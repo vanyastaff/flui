@@ -996,11 +996,11 @@ mod tests {
     fn explicit_quit_reenters_and_reaches_the_handler_outside_the_state_lock() {
         use std::cell::Cell;
 
-        use crate::owner::app_delivery::testing::{AppCall, RecordingApp, bind};
+        use crate::owner::app_delivery::testing::{AppCall, AppLog, bind};
 
         let platform = Arc::new(HeadlessLoop::new::<EmptyHost>(Arc::new(NoWindows)));
         platform.state.lock().is_running = true;
-        let app = RecordingApp::new();
+        let app = AppLog::new();
         let delivery = Arc::clone(&platform.state.lock().app);
         let run = bind(delivery, app.clone());
         run.delivery.ready(run.owner()).expect("bootstrap");

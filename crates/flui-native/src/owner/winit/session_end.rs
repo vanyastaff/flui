@@ -31,7 +31,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::owner::app_delivery::testing::{AppCall, RecordingApp, bind};
+    use crate::owner::app_delivery::testing::{AppCall, AppLog, bind};
     use crate::owner::winit::testing::quiet_platform;
 
     #[test]
@@ -46,7 +46,7 @@ mod tests {
     #[test]
     fn session_end_asks_the_handler_each_phase_and_returns_its_answer() {
         let platform = quiet_platform();
-        let app = RecordingApp::new();
+        let app = AppLog::new();
         app.answer_session_end(SessionEndAnswer::Block);
         let _run = bind(Arc::clone(&platform.owner().app), app.clone());
         for phase in [
@@ -69,7 +69,7 @@ mod tests {
     #[test]
     fn a_session_end_handler_that_panics_hears_the_next_phase() {
         let platform = quiet_platform();
-        let app = RecordingApp::new();
+        let app = AppLog::new();
         let _run = bind(Arc::clone(&platform.owner().app), app.clone());
         let first = std::cell::Cell::new(true);
         app.react(move |_, _| assert!(!first.replace(false), "the first phase panics"));

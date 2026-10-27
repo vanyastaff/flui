@@ -2870,11 +2870,11 @@ mod tests {
         use std::cell::Cell;
         use std::rc::Rc;
 
-        use crate::owner::app_delivery::testing::{AppCall, RecordingApp, bind};
+        use crate::owner::app_delivery::testing::{AppCall, AppLog, bind};
 
         let host = Arc::new(quiet_platform());
         let platform = host.shared_owner();
-        let app = RecordingApp::new();
+        let app = AppLog::new();
         let _run = bind(Arc::clone(&platform.app), app.clone());
         let unlocked = Rc::new(Cell::new(false));
         let (seen, probe) = (Rc::clone(&unlocked), Arc::clone(&platform));
@@ -2934,7 +2934,7 @@ mod tests {
         let callback_count = Arc::new(AtomicUsize::new(0));
         let callback_count_for_handler = Arc::clone(&callback_count);
         let platform_for_handler = Arc::clone(&platform);
-        let app = crate::owner::app_delivery::testing::RecordingApp::new();
+        let app = crate::owner::app_delivery::testing::AppLog::new();
         let _run =
             crate::owner::app_delivery::testing::bind(Arc::clone(&platform.app), app.clone());
         app.react(move |call, _| {

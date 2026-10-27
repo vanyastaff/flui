@@ -338,18 +338,18 @@ fn tick_plan(answer: Option<web_time::Instant>, now: web_time::Instant) -> TickP
 mod tests {
     use super::*;
 
-    use crate::owner::app_delivery::testing::{Bound, RecordingApp, bind};
+    use crate::owner::app_delivery::testing::{AppLog, Bound, bind};
     use std::rc::Rc;
 
     /// A pump whose loop's delivery is bound to a recording handler, which
     /// answers no deadline until a test says otherwise.
-    fn silent_pump() -> (Arc<WakePump>, Rc<RecordingApp>, Bound) {
+    fn silent_pump() -> (Arc<WakePump>, Rc<AppLog>, Bound) {
         let app = Arc::new(AppDelivery::new());
         let pump = WakePump::new(
             Arc::clone(&app),
             Box::new(|| panic!("this pump must not request a frame")),
         );
-        let handler = RecordingApp::new();
+        let handler = AppLog::new();
         let run = bind(app, handler.clone());
         (pump, handler, run)
     }

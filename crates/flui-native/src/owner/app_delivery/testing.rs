@@ -13,7 +13,7 @@ use crate::owner::signal::OwnerSignal;
 use crate::owner::{DirectOwnerHooks, OwnerHooks, OwnerPlatform};
 use crate::platform::{AppHandler, Platform};
 
-/// One call a [`RecordingApp`] heard.
+/// One call a [`AppLog`] heard.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum AppCall {
     Ready,
@@ -25,11 +25,11 @@ pub(crate) enum AppCall {
     WakeDeadline,
 }
 
-/// What a [`RecordingApp`] does on each call, after recording it.
+/// What a [`AppLog`] does on each call, after recording it.
 type Reaction = Rc<dyn Fn(AppCall, &OwnerPlatform)>;
 
 /// Records every call and answers with what it was given.
-pub(crate) struct RecordingApp {
+pub(crate) struct AppLog {
     calls: RefCell<Vec<AppCall>>,
     reaction: RefCell<Option<Reaction>>,
     session_end: Cell<SessionEndAnswer>,
@@ -37,7 +37,7 @@ pub(crate) struct RecordingApp {
     deadline: RefCell<Rc<dyn Fn() -> Option<web_time::Instant>>>,
 }
 
-impl RecordingApp {
+impl AppLog {
     /// A handler that answers `Proceed`, allows the exit and asks for no
     /// deadline.
     pub(crate) fn new() -> Rc<Self> {
@@ -105,7 +105,7 @@ impl RecordingApp {
     }
 }
 
-impl AppHandler for RecordingApp {
+impl AppHandler for AppLog {
     fn ready(&self, owner: OwnerPlatform) -> Result<(), BootstrapError> {
         self.heard(AppCall::Ready, &owner);
         Ok(())

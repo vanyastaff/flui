@@ -9,13 +9,13 @@ use flui_platform::{MemoryPressureLevel, SystemNotice};
 use super::HostEvents;
 use super::host_events::LOW_MEMORY;
 use crate::lifecycle::notice::SystemNotices;
-use crate::owner::app_delivery::testing::{Bound, RecordingApp, bound};
+use crate::owner::app_delivery::testing::{AppLog, Bound, bound};
 use crate::owner::windows::broadcast::{Receiver, Subscriber};
 
 /// A receiver wired to a host, with the notices it delivers heard by a
 /// recording application handler.
-fn hosted_receiver() -> (Receiver, Rc<HostEvents>, Rc<RecordingApp>, Bound) {
-    let app = RecordingApp::new();
+fn hosted_receiver() -> (Receiver, Rc<HostEvents>, Rc<AppLog>, Bound) {
+    let app = AppLog::new();
     let run = bound(app.clone());
     let notices = Arc::new(SystemNotices::new(Arc::clone(&run.delivery)));
     let host = Rc::new(HostEvents::new(Arc::clone(&run.delivery), notices));

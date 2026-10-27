@@ -31,11 +31,11 @@ impl ClassWindows for CountedWindows {
 /// does again.
 #[test]
 fn a_due_deadline_gets_one_modal_frame_per_generation() {
-    use crate::owner::app_delivery::testing::{RecordingApp, bound};
+    use crate::owner::app_delivery::testing::{AppLog, bound};
 
     let windows = Arc::new(CountedWindows::default());
     let frames_asked = || windows.frames_asked.load(Ordering::Relaxed);
-    let app = RecordingApp::new();
+    let app = AppLog::new();
     app.answer_deadline(Some(web_time::Instant::now()));
     let run = bound(app);
     let frames = Rc::new(FrameCount::default());

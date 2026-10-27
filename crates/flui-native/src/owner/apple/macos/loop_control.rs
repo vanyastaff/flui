@@ -618,7 +618,7 @@ impl Drop for LoopOwnership {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::owner::app_delivery::testing::{AppCall, RecordingApp, bind};
+    use crate::owner::app_delivery::testing::{AppCall, AppLog, bind};
     use std::collections::HashMap;
 
     /// An explicit quit fences a reopen already accepted: the handler never
@@ -627,7 +627,7 @@ mod tests {
     fn reopen_explicit_quit_fences_delivery_and_window_admission() {
         let app = Arc::new(AppDelivery::new());
         let control = LoopControl::new(Arc::new(Mutex::new(HashMap::new())), Arc::clone(&app));
-        let handler = RecordingApp::new();
+        let handler = AppLog::new();
         let _run = bind(app, handler.clone());
         control.request_reopen();
         control.request(true); // Dormant request fences without scheduling AppKit.

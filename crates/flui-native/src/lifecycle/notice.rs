@@ -75,7 +75,7 @@ mod tests {
     use flui_foundation::memory::MemoryPressureLevel;
 
     use super::*;
-    use crate::owner::app_delivery::testing::{AppCall, RecordingApp, bound};
+    use crate::owner::app_delivery::testing::{AppCall, AppLog, bound};
 
     struct Cache(AtomicUsize);
 
@@ -95,7 +95,7 @@ mod tests {
 
     #[test]
     fn a_wake_marks_the_registered_caches_before_the_handler_hears_it() {
-        let app = RecordingApp::new();
+        let app = AppLog::new();
         let run = bound(app.clone());
         let notices = SystemNotices::new(Arc::clone(&run.delivery));
         let cache = Arc::new(Cache(AtomicUsize::new(0)));
