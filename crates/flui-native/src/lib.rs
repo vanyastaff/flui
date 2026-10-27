@@ -149,6 +149,8 @@
 //! - `wayland`, `x11`: on Linux, the clients the display source uses to read the
 //!   outputs and their refresh rates from the compositor. On other targets they
 //!   add nothing.
+//! - `testing`: the `testing` module, test support for a native host's own
+//!   windows (ADR-0243). Not part of the release API.
 //!
 //! Accessibility has no feature: Win32, AppKit and Linux winit windows always
 //! hand out their operating system's AccessKit adapter. The headless testing
@@ -216,6 +218,8 @@ pub mod storage;
 #[cfg(test)]
 mod table_test;
 pub mod task;
+#[cfg(feature = "testing")]
+pub mod testing;
 // Reachable for the text position's trait, which bounds a host's table; not
 // an embedding API.
 #[doc(hidden)]

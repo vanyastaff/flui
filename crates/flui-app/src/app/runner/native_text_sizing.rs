@@ -395,7 +395,10 @@ impl NativeTextSizing {
                 | flui_native::TextSizingCaptureError::UnsupportedProfile => {
                     TextSizingSettlement::Unavailable
                 }
-                _ => {
+                flui_native::TextSizingCaptureError::WrongThread
+                | flui_native::TextSizingCaptureError::Unavailable
+                | flui_native::TextSizingCaptureError::Native { .. }
+                | _ => {
                     self.schedule_check(Duration::from_millis(500), true);
                     TextSizingSettlement::Parked
                 }

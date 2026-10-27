@@ -106,7 +106,12 @@ impl From<flui_runtime::owner::DispatchError> for DispatchError {
             OwnerError::UnknownRuntime => Self::StaleRuntime,
             OwnerError::UnknownPresentation => Self::StalePresentation,
             OwnerError::PresentationClosing => Self::PresentationClosing,
-            _ => Self::RuntimeUnavailable,
+            OwnerError::PreferenceRevisionExhausted
+            | OwnerError::OwnerGone
+            | OwnerError::Closed
+            | OwnerError::Busy
+            | OwnerError::InboxFull
+            | _ => Self::RuntimeUnavailable,
         }
     }
 }
@@ -509,7 +514,10 @@ impl From<flui_runtime::owner::PublicationError> for InstallPresentationError {
             PublicationError::PresentationClosing => Self::PresentationClosing,
             PublicationError::UnknownPresentation => Self::StalePresentation,
             PublicationError::Busy => Self::DispatchInFlight,
-            _ => Self::RuntimeUnavailable,
+            PublicationError::ForeignOwner
+            | PublicationError::UnknownRuntime
+            | PublicationError::Closed
+            | _ => Self::RuntimeUnavailable,
         }
     }
 }

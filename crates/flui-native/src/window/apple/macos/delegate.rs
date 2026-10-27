@@ -506,7 +506,7 @@ impl MacOSWindow {
         self.state.lock().sequence.step_ended();
         self.publish_state();
         let window = crate::owner::slot::OwnerWeak::new(self);
-        crate::owner::apple::macos::exec_async_guarded(self.owner, move || {
+        crate::owner::apple::macos::exec_async_on_owner(self.owner, move || {
             let Some(window) = window.upgrade() else {
                 return;
             };

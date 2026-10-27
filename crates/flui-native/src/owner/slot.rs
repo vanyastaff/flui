@@ -252,12 +252,20 @@ impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V
     }
 
     /// A clone of the value under `key`.
+    #[cfg_attr(
+        not(feature = "winit-backend"),
+        expect(dead_code, reason = "only the winit host reads its window table this way")
+    )]
     pub(crate) fn get(&self, key: &K) -> Option<V> {
         self.cell.with(|map| map.get(key).cloned()).flatten()
     }
 
     /// A snapshot of the keys and values: what is done with them next may
     /// open or close windows.
+    #[cfg_attr(
+        not(feature = "winit-backend"),
+        expect(dead_code, reason = "only the winit host reads its window table this way")
+    )]
     pub(crate) fn entries(&self) -> Vec<(K, V)> {
         self.cell
             .with(|map| {
@@ -269,6 +277,10 @@ impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V
     }
 
     /// A snapshot of the values.
+    #[cfg_attr(
+        not(any(feature = "winit-backend", target_os = "macos")),
+        expect(dead_code, reason = "only the winit and AppKit hosts read their window tables")
+    )]
     pub(crate) fn values(&self) -> Vec<V> {
         self.cell
             .with(|map| map.values().cloned().collect())
@@ -276,6 +288,10 @@ impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V
     }
 
     /// A snapshot of the keys.
+    #[cfg_attr(
+        not(any(feature = "winit-backend", target_os = "macos")),
+        expect(dead_code, reason = "only the winit and AppKit hosts read their window tables")
+    )]
     pub(crate) fn keys(&self) -> Vec<K> {
         self.cell
             .with(|map| map.keys().copied().collect())
@@ -284,6 +300,10 @@ impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V
 
     /// Whether the map holds nothing; `true` off the owner thread, which holds
     /// nothing.
+    #[cfg_attr(
+        not(any(feature = "winit-backend", target_os = "macos")),
+        expect(dead_code, reason = "only the winit and AppKit hosts read their window tables")
+    )]
     pub(crate) fn is_empty(&self) -> bool {
         self.cell.with(|map| map.is_empty()).unwrap_or(true)
     }

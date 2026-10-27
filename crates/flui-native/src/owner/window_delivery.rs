@@ -368,6 +368,10 @@ impl WindowDelivery {
     /// (ADR-0254 §5): the window is reached, and read, there alone; a
     /// publication raised elsewhere publishes nothing, and the owner's next
     /// read publishes what changed.
+    #[cfg_attr(
+        all(windows, not(feature = "winit-backend")),
+        expect(dead_code, reason = "the Win32 window publishes through its window procedure")
+    )]
     pub(crate) fn publish_through_owner<W: 'static>(
         &self,
         window: &Rc<W>,

@@ -41,9 +41,9 @@ use objc2::runtime::ProtocolObject;
 use objc2::{MainThreadMarker, Message};
 use objc2_foundation::{NSNotification, NSNotificationCenter, NSObjectProtocol, NSRect};
 use objc2_ui_kit::{
-    UISceneDidDisconnectNotification, UISceneWillConnectNotification, UIScreen,
+    UIDevice, UISceneDidDisconnectNotification, UISceneWillConnectNotification, UIScreen,
     UIScreenDidConnectNotification, UIScreenDidDisconnectNotification,
-    UIScreenModeDidChangeNotification,
+    UIScreenModeDidChangeNotification, UIUserInterfaceIdiom,
 };
 use parking_lot::Mutex;
 
@@ -80,6 +80,9 @@ impl SameObject for RetainedScreen {
 pub struct IosDisplays {
     source: DisplaySource,
     version: AppleVersion,
+    /// Whether the device shows a pointer for a trackpad or mouse: an iPad
+    /// (`UIUserInterfaceIdiom.pad`), read once.
+    shows_a_pointer: bool,
     /// The retained screens and their numbers. Main thread only: a
     /// `UIScreen` is retained and compared there.
     screens: NativeOwner<std::cell::RefCell<ScreenLedger<RetainedScreen>>>,
@@ -100,6 +103,8 @@ impl IosDisplays {
         Self {
             source: DisplaySource::new(),
             version: AppleVersion::read(),
+            shows_a_pointer: UIDevice::currentDevice(marker).userInterfaceIdiom()
+                == UIUserInterfaceIdiom::Pad,
             screens: NativeOwner::new(std::cell::RefCell::new(ScreenLedger::new()), marker),
             link_periods: Mutex::new(ScreenPeriods::new()),
             cadences: Mutex::new(Vec::new()),
@@ -245,6 +250,14 @@ impl Drop for ScreenObserver {
 }
 
 impl crate::owner::apple::ios::HostDisplays for IosDisplays {
+    fn version(&self) -> AppleVersion {
+        self.version
+    }
+
+    fn shows_a_pointer(&self) -> bool {
+        self.shows_a_pointer
+    }
+
     /// The last sample while nothing has invalidated it, otherwise a fresh one.
     fn snapshot(&self, marker: MainThreadMarker) -> Result<DisplaySnapshot, PlatformError> {
         self.source.snapshot_with(|| Ok(self.read(marker)))

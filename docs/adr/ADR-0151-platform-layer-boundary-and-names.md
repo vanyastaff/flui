@@ -348,7 +348,8 @@ mean absence, in place of the nine spellings found today (`WindowCommandError`,
 `WindowShowError`, `CursorError`, `DragError`, the haptic outcome enum, `StorageError`,
 `PreferenceQueryError`, `TextStoreHostError` and `Availability`). Its reasons are
 `NotOnThisPlatform`, `NotOnThisDevice` (the OS build or the hardware of this device lacks it; the
-value names no version), `NotDeclared { what }`, `Unavailable` (temporary; trying again may
+value names no version), `NotYetOnThisHost` (the OS has it and this host does not implement it
+yet; added 2026-10-27, ADR-0152), `NotDeclared { what }`, `Unavailable` (temporary; trying again may
 succeed), `NotRegistered` and `NoWindow`. It is built with `Unsupported::new(reason)`, or with
 `Unsupported::of::<C>(reason)` when a capability's name belongs in the message (ADR-0152).
 `Availability` (native, emulated, unavailable) moves from the input capabilities into the

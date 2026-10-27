@@ -93,7 +93,7 @@ impl OpenWake {
     fn failure(&self) -> Option<AppWindowError> {
         match &*self.state.lock() {
             CompletionState::Failed(error) => Some(error.clone()),
-            _ => None,
+            CompletionState::Waiting | CompletionState::Claimed => None,
         }
     }
     fn take_failure(&self) -> Option<AppWindowError> {

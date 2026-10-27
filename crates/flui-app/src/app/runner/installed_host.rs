@@ -42,7 +42,9 @@ impl From<InstallError> for crate::app::AppWindowError {
     fn from(error: InstallError) -> Self {
         match error {
             InstallError::WindowClosed => Self::Cancelled,
-            source => Self::Mount {
+            source @ (InstallError::Logical(_)
+            | InstallError::Native(_)
+            | InstallError::InitializationFailed) => Self::Mount {
                 source: Arc::new(source),
             },
         }

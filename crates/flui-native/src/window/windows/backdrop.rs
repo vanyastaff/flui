@@ -101,7 +101,7 @@ pub struct Win32Window<'a>(&'a WindowsWindow);
 pub enum Win32WindowError {
     /// Not here, in the contract's vocabulary: the window is closed
     /// ([`UnsupportedReason::NoWindow`]), or the value is one of the contract
-    /// newer than this host ([`UnsupportedReason::NotOnThisPlatform`]).
+    /// newer than this host ([`UnsupportedReason::NotYetOnThisHost`]).
     #[error(transparent)]
     Unsupported(#[from] Unsupported),
     /// The call came from another thread than the window's owner thread, the
@@ -132,8 +132,8 @@ impl Win32WindowError {
     /// The window is closed.
     const CLOSED: Self = Self::Unsupported(Unsupported::new(UnsupportedReason::NoWindow));
     /// A value of the contract newer than this host.
-    const NOT_ON_THIS_HOST: Self =
-        Self::Unsupported(Unsupported::new(UnsupportedReason::NotOnThisPlatform));
+    const NOT_YET_ON_THIS_HOST: Self =
+        Self::Unsupported(Unsupported::new(UnsupportedReason::NotYetOnThisHost));
 }
 
 // ============================================================================
@@ -336,7 +336,7 @@ pub(super) fn apply_corners(
     hwnd: HWND,
     preference: WindowsCornerPreference,
 ) -> Result<(), Win32WindowError> {
-    let value = to_system(&CORNERS, preference).ok_or(Win32WindowError::NOT_ON_THIS_HOST)?;
+    let value = to_system(&CORNERS, preference).ok_or(Win32WindowError::NOT_YET_ON_THIS_HOST)?;
     set(hwnd, CORNER_PREFERENCE, value)
 }
 
@@ -348,7 +348,7 @@ fn chosen_appearance(theme: WindowsTheme) -> Result<Option<WindowAppearance>, Wi
         WindowsTheme::Light => Ok(Some(WindowAppearance::Light)),
         WindowsTheme::Dark => Ok(Some(WindowAppearance::Dark)),
         WindowsTheme::System => Ok(None),
-        _ => Err(Win32WindowError::NOT_ON_THIS_HOST),
+        _ => Err(Win32WindowError::NOT_YET_ON_THIS_HOST),
     }
 }
 
@@ -442,7 +442,8 @@ impl Win32Window<'_> {
     pub fn set_backdrop(self, backdrop: WindowsBackdrop) -> Result<(), Win32WindowError> {
         let hwnd = self.live()?;
         let gate = self.0.backdrop_gate()?;
-        let value = to_system(&BACKDROPS, backdrop).ok_or(Win32WindowError::NOT_ON_THIS_HOST)?;
+        let value =
+            to_system(&BACKDROPS, backdrop).ok_or(Win32WindowError::NOT_YET_ON_THIS_HOST)?;
         set_system_backdrop(hwnd, gate, value)
     }
 

@@ -1455,8 +1455,11 @@ impl PlatformWindow for WindowsWindow {
         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
     }
 
-    /// Win32 has no input region a window hands the system: its input
-    /// capabilities say `Unavailable`.
+    /// The input regions keep the system's edge gestures out of a region
+    /// (`InputRegionKind::SystemGestureExclusion`). Windows starts its edge
+    /// swipes whatever a window says: `SetWindowRgn` and `HTTRANSPARENT` decide
+    /// where a window takes input, which is not that. The input capabilities
+    /// say `Unavailable`.
     fn set_input_regions(
         &self,
         _regions: &[flui_platform::input_regions::InputRegion],

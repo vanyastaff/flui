@@ -489,6 +489,11 @@ impl HostDisplays for NoDisplays {
     fn is_wayland(&self) -> bool {
         false
     }
+
+    #[cfg(target_os = "macos")]
+    fn version(&self) -> crate::version::gate::apple::MacOSVersion {
+        crate::version::gate::apple::MacOSVersion::new(14, 0, 0)
+    }
 }
 
 /// A subscriber of the system's broadcasts that answers none of them.

@@ -61,6 +61,7 @@ use crate::window::apple::geometry::{
     },
     mode::{ModeSequence, ModeStep, WindowFlags, capabilities_of, is_shown},
 };
+use crate::window::capabilities::{appkit_window_capabilities, frame_rate_absence};
 use parking_lot::Mutex;
 use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
@@ -88,7 +89,7 @@ use crate::owner::apple::macos::content_view::{self, ViewHooks};
 use crate::owner::apple::macos::display_pass;
 use crate::owner::apple::macos::{
     ContentViewRef, HostDisplays, WeakWakePump, WindowRegistry, debug_assert_appkit_main_thread,
-    exec_async_guarded, on_owner_thread,
+    exec_async_on_owner, on_owner_thread,
 };
 
 use crate::{
@@ -823,7 +824,7 @@ impl MacOSWindow {
 /// `hop` counts the turns this request has already taken; see the re-check
 /// below for why it exists and [`MAX_DEFER_HOPS`] for why it is bounded.
 fn defer_redraw(owner: &'static dispatch::Queue, window: Arc<OwnerWeak<MacOSWindow>>, hop: u8) {
-    exec_async_guarded(owner, move || {
+    exec_async_on_owner(owner, move || {
         // This turn is supposed to run after the pass has unwound, and that is
         // what a lane turn normally is: the run loop services the lane at its
         // top level, after AppKit's display pass has returned. The premise is
@@ -865,7 +866,7 @@ fn defer_redraw(owner: &'static dispatch::Queue, window: Arc<OwnerWeak<MacOSWind
             Some(window) if !window.closed.load(Ordering::SeqCst) => {
                 // SAFETY: the handle upgraded, so this turn runs on the
                 // window's owner thread (the only one it upgrades on), under
-                // the lane guard `exec_async_guarded` installed.
+                // the lane guard `exec_async_on_owner` installed.
                 unsafe { window.set_needs_display(true) };
             }
             _ => tracing::trace!(
@@ -918,7 +919,7 @@ impl RedrawRequester for MacOSRedraw {
             return;
         }
         let window = Arc::clone(&self.window);
-        exec_async_guarded(self.owner, move || {
+        exec_async_on_owner(self.owner, move || {
             if let Some(owned) = window.upgrade() {
                 owned.redraw_on_owner(&window);
             }
@@ -1142,7 +1143,7 @@ impl host::Window<MacOSLoop> for MacOSWindow {
     fn capabilities(_: &MacOSLoop, _: &MacOSWindows) -> WindowCapabilities {
         // Every window the platform opens routes through the AppKit main lane
         // (`MacOSWindow::new`).
-        window_capabilities(true)
+        appkit_window_capabilities(true)
     }
 
     fn frame_inset(owner: &MacOSLoop, _: &MacOSWindows, _scale_factor: f64) -> Size<f64> {
@@ -1156,36 +1157,6 @@ impl host::Window<MacOSLoop> for MacOSWindow {
         );
         decorated_frame_inset(main)
     }
-}
-
-/// What every AppKit window honours and observes, known before one exists
-/// (`Platform::window_capabilities`). Each field is named, so a command added
-/// to the contract is unavailable here until `apply` carries it out. The
-/// material is an `NSVisualEffectView` behind FLUI's view, which lives on the
-/// main thread: a window whose owner is not the AppKit main lane draws none.
-const fn window_capabilities(owner_is_main: bool) -> WindowCapabilities {
-    use flui_platform::Availability::Native;
-    let mut capabilities = WindowCapabilities::NONE;
-    capabilities.sets_title = Native;
-    capabilities.sets_position = Native;
-    capabilities.sets_size = Native;
-    capabilities.sets_constraints = Native;
-    capabilities.sets_resizable = Native;
-    capabilities.sets_decorated = Native;
-    capabilities.minimizes = Native;
-    capabilities.maximizes = Native;
-    capabilities.enters_fullscreen = Native;
-    capabilities.hides = Native;
-    capabilities.shows = Native;
-    capabilities.activates = Native;
-    capabilities.closes = Native;
-    capabilities.observes_position = Native;
-    capabilities.observes_minimized = Native;
-    capabilities.places_at_open = Native;
-    if owner_is_main {
-        capabilities.material = Native;
-    }
-    capabilities
 }
 
 /// The class every window is an instance of: `NSWindow`, except that it can
@@ -1368,22 +1339,26 @@ impl PlatformWindow for MacOSWindow {
         tracing::debug!("macOS: window revealed after its first presented frame");
     }
 
-    /// macOS 14 has a per-view display link (`NSView.displayLink`) whose
-    /// `preferredFrameRateRange` a hint could ride on, but this host paces its
-    /// frames without one, so it has nothing to carry the request: the
-    /// capability is `Unavailable`. The contract has no reason for "this host
-    /// does not do it"; `NotOnThisDevice` is the nearest, and not
-    /// `NotOnThisPlatform`, which would say no Mac could.
+    /// The capability is `Unavailable`, for the reason `frame_rate_absence`
+    /// gives at the version the platform's displays read: below macOS 14 there
+    /// is no per-view display link to carry the request, from 14 on this host
+    /// paces its frames without it. A window not yet bound to the displays
+    /// knows no version, which unlocks nothing.
     fn set_frame_rate_hint(
         &self,
         _hint: flui_platform::FrameRateHint,
     ) -> Result<(), flui_platform::Unsupported> {
-        Err(flui_platform::Unsupported::new(
-            flui_platform::UnsupportedReason::NotOnThisDevice,
-        ))
+        let absence = self.displays.get().map_or(
+            flui_platform::CapabilityAbsence::NotOnThisDevice,
+            |displays| frame_rate_absence(displays.version()),
+        );
+        Err(absence.into())
     }
 
-    /// AppKit takes no input region from a window.
+    /// The input regions keep the system's edge gestures out of a region
+    /// (`InputRegionKind::SystemGestureExclusion`), and AppKit lets no window
+    /// keep the system's trackpad gestures out; `ignoresMouseEvents` and a
+    /// hit-test override decide where a window takes input, which is not that.
     fn set_input_regions(
         &self,
         _regions: &[flui_platform::input_regions::InputRegion],
@@ -1685,7 +1660,10 @@ impl MacOSWindow {
                 // The key window is the one this host reports active;
                 // the main window has no report of its own here.
                 active: focused,
-                capabilities: capabilities_of(flags, window_capabilities(self.owner_is_main)),
+                capabilities: capabilities_of(
+                    flags,
+                    appkit_window_capabilities(self.owner_is_main),
+                ),
             }
             .onto(state)
         }

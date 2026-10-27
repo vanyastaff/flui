@@ -341,7 +341,7 @@ impl WindowPlacement {
         let wanted = match self.mode {
             WindowMode::Minimized if self.maximized_before_minimize => WindowMode::Maximized,
             WindowMode::Minimized => WindowMode::Normal,
-            mode => mode,
+            mode @ (WindowMode::Normal | WindowMode::Maximized | WindowMode::Fullscreen) => mode,
         };
         let mode = if capabilities.permits(&WindowCommand::SetMode(wanted)) {
             wanted
@@ -463,9 +463,7 @@ fn mode_name(mode: WindowMode) -> &'static str {
         WindowMode::Minimized => "minimized",
         WindowMode::Maximized => "maximized",
         WindowMode::Fullscreen => "fullscreen",
-        // `Normal`, and a mode added later that this format does not know: it
-        // is remembered as the one every window has.
-        _ => "normal",
+        WindowMode::Normal => "normal",
     }
 }
 

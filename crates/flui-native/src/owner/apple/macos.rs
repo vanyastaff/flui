@@ -26,7 +26,7 @@ pub(crate) use loop_control::LoopControl;
 #[cfg(test)]
 pub(crate) use owner_lane::test_owner_queue;
 pub(crate) use owner_lane::{
-    exec_async_guarded, exec_on_owner, on_owner_thread, owner_queue, run_cleanup_guarded,
+    exec_async_on_owner, exec_on_owner, on_owner_thread, owner_queue, run_cleanup_guarded,
 };
 pub(crate) use wake_pump::WeakWakePump;
 
@@ -96,6 +96,9 @@ pub(crate) trait HostDisplays: StaleOnWake {
     /// Mark the screens stale and wake the owner behind `signal` when AppKit
     /// reports a change of screen parameters, until the watch is dropped.
     fn observe(self: Arc<Self>, signal: &Arc<OwnerSignal>) -> Watch;
+
+    /// The macOS version the process runs on, read once (ADR-0244).
+    fn version(&self) -> crate::version::gate::apple::MacOSVersion;
 }
 
 use std::{path::PathBuf, rc::Rc, sync::Arc};
