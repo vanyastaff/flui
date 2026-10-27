@@ -5,7 +5,7 @@
 use flui_app::AppConfig;
 use flui_foundation::geometry::{Point, Size};
 use flui_platform::os_options::{OsWindowOptions, Win32WindowOptions, WindowsCornerPreference};
-use flui_platform::{WindowMode, WindowOptions, WindowReveal};
+use flui_platform::{InputLatency, WindowMode, WindowOptions, WindowReveal};
 
 fn options(config: &AppConfig) -> WindowOptions {
     WindowOptions::from(config)
@@ -78,6 +78,19 @@ fn every_systems_options_are_kept() {
     );
 }
 
+/// The input latency an application asks for reaches the options every
+/// window opens with, which the web and Android hosts read.
+fn the_input_latency_is_kept() {
+    assert_eq!(
+        options(&AppConfig::new().with_input_latency(InputLatency::Low)).input_latency,
+        InputLatency::Low
+    );
+    assert_eq!(
+        options(&AppConfig::new()).input_latency,
+        InputLatency::Balanced
+    );
+}
+
 fn visibility_and_reveal_stay_the_options_own() {
     let defaults = WindowOptions::default();
     let converted = options(
@@ -105,6 +118,10 @@ fn config_to_options_keeps_every_field() {
             ("the_frame_flags_are_kept", the_frame_flags_are_kept as fn()),
             ("the_position_is_kept", the_position_is_kept as fn()),
             ("the_mode_is_kept", the_mode_is_kept as fn()),
+            (
+                "the_input_latency_is_kept",
+                the_input_latency_is_kept as fn(),
+            ),
             (
                 "every_systems_options_are_kept",
                 every_systems_options_are_kept as fn(),
