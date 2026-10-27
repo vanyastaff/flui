@@ -2810,8 +2810,8 @@ graph LR
   `WindowHandler` (`!Send`), шесть обязательных методов по обязательствам — `input` →
   `DispatchEventResult`, `state_changed`, `frame_requested(FrameRequest)`, `close_requested` →
   `CloseDecision { Close, KeepOpen }`, `closed`, `surface_changed(SurfaceChange { Release,
-  Rebuild })`; каждый получает `OwnerThread` — `!Send`-доказательство потока владельца, которое
-  чеканит только вызов, держащий `Rc` обработчика. `PlatformWindow` потерял `on_input`,
+  Rebuild })`; каждый получал `OwnerThread` — доказательство потока владельца (после ревью удалено,
+  пункт 1 ниже). `PlatformWindow` потерял `on_input`,
   `on_state_changed`, `on_request_frame`, `on_close`, `on_should_close`,
   `on_surface_status_change`. **Ядро.** `open_window(options, Rc<dyn WindowHandler>)` у `Platform`,
   `OwnerPlatform` и `Window::open` каждого хоста; `HostPlatform` отдаёт снимок возможностей первым
@@ -2856,8 +2856,9 @@ graph LR
   `window_routes_contract` (`flui-app`; без немедленного запуска услышанного `closed` падает);
   строка `the_input_latency_is_kept` в `config_to_options_keeps_every_field` (без переноса из
   конфига падает); trybuild `ui_pass/window_handler_holds_rc.rs`. Удалены строки, чьё состояние
-  стало невыразимым: Win32 `deadline_window_without_frame_callback_does_not_spin` и
-  `deadline_hidden_window_without_frame_callback_does_not_spin`, строки очереди раннего ввода и
+  сочли невыразимым: Win32 `deadline_window_without_frame_callback_does_not_spin` и
+  `deadline_hidden_window_without_frame_callback_does_not_spin` (после ревью возвращены в новой
+  форме, пункт 3 ниже), строки очереди раннего ввода и
   замены колбэка ввода. `globals` — 57, `module-dag` `flui-native` — 300 модулей, 323 ребра.
   Документы: ARCHITECTURE.md `flui-platform` и `flui-native`, README `flui-native`,
   `docs/architecture.md`, `docs/gaps.md` (имя метода), `changelog.d/platform-window-handler.md`;
@@ -2872,9 +2873,66 @@ graph LR
   (`DOCS_RS=1`), wasm32 lib четырёх крейтов; Linux кросс-clippy с Windows (clang LLVM)
   `--all-targets` пяти крейтов без признаков, с `winit-backend` и `flui-native --all-features`,
   rustdoc `--document-private-items -D warnings` Linux обоих вариантов и Windows; `checks`,
-  `doc-strict`, `wasm-check`, `wasm-test` — 51. Не запускалось: WSL (песочница агента не пускает
-  `wsl`) — nextest под xvfb для winit/X11 и headless на Linux; Android-устройство; Mac и iPhone
-  (vanyastaff/flui#1840); браузер (`web_browser` только собран под wasm32); `cross-typecheck`.
+  `doc-strict`, `wasm-check`, `wasm-test` — 51. WSL в первом прогоне не запускался (вызов `wsl`
+  был не той формы); его догнал прогон ниже.
+  **Исправления после ревью (vanyastaff/flui#1915)**, слиянием, без перебазирования; `main` с
+  vanyastaff/flui#1916 влит (`79cd14897`).
+  (0) **X11 под xvfb (CI `test`, `--all-features`).** Команда, применённая с рабочего потока
+  (`x11_window_takes_commands_and_publishes_what_the_server_holds`), публиковала снимок на том
+  потоке, а обработчик живёт в owner-слоте — `state_changed` скрытия терялся. Доставка с чужого
+  потока теперь встаёт в FIFO окна и просит ход владельца (`WindowDelivery::resume_through`,
+  подключено в winit и headless; без него — ждёт следующей доставки владельца, с
+  предупреждением); ввод оттуда отвечает `DEFERRED`. Строка
+  `a_delivery_raised_off_the_owner_thread_waits_for_an_owner_turn` (без постановки в очередь
+  падает: «each one asked for an owner turn, left 1 right 2»).
+  (1) **`OwnerThread` удалён, методы `WindowHandler` без аргумента-платформы.** ADR-0254 §4 даёт
+  каждому методу `&OwnerPlatform`, но тот же ADR (раздел «Decision») велит контракту называть
+  только свои типы и отдаёт `OwnerPlatform` хост-крейту (`flui-native`, ADR-0151 §9), а
+  `flui-runtime`, который реализует обработчик, по ADR-0083 не имеет ребра к хосту: форму ADR не
+  выполнить, не ломая слои. Решение для владельца — в отчёте координатору.
+  (2) **Ничего до маршрута не теряется.** `WindowRoutes` держит весь ввод по порядку (ответ
+  `DEFERRED`), последний `state_changed`, последний запрос кадра и последнюю смену поверхности и
+  отдаёт их при установке маршрута; `close_requested` без маршрута — `KeepOpen`.
+  `WindowRoutes::of` — `expect("BUG: …")` (кроме двойников окна в юнит-тестах). Строки
+  `window_routes_contract`: `the_input_route_hears_everything_before_it_in_order` и
+  `state_frame_and_surface_wait_for_their_routes` (без удержания ввода и без удержания
+  поверхности падают соответственно).
+  (3) **Спин дедлайна.** `frame_requested` отвечает `FrameOutcome { Produced, Declined }`;
+  счётчик кадров Win32 растёт только от `Produced` (или паники). Строки
+  `deadline_window_declining_its_frames_does_not_spin` и
+  `deadline_hidden_window_declining_its_frames_does_not_spin` в `test_window_lifecycle_contract`
+  (со счётом каждого вызова: 26 153 и 81 690 перевзводов за 300 мс) и строка
+  `a_frame_counts_when_the_handler_runs`.
+  (4) **`close_requested` в очереди.** `dispatch_close_request(close_later)`: при простое FIFO
+  спрашивает сразу и возвращает ответ; во время метода или с чужого потока — `KeepOpen` сейчас,
+  вопрос после метода, при `Close` окно закрывает отложенное закрытие хоста (Win32 — `CLOSE_WINDOW`
+  с идентичностью, winit и headless — командой, AppKit — `close`); после одобренного запроса
+  следующие в очереди не задаются. Строки: `a_close_request_is_the_handlers_to_decide`,
+  `a close request raised inside input waits for it` в headless и Win32 таблицах
+  `handler_reentry`, `a_nested_close_request_keeps_the_window` (без очереди падают все три
+  таблицы; без пропуска после одобренного — счёт вопросов 2 вместо 1).
+  (5) **Паника снимка возобновляется** после ввода, который он предварял (паника самого ввода
+  сдерживается, не подменяет первую); iOS `dispatch_surface_immediate` возвращает панику, вызов
+  доделывает `closed`/релиз или запуск кадров и возобновляет. Строки
+  `a_panicking_snapshot_resumes_after_the_input_it_precedes` и
+  `a_panic_on_the_snapshot_is_resumed` (с `or_contain` падают обе). iOS только типизирован.
+  (6) iOS: маршруты сопоставляются по `IOSSceneSessionId` (теста нет: `flui-app` под iOS не
+  собирается из-за `psm`); `Shared` → `ResidentHandler`; `SAFETY:` в Win32-строках называют
+  инвариант. (7) ADR-0213 §3 и ADR-0063 §5 помечены `Superseded-by ADR-0254`, в заголовке
+  ADR-0063 — защёлка `clear()`; ADR-0237 решение 2 — `state_changed` обработчика; `docs/gaps.md`
+  (запись 9): Web и Android не спрашивают `close_requested`; changelog — форма `PlatformProxy`,
+  `Unavailable` winit вне владельца, `FrameOutcome`, очередь закрытия, доставка с чужого потока.
+  Проверки: Windows — clippy рабочего пространства обычный и с
+  `flui-native/winit-backend,flui/native`; nextest восьми крейтов — 702 из 703, с `winit-backend`
+  — 367 из 368 (падает только trybuild `owner_thread_token_has_no_default`, как на `main`);
+  clippy Android `--all-targets`, macOS `--all-targets` обычный и с `winit-backend`, iOS lib,
+  Linux кросс-clippy (обычный, `--all-features`); `checks` (`globals` — 57), `doc-strict`,
+  `wasm-check` (теперь с `clippy -p flui-native --all-targets` для wasm32). WSL Ubuntu 24.04
+  (`WAYLAND_DISPLAY`, `XDG_SESSION_TYPE` сняты): clippy `flui-native`, `flui-app`,
+  `flui-platform`, `flui-testing` без признаков, с `winit-backend` и `flui-native
+  --all-features`; nextest под xvfb `flui-native` — 217, с `winit-backend` — 300,
+  `--all-features` — 301, `flui-app` с `winit-backend` — 47, всё зелёное. Не запускалось:
+  Android-устройство, Mac и iPhone (vanyastaff/flui#1840), браузер, `cross-typecheck`.
 - [x] **LY49** — ветка `platform/host-only-core`, начата на вершине LY41
   (`origin/platform/snapshot-consumers` @ `87977afc3`), после слияния vanyastaff/flui#1912 перенесена
   на `main` @ `c50202c7a` (дерево то же). **В ядро, `pub(crate)`.** Модель `drag/offers.rs`
