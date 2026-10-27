@@ -146,11 +146,6 @@ impl MacosDisplays {
         }
     }
 
-    /// Why a window takes no refresh-rate request on this macOS.
-    fn frame_rate(&self) -> flui_platform::CapabilityAbsence {
-        crate::window::apple::capabilities::frame_rate_absence(self.version)
-    }
-
     /// Read every screen (`+[NSScreen screens]`).
     fn read(&self, mtm: MainThreadMarker) -> Vec<DisplayInfo> {
         let screens: Retained<NSArray<NSScreen>> = NSScreen::screens(mtm);
@@ -265,8 +260,8 @@ impl Drop for ScreenObserver {
 }
 
 impl crate::owner::apple::macos::HostDisplays for MacosDisplays {
-    fn frame_rate_absence(&self) -> flui_platform::CapabilityAbsence {
-        self.frame_rate()
+    fn version(&self) -> MacOSVersion {
+        self.version
     }
 
     /// The last sample while nothing has invalidated it, otherwise a fresh
@@ -305,10 +300,8 @@ impl crate::owner::apple::macos::HostDisplays for MacosDisplays {
 /// starts on resume) and by a window whose screen is one the last sample lacks.
 #[cfg(feature = "winit-backend")]
 impl crate::owner::winit::HostDisplays for MacosDisplays {
-    /// The AppKit window's answer: winit carries no refresh-rate request
-    /// either, and the reason is this macOS's.
-    fn frame_rate_absence(&self) -> flui_platform::CapabilityAbsence {
-        self.frame_rate()
+    fn version(&self) -> MacOSVersion {
+        self.version
     }
 
     /// The current snapshot: the last sample unless something invalidated it.

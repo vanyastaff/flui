@@ -97,9 +97,8 @@ pub(crate) trait HostDisplays: StaleOnWake {
     /// reports a change of screen parameters, until the watch is dropped.
     fn observe(self: Arc<Self>, signal: &Arc<OwnerSignal>) -> Watch;
 
-    /// Why a window takes no refresh-rate request on the macOS the platform
-    /// runs on (`window::apple::capabilities::frame_rate_absence`).
-    fn frame_rate_absence(&self) -> flui_platform::CapabilityAbsence;
+    /// The macOS version the process runs on, read once (ADR-0244).
+    fn version(&self) -> crate::version::gate::apple::MacOSVersion;
 }
 
 use std::{collections::HashMap, path::PathBuf, sync::Arc};

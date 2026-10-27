@@ -132,8 +132,11 @@ trait depends on `flui-platform` instead.
   window opens on Mica through the same gate. AppKit draws `System` as
   `NSVisualEffectView`'s window-background material behind FLUI's view, for
   windows on the main lane. Where the OS draws a material and the host does
-  not yet (UIKit, Android, an AppKit window off the main lane), the
-  capability is unavailable with `NotYetOnThisHost`, never `NotOnThisPlatform`.
+  not yet (UIKit, Android from API 31 with cross-window blur on, an AppKit
+  window off the main lane), the capability is unavailable with
+  `NotYetOnThisHost`; below the version gate, or with the device's blur off,
+  `NotOnThisDevice`. The rules are pure (`window::capabilities`), and their
+  table tests run on every host.
   The AppKit backdrop (`AppKitWindow::set_backdrop`)
   is an `NSVisualEffectView` material or Liquid Glass, an
   `NSGlassEffectView` looked up by name (macOS 26; `Unsupported` with `NotOnThisDevice` before),

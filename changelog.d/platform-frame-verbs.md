@@ -7,8 +7,8 @@
   materials stay with `flui::native::windows` and `flui::native::macos`.
 - `WindowCapabilities::frame_rate_hint`: whether the window system takes a refresh-rate request.
 - `WindowCapabilities::unavailable` and `WindowCapabilities::refusal`: a capability marked
-  with the reason it is missing (this device lacks it: `NotOnThisDevice`) is refused at
-  admission with that reason.
+  with where it is missing (`CapabilityAbsence`; this device lacks it: `NotOnThisDevice`) is
+  refused at admission with that reason.
 - `flui_platform::window_takes_no_frame_verbs!`, the per-frame verbs of a window test double
   whose window system takes neither.
 

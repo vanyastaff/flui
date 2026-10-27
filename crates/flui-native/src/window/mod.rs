@@ -17,12 +17,12 @@ pub(crate) mod config;
 pub(crate) mod installation;
 pub(crate) mod state;
 
-#[cfg(any(target_os = "android", test))]
-pub(crate) mod activity_capabilities;
 #[cfg(target_os = "android")]
 pub(crate) mod android;
 #[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) mod apple;
+#[cfg(any(target_os = "android", target_os = "ios", target_os = "macos", test))]
+pub(crate) mod capabilities;
 pub(crate) mod headless;
 #[cfg(any(all(target_os = "linux", feature = "winit-backend"), test))]
 pub(crate) mod linux {

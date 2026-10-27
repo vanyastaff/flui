@@ -250,8 +250,12 @@ impl Drop for ScreenObserver {
 }
 
 impl crate::owner::apple::ios::HostDisplays for IosDisplays {
-    fn pointer_absence(&self) -> flui_platform::CapabilityAbsence {
-        crate::window::apple::capabilities::pointer_absence(self.version, self.shows_a_pointer)
+    fn version(&self) -> AppleVersion {
+        self.version
+    }
+
+    fn shows_a_pointer(&self) -> bool {
+        self.shows_a_pointer
     }
 
     /// The last sample while nothing has invalidated it, otherwise a fresh one.

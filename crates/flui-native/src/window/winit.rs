@@ -782,7 +782,7 @@ impl PlatformWindow for WinitWindow {
         _hint: flui_platform::FrameRateHint,
     ) -> Result<(), flui_platform::Unsupported> {
         #[cfg(target_os = "macos")]
-        let absence = self.displays.frame_rate_absence();
+        let absence = crate::window::capabilities::frame_rate_absence(self.displays.version());
         #[cfg(not(target_os = "macos"))]
         let absence = flui_platform::CapabilityAbsence::NotOnThisPlatform;
         Err(absence.into())

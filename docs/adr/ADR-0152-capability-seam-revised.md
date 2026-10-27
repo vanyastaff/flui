@@ -8,10 +8,12 @@
   permission vocabulary, `Plugin` and the registrar in the contract crate, and the carve-out for
   handles that framework widgets name. Providers of the seam are assembled by `flui-app`, not by
   the core host.
-- **Amended:** 2026-10-27 — decision 2, item 7, approved by the owner: the reasons gain
+- **Amended:** 2026-10-27 — decision 2, item 7, the owner's decision: the reasons gain
   `NotYetOnThisHost` (the OS has it, this FLUI host does not implement it yet; not retryable), so
-  a caller tells "never on this platform" from "not in FLUI yet". A window capability left
-  unimplemented says so on `WindowCapabilities`, and admission answers it (ADR-0254 §6).
+  a caller tells "never on this platform" from "not in FLUI yet". A gate that refused is still
+  `NotOnThisDevice`: below the version that has the feature the device lacks it, and only from
+  that version on is the host's gap `NotYetOnThisHost`. How a window carries it follows from
+  this decision (ADR-0254 §6).
 - **Supersedes:** [ADR-0084](ADR-0084-open-capability-seam-and-plugins.md) (Proposed) as a whole;
   what carries over is restated in §1.
   [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md) §1's last sentence ("A new capability is a

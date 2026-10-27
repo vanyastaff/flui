@@ -51,7 +51,6 @@ use flui_platform::{
     WindowGeometry, WindowMode, WindowState,
 };
 
-use crate::window::apple::capabilities::appkit_window_capabilities;
 use crate::window::apple::geometry::{
     frame::{
         cocoa_frame, cocoa_frame_keeping_top, cocoa_top_left_point, constraints_of_content_limits,
@@ -59,6 +58,7 @@ use crate::window::apple::geometry::{
     },
     mode::{ModeSequence, ModeStep, WindowFlags, capabilities_of, is_shown},
 };
+use crate::window::capabilities::{appkit_window_capabilities, frame_rate_absence};
 use parking_lot::Mutex;
 use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
@@ -1373,7 +1373,7 @@ impl PlatformWindow for MacOSWindow {
     ) -> Result<(), flui_platform::Unsupported> {
         let absence = self.displays.get().map_or(
             flui_platform::CapabilityAbsence::NotOnThisDevice,
-            |displays| displays.frame_rate_absence(),
+            |displays| frame_rate_absence(displays.version()),
         );
         Err(absence.into())
     }

@@ -213,9 +213,11 @@ pub(crate) trait HostDisplays: Send + Sync {
     /// the version the platform runs on, or no preference.
     fn request_frame_rate(&self, link: &CADisplayLink, screen: &UIScreen, hint: FrameRateHint);
 
-    /// Why a window does not set the pointer's shape on this device and
-    /// version (`window::apple::capabilities::pointer_absence`).
-    fn pointer_absence(&self) -> flui_platform::CapabilityAbsence;
+    /// The iOS version the process runs on, read once (ADR-0244).
+    fn version(&self) -> crate::version::gate::apple::AppleVersion;
+
+    /// Whether the device shows a pointer for a trackpad or mouse: an iPad.
+    fn shows_a_pointer(&self) -> bool;
 
     /// Mark the screens stale and wake the owner behind `signal` on screen and
     /// scene notifications, until the watch is dropped.

@@ -490,8 +490,8 @@ impl HostDisplays for NoDisplays {
     }
 
     #[cfg(target_os = "macos")]
-    fn frame_rate_absence(&self) -> flui_platform::CapabilityAbsence {
-        flui_platform::CapabilityAbsence::NotYetOnThisHost
+    fn version(&self) -> crate::version::gate::apple::MacOSVersion {
+        crate::version::gate::apple::MacOSVersion::new(14, 0, 0)
     }
 }
 

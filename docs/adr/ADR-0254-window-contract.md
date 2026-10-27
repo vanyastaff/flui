@@ -11,11 +11,14 @@
   `FrameOutcome { Produced, Declined }`, because without it the host cannot tell a frame that was
   served from one nothing ran, and a wake deadline delivered to a handler with nothing to draw
   with re-arms on every paint and spins the loop.
-- **Amended:** 2026-10-27 — decision 6, approved by the owner as an extension of the vocabulary of
-  absence: `NotYetOnThisHost` joins the reasons (ADR-0152's table). A host marks a capability
-  the OS has and it does not implement yet with `WindowCapabilities::unavailable(command, &reason)`,
-  the one per-capability reason that also carries `NotOnThisDevice`, and admission refuses the
-  command with that reason instead of `NotOnThisPlatform`.
+- **Amended:** 2026-10-27 — decision 6, following the owner's decision of 2026-10-27 that adds
+  `NotYetOnThisHost` to the reasons (ADR-0152): a command's capability carries where it is
+  missing, a `CapabilityAbsence` (`NotOnThisPlatform`, `NotOnThisDevice`, `NotYetOnThisHost`),
+  set with `WindowCapabilities::unavailable(command, absence)`, and admission refuses the command
+  with that reason. The type admits no retryable reason, since a capability stays `Unavailable`
+  until the host publishes it again; an absence counts for equality only while its capability is
+  unavailable. The verbs outside the command queue (the frame-rate hint, the input regions) answer
+  their reason themselves: nothing admits them against the capabilities.
 - **Supersedes:**
   - [ADR-0237](ADR-0237-window-state-and-host-notices.md), in part: the window-scoped getters and
     per-fact callbacks that sit beside the snapshot; decision 3's refusal inside `apply` (it moves

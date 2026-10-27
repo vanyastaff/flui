@@ -300,10 +300,9 @@ pub(crate) trait HostDisplays: StaleOnWake {
     #[cfg(target_os = "linux")]
     fn is_wayland(&self) -> bool;
 
-    /// Why a window takes no refresh-rate request on the macOS the platform
-    /// runs on: winit carries none, and AppKit has one from macOS 14.
+    /// The macOS version the process runs on, read once (ADR-0244).
     #[cfg(target_os = "macos")]
-    fn frame_rate_absence(&self) -> flui_platform::CapabilityAbsence;
+    fn version(&self) -> crate::version::gate::apple::MacOSVersion;
 }
 
 /// The displays position is the loop's: the native source the table made

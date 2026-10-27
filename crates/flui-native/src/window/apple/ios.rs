@@ -59,7 +59,7 @@ use crate::owner::signal::OwnerSignal;
 use crate::owner::window_delivery::WindowDelivery;
 use crate::platform::HostPlatform;
 use crate::text::TextInput;
-use crate::window::apple::capabilities::scene_capabilities;
+use crate::window::capabilities::{pointer_absence, scene_capabilities};
 use crate::window::installation::{PendingWindowInstallation, WindowInstallation};
 use crate::window::state::{ReportedFacts, WindowStateCell};
 use crate::{BootstrapError, PlatformError, PlatformProxy};
@@ -745,7 +745,7 @@ impl IOSWindow {
             safe_area: EdgeInsets::ZERO,
         }));
         let dark = Arc::new(AtomicBool::new(false));
-        let pointer = displays.pointer_absence();
+        let pointer = pointer_absence(displays.version(), displays.shows_a_pointer());
         let view = FluiView::new(
             mtm,
             Arc::clone(&delivery),

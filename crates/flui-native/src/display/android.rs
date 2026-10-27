@@ -542,12 +542,8 @@ pub(crate) mod source {
             self.frame_rate.availability()
         }
 
-        fn window_facts(&self) -> crate::window::activity_capabilities::ActivityFacts {
-            crate::window::activity_capabilities::ActivityFacts {
-                api: self.api,
-                frame_rate_hint: self.frame_rate.availability(),
-                cross_window_blur: self.cross_window_blur.load(Ordering::Acquire),
-            }
+        fn cross_window_blur(&self) -> bool {
+            self.cross_window_blur.load(Ordering::Acquire)
         }
 
         /// Ask the system for the refresh rate `hint` names on `window`, if this
