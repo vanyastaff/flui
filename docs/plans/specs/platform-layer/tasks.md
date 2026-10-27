@@ -2567,6 +2567,77 @@ graph LR
   LLVM) обычный и с `winit-backend`, iOS lib, wasm32 lib; `wasm-check`, `wasm-test` — 51; `checks`,
   `doc-strict`; WSL — clippy без признаков, с `winit-backend` и `--all-features`, nextest 318, 446
   (1 пропущен), 300, rustdoc.
+- [x] **LY41** — ветка `platform/snapshot-consumers`, начата на вершине LY40, после слияния
+  vanyastaff/flui#1911 перенесена на `main` @ `006d3d7b1` (дерево LY40 в `main` то же, что
+  `5fbcbb117`). **Удалено.** Из `PlatformWindow` — геттеры `is_focused`, `is_visible`,
+  `physical_size`, `logical_size`, `scale_factor`, `metrics`, `appearance`, `display_id`,
+  `safe_area_insets`, `execution_state`, `is_active`, `is_hovered`, `capabilities`,
+  `mouse_position`, `modifiers`; восемь парных `on_*`; `show`, `activate`, `close` и
+  `WindowShowError`; `WindowEvent` и `Platform::on_window_event`; `WindowControl::capabilities` и
+  `WindowHandle::capabilities` (возможности — поле снимка). В ядре ушли слоты фактов и их
+  `dispatch_*`, событие `Published`, `LifecycleEvent`, `deliver_status_observation`, отчёты
+  видимости (`window::visibility` целиком, `ReportedVisibility` и `follow_wm_minimized` winit,
+  правила поверхности Win32 `windows::surface`, `visibility_muted`, `last_monitor`), глобальные
+  события окон. Остаются шесть регистраций по обязательствам (`on_input`, `on_request_frame`,
+  `on_state_changed`, `on_close`, `on_should_close`, `on_surface_status_change`) — их заменит LY44.
+  **Добавлено сверх строки** (факта или команды в снимке не хватало): (1) `WindowCommand::Close` и
+  `WindowCapabilities::closes` — закрытие стало командой здесь, а не в LY42 (иначе `close` нельзя
+  удалить): `Native` на Win32, macOS, iOS, winit и headless, `Emulated` на Web (холст уходит),
+  `Unavailable` на Android (окно одно, приложение его не закрывает; строка «Open and close a
+  window» в `docs/platform-parity.md` это называет); (2) `WindowState::is_seen` — «видно и не
+  свёрнуто», одно чтение вместо правил поверхности, им пользуются жизненный цикл `flui-app` и
+  presentation; (3) `HeadlessWindowSystem` и `MockWindow::window_system` — что держит оконная
+  система headless, readback conformance-фикстуры вместо геттеров; (4) `ActivityWindow::scale`
+  (Android, `pub(crate)`) вместо геттера масштаба.
+  **Потребители.** `flui-app`: одна подписка на окно (`WindowInstall::observe_window`), которая
+  сравнивает снимок с прежним (`RuntimeEvent::of_state_change`) и отдаёт `WindowStateChanged`,
+  `Resized`, `SafeAreaChanged`, `AppearanceChanged`, `WindowExecution`, `WindowFocus`,
+  `WindowVisibility(is_seen)`, `WindowHover`; смена дисплея или масштаба будит owner, чтобы
+  снимок дисплеев перечитался; `SurfaceGeometry::of` читает размеры и масштаб (до первых рисуемых
+  метрик — масштаб 1); закрытие, показ и активация — команды (`Activate` с `Unsupported`
+  игнорируется). `flui-runtime` (presentation, media query, кадр, предпочтения, запись), drag
+  `flui-interaction`, `flui-view`, `flui-testing` (conformance читает возможности из снимка,
+  закрывает командой, когда `closes` есть), `examples/{scene_render,web_demo}` — на снимке. Около
+  30 тестовых двойников потеряли методы; двойники, чьи `capabilities()` были `ALL`, перенесли это
+  в снимок. **Поведение, найденное по пути.** Web: окно перечитывает состояние на каждом
+  пробуждении owner'а, иначе переход на другой экран не доходил до `display` снимка
+  (`web_window_names_the_display_the_snapshot_describes` падал); winit/Linux: окно публикует схему
+  портала, которой его засеяли при открытии (`color-scheme` в `linux_preferences` падал под
+  xvfb); `StateChanged`, поставленный в очередь внутри упавшего колбэка, доставляется — ревизия уже
+  опубликована (`window_callback_unwind` теперь ждёт этого).
+  Тесты (откат проверен): `window_facts_arrive_only_in_the_snapshot` (`window_state_contract`,
+  имя, которое цитирует ADR-0254) — каждый факт даёт одну ревизию и ровно одно `on_state_changed`,
+  услышанное до любого чтения `state()`; без публикации в `report_hover` падает «hover: heard
+  []»; `a_state_change_survives_a_failed_callback` (юнит в `owner::handlers`) — без доставки
+  `StateChanged` при восстановлении падает «the state notice was lost»; `compile_fail` doctest на
+  `PlatformWindow` (`window.is_focused()`, E0599). Переписаны на снимок: `displays.rs`,
+  `contract.rs` (`a_dpi_change_publishes_the_new_scale_once`,
+  `moves_within_one_monitor_keep_the_display`), `windows_window_commands.rs`
+  (`a_dpi_change_announces_one_whole_snapshot`), `real_loop_tests.rs` (программное закрытие не
+  спрашивает `on_should_close`), X11 (`is_seen` вместо отчётов видимости), wasm32 и браузерные.
+  `module-dag`: 1 исключение, без изменений; `globals` — 56; запись `platform_window.rs` в
+  `markers.toml` удалена (маркеров не осталось). Документы: ARCHITECTURE.md ядра (пункт «снимок —
+  единственный источник факта» вместо «колбэк факта после снимка», Web на пробуждении, дисплей
+  Win32 и macOS, тема, видимость), `flui-platform` (новый пункт), `flui-runtime`, README двух
+  крейтов, `docs/architecture.md`, `docs/platform-parity.md`, `changelog.d/platform-snapshot-consumers.md`.
+  Проверки: `cargo fmt`; clippy `-D warnings` рабочего пространства `--all-targets` обычный и с
+  `flui-native/winit-backend`; nextest `flui-native`, `flui-app`, `flui-platform` — 366, с
+  `winit-backend` — 401 (2 пропущены; оба раза падает только trybuild
+  `owner_thread_token_has_no_default` с `main`, как в LY40), `flui-runtime`, `flui-testing`,
+  `flui-view`, `flui-interaction`, `flui` — 327 (14); doctest'ы `flui-platform`, `flui-native`,
+  `flui-testing`, `flui-view`; `.stderr` `platform_and_host_window_are_sealed` перегенерирован
+  (сдвинулись только номера строк); clippy Android `-p flui-native -p flui-app --all-targets`,
+  macOS lib `flui-native` обычный и с `winit-backend`, iOS lib (`DOCS_RS=1`), wasm32 (`flui-native`,
+  `flui-web-demo` `--all-targets`); `wasm-check`, `wasm-test` — 51; `checks`, `doc-strict`, `reach`.
+  WSL Ubuntu 24.04 (`WAYLAND_DISPLAY` и `XDG_SESSION_TYPE` сняты): clippy `-p flui-native -p
+  flui-app -p flui-platform -p flui-testing --all-targets` и с `winit-backend`; nextest
+  `FLUI_HEADLESS=1` — 212, под xvfb с `winit-backend` — 340 (1 пропущен), `--all-features` — 296;
+  rustdoc `-D warnings --document-private-items` без признаков и с `winit-backend`. Не
+  запускалось: `flui-app` под macOS и iOS (на этом хосте нет `cc` для `psm`), Mac и iPhone — в
+  очереди vanyastaff/flui#1840; `cross-typecheck` (нет `zig`); полный nextest рабочего
+  пространства (виджеты и пакеты — только clippy); браузер — у координатора: перенос окна
+  страницы на другой экран меняет `display` снимка, `freeze`/`resume` и фокус холста видны одним
+  `on_state_changed` каждое.
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`
