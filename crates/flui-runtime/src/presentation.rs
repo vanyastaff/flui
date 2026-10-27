@@ -1449,7 +1449,7 @@ impl PresentationState {
     pub(crate) fn publish_input_regions(&self) {
         let regions = self.staged_input_regions.take();
         *self.published_input_regions.borrow_mut() = Rc::clone(&regions);
-        self.with_window(|window| window.set_input_regions(&regions));
+        self.hand_input_regions(&regions);
     }
 
     /// Hands the window the last committed input regions again, after it moved: on another
@@ -1457,7 +1457,16 @@ impl PresentationState {
     /// for a frame.
     pub(crate) fn republish_input_regions(&self) {
         let regions = Rc::clone(&self.published_input_regions.borrow());
-        self.with_window(|window| window.set_input_regions(&regions));
+        self.hand_input_regions(&regions);
+    }
+
+    /// Hands `regions` to the window. A window whose input capabilities leave input regions
+    /// `Unavailable` refuses them on every frame; the regions then have no effect, which
+    /// those capabilities already say, so the refusal is only traced.
+    fn hand_input_regions(&self, regions: &[flui_platform::input_regions::InputRegion]) {
+        if let Some(Err(refused)) = self.with_window(|window| window.set_input_regions(regions)) {
+            tracing::trace!(%refused, "the window takes no input regions");
+        }
     }
 
     /// This presentation's haptics host: its frame queue and outcome

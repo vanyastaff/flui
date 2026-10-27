@@ -774,6 +774,26 @@ impl PlatformWindow for WinitWindow {
         Ok(())
     }
 
+    /// winit takes no refresh-rate request.
+    fn set_frame_rate_hint(
+        &self,
+        _hint: flui_platform::FrameRateHint,
+    ) -> Result<(), flui_platform::Unsupported> {
+        Err(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::NotOnThisPlatform,
+        ))
+    }
+
+    /// winit hands the system no input region.
+    fn set_input_regions(
+        &self,
+        _regions: &[flui_platform::input_regions::InputRegion],
+    ) -> Result<(), flui_platform::Unsupported> {
+        Err(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::NotOnThisPlatform,
+        ))
+    }
+
     // GPU integration: `winit::window::Window` implements `HasWindowHandle`/
     // `HasDisplayHandle` directly — without these overrides both fall through
     // to the trait defaults (`Err(HandleError::Unavailable)`), which is what

@@ -25,18 +25,18 @@ note: required by a bound in `flui_native::Platform`
              flui_native::HostPlatform<H>
 
 error[E0046]: not all trait items implemented, missing: `capture_text_sizing`, `text_store_host`
-   --> tests/ui/platform_and_host_window_are_sealed.rs:186:1
+   --> tests/ui/platform_and_host_window_are_sealed.rs:188:1
     |
-186 | impl HostWindow for OutsideWindow {
+188 | impl HostWindow for OutsideWindow {
     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ missing `capture_text_sizing`, `text_store_host` in implementation
     |
     = help: implement the missing item: `fn capture_text_sizing(&self, _: flui_native::host_window::sealed::OwnerThreadToken) -> Result<TextSizingCaptureState, TextSizingCaptureError> { todo!() }`
     = help: implement the missing item: `fn text_store_host(&self, _: flui_native::host_window::sealed::OwnerThreadToken) -> Option<Rc<(dyn TextStoreHost + 'static)>> { todo!() }`
 
 error[E0277]: `OutsideWindow` cannot implement `HostWindow`: the trait is sealed
-   --> tests/ui/platform_and_host_window_are_sealed.rs:186:21
+   --> tests/ui/platform_and_host_window_are_sealed.rs:188:21
     |
-186 | impl HostWindow for OutsideWindow {
+188 | impl HostWindow for OutsideWindow {
     |                     ^^^^^^^^^^^^^ not a window of a host in `flui-native`
     |
 help: the trait `flui_native::host_window::sealed::Sealed` is not implemented for `OutsideWindow`

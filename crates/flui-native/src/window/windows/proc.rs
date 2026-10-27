@@ -173,6 +173,9 @@ pub(crate) struct WindowContext {
     /// The windows the platform tracks. Weak: tracking and cache access do
     /// not keep wrappers or their state alive.
     pub windows: std::sync::Weak<WindowSet>,
+    /// What the window honours and observes, fixed when it opens: the build
+    /// it runs on does not change under it.
+    pub(crate) capabilities: flui_platform::WindowCapabilities,
     pub(crate) window_state: std::sync::Weak<Mutex<WindowRecord>>,
     /// The published window state, shared with the wrapper; refreshed by
     /// [`Self::publish_window_state`].
@@ -382,6 +385,7 @@ impl WindowContext {
             appearance: self.appearance.get(),
             active: self.active.get(),
             hovered: self.delivery.hovered(),
+            capabilities: self.capabilities,
         }
     }
 
@@ -1386,6 +1390,8 @@ pub(crate) struct OwnerTracking {
     pub(crate) active: bool,
     /// Whether the mouse is over the window, as its input last reported it.
     pub(crate) hovered: bool,
+    /// What the window honours and observes.
+    pub(crate) capabilities: flui_platform::WindowCapabilities,
 }
 
 /// The window's title as the system holds it, `None` when it cannot be read.
@@ -1420,6 +1426,7 @@ pub(crate) fn sample_state(
         appearance,
         active,
         hovered,
+        capabilities,
     } = tracking;
     let (scale, visible, focused, cached) = {
         let record = record.lock();
@@ -1521,7 +1528,7 @@ pub(crate) fn sample_state(
         execution: flui_platform::WindowExecutionState::Running,
         hovered,
         active,
-        capabilities: super::window::window_capabilities(),
+        capabilities,
     }
     .onto(state)
 }

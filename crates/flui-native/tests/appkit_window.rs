@@ -32,13 +32,16 @@ mod cases {
     use flui_foundation::geometry::{Size, WindowMetrics};
     use flui_native::testing::appkit;
     use flui_native::{HostWindow, MacOSPlatform, Platform as _};
-    use flui_platform::{PlatformWindow, WindowCommand, WindowOptions};
+    use flui_platform::{
+        Availability, PlatformWindow, WindowCommand, WindowMaterial, WindowOptions,
+    };
     use flui_testing::window_commands::AdmitAndApply as _;
     use flui_testing::window_conformance::{self, Readback, WindowFixture};
     use objc2::MainThreadMarker;
     use objc2::rc::Retained;
     use objc2_app_kit::{
-        NSApplication, NSApplicationActivationPolicy, NSView, NSWindow, NSWindowOcclusionState,
+        NSApplication, NSApplicationActivationPolicy, NSView, NSVisualEffectMaterial,
+        NSVisualEffectView, NSWindow, NSWindowOcclusionState,
     };
 
     pub(super) const CASES: &[(&str, fn())] = &[
@@ -144,6 +147,7 @@ mod cases {
                     && ns_window
                         .occlusionState()
                         .contains(NSWindowOcclusionState::Visible),
+                material: self.material(),
             }
         }
 
@@ -175,6 +179,12 @@ mod cases {
             self.ns_window.performClose(None);
             self.settle();
         }
+
+        /// The AppKit input table: an AppKit window hands the system no input
+        /// region.
+        fn input_regions(&self) -> Availability {
+            flui_native::input::availability::macos().input_regions()
+        }
     }
 
     impl Drop for AppKitFixture {
@@ -183,6 +193,21 @@ mod cases {
             // is logged, so a case already unwinding keeps its first failure.
             self.window.close_for_cleanup();
             self.settle();
+        }
+    }
+
+    impl AppKitFixture {
+        /// The contract's material AppKit draws behind the window: an
+        /// `NSVisualEffectView` with the window-background material as the
+        /// content view is `System`, another material has no name here, and
+        /// FLUI's view as the content view, no effect view, is `Opaque`.
+        fn material(&self) -> Option<WindowMaterial> {
+            let content = self.ns_window.contentView()?;
+            match content.downcast::<NSVisualEffectView>() {
+                Ok(effect) => (effect.material() == NSVisualEffectMaterial::WindowBackground)
+                    .then_some(WindowMaterial::System),
+                Err(_) => Some(WindowMaterial::Opaque),
+            }
         }
     }
 

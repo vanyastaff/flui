@@ -231,6 +231,8 @@ impl PlatformWindow for TestWindow {
         None
     }
 
+    flui_platform::window_takes_no_frame_verbs!();
+
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
         *self.cursor.lock() = cursor;
         Ok(())

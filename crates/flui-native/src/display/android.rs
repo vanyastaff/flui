@@ -13,11 +13,16 @@ pub(crate) use source::AndroidDisplays;
 pub(crate) mod sample {
     //! The rules of the Android display source that need no JVM: what a sample of a
     //! `Display` becomes in the snapshot, its refresh rate as a period (by the
-    //! contract's `RefreshPeriod::from_hz`), and what rate a window asks for.
-    //! Every host runs their tests.
+    //! contract's `RefreshPeriod::from_hz`), what rate a window asks for, and
+    //! whether the system takes the request at all. Every host runs their tests.
+
+    use std::sync::Arc;
 
     use flui_foundation::geometry::{Bounds, Point, Size};
-    use flui_platform::{DisplayId, DisplayInfo, FrameRateHint, RefreshPeriod};
+    use flui_platform::{Availability, DisplayId, DisplayInfo, FrameRateHint, RefreshPeriod};
+
+    use crate::owner::android::ndk::{NdkFn, SetFrameRate, SymbolSource};
+    use crate::version::gate::android::AndroidApi;
 
     /// What one `android.view.Display` reported, before it has an identity.
     #[derive(Debug, Clone, PartialEq)]
@@ -79,6 +84,81 @@ pub(crate) mod sample {
         match hint {
             FrameRateHint::High => max_hz.unwrap_or(0.0),
             _ => 0.0,
+        }
+    }
+
+    /// The request a window's refresh rate rides on, `ANativeWindow_setFrameRate`,
+    /// where this system has it (API 30 and a library that exports it); with it, the
+    /// window's `frame_rate_hint` capability.
+    pub(crate) struct FrameRateRequests(Option<NdkFn<SetFrameRate>>);
+
+    impl FrameRateRequests {
+        /// The request as `library` at `api` has it.
+        pub(crate) fn resolve(library: &Arc<dyn SymbolSource>, api: AndroidApi) -> Self {
+            Self(NdkFn::resolve(library, api))
+        }
+
+        /// The window's `frame_rate_hint` capability: `Native` exactly when the
+        /// request resolved.
+        pub(crate) const fn availability(&self) -> Availability {
+            if self.0.is_some() {
+                Availability::Native
+            } else {
+                Availability::Unavailable
+            }
+        }
+
+        /// The request, where the system has it.
+        #[cfg_attr(
+            not(target_os = "android"),
+            expect(dead_code, reason = "only the Android source sends the request")
+        )]
+        pub(crate) const fn handle(&self) -> Option<&NdkFn<SetFrameRate>> {
+            self.0.as_ref()
+        }
+    }
+
+    #[cfg(test)]
+    mod frame_rate_tests {
+        use std::ffi::{CStr, c_void};
+        use std::ptr::NonNull;
+        use std::sync::Arc;
+
+        use flui_platform::Availability;
+
+        use super::FrameRateRequests;
+        use crate::owner::android::ndk::SymbolSource;
+        use crate::version::gate::android::AndroidApi;
+
+        /// A library that exports `ANativeWindow_setFrameRate`, or nothing.
+        struct Library(bool);
+
+        impl SymbolSource for Library {
+            fn symbol(&self, name: &CStr) -> Option<NonNull<c_void>> {
+                // An address no test calls: the lookup only has to find it.
+                (self.0 && name == c"ANativeWindow_setFrameRate").then(NonNull::dangling)
+            }
+        }
+
+        /// A window takes a refresh-rate request exactly where the system has
+        /// one: API 30 and a library that exports it.
+        #[test]
+        fn the_frame_rate_capability_follows_the_request() {
+            let cases = [
+                (29, true, Availability::Unavailable),
+                (30, false, Availability::Unavailable),
+                (30, true, Availability::Native),
+                (35, true, Availability::Native),
+            ];
+            for (level, exported, wanted) in cases {
+                let library: Arc<dyn SymbolSource> = Arc::new(Library(exported));
+                let requests = FrameRateRequests::resolve(&library, AndroidApi::from_level(level));
+                assert_eq!(
+                    requests.availability(),
+                    wanted,
+                    "API {level}, exported {exported}"
+                );
+            }
         }
     }
 
@@ -232,12 +312,10 @@ pub(crate) mod source {
     };
     use parking_lot::Mutex;
 
-    use super::sample::{RawDisplay, max_refresh_hz, requested_frame_rate};
+    use super::sample::{FrameRateRequests, RawDisplay, max_refresh_hz, requested_frame_rate};
     use crate::display::source::DisplaySource;
     use crate::error::PlatformError;
-    use crate::owner::android::ndk::{
-        AChoreographer, NdkFn, RefreshRateWatch, SetFrameRate, SymbolSource,
-    };
+    use crate::owner::android::ndk::{AChoreographer, RefreshRateWatch, SymbolSource};
     use crate::owner::panic_boundary::{AfterPanic, os_entry};
     use crate::owner::signal::OwnerSignal;
     use crate::owner::watch::Watch;
@@ -346,7 +424,7 @@ pub(crate) mod source {
         source: Arc<DisplaySource>,
         api: AndroidApi,
         library: Arc<dyn SymbolSource>,
-        set_frame_rate: Option<NdkFn<SetFrameRate>>,
+        frame_rate: FrameRateRequests,
         invalidator: Arc<Invalidator>,
         activity: Mutex<Option<ActivityDisplay>>,
         /// Set when a sample found another highest rate for the Activity's display,
@@ -374,7 +452,7 @@ pub(crate) mod source {
                 }),
                 source,
                 api,
-                set_frame_rate: NdkFn::resolve(&library, api),
+                frame_rate: FrameRateRequests::resolve(&library, api),
                 library,
                 activity: Mutex::new(None),
                 max_rate_changed: AtomicBool::new(false),
@@ -454,11 +532,15 @@ pub(crate) mod source {
             self.max_rate_changed.swap(false, Ordering::AcqRel)
         }
 
+        fn frame_rate_hint(&self) -> flui_platform::Availability {
+            self.frame_rate.availability()
+        }
+
         /// Ask the system for the refresh rate `hint` names on `window`, if this
         /// system has the request (API 30).
         #[expect(unsafe_code, reason = "calls ANativeWindow_setFrameRate")]
         fn request_frame_rate(&self, window: &NativeWindow, hint: FrameRateHint) {
-            let Some(set_frame_rate) = &self.set_frame_rate else {
+            let Some(set_frame_rate) = self.frame_rate.handle() else {
                 return;
             };
             let max_hz = self.activity.lock().and_then(|activity| activity.max_hz);

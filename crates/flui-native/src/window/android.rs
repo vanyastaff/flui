@@ -19,8 +19,8 @@ use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{EdgeInsets, Size};
 use flui_platform::input_regions::{InputRegion, InputRegionKind};
 use flui_platform::{
-    AdmittedCommand, ApplyError, FrameRateHint, WindowAppearance, WindowCapabilities,
-    WindowGeometry, WindowOptions, WindowState,
+    AdmittedCommand, ApplyError, FrameRateHint, Unsupported, UnsupportedReason, WindowAppearance,
+    WindowCapabilities, WindowGeometry, WindowOptions, WindowState,
 };
 use parking_lot::Mutex;
 
@@ -468,9 +468,18 @@ fn sample_state(
         hovered: kept.hovered,
         // An Activity has no activation apart from its window's focus.
         active: focused,
-        capabilities: WindowCapabilities::NONE,
+        capabilities: activity_capabilities(displays),
     }
     .onto(state)
+}
+
+/// What an Activity's window honours: no command, as the system owns the
+/// surface and the Activity's lifetime, and a refresh-rate request where the
+/// system takes one.
+fn activity_capabilities(displays: &dyn crate::owner::android::HostDisplays) -> WindowCapabilities {
+    let mut capabilities = WindowCapabilities::NONE;
+    capabilities.frame_rate_hint = displays.frame_rate_hint();
+    capabilities
 }
 
 /// Running while the Activity is resumed, independent of focus and of the
@@ -598,8 +607,8 @@ impl host::Window<AndroidLoop> for AndroidWindow {
         owner.window.lock().as_ref().map(|_| WindowId(0))
     }
 
-    fn capabilities(_: &AndroidLoop, _: &WindowPositions<ActivityRef>) -> WindowCapabilities {
-        WindowCapabilities::NONE
+    fn capabilities(owner: &AndroidLoop, _: &WindowPositions<ActivityRef>) -> WindowCapabilities {
+        activity_capabilities(owner.displays.as_ref())
     }
 
     fn frame_inset(_: &AndroidLoop, _: &WindowPositions<ActivityRef>, _: f64) -> Size<f64> {
@@ -639,9 +648,14 @@ impl PlatformWindow for AndroidWindow {
         WindowId(1)
     }
 
-    fn set_frame_rate_hint(&self, hint: FrameRateHint) {
+    /// Kept and sent with every native window the Activity gets, from API 30.
+    fn set_frame_rate_hint(&self, hint: FrameRateHint) -> Result<(), Unsupported> {
+        if !self.displays.frame_rate_hint().is_available() {
+            return Err(Unsupported::new(UnsupportedReason::NotOnThisDevice));
+        }
         *self.frame_rate_hint.lock() = hint;
         self.apply_frame_rate_hint();
+        Ok(())
     }
 
     fn gesture_geometry(
@@ -720,15 +734,15 @@ impl PlatformWindow for AndroidWindow {
     /// hands the exclusion rectangles to the decor view on the Java main thread. The
     /// native surface fills the decor view, so both share one pixel space. Before API 29
     /// the OS has no such call and the capability reports `Unavailable`.
-    fn set_input_regions(&self, regions: &[InputRegion]) {
+    fn set_input_regions(&self, regions: &[InputRegion]) -> Result<(), Unsupported> {
         if self.api.since::<GestureExclusion>().is_none() {
-            return;
+            return Err(Unsupported::new(UnsupportedReason::NotOnThisDevice));
         }
         let scale = self.scale();
         let rects: Vec<[i32; 4]> = {
             let mut projection = self.input_regions.lock();
             let Some(sent) = projection.update(regions, scale, None) else {
-                return;
+                return Ok(());
             };
             sent.iter()
                 .filter(|region| region.kind() == InputRegionKind::SystemGestureExclusion)
@@ -750,6 +764,7 @@ impl PlatformWindow for AndroidWindow {
                 );
             }
         }));
+        Ok(())
     }
 
     // ==================== Callback Registration ====================

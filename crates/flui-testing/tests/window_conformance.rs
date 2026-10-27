@@ -6,12 +6,13 @@
 use std::sync::Arc;
 
 use flui_native::{HeadlessPlatform, HostWindow, MockWindow, Platform};
+use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::{
     AdmittedCommand, ApplyError, CommandRefusal, CursorError, CursorIcon, PlatformHaptics,
     PlatformSystemChrome, PlatformTextInput, PlatformWindow, WindowCommand, WindowId, WindowMode,
     WindowState,
 };
-use flui_platform::{WindowCapabilities, WindowOptions};
+use flui_platform::{Availability, WindowCapabilities, WindowOptions};
 use flui_testing::window_conformance::{self, Readback, WindowFixture};
 
 /// A headless window with a fault of its own: its snapshot claims every
@@ -56,6 +57,26 @@ impl PlatformWindow for Faulty {
         }
         self.0.apply(command)
     }
+    fn set_frame_rate_hint(
+        &self,
+        hint: flui_platform::FrameRateHint,
+    ) -> Result<(), flui_platform::Unsupported> {
+        match self.1 {
+            Fault::VerbsIgnoreTheirCapabilities => Ok(()),
+            _ => self.0.set_frame_rate_hint(hint),
+        }
+    }
+
+    fn set_input_regions(
+        &self,
+        regions: &[flui_platform::input_regions::InputRegion],
+    ) -> Result<(), flui_platform::Unsupported> {
+        match self.1 {
+            Fault::VerbsIgnoreTheirCapabilities => Ok(()),
+            _ => self.0.set_input_regions(regions),
+        }
+    }
+
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
         self.0.set_cursor(cursor)
     }
@@ -104,11 +125,27 @@ enum Fault {
     IgnoresTheToken,
     /// The window's snapshot holds no metrics.
     SnapshotWithoutFacts,
+    /// The window's verbs take everything, whatever its capabilities say: the
+    /// inert default every verb had before it answered `Unsupported`.
+    VerbsIgnoreTheirCapabilities,
 }
 
 impl Fixture {
     fn new(capabilities: WindowCapabilities, fault: Option<Fault>) -> Self {
-        let platform = HeadlessPlatform::new().with_window_capabilities(capabilities);
+        Self::with_input(capabilities, None, fault)
+    }
+
+    /// A headless window under `capabilities` whose platform delivers
+    /// `input` in place of its default input availability.
+    fn with_input(
+        capabilities: WindowCapabilities,
+        input: Option<InputCapabilities>,
+        fault: Option<Fault>,
+    ) -> Self {
+        let mut platform = HeadlessPlatform::new().with_window_capabilities(capabilities);
+        if let Some(input) = input {
+            platform = platform.with_input_availability(input);
+        }
         let model = platform
             .open_window(
                 WindowOptions::default(),
@@ -120,7 +157,8 @@ impl Fixture {
                 fault @ (Fault::ClaimsWhatItCannot
                 | Fault::SnapshotWithoutFacts
                 | Fault::IgnoresClose
-                | Fault::IgnoresTheToken),
+                | Fault::IgnoresTheToken
+                | Fault::VerbsIgnoreTheirCapabilities),
             ) => Arc::new(Faulty(Arc::clone(&model) as _, fault)),
             _ => Arc::clone(&model) as _,
         };
@@ -147,6 +185,7 @@ impl WindowFixture for Fixture {
             // The headless desktop's activation is its focus.
             active: system.focused,
             visible: system.visible,
+            material: Some(system.material),
         }
     }
 
@@ -190,6 +229,10 @@ impl WindowFixture for Fixture {
         self.mock().simulate_capabilities(revised);
         true
     }
+
+    fn input_regions(&self) -> Availability {
+        self.mock().window_system().input_regions
+    }
 }
 
 fn only_the_move_and_size_commands() -> WindowCapabilities {
@@ -217,6 +260,33 @@ fn the_headless_window_conforms_under_every_capability_set() {
     ] {
         let violations = window_conformance::check(&mut Fixture::new(capabilities, None));
         assert!(violations.is_empty(), "{name}: {violations:?}");
+    }
+    let without_input_regions = InputCapabilities::builder()
+        .pen(Availability::Native)
+        .build();
+    let violations = window_conformance::check(&mut Fixture::with_input(
+        WindowCapabilities::ALL,
+        Some(without_input_regions),
+        None,
+    ));
+    assert!(violations.is_empty(), "no input regions: {violations:?}");
+}
+
+fn a_window_whose_verbs_ignore_their_capabilities_is_caught() {
+    for capabilities in [WindowCapabilities::NONE, WindowCapabilities::ALL] {
+        let without_input_regions = InputCapabilities::builder().build();
+        let checks: Vec<_> = window_conformance::check(&mut Fixture::with_input(
+            capabilities,
+            Some(without_input_regions),
+            Some(Fault::VerbsIgnoreTheirCapabilities),
+        ))
+        .into_iter()
+        .map(|violation| violation.check)
+        .collect();
+        assert_eq!(
+            checks,
+            ["per_frame_verbs_report_unsupported_exactly_when_unavailable"]
+        );
     }
 }
 
@@ -298,6 +368,10 @@ fn window_conformance_checks() {
             (
                 "a_window_that_ignores_the_token_is_caught",
                 a_window_that_ignores_the_token_is_caught as fn(),
+            ),
+            (
+                "a_window_whose_verbs_ignore_their_capabilities_is_caught",
+                a_window_whose_verbs_ignore_their_capabilities_is_caught as fn(),
             ),
         ],
     );
