@@ -292,7 +292,7 @@ use wasm_bindgen::JsCast;
 
 #[cfg(target_arch = "wasm32")]
 use crate::{
-    drag::offers::{OfferTable, TransferCompleter, payload_of_bytes},
+    drag::offers::{OfferTable, payload_of_bytes},
     owner::handlers::WindowCallbacks,
     owner::panic_boundary::contain_owner_callback,
     owner::web::event::{answer, pointer_position},
@@ -526,7 +526,7 @@ impl DataTransferSource for WebTransfer {
                         limit: limits.max_bytes,
                     }));
                 }
-                let (request, completer) = TransferCompleter::channel();
+                let (request, completer) = TransferRequest::pending();
                 js_sys::futures::spawn_local(async move {
                     let result = js_sys::futures::JsFuture::from(file.array_buffer())
                         .await

@@ -361,7 +361,7 @@ use parking_lot::Mutex;
 
 #[cfg(target_os = "android")]
 use crate::{
-    drag::offers::{OfferTable, TransferCompleter},
+    drag::offers::OfferTable,
     owner::android::java_view::{ActivityDragSource, JavaView, ViewEvent, ViewTransfer},
     owner::panic_boundary::contain_owner_callback,
     owner::slot::OwnerSlot,
@@ -676,7 +676,7 @@ impl DataTransferSource for AndroidTransfer {
                 let Some(view) = self.view.upgrade() else {
                     return TransferRequest::ready(Err(TransferError::SourceGone));
                 };
-                let (request, completer) = TransferCompleter::channel();
+                let (request, completer) = TransferRequest::pending();
                 let spawned = std::thread::Builder::new()
                     .name("flui-drop-read".into())
                     .spawn(move || {

@@ -400,7 +400,7 @@ trait depends on `flui-platform` instead.
   `owner/`, `version/` and other features' models. The models are
   `clipboard::lock` (the Win32 session lock the Win32 and `arboard` clipboards
   share), `drag::offers` (the offer table every data-transfer source mints its
-  ids in, `TransferCompleter`, the producer half of a delivery, `TransferUri`,
+  ids in, `TransferUri`,
   a URI list as the hosts that read paths or URIs write it, and what a media
   type offers and its bytes carry, shared
   by Android and the Web), `accessibility::bridge` and `haptics::degradation`.
@@ -2953,7 +2953,7 @@ Control means Unicode category Cc; combining means Mc or a nonzero canonical
 combining class. A scalar or grapheme count does not establish that grammar.
 Refused values become Unidentified without discarding physical code, location,
 timestamp, modifiers, composition or the Down/Up observation. No normalization
-rewrites source meaning. `Key::character` and native producers keep their
+rewrites source meaning. Common KeyText and native producers keep their
 nonempty-text contract (ADR-0143).
 
 The private Web conversion uses ICU4X `icu_properties` and `icu_normalizer`

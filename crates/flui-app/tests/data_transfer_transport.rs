@@ -9,13 +9,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Waker};
 
-use flui_foundation::{ClaimSlot, DataTransferId, claim_slot};
+use flui_foundation::DataTransferId;
 use flui_platform::{
     data_transfer::DataTransferOffer, data_transfer::DataTransferSource,
     data_transfer::DropFeedback, data_transfer::RepresentationDescriptor,
     data_transfer::RepresentationIndex, data_transfer::TransferActions,
-    data_transfer::TransferError, data_transfer::TransferFormat, data_transfer::TransferLimits,
-    data_transfer::TransferPayload, data_transfer::TransferRequest,
+    data_transfer::TransferCompleter, data_transfer::TransferError, data_transfer::TransferFormat,
+    data_transfer::TransferLimits, data_transfer::TransferPayload, data_transfer::TransferRequest,
 };
 use flui_scheduler::{OwnerFrame, UpdateScheduler};
 use parking_lot::Mutex;
@@ -43,9 +43,6 @@ fn poll_once(
 // Mock source: the seven stages over a real AsyncDriver
 // ============================================================================
 
-/// The producer half a backend keeps of a parked delivery.
-type Completer = ClaimSlot<Result<TransferPayload, TransferError>>;
-
 /// A `DataTransferSource` with the same shape a native backend has: ids
 /// minted once and retired for good, lazy delivery through parked
 /// completers, and a feedback cache — enough to drive every transport stage
@@ -62,7 +59,7 @@ struct MockState {
     /// Text payload per live offer, delivered when the test releases it.
     payloads: Vec<(DataTransferId, String)>,
     /// Deliveries parked until `deliver_all` (the "async backend" half).
-    parked: Vec<(DataTransferId, Completer, TransferLimits)>,
+    parked: Vec<(DataTransferId, TransferCompleter, TransferLimits)>,
     /// Latest stage-2 feedback per offer, as a backend would cache it.
     feedback: Vec<(DataTransferId, DropFeedback)>,
     /// Offers retired through stage-6 conclusion.
@@ -117,8 +114,7 @@ impl MockSource {
                 Some(payload) => Ok(payload),
                 None => Err(TransferError::SourceGone),
             };
-            // A request its consumer dropped discards the result.
-            drop(completer.deliver(result));
+            completer.complete(result);
         }
     }
 
@@ -167,9 +163,9 @@ impl DataTransferSource for MockSource {
                 index: representation,
             }));
         }
-        let (completer, handle) = claim_slot(Arc::new(|| {}));
+        let (request, completer) = TransferRequest::pending();
         state.parked.push((id, completer, limits));
-        TransferRequest::pending(handle)
+        request
     }
 
     fn update_drop_feedback(&self, id: DataTransferId, feedback: DropFeedback) {

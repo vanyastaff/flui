@@ -44,15 +44,15 @@ use flui_foundation::DataTransferId;
 use flui_foundation::geometry::Point;
 use parking_lot::Mutex;
 
-use crate::drag::offers::{OfferTable, TransferCompleter, TransferUri};
+use crate::drag::offers::{OfferTable, TransferUri};
 use crate::owner::winit::FileDrops;
 use flui_platform::{DragDropEvent, WindowId};
 use flui_platform::{
     data_transfer::DataTransferOffer, data_transfer::DataTransferSource,
     data_transfer::DropFeedback, data_transfer::RepresentationDescriptor,
     data_transfer::RepresentationIndex, data_transfer::TransferActions,
-    data_transfer::TransferError, data_transfer::TransferFormat, data_transfer::TransferLimits,
-    data_transfer::TransferPayload, data_transfer::TransferRequest,
+    data_transfer::TransferCompleter, data_transfer::TransferError, data_transfer::TransferFormat,
+    data_transfer::TransferLimits, data_transfer::TransferPayload, data_transfer::TransferRequest,
 };
 
 /// One drag session over one window (at most one live per window).
@@ -344,7 +344,7 @@ impl DataTransferSource for WinitDataTransfer {
         }
         // Live pre-drop session: park the completer; the drop-burst freeze
         // completes it, and session teardown drops it (→ `SourceGone`).
-        let (request, completer) = TransferCompleter::channel();
+        let (request, completer) = TransferRequest::pending();
         session.pending.push((completer, limits));
         request
     }

@@ -1,7 +1,6 @@
 //! The drag feature's model: what a host's one data-transfer source keeps of
-//! the offers it mints ([`OfferTable`]), the producer half of a delivery
-//! (`TransferCompleter`, where a host completes off its thread), the entries
-//! of a URI list (`TransferUri`, where a host reads paths or URIs), and,
+//! the offers it mints ([`OfferTable`]), the entries of a URI list
+//! (`TransferUri`, where a host reads paths or URIs), and,
 //! for the files that name representations by media type (the browser's
 //! `DataTransfer` types and Android's `ClipDescription` speak media types
 //! alike), what a media type offers and the payload its bytes carry.
@@ -24,15 +23,6 @@ use flui_platform::data_transfer::TransferFormat;
     test
 ))]
 use flui_platform::data_transfer::{Mime, TransferPayload};
-#[cfg(any(
-    target_os = "android",
-    target_arch = "wasm32",
-    all(
-        feature = "winit-backend",
-        any(target_os = "windows", target_os = "macos", target_os = "linux")
-    ),
-))]
-use flui_platform::data_transfer::{TransferError, TransferRequest};
 
 // ============================================================================
 // The offer table: the single minting authority
@@ -126,58 +116,6 @@ impl OfferTable {
         // else: generation space exhausted for this slot — leave it out of
         // the free list forever rather than risk ABA reuse.
         representations
-    }
-}
-
-// ============================================================================
-// The producer half of a delivery
-// ============================================================================
-
-/// The producer half of a pending [`TransferRequest`], which the source keeps
-/// while the payload is read. `Send`: complete it from any thread. Completing
-/// after the consumer dropped its request discards the result; dropping it
-/// without completing resolves the request with [`TransferError::SourceGone`].
-///
-/// The claim slot preserves an existing unwind if executor delivery also
-/// panics, retaining exceptional opaque ownership rather than dropping it
-/// during continuation.
-#[cfg(any(
-    target_os = "android",
-    target_arch = "wasm32",
-    all(
-        feature = "winit-backend",
-        any(target_os = "windows", target_os = "macos", target_os = "linux")
-    ),
-))]
-#[derive(Debug)]
-pub(crate) struct TransferCompleter {
-    slot: flui_foundation::ClaimSlot<Result<TransferPayload, TransferError>>,
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_arch = "wasm32",
-    all(
-        feature = "winit-backend",
-        any(target_os = "windows", target_os = "macos", target_os = "linux")
-    ),
-))]
-impl TransferCompleter {
-    /// A pending request and the completer that resolves it: the source
-    /// keeps the completer and returns the request.
-    pub(crate) fn channel() -> (TransferRequest, Self) {
-        // A transfer's producer is consumed by completion; unlike a window
-        // request, it has no owner-side resource registry to wake on
-        // abandonment.
-        let (slot, handle) = flui_foundation::claim_slot(Arc::new(|| {}));
-        (TransferRequest::pending(handle), Self { slot })
-    }
-
-    /// Resolve the paired request; a no-op once the consumer dropped it.
-    pub(crate) fn complete(self, result: Result<TransferPayload, TransferError>) {
-        // A rejected result holds only the transport vocabulary, no
-        // caller-supplied destructor. Consuming self retires the producer.
-        drop(self.slot.deliver(result));
     }
 }
 

@@ -8,10 +8,9 @@
 //! - [`RepresentationDescriptor`] / [`TransferFormat`] / [`Mime`] — stage 2
 //!   negotiation vocabulary, plus [`DropFeedback`], the DnD reply half;
 //! - [`TransferLimits`] — stage-3 resource bounds;
-//! - [`TransferRequest`] — stage 4, the consumer half of a delivery: a future
-//!   over the foundation claim slot whose producer half the source keeps,
-//!   polled on the frame-driven `AsyncDriver` (no second async mechanism, no
-//!   runtime dependency);
+//! - [`TransferRequest`] / [`TransferCompleter`] — stage 4, a request/reply
+//!   pair over the foundation claim slot, polled on the frame-driven
+//!   `AsyncDriver` (no second async mechanism, no runtime dependency);
 //! - [`TransferPayload`] / [`TransferError`] — stage 5 outcomes;
 //! - [`DataTransferSource`] — the platform-side trait tying the stages
 //!   together, with [`NullDataTransferSource`] as the honest inert
@@ -20,12 +19,11 @@
 //! Each platform instance mints [`DataTransferId`]s in one table inside its
 //! one [`DataTransferSource`], so every id the app can observe is redeemable
 //! at `Platform::data_transfer()` and a stale id fails the generation check
-//! instead of aliasing a later offer. The table, like the producer half of a
-//! request, is the host's.
+//! instead of aliasing a later offer. The table is the host's.
 
 use std::sync::Arc;
 
-use flui_foundation::{ClaimHandle, ClaimOutcome, DataTransferId};
+use flui_foundation::{ClaimHandle, ClaimOutcome, ClaimSlot, DataTransferId, claim_slot};
 
 // ============================================================================
 // MIME + formats
@@ -370,8 +368,7 @@ enum RequestState {
 
 /// Stage-4 artifact, consumer half: one in-flight delivery. A `Send` future
 /// polled by the frame-driven async driver. Dropping it before completion
-/// cancels the delivery, which the producer sees as its claim slot abandoned
-/// ([`ClaimSlot::is_abandoned`](flui_foundation::ClaimSlot::is_abandoned)).
+/// cancels the delivery, observed by [`TransferCompleter::is_cancelled`].
 ///
 /// Executor clone, wake and retirement run outside the claim slot's locks.
 /// Caught wake failures preserve the delivery and retain opaque executor
@@ -384,17 +381,28 @@ pub struct TransferRequest {
 }
 
 impl TransferRequest {
-    /// A delivery the producer completes through the claim slot `handle` was
-    /// made with ([`claim_slot`](fn@flui_foundation::claim_slot)): the backend
-    /// keeps the slot and returns the request from
-    /// [`DataTransferSource::request`]. A value delivered after the request
-    /// was dropped is discarded; a slot dropped without delivering resolves
-    /// the request with [`TransferError::SourceGone`].
-    pub fn pending(handle: ClaimHandle<Result<TransferPayload, TransferError>>) -> Self {
-        Self {
-            state: RequestState::Pending(handle),
-            resolved: false,
-        }
+    /// A pending delivery and the completer that resolves it: the backend
+    /// keeps the completer and returns the request from
+    /// [`DataTransferSource::request`]. The two are made together, so no
+    /// other party can claim the delivery first:
+    ///
+    /// ```compile_fail
+    /// let (_slot, handle) = flui_foundation::claim_slot(std::sync::Arc::new(|| {}));
+    /// let _ = flui_platform::data_transfer::TransferRequest::pending(handle);
+    /// ```
+    #[must_use = "dropping the pair immediately resolves it as cancelled"]
+    pub fn pending() -> (Self, TransferCompleter) {
+        // A transfer's producer is consumed by completion; unlike a window
+        // request, it has no owner-side resource registry to wake on
+        // abandonment.
+        let (slot, handle) = claim_slot(Arc::new(|| {}));
+        (
+            Self {
+                state: RequestState::Pending(handle),
+                resolved: false,
+            },
+            TransferCompleter { slot },
+        )
     }
 
     /// An already-resolved request, for data that is genuinely in memory.
@@ -428,12 +436,43 @@ impl std::future::Future for TransferRequest {
                 Poll::Ready(ClaimOutcome::Delivered(result)) => result,
                 Poll::Ready(ClaimOutcome::OwnerGone) => Err(TransferError::SourceGone),
                 Poll::Ready(ClaimOutcome::AlreadyClaimed) => {
-                    panic!("BUG: a TransferRequest's claim handle was claimed before the request")
+                    panic!("BUG: TransferRequest polled again after it resolved")
                 }
             },
         };
         self.resolved = true;
         Poll::Ready(outcome)
+    }
+}
+
+/// Stage-4 artifact, producer half, which the source keeps while it reads the
+/// payload ([`TransferRequest::pending`]). `Send`: complete it from any
+/// thread. Completing after the consumer dropped its request discards the
+/// result; dropping it without completing resolves the request with
+/// [`TransferError::SourceGone`].
+///
+/// The claim slot preserves an existing unwind if executor delivery also
+/// panics, retaining exceptional opaque ownership rather than dropping it
+/// during continuation.
+#[derive(Debug)]
+pub struct TransferCompleter {
+    slot: ClaimSlot<Result<TransferPayload, TransferError>>,
+}
+
+impl TransferCompleter {
+    /// Resolve the paired request; a no-op once the consumer dropped it.
+    pub fn complete(self, result: Result<TransferPayload, TransferError>) {
+        // A rejected result holds only the transport vocabulary, no
+        // caller-supplied destructor. Consuming self retires the producer.
+        drop(self.slot.deliver(result));
+    }
+
+    /// True once the consumer dropped its request. A long-running producer
+    /// checks it to abandon work early; a blocking read already in progress
+    /// is not interrupted, and its result is discarded.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.slot.is_abandoned()
     }
 }
 

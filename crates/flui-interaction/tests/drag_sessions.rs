@@ -28,7 +28,7 @@ use flui_interaction::{
 };
 use flui_platform::data_transfer::{
     DataTransferOffer, DataTransferSource, DropFeedback, RepresentationIndex, TransferActions,
-    TransferError, TransferFormat, TransferLimits, TransferPayload, TransferRequest,
+    TransferCompleter, TransferFormat, TransferLimits, TransferPayload, TransferRequest,
 };
 use flui_platform::drag::{OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource};
 use flui_platform::{
@@ -75,12 +75,8 @@ struct RecordingSource {
     concluded: Mutex<Vec<DataTransferId>>,
     /// Concluding a drop panics, as a failing backend would.
     fail_conclude: std::sync::atomic::AtomicBool,
-    /// Each request with the claim slot a backend completes it through.
-    requests: Mutex<Vec<(DataTransferId, RepresentationIndex, Completer)>>,
+    requests: Mutex<Vec<(DataTransferId, RepresentationIndex, TransferCompleter)>>,
 }
-
-/// The producer half a backend keeps of a pending request.
-type Completer = flui_foundation::ClaimSlot<Result<TransferPayload, TransferError>>;
 
 impl DataTransferSource for RecordingSource {
     fn clipboard_offer(&self) -> Option<DataTransferOffer> {
@@ -93,9 +89,9 @@ impl DataTransferSource for RecordingSource {
         representation: RepresentationIndex,
         _limits: TransferLimits,
     ) -> TransferRequest {
-        let (completer, handle) = flui_foundation::claim_slot(Arc::new(|| {}));
+        let (request, completer) = TransferRequest::pending();
         self.requests.lock().push((id, representation, completer));
-        TransferRequest::pending(handle)
+        request
     }
 
     fn update_drop_feedback(&self, id: DataTransferId, feedback: DropFeedback) {
@@ -1430,7 +1426,7 @@ fn value_is_redeemed_only_in_source_runtime() {
             .pop()
             .expect("the text was requested");
         assert_eq!((asked, index), (id, RepresentationIndex(0)));
-        drop(completer.deliver(provider(index)));
+        completer.complete(provider(index));
         let fetch = target
             .fetched
             .borrow_mut()
@@ -2533,7 +2529,7 @@ fn the_last_fetch_resolved_off_thread_wakes_the_owner() {
         );
         assert_eq!(f.owner.next_deadline(), None, "nothing to conclude yet");
 
-        drop(completer.deliver(Ok(TransferPayload::Text("hello".into()))));
+        completer.complete(Ok(TransferPayload::Text("hello".into())));
         std::thread::spawn(move || {
             let mut fetch = std::pin::pin!(fetch);
             let mut context = std::task::Context::from_waker(std::task::Waker::noop());
