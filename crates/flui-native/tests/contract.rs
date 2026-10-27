@@ -284,6 +284,14 @@ mod native_windows {
             deadline_no_frame_can_service_does_not_spin,
         ),
         (
+            "deadline_window_declining_its_frames_does_not_spin",
+            deadline_window_declining_its_frames_does_not_spin,
+        ),
+        (
+            "deadline_hidden_window_declining_its_frames_does_not_spin",
+            deadline_hidden_window_declining_its_frames_does_not_spin,
+        ),
+        (
             "deadline_query_unwind_retains_replaced_hostile_captures",
             deadline_query_unwind_retains_replaced_hostile_captures,
         ),
@@ -1020,23 +1028,53 @@ mod native_windows {
     }
 
     fn deadline_no_frame_can_service_does_not_spin() {
-        // No window is open, so a delivery runs no frame callback.
-        let queries = unserviced_deadline_queries();
+        // No window is open, so a delivery runs no frame.
+        let queries = unserviced_deadline_queries(None);
         assert!(
             queries < 16,
             "a deadline no frame can service was re-armed {queries} times"
         );
     }
 
+    fn deadline_window_declining_its_frames_does_not_spin() {
+        // A visible window paints, and its handler declines every frame.
+        let queries = unserviced_deadline_queries(Some(true));
+        assert!(
+            queries < 16,
+            "a deadline a declining window received was re-armed {queries} times"
+        );
+    }
+
+    fn deadline_hidden_window_declining_its_frames_does_not_spin() {
+        // A hidden window gets its frame request directly, and its handler
+        // declines it.
+        let queries = unserviced_deadline_queries(Some(false));
+        assert!(
+            queries < 16,
+            "a deadline a declining hidden window received was re-armed {queries} times"
+        );
+    }
+
     // How many times the loop queries a hook that keeps answering one past
-    // instant, with no window open to run a frame, over a fixed span a
-    // watchdog ends. A delivery that ran no frame must stay delivered, so the
-    // loop parks.
-    fn unserviced_deadline_queries() -> usize {
+    // instant no frame services, over a fixed span a watchdog ends. `window`
+    // opens one window, visible or hidden, whose handler declines every frame
+    // (a handler with nothing to draw with yet). A delivery that ran no frame
+    // must stay delivered, so the loop parks.
+    fn unserviced_deadline_queries(window: Option<bool>) -> usize {
         let queries = Arc::new(AtomicUsize::new(0));
         let result = Arc::clone(&queries);
         Box::new(WindowsPlatform::new().expect("native Windows platform"))
             .run(Box::new(move |owner| {
+                if let Some(visible) = window {
+                    // No frame reaction: the recording handler declines.
+                    // The platform keeps the window open for the run.
+                    let _window = Opened::ready(
+                        &owner,
+                        WindowOptions::default()
+                            .with_visible(visible)
+                            .with_size(Size::new(160.0, 120.0)),
+                    );
+                }
                 let watchdog = owner.proxy();
                 std::thread::spawn(move || {
                     std::thread::sleep(Duration::from_millis(300));

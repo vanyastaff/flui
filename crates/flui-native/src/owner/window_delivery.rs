@@ -23,10 +23,11 @@ use parking_lot::Mutex;
 
 use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::{
-    CloseDecision, DispatchEventResult, FrameRequest, PlatformInput, SurfaceChange, WindowHandler,
+    CloseDecision, DispatchEventResult, FrameOutcome, FrameRequest, PlatformInput, SurfaceChange,
+    WindowHandler,
 };
 
-use super::call_point::{HandlerSlot, call, retire};
+use super::call_point::{Called, HandlerSlot, call, retire};
 use super::handlers::frame_request_now;
 use super::panic_boundary::contain_owner_callback;
 use super::signal::WindowWake;
@@ -203,9 +204,9 @@ pub struct WindowDelivery {
     /// newest last, whose platform follow-up must not be delivered again.
     unanswered_keys: Mutex<VecDeque<flui_platform::keyboard::KeyEvent>>,
     dispatch: Mutex<DispatchState>,
-    /// Incremented each time `frame_requested` runs, nested requests
-    /// delivered later included; a request with no handler to run leaves it
-    /// unchanged. Shareable so a backend can count frames across every window
+    /// Incremented each time `frame_requested` produces a frame (or panics),
+    /// nested requests delivered later included; a declined request, or one
+    /// with no handler to run, leaves it unchanged. Shareable so a backend can count frames across every window
     /// it opens ([`Self::counting_frames`]).
     frames_run: Arc<AtomicU64>,
     asking_to_close: AtomicBool,
@@ -234,8 +235,8 @@ impl WindowDelivery {
     }
 
     /// [`Self::new`], incrementing `frames_run` each time the handler's
-    /// `frame_requested` runs. A request with no handler to run (the window
-    /// already let go of it) does not count, so a backend sharing one counter
+    /// `frame_requested` produces a frame. A declined request, or one with no
+    /// handler to run (the window already let go of it), does not count, so a backend sharing one counter
     /// across its windows can tell a request a frame serviced from one that
     /// reached nothing.
     pub(crate) fn counting_frames(
@@ -473,13 +474,18 @@ impl WindowDelivery {
                     .or_resume(DispatchEventResult::default());
                 input_result.get_or_insert(result);
             }
-            Delivery::Frame(request) => call(&self.handler(), |handler| {
-                // Counted before the call, so a frame that unwinds still
-                // counts as one that ran.
-                self.frames_run.fetch_add(1, Ordering::Relaxed);
-                handler.frame_requested(request);
-            })
-            .or_resume(()),
+            Delivery::Frame(request) => {
+                let called = call(&self.handler(), |handler| handler.frame_requested(request));
+                // A frame that unwinds counts as one that ran: it had its
+                // chance at what was due. A declined one serviced nothing.
+                if matches!(
+                    called,
+                    Called::Returned(FrameOutcome::Produced) | Called::Panicked(_)
+                ) {
+                    self.frames_run.fetch_add(1, Ordering::Relaxed);
+                }
+                called.or_resume(FrameOutcome::Declined);
+            }
             Delivery::StateChanged => call(&self.handler(), |handler| {
                 handler.state_changed();
             })

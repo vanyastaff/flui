@@ -187,7 +187,7 @@ pub use window::{
     CursorError, InputLatency, WindowAppearance, WindowBackgroundAppearance, WindowExecutionState,
     WindowId, WindowOptions, WindowReveal,
 };
-pub use window_handler::{CloseDecision, SurfaceChange, WindowHandler};
+pub use window_handler::{CloseDecision, FrameOutcome, SurfaceChange, WindowHandler};
 pub use window_state::{
     AdmissionError, AdmittedCommand, ApplyError, CapabilitiesOwner, CommandRefusal,
     PlatformFailure, SizeConstraints, SubmitError, WindowCapabilities, WindowCommand,

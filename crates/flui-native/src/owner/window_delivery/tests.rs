@@ -309,20 +309,25 @@ fn closed_is_the_last_call_and_the_window_lets_go() {
     );
 }
 
-/// A frame is counted when the handler's `frame_requested` runs, not when no
-/// handler takes it.
+/// A frame is counted when the handler's `frame_requested` produced one, not
+/// when it declined or no handler took it.
 fn a_frame_counts_when_the_handler_runs() {
     let handler = RecordingWindowHandler::new();
     let frames = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let delivery = WindowDelivery::counting_frames(
-        handler,
+        handler.clone(),
         InputCapabilities::UNAVAILABLE,
         Arc::clone(&frames),
     );
+    let counted = || frames.load(std::sync::atomic::Ordering::Relaxed);
     delivery.dispatch_frame(FrameRequest::new(EventTime::from_nanos(1)));
+    assert_eq!(counted(), 0, "a declined frame serviced nothing");
+    handler.react_to_frame(|_| {});
+    delivery.dispatch_frame(FrameRequest::new(EventTime::from_nanos(2)));
+    assert_eq!(counted(), 1, "a produced frame counts");
     delivery.clear();
     delivery.dispatch_request_frame();
-    assert_eq!(frames.load(std::sync::atomic::Ordering::Relaxed), 1);
+    assert_eq!(counted(), 1, "no handler, no frame");
 }
 
 /// A delivery raised on another thread (a command applied from a worker

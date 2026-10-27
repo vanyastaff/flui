@@ -53,8 +53,8 @@ use flui_layer::{CanvasLayer, Layer, LayerTree, Scene};
 use flui_native::current_platform;
 use flui_painting::{paint::Paint, styling::Color};
 use flui_platform::{
-    CloseDecision, DispatchEventResult, FrameRequest, PlatformInput, SurfaceChange, WindowHandler,
-    WindowOptions,
+    CloseDecision, DispatchEventResult, FrameOutcome, FrameRequest, PlatformInput, SurfaceChange,
+    WindowHandler, WindowOptions,
 };
 
 /// Build a scene with colored rectangles (fallback when no plugin is loaded).
@@ -79,9 +79,13 @@ impl WindowHandler for SceneWindow {
         }
     }
 
-    fn frame_requested(&self, _request: FrameRequest) {
-        if let Some(frame) = self.frame.borrow_mut().as_mut() {
-            frame();
+    fn frame_requested(&self, _request: FrameRequest) -> FrameOutcome {
+        match self.frame.borrow_mut().as_mut() {
+            Some(frame) => {
+                frame();
+                FrameOutcome::Produced
+            }
+            None => FrameOutcome::Declined,
         }
     }
 

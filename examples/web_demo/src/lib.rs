@@ -13,7 +13,8 @@ use wasm_bindgen::prelude::*;
 use flui_foundation::geometry::WindowMetrics;
 use flui_native::HostWindow;
 use flui_platform::{
-    CloseDecision, DispatchEventResult, FrameRequest, PlatformInput, SurfaceChange, WindowHandler,
+    CloseDecision, DispatchEventResult, FrameOutcome, FrameRequest, PlatformInput, SurfaceChange,
+    WindowHandler,
 };
 
 /// The canvas window's handler: logs every input event and each new drawable
@@ -95,7 +96,9 @@ impl WindowHandler for ConsoleLog {
     }
 
     // No GPU renderer in this demo: a frame draws nothing.
-    fn frame_requested(&self, _request: FrameRequest) {}
+    fn frame_requested(&self, _request: FrameRequest) -> FrameOutcome {
+        FrameOutcome::Declined
+    }
 
     fn close_requested(&self) -> CloseDecision {
         CloseDecision::Close

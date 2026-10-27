@@ -23,6 +23,21 @@ pub enum CloseDecision {
     KeepOpen,
 }
 
+/// What a [`WindowHandler`] did with a frame request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "a frame ran or it did not; a platform counts only the first"
+)]
+pub enum FrameOutcome {
+    /// A frame ran: whatever was due when it was asked for had its chance.
+    Produced,
+    /// No frame ran (nothing to run one with yet): the request serviced
+    /// nothing, and work due at the same instant is not asked for again
+    /// because of it.
+    Declined,
+}
+
 /// Which way the surface behind a window changes, as
 /// [`WindowHandler::surface_changed`] reports it (ADR-0063 decision 6).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -81,8 +96,12 @@ pub trait WindowHandler {
     fn state_changed(&self);
 
     /// The platform wants a frame for this window, with what it reported
-    /// about the frame (ADR-0257).
-    fn frame_requested(&self, request: FrameRequest);
+    /// about the frame (ADR-0257). The answer says whether a frame ran: a
+    /// platform that redelivers work due at one instant (a wake deadline)
+    /// asks again only after a frame that ran, so a handler with nothing to
+    /// run a frame with answers [`FrameOutcome::Declined`] and the platform
+    /// does not spin on it.
+    fn frame_requested(&self, request: FrameRequest) -> FrameOutcome;
 
     /// The user or the operating system asks the window to close. The answer
     /// decides: [`CloseDecision::Close`] closes it, and

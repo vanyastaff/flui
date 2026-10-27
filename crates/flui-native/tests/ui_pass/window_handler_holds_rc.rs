@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use flui_native::{OwnerPlatform, WindowOpen};
 use flui_platform::{
-    CloseDecision, DispatchEventResult, FrameRequest, PlatformInput, SurfaceChange,
+    CloseDecision, DispatchEventResult, FrameOutcome, FrameRequest, PlatformInput, SurfaceChange,
     WindowHandler, WindowOptions,
 };
 
@@ -22,7 +22,9 @@ impl WindowHandler for Counting {
 
     fn state_changed(&self) {}
 
-    fn frame_requested(&self, _request: FrameRequest) {}
+    fn frame_requested(&self, _request: FrameRequest) -> FrameOutcome {
+        FrameOutcome::Declined
+    }
 
     fn close_requested(&self) -> CloseDecision {
         CloseDecision::Close

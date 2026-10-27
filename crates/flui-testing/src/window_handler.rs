@@ -25,7 +25,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use flui_platform::{
-    CloseDecision, DispatchEventResult, FrameRequest, PlatformInput, SurfaceChange, WindowHandler,
+    CloseDecision, DispatchEventResult, FrameOutcome, FrameRequest, PlatformInput, SurfaceChange,
+    WindowHandler,
 };
 
 /// One call a [`RecordingWindowHandler`] received.
@@ -202,11 +203,16 @@ impl WindowHandler for RecordingWindowHandler {
         }
     }
 
-    fn frame_requested(&self, request: FrameRequest) {
+    /// A frame runs when the test gave a reaction to run it with; without
+    /// one the request is declined.
+    fn frame_requested(&self, request: FrameRequest) -> FrameOutcome {
         if let Some(reaction) = self.record(HandlerCall::FrameRequested(request), |reactions| {
             &reactions.frame_requested
         }) {
             reaction(request);
+            FrameOutcome::Produced
+        } else {
+            FrameOutcome::Declined
         }
     }
 

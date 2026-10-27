@@ -26,8 +26,8 @@ use std::rc::{Rc, Weak};
 
 use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::{
-    CloseDecision, DispatchEventResult, FrameRequest, PlatformInput, PlatformWindow, SurfaceChange,
-    WindowHandler, WindowId,
+    CloseDecision, DispatchEventResult, FrameOutcome, FrameRequest, PlatformInput, PlatformWindow,
+    SurfaceChange, WindowHandler, WindowId,
 };
 
 use super::host::APP_RUNTIME;
@@ -192,8 +192,11 @@ impl WindowHandler for WindowRoutes {
         let _ = self.state_changed.call(());
     }
 
-    fn frame_requested(&self, request: FrameRequest) {
-        let _ = self.frame_requested.call(request);
+    fn frame_requested(&self, request: FrameRequest) -> FrameOutcome {
+        match self.frame_requested.call(request) {
+            Some(()) => FrameOutcome::Produced,
+            None => FrameOutcome::Declined,
+        }
     }
 
     fn close_requested(&self) -> CloseDecision {
