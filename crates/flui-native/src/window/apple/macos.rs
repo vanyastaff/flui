@@ -1391,13 +1391,18 @@ impl PlatformWindow for MacOSWindow {
         tracing::debug!("macOS: window revealed after its first presented frame");
     }
 
-    /// This host makes no refresh-rate request of AppKit.
+    /// macOS 14 has a per-view display link (`NSView.displayLink`) whose
+    /// `preferredFrameRateRange` a hint could ride on, but this host paces its
+    /// frames without one, so it has nothing to carry the request: the
+    /// capability is `Unavailable`. The contract has no reason for "this host
+    /// does not do it"; `NotOnThisDevice` is the nearest, and not
+    /// `NotOnThisPlatform`, which would say no Mac could.
     fn set_frame_rate_hint(
         &self,
         _hint: flui_platform::FrameRateHint,
     ) -> Result<(), flui_platform::Unsupported> {
         Err(flui_platform::Unsupported::new(
-            flui_platform::UnsupportedReason::NotOnThisPlatform,
+            flui_platform::UnsupportedReason::NotOnThisDevice,
         ))
     }
 

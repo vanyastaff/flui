@@ -109,6 +109,9 @@ pub struct FluiViewIvars {
     /// app's background transitions. `RefCell` because the view's methods
     /// reach it through a shared `&self`.
     display_link: RefCell<Option<Retained<CADisplayLink>>>,
+    /// The rate the window last asked for; the link asks for it whenever it
+    /// starts, changes screens or the hint changes.
+    frame_rate_hint: std::cell::Cell<flui_platform::FrameRateHint>,
     /// The platform's display source, which measures the cadence the link's
     /// ticks show and holds the period it publishes.
     displays: Arc<dyn HostDisplays>,
@@ -287,6 +290,7 @@ impl FluiView {
             sampling_active: std::cell::Cell::new(false),
             sampling_pending: std::cell::Cell::new(false),
             display_link: RefCell::new(None),
+            frame_rate_hint: std::cell::Cell::new(flui_platform::FrameRateHint::Default),
             displays: display.displays,
             screen: display.screen,
             window_id: display.window,
@@ -401,8 +405,27 @@ impl FluiView {
         unsafe {
             link.addToRunLoop_forMode(&NSRunLoop::mainRunLoop(), NSDefaultRunLoopMode);
         }
-        self.ivars().displays.request_frame_rate(&link, screen);
+        self.ivars()
+            .displays
+            .request_frame_rate(&link, screen, self.ivars().frame_rate_hint.get());
         self.ivars().display_link.replace(Some(link));
+    }
+
+    /// Take the window's frame-rate `hint`, and ask the link for it on the
+    /// screen the window's scene is on. A view with no link yet, or in no
+    /// scene, keeps the hint for the link it starts.
+    fn take_frame_rate_hint(&self, hint: flui_platform::FrameRateHint) {
+        self.ivars().frame_rate_hint.set(hint);
+        let link = self.ivars().display_link.borrow().clone();
+        let screen = self
+            .window()
+            .and_then(|window| window.windowScene())
+            .map(|scene| scene.screen());
+        if let (Some(link), Some(screen)) = (link, screen) {
+            self.ivars()
+                .displays
+                .request_frame_rate(&link, &screen, hint);
+        }
     }
 
     /// Take `screen` as the one this window is on. A change of screen resets
@@ -423,7 +446,11 @@ impl FluiView {
         }
         let link = self.ivars().display_link.borrow().clone();
         if let Some(link) = link {
-            self.ivars().displays.request_frame_rate(&link, screen);
+            self.ivars().displays.request_frame_rate(
+                &link,
+                screen,
+                self.ivars().frame_rate_hint.get(),
+            );
         }
         self.delivery().publish_state();
     }
@@ -1191,6 +1218,7 @@ impl host::Window<IOSLoop> for IOSWindow {
 const fn scene_capabilities() -> WindowCapabilities {
     let mut capabilities = WindowCapabilities::NONE;
     capabilities.closes = flui_platform::Availability::Native;
+    capabilities.frame_rate_hint = flui_platform::Availability::Native;
     capabilities
 }
 
@@ -1315,15 +1343,28 @@ impl PlatformWindow for IOSWindow {
         Ok(())
     }
 
-    /// The display link runs at the screen's best rate whatever the window
-    /// asks; this host makes no per-window request.
+    /// Each window's `CADisplayLink` asks for the rate the hint names
+    /// (`preferredFrameRateRange` from iOS 15, `preferredFramesPerSecond`
+    /// before). A closed window answers `NoWindow`. The owner lane is the main
+    /// thread: a call from another thread is a caller's mistake, answered
+    /// `Unavailable` while the capability stays `Native`, which the owner's
+    /// next hint makes good.
     fn set_frame_rate_hint(
         &self,
-        _hint: flui_platform::FrameRateHint,
+        hint: flui_platform::FrameRateHint,
     ) -> Result<(), flui_platform::Unsupported> {
-        Err(flui_platform::Unsupported::new(
-            flui_platform::UnsupportedReason::NotOnThisPlatform,
-        ))
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(flui_platform::Unsupported::new(
+                flui_platform::UnsupportedReason::NoWindow,
+            ));
+        }
+        let Some(marker) = MainThreadMarker::new() else {
+            return Err(flui_platform::Unsupported::new(
+                flui_platform::UnsupportedReason::Unavailable,
+            ));
+        };
+        self.native.get(marker).view.take_frame_rate_hint(hint);
+        Ok(())
     }
 
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {

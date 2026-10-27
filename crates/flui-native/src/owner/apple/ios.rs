@@ -84,7 +84,7 @@ use flui_platform::{SessionEndAnswer, SessionEndPhase, SystemPreferences, Window
 use crate::host_window::HostWindow;
 use crate::owner::watch::Watch;
 use flui_platform::PlatformInput;
-use flui_platform::{DisplayId, DisplaySnapshot};
+use flui_platform::{DisplayId, DisplaySnapshot, FrameRateHint};
 use objc2_quartz_core::CADisplayLink;
 use objc2_ui_kit::{UIHoverGestureRecognizer, UIScreen, UITouch, UIView};
 
@@ -209,9 +209,9 @@ pub(crate) trait HostDisplays: Send + Sync {
     /// that screen had a period from it.
     fn forget_link(&self, window: WindowId, number: Option<ScreenNumber>);
 
-    /// Ask `link` to run at the best rate `screen` sustains on the version the
-    /// platform runs on.
-    fn request_frame_rate(&self, link: &CADisplayLink, screen: &UIScreen);
+    /// Ask `link` for the rate `hint` names: the best rate `screen` sustains on
+    /// the version the platform runs on, or no preference.
+    fn request_frame_rate(&self, link: &CADisplayLink, screen: &UIScreen, hint: FrameRateHint);
 
     /// Mark the screens stale and wake the owner behind `signal` on screen and
     /// scene notifications, until the watch is dropped.
