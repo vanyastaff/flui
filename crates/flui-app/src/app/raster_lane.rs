@@ -450,7 +450,7 @@ impl<B: RasterBackend> RasterLane<B> {
             // variant, which this lane must classify deliberately before
             // relying on it — `Failed` (no retry armed) is the conservative
             // default until then.
-            _ => {
+            PumpOutcome::Idle | PumpOutcome::ShutdownComplete | _ => {
                 tracing::error!(
                     ?outcome,
                     "raster lane: unclassified pump outcome right after an accepted submit"

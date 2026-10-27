@@ -193,7 +193,10 @@ impl DragSessionKey {
             .iter()
             .find_map(|descriptor| match &descriptor.format {
                 TransferFormat::Custom { mime } => Self::from_mime(mime),
-                _ => None,
+                TransferFormat::Text
+                | TransferFormat::Html
+                | TransferFormat::UriList
+                | TransferFormat::Image { .. } => None,
             })
     }
 

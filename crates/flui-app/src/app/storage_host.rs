@@ -81,7 +81,7 @@ impl HostStorage {
             SpawnError::ShuttingDown => StorageError::Cancelled,
             SpawnError::Saturated => StorageError::Busy,
             // The pool could not start; a later request may.
-            _ => Unsupported::new(UnsupportedReason::Unavailable).into(),
+            SpawnError::Unavailable | _ => Unsupported::new(UnsupportedReason::Unavailable).into(),
         })
     }
 }

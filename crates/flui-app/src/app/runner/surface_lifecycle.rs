@@ -392,7 +392,10 @@ impl SurfaceRecreationRetry {
             // A release, a successful recreation, an expected
             // target-unavailable, or a failure while the platform does NOT
             // expect a surface: no retry is owed.
-            _ => self.backoff.record_success(),
+            SurfaceSettlement::Released
+            | SurfaceSettlement::Recreated
+            | SurfaceSettlement::TargetUnavailable
+            | SurfaceSettlement::Failed => self.backoff.record_success(),
         }
     }
 
@@ -519,7 +522,7 @@ where
     let settlement = SurfaceSettlement::classify(&outcome);
     let error = match &outcome {
         SurfaceLifecycleOutcome::Failed(source) => Some(source),
-        _ => None,
+        SurfaceLifecycleOutcome::Released | SurfaceLifecycleOutcome::Recreated => None,
     };
     retry.note_availability(has_surface, settlement, error, now);
     outcome
@@ -769,7 +772,9 @@ mod surface_lifecycle_tests {
 
         let source = match outcome {
             SurfaceLifecycleOutcome::Failed(source) => source,
-            other => panic!("a failed recreation reports Failed, got {other:?}"),
+            other @ (SurfaceLifecycleOutcome::Released | SurfaceLifecycleOutcome::Recreated) => {
+                panic!("a failed recreation reports Failed, got {other:?}")
+            }
         };
         assert!(
             source.to_string().contains("scripted recreation failure"),
