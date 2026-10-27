@@ -319,7 +319,7 @@ pub(crate) mod source {
     use crate::owner::panic_boundary::{AfterPanic, os_entry};
     use crate::owner::signal::OwnerSignal;
     use crate::owner::watch::Watch;
-    use crate::version::gate::android::{AndroidApi, ContextDisplay};
+    use crate::version::gate::android::{AndroidApi, BackgroundBlur, ContextDisplay};
     use flui_platform::PreferenceQueryError;
 
     /// `ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_DEFAULT`.
@@ -430,6 +430,9 @@ pub(crate) mod source {
         /// Set when a sample found another highest rate for the Activity's display,
         /// until the window has asked again with it.
         max_rate_changed: AtomicBool,
+        /// `WindowManager.isCrossWindowBlurEnabled` at the last sample; false
+        /// below API 31 and before the first sample.
+        cross_window_blur: AtomicBool,
     }
 
     impl std::fmt::Debug for AndroidDisplays {
@@ -456,6 +459,7 @@ pub(crate) mod source {
                 library,
                 activity: Mutex::new(None),
                 max_rate_changed: AtomicBool::new(false),
+                cross_window_blur: AtomicBool::new(false),
             }
         }
     }
@@ -496,6 +500,8 @@ pub(crate) mod source {
                 if activity.is_none() {
                     missing_activity = Some(sample.activity_display_id);
                 }
+                self.cross_window_blur
+                    .store(sample.cross_window_blur, Ordering::Release);
                 let previous = std::mem::replace(&mut *self.activity.lock(), activity);
                 if previous.and_then(|display| display.max_hz)
                     != activity.and_then(|display| display.max_hz)
@@ -534,6 +540,10 @@ pub(crate) mod source {
 
         fn frame_rate_hint(&self) -> flui_platform::Availability {
             self.frame_rate.availability()
+        }
+
+        fn cross_window_blur(&self) -> bool {
+            self.cross_window_blur.load(Ordering::Acquire)
         }
 
         /// Ask the system for the refresh rate `hint` names on `window`, if this
@@ -651,6 +661,8 @@ pub(crate) mod source {
         displays: Vec<RawDisplay>,
         /// The display the Activity is on.
         activity_display_id: i32,
+        /// Whether the device blurs behind windows now; false below API 31.
+        cross_window_blur: bool,
     }
 
     fn sample(app: &AndroidApp, api: AndroidApi) -> Result<Sample, PreferenceQueryError> {
@@ -692,9 +704,29 @@ pub(crate) mod source {
                         },
                     )?);
                 }
+                let cross_window_blur = if api.since::<BackgroundBlur>().is_some() {
+                    let windows = env
+                        .call_method(
+                            activity,
+                            jni_str!("getWindowManager"),
+                            jni_sig!("()Landroid/view/WindowManager;"),
+                            &[],
+                        )?
+                        .l()?;
+                    env.call_method(
+                        &windows,
+                        jni_str!("isCrossWindowBlurEnabled"),
+                        jni_sig!("()Z"),
+                        &[],
+                    )?
+                    .z()?
+                } else {
+                    false
+                };
                 Ok(Sample {
                     displays,
                     activity_display_id,
+                    cross_window_blur,
                 })
             })
         })

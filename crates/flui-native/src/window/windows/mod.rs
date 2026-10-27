@@ -201,8 +201,10 @@ pub(crate) mod material {
     ) -> WindowCapabilities {
         match gate {
             Ok(_) => capabilities,
-            Err(_) => capabilities
-                .unavailable_on_this_device(&WindowCommand::SetMaterial(WindowMaterial::Opaque)),
+            Err(_) => capabilities.unavailable(
+                &WindowCommand::SetMaterial(WindowMaterial::Opaque),
+                flui_platform::CapabilityAbsence::NotOnThisDevice,
+            ),
         }
     }
 

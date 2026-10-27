@@ -12,6 +12,14 @@ pub(crate) const WINDOWS_BUILD: u32 = 10240;
 #[cfg(any(target_os = "ios", test))]
 pub(crate) const IOS_FLOOR: (u32, u32, u32) = (13, 0, 0);
 
+/// The lowest macOS version FLUI supports on arm64, as (major, minor, patch).
+#[cfg(all(any(target_os = "macos", test), target_arch = "aarch64"))]
+pub(crate) const MACOS_FLOOR: (u32, u32, u32) = (11, 0, 0);
+
+/// The lowest macOS version FLUI supports on x86_64, as (major, minor, patch).
+#[cfg(all(any(target_os = "macos", test), not(target_arch = "aarch64")))]
+pub(crate) const MACOS_FLOOR: (u32, u32, u32) = (10, 13, 0);
+
 /// The lowest Android API level FLUI supports.
 #[cfg(any(target_os = "android", test))]
 pub(crate) const ANDROID_API: u32 = 23;

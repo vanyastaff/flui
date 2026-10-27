@@ -298,6 +298,10 @@ pub(crate) trait HostDisplays: StaleOnWake {
     /// Whether the windows open on a Wayland compositor.
     #[cfg(target_os = "linux")]
     fn is_wayland(&self) -> bool;
+
+    /// The macOS version the process runs on, read once (ADR-0244).
+    #[cfg(target_os = "macos")]
+    fn version(&self) -> crate::version::gate::apple::MacOSVersion;
 }
 
 /// The displays position is the loop's: the native source the table made

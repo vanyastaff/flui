@@ -11,6 +11,14 @@
   `FrameOutcome { Produced, Declined }`, because without it the host cannot tell a frame that was
   served from one nothing ran, and a wake deadline delivered to a handler with nothing to draw
   with re-arms on every paint and spins the loop.
+- **Amended:** 2026-10-27 — decision 6, following the owner's decision of 2026-10-27 that adds
+  `NotYetOnThisHost` to the reasons (ADR-0152): a command's capability carries where it is
+  missing, a `CapabilityAbsence` (`NotOnThisPlatform`, `NotOnThisDevice`, `NotYetOnThisHost`),
+  set with `WindowCapabilities::unavailable(command, absence)`, and admission refuses the command
+  with that reason. The type admits no retryable reason, since a capability stays `Unavailable`
+  until the host publishes it again; an absence counts for equality only while its capability is
+  unavailable. The verbs outside the command queue (the frame-rate hint, the input regions) answer
+  their reason themselves: nothing admits them against the capabilities.
 - **Supersedes:**
   - [ADR-0237](ADR-0237-window-state-and-host-notices.md), in part: the window-scoped getters and
     per-fact callbacks that sit beside the snapshot; decision 3's refusal inside `apply` (it moves
@@ -353,7 +361,8 @@ method stops compiling instead of being documented. The raster thread receives a
 the vocabulary of the window side too. It replaces the unit `Unsupported` and `Unavailable`
 variants of `WindowCommandError`, `WindowShowError`, `CursorError` and the other window-side enums,
 which embed it. The reasons are ADR-0152's: `NotOnThisPlatform`, `NotOnThisDevice` (the OS build
-or the hardware of this device lacks it), `NotDeclared`, `Unavailable` (temporary: trying again
+or the hardware of this device lacks it), `NotYetOnThisHost` (the OS has it and this host does not
+implement it yet; amended 2026-10-27), `NotDeclared`, `Unavailable` (temporary: trying again
 may succeed), `NotRegistered` and `NoWindow`. A window builds the value with
 `Unsupported::new(reason)`; `Unsupported::of::<C>(reason)`, which names a capability, is for the
 seam.

@@ -774,17 +774,23 @@ impl PlatformWindow for WinitWindow {
         Ok(())
     }
 
-    /// winit takes no refresh-rate request.
+    /// winit takes no refresh-rate request. Neither do Wayland, X11 nor Win32
+    /// windows; AppKit does from macOS 14 (`NSView.displayLink`), so there the
+    /// reason is the platform's answer for this macOS.
     fn set_frame_rate_hint(
         &self,
         _hint: flui_platform::FrameRateHint,
     ) -> Result<(), flui_platform::Unsupported> {
-        Err(flui_platform::Unsupported::new(
-            flui_platform::UnsupportedReason::NotOnThisPlatform,
-        ))
+        #[cfg(target_os = "macos")]
+        let absence = crate::window::capabilities::frame_rate_absence(self.displays.version());
+        #[cfg(not(target_os = "macos"))]
+        let absence = flui_platform::CapabilityAbsence::NotOnThisPlatform;
+        Err(absence.into())
     }
 
-    /// winit hands the system no input region.
+    /// The input regions are the system's edge gestures a region keeps out
+    /// (`InputRegionKind::SystemGestureExclusion`), and no desktop window
+    /// system winit runs on lets a window exclude them.
     fn set_input_regions(
         &self,
         _regions: &[flui_platform::input_regions::InputRegion],

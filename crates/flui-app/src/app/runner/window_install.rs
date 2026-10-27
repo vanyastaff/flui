@@ -254,7 +254,7 @@ impl WindowInstall {
         WindowRoutes::of(&**self.window.native()).route_close_requested(
             move || match router.consult(address, crate::app::close_request::CloseReason::User) {
                 CloseResponse::Close => flui_platform::CloseDecision::Close,
-                _ => flui_platform::CloseDecision::KeepOpen,
+                CloseResponse::KeepOpen => flui_platform::CloseDecision::KeepOpen,
             },
             move || {
                 if let Some(window) = closing.upgrade() {

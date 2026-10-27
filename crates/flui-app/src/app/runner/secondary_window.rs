@@ -1434,7 +1434,12 @@ mod tests {
                                 InstallCase::Closed | InstallCase::ClosedDuringInitialization => {
                                     matches!(completion, Err(AppWindowError::Cancelled))
                                 }
-                                _ => matches!(completion, Err(AppWindowError::Mount { .. })),
+                                InstallCase::Ready
+                                | InstallCase::ClosedDuringInitializationThenPanic
+                                | InstallCase::InitializationPanic
+                                | InstallCase::ObserverDropped => {
+                                    matches!(completion, Err(AppWindowError::Mount { .. }))
+                                }
                             },
                             "failure is typed after rollback: {completion:?}"
                         );

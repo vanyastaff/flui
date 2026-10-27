@@ -103,6 +103,9 @@
 // A public enum is closed only where that is a decision: one more variant
 // later is a breaking change, so each closed enum says why it is closed.
 #![deny(clippy::exhaustive_enums)]
+// A `_` arm must not absorb a variant added later; see the
+// `wildcard_enum_match_arm` entry in the workspace `Cargo.toml`.
+#![warn(clippy::wildcard_enum_match_arm)]
 
 mod brightness;
 mod clipboard;
@@ -183,7 +186,7 @@ pub use system_chrome::{PlatformSystemChrome, SystemUiOverlayStyle};
 pub use target_platform::TargetPlatform;
 pub use text_input::PlatformTextInput;
 pub use text_store::{TextStore, TextStoreEdit, TextStoreHost, TextStoreObserver, TextStoreRead};
-pub use unsupported::{Availability, Unsupported, UnsupportedReason};
+pub use unsupported::{Availability, CapabilityAbsence, Unsupported, UnsupportedReason};
 pub use window::{
     CursorError, InputLatency, WindowAppearance, WindowExecutionState, WindowId, WindowMaterial,
     WindowOptions, WindowReveal,

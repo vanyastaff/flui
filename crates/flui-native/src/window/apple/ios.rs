@@ -59,6 +59,7 @@ use crate::owner::signal::OwnerSignal;
 use crate::owner::window_delivery::WindowDelivery;
 use crate::platform::HostPlatform;
 use crate::text::TextInput;
+use crate::window::capabilities::{pointer_absence, scene_capabilities};
 use crate::window::installation::{PendingWindowInstallation, WindowInstallation};
 use crate::window::state::{ReportedFacts, WindowStateCell};
 use crate::{BootstrapError, PlatformError, PlatformProxy};
@@ -703,6 +704,8 @@ pub struct IOSWindow {
     /// The screen the scene is on, kept by the view; read by `display_id`.
     screen: Arc<parking_lot::Mutex<ScreenIdentity>>,
     id: WindowId,
+    /// Why the window does not set the pointer's shape on this device.
+    pointer: flui_platform::CapabilityAbsence,
     /// The input regions last projected, and the screen edges they reach.
     input_regions: parking_lot::Mutex<(
         crate::input::regions::ProjectedInputRegions,
@@ -742,6 +745,7 @@ impl IOSWindow {
             safe_area: EdgeInsets::ZERO,
         }));
         let dark = Arc::new(AtomicBool::new(false));
+        let pointer = pointer_absence(displays.version(), displays.shows_a_pointer());
         let view = FluiView::new(
             mtm,
             Arc::clone(&delivery),
@@ -779,6 +783,7 @@ impl IOSWindow {
             dark,
             screen,
             id,
+            pointer,
             input_regions: parking_lot::Mutex::default(),
             snapshot: WindowStateCell::new(WindowState::new(
                 WindowGeometry::new(None, Size::new(0.0, 0.0)),
@@ -1212,16 +1217,6 @@ impl host::Window<IOSLoop> for IOSWindow {
     }
 }
 
-/// What a scene's window honours: `UIWindow` has no title, frame, position or
-/// commands, and observes nothing; the app may only ask the system to destroy
-/// its scene session.
-const fn scene_capabilities() -> WindowCapabilities {
-    let mut capabilities = WindowCapabilities::NONE;
-    capabilities.closes = flui_platform::Availability::Native;
-    capabilities.frame_rate_hint = flui_platform::Availability::Native;
-    capabilities
-}
-
 impl crate::host_window::CoreHostWindow for IOSWindow {
     fn window_delivery(&self) -> &WindowDelivery {
         &self.delivery
@@ -1377,12 +1372,10 @@ impl PlatformWindow for IOSWindow {
         None
     }
 
+    /// Not set: an iPhone shows no pointer, and an iPad's pointer style is not
+    /// chosen by this host yet (`pointer_absence`).
     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
-        // iOS has no pointer cursor on a touch device.
-        Err(
-            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
-                .into(),
-        )
+        Err(flui_platform::Unsupported::from(self.pointer).into())
     }
 
     fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {

@@ -500,7 +500,7 @@ impl MacOSWindow {
         self.state.lock().sequence.step_ended();
         self.publish_state();
         let window = self.clone();
-        crate::owner::apple::macos::exec_async_guarded(self.owner, move || {
+        crate::owner::apple::macos::exec_async_on_owner(self.owner, move || {
             let held = window.state.lock().sequence.take_held();
             if let Some(mode) = held
                 && let Err(error) = window.change_mode(mode)

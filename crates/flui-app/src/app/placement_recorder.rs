@@ -250,7 +250,7 @@ impl PlacementRecorder {
         match state.mode {
             WindowMode::Maximized => record.maximized_before = true,
             WindowMode::Normal | WindowMode::Fullscreen => record.maximized_before = false,
-            _ => {}
+            WindowMode::Minimized | _ => {}
         }
         let Some(placement) = WindowPlacement::from_state(state, displays, record.maximized_before)
         else {

@@ -215,6 +215,11 @@ mod hooks {
         /// API 30).
         fn frame_rate_hint(&self) -> flui_platform::Availability;
 
+        /// `WindowManager.isCrossWindowBlurEnabled` at the last sample: the
+        /// device blurs behind windows now. False below API 31 and before the
+        /// first sample.
+        fn cross_window_blur(&self) -> bool;
+
         /// Watch the refresh rate where the system reports it, on the thread
         /// whose looper runs the app, until the watch is dropped on that
         /// thread.
