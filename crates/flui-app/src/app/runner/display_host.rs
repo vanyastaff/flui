@@ -104,7 +104,7 @@ impl DisplayHost {
         };
         // The window answers outside any host borrow: it is platform code.
         if let Some(window) = window {
-            window.set_frame_rate_hint(hint_for(demand));
+            request_rate(window.as_ref(), demand);
         }
     }
 
@@ -124,7 +124,7 @@ impl DisplayHost {
             (followed.window.upgrade(), followed.demand)
         };
         if let Some(window) = window {
-            window.set_frame_rate_hint(hint_for(demand));
+            request_rate(window.as_ref(), demand);
         }
     }
 
@@ -163,6 +163,16 @@ impl DisplayHost {
         live.into_iter()
             .map(|(dispatcher, window)| (dispatcher, self.derive(window.as_ref())))
             .collect()
+    }
+}
+
+/// Ask `window` for the rate `demand` names. A window whose capabilities
+/// leave the hint `Unavailable` refuses it: the system then picks the rate,
+/// as it would for no request, and the demand is kept for a surface that
+/// takes one.
+fn request_rate(window: &dyn PlatformWindow, demand: FrameRateDemand) {
+    if let Err(refused) = window.set_frame_rate_hint(hint_for(demand)) {
+        tracing::trace!(%refused, ?demand, "the window takes no refresh-rate request");
     }
 }
 

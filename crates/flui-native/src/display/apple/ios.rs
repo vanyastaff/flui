@@ -48,7 +48,7 @@ use objc2_ui_kit::{
 use parking_lot::Mutex;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform::{DisplayInfo, DisplayKey, DisplaySnapshot};
+use flui_platform::{DisplayInfo, DisplayKey, DisplaySnapshot, FrameRateHint};
 
 use objc2_quartz_core::{CADisplayLink, CAFrameRateRange};
 
@@ -348,9 +348,9 @@ impl crate::owner::apple::ios::HostDisplays for IosDisplays {
 
     /// A frame-rate range on iOS 15 and later, `preferredFramesPerSecond`
     /// before it.
-    fn request_frame_rate(&self, link: &CADisplayLink, screen: &UIScreen) {
+    fn request_frame_rate(&self, link: &CADisplayLink, screen: &UIScreen, hint: FrameRateHint) {
         let maximum = i64::try_from(screen.maximumFramesPerSecond()).unwrap_or(0);
-        match frame_rate_preference(self.version, maximum) {
+        match frame_rate_preference(self.version, maximum, hint) {
             FrameRatePreference::Range(property, range) => {
                 set_frame_rate_range(link, property, range);
             }

@@ -165,14 +165,12 @@ impl MacosDisplays {
             let bounds = device_bounds_of_screen(bounds_of(screen.frame()), primary_height, scale);
             let usable_bounds =
                 device_bounds_of_screen(bounds_of(screen.visibleFrame()), primary_height, scale);
-            let mut display = DisplayInfo::new(
-                id,
-                format!("Display {}", display_id_of(&screen).unwrap_or_default()),
-                bounds,
-                scale,
-            )
-            .with_usable_bounds(usable_bounds)
-            .with_primary(index == 0);
+            // The name System Settings shows ("Built-in Retina Display", a
+            // monitor's model), macOS 10.15 and later.
+            let mut display =
+                DisplayInfo::new(id, screen.localizedName().to_string(), bounds, scale)
+                    .with_usable_bounds(usable_bounds)
+                    .with_primary(index == 0);
             if let Some(uuid) = display_id_of(&screen)
                 .and_then(|number| u32::try_from(number).ok())
                 .and_then(display_uuid)

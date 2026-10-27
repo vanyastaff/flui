@@ -488,17 +488,26 @@ impl MacOSWindow {
     }
 
     /// A step that animates is over (or failed): publish the window, then send
-    /// the mode held back for it, if there is one. The held mode is taken after
-    /// the publish, since a subscriber that runs in it may command a newer one.
+    /// the mode held back for it, if there is one.
+    ///
+    /// The held mode is planned on the owner lane's next turn. AppKit puts back
+    /// the frame a window had before full screen only after
+    /// `windowDidExitFullScreen:` returns, so inside it a window that went full
+    /// screen zoomed still reads as unzoomed, and a held `Normal` would plan no
+    /// un-zoom and leave it maximized. It is also taken after the publish,
+    /// since a subscriber that runs in it may command a newer one.
     fn handle_transition_ended(&self) {
         self.state.lock().sequence.step_ended();
         self.publish_state();
-        let held = self.state.lock().sequence.take_held();
-        if let Some(mode) = held
-            && let Err(error) = self.change_mode(mode)
-        {
-            tracing::debug!(%error, "a window could not finish changing mode");
-        }
+        let window = self.clone();
+        crate::owner::apple::macos::exec_async_guarded(self.owner, move || {
+            let held = window.state.lock().sequence.take_held();
+            if let Some(mode) = held
+                && let Err(error) = window.change_mode(mode)
+            {
+                tracing::debug!(%error, "a window could not finish changing mode");
+            }
+        });
     }
 
     /// Handle window resize event

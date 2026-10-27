@@ -116,8 +116,25 @@ this one path (ADR-0151 §9).
   closed with an `allow` that says why where its set is fixed by what it
   names (a key goes down or up, TSF's lock kinds, the W3C `location` values),
   where `Custom` is its open end (`TransferFormat`), or where every consumer
-  must handle a new variant (`PlatformInput`; `WindowBackgroundAppearance`,
-  which every backend of the sealed window trait maps).
+  must handle a new variant (`PlatformInput`; `WindowMaterial`, which every
+  host maps).
+- **What a window cannot always honour answers in the same type.** A
+  capability is `Unavailable` exactly when admission refuses its command as
+  `Unsupported`; a command admitted and then refused by the operating system
+  is `ApplyError::Platform`, a failure rather than a missing capability. A
+  capability this device lacks where its platform has it
+  (`WindowCapabilities::unavailable_on_this_device`) is refused with
+  `NotOnThisDevice`, any other with `NotOnThisPlatform`. The window material
+  is such a command (`WindowCommand::SetMaterial`, `WindowCapabilities::material`);
+  its set is the vocabulary every host shares (`Opaque`, `System`), and a
+  material one OS alone has is that OS's extension. The frame-rate hint and
+  the input regions stay verbs, because they are sent every frame and
+  commands apply at the owner's next turn (ADR-0254 §3): each returns
+  `Result<(), Unsupported>` exactly when its capability
+  (`WindowCapabilities::frame_rate_hint`, `InputCapabilities::input_regions`)
+  is `Unavailable`, has no default body, and the window conformance checks
+  both. A test double whose window system takes neither writes them with
+  `window_takes_no_frame_verbs!`.
 - **The raw-handle impls live with the trait.** `HasWindowHandle` and
   `HasDisplayHandle` for `dyn PlatformWindow` are here because the orphan rule
   puts them next to the trait; `flui-native` repeats them for

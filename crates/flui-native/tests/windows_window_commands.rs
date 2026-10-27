@@ -1180,6 +1180,32 @@ fn win32_readback(hwnd: HWND) -> Readback {
         focused: focus == hwnd,
         active: active == hwnd,
         visible: shown && !(cloak_read && cloaked != 0),
+        material: system_backdrop(hwnd),
+    }
+}
+
+/// The contract's material the desktop window manager draws behind `hwnd`:
+/// `DWMSBT_NONE` is `Opaque` and `DWMSBT_MAINWINDOW` (Mica) is `System`;
+/// another backdrop, or a build without the attribute, has no name here.
+fn system_backdrop(hwnd: HWND) -> Option<flui_platform::WindowMaterial> {
+    use windows::Win32::Graphics::Dwm::{
+        DWM_SYSTEMBACKDROP_TYPE, DWMSBT_MAINWINDOW, DWMSBT_NONE, DWMWA_SYSTEMBACKDROP_TYPE,
+    };
+    let mut backdrop = DWM_SYSTEMBACKDROP_TYPE::default();
+    // SAFETY: a query of the live window; the out-parameter is a stack local
+    // of the 4-byte enum the attribute holds, read only when the call worked.
+    let read = unsafe {
+        DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_SYSTEMBACKDROP_TYPE,
+            (&raw mut backdrop).cast(),
+            std::mem::size_of::<DWM_SYSTEMBACKDROP_TYPE>() as u32,
+        )
+    };
+    match (read.is_ok(), backdrop) {
+        (true, DWMSBT_NONE) => Some(flui_platform::WindowMaterial::Opaque),
+        (true, DWMSBT_MAINWINDOW) => Some(flui_platform::WindowMaterial::System),
+        _ => None,
     }
 }
 
@@ -1294,6 +1320,12 @@ impl WindowFixture for Win32Fixture {
             .admit_and_apply(flui_platform::WindowCommand::Close)
             .expect("a Win32 window closes");
         settle();
+    }
+
+    /// The Win32 input table: whatever its touchpad, a Win32 window hands the
+    /// system no input region.
+    fn input_regions(&self) -> flui_platform::Availability {
+        flui_native::input::availability::windows(false).input_regions()
     }
 }
 

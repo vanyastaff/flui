@@ -45,6 +45,18 @@ impl PlatformWindow for Window {
     ) -> Result<(), flui_platform::CursorError> {
         self.inner.set_cursor(cursor)
     }
+    fn set_frame_rate_hint(
+        &self,
+        hint: flui_platform::FrameRateHint,
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.inner.set_frame_rate_hint(hint)
+    }
+    fn set_input_regions(
+        &self,
+        regions: &[flui_platform::input_regions::InputRegion],
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.inner.set_input_regions(regions)
+    }
     fn state(&self) -> flui_platform::WindowState {
         self.inner.state()
     }
@@ -312,6 +324,18 @@ impl PlatformWindow for HapticWindow {
         cursor: flui_platform::CursorIcon,
     ) -> Result<(), flui_platform::CursorError> {
         self.inner.set_cursor(cursor)
+    }
+    fn set_frame_rate_hint(
+        &self,
+        hint: flui_platform::FrameRateHint,
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.inner.set_frame_rate_hint(hint)
+    }
+    fn set_input_regions(
+        &self,
+        regions: &[flui_platform::input_regions::InputRegion],
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.inner.set_input_regions(regions)
     }
     fn state(&self) -> flui_platform::WindowState {
         self.inner.state()

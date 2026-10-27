@@ -463,6 +463,7 @@ mod tests {
         ) -> Result<(), flui_platform::CursorError> {
             Ok(())
         }
+        flui_platform::window_takes_no_frame_verbs!();
         fn state(&self) -> flui_platform::WindowState {
             let size = flui_foundation::geometry::Size::default();
             flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)

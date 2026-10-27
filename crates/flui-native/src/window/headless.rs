@@ -20,9 +20,9 @@ use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
 use flui_platform::text_store::TextStoreHost;
 use flui_platform::{
     AdmittedCommand, ApplyError, CursorError, DispatchEventResult, DisplayId, PlatformHaptics,
-    PlatformInput, PlatformTextInput, PlatformWindow, SizeConstraints, SurfaceChange,
-    WindowAppearance, WindowBackgroundAppearance, WindowCapabilities, WindowCommand,
-    WindowGeometry, WindowHandler, WindowId, WindowMode, WindowOptions, WindowState,
+    PlatformInput, PlatformTextInput, PlatformWindow, SizeConstraints, SurfaceChange, Unsupported,
+    UnsupportedReason, WindowAppearance, WindowCapabilities, WindowCommand, WindowGeometry,
+    WindowHandler, WindowId, WindowMaterial, WindowMode, WindowOptions, WindowState,
 };
 use parking_lot::Mutex;
 
@@ -339,6 +339,13 @@ pub struct HeadlessWindowSystem {
     pub focused: bool,
     /// Whether the window is shown and open.
     pub visible: bool,
+    /// Whether the simulated system honours the window's input regions, as
+    /// the platform's input availability says
+    /// ([`HeadlessPlatform::with_input_availability`](crate::HeadlessPlatform::with_input_availability)).
+    pub input_regions: flui_platform::Availability,
+    /// The material the simulated system draws behind the window: the last
+    /// [`WindowCommand::SetMaterial`] it applied, `Opaque` before any.
+    pub material: WindowMaterial,
 }
 
 /// The canonical test/headless window double.
@@ -420,6 +427,22 @@ impl std::fmt::Debug for MockWindow {
     }
 }
 
+/// Whether the simulated window system takes a verb whose capability is
+/// `availability`: a closed window takes none, and an `Unavailable`
+/// capability is refused as admission refuses a command.
+fn takes(
+    state: &MockWindowState,
+    availability: flui_platform::Availability,
+) -> Result<(), Unsupported> {
+    if state.closed {
+        return Err(Unsupported::new(UnsupportedReason::NoWindow));
+    }
+    if !availability.is_available() {
+        return Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform));
+    }
+    Ok(())
+}
+
 /// What a [`MockWindow`] handed its simulated OS as input regions.
 #[derive(Debug, Default)]
 struct RecordedInputRegions {
@@ -446,8 +469,10 @@ struct MockWindowState {
     /// the oracle for "the frame pump arms the compositor frame callback
     /// once per presented frame, before the present".
     pre_present_notifies: u64,
-    /// Every [`PlatformWindow::set_frame_rate_hint`] the window received, in order.
+    /// Every [`PlatformWindow::set_frame_rate_hint`] the window took, in order.
     frame_rate_hints: Vec<flui_platform::FrameRateHint>,
+    /// Every [`WindowCommand::SetMaterial`] the window applied, in order.
+    materials: Vec<WindowMaterial>,
     title: String,
     /// The outer top-left corner. This host draws no frame, so the outer
     /// rectangle and the content area are the same.
@@ -648,6 +673,7 @@ impl MockWindow {
         let mut model = MockWindowState {
             pre_present_notifies: 0,
             frame_rate_hints: Vec::new(),
+            materials: Vec::new(),
             title: options.title.clone(),
             position: options
                 .position
@@ -800,8 +826,11 @@ impl MockWindow {
     /// system.
     #[must_use]
     pub fn window_system(&self) -> HeadlessWindowSystem {
+        let input_regions = self.delivery.input_capabilities().input_regions();
         let state = self.state.lock();
         HeadlessWindowSystem {
+            input_regions,
+            material: state.materials.last().copied().unwrap_or_default(),
             metrics: flui_foundation::geometry::WindowMetrics::from_logical(
                 state.size,
                 state.scale_factor,
@@ -812,10 +841,16 @@ impl MockWindow {
         }
     }
 
-    /// Every frame-rate hint the window was given, oldest first.
+    /// Every frame-rate hint the window took, oldest first.
     #[must_use]
     pub fn frame_rate_hints(&self) -> Vec<flui_platform::FrameRateHint> {
         self.state.lock().frame_rate_hints.clone()
+    }
+
+    /// Every material the window applied, oldest first.
+    #[must_use]
+    pub fn materials(&self) -> Vec<WindowMaterial> {
+        self.state.lock().materials.clone()
     }
 
     /// Inject a platform input event for testing.
@@ -1068,6 +1103,7 @@ impl PlatformWindow for MockWindow {
                 }
                 WindowCommand::Hide => state.visible = false,
                 WindowCommand::Activate => state.focused = true,
+                WindowCommand::SetMaterial(material) => state.materials.push(material),
                 // A command this host does not know is refused by `admit`
                 // through its capability, and `Close` returned above.
                 _ => {}
@@ -1077,13 +1113,25 @@ impl PlatformWindow for MockWindow {
         Ok(())
     }
 
-    fn set_frame_rate_hint(&self, hint: flui_platform::FrameRateHint) {
-        self.state.lock().frame_rate_hints.push(hint);
+    fn set_frame_rate_hint(&self, hint: flui_platform::FrameRateHint) -> Result<(), Unsupported> {
+        // The snapshot's lock is taken before the model's, never inside it:
+        // a publication holds the snapshot while it reads the model.
+        let availability = self.window_state.published_capabilities().frame_rate_hint;
+        let mut state = self.state.lock();
+        takes(&state, availability)?;
+        state.frame_rate_hints.push(hint);
+        Ok(())
     }
 
-    fn set_input_regions(&self, regions: &[InputRegion]) {
+    /// Taken while the window's
+    /// [`InputCapabilities::input_regions`](flui_platform::input_capabilities::InputCapabilities::input_regions)
+    /// says the simulated system honours them, as it does unless a test said
+    /// otherwise.
+    fn set_input_regions(&self, regions: &[InputRegion]) -> Result<(), Unsupported> {
+        let availability = self.delivery.input_capabilities().input_regions();
         let (scale, display) = {
             let state = self.state.lock();
+            takes(&state, availability)?;
             (state.scale_factor, state.display)
         };
         let mut recorded = self.input_regions.lock();
@@ -1094,6 +1142,7 @@ impl PlatformWindow for MockWindow {
         if let Some(sent) = projection.update(regions, scale, display) {
             updates.push(sent.to_vec());
         }
+        Ok(())
     }
 
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
@@ -1153,10 +1202,6 @@ impl PlatformWindow for MockWindow {
     }
 
     // ==================== Control Methods ====================
-
-    fn set_background_appearance(&self, _appearance: WindowBackgroundAppearance) {
-        // No-op in headless mode
-    }
 
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
         self.state.lock().cursor = cursor;
