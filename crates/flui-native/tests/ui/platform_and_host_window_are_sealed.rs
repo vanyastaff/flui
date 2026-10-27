@@ -165,6 +165,8 @@ impl PlatformWindow for OutsideWindow {
         Err(flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform).into())
     }
 
+    flui_platform::window_takes_no_frame_verbs!();
+
     fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
         None
     }

@@ -383,10 +383,22 @@ impl WindowState {
 /// [`Emulated`](Availability::Emulated) when the backend builds it from what
 /// the window system does provide (a fullscreen made of a borderless window
 /// sized to its monitor), and [`Unavailable`](Availability::Unavailable)
-/// exactly when [`WindowCommand::admit`] answers
+/// exactly when [`WindowCommand::admit`] refuses the command as
 /// [`AdmissionError::Unsupported`]; a boolean could not say "only
-/// approximately". Fields are public so a backend can start from
-/// [`NONE`](Self::NONE) or [`ALL`](Self::ALL) and set the difference.
+/// approximately". A command the capabilities admit can still fail in the
+/// operating system, which [`ApplyError::Platform`] reports: that is a
+/// failure, not a missing capability. The one verb a window takes outside
+/// the command queue, [`frame_rate_hint`](Self::frame_rate_hint), answers
+/// [`Unsupported`] exactly when it is `Unavailable`. Fields are public so a
+/// backend can start from [`NONE`](Self::NONE) or [`ALL`](Self::ALL) and set
+/// the difference.
+///
+/// A capability this device lacks where its platform has it (an operating
+/// system build below the feature's) is set with
+/// [`unavailable_on_this_device`](Self::unavailable_on_this_device), and
+/// admission then refuses its command with
+/// [`NotOnThisDevice`](UnsupportedReason::NotOnThisDevice) instead of
+/// [`NotOnThisPlatform`](UnsupportedReason::NotOnThisPlatform).
 ///
 /// The capabilities in a published snapshot also carry their
 /// [`revision`](Self::revision): the snapshot revision at which what the
@@ -432,6 +444,15 @@ pub struct WindowCapabilities {
     pub observes_minimized: Availability,
     /// A saved position can be applied again when the window opens.
     pub places_at_open: Availability,
+    /// [`PlatformWindow::set_frame_rate_hint`](crate::PlatformWindow::set_frame_rate_hint):
+    /// the window system takes a refresh-rate request for the window.
+    pub frame_rate_hint: Availability,
+    /// [`WindowCommand::SetMaterial`]: the window system draws every
+    /// [`WindowMaterial`](crate::WindowMaterial) behind the window.
+    pub material: Availability,
+    /// The commands whose capability is `Unavailable` because of this device,
+    /// one bit per [`WindowCapabilities::slot`].
+    device_limits: u32,
     /// The window whose snapshot publishes these capabilities; `None` for
     /// capabilities built by hand. Kept by [`WindowState::successor`].
     owner: Option<CapabilitiesOwner>,
@@ -460,7 +481,7 @@ impl CapabilitiesOwner {
 
 impl PartialEq for WindowCapabilities {
     fn eq(&self, other: &Self) -> bool {
-        self.honoured() == other.honoured()
+        self.honoured() == other.honoured() && self.device_limits == other.device_limits
     }
 }
 
@@ -469,13 +490,14 @@ impl Eq for WindowCapabilities {}
 impl std::hash::Hash for WindowCapabilities {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.honoured().hash(state);
+        self.device_limits.hash(state);
     }
 }
 
 impl WindowCapabilities {
     /// Every field but the revision, for equality and hashing. Destructured,
     /// so a field the type gains does not compile until it is listed here.
-    const fn honoured(&self) -> [Availability; 16] {
+    const fn honoured(&self) -> [Availability; 18] {
         let Self {
             sets_title,
             sets_position,
@@ -493,6 +515,9 @@ impl WindowCapabilities {
             observes_position,
             observes_minimized,
             places_at_open,
+            frame_rate_hint,
+            material,
+            device_limits: _,
             owner: _,
             revision: _,
         } = *self;
@@ -513,6 +538,8 @@ impl WindowCapabilities {
             observes_position,
             observes_minimized,
             places_at_open,
+            frame_rate_hint,
+            material,
         ]
     }
 }
@@ -536,6 +563,9 @@ impl WindowCapabilities {
         observes_position: Availability::Unavailable,
         observes_minimized: Availability::Unavailable,
         places_at_open: Availability::Unavailable,
+        frame_rate_hint: Availability::Unavailable,
+        material: Availability::Unavailable,
+        device_limits: 0,
         owner: None,
         revision: WindowRevision::ZERO,
     };
@@ -559,6 +589,9 @@ impl WindowCapabilities {
         observes_position: Availability::Native,
         observes_minimized: Availability::Native,
         places_at_open: Availability::Native,
+        frame_rate_hint: Availability::Native,
+        material: Availability::Native,
+        device_limits: 0,
         owner: None,
         revision: WindowRevision::ZERO,
     };
@@ -603,6 +636,7 @@ impl WindowCapabilities {
             WindowCommand::Show => self.shows,
             WindowCommand::Activate => self.activates,
             WindowCommand::Close => self.closes,
+            WindowCommand::SetMaterial(_) => self.material,
         }
     }
 
@@ -610,6 +644,78 @@ impl WindowCapabilities {
     #[must_use]
     pub const fn permits(&self, command: &WindowCommand) -> bool {
         self.availability(command).is_available()
+    }
+
+    /// These capabilities with `command`'s capability `Unavailable` because
+    /// of this device — its operating system build or its hardware — where
+    /// its platform has it: admission then refuses `command` as
+    /// [`NotOnThisDevice`](UnsupportedReason::NotOnThisDevice). The mode every
+    /// window has ([`WindowMode::Normal`]) cannot be taken away.
+    #[must_use]
+    pub const fn unavailable_on_this_device(mut self, command: &WindowCommand) -> Self {
+        let Some(slot) = Self::slot(command) else {
+            return self;
+        };
+        match command {
+            WindowCommand::SetTitle(_) => self.sets_title = Availability::Unavailable,
+            WindowCommand::SetPosition(_) => self.sets_position = Availability::Unavailable,
+            WindowCommand::SetSize(_) => self.sets_size = Availability::Unavailable,
+            WindowCommand::SetConstraints(_) => self.sets_constraints = Availability::Unavailable,
+            WindowCommand::SetResizable(_) => self.sets_resizable = Availability::Unavailable,
+            WindowCommand::SetDecorated(_) => self.sets_decorated = Availability::Unavailable,
+            WindowCommand::SetMode(WindowMode::Minimized) => {
+                self.minimizes = Availability::Unavailable;
+            }
+            WindowCommand::SetMode(WindowMode::Maximized) => {
+                self.maximizes = Availability::Unavailable;
+            }
+            WindowCommand::SetMode(WindowMode::Fullscreen) => {
+                self.enters_fullscreen = Availability::Unavailable;
+            }
+            WindowCommand::SetMode(WindowMode::Normal) => {}
+            WindowCommand::Hide => self.hides = Availability::Unavailable,
+            WindowCommand::Show => self.shows = Availability::Unavailable,
+            WindowCommand::Activate => self.activates = Availability::Unavailable,
+            WindowCommand::Close => self.closes = Availability::Unavailable,
+            WindowCommand::SetMaterial(_) => self.material = Availability::Unavailable,
+        }
+        self.device_limits |= 1 << slot;
+        self
+    }
+
+    /// Why admission refuses `command` when its capability is `Unavailable`:
+    /// this device ([`unavailable_on_this_device`](Self::unavailable_on_this_device))
+    /// or, otherwise, the platform.
+    #[must_use]
+    pub const fn refusal(&self, command: &WindowCommand) -> UnsupportedReason {
+        match Self::slot(command) {
+            Some(slot) if self.device_limits & (1 << slot) != 0 => {
+                UnsupportedReason::NotOnThisDevice
+            }
+            _ => UnsupportedReason::NotOnThisPlatform,
+        }
+    }
+
+    /// The bit of `command`'s capability in `device_limits`; `None` for the
+    /// mode every window has.
+    const fn slot(command: &WindowCommand) -> Option<u32> {
+        Some(match command {
+            WindowCommand::SetTitle(_) => 0,
+            WindowCommand::SetPosition(_) => 1,
+            WindowCommand::SetSize(_) => 2,
+            WindowCommand::SetConstraints(_) => 3,
+            WindowCommand::SetResizable(_) => 4,
+            WindowCommand::SetDecorated(_) => 5,
+            WindowCommand::SetMode(WindowMode::Minimized) => 6,
+            WindowCommand::SetMode(WindowMode::Maximized) => 7,
+            WindowCommand::SetMode(WindowMode::Fullscreen) => 8,
+            WindowCommand::SetMode(WindowMode::Normal) => return None,
+            WindowCommand::Hide => 9,
+            WindowCommand::Show => 10,
+            WindowCommand::Activate => 11,
+            WindowCommand::Close => 12,
+            WindowCommand::SetMaterial(_) => 13,
+        })
     }
 }
 
@@ -642,6 +748,13 @@ pub enum WindowCommand {
     /// should-close veto (ADR-0123). Asking whether the window may close is
     /// [`WindowControl::request_close`].
     Close,
+    /// Draw a material behind the window's content, in place of the one it
+    /// drew (ADR-0254 §3). It shows through the window's frame and wherever
+    /// the content is transparent; a window opens with the material its host
+    /// gives a new window, which the host's documentation names. The
+    /// material is not a fact of the snapshot: the command is the request,
+    /// and a refusal of the window system is [`ApplyError::Platform`].
+    SetMaterial(crate::WindowMaterial),
 }
 
 impl WindowCommand {
@@ -673,7 +786,8 @@ impl WindowCommand {
             | Self::Show
             | Self::Hide
             | Self::Activate
-            | Self::Close => true,
+            | Self::Close
+            | Self::SetMaterial(_) => true,
         };
         if valid {
             Ok(())
@@ -698,14 +812,14 @@ impl WindowCommand {
     /// What [`validate`](Self::validate) refuses, or
     /// [`AdmissionError::Unsupported`] when the command's capability is
     /// [`Availability::Unavailable`] in `capabilities`: the window's platform
-    /// does not take it ([`UnsupportedReason::NotOnThisPlatform`]).
+    /// does not take it, with the reason [`WindowCapabilities::refusal`] gives.
     pub fn admit(
         self,
         capabilities: &WindowCapabilities,
     ) -> Result<AdmittedCommand, AdmissionError> {
         self.validate()?;
         if !capabilities.permits(&self) {
-            return Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform).into());
+            return Err(Unsupported::new(capabilities.refusal(&self)).into());
         }
         Ok(AdmittedCommand {
             command: self,

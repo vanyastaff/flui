@@ -129,6 +129,7 @@ mod preferences;
 mod storage;
 mod system_chrome;
 mod target_platform;
+mod testing;
 mod text_input;
 pub mod text_store;
 mod unsupported;
@@ -184,8 +185,8 @@ pub use text_input::PlatformTextInput;
 pub use text_store::{TextStore, TextStoreEdit, TextStoreHost, TextStoreObserver, TextStoreRead};
 pub use unsupported::{Availability, Unsupported, UnsupportedReason};
 pub use window::{
-    CursorError, InputLatency, WindowAppearance, WindowBackgroundAppearance, WindowExecutionState,
-    WindowId, WindowOptions, WindowReveal,
+    CursorError, InputLatency, WindowAppearance, WindowExecutionState, WindowId, WindowMaterial,
+    WindowOptions, WindowReveal,
 };
 pub use window_handler::{CloseDecision, FrameOutcome, SurfaceChange, WindowHandler};
 pub use window_state::{

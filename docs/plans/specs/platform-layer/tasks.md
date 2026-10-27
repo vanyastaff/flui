@@ -3047,6 +3047,129 @@ graph LR
   xvfb `--all-features` — 302 из 302; rustdoc с закрытыми элементами обычный и с `winit-backend`.
   Не запускалось: Mac и iPhone (vanyastaff/flui#1840), `cross-typecheck`, Android-устройство,
   браузер.
+- [x] **LY43** — ветка `platform/frame-verbs`, от `main` @ `620d37f82` (LY42). **Контракт.**
+  `PlatformWindow::set_frame_rate_hint(FrameRateHint)`, `set_input_regions(&[InputRegion])` и новый
+  `set_material(WindowMaterial)` возвращают `Result<(), Unsupported>` и не имеют умолчаний (все
+  внешние реализации, около 20 двойников тестов, пишут их сами; обёртки делегируют). Это глаголы, не
+  `WindowCommand` (ADR-0254 п. 3, вариант 8 отвергнут). `WindowCapabilities` получил
+  `frame_rate_hint` и `material` (`honoured` — 18 полей); регионы ввода отвечают
+  `InputCapabilities::input_regions`, как было. `WindowBackgroundAppearance` (с `MicaBackdrop`,
+  `MicaAltBackdrop`, `Transparent`, `Blurred`) и `set_background_appearance` удалены (их не звал ни
+  один путь). **Набор материалов — решение PR:** `WindowMaterial { Opaque, System }` (закрыт с
+  причиной: новый материал — работа каждого хоста). `System` — материал ОС для фона долгоживущего
+  окна (Mica на Windows 11); `Opaque` — без материала. Меньший честный набор: каждый хост, у
+  которого материал не `Unavailable`, рисует оба; Mica Alt и Acrylic остаются в
+  `flui::native::windows` (`Win32Window::set_backdrop`), материалы `NSVisualEffectView` и Liquid
+  Glass — в `flui::native::macos`. **Хосты.** Win32: `WindowSet` читает сборку один раз
+  (`WindowsPlatform::at_build`, `new` — с `WindowsBuild::read()`), шлюз `SystemBackdrop`
+  (`Since<F>`, сборка 22621, чистый модуль `window::windows::material`) решает и возможность, и
+  дойдёт ли глагол до DWM; ниже порога и при отказе `DwmSetWindowAttribute` — `Unsupported` с
+  `NotOnThisDevice` вместо записи в журнал; закрытое окно — `NoWindow`. Возможности окна Win32
+  теперь несёт `OwnerTracking` (контекст окна хранит их с открытия). Окно Win32 по-прежнему
+  открывается на Mica, теперь через тот же шлюз (`apply_windows_features` без ручных ординалов);
+  частота кадров и регионы ввода — `NotOnThisPlatform`. Android: `HostDisplays::takes_frame_rate_requests`
+  (разрешился ли `ANativeWindow_setFrameRate`) даёт `frame_rate_hint` в возможностях окна и
+  платформы; ниже — `NotOnThisDevice`; регионы ввода до API 29 — `NotOnThisDevice`. iOS: регионы
+  ввода как были (закрытое окно — `NoWindow`, не главный поток — `Unavailable`), частота и
+  материал — `NotOnThisPlatform`. macOS, Web, winit: все три — `NotOnThisPlatform`; материал macOS
+  через контракт не подключён (без прогона на Mac и с ошибками `NotOnTheMainLane`/`ForeignContentView`,
+  которых `Unsupported` не выразит) — запись 20 в `docs/gaps.md`. Headless: глаголы отвечают
+  опубликованным возможностям (снимок берётся до замка модели) и доступности ввода
+  (`HeadlessWindowSystem::input_regions`), записи — `frame_rate_hints()`, `materials()`.
+  **Вызывающие.** Presentation (`hand_input_regions`) и хост дисплеев `flui-app` (`request_rate`)
+  пишут отказ в `trace`: возможность уже сказала то же. **Conformance.** Новая проверка
+  `per_frame_verbs_report_unsupported_exactly_when_unavailable` (имя из подтверждения ADR-0254) и
+  обязательный `WindowFixture::input_regions`; headless — ещё набор «без регионов ввода», Win32 —
+  таблица `input::availability::windows`.
+  Тесты (откат проверен для каждого): `system_backdrop_gate_table` (с `Native` ниже порога
+  падает); `window_material_on_win32` — живое окно на этой машине (Windows 11, сборка 26300),
+  readback — атрибут DWM: `below_the_gate_a_material_is_not_on_this_device` (сборка 22000
+  внедрена: возможность `Unavailable`, ответ `NotOnThisDevice`, атрибут не тронут; падает, если
+  набор читает настоящую сборку), `from_the_gate_on_each_material_reaches_the_desktop_window_manager`
+  (открыто на `DWMSBT_MAINWINDOW`, затем `Opaque`→`NONE`, `System`→`MAINWINDOW`, `Opaque`→`NONE`,
+  после закрытия `NoWindow`; падает, если глагол отвечает `Ok` без вызова DWM),
+  `a_refusal_of_the_desktop_window_manager_is_not_on_this_device` (падает с прежним проглатыванием
+  отказа); `flui-testing` — `a_window_whose_verbs_ignore_their_capabilities_is_caught` (без новой
+  проверки падает), а с прежним инертным headless падает
+  `the_headless_window_conforms_under_every_capability_set`. `.stderr`
+  `platform_and_host_window_are_sealed` перегенерирован (сдвиг строк). `module-dag`: 1 исключение,
+  без изменений; `globals` — 57. Документы: ARCHITECTURE.md контракта и ядра, `docs/platform-parity.md`
+  (заметки без смены ячеек: Windows остаётся 🟡 — прозрачности нет), `docs/gaps.md` (запись 20),
+  `changelog.d/platform-frame-verbs.md`.
+  Проверки (Windows): `cargo fmt`; clippy `-D warnings` рабочего пространства `--all-targets`
+  обычный и с `flui-native/winit-backend,flui/native`; nextest `flui-platform`, `flui-native`,
+  `flui-testing`, `flui-app`, `flui-runtime`, `flui-interaction` — 643 (2 пропущены), с
+  `winit-backend` (`flui-native`, `flui-app`) — 370; оба раза падает только trybuild
+  `owner_thread_token_has_no_default` с `main`; фасад с `native` — 10; doctest'ы контракта и ядра;
+  clippy Android `-p flui-native -p flui-app --all-targets`, wasm32 lib, iOS lib (`DOCS_RS=1`),
+  macOS `--all-targets` (`flui-native`, `flui-app`, `flui-platform`, `flui-testing`; clang и
+  llvm-ar LLVM) обычный и с `winit-backend`; `checks`, `doc-strict`, `wasm-test` — 51.
+  WSL Ubuntu 24.04 (`WAYLAND_DISPLAY` и `XDG_SESSION_TYPE` сняты): clippy четырёх крейтов
+  `--all-targets`, с `winit-backend` и `flui-native --all-features`; nextest `FLUI_HEADLESS=1` — 450
+  из 451 (прежний `x11_window_takes_commands_and_publishes_what_the_server_holds` против X-сервера
+  WSLg), под xvfb `--all-features` — 303 из 303; rustdoc `-D warnings --document-private-items`
+  без признаков и с `winit-backend`.
+  Не запускалось: Mac и iPhone (vanyastaff/flui#1840), `cross-typecheck` (нет `zig`),
+  Android-устройство (частота кадров меняет только форму ответа), браузер.
+  **Исправления после ревью (vanyastaff/flui#1917).** Набор материалов `{ Opaque, System }`
+  утверждён владельцем. Слиты `main` @ `dcb188cb8` (LY44: `open_window(options, handler)`,
+  `WindowDelivery` вместо `WindowCallbacks`) и `6b45a8bb5` (#1919–#1921, AppKit conformance) —
+  слиянием. (1) Материал — команда, как решает ADR-0254 п. 3: `WindowCommand::SetMaterial`,
+  допуск по `WindowCapabilities::material`, отказ ОС — `ApplyError::Platform`; глагол
+  `set_material` удалён, `set_frame_rate_hint` и `set_input_regions` остались глаголами.
+  Новое в контракте: `WindowCapabilities::unavailable_on_this_device` и `refusal` — возможность,
+  которой нет у этого устройства, допуск отказывает с `NotOnThisDevice` (Win32 ниже 22621), прочие
+  — `NotOnThisPlatform`; `WindowHandle::set_material` (`flui-view`) — путь виджета через очередь
+  окна. (2) В документации `WindowCapabilities`: `Unavailable` ровно тогда, когда допуск
+  отказывает; отказ ОС после допуска — сбой, не отсутствие. iOS `set_input_regions` с любого
+  потока: края доходят до корневого контроллера через главную очередь (`StatusBar::defer_edges`,
+  контроллер читает последние края при обновлении, так что ранний блок не возвращает старые).
+  (3) Тест отказа DWM: инъекция исхода DWM (`material_applied`) — отказ даёт `ApplyError::Platform`;
+  закрытое окно — `ApplyError::Closed` (команда, допущенная до закрытия). (4) Android: чистая
+  модель `display::android::sample::FrameRateRequests` (разрешение `ANativeWindow_setFrameRate`
+  → `Availability`), хук `HostDisplays::frame_rate_hint`. (5) Заглушки двойников —
+  макрос `flui_platform::window_takes_no_frame_verbs!` (модуль `testing`, ADR-0243): шесть
+  двойников и fixture trybuild. (6) Один шлюз `DWMWA_SYSTEMBACKDROP_TYPE`: команда, открытие на Mica,
+  `Win32Window::set_backdrop` и `backdrop` берут доказательство `Since<SystemBackdrop>`, ниже
+  шлюза вид Win32 отвечает `NotOnThisDevice`. (7) Документация `request_rate`/`hint_for`.
+  (9) ADR-0151 и ADR-0082 называют `WindowCommand::SetMaterial` вместо живого
+  `WindowBackgroundAppearance` (учёт решения ADR-0254 п. 3). (10) macOS: `System` —
+  материал `windowBackground` `NSVisualEffectView` за видом FLUI, `Opaque` — `clear_backdrop`,
+  возможность `Native` для окон главной полосы; закрытое окно — `Closed`, прочие ошибки AppKit —
+  `ApplyError::Platform`. Комментарий владельца после прогона на Mac (M1, macOS 27, 2026-10-27):
+  `WindowFixture::input_regions` добавлен в AppKit-фикстуру `tests/appkit_window.rs` (#1921 уже в
+  `main`), там же readback материала и окно с обработчиком (фикстура звала `open_window` с одним
+  аргументом); iOS `set_frame_rate_hint` идёт через `CADisplayLink` окна (`High` — лучшая частота
+  экрана, иначе без предпочтения; чистое правило `link_rate::frame_rate_preference` с подсказкой),
+  возможность `Native`; macOS `set_frame_rate_hint` остаётся `Unavailable` — кадры хоста идут не от
+  display link — и отвечает `NotOnThisDevice`, а не `NotOnThisPlatform`; вариант причины «этот хост
+  не делает» в контракте отсутствует — вопрос владельцу. Conformance: `SetMaterial` в образцовых
+  командах, `Readback::material` и сходимость материала.
+  Тесты (откат проверен для каждого): `system_backdrop_gate_table` (без
+  `unavailable_on_this_device` ниже шлюза и с причиной, игнорирующей устройство, падает);
+  `window_command_validate` (строка `SetMaterial` и проверка `NotOnThisDevice` на каждую команду;
+  падает при причине без устройства); `window_material_on_win32` — `below_the_gate_…` (падает,
+  если набор читает настоящую сборку и если `set_backdrop` без шлюза),
+  `from_the_gate_on_…` (падает, если Win32 игнорирует `SetMaterial`), `a_refusal_…_is_a_platform_failure`
+  (падает при проглатывании отказа); `the_win32_window_conforms` (сходимость материала: падает
+  при игнорировании); `the_frame_rate_capability_follows_the_request` (Android, падает при
+  инвертированном `if`); `the_link_asks_for_what_the_window_hints` (iOS, падает, если подсказка
+  игнорируется); `a_material_goes_through_the_window_queue` (`flui-app`) и conformance headless
+  (падают, если headless игнорирует `SetMaterial`). iOS `defer_edges` и macOS-материал — только
+  сборкой (Mac).
+  Проверки после исправлений и слияний (Windows): `cargo fmt`; clippy `-D warnings` рабочего
+  пространства `--all-targets` обычный и с `flui-native/winit-backend,flui/native`; nextest
+  `flui-platform`, `flui-native`, `flui-testing`, `flui-app`, `flui-runtime`, `flui-interaction`,
+  `flui-view` — 698 из 700 (16 пропущены): trybuild `owner_thread_token_has_no_default` с `main` и
+  `open_real_window` — проходит отдельно и в прогоне одного `flui-native` (291 из 292), падает
+  только под нагрузкой семи крейтов с настоящими окнами; с `winit-backend` — 372 из 374 (те же);
+  doctest'ы; `.stderr` `platform_and_host_window_are_sealed` перегенерирован; clippy Android
+  `--all-targets`, iOS lib (`DOCS_RS=1`), macOS `--all-targets` обычный и с `winit-backend`;
+  `wasm-check`, `wasm-test` — 51; `checks`, `doc-strict`. WSL Ubuntu 24.04: clippy трёх вариантов;
+  nextest `FLUI_HEADLESS=1` — 453 из 454 (прежний X11 на WSLg), xvfb `--all-features` — 305 из
+  305; rustdoc `--document-private-items` нашёл ссылку на удалённый `set_material`
+  (исправлено). Не запускалось: Mac и iPhone для новых путей (материал macOS, частота кадров iOS,
+  края iOS из чужого потока) — запрошено у владельца; `cross-typecheck`; браузер.
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`

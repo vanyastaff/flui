@@ -70,7 +70,8 @@ source is named.
 - **The contract crate** (`flui-platform-api`) has 16,481 lines in `src/`, re-exported whole as
   `flui::platform`. 63% of it is text-store machinery (3,708 lines), keyboard (2,613), pointer
   (2,016), data transfer and drag (1,173) and haptics (868). Items with no production consumer
-  above the host sit in it: `WindowEvent`, `WindowBackgroundAppearance`, the `OfferTable` family, four
+  above the host sit in it: `WindowEvent`, `WindowBackgroundAppearance` (since replaced by `WindowCommand::SetMaterial`,
+  ADR-0254 §3), the `OfferTable` family, four
   coordinate helpers, and three test doubles (`InMemoryClipboard`, `InMemoryTextStore`,
   `FakeHaptics`). 26 of its 82 public enums are closed with no recorded decision (82 `pub enum`,
   56 of them with `#[non_exhaustive]`, over `crates/flui-platform-api/src`), and nine enums spell
@@ -443,8 +444,8 @@ containment, the owner hearing committed text) stand. `InMemoryTextStore` moves 
   and the drag provider hooks `OsDragProvider` and `OsDragEndHook`, which nothing above the host
   names at `083b0f75d` (`PlatformDragSource` and the drag vocabulary stay).
 - **Deleted:** `WindowEvent`, `Platform::on_window_event` and
-  `WindowBackgroundAppearance`, which a background-material command gated by a window capability
-  replaces (ADR-0254).
+  `WindowBackgroundAppearance`, which the command `WindowCommand::SetMaterial`, admitted against
+  `WindowCapabilities::material`, replaces (ADR-0254 §3).
 - **Kept, and wired.** `WindowOptions::input_latency` has no setter above the host today (only
   the Android and Web hosts read it). It stays in the contract, and the application's window
   configuration, its consumer, sets it in the same series.

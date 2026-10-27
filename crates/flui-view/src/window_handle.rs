@@ -162,6 +162,18 @@ impl WindowHandle {
         self.submit(WindowCommand::Activate)
     }
 
+    /// Have the window system draw `material` behind the window's content
+    /// (ADR-0254 §3).
+    ///
+    /// # Errors
+    /// [`Unsupported`](flui_platform::AdmissionError::Unsupported) where the
+    /// window draws no material
+    /// ([`WindowCapabilities::material`](flui_platform::WindowCapabilities::material));
+    /// otherwise as [`Self::set_title`].
+    pub fn set_material(&self, material: flui_platform::WindowMaterial) -> Result<(), SubmitError> {
+        self.submit(WindowCommand::SetMaterial(material))
+    }
+
     /// Ask the window to close through the vetoed close path; the window may
     /// stay open. Asking is not closing: the application's close-request
     /// handler decides, on the owner's next turn.

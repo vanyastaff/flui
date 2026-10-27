@@ -209,6 +209,11 @@ mod hooks {
         /// this system has the request.
         fn request_frame_rate(&self, window: &NativeWindow, hint: FrameRateHint);
 
+        /// The window's `frame_rate_hint` capability: `Native` exactly where
+        /// this system takes a refresh-rate request (`ANativeWindow_setFrameRate`,
+        /// API 30).
+        fn frame_rate_hint(&self) -> flui_platform::Availability;
+
         /// Watch the refresh rate where the system reports it, on the thread
         /// whose looper runs the app, until the watch is dropped on that
         /// thread.

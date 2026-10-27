@@ -36,12 +36,13 @@ use windows::{
 
 use flui_platform::{
     AdmittedCommand, ApplyError, CursorError, PlatformFailure, PlatformWindow, SizeConstraints,
-    Unsupported, UnsupportedReason, WindowBackgroundAppearance, WindowCapabilities, WindowCommand,
-    WindowId, WindowMode, WindowOptions, WindowReveal, WindowState,
+    Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand, WindowId, WindowMaterial,
+    WindowMode, WindowOptions, WindowReveal, WindowState,
 };
 
 use flui_platform::os_options::WindowsCornerPreference;
 
+use super::material::SystemBackdrop;
 use super::mode::NativeMode;
 use super::proc::{
     FirstShow, OwnerTracking, REQUEST_FRAME, WindowRecord, first_show_command, frame_style,
@@ -54,6 +55,7 @@ use super::set::{
 use crate::host::WindowFacets;
 use crate::owner::windows::WINDOW_CLASS_NAME;
 use crate::text::WindowTextInput;
+use crate::version::gate::Since;
 use crate::window::state::WindowStateCell;
 use crate::{
     owner::OpenWindowError, owner::handlers::PlatformHandlers,
@@ -179,9 +181,15 @@ fn device_pair(x: f64, y: f64, scale: f64) -> Result<(i32, i32), ApplyError> {
 }
 
 /// What every Win32 window honours and observes, known before one exists
-/// (`Platform::window_capabilities`). Win32 has no fullscreen of its own: the
-/// host makes one of a borderless window sized to its monitor.
-pub(crate) const fn window_capabilities() -> WindowCapabilities {
+/// (`Platform::window_capabilities`), on a build that passed or failed the
+/// material's `gate`. Win32 has no fullscreen of its own: the host makes one
+/// of a borderless window sized to its monitor. It takes no refresh-rate
+/// request: the display's rate is the user's setting. The material is
+/// `DWMWA_SYSTEMBACKDROP_TYPE`; a Win32 window opens with
+/// [`WindowMaterial::System`] where the build draws it.
+pub(crate) const fn window_capabilities(
+    gate: &Result<Since<SystemBackdrop>, Unsupported>,
+) -> WindowCapabilities {
     use flui_platform::Availability::{Emulated, Native};
     let mut capabilities = WindowCapabilities::NONE;
     capabilities.sets_title = Native;
@@ -200,7 +208,8 @@ pub(crate) const fn window_capabilities() -> WindowCapabilities {
     capabilities.observes_position = Native;
     capabilities.observes_minimized = Native;
     capabilities.places_at_open = Native;
-    capabilities
+    capabilities.material = Native;
+    super::material::below_the_gate(capabilities, gate)
 }
 
 impl WindowsWindow {
@@ -378,7 +387,7 @@ impl WindowsWindow {
             // What the window opens with on Windows: its own options, or
             // what a window gets without them.
             let os = options.os_options.windows.clone().unwrap_or_default();
-            Self::apply_windows_features(hwnd, os.corner_preference);
+            Self::apply_windows_features(hwnd, windows.material, os.corner_preference);
             // One sample seeds both the chrome and the change filter, so the
             // first theme change after creation is never swallowed.
             let appearance = super::backdrop::system_appearance();
@@ -440,6 +449,7 @@ impl WindowsWindow {
                     active: false,
                     hovered: false,
                     occluded: false,
+                    capabilities: windows.capabilities(),
                 },
             )));
 
@@ -496,6 +506,7 @@ impl WindowsWindow {
             });
             let context = Box::new(WindowContext {
                 window_id,
+                capabilities: windows.capabilities(),
                 windows: Arc::downgrade(&windows),
                 window_state: Arc::downgrade(&state),
                 snapshot: Arc::clone(&snapshot),
@@ -684,62 +695,47 @@ impl WindowsWindow {
             }) == Some(true)
     }
 
-    /// Apply Windows 11 features automatically
+    /// What the desktop window manager draws for a window as it opens: the
+    /// frame extended into the client area, so a material shows wherever the
+    /// content is transparent; [`WindowMaterial::System`] where the build
+    /// draws one (`material`), the material a Win32 window opens with; and the
+    /// corners `corners` asks for.
     ///
-    /// This applies modern Windows 11 visual features if running on Windows 11:
-    /// - Mica backdrop for translucent background with blur
-    /// - the window's corners, as `corners` asks
-    /// - DWM frame extension for proper backdrop rendering
-    fn apply_windows_features(hwnd: HWND, corners: WindowsCornerPreference) {
-        // SAFETY: every call here (`DwmExtendFrameIntoClientArea`,
-        // `DwmSetWindowAttribute`) takes `hwnd` and a pointer to a
-        // stack-local value whose `size_of` matches the `u32` byte-count
-        // argument passed alongside it (`MARGINS` by-reference for the first
-        // call; `&raw const <i32>` cast to `c_void` for the second, with
-        // `size_of::<i32>()`). Callers of this function (`WindowsWindow::new`)
-        // pass the `hwnd` just returned by `CreateWindowExW`, so it is valid
-        // for the duration of this call. The results are discarded (`let _ =`)
-        // because every attribute here is a Windows-11-only cosmetic feature —
-        // failure on older Windows is expected and non-fatal, not evidence
-        // swallowed silently for an operation the caller depends on.
-        unsafe {
-            use windows::Win32::{
-                Graphics::Dwm::{
-                    DWMWINDOWATTRIBUTE, DwmExtendFrameIntoClientArea, DwmSetWindowAttribute,
-                },
-                UI::Controls::MARGINS,
-            };
+    /// Each is cosmetic and the window opens without it: a build that
+    /// refuses one keeps its own drawing, and the window's capabilities
+    /// already say whether it draws a material.
+    fn apply_windows_features(
+        hwnd: HWND,
+        material: Result<Since<SystemBackdrop>, Unsupported>,
+        corners: WindowsCornerPreference,
+    ) {
+        use windows::Win32::{Graphics::Dwm::DwmExtendFrameIntoClientArea, UI::Controls::MARGINS};
 
-            tracing::debug!("Applying Windows 11 features to HWND {:?}", hwnd);
-
-            // 1. Extend frame into client area (required for Mica backdrop)
-            let margins = MARGINS {
-                cxLeftWidth: -1,
-                cxRightWidth: -1,
-                cyTopHeight: -1,
-                cyBottomHeight: -1,
-            };
-            let _ = DwmExtendFrameIntoClientArea(hwnd, &raw const margins);
-
-            // 2. Enable Mica backdrop (Windows 11+)
-            let mica_value: i32 = 2; // DWMSBT_MAINWINDOW
-            let _ = DwmSetWindowAttribute(
-                hwnd,
-                DWMWINDOWATTRIBUTE(38), // DWMWA_SYSTEMBACKDROP_TYPE
-                (&raw const mica_value).cast::<std::ffi::c_void>(),
-                std::mem::size_of::<i32>() as u32,
-            );
-
-            // 3. The corners
-            let _ = super::backdrop::apply_corners(hwnd, corners);
-
-            tracing::debug!("Windows 11 features applied");
+        let margins = MARGINS {
+            cxLeftWidth: -1,
+            cxRightWidth: -1,
+            cyTopHeight: -1,
+            cyBottomHeight: -1,
+        };
+        // SAFETY: `hwnd` is the window `CreateWindowExW` just returned on this
+        // thread (the caller, `WindowsWindow::new`); the call reads the
+        // stack-local `margins` through the typed pointer for its duration.
+        let _ = unsafe { DwmExtendFrameIntoClientArea(hwnd, &raw const margins) };
+        if let Ok(gate) = material {
+            let _ = super::backdrop::apply_material(hwnd, gate, WindowMaterial::System);
         }
+        let _ = super::backdrop::apply_corners(hwnd, corners);
     }
 
     /// Get the native HWND handle
     pub(crate) fn hwnd(&self) -> HWND {
         self.hwnd
+    }
+
+    /// Whether the build the platform runs on draws a system backdrop: the
+    /// one gate every write of `DWMWA_SYSTEMBACKDROP_TYPE` takes.
+    pub(super) fn backdrop_gate(&self) -> Result<Since<SystemBackdrop>, Unsupported> {
+        self.windows.material
     }
 
     /// Whether the mouse is over this window, as its input read it: `None`
@@ -1448,6 +1444,17 @@ impl PlatformWindow for WindowsWindow {
                 self.close_window();
                 return Ok(());
             }
+            // The material is no fact of the snapshot: nothing to publish. A
+            // build below the gate has the capability `Unavailable`, so
+            // admission refused the command before it came here.
+            WindowCommand::SetMaterial(material) => {
+                let Ok(gate) = self.windows.material else {
+                    return Err(crate::window::state::not_carried_out(
+                        &WindowCommand::SetMaterial(material),
+                    ));
+                };
+                return super::backdrop::apply_material(self.hwnd, gate, material);
+            }
             other => return Err(crate::window::state::not_carried_out(&other)),
         }
         super::proc::with_window_context(self.hwnd, "apply", |ctx| {
@@ -1469,36 +1476,18 @@ impl PlatformWindow for WindowsWindow {
         }
     }
 
-    fn set_background_appearance(&self, appearance: WindowBackgroundAppearance) {
-        // SAFETY: `backdrop_value` is a stack-local `i32`; `DwmSetWindowAttribute`
-        // receives it via `&raw const` cast to `c_void`, sized with
-        // `size_of::<i32>()` matching the value pointed at.
-        unsafe {
-            use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute};
+    /// The display's rate is the user's setting: a Win32 window asks for none.
+    fn set_frame_rate_hint(&self, _hint: flui_platform::FrameRateHint) -> Result<(), Unsupported> {
+        Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
+    }
 
-            let backdrop_value: i32 = match appearance {
-                // DWMSBT_NONE — Windows has no native transparent backdrop,
-                // so Transparent also maps to NONE.
-                WindowBackgroundAppearance::Opaque | WindowBackgroundAppearance::Transparent => 1,
-                WindowBackgroundAppearance::Blurred => 3, // DWMSBT_TRANSIENTWINDOW (Acrylic)
-                WindowBackgroundAppearance::MicaBackdrop => 2, // DWMSBT_MAINWINDOW (Mica)
-                WindowBackgroundAppearance::MicaAltBackdrop => 4, // DWMSBT_TABBEDWINDOW (Mica Alt)
-            };
-
-            if let Err(error) = DwmSetWindowAttribute(
-                self.hwnd,
-                DWMWINDOWATTRIBUTE(38), // DWMWA_SYSTEMBACKDROP_TYPE
-                (&raw const backdrop_value).cast::<std::ffi::c_void>(),
-                std::mem::size_of::<i32>() as u32,
-            ) {
-                tracing::warn!(
-                    hwnd = ?self.hwnd,
-                    ?error,
-                    ?appearance,
-                    "DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE) failed"
-                );
-            }
-        }
+    /// Win32 has no input region a window hands the system: its input
+    /// capabilities say `Unavailable`.
+    fn set_input_regions(
+        &self,
+        _regions: &[flui_platform::input_regions::InputRegion],
+    ) -> Result<(), Unsupported> {
+        Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
     }
 
     fn window_handle(

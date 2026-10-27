@@ -446,6 +446,8 @@ impl flui_platform::PlatformWindow for CaptureWakeWindow {
         self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         panic!("capture wake failure");
     }
+    flui_platform::window_takes_no_frame_verbs!();
+
     fn set_cursor(&self, _: flui_platform::CursorIcon) -> Result<(), flui_platform::CursorError> {
         Ok(())
     }
