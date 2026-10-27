@@ -161,7 +161,10 @@ mod tests {
         Box::new(platform)
             .run(Box::new(move |owner| {
                 let window = owner
-                    .open_window(WindowOptions::default())
+                    .open_window(
+                        WindowOptions::default(),
+                        flui_testing::window_handler::RecordingWindowHandler::new(),
+                    )
                     .expect("headless window")
                     .try_ready()
                     .expect("ready inside on_ready");

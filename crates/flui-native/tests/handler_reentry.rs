@@ -10,8 +10,11 @@
 //! for the rest of the process.
 
 use flui_testing::window_commands::AdmitAndApply as _;
+use flui_testing::window_handler::RecordingWindowHandler;
 use std::any::Any;
+use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{RecvTimeoutError, channel};
 use std::sync::{Arc, Weak};
@@ -19,7 +22,8 @@ use std::time::Duration;
 
 use flui_native::{HeadlessPlatform, HostWindow, Platform};
 use flui_platform::{
-    DispatchEventResult, SessionEndAnswer, SessionEndPhase, SystemNotice, WindowOptions,
+    CloseDecision, DispatchEventResult, SessionEndAnswer, SessionEndPhase, SystemNotice,
+    WindowCommand, WindowOptions,
 };
 use parking_lot::Mutex;
 
@@ -152,69 +156,160 @@ fn replaced_application_handlers_reach_the_platform(platform: &Arc<dyn Platform>
     }
 }
 
-// --- window callbacks -----------------------------------------------------
+// --- window handlers ------------------------------------------------------
 
-/// Installs a window callback of one kind, its closure holding `capture`.
-type InstallCallback = fn(&dyn HostWindow, OnDrop);
+/// What a window handler's method does from inside its call: it opens another
+/// window, changes its own and quits, each reaching the platform while the
+/// method runs.
+struct Reentry {
+    platform: Weak<dyn Platform>,
+    window: RefCell<Weak<dyn HostWindow>>,
+    options: fn() -> WindowOptions,
+    /// The windows opened from inside a method, kept open by the test.
+    opened: RefCell<Vec<Arc<dyn HostWindow>>>,
+    /// Whether the method re-entered yet: it re-enters once.
+    done: Cell<bool>,
+}
 
-/// Every callback a window takes.
-const WINDOW_CALLBACKS: &[(&str, InstallCallback)] = &[
-    ("on_input", |window, capture| {
-        window.on_input(Box::new(move |_| {
-            let _ = &capture;
-            DispatchEventResult::default()
-        }));
-    }),
-    ("on_request_frame", |window, capture| {
-        window.on_request_frame(Box::new(move |_| {
-            let _ = &capture;
-        }));
-    }),
-    ("on_state_changed", |window, capture| {
-        window.on_state_changed(Box::new(move || {
-            let _ = &capture;
-        }));
-    }),
-    ("on_close", |window, capture| {
-        window.on_close(Box::new(move || {
-            let _ = &capture;
-        }));
-    }),
-    ("on_should_close", |window, capture| {
-        window.on_should_close(Box::new(move || {
-            let _ = &capture;
-            true
-        }));
-    }),
-    ("on_surface_status_change", |window, capture| {
-        window.on_surface_status_change(Box::new(move |_| {
-            let _ = &capture;
-        }));
-    }),
-];
+impl Reentry {
+    fn new(platform: &Arc<dyn Platform>, options: fn() -> WindowOptions) -> Rc<Self> {
+        Rc::new(Self {
+            platform: Arc::downgrade(platform),
+            window: RefCell::new(Weak::<flui_native::MockWindow>::new()),
+            options,
+            opened: RefCell::new(Vec::new()),
+            done: Cell::new(false),
+        })
+    }
 
-/// For each kind of window callback: a callback whose captures register the
-/// same kind again when dropped is replaced, and that registration lands.
-fn replaced_window_callbacks_reach_their_window(window: &Arc<dyn HostWindow>) {
-    for &(name, install) in WINDOW_CALLBACKS {
-        let reached = Arc::new(AtomicBool::new(false));
-        let observed = Arc::clone(&reached);
-        let weak = Arc::downgrade(window);
-        install(
-            window.as_ref(),
-            OnDrop::new(move || {
-                if let Some(window) = weak.upgrade() {
-                    install(window.as_ref(), OnDrop::inert());
-                    observed.store(true, Ordering::SeqCst);
+    /// Re-enter, the first time it is called.
+    fn run(&self) {
+        if self.done.replace(true) {
+            return;
+        }
+        let platform = self.platform.upgrade().expect("the platform");
+        let window = platform
+            .open_window((self.options)(), RecordingWindowHandler::new())
+            .expect("a window opens from inside a handler method");
+        self.opened.borrow_mut().push(window);
+        let own = self.window.borrow().upgrade();
+        if let Some(own) = own {
+            // A closed window answers `Closed`; the call reached it either way.
+            let _ = own.admit_and_apply(WindowCommand::SetTitle("re-entered".to_owned()));
+        }
+        platform.quit();
+    }
+
+    /// Make `method` re-enter; for `input`, the first input after the
+    /// capability snapshot.
+    fn install(self: &Rc<Self>, handler: &RecordingWindowHandler, method: Method) {
+        let reentry = Rc::clone(self);
+        match method {
+            Method::Input => handler.react_to_input(move |input| {
+                if !matches!(input, flui_platform::PlatformInput::Capabilities(_)) {
+                    reentry.run();
                 }
+                DispatchEventResult::default()
             }),
-        );
-        install(window.as_ref(), OnDrop::inert());
-        assert!(
-            reached.load(Ordering::SeqCst),
-            "{name}: the replaced callback's destructor could not register again"
+            Method::StateChanged => handler.react_to_state_change(move || reentry.run()),
+            Method::FrameRequested => handler.react_to_frame(move |_| reentry.run()),
+            Method::CloseRequested => handler.react_to_close_request(move || {
+                reentry.run();
+                CloseDecision::KeepOpen
+            }),
+            Method::Closed => handler.react_to_close(move || reentry.run()),
+            Method::SurfaceChanged => handler.react_to_surface_change(move |_| reentry.run()),
+        }
+    }
+}
+
+/// The methods of a window handler.
+#[derive(Debug, Clone, Copy)]
+enum Method {
+    Input,
+    StateChanged,
+    FrameRequested,
+    CloseRequested,
+    Closed,
+    SurfaceChanged,
+}
+
+/// Makes a window call a handler method; `reentered` answers whether the
+/// method ran, for a host that calls it on a later message. `false` when the
+/// window never called it.
+type Trigger = dyn Fn(&Arc<dyn HostWindow>, &dyn Fn() -> bool) -> bool;
+
+/// Opens a window delivering to a handler whose `method` re-enters, makes the
+/// window call that method with `trigger`, and checks every re-entry reached
+/// the platform: a window was opened and, where the host reports its quit to
+/// `quits`, the platform quit.
+fn a_handler_method_reenters(
+    platform: &Arc<dyn Platform>,
+    quits: Option<&AtomicUsize>,
+    options: fn() -> WindowOptions,
+    method: Method,
+    trigger: &Trigger,
+) {
+    let reentry = Reentry::new(platform, options);
+    let handler = RecordingWindowHandler::new();
+    reentry.install(&handler, method);
+    let window = platform
+        .open_window(options(), handler)
+        .expect("a window opens");
+    *reentry.window.borrow_mut() = Arc::downgrade(&window);
+    let before = quits.map(|quits| quits.load(Ordering::SeqCst));
+    let probe = Rc::clone(&reentry);
+    assert!(
+        trigger(&window, &move || probe.done.get()),
+        "{method:?}: the window never called it"
+    );
+    assert_eq!(
+        reentry.opened.borrow().len(),
+        1,
+        "{method:?}: the window opened from inside the method"
+    );
+    if let (Some(quits), Some(before)) = (quits, before) {
+        assert_eq!(
+            quits.load(Ordering::SeqCst),
+            before + 1,
+            "{method:?}: the quit reached the platform"
         );
     }
+    for opened in reentry.opened.take() {
+        opened.close_for_cleanup();
+    }
+    window.close_for_cleanup();
+}
+
+/// A window lets go of its handler when it closes; the handler's captures,
+/// whose destructor calls the platform, are dropped with none of the
+/// platform's locks held.
+fn a_handler_dropped_at_close_reaches_the_platform(
+    platform: &Arc<dyn Platform>,
+    options: fn() -> WindowOptions,
+    settle: &dyn Fn(&dyn Fn() -> bool) -> bool,
+) {
+    let reached = Arc::new(AtomicBool::new(false));
+    let observed = Arc::clone(&reached);
+    let weak = Arc::downgrade(platform);
+    let calls_back = OnDrop::new(move || {
+        if let Some(platform) = weak.upgrade() {
+            let _ = platform.active_window();
+            observed.store(true, Ordering::SeqCst);
+        }
+    });
+    let handler = RecordingWindowHandler::new();
+    handler.react_to_frame(move |_| {
+        let _ = &calls_back;
+    });
+    let window = platform
+        .open_window(options(), handler)
+        .expect("a window opens");
+    window.close_now();
+    assert!(
+        settle(&|| reached.load(Ordering::SeqCst)),
+        "the handler's destructor did not reach the platform"
+    );
 }
 
 // --- headless -------------------------------------------------------------
@@ -223,58 +318,85 @@ fn headless() -> Arc<HeadlessPlatform> {
     Arc::new(HeadlessPlatform::new())
 }
 
-/// A window's close callback that opens another window, registers that
-/// window's close callback and quits: each reaches the platform, the nested
-/// window's callback hears it close, and the callback that ran is retired.
-fn headless_close_callback_reenters() {
-    within("headless close callback", || {
-        let platform = headless();
-        let quits = Arc::new(AtomicUsize::new(0));
-        let counted = Arc::clone(&quits);
-        platform.on_quit(Box::new(move || {
-            counted.fetch_add(1, Ordering::SeqCst);
-        }));
-        let successor_heard = Arc::new(AtomicUsize::new(0));
-        let retired = Arc::new(AtomicBool::new(false));
-        let witness = Witness(Arc::clone(&retired));
-        let nested_window = Arc::new(Mutex::new(None));
-        let (weak, heard, nested) = (
-            Arc::downgrade(&platform),
-            Arc::clone(&successor_heard),
-            Arc::clone(&nested_window),
-        );
-        let window = platform
-            .open_window(WindowOptions::default())
-            .expect("a window");
-        window.on_close(Box::new(move || {
-            let _ = &witness;
-            let platform = weak.upgrade().expect("the platform");
-            let window = platform
-                .open_window(WindowOptions::default())
-                .expect("a window opens from inside the callback");
-            window.on_close(Box::new(move || {
-                heard.fetch_add(1, Ordering::SeqCst);
+/// Each method of a window's handler opens a window, changes its own and
+/// quits from inside its call, on the headless host, which calls every one.
+fn headless_handler_methods_reenter() {
+    within("headless window handler", || {
+        // A quit is heard once per platform: each method gets its own.
+        let platform = || {
+            let headless = headless();
+            let quits = Arc::new(AtomicUsize::new(0));
+            let counted = Arc::clone(&quits);
+            headless.on_quit(Box::new(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
             }));
-            *nested.lock() = Some(window);
-            platform.quit();
-        }));
-
-        window.close_now();
-
-        let nested = nested_window
-            .lock()
-            .take()
-            .expect("the callback opened a window");
-        assert_eq!(quits.load(Ordering::SeqCst), 1, "the quit reached the host");
-        assert!(
-            retired.load(Ordering::SeqCst),
-            "the callback that ran is retired once it returns"
-        );
-        nested.close_now();
-        assert_eq!(
-            successor_heard.load(Ordering::SeqCst),
-            1,
-            "the window opened from inside the first callback closes through its own"
+            (headless as Arc<dyn Platform>, quits)
+        };
+        let mock = |window: &Arc<dyn HostWindow>| {
+            window
+                .as_any()
+                .downcast_ref::<flui_native::MockWindow>()
+                .expect("a headless window")
+                .clone()
+        };
+        let rows: [(Method, Box<Trigger>); 6] = [
+            (
+                Method::Input,
+                Box::new(move |window, _| {
+                    mock(window).inject_event(flui_platform::PlatformInput::Ime(
+                        flui_platform::ImeEvent::Enabled,
+                    ));
+                    true
+                }),
+            ),
+            (
+                Method::StateChanged,
+                Box::new(move |window, _| {
+                    mock(window).simulate_resize(320.0, 200.0);
+                    true
+                }),
+            ),
+            (
+                Method::FrameRequested,
+                Box::new(|window, _| {
+                    window.request_redraw();
+                    true
+                }),
+            ),
+            (
+                Method::CloseRequested,
+                Box::new(move |window, _| !mock(window).simulate_close()),
+            ),
+            (
+                Method::Closed,
+                Box::new(|window, _| {
+                    window.close_now();
+                    true
+                }),
+            ),
+            (
+                Method::SurfaceChanged,
+                Box::new(move |window, _| {
+                    mock(window).simulate_surface_change(flui_platform::SurfaceChange::Release);
+                    true
+                }),
+            ),
+        ];
+        for (method, trigger) in &rows {
+            let (platform, quits) = platform();
+            a_handler_method_reenters(
+                &platform,
+                Some(&quits),
+                WindowOptions::default,
+                *method,
+                trigger,
+            );
+        }
+        let (platform, _) = platform();
+        a_handler_dropped_at_close_reaches_the_platform(
+            &platform,
+            WindowOptions::default,
+            &|done| done(),
         );
     });
 }
@@ -363,16 +485,6 @@ fn headless_replaced_application_handlers_reach_the_platform() {
     });
 }
 
-fn headless_replaced_window_callbacks_reach_their_window() {
-    within("headless window callbacks", || {
-        let platform = headless();
-        let window = platform
-            .open_window(WindowOptions::default())
-            .expect("a window");
-        replaced_window_callbacks_reach_their_window(&window);
-    });
-}
-
 /// A session-end hook that installs its successor and then panics: the
 /// caller gets that panic, the hook's captures are retained rather than
 /// dropped after the failure, and the successor answers the next phase.
@@ -424,7 +536,10 @@ fn headless_exit_policy_hook_that_opens_a_window_keeps_the_platform() {
                 let window = weak
                     .upgrade()
                     .expect("the platform")
-                    .open_window(WindowOptions::default())
+                    .open_window(
+                        WindowOptions::default(),
+                        flui_testing::window_handler::RecordingWindowHandler::new(),
+                    )
                     .expect("a window opens from inside the hook");
                 *kept.lock() = Some(window);
             }
@@ -432,7 +547,10 @@ fn headless_exit_policy_hook_that_opens_a_window_keeps_the_platform() {
         }));
 
         let window = platform
-            .open_window(WindowOptions::default())
+            .open_window(
+                WindowOptions::default(),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
             .expect("a window");
         window.close_now();
 
@@ -458,8 +576,8 @@ fn handlers_run_outside_every_lock_of_the_headless_platform() {
         "handlers_run_outside_every_lock_of_the_headless_platform",
         &[
             (
-                "a close callback opens a window and quits",
-                headless_close_callback_reenters,
+                "every window handler method opens a window and quits",
+                headless_handler_methods_reenter,
             ),
             (
                 "a session-end hook replaces itself",
@@ -472,10 +590,6 @@ fn handlers_run_outside_every_lock_of_the_headless_platform() {
             (
                 "replaced application handlers reach the platform",
                 headless_replaced_application_handlers_reach_the_platform,
-            ),
-            (
-                "replaced window callbacks reach their window",
-                headless_replaced_window_callbacks_reach_their_window,
             ),
             (
                 "a failing hook keeps the first failure",
@@ -565,16 +679,17 @@ mod win32 {
     use std::time::{Duration, Instant};
 
     use flui_native::{Platform, WindowsPlatform};
-    use flui_platform::WindowOptions;
+    use flui_platform::{WindowCommand, WindowOptions};
     use flui_testing::window_commands::AdmitAndApply as _;
-    use parking_lot::Mutex;
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
-        DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage, WM_QUIT,
+        DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, PostMessageW, SendMessageW,
+        TranslateMessage, WM_CLOSE, WM_LBUTTONDOWN, WM_QUIT,
     };
 
     use super::{
-        Witness, replaced_application_handlers_reach_the_platform,
-        replaced_window_callbacks_reach_their_window, within,
+        Method, Trigger, Witness, a_handler_dropped_at_close_reaches_the_platform,
+        a_handler_method_reenters, replaced_application_handlers_reach_the_platform, within,
     };
 
     fn platform() -> Arc<WindowsPlatform> {
@@ -612,36 +727,76 @@ mod win32 {
         done()
     }
 
-    /// A window's close callback that, inside `WM_DESTROY`, opens another
-    /// window, registers that window's close callback and quits.
-    fn close_callback_reenters() {
-        within("Win32 close callback", || {
-            let platform = platform();
-            let successor_heard = Arc::new(AtomicUsize::new(0));
-            let nested_window = Arc::new(Mutex::new(None));
-            let (weak, heard, nested) = (
-                Arc::downgrade(&platform),
-                Arc::clone(&successor_heard),
-                Arc::clone(&nested_window),
-            );
-            let window = platform.open_window(hidden()).expect("a window");
-            window.on_close(Box::new(move || {
-                let platform = weak.upgrade().expect("the platform");
-                let window = platform
-                    .open_window(hidden())
-                    .expect("a window opens from inside the callback");
-                window.on_close(Box::new(move || {
-                    heard.fetch_add(1, Ordering::SeqCst);
-                }));
-                *nested.lock() = Some(window);
-                platform.quit();
-            }));
-
-            window.close_now();
-            assert!(pump_until(|| nested_window.lock().is_some()));
-            let nested = nested_window.lock().take().expect("the nested window");
-            nested.close_now();
-            assert!(pump_until(|| successor_heard.load(Ordering::SeqCst) == 1));
+    /// Each method a Win32 window calls opens a window, changes its own and
+    /// quits from inside its call, inside the window procedure that called
+    /// it. A Win32 window never releases its surface, and the quit is a
+    /// posted `WM_QUIT` the pump consumes.
+    fn handler_methods_reenter() {
+        within("Win32 window handler", || {
+            // A quit stops the platform taking windows: each method gets its own.
+            let platform = || -> Arc<dyn Platform> { platform() };
+            let rows: [(Method, Box<Trigger>); 5] = [
+                (
+                    Method::Input,
+                    Box::new(|window, reentered| {
+                        let hwnd = crate::win32_handle(window.as_ref());
+                        // SAFETY: integer message data for the test's own
+                        // window on its owner thread: a primary press at
+                        // client (10, 10).
+                        unsafe {
+                            SendMessageW(
+                                hwnd,
+                                WM_LBUTTONDOWN,
+                                Some(WPARAM(0x0001)),
+                                Some(LPARAM((0x000a << 16) | 0x000a)),
+                            );
+                        }
+                        pump_until(reentered)
+                    }),
+                ),
+                (
+                    Method::StateChanged,
+                    Box::new(|window, reentered| {
+                        window
+                            .admit_and_apply(WindowCommand::SetSize(
+                                flui_foundation::geometry::Size::new(320.0, 200.0),
+                            ))
+                            .expect("a resize");
+                        pump_until(reentered)
+                    }),
+                ),
+                (
+                    Method::FrameRequested,
+                    Box::new(|window, reentered| {
+                        window.request_redraw();
+                        pump_until(reentered)
+                    }),
+                ),
+                (
+                    Method::CloseRequested,
+                    Box::new(|window, reentered| {
+                        let hwnd = crate::win32_handle(window.as_ref());
+                        // SAFETY: an argument-free message to the test's own
+                        // window.
+                        unsafe { PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) }
+                            .expect("a posted close");
+                        pump_until(reentered)
+                    }),
+                ),
+                (
+                    Method::Closed,
+                    Box::new(|window, reentered| {
+                        window.close_now();
+                        pump_until(reentered)
+                    }),
+                ),
+            ];
+            for (method, trigger) in &rows {
+                a_handler_method_reenters(&platform(), None, hidden, *method, trigger);
+            }
+            a_handler_dropped_at_close_reaches_the_platform(&platform(), hidden, &|done| {
+                pump_until(done)
+            });
         });
     }
 
@@ -649,15 +804,6 @@ mod win32 {
         within("Win32 application handlers", || {
             let platform: Arc<dyn Platform> = platform();
             replaced_application_handlers_reach_the_platform(&platform);
-        });
-    }
-
-    fn replaced_window_callbacks() {
-        within("Win32 window callbacks", || {
-            let platform = platform();
-            let window = platform.open_window(hidden()).expect("a window");
-            replaced_window_callbacks_reach_their_window(&window);
-            window.close_now();
         });
     }
 
@@ -740,16 +886,12 @@ mod win32 {
             "handlers_run_outside_every_borrow_of_the_win32_platform",
             &[
                 (
-                    "a close callback opens a window and quits",
-                    close_callback_reenters,
+                    "every window handler method opens a window and quits",
+                    handler_methods_reenter,
                 ),
                 (
                     "replaced application handlers reach the platform",
                     replaced_application_handlers,
-                ),
-                (
-                    "replaced window callbacks reach their window",
-                    replaced_window_callbacks,
                 ),
                 (
                     "a failing exit-policy hook keeps the first failure",

@@ -8,6 +8,7 @@
 
 use std::{
     cell::Cell,
+    rc::Rc,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -16,7 +17,7 @@ use std::{
 };
 
 use cursor_icon::CursorIcon;
-use flui_foundation::ClaimOutcome;
+
 use flui_foundation::geometry::{Point, Size, WindowMetrics};
 use parking_lot::Mutex;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -29,10 +30,10 @@ use winit::{
 use crate::host::{self, WindowFacets, WindowPositions};
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
-use crate::owner::handlers::CallbackWindow;
-use crate::owner::handlers::Publication;
+
+use crate::owner::window_delivery::{Publication, WindowDelivery};
 use crate::owner::winit::HostDisplays;
-use crate::owner::winit::control::{ControlSendError, ControlSender};
+use crate::owner::winit::control::ControlSender;
 use crate::owner::winit::{
     ACTIVE_EVENT_LOOP, LoopWindow, LoopWindows, OpenWindowStateError, WindowSeed, WinitLoop,
 };
@@ -40,10 +41,11 @@ use crate::text::WindowTextInput;
 #[cfg(target_os = "linux")]
 use crate::window::WindowManagerView;
 use crate::window::state::{ModeFlags, ReportedFacts, WindowStateCell, mode_of};
+use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::{
     AdmittedCommand, ApplyError, CursorError, DisplayId, PlatformTextInput, PlatformWindow,
-    SizeConstraints, WindowAppearance, WindowCapabilities, WindowCommand, WindowGeometry, WindowId,
-    WindowMode, WindowOptions, WindowState,
+    SizeConstraints, WindowAppearance, WindowCapabilities, WindowCommand, WindowGeometry,
+    WindowHandler, WindowId, WindowMode, WindowOptions, WindowState,
 };
 use flui_semantics::platform::PlatformAccessibility;
 use plan::{FrameInset, OpenPlan, PlacementDisplay, WindowShell};
@@ -56,7 +58,7 @@ const FRAME_EXTENTS_WAIT: std::time::Duration = std::time::Duration::from_millis
 /// Concrete winit window wrapper
 ///
 /// Wraps `winit::window::Window` to implement `PlatformWindow`.
-/// Includes per-window callbacks for event delivery using the causal FIFO
+/// Includes what the window delivers to its handler, using the causal FIFO
 /// dispatch pattern for reentrancy safety.
 pub struct WinitWindow {
     id: WindowId,
@@ -64,7 +66,7 @@ pub struct WinitWindow {
     window: Arc<Window>,
     is_focused: parking_lot::Mutex<bool>,
     is_visible: parking_lot::Mutex<bool>,
-    callbacks: crate::owner::handlers::WindowCallbacks,
+    delivery: WindowDelivery,
     /// What the table's positions made for this window with it: its
     /// accessibility bridge (on Linux its AT-SPI announcement, so a screen
     /// reader that attaches at any later point finds it on the bus), its
@@ -172,6 +174,7 @@ impl WinitWindow {
         options: &WindowOptions,
         plan: &OpenPlan,
         windows: &WinitWindows,
+        handler: Rc<dyn WindowHandler>,
     ) -> Self {
         let positions = &windows.positions;
         let shell = shell_of(&window);
@@ -230,7 +233,7 @@ impl WinitWindow {
             is_focused: parking_lot::Mutex::new(true),
             is_visible: parking_lot::Mutex::new(options.visible),
             occluded: AtomicBool::new(false),
-            callbacks: crate::owner::handlers::WindowCallbacks::new(),
+            delivery: WindowDelivery::new(handler, InputCapabilities::UNAVAILABLE),
             facets,
             #[cfg(target_os = "linux")]
             portal_dark: std::sync::atomic::AtomicBool::new(false),
@@ -302,11 +305,6 @@ impl WinitWindow {
         &self.window
     }
 
-    /// Get a reference to the per-window callbacks
-    pub fn callbacks(&self) -> &crate::owner::handlers::WindowCallbacks {
-        &self.callbacks
-    }
-
     /// Update focus state
     pub fn set_focused(&self, focused: bool) {
         *self.is_focused.lock() = focused;
@@ -349,7 +347,7 @@ impl WinitWindow {
                     &self.window,
                     self.appearance(),
                     focused,
-                    self.callbacks.hovered(),
+                    self.delivery.hovered(),
                     self.capabilities(),
                 ),
             },
@@ -653,20 +651,20 @@ fn sample_state(window: &Window, facts: &RecordedState<'_>) -> WindowState {
 
 impl Drop for WinitWindow {
     fn drop(&mut self) {
-        // Teardown-order invariant: a registered callback may own this
+        // Teardown-order invariant: the window's handler may own this
         // window's GPU renderer, whose `wgpu::Surface` is built from the
         // `Arc<dyn PlatformWindow>` clone the renderer owns (ADR-0063) —
         // that surface must be destroyed while the native window behind
         // that clone is still alive (on Wayland, destroying the swapchain
         // after the `wl_surface` is a use-after-free on the surface's
         // `wl_proxy`; observed as the post-quit SIGSEGV of issue #713).
-        // `Drop::drop` runs before any field is dropped, so clearing the
-        // callbacks here guarantees the renderer dies before `self.window`
+        // `Drop::drop` runs before any field is dropped, so letting go of
+        // the handler here guarantees the renderer dies before `self.window`
         // regardless of field order.
         // The winit `CloseRequested` arm also clears eagerly at close (the
         // primary, in-loop path); this is the last-resort guarantee for a
         // window whose final `Arc` unwinds anywhere else.
-        self.callbacks.clear();
+        self.delivery.clear();
     }
 }
 
@@ -688,7 +686,7 @@ impl PlatformWindow for WinitWindow {
     fn state(&self) -> WindowState {
         let published = self.window_state.state_with(|| self.sample());
         if published.changed {
-            self.callbacks.dispatch_state_changed();
+            self.delivery.dispatch_state_changed();
         }
         published.state
     }
@@ -770,8 +768,6 @@ impl PlatformWindow for WinitWindow {
         Ok(())
     }
 
-    crate::owner::handlers::impl_window_callback_setters!(callbacks);
-
     // GPU integration: `winit::window::Window` implements `HasWindowHandle`/
     // `HasDisplayHandle` directly — without these overrides both fall through
     // to the trait defaults (`Err(HandleError::Unavailable)`), which is what
@@ -810,7 +806,11 @@ impl PlatformWindow for WinitWindow {
     }
 }
 
-impl crate::host_window::CoreHostWindow for WinitWindow {}
+impl crate::host_window::CoreHostWindow for WinitWindow {
+    fn window_delivery(&self) -> &WindowDelivery {
+        &self.delivery
+    }
+}
 
 impl HostWindow for WinitWindow {
     /// The window's own bridge — the capability the composition root's
@@ -834,12 +834,6 @@ impl HostWindow for WinitWindow {
             .text
             .window_text_input()
             .and_then(WindowTextInput::store_host)
-    }
-}
-
-impl CallbackWindow for WinitWindow {
-    fn callbacks(&self) -> &crate::owner::handlers::WindowCallbacks {
-        WinitWindow::callbacks(self)
     }
 }
 
@@ -1064,10 +1058,11 @@ impl LoopWindows for WinitWindows {
             &options,
             &plan,
             self,
+            seed.handler,
         ));
         seed.notices.mark_stale_on_wake(window.state_cell());
         window
-            .callbacks
+            .delivery
             .publish_through(Arc::downgrade(&window), WinitWindow::read_state);
         // Before the window is mapped: the window manager reads the mode a
         // window opens in from the properties the view writes.
@@ -1099,6 +1094,7 @@ impl host::Window<WinitLoop> for WinitWindow {
         owner: &WinitLoop,
         _: &Arc<WinitWindows>,
         options: WindowOptions,
+        handler: Rc<dyn WindowHandler>,
     ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
         tracing::info!(?options, "Requesting window creation");
 
@@ -1118,7 +1114,7 @@ impl host::Window<WinitLoop> for WinitWindow {
             // and this call is strictly nested inside it — so the reference
             // constructed here is valid for the borrow's entire duration.
             let event_loop = unsafe { event_loop_ptr.as_ref() };
-            let window_id = owner.create_window_now(event_loop, options)?;
+            let window_id = owner.create_window_now(event_loop, options, handler)?;
             return owner.window_by_id(window_id);
         }
 
@@ -1161,40 +1157,18 @@ impl host::Window<WinitLoop> for WinitWindow {
             }
         };
 
-        // The command crosses threads as data only. The owner creates the
-        // window and completes this claim-slot request (ADR-0039 §3)
-        // without exposing winit's thread-affine event-loop capability.
-        let handle = control
-            .request_open_window(options)
-            .map_err(|error| match error {
-                ControlSendError::Full { capacity, rejected } => {
-                    OpenWindowError::LaneFull { capacity, rejected }
-                }
-                ControlSendError::OwnerGone { rejected } => OpenWindowError::OwnerGone {
-                    rejected: Some(rejected),
-                },
-            })?;
-
-        tracing::debug!("Waiting for window creation response");
-
-        // This `handle` is freshly minted above and never offered to any
-        // other caller, so `try_take` cannot have claimed it already —
-        // `AlreadyClaimed` here would mean this fast path itself raced a
-        // second claim attempt, which the code above never performs.
-        // `OwnerGone` is real, though: the event-loop owner can disconnect
-        // (quit, panic-unwind) while this request is in flight on the lane.
-        let window = match handle.wait() {
-            ClaimOutcome::Delivered(result) => result?,
-            ClaimOutcome::AlreadyClaimed => {
-                unreachable!("BUG: this handle is never polled by another caller before wait")
-            }
-            ClaimOutcome::OwnerGone => {
-                return Err(OpenWindowError::OwnerGone { rejected: None });
-            }
-        };
-
-        tracing::info!("Window created successfully");
-        Ok(window)
+        // Another thread, while the loop runs: the handler was built here
+        // and lives here, and the owner would call it. That thread opens a
+        // window through `PlatformProxy::open_window`, whose request builds
+        // the handler on the owner.
+        drop(control);
+        drop(handler);
+        Err(OpenWindowError::Unavailable {
+            message: "open_window called off the winit event-loop thread: a window's handler \
+                      lives on the owner thread, so another thread opens a window through \
+                      PlatformProxy::open_window"
+                .to_owned(),
+        })
     }
 
     fn active(owner: &WinitLoop, _: &WinitWindows) -> Option<WindowId> {

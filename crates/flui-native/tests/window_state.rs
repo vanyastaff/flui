@@ -8,6 +8,8 @@
 use flui_platform::CommandRefusal;
 use flui_testing::window_commands::AdmitAndApply as _;
 use std::sync::Arc;
+
+use crate::Opened;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::geometry::{Point, Size};
@@ -23,11 +25,8 @@ use flui_platform::{
 const NOT_HERE: flui_platform::Unsupported =
     flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform);
 
-fn open(platform: &HeadlessPlatform) -> Arc<dyn HostWindow> {
-    let window: Arc<dyn HostWindow> = platform
-        .open_window(WindowOptions::default())
-        .expect("a headless window opens");
-    window
+fn open(platform: &HeadlessPlatform) -> Opened {
+    Opened::on(platform, WindowOptions::default()).expect("a headless window opens")
 }
 
 fn mock(window: &Arc<dyn HostWindow>) -> &MockWindow {
@@ -37,13 +36,13 @@ fn mock(window: &Arc<dyn HostWindow>) -> &MockWindow {
         .expect("the headless platform opens mock windows")
 }
 
-/// Counts `on_state_changed` notifications.
-fn count_changes(window: &Arc<dyn HostWindow>) -> Arc<AtomicUsize> {
+/// Counts the handler's `state_changed` calls from here on.
+fn count_changes(window: &Opened) -> Arc<AtomicUsize> {
     let changes = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&changes);
-    window.on_state_changed(Box::new(move || {
+    window.handler.react_to_state_change(move || {
         counter.fetch_add(1, Ordering::SeqCst);
-    }));
+    });
     changes
 }
 
@@ -453,25 +452,30 @@ fn opening_options_are_reflected_in_the_first_snapshot() {
         .with_position(Some(Point::new(50.0, 60.0)))
         .with_mode(WindowMode::Maximized)
         .with_normal_geometry(Some(normal));
-    let window: Arc<dyn HostWindow> = platform.open_window(options).expect("window");
+    let window: Arc<dyn HostWindow> = platform
+        .open_window(
+            options,
+            flui_testing::window_handler::RecordingWindowHandler::new(),
+        )
+        .expect("window");
     let state = window.state();
     assert_eq!(state.mode, WindowMode::Maximized);
     assert_eq!(state.revision.get(), 0, "the first snapshot is revision 0");
     assert_eq!(state.normal_geometry, Some(normal));
 }
 
-/// Record the snapshot read inside every `on_state_changed` of `window` from
-/// here on.
-fn listen(window: &Arc<dyn HostWindow>) -> Arc<std::sync::Mutex<Vec<WindowState>>> {
+/// Record the snapshot read inside every `state_changed` of `window`'s handler
+/// from here on.
+fn listen(window: &Opened) -> Arc<std::sync::Mutex<Vec<WindowState>>> {
     let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let state = Arc::downgrade(window);
+    let state = Arc::downgrade(&window.window);
     let log = Arc::clone(&heard);
-    window.on_state_changed(Box::new(move || {
+    window.handler.react_to_state_change(move || {
         if let Some(window) = state.upgrade() {
             let snapshot = window.state();
             log.lock().expect("log").push(snapshot);
         }
-    }));
+    });
     heard
 }
 

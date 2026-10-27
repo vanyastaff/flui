@@ -269,7 +269,7 @@ impl HeadlessDragAndDrop {
         // The windows are the window feature's, which the loop holds without
         // naming them: their callbacks are what the drag reaches.
         let windows = system.map(|system| Arc::clone(&system.lock().windows));
-        let callbacks = windows.and_then(|windows| windows.callbacks_of(window));
+        let callbacks = windows.and_then(|windows| windows.delivery_of(window));
         if let Some(callbacks) = callbacks {
             // No lock is held: the window's callback reenters the runtime.
             callbacks.dispatch_input(PlatformInput::DragDrop(event));

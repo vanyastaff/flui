@@ -85,3 +85,43 @@ fn run_table(table: &str, cases: &[(&str, fn())]) {
         .collect();
     assert!(failed.is_empty(), "{table}: failing cases: {failed:?}");
 }
+
+/// A window and the recording handler it was opened with: a test drives the
+/// window and sets what each handler method does.
+struct Opened {
+    window: std::sync::Arc<dyn flui_native::HostWindow>,
+    handler: std::rc::Rc<flui_testing::window_handler::RecordingWindowHandler>,
+}
+
+impl Opened {
+    /// A window `platform` opens with `options`, delivering to a fresh
+    /// handler.
+    fn on(
+        platform: &(impl flui_native::Platform + ?Sized),
+        options: flui_platform::WindowOptions,
+    ) -> Result<Self, flui_native::OpenWindowError> {
+        let handler = flui_testing::window_handler::RecordingWindowHandler::new();
+        let window = platform.open_window(options, handler.clone())?;
+        Ok(Self { window, handler })
+    }
+
+    /// A window `owner` opens at once with `options`, delivering to a fresh
+    /// handler.
+    fn ready(owner: &flui_native::OwnerPlatform, options: flui_platform::WindowOptions) -> Self {
+        let handler = flui_testing::window_handler::RecordingWindowHandler::new();
+        let window = owner
+            .open_window(options, handler.clone())
+            .expect("the window opens")
+            .try_ready()
+            .expect("the window opens at once");
+        Self { window, handler }
+    }
+}
+
+impl std::ops::Deref for Opened {
+    type Target = std::sync::Arc<dyn flui_native::HostWindow>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.window
+    }
+}

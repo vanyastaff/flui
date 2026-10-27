@@ -76,8 +76,9 @@ use crate::{
     host,
     owner::OwnerHooks,
     owner::OwnerPlatform,
-    owner::handlers::{OpenWindows, PlatformHandlers, WindowCallbacks},
+    owner::handlers::{OpenWindows, PlatformHandlers},
     owner::hwnd_affinity::UserDataRefusal,
+    owner::window_delivery::WindowDelivery,
     platform::Platform,
     platform::PlatformExecutor,
     platform::PlatformReadyCallback,
@@ -489,7 +490,7 @@ pub(crate) struct CreatedWindow {
     pub(crate) scale: WindowScale,
     /// Its callbacks, which a feature dispatches what it hears for the window
     /// to.
-    pub(crate) callbacks: Arc<WindowCallbacks>,
+    pub(crate) delivery: Arc<WindowDelivery>,
     /// The application's handlers, shared with every window of the loop.
     pub(crate) handlers: Rc<RefCell<PlatformHandlers>>,
     /// The system preference source the loop keeps, which measures the
@@ -1317,7 +1318,7 @@ impl WindowsLoop {
             Err(UserDataRefusal::ForeignThread) => {
                 tracing::error!(
                     op,
-                    "platform callback registration refused: platform callbacks are registered \
+                    "platform callback registration refused: platform delivery are registered \
                      on the owner thread; the callback was dropped on the calling thread"
                 );
                 drop(callback);

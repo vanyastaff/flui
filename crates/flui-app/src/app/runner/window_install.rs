@@ -21,6 +21,7 @@ use super::frame_driver::{FrameDriver, FrameInstallError, FrameRegistration, Pre
 use super::installed_host::Installation;
 use super::native_bindings::PreparedNativeWindow;
 use super::owner_dispatch::{PresentationDispatcher, RuntimeTask, dispatch_platform_ui_runtime};
+use super::window_routes::WindowRoutes;
 
 /// What a runner sizes a window's surface and root layout from: the
 /// drawable area the window's snapshot reports, in device and logical pixels,
@@ -169,13 +170,13 @@ impl WindowInstall {
         };
         // Terminal closure during native preparation must survive even though
         // the logical membership is not yet visible to dispatch.
-        window.native().on_close(Box::new(move || {
+        WindowRoutes::of(&**window.native()).route_closed(move || {
             closing.store(true, Ordering::Release);
             let _ = dispatch_platform_ui_runtime(
                 dispatcher,
                 RuntimeTask::ClosePresentation(address.presentation_id),
             );
-        }));
+        });
         let registration = PreparedWindowRegistration::new(window.native());
         Self {
             host,
@@ -249,21 +250,21 @@ impl WindowInstall {
             handler,
         ));
         let router = self.host.native().close_requests();
-        self.window.native().on_should_close(Box::new(move || {
-            matches!(
-                router.consult(address, crate::app::close_request::CloseReason::User),
-                CloseResponse::Close
-            )
-        }));
+        WindowRoutes::of(&**self.window.native()).route_close_requested(move || {
+            match router.consult(address, crate::app::close_request::CloseReason::User) {
+                CloseResponse::Close => flui_platform::CloseDecision::Close,
+                _ => flui_platform::CloseDecision::KeepOpen,
+            }
+        });
     }
 
     #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-    pub(super) fn on_close(&self, mut run: impl FnMut() + Send + 'static) {
+    pub(super) fn on_close(&self, run: impl FnOnce() + 'static) {
         let closed = self.window.cancellation();
-        self.window.native().on_close(Box::new(move || {
+        WindowRoutes::of(&**self.window.native()).route_closed(move || {
             closed.store(true, Ordering::Release);
             run();
-        }));
+        });
     }
 
     pub(super) fn observe(&mut self, observation: WindowObservation) {
@@ -273,7 +274,7 @@ impl WindowInstall {
     /// Follow the window's snapshot into its presentation: the one
     /// subscription a window has for its facts (ADR-0254 §1).
     ///
-    /// Each `on_state_changed` reads the snapshot and compares it with the one
+    /// Each `state_changed` reads the snapshot and compares it with the one
     /// seen before (`RuntimeEvent::of_state_change`): the metrics, safe
     /// area, appearance, execution state, focus, whether the content is seen
     /// and the hover reach the presentation as the facts that changed, and
@@ -295,11 +296,11 @@ impl WindowInstall {
         // wakes the retired owner only (a cheap defence; nothing pins it).
         let proxy = super::host::with_owner_platform(flui_native::OwnerPlatform::proxy);
         let seen = Arc::new(parking_lot::Mutex::new(None::<flui_platform::WindowState>));
-        // Weak: the callback lives in the window's own handler table, and a
-        // strong capture would keep the window alive past close.
+        // Weak: the route lives in the window's own handler, and a strong
+        // capture would keep the window alive past close.
         let observed = Arc::downgrade(&window);
         let last = Arc::clone(&seen);
-        window.on_state_changed(Box::new(move || {
+        WindowRoutes::of(&*window).route_state_changed(move || {
             let Some(window) = observed.upgrade() else {
                 return;
             };
@@ -319,7 +320,7 @@ impl WindowInstall {
                 // A refused delivery means the presentation is gone.
                 let _ = dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Event(event));
             });
-        }));
+        });
         let seed = window.state();
         *seen.lock() = Some(seed.clone());
         self.observe(WindowObservation::Snapshot {
@@ -353,12 +354,12 @@ impl WindowInstall {
         let dispatcher = self.dispatcher();
         install_input_wiring(dispatcher, window.as_ref());
         let binding = self.frame_driver(driver)?.binding;
-        window.on_request_frame(Box::new(move |request| {
+        WindowRoutes::of(&*window).route_frame_requested(move |request| {
             with_owner_callback(|_| {
                 let _ =
                     dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(binding, request));
             });
-        }));
+        });
         self.terminal_callbacks(platform);
         // The subscription precedes the seed. Keep redraw ownership published
         // before lifecycle reconciliation can synchronously request a frame.
@@ -378,7 +379,7 @@ impl WindowInstall {
     /// Close the window when the platform quits, unless something closed it
     /// first.
     ///
-    /// The flag is set by the window's native close (the `on_close` that
+    /// The flag is set by the window's native close (the `closed` route that
     /// [`new`](Self::new) registers) and by a cancelled installation, and each
     /// owns the presentation's retirement. Android's `Destroy` fires that close
     /// before its loop exits and runs this hook, and the close retires the sole

@@ -11,8 +11,11 @@ use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 use flui_foundation::{ClaimHandle, ClaimSlot, claim_slot};
 use parking_lot::Mutex;
 
-use crate::{host_window::HostWindow, owner::OpenWindowError};
-use flui_platform::{WindowId, WindowOptions};
+use crate::{
+    host_window::HostWindow,
+    owner::{OpenWindowError, WindowRequest},
+};
+use flui_platform::WindowId;
 
 pub(super) const CONTROL_CAPACITY: usize = 256;
 
@@ -26,7 +29,7 @@ pub(super) type OpenWindowResult = Result<Arc<dyn HostWindow>, OpenWindowError>;
 
 pub(super) enum ControlCommand {
     OpenWindow {
-        options: WindowOptions,
+        request: WindowRequest,
         /// The owner-side half of the claim-slot reply protocol
         /// (`flui-foundation`'s `ClaimSlot`, ADR-0039 §3). Replaces the
         /// buffered `sync_channel(1)` one-shot: a requester that abandons
@@ -42,9 +45,9 @@ pub(super) enum ControlCommand {
 impl std::fmt::Debug for ControlCommand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::OpenWindow { options, .. } => f
+            Self::OpenWindow { request, .. } => f
                 .debug_struct("ControlCommand::OpenWindow")
-                .field("options", options)
+                .field("request", request)
                 .finish_non_exhaustive(),
         }
     }
@@ -58,10 +61,10 @@ impl std::fmt::Debug for ControlCommand {
 pub(crate) enum ControlSendError {
     Full {
         capacity: usize,
-        rejected: Box<WindowOptions>,
+        rejected: Box<WindowRequest>,
     },
     OwnerGone {
-        rejected: Box<WindowOptions>,
+        rejected: Box<WindowRequest>,
     },
 }
 
@@ -155,20 +158,20 @@ pub(super) fn control_lane(wake_owner: WakeOwner) -> (ControlSender, ControlRece
 impl ControlSender {
     pub(crate) fn request_open_window(
         &self,
-        options: WindowOptions,
+        request: WindowRequest,
     ) -> Result<ClaimHandle<OpenWindowResult>, ControlSendError> {
-        self.request_open_window_after_admission(options, || {})
+        self.request_open_window_after_admission(request, || {})
     }
 
     fn request_open_window_after_admission(
         &self,
-        options: WindowOptions,
+        request: WindowRequest,
         after_admission: impl FnOnce(),
     ) -> Result<ClaimHandle<OpenWindowResult>, ControlSendError> {
         let admission = self.admission.lock();
         if !*admission {
             return Err(ControlSendError::OwnerGone {
-                rejected: Box::new(options),
+                rejected: Box::new(request),
             });
         }
 
@@ -196,7 +199,7 @@ impl ControlSender {
                 }
             }));
         let command = ControlCommand::OpenWindow {
-            options,
+            request,
             reply: slot,
         };
         after_admission();
@@ -219,11 +222,11 @@ impl ControlSender {
                 // next real enqueue.
                 Err(ControlSendError::Full {
                     capacity: CONTROL_CAPACITY,
-                    rejected: Box::new(rejected.into_options()),
+                    rejected: Box::new(rejected.into_request()),
                 })
             }
             Err(TrySendError::Disconnected(rejected)) => Err(ControlSendError::OwnerGone {
-                rejected: Box::new(rejected.into_options()),
+                rejected: Box::new(rejected.into_request()),
             }),
         }
     }
@@ -308,9 +311,9 @@ impl ControlSender {
 }
 
 impl ControlCommand {
-    fn into_options(self) -> WindowOptions {
+    fn into_request(self) -> WindowRequest {
         match self {
-            Self::OpenWindow { options, reply } => {
+            Self::OpenWindow { request, reply } => {
                 // No owner ever saw this request (the enqueue itself
                 // failed): the paired `ClaimHandle` (`request_open_window_
                 // after_admission`'s local `handle`) already dropped when
@@ -322,7 +325,7 @@ impl ControlCommand {
                 // still `Pending`, so dropping `reply` here is a no-op --
                 // the request is already resolved.
                 drop(reply);
-                options
+                request
             }
         }
     }
@@ -390,22 +393,42 @@ mod tests {
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::{CONTROL_CAPACITY, ControlCommand, ControlSendError, control_lane};
-    use flui_platform::WindowOptions;
+    use flui_platform::{WindowHandler, WindowOptions};
+    use flui_testing::window_handler::RecordingWindowHandler;
+
+    use crate::owner::WindowRequest;
+    use crate::owner::window_delivery::WindowDelivery;
 
     assert_impl_all!(super::ControlSender: Clone, Send, Sync);
     assert_not_impl_any!(super::ControlReceiver: Send, Sync);
 
-    fn options(title: impl Into<String>) -> WindowOptions {
-        WindowOptions::default()
-            .with_title(title)
-            .with_size(Size::new(800.0, 600.0))
+    fn options(title: impl Into<String>) -> WindowRequest {
+        WindowRequest::new(
+            WindowOptions::default()
+                .with_title(title)
+                .with_size(Size::new(800.0, 600.0)),
+            || -> std::rc::Rc<dyn WindowHandler> { RecordingWindowHandler::new() },
+        )
     }
 
     /// A tiny stand-in window so tests can build an `Arc<dyn HostWindow>`
     /// reply payload without depending on a real winit window.
-    struct StubWindow;
+    struct StubWindow(WindowDelivery);
 
-    impl crate::host_window::CoreHostWindow for StubWindow {}
+    impl StubWindow {
+        fn new() -> Self {
+            Self(WindowDelivery::new(
+                RecordingWindowHandler::new(),
+                flui_platform::input_capabilities::InputCapabilities::UNAVAILABLE,
+            ))
+        }
+    }
+
+    impl crate::host_window::CoreHostWindow for StubWindow {
+        fn window_delivery(&self) -> &WindowDelivery {
+            &self.0
+        }
+    }
     impl crate::host_window::HostWindow for StubWindow {
         fn accessibility(
             &self,
@@ -493,7 +516,7 @@ mod tests {
         let ControlCommand::OpenWindow { reply, .. } =
             receiver.try_recv().expect("owner receives request");
         assert!(
-            reply.deliver(Ok(Arc::new(StubWindow))).is_ok(),
+            reply.deliver(Ok(Arc::new(StubWindow::new()))).is_ok(),
             "slot is still Pending"
         );
         let window = match worker.join().expect("worker exits") {
@@ -535,7 +558,7 @@ mod tests {
         match error {
             ControlSendError::Full { capacity, rejected } => {
                 assert_eq!(capacity, CONTROL_CAPACITY);
-                assert_eq!(rejected.title, "rejected");
+                assert_eq!(rejected.options.title, "rejected");
             }
             ControlSendError::OwnerGone { .. } => panic!("owner is still alive"),
         }

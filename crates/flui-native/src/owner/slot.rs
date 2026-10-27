@@ -110,6 +110,24 @@ impl<T: 'static> OwnerSlot<T> {
             .map(downcast)
     }
 
+    /// A clone of the value, left in place; `None` when empty or off the
+    /// owner thread.
+    pub(crate) fn cloned(&self) -> Option<T>
+    where
+        T: Clone,
+    {
+        let key = self.owned_key()?;
+        OWNER_VALUES
+            .try_with(|values| {
+                values
+                    .borrow()
+                    .get(&key)
+                    .map(|value| downcast_ref::<T>(value.as_ref()).clone())
+            })
+            .ok()
+            .flatten()
+    }
+
     /// Whether a value is stored; `None` off the owner thread, which cannot
     /// tell.
     pub(crate) fn is_occupied(&self) -> Option<bool> {
@@ -132,6 +150,12 @@ impl<T: 'static> Drop for OwnerSlot<T> {
             super::panic_boundary::contain_owner_callback(|| drop(value));
         }
     }
+}
+
+fn downcast_ref<T: 'static>(value: &dyn Any) -> &T {
+    value
+        .downcast_ref::<T>()
+        .expect("BUG: a slot key names values of one type")
 }
 
 fn downcast<T: 'static>(value: Box<dyn Any>) -> T {

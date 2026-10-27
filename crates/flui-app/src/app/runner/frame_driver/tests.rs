@@ -1,6 +1,7 @@
 //! Private driver fault matrix. Scene assertions use the product pump/sink;
 //! the seam injects native prelude and capture destruction failures without GPU.
 
+use crate::app::runner::window_routes::OwnerOpenRouted as _;
 use flui_testing::window_commands::AdmitAndApply as _;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{
@@ -262,7 +263,7 @@ fn native_terminal_callbacks_refuse_late_publication() {
             .run(Box::new(move |owner| {
                 let owner = Rc::new(owner);
                 let window: Arc<dyn PlatformWindow> = owner
-                    .open_window(flui_platform::WindowOptions::default())?
+                    .open_routed(flui_platform::WindowOptions::default())?
                     .try_ready()?;
                 owner.shared().set_exit_policy_hook(Box::new(|| false));
                 let runtime = UiRuntime::for_test();
@@ -325,7 +326,7 @@ fn a_prepared_single_window_rejects_close_and_quit_before_publication() {
         Box::new(flui_native::HeadlessPlatform::new())
             .run(Box::new(move |owner| {
                 let window: Arc<dyn PlatformWindow> = owner
-                    .open_window(flui_platform::WindowOptions::default())?
+                    .open_routed(flui_platform::WindowOptions::default())?
                     .try_ready()?;
                 owner.shared().set_exit_policy_hook(Box::new(|| false));
                 let mut prepared =
@@ -378,7 +379,7 @@ fn a_quit_after_the_native_close_dispatches_no_second_close() {
         Box::new(flui_native::HeadlessPlatform::new())
             .run(Box::new(move |owner| {
                 let window: Arc<dyn PlatformWindow> = owner
-                    .open_window(flui_platform::WindowOptions::default())?
+                    .open_routed(flui_platform::WindowOptions::default())?
                     .try_ready()?;
                 owner.shared().set_exit_policy_hook(Box::new(|| false));
                 let runtime = UiRuntime::for_test();

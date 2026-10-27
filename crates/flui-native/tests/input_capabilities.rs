@@ -1,10 +1,11 @@
-//! Input capabilities (ADR-0213): what a backend implements, which devices
-//! are present, the snapshot a window's input callback receives first, and
-//! the order and recovery of the input held behind it, and input that arrives
-//! while the callback runs.
+//! Input capabilities (ADR-0213) and a window's input as its handler hears
+//! it (ADR-0254 §4): what a backend implements, which devices are present,
+//! the snapshot that is a handler's first input, its order with the input
+//! around it, and input that arrives while the handler runs.
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::geometry::Point;
 use flui_native::{
@@ -20,11 +21,12 @@ use flui_platform::pointer::{
 };
 use flui_platform::{DispatchEventResult, PlatformInput};
 use flui_platform::{EventTime, ImeEvent};
+use flui_testing::window_handler::RecordingWindowHandler;
 use parking_lot::Mutex;
 
 const PEN: PointerKind = PointerKind::Pen { tool: PenTool::Tip };
 
-/// What a callback saw, in a comparable shape.
+/// What a handler heard, in a comparable shape.
 #[derive(Debug, Clone, PartialEq)]
 enum Seen {
     Capabilities(PointerKindSet),
@@ -73,9 +75,10 @@ fn session(platform: HeadlessPlatform) -> Session {
 }
 
 impl Session {
-    fn open(&self) -> Arc<dyn HostWindow> {
+    /// A window delivering to `handler`.
+    fn open(&self, handler: &Rc<RecordingWindowHandler>) -> Arc<dyn HostWindow> {
         self.owner
-            .open_window(WindowOptions::default())
+            .open_window(WindowOptions::default(), handler.clone())
             .expect("open")
             .try_ready()
             .expect("ready")
@@ -86,15 +89,9 @@ fn mock(window: &Arc<dyn HostWindow>) -> &MockWindow {
     window.as_any().downcast_ref::<MockWindow>().expect("mock")
 }
 
-/// Record every input; the returned log is shared with the callback.
-fn recorder(window: &Arc<dyn HostWindow>) -> Arc<Mutex<Vec<Seen>>> {
-    let log = Arc::new(Mutex::new(Vec::new()));
-    let sink = Arc::clone(&log);
-    window.on_input(Box::new(move |input| {
-        sink.lock().push(seen(&input));
-        DispatchEventResult::default()
-    }));
-    log
+/// Every input `handler` heard, in a comparable shape.
+fn heard(handler: &RecordingWindowHandler) -> Vec<Seen> {
+    handler.inputs().iter().map(seen).collect()
 }
 
 fn pen_down() -> PlatformInput {
@@ -115,33 +112,58 @@ fn ime() -> PlatformInput {
     PlatformInput::Ime(ImeEvent::Enabled)
 }
 
+fn key_at(at: u64) -> PlatformInput {
+    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState};
+    PlatformInput::Keyboard(KeyEvent::new(
+        KeyState::Down,
+        Key::character("k"),
+        Code::KeyK,
+        EventTime::from_nanos(at),
+    ))
+}
+
+/// The first event after a window opens reaches its handler: the handler
+/// exists before the window does, so its capability snapshot arrives before
+/// the open returns, and the first input after it is delivered at once, not
+/// held for a registration.
+fn the_first_event_after_open_reaches_the_handler() {
+    let session = session(HeadlessPlatform::new());
+    let handler = RecordingWindowHandler::new();
+    let window = session.open(&handler);
+    assert_eq!(
+        heard(&handler),
+        [Seen::Capabilities(PointerKindSet::empty())],
+        "the snapshot arrived with the open"
+    );
+    let answer = mock(&window).inject_event(ime());
+    assert!(!answer.is_deferred(), "the input was delivered, not held");
+    assert_eq!(
+        heard(&handler),
+        [Seen::Capabilities(PointerKindSet::empty()), Seen::Ime]
+    );
+}
+
 /// A backend implementing pen with no pen attached reports `Native` and an
 /// empty presence; attaching and removing the pen change presence only, each
 /// change in order with the input around it.
 fn input_capabilities_report_implemented_and_present_separately() {
     let session = session(HeadlessPlatform::new());
-    let window = session.open();
-    let first = Arc::new(Mutex::new(None));
-    let kept = Arc::clone(&first);
-    window.on_input(Box::new(move |input| {
-        if let PlatformInput::Capabilities(capabilities) = input {
-            kept.lock().get_or_insert(capabilities);
-        }
-        DispatchEventResult::default()
-    }));
-    let snapshot = first.lock().expect("snapshot delivered on registration");
+    let handler = RecordingWindowHandler::new();
+    let window = session.open(&handler);
+    let PlatformInput::Capabilities(snapshot) = handler.inputs().remove(0) else {
+        panic!("the first input is the snapshot");
+    };
     assert_eq!(snapshot.pen(), Availability::Native, "implemented");
     assert!(
         !snapshot.present().contains(PointerKindSet::PEN),
         "but absent"
     );
 
-    let log = recorder(&window);
     let pen = session.devices.attach(PEN).expect("attached");
     mock(&window).inject_event(pen_down());
     assert!(session.devices.remove(pen));
     assert_eq!(
-        *log.lock(),
+        heard(&handler),
         [
             Seen::Capabilities(PointerKindSet::empty()),
             Seen::Added,
@@ -153,17 +175,17 @@ fn input_capabilities_report_implemented_and_present_separately() {
     );
 }
 
-/// A capability change after input was queued is delivered after that input
-/// and before the input that followed it.
+/// A capability change between two inputs is delivered after the first and
+/// before the second.
 fn capability_change_is_ordered_with_input() {
     let session = session(HeadlessPlatform::new());
-    let window = session.open();
+    let handler = RecordingWindowHandler::new();
+    let window = session.open(&handler);
     mock(&window).inject_event(ime());
     session.devices.attach(PEN).expect("attached");
     mock(&window).inject_event(pen_down());
-    let log = recorder(&window);
     assert_eq!(
-        *log.lock(),
+        heard(&handler),
         [
             Seen::Capabilities(PointerKindSet::empty()),
             Seen::Ime,
@@ -183,9 +205,9 @@ fn devices_attached_before_the_window_opens_are_in_the_initial_snapshot() {
         .attach(PointerKind::Touch)
         .expect("attached");
     let session = session(platform);
-    let window = session.open();
-    let log = recorder(&window);
-    assert_eq!(*log.lock(), [Seen::Capabilities(PointerKindSet::TOUCH)]);
+    let handler = RecordingWindowHandler::new();
+    let _window = session.open(&handler);
+    assert_eq!(heard(&handler), [Seen::Capabilities(PointerKindSet::TOUCH)]);
 }
 
 /// The availability a backend states is what the snapshot carries.
@@ -195,40 +217,33 @@ fn the_snapshot_carries_the_backend_availability() {
         .trackpad_gestures(Availability::Emulated)
         .build();
     let session = session(HeadlessPlatform::new().with_input_availability(unavailable));
-    let window = session.open();
-    let first = Arc::new(Mutex::new(None));
-    let kept = Arc::clone(&first);
-    window.on_input(Box::new(move |input| {
-        if let PlatformInput::Capabilities(capabilities) = input {
-            kept.lock().get_or_insert(capabilities);
-        }
-        DispatchEventResult::default()
-    }));
-    let snapshot = first.lock().expect("snapshot");
+    let handler = RecordingWindowHandler::new();
+    let _window = session.open(&handler);
+    let PlatformInput::Capabilities(snapshot) = handler.inputs().remove(0) else {
+        panic!("the first input is the snapshot");
+    };
     assert_eq!(snapshot.trackpad_gestures(), Availability::Emulated);
     assert_eq!(snapshot.pen(), Availability::Unavailable);
 }
 
-/// The first snapshot panics with an otherwise idle application: the queued
-/// tail stays in order and the backend's owner turn resumes it.
-fn a_panic_on_the_initial_snapshot_keeps_the_queued_tail_in_order() {
+/// A handler that panics on its capability snapshot loses nothing: the panic
+/// is contained where the open delivered it, and the input after it is
+/// delivered as usual.
+fn a_panic_on_the_snapshot_loses_no_input() {
     let session = session(HeadlessPlatform::new());
-    let window = session.open();
+    let handler = RecordingWindowHandler::new();
+    handler.react_to_input(|input| {
+        assert!(
+            !matches!(input, PlatformInput::Capabilities(_)),
+            "the snapshot fails"
+        );
+        DispatchEventResult::default()
+    });
+    let window = session.open(&handler);
     mock(&window).inject_event(ime());
     mock(&window).inject_event(pen_down());
-    let log = Arc::new(Mutex::new(Vec::new()));
-    let sink = Arc::clone(&log);
-    let calls = AtomicUsize::new(0);
-    window.on_input(Box::new(move |input| {
-        let call = calls.fetch_add(1, Ordering::SeqCst);
-        assert_ne!(call, 0, "the first snapshot fails");
-        sink.lock().push(seen(&input));
-        DispatchEventResult::default()
-    }));
-    assert!(log.lock().is_empty(), "no input before its baseline");
-    session.turns.drive();
     assert_eq!(
-        *log.lock(),
+        heard(&handler),
         [
             Seen::Capabilities(PointerKindSet::empty()),
             Seen::Ime,
@@ -237,76 +252,19 @@ fn a_panic_on_the_initial_snapshot_keeps_the_queued_tail_in_order() {
     );
 }
 
-/// A failed snapshot is retried before any queued input, and at most three
-/// failed passes are made per registration; a new registration starts over.
-fn the_snapshot_is_retried_before_any_queued_input() {
-    let session = session(HeadlessPlatform::new());
-    let window = session.open();
-    mock(&window).inject_event(ime());
-    let log = Arc::new(Mutex::new(Vec::new()));
-    let sink = Arc::clone(&log);
-    window.on_input(Box::new(move |input| {
-        assert!(
-            !matches!(input, PlatformInput::Capabilities(_)),
-            "the snapshot keeps failing"
-        );
-        sink.lock().push(seen(&input));
-        DispatchEventResult::default()
-    }));
-    for _ in 0..5 {
-        session.turns.drive();
-    }
-    assert!(log.lock().is_empty(), "held after three failed passes");
-    let log = recorder(&window);
-    assert_eq!(
-        *log.lock(),
-        [Seen::Capabilities(PointerKindSet::empty()), Seen::Ime]
-    );
-}
-
-/// Input admitted during a pass waits for the next pass, which the same wake
-/// schedules: a callback admitting input on every call cannot monopolize the
-/// owner thread.
-fn reentrantly_admitted_input_waits_for_the_next_pass() {
-    let session = session(HeadlessPlatform::new());
-    let window = session.open();
-    mock(&window).inject_event(ime());
-    let log = Arc::new(Mutex::new(Vec::new()));
-    let sink = Arc::clone(&log);
-    let reentry = Arc::downgrade(&window);
-    window.on_input(Box::new(move |input| {
-        sink.lock().push(seen(&input));
-        if let Some(window) = reentry.upgrade() {
-            // Admitted during the pass that delivers the snapshot and tail.
-            mock(&window).inject_event(ime());
-        }
-        DispatchEventResult::default()
-    }));
-    assert_eq!(
-        *log.lock(),
-        [Seen::Capabilities(PointerKindSet::empty()), Seen::Ime],
-        "one pass delivers only what it started with"
-    );
-    session.turns.drive();
-    assert_eq!(
-        log.lock().len(),
-        4,
-        "the next pass takes the admitted input"
-    );
-}
-
-/// A native event that arrives while the input callback runs is queued
+/// A native event that arrives while the handler's `input` runs is queued
 /// behind it and delivered once it returns, in order, never dropped and never
-/// nested inside the running callback (ADR-0207 §7); its own dispatch reports
+/// nested inside the running method (ADR-0207 §7); its own dispatch reports
 /// the delivery deferred.
 fn a_native_event_during_a_callback_is_queued_not_dropped() {
     let session = session(HeadlessPlatform::new());
-    let window = session.open();
+    let handler = RecordingWindowHandler::new();
+    let window = session.open(&handler);
     let log = Arc::new(Mutex::new(Vec::new()));
     let nested = Arc::new(Mutex::new(None));
     let (sink, answer) = (Arc::clone(&log), Arc::clone(&nested));
     let reentry = Arc::downgrade(&window);
-    window.on_input(Box::new(move |input| {
+    handler.react_to_input(move |input| {
         let kind = seen(&input);
         sink.lock().push(format!("enter {kind:?}"));
         if kind == Seen::Down
@@ -316,8 +274,7 @@ fn a_native_event_during_a_callback_is_queued_not_dropped() {
         }
         sink.lock().push(format!("exit {kind:?}"));
         DispatchEventResult::default()
-    }));
-    log.lock().clear();
+    });
     mock(&window).inject_event(pen_down());
     session.turns.drive();
     assert!(
@@ -327,49 +284,40 @@ fn a_native_event_during_a_callback_is_queued_not_dropped() {
     assert_eq!(
         *log.lock(),
         ["enter Down", "exit Down", "enter Ime", "exit Ime"],
-        "queued behind the running callback, delivered once, in order"
+        "queued behind the running method, delivered once, in order"
     );
 }
 
-/// A key that arrives while the input callback runs needs its answer now: it
-/// is answered "not handled" so the platform default runs, queued behind the
-/// running callback, and delivered once — the platform's follow-up for the
+/// A key that arrives while the handler's `input` runs needs its answer now:
+/// it is answered "not handled" so the platform default runs, queued behind
+/// the running method, and delivered once — the platform's follow-up for the
 /// unhandled key (AppKit resends it as `keyDown:`) is recognized, whether it
-/// arrives still inside the callback or after (ADR-0207 §7).
+/// arrives still inside the method or after (ADR-0207 §7).
 fn a_reentrant_event_needing_an_answer_is_unhandled_and_delivered_once() {
-    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState};
-    let key = |at| {
-        PlatformInput::Keyboard(KeyEvent::new(
-            KeyState::Down,
-            Key::character("k"),
-            Code::KeyK,
-            EventTime::from_nanos(at),
-        ))
-    };
     for follow_up_inside in [true, false] {
         let session = session(HeadlessPlatform::new());
-        let window = session.open();
+        let handler = RecordingWindowHandler::new();
+        let window = session.open(&handler);
         let log = Arc::new(Mutex::new(Vec::new()));
         let answers = Arc::new(Mutex::new(Vec::new()));
         let (sink, answered) = (Arc::clone(&log), Arc::clone(&answers));
         let reentry = Arc::downgrade(&window);
-        window.on_input(Box::new(move |input| {
+        handler.react_to_input(move |input| {
             let kind = seen(&input);
             sink.lock().push(kind.clone());
             if kind == Seen::Down
                 && let Some(window) = reentry.upgrade()
             {
-                answered.lock().push(mock(&window).inject_event(key(20)));
+                answered.lock().push(mock(&window).inject_event(key_at(20)));
                 if follow_up_inside {
-                    answered.lock().push(mock(&window).inject_event(key(20)));
+                    answered.lock().push(mock(&window).inject_event(key_at(20)));
                 }
             }
             DispatchEventResult::default()
-        }));
-        log.lock().clear();
+        });
         mock(&window).inject_event(pen_down());
         if !follow_up_inside {
-            answers.lock().push(mock(&window).inject_event(key(20)));
+            answers.lock().push(mock(&window).inject_event(key_at(20)));
         }
         session.turns.drive();
         let answers = answers.lock().clone();
@@ -385,181 +333,53 @@ fn a_reentrant_event_needing_an_answer_is_unhandled_and_delivered_once() {
         assert_eq!(
             *log.lock(),
             [Seen::Down, Seen::Key],
-            "inside={follow_up_inside}: the key is delivered once, after the callback"
+            "inside={follow_up_inside}: the key is delivered once, after the method"
         );
         // A later key with its own timestamp is a new key, not a follow-up.
-        mock(&window).inject_event(key(30));
+        mock(&window).inject_event(key_at(30));
         assert_eq!(log.lock().last(), Some(&Seen::Key));
         assert_eq!(log.lock().len(), 3);
     }
 }
 
-/// The input callback is held for the window's owner thread (ADR-0082 §4): a
-/// registration from another thread is refused, so a callback that need not
-/// be `Send` can never run or drop anywhere else.
-fn an_input_callback_registered_off_the_owner_thread_is_refused() {
+/// An `input` that keeps raising input from inside itself is delivered each
+/// one after the method that raised it returns, never nested, and the window
+/// keeps answering.
+fn input_raised_from_input_is_delivered_after_it() {
     let session = session(HeadlessPlatform::new());
-    let window = session.open();
-    struct Dropped(Arc<std::sync::atomic::AtomicBool>);
-    impl Drop for Dropped {
-        fn drop(&mut self) {
-            self.0.store(true, Ordering::SeqCst);
-        }
-    }
-    let foreign = Arc::new(AtomicUsize::new(0));
-    let (sink, registrar) = (Arc::clone(&foreign), Arc::clone(&window));
-    std::thread::spawn(move || {
-        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let guard = Dropped(Arc::clone(&dropped));
-        registrar.on_input(Box::new(move |_| {
-            let _ = &guard;
-            sink.fetch_add(1, Ordering::SeqCst);
-            DispatchEventResult::default()
-        }));
-        assert!(
-            dropped.load(Ordering::SeqCst),
-            "the refused callback is dropped by the registration, on its own thread"
-        );
-    })
-    .join()
-    .expect("registering thread");
-    mock(&window).inject_event(ime());
-    session.turns.drive();
-    assert_eq!(
-        foreign.load(Ordering::SeqCst),
-        0,
-        "the foreign registration was refused"
-    );
-
-    let log = recorder(&window);
-    session.turns.drive();
-    assert_eq!(
-        *log.lock(),
-        [Seen::Capabilities(PointerKindSet::empty()), Seen::Ime],
-        "the owner's registration receives the held input"
-    );
-}
-
-/// A callback replaced during the first delivery whose captures panic on
-/// drop: the replacement gets its own snapshot and the tail.
-fn a_replaced_input_callback_whose_drop_panics_still_delivers_the_tail() {
-    struct Hostile;
-    impl Drop for Hostile {
-        fn drop(&mut self) {
-            panic!("outgoing capture");
-        }
-    }
-    let session = session(HeadlessPlatform::new());
-    let window = session.open();
-    mock(&window).inject_event(ime());
-    let log = Arc::new(Mutex::new(Vec::new()));
-    let replacement_log = Arc::clone(&log);
+    let handler = RecordingWindowHandler::new();
+    let window = session.open(&handler);
+    let depth = Rc::new(Cell::new(0_u32));
+    let deepest = Rc::new(Cell::new(0_u32));
+    let raised = Rc::new(Cell::new(0_u32));
+    let (inside, max, count) = (Rc::clone(&depth), Rc::clone(&deepest), Rc::clone(&raised));
     let reentry = Arc::downgrade(&window);
-    let hostile = Hostile;
-    window.on_input(Box::new(move |_| {
-        let _ = &hostile;
-        let sink = Arc::clone(&replacement_log);
-        if let Some(window) = reentry.upgrade() {
-            window.on_input(Box::new(move |input| {
-                sink.lock().push(seen(&input));
-                DispatchEventResult::default()
-            }));
+    handler.react_to_input(move |input| {
+        if matches!(input, PlatformInput::Ime(_)) {
+            inside.set(inside.get() + 1);
+            max.set(max.get().max(inside.get()));
+            if count.get() < 3
+                && let Some(window) = reentry.upgrade()
+            {
+                count.set(count.get() + 1);
+                mock(&window).inject_event(ime());
+            }
+            inside.set(inside.get() - 1);
         }
         DispatchEventResult::default()
-    }));
-    session.turns.drive();
+    });
+    mock(&window).inject_event(ime());
+    assert_eq!(deepest.get(), 1, "an input ran inside another");
     assert_eq!(
-        *log.lock(),
-        [Seen::Capabilities(PointerKindSet::empty()), Seen::Ime]
+        heard(&handler),
+        [
+            Seen::Capabilities(PointerKindSet::empty()),
+            Seen::Ime,
+            Seen::Ime,
+            Seen::Ime,
+            Seen::Ime,
+        ]
     );
-}
-
-/// The most input a window holds behind its snapshot, as documented in
-/// `ARCHITECTURE.md` ("A window's input waits behind its capability
-/// snapshot").
-const HELD_INPUT: u64 = 256;
-
-fn key_at(at: u64) -> PlatformInput {
-    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState};
-    PlatformInput::Keyboard(KeyEvent::new(
-        KeyState::Down,
-        Key::character("k"),
-        Code::KeyK,
-        EventTime::from_nanos(at),
-    ))
-}
-
-/// Record the time of every key and count the snapshots.
-fn key_times(window: &Arc<dyn HostWindow>) -> Arc<Mutex<(usize, Vec<u64>)>> {
-    let log = Arc::new(Mutex::new((0, Vec::new())));
-    let sink = Arc::clone(&log);
-    window.on_input(Box::new(move |input| {
-        let mut log = sink.lock();
-        match input {
-            PlatformInput::Capabilities(_) => log.0 += 1,
-            PlatformInput::Keyboard(key) => log.1.push(key.time.as_nanos()),
-            other => panic!("unexpected input {other:?}"),
-        }
-        DispatchEventResult::default()
-    }));
-    log
-}
-
-/// A window whose input callback is never registered holds only the newest
-/// input, so neither its memory nor the first registration's delivery grows
-/// with how long it was open.
-fn input_held_before_any_registration_is_bounded() {
-    let session = session(HeadlessPlatform::new());
-    let window = session.open();
-    for at in 0..10_000 {
-        mock(&window).inject_event(key_at(at));
-    }
-    let log = key_times(&window);
-    session.turns.drive();
-    let (snapshots, keys) = log.lock().clone();
-    assert_eq!(snapshots, 1);
-    assert_eq!(keys.len() as u64, HELD_INPUT, "held input is bounded");
-    assert_eq!(
-        keys,
-        (10_000 - HELD_INPUT..10_000).collect::<Vec<_>>(),
-        "the newest input is held, in order"
-    );
-}
-
-/// Once a registration's snapshot has failed its three passes, nothing can
-/// deliver new input until the callback is registered again: it is refused,
-/// answered with the platform default rather than held, and a later
-/// registration receives only what was held before.
-fn input_after_the_snapshot_attempts_run_out_is_refused() {
-    let session = session(HeadlessPlatform::new());
-    let window = session.open();
-    mock(&window).inject_event(key_at(1));
-    window.on_input(Box::new(move |input| {
-        assert!(
-            !matches!(input, PlatformInput::Capabilities(_)),
-            "the snapshot keeps failing"
-        );
-        DispatchEventResult::default()
-    }));
-    for _ in 0..5 {
-        session.turns.drive();
-    }
-    for at in 2..10_000 {
-        let answer = mock(&window).inject_event(key_at(at));
-        assert!(
-            !answer.is_deferred() && !answer.default_prevented,
-            "refused input keeps its platform default"
-        );
-    }
-    let log = key_times(&window);
-    session.turns.drive();
-    let (snapshots, keys) = log.lock().clone();
-    assert_eq!(
-        (snapshots, keys.len()),
-        (1, 1),
-        "only the input held before"
-    );
-    assert_eq!(keys, [1]);
 }
 
 #[test]
@@ -567,6 +387,10 @@ fn input_capabilities_contracts() {
     super::run_table(
         "input_capabilities",
         &[
+            (
+                "the_first_event_after_open_reaches_the_handler",
+                the_first_event_after_open_reaches_the_handler,
+            ),
             (
                 "input_capabilities_report_implemented_and_present_separately",
                 input_capabilities_report_implemented_and_present_separately,
@@ -584,24 +408,8 @@ fn input_capabilities_contracts() {
                 the_snapshot_carries_the_backend_availability,
             ),
             (
-                "a_panic_on_the_initial_snapshot_keeps_the_queued_tail_in_order",
-                a_panic_on_the_initial_snapshot_keeps_the_queued_tail_in_order,
-            ),
-            (
-                "the_snapshot_is_retried_before_any_queued_input",
-                the_snapshot_is_retried_before_any_queued_input,
-            ),
-            (
-                "input_held_before_any_registration_is_bounded",
-                input_held_before_any_registration_is_bounded,
-            ),
-            (
-                "input_after_the_snapshot_attempts_run_out_is_refused",
-                input_after_the_snapshot_attempts_run_out_is_refused,
-            ),
-            (
-                "reentrantly_admitted_input_waits_for_the_next_pass",
-                reentrantly_admitted_input_waits_for_the_next_pass,
+                "a_panic_on_the_snapshot_loses_no_input",
+                a_panic_on_the_snapshot_loses_no_input,
             ),
             (
                 "a_native_event_during_a_callback_is_queued_not_dropped",
@@ -612,12 +420,8 @@ fn input_capabilities_contracts() {
                 a_reentrant_event_needing_an_answer_is_unhandled_and_delivered_once,
             ),
             (
-                "an_input_callback_registered_off_the_owner_thread_is_refused",
-                an_input_callback_registered_off_the_owner_thread_is_refused,
-            ),
-            (
-                "a_replaced_input_callback_whose_drop_panics_still_delivers_the_tail",
-                a_replaced_input_callback_whose_drop_panics_still_delivers_the_tail,
+                "input_raised_from_input_is_delivered_after_it",
+                input_raised_from_input_is_delivered_after_it,
             ),
         ],
     );

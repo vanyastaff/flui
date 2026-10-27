@@ -1,177 +1,148 @@
-//! Integration coverage for panic containment: window callback dispatch and the
-//! background executor.
+//! Panic containment of a window's handler and of the background executor:
+//! a handler method that panics never wedges what runs next, and what was
+//! queued behind it is still delivered (ADR-0254 §4, ADR-0207 §7).
+//!
+//! The windows are the headless host's, driven through the window and its
+//! simulated operating system, so the delivery under test is the one every
+//! host uses.
 
 use std::{
+    cell::Cell,
+    rc::Rc,
     sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Weak,
+        atomic::{AtomicBool, Ordering},
     },
     thread,
     time::Duration,
 };
 
-use flui_native::{WindowCallbacks, executor::BackgroundExecutor};
-use flui_platform::ImeEvent;
-use flui_platform::{DispatchEventResult, PlatformInput};
+use flui_native::{
+    HeadlessPlatform, HostWindow, MockWindow, Platform as _, executor::BackgroundExecutor,
+};
+use flui_platform::{CloseDecision, WindowCommand, WindowOptions};
+use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
 
-fn frame_callback_is_restored_after_real_dispatch_panics() {
-    let callbacks = Arc::new(WindowCallbacks::new());
-    let weak_callbacks = Arc::downgrade(&callbacks);
-    let calls = Arc::new(AtomicUsize::new(0));
-    let calls_in_callback = Arc::clone(&calls);
-    *callbacks.on_request_frame.lock() = Some(Box::new(move |_| {
-        let call = calls_in_callback.fetch_add(1, Ordering::SeqCst);
+/// A headless window delivering to `handler`, and its platform.
+fn open(handler: &Rc<RecordingWindowHandler>) -> (HeadlessPlatform, Arc<dyn HostWindow>) {
+    let platform = HeadlessPlatform::new();
+    let window = platform
+        .open_window(WindowOptions::default(), handler.clone())
+        .expect("a headless window");
+    handler.take_calls();
+    (platform, window)
+}
+
+fn mock(window: &Weak<dyn HostWindow>) -> Arc<dyn HostWindow> {
+    window.upgrade().expect("the window is open")
+}
+
+/// A frame whose method panics after it asked for another: the nested
+/// request queued behind it is still delivered, the panic resumes to the
+/// caller, and the next request runs as usual.
+fn a_request_queued_behind_a_failed_frame_is_delivered() {
+    let handler = RecordingWindowHandler::new();
+    let (_platform, window) = open(&handler);
+    let calls = Rc::new(Cell::new(0_u32));
+    let weak = Arc::downgrade(&window);
+    let counted = Rc::clone(&calls);
+    handler.react_to_frame(move |_| {
+        let call = counted.get();
+        counted.set(call + 1);
         if call == 0 {
-            weak_callbacks
-                .upgrade()
-                .expect("callbacks alive")
-                .dispatch_request_frame();
+            mock(&weak).request_redraw();
+            panic!("the first frame fails");
         }
-        assert_ne!(call, 0, "first dispatch panics");
-    }));
+    });
 
     let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        callbacks.dispatch_request_frame();
+        window.request_redraw();
     }));
-    assert!(first.is_err());
-
-    callbacks.dispatch_request_frame();
+    assert!(first.is_err(), "the frame's panic resumes to its caller");
     assert_eq!(
-        calls.load(Ordering::SeqCst),
+        calls.get(),
         2,
-        "nested work from the aborted dispatch must not leak into the next call"
+        "the request queued behind the failure was lost"
     );
+    window.request_redraw();
+    assert_eq!(calls.get(), 3);
 }
 
-fn nested_should_close_is_conservative_veto_without_recursion() {
-    let callbacks = Arc::new(WindowCallbacks::new());
-    let weak_callbacks = Arc::downgrade(&callbacks);
-    let calls = Arc::new(AtomicUsize::new(0));
-    let callback_calls = Arc::clone(&calls);
-    *callbacks.on_should_close.lock() = Some(Box::new(move || {
-        callback_calls.fetch_add(1, Ordering::SeqCst);
-        let nested = weak_callbacks
-            .upgrade()
-            .expect("callbacks alive")
-            .dispatch_should_close();
-        assert!(!nested, "nested close query must conservatively veto");
-        true
-    }));
-
-    assert!(callbacks.dispatch_should_close());
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+/// A close asked again while the handler decides the first is kept open
+/// without asking the handler a second time.
+fn a_nested_close_request_keeps_the_window() {
+    let handler = RecordingWindowHandler::new();
+    let (_platform, window) = open(&handler);
+    let nested = Rc::new(Cell::new(None));
+    let weak = Arc::downgrade(&window);
+    let heard = Rc::clone(&nested);
+    handler.react_to_close_request(move || {
+        let window = mock(&weak);
+        let window = window
+            .as_any()
+            .downcast_ref::<MockWindow>()
+            .expect("a headless window");
+        heard.set(Some(window.simulate_close()));
+        CloseDecision::Close
+    });
+    let window = window
+        .as_any()
+        .downcast_ref::<MockWindow>()
+        .expect("a headless window");
+    assert!(
+        window.simulate_close(),
+        "the outer request closes the window"
+    );
+    assert_eq!(nested.get(), Some(false), "the nested request is kept open");
+    assert_eq!(handler.count(&HandlerCall::CloseRequested), 1);
+    assert_eq!(handler.count(&HandlerCall::Closed), 1);
 }
 
-fn terminal_retirement_survives_an_admitted_callback_failure() {
-    struct Capture {
-        owner: std::sync::Weak<WindowCallbacks>,
-        panics: bool,
-        reenter: bool,
-    }
-    impl Drop for Capture {
-        fn drop(&mut self) {
-            if self.reenter
-                && let Some(owner) = self.owner.upgrade()
-            {
-                owner.dispatch_request_frame();
-                owner.clear();
-            }
-            assert!(!self.panics, "capture retirement failure");
-        }
-    }
-    for (callback_panics, close_panics, capture_panics, retirement_panics, reenter) in [
-        (true, false, false, false, false),
-        (false, true, false, false, false),
-        (false, false, true, false, false),
-        (false, false, false, true, false),
-        (true, true, false, false, false),
-        (true, false, true, false, false),
-        (true, false, false, true, false),
-        (false, true, true, true, true),
-        (true, true, true, true, true),
-    ] {
-        let callbacks = Arc::new(WindowCallbacks::new());
-        let retired = Arc::new(AtomicBool::new(false));
-        let closed = Arc::new(AtomicBool::new(false));
-        let close_observation = Arc::clone(&closed);
-        *callbacks.on_close.lock() = Some(Box::new(move || {
-            close_observation.store(true, Ordering::SeqCst);
-            assert!(!close_panics, "terminal close failure");
-        }));
-        let moves = Arc::new(AtomicUsize::new(0));
-        let move_observation = Arc::clone(&moves);
-        let capture = Arc::new(());
-        let witness = Arc::downgrade(&capture);
-        let hostile = Capture {
-            owner: Arc::downgrade(&callbacks),
-            panics: capture_panics,
-            reenter,
-        };
-        *callbacks.on_state_changed.lock() = Some(Box::new(move || {
-            let _ = (&capture, &hostile);
-            move_observation.fetch_add(1, Ordering::SeqCst);
-        }));
-        let nested = Arc::downgrade(&callbacks);
-        let notice = Arc::clone(&retired);
-        *callbacks.on_request_frame.lock() = Some(Box::new(move |_| {
-            let callbacks = nested.upgrade().expect("owner");
-            callbacks.dispatch_state_changed();
-            callbacks.dispatch_close();
-            let notice = Arc::clone(&notice);
-            callbacks.clear_then(move || {
-                notice.store(true, Ordering::SeqCst);
-                assert!(!retirement_panics, "retirement failure");
-            });
-            assert!(!callback_panics, "admitted callback failure");
-        }));
-        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            callbacks.dispatch_request_frame();
-        }));
-        if callback_panics || close_panics {
-            let failure = failure.expect_err("admitted callback failed");
-            assert_eq!(
-                flui_foundation::panic::payload_text(failure.as_ref()),
-                Some(if callback_panics {
-                    "admitted callback failure"
-                } else {
-                    "terminal close failure"
-                })
-            );
-        } else {
-            assert!(
-                failure.is_ok(),
-                "retirement failures are independently contained"
-            );
-        }
-        assert!(
-            witness.upgrade().is_none(),
-            "terminal callback captures must retire during unwind"
-        );
-        assert!(
-            retired.load(Ordering::SeqCst),
-            "retirement notice must complete despite the aborted prefix"
-        );
-        assert!(
-            closed.load(Ordering::SeqCst),
-            "terminal close must reach the application's cancellation hook even when its causal callback aborts"
-        );
-        assert_eq!(
-            moves.load(Ordering::SeqCst),
-            1,
-            "a state change queued in an aborted transaction is still announced: its \
-             revision is already published"
-        );
-        callbacks.dispatch_request_frame();
-        callbacks.clear();
-        let healthy = WindowCallbacks::new();
-        let delivered = Arc::new(AtomicBool::new(false));
-        let observation = Arc::clone(&delivered);
-        *healthy.on_request_frame.lock() = Some(Box::new(move |_| {
-            observation.store(true, Ordering::SeqCst);
-        }));
-        healthy.dispatch_request_frame();
-        assert!(delivered.load(Ordering::SeqCst));
-    }
+/// A frame closes its own window and then panics: the state change and the
+/// close queued behind it still reach the handler, the window lets go of the
+/// handler, and the frame's panic stays the one that resumes.
+fn a_close_from_a_failed_method_still_finishes() {
+    let handler = RecordingWindowHandler::new();
+    let (_platform, window) = open(&handler);
+    let weak = Arc::downgrade(&window);
+    handler.react_to_frame(move |_| {
+        flui_testing::window_commands::AdmitAndApply::close_for_cleanup(&*mock(&weak));
+        panic!("the frame fails after closing");
+    });
+    let held = Rc::downgrade(&handler);
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        window.request_redraw();
+    }))
+    .expect_err("the frame's panic resumes");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("the frame fails after closing")
+    );
+    let calls = handler.take_calls();
+    assert!(
+        matches!(
+            calls.as_slice(),
+            [
+                HandlerCall::FrameRequested(_),
+                HandlerCall::StateChanged,
+                HandlerCall::Closed
+            ]
+        ),
+        "the deliveries behind the failed frame: {calls:?}"
+    );
+    drop(handler);
+    assert_eq!(held.strong_count(), 0, "the closed window kept its handler");
+    assert!(
+        matches!(
+            window.apply(
+                WindowCommand::Close
+                    .admit(&window.state().capabilities)
+                    .expect("closing is admitted")
+            ),
+            Err(flui_platform::ApplyError::Closed)
+        ),
+        "the window is closed"
+    );
 }
 
 /// Test that background executor handles panic in tasks gracefully
@@ -205,141 +176,30 @@ fn test_background_executor_panic_handling() {
     );
 }
 
-/// A panicking callback or task never wedges what runs next: the frame
-/// callback is restored after a dispatch panic, a nested close query is a
-/// conservative veto, and the background executor keeps running tasks.
+/// A panicking handler method or task never wedges what runs next: a request
+/// queued behind a failed frame is delivered, a nested close request keeps
+/// the window, a close made from a failed method still finishes, and the
+/// background executor keeps running tasks.
 #[test]
 fn panics_in_callbacks_and_tasks_leave_the_dispatcher_usable() {
-    frame_callback_is_restored_after_real_dispatch_panics();
-    nested_should_close_is_conservative_veto_without_recursion();
-    terminal_retirement_survives_an_admitted_callback_failure();
-    test_background_executor_panic_handling();
-}
-
-/// Records whether the capture it sits in was dropped.
-struct Witness(Arc<AtomicBool>);
-
-impl Drop for Witness {
-    fn drop(&mut self) {
-        self.0.store(true, Ordering::SeqCst);
-    }
-}
-
-/// An input callback that, on the input `fails_on` picks, registers a
-/// replacement and then panics; whether its captures were dropped, and how
-/// many inputs the replacement received.
-fn replaced_then_failing(
-    callbacks: &Arc<WindowCallbacks>,
-    fails_on: fn(&PlatformInput) -> bool,
-) -> (Arc<AtomicBool>, Arc<AtomicUsize>) {
-    let dropped = Arc::new(AtomicBool::new(false));
-    let replacement_calls = Arc::new(AtomicUsize::new(0));
-    let witness = Witness(Arc::clone(&dropped));
-    let owner = Arc::downgrade(callbacks);
-    let calls = Arc::clone(&replacement_calls);
-    callbacks.set_input_callback(Box::new(move |input| {
-        let _ = &witness;
-        if fails_on(&input) {
-            let calls = Arc::clone(&calls);
-            owner
-                .upgrade()
-                .expect("owner")
-                .set_input_callback(Box::new(move |_| {
-                    calls.fetch_add(1, Ordering::SeqCst);
-                    DispatchEventResult::default()
-                }));
-            panic!("input callback failure");
-        }
-        DispatchEventResult::default()
-    }));
-    (dropped, replacement_calls)
-}
-
-/// A callback replaced during a call that fails is retained, not dropped:
-/// its captures stay out of the failed operation, contained or unwinding.
-fn a_callback_replaced_during_its_failing_call_is_retained() {
-    let contained = Arc::new(WindowCallbacks::new());
-    let (dropped, replacement) = replaced_then_failing(&contained, |input| {
-        matches!(input, PlatformInput::Capabilities(_))
-    });
-    assert!(
-        !dropped.load(Ordering::SeqCst),
-        "a snapshot failure is contained and retains the outgoing callback"
-    );
-    contained.resume_input_delivery();
-    assert_eq!(
-        replacement.load(Ordering::SeqCst),
-        1,
-        "the replacement receives its snapshot"
-    );
-
-    let unwinding = Arc::new(WindowCallbacks::new());
-    let (dropped, _) =
-        replaced_then_failing(&unwinding, |input| matches!(input, PlatformInput::Ime(_)));
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        unwinding.dispatch_input(PlatformInput::Ime(ImeEvent::Enabled));
-    }))
-    .expect_err("the dispatched input's failure propagates");
-    assert_eq!(
-        flui_foundation::panic::payload_text(failure.as_ref()),
-        Some("input callback failure")
-    );
-    assert!(
-        !dropped.load(Ordering::SeqCst),
-        "an unwinding dispatch retains the outgoing callback"
-    );
-}
-
-/// A window's callbacks destroyed by an unwind retain the input callback.
-fn an_input_callback_destroyed_by_an_unwind_is_retained() {
-    let dropped = Arc::new(AtomicBool::new(false));
-    let callbacks = WindowCallbacks::new();
-    let witness = Witness(Arc::clone(&dropped));
-    callbacks.set_input_callback(Box::new(move |_| {
-        let _ = &witness;
-        DispatchEventResult::default()
-    }));
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-        let _owned = callbacks;
-        panic!("unrelated failure");
-    }))
-    .expect_err("the failure propagates");
-    assert_eq!(
-        flui_foundation::panic::payload_text(failure.as_ref()),
-        Some("unrelated failure")
-    );
-    assert!(!dropped.load(Ordering::SeqCst));
-}
-
-/// Healthy retirement still drops the input callback.
-fn a_cleared_input_callback_is_dropped() {
-    let dropped = Arc::new(AtomicBool::new(false));
-    let callbacks = WindowCallbacks::new();
-    let witness = Witness(Arc::clone(&dropped));
-    callbacks.set_input_callback(Box::new(move |_| {
-        let _ = &witness;
-        DispatchEventResult::default()
-    }));
-    drop(callbacks);
-    assert!(dropped.load(Ordering::SeqCst));
-}
-
-#[test]
-fn input_callbacks_are_retained_on_exceptional_paths() {
     crate::run_table(
-        "input_callbacks_are_retained_on_exceptional_paths",
+        "panics_in_callbacks_and_tasks_leave_the_dispatcher_usable",
         &[
             (
-                "a_callback_replaced_during_its_failing_call_is_retained",
-                a_callback_replaced_during_its_failing_call_is_retained,
+                "a_request_queued_behind_a_failed_frame_is_delivered",
+                a_request_queued_behind_a_failed_frame_is_delivered,
             ),
             (
-                "an_input_callback_destroyed_by_an_unwind_is_retained",
-                an_input_callback_destroyed_by_an_unwind_is_retained,
+                "a_nested_close_request_keeps_the_window",
+                a_nested_close_request_keeps_the_window,
             ),
             (
-                "a_cleared_input_callback_is_dropped",
-                a_cleared_input_callback_is_dropped,
+                "a_close_from_a_failed_method_still_finishes",
+                a_close_from_a_failed_method_still_finishes,
+            ),
+            (
+                "test_background_executor_panic_handling",
+                test_background_executor_panic_handling,
             ),
         ],
     );
@@ -401,6 +261,9 @@ fn ready_tasks_return_results_without_executor_bounds() {
     assert!(failures.is_empty(), "failed cases: {failures:?}");
 }
 
+/// A handler whose captures panic when the window lets go of it, after a
+/// method that already failed: the capture's panic is contained, and the
+/// process neither aborts nor loses the method's failure.
 #[test]
 fn a_retirement_notice_contains_its_capture_failure() {
     const CHILD: &str = "FLUI_DISCARDED_NOTICE_CHILD";
@@ -408,28 +271,27 @@ fn a_retirement_notice_contains_its_capture_failure() {
         struct Hostile;
         impl Drop for Hostile {
             fn drop(&mut self) {
-                panic!("notice capture failure");
+                panic!("handler capture failure");
             }
         }
-        let callbacks = Arc::new(WindowCallbacks::new());
-        let nested = Arc::downgrade(&callbacks);
-        *callbacks.on_request_frame.lock() = Some(Box::new(move |_| {
-            let hostile = Hostile;
-            nested
-                .upgrade()
-                .expect("owner")
-                .clear_then(move || drop(hostile));
+        let handler = RecordingWindowHandler::new();
+        let (_platform, window) = open(&handler);
+        let weak = Arc::downgrade(&window);
+        let hostile = Hostile;
+        handler.react_to_frame(move |_| {
+            let _ = &hostile;
+            flui_testing::window_commands::AdmitAndApply::close_for_cleanup(&*mock(&weak));
             panic!("first failure");
-        }));
+        });
+        drop(handler);
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            callbacks.dispatch_request_frame();
+            window.request_redraw();
         }))
         .expect_err("original failure");
         assert_eq!(
             flui_foundation::panic::payload_text(failure.as_ref()),
             Some("first failure")
         );
-        callbacks.clear();
         std::process::exit(86);
     }
     let mut child = std::process::Command::new(std::env::current_exe().expect("binary"))
@@ -450,55 +312,7 @@ fn a_retirement_notice_contains_its_capture_failure() {
         }
         if std::time::Instant::now() >= deadline {
             child.kill().expect("kill timed-out child");
-            panic!("notice retirement timed out");
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-}
-
-#[test]
-fn a_replaced_callback_capture_cannot_replace_its_invocation_failure() {
-    const CHILD: &str = "FLUI_REPLACED_CAPTURE_CHILD";
-    if std::env::var_os(CHILD).is_some() {
-        struct Hostile;
-        impl Drop for Hostile {
-            fn drop(&mut self) {
-                panic!("replaced capture failure");
-            }
-        }
-        let callbacks = Arc::new(WindowCallbacks::new());
-        let nested = Arc::downgrade(&callbacks);
-        let hostile = Hostile;
-        *callbacks.on_request_frame.lock() = Some(Box::new(move |_| {
-            let _ = &hostile;
-            let owner = nested.upgrade().expect("owner");
-            *owner.on_request_frame.lock() = Some(Box::new(|_| {}));
-            owner.clear();
-            panic!("first invocation failure");
-        }));
-        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            callbacks.dispatch_request_frame();
-        }))
-        .expect_err("invocation failed");
-        assert_eq!(
-            flui_foundation::panic::payload_text(failure.as_ref()),
-            Some("first invocation failure")
-        );
-        callbacks.dispatch_request_frame();
-        std::process::exit(86);
-    }
-    let mut child = std::process::Command::new(std::env::current_exe().expect("binary"))
-        .args(["--exact", "window_callback_unwind::a_replaced_callback_capture_cannot_replace_its_invocation_failure", "--nocapture"])
-        .env(CHILD, "1").env("RUST_BACKTRACE", "0").spawn().expect("child");
-    let deadline = std::time::Instant::now() + Duration::from_secs(20);
-    loop {
-        if let Some(status) = child.try_wait().expect("wait") {
-            assert_eq!(status.code(), Some(86));
-            break;
-        }
-        if std::time::Instant::now() >= deadline {
-            child.kill().expect("kill timed-out child");
-            panic!("capture retirement timed out");
+            panic!("handler retirement timed out");
         }
         thread::sleep(Duration::from_millis(20));
     }

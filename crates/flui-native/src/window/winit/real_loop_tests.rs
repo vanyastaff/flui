@@ -36,6 +36,16 @@ use crate::owner::winit::testing::{
 };
 use crate::{WinitPlatform, host_window::HostWindow};
 use flui_platform::{WindowCommand, WindowOptions};
+use flui_testing::window_handler::RecordingWindowHandler;
+
+/// A request for a window with `options`, whose handler, built on the owner,
+/// records what the window delivers.
+fn request(options: WindowOptions) -> crate::WindowRequest {
+    crate::WindowRequest::new(
+        options,
+        || -> std::rc::Rc<dyn flui_platform::WindowHandler> { RecordingWindowHandler::new() },
+    )
+}
 
 fn options(title: impl Into<String>) -> WindowOptions {
     WindowOptions::default()
@@ -83,7 +93,7 @@ fn winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone() {
                 .with_state(|state| state.window_ids_for_test().keys().copied().collect());
 
             let handle = control_for_worker
-                .request_open_window(options("orphan-after-delivery"))
+                .request_open_window(request(options("orphan-after-delivery")))
                 .expect("lane accepts the request");
 
             // Bounded poll, not a blind sleep: the request must
@@ -213,47 +223,8 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
         /// holds; one of those turns runs the close, whichever wake carries
         /// it.
         move_before_close: Arc<AtomicBool>,
-        /// Whether the input callback is registered.
-        registered: bool,
         /// The moves held before a wake, one per wake.
         injected: Arc<AtomicUsize>,
-        /// What the window's input callback saw: its moves, and each
-        /// capability snapshot by whether it reports a mouse present.
-        seen: Arc<Mutex<Vec<&'static str>>>,
-    }
-
-    impl ExitObserver {
-        /// Register the window's input callback on the owner thread, as an
-        /// application does, so its capability snapshot is delivered and
-        /// input is not held behind it.
-        fn register(&mut self, host: &dyn crate::owner::winit::LoopWindow) {
-            if std::mem::replace(&mut self.registered, true) {
-                return;
-            }
-            let seen = Arc::clone(&self.seen);
-            flui_platform::PlatformWindow::on_input(
-                host,
-                Box::new(move |input| {
-                    use flui_platform::input_capabilities::PointerKindSet;
-                    match input {
-                        flui_platform::PlatformInput::Pointer(
-                            flui_platform::pointer::PointerEvent::Move(_),
-                        ) => seen.lock().push("move"),
-                        flui_platform::PlatformInput::Capabilities(capabilities) => {
-                            seen.lock().push(
-                                if capabilities.present().contains(PointerKindSet::MOUSE) {
-                                    "mouse present"
-                                } else {
-                                    "no mouse"
-                                },
-                            );
-                        }
-                        _ => {}
-                    }
-                    flui_platform::DispatchEventResult::resolved(false, true)
-                }),
-            );
-        }
     }
 
     impl ApplicationHandler for ExitObserver {
@@ -271,16 +242,13 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
         }
 
         fn user_event(&mut self, event_loop: &ActiveEventLoop, (): ()) {
-            let (window, host) = self.inner.platform.with_state(|state| {
-                (
-                    state.window_ids_for_test().keys().next().copied(),
-                    state.windows.values().next().cloned(),
-                )
-            });
+            let window = self
+                .inner
+                .platform
+                .with_state(|state| state.window_ids_for_test().keys().next().copied());
             if self.move_before_close.load(Ordering::SeqCst)
-                && let (Some(window), Some(host)) = (window, host)
+                && let Some(window) = window
             {
-                self.register(host.as_ref());
                 let moved = |x: f64| WinitWindowEvent::CursorMoved {
                     device_id: winit::event::DeviceId::dummy(),
                     position: winit::dpi::PhysicalPosition::new(x, 8.0),
@@ -349,13 +317,52 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
     let kept_window_for_worker = Arc::clone(&kept_window);
     let move_before_close_for_worker = Arc::clone(&move_before_close);
     let injected_for_worker = Arc::clone(&injected);
+    let seen_for_worker = Arc::clone(&seen);
     let poke = event_loop.create_proxy();
     let worker = thread::spawn(move || {
         let outcome = catch_unwind(AssertUnwindSafe(|| {
             wait_for_running(&platform_for_worker);
 
+            // The handler is built on the owner, from what this thread hands
+            // the request.
+            let flag = DropFlag(Arc::clone(&callback_dropped_for_worker));
+            let close_thread_for_callback = Arc::clone(&close_thread_for_worker);
+            let seen = Arc::clone(&seen_for_worker);
+            let request = crate::WindowRequest::new(options("programmatic-close"), move || {
+                let handler = RecordingWindowHandler::new();
+                handler.react_to_frame(move |_| {
+                    let _ = &flag;
+                });
+                handler.react_to_close(move || {
+                    *close_thread_for_callback.lock() = Some(thread::current().id());
+                });
+                handler.react_to_close_request(move || {
+                    close_asked_for_worker.fetch_add(1, Ordering::SeqCst);
+                    flui_platform::CloseDecision::Close
+                });
+                handler.react_to_input(move |input| {
+                    use flui_platform::input_capabilities::PointerKindSet;
+                    match input {
+                        flui_platform::PlatformInput::Pointer(
+                            flui_platform::pointer::PointerEvent::Move(_),
+                        ) => seen.lock().push("move"),
+                        flui_platform::PlatformInput::Capabilities(capabilities) => {
+                            seen.lock().push(
+                                if capabilities.present().contains(PointerKindSet::MOUSE) {
+                                    "mouse present"
+                                } else {
+                                    "no mouse"
+                                },
+                            );
+                        }
+                        _ => {}
+                    }
+                    flui_platform::DispatchEventResult::resolved(false, true)
+                });
+                handler as std::rc::Rc<dyn flui_platform::WindowHandler>
+            });
             let handle = control_for_worker
-                .request_open_window(options("programmatic-close"))
+                .request_open_window(request)
                 .expect("lane accepts the request");
             let window = match handle.wait() {
                 ClaimOutcome::Delivered(result) => result.expect("window creation succeeds"),
@@ -366,18 +373,6 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
             };
             wait_for_map_len(&platform_for_worker, 1, "window registration");
 
-            let flag = DropFlag(Arc::clone(&callback_dropped_for_worker));
-            window.on_request_frame(Box::new(move |_| {
-                let _ = &flag;
-            }));
-            let close_thread_for_callback = Arc::clone(&close_thread_for_worker);
-            window.on_close(Box::new(move || {
-                *close_thread_for_callback.lock() = Some(thread::current().id());
-            }));
-            window.on_should_close(Box::new(move || {
-                close_asked_for_worker.fetch_add(1, Ordering::SeqCst);
-                true
-            }));
             let _prev = kept_window_for_worker.lock().replace(Arc::clone(&window));
 
             // Every owner wake from here on holds a pointer move first; one
@@ -429,9 +424,7 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
         inner: WinitApp::for_test(Arc::clone(&platform), host, lane, None),
         exiting,
         move_before_close,
-        registered: false,
         injected: Arc::clone(&injected),
-        seen: Arc::clone(&seen),
     };
     event_loop
         .run_app(&mut app)
@@ -502,7 +495,7 @@ fn a_linux_winit_window_hands_out_its_at_spi_bridge() {
         let outcome = catch_unwind(AssertUnwindSafe(|| {
             wait_for_running(&platform_for_worker);
             let handle = control
-                .request_open_window(options("accessibility"))
+                .request_open_window(request(options("accessibility")))
                 .expect("lane accepts the request");
             let ClaimOutcome::Delivered(window) = handle.wait() else {
                 panic!("the owner delivers the window to its only claimant");
@@ -575,12 +568,12 @@ mod wayland_window {
             let outcome = catch_unwind(AssertUnwindSafe(|| {
                 wait_for_running(&platform_for_worker);
                 let window = match control_for_worker
-                    .request_open_window(
+                    .request_open_window(super::request(
                         WindowOptions::default()
                             .with_title("wayland-window")
                             .with_size(Size::new(320.0, 240.0))
                             .with_position(Some(Point::new(40.0, 60.0))),
-                    )
+                    ))
                     .expect("lane accepts the request")
                     .wait()
                 {

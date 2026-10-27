@@ -582,7 +582,7 @@ impl MacOSWindow {
     ///
     /// Returns true to allow close, false to prevent
     fn handle_close_request(&self) -> bool {
-        let should_close = self.callbacks.dispatch_should_close();
+        let should_close = self.delivery.dispatch_should_close();
         tracing::debug!("Window close requested: {}", should_close);
         should_close
     }
@@ -619,7 +619,7 @@ impl MacOSWindow {
         // lifetime change. `Drop`'s removal stays as an idempotent safety net.
         let _prev = self.windows_map.lock().remove(&(self.ns_window as u64));
 
-        self.callbacks.dispatch_close();
+        self.delivery.dispatch_close();
         tracing::debug!("Window closed");
 
         // Release every remaining registered callback now, while
@@ -632,7 +632,7 @@ impl MacOSWindow {
         // (through its callback slots) → frame closure → raster lane →
         // renderer → surface → `Arc<MacOSWindow>`, a cycle nothing else
         // here breaks.
-        self.callbacks.clear();
+        self.delivery.clear();
 
         // Match winit's own `windowWillClose:` handling: NIL the delegate
         // so no further delegate method can fire against a window this

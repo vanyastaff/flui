@@ -29,6 +29,14 @@ pub struct IOSSceneAttachmentId(pub(super) u64);
 /// The application's consumer of scene sessions, which the loop calls on the
 /// owner thread through its call point.
 pub(crate) trait SceneConsumer {
+    /// The handler of the window `session` is about to get: the loop asks
+    /// once per window, before it makes the window, which keeps it across
+    /// reconnections.
+    fn window_handler(
+        &mut self,
+        session: &IOSSceneSessionId,
+    ) -> std::rc::Rc<dyn flui_platform::WindowHandler>;
+
     /// `window` connected to `session` as `attachment`; `reconnect` says the
     /// session installed its application before. Returns what the loop
     /// watches of the window's installation, whose acknowledgement wakes the

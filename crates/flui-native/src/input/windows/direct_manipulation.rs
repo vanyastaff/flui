@@ -610,7 +610,7 @@ impl InputWindow {
         loop {
             let next = slot.outbox.borrow_mut().pop_front();
             let Some(input) = next else { break };
-            self.callbacks.dispatch_input(input);
+            self.delivery.dispatch_input(input);
         }
     }
 
@@ -663,7 +663,7 @@ impl InputWindow {
     /// window as wheel ticks.
     fn touchpad_failed(&self, hwnd: HWND) {
         self.release_touchpad(hwnd);
-        self.callbacks
+        self.delivery
             .set_input_capabilities(crate::input::availability::windows(self.has_touchpad()));
     }
 

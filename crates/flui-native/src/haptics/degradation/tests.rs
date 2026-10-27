@@ -707,7 +707,10 @@ fn the_headless_window_plays_a_stale_source_on_its_actuator() {
         .expect("headless owner");
     let owner: OwnerPlatform = saved.borrow_mut().take().expect("started owner");
     let window = owner
-        .open_window(WindowOptions::default())
+        .open_window(
+            WindowOptions::default(),
+            flui_testing::window_handler::RecordingWindowHandler::new(),
+        )
         .expect("open")
         .try_ready()
         .expect("ready");

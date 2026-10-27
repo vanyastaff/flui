@@ -35,10 +35,9 @@ use windows::{
 };
 
 use flui_platform::{
-    AdmittedCommand, ApplyError, CursorError, DispatchEventResult, PlatformFailure, PlatformInput,
-    PlatformWindow, SizeConstraints, Unsupported, UnsupportedReason, WindowBackgroundAppearance,
-    WindowCapabilities, WindowCommand, WindowId, WindowMode, WindowOptions, WindowReveal,
-    WindowState,
+    AdmittedCommand, ApplyError, CursorError, PlatformFailure, PlatformWindow, SizeConstraints,
+    Unsupported, UnsupportedReason, WindowBackgroundAppearance, WindowCapabilities, WindowCommand,
+    WindowId, WindowMode, WindowOptions, WindowReveal, WindowState,
 };
 
 use flui_platform::os_options::WindowsCornerPreference;
@@ -57,8 +56,8 @@ use crate::owner::windows::WINDOW_CLASS_NAME;
 use crate::text::WindowTextInput;
 use crate::window::state::WindowStateCell;
 use crate::{
-    owner::OpenWindowError, owner::call_point::install, owner::handlers::PlatformHandlers,
-    owner::handlers::WindowCallbacks, owner::hwnd_affinity::UserDataRefusal,
+    owner::OpenWindowError, owner::handlers::PlatformHandlers,
+    owner::window_delivery::WindowDelivery,
 };
 
 /// Windows window wrapper
@@ -69,9 +68,7 @@ pub struct WindowsWindow {
     /// Window state
     state: Arc<Mutex<WindowRecord>>,
 
-    /// Which native window this wrapper was built for. The callbacks
-    /// themselves live in that window's owner-thread context, not here;
-    /// see [`Self::register`].
+    /// Which native window this wrapper was built for.
     pub(crate) identity: crate::owner::windows::WindowIdentity,
 
     /// The windows the platform tracks, which this one leaves when the last
@@ -105,15 +102,20 @@ pub struct WindowsWindow {
 
     /// Starts this window's OS drag sessions through OLE (ADR-0211).
     drag_source: Arc<dyn flui_platform::drag::PlatformDragSource>,
+
+    /// What the window delivers to its handler, shared with its owner-thread
+    /// context, which raises every delivery from the window procedure. The
+    /// handler itself lives in an owner-thread slot of it, so this field
+    /// reaches nothing off that thread.
+    delivery: Arc<WindowDelivery>,
 }
 
 // SAFETY, per field: `state` is an `Arc<Mutex<..>>` with its own
 // synchronization; `windows` is an `Arc` of a set behind its own lock;
 // `haptics` and `drag_source` are `Send + Sync` themselves;
-// `identity` is a plain integer. The struct carries no callback storage:
-// callbacks live in the owner-thread `WindowContext` and are installed only
-// through the context gate below, so a foreign thread can neither run nor
-// drop one. The non-`Sync`/non-`Send` members are `hwnd: HWND` and
+// `identity` is a plain integer; `delivery` is `Send + Sync` and keeps the
+// window's handler in an owner-thread slot, so a foreign thread can neither
+// run nor drop it. The non-`Sync`/non-`Send` members are `hwnd: HWND` and
 // `context: *const WindowContext`, both bare addresses that this type never
 // dereferences through these fields (`context` is an identity token for
 // value comparison only — see its field doc) — sending or sharing an
@@ -153,7 +155,7 @@ unsafe impl Send for WindowsWindow {}
 unsafe impl Sync for WindowsWindow {}
 
 impl std::fmt::Debug for WindowsWindow {
-    // Hand-written: `WindowCallbacks` is a callback payload with no meaningful
+    // Hand-written: the window's handler has no meaningful
     // Debug representation.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WindowsWindow")
@@ -211,6 +213,7 @@ impl WindowsWindow {
     /// [`OpenWindowError::Backend`] when Win32 window creation fails.
     pub(crate) fn new(
         options: WindowOptions,
+        handler: Rc<dyn flui_platform::WindowHandler>,
         windows: Arc<WindowSet>,
         shares: crate::owner::windows::control::OwnerShares,
         apartment: Option<Rc<crate::owner::windows::com_apartment::ComApartment>>,
@@ -235,6 +238,7 @@ impl WindowsWindow {
         let (hwnd, requested, scale_factor, normal) = created?;
         Self::install_native(
             options,
+            handler,
             windows,
             handlers,
             frames,
@@ -338,6 +342,7 @@ impl WindowsWindow {
     )]
     fn install_native(
         options: WindowOptions,
+        handler: Rc<dyn flui_platform::WindowHandler>,
         windows: Arc<WindowSet>,
         handlers: Rc<RefCell<PlatformHandlers>>,
         frames: Rc<crate::owner::windows::FrameCount>,
@@ -451,7 +456,13 @@ impl WindowsWindow {
 
             let window_id = WindowId(hwnd.0 as u64);
             let config = windows.config.clone();
-            let callbacks = Arc::new(WindowCallbacks::counting_frames(frames.counter()));
+            // The window class's input hook gives the capabilities of the
+            // devices attached before the handler hears its snapshot.
+            let delivery = Arc::new(WindowDelivery::counting_frames(
+                handler,
+                flui_platform::input_capabilities::InputCapabilities::UNAVAILABLE,
+                frames.counter(),
+            ));
             // Each fact the window reports, its input's hover included, is
             // published from the owner context of this very window before its
             // own callback runs: the context must carry this window's identity,
@@ -460,7 +471,7 @@ impl WindowsWindow {
             // owner thread; a call the context refuses (another thread, a
             // window already gone) still leaves the snapshot stale, so the
             // owner's next read publishes what changed.
-            callbacks.set_state_publisher({
+            delivery.set_state_publisher({
                 let address = hwnd.0 as isize;
                 let cell = Arc::downgrade(&snapshot);
                 Arc::new(move || {
@@ -470,12 +481,12 @@ impl WindowsWindow {
                     });
                     match read {
                         Some(Some(outcome)) => outcome,
-                        Some(None) => crate::owner::handlers::Publication::Unchanged,
+                        Some(None) => crate::owner::window_delivery::Publication::Unchanged,
                         None => {
                             if let Some(cell) = cell.upgrade() {
                                 cell.invalidate();
                             }
-                            crate::owner::handlers::Publication::Unchanged
+                            crate::owner::window_delivery::Publication::Unchanged
                         }
                     }
                 })
@@ -486,7 +497,7 @@ impl WindowsWindow {
                 window_state: Arc::downgrade(&state),
                 snapshot: Arc::clone(&snapshot),
                 exit_policy,
-                callbacks: Arc::clone(&callbacks),
+                delivery: Arc::clone(&delivery),
                 hooks: Rc::clone(&window_hooks),
                 preferences: Rc::clone(&preferences),
                 scale: scale.clone(),
@@ -541,6 +552,7 @@ impl WindowsWindow {
                 // requires; `hwnd` was validated just above.
                 facets: positions.for_window(&this),
                 drag_source: Arc::clone(&drag).drag_source(this),
+                delivery: Arc::clone(&delivery),
             });
             // The wrapper owns the window from here: a panic out of a hook
             // (or anything after it) drops it, which destroys the window and
@@ -566,7 +578,7 @@ impl WindowsWindow {
                     identity,
                     client_size: size,
                     scale,
-                    callbacks,
+                    delivery,
                     handlers: Rc::clone(&handlers),
                     preferences,
                     hooks: Rc::clone(&window_hooks),
@@ -732,42 +744,6 @@ impl WindowsWindow {
     fn hovered(&self) -> Option<bool> {
         crate::owner::windows::window_inputs()?
             .hovered(super::proc::WindowRef::new(self.hwnd, self.identity))
-    }
-
-    /// Installs a callback into this window's owner-thread context.
-    ///
-    /// `install` runs only on the window's owner thread, against the context
-    /// of the very window this wrapper was built for. Otherwise the
-    /// registration is refused and `install`, with the callback it carries,
-    /// is dropped right here — on the calling thread for a foreign-thread
-    /// registration, which is logged as an error because the caller has
-    /// just lost a callback; on the owner for a window that is already gone,
-    /// which is routine teardown ordering.
-    fn register(&self, op: &'static str, install: impl FnOnce(&WindowCallbacks)) {
-        let outcome = super::proc::with_window_context_checked(self.hwnd, op, |context| {
-            (context.identity == self.identity && context.callbacks.accepts_registration())
-                .then(|| install(&context.callbacks))
-        });
-        match outcome {
-            Ok(Some(())) => {}
-            Ok(None) => tracing::debug!(
-                hwnd = ?self.hwnd,
-                op,
-                "callback registration refused: the handle now names a different window"
-            ),
-            Err(UserDataRefusal::ForeignThread) => tracing::error!(
-                hwnd = ?self.hwnd,
-                op,
-                "callback registration refused: window callbacks are registered on the \
-                 window's owner thread; the callback was dropped on the calling thread"
-            ),
-            Err(reason) => tracing::debug!(
-                hwnd = ?self.hwnd,
-                op,
-                ?reason,
-                "callback registration refused: the native window is gone"
-            ),
-        }
     }
 
     /// Get current window bounds
@@ -1249,7 +1225,11 @@ impl WindowsWindow {
     }
 }
 
-impl crate::host_window::CoreHostWindow for WindowsWindow {}
+impl crate::host_window::CoreHostWindow for WindowsWindow {
+    fn window_delivery(&self) -> &WindowDelivery {
+        &self.delivery
+    }
+}
 
 impl crate::host_window::HostWindow for WindowsWindow {
     /// The window's own bridge — the capability the composition root's
@@ -1518,49 +1498,6 @@ impl PlatformWindow for WindowsWindow {
         }
     }
 
-    // ==================== Per-Window Callbacks ====================
-    //
-    // Every setter goes through `Self::register`: it installs into the
-    // owner-thread context, or refuses and drops the callback on the calling
-    // thread. A replaced callback is retired through the call point after its
-    // slot's lock is released, since its destructor may re-enter this window.
-
-    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>) {
-        self.register("on_input", move |callbacks| {
-            callbacks.set_input_callback(callback);
-        });
-    }
-
-    fn on_request_frame(&self, callback: Box<dyn FnMut(flui_platform::FrameRequest) + Send>) {
-        self.register("on_request_frame", move |callbacks| {
-            install(&callbacks.on_request_frame, callback);
-        });
-    }
-
-    fn on_state_changed(&self, callback: Box<dyn FnMut() + Send>) {
-        self.register("on_state_changed", move |callbacks| {
-            install(&callbacks.on_state_changed, callback);
-        });
-    }
-
-    fn on_close(&self, callback: Box<dyn FnOnce() + Send>) {
-        self.register("on_close", move |callbacks| {
-            install(&callbacks.on_close, callback);
-        });
-    }
-
-    fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
-        self.register("on_should_close", move |callbacks| {
-            install(&callbacks.on_should_close, callback);
-        });
-    }
-
-    fn on_surface_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        self.register("on_surface_status_change", move |callbacks| {
-            install(&callbacks.on_surface_status_change, callback);
-        });
-    }
-
     fn window_handle(
         &self,
     ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
@@ -1772,7 +1709,7 @@ impl HasWindowHandle for WindowsWindow {
         // that is already destroyed or whose `HWND` value the OS already
         // recycled for someone else's window — those routes are refused
         // before `Win32WindowHandle::new` runs. And `WM_DESTROY` now calls
-        // `WindowCallbacks::clear()` (see `platform.rs`), which breaks the
+        // `WindowDelivery::clear()` (see `platform.rs`), which breaks the
         // frame-callback → renderer → surface → `Arc<WindowsWindow>` cycle
         // that used to orphan the whole chain forever after a native close
         // — a surface is no longer pinned alive past the window it was
@@ -1783,7 +1720,7 @@ impl HasWindowHandle for WindowsWindow {
         // calls `DestroyWindow` synchronously, and Win32 dispatches
         // `WM_DESTROY` — with it, `callbacks.clear()` — before that call
         // returns. If that `close()` is itself invoked from inside a
-        // callback currently out of its slot in `WindowCallbacks` for its
+        // callback currently out of its slot in `WindowDelivery` for its
         // call (the restore hazard #919 identified), a surface built
         // from a handle this method returned earlier in the same call chain
         // can still be alive while `DestroyWindow` runs beneath it — rwh's
@@ -1838,6 +1775,7 @@ impl Clone for WindowsWindow {
             // whichever wrapper made it.
             facets: self.facets.clone(),
             drag_source: Arc::clone(&self.drag_source),
+            delivery: Arc::clone(&self.delivery),
         }
     }
 }

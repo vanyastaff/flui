@@ -277,7 +277,8 @@ pub(crate) trait SceneWindow: HostWindow {
 /// loop by the host.
 pub(crate) trait SceneWindows: Send + Sync {
     /// A new window `id`, which wakes the owner through `signal`, names its
-    /// screen through `displays` and hands its view's touches to `touches`.
+    /// screen through `displays`, hands its view's touches to `touches` and
+    /// delivers to `handler`.
     fn create(
         &self,
         marker: MainThreadMarker,
@@ -285,6 +286,7 @@ pub(crate) trait SceneWindows: Send + Sync {
         signal: std::sync::Weak<OwnerSignal>,
         displays: Arc<dyn HostDisplays>,
         touches: Box<dyn ViewTouches>,
+        handler: std::rc::Rc<dyn flui_platform::WindowHandler>,
     ) -> Arc<dyn SceneWindow>;
 }
 
@@ -1059,12 +1061,30 @@ impl IOSLoop {
             return None;
         };
         if let Some(id) = fresh {
+            // The window delivers to its handler from its first event on, so
+            // the application makes it before the window exists. No handler,
+            // no window: the reservation is released and the scene refused.
+            let handler = match self
+                .tell_scene_consumer(|consumer| Ok(consumer.window_handler(&origin.session)))
+            {
+                Ok(handler) => handler,
+                Err(error) => {
+                    self.state().borrow_mut().reservation = None;
+                    tracing::warn!(
+                        session = origin.session.as_str(),
+                        %error,
+                        "rejecting a scene whose window has no handler"
+                    );
+                    return None;
+                }
+            };
             let window = self.windows.create(
                 marker,
                 id,
                 Arc::downgrade(&self.signal),
                 Arc::clone(&self.displays),
                 (self.view_touches)(),
+                handler,
             );
             let admitted = {
                 let mut state = self.state().borrow_mut();

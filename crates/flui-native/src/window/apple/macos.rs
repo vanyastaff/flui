@@ -32,6 +32,7 @@ pub use ext::{
     AppKitWindow, MacOSCollectionBehavior, MacOSWindowExt, MacOSWindowLevel, TabJoinError,
 };
 
+use std::rc::Rc;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -85,15 +86,15 @@ use crate::owner::apple::macos::display_pass;
 use crate::owner::apple::macos::{
     ContentViewRef, HostDisplays, WindowRegistry, debug_assert_appkit_main_thread,
 };
-use crate::owner::handlers::CallbackWindow;
+
 use crate::{
     owner::OpenWindowError,
-    owner::handlers::WindowCallbacks,
+    owner::window_delivery::WindowDelivery,
     window::config::WindowConfiguration,
     window::state::{ReportedFacts, WindowStateCell, mode_of},
 };
 use flui_platform::{
-    CursorError, DisplayId, PlatformWindow, WindowId, WindowOptions, WindowReveal,
+    CursorError, DisplayId, PlatformWindow, WindowHandler, WindowId, WindowOptions, WindowReveal,
 };
 
 /// macOS window wrapper around NSWindow
@@ -119,7 +120,7 @@ pub struct MacOSWindow {
     windows_map: WindowRegistry,
 
     /// Per-window callbacks (input, resize, close, ...)
-    callbacks: Arc<WindowCallbacks>,
+    delivery: Arc<WindowDelivery>,
 
     /// Set once `windowWillClose:` has fired for this window (or `close()`
     /// completed without it firing — see `close()`'s own doc). Shared via
@@ -286,7 +287,7 @@ struct MacOSWindowState {
 }
 
 impl std::fmt::Debug for MacOSWindow {
-    // Hand-written: `ns_window` is a raw Objective-C `id` and `WindowCallbacks`
+    // Hand-written: `ns_window` is a raw Objective-C `id` and `WindowDelivery`
     // is a callback payload; neither has a useful Debug form. `owner` (the
     // dispatch lane) has no useful Debug representation either, so it is
     // skipped along with them by `finish_non_exhaustive`.
@@ -328,6 +329,7 @@ impl MacOSWindow {
     /// NSWindow.
     pub(crate) fn new(
         options: WindowOptions,
+        handler: Rc<dyn WindowHandler>,
         windows_map: WindowRegistry,
         windows: &MacOSWindows,
         view_hooks: ViewHooks,
@@ -337,6 +339,7 @@ impl MacOSWindow {
         // traffic already serializes on (see `owner::apple::macos::owner_lane`).
         Self::new_inner(
             options,
+            handler,
             windows_map,
             windows,
             view_hooks,
@@ -412,6 +415,7 @@ impl MacOSWindow {
 
     fn new_inner(
         options: WindowOptions,
+        handler: Rc<dyn WindowHandler>,
         windows_map: WindowRegistry,
         windows: &MacOSWindows,
         view_hooks: ViewHooks,
@@ -589,11 +593,14 @@ impl MacOSWindow {
                 let _: () = msg_send![ns_window, makeKeyAndOrderFront: NIL];
             }
 
-            let callbacks = Arc::new(WindowCallbacks::new());
+            let delivery = Arc::new(WindowDelivery::new(
+                handler,
+                crate::input::availability::macos(),
+            ));
 
             // Create content view for input events. `frame` is
             // objc2-foundation's `NSRect`, the type `create_content_view` takes.
-            let content_view = content_view::create(frame, Arc::downgrade(&callbacks), view_hooks);
+            let content_view = content_view::create(frame, Arc::downgrade(&delivery), view_hooks);
 
             // What the features beside the window make their part of it from.
             let closed = Arc::new(AtomicBool::new(false));
@@ -627,7 +634,7 @@ impl MacOSWindow {
                     first_reveal_pending,
                 })),
                 windows_map: Arc::clone(&windows_map),
-                callbacks,
+                delivery,
                 closed,
                 loop_control: std::sync::OnceLock::new(),
                 config: windows.config.clone(),
@@ -646,7 +653,7 @@ impl MacOSWindow {
             });
 
             window
-                .callbacks
+                .delivery
                 .publish_through(Arc::downgrade(&window), Self::read_state);
 
             // Enable mouse tracking for mouse moved events
@@ -661,7 +668,7 @@ impl MacOSWindow {
 
             // Store in windows map
             let window_id = ns_window as u64;
-            let tracked: Arc<dyn CallbackWindow> = Arc::clone(&window) as _;
+            let tracked: Arc<dyn HostWindow> = Arc::clone(&window) as _;
             let _prev = windows_map.lock().insert(window_id, tracked);
 
             // The rectangle the window returns to is what it has now, placed
@@ -701,11 +708,6 @@ impl MacOSWindow {
         control: std::sync::Weak<crate::owner::apple::macos::LoopControl>,
     ) {
         let _ = self.loop_control.set(control);
-    }
-
-    /// Return this window's callback slots.
-    pub fn callbacks(&self) -> &Arc<WindowCallbacks> {
-        &self.callbacks
     }
 }
 
@@ -996,7 +998,11 @@ impl MacOSWindow {
 /// as long as the nested loop runs.
 const MAX_DEFER_HOPS: u8 = 4;
 
-impl crate::host_window::CoreHostWindow for MacOSWindow {}
+impl crate::host_window::CoreHostWindow for MacOSWindow {
+    fn window_delivery(&self) -> &WindowDelivery {
+        &self.delivery
+    }
+}
 
 impl crate::host_window::HostWindow for MacOSWindow {
     /// The window's NSAccessibility bridge — the capability the composition
@@ -1022,12 +1028,6 @@ impl crate::host_window::HostWindow for MacOSWindow {
             .text
             .window_text_input()
             .and_then(crate::text::WindowTextInput::store_host)
-    }
-}
-
-impl CallbackWindow for MacOSWindow {
-    fn callbacks(&self) -> &WindowCallbacks {
-        &self.callbacks
     }
 }
 
@@ -1080,6 +1080,7 @@ impl host::Window<MacOSLoop> for MacOSWindow {
         owner: &MacOSLoop,
         windows: &Arc<MacOSWindows>,
         mut options: WindowOptions,
+        handler: Rc<dyn WindowHandler>,
     ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
         owner
             .affinity
@@ -1093,6 +1094,7 @@ impl host::Window<MacOSLoop> for MacOSWindow {
         measure_placement_globally(owner.displays.as_ref(), &mut options);
         let window = MacOSWindow::new(
             options,
+            handler,
             Arc::clone(&owner.windows),
             windows,
             owner.view_hooks,
@@ -1104,12 +1106,6 @@ impl host::Window<MacOSLoop> for MacOSWindow {
         window.install_loop_control(Arc::downgrade(&owner.loop_control));
         window.install_wake_pump(Arc::downgrade(&owner.wake_pump));
         window.bind_displays(Arc::clone(&owner.displays));
-        let callbacks = window.callbacks();
-        callbacks.set_input_capabilities(crate::input::availability::macos());
-        callbacks.set_input_wake(crate::owner::signal::OwnerSignal::callbacks_wake(
-            &owner.loop_control.owner_signal,
-            callbacks,
-        ));
 
         Ok(window)
     }
@@ -1458,8 +1454,6 @@ impl PlatformWindow for MacOSWindow {
 
     // ==================== Callback Registration ====================
 
-    crate::owner::handlers::impl_window_callback_setters!(callbacks);
-
     fn window_handle(
         &self,
     ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
@@ -1605,7 +1599,7 @@ impl Clone for MacOSWindow {
             view: self.view,
             state: Arc::clone(&self.state),
             windows_map: Arc::clone(&self.windows_map),
-            callbacks: Arc::clone(&self.callbacks),
+            delivery: Arc::clone(&self.delivery),
             closed: Arc::clone(&self.closed),
             loop_control: self.loop_control.clone(),
             config: self.config.clone(),
@@ -1738,7 +1732,7 @@ impl MacOSWindow {
     fn current_state(&self) -> WindowState {
         let published = self.snapshot.state_with(|| self.sample_state());
         if published.changed {
-            self.callbacks.dispatch_state_changed();
+            self.delivery.dispatch_state_changed();
         }
         published.state
     }
@@ -1750,7 +1744,7 @@ impl MacOSWindow {
     }
 
     /// Read the window again for its state publisher, announcing nothing.
-    fn read_state(&self) -> crate::owner::handlers::Publication {
+    fn read_state(&self) -> crate::owner::window_delivery::Publication {
         self.snapshot.invalidate();
         self.snapshot.state_with(|| self.sample_state()).outcome()
     }
@@ -1766,7 +1760,7 @@ impl MacOSWindow {
                 state.occlusion_visible,
             )
         };
-        let hovered = self.callbacks.hovered();
+        let hovered = self.delivery.hovered();
         route_on_owner(self.owner, self.owner_is_main, || {
             // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
             // body runs on the owner thread — inline on the OS main thread for

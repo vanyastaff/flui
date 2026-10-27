@@ -999,7 +999,13 @@ async fn web_window_names_the_display_the_snapshot_describes() {
     let window = {
         let owner = running.owner.borrow();
         let owner = owner.as_ref().expect("owner");
-        match owner.open_window(WindowOptions::default()).expect("window") {
+        match owner
+            .open_window(
+                WindowOptions::default(),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
+            .expect("window")
+        {
             WindowOpen::Ready(window) => window,
             WindowOpen::Pending(_) => panic!("a Web window opens at once"),
         }
@@ -1110,7 +1116,10 @@ async fn web_granting_screen_access_keeps_the_window_display() {
         match owner
             .as_ref()
             .expect("owner")
-            .open_window(WindowOptions::default())
+            .open_window(
+                WindowOptions::default(),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
             .expect("window")
         {
             WindowOpen::Ready(window) => window,
@@ -1260,7 +1269,10 @@ fn open_recorded_window(running: &Running) -> (Arc<dyn HostWindow>, Arc<Mutex<Ve
         match owner
             .as_ref()
             .expect("owner")
-            .open_window(WindowOptions::default())
+            .open_window(
+                WindowOptions::default(),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
             .expect("window")
         {
             WindowOpen::Ready(window) => window,

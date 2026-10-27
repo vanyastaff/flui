@@ -348,7 +348,10 @@ impl CanvasWindow {
         fresh_canvas();
         let platform = WebPlatform::new().expect("a browser platform");
         let window = platform
-            .open_window(WindowOptions::default())
+            .open_window(
+                WindowOptions::default(),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
             .expect("the page's canvas opens");
         let seen = Rc::new(RefCell::new(Vec::new()));
         let answer = Rc::new(Cell::new(DispatchEventResult::resolved(false, true)));
@@ -486,7 +489,10 @@ fn the_browser_leaves_every_touch_on_the_canvas_to_the_application() {
         place();
         let platform = WebPlatform::new().expect("a browser platform");
         let window = platform
-            .open_window(WindowOptions::default())
+            .open_window(
+                WindowOptions::default(),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
             .expect("the page's canvas opens");
         assert_eq!(touch_action(), "none", "the canvas {canvas}");
         window.close_now();
@@ -1149,8 +1155,10 @@ impl HostedCanvas {
         let out = Rc::clone(&slot);
         Box::new(WebPlatform::new().expect("a browser platform"))
             .run(Box::new(move |owner| {
-                let flui_native::WindowOpen::Ready(window) =
-                    owner.open_window(WindowOptions::default())?
+                let flui_native::WindowOpen::Ready(window) = owner.open_window(
+                    WindowOptions::default(),
+                    flui_testing::window_handler::RecordingWindowHandler::new(),
+                )?
                 else {
                     return Err("the web opens its window at once".into());
                 };

@@ -51,14 +51,15 @@ fn desktop(accept: Option<TransferActions>) -> Desktop {
         }))
         .expect("headless owner");
     let owner: flui_native::OwnerPlatform = saved.borrow_mut().take().expect("started owner");
+    let handler = flui_testing::window_handler::RecordingWindowHandler::new();
     let window = owner
-        .open_window(WindowOptions::default())
+        .open_window(WindowOptions::default(), handler.clone())
         .expect("open")
         .try_ready()
         .expect("ready");
     let seen = Rc::new(RefCell::new(Vec::new()));
     let (target, answering) = (Rc::clone(&seen), Arc::clone(&transfer));
-    window.on_input(Box::new(move |input| {
+    handler.react_to_input(move |input| {
         if let PlatformInput::DragDrop(event) = input {
             let hovered = match &event {
                 DragDropEvent::Entered { offer, .. } => Some(offer.id()),
@@ -71,7 +72,7 @@ fn desktop(accept: Option<TransferActions>) -> Desktop {
             target.borrow_mut().push(event);
         }
         DispatchEventResult::default()
-    }));
+    });
     Desktop {
         dnd,
         transfer,

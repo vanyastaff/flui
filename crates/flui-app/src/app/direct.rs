@@ -129,15 +129,17 @@ pub fn run_direct(
         // 1. Open window. `Ready` is guaranteed inside `on_ready`
         // (ADR-0039 §1).
         let options: WindowOptions = (&config).into();
-        let window = match owner_platform_installed(|owner| owner.open_window(options))
-            .and_then(flui_native::WindowOpen::try_ready)
-        {
-            Ok(window) => window,
-            Err(error) => {
-                tracing::error!(%error, "Window creation failed");
-                return Err(anyhow::Error::from(error).context("Failed to create window"));
-            }
-        };
+        let routes = crate::app::runner::window_routes::WindowRoutes::new();
+        let window =
+            match owner_platform_installed(|owner| owner.open_window(options, routes.clone()))
+                .and_then(flui_native::WindowOpen::try_ready)
+            {
+                Ok(window) => window,
+                Err(error) => {
+                    tracing::error!(%error, "Window creation failed");
+                    return Err(anyhow::Error::from(error).context("Failed to create window"));
+                }
+            };
 
         // 2. Create GPU renderer. `Renderer::new` takes ownership of a
         // `WindowTarget` (issue #1043) — `Arc::clone(&window)` gives it its
@@ -176,7 +178,7 @@ pub fn run_direct(
         // 4. Register frame callback
         let renderer_frame = Arc::clone(&renderer);
         let render_fn_frame = Arc::clone(&render_fn);
-        window.on_request_frame(Box::new(move |_| {
+        routes.route_frame_requested(move |_| {
             let mut r = renderer_frame.lock();
             let (w, h) = r.size();
 
@@ -231,23 +233,23 @@ pub fn run_direct(
                     }
                 }
             }
-        }));
+        });
 
         // 5. Follow the window's snapshot: a change of its drawable metrics
-        // resizes the surface. Weak: the subscription lives in the window's
-        // own handler table.
+        // resizes the surface. Weak: the route lives in the window's
+        // own handler.
         let renderer_resize = Arc::clone(&renderer);
         let observed = Arc::downgrade(&window);
-        let mut sized = window.state().metrics;
-        window.on_state_changed(Box::new(move || {
+        let sized = std::cell::Cell::new(window.state().metrics);
+        routes.route_state_changed(move || {
             let Some(window) = observed.upgrade() else {
                 return;
             };
             let metrics = window.state().metrics;
-            if metrics == sized {
+            if metrics == sized.get() {
                 return;
             }
-            sized = metrics;
+            sized.set(metrics);
             let Some(metrics) = metrics else {
                 return;
             };
@@ -263,20 +265,19 @@ pub fn run_direct(
                 h,
                 metrics.scale().get()
             );
-        }));
+        });
 
         // 6. Register input callback. This is a no-op stub: it neither inspects
         // the input nor requests a redraw (`resolved(false, false)`). Direct mode
         // has no widget tree to dispatch input into; a caller who needs input
         // handling drives it from inside `render_fn` via its own state.
-        window.on_input(Box::new(move |_input: PlatformInput| {
-            DispatchEventResult::resolved(false, false)
-        }));
+        routes
+            .route_input(move |_input: PlatformInput| DispatchEventResult::resolved(false, false));
 
         // 7. Lifecycle callbacks
-        window.on_close(Box::new(|| {
+        routes.route_closed(|| {
             tracing::info!("Window closed");
-        }));
+        });
 
         // Deliberately unconditional, unlike `run_desktop`'s and
         // `open_secondary_window`'s windows, which route this through the
@@ -284,13 +285,13 @@ pub fn run_direct(
         // `UiRuntime` at all (see step 6 above and `run_direct`'s own doc), so
         // there is no presentation for a veto to be addressed to and no
         // widget tree that could be holding unsaved work. An embedder that
-        // wants to refuse a close here owns the loop already and registers
-        // its own `on_should_close` on the window it was handed — the
+        // wants to refuse a close here owns the loop already and opens
+        // its window with a handler of its own — the
         // presentation-addressed API would have nothing to key on.
-        window.on_should_close(Box::new(|| {
+        routes.route_close_requested(|| {
             tracing::debug!("Window close requested, allowing (direct mode hosts no ui_runtime)");
-            true
-        }));
+            flui_platform::CloseDecision::Close
+        });
 
         owner_platform_installed(|owner| {
             owner.shared().on_quit(Box::new(|| {

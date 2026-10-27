@@ -97,7 +97,10 @@ fn open(running: &Running) -> Arc<dyn HostWindow> {
     match owner
         .as_ref()
         .expect("owner")
-        .open_window(WindowOptions::default())
+        .open_window(
+            WindowOptions::default(),
+            flui_testing::window_handler::RecordingWindowHandler::new(),
+        )
         .expect("window")
     {
         WindowOpen::Ready(window) => window,

@@ -42,6 +42,7 @@ mod native_text_sizing;
 ))]
 mod placement;
 mod window_install;
+pub(in crate::app) mod window_routes;
 
 mod owner_dispatch;
 // Unconditional, like `device_recovery` above: the backoff's trait and
@@ -339,6 +340,7 @@ where
 mod tests {
 
     use super::host::APP_RUNTIME;
+    use super::window_routes::{OpenRouted as _, OwnerOpenRouted as _};
 
     // `teardown_platform_ui_runtime` is `cfg(all(not(ios), not(wasm32)))` -- neither
     // platform runs the desktop teardown path it exercises.
@@ -397,7 +399,7 @@ mod tests {
 
         let platform = flui_native::headless_platform();
         let window = platform
-            .open_window(flui_platform::WindowOptions::default().with_size(marker_size))
+            .open_routed(flui_platform::WindowOptions::default().with_size(marker_size))
             .expect("headless platform always opens a window");
 
         // `on_request_frame` requires `Send` on the callback; `AppRuntime` is
@@ -413,15 +415,17 @@ mod tests {
         // stack) would deadlock on the slot's own non-reentrant lock.
         let saw_marker_window = Arc::new(AtomicBool::new(false));
         let saw_marker_window_cb = Arc::clone(&saw_marker_window);
-        window.on_request_frame(Box::new(move |_| {
-            let matches_marker = APP_RUNTIME
-                .with(|slot| {
-                    slot.borrow()
-                        .with_redraw_window(|w| w.state().outer.size == marker_size)
-                })
-                .unwrap_or(false);
-            saw_marker_window_cb.store(matches_marker, Ordering::SeqCst);
-        }));
+        crate::app::runner::window_routes::WindowRoutes::of(&*window).route_frame_requested(
+            move |_| {
+                let matches_marker = APP_RUNTIME
+                    .with(|slot| {
+                        slot.borrow()
+                            .with_redraw_window(|w| w.state().outer.size == marker_size)
+                    })
+                    .unwrap_or(false);
+                saw_marker_window_cb.store(matches_marker, Ordering::SeqCst);
+            },
+        );
 
         // Mirrors the FIXED order in `bootstrap_desktop`/`run_android`:
         // store the window BEFORE requesting the initial redraw. `wake_frame`
@@ -512,7 +516,7 @@ mod tests {
             .run(Box::new(|owner| {
                 install_owner_platform(owner).expect("install owner wake transport");
                 let window = with_owner_platform(|owner| {
-                    owner.open_window(flui_platform::WindowOptions::default())
+                    owner.open_routed(flui_platform::WindowOptions::default())
                 })
                 .expect("BUG: install_owner_platform just ran above")
                 .and_then(flui_native::WindowOpen::try_ready)

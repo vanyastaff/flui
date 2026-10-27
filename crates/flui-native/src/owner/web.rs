@@ -37,8 +37,8 @@ use crate::host::{self, Loop as _};
 use crate::owner::call_point::{Field, Once, call, install};
 use crate::{
     error::PlatformError, owner::DirectOwnerHooks, owner::OwnerHooks, owner::OwnerPlatform,
-    owner::handlers::PlatformHandlers, owner::handlers::WindowCallbacks,
-    owner::signal::OwnerSignal, platform::Platform, platform::PlatformExecutor,
+    owner::handlers::PlatformHandlers, owner::signal::OwnerSignal,
+    owner::window_delivery::WindowDelivery, platform::Platform, platform::PlatformExecutor,
     platform::PlatformReadyCallback,
 };
 use flui_platform::data_transfer::DataTransferSource;
@@ -98,7 +98,7 @@ pub(crate) trait HostDrag: DataTransferSource {
     fn register(
         self: Arc<Self>,
         canvas: &web_sys::HtmlCanvasElement,
-        callbacks: &Arc<WindowCallbacks>,
+        delivery: &Arc<WindowDelivery>,
         registration: &mut dyn CanvasRegistration,
     ) -> Result<Box<dyn CanvasDrag>, crate::OpenWindowError>;
 }
@@ -121,7 +121,7 @@ pub(crate) trait HostInput {
     fn register(
         &self,
         canvas: &web_sys::HtmlCanvasElement,
-        callbacks: &Arc<WindowCallbacks>,
+        delivery: &Arc<WindowDelivery>,
         latency: flui_platform::InputLatency,
         registration: &mut dyn CanvasRegistration,
     ) -> Result<Rc<dyn CanvasKeys>, crate::OpenWindowError>;
@@ -387,7 +387,7 @@ pub(crate) struct WebState {
     is_running: bool,
     /// Window callbacks for RAF loop frame dispatch.
     /// Set when `open_window` creates the single browser window.
-    pub(crate) window_callbacks: Option<Arc<WindowCallbacks>>,
+    pub(crate) window_delivery: Option<Arc<WindowDelivery>>,
     owner: Weak<WebLoop>,
 }
 
@@ -413,7 +413,7 @@ impl WebLoop {
             background_executor: Arc::new(WebExecutor::new()),
             clipboard: H::clipboard(),
             is_running: false,
-            window_callbacks: None,
+            window_delivery: None,
             owner: Weak::new(),
         };
         let state = Arc::new(Mutex::new(state));
@@ -428,7 +428,7 @@ impl WebLoop {
                 };
                 let (owner, window) = {
                     let state = state.lock();
-                    (state.owner.upgrade(), state.window_callbacks.clone())
+                    (state.owner.upgrade(), state.window_delivery.clone())
                 };
                 // A wake is how a screen change reaches the page: the window
                 // reads which screen it is on again before the owner's turn, so
@@ -516,9 +516,9 @@ impl WebLoop {
         let window = web_sys::window().expect("no global window");
 
         *g.borrow_mut() = Some(Closure::new(move |timestamp: f64| {
-            let (is_running, callbacks) = {
+            let (is_running, delivery) = {
                 let s = state.lock();
-                (s.is_running, s.window_callbacks.clone())
+                (s.is_running, s.window_delivery.clone())
             };
             if !is_running {
                 return;
@@ -536,7 +536,7 @@ impl WebLoop {
             }
 
             // Dispatch frame request to window callbacks
-            if let Some(ref cbs) = callbacks {
+            if let Some(ref cbs) = delivery {
                 cbs.dispatch_frame(frame_request_for_animation_frame(timestamp));
             }
 

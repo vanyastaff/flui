@@ -107,7 +107,8 @@ use objc2_app_kit::{NSApplication, NSScreen};
 use parking_lot::Mutex;
 
 use crate::host;
-use crate::owner::handlers::CallbackWindow;
+use crate::host_window::HostWindow;
+
 use crate::{
     error::PlatformError,
     executor::BackgroundExecutor,
@@ -132,7 +133,7 @@ use flui_platform::{DisplayId, DisplaySnapshot, PlatformWindow, SystemPreference
 /// window adds itself when it opens and removes itself when it goes; the loop
 /// asks them for frames from the wake pump and closes them when the
 /// application stops.
-pub(crate) type WindowRegistry = Arc<Mutex<HashMap<u64, Arc<dyn CallbackWindow>>>>;
+pub(crate) type WindowRegistry = Arc<Mutex<HashMap<u64, Arc<dyn HostWindow>>>>;
 
 /// A macOS window as the features beside it reach it (ADR-0151 §3): its
 /// content view, whether it has closed, and the owner lane every AppKit
@@ -319,8 +320,7 @@ impl MacOSLoop {
                     // reaches the owner lane, and ADR-0038 §5's
                     // discipline for re-entrant calls applies to a lock
                     // held across one just as it does to the handler lock.
-                    let open: Vec<Arc<dyn CallbackWindow>> =
-                        windows.lock().values().cloned().collect();
+                    let open: Vec<Arc<dyn HostWindow>> = windows.lock().values().cloned().collect();
                     for window in open {
                         // A frame for a window whose surface is already
                         // gone is the renderer's to decline — this only

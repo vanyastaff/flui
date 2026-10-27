@@ -117,11 +117,11 @@ pub(crate) struct Published {
 
 impl Published {
     /// What a state publisher answers for this read.
-    pub(crate) const fn outcome(&self) -> crate::owner::handlers::Publication {
+    pub(crate) const fn outcome(&self) -> crate::owner::window_delivery::Publication {
         if self.changed {
-            crate::owner::handlers::Publication::Changed
+            crate::owner::window_delivery::Publication::Changed
         } else {
-            crate::owner::handlers::Publication::Unchanged
+            crate::owner::window_delivery::Publication::Unchanged
         }
     }
 }

@@ -380,6 +380,7 @@ impl host::Window<WinitLoop> for NoWindows {
         _: &WinitLoop,
         _: &Arc<NoWindows>,
         _: WindowOptions,
+        _: std::rc::Rc<dyn flui_platform::WindowHandler>,
     ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
         Err(Self::refusal())
     }

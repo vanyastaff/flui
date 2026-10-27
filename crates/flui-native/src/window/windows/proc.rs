@@ -54,9 +54,9 @@ use super::mode::NativeMode;
 use super::set::{WindowSet, checked_logical_to_device, restore_rectangle};
 use super::window::WindowsWindow;
 
-use crate::owner::handlers::{Publication, WindowCallbacks};
 use crate::owner::hwnd_affinity::ContextLedger;
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
+use crate::owner::window_delivery::{Publication, WindowDelivery};
 use crate::owner::windows::HostDisplays;
 use crate::owner::windows::control::OwnerPreferences;
 use crate::owner::windows::modal_loop::MODAL_DEADLINE_TIMER;
@@ -127,7 +127,7 @@ pub(crate) struct WindowContext {
     /// Per-window callbacks for event delivery, shared with the features the
     /// class's hooks announced the window to and released by `WM_DESTROY` on
     /// the owner thread.
-    pub callbacks: Arc<WindowCallbacks>,
+    pub delivery: Arc<WindowDelivery>,
     /// The hooks of the window's class, which the window tells of its steps.
     pub(crate) hooks: WindowHooks,
     /// The system preferences: the window's gesture geometry is measured with
@@ -245,11 +245,11 @@ impl WindowContext {
     /// event clock's reading otherwise.
     pub(crate) fn request_frame(&self) {
         match compositor_refresh() {
-            Some(timing) => self.callbacks.dispatch_frame(crate::frame_request_timed(
+            Some(timing) => self.delivery.dispatch_frame(crate::frame_request_timed(
                 timing.since_refresh,
                 Some(timing.until_refresh),
             )),
-            None => self.callbacks.dispatch_request_frame(),
+            None => self.delivery.dispatch_request_frame(),
         }
     }
 
@@ -266,7 +266,7 @@ impl WindowContext {
     /// publish the snapshot, whose metrics read the client area.
     pub(crate) fn report_resize(&self, device: Size<i32>) {
         self.last_resize.set(Some((device, self.scale.scale())));
-        self.callbacks.publish_state();
+        self.delivery.publish_state();
     }
 
     /// Complete cache updates before callback-capable native/user code.
@@ -293,7 +293,7 @@ impl WindowContext {
             .state_with(|| sample_state(hwnd, &record, self.tracking(hwnd)));
         // `on_state_changed` when the revision grew.
         if published.changed {
-            self.callbacks.dispatch_state_changed();
+            self.delivery.dispatch_state_changed();
         }
         published.state
     }
@@ -323,7 +323,7 @@ impl WindowContext {
             occluded: self.visibility.occluded(),
             appearance: self.appearance.get(),
             active: self.active.get(),
-            hovered: self.callbacks.hovered(),
+            hovered: self.delivery.hovered(),
         }
     }
 
@@ -684,7 +684,7 @@ impl WindowProc {
                     if let Some(ctx) = ctx {
                         // Ask per-window callback if close should proceed; a
                         // `false` vetoes the close.
-                        if ctx.callbacks.dispatch_should_close()
+                        if ctx.delivery.dispatch_should_close()
                             && let Err(error) = DestroyWindow(hwnd)
                         {
                             tracing::warn!(?hwnd, ?error, "DestroyWindow failed on WM_CLOSE");
@@ -713,7 +713,7 @@ impl WindowProc {
                         window_destroyed(&hooks, WindowRef::new(hwnd, ctx.identity));
 
                         // Fire per-window on_close callback (FnOnce)
-                        ctx.callbacks.dispatch_close();
+                        ctx.delivery.dispatch_close();
 
                         // Release every remaining registered callback now,
                         // while the HWND is still valid (Win32 only frees it
@@ -738,7 +738,7 @@ impl WindowProc {
                         // so the trace is ordered after the release however
                         // the close arrived.
                         let window_id = ctx.window_id.0;
-                        ctx.callbacks.clear_then(move || {
+                        ctx.delivery.clear_then(move || {
                             tracing::debug!(
                                 target: "flui.platform",
                                 event = "native_window_destroyed",
@@ -1898,7 +1898,7 @@ impl WindowContext {
         // A cloak or a lock hides a shown window in its snapshot too: read it
         // again and publish it, which says nothing when nothing changed.
         self.snapshot.invalidate();
-        self.callbacks.publish_state();
+        self.delivery.publish_state();
     }
 }
 
@@ -2178,7 +2178,7 @@ impl WindowContext {
     /// minimized mode in its snapshot, whatever the first show asked for (a
     /// launcher can choose the first show state).
     pub(crate) fn settle_shown(&self) {
-        self.callbacks.publish_state();
+        self.delivery.publish_state();
     }
 
     /// Note that the app asked for the window to be shown, so a restore that

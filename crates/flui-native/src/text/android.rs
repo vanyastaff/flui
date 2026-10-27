@@ -545,7 +545,7 @@ mod input {
                     // answers as it answers a keyboard's.
                     let (key, shift) = editor_action_key(action);
                     for key_input in editor_action_keys(key, shift, uptime_ms) {
-                        window.callbacks().dispatch_input(key_input);
+                        window.delivery().dispatch_input(key_input);
                     }
                 }),
             }

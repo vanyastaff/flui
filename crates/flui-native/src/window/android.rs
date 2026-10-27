@@ -30,12 +30,12 @@ use crate::owner::android::java_view::{ActivityDragSource, JavaView};
 use crate::owner::android::{
     ActivityFlags, ActivityPreferences, ActivityRef, ActivityWindow, ActivityWindowId, AndroidLoop,
 };
-use crate::owner::handlers::CallbackWindow;
+
 use crate::text::WindowTextInput;
 use crate::{
     input::availability::AndroidInputApis,
     owner::OpenWindowError,
-    owner::handlers::WindowCallbacks,
+    owner::window_delivery::WindowDelivery,
     version::gate::android::AndroidApi,
     version::gate::android::DragSource,
     version::gate::android::GestureExclusion,
@@ -58,7 +58,7 @@ pub struct AndroidWindow {
     /// The window's identity, by which features keep what they hold of it.
     id: ActivityWindowId,
     app: AndroidApp,
-    callbacks: Arc<WindowCallbacks>,
+    delivery: Arc<WindowDelivery>,
     redraw_requested: Arc<AtomicBool>,
     activity: Arc<ActivityFlags>,
     owner: std::thread::ThreadId,
@@ -110,6 +110,7 @@ impl AndroidWindow {
         displays: Arc<dyn crate::owner::android::HostDisplays>,
         preferences: Arc<dyn ActivityPreferences>,
         drag_source: Arc<dyn ActivityDragSource>,
+        handler: Rc<dyn flui_platform::WindowHandler>,
     ) -> Self {
         let ActivityRef {
             id,
@@ -119,13 +120,10 @@ impl AndroidWindow {
             owner,
             signal: owner_signal,
         } = window.clone();
-        let callbacks = Arc::new(WindowCallbacks::new());
-        callbacks.set_input_capabilities(input_capabilities(api, java_view.is_ready()));
-        if let Some(signal) = owner_signal.upgrade() {
-            callbacks.set_input_wake(crate::owner::signal::OwnerSignal::callbacks_wake(
-                &signal, &callbacks,
-            ));
-        }
+        let delivery = Arc::new(WindowDelivery::new(
+            handler,
+            input_capabilities(api, java_view.is_ready()),
+        ));
         let appearance = night_mode(&app, preferences.as_ref());
         let snapshot = Arc::new(WindowStateCell::new(sample_state(
             &app,
@@ -143,7 +141,7 @@ impl AndroidWindow {
             facets: positions.for_window(window),
             appearance: Arc::new(Mutex::new(appearance)),
             app,
-            callbacks,
+            delivery,
             redraw_requested: Arc::new(AtomicBool::new(true)),
             activity,
             owner,
@@ -159,12 +157,6 @@ impl AndroidWindow {
             snapshot,
             api,
         }
-    }
-
-    /// Access the callback storage (used by `AndroidLoop` to dispatch
-    /// events)
-    pub fn callbacks(&self) -> &WindowCallbacks {
-        &self.callbacks
     }
 
     /// The native window's size in device pixels; zero while there is none.
@@ -247,7 +239,7 @@ impl AndroidWindow {
     fn current_state(&self) -> WindowState {
         let published = self.snapshot.state_with(|| self.sample());
         if published.changed {
-            self.callbacks.dispatch_state_changed();
+            self.delivery.dispatch_state_changed();
         }
         published.state
     }
@@ -261,22 +253,16 @@ impl AndroidWindow {
             &Kept {
                 appearance: *self.appearance.lock(),
                 safe_area: self.safe_area.lock().accepted,
-                hovered: self.callbacks.hovered(),
+                hovered: self.delivery.hovered(),
             },
         )
     }
 
     /// Read the activity surface again for its state publisher, announcing
     /// nothing.
-    fn read_state(&self) -> crate::owner::handlers::Publication {
+    fn read_state(&self) -> crate::owner::window_delivery::Publication {
         self.snapshot.invalidate();
         self.snapshot.state_with(|| self.sample()).outcome()
-    }
-}
-
-impl CallbackWindow for AndroidWindow {
-    fn callbacks(&self) -> &WindowCallbacks {
-        &self.callbacks
     }
 }
 
@@ -297,7 +283,7 @@ impl ActivityWindow for AndroidWindow {
 
     /// The view's installation finished: what the window can do now.
     fn refresh_capabilities(&self) {
-        self.callbacks
+        self.delivery
             .set_input_capabilities(input_capabilities(self.api, self.java_view.is_ready()));
     }
 
@@ -497,7 +483,11 @@ fn take_deliverable_redraw_request(redraw_requested: &AtomicBool, execution_runn
     execution_running && redraw_requested.swap(false, Ordering::SeqCst)
 }
 
-impl crate::host_window::CoreHostWindow for AndroidWindow {}
+impl crate::host_window::CoreHostWindow for AndroidWindow {
+    fn window_delivery(&self) -> &WindowDelivery {
+        &self.delivery
+    }
+}
 
 impl crate::host_window::HostWindow for AndroidWindow {
     fn accessibility(&self) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {
@@ -548,6 +538,7 @@ impl host::Window<AndroidLoop> for AndroidWindow {
         owner: &AndroidLoop,
         positions: &Arc<WindowPositions<ActivityRef>>,
         options: WindowOptions,
+        handler: Rc<dyn flui_platform::WindowHandler>,
     ) -> Result<Arc<dyn crate::host_window::HostWindow>, OpenWindowError> {
         if options.input_latency == flui_platform::InputLatency::Low {
             // NativeActivity takes touch from the native input queue, which
@@ -579,9 +570,10 @@ impl host::Window<AndroidLoop> for AndroidWindow {
             Arc::clone(&owner.displays),
             Arc::clone(&owner.preferences),
             drag_source,
+            handler,
         ));
         window
-            .callbacks
+            .delivery
             .publish_through(Arc::downgrade(&window), AndroidWindow::read_state);
         let previous = owner
             .window
@@ -591,7 +583,7 @@ impl host::Window<AndroidLoop> for AndroidWindow {
             previous.retire_java_view();
             previous.revoke_geometry();
             for event in cancelled {
-                previous.callbacks().dispatch_input(event);
+                previous.delivery().dispatch_input(event);
             }
         }
         tracing::info!("Android window created (wrapping ANativeWindow)");
@@ -757,8 +749,6 @@ impl PlatformWindow for AndroidWindow {
     }
 
     // ==================== Callback Registration ====================
-
-    crate::owner::handlers::impl_window_callback_setters!(callbacks);
 
     // ==================== Window Handles (GPU integration) ====================
 
