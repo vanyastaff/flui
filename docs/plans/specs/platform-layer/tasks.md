@@ -2963,6 +2963,11 @@ graph LR
   clippy Android `-p flui-native -p flui-app --all-targets`, wasm32 lib, iOS lib (`DOCS_RS=1`),
   macOS `--all-targets` (`flui-native`, `flui-app`, `flui-platform`, `flui-testing`; clang и
   llvm-ar LLVM) обычный и с `winit-backend`; `checks`, `doc-strict`, `wasm-test` — 51.
+  WSL Ubuntu 24.04 (`WAYLAND_DISPLAY` и `XDG_SESSION_TYPE` сняты): clippy четырёх крейтов
+  `--all-targets`, с `winit-backend` и `flui-native --all-features`; nextest `FLUI_HEADLESS=1` — 450
+  из 451 (прежний `x11_window_takes_commands_and_publishes_what_the_server_holds` против X-сервера
+  WSLg), под xvfb `--all-features` — 303 из 303; rustdoc `-D warnings --document-private-items`
+  без признаков и с `winit-backend`.
   Не запускалось: Mac и iPhone (vanyastaff/flui#1840), `cross-typecheck` (нет `zig`),
   Android-устройство (частота кадров меняет только форму ответа), браузер.
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
