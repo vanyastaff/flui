@@ -374,7 +374,7 @@ impl WindowPlacement {
             (outer.width - frame.width).max(1.0),
             (outer.height - frame.height).max(1.0),
         );
-        let offset_in_display = if capabilities.places_at_open {
+        let offset_in_display = if capabilities.places_at_open.is_available() {
             self.offset.map(|at| {
                 Point::new(
                     at.x.min(area.size.width - outer.width).max(0.0),

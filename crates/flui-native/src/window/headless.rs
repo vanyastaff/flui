@@ -30,14 +30,14 @@ use crate::host::{self, Host, WindowFacets, WindowPositions};
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
 use crate::owner::call_point::{Field, install};
-use crate::owner::handlers::{OpenWindows, WindowCallbacks};
+use crate::owner::handlers::{OpenWindows, Publication, WindowCallbacks};
 use crate::owner::headless::TextStoreHostFactory;
 use crate::owner::headless::{
     HeadlessLoop, HeadlessState, TrackedWindows, consult_exit_policy, emit_window_event,
 };
 use crate::platform::HostPlatform;
 use crate::text::WindowTextInput;
-use crate::window::state::WindowStateCell;
+use crate::window::state::{ReportedFacts, WindowStateCell};
 
 /// What the headless host imposes on its windows.
 ///
@@ -365,6 +365,8 @@ pub struct MockWindow {
     state: Arc<Mutex<MockWindowState>>,
     /// The published snapshot, shared by every clone of this window.
     window_state: Arc<WindowStateCell>,
+    /// What the window's state publisher reads; the callbacks hold it weakly.
+    source: Arc<SnapshotSource>,
     capabilities: WindowCapabilities,
     limits: HeadlessWindowPolicy,
     callbacks: Arc<WindowCallbacks>,
@@ -545,19 +547,34 @@ impl MockWindowState {
 
 /// The snapshot the model describes, as this window's capabilities let the
 /// host observe it: no position without `observes_position`, no minimized
-/// mode without `observes_minimized`, and no frame while fullscreen.
-fn sample_window_state(model: &MockWindowState, capabilities: &WindowCapabilities) -> WindowState {
+/// mode without `observes_minimized`, and no frame while fullscreen. A
+/// closed window is detached; a size or scale that is not a drawable area
+/// reports no metrics. The hover is what the last hover report said.
+fn sample_window_state(
+    model: &MockWindowState,
+    capabilities: &WindowCapabilities,
+    hovered: bool,
+) -> WindowState {
     let observed = |geometry: WindowGeometry| {
         WindowGeometry::new(
-            geometry.position.filter(|_| capabilities.observes_position),
+            geometry
+                .position
+                .filter(|_| capabilities.observes_position.is_available()),
             geometry.size,
         )
     };
     let mode = match model.mode {
-        WindowMode::Minimized if !capabilities.observes_minimized => WindowMode::Normal,
+        WindowMode::Minimized if !capabilities.observes_minimized.is_available() => {
+            WindowMode::Normal
+        }
         mode => mode,
     };
-    WindowState::new(observed(model.geometry()), model.size)
+    let execution = if model.closed {
+        flui_platform::WindowExecutionState::Detached
+    } else {
+        model.execution
+    };
+    let state = WindowState::new(observed(model.geometry()), model.size)
         .with_mode(mode)
         .with_normal_geometry(model.normal_geometry.map(observed))
         .with_visible(model.visible && !model.closed)
@@ -566,7 +583,52 @@ fn sample_window_state(model: &MockWindowState, capabilities: &WindowCapabilitie
         .with_constraints(model.constraints)
         .with_resizable(model.resizable)
         .with_decorated(model.decorated && model.mode != WindowMode::Fullscreen)
-        .with_display(model.display)
+        .with_display(model.display);
+    // This host has no activation apart from focus.
+    ReportedFacts {
+        metrics: flui_foundation::geometry::WindowMetrics::from_logical(
+            model.size,
+            model.scale_factor,
+        )
+        .ok(),
+        appearance: model.appearance,
+        safe_area: model.safe_area,
+        execution,
+        hovered,
+        active: model.focused,
+        capabilities: *capabilities,
+    }
+    .onto(state)
+}
+
+/// Read what `model` says now into the snapshot, announcing nothing.
+fn read_window_state(
+    cell: &WindowStateCell,
+    model: &Mutex<MockWindowState>,
+    capabilities: &WindowCapabilities,
+    callbacks: &WindowCallbacks,
+) -> crate::window::state::Published {
+    cell.invalidate();
+    cell.state_with(|| sample_window_state(&model.lock(), capabilities, callbacks.hovered()))
+}
+
+/// What a window's state publisher reads: the model standing in for the OS,
+/// held by every clone of the window.
+struct SnapshotSource {
+    cell: Arc<WindowStateCell>,
+    model: Arc<Mutex<MockWindowState>>,
+    capabilities: WindowCapabilities,
+    callbacks: Weak<WindowCallbacks>,
+}
+
+impl SnapshotSource {
+    fn read(&self) -> Publication {
+        self.callbacks
+            .upgrade()
+            .map_or(Publication::Unchanged, |callbacks| {
+                read_window_state(&self.cell, &self.model, &self.capabilities, &callbacks).outcome()
+            })
+    }
 }
 
 impl MockWindow {
@@ -591,7 +653,7 @@ impl MockWindow {
             title: options.title.clone(),
             position: options
                 .position
-                .filter(|_| capabilities.places_at_open)
+                .filter(|_| capabilities.places_at_open.is_available())
                 .unwrap_or_default(),
             size: options.size,
             mode: WindowMode::Normal,
@@ -620,14 +682,25 @@ impl MockWindow {
         if model.mode != WindowMode::Normal && options.normal_geometry.is_some() {
             model.normal_geometry = options.normal_geometry;
         }
-        let initial = sample_window_state(&model, &capabilities);
+        let initial = sample_window_state(&model, &capabilities, false);
+        let state = Arc::new(Mutex::new(model));
+        let window_state = Arc::new(WindowStateCell::new(initial));
+        let callbacks = Arc::new(WindowCallbacks::new());
+        let source = Arc::new(SnapshotSource {
+            cell: Arc::clone(&window_state),
+            model: Arc::clone(&state),
+            capabilities,
+            callbacks: Arc::downgrade(&callbacks),
+        });
+        callbacks.publish_through(Arc::downgrade(&source), SnapshotSource::read);
         Self {
             id,
-            state: Arc::new(Mutex::new(model)),
-            window_state: Arc::new(WindowStateCell::new(initial)),
+            state,
+            window_state,
+            source,
             capabilities,
             limits,
-            callbacks: Arc::new(WindowCallbacks::new()),
+            callbacks,
             facets: positions.for_window(&()),
             text_store_host,
             input_regions: Arc::default(),
@@ -652,14 +725,13 @@ impl MockWindow {
     /// `on_state_changed` after the cell's lock is released when the revision
     /// grew.
     fn publish_state(&self) -> WindowState {
-        self.window_state.invalidate();
-        let published = self.window_state.state_with(|| {
-            let model = self.state.lock();
-            sample_window_state(&model, &self.capabilities)
-        });
-        if published.changed {
-            self.callbacks.dispatch_state_changed();
-        }
+        let published = read_window_state(
+            &self.source.cell,
+            &self.source.model,
+            &self.capabilities,
+            &self.callbacks,
+        );
+        self.callbacks.announce(published.changed);
         published.state
     }
 
@@ -682,6 +754,8 @@ impl MockWindow {
             state.visible = false;
             state.closed = true;
         }
+        // Hidden and detached, in one revision, before the window is gone.
+        self.publish_state();
         self.callbacks.dispatch_close();
         // What the window-level positions put on the window goes with it.
         self.facets.text.detach();
@@ -764,8 +838,13 @@ impl MockWindow {
             state.size = size;
             state.scale_factor
         };
-        self.publish_state();
-        self.callbacks.dispatch_logical_resize(size, scale);
+        // A drawable size is published with its resize, in one event; one that
+        // is not reaches only the snapshot.
+        if flui_foundation::geometry::WindowMetrics::from_logical(size, scale).is_ok() {
+            self.callbacks.dispatch_logical_resize(size, scale);
+        } else {
+            self.publish_state();
+        }
     }
 
     /// Simulate the user (or the OS) moving the window to `position`, outer
@@ -795,8 +874,22 @@ impl MockWindow {
     /// Fires the registered `on_active_status_change` callback.
     pub fn simulate_focus(&self, focused: bool) {
         self.state.lock().focused = focused;
-        self.publish_state();
         self.callbacks.dispatch_active_status_change(focused);
+    }
+
+    /// Simulate the pointer entering (`true`) or leaving the window's content.
+    /// Fires `on_state_changed` when the snapshot differs, then the registered
+    /// `on_hover_status_change` callback when the hover changed; a closed
+    /// window ignores the report.
+    pub fn simulate_hover(&self, hovered: bool) {
+        {
+            let mut state = self.state.lock();
+            if state.closed || state.hovered == hovered {
+                return;
+            }
+            state.hovered = hovered;
+        }
+        self.callbacks.dispatch_hover_status_change(hovered);
     }
 
     /// Simulate an owner-thread safe-area report; the callback fires without
@@ -831,7 +924,6 @@ impl MockWindow {
     /// Fires the registered `on_visibility_status_change` callback.
     pub fn simulate_visibility(&self, visible: bool) {
         self.state.lock().visible = visible;
-        self.publish_state();
         self.callbacks.dispatch_visibility_status_change(visible);
     }
 

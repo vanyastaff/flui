@@ -782,10 +782,44 @@ trait depends on `flui-platform` instead.
 - **A window publishes a state snapshot and takes commands (ADR-0237).** There
   is one window trait. `PlatformWindow::state` returns an immutable
   `WindowState` with a revision, `apply` takes a `WindowCommand`, and
-  `capabilities` says which commands the window honours: `apply` answers
-  `Unsupported` exactly when the matching capability is `false`, and the
-  capabilities of each backend are what its `apply` carries out today. The
-  snapshot describes what the OS reported, not what a command asked for.
+  `capabilities` says which commands the window honours, each as an
+  `Availability`: `apply` answers `Unsupported` exactly when the matching
+  capability is `Unavailable`, `Emulated` marks what the host builds itself
+  (the Win32 borderless fullscreen), and the capabilities of each backend are
+  what its `apply` carries out today. The snapshot describes what the OS
+  reported, not what a command asked for, and holds every fact of the window
+  (ADR-0254 §1): the drawable `WindowMetrics` (a report that is not a drawable
+  area keeps the last), appearance, display, safe area, execution state,
+  focus, visibility, hover and the capabilities.
+- **Every fact callback is preceded by the snapshot that holds the fact.**
+  Each host sets a `StatePublisher` on the window's `WindowCallbacks` when the
+  window opens (`publish_through`, over a weak reference to the window); every
+  fact dispatch (resize and scale, focus, visibility, hover, appearance,
+  display, safe area, execution state) runs it first. The publisher reads the
+  window again and answers `Publication` (changed, unchanged, held) without
+  announcing anything; `on_state_changed` and the fact's own callback then go
+  as one `Published` event, each contained, so a panic in either loses
+  neither and the first failure resurfaces after both ran. This happens in the
+  OS callback that reported the fact (each `WM_SIZE` of a Win32 live resize
+  inside its modal loop). While a window holds its publishing back (Win32
+  through a DPI change or a fullscreen switch), the facts wait in
+  `WindowCallbacks` and follow the publication that ends the hold
+  (`announce`). The Win32 publisher reads only a context whose
+  `WindowIdentity` is its window's, so a recycled handle publishes nothing of
+  another window; every fact comes from the window procedure on the owner
+  thread, and a read the context refuses leaves the snapshot stale for the
+  owner's next read. A fact another feature reports reaches the snapshot the
+  same way: the hover is what the last `dispatch_hover_status_change` said
+  (`WindowCallbacks::hovered`), whether Win32 or web input, AppKit's tracking
+  area or winit's cursor events reported it. An observation committed at its
+  delivery point (the Web's focus and visibility) is published right after
+  its commit. The facts beyond geometry (metrics, appearance, safe area,
+  execution, hover, activation, capabilities) are one value,
+  `window::state::ReportedFacts`, that every host builds. Activation is
+  Win32's `WM_ACTIVATE` (a window whose owned popup has the keyboard is active
+  and not focused); the other hosts have no notion apart from focus (AppKit's
+  key window, winit's `Focused`, the canvas focus, the scene and the
+  Activity), so their activation is their focus.
   Every backend keeps its last snapshot in a `window::state::WindowStateCell`
   (built like `DisplaySource`): an OS event marks the cell stale, the next read
   samples the OS with no lock held, and a sample equal to the published one
@@ -795,8 +829,8 @@ trait depends on `flui-platform` instead.
   Web from the layout, focus and visibility observers; the headless window
   keeps a model that stands in for the OS (`HeadlessWindowPolicy` makes it clamp a size
   or decline a maximize) and publishes after each command or `simulate_*`
-  call. The iOS window rereads its metrics on each `state` call and does not
-  yet raise `on_state_changed` from its view's metric updates.
+  call. The iOS window rereads its metrics and lifecycle on each `state` call
+  and publishes from its view's metric updates and each lifecycle step.
 - **The macOS backend enforces the window thread-affinity default
   mechanically.** `PlatformWindow`'s rule is that a method driving a window runs
   on the thread that owns the platform event loop. Every window-driving

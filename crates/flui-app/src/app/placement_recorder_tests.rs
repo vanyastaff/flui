@@ -168,7 +168,7 @@ fn restore_asks_the_platform_for_what_it_can_place() {
         1.0,
     );
     let mut capabilities = WindowCapabilities::ALL;
-    capabilities.places_at_open = false;
+    capabilities.places_at_open = flui_platform::Availability::Unavailable;
     restore_into(&mut options, &placement, &displays(), &capabilities, |_| {
         NO_FRAME
     });

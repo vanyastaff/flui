@@ -17,7 +17,7 @@ use std::{
 
 use cursor_icon::CursorIcon;
 use flui_foundation::ClaimOutcome;
-use flui_foundation::geometry::{Point, Size};
+use flui_foundation::geometry::{Point, Size, WindowMetrics};
 use parking_lot::Mutex;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::{
@@ -31,6 +31,7 @@ use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
 use crate::owner::call_point::install;
 use crate::owner::handlers::CallbackWindow;
+use crate::owner::handlers::Publication;
 use crate::owner::winit::HostDisplays;
 use crate::owner::winit::control::{ControlSendError, ControlSender};
 use crate::owner::winit::{
@@ -39,7 +40,7 @@ use crate::owner::winit::{
 use crate::text::WindowTextInput;
 #[cfg(target_os = "linux")]
 use crate::window::WindowManagerView;
-use crate::window::state::{ModeFlags, WindowStateCell, mode_of};
+use crate::window::state::{ModeFlags, ReportedFacts, WindowStateCell, mode_of};
 use crate::window::visibility::ReportedVisibility;
 use flui_platform::{
     CursorError, DisplayId, PlatformTextInput, PlatformWindow, SizeConstraints, WindowAppearance,
@@ -93,8 +94,6 @@ pub struct WinitWindow {
     /// The snapshot last published (ADR-0237). Shared with the platform so a
     /// wake from sleep marks it stale.
     window_state: Arc<WindowStateCell>,
-    /// What the window system lets a program do to this window.
-    shell: WindowShell,
     /// What `apply` honours on this window.
     capabilities: WindowCapabilities,
     /// The title last set. winit cannot read one back on X11 or Wayland.
@@ -194,7 +193,6 @@ impl WinitWindow {
         let display = displays.id_of_window(&window);
         let initial = sample_state(
             &window,
-            shell,
             &RecordedState {
                 title: &title,
                 constraints,
@@ -202,13 +200,19 @@ impl WinitWindow {
                 visible: options.visible,
                 display,
                 probed_mode: None,
+                reported: reported_facts(
+                    &window,
+                    appearance_of(&window, false),
+                    true,
+                    false,
+                    capabilities,
+                ),
             },
         );
         Self {
             id,
             closed: AtomicBool::new(false),
             window_state: Arc::new(WindowStateCell::new(initial)),
-            shell,
             capabilities,
             title: Mutex::new(title),
             constraints: Mutex::new(constraints),
@@ -332,18 +336,39 @@ impl WinitWindow {
     /// Reads winit with no lock of the snapshot held, and keeps the rectangle
     /// a maximized or fullscreen window returns to: the outer geometry the
     /// window had the last time it was in normal mode.
+    /// Read the window again for its state publisher, announcing nothing: the
+    /// fact that asked is delivered behind the announcement.
+    fn read_state(&self) -> Publication {
+        self.window_state.invalidate();
+        let published = self.window_state.state_with(|| self.sample());
+        #[cfg(target_os = "linux")]
+        if published.changed {
+            self.follow_wm_minimized(&published.state);
+        }
+        published.outcome()
+    }
+
     fn sample(&self) -> WindowState {
         let title = self.title.lock().clone();
+        // Read once: a second lock of the flag inside the literal below would
+        // wait on the first one's guard, alive until the statement ends.
+        let focused = *self.is_focused.lock();
         let mut state = sample_state(
             &self.window,
-            self.shell,
             &RecordedState {
                 title: &title,
                 constraints: *self.constraints.lock(),
-                focused: *self.is_focused.lock(),
+                focused,
                 visible: *self.is_visible.lock() && !self.occluded.load(Ordering::Acquire),
                 display: PlatformWindow::display_id(self),
                 probed_mode: self.probed_mode(),
+                reported: reported_facts(
+                    &self.window,
+                    PlatformWindow::appearance(self),
+                    focused,
+                    self.callbacks.hovered(),
+                    PlatformWindow::capabilities(self),
+                ),
             },
         );
         let mut remembered = self.normal_geometry.lock();
@@ -521,6 +546,45 @@ struct RecordedState<'a> {
     /// The mode the window system reports directly, where winit's flags fall
     /// short of it (X11 minimization).
     probed_mode: Option<WindowMode>,
+    /// The facts beyond geometry; their capabilities are what the window
+    /// honours now (an X11 window whose minimization goes unseen says so).
+    reported: ReportedFacts,
+}
+
+/// What a winit window reports beyond its geometry. winit has no safe area
+/// and never suspends a desktop window, and its focus is the activation (it
+/// reports no other).
+fn reported_facts(
+    window: &Window,
+    appearance: WindowAppearance,
+    focused: bool,
+    hovered: bool,
+    capabilities: WindowCapabilities,
+) -> ReportedFacts {
+    ReportedFacts {
+        metrics: WindowMetrics::new(device_size(window.inner_size()), window.scale_factor()).ok(),
+        appearance,
+        safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
+        execution: flui_platform::WindowExecutionState::Running,
+        hovered,
+        active: focused,
+        capabilities,
+    }
+}
+
+/// The user's theme as applied to `window`: winit's live theme where it has
+/// one (Windows, macOS, a Wayland override), on Linux otherwise the Settings
+/// portal's color-scheme (`portal_dark`).
+fn appearance_of(window: &Window, portal_dark: bool) -> WindowAppearance {
+    let dark = match window.theme() {
+        Some(theme) => theme == winit::window::Theme::Dark,
+        None => portal_dark,
+    };
+    if dark {
+        WindowAppearance::Dark
+    } else {
+        WindowAppearance::Light
+    }
 }
 
 /// A device-pixel extent as the signed one the frame measurement takes.
@@ -530,8 +594,8 @@ fn device_size(size: winit::dpi::PhysicalSize<u32>) -> Size<i32> {
 }
 
 /// The window as winit and `facts` describe it.
-fn sample_state(window: &Window, shell: WindowShell, facts: &RecordedState<'_>) -> WindowState {
-    let capabilities = shell.capabilities();
+fn sample_state(window: &Window, facts: &RecordedState<'_>) -> WindowState {
+    let capabilities = facts.reported.capabilities;
     let scale = window.scale_factor();
     let logical = |size: winit::dpi::PhysicalSize<u32>| {
         Size::new(
@@ -541,11 +605,13 @@ fn sample_state(window: &Window, shell: WindowShell, facts: &RecordedState<'_>) 
     };
     let position = capabilities
         .observes_position
+        .is_available()
         .then(|| window.outer_position().ok())
         .flatten()
         .map(|at| Point::new(f64::from(at.x) / scale, f64::from(at.y) / scale));
-    let minimized = capabilities.observes_minimized && window.is_minimized() == Some(true);
-    WindowState::new(
+    let minimized =
+        capabilities.observes_minimized.is_available() && window.is_minimized() == Some(true);
+    let state = WindowState::new(
         WindowGeometry::new(position, logical(window.outer_size())),
         logical(window.inner_size()),
     )
@@ -562,7 +628,8 @@ fn sample_state(window: &Window, shell: WindowShell, facts: &RecordedState<'_>) 
     .with_constraints(facts.constraints)
     .with_resizable(window.is_resizable())
     .with_decorated(window.is_decorated())
-    .with_display(facts.display)
+    .with_display(facts.display);
+    facts.reported.onto(state)
 }
 
 impl Drop for WinitWindow {
@@ -601,17 +668,15 @@ impl PlatformWindow for WinitWindow {
     }
 
     fn appearance(&self) -> WindowAppearance {
-        // winit's live theme where it has one (Windows, macOS, a Wayland
-        // override); on Linux otherwise the Settings portal's color-scheme.
-        match self.window.theme() {
-            Some(winit::window::Theme::Dark) => WindowAppearance::Dark,
-            Some(winit::window::Theme::Light) => WindowAppearance::Light,
-            #[cfg(target_os = "linux")]
-            None if self.portal_dark.load(std::sync::atomic::Ordering::Relaxed) => {
-                WindowAppearance::Dark
-            }
-            None => WindowAppearance::Light,
-        }
+        #[cfg(target_os = "linux")]
+        let portal_dark = self.portal_dark.load(std::sync::atomic::Ordering::Relaxed);
+        #[cfg(not(target_os = "linux"))]
+        let portal_dark = false;
+        appearance_of(&self.window, portal_dark)
+    }
+
+    fn is_hovered(&self) -> bool {
+        self.callbacks.hovered()
     }
 
     fn scale_factor(&self) -> f64 {
@@ -647,9 +712,11 @@ impl PlatformWindow for WinitWindow {
     fn state(&self) -> WindowState {
         let published = self.window_state.state_with(|| self.sample());
         if published.changed {
+            // The snapshot is announced before the visibility report it may
+            // bring, as every fact's own callback follows its snapshot.
+            self.callbacks.dispatch_state_changed();
             #[cfg(target_os = "linux")]
             self.follow_wm_minimized(&published.state);
-            self.callbacks.dispatch_state_changed();
         }
         published.state
     }
@@ -658,7 +725,7 @@ impl PlatformWindow for WinitWindow {
         #[cfg(target_os = "linux")]
         if self.minimize_unobserved.load(Ordering::Acquire) {
             let mut capabilities = self.capabilities;
-            capabilities.observes_minimized = false;
+            capabilities.observes_minimized = flui_platform::Availability::Unavailable;
             return capabilities;
         }
         self.capabilities
@@ -736,7 +803,7 @@ impl PlatformWindow for WinitWindow {
             return Err(flui_platform::WindowShowError::Closed);
         }
         // Winit cannot unminimize or focus Wayland windows.
-        if !self.capabilities.shows {
+        if !self.capabilities.shows.is_available() {
             return Err(flui_platform::Unsupported::new(
                 flui_platform::UnsupportedReason::NotOnThisPlatform,
             )
@@ -897,7 +964,6 @@ impl LoopWindow for WinitWindow {
     fn set_occluded(&self, occluded: bool) {
         self.occluded.store(occluded, Ordering::Release);
     }
-
     fn set_visible(&self, visible: bool) {
         WinitWindow::set_visible(self, visible);
     }
@@ -1102,6 +1168,9 @@ impl LoopWindows for WinitWindows {
             self,
         ));
         seed.notices.mark_stale_on_wake(window.state_cell());
+        window
+            .callbacks
+            .publish_through(Arc::downgrade(&window), WinitWindow::read_state);
         // Before the window is mapped: the window manager reads the mode a
         // window opens in from the properties the view writes.
         #[cfg(target_os = "linux")]
@@ -1299,13 +1368,13 @@ pub(crate) mod plan {
                 Self::Desktop => WindowCapabilities::ALL,
                 Self::Wayland => {
                     let mut capabilities = WindowCapabilities::ALL;
-                    capabilities.sets_position = false;
-                    capabilities.hides = false;
-                    capabilities.shows = false;
-                    capabilities.activates = false;
-                    capabilities.observes_position = false;
-                    capabilities.observes_minimized = false;
-                    capabilities.places_at_open = false;
+                    capabilities.sets_position = flui_platform::Availability::Unavailable;
+                    capabilities.hides = flui_platform::Availability::Unavailable;
+                    capabilities.shows = flui_platform::Availability::Unavailable;
+                    capabilities.activates = flui_platform::Availability::Unavailable;
+                    capabilities.observes_position = flui_platform::Availability::Unavailable;
+                    capabilities.observes_minimized = flui_platform::Availability::Unavailable;
+                    capabilities.places_at_open = flui_platform::Availability::Unavailable;
                     capabilities
                 }
             }
@@ -1439,8 +1508,12 @@ pub(crate) mod plan {
         ) -> Self {
             let capabilities = shell.capabilities();
             let mode = match options.mode {
-                WindowMode::Maximized if capabilities.maximizes => WindowMode::Maximized,
-                WindowMode::Fullscreen if capabilities.enters_fullscreen => WindowMode::Fullscreen,
+                WindowMode::Maximized if capabilities.maximizes.is_available() => {
+                    WindowMode::Maximized
+                }
+                WindowMode::Fullscreen if capabilities.enters_fullscreen.is_available() => {
+                    WindowMode::Fullscreen
+                }
                 _ => WindowMode::Normal,
             };
             let returns_to = match mode {
@@ -1467,7 +1540,7 @@ pub(crate) mod plan {
             let hidden_until_first_frame = options.visible
                 && options.reveal == WindowReveal::AfterFirstFrame
                 && shell.defers_reveal();
-            let position = if capabilities.places_at_open {
+            let position = if capabilities.places_at_open.is_available() {
                 at.and_then(|at| device_position(at, display))
             } else {
                 None
@@ -1685,7 +1758,7 @@ pub(crate) mod plan {
                 ("places_at_open", wayland.places_at_open, false),
             ];
             for (field, actual, expected) in table {
-                assert_eq!(actual, expected, "{field}");
+                assert_eq!(actual.is_available(), expected, "{field}");
             }
         }
 

@@ -60,7 +60,7 @@ use crate::owner::signal::OwnerSignal;
 use crate::platform::HostPlatform;
 use crate::text::TextInput;
 use crate::window::installation::{PendingWindowInstallation, WindowInstallation};
-use crate::window::state::WindowStateCell;
+use crate::window::state::{ReportedFacts, WindowStateCell};
 use crate::{BootstrapError, PlatformError, PlatformProxy};
 use flui_foundation::geometry::{EdgeInsets, Size};
 use flui_platform::{
@@ -594,9 +594,10 @@ impl FluiView {
         if previous.size != next.size || previous.scale != next.scale {
             self.callbacks()
                 .dispatch_metrics_resize(next.size, next.scale);
-            // The published state follows the metrics: `state()` reads them
-            // again when the owner asks.
-            self.callbacks().dispatch_state_changed();
+            // The published state follows the metrics; the resize above
+            // published it unless the metrics are not a drawable area, and
+            // the size is part of it either way.
+            self.callbacks().publish_state();
         }
         if self.ivars().sampling.get() != admission {
             // The resize dispatch above retired this view, so this snapshot's
@@ -959,6 +960,39 @@ impl SceneWindow for IOSWindow {
 }
 
 impl IOSWindow {
+    /// The scene's size, visibility, focus, metrics and lifecycle, read again.
+    fn sample_state(&self) -> WindowState {
+        let metrics = *self.metrics.lock();
+        let focused = self.is_focused();
+        let state = WindowState::new(WindowGeometry::new(None, metrics.size), metrics.size)
+            .with_visible(self.is_visible())
+            .with_focused(focused)
+            .with_resizable(false)
+            .with_decorated(false)
+            .with_display(self.screen.lock().id);
+        ReportedFacts {
+            metrics: flui_foundation::geometry::WindowMetrics::from_logical(
+                metrics.size,
+                metrics.scale,
+            )
+            .ok(),
+            appearance: PlatformWindow::appearance(self),
+            safe_area: metrics.safe_area,
+            execution: PlatformWindow::execution_state(self),
+            hovered: self.callbacks.hovered(),
+            // A scene has no activation apart from its focus.
+            active: focused,
+            capabilities: PlatformWindow::capabilities(self),
+        }
+        .onto(state)
+    }
+
+    /// Read the scene again for its state publisher, announcing nothing.
+    fn read_state(&self) -> crate::owner::handlers::Publication {
+        self.snapshot.invalidate();
+        self.snapshot.state_with(|| self.sample_state()).outcome()
+    }
+
     fn detach_native(&self, marker: MainThreadMarker) {
         let native = self.native.get(marker);
         native
@@ -1018,8 +1052,9 @@ impl IOSWindow {
                 }
             }
         }
-        // Visibility and focus are part of the published state.
-        self.callbacks.dispatch_state_changed();
+        // Execution, visibility and focus are published in one revision,
+        // before the callbacks of each.
+        self.callbacks.publish_state();
         let current = || {
             !self.closed.load(Ordering::SeqCst) && self.lifecycle.lock().generation == generation
         };
@@ -1110,14 +1145,18 @@ impl SceneWindows for IOSWindows {
         displays: Arc<dyn HostDisplays>,
         touches: Box<dyn ViewTouches>,
     ) -> Arc<dyn SceneWindow> {
-        Arc::new(IOSWindow::new(
+        let window = Arc::new(IOSWindow::new(
             marker,
             id,
             signal,
             displays,
             touches,
             &self.positions,
-        ))
+        ));
+        window
+            .callbacks
+            .publish_through(Arc::downgrade(&window), IOSWindow::read_state);
+        window
     }
 }
 
@@ -1363,15 +1402,7 @@ impl PlatformWindow for IOSWindow {
     /// each lifecycle step.
     fn state(&self) -> WindowState {
         self.snapshot.invalidate();
-        let published = self.snapshot.state_with(|| {
-            let size = self.metrics.lock().size;
-            WindowState::new(WindowGeometry::new(None, size), size)
-                .with_visible(self.is_visible())
-                .with_focused(self.is_focused())
-                .with_resizable(false)
-                .with_decorated(false)
-                .with_display(self.screen.lock().id)
-        });
+        let published = self.snapshot.state_with(|| self.sample_state());
         if published.changed {
             self.callbacks.dispatch_state_changed();
         }

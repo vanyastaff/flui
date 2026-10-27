@@ -21,21 +21,46 @@
 //!   [`InvalidGeometry`](WindowCommandError::InvalidGeometry).
 //! - **A closed window refuses.** Every command after the window closed is
 //!   [`Closed`](WindowCommandError::Closed).
+//! - **The snapshot agrees with the window system.** Once the window system
+//!   has settled, each fact the fixture reads back by its own means (the
+//!   drawable metrics and scale, focus, visibility) is the snapshot's, and the
+//!   snapshot's capabilities are the window's (ADR-0254 §1).
 //!
 //! [`check`] returns each violated promise by name; [`assert_conforms`] panics
 //! listing them.
 
 use std::sync::Arc;
 
-use flui_foundation::geometry::{Point, Size};
+use flui_foundation::geometry::{Point, Size, WindowMetrics};
 use flui_platform::{
     PlatformWindow, SizeConstraints, WindowCommand, WindowCommandError, WindowMode, WindowState,
 };
+
+/// What the window system says of the window now, read by the fixture by its
+/// own means (the operating system's queries, a headless host's model), never
+/// through the window's snapshot. Every fact is read: a fixture cannot leave
+/// one out and pass for it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Readback {
+    /// The drawable area in device pixels and its scale; `None` while the
+    /// window has no drawable area (minimized), whose snapshot keeps the last.
+    pub metrics: Option<WindowMetrics>,
+    /// Whether the window has input focus.
+    pub focused: bool,
+    /// Whether the window is the active window of its desktop.
+    pub active: bool,
+    /// Whether the window is shown and nothing (a cloak, a locked session)
+    /// hides it.
+    pub visible: bool,
+}
 
 /// A window under test, as the checks drive it.
 pub trait WindowFixture {
     /// The window under test, open and visible, in normal mode.
     fn window(&self) -> Arc<dyn PlatformWindow>;
+
+    /// What the window system says of the window now.
+    fn readback(&self) -> Readback;
 
     /// Let the window system carry out what was accepted: pump the event loop
     /// until it is quiet. A window that applies commands synchronously keeps
@@ -97,6 +122,10 @@ const CHECKS: &[(&str, Check)] = &[
     ("accepted_commands_converge", accepted_commands_converge),
     ("revisions_mean_change", revisions_mean_change),
     ("bad_numbers_are_refused", bad_numbers_are_refused),
+    (
+        "the_snapshot_agrees_with_the_window_system",
+        the_snapshot_agrees_with_the_window_system,
+    ),
     ("a_closed_window_refuses", a_closed_window_refuses),
 ];
 
@@ -111,8 +140,10 @@ fn sample_commands(state: &WindowState) -> Vec<WindowCommand> {
             Some(Size::new(200.0, 150.0)),
             Some(Size::new(2000.0, 1500.0)),
         )),
-        WindowCommand::SetResizable(!state.resizable),
+        // The frame first: a window system that resizes a window only through
+        // its frame (Win32) takes resizing back only on a framed window.
         WindowCommand::SetDecorated(!state.decorated),
+        WindowCommand::SetResizable(!state.resizable),
         WindowCommand::SetMode(WindowMode::Minimized),
         WindowCommand::SetMode(WindowMode::Maximized),
         WindowCommand::SetMode(WindowMode::Fullscreen),
@@ -167,7 +198,7 @@ fn accepted_commands_converge(fixture: &mut dyn WindowFixture) -> Result<(), Str
                 .then_some(())
                 .ok_or_else(|| format!("the title is {:?}, not {title:?}", state.title)),
             WindowCommand::SetPosition(at) => {
-                if capabilities.observes_position {
+                if capabilities.observes_position.is_available() {
                     let there = state.outer.position;
                     there
                         .is_some_and(|there| near(there.x, at.x) && near(there.y, at.y))
@@ -196,7 +227,7 @@ fn accepted_commands_converge(fixture: &mut dyn WindowFixture) -> Result<(), Str
                 .then_some(())
                 .ok_or_else(|| format!("decorated is {}, not {on}", state.decorated)),
             WindowCommand::SetMode(WindowMode::Minimized) => {
-                if capabilities.observes_minimized {
+                if capabilities.observes_minimized.is_available() {
                     (state.mode == WindowMode::Minimized)
                         .then_some(())
                         .ok_or_else(|| format!("the mode is {:?}, not Minimized", state.mode))
@@ -273,6 +304,59 @@ fn bad_numbers_are_refused(fixture: &mut dyn WindowFixture) -> Result<(), String
         if window.state() != before {
             broken.push(format!("{command:?} changed the window"));
         }
+    }
+    finish(broken)
+}
+
+/// What `state` says that `readback` disagrees with, after `step`.
+fn disagreements(step: &str, state: &WindowState, readback: Readback) -> Vec<String> {
+    let mut broken = Vec::new();
+    if let Some(metrics) = readback.metrics
+        && state.metrics != Some(metrics)
+    {
+        broken.push(format!(
+            "{step}: the snapshot's metrics are {:?}, the window system's {metrics:?}",
+            state.metrics
+        ));
+    }
+    for (fact, published, read) in [
+        ("focused", state.focused, readback.focused),
+        ("active", state.active, readback.active),
+        ("visible", state.visible, readback.visible),
+    ] {
+        if published != read {
+            broken.push(format!(
+                "{step}: the snapshot says {fact} {published}, the window system {read}"
+            ));
+        }
+    }
+    broken
+}
+
+fn the_snapshot_agrees_with_the_window_system(
+    fixture: &mut dyn WindowFixture,
+) -> Result<(), String> {
+    let window = fixture.window();
+    fixture.settle();
+    let mut broken = Vec::new();
+    let mut compare = |step: &str, fixture: &dyn WindowFixture| {
+        let state = window.state();
+        broken.extend(disagreements(step, &state, fixture.readback()));
+        if state.capabilities != window.capabilities() {
+            broken.push(format!(
+                "{step}: the snapshot's capabilities are {:?}, the window's {:?}",
+                state.capabilities,
+                window.capabilities()
+            ));
+        }
+    };
+    compare("at open", fixture);
+    for command in sample_commands(&window.state()) {
+        if !window.capabilities().permits(&command) || window.apply(command.clone()).is_err() {
+            continue;
+        }
+        fixture.settle();
+        compare(&format!("after {command:?}"), fixture);
     }
     finish(broken)
 }

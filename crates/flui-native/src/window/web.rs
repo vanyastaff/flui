@@ -24,9 +24,16 @@ use parking_lot::Mutex;
 use wasm_bindgen::{JsCast, prelude::*};
 
 use crate::{
-    host, host::WindowFacets, host::WindowPositions, host_window::HostWindow,
-    owner::OpenWindowError, owner::handlers::WindowCallbacks, owner::signal::OwnerSignal,
-    owner::web::WebLoop, text::WindowTextInput, window::state::WindowStateCell,
+    host,
+    host::WindowFacets,
+    host::WindowPositions,
+    host_window::HostWindow,
+    owner::OpenWindowError,
+    owner::handlers::WindowCallbacks,
+    owner::signal::OwnerSignal,
+    owner::web::WebLoop,
+    text::WindowTextInput,
+    window::state::{ReportedFacts, WindowStateCell},
     window::visibility::ReportedVisibility,
 };
 use flui_platform::{
@@ -77,7 +84,12 @@ impl StatePublisher {
     /// revision.
     fn current(&self) -> WindowState {
         let published = self.cell.state_with(|| {
-            sample_state(&self.canvas, &self.state, self.displays.current_display())
+            sample_state(
+                &self.canvas,
+                &self.state,
+                self.displays.current_display(),
+                self.callbacks.hovered(),
+            )
         });
         if published.changed {
             self.callbacks.dispatch_state_changed();
@@ -90,6 +102,22 @@ impl StatePublisher {
         self.cell.invalidate();
         let _ = self.current();
     }
+
+    /// Read the page again for the window's state publisher, announcing
+    /// nothing.
+    fn read(&self) -> crate::owner::handlers::Publication {
+        self.cell.invalidate();
+        self.cell
+            .state_with(|| {
+                sample_state(
+                    &self.canvas,
+                    &self.state,
+                    self.displays.current_display(),
+                    self.callbacks.hovered(),
+                )
+            })
+            .outcome()
+    }
 }
 
 /// The window as the page reports it now. A canvas has no frame, no global
@@ -98,14 +126,25 @@ fn sample_state(
     canvas: &web_sys::HtmlCanvasElement,
     state: &Mutex<WebWindowState>,
     display: Option<flui_platform::DisplayId>,
+    hovered: bool,
 ) -> WindowState {
-    let (title, size, focused, visible) = {
+    let (title, size, focused, visible, execution, metrics) = {
         let state = state.lock();
         (
             state.title.clone(),
             Size::new(state.width, state.height),
             state.focused,
             state.visible,
+            state.execution,
+            // The backing store is the drawable area; an empty box is none.
+            flui_foundation::geometry::WindowMetrics::new(
+                flui_foundation::geometry::DeviceSize::new(
+                    i32::try_from(state.backing.width).unwrap_or(i32::MAX),
+                    i32::try_from(state.backing.height).unwrap_or(i32::MAX),
+                ),
+                state.scale_factor,
+            )
+            .ok(),
         )
     };
     // The canvas, or an element that holds it: another element of the page (a
@@ -116,7 +155,7 @@ fn sample_state(
             .fullscreen_element()
             .is_some_and(|element| element.contains(Some(canvas)))
     });
-    WindowState::new(WindowGeometry::new(None, size), size)
+    let state = WindowState::new(WindowGeometry::new(None, size), size)
         .with_mode(if fullscreen {
             WindowMode::Fullscreen
         } else {
@@ -127,7 +166,28 @@ fn sample_state(
         .with_title(Some(title))
         .with_resizable(false)
         .with_decorated(false)
-        .with_display(display)
+        .with_display(display);
+    ReportedFacts {
+        metrics,
+        appearance: page_appearance(),
+        // The page owns the viewport; the canvas has no safe area of its own.
+        safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
+        execution,
+        hovered,
+        // A page has no activation apart from the canvas's focus.
+        active: focused,
+        capabilities: window_capabilities(),
+    }
+    .onto(state)
+}
+
+/// The user's color scheme as the page sees it (`prefers-color-scheme`).
+fn page_appearance() -> WindowAppearance {
+    if dark_scheme_query().is_some_and(|query| query.matches()) {
+        WindowAppearance::Dark
+    } else {
+        WindowAppearance::Light
+    }
 }
 
 struct WebWindowState {
@@ -369,7 +429,7 @@ impl WebWindow {
         };
 
         let state = Arc::new(Mutex::new(state));
-        let initial = sample_state(&canvas, &state, displays.current_display());
+        let initial = sample_state(&canvas, &state, displays.current_display(), false);
         Ok(Self {
             id,
             registration: RefCell::new(Some(Registration::new(&canvas, claim))),
@@ -982,8 +1042,8 @@ impl crate::host_window::HostWindow for WebWindow {
 /// (`Platform::window_capabilities`).
 pub(crate) const fn window_capabilities() -> WindowCapabilities {
     let mut capabilities = WindowCapabilities::NONE;
-    capabilities.sets_title = true;
-    capabilities.enters_fullscreen = true;
+    capabilities.sets_title = flui_platform::Availability::Native;
+    capabilities.enters_fullscreen = flui_platform::Availability::Native;
     capabilities
 }
 
@@ -1051,7 +1111,13 @@ impl host::Window<WebLoop> for WebWindow {
         // Notify window created
         WebLoop::dispatch_window_event(&owner.state, WindowEvent::Created(WindowId(0)));
 
-        Ok(Arc::new(window))
+        let window = Arc::new(window);
+        window
+            .callbacks
+            .publish_through(Arc::downgrade(&window), |window: &WebWindow| {
+                window.publisher().read()
+            });
+        Ok(window)
     }
 
     fn active(owner: &WebLoop, _: &WindowPositions<CanvasRef>) -> Option<WindowId> {
@@ -1161,7 +1227,7 @@ impl PlatformWindow for WebWindow {
                 }
             }
             // Every other command is refused by `admit` through a capability
-            // this backend leaves `false`.
+            // this backend leaves `Unavailable`.
             _ => {
                 return Err(flui_platform::Unsupported::new(
                     flui_platform::UnsupportedReason::NotOnThisPlatform,
@@ -1180,11 +1246,7 @@ impl PlatformWindow for WebWindow {
     }
 
     fn appearance(&self) -> WindowAppearance {
-        if dark_scheme_query().is_some_and(|query| query.matches()) {
-            WindowAppearance::Dark
-        } else {
-            WindowAppearance::Light
-        }
+        page_appearance()
     }
 
     /// The browser's screen the page is on: the one screen of a tab, or the

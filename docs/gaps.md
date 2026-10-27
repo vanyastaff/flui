@@ -153,6 +153,11 @@ request.
 - winit cannot read a title back on Linux, so the snapshot holds the one last set.
 - Wayland never reports minimized.
 - Placement restore ran only on Windows; live resize is not audited.
+- **The snapshot against the window system** (`window_conformance`'s `the_snapshot_agrees_with_the_window_system`: metrics, focus, activation, visibility and capabilities read back by the fixture's own means) ran on headless and on Win32 only.
+  - winit: not run; the real-loop harness runs a scenario on a worker thread, while the fixture's `apply` and `settle` need owner turns between commands.
+  - AppKit and UIKit: not run, type-checked only, queued in [#1840](https://github.com/vanyastaff/flui/issues/1840).
+  - Web: not run; the browser suite has no fixture that reads the canvas back apart from the window.
+  - Android: not run; the conformance needs a device fixture.
 
 ### 10. No custom title bar, popups or owned windows
 
@@ -465,5 +470,6 @@ request.
 | 2026-10-26 | minor | Entry 15: the interaction layer has the pointer frame (`dispatch_pointer_frame_on`, `pointer_frame_end`); no backend reports frames yet. Follow-ups: Win32 `GetPointerFrameInfoHistory`, Android `ACTION_MOVE` with all pointers, Wayland `wl_touch.frame`, iOS touch sets |
 | 2026-10-26 | minor | Entry 15: `PlatformInput::PointerFrame` carries a frame from a backend; the Win32 touch and pen path reads it with `GetPointerFrameInfo` (synthetic data only, live touch run pending) |
 | 2026-10-26 | minor | Entry 20: the macOS backdrop material and Liquid Glass come back through the escape hatch `flui::native::macos` (`AppKitWindow::set_backdrop`), type-checked only and listed in [#1840](https://github.com/vanyastaff/flui/issues/1840); Windows still forces Mica |
+| 2026-10-26 | minor | Entry 9: the window snapshot holds every window fact, and the window conformance compares it with what the window system reads back; it ran on headless and Win32, and the winit, AppKit, UIKit, Web and Android runs are listed |
 
 </details>

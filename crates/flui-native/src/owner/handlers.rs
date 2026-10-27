@@ -393,6 +393,17 @@ pub struct WindowCallbacks {
     /// every window it opens ([`Self::counting_frames`]).
     frames_run: Arc<AtomicU64>,
     should_close_dispatching: Mutex<bool>,
+    /// Publishes the window's snapshot before each fact's own callback is
+    /// queued; see [`Self::set_state_publisher`].
+    state_publisher: Mutex<Option<StatePublisher>>,
+    /// Fact events that arrived while the window held its publishing back,
+    /// delivered behind the publication that ends the hold.
+    held: Mutex<Vec<WindowCallbackEvent>>,
+    /// What the last hover report said: whatever reports it (Win32 or web
+    /// input, AppKit's tracking area, winit's cursor events), a hover reaches
+    /// the window through [`Self::dispatch_hover_status_change`] alone, and
+    /// the window's snapshot reads it here ([`Self::hovered`]).
+    hovered: AtomicBool,
 
     /// One-shot latch set by [`Self::clear`] before it takes any slot.
     ///
@@ -416,6 +427,46 @@ type RetirementNotice = Box<dyn FnOnce() + Send>;
 
 type StatusCallback = Box<dyn FnMut(bool) + Send>;
 
+/// Reads a window from its window system again and publishes what it read,
+/// announcing nothing: [`WindowCallbacks`] delivers `on_state_changed` with
+/// the fact that asked. A window's host builds it over a weak reference to
+/// the window ([`WindowCallbacks::publish_through`]), so the callbacks never
+/// keep their window alive.
+pub(crate) type StatePublisher = Arc<dyn Fn() -> Publication + Send + Sync>;
+
+/// What a [`StatePublisher`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Publication {
+    /// A new revision.
+    Changed,
+    /// The window reads as published already, or is gone.
+    Unchanged,
+    /// The window holds its publishing back while a change of several steps
+    /// is half made; the host publishes and announces once it ends.
+    #[cfg_attr(
+        not(windows),
+        expect(
+            dead_code,
+            reason = "only the Win32 window holds its publishing back (a DPI change)"
+        )
+    )]
+    Held,
+}
+
+/// Resume the first of two contained failures, dropping the second.
+fn resurface_first(first: std::thread::Result<()>, second: std::thread::Result<()>) {
+    match (first, second) {
+        (Err(payload), second) => {
+            if let Err(later) = second {
+                contain_owner_callback(|| drop(later));
+            }
+            std::panic::resume_unwind(payload);
+        }
+        (Ok(()), Err(payload)) => std::panic::resume_unwind(payload),
+        (Ok(()), Ok(())) => {}
+    }
+}
+
 enum WindowCallbackEvent {
     Input(PlatformInput),
     RequestFrame(FrameRequest),
@@ -429,6 +480,13 @@ enum WindowCallbackEvent {
     AppearanceChanged,
     DisplayChanged,
     SurfaceStatus(bool),
+    /// A publication of the window's snapshot: `on_state_changed` when it
+    /// produced a new revision, then the facts that came with it, each
+    /// contained.
+    Published {
+        changed: bool,
+        facts: Vec<WindowCallbackEvent>,
+    },
     /// A deferred [`WindowCallbacks::clear`]: queued instead of run inline
     /// when `clear()` is called while this window's FIFO is already
     /// draining (a `close()` issued from inside one of this window's own
@@ -666,6 +724,111 @@ impl WindowCallbacks {
     pub(crate) fn accepts_registration(&self) -> bool {
         !self.lifecycle_closed.load(Ordering::SeqCst)
     }
+    /// Set how this window publishes its snapshot (ADR-0254 §1). Every fact
+    /// dispatch below (resize and scale, focus, visibility, hover, appearance,
+    /// display, safe area, execution state) runs it first, on the calling
+    /// thread and with no lock of this set held; the publisher announces
+    /// nothing itself. When it published a new revision, `on_state_changed`
+    /// and the fact's own callback are delivered as one event, each
+    /// contained, so a panic in either loses neither and the first failure
+    /// resurfaces afterwards. When the window holds its publishing back (a
+    /// change made of several steps), the fact waits behind the publication
+    /// that ends the hold ([`Self::announce`]). A fact reported by another
+    /// feature (the input's hover) reaches the snapshot the same way as the
+    /// window's own. The host sets it once, when the window opens.
+    pub(crate) fn set_state_publisher(&self, publisher: StatePublisher) {
+        *self.state_publisher.lock() = Some(publisher);
+    }
+
+    /// [`Self::set_state_publisher`] over a weak reference to the window:
+    /// `publish` reads the window again and says what it published, and a
+    /// window that is gone publishes nothing.
+    pub(crate) fn publish_through<W: Send + Sync + 'static>(
+        &self,
+        window: std::sync::Weak<W>,
+        publish: fn(&W) -> Publication,
+    ) {
+        self.set_state_publisher(Arc::new(move || {
+            window
+                .upgrade()
+                .map_or(Publication::Unchanged, |window| publish(&window))
+        }));
+    }
+
+    /// Whether the pointer is over the window, as the last hover report said;
+    /// `false` before the first.
+    pub(crate) fn hovered(&self) -> bool {
+        self.hovered.load(Ordering::Acquire)
+    }
+
+    /// Run the publisher, if the host set one.
+    fn publish(&self) -> Publication {
+        let publisher = self.state_publisher.lock().clone();
+        publisher.map_or(Publication::Unchanged, |publisher| publisher())
+    }
+
+    /// Publish the window's snapshot now, for a fact that has no callback of
+    /// its own, and announce it ([`Self::announce`]).
+    pub(crate) fn publish_state(&self) {
+        match self.publish() {
+            Publication::Changed => self.announce(true),
+            Publication::Unchanged => self.announce(false),
+            Publication::Held => {}
+        }
+    }
+
+    /// Announce a publication: `on_state_changed` when it produced a new
+    /// revision, then each fact callback held back while the window held its
+    /// publishing, in one event. A host calls it after every publication it
+    /// makes outside a fact dispatch.
+    pub(crate) fn announce(&self, changed: bool) {
+        let facts = std::mem::take(&mut *self.held.lock());
+        if !changed && facts.is_empty() {
+            return;
+        }
+        self.deliver_published(changed, facts);
+    }
+
+    /// Publish, then deliver `fact` behind the announcement.
+    fn dispatch_fact(&self, fact: WindowCallbackEvent) {
+        let changed = match self.publish() {
+            Publication::Held => {
+                self.held.lock().push(fact);
+                return;
+            }
+            Publication::Changed => true,
+            Publication::Unchanged => false,
+        };
+        let mut facts = std::mem::take(&mut *self.held.lock());
+        facts.push(fact);
+        self.deliver_published(changed, facts);
+    }
+
+    fn deliver_published(&self, changed: bool, facts: Vec<WindowCallbackEvent>) {
+        let Some(drain) = DispatchDrain::begin(
+            &self.event_dispatch,
+            WindowCallbackEvent::Published { changed, facts },
+        ) else {
+            return;
+        };
+        self.drain_events(drain);
+    }
+
+    /// Publish for a fact delivered outside the window's FIFO (safe area,
+    /// the iOS immediate lifecycle), then run `deliver`. The announcement and
+    /// the delivery are each contained; the first failure resurfaces after
+    /// both ran.
+    fn publish_then(&self, deliver: impl FnOnce()) {
+        let announced = match self.publish() {
+            Publication::Held => Ok(()),
+            outcome => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.announce(outcome == Publication::Changed);
+            })),
+        };
+        let delivered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(deliver));
+        resurface_first(announced, delivered);
+    }
+
     /// Create a new empty callback set
     pub fn new() -> Self {
         Self::counting_frames(Arc::default())
@@ -699,6 +862,9 @@ impl WindowCallbacks {
             on_surface_status_change: Mutex::new(None),
             event_dispatch: Mutex::new(DispatchState::new()),
             should_close_dispatching: Mutex::new(false),
+            state_publisher: Mutex::new(None),
+            held: Mutex::new(Vec::new()),
+            hovered: AtomicBool::new(false),
             cleared: AtomicBool::new(false),
             lifecycle_closed: AtomicBool::new(false),
         }
@@ -829,6 +995,8 @@ impl WindowCallbacks {
         let on_appearance_changed = self.on_appearance_changed.lock().take();
         let on_display_changed = self.on_display_changed.lock().take();
         let on_surface_status_change = self.on_surface_status_change.lock().take();
+        let state_publisher = self.state_publisher.lock().take();
+        let held_facts = std::mem::take(&mut *self.held.lock());
         // Each slot retires independently: distinct panicking destructors must
         // never meet during the same unwind. No slot lock is held here.
         contain_owner_callback(|| drop(on_safe_area_change));
@@ -849,6 +1017,8 @@ impl WindowCallbacks {
         contain_owner_callback(|| drop(on_appearance_changed));
         contain_owner_callback(|| drop(on_display_changed));
         contain_owner_callback(|| drop(on_surface_status_change));
+        contain_owner_callback(|| drop(state_publisher));
+        contain_owner_callback(|| drop(held_facts));
     }
 
     fn drain_events(
@@ -918,6 +1088,19 @@ impl WindowCallbacks {
     ) -> Option<DispatchEventResult> {
         let mut input_result = None;
         while let Some(event) = drain.next() {
+            self.deliver_event(event, &mut input_result);
+        }
+        input_result
+    }
+
+    /// One event of the window's FIFO, delivered; an input event records its
+    /// result in `input_result`.
+    fn deliver_event(
+        &self,
+        event: WindowCallbackEvent,
+        input_result: &mut Option<DispatchEventResult>,
+    ) {
+        {
             match event {
                 WindowCallbackEvent::Input(event) => {
                     // Admitted before a re-registration: the new callback's
@@ -925,7 +1108,7 @@ impl WindowCallbacks {
                     if !self.deliver_pending_snapshot() {
                         self.redirect_behind_snapshot(event);
                         input_result.get_or_insert(DispatchEventResult::DEFERRED);
-                        continue;
+                        return;
                     }
                     // An outgoing callback replaced during its call retires
                     // after its result; its capture failure is contained.
@@ -1008,9 +1191,31 @@ impl WindowCallbacks {
                         contain_owner_callback(retired);
                     }
                 }
+                WindowCallbackEvent::Published { changed, facts } => {
+                    let announced = if changed {
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            call(&self.queued(&self.on_state_changed), |callback| callback())
+                                .or_resume(());
+                        }))
+                    } else {
+                        Ok(())
+                    };
+                    let mut delivered = Ok(());
+                    for fact in facts {
+                        let outcome =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                self.deliver_event(fact, &mut None);
+                            }));
+                        if delivered.is_ok() {
+                            delivered = outcome;
+                        } else if let Err(later) = outcome {
+                            contain_owner_callback(|| drop(later));
+                        }
+                    }
+                    resurface_first(announced, delivered);
+                }
             }
         }
-        input_result
     }
 
     fn deliver_status_observation(
@@ -1021,6 +1226,8 @@ impl WindowCallbacks {
     ) {
         if let Some(commit) = commit {
             commit();
+            // Committed at its delivery point: the snapshot reads it now.
+            self.publish_state();
         }
         call(&self.queued(slot), |callback| callback(value)).or_resume(());
     }
@@ -1381,12 +1588,7 @@ impl WindowCallbacks {
 
     /// Dispatch a resize event with the window's new metrics.
     pub fn dispatch_resize(&self, metrics: WindowMetrics) {
-        let Some(drain) =
-            DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::Resize(metrics))
-        else {
-            return;
-        };
-        self.drain_events(drain);
+        self.dispatch_fact(WindowCallbackEvent::Resize(metrics));
     }
 
     /// [`Self::dispatch_resize`] for a backend that reports a logical size: the device size is
@@ -1445,11 +1647,16 @@ impl WindowCallbacks {
     #[cfg(target_os = "ios")]
     pub(crate) fn dispatch_lifecycle_immediate(&self, event: LifecycleEvent) {
         use LifecycleEvent::{Execution, Focus, Surface, Visibility};
-        match event {
+        let deliver = || match event {
             Execution(value) => self.invoke_lifecycle(&self.on_execution_state_change, value),
             Focus(value) => self.invoke_lifecycle(&self.on_active_status_change, value),
             Visibility(value) => self.invoke_lifecycle(&self.on_visibility_status_change, value),
             Surface(value) => self.invoke_lifecycle(&self.on_surface_status_change, value),
+        };
+        if matches!(event, Surface(_)) {
+            deliver();
+        } else {
+            self.publish_then(deliver);
         }
     }
 
@@ -1463,13 +1670,7 @@ impl WindowCallbacks {
 
     /// Dispatch active status change (focus gained/lost).
     pub fn dispatch_active_status_change(&self, is_active: bool) {
-        let Some(drain) = DispatchDrain::begin(
-            &self.event_dispatch,
-            WindowCallbackEvent::Active(is_active, None),
-        ) else {
-            return;
-        };
-        self.drain_events(drain);
+        self.dispatch_fact(WindowCallbackEvent::Active(is_active, None));
     }
 
     /// Publish a backend observation at its causal delivery point, so getters
@@ -1491,13 +1692,7 @@ impl WindowCallbacks {
 
     /// Dispatch visibility status change (occlusion gained/lost).
     pub fn dispatch_visibility_status_change(&self, is_visible: bool) {
-        let Some(drain) = DispatchDrain::begin(
-            &self.event_dispatch,
-            WindowCallbackEvent::Visibility(is_visible, None),
-        ) else {
-            return;
-        };
-        self.drain_events(drain);
+        self.dispatch_fact(WindowCallbackEvent::Visibility(is_visible, None));
     }
 
     /// Commit an accepted visibility observation immediately before its callback.
@@ -1537,12 +1732,14 @@ impl WindowCallbacks {
         if self.lifecycle_closed.load(Ordering::SeqCst) {
             return;
         }
-        let Some(mut drain) = DispatchDrain::begin(&self.safe_area_dispatch, insets) else {
-            return;
-        };
-        while let Some(insets) = drain.next() {
-            self.invoke_lifecycle(&self.on_safe_area_change, insets);
-        }
+        self.publish_then(|| {
+            let Some(mut drain) = DispatchDrain::begin(&self.safe_area_dispatch, insets) else {
+                return;
+            };
+            while let Some(insets) = drain.next() {
+                self.invoke_lifecycle(&self.on_safe_area_change, insets);
+            }
+        });
     }
 
     #[cfg(target_os = "ios")]
@@ -1558,10 +1755,12 @@ impl WindowCallbacks {
         // this is an IMMEDIATE delivery, so it is fenced the moment a close is
         // requested — `clear()` sets this latch on entry — rather than at slot
         // teardown, which can sit behind a still-running drain.
-        call(&self.immediate(&self.on_resize), |callback| {
-            callback(metrics);
-        })
-        .or_contain((), "a window's resize callback");
+        self.publish_then(|| {
+            call(&self.immediate(&self.on_resize), |callback| {
+                callback(metrics);
+            })
+            .or_contain((), "a window's resize callback");
+        });
     }
 
     /// Replace an execution observer, disposing captures outside the storage lock.
@@ -1582,43 +1781,28 @@ impl WindowCallbacks {
 
     /// Deliver an owner-thread execution observation through the window FIFO.
     pub fn dispatch_execution_state_change(&self, state: WindowExecutionState) {
-        let Some(drain) =
-            DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::Execution(state))
-        else {
-            return;
-        };
-        self.drain_events(drain);
+        self.dispatch_fact(WindowCallbackEvent::Execution(state));
     }
 
-    /// Dispatch hover status change (mouse enter/leave).
+    /// Dispatch hover status change (mouse enter/leave). A report after the
+    /// window began to close is not a fact of it any more.
     pub fn dispatch_hover_status_change(&self, is_hovered: bool) {
-        let Some(drain) =
-            DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::Hover(is_hovered))
-        else {
+        if self.lifecycle_closed.load(Ordering::SeqCst) {
             return;
-        };
-        self.drain_events(drain);
+        }
+        self.hovered.store(is_hovered, Ordering::Release);
+        self.dispatch_fact(WindowCallbackEvent::Hover(is_hovered));
     }
 
     /// Dispatch appearance change (system theme changed).
     pub fn dispatch_appearance_changed(&self) {
-        let Some(drain) =
-            DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::AppearanceChanged)
-        else {
-            return;
-        };
-        self.drain_events(drain);
+        self.dispatch_fact(WindowCallbackEvent::AppearanceChanged);
     }
 
     /// Dispatch a display change hint (the window may be on another display, or
     /// its display changed).
     pub fn dispatch_display_changed(&self) {
-        let Some(drain) =
-            DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::DisplayChanged)
-        else {
-            return;
-        };
-        self.drain_events(drain);
+        self.dispatch_fact(WindowCallbackEvent::DisplayChanged);
     }
 
     /// Dispatch a GPU-surface availability change. Parameter: `has_surface`

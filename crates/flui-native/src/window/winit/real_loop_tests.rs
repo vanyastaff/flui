@@ -611,11 +611,23 @@ mod wayland_window {
                     _ => panic!("the window request is delivered"),
                 };
                 let capabilities = window.capabilities();
-                assert!(!capabilities.sets_position && !capabilities.places_at_open);
-                assert!(!capabilities.hides && !capabilities.shows && !capabilities.activates);
-                assert!(!capabilities.observes_position && !capabilities.observes_minimized);
                 assert!(
-                    capabilities.sets_title && capabilities.sets_size && capabilities.maximizes
+                    !capabilities.sets_position.is_available()
+                        && !capabilities.places_at_open.is_available()
+                );
+                assert!(
+                    !capabilities.hides.is_available()
+                        && !capabilities.shows.is_available()
+                        && !capabilities.activates.is_available()
+                );
+                assert!(
+                    !capabilities.observes_position.is_available()
+                        && !capabilities.observes_minimized.is_available()
+                );
+                assert!(
+                    capabilities.sets_title.is_available()
+                        && capabilities.sets_size.is_available()
+                        && capabilities.maximizes.is_available()
                 );
                 assert_eq!(host_for_worker.window_capabilities(), capabilities);
                 assert_ne!(capabilities, WindowCapabilities::ALL);

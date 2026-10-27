@@ -44,12 +44,12 @@ use windows::Win32::{
             GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, HTCLIENT, IsIconic,
             IsWindowVisible, IsZoomed, KillTimer, MINMAXINFO, OBJID_WINDOW, PostMessageW,
             SC_KEYMENU, SC_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SWP_NOSIZE,
-            SendMessageW, SetTimer, SetWindowLongPtrW, WINDOWPOS, WINEVENT_OUTOFCONTEXT, WM_APP,
-            WM_CLOSE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO,
-            WM_KILLFOCUS, WM_MOVE, WM_PAINT, WM_SETCURSOR, WM_SETFOCUS, WM_SETTEXT,
-            WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_STYLECHANGED, WM_SYSCOMMAND,
-            WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, WS_CAPTION, WS_MAXIMIZE, WS_MAXIMIZEBOX,
-            WS_MINIMIZE, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME,
+            SendMessageW, SetTimer, SetWindowLongPtrW, WA_INACTIVE, WINDOWPOS,
+            WINEVENT_OUTOFCONTEXT, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_CREATE, WM_DESTROY,
+            WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_KILLFOCUS, WM_MOVE, WM_PAINT,
+            WM_SETCURSOR, WM_SETFOCUS, WM_SETTEXT, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE,
+            WM_STYLECHANGED, WM_SYSCOMMAND, WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, WS_CAPTION,
+            WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZE, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME,
         },
     },
 };
@@ -59,7 +59,7 @@ use super::mode::NativeMode;
 use super::set::{WindowSet, checked_logical_to_device, restore_rectangle};
 use super::window::WindowsWindow;
 use crate::owner::call_point::{Field, call};
-use crate::owner::handlers::{PlatformHandlers, WindowCallbacks};
+use crate::owner::handlers::{PlatformHandlers, Publication, WindowCallbacks};
 use crate::owner::hwnd_affinity::ContextLedger;
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::owner::windows::HostDisplays;
@@ -70,7 +70,7 @@ use crate::owner::windows::{
 };
 use crate::owner::windows::{get_x_lparam, get_y_lparam};
 use crate::window::config::WindowConfiguration;
-use crate::window::state::{WindowStateCell, mode_of};
+use crate::window::state::{ReportedFacts, WindowStateCell, mode_of};
 use crate::window::visibility::ReportedVisibility;
 
 /// Posted to a window nothing paints, so its frame still runs: a hidden window
@@ -162,6 +162,9 @@ pub(crate) struct WindowContext {
     /// `on_appearance_changed`; the chrome is drawn in it while
     /// `chrome_follows_system`.
     pub appearance: std::cell::Cell<WindowAppearance>,
+    /// Whether the last `WM_ACTIVATE` made the window the active one of its
+    /// desktop: it, or a window it owns, has the keyboard.
+    pub(crate) active: std::cell::Cell<bool>,
     /// Whether the title bar follows the system theme; `false` once the app
     /// chose it through `Win32Window::set_dark_mode` or `set_theme`, or opened
     /// with a theme of its own (`Win32WindowOptions::theme`).
@@ -312,10 +315,25 @@ impl WindowContext {
         let published = self
             .snapshot
             .state_with(|| sample_state(hwnd, &record, self.tracking(hwnd)));
-        if published.changed {
-            self.callbacks.dispatch_state_changed();
-        }
+        // With the fact callbacks the hold kept back, behind the announcement.
+        self.callbacks.announce(published.changed);
         published.state
+    }
+
+    /// Read the window again for its state publisher, announcing nothing: the
+    /// fact that asked is delivered behind the announcement, or, while
+    /// publishing is held, behind the publication that ends the hold.
+    pub(crate) fn read_window_state(&self, hwnd: HWND) -> Publication {
+        self.snapshot.invalidate();
+        if self.publish_hold.get() > 0 {
+            return Publication::Held;
+        }
+        let Some(record) = self.window_state.upgrade() else {
+            return Publication::Unchanged;
+        };
+        self.snapshot
+            .state_with(|| sample_state(hwnd, &record, self.tracking(hwnd)))
+            .outcome()
     }
 
     /// What this context knows of the window beyond what Win32 reports.
@@ -325,6 +343,10 @@ impl WindowContext {
             restore_style: self.restore_style.get(),
             constraints: self.constraints.get(),
             display: self.displays.display_of_window(hwnd),
+            occluded: self.visibility.occluded(),
+            appearance: self.appearance.get(),
+            active: self.active.get(),
+            hovered: self.callbacks.hovered(),
         }
     }
 
@@ -639,7 +661,7 @@ impl WindowMessages for WindowProc {
             | WM_SHOWWINDOW | WM_MOVE | WM_DPICHANGED | WM_WINDOWPOSCHANGING
             | WM_WINDOWPOSCHANGED | TOGGLE_FULLSCREEN | WM_SETTEXT | WM_STYLECHANGED
             | WM_GETMINMAXINFO | REQUEST_FRAME | WM_SETCURSOR | WM_SETFOCUS | WM_KILLFOCUS
-            | WM_SETTINGCHANGE => true,
+            | WM_ACTIVATE | WM_SETTINGCHANGE => true,
             WM_TIMER => wparam.0 == MODAL_DEADLINE_TIMER,
             WM_SYSCOMMAND => (wparam.0 & 0xFFF0) == SC_KEYMENU as usize,
             _ => false,
@@ -1255,6 +1277,19 @@ impl WindowProc {
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
 
+                // Activation, apart from focus: a window whose owned popup has
+                // the keyboard stays active without the focus. The default
+                // procedure then moves the focus as Win32 does.
+                WM_ACTIVATE => {
+                    if let Some(ctx) = ctx {
+                        let active = (wparam.0 & 0xFFFF) as u32 != WA_INACTIVE;
+                        if ctx.active.replace(active) != active {
+                            ctx.publish_window_state(hwnd);
+                        }
+                    }
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
+
                 WM_SETFOCUS => {
                     tracing::debug!("Window Focused");
 
@@ -1379,6 +1414,15 @@ pub(crate) struct OwnerTracking {
     pub(crate) restore_style: u32,
     pub(crate) constraints: SizeConstraints,
     pub(crate) display: Option<flui_platform::DisplayId>,
+    /// Whether a cloak or a locked session hides the window whatever it shows.
+    pub(crate) occluded: bool,
+    /// The user's theme as `WM_SETTINGCHANGE` last read it: never the
+    /// dark-mode flag this host sets on the chrome to match (ADR-0222).
+    pub(crate) appearance: WindowAppearance,
+    /// Whether the last `WM_ACTIVATE` made the window the active one.
+    pub(crate) active: bool,
+    /// Whether the mouse is over the window, as its input last reported it.
+    pub(crate) hovered: bool,
 }
 
 /// The window's title as the system holds it, `None` when it cannot be read.
@@ -1409,12 +1453,16 @@ pub(crate) fn sample_state(
         restore_style,
         constraints,
         display,
+        occluded,
+        appearance,
+        active,
+        hovered,
     } = tracking;
     let (scale, visible, focused, cached) = {
         let record = record.lock();
         (
             record.scale_factor,
-            record.visible,
+            record.visible && !occluded,
             record.focused,
             record.bounds.size,
         )
@@ -1482,7 +1530,7 @@ pub(crate) fn sample_state(
             ),
         )
     });
-    WindowState::new(outer, if mode.is_minimized() { cached } else { content })
+    let state = WindowState::new(outer, if mode.is_minimized() { cached } else { content })
         .with_mode(mode_of(mode.flags()))
         .with_normal_geometry(normal)
         .with_visible(visible)
@@ -1491,7 +1539,28 @@ pub(crate) fn sample_state(
         .with_constraints(constraints)
         .with_resizable(style & WS_THICKFRAME.0 != 0)
         .with_decorated(style & WS_CAPTION.0 == WS_CAPTION.0)
-        .with_display(display)
+        .with_display(display);
+    ReportedFacts {
+        // The client area in device pixels at the window's scale; a minimized
+        // window's empty client area is not drawable and keeps the last.
+        metrics: have_client
+            .then(|| {
+                flui_foundation::geometry::WindowMetrics::new(
+                    Size::new(client.right - client.left, client.bottom - client.top),
+                    scale,
+                )
+                .ok()
+            })
+            .flatten(),
+        appearance,
+        // A desktop window has no safe area, and Win32 never suspends one.
+        safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
+        execution: flui_platform::WindowExecutionState::Running,
+        hovered,
+        active,
+        capabilities: super::window::window_capabilities(),
+    }
+    .onto(state)
 }
 
 impl WindowsWindow {
@@ -1975,6 +2044,9 @@ impl WindowContext {
     }
 
     fn settle_visibility(&self) {
+        // A cloak or a lock hides a shown window in its snapshot too: read it
+        // again, whether or not the report below changes.
+        self.snapshot.invalidate();
         let visible = self.visibility.visible();
         if let Some(visible) = ReportedVisibility::report_in(&self.visibility.reported, visible) {
             tracing::debug!(visible, "window visibility changed");

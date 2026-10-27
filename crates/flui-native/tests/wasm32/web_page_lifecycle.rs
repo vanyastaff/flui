@@ -370,8 +370,8 @@ async fn web_page_events_leave_with_the_window() {
 async fn web_window_reports_what_a_page_can_do() {
     let (_probe, running, window) = page().await;
     let mut expected = WindowCapabilities::NONE;
-    expected.sets_title = true;
-    expected.enters_fullscreen = true;
+    expected.sets_title = flui_platform::Availability::Native;
+    expected.enters_fullscreen = flui_platform::Availability::Native;
     assert_eq!(window.capabilities(), expected);
     assert_eq!(
         running

@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use flui_foundation::geometry::{DeviceSize, Size};
+use flui_foundation::geometry::{DeviceSize, Size, WindowMetrics};
 use flui_native::{HeadlessPlatform, Platform};
 use flui_platform::{
     CursorError, CursorIcon, PlatformHaptics, PlatformSystemChrome, PlatformTextInput,
@@ -13,13 +13,15 @@ use flui_platform::{
     WindowMode, WindowState,
 };
 use flui_platform::{WindowCapabilities, WindowOptions};
-use flui_testing::window_conformance::{self, WindowFixture};
+use flui_testing::window_conformance::{self, Readback, WindowFixture};
 
-/// A window that refuses what it does not take as unavailable for now, as if
-/// asking again could succeed.
-struct RefusesForNow(Arc<dyn PlatformWindow>);
+/// A headless window with a fault of its own: it refuses what it does not
+/// take as unavailable for now, as if asking again could succeed
+/// ([`Fault::RefusesForNow`]), or publishes a snapshot without the facts the
+/// window system reports ([`Fault::SnapshotWithoutFacts`]).
+struct Faulty(Arc<dyn PlatformWindow>, Fault);
 
-impl PlatformWindow for RefusesForNow {
+impl PlatformWindow for Faulty {
     fn id(&self) -> WindowId {
         self.0.id()
     }
@@ -42,14 +44,21 @@ impl PlatformWindow for RefusesForNow {
         self.0.is_visible()
     }
     fn state(&self) -> WindowState {
-        self.0.state()
+        let mut state = self.0.state();
+        if matches!(self.1, Fault::SnapshotWithoutFacts) {
+            // The snapshot of a window that keeps metrics and capabilities
+            // to its getters.
+            state.metrics = None;
+            state.capabilities = WindowCapabilities::NONE;
+        }
+        state
     }
     fn capabilities(&self) -> WindowCapabilities {
         self.0.capabilities()
     }
     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
         self.0.apply(command).map_err(|error| match error {
-            WindowCommandError::Unsupported(_) => {
+            WindowCommandError::Unsupported(_) if matches!(self.1, Fault::RefusesForNow) => {
                 Unsupported::new(UnsupportedReason::Unavailable).into()
             }
             other => other,
@@ -93,6 +102,8 @@ enum Fault {
     IgnoresClose,
     /// The window refuses what it does not take as unavailable for now.
     RefusesForNow,
+    /// The window's snapshot holds neither its metrics nor its capabilities.
+    SnapshotWithoutFacts,
 }
 
 impl Fixture {
@@ -101,10 +112,11 @@ impl Fixture {
         let window: Arc<dyn PlatformWindow> = platform
             .open_window(WindowOptions::default())
             .expect("a headless window opens");
-        let window = if matches!(fault, Some(Fault::RefusesForNow)) {
-            Arc::new(RefusesForNow(window))
-        } else {
-            window
+        let window = match fault {
+            Some(fault @ (Fault::RefusesForNow | Fault::SnapshotWithoutFacts)) => {
+                Arc::new(Faulty(window, fault))
+            }
+            _ => window,
         };
         Self { window, fault }
     }
@@ -113,6 +125,18 @@ impl Fixture {
 impl WindowFixture for Fixture {
     fn window(&self) -> Arc<dyn PlatformWindow> {
         Arc::clone(&self.window)
+    }
+
+    /// The headless host's model: what its window system says, read apart
+    /// from the snapshot.
+    fn readback(&self) -> Readback {
+        Readback {
+            metrics: WindowMetrics::new(self.window.physical_size(), self.window.scale_factor())
+                .ok(),
+            focused: self.window.is_focused(),
+            active: self.window.is_active(),
+            visible: self.window.is_visible(),
+        }
     }
 
     fn settle(&mut self) {
@@ -138,17 +162,17 @@ impl WindowFixture for Fixture {
 
 fn only_the_move_and_size_commands() -> WindowCapabilities {
     let mut capabilities = WindowCapabilities::NONE;
-    capabilities.sets_position = true;
-    capabilities.sets_size = true;
-    capabilities.observes_position = true;
+    capabilities.sets_position = flui_platform::Availability::Native;
+    capabilities.sets_size = flui_platform::Availability::Native;
+    capabilities.observes_position = flui_platform::Availability::Native;
     capabilities
 }
 
 fn no_fullscreen_or_minimize() -> WindowCapabilities {
     let mut capabilities = WindowCapabilities::ALL;
-    capabilities.enters_fullscreen = false;
-    capabilities.minimizes = false;
-    capabilities.observes_minimized = false;
+    capabilities.enters_fullscreen = flui_platform::Availability::Unavailable;
+    capabilities.minimizes = flui_platform::Availability::Unavailable;
+    capabilities.observes_minimized = flui_platform::Availability::Unavailable;
     capabilities
 }
 
@@ -195,6 +219,11 @@ fn a_window_that_refuses_for_now_what_it_never_takes_is_caught() {
     assert_eq!(checks, ["capabilities_are_honest"]);
 }
 
+fn a_snapshot_without_the_windows_facts_is_caught() {
+    let checks = caught(Fault::SnapshotWithoutFacts);
+    assert_eq!(checks, ["the_snapshot_agrees_with_the_window_system"]);
+}
+
 #[test]
 fn window_conformance_checks() {
     crate::run_table(
@@ -215,6 +244,10 @@ fn window_conformance_checks() {
             (
                 "a_window_that_refuses_for_now_what_it_never_takes_is_caught",
                 a_window_that_refuses_for_now_what_it_never_takes_is_caught as fn(),
+            ),
+            (
+                "a_snapshot_without_the_windows_facts_is_caught",
+                a_snapshot_without_the_windows_facts_is_caught as fn(),
             ),
         ],
     );

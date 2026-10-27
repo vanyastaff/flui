@@ -388,12 +388,18 @@ pub trait PlatformWindow: Send + Sync {
     /// [`WindowCommandError`].
     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError>;
 
-    /// Register a callback meaning "[`state`](Self::state) may answer
-    /// differently now".
+    /// Register a callback meaning "[`state`](Self::state) answers differently
+    /// now".
     ///
     /// Called on the owner thread after a new snapshot was published, outside
-    /// any lock the window holds. The callback carries no payload: it re-reads
-    /// `state()` and compares revisions.
+    /// any lock the window holds, once per revision whichever fact changed:
+    /// geometry, mode, metrics, appearance, display, safe area, execution
+    /// state, focus, activation, visibility, hover or capabilities. Facts the window system
+    /// reports together are published in one revision. A host delivers it
+    /// inside the OS callback that reported the change where the OS gives one
+    /// (each `WM_SIZE` of a Win32 live resize, inside its modal loop), before
+    /// the callback for that one fact. The callback carries no payload: it
+    /// re-reads `state()` and compares it with the snapshot it last saw.
     fn on_state_changed(&self, callback: Box<dyn FnMut() + Send>) {
         let _ = callback;
     }
