@@ -5,8 +5,8 @@ use flui_foundation::geometry::{EdgeInsets, Point, Size, WindowMetrics};
 use flui_platform::{
     AdmissionError, AdmittedCommand, ApplyError, Availability, CapabilitiesOwner, SizeConstraints,
     Unsupported, UnsupportedReason, WindowAppearance, WindowCapabilities, WindowCommand,
-    WindowExecutionState, WindowGeometry, WindowMode, WindowRevision, WindowRevisionExhausted,
-    WindowState,
+    WindowExecutionState, WindowGeometry, WindowMaterial, WindowMode, WindowRevision,
+    WindowRevisionExhausted, WindowState,
 };
 
 fn size(width: f64, height: f64) -> Size<f64> {
@@ -120,7 +120,7 @@ fn admits(
 }
 
 fn admit_refuses_exactly_when_the_capability_is_unavailable() {
-    let rows: [(WindowCommand, Capability); 13] = [
+    let rows: [(WindowCommand, Capability); 14] = [
         (WindowCommand::SetTitle("t".into()), |c| &mut c.sets_title),
         (WindowCommand::SetPosition(Point::new(1.0, 1.0)), |c| {
             &mut c.sets_position
@@ -144,6 +144,9 @@ fn admit_refuses_exactly_when_the_capability_is_unavailable() {
         (WindowCommand::Hide, |c| &mut c.hides),
         (WindowCommand::Activate, |c| &mut c.activates),
         (WindowCommand::Close, |c| &mut c.closes),
+        (WindowCommand::SetMaterial(WindowMaterial::System), |c| {
+            &mut c.material
+        }),
     ];
     for (command, capability) in rows {
         let mut all = WindowCapabilities::ALL;
@@ -165,6 +168,21 @@ fn admit_refuses_exactly_when_the_capability_is_unavailable() {
             ))),
             "{command:?} on a window that honours nothing"
         );
+        // A capability this device lacks, where the platform has it.
+        let on_this_device = WindowCapabilities::ALL.unavailable_on_this_device(&command);
+        assert_eq!(
+            on_this_device.availability(&command),
+            Availability::Unavailable,
+            "{command:?} taken away on this device"
+        );
+        assert_eq!(
+            admits(&command, &on_this_device),
+            Err(AdmissionError::Unsupported(Unsupported::new(
+                UnsupportedReason::NotOnThisDevice
+            ))),
+            "{command:?} without its capability on this device"
+        );
+        assert_ne!(on_this_device, WindowCapabilities::ALL, "{command:?}");
     }
 }
 

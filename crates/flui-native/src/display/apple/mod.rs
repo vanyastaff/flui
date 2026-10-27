@@ -346,7 +346,7 @@ pub(crate) mod link_rate {
     //! measures becomes a new published refresh period, by the contract's
     //! constructor and the display model's one publisher.
 
-    use flui_platform::RefreshPeriod;
+    use flui_platform::{FrameRateHint, RefreshPeriod};
 
     use crate::display::source::MeasuredPeriod;
     use crate::version::gate::{Gate, Since, apple::AppleVersion};
@@ -389,33 +389,49 @@ pub(crate) mod link_rate {
         FramesPerSecond(u16),
     }
 
-    /// The request that runs a link at `maximum_frames_per_second` (the screen's
-    /// `maximumFramesPerSecond`) on `version`.
+    impl FrameRateRange {
+        /// No preference: the system picks the rate (`CAFrameRateRangeDefault`).
+        pub(crate) const NO_PREFERENCE: Self = Self {
+            minimum: 0.0,
+            maximum: 0.0,
+            preferred: 0.0,
+        };
+    }
+
+    /// The request a link gets on `version` for the window's `hint`, given the
+    /// screen's `maximumFramesPerSecond`.
     ///
-    /// A maximum below one is a screen that reports nothing and reads as 60; one
-    /// above 1000 is held at 1000. The range's minimum is 60, or the maximum when
-    /// that is lower, so the range is never inverted.
+    /// [`FrameRateHint::High`] runs the link at the screen's best rate: a maximum
+    /// below one is a screen that reports nothing and reads as 60; one above 1000
+    /// is held at 1000; the range's minimum is 60, or the maximum when that is
+    /// lower, so the range is never inverted. Any other hint withdraws the
+    /// request: the default range, or `preferredFramesPerSecond` zero before
+    /// iOS 15, both of which leave the rate to the system.
     pub(crate) fn frame_rate_preference(
         version: AppleVersion,
         maximum_frames_per_second: i64,
+        hint: FrameRateHint,
     ) -> FrameRatePreference {
-        let maximum = if maximum_frames_per_second < 1 {
-            ASSUMED_MAXIMUM
-        } else {
-            u16::try_from(maximum_frames_per_second)
-                .unwrap_or(MAXIMUM_CEILING)
-                .min(MAXIMUM_CEILING)
+        let wanted = match hint {
+            FrameRateHint::High => Some(if maximum_frames_per_second < 1 {
+                ASSUMED_MAXIMUM
+            } else {
+                u16::try_from(maximum_frames_per_second)
+                    .unwrap_or(MAXIMUM_CEILING)
+                    .min(MAXIMUM_CEILING)
+            }),
+            _ => None,
         };
         match version.since::<FrameRateRangeProperty>() {
             Some(proof) => FrameRatePreference::Range(
                 proof,
-                FrameRateRange {
+                wanted.map_or(FrameRateRange::NO_PREFERENCE, |maximum| FrameRateRange {
                     minimum: f32::from(RANGE_FLOOR.min(maximum)),
                     maximum: f32::from(maximum),
                     preferred: f32::from(maximum),
-                },
+                }),
             ),
-            None => FrameRatePreference::FramesPerSecond(maximum),
+            None => FrameRatePreference::FramesPerSecond(wanted.unwrap_or(0)),
         }
     }
 
@@ -504,7 +520,7 @@ pub(crate) mod link_rate {
 
     #[cfg(test)]
     mod tests {
-        use flui_platform::RefreshPeriod;
+        use flui_platform::{FrameRateHint, RefreshPeriod};
 
         use super::{
             AppleVersion, FrameRatePreference, FrameRateRange, LinkPeriod, ScreenPeriods,
@@ -532,7 +548,7 @@ pub(crate) mod link_rate {
                 (AppleVersion::new(14, 0, 0), 1_000_000, 1000),
             ] {
                 assert_eq!(
-                    frame_rate_preference(version, maximum),
+                    frame_rate_preference(version, maximum, FrameRateHint::High),
                     FrameRatePreference::FramesPerSecond(expected),
                     "{version:?} max {maximum}"
                 );
@@ -550,7 +566,7 @@ pub(crate) mod link_rate {
                 // A screen reporting nothing reads as 60.
                 (AppleVersion::new(16, 0, 0), 0, 60.0, 60.0),
             ] {
-                let range = range(frame_rate_preference(version, maximum))
+                let range = range(frame_rate_preference(version, maximum, FrameRateHint::High))
                     .unwrap_or_else(|| panic!("{version:?} has the range property"));
                 assert_eq!(
                     range,
@@ -562,6 +578,32 @@ pub(crate) mod link_rate {
                     "{version:?} max {maximum}"
                 );
             }
+        }
+
+        /// The window's hint is what the link asks for: `High` the screen's
+        /// best rate, the default no preference at all, on either side of the
+        /// range property's gate.
+        #[test]
+        fn the_link_asks_for_what_the_window_hints() {
+            let ios_15 = AppleVersion::new(15, 0, 0);
+            let ios_14 = AppleVersion::new(14, 0, 0);
+            assert_eq!(
+                range(frame_rate_preference(ios_15, 120, FrameRateHint::Default)),
+                Some(FrameRateRange::NO_PREFERENCE)
+            );
+            assert_eq!(
+                frame_rate_preference(ios_14, 120, FrameRateHint::Default),
+                FrameRatePreference::FramesPerSecond(0)
+            );
+            assert_eq!(
+                range(frame_rate_preference(ios_15, 120, FrameRateHint::High))
+                    .map(|range| range.preferred),
+                Some(120.0)
+            );
+            assert_eq!(
+                frame_rate_preference(ios_14, 120, FrameRateHint::High),
+                FrameRatePreference::FramesPerSecond(120)
+            );
         }
 
         /// The display link's gate, the row of `version::gate`'s table for the

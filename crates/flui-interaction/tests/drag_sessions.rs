@@ -134,6 +134,8 @@ impl PlatformWindow for DragWindow {
         WindowId(1)
     }
     fn request_redraw(&self) {}
+    flui_platform::window_takes_no_frame_verbs!();
+
     fn set_cursor(&self, _: flui_platform::CursorIcon) -> Result<(), flui_platform::CursorError> {
         Ok(())
     }

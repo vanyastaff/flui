@@ -39,6 +39,8 @@ impl flui_platform::PlatformWindow for WakeWindow {
             action();
         }
     }
+    flui_platform::window_takes_no_frame_verbs!();
+
     fn set_cursor(&self, _: flui_platform::CursorIcon) -> Result<(), flui_platform::CursorError> {
         Ok(())
     }

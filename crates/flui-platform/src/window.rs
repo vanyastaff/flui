@@ -315,24 +315,29 @@ impl From<WindowAppearance> for crate::Brightness {
     }
 }
 
-/// Window background appearance (backdrop material)
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+/// The material the window system draws behind a window's content, which
+/// shows through the window's frame and wherever its content is transparent
+/// ([`WindowCommand::SetMaterial`](crate::WindowCommand::SetMaterial)).
+///
+/// The vocabulary every host shares: each material is one every window
+/// system that has materials at all can draw, so a host whose
+/// [`WindowCapabilities::material`](crate::WindowCapabilities::material) is
+/// not `Unavailable` draws each of them. A material only one operating system
+/// has (Mica Alt and Acrylic on Windows, the `NSVisualEffectView` materials
+/// and Liquid Glass on macOS) is reached through that system's extension
+/// (`flui::native::windows`, `flui::native::macos`).
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 #[allow(
     clippy::exhaustive_enums,
-    reason = "every backend maps every material, and the window trait is sealed: a new material is a change each backend makes"
+    reason = "every host maps every material: a new material is a change each host makes, not one it may skip"
 )]
-pub enum WindowBackgroundAppearance {
-    /// Opaque background (default)
+pub enum WindowMaterial {
+    /// No material: the window's own background, opaque.
     #[default]
     Opaque,
-    /// Transparent background
-    Transparent,
-    /// Blurred background
-    Blurred,
-    /// Windows 11 Mica backdrop
-    MicaBackdrop,
-    /// Windows 11 Mica Alt backdrop
-    MicaAltBackdrop,
+    /// The window system's material for a long-lived window's background,
+    /// tinted by the desktop behind it: Mica on Windows 11.
+    System,
 }
 
 /// Failure to apply a cursor to one exact platform window.

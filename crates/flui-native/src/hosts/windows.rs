@@ -24,6 +24,7 @@ use crate::platform::HostPlatform;
 use crate::preferences::windows::PreferenceSource;
 use crate::storage::UserDataDirs;
 use crate::text::windows::Tsf;
+use crate::version::gate::windows::WindowsBuild;
 use crate::window::config::WindowConfiguration;
 use crate::window::windows::proc::WindowProc;
 use crate::window::windows::{WindowSet, WindowsWindow};
@@ -123,8 +124,15 @@ impl HostPlatform<Windows> {
     /// [`PlatformError::Init`] when the owner thread's COM apartment, window
     /// class or owner window cannot be set up.
     pub fn new() -> Result<Self, PlatformError> {
+        Self::at_build(WindowsBuild::read())
+    }
+
+    /// The platform as it runs on `build`, which its windows' version gates
+    /// read: [`new`](Self::new) with the build the process runs on, and a
+    /// test with the build it names.
+    pub(crate) fn at_build(build: WindowsBuild) -> Result<Self, PlatformError> {
         Self::try_from_parts(
-            |positions| WindowSet::new(WindowConfiguration::default(), positions),
+            |positions| WindowSet::new(WindowConfiguration::default(), positions, build),
             |windows| WindowsLoop::new::<Windows>(Arc::clone(windows) as _),
         )
     }

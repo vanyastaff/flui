@@ -15,12 +15,17 @@
 //!   claimed and then refused.
 //! - **State converges.** A command the window accepted shows in its
 //!   [`state`](PlatformWindow::state) once the window system has settled: the
-//!   title, size, position, mode, visibility, flags and constraints it asked for.
+//!   title, size, position, mode, visibility, flags and constraints it asked for,
+//!   and the window system draws the material it asked for.
 //! - **Revisions mean change.** Reading the state twice with nothing between
 //!   keeps its revision; a command that changed something raises it.
 //! - **Bad numbers never reach the window system.** A size that is not finite
 //!   and positive is refused at admission as
 //!   [`InvalidGeometry`](AdmissionError::InvalidGeometry), so no window sees it.
+//! - **Verbs answer to their capability.** The frame-rate hint and the input
+//!   regions, which a window takes outside the command queue because they are
+//!   sent every frame, answer `Unsupported` exactly when their capability is
+//!   `Unavailable` (ADR-0254 §3). The material is a command like the others.
 //! - **A closed window refuses.** Every admitted command after the window
 //!   closed — through [`WindowCommand::Close`] where the window takes it, else
 //!   the way the window system closes it — is [`Closed`](ApplyError::Closed).
@@ -34,10 +39,11 @@
 
 use std::sync::Arc;
 
-use flui_foundation::geometry::{Point, Size, WindowMetrics};
+use flui_foundation::geometry::{Point, Rect, Size, WindowMetrics};
+use flui_platform::input_regions::{InputRegion, InputRegionKind};
 use flui_platform::{
-    AdmissionError, ApplyError, PlatformWindow, SizeConstraints, WindowCommand, WindowMode,
-    WindowState,
+    AdmissionError, ApplyError, Availability, FrameRateHint, PlatformWindow, SizeConstraints,
+    Unsupported, WindowCommand, WindowMaterial, WindowMode, WindowState,
 };
 
 use crate::window_commands::AdmitAndApply;
@@ -58,6 +64,11 @@ pub struct Readback {
     /// Whether the window is shown and nothing (a cloak, a locked session)
     /// hides it.
     pub visible: bool,
+    /// The material the window system draws behind the window; `None` where
+    /// it draws one the contract has no name for, or none can be read. Not a
+    /// fact of the snapshot: the checks compare it with the
+    /// [`WindowCommand::SetMaterial`] the window accepted.
+    pub material: Option<WindowMaterial>,
 }
 
 /// A window under test, as the checks drive it.
@@ -82,6 +93,12 @@ pub trait WindowFixture {
     fn revise_capabilities(&mut self) -> bool {
         false
     }
+
+    /// Whether the window's input path honours input regions, as its
+    /// [`InputCapabilities::input_regions`](flui_platform::input_capabilities::InputCapabilities::input_regions)
+    /// reports it: the capability the input-region verb answers to, which
+    /// the snapshot does not carry.
+    fn input_regions(&self) -> Availability;
 }
 
 /// One promise a window broke.
@@ -143,6 +160,10 @@ const CHECKS: &[(&str, Check)] = &[
         "a_command_admitted_before_a_revision_is_superseded",
         a_command_admitted_before_a_revision_is_superseded,
     ),
+    (
+        "per_frame_verbs_report_unsupported_exactly_when_unavailable",
+        per_frame_verbs_report_unsupported_exactly_when_unavailable,
+    ),
     ("a_closed_window_refuses", a_closed_window_refuses),
 ];
 
@@ -168,6 +189,8 @@ fn sample_commands(state: &WindowState) -> Vec<WindowCommand> {
         WindowCommand::Hide,
         WindowCommand::Show,
         WindowCommand::Activate,
+        WindowCommand::SetMaterial(WindowMaterial::System),
+        WindowCommand::SetMaterial(WindowMaterial::Opaque),
     ]
 }
 
@@ -266,6 +289,12 @@ fn accepted_commands_converge(fixture: &mut dyn WindowFixture) -> Result<(), Str
                 .visible
                 .then_some(())
                 .ok_or_else(|| "the window is still hidden".to_owned()),
+            WindowCommand::SetMaterial(material) => {
+                let held = fixture.readback().material;
+                (held == Some(*material))
+                    .then_some(())
+                    .ok_or_else(|| format!("the window system draws {held:?}, not {material:?}"))
+            }
             _ => Ok(()),
         };
         if let Err(detail) = outcome {
@@ -398,6 +427,52 @@ fn a_command_admitted_before_a_revision_is_superseded(
         return Err("a superseded title reached the window".to_owned());
     }
     Ok(())
+}
+
+/// The verbs a window takes outside the command queue — the frame-rate hint
+/// and the input regions — answer `Unsupported` exactly when
+/// their capability is `Unavailable`, never as a refusal worth trying again,
+/// and are taken otherwise (ADR-0254 §3).
+fn per_frame_verbs_report_unsupported_exactly_when_unavailable(
+    fixture: &mut dyn WindowFixture,
+) -> Result<(), String> {
+    let window = fixture.window();
+    let capabilities = window.state().capabilities;
+    let mut broken = Vec::new();
+    let mut judge =
+        |verb: String, availability: Availability, answer: Result<(), Unsupported>| match (
+            availability.is_available(),
+            answer,
+        ) {
+            (false, Err(refused)) if refused.is_retryable() => broken.push(format!(
+                "{verb} is Unavailable but was refused as {refused}, which asks to be tried again"
+            )),
+            (true, Ok(())) | (false, Err(_)) => {}
+            (true, Err(refused)) => {
+                broken.push(format!("{verb} is {availability:?} but answered {refused}"));
+            }
+            (false, Ok(())) => broken.push(format!("{verb} is Unavailable but answered Ok")),
+        };
+    for hint in [FrameRateHint::High, FrameRateHint::Default] {
+        judge(
+            format!("set_frame_rate_hint({hint:?})"),
+            capabilities.frame_rate_hint,
+            window.set_frame_rate_hint(hint),
+        );
+    }
+    let region = InputRegion::new(
+        InputRegionKind::SystemGestureExclusion,
+        Rect::from_ltrb(0.0, 0.0, 40.0, 30.0),
+    );
+    let input_regions = fixture.input_regions();
+    for regions in [&[region][..], &[]] {
+        judge(
+            format!("set_input_regions({} regions)", regions.len()),
+            input_regions,
+            window.set_input_regions(regions),
+        );
+    }
+    finish(broken)
 }
 
 fn a_closed_window_refuses(fixture: &mut dyn WindowFixture) -> Result<(), String> {
