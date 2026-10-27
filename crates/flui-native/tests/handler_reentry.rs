@@ -9,6 +9,7 @@
 //! worker thread and is reported after [`TIMEOUT`]: the worker stays parked
 //! for the rest of the process.
 
+use flui_testing::window_commands::AdmitAndApply as _;
 use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -18,8 +19,7 @@ use std::time::Duration;
 
 use flui_native::{HeadlessPlatform, HostWindow, Platform};
 use flui_platform::{
-    DispatchEventResult, SessionEndAnswer, SessionEndPhase, SystemNotice, WindowCommand,
-    WindowOptions,
+    DispatchEventResult, SessionEndAnswer, SessionEndPhase, SystemNotice, WindowOptions,
 };
 use parking_lot::Mutex;
 
@@ -259,7 +259,7 @@ fn headless_close_callback_reenters() {
             platform.quit();
         }));
 
-        let _ = window.apply(WindowCommand::Close);
+        window.close_now();
 
         let nested = nested_window
             .lock()
@@ -270,7 +270,7 @@ fn headless_close_callback_reenters() {
             retired.load(Ordering::SeqCst),
             "the callback that ran is retired once it returns"
         );
-        let _ = nested.apply(WindowCommand::Close);
+        nested.close_now();
         assert_eq!(
             successor_heard.load(Ordering::SeqCst),
             1,
@@ -434,7 +434,7 @@ fn headless_exit_policy_hook_that_opens_a_window_keeps_the_platform() {
         let window = platform
             .open_window(WindowOptions::default())
             .expect("a window");
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
 
         assert!(opened.lock().is_some(), "the hook ran and opened a window");
         assert_eq!(
@@ -443,7 +443,7 @@ fn headless_exit_policy_hook_that_opens_a_window_keeps_the_platform() {
             "the window the hook opened keeps the platform running"
         );
         let window = opened.lock().take().expect("the hook's window");
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
         assert_eq!(
             quits.load(Ordering::SeqCst),
             1,
@@ -565,7 +565,8 @@ mod win32 {
     use std::time::{Duration, Instant};
 
     use flui_native::{Platform, WindowsPlatform};
-    use flui_platform::{WindowCommand, WindowOptions};
+    use flui_platform::WindowOptions;
+    use flui_testing::window_commands::AdmitAndApply as _;
     use parking_lot::Mutex;
     use windows::Win32::UI::WindowsAndMessaging::{
         DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage, WM_QUIT,
@@ -636,10 +637,10 @@ mod win32 {
                 platform.quit();
             }));
 
-            let _ = window.apply(WindowCommand::Close);
+            window.close_now();
             assert!(pump_until(|| nested_window.lock().is_some()));
             let nested = nested_window.lock().take().expect("the nested window");
-            let _ = nested.apply(WindowCommand::Close);
+            nested.close_now();
             assert!(pump_until(|| successor_heard.load(Ordering::SeqCst) == 1));
         });
     }
@@ -656,7 +657,7 @@ mod win32 {
             let platform = platform();
             let window = platform.open_window(hidden()).expect("a window");
             replaced_window_callbacks_reach_their_window(&window);
-            let _ = window.apply(flui_platform::WindowCommand::Close);
+            window.close_now();
         });
     }
 

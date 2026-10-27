@@ -41,9 +41,9 @@ use crate::text::WindowTextInput;
 use crate::window::WindowManagerView;
 use crate::window::state::{ModeFlags, ReportedFacts, WindowStateCell, mode_of};
 use flui_platform::{
-    CursorError, DisplayId, PlatformTextInput, PlatformWindow, SizeConstraints, WindowAppearance,
-    WindowCapabilities, WindowCommand, WindowCommandError, WindowGeometry, WindowId, WindowMode,
-    WindowOptions, WindowState,
+    AdmittedCommand, ApplyError, CursorError, DisplayId, PlatformTextInput, PlatformWindow,
+    SizeConstraints, WindowAppearance, WindowCapabilities, WindowCommand, WindowGeometry, WindowId,
+    WindowMode, WindowOptions, WindowState,
 };
 use flui_semantics::platform::PlatformAccessibility;
 use plan::{FrameInset, OpenPlan, PlacementDisplay, WindowShell};
@@ -431,7 +431,7 @@ impl WinitWindow {
     /// Enter `mode`. Leaving fullscreen and minimized first keeps entering a
     /// mode from depending on what the window manager makes of two requests at
     /// once: it keeps a minimized window minimized under a maximize.
-    fn enter_mode(&self, mode: WindowMode) -> Result<(), WindowCommandError> {
+    fn enter_mode(&self, mode: WindowMode) -> Result<(), ApplyError> {
         if *self.reveal_pending.lock() || !*self.is_visible.lock() {
             self.minimize_on_map
                 .store(mode == WindowMode::Minimized, Ordering::Release);
@@ -455,11 +455,10 @@ impl WinitWindow {
                 self.window.set_minimized(false);
                 self.window.set_maximized(false);
             }
-            _ => {
-                return Err(flui_platform::Unsupported::new(
-                    flui_platform::UnsupportedReason::NotOnThisPlatform,
-                )
-                .into());
+            other => {
+                return Err(crate::window::state::not_carried_out(
+                    &WindowCommand::SetMode(other),
+                ));
             }
         }
         Ok(())
@@ -694,11 +693,11 @@ impl PlatformWindow for WinitWindow {
         published.state
     }
 
-    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+    fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
         if self.closed.load(Ordering::Acquire) {
-            return Err(WindowCommandError::Closed);
+            return Err(ApplyError::Closed);
         }
-        command.admit(&self.capabilities)?;
+        let command = command.against(&self.window_state.published_capabilities())?;
         match command {
             WindowCommand::SetTitle(title) => {
                 self.window.set_title(&title);
@@ -748,12 +747,7 @@ impl PlatformWindow for WinitWindow {
                 return Ok(());
             }
             // `admit` refuses a command this window does not know.
-            _ => {
-                return Err(flui_platform::Unsupported::new(
-                    flui_platform::UnsupportedReason::NotOnThisPlatform,
-                )
-                .into());
-            }
+            other => return Err(crate::window::state::not_carried_out(&other)),
         }
         // After the command's native work.
         self.refresh_state();

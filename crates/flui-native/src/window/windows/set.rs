@@ -444,6 +444,8 @@ mod open_tests {
         WindowOptions,
     };
 
+    use flui_testing::window_commands::AdmitAndApply as _;
+
     use super::open_spot;
     use crate::platform::Platform as _;
 
@@ -597,10 +599,10 @@ mod open_tests {
             .open_window(WindowOptions::default().with_visible(false))
             .expect("window");
         window
-            .apply(WindowCommand::SetMode(WindowMode::Maximized))
+            .admit_and_apply(WindowCommand::SetMode(WindowMode::Maximized))
             .expect("maximize");
         window
-            .apply(WindowCommand::SetSize(Size::new(500.0, 400.0)))
+            .admit_and_apply(WindowCommand::SetSize(Size::new(500.0, 400.0)))
             .expect("resize while maximized");
         assert_eq!(
             window.state().mode,
@@ -608,7 +610,7 @@ mod open_tests {
             "still maximized"
         );
         window
-            .apply(WindowCommand::SetMode(WindowMode::Normal))
+            .admit_and_apply(WindowCommand::SetMode(WindowMode::Normal))
             .expect("restore");
         let state = window.state();
         assert!(
@@ -633,7 +635,7 @@ mod open_tests {
             .expect("window");
         assert_eq!(window.state().mode, WindowMode::Maximized);
         window
-            .apply(WindowCommand::SetMode(WindowMode::Normal))
+            .admit_and_apply(WindowCommand::SetMode(WindowMode::Normal))
             .expect("restore");
         let outer = window.state().outer;
         assert!(
@@ -679,11 +681,11 @@ mod open_tests {
         };
 
         window
-            .apply(WindowCommand::SetMode(WindowMode::Maximized))
+            .admit_and_apply(WindowCommand::SetMode(WindowMode::Maximized))
             .expect("maximize");
         same_as_normal(window.state(), "a maximized window");
         window
-            .apply(WindowCommand::SetMode(WindowMode::Fullscreen))
+            .admit_and_apply(WindowCommand::SetMode(WindowMode::Fullscreen))
             .expect("fullscreen");
         same_as_normal(window.state(), "a fullscreen window entered from maximized");
     }

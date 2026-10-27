@@ -3,6 +3,7 @@
 //! announcement to its destruction, and read by the window's other features
 //! through `WindowInputs`.
 
+use flui_testing::window_commands::AdmitAndApply as _;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
@@ -84,7 +85,7 @@ fn a_windows_input_is_gone_once_it_is_destroyed() {
     let kept =
         std::rc::Rc::downgrade(&testing::window_input(this.hwnd()).expect("the window's input"));
 
-    let _ = window.apply(flui_platform::WindowCommand::Close);
+    window.close_now();
     assert_eq!(inputs.hovered(this), None);
     assert!(kept.upgrade().is_none(), "the window's input is dropped");
 }

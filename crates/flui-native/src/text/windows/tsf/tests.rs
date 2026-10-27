@@ -2,6 +2,7 @@
 //! window, with no input method typing: which store a completion reaches,
 //! and that one queued behind a TSF call is never lost.
 
+use flui_testing::window_commands::AdmitAndApply as _;
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
@@ -814,7 +815,7 @@ fn a_window_offers_its_text_services_as_its_host() {
         "TSF ends the composition it holds in the focused store (none here)"
     );
 
-    let _ = window.apply(flui_platform::WindowCommand::Close);
+    window.close_now();
     assert_eq!(
         host.complete_composition(&erased(&store)),
         Err(TextStoreHostError::Unsupported(
@@ -993,7 +994,7 @@ fn a_moved_window_tells_tsf_its_layout_changed() {
         );
         host.focus_store(None);
     });
-    let _ = window.apply(flui_platform::WindowCommand::Close);
+    window.close_now();
 }
 
 /// A window's DPI change reaches its text services as the new scale is set,
@@ -1036,7 +1037,7 @@ fn a_rescaled_window_answers_layout_at_its_new_scale() {
         (services.scale() * 96.0 - dpi as f64).abs() < 1e-9,
         "the text services answer at the window's new scale"
     );
-    let _ = window.apply(flui_platform::WindowCommand::Close);
+    window.close_now();
 }
 
 /// One row: its name, and the case run against the shared window.
@@ -1122,8 +1123,10 @@ fn the_text_services_answer_a_completion_for_its_store() {
             failed.push(name);
         }
     }
-    let _ = window.apply(flui_platform::WindowCommand::Close);
+    // The cases' own failures first: a close that fails after them must not
+    // hide which cases did.
     assert!(failed.is_empty(), "failed cases: {failed:?}");
+    window.close_now();
 }
 
 /// A subscriber that panics on the one event whose message is `.0`.
@@ -1321,7 +1324,7 @@ fn a_panicking_activation_diagnostic_orphans_no_window() {
                 crate::text::windows::testing::services_of(hwnd).is_some(),
                 "the window's text services are active"
             );
-            let _ = window.apply(flui_platform::WindowCommand::Close);
+            window.close_now();
         }
         Ok(Err(error)) => panic!("the open failed: {error}"),
         Err(_) => assert!(
@@ -1439,7 +1442,7 @@ fn a_window_dropped_after_its_platform_retires_tsf_inside_com() {
 
     SHUTDOWN_IN_APARTMENT.set(None);
     drop(platform);
-    let _ = window.apply(flui_platform::WindowCommand::Close);
+    window.close_now();
     drop(window);
     assert!(
         apartment.upgrade().is_none(),

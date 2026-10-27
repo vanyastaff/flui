@@ -9,6 +9,7 @@
 // same binary.
 #![expect(unsafe_code)]
 
+use flui_testing::window_commands::AdmitAndApply as _;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -63,7 +64,7 @@ fn closing_the_only_window_without_a_hook_never_calls_quit() {
     let window = platform
         .open_window(WindowOptions::default())
         .expect("headless platform should create a window");
-    let _ = window.apply(flui_platform::WindowCommand::Close);
+    window.close_now();
 
     assert_eq!(
         quit_calls.load(Ordering::SeqCst),
@@ -87,7 +88,7 @@ fn exit_policy_hook_veto_prevents_quit_even_after_the_last_window_closes() {
     let window = platform
         .open_window(WindowOptions::default())
         .expect("headless platform should create a window");
-    let _ = window.apply(flui_platform::WindowCommand::Close);
+    window.close_now();
 
     assert_eq!(
         quit_calls.load(Ordering::SeqCst),

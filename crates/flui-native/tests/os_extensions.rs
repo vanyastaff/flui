@@ -33,6 +33,7 @@ fn main() {
 mod cases {
     use flui_native::{HostWindow, Platform};
     use flui_platform::WindowOptions;
+    use flui_testing::window_commands::AdmitAndApply as _;
 
     /// Every case, by name.
     pub(crate) const CASES: &[(&str, fn())] = &[
@@ -95,7 +96,7 @@ mod cases {
                         .expect("a window opened on the owner is ready");
                     check("winit", window.as_ref());
                     marked.set(true);
-                    let _ = window.apply(flui_platform::WindowCommand::Close);
+                    window.close_now();
                     owner.quit();
                     Ok(())
                 }))
@@ -125,7 +126,7 @@ mod cases {
             win32.dpi().is_ok_and(|dpi| dpi > 0),
             "a live Win32 window has a DPI"
         );
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
     }
 
     /// The Win32 host opens a window with the corners and theme its options
@@ -156,7 +157,7 @@ mod cases {
             let win32 = window.win32().expect("a Win32 window has its view");
             assert_eq!(win32.corner_preference(), Ok(corners));
             assert_eq!(win32.theme(), Ok(theme));
-            let _ = window.apply(flui_platform::WindowCommand::Close);
+            window.close_now();
         }
     }
 
@@ -187,7 +188,7 @@ mod cases {
             Ok(WindowsCornerPreference::Round),
             "the refused call changed nothing"
         );
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
         let closed = Err(Win32WindowError::Unsupported(Unsupported::new(
             UnsupportedReason::NoWindow,
         )));
@@ -396,6 +397,6 @@ mod cases {
         assert!(tree.is_flui_view(&tree.content_view()));
         assert!(tree.flui_view_is_first_responder());
         assert_eq!(appkit.clear_backdrop(), Ok(()), "nothing to take away");
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
     }
 }

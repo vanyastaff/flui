@@ -8,6 +8,7 @@
 //! default actions.
 #![cfg(target_arch = "wasm32")]
 
+use flui_testing::window_commands::AdmitAndApply as _;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -433,7 +434,7 @@ impl CanvasWindow {
 
 impl Drop for CanvasWindow {
     fn drop(&mut self) {
-        let _ = self.window.apply(WindowCommand::Close);
+        self.window.close_for_cleanup();
     }
 }
 
@@ -488,7 +489,7 @@ fn the_browser_leaves_every_touch_on_the_canvas_to_the_application() {
             .open_window(WindowOptions::default())
             .expect("the page's canvas opens");
         assert_eq!(touch_action(), "none", "the canvas {canvas}");
-        let _ = window.apply(WindowCommand::Close);
+        window.close_now();
     }
 }
 
@@ -853,7 +854,7 @@ fn a_hidden_page_ends_its_presses_before_a_visibility_callback_closes_it() {
         if let Some(window) = closing.upgrade()
             && !window.state().visible
         {
-            let _ = window.apply(WindowCommand::Close);
+            window.close_now();
         }
     }));
     pointer_at("pointerdown", 5, "touch", 0, 1, 40.0, 30.0);
@@ -1199,7 +1200,7 @@ impl HostedCanvas {
 
 impl Drop for HostedCanvas {
     fn drop(&mut self) {
-        let _ = self.window.apply(WindowCommand::Close);
+        self.window.close_for_cleanup();
         self.owner.quit();
     }
 }

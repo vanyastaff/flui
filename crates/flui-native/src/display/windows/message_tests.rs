@@ -8,6 +8,7 @@ use crate::owner::windows::broadcast::send_for_test;
 use crate::platform::Platform;
 use crate::window::windows::WindowsWindow;
 use flui_platform::WindowOptions;
+use flui_testing::window_commands::AdmitAndApply as _;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -217,5 +218,5 @@ fn dpi_change_invalidates_the_snapshot() {
         sampled + 1,
         "a DPI change left the snapshot cached"
     );
-    let _ = window.apply(flui_platform::WindowCommand::Close);
+    window.close_now();
 }

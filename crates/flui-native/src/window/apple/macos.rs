@@ -46,8 +46,8 @@ use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::{
-    SizeConstraints, WindowCapabilities, WindowCommand, WindowCommandError, WindowGeometry,
-    WindowMode, WindowState,
+    AdmittedCommand, ApplyError, SizeConstraints, WindowCapabilities, WindowCommand,
+    WindowGeometry, WindowMode, WindowState,
 };
 
 use crate::window::apple::geometry::{
@@ -1330,11 +1330,11 @@ impl PlatformWindow for MacOSWindow {
         self.current_state()
     }
 
-    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+    fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
         if self.closed.load(Ordering::SeqCst) {
-            return Err(WindowCommandError::Closed);
+            return Err(ApplyError::Closed);
         }
-        command.admit(&window_capabilities())?;
+        let command = command.against(&self.snapshot.published_capabilities())?;
         match command {
             WindowCommand::SetTitle(title) => self.set_native_title(&title),
             WindowCommand::SetPosition(at) => self.set_native_position(at)?,
@@ -1357,12 +1357,7 @@ impl PlatformWindow for MacOSWindow {
             }
             // A command added to the contract that this backend has not met
             // is refused, not ignored.
-            _ => {
-                return Err(flui_platform::Unsupported::new(
-                    flui_platform::UnsupportedReason::NotOnThisPlatform,
-                )
-                .into());
-            }
+            other => return Err(crate::window::state::not_carried_out(&other)),
         }
         self.publish_state();
         Ok(())
@@ -1482,13 +1477,13 @@ impl PlatformWindow for MacOSWindow {
 impl MacOSWindow {
     /// Show the window, deminiaturizing it and making it key; the zoomed or
     /// fullscreen mode is kept.
-    fn show_window(&self) -> Result<(), WindowCommandError> {
+    fn show_window(&self) -> Result<(), ApplyError> {
         // An explicit show settles a deferred first reveal: the window is
         // made opaque along with being ordered.
         let settle_reveal = self.take_pending_first_reveal();
         let shown = route_on_owner(self.owner, self.owner_is_main, || {
             if self.closed.load(Ordering::SeqCst) {
-                return Err(WindowCommandError::Closed);
+                return Err(ApplyError::Closed);
             }
             // SAFETY: self retains the native window; routing establishes its
             // owner lane. Deminiaturizing and ordering do not toggle zoom/fullscreen.
@@ -1501,12 +1496,12 @@ impl MacOSWindow {
                     let _: () = msg_send![self.ns_window, deminiaturize: NIL];
                 }
                 if self.closed.load(Ordering::SeqCst) {
-                    return Err(WindowCommandError::Closed);
+                    return Err(ApplyError::Closed);
                 }
                 let _: () = msg_send![self.ns_window, makeKeyAndOrderFront: NIL];
             }
             if self.closed.load(Ordering::SeqCst) {
-                Err(WindowCommandError::Closed)
+                Err(ApplyError::Closed)
             } else {
                 Ok(())
             }
@@ -1930,15 +1925,14 @@ impl MacOSWindow {
     }
 
     /// Move the window's outer top-left corner.
-    fn set_native_position(&self, at: Point<f64>) -> Result<(), WindowCommandError> {
+    fn set_native_position(&self, at: Point<f64>) -> Result<(), ApplyError> {
         route_on_owner(self.owner, self.owner_is_main, || {
             // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
             // body runs on the owner lane.
             unsafe {
-                let height =
-                    primary_screen_height().ok_or_else(|| WindowCommandError::Backend {
-                        message: "there is no screen to measure a position from".into(),
-                    })?;
+                let height = primary_screen_height().ok_or_else(|| {
+                    ApplyError::failed("there is no screen to measure a position from".into())
+                })?;
                 let point = cocoa_top_left_point(at, height);
                 let _: () = msg_send![
                     self.ns_window,
@@ -1979,16 +1973,16 @@ impl MacOSWindow {
     /// Switch one style-mask bit (resizable, titled) on or off, keeping the
     /// content area where it is: removing the title bar shrinks the frame, not
     /// the content.
-    fn set_style_bit(&self, bit: NSWindowStyleMask, on: bool) -> Result<(), WindowCommandError> {
+    fn set_style_bit(&self, bit: NSWindowStyleMask, on: bool) -> Result<(), ApplyError> {
         route_on_owner(self.owner, self.owner_is_main, || {
             // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
             // body runs on the owner lane.
             unsafe {
                 let mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
                 if mask.contains(NSWindowStyleMask::FullScreen) {
-                    return Err(WindowCommandError::Backend {
-                        message: "AppKit does not restyle a window while it is full screen".into(),
-                    });
+                    return Err(ApplyError::failed(
+                        "AppKit does not restyle a window while it is full screen".into(),
+                    ));
                 }
                 // A window that is no longer resizable reports a zoomed frame
                 // as normal and cannot be un-zoomed by the user, so it is
@@ -1998,9 +1992,9 @@ impl MacOSWindow {
                     && !on
                     && mode_of(flags.mode_flags()) != WindowMode::Normal
                 {
-                    return Err(WindowCommandError::Backend {
-                        message: "a window is made fixed-size only in normal mode".into(),
-                    });
+                    return Err(ApplyError::failed(
+                        "a window is made fixed-size only in normal mode".into(),
+                    ));
                 }
                 let wanted = if on { mask | bit } else { mask - bit };
                 if wanted == mask {
@@ -2018,16 +2012,15 @@ impl MacOSWindow {
 
     /// Order the window out. A full-screen window is refused: ordering it out
     /// leaves its empty Space behind.
-    fn hide(&self) -> Result<(), WindowCommandError> {
+    fn hide(&self) -> Result<(), ApplyError> {
         route_on_owner(self.owner, self.owner_is_main, || {
             // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
             // body runs on the owner lane.
             unsafe {
                 if self.read_flags().fullscreen {
-                    return Err(WindowCommandError::Backend {
-                        message: "a full-screen window leaves full screen before it is hidden"
-                            .into(),
-                    });
+                    return Err(ApplyError::failed(
+                        "a full-screen window leaves full screen before it is hidden".into(),
+                    ));
                 }
                 let _: () = msg_send![self.ns_window, orderOut: NIL];
                 Ok(())
@@ -2045,16 +2038,15 @@ impl MacOSWindow {
     /// state when its `windowDid…` notification arrives. The newest command
     /// wins, and it also replaces the mode a hidden window was to enter when
     /// first shown.
-    fn change_mode(&self, mode: WindowMode) -> Result<(), WindowCommandError> {
+    fn change_mode(&self, mode: WindowMode) -> Result<(), ApplyError> {
         let flags = route_on_owner(self.owner, self.owner_is_main, || {
             // SAFETY: `ns_window` is alive; the body runs on the owner lane.
             unsafe { self.read_flags() }
         });
         if !flags.resizable && matches!(mode, WindowMode::Maximized | WindowMode::Fullscreen) {
-            return Err(WindowCommandError::Backend {
-                message: "AppKit does not zoom or full-screen a window that cannot be resized"
-                    .into(),
-            });
+            return Err(ApplyError::failed(
+                "AppKit does not zoom or full-screen a window that cannot be resized".into(),
+            ));
         }
         let steps = self
             .state

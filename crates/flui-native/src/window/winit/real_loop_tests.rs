@@ -8,6 +8,7 @@
 //! (`owner::winit::testing`): the event loop a test thread may build, the
 //! application a test runs it with and the waits for the loop.
 
+use flui_testing::window_commands::AdmitAndApply as _;
 use std::{
     collections::HashSet,
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
@@ -393,7 +394,7 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
             // The programmatic close, from a thread that is NOT the
             // owner — the hardest case for the teardown's thread rules.
             window
-                .apply(WindowCommand::Close)
+                .admit_and_apply(WindowCommand::Close)
                 .expect("a winit window closes");
 
             wait_for_map_len(&platform_for_worker, 0, "programmatic close map removal");
@@ -537,7 +538,8 @@ mod wayland_window {
     use flui_foundation::geometry::Point;
 
     use super::*;
-    use flui_platform::{WindowCapabilities, WindowCommand, WindowCommandError, WindowMode};
+    use flui_platform::CommandRefusal;
+    use flui_platform::{AdmissionError, WindowCapabilities, WindowCommand, WindowMode};
     use winit::event_loop::EventLoop;
 
     /// What a window answers for a command its capabilities leave out.
@@ -624,17 +626,19 @@ mod wayland_window {
                     WindowCommand::Activate,
                 ] {
                     assert_eq!(
-                        window.apply(refused.clone()),
-                        Err(WindowCommandError::Unsupported(NOT_HERE)),
+                        window.admit_and_apply(refused.clone()),
+                        Err(CommandRefusal::Admission(AdmissionError::Unsupported(
+                            NOT_HERE
+                        ))),
                         "{refused:?}"
                     );
                 }
                 window
-                    .apply(WindowCommand::SetTitle("renamed".into()))
+                    .admit_and_apply(WindowCommand::SetTitle("renamed".into()))
                     .expect("a title is set");
                 assert_eq!(window.state().title.as_deref(), Some("renamed"));
                 window
-                    .apply(WindowCommand::SetMode(WindowMode::Maximized))
+                    .admit_and_apply(WindowCommand::SetMode(WindowMode::Maximized))
                     .expect("a maximize is requested");
                 // No first frame ever presents here, so there is nothing to
                 // reveal and the call changes nothing.

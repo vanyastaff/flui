@@ -12,8 +12,8 @@ use cursor_icon::CursorIcon;
 use flui_foundation::geometry::Point;
 
 use crate::{
-    CursorError, DispatchEventResult, PlatformHaptics, PlatformInput, PlatformTextInput,
-    WindowBackgroundAppearance, WindowCommand, WindowCommandError, WindowId, WindowState,
+    AdmittedCommand, ApplyError, CursorError, DispatchEventResult, PlatformHaptics, PlatformInput,
+    PlatformTextInput, WindowBackgroundAppearance, WindowId, WindowState,
 };
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -92,7 +92,8 @@ pub enum WindowAt {
 /// them is one [`on_state_changed`](Self::on_state_changed). There is no getter
 /// and no callback per fact: a consumer that needs to know which fact changed
 /// compares the new snapshot with the one it saw last. Showing, activating and
-/// closing a window are [`WindowCommand`]s like every other change.
+/// closing a window are [`WindowCommand`](crate::WindowCommand)s like every
+/// other change.
 ///
 /// # A window built from this crate alone
 ///
@@ -100,9 +101,9 @@ pub enum WindowAt {
 /// use std::sync::Arc;
 ///
 /// use flui_platform::{
-///     CursorError, CursorIcon, PlatformHaptics, PlatformSystemChrome, PlatformTextInput,
-///     PlatformWindow, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand,
-///     WindowCommandError, WindowGeometry, WindowId, WindowState,
+///     AdmissionError, AdmittedCommand, ApplyError, CursorError, CursorIcon, PlatformHaptics,
+///     PlatformSystemChrome, PlatformTextInput, PlatformWindow, Unsupported, UnsupportedReason,
+///     WindowCapabilities, WindowCommand, WindowGeometry, WindowId, WindowMode, WindowState,
 /// };
 /// use flui_foundation::geometry::Size;
 ///
@@ -116,8 +117,10 @@ pub enum WindowAt {
 ///     fn state(&self) -> WindowState {
 ///         WindowState::new(WindowGeometry::new(None, Size::default()), Size::default())
 ///     }
-///     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
-///         command.admit(&WindowCapabilities::NONE)?;
+///     fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
+///         // Under the capabilities of its own snapshot, which honour
+///         // nothing but the normal mode every window has.
+///         command.against(&WindowCapabilities::NONE)?;
 ///         Ok(())
 ///     }
 ///     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
@@ -139,10 +142,24 @@ pub enum WindowAt {
 ///
 /// let window: &dyn PlatformWindow = &Offscreen;
 /// assert_eq!(window.id(), WindowId(7));
+/// let capabilities = window.state().capabilities;
 /// assert!(matches!(
-///     window.apply(WindowCommand::Show),
-///     Err(WindowCommandError::Unsupported(_))
+///     WindowCommand::Show.admit(&capabilities),
+///     Err(AdmissionError::Unsupported(_))
 /// ));
+/// let normal = WindowCommand::SetMode(WindowMode::Normal)
+///     .admit(&capabilities)
+///     .expect("every window has the normal mode");
+/// assert_eq!(window.apply(normal), Ok(()));
+/// ```
+///
+/// A window takes only what [`WindowCommand::admit`](crate::WindowCommand::admit) built, and nothing but
+/// `admit` builds it:
+///
+/// ```compile_fail,E0308
+/// fn show(window: &dyn flui_platform::PlatformWindow) {
+///     let _ = window.apply(flui_platform::WindowCommand::Show);
+/// }
 /// ```
 ///
 /// A fact is read from the snapshot, never asked of the window on its own:
@@ -160,9 +177,9 @@ pub enum WindowAt {
 /// use std::sync::Arc;
 ///
 /// use flui_platform::{
-///     CursorError, CursorIcon, PlatformHaptics, PlatformSystemChrome, PlatformTextInput,
-///     PlatformWindow, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand,
-///     WindowCommandError, WindowGeometry, WindowId, WindowState,
+///     AdmissionError, AdmittedCommand, ApplyError, CursorError, CursorIcon, PlatformHaptics,
+///     PlatformSystemChrome, PlatformTextInput, PlatformWindow, Unsupported, UnsupportedReason,
+///     WindowCapabilities, WindowCommand, WindowGeometry, WindowId, WindowMode, WindowState,
 /// };
 /// use flui_foundation::geometry::Size;
 ///
@@ -176,8 +193,10 @@ pub enum WindowAt {
 ///     fn state(&self) -> WindowState {
 ///         WindowState::new(WindowGeometry::new(None, Size::default()), Size::default())
 ///     }
-///     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
-///         command.admit(&WindowCapabilities::NONE)?;
+///     fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
+///         // Under the capabilities of its own snapshot, which honour
+///         // nothing but the normal mode every window has.
+///         command.against(&WindowCapabilities::NONE)?;
 ///         Ok(())
 ///     }
 ///     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
@@ -322,25 +341,29 @@ pub trait PlatformWindow: Send + Sync {
     ///
     /// Accepted means requested: the outcome is visible only in the next
     /// [`state`](Self::state), because the OS may clamp, delay or refuse it.
-    /// Call it on the owner thread. An implementation begins with
-    /// [`WindowCommand::admit`] against the capabilities of its own snapshot,
-    /// so it refuses with [`WindowCommandError::Unsupported`] exactly when a
-    /// capability is unavailable, and with
-    /// [`WindowCommandError::InvalidGeometry`] before the OS is called.
+    /// Call it on the owner thread. The command was admitted
+    /// ([`WindowCommand::admit`](crate::WindowCommand::admit)), so its numbers
+    /// describe a window and the capabilities it was checked against honour
+    /// it: an implementation has no refusal of its own to remember. It opens
+    /// the token with [`AdmittedCommand::against`] the capabilities of its
+    /// last published snapshot, which answers [`ApplyError::Superseded`] when
+    /// they changed since admission.
     ///
-    /// [`WindowCommand::Close`] is a decision already made, not a request: it
-    /// asks no should-close veto ([`on_should_close`](Self::on_should_close))
+    /// [`WindowCommand::Close`](crate::WindowCommand::Close) is a decision already made, not a
+    /// request: it asks no should-close veto
+    /// ([`on_should_close`](Self::on_should_close))
     /// and runs the same teardown a user's close takes — the
     /// [`on_close`](Self::on_close) callback, removal from the backend's window
     /// tracking, cleanup of per-window input state, and the exit-policy consult
     /// that ends the loop when this was the last window. Win32 and the headless
     /// double run that teardown before `apply` returns; winit runs it on the
     /// owner thread's next turn. A window that has already closed answers
-    /// [`WindowCommandError::Closed`].
+    /// [`ApplyError::Closed`].
     ///
     /// # Errors
-    /// [`WindowCommandError`].
-    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError>;
+    /// [`ApplyError`]: the window closed, its capabilities moved since
+    /// admission, or the operating system refused or failed the request.
+    fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError>;
 
     /// Register a callback meaning "[`state`](Self::state) answers differently
     /// now".
@@ -438,8 +461,8 @@ pub trait PlatformWindow: Send + Sync {
     /// A backend that defers the physical reveal of a window opened
     /// [`WindowOptions::visible`](crate::WindowOptions::visible)
     /// `== true` performs it now, exactly once; a window opened hidden, one
-    /// already shown explicitly ([`WindowCommand::Show`] or
-    /// [`WindowCommand::Activate`]),
+    /// already shown explicitly ([`WindowCommand::Show`](crate::WindowCommand::Show) or
+    /// [`WindowCommand::Activate`](crate::WindowCommand::Activate)),
     /// or a backend that reveals at open, ignores the call. Calling it
     /// again is harmless.
     ///

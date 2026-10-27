@@ -11,7 +11,7 @@ use std::time::Duration;
 use flui_foundation::geometry::Size;
 use flui_objects::RenderSizedBox;
 use flui_platform::{
-    HostNotice, WindowCapabilities, WindowCommand, WindowCommandError, WindowControl,
+    AdmissionError, HostNotice, SubmitError, WindowCapabilities, WindowCommand, WindowControl,
     WindowGeometry, WindowMode, WindowState,
 };
 use flui_rendering::protocol::BoxProtocol;
@@ -37,9 +37,9 @@ impl WindowControl for StubControl {
             .with_title(Some("Stub".to_owned()))
             .with_capabilities(WindowCapabilities::ALL)
     }
-    fn submit(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
-        command.admit(&self.state().capabilities)?;
-        self.submitted.borrow_mut().push(command);
+    fn submit(&self, command: WindowCommand) -> Result<(), SubmitError> {
+        let admitted = command.admit(&self.state().capabilities)?;
+        self.submitted.borrow_mut().push(admitted.command().clone());
         Ok(())
     }
     fn request_close(&self) {
@@ -151,7 +151,7 @@ fn commands_reach_the_control_checked_and_in_order() {
     handle.set_mode(WindowMode::Maximized).expect("accepted");
     assert_eq!(
         handle.set_size(Size::new(0.0, 10.0)),
-        Err(WindowCommandError::InvalidGeometry),
+        Err(SubmitError::Admission(AdmissionError::InvalidGeometry)),
         "a size that describes no window is refused before the control"
     );
     handle.hide().expect("accepted");
@@ -190,7 +190,7 @@ fn the_handle_goes_closed_with_its_window_and_does_not_keep_it_alive() {
     let source = source.expect("source");
     source.close();
     assert_eq!(handle.state(), Err(WindowClosed));
-    assert_eq!(handle.set_title("late"), Err(WindowCommandError::Closed));
+    assert_eq!(handle.set_title("late"), Err(SubmitError::Closed));
     drop(subscription);
 
     let (source, handle) = mount(Some(StubControl::default()));
@@ -225,7 +225,7 @@ impl WindowControl for Overtaken {
         }
         first
     }
-    fn submit(&self, _: WindowCommand) -> Result<(), WindowCommandError> {
+    fn submit(&self, _: WindowCommand) -> Result<(), SubmitError> {
         Ok(())
     }
     fn request_close(&self) {}

@@ -11,6 +11,7 @@
 //! (`owner::winit::testing::QuietHost`), under a table of its own
 //! ([`X11Windows`]): the window, its probe and the loop, without the host's.
 
+use flui_testing::window_commands::AdmitAndApply as _;
 use std::{
     sync::{Arc, atomic::Ordering},
     thread,
@@ -248,19 +249,19 @@ fn x11_window_takes_commands_and_publishes_what_the_server_holds() {
             state.outer.position == Some(Point::new(840.0, 640.0))
         });
         window
-            .apply(WindowCommand::SetSize(Size::new(400.0, 300.0)))
+            .admit_and_apply(WindowCommand::SetSize(Size::new(400.0, 300.0)))
             .expect("a desktop window resizes");
         until_state(&window, "the new size", |state| {
             state.content_size == Size::new(400.0, 300.0)
         });
         window
-            .apply(WindowCommand::SetPosition(Point::new(860.0, 680.0)))
+            .admit_and_apply(WindowCommand::SetPosition(Point::new(860.0, 680.0)))
             .expect("a desktop window moves");
         until_state(&window, "the new position", |state| {
             state.outer.position == Some(Point::new(860.0, 680.0))
         });
         window
-            .apply(WindowCommand::SetTitle("renamed".into()))
+            .admit_and_apply(WindowCommand::SetTitle("renamed".into()))
             .expect("a title is set");
         assert_eq!(window.state().title.as_deref(), Some("renamed"));
 
@@ -268,13 +269,13 @@ fn x11_window_takes_commands_and_publishes_what_the_server_holds() {
         // either cannot leave the last report behind what the window
         // answers.
         window
-            .apply(WindowCommand::Hide)
+            .admit_and_apply(WindowCommand::Hide)
             .expect("a desktop window hides");
         until_map_state(server, id, MapState::UNMAPPED);
         assert!(!window.state().visible);
         until_reports(&window, &visibility, &[true, false], "a report of the hide");
         window
-            .apply(WindowCommand::Show)
+            .admit_and_apply(WindowCommand::Show)
             .expect("a desktop window shows");
         until_map_state(server, id, MapState::VIEWABLE);
         assert!(window.state().visible);
@@ -345,7 +346,7 @@ fn x11_window_takes_commands_and_publishes_what_the_server_holds() {
         );
         // A show of a window that stays mapped keeps its occlusion.
         window
-            .apply(WindowCommand::Show)
+            .admit_and_apply(WindowCommand::Show)
             .expect("a desktop window shows");
         assert!(!window.state().visible, "still covered");
         assert_eq!(*visibility.lock(), [true, false, true, false, true, false]);
@@ -528,7 +529,7 @@ fn x11_window_opened_hidden_in_a_mode_keeps_the_mode_until_it_is_shown() {
         assert!(!window.state().visible);
 
         window
-            .apply(WindowCommand::Show)
+            .admit_and_apply(WindowCommand::Show)
             .expect("a desktop window shows");
         until_map_state(server, id, MapState::VIEWABLE);
     });
@@ -545,23 +546,23 @@ fn x11_window_asked_for_a_mode_before_its_first_frame_opens_in_that_mode() {
         .with_reveal(WindowReveal::AfterFirstFrame);
     run_x11_scenario(opening, |window, id, server| {
         window
-            .apply(WindowCommand::SetMode(WindowMode::Fullscreen))
+            .admit_and_apply(WindowCommand::SetMode(WindowMode::Fullscreen))
             .expect("a desktop window enters fullscreen");
         assert_eq!(state_names(server, id), ["_NET_WM_STATE_FULLSCREEN"]);
 
         window
-            .apply(WindowCommand::SetMode(WindowMode::Normal))
+            .admit_and_apply(WindowCommand::SetMode(WindowMode::Normal))
             .expect("a desktop window returns to normal");
         assert_eq!(state_names(server, id), Vec::<String>::new());
 
         // Minimizing it leaves no mode to be mapped in; the window is
         // minimized once it is mapped.
         window
-            .apply(WindowCommand::SetMode(WindowMode::Fullscreen))
+            .admit_and_apply(WindowCommand::SetMode(WindowMode::Fullscreen))
             .expect("a desktop window enters fullscreen");
         assert_eq!(state_names(server, id), ["_NET_WM_STATE_FULLSCREEN"]);
         window
-            .apply(WindowCommand::SetMode(WindowMode::Minimized))
+            .admit_and_apply(WindowCommand::SetMode(WindowMode::Minimized))
             .expect("a minimize is requested");
         assert_eq!(state_names(server, id), Vec::<String>::new());
 
@@ -589,7 +590,7 @@ fn x11_window_without_a_probe_does_not_claim_to_observe_minimizing() {
         assert_eq!(capabilities, expected);
         // Asking is still allowed: the compositor or window manager acts.
         window
-            .apply(WindowCommand::SetMode(WindowMode::Minimized))
+            .admit_and_apply(WindowCommand::SetMode(WindowMode::Minimized))
             .expect("a minimize is requested");
     });
 }

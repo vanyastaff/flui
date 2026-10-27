@@ -127,19 +127,19 @@ fn a_refused_command_is_never_queued() {
     let rig_none = rig(&none, 2);
     assert_eq!(
         rig_none.handle.set_title("x"),
-        Err(WindowCommandError::Unsupported(Unsupported::new(
-            UnsupportedReason::NotOnThisPlatform
+        Err(SubmitError::Admission(AdmissionError::Unsupported(
+            Unsupported::new(UnsupportedReason::NotOnThisPlatform)
         )))
     );
     let all = headless_window(WindowCapabilities::ALL);
     let rig_all = rig(&all, 3);
     assert_eq!(
         rig_all.handle.set_size(Size::new(f64::NAN, 10.0)),
-        Err(WindowCommandError::InvalidGeometry)
+        Err(SubmitError::Admission(AdmissionError::InvalidGeometry))
     );
     assert_eq!(
         rig_all.handle.set_position(Point::new(f64::INFINITY, 0.0)),
-        Err(WindowCommandError::InvalidGeometry)
+        Err(SubmitError::Admission(AdmissionError::InvalidGeometry))
     );
     assert_eq!(
         rig_none.wakes.get() + rig_all.wakes.get(),
@@ -149,6 +149,78 @@ fn a_refused_command_is_never_queued() {
     let before = all.state();
     rig_all.queues.apply_pending();
     assert_eq!(all.state(), before);
+}
+
+/// The window system revises what the window honours between a submit and
+/// the turn that applies it: the queue, the command's caller, admits each
+/// queued command again against the snapshot then. What the window still
+/// honours applies, in submission order; what it lost is refused and changes
+/// nothing; neither is applied under the capabilities it was checked against.
+fn a_command_superseded_in_the_queue_is_admitted_again() {
+    let host = headless_host_window(WindowCapabilities::ALL);
+    let window: Arc<dyn PlatformWindow> = host.clone();
+    let rig = rig(&window, 20);
+    rig.handle.set_title("kept").expect("accepted");
+    rig.handle
+        .set_mode(WindowMode::Maximized)
+        .expect("accepted while the window maximizes");
+    rig.handle
+        .set_size(Size::new(300.0, 200.0))
+        .expect("accepted");
+
+    let mut revised = WindowCapabilities::ALL;
+    revised.maximizes = flui_platform::Availability::Unavailable;
+    host.as_any()
+        .downcast_ref::<flui_native::MockWindow>()
+        .expect("headless window")
+        .simulate_capabilities(revised);
+    let before = window.state();
+    assert_ne!(
+        before.capabilities.revision(),
+        WindowCapabilities::ALL.revision(),
+        "the change is published at a new capabilities revision"
+    );
+
+    rig.queues.apply_pending();
+    let after = window.state();
+    assert_eq!(after.title.as_deref(), Some("kept"));
+    assert_eq!(
+        after.mode,
+        WindowMode::Normal,
+        "the maximize the window lost"
+    );
+    assert_eq!(after.content_size, Size::new(300.0, 200.0));
+    assert_eq!(
+        after.revision.get(),
+        before.revision.get() + 2,
+        "the title and the size, nothing for the refused maximize"
+    );
+}
+
+/// A close the window refuses (its window system lets the application close
+/// none of its windows) leaves the window open, so what was queued behind it
+/// still applies; only a close that goes ahead, or finds the window closed,
+/// ends the batch.
+fn a_refused_close_keeps_the_work_queued_behind_it() {
+    let mut cannot_close = WindowCapabilities::ALL;
+    cannot_close.closes = flui_platform::Availability::Unavailable;
+    let window = headless_window(cannot_close);
+    let rig = rig_with(
+        &window,
+        21,
+        WindowCommandQueues::default(),
+        router_for(&window, 21, None),
+    );
+    rig.handle.request_close().expect("accepted");
+    rig.handle
+        .set_title("after the refused close")
+        .expect("accepted");
+    rig.queues.apply_pending();
+    assert_eq!(
+        window.state().title.as_deref(),
+        Some("after the refused close"),
+        "the window stayed, and so did its queue"
+    );
 }
 
 fn the_handles_of_two_windows_do_not_mix() {
@@ -197,10 +269,7 @@ fn a_closed_window_answers_closed() {
         .subscribe(move |_| counted.set(counted.get() + 1))
         .expect("open window accepts subscriptions");
     rig.source.close();
-    assert_eq!(
-        rig.handle.set_title("late"),
-        Err(WindowCommandError::Closed)
-    );
+    assert_eq!(rig.handle.set_title("late"), Err(SubmitError::Closed));
     assert_eq!(rig.handle.request_close(), Err(WindowClosed));
     assert!(rig.handle.state().is_err());
     assert!(rig.handle.subscribe(|_| {}).is_err());
@@ -238,11 +307,10 @@ impl PlatformWindow for RecordingWindow {
         .with_focused(true)
         .with_capabilities(WindowCapabilities::ALL)
     }
-    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+    fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
+        let command = command.against(&self.state().capabilities)?;
         if self.fail_titles && matches!(command, WindowCommand::SetTitle(_)) {
-            return Err(WindowCommandError::Backend {
-                message: "the system said no".into(),
-            });
+            return Err(ApplyError::failed("the system said no".into()));
         }
         self.applied.lock().expect("log").push(command);
         if let Some(during) = self.during_apply {
@@ -588,6 +656,14 @@ fn window_handle_contract() {
             (
                 "a_refused_command_is_never_queued",
                 a_refused_command_is_never_queued as fn(),
+            ),
+            (
+                "a_command_superseded_in_the_queue_is_admitted_again",
+                a_command_superseded_in_the_queue_is_admitted_again as fn(),
+            ),
+            (
+                "a_refused_close_keeps_the_work_queued_behind_it",
+                a_refused_close_keeps_the_work_queued_behind_it as fn(),
             ),
             (
                 "the_handles_of_two_windows_do_not_mix",

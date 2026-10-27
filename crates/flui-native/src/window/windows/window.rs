@@ -35,9 +35,10 @@ use windows::{
 };
 
 use flui_platform::{
-    CursorError, DispatchEventResult, PlatformInput, PlatformWindow, SizeConstraints, Unsupported,
-    UnsupportedReason, WindowBackgroundAppearance, WindowCapabilities, WindowCommand,
-    WindowCommandError, WindowId, WindowMode, WindowOptions, WindowReveal, WindowState,
+    AdmittedCommand, ApplyError, CursorError, DispatchEventResult, PlatformFailure, PlatformInput,
+    PlatformWindow, SizeConstraints, Unsupported, UnsupportedReason, WindowBackgroundAppearance,
+    WindowCapabilities, WindowCommand, WindowId, WindowMode, WindowOptions, WindowReveal,
+    WindowState,
 };
 
 use flui_platform::os_options::WindowsCornerPreference;
@@ -162,18 +163,17 @@ impl std::fmt::Debug for WindowsWindow {
 }
 
 /// A Win32 call that failed, as the error of the command that made it.
-fn backend_error(what: &str, error: windows::core::Error) -> WindowCommandError {
-    WindowCommandError::Backend {
-        message: format!("{what} failed: {error}"),
-    }
+fn backend_error(what: &str, error: windows::core::Error) -> ApplyError {
+    ApplyError::failed(format!("{what} failed: {error}"))
 }
 
-/// A command's logical pair in device pixels, refused as invalid geometry
-/// when either value is beyond what Win32 can represent.
-fn device_pair(x: f64, y: f64, scale: f64) -> Result<(i32, i32), WindowCommandError> {
+/// A command's logical pair in device pixels, refused before any call when
+/// either value is beyond what Win32 can represent: admission held the numbers
+/// to being finite and positive, and the device range is Win32's own limit.
+fn device_pair(x: f64, y: f64, scale: f64) -> Result<(i32, i32), ApplyError> {
     checked_logical_to_device(x, scale)
         .zip(checked_logical_to_device(y, scale))
-        .ok_or(WindowCommandError::InvalidGeometry)
+        .ok_or(ApplyError::Platform(PlatformFailure::OutOfRange))
 }
 
 /// What every Win32 window honours and observes, known before one exists
@@ -816,10 +816,10 @@ impl WindowsWindow {
     /// - a fullscreen window takes the size for the bounds it returns to.
     ///
     /// # Errors
-    /// [`WindowCommandError::InvalidGeometry`] for a size beyond what Win32
-    /// can represent, before any call; [`WindowCommandError::Backend`] when
+    /// [`ApplyError::Platform`] for a size beyond what Win32
+    /// can represent, before any call; [`ApplyError::Platform`] when
     /// Win32 refuses or fails the resize.
-    fn set_inner_size(&self, size: Size<f64>) -> Result<(), WindowCommandError> {
+    fn set_inner_size(&self, size: Size<f64>) -> Result<(), ApplyError> {
         let scale = self.state.lock().scale_factor;
         let content = device_pair(size.width, size.height, scale)?;
         let fullscreen = super::proc::with_window_context(self.hwnd, "set_inner_size", |ctx| {
@@ -890,10 +890,10 @@ impl WindowsWindow {
     /// restored, and a fullscreen window takes it for the bounds it returns to.
     ///
     /// # Errors
-    /// [`WindowCommandError::InvalidGeometry`] for a position beyond what
-    /// Win32 can represent, before any call; [`WindowCommandError::Backend`]
+    /// [`ApplyError::Platform`] for a position beyond what
+    /// Win32 can represent, before any call; [`ApplyError::Platform`]
     /// when Win32 refuses or fails the move.
-    fn set_outer_position(&self, at: Point<f64>) -> Result<(), WindowCommandError> {
+    fn set_outer_position(&self, at: Point<f64>) -> Result<(), ApplyError> {
         let scale = self.state.lock().scale_factor;
         let (x, y) = device_pair(at.x, at.y, scale)?;
         let fullscreen = super::proc::with_window_context(self.hwnd, "set_outer_position", |ctx| {
@@ -958,8 +958,8 @@ impl WindowsWindow {
     /// changes instead, and it is the one the next sample reports.
     ///
     /// # Errors
-    /// [`WindowCommandError::Backend`] when Win32 refuses or fails the change.
-    fn restyle_frame(&self, decorated: bool, resizable: bool) -> Result<(), WindowCommandError> {
+    /// [`ApplyError::Platform`] when Win32 refuses or fails the change.
+    fn restyle_frame(&self, decorated: bool, resizable: bool) -> Result<(), ApplyError> {
         let fullscreen = super::proc::with_window_context(self.hwnd, "restyle_frame", |ctx| {
             ctx.resizable.set(resizable);
             let mode = ctx.mode.get();
@@ -1012,7 +1012,7 @@ impl WindowsWindow {
         super::proc::with_window_context(
             self.hwnd,
             "restyle_frame",
-            |ctx| -> Result<(), WindowCommandError> {
+            |ctx| -> Result<(), ApplyError> {
                 // The frame changes in two steps; a subscriber sees the result only.
                 let _hold = ctx.hold_publishing();
                 unsafe {
@@ -1056,7 +1056,7 @@ impl WindowsWindow {
                 }
             },
         )
-        .unwrap_or(Err(WindowCommandError::Closed))
+        .unwrap_or(Err(ApplyError::Closed))
     }
 
     /// Whether the window waits for its first presented frame to be shown.
@@ -1073,8 +1073,8 @@ impl WindowsWindow {
     /// revealed in: setting a mode must not show it early.
     ///
     /// # Errors
-    /// [`WindowCommandError::Unsupported`] for a mode this backend does not know.
-    fn set_mode(&self, mode: WindowMode) -> Result<(), WindowCommandError> {
+    /// [`ApplyError::Platform`] for a mode this backend does not know.
+    fn set_mode(&self, mode: WindowMode) -> Result<(), ApplyError> {
         if !matches!(
             mode,
             WindowMode::Normal
@@ -1082,10 +1082,9 @@ impl WindowsWindow {
                 | WindowMode::Maximized
                 | WindowMode::Fullscreen
         ) {
-            return Err(flui_platform::Unsupported::new(
-                flui_platform::UnsupportedReason::NotOnThisPlatform,
-            )
-            .into());
+            return Err(crate::window::state::not_carried_out(
+                &WindowCommand::SetMode(mode),
+            ));
         }
         if self.awaiting_reveal() {
             self.set_fullscreen(mode == WindowMode::Fullscreen);
@@ -1423,11 +1422,11 @@ impl PlatformWindow for WindowsWindow {
             .unwrap_or_else(|| self.snapshot.published())
     }
 
-    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+    fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
         if !handle_available(super::proc::teardown_route(self.hwnd, self.context)) {
-            return Err(WindowCommandError::Closed);
+            return Err(ApplyError::Closed);
         }
-        command.admit(&window_capabilities())?;
+        let command = command.against(&self.snapshot.published_capabilities())?;
         match command {
             WindowCommand::SetTitle(title) => self.set_native_title(&title),
             WindowCommand::SetPosition(at) => self.set_outer_position(at)?,
@@ -1466,14 +1465,7 @@ impl PlatformWindow for WindowsWindow {
                 self.close_window();
                 return Ok(());
             }
-            // Every other command is refused by `admit` through a capability
-            // this backend leaves `Unavailable`.
-            _ => {
-                return Err(flui_platform::Unsupported::new(
-                    flui_platform::UnsupportedReason::NotOnThisPlatform,
-                )
-                .into());
-            }
+            other => return Err(crate::window::state::not_carried_out(&other)),
         }
         super::proc::with_window_context(self.hwnd, "apply", |ctx| {
             ctx.publish_window_state(self.hwnd);
@@ -1586,7 +1578,7 @@ impl PlatformWindow for WindowsWindow {
 impl WindowsWindow {
     /// Show the window, unminimizing it and requesting foreground focus; the
     /// maximized or fullscreen mode is kept.
-    fn show_window(&self) -> Result<(), WindowCommandError> {
+    fn show_window(&self) -> Result<(), ApplyError> {
         use windows::Win32::UI::WindowsAndMessaging::{
             SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, WPF_RESTORETOMAXIMIZED,
         };
@@ -1618,11 +1610,8 @@ impl WindowsWindow {
                     // on its owner thread. The context guard pins userdata through
                     // ShowWindow reentry; placement is an initialized out pointer.
                     unsafe {
-                        let placement = placement_of(self.hwnd).map_err(|error| {
-                            WindowCommandError::Backend {
-                                message: error.to_string(),
-                            }
-                        })?;
+                        let placement = placement_of(self.hwnd)
+                            .map_err(|error| ApplyError::failed(error.to_string()))?;
                         if let Some(mode) = first {
                             ctx.begin_first_show(mode);
                         }
@@ -1645,7 +1634,7 @@ impl WindowsWindow {
                         Ok(())
                     }
                 })
-                .unwrap_or(Err(WindowCommandError::Closed))
+                .unwrap_or(Err(ApplyError::Closed))
             },
             || {
                 // SAFETY: the adapter rechecked wrapper identity after ShowWindow,

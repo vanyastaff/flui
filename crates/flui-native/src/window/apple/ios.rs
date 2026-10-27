@@ -62,11 +62,11 @@ use crate::window::installation::{PendingWindowInstallation, WindowInstallation}
 use crate::window::state::{ReportedFacts, WindowStateCell};
 use crate::{BootstrapError, PlatformError, PlatformProxy};
 use flui_foundation::geometry::{EdgeInsets, Size};
-use flui_platform::{CursorError, PlatformWindow, WindowExecutionState, WindowId, WindowOptions};
 use flui_platform::{
-    WindowAppearance, WindowCapabilities, WindowCommand, WindowCommandError, WindowGeometry,
-    WindowState,
+    AdmittedCommand, ApplyError, WindowAppearance, WindowCapabilities, WindowCommand,
+    WindowGeometry, WindowState,
 };
+use flui_platform::{CursorError, PlatformWindow, WindowExecutionState, WindowId, WindowOptions};
 use status_bar::FluiViewController;
 pub(crate) use status_bar::IOSSystemChrome;
 
@@ -1292,14 +1292,14 @@ impl PlatformWindow for IOSWindow {
         )
     }
 
-    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+    fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
         if self.closed.load(Ordering::SeqCst) {
-            return Err(WindowCommandError::Closed);
+            return Err(ApplyError::Closed);
         }
         // The system owns the surface: every command is refused, except the
         // ones every window takes. A scene cannot bring itself to the
         // foreground: the user and the system decide which app is shown.
-        command.admit(&scene_capabilities())?;
+        let command = command.against(&self.snapshot.published_capabilities())?;
         if command == WindowCommand::Close {
             crate::owner::apple::ios::request_close(self.id);
         }

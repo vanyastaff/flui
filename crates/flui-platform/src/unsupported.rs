@@ -4,13 +4,14 @@
 //! application's declarations or the moment does not have what a caller asked
 //! for, and [`UnsupportedReason`] says which. Every error and outcome that can
 //! mean absence embeds it instead of a unit variant of its own:
-//! [`WindowCommandError`](crate::WindowCommandError),
+//! [`AdmissionError`](crate::AdmissionError),
+//! [`SubmitError`](crate::SubmitError),
 //! [`CursorError`](crate::CursorError), [`DragError`](crate::drag::DragError),
 //! [`HapticOutcome`](crate::haptics::HapticOutcome),
 //! [`StorageError`](crate::StorageError),
 //! [`PreferenceQueryError`](crate::PreferenceQueryError) and
 //! [`TextStoreHostError`](crate::text_store::TextStoreHostError). Each converts
-//! from it and answers [`unsupported`](crate::WindowCommandError::unsupported)
+//! from it and answers [`unsupported`](crate::AdmissionError::unsupported)
 //! with it, so a caller asks any of them the same question.
 //!
 //! No reason names an operating-system version: a version gate that refused

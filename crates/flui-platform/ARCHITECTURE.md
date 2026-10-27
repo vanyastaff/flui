@@ -65,6 +65,29 @@ this one path (ADR-0151 §9).
   twin. `WindowState::is_seen` is the one reading of "the surface is seen":
   visible and not minimized. A `compile_fail` doctest on the trait pins that
   a getter does not compile.
+- **A window takes only an admitted command (ADR-0254 §2).**
+  `WindowCommand::admit(&WindowCapabilities)` is the one constructor of
+  `AdmittedCommand`, and `PlatformWindow::apply` takes nothing else
+  (`tests/compile_fail/{admitted_command_has_one_constructor,
+  apply_takes_only_an_admitted_command}.rs`). Admission refuses with
+  `AdmissionError::Unsupported` exactly when the capability is `Unavailable`
+  and with `InvalidGeometry` before that. The token carries the capabilities'
+  owner and revision, which `WindowState::successor` alone keeps: the owner is
+  the `CapabilitiesOwner` the host stamped on the window's first snapshot,
+  unique in the process, and the revision moves to the new snapshot's when
+  what the window honours changes, and not with any other fact. A window
+  opens the token with `AdmittedCommand::against` its published capabilities;
+  the contract is identity (same owner, same revision), so another window's
+  token, one admitted against capabilities built by hand, or one from an
+  earlier revision is `ApplyError::Superseded`, which gives the command back to
+  be admitted again. Equality of `WindowCapabilities` compares what is
+  honoured, not owner or revision. `ApplyError` is the world's (`Closed`,
+  `Superseded { command }`, `Platform(PlatformFailure)`, where
+  `PlatformFailure` tells `OutOfRange` from `Failed { message }`);
+  `WindowControl::submit` answers `SubmitError` (`Admission`, `Closed`).
+  `WindowCommand::admit_and_apply` is the one path that applies at once
+  (admit against the snapshot, apply, admit once more on `Superseded`), and
+  answers `CommandRefusal` (`Admission` or `Apply`).
 - **"Not here" has one vocabulary.** Every error and outcome that can mean
   absence carries an `Unsupported`, built with `Unsupported::new(reason)` and
   never written as a literal, whose `UnsupportedReason` says why

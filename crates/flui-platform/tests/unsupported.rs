@@ -8,8 +8,8 @@ use flui_platform::drag::DragError;
 use flui_platform::haptics::HapticOutcome;
 use flui_platform::text_store::TextStoreHostError;
 use flui_platform::{
-    CursorError, InvalidPreference, PreferenceQueryError, StorageError, Unsupported,
-    UnsupportedReason, WindowCommandError,
+    AdmissionError, CursorError, InvalidPreference, PreferenceQueryError, StorageError,
+    SubmitError, Unsupported, UnsupportedReason,
 };
 
 /// Every reason there is.
@@ -46,9 +46,13 @@ fn carries<E: Error + 'static>(make: fn(Unsupported) -> E, read: fn(&E) -> Optio
 }
 
 fn window_commands() {
-    carries(WindowCommandError::from, WindowCommandError::unsupported);
-    assert_eq!(WindowCommandError::Closed.unsupported(), None);
-    assert_eq!(WindowCommandError::InvalidGeometry.unsupported(), None);
+    carries(AdmissionError::from, AdmissionError::unsupported);
+    assert_eq!(AdmissionError::InvalidGeometry.unsupported(), None);
+    carries(
+        |unsupported| SubmitError::from(AdmissionError::from(unsupported)),
+        SubmitError::unsupported,
+    );
+    assert_eq!(SubmitError::Closed.unsupported(), None);
 }
 
 fn cursors() {

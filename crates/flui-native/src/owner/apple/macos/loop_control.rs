@@ -29,7 +29,6 @@ use crate::{
     owner::handlers::PlatformHandlers,
     owner::panic_boundary::{AfterPanic, contain_os_entry, os_entry},
 };
-use flui_platform::PlatformWindow;
 
 /// Whether finishing a session end also answers a waiting
 /// `applicationShouldTerminate:`.
@@ -465,9 +464,13 @@ impl LoopControl {
         }
         for window in &windows {
             cleanup_step(|| {
-                // An AppKit window always closes; the one refusal left is a
-                // window already closed, which is what quitting wants.
-                let _ = PlatformWindow::apply(window.as_ref(), flui_platform::WindowCommand::Close);
+                // An AppKit window always takes a close; the one failure left
+                // is a window already closed, which is what quitting wants.
+                if let Err(refusal) =
+                    flui_platform::WindowCommand::Close.admit_and_apply(window.as_ref())
+                {
+                    tracing::debug!(?refusal, "a window did not close at quit");
+                }
             });
         }
         let remaining = std::mem::take(&mut *self.windows.lock());

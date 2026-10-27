@@ -108,13 +108,12 @@ mod measured {
         TranslationFraction as _,
     };
     use flui_sdk::platform::{
-        Brightness as _, DurationScale as _, GesturePreferences as _, HapticFeedback as _,
-        HostNotice as _, InvalidLocale as _, InvalidPreference as _, Locale as _,
-        MemoryPressureLevel as _, MotionPreference as _, NativeMouseGeometry as _,
-        NativeTouchGeometry as _, SessionEndBlock as _, SessionEndRequest as _,
+        AdmissionError as _, Brightness as _, DurationScale as _, GesturePreferences as _,
+        HapticFeedback as _, HostNotice as _, InvalidLocale as _, InvalidPreference as _,
+        Locale as _, MemoryPressureLevel as _, MotionPreference as _, NativeMouseGeometry as _,
+        NativeTouchGeometry as _, SessionEndBlock as _, SessionEndRequest as _, SubmitError as _,
         SystemPreferences as _, TargetPlatform as _, TextWeightPreference as _,
-        WheelPreferences as _, WheelStep as _, WindowCommandError as _, WindowMode as _,
-        WindowState as _,
+        WheelPreferences as _, WheelStep as _, WindowMode as _, WindowState as _,
     };
     use flui_sdk::rendering::{
         BoxConstraints as _, BoxProtocol as _, HitTestBehavior as _, RenderError as _,
@@ -523,6 +522,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_painting::typography::FontWeight;",
         "pub use flui_painting::typography::TextDirection;",
         "pub use flui_painting::typography::TextStyle;",
+        "pub use flui_platform::AdmissionError;",
         "pub use flui_platform::Availability;",
         "pub use flui_platform::Brightness;",
         "pub use flui_platform::DurationScale;",
@@ -539,6 +539,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform::NativeTouchGeometry;",
         "pub use flui_platform::SessionEndBlock;",
         "pub use flui_platform::SessionEndRequest;",
+        "pub use flui_platform::SubmitError;",
         "pub use flui_platform::SystemPreferences;",
         "pub use flui_platform::TargetPlatform;",
         "pub use flui_platform::TextWeightPreference;",
@@ -546,7 +547,6 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform::UnsupportedReason;",
         "pub use flui_platform::WheelPreferences;",
         "pub use flui_platform::WheelStep;",
-        "pub use flui_platform::WindowCommandError;",
         "pub use flui_platform::WindowMode;",
         "pub use flui_platform::WindowState;",
         "pub use flui_platform::data_transfer::TransferActions;",

@@ -17,6 +17,7 @@
 //! and effect mapping) run beside `crossing`, the modal frame pace beside
 //! `owner::modal_pace`.
 
+use flui_testing::window_commands::AdmitAndApply as _;
 use std::cell::{Cell, RefCell};
 use std::num::{NonZeroU32, NonZeroU64};
 use std::rc::Rc;
@@ -836,7 +837,7 @@ fn a_window_closed_by_its_drag_callback_is_left() {
         if matches!(event, DragDropEvent::Entered { .. })
             && let Some(window) = closer.borrow_mut().take()
         {
-            let _ = window.apply(flui_platform::WindowCommand::Close);
+            window.close_now();
         }
     });
     *closing.borrow_mut() = Some(Arc::clone(&target.host));
@@ -1346,7 +1347,7 @@ fn a_drop_concluded_after_its_window_closed_releases_the_data_object() {
     assert_eq!(drop_on(&ole, &data, at, BOTH), DROPEFFECT_COPY);
     drop((data, ole));
     let offer = target.offer.borrow().clone().expect("an offer");
-    let _ = target.host.apply(flui_platform::WindowCommand::Close);
+    target.host.close_now();
     let _ = pump_until(|| false, Duration::from_millis(50));
     assert!(
         !released.get(),

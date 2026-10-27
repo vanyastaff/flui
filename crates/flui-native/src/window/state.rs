@@ -48,6 +48,20 @@ impl ReportedFacts {
     }
 }
 
+/// The answer to a command a host has no way to carry out. `admit` refuses it
+/// first, through a capability the host names `Unavailable`, so a window
+/// reaches this only for a command the contract gained before the host learnt
+/// it: the window system cannot do it, and the caller hears so.
+#[cfg(any(
+    windows,
+    target_os = "macos",
+    target_arch = "wasm32",
+    all(target_os = "linux", feature = "winit-backend")
+))]
+pub(crate) fn not_carried_out(command: &flui_platform::WindowCommand) -> flui_platform::ApplyError {
+    flui_platform::ApplyError::failed(format!("this window system does not carry out {command:?}"))
+}
+
 /// What a window system says of a window, as the three facts its mode is
 /// decided from. Each platform reads them from its own report (winit's
 /// queries, AppKit's style mask and flags, the X11 window manager's
@@ -144,6 +158,22 @@ pub(crate) struct WindowStateCell {
     invalidations: AtomicU64,
 }
 
+/// The capabilities owners handed out so far, one per window cell.
+static NEXT_CAPABILITIES_OWNER: AtomicU64 = AtomicU64::new(1);
+
+/// A capabilities owner no window of this process had before. Advanced with a
+/// checked add, so the source refuses instead of reissuing a number.
+fn next_capabilities_owner() -> flui_platform::CapabilitiesOwner {
+    let number = NEXT_CAPABILITIES_OWNER
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+            next.checked_add(1)
+        })
+        .expect("BUG: 2^64 windows opened in one process");
+    flui_platform::CapabilitiesOwner::new(
+        std::num::NonZeroU64::new(number).expect("BUG: the owner source starts at one"),
+    )
+}
+
 impl crate::owner::notices::StaleOnWake for WindowStateCell {
     fn mark_stale(&self) {
         self.invalidate();
@@ -158,7 +188,12 @@ impl WindowStateCell {
     }
 
     /// A cell publishing `initial`, stale: the first `state_with` reads the OS.
-    pub(crate) fn new(initial: WindowState) -> Self {
+    /// Its capabilities are stamped with a capabilities owner no other window
+    /// of the process has, which every later snapshot keeps, so a command
+    /// admitted for another window, or against capabilities built by hand,
+    /// never opens on this one.
+    pub(crate) fn new(mut initial: WindowState) -> Self {
+        initial.capabilities = initial.capabilities.owned_by(next_capabilities_owner());
         Self {
             last: Mutex::new(Slot {
                 state: initial,
@@ -174,6 +209,15 @@ impl WindowStateCell {
     /// at any point.
     pub(crate) fn invalidate(&self) {
         self.invalidations.fetch_add(1, Ordering::Release);
+    }
+
+    /// The capabilities of the last published snapshot, without reading the
+    /// OS: what an admitted command is opened against
+    /// ([`AdmittedCommand::against`](flui_platform::AdmittedCommand::against)),
+    /// so a command admitted against the snapshot a caller read applies
+    /// unless what the window honours was published as changed since.
+    pub(crate) fn published_capabilities(&self) -> WindowCapabilities {
+        self.last.lock().state.capabilities
     }
 
     /// The last published snapshot, without reading the OS.

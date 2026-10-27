@@ -68,6 +68,8 @@ mod scripts;
 mod self_rescheduling_local_post_frame;
 #[path = "text_store_kit.rs"]
 mod text_store_kit;
+#[path = "window_commands.rs"]
+mod window_commands;
 #[path = "window_conformance.rs"]
 mod window_conformance;
 #[path = "window_scale_factor.rs"]

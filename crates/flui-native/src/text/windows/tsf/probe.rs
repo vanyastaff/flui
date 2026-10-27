@@ -12,6 +12,7 @@
 //! window is the foreground window. The probe types through the host the
 //! window itself offers (ADR-0135 §3), into a store of its own.
 
+use flui_testing::window_commands::AdmitAndApply as _;
 use std::cell::Cell;
 use std::io::Write as _;
 use std::ops::{Deref, DerefMut};
@@ -569,7 +570,7 @@ fn text_services_probe() {
     println!("PROBE ja-JP profile for this thread: {ja:?}");
     if ja.is_err() {
         println!("PROBE SKIP: Microsoft IME ja-JP is not installed; points (2)-(7) need it");
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
         return;
     }
     let mut active = TF_INPUTPROCESSORPROFILE::default();
@@ -723,7 +724,7 @@ fn text_services_probe() {
         previous.hkl,
     );
     println!("PROBE previous profile restored: {restored:?}");
-    let _ = window.apply(flui_platform::WindowCommand::Close);
+    window.close_now();
     pump(100, &probe);
     println!(
         "PROBE (8) after the window's WM_DESTROY the host answers {:?}",

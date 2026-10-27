@@ -90,6 +90,8 @@ use std::thread::ThreadId;
 use flui_foundation::PresentationAddress;
 use flui_foundation::panic::payload_text;
 use flui_platform::PlatformWindow;
+
+use flui_platform::CommandRefusal;
 pub use flui_view::CloseReason;
 use parking_lot::Mutex;
 
@@ -210,7 +212,7 @@ impl std::fmt::Debug for CloseRequestHandler {
 }
 
 /// Why a programmatic close could not be delivered.
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Debug, thiserror::Error, PartialEq)]
 #[non_exhaustive]
 pub enum CloseRequestError {
     /// No presentation is registered at this address — it was never
@@ -251,17 +253,27 @@ pub enum CloseRequestError {
          presentation's event loop"
     )]
     NoHostedRuntime,
-    /// The window refused to close: its window system lets the application
+    /// The window does not close: its window system lets the application
     /// close none of its windows (Android's one window, whose `closes`
-    /// capability is `Unavailable`), or the close failed in the window
-    /// system.
+    /// capability is `Unavailable`).
     #[error("the window at {address:?} refused to close")]
     Refused {
         /// The address that was asked for.
         address: PresentationAddress,
-        /// The window's answer to [`WindowCommand::Close`](flui_platform::WindowCommand::Close).
+        /// Why admitting [`WindowCommand::Close`](flui_platform::WindowCommand::Close)
+        /// failed.
         #[source]
-        error: flui_platform::WindowCommandError,
+        error: flui_platform::AdmissionError,
+    },
+    /// The window took the close, and its window system failed it or the
+    /// window was already gone.
+    #[error("the window at {address:?} failed to close")]
+    Failed {
+        /// The address that was asked for.
+        address: PresentationAddress,
+        /// The window's answer to the admitted close.
+        #[source]
+        error: flui_platform::ApplyError,
     },
 }
 
@@ -511,9 +523,12 @@ impl CloseRequestRouter {
         // Outside the lock: closing fires the window's own `on_close`,
         // which re-enters flui-app (`close_this_window`) and may re-enter
         // this router.
-        window
-            .apply(flui_platform::WindowCommand::Close)
-            .map_err(|error| CloseRequestError::Refused { address, error })
+        flui_platform::WindowCommand::Close
+            .admit_and_apply(&*window)
+            .map_err(|refusal| match refusal {
+                CommandRefusal::Admission(error) => CloseRequestError::Refused { address, error },
+                CommandRefusal::Apply(error) => CloseRequestError::Failed { address, error },
+            })
     }
 }
 
@@ -725,7 +740,7 @@ mod tests {
                 refused,
                 Err(CloseRequestError::Refused {
                     address,
-                    error: flui_platform::WindowCommandError::Unsupported(_),
+                    error: flui_platform::AdmissionError::Unsupported(_),
                 }) if address == at
             ),
             "{refused:?}"

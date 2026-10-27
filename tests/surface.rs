@@ -123,7 +123,10 @@ mod narrowing {
         );
         assert_eq!(win32.theme(), Ok(WindowsTheme::Light));
         assert_eq!(win32.backdrop(), Ok(WindowsBackdrop::MicaAlt));
-        flui_platform::PlatformWindow::apply(window.as_ref(), flui_platform::WindowCommand::Close)
+        let close = flui_platform::WindowCommand::Close
+            .admit(&flui_platform::PlatformWindow::state(window.as_ref()).capabilities)
+            .expect("a Win32 window takes a close");
+        flui_platform::PlatformWindow::apply(window.as_ref(), close)
             .expect("a Win32 window closes");
     }
 }

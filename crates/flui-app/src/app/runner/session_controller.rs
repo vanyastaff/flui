@@ -245,6 +245,7 @@ mod tests {
     };
     use super::*;
     use flui_native::Platform;
+    use flui_testing::window_commands::AdmitAndApply as _;
     use flui_view::{StatefulView, View, ViewState};
     use std::{
         cell::{Cell, RefCell},
@@ -474,7 +475,7 @@ mod tests {
             }))).expect("owner drains abandoned installation");
             let registered = APP_RUNTIME.with(|slot| slot.borrow().installed_host.native().contains_address(address.get().expect("admitted address")));
             assert!(!registered, "dropping pending readiness authority cancels publication without a native close callback");
-            let _ = retained_window.apply(flui_platform::WindowCommand::Close);
+            retained_window.close_now();
             Ok(())
         })).expect("headless receipt cancellation host");
     }
