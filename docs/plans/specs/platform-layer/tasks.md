@@ -2678,6 +2678,57 @@ graph LR
   nextest `flui-native`, `flui-app`, `flui-testing` — 389, с `winit-backend` — 424 (2 пропущены;
   падает только trybuild `owner_thread_token_has_no_default` с `main`); clippy wasm32 lib,
   `wasm-test` — 51; `checks`, `doc-strict`; WSL — clippy и rustdoc с `winit-backend`.
+- [x] **LY49** — ветка `platform/host-only-core`, начата на вершине LY41
+  (`origin/platform/snapshot-consumers` @ `87977afc3`). **В ядро, `pub(crate)`.** Модель `drag/offers.rs`
+  (теперь без `cfg`, элементы — под `cfg` своих потребителей): `OfferTable` (слот хранит
+  `Arc<[RepresentationDescriptor]>`; `len`/`is_empty` без потребителя удалены), `TransferCompleter`
+  (`channel()` и `complete`; `is_cancelled` никто не звал — удалён) и `TransferUri`. Модель
+  `input/regions.rs`: `DeviceInputRegion`, `ProjectedInputRegions` (`sent()` — только тестам);
+  тесты проекции переехали `git mv` из `flui-platform/tests/input_regions.rs` в
+  `input/regions/tests.rs` (правки — пути и импорты). **В контракте.** `TransferRequest::pending(ClaimHandle)`
+  вместо `channel()`: слот `claim_slot` держит хост, его обёртка — `TransferCompleter` ядра.
+  **Удалено.** `KeyText` (`Key::Character(String)`, непустоту держит `Key::character`);
+  координатные помощники — ни одного вызова, перенос дал бы мёртвый код; `OfferRecord` —
+  его `payload` читал один winit, теперь замороженный список держит сессия winit
+  (`frozen: Option<TransferPayload>`); `TransferImage` и варианты `TransferPayload::{UriList, Image}`
+  — выше хоста их никто не читал (вариант уходит вместе с типом). **Решения сверх строки.**
+  (1) Раз `TransferUri` в ядре, список URI доходит до приложения как `Custom` типа `text/uri-list`
+  (RFC 2483, строки через CRLF, локальный путь — `file:` URI по RFC 8089 с процент-кодированием;
+  диск `C:\a` ↔ `file:///C:/a`, UNC `\\h\s\a` ↔ `file://h/s/a`, относительный путь пропускается),
+  изображение — `Custom` своего контейнера. Хост пишет список (`TransferUri::list_payload`:
+  `CF_HDROP` Win32, файлы winit, URI клипа Android) и читает отданный источником
+  (`TransferUri::list_of`: `CF_HDROP` наружу, клип Android); Web отдаёт строку браузера как есть.
+  (2) `owner/headless` больше не называет таблицу предложений (база не называет фичу): цикл держит
+  её через хук `SimulatedOffers`, который делает таблица (`HeadlessHost::offers`), как
+  `SimulatedDevices`; реализация — `drag/headless.rs`. (3) `MockWindow::input_region_updates` и
+  `HeadlessWindow::input_region_updates` (`flui-testing`) отдают пары (вид, прямоугольник в
+  пикселях устройства); тестовый хост `flui-testing` проецирует сам (`device_rect_covering` и тот же
+  ключ сравнения), ядро ему недоступно. Тестовые двойники выше хоста (`flui-interaction`
+  `drag_sessions`, `flui-widgets` `anchored_drag`/`nested_scroll`, `flui-app`
+  `data_transfer_transport`, `flui-platform` `drag_plan`/`transfer_request`) чеканят id сами
+  (`DataTransferId::new_gen`, счётчик без повторов) и завершают запросы через `claim_slot`.
+  Пересечение с LY42: одна строка документации `PlatformWindow::set_input_regions`
+  (`platform_window.rs`). **Тесты** (`drag::offers::tests`): `a_uri_list_is_delivered_as_file_uris`,
+  `a_served_uri_list_reads_as_paths_and_uris`, `a_retired_offer_never_aliases_the_next`.
+  Откат проверен: с `file://{path.display()}` вместо кодирования падают первые два; без разбора
+  `file:` в `list_of` — `a_served_uri_list_reads_as_paths_and_uris`,
+  `drag::windows::crossing::tests::ole_drag_drop_contracts` и `ole_drag_and_drop_on_real_windows`;
+  без сдвига поколения — `a_retired_offer_never_aliases_the_next`. Существующие drag-тесты
+  (headless, OLE, HTML, Android, winit) зелёные, утверждения о типизированных `UriList`/`Image`
+  переписаны на байты. `module-dag`: 1 исключение, без изменений. Документы: ADR-0038 (словарь,
+  `pending`, место таблицы), ARCHITECTURE.md ядра (модели `drag::offers`, `input::regions`,
+  `HeadlessHost::offers`), `flui-platform`, `flui-rendering`;
+  `changelog.d/platform-host-only-core.md`; `platform-parity`/`gaps` без изменений (поддержка по
+  платформам та же).
+  Проверки (Windows): `cargo fmt`; clippy `-D warnings` рабочего пространства `--all-targets`
+  обычный и с `flui-native/winit-backend,flui/native`; nextest `flui-native`, `flui-platform` —
+  324, `flui-native`, `flui-app` с `winit-backend` — 366 (2 пропущены; оба раза падает только
+  trybuild `owner_thread_token_has_no_default`, как в LY40/LY41), `flui-interaction`, `flui-app`,
+  `flui-testing`, `flui-widgets` — 351 (3), `flui` с `native` — 10; doctest'ы `flui-platform`,
+  `flui-native`; clippy Android `-p flui-native -p flui-app --all-targets`, wasm32 lib, iOS lib
+  (`DOCS_RS=1`), macOS `--all-targets` обычный и с `winit-backend`; `wasm-check`, `wasm-test` — 51;
+  `checks` (с `key-vocabulary`, `recording-vocabulary`, `markers`, `testing`), `doc-strict`,
+  `module-dag`, `workspace`, `reach`.
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`

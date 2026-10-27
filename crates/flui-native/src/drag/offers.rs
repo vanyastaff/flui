@@ -1,6 +1,7 @@
 //! The drag feature's model: what a host's one data-transfer source keeps of
 //! the offers it mints ([`OfferTable`]), the producer half of a delivery
-//! ([`TransferCompleter`]), the entries of a URI list ([`TransferUri`]), and,
+//! (`TransferCompleter`, where a host completes off its thread), the entries
+//! of a URI list (`TransferUri`, where a host reads paths or URIs), and,
 //! for the files that name representations by media type (the browser's
 //! `DataTransfer` types and Android's `ClipDescription` speak media types
 //! alike), what a media type offers and the payload its bytes carry.
@@ -216,6 +217,13 @@ pub(crate) enum TransferUri {
     /// A local filesystem path.
     Path(std::path::PathBuf),
     /// Any other URI, unparsed.
+    #[cfg_attr(
+        not(any(windows, target_os = "android", test)),
+        expect(
+            dead_code,
+            reason = "the winit host on macOS and Linux reads only paths"
+        )
+    )]
     Uri(String),
 }
 

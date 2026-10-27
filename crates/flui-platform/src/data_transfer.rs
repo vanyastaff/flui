@@ -385,7 +385,7 @@ pub struct TransferRequest {
 
 impl TransferRequest {
     /// A delivery the producer completes through the claim slot `handle` was
-    /// made with ([`claim_slot`](flui_foundation::claim_slot)): the backend
+    /// made with ([`claim_slot`](fn@flui_foundation::claim_slot)): the backend
     /// keeps the slot and returns the request from
     /// [`DataTransferSource::request`]. A value delivered after the request
     /// was dropped is discarded; a slot dropped without delivering resolves

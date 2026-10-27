@@ -350,8 +350,9 @@ trait depends on `flui-platform` instead.
   loop's events and turns bring them), `AndroidHost::clipboard`,
   `AndroidHost::transfer` (`ViewTransfer`, made for `FluiView`) and
   `AndroidHost::input` (`ActivityInput`: the native queue's motion and key
-  events and the scroll factors), and `HeadlessHost::devices`
-  (`SimulatedDevices`: the devices a test attaches). The table names the
+  events and the scroll factors), `HeadlessHost::devices`
+  (`SimulatedDevices`: the devices a test attaches) and `HeadlessHost::offers`
+  (`SimulatedOffers`: the drag model's offer table). The table names the
   loop as such a position (`type Drag = WindowsLoop`, `type Input =
   AndroidLoop`, as it names the loop for the displays, the preferences and
   the lifecycle), and the loop answers it from that field, so a table cannot
@@ -398,7 +399,10 @@ trait depends on `flui-platform` instead.
   `features`: `cargo xtask module-dag` holds a platform file to its own model,
   `owner/`, `version/` and other features' models. The models are
   `clipboard::lock` (the Win32 session lock the Win32 and `arboard` clipboards
-  share), `drag::offers` (what a media type offers and its bytes carry, shared
+  share), `drag::offers` (the offer table every data-transfer source mints its
+  ids in, `TransferCompleter`, the producer half of a delivery, `TransferUri`,
+  a URI list as the hosts that read paths or URIs write it, and what a media
+  type offers and its bytes carry, shared
   by Android and the Web), `accessibility::bridge` and `haptics::degradation`.
   A platform is one file. One whose decisions need no OS keeps them in a
   module of the file under `forbid(unsafe_code)`, named for what it decides
@@ -642,7 +646,10 @@ trait depends on `flui-platform` instead.
   matched variant by variant, and the one table of key locations, whose
   named rows give the number the DOM reports for each location and the
   codes that imply it, which Win32 and AppKit read it from; a character no
-  key typed is `CHARACTER_WITHOUT_A_KEY`), `scroll` (the one wheel step: a
+  key typed is `CHARACTER_WITHOUT_A_KEY`), `regions` (a window's input
+  regions projected to device pixels, rounded outward, and handed the OS only
+  when the pixels, the scale or the display changed; every window that takes
+  them, the headless one too, projects through it), `scroll` (the one wheel step: a
   platform's amounts in the unit it picks, each axis turned to FLUI's
   direction by whether it moves the offset or the content, an idle axis
   `+0.0` whichever zero the platform reported, a non-finite amount refused,
@@ -2946,7 +2953,7 @@ Control means Unicode category Cc; combining means Mc or a nonzero canonical
 combining class. A scalar or grapheme count does not establish that grammar.
 Refused values become Unidentified without discarding physical code, location,
 timestamp, modifiers, composition or the Down/Up observation. No normalization
-rewrites source meaning. Common KeyText and native producers keep their
+rewrites source meaning. `Key::character` and native producers keep their
 nonempty-text contract (ADR-0143).
 
 The private Web conversion uses ICU4X `icu_properties` and `icu_normalizer`
