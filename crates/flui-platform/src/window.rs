@@ -317,7 +317,7 @@ impl From<WindowAppearance> for crate::Brightness {
 
 /// The material the window system draws behind a window's content, which
 /// shows through the window's frame and wherever its content is transparent
-/// ([`PlatformWindow::set_material`](crate::PlatformWindow::set_material)).
+/// ([`WindowCommand::SetMaterial`](crate::WindowCommand::SetMaterial)).
 ///
 /// The vocabulary every host shares: each material is one every window
 /// system that has materials at all can draw, so a host whose
