@@ -68,8 +68,9 @@ fn a_request_queued_behind_a_failed_frame_is_delivered() {
     assert_eq!(calls.get(), 3);
 }
 
-/// A close asked again while the handler decides the first is kept open
-/// without asking the handler a second time.
+/// A close asked again while the handler decides the first is kept open at
+/// once and queued behind the first answer, never asked inside it; the first
+/// granted the close, so the queued one is not asked at all.
 fn a_nested_close_request_keeps_the_window() {
     let handler = RecordingWindowHandler::new();
     let (_platform, window) = open(&handler);
@@ -77,12 +78,14 @@ fn a_nested_close_request_keeps_the_window() {
     let weak = Arc::downgrade(&window);
     let heard = Rc::clone(&nested);
     handler.react_to_close_request(move || {
-        let window = mock(&weak);
-        let window = window
-            .as_any()
-            .downcast_ref::<MockWindow>()
-            .expect("a headless window");
-        heard.set(Some(window.simulate_close()));
+        if heard.get().is_none() {
+            let window = mock(&weak);
+            let window = window
+                .as_any()
+                .downcast_ref::<MockWindow>()
+                .expect("a headless window");
+            heard.set(Some(window.simulate_close()));
+        }
         CloseDecision::Close
     });
     let window = window

@@ -244,6 +244,9 @@ pub struct WindowDelivery {
     /// The answer of the close request asked with the FIFO idle
     /// ([`Self::dispatch_close_request`]), left by its delivery.
     close_answer: Mutex<Option<CloseDecision>>,
+    /// A close request was granted: the window is closing, and a request
+    /// queued behind it is not asked.
+    close_granted: AtomicBool,
     /// Publishes the window's snapshot when the window system reports a fact;
     /// see [`Self::set_state_publisher`].
     state_publisher: Mutex<Option<StatePublisher>>,
@@ -299,6 +302,7 @@ impl WindowDelivery {
             }),
             frames_run,
             close_answer: Mutex::new(None),
+            close_granted: AtomicBool::new(false),
             state_publisher: Mutex::new(None),
             hovered: AtomicBool::new(false),
             closed: AtomicBool::new(false),
@@ -549,8 +553,19 @@ impl WindowDelivery {
                 .or_resume(());
             }
             Delivery::CloseRequest(later) => {
+                if self.close_granted.load(Ordering::SeqCst) {
+                    // An earlier request was granted and the window is
+                    // closing: there is nothing left to ask.
+                    if later.is_none() {
+                        *self.close_answer.lock() = Some(CloseDecision::KeepOpen);
+                    }
+                    return;
+                }
                 let decision = call(&self.handler(), |handler| handler.close_requested())
                     .or_resume(CloseDecision::Close);
+                if decision == CloseDecision::Close {
+                    self.close_granted.store(true, Ordering::SeqCst);
+                }
                 match later {
                     None => *self.close_answer.lock() = Some(decision),
                     Some(close) if decision == CloseDecision::Close => {
