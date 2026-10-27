@@ -2638,6 +2638,46 @@ graph LR
   пространства (виджеты и пакеты — только clippy); браузер — у координатора: перенос окна
   страницы на другой экран меняет `display` снимка, `freeze`/`resume` и фокус холста видны одним
   `on_state_changed` каждое.
+  **Исправления после ревью (vanyastaff/flui#1912).** (1) Подписка окна в `flui-app`
+  (`observe_window`) больше не теряет факты после паники подписчика: снимок ведёт
+  `RuntimeEvent::follow` (база сдвигается до доставки, чтобы перемена, сделанная подписчиком, шла
+  против этого снимка; снимок без метрик сохраняет прежние, так что Some→None→Some тех же метрик
+  не даёт resize), доставку — `RuntimeEvent::deliver_each`: каждое событие в своей изоляции,
+  первая паника всплывает после всех. Тест `window_state_follow_contract` (таблица в
+  `owner_dispatch/state_follow_tests.rs`: каждый факт — ровно его событие, активация одна — только
+  `state`, свёртывание — `WindowVisibility(false)`, цикл метрик, перемена до чтения seed ничего
+  не даёт, перенос на дисплей или новый масштаб просит выборку, паника доставки не теряет поздние
+  факты). Откат проверен: без ветки `is_seen` (сравнение `visible`) падают три случая; без
+  сохранения метрик — цикл; без изоляции доставки — паника. Тест крейтовый, а не в `tests/`:
+  `RuntimeEvent` и `observe_window` закрыты внутри раннера, и публичного входа, который запускает
+  раннер на управляемом headless-окне, нет. (2) Отказ закрытия не теряется:
+  `CloseRequestError::Refused { address, error }` у `request_presentation_close` (Android:
+  `closes` — `Unavailable`); тест `a_window_that_cannot_close_says_so` (`close_request_matrix`)
+  падает без него («Ok»). Окна, которые раннер отбрасывает (неудачная или отменённая установка,
+  открытие, которого никто не ждёт), закрываются через `runner::discard_window`, который пишет
+  отказ в журнал: слушателя у отказа нет. (3) Win32: `WindowCommand::Close` с чужого потока шлёт
+  свой `CLOSE_WINDOW` (`WM_APP + 4`, с идентичностью окна), владелец уничтожает окно без вопроса
+  вето; раньше уходил `WM_CLOSE`, который спрашивал вето. Тест
+  `a_close_from_another_thread_asks_no_veto` (`native_window_commands`) с `WM_CLOSE` вместо
+  нового сообщения падает. Путь сброса окна в `Drop` с чужого потока по-прежнему шлёт `WM_CLOSE`
+  (сброс — не команда). (4) Вето закрытия через `WindowControl` уже покрыто:
+  `commands_after_a_close_that_goes_ahead_are_dropped_and_after_a_veto_apply`
+  (`window_handle_contract`, `flui-app`) — `request_close` с обработчиком `KeepOpen` оставляет окно
+  и применяет остальные команды. (5) Мелкое: `StatePublisher` Web делит одну выборку (`sample`);
+  перечитывание окна на пробуждении owner'а Web изолировано от паники колбэка, как хук конца
+  сессии; `WindowCallbacks::announce` удалён (хосты зовут `dispatch_state_changed` только при
+  новой ревизии); `HeadlessWindowSystem::active` удалено — активация headless и есть фокус,
+  фикстура читает `focused`. Чтение возможностей клонирует снимок (строку заголовка и малые
+  поля) — дёшево, API не растёт. (6) Документы, которые называли удалённое (`close()`,
+  `on_window_event`), исправлены; `rg` по удалённым именам вне `docs/plans`, ADR и changelog пуст
+  (оставшиеся совпадения — `WindowEvent` winit и чужие `close()`). `docs/gaps.md`: запись 9 —
+  Android не закрывает окно, запись 4 — браузерный прогон снимка не выполнен. Тест фасада
+  `tests/surface.rs` (`flui/native`, Windows) закрывает окно командой — его ловил
+  `cross-typecheck`. Проверки: clippy `-D warnings` рабочего пространства `--all-targets` с
+  `flui-native/winit-backend` и `flui/native`; clippy и nextest `-p flui --features native` — 10;
+  nextest `flui-native`, `flui-app`, `flui-testing` — 389, с `winit-backend` — 424 (2 пропущены;
+  падает только trybuild `owner_thread_token_has_no_default` с `main`); clippy wasm32 lib,
+  `wasm-test` — 51; `checks`, `doc-strict`; WSL — clippy и rustdoc с `winit-backend`.
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`
