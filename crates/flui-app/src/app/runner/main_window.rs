@@ -668,7 +668,7 @@ where
     // the ui_runtimes (and the native windows they own) are retired while the
     // owner platform still lives, on unwind too.
     let teardown = LoopTeardown;
-    let result = platform.run(Box::new(move |owner| {
+    let result = platform.run(crate::app::runner::app_handler(move |owner| {
         let Application {
             mut factory,
             config,
@@ -695,12 +695,10 @@ where
         install_exit_policy_hook(config.exit_policy);
         install_platform_quit_hook();
         let reopen = Arc::downgrade(&ingress);
-        with_owner_platform(|owner| {
-            owner.shared().on_reopen(Box::new(move || {
-                if let Some(ingress) = reopen.upgrade() {
-                    ingress.request_native_show();
-                }
-            }));
+        super::host::route_reopen(move || {
+            if let Some(ingress) = reopen.upgrade() {
+                ingress.request_native_show();
+            }
         });
         let reload = WorkerReload::from_config(&config);
         let watcher = reload.spawn_watcher(runtime_wake_callback());
@@ -846,7 +844,7 @@ mod tests {
         let saved = Rc::new(RefCell::new(None));
         let output = Rc::clone(&saved);
         Box::new(platform)
-            .run(Box::new(move |owner| {
+            .run(crate::app::runner::app_handler(move |owner| {
                 let handle = install_test_controller(
                     owner,
                     Box::new(move |_, _, _| {
@@ -901,7 +899,7 @@ mod tests {
             let _owner = OwnerHostClearGuard::arm();
             let _cleanup = LoopTeardown;
             Box::new(HeadlessPlatform::new())
-                .run(Box::new(move |owner| {
+                .run(crate::app::runner::app_handler(move |owner| {
                     let handle = install_test_controller(
                         owner,
                         Box::new(move |_, window, host| {
@@ -986,7 +984,7 @@ mod tests {
         let _owner = OwnerHostClearGuard::arm();
         let _cleanup = LoopTeardown;
         Box::new(HeadlessPlatform::new())
-            .run(Box::new(move |owner| {
+            .run(crate::app::runner::app_handler(move |owner| {
                 let calls = Rc::new(Cell::new(0));
                 let called = Rc::clone(&calls);
                 let handle = install_test_controller(

@@ -146,19 +146,14 @@ where
         }
         let mut installation = prepare_platform_ui_runtime(ui_runtime, Arc::clone(&window));
         installation.dev_agent(config.dev_agent.zip(agent_window));
-        owner_platform_installed(|owner| {
-            installation.submit_web(
-                super::frame_driver::FrameDriver::Web(WebFrameDriver {
-                    renderer,
-                    window,
-                    gpu_loss,
-                    owner_wake: wake,
-                    surface_color: config.surface_color,
-                    frame_latency: config.frame_latency,
-                }),
-                &owner.shared(),
-            )
-        })?;
+        installation.submit_web(super::frame_driver::FrameDriver::Web(WebFrameDriver {
+            renderer,
+            window,
+            gpu_loss,
+            owner_wake: wake,
+            surface_color: config.surface_color,
+            frame_latency: config.frame_latency,
+        }))?;
 
         tracing::info!("Web platform initialized with callbacks");
         Ok(())
@@ -172,7 +167,7 @@ where
     // (ADR-0039 §6/§7 "wasm posture"). An explicit web detach/quit
     // ownership hook is deferred until the platform exposes a callback
     // whose lifetime encloses the RAF registration.
-    let result = platform.run(Box::new(move |owner| {
+    let result = platform.run(crate::app::runner::app_handler(move |owner| {
         install_owner_platform(owner)?;
         super::host::install_configured_executors(&config);
         super::host::install_host_storage(&config);

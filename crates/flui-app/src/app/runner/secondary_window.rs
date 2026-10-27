@@ -1267,7 +1267,7 @@ mod tests {
     fn installation_case(case: InstallCase) {
         let _clear = super::super::host::OwnerHostClearGuard::arm();
         Box::new(HeadlessPlatform::new())
-            .run(Box::new(move |owner| {
+            .run(crate::app::runner::app_handler(move |owner| {
                 let window = owner.open_routed(flui_platform::WindowOptions::default())
                     .expect("native window");
                 let flui_native::WindowOpen::Ready(window) = window else {
@@ -1513,7 +1513,7 @@ mod tests {
         }
         let _clear = super::super::host::OwnerHostClearGuard::arm();
         Box::new(HeadlessPlatform::new())
-            .run(Box::new(|owner| {
+            .run(crate::app::runner::app_handler(|owner| {
                 super::super::host::install_owner_platform(owner).expect("owner");
                 let closed = Arc::new(AtomicUsize::new(0));
                 let mut requests = Vec::new();
@@ -1611,7 +1611,7 @@ mod tests {
         let calls = Rc::new(Cell::new(0));
         let called = Rc::clone(&calls);
         Box::new(platform)
-            .run(Box::new(move |owner| {
+            .run(crate::app::runner::app_handler(move |owner| {
                 super::super::host::install_owner_platform(owner).expect("owner");
                 for first in [true, false] {
                     let window = with_owner_platform(|owner| {
@@ -1707,7 +1707,7 @@ mod tests {
             Failure::OwnerReplacement,
         ] {
             let _clear = super::super::host::OwnerHostClearGuard::arm();
-            Box::new(HeadlessPlatform::new()).run(Box::new(move |owner| {
+            Box::new(HeadlessPlatform::new()).run(crate::app::runner::app_handler(move |owner| {
                 super::super::host::install_owner_platform(owner).expect("owner");
                 let window = with_owner_platform(|owner| owner.open_routed(flui_platform::WindowOptions::default()))
                     .expect("owner").expect("open").try_ready().expect("headless ready");
@@ -1766,7 +1766,7 @@ mod tests {
         for policy in [WindowPolicy::Isolated, WindowPolicy::Shared] {
             let _clear = super::super::host::OwnerHostClearGuard::arm();
             Box::new(HeadlessPlatform::new())
-                .run(Box::new(move |owner| {
+                .run(crate::app::runner::app_handler(move |owner| {
                     super::super::host::install_owner_platform(owner).expect("owner");
                     let outer = super::super::owner_dispatch::install_platform_ui_runtime(
                         UiRuntime::for_test(),

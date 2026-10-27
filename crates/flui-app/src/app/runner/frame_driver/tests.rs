@@ -253,60 +253,76 @@ fn close_refuses_async_publication_without_cancelling_the_accepted_frame() {
 
 struct ReentrantCapture(Arc<AtomicUsize>);
 
-fn native_terminal_callbacks_refuse_late_publication() {
+/// Run a headless platform whose bootstrap only keeps the owner capability,
+/// then `scenario` with it on the same thread, as the owner's later turns run:
+/// the quit a scenario asks for reaches the handler at once, not after a
+/// bootstrap still running.
+fn after_bootstrap(
+    scenario: impl FnOnce(Rc<flui_native::OwnerPlatform>) -> Result<(), flui_native::BootstrapError>,
+) {
     use flui_native::Platform;
+
+    let kept = Rc::new(std::cell::RefCell::new(None));
+    let keep = Rc::clone(&kept);
+    Box::new(flui_native::HeadlessPlatform::new())
+        .run(crate::app::runner::app_handler(move |owner| {
+            keep.replace(Some(owner));
+            Ok(())
+        }))
+        .expect("headless run");
+    let owner = Rc::new(kept.take().expect("the bootstrap kept the owner"));
+    scenario(owner).expect("the scenario");
+}
+
+fn native_terminal_callbacks_refuse_late_publication() {
     use flui_platform::PlatformWindow;
 
     for quit in [false, true] {
         let _clear = OwnerHostClearGuard::arm();
-        Box::new(flui_native::HeadlessPlatform::new())
-            .run(Box::new(move |owner| {
-                let owner = Rc::new(owner);
-                let window: Arc<dyn PlatformWindow> = owner
-                    .open_routed(flui_platform::WindowOptions::default())?
-                    .try_ready()?;
-                owner.shared().set_exit_policy_hook(Box::new(|| false));
-                let runtime = UiRuntime::for_test();
-                runtime.attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0))?;
-                let mut installation = prepare_replacement_ui_runtime(runtime, Arc::clone(&window));
-                let dispatcher = installation.dispatcher();
-                installation.terminal_callbacks(&owner.shared());
-                let scenes = Arc::new(AtomicUsize::new(0));
-                let frame = installation
-                    .frame_driver(FrameDriver::Test(TestFrameDriver {
-                        installed: None,
-                        sink: counting_sink(Arc::clone(&scenes)),
-                        resize: None,
-                        prelude: Some(Box::new(move || {
-                            if quit {
-                                owner.quit();
-                            } else {
-                                window.close_now();
-                            }
-                        })),
-                    }))
-                    .expect("prepare native driver");
-                installation
-                    .submit()
-                    .outcome()
-                    .expect("fresh host completes inline")
-                    .expect("installed");
-                dispatch_platform_ui_runtime(
-                    dispatcher,
-                    RuntimeTask::Frame(frame.binding, flui_native::frame_request_now()),
-                )
-                .expect("already accepted frame finishes");
-                let resource = parking_lot::Mutex::new(None);
-                assert_eq!(
-                    frame.liveness.publish(&resource, 42),
-                    Err(42),
-                    "quit={quit}"
-                );
-                assert_eq!(scenes.load(Ordering::SeqCst), 1, "quit={quit}");
-                teardown_platform_ui_runtime();
-                Ok(())
-            }))
-            .expect("headless terminal callback");
+        after_bootstrap(move |owner| {
+            let window: Arc<dyn PlatformWindow> = owner
+                .open_routed(flui_platform::WindowOptions::default())?
+                .try_ready()?;
+            let runtime = UiRuntime::for_test();
+            runtime.attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0))?;
+            let mut installation = prepare_replacement_ui_runtime(runtime, Arc::clone(&window));
+            let dispatcher = installation.dispatcher();
+            installation.terminal_callbacks();
+            let scenes = Arc::new(AtomicUsize::new(0));
+            let frame = installation
+                .frame_driver(FrameDriver::Test(TestFrameDriver {
+                    installed: None,
+                    sink: counting_sink(Arc::clone(&scenes)),
+                    resize: None,
+                    prelude: Some(Box::new(move || {
+                        if quit {
+                            owner.quit();
+                        } else {
+                            window.close_now();
+                        }
+                    })),
+                }))
+                .expect("prepare native driver");
+            installation
+                .submit()
+                .outcome()
+                .expect("fresh host completes inline")
+                .expect("installed");
+            dispatch_platform_ui_runtime(
+                dispatcher,
+                RuntimeTask::Frame(frame.binding, flui_native::frame_request_now()),
+            )
+            .expect("already accepted frame finishes");
+            let resource = parking_lot::Mutex::new(None);
+            assert_eq!(
+                frame.liveness.publish(&resource, 42),
+                Err(42),
+                "quit={quit}"
+            );
+            assert_eq!(scenes.load(Ordering::SeqCst), 1, "quit={quit}");
+            teardown_platform_ui_runtime();
+            Ok(())
+        });
     }
 }
 
@@ -319,50 +335,46 @@ impl Drop for ReentrantCapture {
 }
 
 fn a_prepared_single_window_rejects_close_and_quit_before_publication() {
-    use flui_native::Platform;
     use flui_platform::PlatformWindow;
     for quit in [false, true] {
         let _clear = OwnerHostClearGuard::arm();
-        Box::new(flui_native::HeadlessPlatform::new())
-            .run(Box::new(move |owner| {
-                let window: Arc<dyn PlatformWindow> = owner
-                    .open_routed(flui_platform::WindowOptions::default())?
-                    .try_ready()?;
-                owner.shared().set_exit_policy_hook(Box::new(|| false));
-                let mut prepared =
-                    prepare_replacement_ui_runtime(UiRuntime::for_test(), Arc::clone(&window));
-                prepared.terminal_callbacks(&owner.shared());
-                let frame = prepared.frame_driver(FrameDriver::Test(TestFrameDriver {
-                    installed: None,
-                    sink: counting_sink(Arc::new(AtomicUsize::new(0))),
-                    prelude: None,
-                    resize: None,
-                }))?;
-                assert!(
-                    !frame.liveness.is_live(),
-                    "preparation grants no async publication authority"
-                );
-                if quit {
-                    owner.quit();
-                } else {
-                    window.close_now();
-                }
-                let result = prepared
-                    .submit()
-                    .outcome()
-                    .expect("fresh host settles refusal inline");
-                assert!(matches!(
-                    result,
-                    Err(super::super::installed_host::InstallError::WindowClosed)
-                ));
-                assert!(
-                    !frame.liveness.is_live(),
-                    "terminal preparation never publishes its driver"
-                );
-                teardown_platform_ui_runtime();
-                Ok(())
-            }))
-            .expect("headless preparation");
+        after_bootstrap(move |owner| {
+            let window: Arc<dyn PlatformWindow> = owner
+                .open_routed(flui_platform::WindowOptions::default())?
+                .try_ready()?;
+            let mut prepared =
+                prepare_replacement_ui_runtime(UiRuntime::for_test(), Arc::clone(&window));
+            prepared.terminal_callbacks();
+            let frame = prepared.frame_driver(FrameDriver::Test(TestFrameDriver {
+                installed: None,
+                sink: counting_sink(Arc::new(AtomicUsize::new(0))),
+                prelude: None,
+                resize: None,
+            }))?;
+            assert!(
+                !frame.liveness.is_live(),
+                "preparation grants no async publication authority"
+            );
+            if quit {
+                owner.quit();
+            } else {
+                window.close_now();
+            }
+            let result = prepared
+                .submit()
+                .outcome()
+                .expect("fresh host settles refusal inline");
+            assert!(matches!(
+                result,
+                Err(super::super::installed_host::InstallError::WindowClosed)
+            ));
+            assert!(
+                !frame.liveness.is_live(),
+                "terminal preparation never publishes its driver"
+            );
+            teardown_platform_ui_runtime();
+            Ok(())
+        });
     }
 }
 
@@ -371,55 +383,51 @@ fn a_prepared_single_window_rejects_close_and_quit_before_publication() {
 /// the quit hook. A `quit()` with no `Destroy` before it leaves the close to
 /// the hook.
 fn a_quit_after_the_native_close_dispatches_no_second_close() {
-    use flui_native::Platform;
     use flui_platform::PlatformWindow;
 
     for native_close in [true, false] {
         let _clear = OwnerHostClearGuard::arm();
-        Box::new(flui_native::HeadlessPlatform::new())
-            .run(Box::new(move |owner| {
-                let window: Arc<dyn PlatformWindow> = owner
-                    .open_routed(flui_platform::WindowOptions::default())?
-                    .try_ready()?;
-                owner.shared().set_exit_policy_hook(Box::new(|| false));
-                let runtime = UiRuntime::for_test();
-                runtime.attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0))?;
-                let installation = prepare_replacement_ui_runtime(runtime, Arc::clone(&window));
-                installation.terminal_callbacks(&owner.shared());
-                installation
-                    .submit()
-                    .outcome()
-                    .expect("fresh host completes inline")
-                    .expect("installed");
-                let runtimes = || {
-                    super::super::host::APP_RUNTIME
-                        .with(|slot| slot.borrow().installed_host.logical().runtime_count())
-                };
-                if native_close {
-                    window.close_now();
-                    assert_eq!(runtimes(), 0, "the native close retired the runtime");
-                }
-                let ((), log) = flui_testing::log_capture::capture(|| owner.quit());
-                assert!(
-                    log.contains("Quitting headless platform"),
-                    "vacuous-pass guard: the quit ran inside the capture\n{log}"
-                );
-                let complaints = log
-                    .records()
-                    .iter()
-                    .filter(|record| record.level <= tracing::Level::WARN)
-                    .count();
-                assert_eq!(
-                    complaints,
-                    0,
-                    "native_close={native_close}\n{}",
-                    log.render_at_least(tracing::Level::WARN)
-                );
-                assert_eq!(runtimes(), 0, "native_close={native_close}");
-                teardown_platform_ui_runtime();
-                Ok(())
-            }))
-            .expect("headless terminal callbacks");
+        after_bootstrap(move |owner| {
+            let window: Arc<dyn PlatformWindow> = owner
+                .open_routed(flui_platform::WindowOptions::default())?
+                .try_ready()?;
+            let runtime = UiRuntime::for_test();
+            runtime.attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0))?;
+            let installation = prepare_replacement_ui_runtime(runtime, Arc::clone(&window));
+            installation.terminal_callbacks();
+            installation
+                .submit()
+                .outcome()
+                .expect("fresh host completes inline")
+                .expect("installed");
+            let runtimes = || {
+                super::super::host::APP_RUNTIME
+                    .with(|slot| slot.borrow().installed_host.logical().runtime_count())
+            };
+            if native_close {
+                window.close_now();
+                assert_eq!(runtimes(), 0, "the native close retired the runtime");
+            }
+            let ((), log) = flui_testing::log_capture::capture(|| owner.quit());
+            assert!(
+                log.contains("Quitting headless platform"),
+                "vacuous-pass guard: the quit ran inside the capture\n{log}"
+            );
+            let complaints = log
+                .records()
+                .iter()
+                .filter(|record| record.level <= tracing::Level::WARN)
+                .count();
+            assert_eq!(
+                complaints,
+                0,
+                "native_close={native_close}\n{}",
+                log.render_at_least(tracing::Level::WARN)
+            );
+            assert_eq!(runtimes(), 0, "native_close={native_close}");
+            teardown_platform_ui_runtime();
+            Ok(())
+        });
     }
 }
 
