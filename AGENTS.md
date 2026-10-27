@@ -143,6 +143,10 @@ by, with the better shape. What this repository keeps getting wrong:
 - state owned by the process instead of a UI runtime; native-platform changes without a shown
   run; event translation tested only synthetically;
 - shapes transliterated from another framework (Dart-style names, setter/getter pairs);
+- a `type` alias for values that are easy to confuse, where a newtype makes the mix-up a type
+  error; a `new` returning `Result` or `Option` (that constructor is `try_new`);
+- a generic-return call (`.into()`, `.parse()`, `collect()`) whose target type the reader has to
+  infer: name it with a turbofish or a typed binding;
 - `SAFETY:` comments that restate the operation instead of naming the invariant;
 - workflow actions not pinned to a full SHA, cargo without `--locked`, caches saved off `main`;
 - an exemption (`deny.toml` skip, `typos.toml` word, `#[expect]`) without its reason.
