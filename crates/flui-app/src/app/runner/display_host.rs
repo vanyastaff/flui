@@ -171,6 +171,6 @@ fn hint_for(demand: FrameRateDemand) -> FrameRateHint {
     match demand {
         FrameRateDemand::Active => FrameRateHint::High,
         // The demand enum grows; an unknown one leaves the rate to the system.
-        _ => FrameRateHint::Default,
+        FrameRateDemand::Idle | _ => FrameRateHint::Default,
     }
 }

@@ -167,7 +167,7 @@ fn report(window: &dyn PlatformWindow, refusal: &CommandRefusal) {
                 "the window no longer takes a queued window command"
             );
         }
-        other => {
+        other @ (CommandRefusal::Admission(_) | CommandRefusal::Apply(_)) => {
             tracing::debug!(
                 window = ?window.id(),
                 error = %other,

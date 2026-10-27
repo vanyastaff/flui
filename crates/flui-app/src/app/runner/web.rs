@@ -278,7 +278,7 @@ impl WebFrameDriver {
         // services commands, tasks and input without a frame.
         let action = match action {
             WakeAction::Render if !gpu_loss.can_draw() => WakeAction::PumpBackground,
-            other => other,
+            other @ (WakeAction::Render | WakeAction::PumpBackground | WakeAction::Skip) => other,
         };
         match action {
             WakeAction::Skip => return,

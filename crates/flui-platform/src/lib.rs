@@ -103,6 +103,9 @@
 // A public enum is closed only where that is a decision: one more variant
 // later is a breaking change, so each closed enum says why it is closed.
 #![deny(clippy::exhaustive_enums)]
+// A `_` arm must not absorb a variant added later; see the
+// `wildcard_enum_match_arm` entry in the workspace `Cargo.toml`.
+#![warn(clippy::wildcard_enum_match_arm)]
 
 mod brightness;
 mod clipboard;

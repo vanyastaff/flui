@@ -601,7 +601,17 @@ large_futures = "warn"
 imprecise_flops = "warn"
 # A mutating debug assertion changes behavior between debug and release builds.
 debug_assert_with_mut_call = "warn"
-# Allow reasonable exceptions
+# `wildcard_enum_match_arm` — measured, kept off workspace-wide. A `_` arm that
+# swallows a variant added later is the "accepted work dropped" defect, but the
+# measured count is 729 sites (Windows all-targets/all-features 701, of which
+# 407 in lib/bin code; macOS, Android and wasm32 add 28), mostly over our own
+# enums (`PointerEvent` 114, `DrawOp` 45, `Layer` 40), with a few over syn,
+# winit, serde_json and lyon. Too many for one change, so it is on per crate
+# instead (`#![warn(clippy::wildcard_enum_match_arm)]` in flui-platform and
+# flui-app, 21 sites fixed), widened crate by crate. Over a workspace enum that
+# is `#[non_exhaustive]` in another crate the `_` is mandatory: list the known
+# variants in its arm (`A | B | _`) so the next variant trips the lint again.
+# A foreign enum's site takes `#[expect(..., reason = "...")]`.
 cast_precision_loss = "allow"
 module_name_repetitions = "allow"
 too_many_lines = "allow"
