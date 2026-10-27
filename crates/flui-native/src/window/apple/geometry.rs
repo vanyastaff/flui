@@ -1,8 +1,8 @@
 //! What the AppKit and UIKit windows report and are asked, as pure rules:
-//! where an `NSWindow` is ([`frame`]), which mode it is in and how to reach
-//! another ([`mode`]), whether its surface is seen ([`surface`]), and which
+//! where an `NSWindow` is (`frame`), which mode it is in and how to reach
+//! another (`mode`), whether its surface is seen (`surface`), and which
 //! screen edges a UIKit window defers its system gestures on
-//! ([`screen_edges`]).
+//! (`screen_edges`).
 //!
 //! Nothing here calls the OS, so `test` keeps the rules checked on every host.
 
