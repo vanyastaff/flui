@@ -152,6 +152,39 @@ fn a_refused_command_is_never_queued() {
     assert_eq!(all.state(), before);
 }
 
+/// A material is a command like the others: a window that draws one takes it
+/// through the queue at the owner's next turn, and one that draws none
+/// refuses it at the submit.
+fn a_material_goes_through_the_window_queue() {
+    let host = headless_host_window(WindowCapabilities::ALL);
+    let window: Arc<dyn PlatformWindow> = host.clone();
+    let rig_all = rig(&window, 21);
+    let mock = host
+        .as_any()
+        .downcast_ref::<flui_native::MockWindow>()
+        .expect("headless window");
+    rig_all
+        .handle
+        .set_material(flui_platform::WindowMaterial::System)
+        .expect("accepted");
+    assert_eq!(mock.materials(), [], "nothing is applied inline");
+    rig_all.queues.apply_pending();
+    assert_eq!(mock.materials(), [flui_platform::WindowMaterial::System]);
+
+    let mut without = WindowCapabilities::ALL;
+    without.material = flui_platform::Availability::Unavailable;
+    let none = headless_window(without);
+    let rig_none = rig(&none, 22);
+    assert_eq!(
+        rig_none
+            .handle
+            .set_material(flui_platform::WindowMaterial::System),
+        Err(SubmitError::Admission(AdmissionError::Unsupported(
+            Unsupported::new(UnsupportedReason::NotOnThisPlatform)
+        )))
+    );
+}
+
 /// The window system revises what the window honours between a submit and
 /// the turn that applies it: the queue, the command's caller, admits each
 /// queued command again against the snapshot then. What the window still
@@ -655,6 +688,10 @@ fn window_handle_contract() {
             (
                 "commands_wait_for_the_next_turn_and_apply_in_order",
                 commands_wait_for_the_next_turn_and_apply_in_order as fn(),
+            ),
+            (
+                "a_material_goes_through_the_window_queue",
+                a_material_goes_through_the_window_queue as fn(),
             ),
             (
                 "a_refused_command_is_never_queued",
