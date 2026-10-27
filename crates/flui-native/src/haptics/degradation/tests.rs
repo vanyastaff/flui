@@ -700,7 +700,7 @@ fn the_headless_window_plays_a_stale_source_on_its_actuator() {
     let saved = std::rc::Rc::new(std::cell::RefCell::new(None));
     let installed = std::rc::Rc::clone(&saved);
     Box::new(HeadlessPlatform::new())
-        .run(Box::new(move |owner| {
+        .run(crate::owner::app_delivery::testing::on_ready(move |owner| {
             *installed.borrow_mut() = Some(owner);
             Ok(())
         }))

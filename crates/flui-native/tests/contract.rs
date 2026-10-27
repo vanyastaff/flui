@@ -260,10 +260,6 @@ mod native_windows {
             deadline_rearms_independent_windows_without_input,
         ),
         (
-            "deadline_hook_replacement_rearms_without_input",
-            deadline_hook_replacement_rearms_without_input,
-        ),
-        (
             "deadline_query_can_close_an_independent_window",
             deadline_query_can_close_an_independent_window,
         ),
@@ -292,8 +288,8 @@ mod native_windows {
             deadline_hidden_window_declining_its_frames_does_not_spin,
         ),
         (
-            "deadline_query_unwind_retains_replaced_hostile_captures",
-            deadline_query_unwind_retains_replaced_hostile_captures,
+            "deadline_query_unwind_retains_hostile_captures",
+            deadline_query_unwind_retains_hostile_captures,
         ),
         (
             "deadline_reaches_minimized_window",
@@ -938,10 +934,6 @@ mod native_windows {
         run_deadline_windows("rearm");
     }
 
-    fn deadline_hook_replacement_rearms_without_input() {
-        run_deadline_windows("replace");
-    }
-
     fn deadline_query_can_close_an_independent_window() {
         run_deadline_windows("close");
     }
@@ -950,7 +942,7 @@ mod native_windows {
         let calls = Arc::new(AtomicUsize::new(0));
         let result = Arc::clone(&calls);
         Box::new(WindowsPlatform::new().expect("native Windows platform"))
-            .run(Box::new(move |owner| {
+            .run(crate::app::with_log(move |log, owner| {
                 let window = Opened::ready(
                     &owner,
                     WindowOptions::default()
@@ -989,7 +981,7 @@ mod native_windows {
                     }
                 });
                 let proxy = owner.proxy();
-                owner.shared().set_wake_deadline_hook(Box::new(move || {
+                log.answer_deadline_with(move || {
                     let (deadline, stage) = *state.lock().expect("readmission state");
                     if stage == 1 {
                         // None must be observed by the loop before the next
@@ -997,7 +989,7 @@ mod native_windows {
                         proxy.wake().expect("readmit on the next owner turn");
                     }
                     deadline
-                }));
+                });
                 Ok(())
             }))
             .expect("native readmission loop returns normally");
@@ -1064,7 +1056,7 @@ mod native_windows {
         let queries = Arc::new(AtomicUsize::new(0));
         let result = Arc::clone(&queries);
         Box::new(WindowsPlatform::new().expect("native Windows platform"))
-            .run(Box::new(move |owner| {
+            .run(crate::app::with_log(move |log, owner| {
                 if let Some(visible) = window {
                     // No frame reaction: the recording handler declines.
                     // The platform keeps the window open for the run.
@@ -1081,10 +1073,10 @@ mod native_windows {
                     let _ = watchdog.request_quit();
                 });
                 let due = web_time::Instant::now() + Duration::from_millis(30);
-                owner.shared().set_wake_deadline_hook(Box::new(move || {
+                log.answer_deadline_with(move || {
                     queries.fetch_add(1, Ordering::SeqCst);
                     Some(due)
-                }));
+                });
                 Ok(())
             }))
             .expect("native unserviced-deadline loop returns normally");
@@ -1102,7 +1094,7 @@ mod native_windows {
         let frames = Arc::new(AtomicUsize::new(0));
         let result = Arc::clone(&frames);
         Box::new(WindowsPlatform::new().expect("native Windows platform"))
-            .run(Box::new(move |owner| {
+            .run(crate::app::with_log(move |log, owner| {
                 let window = Opened::ready(
                     &owner,
                     WindowOptions::default()
@@ -1130,16 +1122,16 @@ mod native_windows {
                     callback_pending.fetch_sub(1, Ordering::SeqCst);
                     frames.fetch_add(1, Ordering::SeqCst);
                 });
-                owner.shared().set_wake_deadline_hook(Box::new(move || {
+                log.answer_deadline_with(move || {
                     (pending.load(Ordering::SeqCst) > 0).then_some(due)
-                }));
+                });
                 Ok(())
             }))
             .expect("native same-instant loop returns normally");
         result.load(Ordering::SeqCst)
     }
 
-    fn deadline_query_unwind_retains_replaced_hostile_captures() {
+    fn deadline_query_unwind_retains_hostile_captures() {
         struct Bomb(Arc<AtomicUsize>);
         impl Drop for Bomb {
             fn drop(&mut self) {
@@ -1152,19 +1144,16 @@ mod native_windows {
         let captures = (Bomb(Arc::clone(&drops)), Bomb(Arc::clone(&drops)));
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             Box::new(WindowsPlatform::new().expect("native Windows platform"))
-                .run(Box::new(move |owner| {
-                    let shared = owner.shared();
-                    let replacement = shared.clone();
-                    shared.set_wake_deadline_hook(Box::new(move || {
+                .run(crate::app::with_log(move |log, _| {
+                    log.answer_deadline_with(move || {
                         std::hint::black_box(&captures);
-                        replacement.set_wake_deadline_hook(Box::new(|| None));
                         panic!("deadline query failure");
-                    }));
+                    });
                     Ok(())
                 }))
-                .expect("native query returns unless its hook panics");
+                .expect("native query returns unless its handler panics");
         }))
-        .expect_err("original hook panic propagates through the Rust run boundary");
+        .expect_err("the handler's panic propagates through the Rust run boundary");
         assert_eq!(
             failure.downcast_ref::<&'static str>().copied(),
             Some("deadline query failure")
@@ -1172,7 +1161,7 @@ mod native_windows {
         assert_eq!(
             drops.load(Ordering::SeqCst),
             0,
-            "outgoing captures retained before unwind retirement"
+            "the failed handler's captures are retained, not dropped into the unwind"
         );
         drop(failure);
         let platform = WindowsPlatform::new().expect("independent native owner after failed query");
@@ -1220,7 +1209,7 @@ mod native_windows {
         let serviced = Arc::new(Mutex::new(None::<bool>));
         let result = Arc::clone(&serviced);
         Box::new(WindowsPlatform::new().expect("native Windows platform"))
-            .run(Box::new(move |owner| {
+            .run(crate::app::with_log(move |log, owner| {
                 let window = Opened::ready(
                     &owner,
                     WindowOptions::default()
@@ -1256,9 +1245,7 @@ mod native_windows {
                     *serviced.lock().expect("serviced state") = Some(still);
                     proxy.request_quit().expect("quit after unpainted deadline");
                 });
-                owner.shared().set_wake_deadline_hook(Box::new(move || {
-                    *pending.lock().expect("deadline state")
-                }));
+                log.answer_deadline_with(move || *pending.lock().expect("deadline state"));
                 Ok(())
             }))
             .expect("native unpainted deadline loop returns normally");
@@ -1275,7 +1262,7 @@ mod native_windows {
     )]
     fn run_deadline_windows(mode: &'static str) {
         // Every frame request before the first admitted deadline is a
-        // delivery nothing asked for (a stale answer of a replaced hook).
+        // delivery nothing asked for (an answer no deadline was due for).
         // Each window's first paint is forced before the hooks arm, so no
         // ordinary paint lands in that span.
         let early = Arc::new(AtomicUsize::new(0));
@@ -1289,8 +1276,7 @@ mod native_windows {
         let returned_counts = Arc::clone(&counts);
         let returned_closed = Arc::clone(&first_closed);
         Box::new(WindowsPlatform::new().expect("native Windows platform"))
-            .run(Box::new(move |owner| {
-                let shared = owner.shared();
+            .run(crate::app::with_log(move |log, owner| {
                 let proxy = owner.proxy();
                 let mut first = None;
                 let mut windows = Vec::new();
@@ -1355,23 +1341,8 @@ mod native_windows {
                 let initial = web_time::Instant::now() + Duration::from_millis(80);
                 *deadlines.lock().expect("deadline state") = [Some(initial); 2];
                 let hook_deadlines = Arc::clone(&deadlines);
-                let replacement_shared = shared.clone();
-                shared.set_wake_deadline_hook(Box::new(move || {
+                log.answer_deadline_with(move || {
                     let first_query = queried.fetch_add(1, Ordering::SeqCst) == 0;
-                    if mode == "replace" && first_query {
-                        let replacement_deadlines = Arc::clone(&hook_deadlines);
-                        replacement_shared.set_wake_deadline_hook(Box::new(move || {
-                            replacement_deadlines
-                                .lock()
-                                .expect("replacement deadline state")
-                                .iter()
-                                .flatten()
-                                .copied()
-                                .min()
-                        }));
-                        // This answer belongs to the outgoing registration.
-                        return Some(web_time::Instant::now());
-                    }
                     if mode == "close" && first_query {
                         first.upgrade().expect("live first window").close_now();
                         hook_deadlines.lock().expect("deadline state")[0] = None;
@@ -1383,7 +1354,7 @@ mod native_windows {
                         .flatten()
                         .copied()
                         .min()
-                }));
+                });
                 Ok(())
             }))
             .expect("native deadline loop returns normally");
@@ -5035,12 +5006,16 @@ mod native_windows {
         window.close_now();
     }
 
-    /// Runs `platform`'s message loop with `ready` as its bootstrap; returns
-    /// once the loop ends. A loop that never ends is the child's timeout.
-    fn run_loop(platform: WindowsPlatform, ready: impl FnOnce(OwnerPlatform) + 'static) {
+    /// Runs `platform`'s message loop with `ready` as its bootstrap, which
+    /// sets what the handler answers; returns once the loop ends. A loop that
+    /// never ends is the child's timeout.
+    fn run_loop(
+        platform: WindowsPlatform,
+        ready: impl FnOnce(&crate::app::AppLog, OwnerPlatform) + 'static,
+    ) {
         Box::new(platform)
-            .run(Box::new(move |owner| {
-                ready(owner);
+            .run(crate::app::with_log(move |log, owner| {
+                ready(log, owner);
                 Ok(())
             }))
             .expect("Win32 message loop");
@@ -5075,7 +5050,10 @@ mod native_windows {
 
     fn closing_the_last_window_ends_the_loop() {
         let platform = WindowsPlatform::new().expect("native Windows platform");
-        run_loop(platform, |owner| post_close(&open_owned(&owner)));
+        run_loop(platform, |log, owner| {
+            log.answer_exit(true);
+            post_close(&open_owned(&owner));
+        });
     }
 
     fn exit_policy_veto_holds_until_a_reevaluation_allows_exit() {
@@ -5085,10 +5063,10 @@ mod native_windows {
         run_loop(platform, {
             let answers = Arc::clone(&answers);
             let releaser = Arc::clone(&releaser);
-            move |owner| {
+            move |log, owner| {
                 let allow = Arc::new(AtomicBool::new(false));
                 let shared = owner.shared();
-                shared.set_exit_policy_hook(Box::new({
+                log.answer_exit_with({
                     let allow = Arc::clone(&allow);
                     let answers = Arc::clone(&answers);
                     move || {
@@ -5096,7 +5074,7 @@ mod native_windows {
                         answers.lock().expect("hook answers").push(answer);
                         answer
                     }
-                }));
+                });
                 post_close(&open_owned(&owner));
                 // Once the hook has vetoed, a worker lets the loop run on,
                 // then allows exit and asks for a fresh decision.
@@ -5137,9 +5115,9 @@ mod native_windows {
         run_loop(platform, {
             let calls = Arc::clone(&calls);
             let releaser = Arc::clone(&releaser);
-            move |owner| {
+            move |log, owner| {
                 let shared = owner.shared();
-                shared.set_exit_policy_hook(Box::new({
+                log.answer_exit_with({
                     let calls = Arc::clone(&calls);
                     move || {
                         // The first answer is a panic inside the owner
@@ -5150,7 +5128,7 @@ mod native_windows {
                         );
                         true
                     }
-                }));
+                });
                 post_close(&open_owned(&owner));
                 let worker = std::thread::spawn(move || {
                     let start = Instant::now();
@@ -5190,11 +5168,11 @@ mod native_windows {
         let consultations = Arc::new(AtomicUsize::new(0));
         run_loop(platform, {
             let consultations = Arc::clone(&consultations);
-            move |owner| {
+            move |log, owner| {
                 // The first consultation opens (and queues the close of) a
                 // replacement window yet allows exit; the loop must outlive
                 // that answer and end only after the replacement closes.
-                owner.shared().set_exit_policy_hook(Box::new(move || {
+                log.answer_exit_with(move || {
                     if consultations.fetch_add(1, Ordering::SeqCst) == 0 {
                         OWNER.with(|slot| {
                             let slot = slot.borrow();
@@ -5202,7 +5180,7 @@ mod native_windows {
                         });
                     }
                     true
-                }));
+                });
                 post_close(&open_owned(&owner));
                 OWNER.with(|slot| *slot.borrow_mut() = Some(owner));
             }

@@ -31,7 +31,7 @@ fn native_setting_message_replaces_the_cached_observation() {
     let (finish, finished) = std::sync::mpsc::channel();
     let (watchdog_tx, watchdog_rx) = std::sync::mpsc::channel();
     Box::new(platform)
-        .run(Box::new(move |owner| {
+        .run(crate::owner::app_delivery::testing::on_ready(move |owner| {
             let quit = owner.proxy();
             let timeout = quit.clone();
             owner.on_wake(Box::new(move || {
@@ -94,7 +94,7 @@ fn failed_native_posts_still_deliver_owner_turns_and_quit() {
     let (finish, finished) = std::sync::mpsc::channel();
     let (worker_tx, worker_rx) = std::sync::mpsc::channel();
     Box::new(platform)
-        .run(Box::new(move |owner| {
+        .run(crate::owner::app_delivery::testing::on_ready(move |owner| {
             let proxy = owner.proxy();
             let next = proxy.clone();
             owner.on_wake(Box::new(move || {
@@ -173,7 +173,7 @@ fn recovery(panics: bool, repeat_failure: bool) {
     let (healthy, health) = std::sync::mpsc::channel();
     let (watchdog_tx, watchdog_rx) = std::sync::mpsc::channel();
     Box::new(platform)
-        .run(Box::new(move |owner| {
+        .run(crate::owner::app_delivery::testing::on_ready(move |owner| {
             let watchdog_quit = owner.proxy();
             watchdog_tx
                 .send(std::thread::spawn(move || {

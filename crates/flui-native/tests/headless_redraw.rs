@@ -21,7 +21,7 @@ fn session() -> Session {
     let saved = std::rc::Rc::new(std::cell::RefCell::new(None));
     let installed = std::rc::Rc::clone(&saved);
     Box::new(platform)
-        .run(Box::new(move |owner| {
+        .run(crate::app::on_ready(move |owner| {
             *installed.borrow_mut() = Some(owner);
             Ok(())
         }))

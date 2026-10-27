@@ -49,6 +49,7 @@
 
 use std::{
     path::PathBuf,
+    rc::Rc,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -82,14 +83,14 @@ use crate::{
     owner::android::ndk::SymbolSource,
     owner::android::poll::LoopTurn,
     owner::android::poll::poll_timeout,
-    owner::call_point::{Field, SharedField, call, install},
-    owner::handlers::{PlatformHandlers, SessionEndHook},
+
+    owner::app_delivery::AppDelivery,
     owner::notices::{LifecycleHooks, NoticeChannel},
     owner::redraw_poll::RedrawPoll,
     owner::signal::OwnerSignal,
     platform::Platform,
     platform::PlatformExecutor,
-    platform::PlatformReadyCallback,
+    platform::AppHandler,
     version::gate::android::AndroidApi,
     version::gate::android::StylusHandwriting,
 };
@@ -227,7 +228,9 @@ pub(crate) trait ActivityWindow: crate::host_window::HostWindow {
 /// The platform over it is the one `android_platform` (the crate root) starts.
 pub struct AndroidLoop {
     pub(crate) app: AndroidApp,
-    handlers: Arc<Mutex<PlatformHandlers>>,
+    /// What the loop delivers to the application's handler, which `run`
+    /// binds at the first window.
+    app_delivery: Arc<AppDelivery>,
     running: Arc<AtomicBool>,
     pub(crate) activity: Arc<ActivityFlags>,
     /// What each of the Activity's lifecycle callbacks means, as the table
@@ -266,19 +269,12 @@ impl std::fmt::Debug for AndroidLoop {
 }
 
 impl AndroidLoop {
-    /// One of the application's handlers, as a slot of the handler set.
-    pub(crate) fn handler<H>(
-        &self,
-        project: fn(&mut PlatformHandlers) -> &mut Option<H>,
-    ) -> Field<'_, Mutex<PlatformHandlers>, H> {
-        Field::new(&*self.handlers, project)
-    }
-
-    /// Run the application's quit handler through the call point, with no
-    /// lock of the handler set held: it may install another handler or call
-    /// back into the platform.
+    /// Tell the application's handler the platform quits, through the call
+    /// point with no lock held: it may call back into the platform. The
+    /// handler is let go after.
     fn invoke_quit(&self) {
-        call(&self.handler(|handlers| &mut handlers.quit), |quit| quit()).or_resume(());
+        self.app_delivery.quit_requested().or_resume(());
+        self.app_delivery.release();
     }
 
     /// The loop of host `H`, whose table makes the displays, the preference
@@ -311,14 +307,15 @@ impl AndroidLoop {
         let owner = Arc::downgrade(&owner_signal);
         let preferences = H::preferences(&app, api, &owner_signal);
         let activity_callbacks = H::activity(&app);
+        let app_delivery = Arc::new(AppDelivery::new());
         Self {
             java_view,
             app,
-            handlers: Arc::new(Mutex::new(PlatformHandlers::new())),
+            notices: H::notices(&app_delivery),
+            app_delivery,
             running: Arc::new(AtomicBool::new(true)),
             activity: Arc::new(ActivityFlags::default()),
             activity_callbacks,
-            notices: H::notices(),
             window: Arc::new(Mutex::new(None)),
             background_executor: Arc::new(SimpleExecutor),
             clipboard: H::clipboard(),
@@ -575,11 +572,10 @@ impl ActivityTarget for AndroidLoop {
     /// [`SessionEndPhase::Ending`] only: no query, no block.
     fn session_ended(&self) {
         // The system does not wait for an answer: there is nothing to veto.
-        let _answer = call(
-            &self.handler(|handlers| &mut handlers.session_end),
-            |hook| hook(SessionEndPhase::Ending),
-        )
-        .or_resume(flui_platform::SessionEndAnswer::Proceed);
+        let _answer = self
+            .app_delivery
+            .session_end(SessionEndPhase::Ending)
+            .or_resume(flui_platform::SessionEndAnswer::Proceed);
     }
 
     fn memory_pressure_raised(&self, level: MemoryPressureLevel) {
@@ -591,7 +587,7 @@ impl host::Loop for AndroidLoop {
     fn run(
         self: Arc<Self>,
         platform: Arc<dyn Platform>,
-        on_ready: PlatformReadyCallback,
+        handler: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError> {
         tracing::info!("Starting Android platform event loop");
 
@@ -608,7 +604,13 @@ impl host::Loop for AndroidLoop {
         // at the loop's exit.
         let refresh_rate = self.displays.observe();
 
-        let mut on_ready = Some(on_ready);
+        let mut handler = Some(handler);
+        // No owner lane on this backend: every `OwnerPlatform::open_window`
+        // call creates directly and is always `Ready`.
+        let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::with_signal(
+            Arc::clone(&platform),
+            Arc::clone(&self.owner_signal),
+        ));
         self.activity.resumed.store(false, Ordering::SeqCst);
         // Set when `on_ready` returns `Err`: a fallible bootstrap
         // failure (window creation, GPU init, root-widget attach) has no
@@ -661,19 +663,12 @@ impl host::Loop for AndroidLoop {
             }
 
             // Wall-clock wake (mirrors the winit backend's `about_to_wait`):
-            // consult the registered wake-deadline hook fresh on EVERY
+            // ask the application's handler for its deadline fresh on EVERY
             // iteration -- a deadline that fires, a new one getting armed,
-            // or every deadline clearing must all be reflected immediately,
-            // not stale from whenever the hook was installed. Lock
-            // discipline (ADR-0038 §5, the same rule winit's own
-            // `about_to_wait` follows): the hook itself re-enters
-            // `flui-app`, so it is called through the call point, never
-            // while `self.handlers` is held.
-            let wake_deadline = call(
-                &SharedField::new(&*self.handlers, |handlers| &mut handlers.wake_deadline),
-                |hook| hook(),
-            )
-            .or_resume(None);
+            // or every deadline clearing must all be reflected immediately.
+            // The handler re-enters `flui-app`, so it is asked through the
+            // call point with no lock held (ADR-0038 §5).
+            let wake_deadline = self.app_delivery.wake_deadline().or_resume(None);
             let deadline_due = is_deadline_due(wake_deadline, web_time::Instant::now());
             if deadline_due {
                 // Owner services remain deliverable while execution gates frames.
@@ -794,7 +789,7 @@ impl host::Loop for AndroidLoop {
                             // `InitWindow` no window exists yet, so the
                             // dispatch below finds no registrant — the
                             // bootstrap's own acquire is that acquire.
-                            if on_ready.is_some() {
+                            if handler.is_some() {
                                 should_call_ready = true;
                             }
 
@@ -844,7 +839,7 @@ impl host::Loop for AndroidLoop {
                             // A window that never arrived leaves `on_ready`
                             // untaken, and exiting clean here would report a
                             // presentation that never started as success.
-                            if on_ready.is_some() {
+                            if handler.is_some() {
                                 bootstrap_error = Some(
                                     "Android: the event loop shut down before any \
                                      MainEvent::InitWindow, so the presentation was never \
@@ -922,13 +917,15 @@ impl host::Loop for AndroidLoop {
             // precedes it at startup. No owner lane on this backend: every
             // `OwnerPlatform::open_window` call creates directly and is
             // always `Ready`.
-            if should_call_ready && let Some(ready) = on_ready.take() {
-                let owner_platform = Arc::clone(&platform);
-                let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::with_signal(
-                    Arc::clone(&owner_platform),
-                    Arc::clone(&self.owner_signal),
-                ));
-                if let Err(error) = ready(OwnerPlatform::new(owner_platform, hooks)) {
+            if should_call_ready && let Some(handler) = handler.take() {
+                // The delivery holds the platform and the hooks weakly: they
+                // live in this frame until the loop ends.
+                self.app_delivery.bind(handler, &platform, &hooks);
+                self.app_delivery.resume_through_signal(&self.owner_signal);
+                let ready = self
+                    .app_delivery
+                    .ready(OwnerPlatform::new(Arc::clone(&platform), Arc::clone(&hooks)));
+                if let Err(error) = ready {
                     tracing::error!(%error, "on_ready bootstrap failed; stopping the event loop");
                     bootstrap_error = Some(error);
                     self.running.store(false, Ordering::Relaxed);
@@ -1052,35 +1049,8 @@ impl host::Loop for AndroidLoop {
         let _ = self.owner_signal.request_quit();
     }
 
-    fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
-        install(&self.handler(|handlers| &mut handlers.quit), callback);
-    }
-
-    fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
-        // The Activity lifecycle decides when the loop ends; there is no exit
-        // policy to consult.
-        drop(hook);
-    }
-
     fn request_exit_policy_reevaluation(&self) {
         // No exit policy is consulted, so there is nothing to re-evaluate.
-    }
-
-    /// Unlike `winit`'s override (the trait's one other live implementor),
-    /// this backend has no `ControlFlow::WaitUntil` to hand the deadline
-    /// to — `run`'s own loop actuates it directly instead, by checking
-    /// `now >= deadline` once per iteration and forcing a dispatch when due
-    /// (see that loop's own comment). Storage is the identical
-    /// `PlatformHandlers::wake_deadline` slot winit uses, for the same
-    /// call-a-clone-outside-the-lock consultation discipline (ADR-0038 §5).
-    fn set_wake_deadline_hook(
-        &self,
-        hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
-    ) {
-        install(
-            &self.handler(|handlers| &mut handlers.wake_deadline),
-            Arc::from(hook),
-        );
     }
 }
 
@@ -1176,22 +1146,9 @@ impl host::Drag<AndroidLoop> for AndroidLoop {
 /// recreates an Activity itself rather than reopening one. The lifecycle
 /// feature's position reaches the hooks through this.
 impl LifecycleHooks for AndroidLoop {
-    fn notices(&self) -> &dyn NoticeChannel {
-        &*self.notices
-    }
-
-    fn set_session_end_hook(&self, hook: SessionEndHook) {
-        install(&self.handler(|handlers| &mut handlers.session_end), hook);
-    }
-
     fn release_session_end(&self) {
         // The system does not wait for an answer to a session end, so no end
         // is held open.
-    }
-
-    fn set_reopen_hook(&self, hook: Box<dyn FnMut() + Send>) {
-        // Android has no reopen signal.
-        drop(hook);
     }
 }
 

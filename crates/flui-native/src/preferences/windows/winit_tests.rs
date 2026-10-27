@@ -251,7 +251,7 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
     let wake_healthy = healthy_frame.clone();
     let frame_healthy = healthy_frame;
     let frame_sink = frames.clone();
-    let on_ready: crate::platform::PlatformReadyCallback = Box::new(move |owner| {
+    let on_ready = crate::owner::app_delivery::testing::on_ready(move |owner| {
         let mut lines = 0_u32;
         let mut characters = 0_u32;
         // SAFETY: writable scalar outputs; these getters do not mutate OS policy.
@@ -536,7 +536,7 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
     let frame_done = done.clone();
     let frame_quit = host.clone();
     let frame_sink = frames.clone();
-    let on_ready: crate::platform::PlatformReadyCallback = Box::new(move |owner| {
+    let on_ready = crate::owner::app_delivery::testing::on_ready(move |owner| {
         assert!(matches!(
             owner.preferences(),
             Err(crate::PlatformError::PreferencesDeferred)

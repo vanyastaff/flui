@@ -165,7 +165,6 @@ mod host_events {
     use std::{
         cell::{Cell, RefCell},
         ffi::c_void,
-        rc::Rc,
         sync::{
             Arc,
             atomic::{AtomicBool, Ordering},
@@ -197,8 +196,7 @@ mod host_events {
 
     use super::memory_watch::{HOLD_INTERVAL, MemoryWatch};
     use super::messages::{self, HostEvent, HostMessage, QueryAnswer};
-    use crate::owner::call_point::{Field, call};
-    use crate::owner::handlers::PlatformHandlers;
+    use crate::owner::app_delivery::AppDelivery;
     use crate::owner::notices::NoticeChannel;
     use crate::owner::panic_boundary::{AfterPanic, os_entry};
     use crate::owner::windows::broadcast::Subscriber;
@@ -213,7 +211,7 @@ mod host_events {
     /// The host's side of the receiver. `!Send`: it is created, used and dropped
     /// on the owner thread.
     pub(crate) struct HostEvents {
-        handlers: Rc<RefCell<PlatformHandlers>>,
+        app: Arc<AppDelivery>,
         notices: Arc<dyn NoticeChannel>,
         clock_origin: Instant,
         /// The window a shutdown-blocking reason is registered on, while one is.
@@ -232,11 +230,11 @@ mod host_events {
 
     impl HostEvents {
         pub(crate) fn new(
-            handlers: Rc<RefCell<PlatformHandlers>>,
+            app: Arc<AppDelivery>,
             notices: Arc<dyn NoticeChannel>,
         ) -> Self {
             Self {
-                handlers,
+                app,
                 notices,
                 clock_origin: Instant::now(),
                 blocking: Cell::new(None),
@@ -313,18 +311,15 @@ mod host_events {
             }
         }
 
-        /// Run the host's session-end hook. A panic in it answers `Proceed`: the
-        /// session must not hang on a broken subscriber.
+        /// Ask the application's handler about a phase of the session ending.
+        /// A panic in it answers `Proceed`, and so does a run with no handler:
+        /// the session must not hang on a broken subscriber.
         fn ask_session_end(&self, phase: SessionEndPhase) -> SessionEndAnswer {
-            // Through the call point: no borrow of the handler set is held while
-            // the hook runs, and a superseded hook is retired in a boundary of its
-            // own, so a capture that panics in `Drop` cannot turn the answer into
-            // the default one.
-            call(
-                &Field::new(&*self.handlers, |handlers| &mut handlers.session_end),
-                |hook| hook(phase),
-            )
-            .or_contain(SessionEndAnswer::Proceed, "the session-end hook")
+            // Through the call point: no borrow of the receiver is held while
+            // the handler runs.
+            self.app
+                .session_end(phase)
+                .or_contain(SessionEndAnswer::Proceed, "the session-end handler")
         }
 
         fn now(&self) -> std::time::Duration {

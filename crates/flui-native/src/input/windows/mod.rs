@@ -57,7 +57,7 @@ use crate::owner::windows::{
     WindowsLoop, window_step,
 };
 #[cfg(windows)]
-use crate::owner::{handlers::PlatformHandlers, window_delivery::WindowDelivery};
+use crate::owner::{window_delivery::WindowDelivery, windows::AppHooks};
 #[cfg(windows)]
 use flui_platform::Modifiers;
 
@@ -153,8 +153,9 @@ struct InputWindow {
     hooks: Weak<[Rc<dyn WindowMessages>]>,
     /// Its callbacks, which its input is dispatched to.
     delivery: Arc<WindowDelivery>,
-    /// The application's handlers: a keyboard layout change reaches theirs.
-    handlers: Rc<RefCell<PlatformHandlers>>,
+    /// What the application gave the loop: a keyboard layout change reaches
+    /// its callback.
+    handlers: Rc<RefCell<AppHooks>>,
     /// The system preferences, which give its double-click interval and
     /// rectangle.
     preferences: Rc<dyn OwnerPreferences>,

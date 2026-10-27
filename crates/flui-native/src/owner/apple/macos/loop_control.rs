@@ -25,8 +25,8 @@ use crate::{
     owner::apple::terminate_gate::DEFERRAL_LIMIT,
     owner::apple::terminate_gate::TerminateGate,
     owner::apple::terminate_gate::Termination,
-    owner::call_point::{Called, Field, Once, call, retire},
-    owner::handlers::PlatformHandlers,
+    owner::app_delivery::AppDelivery,
+    owner::call_point::Called,
     owner::panic_boundary::{AfterPanic, contain_os_entry, os_entry},
 };
 
@@ -64,16 +64,16 @@ pub(crate) struct LoopControl {
     pub(crate) owner_signal: Arc<crate::owner::signal::OwnerSignal>,
     state: Mutex<State>,
     windows: super::WindowRegistry,
-    handlers: Arc<Mutex<PlatformHandlers>>,
+    app: Arc<AppDelivery>,
     /// Connects the session-end announcement to the terminate request that
-    /// follows it. Never held across a call into the session-end hook.
+    /// follows it. Never held across a call into the application's handler.
     terminate_gate: Mutex<TerminateGate>,
 }
 
 impl LoopControl {
     pub(super) fn new(
         windows: super::WindowRegistry,
-        handlers: Arc<Mutex<PlatformHandlers>>,
+        app: Arc<AppDelivery>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|weak: &Weak<Self>| {
             let weak = weak.clone();
@@ -102,7 +102,7 @@ impl LoopControl {
                     reopen_active: false,
                 }),
                 windows,
-                handlers,
+                app,
                 terminate_gate: Mutex::new(TerminateGate::new()),
             }
         })
@@ -215,23 +215,13 @@ impl LoopControl {
         }
     }
 
-    /// One of the application's handlers, as a slot of the handler set that
-    /// takes a handler back only while the loop still accepts work.
-    fn handler<H>(
-        &self,
-        project: fn(&mut PlatformHandlers) -> &mut Option<H>,
-    ) -> Field<'_, Mutex<PlatformHandlers>, H, impl Fn() -> bool + '_> {
-        Field::new(&*self.handlers, project).restoring_while(|| self.accepts_windows())
-    }
-
-    /// Ask the session-end hook through the call point, outside every lock. A
-    /// hook that panics lets the session end; a missing one does too.
+    /// Ask the application's handler about a session end through the call
+    /// point, outside every lock. A handler that panics lets the session end;
+    /// a run with no handler does too.
     fn ask_session_end(&self, phase: SessionEndPhase) -> SessionEndAnswer {
-        call(
-            &self.handler(|handlers| &mut handlers.session_end),
-            |hook| hook(phase),
-        )
-        .or_contain(SessionEndAnswer::Proceed, "the session-end hook")
+        self.app
+            .session_end(phase)
+            .or_contain(SessionEndAnswer::Proceed, "the session-end handler")
     }
 
     pub(crate) fn accepts_windows(&self) -> bool {
@@ -239,19 +229,6 @@ impl LoopControl {
         !state.explicit_quit
             && !matches!(state.phase, Phase::Stopping | Phase::Stopped)
             && self.owner_signal.accepting()
-    }
-
-    /// Replacements and rejected registrations are retired outside both locks.
-    pub(super) fn set_reopen(&self, callback: Box<dyn FnMut() + Send>) {
-        let retired = {
-            let mut handlers = self.handlers.lock();
-            if self.accepts_windows() {
-                handlers.reopen.replace(callback)
-            } else {
-                Some(callback)
-            }
-        };
-        retire(retired);
     }
 
     fn request_reopen(self: &Arc<Self>) {
@@ -335,10 +312,7 @@ impl LoopControl {
                 }
                 state.pending_reopens -= 1;
             }
-            call(&self.handler(|handlers| &mut handlers.reopen), |reopen| {
-                reopen();
-            })
-            .or_contain((), "the reopen callback");
+            self.app.reopen().or_contain((), "the application's reopen");
         }
     }
 
@@ -408,17 +382,13 @@ impl LoopControl {
         if !self.windows.lock().is_empty() {
             return;
         }
-        // The hook may replace itself, open a window, request another turn, or quit.
-        // Both invocation AND destruction of the displaced hook are outside locks.
-        // No hook allows the exit.
-        let allowed = match call(
-            &self.handler(|handlers| &mut handlers.exit_policy),
-            |hook| hook(),
-        ) {
+        // The handler may open a window, request another turn, or quit: it is
+        // asked outside every lock. A run with no handler allows the exit.
+        let allowed = match self.app.exit_policy() {
             Called::Vacant => true,
             Called::Returned(allow) => allow,
             Called::Panicked(failure) => {
-                failure.contain("the exit-policy hook");
+                failure.contain("the application's exit policy");
                 self.quit();
                 return;
             }
@@ -476,15 +446,10 @@ impl LoopControl {
         let remaining = std::mem::take(&mut *self.windows.lock());
         cleanup_step(|| drop(remaining));
         cleanup_step(|| drop(windows));
-        call(
-            &Once(Field::new(&*self.handlers, |handlers| &mut handlers.quit)),
-            |quit| quit(),
-        )
-        .or_contain((), "the quit callback");
-        let reopen = self.handlers.lock().reopen.take();
-        retire(reopen);
-        let handlers = std::mem::take(&mut *self.handlers.lock());
-        retire(handlers);
+        self.app
+            .quit_requested()
+            .or_contain((), "the application's quit");
+        self.app.release();
         self.state.lock().phase = Phase::Stopped;
     }
 }
@@ -656,37 +621,26 @@ impl Drop for LoopOwnership {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::owner::app_delivery::testing::{AppCall, RecordingApp, bind};
     use std::collections::HashMap;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    fn control() -> Arc<LoopControl> {
-        LoopControl::new(
-            Arc::new(Mutex::new(HashMap::new())),
-            Arc::new(Mutex::new(PlatformHandlers::default())),
-        )
-    }
-
+    /// An explicit quit fences a reopen already accepted: the handler never
+    /// hears it, and no window is admitted after.
     #[test]
-    fn reopen_explicit_quit_fences_delivery_registration_and_window_admission() {
-        let control = control();
-        control.set_reopen(Box::new(|| panic!("quit-fenced event delivered")));
+    fn reopen_explicit_quit_fences_delivery_and_window_admission() {
+        let app = Arc::new(AppDelivery::new());
+        let control = LoopControl::new(Arc::new(Mutex::new(HashMap::new())), Arc::clone(&app));
+        let handler = RecordingApp::new();
+        let _run = bind(app, handler.clone());
         control.request_reopen();
         control.request(true); // Dormant request fences without scheduling AppKit.
         assert!(!control.accepts_windows());
         control.state.lock().phase = Phase::Running;
         control.drain_reopens();
-        let dropped = Arc::new(AtomicUsize::new(0));
-        struct Marker(Arc<AtomicUsize>);
-        impl Drop for Marker {
-            fn drop(&mut self) {
-                self.0.fetch_add(1, Ordering::SeqCst);
-            }
-        }
-        let marker = Marker(Arc::clone(&dropped));
-        control.set_reopen(Box::new(move || {
-            let _ = &marker;
-        }));
-        assert_eq!(dropped.load(Ordering::SeqCst), 1);
+        assert!(
+            !handler.calls().contains(&AppCall::Reopen),
+            "quit-fenced event delivered"
+        );
         assert_eq!(control.state.lock().pending_reopens, 0);
         control.finish();
     }

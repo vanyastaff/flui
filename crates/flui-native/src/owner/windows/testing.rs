@@ -30,6 +30,7 @@ use super::{
 use crate::error::PlatformError;
 use crate::owner::handlers::OpenWindows;
 use crate::owner::notices::testing::NoNotices;
+use crate::owner::app_delivery::AppDelivery;
 use crate::owner::notices::{NoticeChannel, StaleOnWake};
 use crate::owner::sources::SystemPreferenceSource;
 use flui_platform::text_store::TextStoreHost;
@@ -67,7 +68,7 @@ impl<C: ClassHooks> WindowsHost for QuietHost<C> {
         Ok(Rc::new(NoPreferences))
     }
 
-    fn notices() -> Arc<dyn NoticeChannel> {
+    fn notices(_: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {
         Arc::new(NoNotices)
     }
 

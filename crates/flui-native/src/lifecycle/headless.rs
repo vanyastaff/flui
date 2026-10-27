@@ -7,7 +7,6 @@ use flui_platform::{SessionEndAnswer, SessionEndPhase, SystemNotice};
 use parking_lot::Mutex;
 
 use crate::host::{self, Host};
-use crate::owner::call_point::{Field, call, install};
 use crate::owner::headless::{HeadlessLoop, HeadlessState};
 use crate::platform::HostPlatform;
 
@@ -37,28 +36,8 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
 }
 
 impl host::Lifecycle<HeadlessLoop> for HeadlessHostEvents {
-    fn on_session_end(
-        owner: &HeadlessLoop,
-        callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
-    ) {
-        install(
-            &Field::new(&*owner.state, |state| &mut state.handlers.session_end),
-            callback,
-        );
-    }
-
-    fn on_host_notice(owner: &HeadlessLoop, callback: Box<dyn FnMut(SystemNotice) + Send>) {
-        let notices = owner.with_state(|state| Arc::clone(&state.notices));
-        notices.set_hook(callback);
-    }
-
     fn release_session_end(owner: &HeadlessLoop) {
         owner.with_state(|state| state.session_end_releases += 1);
-    }
-
-    fn on_reopen(_: &HeadlessLoop, callback: Box<dyn FnMut() + Send>) {
-        // Nothing reopens a headless application.
-        drop(callback);
     }
 
     fn activate(_: &HeadlessLoop, _: bool) {
@@ -66,14 +45,18 @@ impl host::Lifecycle<HeadlessLoop> for HeadlessHostEvents {
     }
 }
 
-/// Reports session ends and system notices to the headless platform's
-/// registered hooks after `run` has consumed it — obtained from
-/// [`HeadlessPlatform::host_events`](crate::HeadlessPlatform::host_events) before `run`.
+/// Reports session ends, system notices and reopens to the application's
+/// handler of the headless platform after `run` has consumed it — obtained
+/// from [`HeadlessPlatform::host_events`](crate::HeadlessPlatform::host_events)
+/// before `run`.
 ///
-/// Each call runs the hook on the calling thread through the call point,
-/// outside the platform's state lock, so the hook may call back into the
-/// platform; a hook registered while it runs replaces it. A hook that panics
-/// keeps its place, and its panic reaches the caller.
+/// The test thread is the headless platform's owner thread. Each report goes
+/// through the platform's delivery to the handler, outside the platform's
+/// state lock, so the handler may call back into the platform. A report made
+/// before `run`, while another method runs, or from another thread waits for
+/// the handler and is heard in order; a session end, which asks, is answered
+/// at once. A handler's panic reaches the caller after what was queued behind
+/// it is heard.
 #[derive(Clone)]
 pub struct HeadlessHostEvents {
     state: Weak<Mutex<HeadlessState>>,
@@ -87,26 +70,25 @@ impl std::fmt::Debug for HeadlessHostEvents {
 
 impl HeadlessHostEvents {
     /// One phase of the user's session ending, as the operating system reports
-    /// it: the hook registered with `OwnerPlatform::on_session_end` is asked and
-    /// its answer returned; [`SessionEndAnswer::Proceed`] when none is
-    /// registered or the platform is gone. Like
+    /// it: the application's handler is asked
+    /// ([`AppHandler::session_end`](crate::AppHandler::session_end)) and its
+    /// answer returned; [`SessionEndAnswer::Proceed`] when no handler can be
+    /// asked or the platform is gone. Like
     /// [`MockWindow::simulate_close`](crate::MockWindow::simulate_close), it
-    /// may be called from inside another callback, as a session end arriving
-    /// in a nested native loop is.
+    /// may be called from inside another method, as a session end arriving in
+    /// a nested native loop is.
     pub fn session_end(&self, phase: SessionEndPhase) -> SessionEndAnswer {
         let Some(state) = self.state.upgrade() else {
             return SessionEndAnswer::Proceed;
         };
-        call(
-            &Field::new(&*state, |state| &mut state.handlers.session_end),
-            |hook| hook(phase),
-        )
-        .or_resume(SessionEndAnswer::Proceed)
+        let app = Arc::clone(&state.lock().app);
+        app.session_end(phase).or_resume(SessionEndAnswer::Proceed)
     }
 
-    /// A system notice other than a session end's phases: the hook registered
-    /// with `OwnerPlatform::on_host_notice` is called. Nothing happens when
-    /// none is registered or the platform is gone.
+    /// A system notice other than a session end's phases, reported to the
+    /// application's handler
+    /// ([`AppHandler::host_notice`](crate::AppHandler::host_notice)). Nothing
+    /// happens once the platform is gone.
     ///
     /// A wake marks the state of every window opened on this platform stale
     /// first (`owner::notices`).
@@ -118,6 +100,18 @@ impl HeadlessHostEvents {
         notices.dispatch(notice);
     }
 
+    /// The user reopened the application, as AppKit reports a click on the
+    /// Dock icon: the application's handler hears it
+    /// ([`AppHandler::reopen`](crate::AppHandler::reopen)). Nothing happens
+    /// once the platform is gone.
+    pub fn reopen(&self) {
+        let Some(state) = self.state.upgrade() else {
+            return;
+        };
+        let app = Arc::clone(&state.lock().app);
+        app.reopen().or_resume(());
+    }
+
     /// How many times the host told the platform it released a session end it
     /// had answered with a block (`Platform::release_session_end`).
     #[must_use]
@@ -127,3 +121,4 @@ impl HeadlessHostEvents {
             .map_or(0, |state| state.lock().session_end_releases)
     }
 }
+

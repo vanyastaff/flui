@@ -9,12 +9,14 @@
 //!   reaches the operating system;
 //! - [`call_point`]: the one point where the platform calls an application or
 //!   window handler, with no lock or borrow held;
-//! - [`handlers`]: the application's handler set, called through it;
+//! - `app_delivery`: what a loop delivers to the application's handler, the
+//!   one passed to `run`, through one causal queue;
+//! - [`handlers`]: what a loop asks of the windows it holds, and the frame
+//!   requests a host stamps;
 //! - `window_delivery`: what a window delivers to the handler it was opened
 //!   with, through one causal queue;
 //! - [`notices`]: the channel a loop pushes system notices through, which the
-//!   lifecycle feature implements, and the application's lifecycle hooks a
-//!   loop keeps;
+//!   lifecycle feature implements;
 //! - `sources`: what a loop keeps of its host's preference source;
 //! - `watch`: an observation a feature started for a loop, which the loop
 //!   ends by dropping it;
@@ -39,7 +41,7 @@
 //! on at least one real OS: window creation, display queries, activation,
 //! appearance/keyboard queries, and quit. It is minted only by a backend, on
 //! the thread that owns — or, before the loop starts, will own — its event
-//! loop, and handed to [`PlatformReadyCallback`](crate::PlatformReadyCallback).
+//! loop, and handed to [`AppHandler::ready`](crate::AppHandler::ready).
 //! `!Send + !Sync` by phantom marker: possession proves the thread, so a
 //! wrong-thread call becomes a compile error instead of a runtime assert (the
 //! [`OwnerAffinity`] backstop `flui-foundation` carries).
@@ -56,11 +58,12 @@
 //! channel.
 //!
 //! Only the `pub(crate)` constructor here mints an `OwnerPlatform`, so only a
-//! host in this crate can hand `on_ready` the capability it needs; `Platform`
+//! host in this crate can hand `ready` the capability it needs; `Platform`
 //! is sealed to say so in its type (ADR-0151 §5).
 
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android;
+pub(crate) mod app_delivery;
 #[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) mod apple;
 pub(crate) mod call_point;
@@ -118,7 +121,6 @@ use std::thread::ThreadId;
 
 use flui_foundation::{ClaimHandle, ClaimOutcome};
 use flui_platform::text_store::TextStoreHost;
-use flui_platform::{SessionEndAnswer, SessionEndPhase, SystemNotice};
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 
 use crate::error::PlatformError;
@@ -182,23 +184,6 @@ impl OwnerPlatform {
     /// Returns unsupported on backends without this transport, or owner-gone after quit.
     pub fn on_wake(&self, callback: Box<dyn FnMut() + Send>) -> Result<(), WakeRegistrationError> {
         self.hooks.on_wake(callback)
-    }
-
-    /// Install the callback the platform asks at each phase of the user's
-    /// session ending, replacing any earlier one. See
-    /// [`Platform::on_session_end`].
-    pub fn on_session_end(
-        &self,
-        callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
-    ) {
-        self.platform.on_session_end(callback);
-    }
-
-    /// Install the callback the platform calls with each system notice other
-    /// than a session end's phases, replacing any earlier one. See
-    /// [`Platform::on_host_notice`].
-    pub fn on_host_notice(&self, callback: Box<dyn FnMut(SystemNotice) + Send>) {
-        self.platform.on_host_notice(callback);
     }
 
     /// Tell the platform the application released the session end it asked to
@@ -401,26 +386,6 @@ impl SharedPlatform {
         self.platform.data_transfer()
     }
 
-    /// Registers a callback for when the application should quit.
-    pub fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
-        self.platform.on_quit(callback);
-    }
-
-    /// Registers the callback asked at each phase of the user's session
-    /// ending; see [`Platform::on_session_end`].
-    pub fn on_session_end(
-        &self,
-        callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
-    ) {
-        self.platform.on_session_end(callback);
-    }
-
-    /// Registers the callback called with each other system notice; see
-    /// [`Platform::on_host_notice`].
-    pub fn on_host_notice(&self, callback: Box<dyn FnMut(SystemNotice) + Send>) {
-        self.platform.on_host_notice(callback);
-    }
-
     /// Tells the platform the application released the session end it asked to
     /// wait for; see [`Platform::release_session_end`].
     pub fn release_session_end(&self) {
@@ -441,43 +406,15 @@ impl SharedPlatform {
         self.platform.window_frame_inset(scale_factor)
     }
 
-    /// Registers a callback for when the application is reopened (macOS).
-    pub fn on_reopen(&self, callback: Box<dyn FnMut() + Send>) {
-        self.platform.on_reopen(callback);
-    }
-
-    /// Installs the hook this platform consults before exiting
-    /// unconditionally on "every window closed" — see
-    /// [`Platform::set_exit_policy_hook`]'s doc for the full contract.
-    pub fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
-        self.platform.set_exit_policy_hook(hook);
-    }
-
-    /// Requests an owner-thread re-consultation of the exit-policy hook —
-    /// see [`Platform::request_exit_policy_reevaluation`]'s doc for the
-    /// full contract. On this fence deliberately: it is the one exit-path
-    /// operation a *worker* thread legitimately needs (a keep-alive
-    /// application service completing is what makes a prior last-window
-    /// veto stale), it is coalesced and enqueue-and-wake only — the hook
-    /// itself always runs on the owner thread, never here.
+    /// Requests that the owner thread ask the application handler's exit
+    /// policy again — see [`Platform::request_exit_policy_reevaluation`]'s
+    /// doc for the full contract. On this fence deliberately: it is the one
+    /// exit-path operation a *worker* thread legitimately needs (a keep-alive
+    /// application service completing is what makes a prior last-window veto
+    /// stale), it is coalesced and enqueue-and-wake only — the handler itself
+    /// is always asked on the owner thread, never here.
     pub fn request_exit_policy_reevaluation(&self) {
         self.platform.request_exit_policy_reevaluation();
-    }
-
-    /// Installs the hook this platform consults, once per idle iteration,
-    /// for the earliest wall-clock instant it should wake at instead of
-    /// blocking forever — see [`Platform::set_wake_deadline_hook`]'s doc for
-    /// the full contract.
-    pub fn set_wake_deadline_hook(
-        &self,
-        hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
-    ) {
-        self.platform.set_wake_deadline_hook(hook);
-    }
-
-    /// Registers a callback for URLs opened by the system.
-    pub fn on_open_urls(&self, callback: Box<dyn FnMut(Vec<String>) + Send>) {
-        self.platform.on_open_urls(callback);
     }
 
     /// Registers a callback for keyboard layout changes.

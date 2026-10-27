@@ -159,7 +159,7 @@ mod tests {
         let offered = Rc::new(Cell::new(None));
         let observed = Rc::clone(&offered);
         Box::new(platform)
-            .run(Box::new(move |owner| {
+            .run(crate::owner::app_delivery::testing::on_ready(move |owner| {
                 let window = owner
                     .open_window(
                         WindowOptions::default(),

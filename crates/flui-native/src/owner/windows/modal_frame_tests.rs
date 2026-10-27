@@ -26,42 +26,30 @@ impl ClassWindows for CountedWindows {
     fn paint_invalid(&self) {}
 }
 
-/// A due deadline is delivered once per frame generation and per hook: a
-/// replacement hook answering the very instant its predecessor was
-/// delivered at is new work, not a repeat. Red-check: key the modal
-/// delivery by the instant and the frame count alone.
+/// A due deadline is delivered once per frame generation: the application's
+/// same answer with no frame since asks for no frame, and after a frame it
+/// does again.
 #[test]
-fn a_replaced_wake_hook_gets_its_modal_frame() {
+fn a_due_deadline_gets_one_modal_frame_per_generation() {
+    use crate::owner::app_delivery::testing::{RecordingApp, bound};
+
     let windows = Arc::new(CountedWindows::default());
     let frames_asked = || windows.frames_asked.load(Ordering::Relaxed);
-
-    let due = web_time::Instant::now();
-    let hook = || -> Arc<WakeDeadlineHook> { Arc::new(move || Some(due)) };
-    let handlers = Rc::new(RefCell::new(PlatformHandlers::new()));
-    // No frame callback counts into this generation: every delivery below
-    // is in the same one.
+    let app = RecordingApp::new();
+    app.answer_deadline(Some(web_time::Instant::now()));
+    let run = bound(app);
+    let frames = Rc::new(FrameCount::default());
     let modal = ModalFrames::new(
-        Rc::clone(&handlers),
-        Arc::downgrade(&windows) as Weak<dyn ClassWindows>,
-        Rc::default(),
+        Arc::clone(&run.delivery),
+        Arc::downgrade(&windows) as std::sync::Weak<dyn ClassWindows>,
+        Rc::clone(&frames),
     );
-    let deliver = || modal.deliver();
 
-    handlers.borrow_mut().wake_deadline = Some(hook());
-    let _ = deliver();
+    let _ = modal.deliver();
     assert_eq!(frames_asked(), 1, "the due deadline");
-    let _ = deliver();
-    assert_eq!(
-        frames_asked(),
-        1,
-        "the same answer of the same hook, with no frame since"
-    );
-
-    handlers.borrow_mut().wake_deadline = Some(hook());
-    let _ = deliver();
-    assert_eq!(
-        frames_asked(),
-        2,
-        "the replacement's answer at the same instant"
-    );
+    let _ = modal.deliver();
+    assert_eq!(frames_asked(), 1, "the same answer, with no frame since");
+    frames.counter().fetch_add(1, Ordering::Relaxed);
+    let _ = modal.deliver();
+    assert_eq!(frames_asked(), 2, "the same answer after a frame");
 }

@@ -24,31 +24,80 @@ use crate::owner::{OpenWindowError, OwnerPlatform};
 use crate::storage::DataDirs;
 use crate::task::Task;
 
-/// [`Platform::run`]'s ready callback: invoked once, synchronously, with the
-/// owner-thread capability (ADR-0039). Named to keep
-/// `Box<dyn FnOnce(OwnerPlatform) -> Result<(), BootstrapError>>` out of
-/// every call site's signature.
+/// What the platform tells and asks the application it runs, passed once to
+/// [`Platform::run`] (ADR-0254 §4).
 ///
-/// Replaces the pre-ADR-0039 `Box<dyn FnOnce(&dyn Platform)>` shape: the
-/// callback now receives [`OwnerPlatform`] by value instead of a borrowed
-/// `&dyn Platform`, so it may stash the capability in owner-thread state for
-/// the rest of the loop's life (e.g. `flui-app`'s `OWNER_PLATFORM_HOST` TLS
-/// slot) rather than being limited to the callback's own stack frame.
+/// One method per obligation, none with a default body: a handler that does
+/// not care about one says so in code. Every method is called on the owner
+/// thread, through the one call point in `owner/`, with no lock or borrow of
+/// the host held, so a method may quit, open a window or reach the platform in
+/// any other way. `ready` hands over the owner capability by value; every other
+/// method borrows it for the call, so a handler needs no copy of its own.
 ///
-/// Fallible (slice-2 maintainer fix): bootstrap run from inside `on_ready`
-/// (window creation, GPU init, root-widget attach) can fail, and a callback
-/// that swallowed that failure would leave the loop running with a broken
-/// app — Android would keep pumping with no UI, web would install its RAF
-/// loop over a half-built page. Returning `Err` here propagates out of
-/// [`Platform::run`] itself instead, as
-/// [`PlatformError::Bootstrap`] with the callback's own error as its
-/// `source`: every backend stops entering (or promptly exits) its loop on
-/// `Err` and hands the error back to `run`'s own caller. The error type is
-/// the opaque [`BootstrapError`] — embedder bootstrap code is
-/// application-land and returns arbitrary errors, so the boundary carries a
-/// boxed `std::error::Error` rather than committing the signature to any
-/// one error library.
-pub type PlatformReadyCallback = Box<dyn FnOnce(OwnerPlatform) -> Result<(), BootstrapError>>;
+/// What the platform reports (a quit, a reopen, a host notice) is accepted
+/// whether or not the handler can hear it yet: one that arrives before `ready`
+/// has returned, while another of these methods runs, or on another thread,
+/// waits in order and is delivered on the owner thread once the handler can
+/// hear it. What the platform asks (a session end's answer, the exit policy,
+/// the wake deadline) is asked at once, re-entrantly if need be; before `ready`
+/// and after the loop ended the host answers it itself.
+///
+/// A panicking method is contained: what the platform had accepted behind it
+/// is still delivered, each in its own containment, and the first panic is
+/// raised afterwards. A second panic never replaces the first.
+///
+/// A trait of the host crate, not of the contract: it names
+/// [`OwnerPlatform`], and only the composition root (`flui-app`) implements it
+/// (ADR-0151 §9). It is not `Send`: the handler lives on the owner thread with
+/// the capability it receives.
+pub trait AppHandler: 'static {
+    /// The loop runs and windows can open: the application's bootstrap.
+    /// Called once, before any other method, with the owner-thread capability
+    /// (ADR-0039), which the application may keep for the loop's life.
+    ///
+    /// # Errors
+    /// A bootstrap that failed (window creation, GPU initialisation, the root
+    /// widget): [`Platform::run`] stops entering, or promptly exits, its loop
+    /// and returns it as [`PlatformError::Bootstrap`].
+    fn ready(&self, owner: OwnerPlatform) -> Result<(), BootstrapError>;
+
+    /// The platform quits: its loop stopped, or is about to. Delivered once
+    /// per run.
+    fn quit_requested(&self, owner: &OwnerPlatform);
+
+    /// The user reopened the application (a click on its Dock icon). Only
+    /// AppKit reports it.
+    fn reopen(&self, owner: &OwnerPlatform);
+
+    /// A phase of the user's session ending (log off, restart, shut down),
+    /// possibly inside a nested native loop. The answer to
+    /// [`SessionEndPhase::Query`] decides whether the platform asks the user to
+    /// wait; it is read for no other phase. A host without session-end
+    /// messages never asks.
+    fn session_end(&self, owner: &OwnerPlatform, phase: SessionEndPhase) -> SessionEndAnswer;
+
+    /// A system notice other than a session end's phases: sleep, wake, the
+    /// session locking or unlocking, memory pressure. Before a
+    /// [`SystemNotice::Wake`] is delivered, the platform marks its display
+    /// snapshot and every window's published state stale.
+    fn host_notice(&self, owner: &OwnerPlatform, notice: SystemNotice);
+
+    /// Whether the platform may end its loop now that its own window
+    /// bookkeeping holds no window: `true` lets it end, `false` keeps it
+    /// running (another window is about to open, a service holds the
+    /// application). Asked by the Win32, AppKit, winit and headless hosts when
+    /// their last window closes, and again on
+    /// [`Platform::request_exit_policy_reevaluation`]; Android, the web and
+    /// iOS leave the end of the process to the Activity, the page and UIKit.
+    fn exit_policy(&self, owner: &OwnerPlatform) -> bool;
+
+    /// The earliest wall-clock instant the loop must wake at even with
+    /// nothing else to do (a gesture's hold deadline, a timer), or `None`.
+    /// Asked once per idle iteration by the hosts that wait idle (Win32,
+    /// AppKit, winit, Android, iOS); the headless and web hosts have no idle
+    /// wait to bound.
+    fn wake_deadline(&self, owner: &OwnerPlatform) -> Option<web_time::Instant>;
+}
 
 mod sealed {
     /// The seal of [`Platform`](super::Platform): public in a private module,
@@ -73,33 +122,19 @@ mod sealed {
 /// The Platform trait follows several key design principles from GPUI:
 ///
 /// - **Unified API**: Single trait for all platform operations
-/// - **Callback registry**: Framework can register handlers without tight
-///   coupling
+/// - **One handler per run**: what the platform tells and asks the
+///   application goes to the [`AppHandler`] passed to [`run`](Self::run), and
+///   what a window delivers to the handler it was opened with
 /// - **Interior mutability**: Implementations use Mutex/RwLock for thread-safe
 ///   &self methods
 /// - **Type erasure**: Returns `Box<dyn Trait>` for flexibility
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use flui_native::{Platform, PlatformError, current_platform};
-///
-/// fn main() -> Result<(), PlatformError> {
-///     let platform = current_platform()?;
-///     platform.run(Box::new(|owner| {
-///         println!("Platform ready: {}", owner.shared().name());
-///         Ok(())
-///     }))?;
-///     Ok(())
-/// }
-/// ```
 ///
 /// # Sealed (ADR-0151 §5)
 ///
 /// A private supertrait, implemented for [`HostPlatform`] alone, keeps every
 /// implementation in this crate: an outside `impl Platform` does not compile
 /// (`trybuild_ui::ui_tests` pins the error). It could not have run either:
-/// `run`'s `on_ready` callback receives an [`OwnerPlatform`], which only a
+/// `run`'s [`AppHandler::ready`] receives an [`OwnerPlatform`], which only a
 /// `pub(crate)` constructor here mints. A new platform is a host table in
 /// `hosts/`, not another implementation of this trait.
 pub trait Platform: sealed::Sealed + Send + Sync + 'static {
@@ -112,18 +147,17 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
 
     // ==================== Lifecycle ====================
 
-    /// Run the platform event loop
+    /// Run the platform event loop, telling and asking `handler` what the
+    /// platform has for the application (ADR-0254 §4).
     ///
-    /// This function takes ownership of the platform and the current thread,
-    /// running the platform's event loop. The `on_ready` callback is invoked
-    /// once, synchronously, on the thread that owns (or will own) the event
-    /// loop, and is passed an [`OwnerPlatform`] — the owner-thread capability
-    /// (ADR-0039) — by value: it can call `open_window` and every other
-    /// owner-affine operation, and reach the residual `Send + Sync` surface
-    /// via [`OwnerPlatform::shared`]. `on_ready` may stash the capability in
-    /// owner-thread state for the rest of the loop's life; the outer
-    /// `Box<dyn Platform>` binding is no longer reachable once `run` has
-    /// taken ownership of it.
+    /// Takes the platform and the current thread, which becomes the owner
+    /// thread. [`AppHandler::ready`] is called once, synchronously, on it,
+    /// with the [`OwnerPlatform`] by value: it can open windows and reach every
+    /// other owner-affine operation, and reach the residual `Send + Sync`
+    /// surface through [`OwnerPlatform::shared`]. The handler is the one place
+    /// a quit, a reopen, a session end, a host notice and the exit and
+    /// wake-deadline questions go for the rest of the run; it is released when
+    /// the loop ends.
     ///
     /// Takes `self: Box<Self>` because some backends (e.g. winit) require
     /// ownership of the event loop to run it.
@@ -132,100 +166,47 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     /// shutdown. Backends tied to a page/process lifetime may not return.
     ///
     /// # Errors
-    /// Propagates `on_ready`'s own `Err` as [`PlatformError::Bootstrap`],
-    /// with the callback's error preserved as its `source` (a bootstrap
-    /// failure — window creation, GPU init, root-widget attach — has no
-    /// other return path back to `run`'s caller). Every backend stops
-    /// entering, or promptly exits, its loop on that `Err` rather than
-    /// continuing with a broken app: a returned error means the loop never
-    /// ran a single iteration with `on_ready`'s bootstrap incomplete. A
-    /// backend may also return [`PlatformError::EventLoop`] for a
-    /// platform-level failure unrelated to `on_ready`.
-    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> Result<(), PlatformError>;
+    /// Propagates `ready`'s own `Err` as [`PlatformError::Bootstrap`], with
+    /// the handler's error preserved as its `source` (a bootstrap failure —
+    /// window creation, GPU init, root-widget attach — has no other return
+    /// path back to `run`'s caller). Every backend stops entering, or promptly
+    /// exits, its loop on that `Err` rather than continuing with a broken app:
+    /// a returned error means the loop never ran a single iteration with the
+    /// bootstrap incomplete. A backend may also return
+    /// [`PlatformError::EventLoop`] for a platform-level failure unrelated to
+    /// `ready`.
+    fn run(self: Box<Self>, handler: Rc<dyn AppHandler>) -> Result<(), PlatformError>;
 
     /// Request the application to quit
     ///
     /// This may not quit immediately - the platform will clean up and then
-    /// exit.
+    /// exit, and tell the handler ([`AppHandler::quit_requested`]).
     fn quit(&self);
 
-    /// Install the hook this platform consults before it would otherwise
-    /// exit unconditionally because its own window bookkeeping believes
-    /// every window it tracks has just closed: `true` allows the exit it was
-    /// about to take anyway, `false` vetoes it.
+    /// Ask the handler's [`AppHandler::exit_policy`] again on the event-loop
+    /// owner thread, even though no window is closing right now.
     ///
-    /// This is the embedder-facing seam issue #555's `ExitPolicy` /
-    /// `AppRuntime::should_exit` wire through: an embedder that hosts more
-    /// than one top-level window installs a hook here that consults its own
-    /// UI runtime registry (which the platform layer cannot see — `flui-app`
-    /// depends on `flui-native`, never the reverse) instead of letting
-    /// this backend's native window count decide alone.
-    ///
-    /// The `winit`, AppKit, Win32 and headless hosts consult the hook; Android,
-    /// the web and iOS leave the end of the process to the Activity lifecycle,
-    /// the page and UIKit, and drop it. Win32 consults the hook on an
-    /// owner-window turn after the last tracked window's `WM_DESTROY`, and with
-    /// no hook installed ends its message loop there.
-    fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>);
-
-    /// Request that the exit-policy hook
-    /// ([`set_exit_policy_hook`](Self::set_exit_policy_hook)) be
-    /// re-consulted on the event-loop owner thread, even though no window
-    /// is closing right now.
-    ///
-    /// Exists because that hook is otherwise only consulted when a window
-    /// closes: an application whose *last window is already gone* can be
-    /// held open by something the platform cannot see (issue #558's
-    /// keep-alive application services), and when that holder releases —
-    /// on a worker thread, with no window left to produce events — nothing
-    /// would ever re-ask the hook, so the veto would be permanent and the
-    /// process would linger forever. Backends that support this wake the
-    /// owner loop; the owner then re-consults the hook exactly as the
-    /// window-close path does (only when its window bookkeeping is empty)
-    /// and exits if the hook now allows it.
+    /// Exists because the exit policy is otherwise only asked when a window
+    /// closes: an application whose *last window is already gone* can be held
+    /// open by something the platform cannot see (issue #558's keep-alive
+    /// application services), and when that holder releases — on a worker
+    /// thread, with no window left to produce events — nothing would ever ask
+    /// again, so the veto would be permanent and the process would linger
+    /// forever. Backends that support this wake the owner loop; the owner then
+    /// asks exactly as the window-close path does (only when its window
+    /// bookkeeping is empty) and exits if the handler now allows it.
     ///
     /// Callable from **any thread**; coalesced (a burst of requests costs
     /// one re-check); always safe to over-call — a re-check while windows
-    /// are still open, or while the hook still vetoes, is a no-op.
+    /// are still open, or while the handler still vetoes, is a no-op.
     ///
     /// The `winit`, AppKit and Win32 hosts wake their owner loop to re-check.
-    /// Android, the web and iOS have no exit policy to consult again, so a
+    /// Android, the web and iOS have no exit policy to ask again, so a
     /// keep-alive holder's release does not end the process there until an
     /// explicit [`quit`](Self::quit). The headless host parks the request; its
     /// embedder drives the actual re-check on the owner thread
-    /// (`HeadlessExitReevaluation::drive`) — consulting the hook on the
-    /// *calling* thread would run it against the wrong thread-local runtime
-    /// state.
+    /// (`HeadlessExitReevaluation::drive`).
     fn request_exit_policy_reevaluation(&self);
-
-    /// Install the hook this platform consults, once per idle iteration,
-    /// for the earliest wall-clock instant something upstream needs the
-    /// loop to wake at. The winit backend uses
-    /// [`ControlFlow::WaitUntil`](https://docs.rs/winit/latest/winit/event_loop/enum.ControlFlow.html)
-    /// and native Win32 bounds its message wait and, when an admitted deadline
-    /// becomes due, invalidates live windows (requesting a minimized one's
-    /// frame directly, since it is not painted). `None` means no upstream
-    /// deadline is pending and permits the backend's ordinary idle wait.
-    ///
-    /// This is issue #556's wall-clock-wake seam: a gesture recognizer's
-    /// armed hold/give-up deadline (long-press, double-tap) or a pending
-    /// timer needs the loop to wake and re-drive a frame pump at the right
-    /// instant even when nothing else is dirty and no animation is
-    /// running — otherwise an idle `ControlFlow::Wait` loop never calls
-    /// back in to resolve it. `flui-app` computes the earliest such instant
-    /// across every UI runtime it hosts on this thread (the platform layer
-    /// cannot see UI runtimes — `flui-app` depends on `flui-native`, never the
-    /// reverse) and installs this hook once, the same seam
-    /// [`set_exit_policy_hook`](Self::set_exit_policy_hook) uses.
-    ///
-    /// The AppKit and Android hosts actuate the deadline from their own loops
-    /// and iOS keeps the hook for it; the headless host has no idle-blocking
-    /// event loop to wake and the web host's browser loop has no idle wait to
-    /// bound, so both drop it.
-    fn set_wake_deadline_hook(
-        &self,
-        hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
-    );
 
     // ==================== Window Management ====================
 
@@ -380,32 +361,6 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     /// A host that does not read the layout never calls it.
     fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut() + Send>);
 
-    // ==================== Callbacks ====================
-
-    /// Register a callback for when the application should quit
-    fn on_quit(&self, callback: Box<dyn FnMut() + Send>);
-
-    /// Register the callback the platform asks when the user's session ends
-    /// (log off, restart, shut down), replacing any earlier one. It runs on
-    /// the owner thread, possibly inside a nested native loop, once per
-    /// phase of each session end; see [`SessionEndPhase`].
-    ///
-    /// A host without session-end messages never calls it and drops it
-    /// unused.
-    fn on_session_end(&self, callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>);
-
-    /// Register the callback the platform calls with every system notice other
-    /// than a session end's phases (sleep, wake, session lock, memory
-    /// pressure), replacing any earlier one. It runs on the owner thread.
-    ///
-    /// A host that observes none of them never calls it and drops it unused.
-    ///
-    /// A backend that delivers [`SystemNotice::Wake`] marks its display
-    /// snapshot and every window's state stale first, in the shared dispatch
-    /// (`owner::notices`), so the first read after the machine woke asks
-    /// the operating system again.
-    fn on_host_notice(&self, callback: Box<dyn FnMut(SystemNotice) + Send>);
-
     /// Tell the platform the application is done holding a session end it
     /// answered [`SessionEndAnswer::Block`] to, so the session may go on: the
     /// last [`SessionEndBlock`](flui_platform::SessionEndBlock) was
@@ -433,23 +388,6 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     /// does not measure the frame before a window exists; winit answers the
     /// frame it has measured so far and AppKit the one its window style gives.
     fn window_frame_inset(&self, scale_factor: f64) -> flui_foundation::geometry::Size<f64>;
-
-    /// Register the macOS application's reopen signal callback.
-    ///
-    /// AppKit delivers this signal for both visible-window and no-window reopen
-    /// events. FLUI suppresses AppKit's default untitled-document creation; the
-    /// callback decides whether to show or create UI. Delivery is deferred to the
-    /// owner lane and uses the registration current at that turn. Nested events
-    /// wait until the active callback and its cleanup finish. Replacement is safe
-    /// from inside a callback. Explicit quit rejects pending signals and later
-    /// registrations; callbacks are released when the native run ends.
-    /// Other hosts never produce the signal and drop the callback unused.
-    fn on_reopen(&self, callback: Box<dyn FnMut() + Send>);
-
-    /// Register a callback for URLs opened by the system
-    ///
-    /// No host produces opened URLs yet; the callback is dropped unused.
-    fn on_open_urls(&self, callback: Box<dyn FnMut(Vec<String>) + Send>);
 
     // ==================== Platform Info ====================
 
@@ -605,29 +543,18 @@ impl<H: Host> Platform for HostPlatform<H> {
         self.owner.background_executor()
     }
 
-    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> Result<(), PlatformError> {
+    fn run(self: Box<Self>, handler: Rc<dyn AppHandler>) -> Result<(), PlatformError> {
         let owner = self.shared_owner();
         let platform: Arc<dyn Platform> = Arc::<Self>::from(self);
-        owner.run(platform, on_ready)
+        owner.run(platform, handler)
     }
 
     fn quit(&self) {
         self.owner.quit();
     }
 
-    fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
-        self.owner.set_exit_policy_hook(hook);
-    }
-
     fn request_exit_policy_reevaluation(&self) {
         self.owner.request_exit_policy_reevaluation();
-    }
-
-    fn set_wake_deadline_hook(
-        &self,
-        hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
-    ) {
-        self.owner.set_wake_deadline_hook(hook);
     }
 
     fn open_window(
@@ -709,18 +636,6 @@ impl<H: Host> Platform for HostPlatform<H> {
         H::Input::on_keyboard_layout_change(&self.owner, callback);
     }
 
-    fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
-        self.owner.on_quit(callback);
-    }
-
-    fn on_session_end(&self, callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>) {
-        H::Lifecycle::on_session_end(&self.owner, callback);
-    }
-
-    fn on_host_notice(&self, callback: Box<dyn FnMut(SystemNotice) + Send>) {
-        H::Lifecycle::on_host_notice(&self.owner, callback);
-    }
-
     fn release_session_end(&self) {
         H::Lifecycle::release_session_end(&self.owner);
     }
@@ -731,16 +646,6 @@ impl<H: Host> Platform for HostPlatform<H> {
 
     fn window_frame_inset(&self, scale_factor: f64) -> Size<f64> {
         H::Window::frame_inset(&self.owner, &self.window_shared, scale_factor)
-    }
-
-    fn on_reopen(&self, callback: Box<dyn FnMut() + Send>) {
-        H::Lifecycle::on_reopen(&self.owner, callback);
-    }
-
-    fn on_open_urls(&self, callback: Box<dyn FnMut(Vec<String>) + Send>) {
-        // No host produces opened URLs yet: the activation feature brings the
-        // producer and replaces this registration with its handler.
-        drop(callback);
     }
 
     fn name(&self) -> &'static str {

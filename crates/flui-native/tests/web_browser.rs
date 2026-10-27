@@ -8,6 +8,9 @@
 //! default actions.
 #![cfg(target_arch = "wasm32")]
 
+#[path = "support/app.rs"]
+mod app;
+
 use flui_testing::window_commands::AdmitAndApply as _;
 use flui_testing::window_handler::RecordingWindowHandler;
 use std::cell::{Cell, RefCell};
@@ -1153,7 +1156,7 @@ impl HostedCanvas {
         let slot = Rc::new(RefCell::new(None));
         let out = Rc::clone(&slot);
         Box::new(WebPlatform::new().expect("a browser platform"))
-            .run(Box::new(move |owner| {
+            .run(crate::app::on_ready(move |owner| {
                 let handler = RecordingWindowHandler::new();
                 let keys = Rc::new(RefCell::new(Vec::new()));
                 let record = Rc::clone(&keys);

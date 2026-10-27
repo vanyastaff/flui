@@ -45,7 +45,7 @@ fn display_change_message_invalidates_the_snapshot_and_wakes_the_owner() {
     );
     let counted = Arc::clone(&displays);
     Box::new(platform)
-        .run(Box::new(move |owner| {
+        .run(crate::owner::app_delivery::testing::on_ready(move |owner| {
             let quit = owner.proxy();
             let timeout = quit.clone();
             let observer = Arc::clone(&counted);

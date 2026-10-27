@@ -51,6 +51,7 @@ mod hooks {
     use super::java_view::{InputMethod, JavaView, ViewTransfer};
     use super::ndk::SymbolSource;
     use crate::error::PlatformError;
+    use crate::owner::app_delivery::AppDelivery;
     use crate::owner::notices::NoticeChannel;
     use crate::owner::signal::OwnerSignal;
     use crate::owner::sources::SystemPreferenceSource;
@@ -99,7 +100,7 @@ mod hooks {
 
         /// The channel the trim level and the low-memory call take to the
         /// application.
-        fn notices() -> Arc<dyn NoticeChannel>;
+        fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel>;
 
         /// What each of the Activity's lifecycle callbacks means for `app`.
         fn activity(app: &AndroidApp) -> Box<dyn ActivityCallbacks>;

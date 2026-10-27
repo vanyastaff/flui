@@ -20,6 +20,7 @@ use crate::input::winit::WinitInput;
 #[cfg(target_os = "linux")]
 use crate::lifecycle::linux::WinitNotices;
 use crate::lifecycle::notice::SystemNotices;
+use crate::owner::app_delivery::AppDelivery;
 use crate::owner::notices::NoticeChannel;
 #[cfg(target_os = "linux")]
 use crate::owner::winit::HostNoticeStart;
@@ -94,8 +95,8 @@ impl WinitHost for Winit {
         Arc::new(NativeDisplays::new())
     }
 
-    fn notices() -> Arc<dyn NoticeChannel> {
-        Arc::new(SystemNotices::default())
+    fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {
+        Arc::new(SystemNotices::new(Arc::clone(app)))
     }
 
     /// The source of the system the host runs on.

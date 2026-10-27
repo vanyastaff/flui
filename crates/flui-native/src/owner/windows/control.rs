@@ -21,8 +21,9 @@ use crate::{
     owner::OwnerHooks,
     owner::ProxyTransport,
     owner::WindowOpen,
-    owner::call_point::{Called, Field, call},
-    owner::handlers::PlatformHandlers,
+    owner::app_delivery::AppDelivery,
+    owner::call_point::Called,
+
     owner::hwnd_affinity::UserDataRefusal,
     owner::hwnd_affinity::UserDataVerdict,
     owner::hwnd_affinity::classify_user_data_access,
@@ -71,7 +72,7 @@ pub(crate) struct OwnerControlContext {
     /// holding a recycled handle cannot reach another platform's state.
     identity: WindowIdentity,
     signal: Arc<OwnerSignal>,
-    handlers: Rc<RefCell<PlatformHandlers>>,
+    handlers: Rc<RefCell<super::AppHooks>>,
     turn: Rc<OwnerTurnSlot>,
     frames: Rc<FrameCount>,
     preferences: Rc<dyn OwnerPreferences>,
@@ -199,9 +200,10 @@ impl OwnerWindow {
 /// clones instead of a borrow means no reference into the context survives
 /// user code, which may tear the owner window down.
 pub(crate) struct OwnerShares {
-    /// The platform-level handlers (`on_quit`, `on_keyboard_layout_change`, ...),
+    /// What the application gave the loop (its handler's delivery, the keyboard
+    /// layout callback),
     /// shared with every window context this platform opens.
-    pub(crate) handlers: Rc<RefCell<PlatformHandlers>>,
+    pub(crate) handlers: Rc<RefCell<super::AppHooks>>,
     /// Where the owner-turn callback waits between turns.
     pub(crate) turn: Rc<OwnerTurnSlot>,
     /// Frame callbacks dispatched by every window this platform opens.
@@ -229,10 +231,10 @@ pub(crate) struct OwnerShares {
 
 /// A coalesced request, postable from any thread, that the owner consult the
 /// exit policy: if the platform tracks no top-level window, the
-/// `PlatformHandlers::exit_policy` hook (or, with none installed, the default
-/// "exit when the last window closes") decides whether the message loop
-/// quits. Requests made while one is already queued cost nothing; once the
-/// owner window is closed they are refused, like a wake.
+/// application's handler (or, with none bound, the default "exit when the last
+/// window closes") decides whether the message loop quits. Requests made while
+/// one is already queued cost nothing; once the owner window is closed they
+/// are refused, like a wake.
 #[derive(Clone)]
 pub(crate) struct ExitPolicyRequest {
     address: Arc<Mutex<Option<isize>>>,
@@ -294,8 +296,9 @@ pub(crate) struct OwnerObjects<'a> {
 pub(crate) struct OwnerSeeds<'a> {
     /// Wakes the owner; a source wakes it when what it read changes.
     pub(crate) signal: &'a Arc<OwnerSignal>,
-    /// The application's handlers, whose session-end hook the lifecycle asks.
-    pub(crate) handlers: &'a Rc<RefCell<PlatformHandlers>>,
+    /// The delivery to the application's handler, which the lifecycle asks at a
+    /// session end.
+    pub(crate) app: &'a Arc<AppDelivery>,
     /// Where the lifecycle hands system notices.
     pub(crate) notices: &'a Arc<dyn NoticeChannel>,
 }
@@ -358,6 +361,7 @@ impl OwnerControl {
         owner_hooks: Vec<Arc<dyn OwnerMessages>>,
         displays: Arc<dyn super::HostDisplays>,
         notices: Arc<dyn NoticeChannel>,
+        app: Arc<AppDelivery>,
     ) -> Result<Self, PlatformError> {
         let registration = REGISTERED.get_or_init(|| {
             // SAFETY: class name lives forever; this exact procedure implements its ABI.
@@ -399,10 +403,10 @@ impl OwnerControl {
                 })
         }));
         let exit_policy_pending = Arc::new(AtomicBool::new(false));
-        let handlers = Rc::new(RefCell::new(PlatformHandlers::default()));
+        let handlers = Rc::new(RefCell::new(super::AppHooks::new(Arc::clone(&app))));
         let seeds = OwnerSeeds {
             signal: &signal,
-            handlers: &handlers,
+            app: &app,
             notices: &notices,
         };
         let window_hooks = super::window_class::<H>()
@@ -438,7 +442,7 @@ impl OwnerControl {
             windows: windows.clone(),
             exit_policy_pending: Arc::clone(&exit_policy_pending),
             owner_hooks: Rc::clone(&owner_hooks),
-            modal_frames: Rc::new(ModalFrames::new(handlers, windows, frames)),
+            modal_frames: Rc::new(ModalFrames::new(app, windows, frames)),
         });
         // SAFETY: dedicated registered class, created on this (the owner) thread;
         // userdata is the boxed context, reclaimed exactly once by WM_NCDESTROY.
@@ -692,31 +696,28 @@ fn quit_owner_loop(signal: &OwnerSignal, turn: &OwnerTurnSlot) {
 
 /// The owner's exit decision: no tracked top-level window, the platform
 /// still accepting work (a quit already under way is not decided twice),
-/// and the exit-policy hook allowing it. No hook installed allows it.
+/// and the application's handler allowing it. No handler bound allows it.
 ///
-/// The hook runs through the call point with no `RefCell` borrow held,
-/// because it re-enters the embedder, which may install a new hook, open a
-/// window or quit; it goes back only if the slot is still empty, so a hook
-/// installed meanwhile wins. A window opened while it ran vetoes the exit
-/// regardless of its answer, and so does a hook that panics.
+/// The handler is asked through the call point with no `RefCell` borrow held,
+/// because it re-enters the embedder, which may open a window or quit. A
+/// window opened while it ran vetoes the exit regardless of its answer, and
+/// so does a handler that panics.
 fn exit_policy_allows_exit(
     signal: &OwnerSignal,
-    handlers: &RefCell<PlatformHandlers>,
+    handlers: &RefCell<super::AppHooks>,
     windows: &Weak<dyn ClassWindows>,
 ) -> bool {
     let no_windows = || windows.upgrade().is_some_and(|windows| windows.is_empty());
     if !signal.accepting() || !no_windows() {
         return false;
     }
-    // The hook is embedder code running inside this window procedure, where
-    // an unwind cannot cross the FFI boundary. A panic is contained and
-    // counts as a veto; the hook stays installed. No hook allows the exit.
-    let allowed = match call(
-        &Field::new(handlers, |handlers| &mut handlers.exit_policy),
-        |hook| hook(),
-    ) {
+    // The handler is embedder code running inside this window procedure,
+    // where an unwind cannot cross the FFI boundary. A panic is contained and
+    // counts as a veto.
+    let app = Arc::clone(&handlers.borrow().app);
+    let allowed = match app.exit_policy() {
         Called::Vacant => true,
-        called => called.or_contain(false, "the exit-policy hook"),
+        called => called.or_contain(false, "the application's exit policy"),
     };
     allowed && signal.accepting() && no_windows()
 }

@@ -38,7 +38,7 @@ use std::{
     any::TypeId,
     cell::RefCell,
     rc::Rc,
-    sync::{Arc, OnceLock, Weak},
+    sync::{Arc, OnceLock},
 };
 
 use flui_platform::CursorError;
@@ -67,7 +67,8 @@ use windows::{
     core::{PCWSTR, w},
 };
 
-use crate::owner::call_point::{Field, Once, SharedField, call, install, retire};
+use crate::owner::call_point::{Field, install};
+use crate::owner::app_delivery::AppDelivery;
 use crate::owner::notices::{NoticeChannel, StaleOnWake};
 use crate::owner::panic_boundary::{self, AfterPanic};
 use crate::{
@@ -76,19 +77,19 @@ use crate::{
     host,
     owner::OwnerHooks,
     owner::OwnerPlatform,
-    owner::handlers::{OpenWindows, PlatformHandlers},
+    owner::handlers::OpenWindows,
     owner::hwnd_affinity::UserDataRefusal,
     owner::window_delivery::WindowDelivery,
     platform::Platform,
     platform::PlatformExecutor,
-    platform::PlatformReadyCallback,
+    platform::AppHandler,
 };
 use broadcast::Subscriber;
 use com_apartment::ComApartment;
 use flui_platform::{DisplayId, DisplaySnapshot};
 pub(crate) use wake_deadline::FrameCount;
 use wake_deadline::ModalDelivery;
-use wake_deadline::{DeadlineArm, DeadlineDelivery, WakeDeadlineHook};
+use wake_deadline::{DeadlineArm, DeadlineDelivery};
 pub(crate) use window_table::{WindowScale, WindowTable};
 
 /// The name of FLUI's window class, which every window the host opens has.
@@ -257,7 +258,7 @@ pub(crate) trait WindowsHost: 'static {
     ) -> Result<Rc<dyn control::OwnerPreferences>, PlatformError>;
 
     /// The channel the owner's system notices take to the application.
-    fn notices() -> Arc<dyn NoticeChannel>;
+    fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel>;
 
     /// The lifecycle the owner keeps for the table's lifecycle position.
     fn lifecycle(owner: &control::OwnerSeeds<'_>) -> Rc<dyn control::OwnerLifecycle>;
@@ -475,6 +476,27 @@ pub(crate) trait WindowMessages {
     }
 }
 
+/// What the application gave the loop, shared on the owner thread with every
+/// window it opens: the delivery to the application's handler, and the
+/// keyboard layout callback, which stays a registration until nothing above
+/// the host reads it (`Platform::on_keyboard_layout_change`).
+pub(crate) struct AppHooks {
+    /// The loop's delivery to the application's handler.
+    pub(crate) app: Arc<AppDelivery>,
+    /// Called when the keyboard layout changes.
+    pub(crate) keyboard_layout_changed: Option<Box<dyn FnMut() + Send>>,
+}
+
+impl AppHooks {
+    /// The hooks over `app`, with no keyboard layout callback.
+    pub(crate) fn new(app: Arc<AppDelivery>) -> Self {
+        Self {
+            app,
+            keyboard_layout_changed: None,
+        }
+    }
+}
+
 /// A window of FLUI's class as the hooks see it once it is created.
 pub(crate) struct CreatedWindow {
     /// The window.
@@ -491,8 +513,8 @@ pub(crate) struct CreatedWindow {
     /// Its callbacks, which a feature dispatches what it hears for the window
     /// to.
     pub(crate) delivery: Arc<WindowDelivery>,
-    /// The application's handlers, shared with every window of the loop.
-    pub(crate) handlers: Rc<RefCell<PlatformHandlers>>,
+    /// What the application gave the loop, shared with every window of it.
+    pub(crate) handlers: Rc<RefCell<AppHooks>>,
     /// The system preference source the loop keeps, which measures the
     /// system's mouse geometry at the window's scale.
     pub(crate) preferences: Rc<dyn control::OwnerPreferences>,
@@ -818,6 +840,9 @@ impl WindowsLoop {
 /// [`WindowsPlatform`](crate::WindowsPlatform) is its platform.
 pub struct WindowsLoop {
     pub(crate) owner_control: control::OwnerControl,
+    /// What the loop delivers to the application's handler, which `run`
+    /// binds; the owner context and every window share it.
+    pub(crate) app: Arc<AppDelivery>,
     /// The drag-and-drop transport, as the table made it: the platform's one
     /// data-transfer source, which every window it opens shares.
     pub(crate) drag: Arc<dyn HostDrag>,
@@ -956,7 +981,8 @@ impl WindowsLoop {
         // retires its preference subscriptions and receiver through the guard.
         let drag = drag();
         let displays = H::displays();
-        let notices = H::notices();
+        let app = Arc::new(AppDelivery::new());
+        let notices = H::notices(&app);
         notices.mark_held_stale_on_wake(Arc::downgrade(&displays) as _);
         let owner_control = control::OwnerControl::new::<H>(
             owner_identity,
@@ -964,6 +990,7 @@ impl WindowsLoop {
             vec![Arc::clone(&drag) as Arc<dyn control::OwnerMessages>],
             Arc::clone(&displays),
             notices,
+            Arc::clone(&app),
         )?;
 
         // SAFETY: `GetModuleHandleW(None)` queries the current process
@@ -1005,6 +1032,7 @@ impl WindowsLoop {
 
         let platform = Self {
             owner_control,
+            app,
             drag,
             message_window,
             windows,
@@ -1166,10 +1194,9 @@ impl WindowsLoop {
                     .is_some_and(|arm| arm.deadline <= web_time::Instant::now())
                 {
                     let arm = armed.take().expect("BUG: a due deadline is armed");
-                    if self
-                        .deadline_hook()
-                        .is_some_and(|hook| Weak::ptr_eq(&arm.hook, &Arc::downgrade(&hook)))
-                    {
+                    // A platform that quit asks for no frame: the deadline
+                    // was the run's handler's, and the run is ending.
+                    if self.owner_control.signal.accepting() && self.app.is_bound_here() {
                         let before = frame_count();
                         self.windows.redraw_for_deadline();
                         delivered = Some(DeadlineDelivery {
@@ -1191,35 +1218,18 @@ impl WindowsLoop {
                     continue;
                 }
 
-                // A replaced hook's final captures may themselves replace
-                // registration or quit: the query retires its clone before
-                // the answer is validated below.
-                let next = self.query_wake_deadline();
-                armed = match next {
-                    Some((deadline, identity))
-                        if self.deadline_hook().is_some_and(|hook| {
-                            Weak::ptr_eq(&identity, &Arc::downgrade(&hook))
-                        }) =>
+                // The handler is asked with no borrow of `msg` and no lock
+                // held: it may close windows or quit before it answers.
+                armed = match self.query_wake_deadline() {
+                    Some(deadline)
+                        if delivered
+                            .as_ref()
+                            .is_none_or(|last| last.admits(deadline, frame_count())) =>
                     {
-                        match deadline {
-                            Some(deadline)
-                                if delivered.as_ref().is_none_or(|last| {
-                                    last.admits(deadline, &identity, frame_count())
-                                }) =>
-                            {
-                                Some(DeadlineArm {
-                                    deadline,
-                                    hook: identity,
-                                })
-                            }
-                            Some(_) => None,
-                            None => {
-                                delivered = None;
-                                None
-                            }
-                        }
+                        Some(DeadlineArm { deadline })
                     }
-                    _ => {
+                    Some(_) => None,
+                    None => {
                         delivered = None;
                         None
                     }
@@ -1268,42 +1278,26 @@ impl WindowsLoop {
         Ok(())
     }
 
-    fn deadline_hook(&self) -> Option<Arc<WakeDeadlineHook>> {
-        if !self.owner_control.signal.accepting() {
-            return None;
-        }
-        let shares = self.owner_control.shares("query wake deadline").ok()?;
-        shares.handlers.borrow().wake_deadline.clone()
-    }
-
-    /// Ask the wake-deadline hook through the call point: its answer, and
-    /// the identity of the hook that gave it, so an answer is never credited
-    /// to a replacement. `None` when no hook is installed or the platform no
+    /// Ask the application's handler for its wake deadline. `None` when it
+    /// asks for none, when no handler is bound, or once the platform no
     /// longer accepts work. Its panic unwinds out of the loop.
-    fn query_wake_deadline(&self) -> Option<(Option<web_time::Instant>, Weak<WakeDeadlineHook>)> {
+    fn query_wake_deadline(&self) -> Option<web_time::Instant> {
         if !self.owner_control.signal.accepting() {
             return None;
         }
-        let shares = self.owner_control.shares("query wake deadline").ok()?;
-        Self::ask_wake_deadline(&shares.handlers)
+        Self::ask_wake_deadline(&self.app)
     }
 
-    /// [`Self::query_wake_deadline`] over a handler set.
-    fn ask_wake_deadline(
-        handlers: &RefCell<PlatformHandlers>,
-    ) -> Option<(Option<web_time::Instant>, Weak<WakeDeadlineHook>)> {
-        call(
-            &SharedField::new(handlers, |handlers| &mut handlers.wake_deadline),
-            |hook| Some((hook(), Arc::downgrade(hook))),
-        )
-        .or_resume(None)
+    /// The wake deadline `app`'s handler asks for, through the call point.
+    fn ask_wake_deadline(app: &AppDelivery) -> Option<web_time::Instant> {
+        app.wake_deadline().or_resume(None)
     }
 
-    /// Installs a platform-level handler into the owner-thread handler set.
+    /// Installs a platform-level callback into the owner-thread hooks.
     ///
     /// Off the owner thread, or once the platform has shut down, the
     /// registration is refused and `callback` is dropped here, on the
-    /// calling thread. A replaced handler is retired through the call point
+    /// calling thread. A replaced callback is retired through the call point
     /// after the `RefCell` borrow ends, since its destructor may re-enter the
     /// platform, in a boundary of its own: a capture that panics in `Drop`
     /// must not unwind into the host.
@@ -1311,7 +1305,7 @@ impl WindowsLoop {
         &self,
         op: &'static str,
         callback: H,
-        project: fn(&mut PlatformHandlers) -> &mut Option<H>,
+        project: fn(&mut AppHooks) -> &mut Option<H>,
     ) {
         match self.owner_control.shares(op) {
             Ok(shares) => install(&Field::new(&*shares.handlers, project), callback),
@@ -1339,7 +1333,7 @@ impl host::Loop for WindowsLoop {
     fn run(
         self: Arc<Self>,
         platform: Arc<dyn Platform>,
-        on_ready: PlatformReadyCallback,
+        handler: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError> {
         tracing::info!("Running Windows platform");
 
@@ -1351,37 +1345,33 @@ impl host::Loop for WindowsLoop {
         struct RunGuard(Arc<WindowsLoop>);
         impl Drop for RunGuard {
             fn drop(&mut self) {
-                // Hold the handler set while the owner context still exists,
-                // close (which frees that context on this thread), and only
-                // then run the quit callback: it still observes a closed
-                // platform. It runs once, and its panic is contained: this
-                // is a destructor, possibly of an unwind already under way.
-                let handlers = self
-                    .0
-                    .owner_control
-                    .shares("run teardown")
-                    .ok()
-                    .map(|shares| Rc::clone(&shares.handlers));
+                // Close (which frees the owner context on this thread), and
+                // only then tell the handler the platform quits: it still
+                // observes a closed platform. The delivery hears the quit once
+                // and contains its panic: this is a destructor, possibly of an
+                // unwind already under way. The handler is released last,
+                // contained, or kept while an unwind is under way.
                 self.0.owner_control.close();
-                if let Some(handlers) = handlers {
-                    call(
-                        &Once(Field::new(&*handlers, |handlers| &mut handlers.quit)),
-                        |quit| quit(),
-                    )
-                    .or_contain((), "the quit callback");
-                    // The last handle to the handler set when the owner context
-                    // is gone: its handlers' destructors are user code, dropped
-                    // contained, or kept while an unwind is under way.
-                    retire(handlers);
-                }
+                self.0
+                    .app
+                    .quit_requested()
+                    .or_contain((), "the application's quit");
+                self.0.app.release();
             }
         }
-        let _guard = RunGuard(Arc::clone(&self));
+        // The delivery holds the platform and the hooks weakly: they live in
+        // this frame until the loop ends, declared before the guard so they
+        // outlive it and the handler can still hear the quit.
         let hooks: Arc<dyn OwnerHooks> = Arc::new(control::WindowsOwnerHooks::new(
             Arc::clone(&platform),
             &self.owner_control,
         ));
-        on_ready(OwnerPlatform::new(platform, hooks)).map_err(PlatformError::bootstrap)?;
+        let _guard = RunGuard(Arc::clone(&self));
+        self.app.bind(handler, &platform, &hooks);
+        self.app.resume_through_signal(&self.owner_control.signal);
+        self.app
+            .ready(OwnerPlatform::new(Arc::clone(&platform), Arc::clone(&hooks)))
+            .map_err(PlatformError::bootstrap)?;
         self.owner_control
             .signal
             .start()
@@ -1405,34 +1395,6 @@ impl host::Loop for WindowsLoop {
         unsafe {
             PostQuitMessage(0);
         }
-    }
-
-    fn set_wake_deadline_hook(&self, hook: Box<WakeDeadlineHook>) {
-        if !self.owner_control.signal.accepting() {
-            drop(hook);
-            return;
-        }
-        let hook: Arc<WakeDeadlineHook> = Arc::from(hook);
-        self.register_handler("set_wake_deadline_hook", hook, |handlers| {
-            &mut handlers.wake_deadline
-        });
-        // Re-query after replacement even when the old query re-entered this
-        // setter. The existing owner signal coalesces these notifications.
-        if self.owner_control.signal.accepting()
-            && let Err(error) = self.owner_control.signal.wake()
-        {
-            tracing::warn!(%error, "failed to wake Win32 after deadline hook registration");
-        }
-    }
-
-    fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
-        self.register_handler("on_quit", callback, |handlers| &mut handlers.quit);
-    }
-
-    fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
-        self.register_handler("set_exit_policy_hook", hook, |handlers| {
-            &mut handlers.exit_policy
-        });
     }
 
     fn request_exit_policy_reevaluation(&self) {
@@ -1736,41 +1698,12 @@ impl host::Preferences<WindowsLoop> for WindowsLoop {
 
 /// The lifecycle position is the loop's: the broadcast receiver tells the
 /// lifecycle the table made ([`WindowsHost::lifecycle`]) of the session, power,
-/// lock and memory messages, and the loop keeps the application's hooks.
+/// lock and memory messages, and the lifecycle asks the application's handler.
 impl host::Lifecycle<WindowsLoop> for WindowsLoop {
-    fn on_session_end(
-        owner: &WindowsLoop,
-        callback: Box<
-            dyn FnMut(flui_platform::SessionEndPhase) -> flui_platform::SessionEndAnswer + Send,
-        >,
-    ) {
-        owner.register_handler("on_session_end", callback, |handlers| {
-            &mut handlers.session_end
-        });
-    }
-
-    fn on_host_notice(
-        owner: &WindowsLoop,
-        callback: Box<dyn FnMut(flui_platform::SystemNotice) + Send>,
-    ) {
-        match owner.owner_control.shares("on_host_notice") {
-            Ok(shares) => shares.notices.set_hook(callback),
-            Err(reason) => {
-                tracing::debug!(?reason, "host notice registration refused");
-                drop(callback);
-            }
-        }
-    }
-
     fn release_session_end(owner: &WindowsLoop) {
         if let Ok(shares) = owner.owner_control.shares("release_session_end") {
             shares.lifecycle.release_session_end();
         }
-    }
-
-    fn on_reopen(_: &WindowsLoop, callback: Box<dyn FnMut() + Send>) {
-        // Windows sends no reopen signal; nothing will call the callback.
-        drop(callback);
     }
 
     fn activate(_: &WindowsLoop, _ignoring_other_apps: bool) {

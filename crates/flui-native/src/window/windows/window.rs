@@ -56,7 +56,7 @@ use crate::owner::windows::WINDOW_CLASS_NAME;
 use crate::text::WindowTextInput;
 use crate::window::state::WindowStateCell;
 use crate::{
-    owner::OpenWindowError, owner::handlers::PlatformHandlers,
+    owner::OpenWindowError, owner::windows::AppHooks,
     owner::window_delivery::WindowDelivery,
 };
 
@@ -344,7 +344,7 @@ impl WindowsWindow {
         options: WindowOptions,
         handler: Rc<dyn flui_platform::WindowHandler>,
         windows: Arc<WindowSet>,
-        handlers: Rc<RefCell<PlatformHandlers>>,
+        handlers: Rc<RefCell<AppHooks>>,
         frames: Rc<crate::owner::windows::FrameCount>,
         exit_policy: crate::owner::windows::control::ExitPolicyRequest,
         displays: Arc<dyn crate::owner::windows::HostDisplays>,
@@ -525,7 +525,7 @@ impl WindowsWindow {
                 last_resize: std::cell::Cell::new(None),
                 modal_pacing: crate::owner::windows::modal_loop::ModalPacing::new(
                     crate::owner::windows::modal_loop::ModalFrames::new(
-                        Rc::clone(&handlers),
+                        std::sync::Arc::clone(&handlers.borrow().app),
                         Arc::downgrade(&windows)
                             as std::sync::Weak<dyn crate::owner::windows::ClassWindows>,
                         Rc::clone(&frames),

@@ -1,5 +1,5 @@
 //! Headless platform: selection through `FLUI_HEADLESS`, clipboard, executor, and
-//! the exit-policy hook driven through the public `Platform` surface.
+//! the application handler's exit policy driven through the public `Platform` surface.
 
 // `std::env::set_var`/`remove_var` are `unsafe` in edition 2024. The safety
 // condition is that no other thread reads the environment concurrently, and
@@ -9,12 +9,13 @@
 // same binary.
 #![expect(unsafe_code)]
 
-use flui_testing::window_commands::AdmitAndApply as _;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+#[path = "support/app.rs"]
+mod app;
 
-use flui_native::{HeadlessPlatform, Platform as _, current_platform, headless_platform};
-use flui_platform::{SessionEndAnswer, SessionEndPhase, WindowOptions};
+use flui_testing::window_commands::AdmitAndApply as _;
+use app::{AppCall, AppLog, run_keeping_owner};
+use flui_native::{HeadlessPlatform, current_platform};
+use flui_platform::WindowOptions;
 
 fn flui_headless_env_var_selects_the_headless_platform() {
     // Set environment variable
@@ -39,131 +40,68 @@ fn flui_headless_env_var_selects_the_headless_platform() {
 }
 
 // ============================================================================
-// Exit-policy hook (issue #555's live-loop wiring) -- driven entirely through
-// the PUBLIC `Platform`/`PlatformWindow` surface, exactly as a real embedder
-// would: `open_window`, the returned window's own `WindowCommand::Close`, `on_quit`,
-// `set_exit_policy_hook`. No internal `MockWindow`/`HeadlessState` access.
-// This is "the real platform loop path" for the headless backend: the same
-// `PlatformHandlers::exit_policy` slot and `notify_closed` bookkeeping the
-// winit backend's `CloseRequested` handler consults, not a parallel
-// test-only mechanism.
+// Exit policy (issue #555's live-loop wiring) -- driven entirely through the
+// public surface, exactly as a real embedder would: `run` with a handler,
+// `open_window` on the owner, the window's own `WindowCommand::Close`. This is
+// the same `notify_closed` bookkeeping the winit backend's `CloseRequested`
+// handler consults, not a parallel test-only mechanism.
 // ============================================================================
 
-/// An unset hook must not change existing behavior at all: closing every
-/// tracked window is a no-op today (no `quit()` call), and this test pins
-/// that every embedder/test written before this mechanism existed keeps
-/// seeing exactly that.
-fn closing_the_only_window_without_a_hook_never_calls_quit() {
-    let platform = headless_platform();
-    let quit_calls = Arc::new(AtomicUsize::new(0));
-    let quit_calls_for_handler = Arc::clone(&quit_calls);
-    platform.on_quit(Box::new(move || {
-        quit_calls_for_handler.fetch_add(1, Ordering::SeqCst);
-    }));
+/// Closing the last window asks the handler; its veto keeps the platform
+/// running, and its consent quits it, which the handler hears once.
+fn closing_the_last_window_asks_the_handler_whether_to_quit() {
+    for allow in [false, true] {
+        let log = AppLog::new();
+        log.answer_exit(allow);
+        let owner = run_keeping_owner(Box::new(HeadlessPlatform::new()), &log);
+        let window = owner
+            .open_window(
+                WindowOptions::default(),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
+            .expect("headless platform should create a window")
+            .try_ready()
+            .expect("a headless window opens at once");
+        window.close_now();
 
-    let window = platform
-        .open_window(
-            WindowOptions::default(),
-            flui_testing::window_handler::RecordingWindowHandler::new(),
-        )
-        .expect("headless platform should create a window");
-    window.close_now();
-
-    assert_eq!(
-        quit_calls.load(Ordering::SeqCst),
-        0,
-        "no exit-policy hook was installed -- closing the last window must not invoke quit"
-    );
+        assert_eq!(log.count(AppCall::ExitPolicy), 1, "asked once");
+        assert_eq!(
+            log.count(AppCall::Quit),
+            usize::from(allow),
+            "a veto keeps the platform, consent quits it"
+        );
+    }
 }
 
-/// The hook's veto is honored: `quit` must not fire even after every window
-/// has closed, when the hook returns `false` (the drain-before-decide
-/// scenario `AppRuntime::should_exit` implements one layer up).
-fn exit_policy_hook_veto_prevents_quit_even_after_the_last_window_closes() {
-    let platform = headless_platform();
-    platform.set_exit_policy_hook(Box::new(|| false));
-    let quit_calls = Arc::new(AtomicUsize::new(0));
-    let quit_calls_for_handler = Arc::clone(&quit_calls);
-    platform.on_quit(Box::new(move || {
-        quit_calls_for_handler.fetch_add(1, Ordering::SeqCst);
-    }));
-
-    let window = platform
-        .open_window(
-            WindowOptions::default(),
-            flui_testing::window_handler::RecordingWindowHandler::new(),
-        )
-        .expect("headless platform should create a window");
+/// A platform that never ran has no handler to ask: closing its last window
+/// keeps it running.
+fn closing_the_last_window_before_run_never_quits() {
+    let platform = HeadlessPlatform::new();
+    let events = platform.host_events();
+    let window = flui_native::Platform::open_window(
+        &platform,
+        WindowOptions::default(),
+        flui_testing::window_handler::RecordingWindowHandler::new(),
+    )
+    .expect("headless platform should create a window");
     window.close_now();
 
+    let log = AppLog::new();
+    let _owner = run_keeping_owner(Box::new(platform), &log);
+    events.reopen();
     assert_eq!(
-        quit_calls.load(Ordering::SeqCst),
-        0,
-        "a hook that vetoes the exit must prevent quit from firing"
+        log.calls(),
+        [AppCall::Ready, AppCall::Reopen],
+        "nothing quit the platform before it ran"
     );
 }
 
 /// Headless platform selection and its exit policy: the env var selects it,
-/// no hook never calls quit, and a vetoing hook prevents quit. The env-var
+/// and the handler decides whether closing the last window quits. The env-var
 /// case runs last because it writes process-global state.
 #[test]
 fn the_headless_platform_is_selected_and_its_exit_policy_is_honoured() {
-    closing_the_only_window_without_a_hook_never_calls_quit();
-    exit_policy_hook_veto_prevents_quit_even_after_the_last_window_closes();
+    closing_the_last_window_asks_the_handler_whether_to_quit();
+    closing_the_last_window_before_run_never_quits();
     flui_headless_env_var_selects_the_headless_platform();
-}
-
-/// A session-end callback that panics is not lost with the unwind: the next
-/// simulated phase still reaches it.
-#[test]
-fn a_panicking_session_end_hook_keeps_its_place() {
-    let platform = HeadlessPlatform::new();
-    let calls = Arc::new(Mutex::new(0));
-    let counted = Arc::clone(&calls);
-    platform.on_session_end(Box::new(move |_| {
-        let call = {
-            let mut calls = counted.lock().expect("calls");
-            *calls += 1;
-            *calls
-        };
-        assert!(call > 1, "the first call fails");
-        SessionEndAnswer::Block
-    }));
-
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        platform.simulate_session_end(SessionEndPhase::Query)
-    }));
-    assert!(outcome.is_err(), "the hook's panic reaches the caller");
-    assert_eq!(
-        platform.simulate_session_end(SessionEndPhase::Query),
-        SessionEndAnswer::Block,
-        "the callback is still registered"
-    );
-}
-
-/// A simulated session end asks the registered callback once per phase, in
-/// order, and returns its answer to the query.
-#[test]
-fn simulated_session_end_reaches_the_hook() {
-    let platform = HeadlessPlatform::new();
-    let phases = Arc::new(Mutex::new(Vec::new()));
-    let seen = Arc::clone(&phases);
-    platform.on_session_end(Box::new(move |phase| {
-        seen.lock().expect("phase log").push(phase);
-        SessionEndAnswer::Block
-    }));
-
-    let answer = platform.simulate_session_end(SessionEndPhase::Query);
-    platform.simulate_session_end(SessionEndPhase::Cancelled);
-
-    assert_eq!(
-        *phases.lock().expect("phase log"),
-        [SessionEndPhase::Query, SessionEndPhase::Cancelled],
-        "each simulated phase reaches the callback once, in order"
-    );
-    assert_eq!(
-        answer,
-        SessionEndAnswer::Block,
-        "the query returns the callback's answer"
-    );
 }

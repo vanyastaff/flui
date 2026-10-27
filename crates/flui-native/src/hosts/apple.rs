@@ -36,6 +36,7 @@ use crate::owner::apple::ios::{IosHost, UIKitPreferences, ViewTouches};
 use crate::owner::apple::macos::content_view::ViewHooks;
 #[cfg(target_os = "macos")]
 use crate::owner::apple::macos::{LoopControl, MacosHost, NoticeSources};
+use crate::owner::app_delivery::AppDelivery;
 use crate::owner::notices::NoticeChannel;
 use crate::owner::signal::OwnerSignal;
 #[cfg(target_os = "macos")]
@@ -178,8 +179,8 @@ impl MacosHost for Apple {
         Box::new(AppKitPreferences::new(signal))
     }
 
-    fn notices() -> Arc<dyn NoticeChannel> {
-        Arc::new(SystemNotices::default())
+    fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {
+        Arc::new(SystemNotices::new(Arc::clone(app)))
     }
 
     fn notice_sources(
@@ -212,8 +213,8 @@ impl IosHost for Apple {
         Box::new(IOSPreferences::new(signal, marker))
     }
 
-    fn notices() -> Arc<dyn NoticeChannel> {
-        Arc::new(SystemNotices::default())
+    fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {
+        Arc::new(SystemNotices::new(Arc::clone(app)))
     }
 
     fn view_touches() -> Box<dyn ViewTouches> {
