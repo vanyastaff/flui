@@ -55,7 +55,7 @@ use crate::window::apple::geometry::{
         cocoa_frame, cocoa_frame_keeping_top, cocoa_top_left_point, constraints_of_content_limits,
         content_limits_of_constraints, globalize, top_left_of_frame,
     },
-    mode::{ModeSequence, ModeStep, WindowFlags, is_shown},
+    mode::{ModeSequence, ModeStep, WindowFlags, capabilities_of, is_shown},
 };
 use parking_lot::Mutex;
 use raw_window_handle::{
@@ -1841,7 +1841,7 @@ impl MacOSWindow {
                     // The key window is the one this host reports active;
                     // the main window has no report of its own here.
                     active: focused,
-                    capabilities: window_capabilities(),
+                    capabilities: capabilities_of(flags, window_capabilities()),
                 }
                 .onto(state)
             }

@@ -408,6 +408,35 @@ pub(crate) mod mode {
         EnterFullscreen,
     }
 
+    /// What a window with these flags honours of `every`, the commands an
+    /// AppKit window takes in normal mode.
+    ///
+    /// AppKit zooms and full-screens only a resizable window, restyles none and
+    /// orders none out while it is full screen, and a window is made fixed-size
+    /// only from normal mode (a fixed-size window reports a zoomed frame as
+    /// normal, and the user could not un-zoom it). The snapshot says so, so
+    /// admission refuses such a command before AppKit does.
+    pub(crate) fn capabilities_of(
+        flags: WindowFlags,
+        every: flui_platform::WindowCapabilities,
+    ) -> flui_platform::WindowCapabilities {
+        use flui_platform::Availability::Unavailable;
+
+        let mut honoured = every;
+        if !flags.resizable {
+            honoured.maximizes = Unavailable;
+            honoured.enters_fullscreen = Unavailable;
+        }
+        if flags.fullscreen {
+            honoured.sets_decorated = Unavailable;
+            honoured.hides = Unavailable;
+        }
+        if mode_of(flags.mode_flags()) != WindowMode::Normal {
+            honoured.sets_resizable = Unavailable;
+        }
+        honoured
+    }
+
     /// The requests that take a window with these flags to `target`, in order.
     ///
     /// A window already in `target` needs none. Leaving full screen and leaving
@@ -752,6 +781,51 @@ pub(crate) mod mode {
             sequence.enter_when_shown(Fullscreen);
             assert_eq!(sequence.take_when_shown(), Some(Fullscreen));
             assert_eq!(sequence.take_when_shown(), None, "it is entered once");
+        }
+
+        #[test]
+        fn a_window_honours_the_mode_and_style_commands_its_flags_allow() {
+            use flui_platform::Availability::{self, Native, Unavailable};
+            use flui_platform::WindowCapabilities;
+
+            let mut every = WindowCapabilities::NONE;
+            every.maximizes = Native;
+            every.enters_fullscreen = Native;
+            every.sets_resizable = Native;
+            every.sets_decorated = Native;
+            every.hides = Native;
+            // (flags, maximizes, enters full screen, sets resizable, sets
+            // decorated, hides)
+            type Row = (&'static str, [Availability; 5]);
+            let rows: [Row; 7] = [
+                ("R", [Native, Native, Native, Native, Native]),
+                // A fixed-size window is neither zoomed nor made full screen.
+                ("", [Unavailable, Unavailable, Native, Native, Native]),
+                ("Z", [Unavailable, Unavailable, Native, Native, Native]),
+                // Made fixed-size only from normal mode.
+                ("ZR", [Native, Native, Unavailable, Native, Native]),
+                ("MR", [Native, Native, Unavailable, Native, Native]),
+                ("M", [Unavailable, Unavailable, Unavailable, Native, Native]),
+                // Not restyled, nor ordered out, while full screen.
+                (
+                    "FR",
+                    [Native, Native, Unavailable, Unavailable, Unavailable],
+                ),
+            ];
+            for (letters, expected) in rows {
+                let honoured = capabilities_of(flags(letters), every);
+                assert_eq!(
+                    [
+                        honoured.maximizes,
+                        honoured.enters_fullscreen,
+                        honoured.sets_resizable,
+                        honoured.sets_decorated,
+                        honoured.hides,
+                    ],
+                    expected,
+                    "flags {letters:?}"
+                );
+            }
         }
     }
 }
