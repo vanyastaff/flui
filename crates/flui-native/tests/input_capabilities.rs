@@ -226,10 +226,10 @@ fn the_snapshot_carries_the_backend_availability() {
     assert_eq!(snapshot.pen(), Availability::Unavailable);
 }
 
-/// A handler that panics on its capability snapshot loses nothing: the panic
-/// is contained where the open delivered it, and the input after it is
-/// delivered as usual.
-fn a_panic_on_the_snapshot_loses_no_input() {
+/// A handler that panics on its capability snapshot is not silenced: the
+/// open that delivered the snapshot resumes the handler's own panic, and the
+/// window it opened keeps delivering to the handler.
+fn a_panic_on_the_snapshot_is_resumed() {
     let session = session(HeadlessPlatform::new());
     let handler = RecordingWindowHandler::new();
     handler.react_to_input(|input| {
@@ -239,16 +239,18 @@ fn a_panic_on_the_snapshot_loses_no_input() {
         );
         DispatchEventResult::default()
     });
-    let window = session.open(&handler);
-    mock(&window).inject_event(ime());
-    mock(&window).inject_event(pen_down());
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = session.open(&handler);
+    }))
+    .expect_err("the snapshot's panic reaches the caller of the open");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*payload),
+        Some("the snapshot fails"),
+        "the handler's own panic, not one of the platform's"
+    );
     assert_eq!(
         heard(&handler),
-        [
-            Seen::Capabilities(PointerKindSet::empty()),
-            Seen::Ime,
-            Seen::Down,
-        ]
+        [Seen::Capabilities(PointerKindSet::empty())]
     );
 }
 
@@ -408,8 +410,8 @@ fn input_capabilities_contracts() {
                 the_snapshot_carries_the_backend_availability,
             ),
             (
-                "a_panic_on_the_snapshot_loses_no_input",
-                a_panic_on_the_snapshot_loses_no_input,
+                "a_panic_on_the_snapshot_is_resumed",
+                a_panic_on_the_snapshot_is_resumed,
             ),
             (
                 "a_native_event_during_a_callback_is_queued_not_dropped",

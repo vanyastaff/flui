@@ -27,7 +27,7 @@ use flui_platform::{
     WindowHandler,
 };
 
-use super::call_point::{Called, HandlerSlot, call, retire};
+use super::call_point::{Called, Failure, HandlerSlot, call, retire};
 use super::handlers::frame_request_now;
 use super::panic_boundary::contain_owner_callback;
 use super::signal::WindowWake;
@@ -467,12 +467,29 @@ impl WindowDelivery {
             return;
         }
         match delivery {
-            Delivery::Snapshot => self.deliver_snapshot_if_due(),
+            Delivery::Snapshot => {
+                if let Some(failure) = self.deliver_snapshot_if_due() {
+                    failure.resume();
+                }
+            }
             Delivery::Input(event) => {
-                self.deliver_snapshot_if_due();
-                let result = call(&self.handler(), |handler| handler.input(event))
-                    .or_resume(DispatchEventResult::default());
-                input_result.get_or_insert(result);
+                let snapshot_failure = self.deliver_snapshot_if_due();
+                let called = call(&self.handler(), |handler| handler.input(event));
+                let Some(first) = snapshot_failure else {
+                    let result = called.or_resume(DispatchEventResult::default());
+                    input_result.get_or_insert(result);
+                    return;
+                };
+                // The snapshot's panic came first: the input still had its
+                // delivery, and a panic of its own does not replace that one.
+                match called {
+                    Called::Returned(result) => {
+                        input_result.get_or_insert(result);
+                    }
+                    Called::Panicked(second) => second.contain("a window handler's input"),
+                    Called::Vacant => {}
+                }
+                first.resume();
             }
             Delivery::Frame(request) => {
                 let called = call(&self.handler(), |handler| handler.frame_requested(request));
@@ -506,20 +523,24 @@ impl WindowDelivery {
     }
 
     /// Deliver the capability snapshot when the handler has not had it. Its
-    /// panic is contained here: the input it precedes is still delivered.
-    fn deliver_snapshot_if_due(&self) {
+    /// panic is handed back, not resumed: the input it precedes is still
+    /// delivered, and the caller resumes it afterwards.
+    #[must_use = "the snapshot's panic is the first failure: resume it"]
+    fn deliver_snapshot_if_due(&self) -> Option<Failure> {
         let capabilities = {
             let mut front = self.input.lock();
             if !front.snapshot_due {
-                return;
+                return None;
             }
             front.snapshot_due = false;
             front.capabilities
         };
-        call(&self.handler(), |handler| {
+        match call(&self.handler(), |handler| {
             handler.input(PlatformInput::Capabilities(capabilities));
-        })
-        .or_contain((), "a window handler's input (the capability snapshot)");
+        }) {
+            Called::Panicked(failure) => Some(failure),
+            Called::Vacant | Called::Returned(()) => None,
+        }
     }
 
     /// Deliver an input event.
@@ -641,15 +662,21 @@ impl WindowDelivery {
     /// input or frame method holds the general FIFO: a release must free the
     /// surface before UIKit takes the layer away. Not after the window's
     /// retirement started.
+    ///
+    /// The handler's panic is handed back: the caller finishes what the
+    /// UIKit callback owes (a close's `closed` and release) and resumes it
+    /// afterwards, so the first failure is neither lost nor allowed to drop
+    /// that work.
     #[cfg(target_os = "ios")]
-    pub(crate) fn dispatch_surface_immediate(&self, change: SurfaceChange) {
+    #[must_use = "the handler's panic is the first failure: resume it"]
+    pub(crate) fn dispatch_surface_immediate(&self, change: SurfaceChange) -> Option<Failure> {
         if self.retiring.load(Ordering::SeqCst) || self.closed.load(Ordering::SeqCst) {
-            return;
+            return None;
         }
-        call(&self.handler(), |handler| {
-            handler.surface_changed(change);
-        })
-        .or_contain((), "a window handler's surface change");
+        match call(&self.handler(), |handler| handler.surface_changed(change)) {
+            Called::Panicked(failure) => Some(failure),
+            Called::Vacant | Called::Returned(()) => None,
+        }
     }
 
     /// Deliver a change of the surface behind the window. A

@@ -71,6 +71,37 @@ fn the_capability_snapshot_is_the_first_input() {
     );
 }
 
+/// An input that carries the snapshot is delivered even when the snapshot
+/// panics, and the snapshot's panic, the first failure, resumes afterwards
+/// rather than being logged away; the input's own answer is kept.
+fn a_panicking_snapshot_resumes_after_the_input_it_precedes() {
+    let (delivery, handler) = window();
+    handler.react_to_input(|input| {
+        assert!(
+            !matches!(input, PlatformInput::Capabilities(_)),
+            "the snapshot fails"
+        );
+        DispatchEventResult::DEFERRED
+    });
+    let payload = catch_unwind(AssertUnwindSafe(|| delivery.dispatch_input(ime())))
+        .expect_err("the snapshot's panic resumes");
+    assert_eq!(
+        flui_foundation::panic::payload_text(payload.as_ref()),
+        Some("the snapshot fails")
+    );
+    assert_eq!(
+        handler.take_calls(),
+        [snapshot(), input()],
+        "the input was delivered"
+    );
+    delivery.dispatch_input(ime());
+    assert_eq!(
+        handler.take_calls(),
+        [input()],
+        "the snapshot is not retried"
+    );
+}
+
 /// Capabilities set before the snapshot is delivered become the snapshot;
 /// a change after it is an input in order with the input around it.
 fn a_capability_change_is_ordered_with_the_input() {
@@ -378,6 +409,10 @@ fn window_handler_obligation_table() {
         (
             "the capability snapshot is the first input",
             the_capability_snapshot_is_the_first_input,
+        ),
+        (
+            "a panicking snapshot resumes after the input it precedes",
+            a_panicking_snapshot_resumes_after_the_input_it_precedes,
         ),
         (
             "a capability change is ordered with the input",

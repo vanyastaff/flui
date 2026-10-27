@@ -917,7 +917,8 @@ impl SceneWindow for IOSWindow {
         self.begin_retirement();
         // A closed window's snapshot is detached, hidden and unfocused.
         self.delivery.publish_state();
-        self.delivery
+        let failure = self
+            .delivery
             .dispatch_surface_immediate(SurfaceChange::Release);
         crate::owner::panic_boundary::contain_owner_callback(|| self.delivery.dispatch_close());
         crate::owner::panic_boundary::contain_owner_callback(|| self.delivery.clear());
@@ -925,6 +926,10 @@ impl SceneWindow for IOSWindow {
         self.facets.accessibility.detach();
         if let Some(marker) = MainThreadMarker::new() {
             self.detach_native(marker);
+        }
+        // The release's panic is the first failure; the close finished first.
+        if let Some(failure) = failure {
+            failure.resume();
         }
     }
 }
@@ -1055,24 +1060,32 @@ impl IOSWindow {
             }
             // The surface goes after the snapshot that stops the frames.
             Background | Detached => {
-                if current() {
-                    self.delivery
-                        .dispatch_surface_immediate(SurfaceChange::Release);
+                if current()
+                    && let Some(failure) = self
+                        .delivery
+                        .dispatch_surface_immediate(SurfaceChange::Release)
+                {
+                    failure.resume();
                 }
             }
             // The surface comes back before the snapshot that runs the frames
             // again.
             Foreground => {
-                self.delivery
+                // A panicking rebuild still lets the frames run again; its
+                // panic resumes once they do.
+                let failure = self
+                    .delivery
                     .dispatch_surface_immediate(SurfaceChange::Rebuild);
-                if !current() {
-                    return;
-                }
-                self.lifecycle.lock().execution = WindowExecutionState::Running;
-                self.delivery.publish_state();
                 if current() {
-                    self.set_frame_tick_paused(false);
-                    self.request_redraw();
+                    self.lifecycle.lock().execution = WindowExecutionState::Running;
+                    self.delivery.publish_state();
+                    if current() {
+                        self.set_frame_tick_paused(false);
+                        self.request_redraw();
+                    }
+                }
+                if let Some(failure) = failure {
+                    failure.resume();
                 }
             }
         }

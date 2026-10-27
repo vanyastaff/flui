@@ -3470,7 +3470,7 @@ The rows of `input_capabilities_contracts` in `tests/input_capabilities.rs` pin
 the order (`the_first_event_after_open_reaches_the_handler`,
 `capability_change_is_ordered_with_input`,
 `input_raised_from_input_is_delivered_after_it`) and the panic
-(`a_panic_on_the_snapshot_loses_no_input`); `window_handler_obligation_table`
+(`a_panic_on_the_snapshot_is_resumed`); `window_handler_obligation_table`
 pins each method's obligation on the delivery itself. Presence changes reach a window from the headless device handle and the
 winit backend's registry; the native Win32, AppKit, UIKit, Android and web
 backends report their initial table without presence changes yet.
