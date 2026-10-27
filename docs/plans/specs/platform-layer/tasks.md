@@ -2678,6 +2678,77 @@ graph LR
   nextest `flui-native`, `flui-app`, `flui-testing` — 389, с `winit-backend` — 424 (2 пропущены;
   падает только trybuild `owner_thread_token_has_no_default` с `main`); clippy wasm32 lib,
   `wasm-test` — 51; `checks`, `doc-strict`; WSL — clippy и rustdoc с `winit-backend`.
+- [x] **LY42** — ветка `platform/admitted-command`, начата на вершине LY41 `87977afc3`, после слияния
+  vanyastaff/flui#1912 перенесена на `main` @ `c50202c7a` (дерево то же). **Контракт.**
+  `WindowCommand::admit(self, &WindowCapabilities) -> Result<AdmittedCommand, AdmissionError>` —
+  единственный конструктор `AdmittedCommand` (поля закрыты); `PlatformWindow::apply(AdmittedCommand)
+  -> Result<(), ApplyError>`. `AdmissionError { Unsupported, InvalidGeometry }` (`unsupported()`),
+  `ApplyError { Closed, Superseded, Platform { message } }`, `SubmitError { Admission, Closed }`
+  (`unsupported()`); `WindowCommandError` удалён (и из `flui-sdk::platform`, где теперь
+  `AdmissionError` и `SubmitError`). Ревизия возможностей живёт в самих `WindowCapabilities`
+  (закрытое поле, `revision()`): её ведёт только `WindowState::successor` — ревизия образца
+  игнорируется, при смене любого поля возможностей она становится ревизией нового снимка, при смене
+  другого факта не двигается. Равенство и хеш возможностей сравнивают только поля доступности
+  (деструктуризация: новое поле не скомпилируется, пока его нет в сравнении) — иначе снимок X11,
+  чьи возможности пересмотрены, не был бы равен тем же возможностям, собранным руками (поймал
+  прогон под WSLg). `AdmittedCommand::against(&WindowCapabilities) -> Result<WindowCommand,
+  ApplyError>` — единственный способ вынуть команду: другая ревизия или возможности, которые её
+  больше не допускают, — `Superseded`. **Хосты.** Каждый `apply` (Win32, AppKit, UIKit, Android,
+  Web, winit, headless) открывает токен против возможностей последнего опубликованного снимка
+  (`WindowStateCell::published_capabilities`), не своей константы: смена, которую снимок
+  опубликовал (наблюдение свёртывания X11 у winit), даёт `Superseded`. Ветки «команда, которой хост
+  не знает» — `ApplyError::Platform` (`window::state::not_carried_out`). Сверх строки: числа Win32
+  за пределом устройства (`device_pair`) — теперь `Platform`, а не `InvalidGeometry`: допуск
+  проверил конечность и положительность, предел — свойство Win32. **Вызывающие.** Очередь
+  `flui-app` хранит `AdmittedCommand`; на `Superseded` она допускает команду заново против снимка
+  на этом ходе и применяет её на месте (`window_control::apply_admitted`), отказ при повторном
+  допуске пишется с причиной. Свои команды раннера (показ и активация главного окна, закрытие
+  отброшенного окна, `request_close`) идут через `window_control::apply_now`; `CloseRequestError`
+  разделён: `Refused { error: AdmissionError }` (Android) и новый `Failed { error: ApplyError }`.
+  Закрытие при выходе цикла AppKit и харнесс-закрытие winit пишут отказ в журнал вместо `let _`.
+  Headless: возможности — часть модели оконной системы, `MockWindow::simulate_capabilities`.
+  Тестам и фикстурам — `flui_testing::window_commands::{AdmitAndApply, CommandRefusal}`
+  (`admit_and_apply`, `close_now`: уже закрытое окно — норма, иной отказ — паника); около 80
+  тестовых `let _ = window.apply(Close)` стали `close_now()`. **Conformance**
+  (`flui_testing::window_conformance`): `capabilities_are_honest` — допуск отказывает
+  `Unsupported` (не повторяемым) ровно при `Unavailable`, и окно применяет всё допущенное;
+  `bad_numbers_are_refused` — допуском; закрытое окно отвечает `ApplyError::Closed`. Фикстура
+  `RefusesForNow` невыразима (отказ по возможности больше не делает окно) и заменена на
+  `ClaimsWhatItCannot` (снимок заявляет `ALL`, окно — `NONE`).
+  Тесты (откат проверен, кроме оговорённого): `flui-platform` — trybuild
+  `admitted_command_has_one_constructor` (с открытыми полями фикстура компилируется — тест падает)
+  и `apply_takes_only_an_admitted_command` (E0308 на типе параметра; откат сигнатуры `apply` не
+  прогонялся — он ломает весь крейт), `compile_fail` doctest на `PlatformWindow::apply` с голой
+  командой; `the_capabilities_revision_moves_only_with_the_capabilities` и
+  `a_token_opens_only_under_the_capabilities_it_was_admitted_against` (без штампа ревизии в
+  `successor` падают оба, без сравнения ревизии в `against` — второй); строка `Close` в
+  `admit_refuses_exactly_when_the_capability_is_unavailable`; `flui-native` —
+  `a_command_admitted_before_a_capability_change_is_superseded` (`window_state_contract`; падает и
+  без штампа, и без сравнения ревизии); `flui-app` — `a_command_superseded_in_the_queue_is_admitted_again`
+  (`window_handle_contract`; без повторного допуска в очереди и без штампа падает);
+  `flui-testing` — `a_window_that_claims_what_it_cannot_do_is_caught` (если честность не применяет
+  допущенное, первым ловит не `capabilities_are_honest`). `submit_reports_a_refusal_and_a_closed_window`
+  ADR-0254 покрыт существующими `a_refused_command_is_never_queued` и `a_closed_window_answers_closed`.
+  `module-dag` без изменений, `globals` без изменений. Документы: ARCHITECTURE.md `flui-platform`
+  и `flui-native`, `changelog.d/platform-admitted-command.md`; `docs/platform-parity.md` и
+  `docs/gaps.md` не тронуты — поведение платформ не изменилось.
+  Проверки (Windows): `cargo fmt`; clippy `-D warnings` рабочего пространства `--all-targets`
+  обычный и с `flui-native/winit-backend,flui/native`; nextest `flui-platform`, `flui-native`,
+  `flui-app`, `flui-testing`, `flui-view`, `flui-runtime`, `flui-interaction`, `flui-sdk` — 695 из
+  696 (16 пропущены), `flui-native` с `winit-backend` и `flui-app` — 361 из 362 (оба раза падает
+  только trybuild `owner_thread_token_has_no_default` с `main`), `flui --features native` — 10;
+  trybuild `flui-platform` — 3 из 3; clippy Android `-p flui-native -p flui-app --all-targets`,
+  macOS `--all-targets` (`flui-native`, `flui-app`, `flui-platform`, `flui-testing`; clang и
+  llvm-ar LLVM) обычный и с `winit-backend`, iOS lib `flui-native` (`DOCS_RS=1`; `flui-app` под
+  iOS не собирается: `psm` без `cc`), wasm32 lib `flui-native`, `flui-app`; `checks`,
+  `doc-strict`, `wasm-check`, `wasm-test` — 51. WSL Ubuntu 24.04 (`WAYLAND_DISPLAY` и `XDG_SESSION_TYPE` сняты): clippy четырёх
+  крейтов `--all-targets`, с `winit-backend` и `flui-native --all-features`; nextest под xvfb без
+  признаков — 443 (1 пропущен), с `winit-backend` — 341 (1), `--all-features` — 296; rustdoc
+  `-D warnings --document-private-items` без признаков и с `winit-backend`. Без xvfb (дисплей WSLg
+  с оконным менеджером) X11-тест позиции открытия видит рамку менеджера — окружение, не код.
+  Не запускалось: Mac и iPhone — в очереди vanyastaff/flui#1840;
+  `cross-typecheck` (нет `zig`); браузер — у координатора: `WindowCommand::Close` холста и
+  полноэкранный режим через допуск ведут себя как прежде.
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`
