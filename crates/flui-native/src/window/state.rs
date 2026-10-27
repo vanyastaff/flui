@@ -8,10 +8,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use flui_foundation::geometry::{EdgeInsets, WindowMetrics};
-use flui_platform::{
-    ApplyError, WindowAppearance, WindowCapabilities, WindowCommand, WindowExecutionState,
-    WindowState,
-};
+use flui_platform::{WindowAppearance, WindowCapabilities, WindowExecutionState, WindowState};
 use parking_lot::Mutex;
 
 /// The facts a window reports beyond its geometry, mode and flags, as each
@@ -55,8 +52,14 @@ impl ReportedFacts {
 /// first, through a capability the host names `Unavailable`, so a window
 /// reaches this only for a command the contract gained before the host learnt
 /// it: the window system cannot do it, and the caller hears so.
-pub(crate) fn not_carried_out(command: &WindowCommand) -> ApplyError {
-    ApplyError::Platform {
+#[cfg(any(
+    windows,
+    target_os = "macos",
+    target_arch = "wasm32",
+    all(target_os = "linux", feature = "winit-backend")
+))]
+pub(crate) fn not_carried_out(command: &flui_platform::WindowCommand) -> flui_platform::ApplyError {
+    flui_platform::ApplyError::Platform {
         message: format!("this window system does not carry out {command:?}"),
     }
 }

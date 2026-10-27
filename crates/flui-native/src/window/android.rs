@@ -20,7 +20,7 @@ use flui_foundation::geometry::{EdgeInsets, Size};
 use flui_platform::input_regions::{InputRegion, InputRegionKind, ProjectedInputRegions};
 use flui_platform::{
     AdmittedCommand, ApplyError, FrameRateHint, WindowAppearance, WindowCapabilities,
-    WindowCommand, WindowGeometry, WindowOptions, WindowState,
+    WindowGeometry, WindowOptions, WindowState,
 };
 use parking_lot::Mutex;
 

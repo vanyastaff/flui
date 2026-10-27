@@ -465,9 +465,19 @@ impl LoopControl {
         }
         for window in &windows {
             cleanup_step(|| {
-                // An AppKit window always closes; the one refusal left is a
-                // window already closed, which is what quitting wants.
-                let _ = PlatformWindow::apply(window.as_ref(), flui_platform::WindowCommand::Close);
+                // An AppKit window always takes a close; the one failure left
+                // is a window already closed, which is what quitting wants.
+                let capabilities = PlatformWindow::state(window.as_ref()).capabilities;
+                let closed = flui_platform::WindowCommand::Close
+                    .admit(&capabilities)
+                    .map_err(|refused| refused.to_string())
+                    .and_then(|close| {
+                        PlatformWindow::apply(window.as_ref(), close)
+                            .map_err(|error| error.to_string())
+                    });
+                if let Err(error) = closed {
+                    tracing::debug!(%error, "a window did not close at quit");
+                }
             });
         }
         let remaining = std::mem::take(&mut *self.windows.lock());
