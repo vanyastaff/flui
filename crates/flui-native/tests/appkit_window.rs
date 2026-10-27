@@ -35,7 +35,6 @@ mod cases {
     use flui_platform::{PlatformWindow, WindowCommand, WindowOptions};
     use flui_testing::window_commands::AdmitAndApply as _;
     use flui_testing::window_conformance::{self, Readback, WindowFixture};
-    use flui_testing::window_handler::RecordingWindowHandler;
     use objc2::MainThreadMarker;
     use objc2::rc::Retained;
     use objc2_app_kit::{
@@ -48,7 +47,31 @@ mod cases {
             "a_window_zoomed_before_full_screen_returns_to_normal",
             a_window_zoomed_before_full_screen_returns_to_normal,
         ),
+        (
+            "each_display_is_named_as_appkit_names_its_screen",
+            each_display_is_named_as_appkit_names_its_screen,
+        ),
     ];
+
+    /// The snapshot names a display the way System Settings does, from
+    /// `NSScreen.localizedName`, screen by screen in AppKit's order.
+    fn each_display_is_named_as_appkit_names_its_screen() {
+        use objc2_app_kit::NSScreen;
+
+        let mtm = MainThreadMarker::new().expect("the cases run on the main thread");
+        let platform = MacOSPlatform::new().expect("the AppKit platform");
+        let snapshot = platform.display_snapshot().expect("a display snapshot");
+        let names: Vec<String> = NSScreen::screens(mtm)
+            .iter()
+            .map(|screen| screen.localizedName().to_string())
+            .collect();
+        let published: Vec<&str> = snapshot
+            .displays()
+            .iter()
+            .map(|display| display.name.as_str())
+            .collect();
+        assert_eq!(published, names, "the snapshot's display names");
+    }
 
     /// The application as `MacOSPlatform::run` makes it before its loop: a
     /// regular application that has finished launching and is active, so its
@@ -171,7 +194,7 @@ mod cases {
         let window = platform
             .open_window(
                 WindowOptions::default().with_title(title),
-                RecordingWindowHandler::new(),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
             )
             .expect("an AppKit window opens");
         let ns_window = ns_window_of(window.as_ref());
