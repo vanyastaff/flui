@@ -784,14 +784,20 @@ impl PlatformWindow for WinitWindow {
         ))
     }
 
-    /// winit hands the system no input region.
+    /// winit hands the system no input region. On Linux the window system
+    /// takes one (`wl_surface.set_input_region`, the X Shape extension's input
+    /// shape), which this host does not send yet; elsewhere winit runs, the
+    /// window system has none.
     fn set_input_regions(
         &self,
         _regions: &[flui_platform::input_regions::InputRegion],
     ) -> Result<(), flui_platform::Unsupported> {
-        Err(flui_platform::Unsupported::new(
-            flui_platform::UnsupportedReason::NotOnThisPlatform,
-        ))
+        let reason = if cfg!(target_os = "linux") {
+            flui_platform::UnsupportedReason::NotYetOnThisHost
+        } else {
+            flui_platform::UnsupportedReason::NotOnThisPlatform
+        };
+        Err(flui_platform::Unsupported::new(reason))
     }
 
     // GPU integration: `winit::window::Window` implements `HasWindowHandle`/

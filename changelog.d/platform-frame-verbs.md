@@ -6,8 +6,9 @@
   window-background material on macOS). Other hosts report it `Unavailable`; one OS's own
   materials stay with `flui::native::windows` and `flui::native::macos`.
 - `WindowCapabilities::frame_rate_hint`: whether the window system takes a refresh-rate request.
-- `WindowCapabilities::unavailable_on_this_device` and `WindowCapabilities::refusal`: a capability
-  this device lacks is refused at admission with `NotOnThisDevice`.
+- `WindowCapabilities::unavailable` and `WindowCapabilities::refusal`: a capability marked
+  with the reason it is missing (this device lacks it: `NotOnThisDevice`) is refused at
+  admission with that reason.
 - `flui_platform::window_takes_no_frame_verbs!`, the per-frame verbs of a window test double
   whose window system takes neither.
 

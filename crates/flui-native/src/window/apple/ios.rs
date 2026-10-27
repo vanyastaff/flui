@@ -1214,9 +1214,14 @@ impl host::Window<IOSLoop> for IOSWindow {
 
 /// What a scene's window honours: `UIWindow` has no title, frame, position or
 /// commands, and observes nothing; the app may only ask the system to destroy
-/// its scene session.
+/// its scene session. UIKit draws a material behind a view
+/// (`UIVisualEffectView`), which this host does not place yet: the material is
+/// `NotYetOnThisHost`, not missing from the platform.
 const fn scene_capabilities() -> WindowCapabilities {
-    let mut capabilities = WindowCapabilities::NONE;
+    let mut capabilities = WindowCapabilities::NONE.unavailable(
+        &flui_platform::WindowCommand::SetMaterial(flui_platform::WindowMaterial::Opaque),
+        &flui_platform::UnsupportedReason::NotYetOnThisHost,
+    );
     capabilities.closes = flui_platform::Availability::Native;
     capabilities.frame_rate_hint = flui_platform::Availability::Native;
     capabilities

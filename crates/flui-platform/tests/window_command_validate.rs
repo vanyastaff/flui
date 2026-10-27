@@ -168,21 +168,32 @@ fn admit_refuses_exactly_when_the_capability_is_unavailable() {
             ))),
             "{command:?} on a window that honours nothing"
         );
-        // A capability this device lacks, where the platform has it.
-        let on_this_device = WindowCapabilities::ALL.unavailable_on_this_device(&command);
-        assert_eq!(
-            on_this_device.availability(&command),
-            Availability::Unavailable,
-            "{command:?} taken away on this device"
+        // A capability this device lacks where the platform has it, and one
+        // the operating system has that the host does not implement yet:
+        // admission answers the reason the host marked, not the platform's.
+        for reason in [
+            &UnsupportedReason::NotOnThisDevice,
+            &UnsupportedReason::NotYetOnThisHost,
+        ] {
+            let marked = WindowCapabilities::ALL.unavailable(&command, reason);
+            assert_eq!(
+                marked.availability(&command),
+                Availability::Unavailable,
+                "{command:?} taken away, {reason:?}"
+            );
+            assert_eq!(
+                admits(&command, &marked),
+                Err(AdmissionError::Unsupported(Unsupported::new(*reason))),
+                "{command:?} without its capability, {reason:?}"
+            );
+            assert_eq!(marked.refusal(&command), *reason, "{command:?}");
+            assert_ne!(marked, WindowCapabilities::ALL, "{command:?}");
+        }
+        assert_ne!(
+            WindowCapabilities::ALL.unavailable(&command, &UnsupportedReason::NotOnThisDevice),
+            WindowCapabilities::ALL.unavailable(&command, &UnsupportedReason::NotYetOnThisHost),
+            "{command:?}: the reason is part of what the window honours"
         );
-        assert_eq!(
-            admits(&command, &on_this_device),
-            Err(AdmissionError::Unsupported(Unsupported::new(
-                UnsupportedReason::NotOnThisDevice
-            ))),
-            "{command:?} without its capability on this device"
-        );
-        assert_ne!(on_this_device, WindowCapabilities::ALL, "{command:?}");
     }
 }
 

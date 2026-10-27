@@ -394,10 +394,11 @@ impl WindowState {
 /// the difference.
 ///
 /// A capability this device lacks where its platform has it (an operating
-/// system build below the feature's) is set with
-/// [`unavailable_on_this_device`](Self::unavailable_on_this_device), and
-/// admission then refuses its command with
-/// [`NotOnThisDevice`](UnsupportedReason::NotOnThisDevice) instead of
+/// system build below the feature's), or one the operating system has and
+/// the host does not implement yet, is set with
+/// [`unavailable`](Self::unavailable) and its reason, and admission then
+/// refuses its command with [`NotOnThisDevice`](UnsupportedReason::NotOnThisDevice)
+/// or [`NotYetOnThisHost`](UnsupportedReason::NotYetOnThisHost) instead of
 /// [`NotOnThisPlatform`](UnsupportedReason::NotOnThisPlatform).
 ///
 /// The capabilities in a published snapshot also carry their
@@ -450,9 +451,9 @@ pub struct WindowCapabilities {
     /// [`WindowCommand::SetMaterial`]: the window system draws every
     /// [`WindowMaterial`](crate::WindowMaterial) behind the window.
     pub material: Availability,
-    /// The commands whose capability is `Unavailable` because of this device,
-    /// one bit per [`WindowCapabilities::slot`].
-    device_limits: u32,
+    /// Why each command's capability is `Unavailable`, indexed by
+    /// [`WindowCapabilities::slot`]; read only when it is.
+    reasons: [&'static UnsupportedReason; COMMAND_CAPABILITIES],
     /// The window whose snapshot publishes these capabilities; `None` for
     /// capabilities built by hand. Kept by [`WindowState::successor`].
     owner: Option<CapabilitiesOwner>,
@@ -481,7 +482,7 @@ impl CapabilitiesOwner {
 
 impl PartialEq for WindowCapabilities {
     fn eq(&self, other: &Self) -> bool {
-        self.honoured() == other.honoured() && self.device_limits == other.device_limits
+        self.honoured() == other.honoured() && self.reasons == other.reasons
     }
 }
 
@@ -490,9 +491,17 @@ impl Eq for WindowCapabilities {}
 impl std::hash::Hash for WindowCapabilities {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.honoured().hash(state);
-        self.device_limits.hash(state);
+        self.reasons.hash(state);
     }
 }
+
+/// The capabilities a [`WindowCommand`] is admitted against, one per
+/// [`WindowCapabilities::slot`].
+const COMMAND_CAPABILITIES: usize = 14;
+
+/// The reason of a capability nothing marked: the platform's.
+const NOT_ON_THIS_PLATFORM: [&UnsupportedReason; COMMAND_CAPABILITIES] =
+    [&UnsupportedReason::NotOnThisPlatform; COMMAND_CAPABILITIES];
 
 impl WindowCapabilities {
     /// Every field but the revision, for equality and hashing. Destructured,
@@ -517,7 +526,7 @@ impl WindowCapabilities {
             places_at_open,
             frame_rate_hint,
             material,
-            device_limits: _,
+            reasons: _,
             owner: _,
             revision: _,
         } = *self;
@@ -565,7 +574,7 @@ impl WindowCapabilities {
         places_at_open: Availability::Unavailable,
         frame_rate_hint: Availability::Unavailable,
         material: Availability::Unavailable,
-        device_limits: 0,
+        reasons: NOT_ON_THIS_PLATFORM,
         owner: None,
         revision: WindowRevision::ZERO,
     };
@@ -591,7 +600,7 @@ impl WindowCapabilities {
         places_at_open: Availability::Native,
         frame_rate_hint: Availability::Native,
         material: Availability::Native,
-        device_limits: 0,
+        reasons: NOT_ON_THIS_PLATFORM,
         owner: None,
         revision: WindowRevision::ZERO,
     };
@@ -646,13 +655,44 @@ impl WindowCapabilities {
         self.availability(command).is_available()
     }
 
-    /// These capabilities with `command`'s capability `Unavailable` because
-    /// of this device — its operating system build or its hardware — where
-    /// its platform has it: admission then refuses `command` as
-    /// [`NotOnThisDevice`](UnsupportedReason::NotOnThisDevice). The mode every
-    /// window has ([`WindowMode::Normal`]) cannot be taken away.
+    /// These capabilities with `command`'s capability `Unavailable` for
+    /// `reason`, which admission then answers for `command`.
+    ///
+    /// The reason says which absence it is:
+    /// [`NotOnThisDevice`](UnsupportedReason::NotOnThisDevice) where the
+    /// platform has the capability and this device — its operating system
+    /// build or its hardware — lacks it,
+    /// [`NotYetOnThisHost`](UnsupportedReason::NotYetOnThisHost) where the
+    /// operating system has it and the host does not implement it yet, and
+    /// [`NotOnThisPlatform`](UnsupportedReason::NotOnThisPlatform), what a
+    /// field set to `Unavailable` by hand answers, where no device of the
+    /// platform has it. The mode every window has ([`WindowMode::Normal`])
+    /// cannot be taken away.
+    ///
+    /// The reason is borrowed for `'static` (`&UnsupportedReason::NotYetOnThisHost`
+    /// is one) so that capabilities stay small enough to copy into every
+    /// snapshot.
+    ///
+    /// ```
+    /// use flui_platform::{
+    ///     UnsupportedReason, WindowCapabilities, WindowCommand, WindowMaterial,
+    /// };
+    ///
+    /// let material = WindowCommand::SetMaterial(WindowMaterial::System);
+    /// let capabilities = WindowCapabilities::ALL
+    ///     .unavailable(&material, &UnsupportedReason::NotYetOnThisHost);
+    /// let refused = material.admit(&capabilities).unwrap_err();
+    /// assert_eq!(
+    ///     refused.unsupported().map(|absent| absent.reason),
+    ///     Some(UnsupportedReason::NotYetOnThisHost)
+    /// );
+    /// ```
     #[must_use]
-    pub const fn unavailable_on_this_device(mut self, command: &WindowCommand) -> Self {
+    pub const fn unavailable(
+        mut self,
+        command: &WindowCommand,
+        reason: &'static UnsupportedReason,
+    ) -> Self {
         let Some(slot) = Self::slot(command) else {
             return self;
         };
@@ -679,26 +719,24 @@ impl WindowCapabilities {
             WindowCommand::Close => self.closes = Availability::Unavailable,
             WindowCommand::SetMaterial(_) => self.material = Availability::Unavailable,
         }
-        self.device_limits |= 1 << slot;
+        self.reasons[slot] = reason;
         self
     }
 
     /// Why admission refuses `command` when its capability is `Unavailable`:
-    /// this device ([`unavailable_on_this_device`](Self::unavailable_on_this_device))
-    /// or, otherwise, the platform.
+    /// the reason [`unavailable`](Self::unavailable) gave it or, for a field
+    /// set by hand, [`NotOnThisPlatform`](UnsupportedReason::NotOnThisPlatform).
     #[must_use]
     pub const fn refusal(&self, command: &WindowCommand) -> UnsupportedReason {
         match Self::slot(command) {
-            Some(slot) if self.device_limits & (1 << slot) != 0 => {
-                UnsupportedReason::NotOnThisDevice
-            }
-            _ => UnsupportedReason::NotOnThisPlatform,
+            Some(slot) => *self.reasons[slot],
+            None => UnsupportedReason::NotOnThisPlatform,
         }
     }
 
-    /// The bit of `command`'s capability in `device_limits`; `None` for the
-    /// mode every window has.
-    const fn slot(command: &WindowCommand) -> Option<u32> {
+    /// The index of `command`'s capability in `reasons`; `None` for the mode
+    /// every window has.
+    const fn slot(command: &WindowCommand) -> Option<usize> {
         Some(match command {
             WindowCommand::SetTitle(_) => 0,
             WindowCommand::SetPosition(_) => 1,

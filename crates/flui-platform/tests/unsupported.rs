@@ -19,7 +19,11 @@ const ANSWERS: [(UnsupportedReason, bool, &str); 7] = [
         false,
         "not on this platform",
     ),
-    (UnsupportedReason::NotOnThisDevice, false, "not on this device"),
+    (
+        UnsupportedReason::NotOnThisDevice,
+        false,
+        "not on this device",
+    ),
     (
         UnsupportedReason::NotYetOnThisHost,
         false,
@@ -38,7 +42,11 @@ const ANSWERS: [(UnsupportedReason, bool, &str); 7] = [
         false,
         "nothing is registered to provide it",
     ),
-    (UnsupportedReason::NoWindow, false, "its window is not there"),
+    (
+        UnsupportedReason::NoWindow,
+        false,
+        "its window is not there",
+    ),
 ];
 
 /// Every reason there is.

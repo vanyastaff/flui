@@ -104,7 +104,7 @@ this one path (ADR-0151 §9).
 - **"Not here" has one vocabulary.** Every error and outcome that can mean
   absence carries an `Unsupported`, built with `Unsupported::new(reason)` and
   never written as a literal, whose `UnsupportedReason` says why
-  (`NotOnThisPlatform`, `NotOnThisDevice`, `NotDeclared { what }`,
+  (`NotOnThisPlatform`, `NotOnThisDevice`, `NotYetOnThisHost`, `NotDeclared { what }`,
   `Unavailable`, `NotRegistered`, `NoWindow`); each answers
   `unsupported() -> Option<Unsupported>`, and only `Unavailable` is worth
   asking again (`is_retryable`). No reason names an operating-system version
@@ -122,9 +122,11 @@ this one path (ADR-0151 §9).
   capability is `Unavailable` exactly when admission refuses its command as
   `Unsupported`; a command admitted and then refused by the operating system
   is `ApplyError::Platform`, a failure rather than a missing capability. A
-  capability this device lacks where its platform has it
-  (`WindowCapabilities::unavailable_on_this_device`) is refused with
-  `NotOnThisDevice`, any other with `NotOnThisPlatform`. The window material
+  capability carries the reason a host marked with
+  `WindowCapabilities::unavailable(command, &reason)`: `NotOnThisDevice` where
+  this device lacks what its platform has, `NotYetOnThisHost` where the OS has
+  it and the host does not implement it yet; any other is refused with
+  `NotOnThisPlatform`. The window material
   is such a command (`WindowCommand::SetMaterial`, `WindowCapabilities::material`);
   its set is the vocabulary every host shares (`Opaque`, `System`), and a
   material one OS alone has is that OS's extension. The frame-rate hint and

@@ -13,7 +13,7 @@
   with re-arms on every paint and spins the loop.
 - **Amended:** 2026-10-27 — decision 6, approved by the owner as an extension of the vocabulary of
   absence: `NotYetOnThisHost` joins the reasons (ADR-0152's table). A host marks a capability
-  the OS has and it does not implement yet with `WindowCapabilities::unavailable(command, reason)`,
+  the OS has and it does not implement yet with `WindowCapabilities::unavailable(command, &reason)`,
   the one per-capability reason that also carries `NotOnThisDevice`, and admission refuses the
   command with that reason instead of `NotOnThisPlatform`.
 - **Supersedes:**

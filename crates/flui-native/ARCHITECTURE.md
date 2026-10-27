@@ -131,7 +131,10 @@ trait depends on `flui-platform` instead.
   refusal of the desktop window manager is `ApplyError::Platform`. A Win32
   window opens on Mica through the same gate. AppKit draws `System` as
   `NSVisualEffectView`'s window-background material behind FLUI's view, for
-  windows on the main lane. The AppKit backdrop (`AppKitWindow::set_backdrop`)
+  windows on the main lane. Where the OS draws a material and the host does
+  not yet (UIKit, Android, an AppKit window off the main lane), the
+  capability is unavailable with `NotYetOnThisHost`, never `NotOnThisPlatform`.
+  The AppKit backdrop (`AppKitWindow::set_backdrop`)
   is an `NSVisualEffectView` material or Liquid Glass, an
   `NSGlassEffectView` looked up by name (macOS 26; `Unsupported` with `NotOnThisDevice` before),
   holding FLUI's view; it answers `MacOSBackdropError` for a closed window, a

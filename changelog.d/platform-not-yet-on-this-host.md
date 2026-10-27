@@ -8,11 +8,13 @@
 
 ### Changed
 
-- **`flui-platform`**: `WindowCapabilities::unavailable_on_this_device(command)` becomes
-  `WindowCapabilities::unavailable(command, reason)`: one per-capability reason that admission
-  answers, `NotOnThisDevice` or `NotYetOnThisHost` alike
+- **`flui-platform`**: `WindowCapabilities::unavailable(command, &reason)` marks a capability
+  `Unavailable` with the reason admission answers, `NotOnThisDevice` or `NotYetOnThisHost` alike,
+  in place of `unavailable_on_this_device`
   ([ADR-0254](/docs/adr/ADR-0254-window-contract.md)).
-- **`flui-native`**: the window material on iOS and Android, and the frame-rate hint on macOS,
-  answer `NotYetOnThisHost` instead of `NotOnThisPlatform` or `NotOnThisDevice`: the OS has them
-  (`UIVisualEffectView`, Android 12's window background blur, `NSView.displayLink`), the host
-  does not drive them yet.
+- **`flui-native`**: what the OS has and the host does not drive yet answers `NotYetOnThisHost`
+  instead of `NotOnThisPlatform` or `NotOnThisDevice`: the window material on iOS
+  (`UIVisualEffectView`), on Android (window background blur) and on a macOS window owned off the
+  main lane; the frame-rate hint on macOS (`NSView.displayLink`); the pointer icon on Android
+  (`PointerIcon`); input regions under winit on Linux (Wayland and X11 input shapes); a
+  `Win32Window` value newer than the host.

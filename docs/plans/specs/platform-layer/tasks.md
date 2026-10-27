@@ -3170,6 +3170,23 @@ graph LR
   305; rustdoc `--document-private-items` нашёл ссылку на удалённый `set_material`
   (исправлено). Не запускалось: Mac и iPhone для новых путей (материал macOS, частота кадров iOS,
   края iOS из чужого потока) — запрошено у владельца; `cross-typecheck`; браузер.
+  **Дополнение к LY43 и словарю LY38** — ветка `platform/not-yet-on-this-host` (владелец одобрил
+  2026-10-27). Новая причина `UnsupportedReason::NotYetOnThisHost`: ОС это умеет, хост FLUI ещё
+  нет; не повторяемая. Отличает «на этой платформе никогда» (`NotOnThisPlatform`) и «у этого
+  устройства нет» (`NotOnThisDevice`) от «FLUI ещё не сделал». `unavailable_on_this_device`
+  обобщён в `WindowCapabilities::unavailable(command, &reason)` — одна причина на возможность
+  (`&'static`, чтобы набор оставался маленьким `Copy`); `refusal` отвечает ею. Поправки
+  ADR-0152 (таблица причин), ADR-0254 §6, ADR-0151 §4. Обход `NotOnThisPlatform` в `flui-native`:
+  стали `NotYetOnThisHost` — материал iOS (`UIVisualEffectView`), Android (размытие фона окна,
+  API 31), macOS у владельца не на главной полосе; подсказка частоты macOS (была
+  `NotOnThisDevice`); курсор Android (`PointerIcon`); входные области winit на Linux;
+  значение `Win32Window` новее хоста. Оставлены: Win32 частота кадров и входные области, веб,
+  курсор iOS (у iPhone указателя нет, `UIPointerStyle` iPad — не курсор), входные области AppKit,
+  drag пером и касанием в OLE, хаптика Linux, `Absent`, неизвестный `WriteMode` хранилищ,
+  headless. Тесты: `every_error_carries_its_reason` (строка
+  `each reason answers retry and message`; падает, если `NotYetOnThisHost` повторяемая, и не
+  собирается без варианта); `window_command_validate` (каждая команда с `NotOnThisDevice` и
+  `NotYetOnThisHost`; падает, если `refusal` знает только устройство).
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`
