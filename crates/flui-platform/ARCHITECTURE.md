@@ -65,6 +65,21 @@ this one path (ADR-0151 §9).
   twin. `WindowState::is_seen` is the one reading of "the surface is seen":
   visible and not minimized. A `compile_fail` doctest on the trait pins that
   a getter does not compile.
+- **A window takes only an admitted command (ADR-0254 §2).**
+  `WindowCommand::admit(&WindowCapabilities)` is the one constructor of
+  `AdmittedCommand`, and `PlatformWindow::apply` takes nothing else
+  (`tests/compile_fail/{admitted_command_has_one_constructor,
+  apply_takes_only_an_admitted_command}.rs`). Admission refuses with
+  `AdmissionError::Unsupported` exactly when the capability is `Unavailable`
+  and with `InvalidGeometry` before that. The token carries the capabilities'
+  revision, which `WindowState::successor` alone keeps: it moves to the new
+  snapshot's revision when what the window honours changes, and not with any
+  other fact. A window opens the token with `AdmittedCommand::against` its
+  published capabilities: another revision, or capabilities that no longer
+  honour the command, is `ApplyError::Superseded`, which the caller answers by
+  admitting again. `ApplyError` is the world's (`Closed`, `Superseded`,
+  `Platform`); `WindowControl::submit` answers `SubmitError` (`Admission`,
+  `Closed`).
 - **"Not here" has one vocabulary.** Every error and outcome that can mean
   absence carries an `Unsupported`, built with `Unsupported::new(reason)` and
   never written as a literal, whose `UnsupportedReason` says why

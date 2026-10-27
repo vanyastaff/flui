@@ -776,13 +776,22 @@ trait depends on `flui-platform` instead.
   result would not be a `flui_engine::WindowTarget` until upcast.
 - **A window publishes a state snapshot and takes commands (ADR-0237).** There
   is one window trait. `PlatformWindow::state` returns an immutable
-  `WindowState` with a revision, and `apply` takes a `WindowCommand`; the
-  snapshot's `capabilities` say which commands the window honours, each as an
-  `Availability`: `apply` answers `Unsupported` exactly when the matching
-  capability is `Unavailable`, `Emulated` marks what the host builds itself
-  (the Win32 borderless fullscreen, the Web's close, which retires the
-  canvas), and the capabilities of each backend are what its `apply` carries
-  out today. Showing, activating and closing are commands like the others
+  `WindowState` with a revision, and `apply` takes an `AdmittedCommand`
+  (ADR-0254 §2); the snapshot's `capabilities` say which commands the window
+  honours, each as an `Availability`: `WindowCommand::admit` refuses with
+  `Unsupported` exactly when the matching capability is `Unavailable`,
+  `Emulated` marks what the host builds itself (the Win32 borderless
+  fullscreen, the Web's close, which retires the canvas), and the capabilities
+  of each backend are what its `apply` carries out today. Every host's `apply`
+  opens the token against the capabilities of its last published snapshot
+  (`WindowStateCell::published_capabilities`), never a constant of its own, so
+  a capability change the snapshot published (winit's X11 minimize
+  observation, the headless `simulate_capabilities`) answers
+  `ApplyError::Superseded`; a command no host arm carries out answers
+  `ApplyError::Platform` (`window::state::not_carried_out`), and Win32 numbers
+  beyond its device range are `Platform` too: admission held them finite and
+  positive, the range is the window system's. Showing, activating and closing
+  are commands like the others
   (`Show`, `Activate`, `Close`); there is no method twin. The snapshot
   describes what the OS reported, not what a command asked for, and holds
   every fact of the window (ADR-0254 §1): the drawable `WindowMetrics` (a
