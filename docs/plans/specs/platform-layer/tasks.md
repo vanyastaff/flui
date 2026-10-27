@@ -2741,6 +2741,44 @@ graph LR
   Android меняется только формой списка URI, тест `drag::android::clip::tests` на хосте); браузер —
   у координатора: drop файла или ссылки на холст отдаёт `Custom` `text/uri-list` строкой браузера,
   исходящий drag со списком URI кладёт ту же строку в `DataTransfer`.
+  **Исправления после ревью (vanyastaff/flui#1913).** Правка ADR-0038 на месте (без `UriList` и
+  `Image`, вместо них `Custom` `text/uri-list` и закодированные байты изображения) одобрена
+  владельцем 2026-10-27. (1) `TransferRequest::pending()` возвращает пару с `TransferCompleter`:
+  ручка, взятая до запроса, больше невозможна (паника на ошибку вызывающего ушла), и
+  `TransferCompleter` со `is_cancelled` остался в контракте — четыре ручные копии (ядро,
+  `transfer_request.rs`, `data_transfer_transport.rs`, `drag_sessions.rs`) свёрнуты в него.
+  Тест — `compile_fail` doctest у `pending` (ручку в него не передать); с прежней подписью
+  `pending(handle)` он падает. (2) `DeviceInputRegion` — снова данные контракта, с единственной
+  проекцией `DeviceInputRegion::project` (`NotProjected`: пусто, не конечно, вне `i32`); её зовут
+  `ProjectedInputRegions` ядра (и логирует) и тестовый хост; `input_region_updates` обоих отдают
+  `DeviceInputRegion`. Тест `the_headless_window_drops_input_regions_no_host_could_send`
+  (`flui-testing`, `headless_host`): с прежней проекцией тестового хоста падает. (3) `file:` URI:
+  написание пути — параметр `PathStyle` (`Windows` у `CF_HDROP`, `Posix` у Android, `HOST` у
+  winit), так что Android и Linux не пишут `\\host\share`, а обратная косая в имени POSIX
+  экранируется; `\\?\C:\…` и `\\?\UNC\…` пишутся как путь, который они называют; `%` берёт ровно
+  две шестнадцатеричные цифры; путь не в Unicode (непарный суррогат, не-UTF-8) не пишется, как и не
+  читается. Таблицы: `a_path_is_written_as_its_file_uri`, `a_served_file_uri_reads_as_its_path`,
+  `a_written_path_reads_back`, `a_path_that_is_not_unicode_is_left_out`. Откат проверен: с
+  `from_str_radix` падает строка `%+1`; с POSIX, написанным как Windows, — строка `a\b`; без
+  веток `\\?\` — `\\?\C:\`; с `to_string_lossy` вместо `to_str` — тест суррогата. (4) `KeyText`
+  возвращён (закрытое поле, строит только `Key::character`); `compile_fail` doctest
+  `Key::Character(String::new())` падает с `Character(String)`. (5) ADR-0038: ADR-0151 в
+  `Amended by:`, `TransferCompleter::is_cancelled` снова наблюдает отмену; ADR-0151 получил запись
+  «Amended: 2026-10-27» — `TransferCompleter`, `DeviceInputRegion` и `KeyText` остаются в
+  контракте. (6) Строка «Чего нет в этой серии»: таблицы предложений переехали (в `docs/gaps.md`
+  такой строки нет). (7) `OsDragProvider` и `OsDragEndHook` (ADR-0151 §7) не названы ни в одной
+  строке `tasks.md` — владельца нет, не тронуты.
+  Проверки: clippy `-D warnings` рабочего пространства `--all-targets` обычный и с
+  `flui-native/winit-backend,flui/native`; nextest `flui-native`, `flui-platform`, `flui-app`,
+  `flui-testing`, `flui-interaction`, `flui-widgets` с `winit-backend` — 713 (4 пропущены; падает
+  только trybuild `owner_thread_token_has_no_default`); doctest'ы `flui-platform`, `flui-native` —
+  61; clippy Android `--all-targets`, wasm32, iOS lib, macOS `--all-targets` обычный и с
+  `winit-backend`; `wasm-test` — 51; `checks`, `doc-strict`, `module-dag`, `workspace`, `reach`.
+  WSL: clippy обычный и с `winit-backend`; nextest `FLUI_HEADLESS=1` — 582 из 583 (тот же
+  `x11_window_takes_commands_and_publishes_what_the_server_holds` против X-сервера WSLg), под
+  xvfb `--all-features` — 302 из 302; rustdoc с закрытыми элементами обычный и с `winit-backend`.
+  Не запускалось: Mac и iPhone (vanyastaff/flui#1840), `cross-typecheck`, Android-устройство,
+  браузер.
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`
@@ -3069,7 +3107,7 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
 | Дочерние, владеемые и всплывающие окна; свой заголовок (hit-testing заголовка, snap layouts) | 10 | пункты D2 «дочерние и всплывающие окна» и «декорации и свой заголовок»; `WindowOptions`, `WindowCommand` и `Availability` в `WindowCapabilities` (LY38–LY43) | родитель и владелец в опциях, hit-testing заголовка, snap, окна за границей окна приложения |
 | Системная «назад» как функция (спека «system back») | 3 | ничего на хосте: производитель бита «можно ли вернуться» — навигатор, вне серии, а регистрация хоста без производителя — неподключённая поверхность; место — `WindowHandler`, `AppHandler` и очередь LY62 | регистрация `OnBackInvokedCallback` на Android (API 33, `OnBackAnimationCallback` с API 34, только пока приложение может вернуться), краевой свайп iOS (`UIScreenEdgePanGestureRecognizer`), History API Web с приёмом «одной записи» и ответом dev-сервера для путей без файла (ADR-0255 п. 3, 14, 19), бит «можно ли вернуться», виджеты, навигатор, прогоны по ОС |
 | Клавиатура в раскладке: избегание клавиатуры, прокрутка к полю | 1, 16 | хосты публикуют inset клавиатуры в снимке окна (LY66, LY72, LY74) | поведение виджетов, прокрутка, прогоны |
-| Перетаскивание наружу и приём от других приложений | 8 | словарь `drag` и `data_transfer` остаётся в контракте (design §5); таблицы предложений уходят в ядро (LY49) | нативные источники и цели (в т. ч. `NSDraggingDestination`), прогоны с другими приложениями |
+| Перетаскивание наружу и приём от других приложений | 8 | словарь `drag` и `data_transfer` остаётся в контракте (design §5); таблицы предложений переехали в ядро (LY49) | нативные источники и цели (в т. ч. `NSDraggingDestination`), прогоны с другими приложениями |
 | Богатый clipboard: HTML, изображения, файлы | 6 | `ClipboardHandle` на шве, текст на каждой ОС, где она его даёт (LY50, LY80, LY84) | форматы, согласование представлений |
 | Активация (спека «activation»): URL-схемы, ассоциации файлов, единственный экземпляр, тёплые ссылки | 13 | место — `AppHandler` (LY45), очередь Activity LY62, манифест с `launchMode="singleTop"`; `AppHandler` не получает пустого обязательства `opened` | обязательство `opened(urls, files)` в `AppHandler` и маршрутизатор, `onNewIntent` Android, колбэки сцены iOS (`scene:willConnectToSession:options:`, `scene:openURLContexts:`, `scene:continueUserActivity:`, `windowScene:performActionForShortcutItem:`), регистрация схем и ассоциаций в упаковке, передача аргументов единственному экземпляру, источники на десктопе и Web |
 | Разрешения ОС: запрос, состояние, объём | — (крейты возможностей: уведомления, геолокация) | `launch_for_result` и очередь результатов Activity (LY62, LY64); `onRequestPermissionsResult` не пересылается | `request_permissions`, `PermissionState`, `Grant`, `Denial` и `Scope` в форме ADR-0152 п. 2.8 приходят с первой возможностью, которой они нужны |

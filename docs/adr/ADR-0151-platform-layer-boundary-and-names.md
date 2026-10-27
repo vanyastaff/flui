@@ -17,6 +17,13 @@
   behaviour, as the section says: since Rust 1.81 it aborts the process, with nothing in FLUI's
   diagnostics; out of an `extern "C-unwind"` frame it unwinds through foreign frames not written
   for it. Containment buys a logged failure and an answer the OS understands.
+- **Amended:** 2026-10-27 — sections 2 and 7: three items stay in the contract. `TransferCompleter`
+  is the producer half every source makes with its request (`TransferRequest::pending()` returns
+  both, so nothing claims a delivery before the request exists), test sources included;
+  `DeviceInputRegion` is plain data with the one projection (`DeviceInputRegion::project`) that
+  the core host's `ProjectedInputRegions` and the testing host both use; `KeyText` keeps a
+  character key's text non-empty by type. The rest of the list moved as written; the typed
+  `UriList` and `Image` payloads went with `TransferUri` and `TransferImage` (ADR-0038).
 - **Supersedes:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) §1 (what the contract crate
   holds), §2 (the crates' names and what the core host keeps), §4 step 2 (callbacks without
   `Send`, jointly with [ADR-0254](ADR-0254-window-contract.md)) and §5's Linux row (winit as the
@@ -261,11 +268,11 @@ and `HandleError`; `cursor-icon`; `serde` behind a feature), whatever ADR-0089's
 
 | Module | Fate |
 |---|---|
-| `brightness`, `locale`, `target_platform`, `event_time`, `keyboard/`, `pointer/`, `ime`, `text_input`, `input_capabilities/`, `display`, `placement`, `window_state`, `host_notice`, `preferences/`, `system_chrome`, `haptic_feedback`, `haptics/`, `drag`, `storage` | Stay. `keyboard` loses `KeyText`; `display` moves to `std::sync::Mutex`; `haptics/` loses `FakeHaptics` |
+| `brightness`, `locale`, `target_platform`, `event_time`, `keyboard/`, `pointer/`, `ime`, `text_input`, `input_capabilities/`, `display`, `placement`, `window_state`, `host_notice`, `preferences/`, `system_chrome`, `haptic_feedback`, `haptics/`, `drag`, `storage` | Stay. `display` moves to `std::sync::Mutex`; `haptics/` loses `FakeHaptics` |
 | `window`, `platform_window` | Reworked by ADR-0254: snapshot, `AdmittedCommand`, `WindowHandler`, `!Send` window and `SurfaceTarget`. `WindowEvent`, `WindowBackgroundAppearance`, the getters and the command twins are removed |
 | `input` | `PlatformInput`, `DispatchEventResult` and `DragDropEvent` stay; the coordinate helpers move to the core host |
-| `input_regions` | `InputRegion` and `InputRegionKind` stay; `DeviceInputRegion` and `ProjectedInputRegions` move to the core host |
-| `data_transfer` | The vocabulary stays; `OfferTable`, `OfferRecord`, `TransferCompleter`, `TransferUri` and `TransferImage` move to the core host |
+| `input_regions` | `InputRegion`, `InputRegionKind` and `DeviceInputRegion` stay; `ProjectedInputRegions` moves to the core host |
+| `data_transfer` | The vocabulary stays, `TransferCompleter` with it; `OfferTable`, `OfferRecord`, `TransferUri` and `TransferImage` move to the core host |
 | `clipboard` | Removed. Clipboard is a service behind the seam: its handle in `flui-interaction`, its provider in `flui-app` over the core host's clipboard (section 7) |
 | `text_store/` | Section 6 |
 | `unsupported` (new) | `Unsupported`, `UnsupportedReason`, `Availability` (section 4) |
@@ -429,12 +436,12 @@ containment, the owner hearing committed text) stand. `InMemoryTextStore` moves 
   implementation, `pub(crate)` in the core host (the headless host is a runtime-selected host
   and cannot depend on `flui-testing`), and a scripted double in `flui-testing`. The roles differ:
   the buffer of a headless host against the sequence of answers a test scripts.
-- **Host-only items move into the core host as `pub(crate)`:** `OfferTable`, `OfferRecord`,
-  `TransferCompleter`, `TransferUri`, `TransferImage`, `device_to_logical`, `logical_to_device`,
-  `offset_from_coords`, `delta_offset_from_coords`, `DeviceInputRegion`, `ProjectedInputRegions`,
+- **Host-only items move into the core host as `pub(crate)`:** `OfferTable`, `OfferRecord`
+  (dissolved into the table), `TransferUri`, `TransferImage` (deleted with its payload),
+  `ProjectedInputRegions`, the coordinate helpers (deleted: nothing called them),
   and the drag provider hooks `OsDragProvider` and `OsDragEndHook`, which nothing above the host
   names at `083b0f75d` (`PlatformDragSource` and the drag vocabulary stay).
-- **Deleted:** `WindowEvent`, `Platform::on_window_event`, `KeyText`, and
+- **Deleted:** `WindowEvent`, `Platform::on_window_event` and
   `WindowBackgroundAppearance`, which a background-material command gated by a window capability
   replaces (ADR-0254).
 - **Kept, and wired.** `WindowOptions::input_latency` has no setter above the host today (only

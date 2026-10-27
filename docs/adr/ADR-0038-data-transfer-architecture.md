@@ -7,7 +7,10 @@
   vocabulary live in `flui-platform`, re-exported at `flui_native::data_transfer`; §9: the
   `Clipboard` trait moves there too, while the required `Platform::clipboard()` stays on
   `Platform` in `flui-native`); [ADR-0211](ADR-0211-unified-drag-and-drop.md) (§2: several concurrent offers and sessions; §5: the source
-  side, sessions and escalation from in-window drags; §8: the Web target)
+  side, sessions and escalation from in-window drags; §8: the Web target);
+  [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) (§7: `OfferTable` is the core host's;
+  a URI list and an image arrive as `TransferPayload::Custom` of their type, the typed
+  `UriList` and `Image` payloads removed; §2, §3 and §4 below follow it)
 
 ## Context
 
@@ -44,7 +47,7 @@ Every external datum — a paste, a drop — moves through the same stages:
 | 1. Offer | `DataTransferOffer` (metadata only) | backend |
 | 2. Negotiation | consumer reads `RepresentationDescriptor`s; for DnD the target sends `DropFeedback`, which the backend caches to answer the OS synchronously | consumer ↔ backend |
 | 3. Request | `DataTransferSource::request(id, index, limits)` | consumer |
-| 4. Async delivery | `TransferRequest` (consumer half) / the claim slot the backend completes it through | backend thread → frame thread |
+| 4. Async delivery | `TransferRequest` (consumer half) / `TransferCompleter` (backend half) | backend thread → frame thread |
 | 5. Decoding | `TransferPayload`, or `TransferError::Decode` | transport |
 | 6. Drop action | resolved at OS drop time from the cached feedback; `conclude_drop(id)` releases protocol resources | backend + UI runtime |
 | 7. Completion / cancel | per delivery: drop the request or its `TaskToken`; per offer: source retirement and a generation bump | either side |
@@ -126,14 +129,13 @@ feedback)` and `conclude_drop(id)`. None blocks and none is `async fn`.
 `NullDataTransferSource` is the honest inert source for backends without a
 transport.
 
-`TransferRequest::pending(handle)` is the consumer half of a
-`flui_foundation::claim_slot` pair whose slot the backend keeps (the core
-host wraps it as its `TransferCompleter`). The request is a `Send` future;
-dropping it cancels, which the producer sees as its slot abandoned.
-Completing after cancellation is a no-op; dropping the slot without
-completing resolves the request with `SourceGone`, so a crashed producer never
-leaves a consumer pending. `TransferRequest::ready(..)` serves data already in
-memory.
+`TransferRequest::pending()` returns a connected pair, made together over one
+`flui_foundation::claim_slot`, so nothing can claim the delivery before the
+request exists. The request is a `Send` future; dropping it cancels, which the
+producer sees through `TransferCompleter::is_cancelled()`. Completing after
+cancellation is a no-op; dropping the completer without completing resolves
+the request with `SourceGone`, so a crashed producer never leaves a consumer
+pending. `TransferRequest::ready(..)` serves data already in memory.
 
 The consumer spawns the request on the UI runtime scheduler and holds the house
 `TaskToken`; it is polled by the frame-driven async driver, and the
