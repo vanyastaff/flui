@@ -29,7 +29,7 @@ use flui_platform::pointer::{PanZoomPhase, PointerEvent, PointerKind};
 use flui_platform::text_store::{
     InMemoryTextStore, TextStore, TextStoreHost, Utf16Offset, Utf16Range,
 };
-use flui_platform::{DispatchEventResult, WindowCommand, WindowOptions};
+use flui_platform::{DispatchEventResult, WindowOptions};
 use flui_platform::{DragDropEvent, PlatformInput};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
@@ -950,14 +950,14 @@ async fn an_html_drag_over_the_canvas_is_offered_and_dropped() {
             mime: Mime::new("image/png"),
         })
         .expect("the image file is offered as an image");
-    let TransferPayload::Image(png) = transfer
+    let TransferPayload::Custom { mime, bytes } = transfer
         .request(*id, image, TransferLimits::default())
         .await
         .expect("the image is read")
     else {
-        panic!("an image file resolves as the image it announced");
+        panic!("an image file resolves as bytes with its container type");
     };
-    assert_eq!((png.mime.as_str(), &*png.bytes), ("image/png", &b"png"[..]));
+    assert_eq!((mime.as_str(), &*bytes), ("image/png", &b"png"[..]));
     assert!(matches!(
         transfer
             .request(*id, file, TransferLimits::default().with_max_bytes(3))
