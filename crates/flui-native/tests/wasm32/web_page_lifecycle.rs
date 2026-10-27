@@ -134,7 +134,10 @@ async fn page() -> (Probe, Running, PageWindow) {
     (probe, running, window)
 }
 
-fn recorder<T: Send + 'static>() -> (Arc<Mutex<Vec<T>>>, Arc<Mutex<Vec<T>>>) {
+/// A log a test reads and a callback writes.
+type Log<T> = Arc<Mutex<Vec<T>>>;
+
+fn recorder<T: Send + 'static>() -> (Log<T>, Log<T>) {
     let seen = Arc::new(Mutex::new(Vec::new()));
     (Arc::clone(&seen), seen)
 }
@@ -151,7 +154,7 @@ fn record_executions(window: &PageWindow) -> Arc<Mutex<Vec<WindowExecutionState>
         };
         let execution = window.state().execution;
         if execution != last.replace(execution) {
-            log.lock().unwrap().push(execution);
+            log.lock().expect("recorded values").push(execution);
         }
     });
     seen
@@ -171,7 +174,7 @@ async fn web_freeze_and_resume_set_the_execution_state() {
     fire_document("resume");
 
     assert_eq!(
-        *seen.lock().unwrap(),
+        *seen.lock().expect("recorded values"),
         [
             WindowExecutionState::Suspended,
             WindowExecutionState::Running
@@ -192,24 +195,31 @@ async fn web_pagehide_reports_the_session_ending() {
         .as_ref()
         .expect("owner")
         .on_session_end(Box::new(move |phase| {
-            log.lock().unwrap().push(phase);
+            log.lock().expect("recorded values").push(phase);
             SessionEndAnswer::Proceed
         }));
 
     fire_window("pagehide", false);
-    assert_eq!(*seen.lock().unwrap(), [SessionEndPhase::Ending]);
+    assert_eq!(
+        *seen.lock().expect("recorded values"),
+        [SessionEndPhase::Ending]
+    );
     // A page the browser cached comes back: the ending is undone. A first
     // load raises `pageshow` too, and says nothing.
     fire_window("pageshow", false);
-    assert_eq!(seen.lock().unwrap().len(), 1, "a first load ends nothing");
+    assert_eq!(
+        seen.lock().expect("recorded values").len(),
+        1,
+        "a first load ends nothing"
+    );
     fire_window("pageshow", true);
     assert_eq!(
-        *seen.lock().unwrap(),
+        *seen.lock().expect("recorded values"),
         [SessionEndPhase::Ending, SessionEndPhase::Cancelled]
     );
     // And it can be hidden again.
     fire_window("pagehide", false);
-    assert_eq!(seen.lock().unwrap().len(), 3);
+    assert_eq!(seen.lock().expect("recorded values").len(), 3);
 
     running.quit();
     settle().await;
@@ -233,10 +243,13 @@ async fn web_pagehide_is_not_replayed_to_a_later_hook() {
         .as_ref()
         .expect("owner")
         .on_session_end(Box::new(move |phase| {
-            log.lock().unwrap().push(phase);
+            log.lock().expect("recorded values").push(phase);
             SessionEndAnswer::Proceed
         }));
-    assert!(seen.lock().unwrap().is_empty(), "a notice is one-off");
+    assert!(
+        seen.lock().expect("recorded values").is_empty(),
+        "a notice is one-off"
+    );
     running.quit();
     settle().await;
 }
@@ -268,7 +281,7 @@ async fn web_session_end_hook_reenters_the_platform() {
     let (dropping, observed) = (shared.clone(), Arc::clone(&reached));
     let calls_back = OnDrop(Some(Box::new(move || {
         dropping.on_quit(Box::new(|| {}));
-        *observed.lock().unwrap() = true;
+        *observed.lock().expect("recorded values") = true;
     })));
     let (seen, log) = recorder();
     let installing = shared.clone();
@@ -276,7 +289,7 @@ async fn web_session_end_hook_reenters_the_platform() {
         let _ = &calls_back;
         let log = Arc::clone(&log);
         installing.on_session_end(Box::new(move |phase| {
-            log.lock().unwrap().push(phase);
+            log.lock().expect("recorded values").push(phase);
             SessionEndAnswer::Proceed
         }));
         proxy.request_quit().expect("quit");
@@ -285,11 +298,14 @@ async fn web_session_end_hook_reenters_the_platform() {
 
     fire_window("pagehide", false);
     assert!(
-        *reached.lock().unwrap(),
+        *reached.lock().expect("recorded values"),
         "the replaced hook's destructor reached the platform"
     );
     fire_window("pageshow", true);
-    assert_eq!(*seen.lock().unwrap(), [SessionEndPhase::Cancelled]);
+    assert_eq!(
+        *seen.lock().expect("recorded values"),
+        [SessionEndPhase::Cancelled]
+    );
     settle().await;
 }
 
@@ -297,23 +313,23 @@ async fn web_session_end_hook_reenters_the_platform() {
 async fn web_fullscreenchange_republishes_the_window_state() {
     let (_probe, running, window) = page().await;
     let (seen, log) = recorder();
-    window
-        .handler
-        .react_to_state_change(move || log.lock().unwrap().push(()));
+    window.handler.react_to_state_change(move || {
+        log.lock().expect("recorded values").push(());
+    });
     let before = window.state();
     assert_eq!(before.mode, WindowMode::Normal);
     // Another element going fullscreen is not this window going fullscreen.
     set_foreign_fullscreen();
     fire_document("fullscreenchange");
     assert_eq!(window.state().mode, WindowMode::Normal);
-    assert!(seen.lock().unwrap().is_empty());
+    assert!(seen.lock().expect("recorded values").is_empty());
 
     set_fullscreen(true);
     fire_document("fullscreenchange");
     let entered = window.state();
     assert_eq!(entered.mode, WindowMode::Fullscreen);
     assert!(entered.revision > before.revision);
-    assert_eq!(seen.lock().unwrap().len(), 1);
+    assert_eq!(seen.lock().expect("recorded values").len(), 1);
 
     fire_document("fullscreenchange");
     assert_eq!(
@@ -321,18 +337,18 @@ async fn web_fullscreenchange_republishes_the_window_state() {
         entered.revision,
         "no change, no revision"
     );
-    assert_eq!(seen.lock().unwrap().len(), 1);
+    assert_eq!(seen.lock().expect("recorded values").len(), 1);
 
     set_fullscreen(false);
     fire_document("fullscreenchange");
     assert_eq!(window.state().mode, WindowMode::Normal);
-    assert_eq!(seen.lock().unwrap().len(), 2);
+    assert_eq!(seen.lock().expect("recorded values").len(), 2);
 
     // A container of the canvas going fullscreen takes the canvas with it.
     set_container_fullscreen();
     fire_document("fullscreenchange");
     assert_eq!(window.state().mode, WindowMode::Fullscreen);
-    assert_eq!(seen.lock().unwrap().len(), 3);
+    assert_eq!(seen.lock().expect("recorded values").len(), 3);
     running.quit();
     settle().await;
 }
@@ -341,18 +357,21 @@ async fn web_fullscreenchange_republishes_the_window_state() {
 async fn web_context_loss_is_prevented_and_reported_as_surface_status() {
     let (_probe, running, window) = page().await;
     let (seen, log) = recorder();
-    window
-        .handler
-        .react_to_surface_change(move |change| log.lock().unwrap().push(change));
+    window.handler.react_to_surface_change(move |change| {
+        log.lock().expect("recorded values").push(change);
+    });
 
     assert!(
         fire_on_canvas("webglcontextlost"),
         "without preventDefault the browser never restores the context"
     );
-    assert_eq!(*seen.lock().unwrap(), [SurfaceChange::Release]);
+    assert_eq!(
+        *seen.lock().expect("recorded values"),
+        [SurfaceChange::Release]
+    );
     fire_on_canvas("webglcontextrestored");
     assert_eq!(
-        *seen.lock().unwrap(),
+        *seen.lock().expect("recorded values"),
         [SurfaceChange::Release, SurfaceChange::Rebuild]
     );
     running.quit();
@@ -375,15 +394,15 @@ async fn web_page_events_leave_with_the_window() {
 
     let executions = record_executions(&window);
     let (surfaces, surface_log) = recorder();
-    window
-        .handler
-        .react_to_surface_change(move |change| surface_log.lock().unwrap().push(change));
+    window.handler.react_to_surface_change(move |change| {
+        surface_log.lock().expect("recorded values").push(change);
+    });
 
     // The window hears both while it is open.
     fire_document("freeze");
     assert!(fire_on_canvas("webglcontextlost"));
-    assert_eq!(executions.lock().unwrap().len(), 1);
-    assert_eq!(surfaces.lock().unwrap().len(), 1);
+    assert_eq!(executions.lock().expect("recorded values").len(), 1);
+    assert_eq!(surfaces.lock().expect("recorded values").len(), 1);
 
     window
         .admit_and_apply(flui_platform::WindowCommand::Close)
@@ -399,8 +418,16 @@ async fn web_page_events_leave_with_the_window() {
         "a closed window no longer takes the context loss"
     );
     fire_document("resume");
-    assert_eq!(executions.lock().unwrap().len(), 1, "nothing after close");
-    assert_eq!(surfaces.lock().unwrap().len(), 1, "nothing after close");
+    assert_eq!(
+        executions.lock().expect("recorded values").len(),
+        1,
+        "nothing after close"
+    );
+    assert_eq!(
+        surfaces.lock().expect("recorded values").len(),
+        1,
+        "nothing after close"
+    );
     running.quit();
     settle().await;
 }

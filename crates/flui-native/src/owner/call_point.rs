@@ -265,7 +265,11 @@ impl<'a, G: ?Sized + Guarded, H> Field<'a, G, H> {
 
     /// The same field, taking a handler back only while `accepts` answers
     /// `true`.
-    #[cfg(any(target_os = "macos", target_os = "ios", test))]
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        all(test, not(target_arch = "wasm32"))
+    ))]
     pub(crate) fn restoring_while<A: Fn() -> bool>(self, accepts: A) -> Field<'a, G, H, A> {
         Field {
             state: self.state,
@@ -311,7 +315,7 @@ impl<G: ?Sized + Guarded, H, A: Fn() -> bool> HandlerSlot for Field<'_, G, H, A>
     target_os = "ios",
     target_os = "android",
     all(target_os = "linux", feature = "winit-backend"),
-    test
+    all(test, not(target_arch = "wasm32"))
 ))]
 pub(crate) struct SharedField<'a, G: ?Sized + Guarded, H> {
     state: &'a G,
@@ -324,7 +328,7 @@ pub(crate) struct SharedField<'a, G: ?Sized + Guarded, H> {
     target_os = "ios",
     target_os = "android",
     all(target_os = "linux", feature = "winit-backend"),
-    test
+    all(test, not(target_arch = "wasm32"))
 ))]
 impl<'a, G: ?Sized + Guarded, H: Clone> SharedField<'a, G, H> {
     /// The field of `state` that `project` names.
@@ -339,7 +343,7 @@ impl<'a, G: ?Sized + Guarded, H: Clone> SharedField<'a, G, H> {
     target_os = "ios",
     target_os = "android",
     all(target_os = "linux", feature = "winit-backend"),
-    test
+    all(test, not(target_arch = "wasm32"))
 ))]
 impl<G: ?Sized + Guarded, H: Clone> HandlerSlot for SharedField<'_, G, H> {
     type Handler = H;
