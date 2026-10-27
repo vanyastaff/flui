@@ -34,12 +34,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use flui_foundation::geometry::{Bounds, DevicePixelRatio, DeviceRect, Size, device_rect_covering};
+use flui_foundation::geometry::{Bounds, DevicePixelRatio, Size};
 use flui_foundation::{ManualClock, PresentationId};
 use flui_platform::TextStoreHost;
 use flui_platform::data_transfer::{RepresentationDescriptor, TransferActions};
 use flui_platform::drag::{DragError, OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource};
-use flui_platform::input_regions::{InputRegion, InputRegionKind};
+use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
 use flui_platform::{
     CursorError, CursorIcon, DisplayId, InMemoryClipboard, PlatformInput, PlatformTextInput,
     PlatformWindow, Unsupported, UnsupportedReason, WindowId,
@@ -100,16 +100,18 @@ impl std::fmt::Debug for HeadlessWindow {
 
 /// What a [`HeadlessWindow`] handed its simulated OS of its input regions, played as a
 /// backend plays it (ADR-0217 §5): a frame's logical regions are projected to device pixels
-/// at the window's scale, each rounded outward, and the OS is handed the set only when the
-/// pixels, the scale or the display changed. A window starts with nothing claimed, so an
-/// empty first set is no change.
+/// at the window's scale by the projection every backend uses
+/// ([`DeviceInputRegion::project`]: rounded outward, a region that is empty, not finite or
+/// beyond `i32` dropped), and the OS is handed the set only when the pixels, the scale or
+/// the display changed. A window starts with nothing claimed, so an empty first set is no
+/// change.
 #[derive(Debug, Default)]
 struct SentInputRegions {
     /// The scale (`f64::to_bits`) and display `sent` was projected for; `None` until the
     /// first projection.
     key: Option<(u64, Option<DisplayId>)>,
-    sent: Vec<(InputRegionKind, DeviceRect)>,
-    updates: Vec<Vec<(InputRegionKind, DeviceRect)>>,
+    sent: Vec<DeviceInputRegion>,
+    updates: Vec<Vec<DeviceInputRegion>>,
 }
 
 impl SentInputRegions {
@@ -119,10 +121,9 @@ impl SentInputRegions {
         let Some(ratio) = DevicePixelRatio::new(scale) else {
             return;
         };
-        let projected: Vec<(InputRegionKind, DeviceRect)> = regions
+        let projected: Vec<DeviceInputRegion> = regions
             .iter()
-            .filter(|region| !region.rect().is_empty())
-            .map(|region| (region.kind(), device_rect_covering(region.rect(), ratio)))
+            .filter_map(|region| DeviceInputRegion::project(*region, ratio).ok())
             .collect();
         let key = Some((scale.to_bits(), display));
         let unchanged = if self.key.is_none() {
@@ -229,11 +230,11 @@ impl HeadlessWindow {
             .map(|input| input.ime_allowed.lock().clone())
     }
 
-    /// Every input-region set this window handed the OS, each region's kind and rectangle
-    /// in device pixels, in delivery order: one entry per change the backend's projection
+    /// Every input-region set this window handed the OS, in device pixels and delivery
+    /// order: one entry per change the backend's projection
     /// saw, none for a frame that re-sent an unchanged set (ADR-0217 §5).
     #[must_use]
-    pub fn input_region_updates(&self) -> Vec<Vec<(InputRegionKind, DeviceRect)>> {
+    pub fn input_region_updates(&self) -> Vec<Vec<DeviceInputRegion>> {
         self.input_regions.lock().updates.clone()
     }
 

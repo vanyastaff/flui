@@ -3,10 +3,10 @@
 //! the projected pixels, the scale or the display changed.
 
 use flui_foundation::geometry::{DevicePoint, DeviceRect, Rect};
-use flui_platform::input_regions::{InputRegion, InputRegionKind};
+use flui_platform::input_regions::{DeviceInputRegion, InputRegion, InputRegionKind};
 use flui_platform::{DisplayKey, DisplayRegistry};
 
-use super::{DeviceInputRegion, ProjectedInputRegions};
+use super::ProjectedInputRegions;
 use crate::table_test::run_table;
 
 const EXCLUSION: InputRegionKind = InputRegionKind::SystemGestureExclusion;

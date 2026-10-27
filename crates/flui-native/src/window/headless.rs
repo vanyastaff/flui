@@ -15,8 +15,8 @@ use std::{
 };
 
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::{Bounds, DeviceRect, Point, Size};
-use flui_platform::input_regions::{InputRegion, InputRegionKind};
+use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
 use flui_platform::text_store::TextStoreHost;
 use flui_platform::{
     CursorError, DispatchEventResult, DisplayId, PlatformHaptics, PlatformInput, PlatformTextInput,
@@ -28,7 +28,7 @@ use parking_lot::Mutex;
 
 use crate::host::{self, Host, WindowFacets, WindowPositions};
 use crate::host_window::HostWindow;
-use crate::input::regions::{DeviceInputRegion, ProjectedInputRegions};
+use crate::input::regions::ProjectedInputRegions;
 use crate::owner::OpenWindowError;
 
 use crate::owner::handlers::{OpenWindows, Publication, WindowCallbacks};
@@ -803,21 +803,11 @@ impl MockWindow {
         self.state.lock().pre_present_notifies
     }
 
-    /// Every input-region set this window handed its simulated OS, each region's kind and
-    /// rectangle in device pixels, in delivery order: one entry per change of the
-    /// projection, scale or display.
+    /// Every input-region set this window handed its simulated OS, in device pixels and
+    /// delivery order: one entry per change of the projection, scale or display.
     #[must_use]
-    pub fn input_region_updates(&self) -> Vec<Vec<(InputRegionKind, DeviceRect)>> {
-        let recorded = self.input_regions.lock();
-        recorded
-            .updates
-            .iter()
-            .map(|sent| {
-                sent.iter()
-                    .map(|region| (region.kind(), region.rect()))
-                    .collect()
-            })
-            .collect()
+    pub fn input_region_updates(&self) -> Vec<Vec<DeviceInputRegion>> {
+        self.input_regions.lock().updates.clone()
     }
     /// What the simulated window system holds for this window now, read from
     /// its model and never through the snapshot: what a conformance fixture

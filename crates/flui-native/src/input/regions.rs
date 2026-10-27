@@ -6,38 +6,12 @@
 //! The backend projects them to device pixels once, with the window's current
 //! scale, and updates the OS only when the projection changed;
 //! [`ProjectedInputRegions`] is that projection and comparison, shared by every
-//! backend so the rule is written once.
+//! backend; the projection of one region is the contract's
+//! ([`DeviceInputRegion::project`]).
 
-use flui_foundation::geometry::{DevicePixelRatio, DeviceRect, device_rect_covering};
+use flui_foundation::geometry::DevicePixelRatio;
 use flui_platform::DisplayId;
-use flui_platform::input_regions::{InputRegion, InputRegionKind};
-
-/// One region in device pixels, as a backend hands it to the OS.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct DeviceInputRegion {
-    kind: InputRegionKind,
-    rect: DeviceRect,
-}
-
-impl DeviceInputRegion {
-    /// A `kind` region covering the device pixels of `rect`.
-    #[must_use]
-    pub(crate) const fn new(kind: InputRegionKind, rect: DeviceRect) -> Self {
-        Self { kind, rect }
-    }
-
-    /// What the region is for.
-    #[must_use]
-    pub(crate) const fn kind(&self) -> InputRegionKind {
-        self.kind
-    }
-
-    /// Where it is, in window device pixels.
-    #[must_use]
-    pub(crate) const fn rect(&self) -> DeviceRect {
-        self.rect
-    }
-}
+use flui_platform::input_regions::{DeviceInputRegion, InputRegion, NotProjected};
 
 /// The device-pixel regions a backend last handed the OS for one window, and the scale and
 /// display they were projected for.
@@ -107,41 +81,22 @@ impl ProjectedInputRegions {
     }
 }
 
-/// `region` in device pixels, or `None` when it is empty or not representable.
+/// `region` in device pixels, or `None` when it is empty (dropped silently) or not
+/// representable (dropped with a diagnostic).
 fn project(region: InputRegion, ratio: DevicePixelRatio) -> Option<DeviceInputRegion> {
-    let rect = region.rect();
-    if rect.is_empty() {
-        return None;
+    match DeviceInputRegion::project(region, ratio) {
+        Ok(projected) => Some(projected),
+        Err(NotProjected::Empty) => None,
+        Err(reason) => {
+            tracing::warn!(
+                kind = ?region.kind(),
+                rect = ?region.rect(),
+                scale = ratio.get(),
+                "input region dropped: {reason}"
+            );
+            None
+        }
     }
-    let edges = [rect.left(), rect.top(), rect.right(), rect.bottom()].map(|e| ratio.to_device(e));
-    if edges.iter().any(|edge| !edge.is_finite()) {
-        tracing::warn!(
-            kind = ?region.kind(),
-            rect = ?rect,
-            scale = ratio.get(),
-            "input region dropped: its device-pixel edges are not finite"
-        );
-        return None;
-    }
-    let [left, top, right, bottom] = edges;
-    let [left, top, right, bottom] = [left.floor(), top.floor(), right.ceil(), bottom.ceil()];
-    let in_range = |value: f64| (f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&value);
-    let representable = [left, top, right, bottom].into_iter().all(in_range)
-        && right - left <= f64::from(i32::MAX)
-        && bottom - top <= f64::from(i32::MAX);
-    if !representable {
-        tracing::warn!(
-            kind = ?region.kind(),
-            rect = ?rect,
-            scale = ratio.get(),
-            "input region dropped: its device-pixel edges or size do not fit in i32"
-        );
-        return None;
-    }
-    Some(DeviceInputRegion::new(
-        region.kind(),
-        device_rect_covering(rect, ratio),
-    ))
 }
 
 #[cfg(test)]

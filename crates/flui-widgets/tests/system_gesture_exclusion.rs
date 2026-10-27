@@ -6,7 +6,7 @@
 
 use flui_foundation::geometry::{DevicePoint, DeviceRect, Matrix4};
 use flui_painting::styling::Color;
-use flui_platform::input_regions::InputRegionKind;
+use flui_platform::input_regions::{DeviceInputRegion, InputRegionKind};
 use flui_platform::{DisplayId, DisplayKey, DisplayRegistry};
 use flui_testing::log_capture;
 use flui_view::{IntoView, View};
@@ -17,8 +17,8 @@ use flui_widgets::{
 
 use crate::common::{LaidOut, lay_out, tight};
 
-fn device(left: i32, top: i32, right: i32, bottom: i32) -> (InputRegionKind, DeviceRect) {
-    (
+fn device(left: i32, top: i32, right: i32, bottom: i32) -> DeviceInputRegion {
+    DeviceInputRegion::new(
         InputRegionKind::SystemGestureExclusion,
         DeviceRect::from_min_max(DevicePoint::new(left, top), DevicePoint::new(right, bottom)),
     )
