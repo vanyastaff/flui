@@ -255,7 +255,7 @@ request.
 > **Environments:** desktop; mobile for capture · **Who it hurts:** Apps with a native look; apps showing sensitive data · **Parity:** [Windows](platform-parity.md#windows)
 
 - Backdrop materials, transparency, icon, capture exclusion.
-- The contract's window material (`WindowCommand::SetMaterial`: `Opaque`, `System`) is drawn on Windows (Mica, build 22621 and later; a Win32 window still opens on it) and on macOS (`NSVisualEffectView`'s window-background material, type-checked only); Linux, Web and mobile report it `Unavailable`. The macOS material, the backdrop material and Liquid Glass (`flui::native::macos`) have never run on a Mac; no window icon on Windows or Linux.
+- The contract's window material (`WindowCommand::SetMaterial`: `Opaque`, `System`) is drawn on Windows (Mica, build 22621 and later; a Win32 window still opens on it) and on macOS (`NSVisualEffectView`'s window-background material, type-checked only); Linux, Web and mobile report it `Unavailable`. The backdrop material and Liquid Glass of `flui::native::macos` ran on macOS 27 (an M1, 2026-10-27, `an_appkit_backdrop_goes_behind_the_content_and_comes_away`); the contract's material on macOS waits for its Mac run; no window icon on Windows or Linux.
 
 ### 21. Unaudited rows
 

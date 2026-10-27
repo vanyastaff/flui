@@ -18,6 +18,9 @@
   their capability (`WindowCapabilities::frame_rate_hint`,
   `InputCapabilities::input_regions`) is `Unavailable`.
 - A window system that refuses a material answers `ApplyError::Platform` instead of logging.
+- An iOS window's display link asks for the rate `set_frame_rate_hint` names: the screen's best
+  for `FrameRateHint::High`, no preference for `Default` (before, it always asked for the best).
+- `WindowHandle::set_material` submits the material command from a widget.
 - `Win32Window::set_backdrop` and `Win32Window::backdrop` answer `Unsupported` with
   `NotOnThisDevice` below Windows 11 build 22621.
 
