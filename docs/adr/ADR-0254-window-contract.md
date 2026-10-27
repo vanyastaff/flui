@@ -4,6 +4,13 @@
   after this record, and a platform's row in `docs/platform-parity.md` moves only after a run on
   that platform (Confirmation).
 - **Date:** 2026-10-20
+- **Amended:** 2026-10-27 — decision 4, approved by the owner: (1) a `WindowHandler` method takes
+  no `&OwnerPlatform`, because `WindowHandler` is the contract's and `OwnerPlatform` is the host
+  crate's, which the contract cannot name without the edge ADR-0083 and the layers forbid; a
+  handler that drives the platform captures what it needs; (2) `frame_requested` answers a
+  `FrameOutcome { Produced, Declined }`, because without it the host cannot tell a frame that was
+  served from one nothing ran, and a wake deadline delivered to a handler with nothing to draw
+  with re-arms on every paint and spins the loop.
 - **Supersedes:**
   - [ADR-0237](ADR-0237-window-state-and-host-notices.md), in part: the window-scoped getters and
     per-fact callbacks that sit beside the snapshot; decision 3's refusal inside `apply` (it moves
@@ -266,14 +273,16 @@ false" to "a window's capabilities are honest".
 ### 4. One handler is passed at open
 
 `open_window(options, handler)` takes an `Rc<dyn WindowHandler>`. Its methods are called on the
-owner thread, and each takes `&OwnerPlatform`, so the handler reaches the platform without an
-ambient slot. It has one method per obligation, not per fact, and none has a default body:
+owner thread, the one that holds the handler's `Rc`. They take no platform argument: the owner's
+platform, `OwnerPlatform`, is a host type the contract cannot name (ADR-0083), so a handler that
+drives the platform captures what it needs. It has one method per obligation, not per fact, and
+none has a default body:
 
 | Method | Called when | Returns |
 |---|---|---|
 | `input` | A platform input event for this window arrives. The first is the capability snapshot, `PlatformInput::Capabilities` | `DispatchEventResult`, with its deferred forms for an event queued behind a reentrant callback (ADR-0207) |
 | `state_changed` | A new snapshot has been published, outside any lock or borrow of the host | Nothing; no payload, the handler re-reads the snapshot |
-| `frame_requested` | The platform wants a frame for this window | Nothing |
+| `frame_requested` | The platform wants a frame for this window | A `FrameOutcome`: `Produced` when a frame ran, `Declined` when the handler had nothing to run one with; only a produced frame counts as serving work due at one instant (a wake deadline) |
 | `close_requested` | The user, the OS or `WindowControl::request_close` asks the window to close | A `CloseDecision`: proceed, or veto and keep the window |
 | `closed` | The window has closed, once, after it left the host's tracking | Nothing |
 | `surface_changed` | The surface behind the window is about to become invalid, or a valid one must exist again; the two directions keep the asymmetry of ADR-0063 decision 6 | Nothing |

@@ -2933,6 +2933,12 @@ graph LR
   --all-features`; nextest под xvfb `flui-native` — 217, с `winit-backend` — 300,
   `--all-features` — 301, `flui-app` с `winit-backend` — 47, всё зелёное. Не запускалось:
   Android-устройство, Mac и iPhone (vanyastaff/flui#1840), браузер, `cross-typecheck`.
+  **Одобрение владельца (2026-10-27).** Оба отступления от ADR-0254 §4 одобрены: методы
+  `WindowHandler` без `&OwnerPlatform` и `frame_requested -> FrameOutcome { Produced, Declined }`;
+  ADR-0254 дополнен на месте (строка `Amended: 2026-10-27`, текст и таблица §4). Запрос закрытия
+  до маршрута теперь не забывается: один флаг, маршрут спрашивается ровно один раз при установке,
+  `Close` закрывает окно командой (`a_close_request_before_its_route_is_asked_once` в
+  `window_routes_contract`; без флага падает).
 - [x] **LY49** — ветка `platform/host-only-core`, начата на вершине LY41
   (`origin/platform/snapshot-consumers` @ `87977afc3`), после слияния vanyastaff/flui#1912 перенесена
   на `main` @ `c50202c7a` (дерево то же). **В ядро, `pub(crate)`.** Модель `drag/offers.rs`
