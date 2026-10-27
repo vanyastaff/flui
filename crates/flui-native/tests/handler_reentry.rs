@@ -839,9 +839,11 @@ mod win32 {
                     Method::Input,
                     Box::new(|window, reentered| {
                         let hwnd = crate::win32_handle(window.as_ref());
-                        // SAFETY: integer message data for the test's own
-                        // window on its owner thread: a primary press at
-                        // client (10, 10).
+                        // SAFETY: the window is alive (the trigger runs before
+                        // anything closes it) and owned by this thread, which
+                        // opened it, so the send runs its window procedure
+                        // here; the message carries plain integers, a primary
+                        // press at client (10, 10).
                         unsafe {
                             SendMessageW(
                                 hwnd,
@@ -875,8 +877,9 @@ mod win32 {
                     Method::CloseRequested,
                     Box::new(|window, reentered| {
                         let hwnd = crate::win32_handle(window.as_ref());
-                        // SAFETY: an argument-free message to the test's own
-                        // window.
+                        // SAFETY: the window is alive and owned by this thread,
+                        // whose pump delivers the posted message; `WM_CLOSE`
+                        // carries no pointers.
                         unsafe { PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) }
                             .expect("a posted close");
                         pump_until(reentered)

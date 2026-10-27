@@ -213,22 +213,30 @@ where
         }
     };
     // The loop makes a session's window, with its handler, before the
-    // session connects; the connection names the window those routes belong
-    // to.
-    let made = Rc::new(std::cell::RefCell::new(
-        None::<Rc<super::window_routes::WindowRoutes>>,
-    ));
+    // session connects; the connection names the session and its window, so
+    // the routes made for that session are adopted for that window, whatever
+    // order sessions are made and connected in.
+    let made = Rc::new(std::cell::RefCell::new(std::collections::HashMap::<
+        flui_native::IOSSceneSessionId,
+        Rc<super::window_routes::WindowRoutes>,
+    >::new()));
     let adopting = Rc::clone(&made);
-    let handlers = Box::new(move |_: &flui_native::IOSSceneSessionId| {
+    let handlers = Box::new(move |session: &flui_native::IOSSceneSessionId| {
         let routes = super::window_routes::WindowRoutes::new();
-        *made.borrow_mut() = Some(Rc::clone(&routes));
+        made.borrow_mut()
+            .insert(session.clone(), Rc::clone(&routes));
         routes as Rc<dyn flui_platform::WindowHandler>
     });
     let events = Box::new(move |event: IOSSceneEvent| {
-        if let IOSSceneEvent::Connected { window, .. } = &event
-            && let Some(routes) = adopting.borrow_mut().take()
+        if let IOSSceneEvent::Connected {
+            session, window, ..
+        } = &event
+            && let Some(routes) = adopting.borrow_mut().remove(session)
         {
             routes.adopt(window.id());
+        }
+        if let IOSSceneEvent::Discarded { session } = &event {
+            adopting.borrow_mut().remove(session);
         }
         scene_event(event)
     });

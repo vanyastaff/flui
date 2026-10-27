@@ -47,9 +47,9 @@ const UNANSWERED_KEYS: usize = 8;
 /// panicked. Only a clone that is the last one, because the window let go of
 /// its handler meanwhile, goes back to the call point, which drops it outside
 /// every lock, or retains it when the method failed.
-struct Shared<'a>(&'a OwnerSlot<Rc<dyn WindowHandler>>);
+struct ResidentHandler<'a>(&'a OwnerSlot<Rc<dyn WindowHandler>>);
 
-impl HandlerSlot for Shared<'_> {
+impl HandlerSlot for ResidentHandler<'_> {
     type Handler = Rc<dyn WindowHandler>;
 
     fn take(&self) -> Option<Self::Handler> {
@@ -307,8 +307,8 @@ impl WindowDelivery {
     }
 
     /// The window's handler, for one call.
-    fn handler(&self) -> Shared<'_> {
-        Shared(&self.handler)
+    fn handler(&self) -> ResidentHandler<'_> {
+        ResidentHandler(&self.handler)
     }
 
     /// Deliver the capability snapshot the handler is owed as its first
