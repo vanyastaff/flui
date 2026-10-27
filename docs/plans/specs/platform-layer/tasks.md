@@ -2679,7 +2679,8 @@ graph LR
   падает только trybuild `owner_thread_token_has_no_default` с `main`); clippy wasm32 lib,
   `wasm-test` — 51; `checks`, `doc-strict`; WSL — clippy и rustdoc с `winit-backend`.
 - [x] **LY49** — ветка `platform/host-only-core`, начата на вершине LY41
-  (`origin/platform/snapshot-consumers` @ `87977afc3`). **В ядро, `pub(crate)`.** Модель `drag/offers.rs`
+  (`origin/platform/snapshot-consumers` @ `87977afc3`), после слияния vanyastaff/flui#1912 перенесена
+  на `main` @ `c50202c7a` (дерево то же). **В ядро, `pub(crate)`.** Модель `drag/offers.rs`
   (теперь без `cfg`, элементы — под `cfg` своих потребителей): `OfferTable` (слот хранит
   `Arc<[RepresentationDescriptor]>`; `len`/`is_empty` без потребителя удалены), `TransferCompleter`
   (`channel()` и `complete`; `is_cancelled` никто не звал — удалён) и `TransferUri`. Модель
@@ -2728,7 +2729,18 @@ graph LR
   `flui-native`; clippy Android `-p flui-native -p flui-app --all-targets`, wasm32 lib, iOS lib
   (`DOCS_RS=1`), macOS `--all-targets` обычный и с `winit-backend`; `wasm-check`, `wasm-test` — 51;
   `checks` (с `key-vocabulary`, `recording-vocabulary`, `markers`, `testing`), `doc-strict`,
-  `module-dag`, `workspace`, `reach`.
+  `module-dag`, `workspace`, `reach`. WSL Ubuntu 24.04 (`WAYLAND_DISPLAY` и `XDG_SESSION_TYPE`
+  сняты, cargo без heli — в WSL его нет): clippy `-p flui-native -p flui-platform -p flui-testing
+  -p flui-app --all-targets` обычный и с `winit-backend`; nextest `FLUI_HEADLESS=1` (те же крейты и
+  `flui-interaction`) — 580, падает только
+  `x11_window_takes_commands_and_publishes_what_the_server_holds`: без xvfb он ходит в X-сервер
+  WSLg, который не двигает окно (кода окна ветка не трогает); под xvfb `--all-features`
+  `flui-native` — 300 из 300; rustdoc `-D warnings --document-private-items` без признаков и с
+  `winit-backend`. Не запускалось: `flui-app` под macOS и iOS, Mac и iPhone — в очереди
+  vanyastaff/flui#1840; `cross-typecheck` (нет `zig`); Android-устройство (поведение drop на
+  Android меняется только формой списка URI, тест `drag::android::clip::tests` на хосте); браузер —
+  у координатора: drop файла или ссылки на холст отдаёт `Custom` `text/uri-list` строкой браузера,
+  исходящий drag со списком URI кладёт ту же строку в `DataTransfer`.
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`
