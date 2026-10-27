@@ -3458,7 +3458,9 @@ delivers the capability snapshot (`PlatformInput::Capabilities`, the
 backend's availability table from `input::availability` with the presence its
 device registry reports) as the handler's first `input`, before the open
 returns, and every later capability change in order with the input around it.
-No input is held for a handler still to come and no snapshot is kept for one.
+The host keeps no input for a handler still to come: a handler that cannot
+take its input yet keeps it itself (`flui-app`'s `WindowRoutes` holds what
+arrives before the window's presentation exists and hands it over in order).
 A delivery raised inside a handler method waits for it: an input that needs an
 answer gets the deferred form of its result (ADR-0207) and is delivered once,
 after the running method returns. A method's panic is contained at the call

@@ -27,5 +27,7 @@
 
 - `PlatformWindow::on_input`, `on_state_changed`, `on_request_frame`, `on_close`,
   `on_should_close` and `on_surface_status_change`, with the core host's `WindowCallbacks`,
-  `InputCallback` and `InputWake`. Input that arrived before a callback was registered was held for
-  it; with the handler passed at open there is no such input.
+  `InputCallback` and `InputWake`. The host no longer holds input for a callback registered
+  later: the handler exists from the open. An application window's input, state change, frame
+  request and surface change that arrive before its presentation exists are kept by the runner
+  and handed to the presentation in order; a close request in that gap keeps the window.

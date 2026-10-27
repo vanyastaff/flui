@@ -1,19 +1,23 @@
 //! The window handler the runner opens every window with (ADR-0254 §4).
 //!
 //! A window is opened with its handler, before the runner has a UI runtime
-//! or a presentation for it: those are built from the open window. So the
-//! handler, [`WindowRoutes`], answers every obligation from the first call,
-//! and the runner points each obligation at the presentation once it exists
-//! (`route_*`). Until then:
+//! or a presentation for it: those are built from the open window, on the
+//! owner turn that opened it or, for a window whose open was deferred, on a
+//! later one. So the handler, [`WindowRoutes`], answers every obligation from
+//! the first call, and the runner points each obligation at the presentation
+//! once it exists (`route_*`). Nothing that arrives in between is lost:
 //!
-//! - an input is not taken, and the platform's default runs, except the
-//!   capability snapshot, which is kept and handed to the input route as its
-//!   first input, so the presentation still hears the window's capabilities
-//!   before anything else;
-//! - a state change, a frame request and a surface change are left: the
-//!   presentation reads the window's snapshot when it is built, and asks for
-//!   its first frame itself;
-//! - a close request closes the window: nothing can veto it yet;
+//! - every input, the capability snapshot first, is kept in order and
+//!   answered with the deferred form of its result (its outcome is not known
+//!   yet); the input route hears them all, in order, when it is set, so a
+//!   press the user made while the presentation was being built is not cut
+//!   off from its release;
+//! - a state change, a frame request and a surface change are kept, the
+//!   newest of each, and handed to their route when it is set: a state
+//!   change carries no payload, a frame request is answered by one frame, and
+//!   the newest surface change is the surface the window needs (a lost
+//!   `Rebuild` would leave it blank);
+//! - a close request keeps the window open: there is no one to ask yet;
 //! - `closed` is kept, and the close route runs at once when it is set, so a
 //!   window that closed while the runner was building its presentation still
 //!   retires it.
@@ -22,9 +26,9 @@
 //! another route, close the window or open one.
 
 use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::rc::{Rc, Weak};
 
-use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::{
     CloseDecision, DispatchEventResult, FrameOutcome, FrameRequest, PlatformInput, PlatformWindow,
     SurfaceChange, WindowHandler, WindowId,
@@ -48,6 +52,11 @@ impl<A, R> Slot<A, R> {
     fn set(&self, route: Route<A, R>) {
         let replaced = self.0.replace(Some(route));
         drop(replaced);
+    }
+
+    /// A route is set and not out for a call.
+    fn is_set(&self) -> bool {
+        self.0.borrow().is_some()
     }
 
     /// Call the route with `argument`, with no borrow of the slot held;
@@ -82,14 +91,24 @@ impl<A, R> Slot<A, R> {
     }
 }
 
+/// What arrived before its route was set, handed to the route when it is.
+#[derive(Default)]
+struct Held {
+    /// Every input, in order.
+    inputs: VecDeque<PlatformInput>,
+    /// A state change is owed.
+    state_changed: bool,
+    /// The newest frame request.
+    frame: Option<FrameRequest>,
+    /// The newest surface change.
+    surface: Option<SurfaceChange>,
+}
+
 /// The runner's handler of one window: what each obligation does, pointed at
 /// the window's presentation once it exists. See the module doc.
 #[derive(Default)]
 pub(crate) struct WindowRoutes {
     input: Slot<PlatformInput, DispatchEventResult>,
-    /// The capabilities heard while no input route was set: handed to the
-    /// route as its first input.
-    capabilities: Cell<Option<InputCapabilities>>,
     state_changed: Slot<(), ()>,
     frame_requested: Slot<FrameRequest, ()>,
     close_requested: Slot<(), CloseDecision>,
@@ -97,6 +116,7 @@ pub(crate) struct WindowRoutes {
     /// `closed` arrived before its route.
     closed_heard: Cell<bool>,
     surface_changed: Slot<SurfaceChange, ()>,
+    held: RefCell<Held>,
 }
 
 impl WindowRoutes {
@@ -105,13 +125,20 @@ impl WindowRoutes {
         Rc::default()
     }
 
-    /// The routes of `window`: the ones the runner opened it with, or, for a
-    /// window it did not open (a test double), routes nothing calls.
+    /// The routes the runner opened `window` with.
+    ///
+    /// # Panics
+    ///
+    /// For a window the runner did not open with routes, or one that already
+    /// let go of them: a route set there would never be called.
     pub(crate) fn of(window: &(impl PlatformWindow + ?Sized)) -> Rc<Self> {
         let id = window.id();
-        APP_RUNTIME
-            .with(|slot| slot.borrow().window_routes(id))
-            .unwrap_or_default()
+        let routes = APP_RUNTIME.with(|slot| slot.borrow().window_routes(id));
+        // A unit test's window double was never opened and calls no handler:
+        // routes set on it are never called, which is what such a test means.
+        #[cfg(test)]
+        let routes = routes.or_else(|| Some(Self::new()));
+        routes.expect("BUG: the runner opens every window it routes with `WindowRoutes`, adopted")
     }
 
     /// Record that the window `window` was opened with these routes, so
@@ -122,25 +149,43 @@ impl WindowRoutes {
         APP_RUNTIME.with(|slot| slot.borrow_mut().adopt_window_routes(window, weak));
     }
 
-    /// Route the window's input; the capabilities heard before go first.
+    /// Route the window's input; the input heard before goes first, in order.
     pub(crate) fn route_input(
         &self,
         route: impl FnMut(PlatformInput) -> DispatchEventResult + 'static,
     ) {
         self.input.set(Box::new(route));
-        if let Some(capabilities) = self.capabilities.take() {
-            let _ = self.input.call(PlatformInput::Capabilities(capabilities));
+        self.deliver_held_inputs();
+    }
+
+    /// Hand the held input to the input route, in order. Popped one at a time
+    /// with no borrow held: input that arrives while the route runs joins the
+    /// end and is reached in turn; a route that panics leaves the rest held
+    /// for the next input to hand over.
+    fn deliver_held_inputs(&self) {
+        while self.input.is_set() {
+            let next = self.held.borrow_mut().inputs.pop_front();
+            let Some(input) = next else { break };
+            let _ = self.input.call(input);
         }
     }
 
-    /// Route the window's state changes.
+    /// Route the window's state changes; one owed from before is delivered.
     pub(crate) fn route_state_changed(&self, mut route: impl FnMut() + 'static) {
         self.state_changed.set(Box::new(move |()| route()));
+        if std::mem::take(&mut self.held.borrow_mut().state_changed) {
+            let _ = self.state_changed.call(());
+        }
     }
 
-    /// Route the window's frame requests.
+    /// Route the window's frame requests; the newest one from before is
+    /// delivered.
     pub(crate) fn route_frame_requested(&self, route: impl FnMut(FrameRequest) + 'static) {
         self.frame_requested.set(Box::new(route));
+        let held = self.held.borrow_mut().frame.take();
+        if let Some(request) = held {
+            let _ = self.frame_requested.call(request);
+        }
     }
 
     /// Route the window's close requests.
@@ -169,40 +214,50 @@ impl WindowRoutes {
     )]
     pub(crate) fn route_surface_changed(&self, route: impl FnMut(SurfaceChange) + 'static) {
         self.surface_changed.set(Box::new(route));
+        let held = self.held.borrow_mut().surface.take();
+        if let Some(change) = held {
+            let _ = self.surface_changed.call(change);
+        }
     }
 }
 
 impl WindowHandler for WindowRoutes {
     fn input(&self, event: PlatformInput) -> DispatchEventResult {
-        let capabilities = match &event {
-            PlatformInput::Capabilities(capabilities) => Some(*capabilities),
-            _ => None,
-        };
-        if let Some(result) = self.input.call(event) {
-            return result;
+        // A set route that is not out for a call (the replay of what was held
+        // takes it out) hears the input now.
+        if self.held.borrow().inputs.is_empty() && self.input.is_set() {
+            return self
+                .input
+                .call(event)
+                .expect("BUG: a set input route is there for its call");
         }
-        // No route yet: the capabilities are kept for the route to come.
-        if let Some(capabilities) = capabilities {
-            self.capabilities.set(Some(capabilities));
-        }
-        DispatchEventResult::default()
+        // No route yet, or input still waiting for it: kept behind that, and
+        // handed over now when the route is there to take it.
+        self.held.borrow_mut().inputs.push_back(event);
+        self.deliver_held_inputs();
+        DispatchEventResult::DEFERRED
     }
 
     fn state_changed(&self) {
-        let _ = self.state_changed.call(());
-    }
-
-    fn frame_requested(&self, request: FrameRequest) -> FrameOutcome {
-        match self.frame_requested.call(request) {
-            Some(()) => FrameOutcome::Produced,
-            None => FrameOutcome::Declined,
+        if self.state_changed.call(()).is_none() {
+            self.held.borrow_mut().state_changed = true;
         }
     }
 
+    fn frame_requested(&self, request: FrameRequest) -> FrameOutcome {
+        if self.frame_requested.call(request).is_some() {
+            return FrameOutcome::Produced;
+        }
+        // Answered with one frame once the route is set; nothing ran now.
+        self.held.borrow_mut().frame = Some(request);
+        FrameOutcome::Declined
+    }
+
     fn close_requested(&self) -> CloseDecision {
+        // No presentation to ask yet: the window stays.
         self.close_requested
             .call(())
-            .unwrap_or(CloseDecision::Close)
+            .unwrap_or(CloseDecision::KeepOpen)
     }
 
     fn closed(&self) {
@@ -214,7 +269,9 @@ impl WindowHandler for WindowRoutes {
     }
 
     fn surface_changed(&self, change: SurfaceChange) {
-        let _ = self.surface_changed.call(change);
+        if self.surface_changed.call(change).is_none() {
+            self.held.borrow_mut().surface = Some(change);
+        }
     }
 }
 
