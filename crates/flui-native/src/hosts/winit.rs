@@ -134,12 +134,10 @@ impl WinitHost for Winit {
 ///
 /// ```rust,ignore
 /// let platform = WinitPlatform::new();
-/// platform.run(Box::new(|owner| {
-///     // `open_window` is guaranteed `Ready` here — see the module-level
-///     // doc on same-thread window creation.
-///     let _window = owner.open_window(Default::default())?.try_ready()?;
-///     Ok(())
-/// }))?;
+/// // `App` implements `AppHandler`; inside its `ready`, `open_window` is
+/// // guaranteed `Ready` — see the module-level doc on same-thread window
+/// // creation.
+/// Box::new(platform).run(Rc::new(App::default()))?;
 /// ```
 pub type WinitPlatform = HostPlatform<Winit>;
 

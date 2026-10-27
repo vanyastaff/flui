@@ -1,6 +1,9 @@
 //! Main-thread public owner contracts with a private portal for every case.
 
 #[cfg(target_os = "linux")]
+#[path = "support/app.rs"]
+mod app;
+#[cfg(target_os = "linux")]
 #[path = "support/linux_preferences.rs"]
 mod fixture;
 

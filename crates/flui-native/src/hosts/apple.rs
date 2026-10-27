@@ -148,7 +148,8 @@ impl Host for Apple {
 /// use flui_native::{MacOSPlatform, Platform};
 ///
 /// let platform = MacOSPlatform::new()?;
-/// Box::new(platform).run(Box::new(|_owner| Ok(())))?;
+/// // `App` implements `AppHandler`: its `ready` is the bootstrap.
+/// Box::new(platform).run(Rc::new(App::default()))?;
 /// ```
 #[cfg(target_os = "macos")]
 pub type MacOSPlatform = HostPlatform<Apple>;

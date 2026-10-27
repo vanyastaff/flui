@@ -60,10 +60,8 @@
 //! use flui_native::current_platform;
 //!
 //! let platform = current_platform()?;
-//! platform.run(Box::new(|owner| {
-//!     println!("Platform ready: {}", owner.shared().name());
-//!     Ok(())
-//! }))?;
+//! // `App` implements `AppHandler`: its `ready` is the bootstrap.
+//! platform.run(Rc::new(App::default()))?;
 //! ```
 //!
 //! ## Testing with Headless Mode
@@ -378,10 +376,8 @@ pub use owner::{
 /// let platform = current_platform()?;
 /// println!("Running on: {}", platform.name());
 ///
-/// platform.run(Box::new(|_owner| {
-///     println!("Platform ready!");
-///     Ok(())
-/// }))?;
+/// // `App` implements `AppHandler`: its `ready` is the bootstrap.
+/// platform.run(Rc::new(App::default()))?;
 /// ```
 ///
 /// # Platform-Specific Code
@@ -526,7 +522,8 @@ pub fn headless_platform() -> Box<dyn Platform> {
 /// #[unsafe(no_mangle)]
 /// fn android_main(app: android_activity::AndroidApp) {
 ///     let platform = flui_native::android_platform(app);
-///     let _ = platform.run(Box::new(|_owner| Ok(())));
+///     // `App` implements `AppHandler`: its `ready` is the bootstrap.
+///     let _ = platform.run(Rc::new(App::default()));
 /// }
 /// ```
 #[cfg(target_os = "android")]

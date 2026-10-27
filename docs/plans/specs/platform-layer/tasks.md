@@ -3228,7 +3228,24 @@ graph LR
   Документы: ARCHITECTURE.md ядра, README ядра, `docs/architecture.md`, `docs/gaps.md` (запись 13),
   `docs/platform-parity.md` (заметка о диплинках, ячейки без изменений),
   `changelog.d/platform-app-handler.md`.
-  Проверки: CHECKS_PLACEHOLDER
+  `module-dag` `flui-native` — 302 модуля, 324 ребра, 1 исключение; `globals` — 57; из
+  `markers.toml` ушла запись маркера `slice` в `platform.rs`.
+  Проверки (Windows): `cargo fmt`; clippy `-D warnings` рабочего пространства `--all-targets`
+  обычный и с `flui-native/winit-backend,flui/native`; nextest `flui-native`, `flui-app`,
+  `flui-platform`, `flui-testing`, `flui-runtime`, `flui-view`, `flui-interaction`, `flui-sdk` —
+  701 из 703 (падают trybuild `owner_thread_token_has_no_default`, как на `main`, и реальное окно
+  `open_real_window` — повтор зелёный), `flui-native` и `flui-app` с `winit-backend` — 365 из 366
+  (тот же trybuild), `flui --features native` — 10; trybuild `flui-native` (`.stderr` двух
+  фикстур); clippy Android `--all-targets` (`flui-native`, `flui-app`), macOS `--all-targets`
+  обычный и с `winit-backend` (clang и llvm-ar LLVM), iOS lib `flui-native` (`DOCS_RS=1`), wasm32
+  lib `flui-native`, `flui-app`, `flui-platform`, `flui-web-demo`; `checks`, `doc-strict`,
+  `wasm-check`, `wasm-test` — 49. WSL Ubuntu 24.04 (`WAYLAND_DISPLAY`, `XDG_SESSION_TYPE`
+  сняты): clippy четырёх крейтов без признаков, с `winit-backend` и `flui-native --all-features`;
+  nextest под xvfb `FLUI_HEADLESS=1`: `flui-native` — 215, с `winit-backend` — 297,
+  `--all-features` — 298, `flui-app` с `winit-backend` — 47; rustdoc `--document-private-items -D
+  warnings` обоих вариантов. Не запускалось: Android-устройство, Mac и iPhone (AppKit reopen и
+  насос дедлайна, UIKit — только типизированы; vanyastaff/flui#1840), браузер (проверить: `pagehide`
+  и `pageshow` доходят до `AppHandler::session_end`, выход отпускает окно), `cross-typecheck`.
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`
