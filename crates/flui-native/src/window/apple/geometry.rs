@@ -794,37 +794,88 @@ pub(crate) mod mode {
             every.sets_resizable = Native;
             every.sets_decorated = Native;
             every.hides = Native;
-            // (flags, maximizes, enters full screen, sets resizable, sets
-            // decorated, hides)
-            type Row = (&'static str, [Availability; 5]);
-            let rows: [Row; 7] = [
-                ("R", [Native, Native, Native, Native, Native]),
+            /// What a window with `flags` honours.
+            #[derive(Debug, PartialEq)]
+            struct Row {
+                flags: &'static str,
+                maximizes: Availability,
+                enters_fullscreen: Availability,
+                sets_resizable: Availability,
+                sets_decorated: Availability,
+                hides: Availability,
+            }
+            let rows = [
+                Row {
+                    flags: "R",
+                    maximizes: Native,
+                    enters_fullscreen: Native,
+                    sets_resizable: Native,
+                    sets_decorated: Native,
+                    hides: Native,
+                },
                 // A fixed-size window is neither zoomed nor made full screen.
-                ("", [Unavailable, Unavailable, Native, Native, Native]),
-                ("Z", [Unavailable, Unavailable, Native, Native, Native]),
+                Row {
+                    flags: "",
+                    maximizes: Unavailable,
+                    enters_fullscreen: Unavailable,
+                    sets_resizable: Native,
+                    sets_decorated: Native,
+                    hides: Native,
+                },
+                Row {
+                    flags: "Z",
+                    maximizes: Unavailable,
+                    enters_fullscreen: Unavailable,
+                    sets_resizable: Native,
+                    sets_decorated: Native,
+                    hides: Native,
+                },
                 // Made fixed-size only from normal mode.
-                ("ZR", [Native, Native, Unavailable, Native, Native]),
-                ("MR", [Native, Native, Unavailable, Native, Native]),
-                ("M", [Unavailable, Unavailable, Unavailable, Native, Native]),
+                Row {
+                    flags: "ZR",
+                    maximizes: Native,
+                    enters_fullscreen: Native,
+                    sets_resizable: Unavailable,
+                    sets_decorated: Native,
+                    hides: Native,
+                },
+                Row {
+                    flags: "MR",
+                    maximizes: Native,
+                    enters_fullscreen: Native,
+                    sets_resizable: Unavailable,
+                    sets_decorated: Native,
+                    hides: Native,
+                },
+                Row {
+                    flags: "M",
+                    maximizes: Unavailable,
+                    enters_fullscreen: Unavailable,
+                    sets_resizable: Unavailable,
+                    sets_decorated: Native,
+                    hides: Native,
+                },
                 // Not restyled, nor ordered out, while full screen.
-                (
-                    "FR",
-                    [Native, Native, Unavailable, Unavailable, Unavailable],
-                ),
+                Row {
+                    flags: "FR",
+                    maximizes: Native,
+                    enters_fullscreen: Native,
+                    sets_resizable: Unavailable,
+                    sets_decorated: Unavailable,
+                    hides: Unavailable,
+                },
             ];
-            for (letters, expected) in rows {
-                let honoured = capabilities_of(flags(letters), every);
-                assert_eq!(
-                    [
-                        honoured.maximizes,
-                        honoured.enters_fullscreen,
-                        honoured.sets_resizable,
-                        honoured.sets_decorated,
-                        honoured.hides,
-                    ],
-                    expected,
-                    "flags {letters:?}"
-                );
+            for expected in rows {
+                let honoured = capabilities_of(flags(expected.flags), every);
+                let actual = Row {
+                    flags: expected.flags,
+                    maximizes: honoured.maximizes,
+                    enters_fullscreen: honoured.enters_fullscreen,
+                    sets_resizable: honoured.sets_resizable,
+                    sets_decorated: honoured.sets_decorated,
+                    hides: honoured.hides,
+                };
+                assert_eq!(actual, expected);
             }
         }
     }
