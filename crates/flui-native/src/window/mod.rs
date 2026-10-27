@@ -17,6 +17,8 @@ pub(crate) mod config;
 pub(crate) mod installation;
 pub(crate) mod state;
 
+#[cfg(any(target_os = "android", test))]
+pub(crate) mod activity_capabilities;
 #[cfg(target_os = "android")]
 pub(crate) mod android;
 #[cfg(any(target_os = "macos", target_os = "ios", test))]

@@ -1172,7 +1172,10 @@ impl PlatformWindow for WebWindow {
         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
     }
 
-    /// A page hands the system no input region.
+    /// The input regions keep the system's edge gestures out of a region
+    /// (`InputRegionKind::SystemGestureExclusion`); a page cannot keep the
+    /// browser's or the system's edge swipes out of part of its canvas. CSS
+    /// `pointer-events` decides which element takes input, which is not that.
     fn set_input_regions(
         &self,
         _regions: &[flui_platform::input_regions::InputRegion],

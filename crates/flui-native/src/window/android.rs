@@ -20,7 +20,7 @@ use flui_foundation::geometry::{EdgeInsets, Size};
 use flui_platform::input_regions::{InputRegion, InputRegionKind};
 use flui_platform::{
     AdmittedCommand, ApplyError, FrameRateHint, Unsupported, UnsupportedReason, WindowAppearance,
-    WindowCapabilities, WindowCommand, WindowGeometry, WindowMaterial, WindowOptions, WindowState,
+    WindowCapabilities, WindowGeometry, WindowOptions, WindowState,
 };
 use parking_lot::Mutex;
 
@@ -30,6 +30,7 @@ use crate::owner::android::java_view::{ActivityDragSource, JavaView};
 use crate::owner::android::{
     ActivityFlags, ActivityPreferences, ActivityRef, ActivityWindow, ActivityWindowId, AndroidLoop,
 };
+use crate::window::activity_capabilities::{activity_capabilities, pointer_icon_absence};
 
 use crate::text::WindowTextInput;
 use crate::{
@@ -468,23 +469,9 @@ fn sample_state(
         hovered: kept.hovered,
         // An Activity has no activation apart from its window's focus.
         active: focused,
-        capabilities: activity_capabilities(displays),
+        capabilities: activity_capabilities(displays.window_facts()),
     }
     .onto(state)
-}
-
-/// What an Activity's window honours: no command, as the system owns the
-/// surface and the Activity's lifetime, and a refresh-rate request where the
-/// system takes one. Android 12 blurs what is behind a window
-/// (`Window.setBackgroundBlurRadius`), which this host does not drive yet: the
-/// material is `NotYetOnThisHost`, not missing from the platform.
-fn activity_capabilities(displays: &dyn crate::owner::android::HostDisplays) -> WindowCapabilities {
-    let mut capabilities = WindowCapabilities::NONE.unavailable(
-        &WindowCommand::SetMaterial(WindowMaterial::Opaque),
-        &UnsupportedReason::NotYetOnThisHost,
-    );
-    capabilities.frame_rate_hint = displays.frame_rate_hint();
-    capabilities
 }
 
 /// Running while the Activity is resumed, independent of focus and of the
@@ -613,7 +600,7 @@ impl host::Window<AndroidLoop> for AndroidWindow {
     }
 
     fn capabilities(owner: &AndroidLoop, _: &WindowPositions<ActivityRef>) -> WindowCapabilities {
-        activity_capabilities(owner.displays.as_ref())
+        activity_capabilities(owner.displays.window_facts())
     }
 
     fn frame_inset(_: &AndroidLoop, _: &WindowPositions<ActivityRef>, _: f64) -> Size<f64> {
@@ -716,10 +703,9 @@ impl PlatformWindow for AndroidWindow {
         self.current_state()
     }
 
-    /// Android shows a pointer icon for a mouse or stylus (`PointerIcon`,
-    /// `View.setPointerIcon`), which this host does not set yet.
+    /// Not set: the reason [`pointer_icon_absence`] gives at this API level.
     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
-        Err(Unsupported::new(UnsupportedReason::NotYetOnThisHost).into())
+        Err(Unsupported::from(pointer_icon_absence(self.api)).into())
     }
 
     fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {

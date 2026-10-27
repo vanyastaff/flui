@@ -213,6 +213,10 @@ pub(crate) trait HostDisplays: Send + Sync {
     /// the version the platform runs on, or no preference.
     fn request_frame_rate(&self, link: &CADisplayLink, screen: &UIScreen, hint: FrameRateHint);
 
+    /// Why a window does not set the pointer's shape on this device and
+    /// version (`window::apple::capabilities::pointer_absence`).
+    fn pointer_absence(&self) -> flui_platform::CapabilityAbsence;
+
     /// Mark the screens stale and wake the owner behind `signal` on screen and
     /// scene notifications, until the watch is dropped.
     fn observe(self: Arc<Self>, signal: &Arc<OwnerSignal>) -> Watch;

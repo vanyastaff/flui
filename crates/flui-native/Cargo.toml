@@ -384,6 +384,8 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
     "UIWindow",
     "UIPasteboard",
     "UIColor",
+    # `UIUserInterfaceIdiom`: whether the device shows a pointer.
+    "UIDevice",
     # The feedback generators, the window's haptic actuator (ADR-0210).
     "UIFeedbackGenerator",
     "UIImpactFeedbackGenerator",

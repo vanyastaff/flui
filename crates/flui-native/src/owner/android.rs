@@ -214,6 +214,11 @@ mod hooks {
         /// API 30).
         fn frame_rate_hint(&self) -> flui_platform::Availability;
 
+        /// What the system said at the last sample that the Activity window's
+        /// capabilities rest on: the API level, the refresh-rate request and
+        /// whether the device blurs behind windows now.
+        fn window_facts(&self) -> crate::window::activity_capabilities::ActivityFacts;
+
         /// Watch the refresh rate where the system reports it, on the thread
         /// whose looper runs the app, until the watch is dropped on that
         /// thread.

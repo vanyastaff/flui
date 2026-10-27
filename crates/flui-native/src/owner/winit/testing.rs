@@ -488,6 +488,11 @@ impl HostDisplays for NoDisplays {
     fn is_wayland(&self) -> bool {
         false
     }
+
+    #[cfg(target_os = "macos")]
+    fn frame_rate_absence(&self) -> flui_platform::CapabilityAbsence {
+        flui_platform::CapabilityAbsence::NotYetOnThisHost
+    }
 }
 
 /// A subscriber of the system's broadcasts that answers none of them.

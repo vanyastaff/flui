@@ -774,30 +774,30 @@ impl PlatformWindow for WinitWindow {
         Ok(())
     }
 
-    /// winit takes no refresh-rate request.
+    /// winit takes no refresh-rate request. Neither do Wayland, X11 nor Win32
+    /// windows; AppKit does from macOS 14 (`NSView.displayLink`), so there the
+    /// reason is the platform's answer for this macOS.
     fn set_frame_rate_hint(
         &self,
         _hint: flui_platform::FrameRateHint,
     ) -> Result<(), flui_platform::Unsupported> {
-        Err(flui_platform::Unsupported::new(
-            flui_platform::UnsupportedReason::NotOnThisPlatform,
-        ))
+        #[cfg(target_os = "macos")]
+        let absence = self.displays.frame_rate_absence();
+        #[cfg(not(target_os = "macos"))]
+        let absence = flui_platform::CapabilityAbsence::NotOnThisPlatform;
+        Err(absence.into())
     }
 
-    /// winit hands the system no input region. On Linux the window system
-    /// takes one (`wl_surface.set_input_region`, the X Shape extension's input
-    /// shape), which this host does not send yet; elsewhere winit runs, the
-    /// window system has none.
+    /// The input regions are the system's edge gestures a region keeps out
+    /// (`InputRegionKind::SystemGestureExclusion`), and no desktop window
+    /// system winit runs on lets a window exclude them.
     fn set_input_regions(
         &self,
         _regions: &[flui_platform::input_regions::InputRegion],
     ) -> Result<(), flui_platform::Unsupported> {
-        let reason = if cfg!(target_os = "linux") {
-            flui_platform::UnsupportedReason::NotYetOnThisHost
-        } else {
-            flui_platform::UnsupportedReason::NotOnThisPlatform
-        };
-        Err(flui_platform::Unsupported::new(reason))
+        Err(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::NotOnThisPlatform,
+        ))
     }
 
     // GPU integration: `winit::window::Window` implements `HasWindowHandle`/
