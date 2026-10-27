@@ -229,10 +229,7 @@ mod host_events {
     }
 
     impl HostEvents {
-        pub(crate) fn new(
-            app: Arc<AppDelivery>,
-            notices: Arc<dyn NoticeChannel>,
-        ) -> Self {
+        pub(crate) fn new(app: Arc<AppDelivery>, notices: Arc<dyn NoticeChannel>) -> Self {
             Self {
                 app,
                 notices,

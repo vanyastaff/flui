@@ -16,8 +16,8 @@ use super::broadcast::Subscriber;
 use super::control::{OwnerControl, OwnerMessages, OwnerPost, OwnerWindow};
 use super::testing::{ClassHooks, NoDisplays, NoPreferences, NoWindows, QuietHost};
 use super::{
-    CreatedWindow, WindowGone, WindowHooks, WindowIdentity, WindowMessages,
-    WindowsLoop, dispatch_window_message, window_created,
+    CreatedWindow, WindowGone, WindowHooks, WindowIdentity, WindowMessages, WindowsLoop,
+    dispatch_window_message, window_created,
 };
 use crate::error::PlatformError;
 

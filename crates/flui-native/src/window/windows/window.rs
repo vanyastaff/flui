@@ -58,8 +58,7 @@ use crate::text::WindowTextInput;
 use crate::version::gate::Since;
 use crate::window::state::WindowStateCell;
 use crate::{
-    owner::OpenWindowError, owner::windows::AppHooks,
-    owner::window_delivery::WindowDelivery,
+    owner::OpenWindowError, owner::window_delivery::WindowDelivery, owner::windows::AppHooks,
 };
 
 /// Windows window wrapper

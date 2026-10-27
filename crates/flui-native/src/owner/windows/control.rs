@@ -23,7 +23,6 @@ use crate::{
     owner::WindowOpen,
     owner::app_delivery::AppDelivery,
     owner::call_point::Called,
-
     owner::hwnd_affinity::UserDataRefusal,
     owner::hwnd_affinity::UserDataVerdict,
     owner::hwnd_affinity::classify_user_data_access,

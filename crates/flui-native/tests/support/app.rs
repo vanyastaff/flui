@@ -145,7 +145,11 @@ impl AppLog {
 
     /// How many times it heard `call`.
     pub fn count(&self, call: AppCall) -> usize {
-        self.calls.borrow().iter().filter(|heard| **heard == call).count()
+        self.calls
+            .borrow()
+            .iter()
+            .filter(|heard| **heard == call)
+            .count()
     }
 
     fn heard(&self, call: AppCall, owner: &OwnerPlatform) {

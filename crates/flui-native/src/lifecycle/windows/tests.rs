@@ -51,7 +51,7 @@ fn low_memory_is_reported_once_per_hold() {
 fn a_wake_that_could_not_be_posted_is_delivered_with_the_next_message() {
     let (receiver, host, heard, _run) = hosted_receiver();
     host.fail_low_memory_post_for_test();
-    assert!(heard.notices().is_empty());
+    assert_eq!(heard.notices(), []);
     receiver.send_with_for_test(windows::Win32::UI::WindowsAndMessaging::WM_NULL, 0, 0);
     assert_eq!(
         heard.notices(),

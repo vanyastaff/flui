@@ -115,17 +115,15 @@ use crate::{
     owner::DirectOwnerHooks,
     owner::OwnerHooks,
     owner::OwnerPlatform,
-    owner::apple::NativeOwner,
-
-
     owner::app_delivery::AppDelivery,
+    owner::apple::NativeOwner,
     owner::notices::{LifecycleHooks, NoticeChannel, StaleOnWake},
     owner::signal::OwnerSignal,
     owner::sources::SystemPreferenceSource,
     owner::watch::Watch,
+    platform::AppHandler,
     platform::Platform,
     platform::PlatformExecutor,
-    platform::AppHandler,
 };
 use flui_platform::{DisplayId, DisplaySnapshot, PlatformWindow, SystemPreferences};
 
@@ -384,7 +382,10 @@ impl host::Loop for MacOSLoop {
         self.app_delivery
             .resume_through_signal(&self.loop_control.owner_signal);
         self.app_delivery
-            .ready(OwnerPlatform::new(Arc::clone(&platform), Arc::clone(&hooks)))
+            .ready(OwnerPlatform::new(
+                Arc::clone(&platform),
+                Arc::clone(&hooks),
+            ))
             .map_err(PlatformError::bootstrap)?;
         // The handler is bound: the pump may ask it for its deadline.
         self.wake_pump.arm();

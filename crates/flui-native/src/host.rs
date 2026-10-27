@@ -43,9 +43,8 @@ use flui_platform::data_transfer::{DataTransferSource, NullDataTransferSource};
 use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
 use flui_platform::{
     ClipboardItem, DeviceId, DisplaySnapshot, HapticFeedback, PlatformHaptics,
-    PlatformSystemChrome, StorageName,
-    SystemPreferences, SystemUiOverlayStyle, Unsupported, UnsupportedReason, WindowCapabilities,
-    WindowHandler, WindowId, WindowOptions,
+    PlatformSystemChrome, StorageName, SystemPreferences, SystemUiOverlayStyle, Unsupported,
+    UnsupportedReason, WindowCapabilities, WindowHandler, WindowId, WindowOptions,
 };
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,

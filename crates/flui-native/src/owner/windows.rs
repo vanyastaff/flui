@@ -67,22 +67,15 @@ use windows::{
     core::{PCWSTR, w},
 };
 
-use crate::owner::call_point::{Field, install};
 use crate::owner::app_delivery::AppDelivery;
+use crate::owner::call_point::{Field, install};
 use crate::owner::notices::{NoticeChannel, StaleOnWake};
 use crate::owner::panic_boundary::{self, AfterPanic};
 use crate::{
-    error::PlatformError,
-    executor::BackgroundExecutor,
-    host,
-    owner::OwnerHooks,
-    owner::OwnerPlatform,
-    owner::handlers::OpenWindows,
-    owner::hwnd_affinity::UserDataRefusal,
-    owner::window_delivery::WindowDelivery,
-    platform::Platform,
+    error::PlatformError, executor::BackgroundExecutor, host, owner::OwnerHooks,
+    owner::OwnerPlatform, owner::handlers::OpenWindows, owner::hwnd_affinity::UserDataRefusal,
+    owner::window_delivery::WindowDelivery, platform::AppHandler, platform::Platform,
     platform::PlatformExecutor,
-    platform::AppHandler,
 };
 use broadcast::Subscriber;
 use com_apartment::ComApartment;
@@ -1370,7 +1363,10 @@ impl host::Loop for WindowsLoop {
         self.app.bind(handler, &platform, &hooks);
         self.app.resume_through_signal(&self.owner_control.signal);
         self.app
-            .ready(OwnerPlatform::new(Arc::clone(&platform), Arc::clone(&hooks)))
+            .ready(OwnerPlatform::new(
+                Arc::clone(&platform),
+                Arc::clone(&hooks),
+            ))
             .map_err(PlatformError::bootstrap)?;
         self.owner_control
             .signal

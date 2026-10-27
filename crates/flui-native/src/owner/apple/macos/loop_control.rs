@@ -21,11 +21,11 @@ use super::owner_lane::{
 };
 use crate::{
     error::PlatformError,
+    owner::app_delivery::AppDelivery,
     owner::apple::terminate_gate::ANNOUNCEMENT_LIFETIME,
     owner::apple::terminate_gate::DEFERRAL_LIMIT,
     owner::apple::terminate_gate::TerminateGate,
     owner::apple::terminate_gate::Termination,
-    owner::app_delivery::AppDelivery,
     owner::call_point::Called,
     owner::panic_boundary::{AfterPanic, contain_os_entry, os_entry},
 };
@@ -71,10 +71,7 @@ pub(crate) struct LoopControl {
 }
 
 impl LoopControl {
-    pub(super) fn new(
-        windows: super::WindowRegistry,
-        app: Arc<AppDelivery>,
-    ) -> Arc<Self> {
+    pub(super) fn new(windows: super::WindowRegistry, app: Arc<AppDelivery>) -> Arc<Self> {
         Arc::new_cyclic(|weak: &Weak<Self>| {
             let weak = weak.clone();
             let owner_signal = crate::owner::signal::OwnerSignal::new(Arc::new(move || {

@@ -48,9 +48,9 @@ pub use scene::{IOSSceneAttachmentId, IOSSceneSessionId};
 pub(crate) use scene::{SceneConsumer, SceneInstallation};
 
 use std::cell::RefCell;
-use std::rc::Rc;
 use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -71,14 +71,14 @@ use parking_lot::Mutex;
 
 use crate::error::PlatformError;
 use crate::host;
-use crate::owner::call_point::{Called, Field, call, install, retire};
 use crate::owner::app_delivery::AppDelivery;
+use crate::owner::call_point::{Called, Field, call, install, retire};
 use crate::owner::notices::{LifecycleHooks, NoticeChannel};
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::owner::sources::SystemPreferenceSource;
 use crate::{
-    owner::DirectOwnerHooks, owner::OwnerHooks, owner::OwnerPlatform, platform::Platform,
-    platform::AppHandler, platform::PlatformExecutor,
+    owner::DirectOwnerHooks, owner::OwnerHooks, owner::OwnerPlatform, platform::AppHandler,
+    platform::Platform, platform::PlatformExecutor,
 };
 use flui_platform::{SessionEndAnswer, SessionEndPhase, SystemPreferences, WindowId};
 
@@ -832,8 +832,7 @@ fn run_pending_bootstrap() -> bool {
             state.handler.take(),
         )
     });
-    let (Some(platform), Some(owner_platform), Some(handler)) =
-        (platform, owner_platform, handler)
+    let (Some(platform), Some(owner_platform), Some(handler)) = (platform, owner_platform, handler)
     else {
         return false;
     };

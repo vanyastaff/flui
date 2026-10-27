@@ -12,10 +12,10 @@
 #[path = "support/app.rs"]
 mod app;
 
-use flui_testing::window_commands::AdmitAndApply as _;
 use app::{AppCall, AppLog, run_keeping_owner};
 use flui_native::{HeadlessPlatform, current_platform};
 use flui_platform::WindowOptions;
+use flui_testing::window_commands::AdmitAndApply as _;
 
 fn flui_headless_env_var_selects_the_headless_platform() {
     // Set environment variable

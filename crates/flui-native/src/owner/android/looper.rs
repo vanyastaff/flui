@@ -83,14 +83,13 @@ use crate::{
     owner::android::ndk::SymbolSource,
     owner::android::poll::LoopTurn,
     owner::android::poll::poll_timeout,
-
     owner::app_delivery::AppDelivery,
     owner::notices::{LifecycleHooks, NoticeChannel},
     owner::redraw_poll::RedrawPoll,
     owner::signal::OwnerSignal,
+    platform::AppHandler,
     platform::Platform,
     platform::PlatformExecutor,
-    platform::AppHandler,
     version::gate::android::AndroidApi,
     version::gate::android::StylusHandwriting,
 };
@@ -922,9 +921,10 @@ impl host::Loop for AndroidLoop {
                 // live in this frame until the loop ends.
                 self.app_delivery.bind(handler, &platform, &hooks);
                 self.app_delivery.resume_through_signal(&self.owner_signal);
-                let ready = self
-                    .app_delivery
-                    .ready(OwnerPlatform::new(Arc::clone(&platform), Arc::clone(&hooks)));
+                let ready = self.app_delivery.ready(OwnerPlatform::new(
+                    Arc::clone(&platform),
+                    Arc::clone(&hooks),
+                ));
                 if let Err(error) = ready {
                     tracing::error!(%error, "on_ready bootstrap failed; stopping the event loop");
                     bootstrap_error = Some(error);

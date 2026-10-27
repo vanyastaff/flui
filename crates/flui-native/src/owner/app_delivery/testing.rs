@@ -89,7 +89,10 @@ impl RecordingApp {
     }
 
     /// Answer the wake deadline with what `answer` says when asked.
-    pub(crate) fn answer_deadline_with(&self, answer: impl Fn() -> Option<web_time::Instant> + 'static) {
+    pub(crate) fn answer_deadline_with(
+        &self,
+        answer: impl Fn() -> Option<web_time::Instant> + 'static,
+    ) {
         self.deadline.replace(Rc::new(answer));
     }
 

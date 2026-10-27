@@ -46,6 +46,32 @@ fn a_report_raised_inside_a_method_is_heard_after_it() {
     );
 }
 
+/// A report raised while the handler answers a question waits for the
+/// answer, as one raised inside any method does.
+fn a_report_raised_inside_a_question_is_heard_after_the_answer() {
+    let app = RecordingApp::new();
+    let run = bound(app.clone());
+    let delivery = Arc::clone(&run.delivery);
+    let log = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = Rc::clone(&log);
+    app.react(move |call, _| {
+        seen.borrow_mut().push(("start", call));
+        if call == AppCall::ExitPolicy {
+            let _ = delivery.host_notice(SystemNotice::Sleep);
+            seen.borrow_mut().push(("end", call));
+        }
+    });
+    assert!(matches!(run.delivery.exit_policy(), Called::Returned(true)));
+    assert_eq!(
+        *log.borrow(),
+        [
+            ("start", AppCall::ExitPolicy),
+            ("end", AppCall::ExitPolicy),
+            ("start", SLEEP),
+        ]
+    );
+}
+
 /// What the platform reports before the run binds its handler, and while
 /// `ready` runs, waits for `ready` and is heard once it returns.
 fn a_report_before_ready_waits_for_it() {
@@ -131,10 +157,7 @@ fn a_panicking_method_loses_no_report_and_keeps_the_first_panic() {
     assert_eq!(payload.downcast_ref::<&str>(), Some(&"first"));
     assert_eq!(app.calls(), [AppCall::Ready, SLEEP, WAKE, AppCall::Quit]);
     // The delivery carries on.
-    assert!(matches!(
-        run.delivery.reopen(),
-        Called::Returned(())
-    ));
+    assert!(matches!(run.delivery.reopen(), Called::Returned(())));
 }
 
 /// A report from another thread is queued for the owner and asks for an
@@ -157,7 +180,11 @@ fn a_report_from_another_thread_waits_for_an_owner_turn() {
     })
     .join()
     .expect("the other thread reports");
-    assert_eq!(turns.load(Ordering::SeqCst), 1, "it asked for an owner turn");
+    assert_eq!(
+        turns.load(Ordering::SeqCst),
+        1,
+        "it asked for an owner turn"
+    );
     assert_eq!(app.calls(), [AppCall::Ready]);
     assert!(matches!(
         run.delivery.deliver_queued(),
@@ -283,6 +310,10 @@ fn app_delivery_contracts() {
             (
                 "a report raised inside a method is heard after it",
                 a_report_raised_inside_a_method_is_heard_after_it,
+            ),
+            (
+                "a report raised inside a question is heard after the answer",
+                a_report_raised_inside_a_question_is_heard_after_the_answer,
             ),
             (
                 "a report before ready waits for it",

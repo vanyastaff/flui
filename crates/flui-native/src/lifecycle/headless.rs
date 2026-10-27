@@ -121,4 +121,3 @@ impl HeadlessHostEvents {
             .map_or(0, |state| state.lock().session_end_releases)
     }
 }
-

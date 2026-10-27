@@ -26,20 +26,10 @@ use crate::owner::app_delivery::AppDelivery;
 use crate::owner::slot::OwnerSlot;
 use crate::platform::HostPlatform;
 use crate::{
-    error::PlatformError,
-    host_window::HostWindow,
-    owner::DirectOwnerHooks,
-    owner::OpenWindowError,
-    owner::OwnerHooks,
-    owner::OwnerPlatform,
-    owner::PendingWindow,
-    owner::ProxyTransport,
-    owner::WindowOpen,
-    owner::handlers::OpenWindows,
-    owner::window_delivery::WindowDelivery,
-    platform::AppHandler,
-    platform::Platform,
-    platform::PlatformExecutor,
+    error::PlatformError, host_window::HostWindow, owner::DirectOwnerHooks, owner::OpenWindowError,
+    owner::OwnerHooks, owner::OwnerPlatform, owner::PendingWindow, owner::ProxyTransport,
+    owner::WindowOpen, owner::handlers::OpenWindows, owner::window_delivery::WindowDelivery,
+    platform::AppHandler, platform::Platform, platform::PlatformExecutor,
 };
 use flui_platform::{DisplayId, DisplaySnapshot, WindowHandler, WindowId, WindowOptions};
 

@@ -208,7 +208,9 @@ impl AppDelivery {
             Called::Returned(result) => result?,
             Called::Panicked(failure) => failure.resume(),
             Called::Vacant => {
-                return Err("the run has no application handler on this thread to bootstrap".into());
+                return Err(
+                    "the run has no application handler on this thread to bootstrap".into(),
+                );
             }
         }
         walk.disarm();
@@ -385,10 +387,7 @@ impl AppDelivery {
     /// delivered right after it. When the answer came but a report delivered
     /// after it panicked, that panic is the question's failure: the host
     /// falls back as it does for a handler that panicked.
-    fn question<R>(
-        &self,
-        body: impl FnOnce(&dyn AppHandler, &OwnerPlatform) -> R,
-    ) -> Called<R> {
+    fn question<R>(&self, body: impl FnOnce(&dyn AppHandler, &OwnerPlatform) -> R) -> Called<R> {
         let begun = {
             let mut state = self.state.lock();
             let begun = state.on_owner() && !state.delivering;

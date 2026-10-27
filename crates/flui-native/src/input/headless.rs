@@ -57,9 +57,7 @@ impl host::Input<HeadlessLoop> for HeadlessInputDevices {
 
     fn on_keyboard_layout_change(owner: &HeadlessLoop, callback: Box<dyn FnMut() + Send>) {
         install(
-            &Field::new(&*owner.state, |state| {
-                &mut state.keyboard_layout_changed
-            }),
+            &Field::new(&*owner.state, |state| &mut state.keyboard_layout_changed),
             callback,
         );
     }

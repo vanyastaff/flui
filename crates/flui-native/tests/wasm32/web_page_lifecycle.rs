@@ -10,9 +10,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use flui_native::{HostWindow, WindowOpen};
-use flui_platform::{
-    SessionEndPhase, WindowCapabilities, WindowExecutionState, WindowMode,
-};
+use flui_platform::{SessionEndPhase, WindowCapabilities, WindowExecutionState, WindowMode};
 use flui_platform::{SurfaceChange, WindowOptions};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::wasm_bindgen_test;

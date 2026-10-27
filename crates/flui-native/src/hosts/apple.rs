@@ -26,6 +26,7 @@ use crate::input::apple::macos::ViewInputs;
 #[cfg(target_os = "macos")]
 use crate::lifecycle::apple::macos::SystemNoticeSources;
 use crate::lifecycle::notice::SystemNotices;
+use crate::owner::app_delivery::AppDelivery;
 #[cfg(target_os = "ios")]
 use crate::owner::apple::IOSLoop;
 #[cfg(target_os = "macos")]
@@ -36,7 +37,6 @@ use crate::owner::apple::ios::{IosHost, UIKitPreferences, ViewTouches};
 use crate::owner::apple::macos::content_view::ViewHooks;
 #[cfg(target_os = "macos")]
 use crate::owner::apple::macos::{LoopControl, MacosHost, NoticeSources};
-use crate::owner::app_delivery::AppDelivery;
 use crate::owner::notices::NoticeChannel;
 use crate::owner::signal::OwnerSignal;
 #[cfg(target_os = "macos")]

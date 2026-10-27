@@ -159,18 +159,20 @@ mod tests {
         let offered = Rc::new(Cell::new(None));
         let observed = Rc::clone(&offered);
         Box::new(platform)
-            .run(crate::owner::app_delivery::testing::on_ready(move |owner| {
-                let window = owner
-                    .open_window(
-                        WindowOptions::default(),
-                        flui_testing::window_handler::RecordingWindowHandler::new(),
-                    )
-                    .expect("headless window")
-                    .try_ready()
-                    .expect("ready inside on_ready");
-                observed.set(Some(owner.text_store_host(&window).is_some()));
-                Ok(())
-            }))
+            .run(crate::owner::app_delivery::testing::on_ready(
+                move |owner| {
+                    let window = owner
+                        .open_window(
+                            WindowOptions::default(),
+                            flui_testing::window_handler::RecordingWindowHandler::new(),
+                        )
+                        .expect("headless window")
+                        .try_ready()
+                        .expect("ready inside on_ready");
+                    observed.set(Some(owner.text_store_host(&window).is_some()));
+                    Ok(())
+                },
+            ))
             .expect("headless run");
         offered.get().expect("on_ready ran")
     }

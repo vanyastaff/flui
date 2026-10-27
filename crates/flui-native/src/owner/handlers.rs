@@ -1,4 +1,3 @@
-
 //! What a loop asks of the windows it holds, and the frame requests a host
 //! stamps on the event clock. The application's handler is reached through
 //! the loop's [`AppDelivery`](super::app_delivery::AppDelivery), a window's
@@ -117,11 +116,26 @@ mod tests {
             }
         }
         // A teardown that runs a one-shot callback from a destructor, as the
-        // Win32 run guard runs the quit callback.
+        // Win32 run guard tells the application it quits: the callback is
+        // taken for good, so a failed call retains it rather than putting it
+        // back for the guard's own drop.
+        struct OneShot<'a>(&'a Mutex<Option<Box<dyn FnMut() + Send>>>);
+        impl crate::owner::call_point::HandlerSlot for OneShot<'_> {
+            type Handler = Box<dyn FnMut() + Send>;
+            fn take(&self) -> Option<Self::Handler> {
+                self.0.lock().take()
+            }
+            fn restore(&self, handler: Self::Handler) -> Option<Self::Handler> {
+                Some(handler)
+            }
+            fn replace(&self, handler: Self::Handler) -> Option<Self::Handler> {
+                self.0.lock().replace(handler)
+            }
+        }
         struct Guard(Mutex<Option<Box<dyn FnMut() + Send>>>);
         impl Drop for Guard {
             fn drop(&mut self) {
-                call(&self.0, |callback| {
+                call(&OneShot(&self.0), |callback| {
                     callback();
                 })
                 .or_contain((), "the guarded callback");

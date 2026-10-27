@@ -40,7 +40,6 @@ use std::{
     time::Duration,
 };
 
-
 use super::owner_lane::owner_queue;
 
 use crate::owner::app_delivery::AppDelivery;
@@ -116,10 +115,7 @@ impl WakePump {
     /// Build the pump. `wake` is invoked on the owner thread when a deadline
     /// has come due; it must be safe to call from there (see
     /// [`super::MacOSLoop`]'s construction site).
-    pub(crate) fn new(
-        app: Arc<AppDelivery>,
-        wake: Box<dyn Fn() + Send + Sync>,
-    ) -> Arc<Self> {
+    pub(crate) fn new(app: Arc<AppDelivery>, wake: Box<dyn Fn() + Send + Sync>) -> Arc<Self> {
         Arc::new(Self {
             app,
             wake,
@@ -393,11 +389,10 @@ mod tests {
         let (pump, app, _run) = silent_pump();
         let consults = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&consults);
-        app.answer_deadline_with(
-            move || -> Option<web_time::Instant> {
-                counted.fetch_add(1, Ordering::AcqRel);
-                None
-            });
+        app.answer_deadline_with(move || -> Option<web_time::Instant> {
+            counted.fetch_add(1, Ordering::AcqRel);
+            None
+        });
         let before = pump.generation.load(Ordering::Acquire);
 
         pump.arm();
@@ -425,8 +420,7 @@ mod tests {
     #[test]
     fn an_empty_first_look_looks_again() {
         let (pump, app, _run) = silent_pump();
-        app.answer_deadline_with(
-            || -> Option<web_time::Instant> { None });
+        app.answer_deadline_with(|| -> Option<web_time::Instant> { None });
         let generation = pump.generation.load(Ordering::Acquire);
 
         pump.fire(generation, Look::First);
@@ -451,9 +445,7 @@ mod tests {
     #[test]
     fn a_tick_whose_hook_panics_leaves_no_tick_queued() {
         let (pump, app, _run) = silent_pump();
-        app.answer_deadline_with(|| -> Option<web_time::Instant> {
-            panic!("a failing wake hook")
-        });
+        app.answer_deadline_with(|| -> Option<web_time::Instant> { panic!("a failing wake hook") });
         // The tick being fired: a nonzero instant, whatever the base.
         pump.pending_at.store(
             micros_since_base(web_time::Instant::now() + Duration::from_millis(5)),
@@ -486,18 +478,17 @@ mod tests {
         let (pump, app, _run) = silent_pump();
         let weak = Arc::downgrade(&pump);
         let rearmed = AtomicBool::new(false);
-        app.answer_deadline_with(
-            move || -> Option<web_time::Instant> {
-                if !rearmed.swap(true, Ordering::AcqRel)
-                    && let Some(pump) = weak.upgrade()
-                {
-                    pump.schedule(
-                        web_time::Instant::now() + Duration::from_millis(50),
-                        Look::Again,
-                    );
-                }
-                panic!("a wake hook that re-armed, then failed")
-            });
+        app.answer_deadline_with(move || -> Option<web_time::Instant> {
+            if !rearmed.swap(true, Ordering::AcqRel)
+                && let Some(pump) = weak.upgrade()
+            {
+                pump.schedule(
+                    web_time::Instant::now() + Duration::from_millis(50),
+                    Look::Again,
+                );
+            }
+            panic!("a wake hook that re-armed, then failed")
+        });
         pump.pending_at.store(
             micros_since_base(web_time::Instant::now() + Duration::from_millis(5)),
             Ordering::Release,

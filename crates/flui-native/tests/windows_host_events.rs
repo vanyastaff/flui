@@ -128,42 +128,51 @@ const FALSE: isize = 0;
 const TRUE: isize = 1;
 
 fn a_blocked_query_refuses_and_gives_the_system_a_reason() {
-    hosted(|_| SessionEndAnswer::Block, |host| {
-    assert_eq!(
-        host.send(WM_QUERYENDSESSION, 0, ENDSESSION_LOGOFF as isize),
-        FALSE
-    );
-    assert_eq!(host.phases(), [SessionEndPhase::Query]);
-    let reason = host.block_reason().expect("the system holds a reason");
-    assert!(!reason.is_empty(), "a blank reason shows the user nothing");
+    hosted(
+        |_| SessionEndAnswer::Block,
+        |host| {
+            assert_eq!(
+                host.send(WM_QUERYENDSESSION, 0, ENDSESSION_LOGOFF as isize),
+                FALSE
+            );
+            assert_eq!(host.phases(), [SessionEndPhase::Query]);
+            let reason = host.block_reason().expect("the system holds a reason");
+            assert!(!reason.is_empty(), "a blank reason shows the user nothing");
 
-    // The end was cancelled (the system sends this after a refusal too): the
-    // reason stays until the host lets go, because its work is not done.
-    host.send(WM_ENDSESSION, 0, 0);
-    assert_eq!(
-        host.phases(),
-        [SessionEndPhase::Query, SessionEndPhase::Cancelled]
+            // The end was cancelled (the system sends this after a refusal too): the
+            // reason stays until the host lets go, because its work is not done.
+            host.send(WM_ENDSESSION, 0, 0);
+            assert_eq!(
+                host.phases(),
+                [SessionEndPhase::Query, SessionEndPhase::Cancelled]
+            );
+            assert!(host.block_reason().is_some());
+            host.owner.release_session_end();
+            assert_eq!(host.block_reason(), None);
+        },
     );
-    assert!(host.block_reason().is_some());
-    host.owner.release_session_end();
-    assert_eq!(host.block_reason(), None);
-    });
 }
 
 fn releasing_the_block_withdraws_the_reason() {
-    hosted(|_| SessionEndAnswer::Block, |host| {
-    assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), FALSE);
-    assert!(host.block_reason().is_some());
-    host.owner.release_session_end();
-    assert_eq!(host.block_reason(), None, "the session may go on");
-    });
+    hosted(
+        |_| SessionEndAnswer::Block,
+        |host| {
+            assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), FALSE);
+            assert!(host.block_reason().is_some());
+            host.owner.release_session_end();
+            assert_eq!(host.block_reason(), None, "the session may go on");
+        },
+    );
 }
 
 fn a_query_the_host_lets_through_is_allowed() {
-    hosted(|_| SessionEndAnswer::Proceed, |host| {
-    assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), TRUE);
-    assert_eq!(host.block_reason(), None);
-    });
+    hosted(
+        |_| SessionEndAnswer::Proceed,
+        |host| {
+            assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), TRUE);
+            assert_eq!(host.block_reason(), None);
+        },
+    );
 }
 
 fn without_a_hook_a_query_is_allowed() {
@@ -176,68 +185,83 @@ fn without_a_hook_a_query_is_allowed() {
 }
 
 fn a_critical_session_end_cannot_be_blocked() {
-    hosted(|_| SessionEndAnswer::Block, |host| {
-    assert_eq!(
-        host.send(
-            WM_QUERYENDSESSION,
-            0,
-            (ENDSESSION_CRITICAL | ENDSESSION_LOGOFF) as isize
-        ),
-        TRUE
+    hosted(
+        |_| SessionEndAnswer::Block,
+        |host| {
+            assert_eq!(
+                host.send(
+                    WM_QUERYENDSESSION,
+                    0,
+                    (ENDSESSION_CRITICAL | ENDSESSION_LOGOFF) as isize
+                ),
+                TRUE
+            );
+            assert_eq!(host.block_reason(), None);
+            assert_eq!(host.phases(), [SessionEndPhase::Query], "it is still asked");
+        },
     );
-    assert_eq!(host.block_reason(), None);
-    assert_eq!(host.phases(), [SessionEndPhase::Query], "it is still asked");
-    });
 }
 
 fn a_session_that_ends_reaches_the_hook() {
-    hosted(|_| SessionEndAnswer::Proceed, |host| {
-    host.send(WM_QUERYENDSESSION, 0, 0);
-    host.send(WM_ENDSESSION, 1, ENDSESSION_LOGOFF as isize);
-    assert_eq!(
-        host.phases(),
-        [SessionEndPhase::Query, SessionEndPhase::Ending]
+    hosted(
+        |_| SessionEndAnswer::Proceed,
+        |host| {
+            host.send(WM_QUERYENDSESSION, 0, 0);
+            host.send(WM_ENDSESSION, 1, ENDSESSION_LOGOFF as isize);
+            assert_eq!(
+                host.phases(),
+                [SessionEndPhase::Query, SessionEndPhase::Ending]
+            );
+        },
     );
-    });
 }
 
 fn a_panicking_hook_does_not_hold_the_session_up() {
-    hosted(|phase| {
-        assert_ne!(phase, SessionEndPhase::Query, "a broken subscriber");
-        SessionEndAnswer::Proceed
-    }, |host| {
-    assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), TRUE);
-    assert_eq!(host.block_reason(), None);
-    host.send(WM_ENDSESSION, 1, 0);
-    assert_eq!(
-        host.phases(),
-        [SessionEndPhase::Query, SessionEndPhase::Ending],
-        "the hook is still installed after the panic"
+    hosted(
+        |phase| {
+            assert_ne!(phase, SessionEndPhase::Query, "a broken subscriber");
+            SessionEndAnswer::Proceed
+        },
+        |host| {
+            assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), TRUE);
+            assert_eq!(host.block_reason(), None);
+            host.send(WM_ENDSESSION, 1, 0);
+            assert_eq!(
+                host.phases(),
+                [SessionEndPhase::Query, SessionEndPhase::Ending],
+                "the hook is still installed after the panic"
+            );
+        },
     );
-    });
 }
 
 fn sleep_and_wake_reach_the_host_once_each() {
-    hosted(|_| SessionEndAnswer::Proceed, |host| {
-    host.send(WM_POWERBROADCAST, PBT_APMSUSPEND as usize, 0);
-    host.send(WM_POWERBROADCAST, PBT_APMRESUMEAUTOMATIC as usize, 0);
-    // Sent after the automatic resume when the user caused it: not a second wake.
-    host.send(WM_POWERBROADCAST, PBT_APMRESUMESUSPEND as usize, 0);
-    assert_eq!(host.notices(), [SystemNotice::Sleep, SystemNotice::Wake]);
-    });
+    hosted(
+        |_| SessionEndAnswer::Proceed,
+        |host| {
+            host.send(WM_POWERBROADCAST, PBT_APMSUSPEND as usize, 0);
+            host.send(WM_POWERBROADCAST, PBT_APMRESUMEAUTOMATIC as usize, 0);
+            // Sent after the automatic resume when the user caused it: not a second wake.
+            host.send(WM_POWERBROADCAST, PBT_APMRESUMESUSPEND as usize, 0);
+            assert_eq!(host.notices(), [SystemNotice::Sleep, SystemNotice::Wake]);
+        },
+    );
 }
 
 fn locking_and_unlocking_the_session_reach_the_host() {
-    hosted(|_| SessionEndAnswer::Proceed, |host| {
-    host.send(WM_WTSSESSION_CHANGE, WTS_SESSION_LOCK as usize, 1);
-    host.send(WM_WTSSESSION_CHANGE, WTS_SESSION_UNLOCK as usize, 1);
-    // Remote-session changes are not lock changes.
-    host.send(WM_WTSSESSION_CHANGE, 1, 1);
-    assert_eq!(
-        host.notices(),
-        [SystemNotice::SessionLocked, SystemNotice::SessionUnlocked]
+    hosted(
+        |_| SessionEndAnswer::Proceed,
+        |host| {
+            host.send(WM_WTSSESSION_CHANGE, WTS_SESSION_LOCK as usize, 1);
+            host.send(WM_WTSSESSION_CHANGE, WTS_SESSION_UNLOCK as usize, 1);
+            // Remote-session changes are not lock changes.
+            host.send(WM_WTSSESSION_CHANGE, 1, 1);
+            assert_eq!(
+                host.notices(),
+                [SystemNotice::SessionLocked, SystemNotice::SessionUnlocked]
+            );
+        },
     );
-    });
 }
 
 #[test]
@@ -341,37 +365,43 @@ fn reason_held_for(window: HWND) -> Option<String> {
 }
 
 fn a_block_is_registered_on_the_visible_window() {
-    hosted(|_| SessionEndAnswer::Block, |host| {
-    let window = host
-        .owner
-        .open_window(
-            flui_platform::WindowOptions::default().with_visible(true),
-            flui_testing::window_handler::RecordingWindowHandler::new(),
-        )
-        .expect("a window")
-        .try_ready()
-        .expect("the window opens at once");
-    let window_hwnd = crate::win32_handle(window.as_ref());
-    assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), FALSE);
-    assert!(
-        reason_held_for(window_hwnd).is_some(),
-        "the system lists the window the user can see"
+    hosted(
+        |_| SessionEndAnswer::Block,
+        |host| {
+            let window = host
+                .owner
+                .open_window(
+                    flui_platform::WindowOptions::default().with_visible(true),
+                    flui_testing::window_handler::RecordingWindowHandler::new(),
+                )
+                .expect("a window")
+                .try_ready()
+                .expect("the window opens at once");
+            let window_hwnd = crate::win32_handle(window.as_ref());
+            assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), FALSE);
+            assert!(
+                reason_held_for(window_hwnd).is_some(),
+                "the system lists the window the user can see"
+            );
+            assert_eq!(host.block_reason(), None, "not the hidden receiver");
+            host.owner.release_session_end();
+            assert_eq!(reason_held_for(window_hwnd), None);
+            // The window goes with the case: the next one must not find it visible.
+            window.close_now();
+        },
     );
-    assert_eq!(host.block_reason(), None, "not the hidden receiver");
-    host.owner.release_session_end();
-    assert_eq!(reason_held_for(window_hwnd), None);
-    // The window goes with the case: the next one must not find it visible.
-    window.close_now();
-    });
 }
 
 fn a_second_query_replaces_the_first_block() {
-    hosted(|_| SessionEndAnswer::Block, |host| {
-    assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), FALSE);
-    assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), FALSE);
-    host.owner.release_session_end();
-    assert_eq!(host.block_reason(), None, "no reason is left behind");
-    });
+    hosted(
+        |_| SessionEndAnswer::Block,
+        |host| {
+            assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), FALSE);
+            assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), FALSE);
+            host.owner.release_session_end();
+            assert_eq!(host.block_reason(), None, "no reason is left behind");
+        },
+    );
 }
 
 fn the_block_is_held_while_the_host_saves_for_an_ending_session() {
@@ -380,21 +410,24 @@ fn the_block_is_held_while_the_host_saves_for_an_ending_session() {
     let receiver = Arc::new(AtomicIsize::new(0));
     let held_at_ending = Arc::new(Mutex::new(None));
     let (seen_receiver, seen_held) = (Arc::clone(&receiver), Arc::clone(&held_at_ending));
-    hosted(move |phase| {
-        if phase == SessionEndPhase::Ending {
-            let window = HWND(seen_receiver.load(Ordering::SeqCst) as *mut _);
-            *seen_held.lock().expect("log") = Some(reason_held_for(window).is_some());
-        }
-        SessionEndAnswer::Block
-    }, move |host| {
-    receiver.store(host.receiver.0 as isize, Ordering::SeqCst);
-    assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), FALSE);
-    host.send(WM_ENDSESSION, 1, 0);
-    assert_eq!(
-        *held_at_ending.lock().expect("log"),
-        Some(true),
-        "the system waits for the hook; the reason goes after it"
+    hosted(
+        move |phase| {
+            if phase == SessionEndPhase::Ending {
+                let window = HWND(seen_receiver.load(Ordering::SeqCst) as *mut _);
+                *seen_held.lock().expect("log") = Some(reason_held_for(window).is_some());
+            }
+            SessionEndAnswer::Block
+        },
+        move |host| {
+            receiver.store(host.receiver.0 as isize, Ordering::SeqCst);
+            assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), FALSE);
+            host.send(WM_ENDSESSION, 1, 0);
+            assert_eq!(
+                *held_at_ending.lock().expect("log"),
+                Some(true),
+                "the system waits for the hook; the reason goes after it"
+            );
+            assert_eq!(host.block_reason(), None);
+        },
     );
-    assert_eq!(host.block_reason(), None);
-    });
 }

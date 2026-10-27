@@ -37,9 +37,8 @@ use crate::host::{self, Loop as _};
 use crate::owner::app_delivery::AppDelivery;
 use crate::{
     error::PlatformError, owner::DirectOwnerHooks, owner::OwnerHooks, owner::OwnerPlatform,
-    owner::signal::OwnerSignal,
-    owner::window_delivery::WindowDelivery, platform::Platform, platform::PlatformExecutor,
-    platform::AppHandler,
+    owner::signal::OwnerSignal, owner::window_delivery::WindowDelivery, platform::AppHandler,
+    platform::Platform, platform::PlatformExecutor,
 };
 use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::drag::PlatformDragSource;

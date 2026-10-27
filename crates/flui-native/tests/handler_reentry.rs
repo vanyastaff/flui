@@ -77,8 +77,11 @@ fn payload_text(payload: &(dyn Any + Send)) -> Option<&str> {
 /// owner capability of one that runs.
 trait Reach {
     /// Open a window delivering to `handler`.
-    fn open(&self, options: WindowOptions, handler: Rc<RecordingWindowHandler>)
-    -> Arc<dyn HostWindow>;
+    fn open(
+        &self,
+        options: WindowOptions,
+        handler: Rc<RecordingWindowHandler>,
+    ) -> Arc<dyn HostWindow>;
 
     /// Quit the platform.
     fn quit(&self);
@@ -483,15 +486,12 @@ fn headless_app_handler_methods_reenter() {
         let rows: [(AppCall, AppTrigger); 5] = [
             (AppCall::Quit, |_, owner| owner.quit()),
             (AppCall::Reopen, |events, _| events.reopen()),
-            (
-                AppCall::SessionEnd(SessionEndPhase::Query),
-                |events, _| {
-                    assert_eq!(
-                        events.session_end(SessionEndPhase::Query),
-                        SessionEndAnswer::Proceed
-                    );
-                },
-            ),
+            (AppCall::SessionEnd(SessionEndPhase::Query), |events, _| {
+                assert_eq!(
+                    events.session_end(SessionEndPhase::Query),
+                    SessionEndAnswer::Proceed
+                );
+            }),
             (AppCall::Notice(SystemNotice::Sleep), |events, _| {
                 events.notice(SystemNotice::Sleep);
             }),
@@ -510,8 +510,11 @@ fn headless_app_handler_methods_reenter() {
             let log = AppLog::new();
             let owner = Rc::new(run_keeping_owner(Box::new(platform), &log));
             let opened = Rc::new(RefCell::new(Vec::new()));
-            let (inner_events, kept, done) =
-                (events.clone(), Rc::clone(&opened), Rc::new(Cell::new(false)));
+            let (inner_events, kept, done) = (
+                events.clone(),
+                Rc::clone(&opened),
+                Rc::new(Cell::new(false)),
+            );
             log.react(move |call, owner| {
                 if call != method || done.replace(true) {
                     return;

@@ -126,8 +126,7 @@ use crate::{
     error::BootstrapError, error::PlatformError, executor::BackgroundExecutor, host, host::Host,
     host_window::HostWindow, owner::OpenWindowError, owner::OwnerHooks, owner::OwnerPlatform,
     owner::PendingWindow, owner::ProxySendError, owner::ProxyTransport, owner::WindowOpen,
-    platform::AppHandler, platform::HostPlatform, platform::Platform,
-    platform::PlatformExecutor,
+    platform::AppHandler, platform::HostPlatform, platform::Platform, platform::PlatformExecutor,
 };
 use control::{
     ControlCommand, ControlReceiver, ControlSendError, ControlSender, OpenWindowResult,
@@ -2498,10 +2497,9 @@ impl host::Loop for WinitLoop {
         // error from `event_loop.run_app`, or both combined -- see
         // `run_event_loop`'s `combine_shutdown_result`. This is the sole
         // `error`-level log for whichever of those it turns out to be.
-        self.run_event_loop(platform, handler)
-            .inspect_err(|error| {
-                tracing::error!("winit Platform::run exited with an error: {:?}", error);
-            })
+        self.run_event_loop(platform, handler).inspect_err(|error| {
+            tracing::error!("winit Platform::run exited with an error: {:?}", error);
+        })
     }
 
     fn quit(&self) {
@@ -2891,9 +2889,7 @@ mod tests {
         assert!(!platform.exit_policy_allows_exit(), "the handler decides");
 
         app.react(|call, _| {
-            if call == AppCall::ExitPolicy {
-                panic!("first failure");
-            }
+            assert!(call != AppCall::ExitPolicy, "first failure");
         });
         let failure = catch_unwind(AssertUnwindSafe(|| platform.exit_policy_allows_exit()))
             .expect_err("the handler's panic reaches the loop");
@@ -2939,7 +2935,8 @@ mod tests {
         let callback_count_for_handler = Arc::clone(&callback_count);
         let platform_for_handler = Arc::clone(&platform);
         let app = crate::owner::app_delivery::testing::RecordingApp::new();
-        let _run = crate::owner::app_delivery::testing::bind(Arc::clone(&platform.app), app.clone());
+        let _run =
+            crate::owner::app_delivery::testing::bind(Arc::clone(&platform.app), app.clone());
         app.react(move |call, _| {
             if call != crate::owner::app_delivery::testing::AppCall::Quit {
                 return;
