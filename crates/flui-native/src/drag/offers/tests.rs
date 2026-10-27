@@ -5,7 +5,7 @@ use flui_platform::data_transfer::{
     Mime, RepresentationDescriptor, TransferFormat, TransferPayload,
 };
 
-use super::{OfferTable, TransferUri, format_of, payload_of_bytes};
+use super::{OfferTable, PathStyle, TransferUri, format_of, payload_of_bytes};
 
 /// A media type offers its transfer format; a type FLUI does not announce
 /// (the browser's `Files`, Chromium's private types, a name that is no
@@ -80,77 +80,189 @@ fn bytes_carry_the_payload_of_their_format() {
     }
 }
 
-/// The text a URI-list payload carries.
-fn list_text(payload: &TransferPayload) -> &str {
-    let TransferPayload::Custom { mime, bytes } = payload else {
-        panic!("a URI list is delivered as bytes, got {payload:?}");
+const WINDOWS: PathStyle = PathStyle::Windows;
+const POSIX: PathStyle = PathStyle::Posix;
+
+/// The line a host writes for one path in `style`, or `None` when it leaves the
+/// path out.
+fn written(path: impl Into<PathBuf>, style: PathStyle) -> Option<String> {
+    let TransferPayload::Custom { mime, bytes } =
+        TransferUri::list_payload([TransferUri::Path(path.into())], style)
+    else {
+        panic!("a URI list is delivered as bytes");
     };
     assert_eq!(mime.as_str(), "text/uri-list");
-    std::str::from_utf8(bytes).expect("a URI list is UTF-8")
+    let text = std::str::from_utf8(&bytes).expect("a URI list is UTF-8");
+    text.strip_suffix("\r\n").map(str::to_owned)
 }
 
-/// A host's paths and URIs reach the application as `text/uri-list`: a path as
-/// its `file:` URI, percent-encoded, one CRLF-terminated line each; a relative
-/// path, which no URI names, is left out.
-#[test]
-fn a_uri_list_is_delivered_as_file_uris() {
-    let payload = TransferUri::list_payload([
-        TransferUri::Path(PathBuf::from(r"C:\Users\a b\x#1.txt")),
-        TransferUri::Path(PathBuf::from(r"\\server\share\é.png")),
-        TransferUri::Path(PathBuf::from("/tmp/100%.txt")),
-        TransferUri::Path(PathBuf::from("relative/a.txt")),
-        TransferUri::Uri("content://media/1".to_owned()),
-    ]);
-    assert_eq!(
-        list_text(&payload),
-        "file:///C:/Users/a%20b/x%231.txt\r\n\
-         file://server/share/%C3%A9.png\r\n\
-         file:///tmp/100%25.txt\r\n\
-         content://media/1\r\n"
-    );
-}
-
-/// A URI list an application serves reads back as the host's entries: a
-/// `file:` URI of a local path as that path, any other URI as itself, with
-/// comments and blank lines skipped; a payload of another type is no list.
-#[test]
-fn a_served_uri_list_reads_as_paths_and_uris() {
+/// What a host reads one line of a served URI list as, in `style`.
+fn read(line: &str, style: PathStyle) -> TransferUri {
     let served = TransferPayload::Custom {
         mime: Mime::new("text/uri-list"),
-        bytes: Arc::from(
-            b"# a comment\r\n\
-              file:///C:/Users/a%20b/x%231.txt\r\n\
-              \r\n\
-              FILE://localhost/tmp/100%25.txt\n\
-              file://server/share/%C3%A9.png\r\n\
-              file:///tmp/bad%zz\r\n\
-              https://flui.dev/?q=1\r\n"
-                .to_vec(),
-        ),
+        bytes: Arc::from(format!("{line}\r\n").into_bytes()),
     };
+    let mut entries = TransferUri::list_of(&served, style).expect("a URI list");
+    assert_eq!(entries.len(), 1, "{line:?}");
+    entries.remove(0)
+}
+
+fn path(path: &str) -> TransferUri {
+    TransferUri::Path(PathBuf::from(path))
+}
+
+fn uri(uri: &str) -> TransferUri {
+    TransferUri::Uri(uri.to_owned())
+}
+
+/// A host's path reaches the application as its `file:` URI in the host's
+/// spelling, percent-encoded; a path no URI names is left out. Only Windows
+/// spells drives, shares and verbatim paths; a POSIX name keeps a backslash.
+#[test]
+fn a_path_is_written_as_its_file_uri() {
+    let rows: [(&str, PathStyle, Option<&str>); 13] = [
+        (
+            r"C:\Users\a b\x#1.txt",
+            WINDOWS,
+            Some("file:///C:/Users/a%20b/x%231.txt"),
+        ),
+        (
+            r"\\server\share\é.png",
+            WINDOWS,
+            Some("file://server/share/%C3%A9.png"),
+        ),
+        (r"\\?\C:\long\a.txt", WINDOWS, Some("file:///C:/long/a.txt")),
+        (
+            r"\\?\UNC\server\share\a.txt",
+            WINDOWS,
+            Some("file://server/share/a.txt"),
+        ),
+        (r"\\?\Volume{1}\a.txt", WINDOWS, None),
+        (r"\rooted\a.txt", WINDOWS, Some("file:///rooted/a.txt")),
+        (r"relative\a.txt", WINDOWS, None),
+        ("/tmp/100%.txt", POSIX, Some("file:///tmp/100%25.txt")),
+        (r"/tmp/a\b.txt", POSIX, Some("file:///tmp/a%5Cb.txt")),
+        (r"\\server\share\a.txt", POSIX, None),
+        (r"C:\a.txt", POSIX, None),
+        ("relative/a.txt", POSIX, None),
+        (
+            "/home/ü/ä ö.txt",
+            POSIX,
+            Some("file:///home/%C3%BC/%C3%A4%20%C3%B6.txt"),
+        ),
+    ];
+    for (source, style, line) in rows {
+        assert_eq!(
+            written(source, style).as_deref(),
+            line,
+            "{source:?} in {style:?}"
+        );
+    }
+    // Any other URI passes through, and the lines keep their order.
+    let TransferPayload::Custom { bytes, .. } = TransferUri::list_payload(
+        [uri("content://media/1"), path("/a"), path("relative")],
+        POSIX,
+    ) else {
+        panic!("a URI list is delivered as bytes");
+    };
+    assert_eq!(&*bytes, b"content://media/1\r\nfile:///a\r\n");
+}
+
+/// A `file:` URI an application serves reads back as the path it names in the
+/// host's spelling; anything else (another scheme, a malformed escape, a remote
+/// host where the host has no shares, no absolute path) stays a URI.
+#[test]
+fn a_served_file_uri_reads_as_its_path() {
+    let rows: [(&str, PathStyle, TransferUri); 14] = [
+        (
+            "file:///C:/Users/a%20b/x%231.txt",
+            WINDOWS,
+            path(r"C:\Users\a b\x#1.txt"),
+        ),
+        (
+            "file://server/share/%C3%A9.png",
+            WINDOWS,
+            path(r"\\server\share\é.png"),
+        ),
+        ("FILE://localhost/C:/a.txt", WINDOWS, path(r"C:\a.txt")),
+        ("file:///rooted/a.txt", WINDOWS, path(r"\rooted\a.txt")),
+        ("file:///tmp/100%25.txt", POSIX, path("/tmp/100%.txt")),
+        ("file://localhost/tmp/a.txt", POSIX, path("/tmp/a.txt")),
+        ("file:///tmp/a%5Cb.txt", POSIX, path(r"/tmp/a\b.txt")),
+        (
+            "file://server/share/a.txt",
+            POSIX,
+            uri("file://server/share/a.txt"),
+        ),
+        ("file:///tmp/bad%zz", POSIX, uri("file:///tmp/bad%zz")),
+        ("file:///tmp/sign%+1", POSIX, uri("file:///tmp/sign%+1")),
+        ("file:///tmp/short%4", POSIX, uri("file:///tmp/short%4")),
+        (
+            "file:///tmp/not-utf8%FF",
+            POSIX,
+            uri("file:///tmp/not-utf8%FF"),
+        ),
+        ("file:relative", POSIX, uri("file:relative")),
+        (
+            "https://flui.dev/?q=1",
+            WINDOWS,
+            uri("https://flui.dev/?q=1"),
+        ),
+    ];
+    for (line, style, entry) in rows {
+        assert_eq!(read(line, style), entry, "{line:?} in {style:?}");
+    }
+    // Comments and blank lines are no entries; a payload of another type is
+    // no list.
+    let served = TransferPayload::Custom {
+        mime: Mime::new("text/uri-list"),
+        bytes: Arc::from(b"# a comment\r\n\r\nfile:///a\n".to_vec()),
+    };
+    assert_eq!(TransferUri::list_of(&served, POSIX), Some(vec![path("/a")]));
     assert_eq!(
-        TransferUri::list_of(&served),
-        Some(vec![
-            TransferUri::Path(PathBuf::from(r"C:\Users\a b\x#1.txt")),
-            TransferUri::Path(PathBuf::from("/tmp/100%.txt")),
-            TransferUri::Path(PathBuf::from(r"\\server\share\é.png")),
-            TransferUri::Uri("file:///tmp/bad%zz".to_owned()),
-            TransferUri::Uri("https://flui.dev/?q=1".to_owned()),
-        ])
-    );
-    assert_eq!(
-        TransferUri::list_of(&TransferPayload::Text("file:///tmp/a".to_owned())),
+        TransferUri::list_of(&TransferPayload::Text("file:///a".to_owned()), POSIX),
         None
     );
-    // What a host writes, it reads back.
-    let paths = vec![
-        TransferUri::Path(PathBuf::from(r"D:\a\b c.txt")),
-        TransferUri::Path(PathBuf::from("/home/ü/ä ö.txt")),
+}
+
+/// What a host writes, it reads back in the same spelling.
+#[test]
+fn a_written_path_reads_back() {
+    let rows = [
+        (r"D:\a\b c.txt", WINDOWS),
+        (r"\\server\share\é.png", WINDOWS),
+        (r"\rooted\a.txt", WINDOWS),
+        ("/home/ü/ä ö.txt", POSIX),
+        (r"/tmp/a\b%.txt", POSIX),
     ];
-    assert_eq!(
-        TransferUri::list_of(&TransferUri::list_payload(paths.clone())),
-        Some(paths)
-    );
+    for (source, style) in rows {
+        let paths = vec![path(source)];
+        let written = TransferUri::list_payload(paths.clone(), style);
+        assert_eq!(
+            TransferUri::list_of(&written, style),
+            Some(paths),
+            "{source:?} in {style:?}"
+        );
+    }
+}
+
+/// A path that is not Unicode has no `file:` URI a reader would take back, so
+/// none is written: an unpaired surrogate on Windows, bytes that are not UTF-8
+/// on Unix.
+#[test]
+fn a_path_that_is_not_unicode_is_left_out() {
+    #[cfg(windows)]
+    let (source, style) = {
+        use std::os::windows::ffi::OsStringExt;
+        let wide = [u16::from(b'C'), u16::from(b':'), u16::from(b'\\'), 0xD800];
+        (std::ffi::OsString::from_wide(&wide), WINDOWS)
+    };
+    #[cfg(unix)]
+    let (source, style) = {
+        use std::os::unix::ffi::OsStringExt;
+        (std::ffi::OsString::from_vec(b"/tmp/\xff".to_vec()), POSIX)
+    };
+    assert_eq!(written(source, style), None);
 }
 
 fn announcing(format: TransferFormat) -> Arc<[RepresentationDescriptor]> {

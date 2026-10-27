@@ -11,18 +11,7 @@ use std::sync::Arc;
 use flui_foundation::DataTransferId;
 use flui_platform::data_transfer::RepresentationDescriptor;
 #[cfg(any(target_os = "android", target_arch = "wasm32", test))]
-use flui_platform::data_transfer::TransferFormat;
-#[cfg(any(
-    windows,
-    target_os = "android",
-    target_arch = "wasm32",
-    all(
-        feature = "winit-backend",
-        any(target_os = "macos", target_os = "linux")
-    ),
-    test
-))]
-use flui_platform::data_transfer::{Mime, TransferPayload};
+use flui_platform::data_transfer::{Mime, TransferFormat, TransferPayload};
 
 // ============================================================================
 // The offer table: the single minting authority
@@ -123,7 +112,6 @@ impl OfferTable {
 // URI lists
 // ============================================================================
 
-/// The media type of a URI list (RFC 2483).
 #[cfg(any(
     windows,
     target_os = "android",
@@ -133,14 +121,11 @@ impl OfferTable {
     ),
     test
 ))]
-const URI_LIST: &str = "text/uri-list";
+pub(crate) use uri_list::{PathStyle, TransferUri};
 
-/// One entry of a `text/uri-list` as a host reads or writes it: a local path,
-/// which travels as its `file:` URI (RFC 8089), or any other URI.
-///
-/// The OS hands a host paths (`CF_HDROP`, winit's dropped files) or URIs (a
-/// clip's items); the application sees the list as the bytes of
-/// `text/uri-list`, the one form every protocol shares.
+/// The entries of a `text/uri-list` and the `file:` URIs of local paths
+/// (RFC 2483, RFC 8089), as the hosts that read paths or URIs write and read
+/// them.
 #[cfg(any(
     windows,
     target_os = "android",
@@ -150,195 +135,262 @@ const URI_LIST: &str = "text/uri-list";
     ),
     test
 ))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum TransferUri {
-    /// A local filesystem path.
-    Path(std::path::PathBuf),
-    /// Any other URI, unparsed.
-    #[cfg_attr(
-        not(any(windows, target_os = "android", test)),
-        expect(
-            dead_code,
-            reason = "the winit host on macOS and Linux reads only paths"
-        )
-    )]
-    Uri(String),
-}
+mod uri_list {
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
 
-#[cfg(any(
-    windows,
-    target_os = "android",
-    all(
-        feature = "winit-backend",
-        any(target_os = "macos", target_os = "linux")
-    ),
-    test
-))]
-impl TransferUri {
-    /// The payload a URI list of `uris` is delivered as: `text/uri-list`, one
-    /// URI per CRLF-terminated line. A relative path, which no URI names, is
-    /// left out.
-    #[must_use]
-    pub(crate) fn list_payload(uris: impl IntoIterator<Item = Self>) -> TransferPayload {
-        let mut list = String::new();
-        for uri in uris {
-            let Some(uri) = uri.to_uri() else {
-                tracing::debug!(
-                    ?uri,
-                    "a relative path has no file URI; left out of the list"
-                );
-                continue;
+    use flui_platform::data_transfer::{Mime, TransferPayload};
+
+    /// The media type of a URI list.
+    const URI_LIST: &str = "text/uri-list";
+
+    /// How a host's paths are spelled. A drive (`C:\`), a UNC share
+    /// (`\\host\share`) and a verbatim prefix (`\\?\`) are Windows paths; a
+    /// POSIX path is rooted at `/` and may hold a backslash in a name.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum PathStyle {
+        /// Win32 paths (`CF_HDROP`, a winit host on Windows).
+        #[cfg_attr(
+            not(any(windows, test)),
+            expect(dead_code, reason = "only a Windows host spells Win32 paths")
+        )]
+        Windows,
+        /// POSIX paths (Android, a winit host on macOS and Linux).
+        #[cfg_attr(
+            all(windows, not(test)),
+            expect(dead_code, reason = "a Windows host spells only Win32 paths")
+        )]
+        Posix,
+    }
+
+    impl PathStyle {
+        /// The style of the paths this host's OS hands out.
+        #[cfg(all(feature = "winit-backend", target_os = "windows"))]
+        pub(crate) const HOST: Self = Self::Windows;
+
+        /// The style of the paths this host's OS hands out.
+        #[cfg(all(
+            feature = "winit-backend",
+            any(target_os = "macos", target_os = "linux")
+        ))]
+        pub(crate) const HOST: Self = Self::Posix;
+    }
+
+    /// One entry of a `text/uri-list` as a host reads or writes it: a local
+    /// path, which travels as its `file:` URI, or any other URI.
+    ///
+    /// The OS hands a host paths (`CF_HDROP`, winit's dropped files) or URIs (a
+    /// clip's items); the application sees the list as the bytes of
+    /// `text/uri-list`, the one form every protocol shares.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) enum TransferUri {
+        /// A local filesystem path.
+        Path(PathBuf),
+        /// Any other URI, unparsed.
+        #[cfg_attr(
+            not(any(windows, target_os = "android", test)),
+            expect(
+                dead_code,
+                reason = "the winit host on macOS and Linux reads only paths"
+            )
+        )]
+        Uri(String),
+    }
+
+    impl TransferUri {
+        /// The payload a URI list of `uris` is delivered as: `text/uri-list`,
+        /// one URI per CRLF-terminated line, each path spelled in `style`. A
+        /// path with no `file:` URI (relative, of another style, or not
+        /// Unicode, which no reader would take back) is left out.
+        #[must_use]
+        pub(crate) fn list_payload(
+            uris: impl IntoIterator<Item = Self>,
+            style: PathStyle,
+        ) -> TransferPayload {
+            let mut list = String::new();
+            for uri in uris {
+                let Some(uri) = uri.to_uri(style) else {
+                    tracing::debug!(
+                        ?uri,
+                        ?style,
+                        "a path with no file URI is left out of the list"
+                    );
+                    continue;
+                };
+                list.push_str(&uri);
+                list.push_str("\r\n");
+            }
+            TransferPayload::Custom {
+                mime: Mime::new(URI_LIST),
+                bytes: Arc::from(list.into_bytes()),
+            }
+        }
+
+        /// The entries of a URI-list payload, a `file:` URI of a local path
+        /// read as that path in `style`; `None` for a payload of any other
+        /// type, or one that is not UTF-8. Blank lines and `#` comments are
+        /// skipped.
+        #[cfg(any(windows, target_os = "android", test))]
+        #[must_use]
+        pub(crate) fn list_of(payload: &TransferPayload, style: PathStyle) -> Option<Vec<Self>> {
+            let TransferPayload::Custom { mime, bytes } = payload else {
+                return None;
             };
-            list.push_str(&uri);
-            list.push_str("\r\n");
+            if mime.as_str().split(';').next() != Some(URI_LIST) {
+                return None;
+            }
+            let list = std::str::from_utf8(bytes).ok()?;
+            Some(
+                list.lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                    .map(|line| {
+                        path_of_file_uri(line, style)
+                            .map_or_else(|| Self::Uri(line.to_owned()), Self::Path)
+                    })
+                    .collect(),
+            )
         }
-        TransferPayload::Custom {
-            mime: Mime::new(URI_LIST),
-            bytes: Arc::from(list.into_bytes()),
+
+        /// This entry as a URI, or `None` for a path with no `file:` URI.
+        fn to_uri(&self, style: PathStyle) -> Option<String> {
+            match self {
+                Self::Uri(uri) => Some(uri.clone()),
+                Self::Path(path) => file_uri(path, style),
+            }
         }
     }
 
-    /// The entries of a URI-list payload, a `file:` URI of a local path read
-    /// as that path; `None` for a payload of any other type, or one that is
-    /// not UTF-8. Blank lines and `#` comments are skipped (RFC 2483).
-    #[cfg(any(windows, target_os = "android", test))]
-    #[must_use]
-    pub(crate) fn list_of(payload: &TransferPayload) -> Option<Vec<Self>> {
-        let TransferPayload::Custom { mime, bytes } = payload else {
-            return None;
+    /// Whether `text` starts with a drive (`C:`), alone or before a separator.
+    fn starts_with_drive(text: &str) -> bool {
+        match text.as_bytes() {
+            [letter, b':'] => letter.is_ascii_alphabetic(),
+            [letter, b':', separator, ..] => {
+                letter.is_ascii_alphabetic() && matches!(separator, b'/' | b'\\')
+            }
+            _ => false,
+        }
+    }
+
+    /// The `file:` URI of an absolute `path` in `style`:
+    ///
+    /// - Windows: a drive path `C:\a b` as `file:///C:/a%20b`, a UNC path
+    ///   `\\host\share\a` as `file://host/share/a`, a verbatim `\\?\C:\a` or
+    ///   `\\?\UNC\host\share\a` as the path it spells, a path rooted with no
+    ///   drive (`\a`) as `file:///a`;
+    /// - POSIX: `/a b` as `file:///a%20b`, a backslash in a name escaped.
+    ///
+    /// `None` for a relative path, a Windows path that names no drive or share
+    /// (`\\?\Volume{…}`), and a path that is not Unicode (an unpaired
+    /// surrogate, bytes that are not UTF-8): no reader takes those back, so
+    /// none is written. Every byte but the unreserved ones, `/` and `:` is
+    /// percent-encoded.
+    fn file_uri(path: &Path, style: PathStyle) -> Option<String> {
+        let text = path.to_str()?;
+        let (prefix, rest) = match style {
+            PathStyle::Windows => {
+                if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
+                    ("file://", unc)
+                } else if let Some(verbatim) = text.strip_prefix(r"\\?\") {
+                    starts_with_drive(verbatim).then_some(("file:///", verbatim))?
+                } else if let Some(unc) = text.strip_prefix(r"\\") {
+                    ("file://", unc)
+                } else if starts_with_drive(text) {
+                    ("file:///", text)
+                } else if text.starts_with(['\\', '/']) {
+                    ("file://", text)
+                } else {
+                    return None;
+                }
+            }
+            PathStyle::Posix => (text.starts_with('/').then_some("file://")?, text),
         };
-        if mime.as_str().split(';').next() != Some(URI_LIST) {
+        let mut uri = String::with_capacity(prefix.len() + rest.len());
+        uri.push_str(prefix);
+        for byte in rest.bytes() {
+            match byte {
+                b'\\' if style == PathStyle::Windows => uri.push('/'),
+                b'A'..=b'Z'
+                | b'a'..=b'z'
+                | b'0'..=b'9'
+                | b'-'
+                | b'.'
+                | b'_'
+                | b'~'
+                | b'/'
+                | b':' => {
+                    uri.push(char::from(byte));
+                }
+                _ => {
+                    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                    uri.push('%');
+                    uri.push(char::from(HEX[usize::from(byte >> 4)]));
+                    uri.push(char::from(HEX[usize::from(byte & 0xF)]));
+                }
+            }
+        }
+        Some(uri)
+    }
+
+    /// The local path a `file:` URI names in `style`, or `None` for any other
+    /// URI, a `file:` URI with no absolute path, a malformed percent escape, a
+    /// path that is not UTF-8, and, in the POSIX style, a remote host.
+    /// Windows: `file:///C:/a` reads as `C:\a`, `file://host/share/a` as
+    /// `\\host\share\a`, `file:///a` as `\a`. POSIX: `file:///a` (and
+    /// `file://localhost/a`) reads as `/a`.
+    #[cfg(any(windows, target_os = "android", test))]
+    fn path_of_file_uri(uri: &str, style: PathStyle) -> Option<PathBuf> {
+        let scheme = uri.get(..5)?;
+        if !scheme.eq_ignore_ascii_case("file:") {
             return None;
         }
-        let list = std::str::from_utf8(bytes).ok()?;
-        Some(
-            list.lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty() && !line.starts_with('#'))
-                .map(|line| {
-                    path_of_file_uri(line).map_or_else(|| Self::Uri(line.to_owned()), Self::Path)
+        let rest = uri[5..].split(['?', '#']).next().unwrap_or_default();
+        let (host, path) = match rest.strip_prefix("//") {
+            Some(after) => after.split_at(after.find('/').unwrap_or(after.len())),
+            None => ("", rest),
+        };
+        let decoded = String::from_utf8(percent_decoded(path)?).ok()?;
+        let remote = !host.is_empty() && !host.eq_ignore_ascii_case("localhost");
+        let local = decoded.strip_prefix('/');
+        match style {
+            PathStyle::Windows if remote => {
+                let host = String::from_utf8(percent_decoded(host)?).ok()?;
+                Some(format!(r"\\{host}{}", decoded.replace('/', "\\")).into())
+            }
+            PathStyle::Windows => {
+                let local = local?;
+                Some(if starts_with_drive(local) {
+                    local.replace('/', "\\").into()
+                } else {
+                    decoded.replace('/', "\\").into()
                 })
-                .collect(),
-        )
-    }
-
-    /// This entry as a URI, or `None` for a relative path.
-    fn to_uri(&self) -> Option<String> {
-        match self {
-            Self::Uri(uri) => Some(uri.clone()),
-            Self::Path(path) => file_uri(path),
-        }
-    }
-}
-
-/// Whether `bytes` start with a drive (`C:`), alone or before a separator.
-#[cfg(any(
-    windows,
-    target_os = "android",
-    all(
-        feature = "winit-backend",
-        any(target_os = "macos", target_os = "linux")
-    ),
-    test
-))]
-fn starts_with_drive(bytes: &[u8]) -> bool {
-    match bytes {
-        [letter, b':'] => letter.is_ascii_alphabetic(),
-        [letter, b':', separator, ..] => {
-            letter.is_ascii_alphabetic() && matches!(separator, b'/' | b'\\')
-        }
-        _ => false,
-    }
-}
-
-/// The `file:` URI of an absolute `path` (RFC 8089): a drive path `C:\a b` as
-/// `file:///C:/a%20b`, a UNC path `\\host\share\a` as `file://host/share/a`, a
-/// POSIX path `/a b` as `file:///a%20b`; `None` for a relative path. Every
-/// byte but the unreserved ones, `/` and `:` is percent-encoded.
-#[cfg(any(
-    windows,
-    target_os = "android",
-    all(
-        feature = "winit-backend",
-        any(target_os = "macos", target_os = "linux")
-    ),
-    test
-))]
-fn file_uri(path: &std::path::Path) -> Option<String> {
-    let bytes = path.as_os_str().as_encoded_bytes();
-    let (prefix, rest, windows) = if let Some(unc) = bytes.strip_prefix(br"\\") {
-        ("file://", unc, true)
-    } else if starts_with_drive(bytes) {
-        ("file:///", bytes, true)
-    } else if bytes.starts_with(b"/") {
-        ("file://", bytes, false)
-    } else {
-        return None;
-    };
-    let mut uri = String::with_capacity(prefix.len() + rest.len());
-    uri.push_str(prefix);
-    for &byte in rest {
-        match byte {
-            b'\\' if windows => uri.push('/'),
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' | b':' => {
-                uri.push(char::from(byte));
             }
-            _ => {
-                const HEX: &[u8; 16] = b"0123456789ABCDEF";
-                uri.push('%');
-                uri.push(char::from(HEX[usize::from(byte >> 4)]));
-                uri.push(char::from(HEX[usize::from(byte & 0xF)]));
+            PathStyle::Posix if remote => None,
+            PathStyle::Posix => decoded.starts_with('/').then(|| decoded.into()),
+        }
+    }
+
+    /// `text` with its percent escapes decoded, or `None` for a malformed one:
+    /// a `%` takes exactly two hexadecimal digits.
+    #[cfg(any(windows, target_os = "android", test))]
+    fn percent_decoded(text: &str) -> Option<Vec<u8>> {
+        let hex = |byte: u8| char::from(byte).to_digit(16);
+        let bytes = text.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut index = 0;
+        while let Some(&byte) = bytes.get(index) {
+            if byte == b'%' {
+                let high = hex(*bytes.get(index + 1)?)?;
+                let low = hex(*bytes.get(index + 2)?)?;
+                out.push(u8::try_from(high * 16 + low).expect("BUG: two hex digits fit a byte"));
+                index += 3;
+            } else {
+                out.push(byte);
+                index += 1;
             }
         }
+        Some(out)
     }
-    Some(uri)
-}
-
-/// The local path a `file:` URI names, or `None` for any other URI, a `file:`
-/// URI with no absolute path, a malformed percent escape or a path that is not
-/// UTF-8. `file:///C:/a` reads as `C:\a`, `file://host/share/a` as
-/// `\\host\share\a`, `file:///a` (and `file://localhost/a`) as `/a`.
-#[cfg(any(windows, target_os = "android", test))]
-fn path_of_file_uri(uri: &str) -> Option<std::path::PathBuf> {
-    let scheme = uri.get(..5)?;
-    if !scheme.eq_ignore_ascii_case("file:") {
-        return None;
-    }
-    let rest = uri[5..].split(['?', '#']).next().unwrap_or_default();
-    let (host, path) = match rest.strip_prefix("//") {
-        Some(after) => after.split_at(after.find('/').unwrap_or(after.len())),
-        None => ("", rest),
-    };
-    let decoded = String::from_utf8(percent_decoded(path)?).ok()?;
-    if !host.is_empty() && !host.eq_ignore_ascii_case("localhost") {
-        let host = String::from_utf8(percent_decoded(host)?).ok()?;
-        return Some(format!(r"\\{host}{}", decoded.replace('/', "\\")).into());
-    }
-    let local = decoded.strip_prefix('/')?;
-    Some(if starts_with_drive(local.as_bytes()) {
-        local.replace('/', "\\").into()
-    } else {
-        decoded.into()
-    })
-}
-
-/// `text` with its percent escapes decoded, or `None` for a malformed one.
-#[cfg(any(windows, target_os = "android", test))]
-fn percent_decoded(text: &str) -> Option<Vec<u8>> {
-    let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while let Some(&byte) = bytes.get(index) {
-        if byte == b'%' {
-            let hex = std::str::from_utf8(bytes.get(index + 1..index + 3)?).ok()?;
-            out.push(u8::from_str_radix(hex, 16).ok()?);
-            index += 3;
-        } else {
-            out.push(byte);
-            index += 1;
-        }
-    }
-    Some(out)
 }
 
 // ============================================================================

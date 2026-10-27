@@ -17,7 +17,7 @@ use flui_platform::data_transfer::{
 };
 use flui_platform::drag::{DragSessionKey, OsDragEnd, ProcessNonce};
 
-use crate::drag::offers::TransferUri;
+use crate::drag::offers::{PathStyle, TransferUri};
 
 fn identity() -> RepresentationDescriptor {
     DragSessionKey::new(
@@ -198,11 +198,14 @@ fn a_flui_drag_puts_what_a_clip_can_carry_in_its_clip() {
     let payloads = [
         Some(TransferPayload::Text("hi".to_owned())),
         Some(TransferPayload::Html("<b>hi</b>".to_owned())),
-        Some(TransferUri::list_payload([
-            TransferUri::Uri("content://doc/1".to_owned()),
-            TransferUri::Uri("file:///sdcard/a.txt".to_owned()),
-            TransferUri::Path("/sdcard/b.txt".into()),
-        ])),
+        Some(TransferUri::list_payload(
+            [
+                TransferUri::Uri("content://doc/1".to_owned()),
+                TransferUri::Uri("file:///sdcard/a.txt".to_owned()),
+                TransferUri::Path("/sdcard/b.txt".into()),
+            ],
+            PathStyle::Posix,
+        )),
         Some(TransferPayload::Custom {
             mime: Mime::new("image/png"),
             bytes: Arc::from(vec![0_u8; 4]),

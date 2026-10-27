@@ -64,7 +64,7 @@ mod crossing {
     use flui_platform::drag::IDENTITY_ESSENCE;
     use flui_platform::pointer::PointerKind;
 
-    use crate::drag::offers::TransferUri;
+    use crate::drag::offers::{PathStyle, TransferUri};
 
     /// `DROPEFFECT_COPY`.
     pub(super) const EFFECT_COPY: u32 = 1;
@@ -240,7 +240,7 @@ mod crossing {
             (NativeFormat::UnicodeText, TransferPayload::Text(text)) => Some(encode_text(text)),
             (NativeFormat::Html, TransferPayload::Html(markup)) => Some(encode_html(markup)),
             (NativeFormat::FileDrop, payload) => {
-                let uris = TransferUri::list_of(payload)?;
+                let uris = TransferUri::list_of(payload, PathStyle::Windows)?;
                 let paths: Vec<&std::path::Path> = uris
                     .iter()
                     .filter_map(|uri| match uri {
@@ -272,8 +272,12 @@ mod crossing {
         match (native, format) {
             (NativeFormat::UnicodeText, _) => decode_text(bytes).map(TransferPayload::Text),
             (NativeFormat::Html, _) => decode_html(bytes).map(TransferPayload::Html),
-            (NativeFormat::FileDrop, _) => decode_file_drop(bytes)
-                .map(|paths| TransferUri::list_payload(paths.into_iter().map(TransferUri::Path))),
+            (NativeFormat::FileDrop, _) => decode_file_drop(bytes).map(|paths| {
+                TransferUri::list_payload(
+                    paths.into_iter().map(TransferUri::Path),
+                    PathStyle::Windows,
+                )
+            }),
             // The identity is read from the descriptor; its payload is empty, as
             // the source runtime serves it.
             (NativeFormat::Named(name), _) if is_identity(name) => Ok(TransferPayload::Custom {

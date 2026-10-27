@@ -57,7 +57,7 @@ use windows_core::HRESULT;
 
 use super::OleTransfer;
 use crate::WindowsPlatform;
-use crate::drag::offers::TransferUri;
+use crate::drag::offers::{PathStyle, TransferUri};
 use crate::hosts::windows::Windows;
 use crate::owner::windows::control::OwnerPost;
 use crate::owner::windows::{HostDrag, WindowsLoop};
@@ -398,7 +398,10 @@ fn request(ended: &Rc<Cell<Option<OsDragEnd>>>) -> OsDragRequest {
         provider: Box::new(|RepresentationIndex(index)| match index {
             0 => Ok(TransferPayload::Text("dragged \u{2713}".into())),
             1 => Ok(TransferPayload::Html("<b>dragged</b>".into())),
-            2 => Ok(TransferUri::list_payload([TransferUri::Path(path())])),
+            2 => Ok(TransferUri::list_payload(
+                [TransferUri::Path(path())],
+                PathStyle::Windows,
+            )),
             3 => Ok(TransferPayload::Custom {
                 mime: custom(),
                 bytes: Arc::from(&b"\x00raw\xff"[..]),
@@ -608,7 +611,11 @@ fn a_drag_over_a_window_is_offered_answered_and_fetched() {
     );
     let files = fetch(&transfer, &offer, &TransferFormat::UriList);
     assert!(
-        files.as_ref().ok().and_then(TransferUri::list_of) == Some(vec![TransferUri::Path(path())]),
+        files
+            .as_ref()
+            .ok()
+            .and_then(|files| TransferUri::list_of(files, PathStyle::Windows))
+            == Some(vec![TransferUri::Path(path())]),
         "{files:?}"
     );
     let bytes = fetch(

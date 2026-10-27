@@ -44,7 +44,7 @@ use flui_foundation::DataTransferId;
 use flui_foundation::geometry::Point;
 use parking_lot::Mutex;
 
-use crate::drag::offers::{OfferTable, TransferUri};
+use crate::drag::offers::{OfferTable, PathStyle, TransferUri};
 use crate::owner::winit::FileDrops;
 use flui_platform::{DragDropEvent, WindowId};
 use flui_platform::{
@@ -186,8 +186,10 @@ impl FileDrops for WinitDataTransfer {
                 if !session.dropped || session.frozen.is_some() {
                     continue;
                 }
-                let payload =
-                    TransferUri::list_payload(session.paths.drain(..).map(TransferUri::Path));
+                let payload = TransferUri::list_payload(
+                    session.paths.drain(..).map(TransferUri::Path),
+                    PathStyle::HOST,
+                );
                 let actual = payload.byte_len();
                 session.frozen = Some(payload.clone());
                 for (completer, limits) in session.pending.drain(..) {

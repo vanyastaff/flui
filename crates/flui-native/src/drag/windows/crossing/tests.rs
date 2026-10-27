@@ -17,7 +17,7 @@ use flui_platform::data_transfer::{
 };
 use flui_platform::drag::IDENTITY_ESSENCE;
 
-use crate::drag::offers::TransferUri;
+use crate::drag::offers::{PathStyle, TransferUri};
 
 const COPY: TransferActions = TransferActions::COPY;
 const MOVE: TransferActions = TransferActions::MOVE;
@@ -141,7 +141,7 @@ fn payloads_round_trip_through_their_clipboard_formats() {
         ),
         (
             TransferFormat::UriList,
-            TransferUri::list_payload([TransferUri::Path(path)]),
+            TransferUri::list_payload([TransferUri::Path(path)], PathStyle::Windows),
         ),
         (
             TransferFormat::Custom {
@@ -160,7 +160,10 @@ fn payloads_round_trip_through_their_clipboard_formats() {
         assert_eq!(format!("{back:?}"), format!("{payload:?}"), "{format:?}");
     }
     // A URI list with no local path has nothing CF_HDROP can carry.
-    let remote = TransferUri::list_payload([TransferUri::Uri("https://flui.dev".into())]);
+    let remote = TransferUri::list_payload(
+        [TransferUri::Uri("https://flui.dev".into())],
+        PathStyle::Windows,
+    );
     assert!(encode(&NativeFormat::FileDrop, &remote).is_none());
     // A payload of another kind than its format is not served.
     assert!(
@@ -212,7 +215,10 @@ fn foreign_allocations_decode_within_their_bounds() {
     ansi.extend_from_slice(b"C:\\a.txt\0C:\\b.txt\0\0");
     let decoded = decode(&NativeFormat::FileDrop, &TransferFormat::UriList, &ansi);
     assert_eq!(
-        decoded.as_ref().ok().and_then(TransferUri::list_of),
+        decoded
+            .as_ref()
+            .ok()
+            .and_then(|decoded| TransferUri::list_of(decoded, PathStyle::Windows)),
         Some(vec![
             TransferUri::Path(r"C:\a.txt".into()),
             TransferUri::Path(r"C:\b.txt".into()),

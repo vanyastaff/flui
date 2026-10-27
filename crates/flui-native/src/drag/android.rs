@@ -45,7 +45,7 @@ mod clip {
     };
     use flui_platform::drag::{IDENTITY_ESSENCE, OsDragEnd};
 
-    use crate::drag::offers::TransferUri;
+    use crate::drag::offers::{PathStyle, TransferUri};
 
     /// `View.DRAG_FLAG_GLOBAL`: the drag may leave the source's window.
     pub(super) const DRAG_FLAG_GLOBAL: i32 = 1 << 8;
@@ -189,6 +189,7 @@ mod clip {
             ClipSource::UriList if clip.uris.is_empty() => Held::Missing,
             ClipSource::UriList => Held::Payload(TransferUri::list_payload(
                 clip.uris.iter().cloned().map(TransferUri::Uri),
+                PathStyle::Posix,
             )),
             ClipSource::Identity => Held::Payload(TransferPayload::Custom {
                 mime: match &descriptor.format {
@@ -268,7 +269,7 @@ mod clip {
                     parts.html = Some(html.clone());
                     true
                 }
-                Some(payload) => match TransferUri::list_of(payload) {
+                Some(payload) => match TransferUri::list_of(payload, PathStyle::Posix) {
                     Some(uris) => {
                         let before = parts.uris.len();
                         parts
