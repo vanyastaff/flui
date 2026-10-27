@@ -35,7 +35,7 @@
     target_os = "android",
     all(target_os = "linux", any(feature = "wayland", feature = "x11")),
     all(target_os = "linux", feature = "winit-backend"),
-    test
+    all(test, not(target_arch = "wasm32"))
 ))]
 pub(crate) const OPAQUE_PANIC_PAYLOAD: &str = "non-string panic payload";
 
@@ -51,7 +51,7 @@ pub(crate) const OPAQUE_PANIC_PAYLOAD: &str = "non-string panic payload";
     target_os = "android",
     all(target_os = "linux", any(feature = "wayland", feature = "x11")),
     all(target_os = "linux", feature = "winit-backend"),
-    test
+    all(test, not(target_arch = "wasm32"))
 ))]
 #[must_use]
 pub(crate) fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> &str {
@@ -65,7 +65,7 @@ pub(crate) fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> &st
     target_os = "ios",
     target_os = "android",
     all(target_os = "linux", feature = "winit-backend"),
-    test
+    all(test, not(target_arch = "wasm32"))
 ))]
 pub(crate) enum AfterPanic<A, R> {
     /// The entry failed and the state behind it holds: the OS gets what this
@@ -108,7 +108,7 @@ pub(crate) enum AfterPanic<A, R> {
     target_os = "ios",
     target_os = "android",
     all(target_os = "linux", feature = "winit-backend"),
-    test
+    all(test, not(target_arch = "wasm32"))
 ))]
 pub(crate) fn os_entry<A, R>(
     entry: &'static str,
@@ -140,7 +140,7 @@ where
     target_os = "ios",
     target_os = "android",
     all(target_os = "linux", feature = "winit-backend"),
-    test
+    all(test, not(target_arch = "wasm32"))
 ))]
 fn end_process(entry: &'static str, args: Option<&dyn std::fmt::Debug>, why: &'static str) -> ! {
     contain_owner_callback(|| {
@@ -185,7 +185,11 @@ pub(crate) fn owner_callback_panicked(body: impl FnOnce()) -> bool {
 /// text, under `entry`, the log contained like any owner callback, and its
 /// payload is then retained rather than dropped, since a payload's destructor
 /// is user code that would unwind into the OS (ADR-0127 §2).
-#[cfg(any(target_os = "windows", target_os = "macos", test))]
+#[cfg(any(
+    target_os = "windows",
+    target_os = "macos",
+    all(test, not(target_arch = "wasm32"))
+))]
 pub(crate) fn contain_os_entry<R>(entry: &'static str, body: impl FnOnce() -> R) -> Option<R> {
     contained(entry, None, body)
 }
@@ -197,7 +201,7 @@ pub(crate) fn contain_os_entry<R>(entry: &'static str, body: impl FnOnce() -> R)
     target_os = "ios",
     target_os = "android",
     all(target_os = "linux", feature = "winit-backend"),
-    test
+    all(test, not(target_arch = "wasm32"))
 ))]
 fn contained<R>(
     entry: &'static str,
