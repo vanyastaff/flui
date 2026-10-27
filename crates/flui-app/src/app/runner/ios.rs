@@ -300,10 +300,6 @@ where
     use flui_engine::Renderer;
     use parking_lot::Mutex;
 
-    fn owner_platform_installed<R>(f: impl FnOnce(&flui_native::OwnerPlatform) -> R) -> R {
-        with_owner_platform(f).expect("BUG: bootstrap_ios runs only after install_owner_platform")
-    }
-
     let presentation_window = super::presentation_window(Arc::clone(&host))
         .with_pointer_resampling(config.pointer_resampling);
     let window = Arc::clone(presentation_window.window());
