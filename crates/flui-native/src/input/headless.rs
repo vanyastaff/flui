@@ -24,9 +24,10 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
     /// Report `availability` as what this backend implements (its device
     /// presence is ignored: attached devices come from
     /// [`input_devices`](Self::input_devices)). Without it the headless
-    /// backend reports pen, precise scrolling and trackpad gestures `Native`,
-    /// since a test can synthesize all of them, and input regions and outgoing
-    /// drags `Unavailable`.
+    /// backend reports pen, precise scrolling, trackpad gestures and input
+    /// regions `Native`, since a test can synthesize or record all of them,
+    /// and outgoing drags `Unavailable`. A window takes input regions exactly
+    /// while this says they are available.
     #[must_use]
     pub fn with_input_availability(
         self,

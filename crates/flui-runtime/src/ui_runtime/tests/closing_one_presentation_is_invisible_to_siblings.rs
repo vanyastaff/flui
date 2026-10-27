@@ -506,6 +506,24 @@ impl flui_platform::PlatformWindow for OwnershipWindow {
     fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
         self.delegate.drag_source()
     }
+    fn set_frame_rate_hint(
+        &self,
+        hint: flui_platform::FrameRateHint,
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.delegate.set_frame_rate_hint(hint)
+    }
+    fn set_input_regions(
+        &self,
+        regions: &[flui_platform::input_regions::InputRegion],
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.delegate.set_input_regions(regions)
+    }
+    fn set_material(
+        &self,
+        material: flui_platform::WindowMaterial,
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.delegate.set_material(material)
+    }
     fn set_cursor(
         &self,
         cursor: flui_platform::CursorIcon,

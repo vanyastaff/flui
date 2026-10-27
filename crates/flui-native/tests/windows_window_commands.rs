@@ -1277,6 +1277,12 @@ impl WindowFixture for Win32Fixture {
             .expect("a Win32 window closes");
         settle();
     }
+
+    /// The Win32 input table: whatever its touchpad, a Win32 window hands the
+    /// system no input region.
+    fn input_regions(&self) -> flui_platform::Availability {
+        flui_native::input::availability::windows(false).input_regions()
+    }
 }
 
 fn the_win32_window_conforms() {

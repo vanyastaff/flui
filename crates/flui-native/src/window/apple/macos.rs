@@ -1382,6 +1382,37 @@ impl PlatformWindow for MacOSWindow {
         tracing::debug!("macOS: window revealed after its first presented frame");
     }
 
+    /// This host draws none of the contract's materials; an AppKit window's
+    /// own materials are reached through `AppKitWindow::set_backdrop`.
+    fn set_material(
+        &self,
+        _material: flui_platform::WindowMaterial,
+    ) -> Result<(), flui_platform::Unsupported> {
+        Err(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::NotOnThisPlatform,
+        ))
+    }
+
+    /// This host makes no refresh-rate request of AppKit.
+    fn set_frame_rate_hint(
+        &self,
+        _hint: flui_platform::FrameRateHint,
+    ) -> Result<(), flui_platform::Unsupported> {
+        Err(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::NotOnThisPlatform,
+        ))
+    }
+
+    /// AppKit takes no input region from a window.
+    fn set_input_regions(
+        &self,
+        _regions: &[flui_platform::input_regions::InputRegion],
+    ) -> Result<(), flui_platform::Unsupported> {
+        Err(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::NotOnThisPlatform,
+        ))
+    }
+
     // The explicit `arrowCursor` list below is intentional documentation of
     // which icons resolve to the default arrow; it is textually identical to
     // the `_` arm's body, which objc2's `msg_send!` expansion makes clippy

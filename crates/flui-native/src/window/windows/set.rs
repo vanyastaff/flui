@@ -14,8 +14,9 @@ use windows::Win32::{
     },
 };
 
-use flui_platform::{PlatformWindow, WindowCapabilities, WindowId, WindowOptions};
+use flui_platform::{PlatformWindow, Unsupported, WindowCapabilities, WindowId, WindowOptions};
 
+use super::material::{self, SystemBackdrop};
 use super::proc::{WindowRef, to_screen, with_window_context_checked};
 use super::window::{WindowsWindow, window_capabilities};
 use crate::host::WindowPositions;
@@ -23,6 +24,8 @@ use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
 use crate::owner::handlers::OpenWindows;
 use crate::owner::windows::{ClassWindows, WindowsLoop};
+use crate::version::gate::Since;
+use crate::version::gate::windows::WindowsBuild;
 use crate::window::config::WindowConfiguration;
 
 /// The windows of FLUI's class the platform tracks, keyed by HWND, and the
@@ -38,17 +41,30 @@ pub struct WindowSet {
     pub(super) config: WindowConfiguration,
     /// What every window hands out of the window-level positions.
     pub(super) positions: WindowPositions<WindowRef>,
+    /// Whether the build the platform runs on draws a material behind a
+    /// window, read once with the platform.
+    pub(super) material: Result<Since<SystemBackdrop>, Unsupported>,
 }
 
 impl WindowSet {
     /// No window yet; every window opens with `config` and hands out
-    /// `positions`.
-    pub(crate) fn new(config: WindowConfiguration, positions: WindowPositions<WindowRef>) -> Self {
+    /// `positions`, and draws a material as `build` allows.
+    pub(crate) fn new(
+        config: WindowConfiguration,
+        positions: WindowPositions<WindowRef>,
+        build: WindowsBuild,
+    ) -> Self {
         Self {
             by_handle: Mutex::new(HashMap::new()),
             config,
             positions,
+            material: material::gate(build),
         }
+    }
+
+    /// What every window of this platform honours and observes.
+    pub(super) const fn capabilities(&self) -> WindowCapabilities {
+        window_capabilities(material::availability(&self.material))
     }
 
     /// Stops tracking the window `hwnd` names, when it is the one with
@@ -89,6 +105,7 @@ impl std::fmt::Debug for WindowSet {
         };
         out.field("config", &self.config)
             .field("positions", &self.positions)
+            .field("material", &self.material)
             .finish()
     }
 }
@@ -238,8 +255,8 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
         }
     }
 
-    fn capabilities(_: &WindowsLoop, _: &WindowSet) -> WindowCapabilities {
-        window_capabilities()
+    fn capabilities(_: &WindowsLoop, windows: &WindowSet) -> WindowCapabilities {
+        windows.capabilities()
     }
 
     fn frame_inset(_: &WindowsLoop, _: &WindowSet, _: f64) -> Size<f64> {

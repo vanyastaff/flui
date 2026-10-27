@@ -39,6 +39,33 @@ impl flui_platform::PlatformWindow for WakeWindow {
             action();
         }
     }
+    fn set_frame_rate_hint(
+        &self,
+        _: flui_platform::FrameRateHint,
+    ) -> Result<(), flui_platform::Unsupported> {
+        Err(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::NotOnThisPlatform,
+        ))
+    }
+
+    fn set_input_regions(
+        &self,
+        _: &[flui_platform::input_regions::InputRegion],
+    ) -> Result<(), flui_platform::Unsupported> {
+        Err(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::NotOnThisPlatform,
+        ))
+    }
+
+    fn set_material(
+        &self,
+        _: flui_platform::WindowMaterial,
+    ) -> Result<(), flui_platform::Unsupported> {
+        Err(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::NotOnThisPlatform,
+        ))
+    }
+
     fn set_cursor(&self, _: flui_platform::CursorIcon) -> Result<(), flui_platform::CursorError> {
         Ok(())
     }

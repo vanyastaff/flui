@@ -904,6 +904,24 @@ impl PlatformWindow for WithDragSource {
     ) -> Result<(), flui_platform::CursorError> {
         self.window.set_cursor(cursor)
     }
+    fn set_frame_rate_hint(
+        &self,
+        hint: flui_platform::FrameRateHint,
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.window.set_frame_rate_hint(hint)
+    }
+    fn set_input_regions(
+        &self,
+        regions: &[flui_platform::input_regions::InputRegion],
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.window.set_input_regions(regions)
+    }
+    fn set_material(
+        &self,
+        material: flui_platform::WindowMaterial,
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.window.set_material(material)
+    }
     fn drag_source(&self) -> Option<Arc<dyn PlatformDragSource>> {
         Some(Arc::clone(&self.source))
     }

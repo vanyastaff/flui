@@ -1241,9 +1241,21 @@ impl PlatformWindow for IOSWindow {
     /// projects the regions, and when the projection changed defers each edge an
     /// exclusion region reaches (`preferredScreenEdgesDeferringSystemGestures`). A region
     /// clear of every edge has no UIKit equivalent and defers nothing.
-    fn set_input_regions(&self, regions: &[flui_platform::input_regions::InputRegion]) {
+    fn set_input_regions(
+        &self,
+        regions: &[flui_platform::input_regions::InputRegion],
+    ) -> Result<(), flui_platform::Unsupported> {
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(flui_platform::Unsupported::new(
+                flui_platform::UnsupportedReason::NoWindow,
+            ));
+        }
+        // The owner lane is the main thread; a call from elsewhere is a
+        // caller's mistake the next frame on the owner lane makes good.
         let Some(marker) = MainThreadMarker::new() else {
-            return;
+            return Err(flui_platform::Unsupported::new(
+                flui_platform::UnsupportedReason::Unavailable,
+            ));
         };
         let (size, scale) = {
             let metrics = *self.metrics.lock();
@@ -1257,11 +1269,13 @@ impl PlatformWindow for IOSWindow {
             let mut state = self.input_regions.lock();
             let (projection, edges) = &mut *state;
             let Some(sent) = projection.update(regions, scale, None) else {
-                return;
+                return Ok(());
             };
             *edges = crate::window::apple::geometry::screen_edges::DeferredEdges::of(sent, size);
             *edges
         };
+        // A window not yet in a scene keeps the edges, which its controller
+        // takes when it attaches.
         let controller = self
             .native
             .get(marker)
@@ -1272,6 +1286,28 @@ impl PlatformWindow for IOSWindow {
         if let Some(controller) = controller {
             controller.defer_edges(rect_edge(edges));
         }
+        Ok(())
+    }
+
+    /// This host draws none of the contract's materials.
+    fn set_material(
+        &self,
+        _material: flui_platform::WindowMaterial,
+    ) -> Result<(), flui_platform::Unsupported> {
+        Err(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::NotOnThisPlatform,
+        ))
+    }
+
+    /// The display link runs at the screen's best rate whatever the window
+    /// asks; this host makes no per-window request.
+    fn set_frame_rate_hint(
+        &self,
+        _hint: flui_platform::FrameRateHint,
+    ) -> Result<(), flui_platform::Unsupported> {
+        Err(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::NotOnThisPlatform,
+        ))
     }
 
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {

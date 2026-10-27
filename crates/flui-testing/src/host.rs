@@ -284,10 +284,31 @@ impl PlatformWindow for HeadlessWindow {
         Some(Arc::clone(&self.os_drags) as Arc<dyn PlatformDragSource>)
     }
 
-    fn set_input_regions(&self, regions: &[InputRegion]) {
+    fn set_input_regions(&self, regions: &[InputRegion]) -> Result<(), flui_platform::Unsupported> {
         let scale = *self.scale_factor.lock();
         let display = *self.display.lock();
         self.input_regions.lock().update(regions, scale, display);
+        Ok(())
+    }
+
+    /// The host's window honours no command and takes no request: its
+    /// capabilities say `Unavailable`.
+    fn set_frame_rate_hint(
+        &self,
+        _: flui_platform::FrameRateHint,
+    ) -> Result<(), flui_platform::Unsupported> {
+        Err(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::NotOnThisPlatform,
+        ))
+    }
+
+    fn set_material(
+        &self,
+        _: flui_platform::WindowMaterial,
+    ) -> Result<(), flui_platform::Unsupported> {
+        Err(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::NotOnThisPlatform,
+        ))
     }
 
     /// Shown and focused, with no position (as on Wayland), its logical size

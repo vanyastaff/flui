@@ -13,7 +13,7 @@ use flui_foundation::geometry::Point;
 
 use crate::{
     AdmittedCommand, ApplyError, CursorError, DispatchEventResult, PlatformHaptics, PlatformInput,
-    PlatformTextInput, WindowBackgroundAppearance, WindowId, WindowState,
+    PlatformTextInput, Unsupported, WindowId, WindowMaterial, WindowState,
 };
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -100,10 +100,12 @@ pub enum WindowAt {
 /// ```
 /// use std::sync::Arc;
 ///
+/// use flui_platform::input_regions::InputRegion;
 /// use flui_platform::{
-///     AdmissionError, AdmittedCommand, ApplyError, CursorError, CursorIcon, PlatformHaptics,
-///     PlatformSystemChrome, PlatformTextInput, PlatformWindow, Unsupported, UnsupportedReason,
-///     WindowCapabilities, WindowCommand, WindowGeometry, WindowId, WindowMode, WindowState,
+///     AdmissionError, AdmittedCommand, ApplyError, CursorError, CursorIcon, FrameRateHint,
+///     PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow, Unsupported,
+///     UnsupportedReason, WindowCapabilities, WindowCommand, WindowGeometry, WindowId,
+///     WindowMaterial, WindowMode, WindowState,
 /// };
 /// use flui_foundation::geometry::Size;
 ///
@@ -138,6 +140,16 @@ pub enum WindowAt {
 ///     fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
 ///         None
 ///     }
+///     // Its capabilities leave every verb `Unavailable`, so each answers so.
+///     fn set_frame_rate_hint(&self, _hint: FrameRateHint) -> Result<(), Unsupported> {
+///         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
+///     }
+///     fn set_input_regions(&self, _regions: &[InputRegion]) -> Result<(), Unsupported> {
+///         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
+///     }
+///     fn set_material(&self, _material: WindowMaterial) -> Result<(), Unsupported> {
+///         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
+///     }
 /// }
 ///
 /// let window: &dyn PlatformWindow = &Offscreen;
@@ -147,6 +159,8 @@ pub enum WindowAt {
 ///     WindowCommand::Show.admit(&capabilities),
 ///     Err(AdmissionError::Unsupported(_))
 /// ));
+/// assert!(!capabilities.material.is_available());
+/// assert!(window.set_material(WindowMaterial::System).is_err());
 /// let normal = WindowCommand::SetMode(WindowMode::Normal)
 ///     .admit(&capabilities)
 ///     .expect("every window has the normal mode");
@@ -176,10 +190,12 @@ pub enum WindowAt {
 /// ```compile_fail,E0407
 /// use std::sync::Arc;
 ///
+/// use flui_platform::input_regions::InputRegion;
 /// use flui_platform::{
-///     AdmissionError, AdmittedCommand, ApplyError, CursorError, CursorIcon, PlatformHaptics,
-///     PlatformSystemChrome, PlatformTextInput, PlatformWindow, Unsupported, UnsupportedReason,
-///     WindowCapabilities, WindowCommand, WindowGeometry, WindowId, WindowMode, WindowState,
+///     AdmissionError, AdmittedCommand, ApplyError, CursorError, CursorIcon, FrameRateHint,
+///     PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow, Unsupported,
+///     UnsupportedReason, WindowCapabilities, WindowCommand, WindowGeometry, WindowId,
+///     WindowMaterial, WindowMode, WindowState,
 /// };
 /// use flui_foundation::geometry::Size;
 ///
@@ -213,6 +229,15 @@ pub enum WindowAt {
 ///     }
 ///     fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
 ///         None
+///     }
+///     fn set_frame_rate_hint(&self, _hint: FrameRateHint) -> Result<(), Unsupported> {
+///         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
+///     }
+///     fn set_input_regions(&self, _regions: &[InputRegion]) -> Result<(), Unsupported> {
+///         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
+///     }
+///     fn set_material(&self, _material: WindowMaterial) -> Result<(), Unsupported> {
+///         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
 ///     }
 ///     fn accessibility(&self) -> Option<()> { None }
 /// }
@@ -446,12 +471,18 @@ pub trait PlatformWindow: Send + Sync {
     /// scale must publish that state and raise [`on_state_changed`](Self::on_state_changed),
     /// or the OS keeps the previous display's projection until the next composited frame.
     ///
-    /// A backend whose OS honours no input region keeps this default, which ignores the set,
-    /// and reports [`InputCapabilities::input_regions`](crate::input_capabilities::InputCapabilities::input_regions)
-    /// as `Unavailable`. Owner thread only.
-    fn set_input_regions(&self, regions: &[crate::input_regions::InputRegion]) {
-        let _ = regions;
-    }
+    /// It is a verb, not a [`WindowCommand`](crate::WindowCommand): commands apply at the
+    /// owner's next turn, and this is sent every frame (ADR-0254 §3). Owner thread only.
+    ///
+    /// # Errors
+    ///
+    /// [`Unsupported`] exactly when the window's
+    /// [`InputCapabilities::input_regions`](crate::input_capabilities::InputCapabilities::input_regions)
+    /// is `Unavailable`: the OS honours no input region here, and the set is not kept.
+    fn set_input_regions(
+        &self,
+        regions: &[crate::input_regions::InputRegion],
+    ) -> Result<(), Unsupported>;
 
     // ==================== Control ====================
 
@@ -473,10 +504,24 @@ pub trait PlatformWindow: Send + Sync {
     /// window at all.
     fn reveal_after_first_frame(&self) {}
 
-    /// Set the window's background appearance (backdrop material)
-    fn set_background_appearance(&self, appearance: WindowBackgroundAppearance) {
-        let _ = appearance;
-    }
+    /// Have the window system draw `material` behind the window's content, in
+    /// place of the material it drew. The material shows through the window's
+    /// frame and wherever the content is transparent. A window opens with the
+    /// material its host gives a new window, which the host's documentation
+    /// names.
+    ///
+    /// A verb with a capability, not a [`WindowCommand`](crate::WindowCommand)
+    /// (ADR-0254 §3): it takes effect when it returns `Ok`. Owner thread only.
+    ///
+    /// # Errors
+    ///
+    /// [`Unsupported`] when the window's
+    /// [`WindowCapabilities::material`](crate::WindowCapabilities::material) is
+    /// `Unavailable`, and with [`UnsupportedReason::NotOnThisDevice`](crate::UnsupportedReason::NotOnThisDevice)
+    /// when the window system refuses the material all the same; the window
+    /// then keeps the material it had. A closed window answers
+    /// [`NoWindow`](crate::UnsupportedReason::NoWindow).
+    fn set_material(&self, material: WindowMaterial) -> Result<(), Unsupported>;
 
     /// Apply the cursor selected by this window's presentation.
     ///
@@ -544,14 +589,19 @@ pub trait PlatformWindow: Send + Sync {
     /// request and leaves the choice to the system. It is a request, not a
     /// command: the system may keep any rate. A native surface carries the
     /// request, so a host sends the current hint again after the surface was
-    /// replaced. A backend without such a request, or one running on an
-    /// operating system version that lacks it, ignores the hint; that is the
-    /// default.
+    /// replaced.
     ///
-    /// Called on the owner thread.
-    fn set_frame_rate_hint(&self, hint: crate::FrameRateHint) {
-        let _ = hint;
-    }
+    /// A verb, not a [`WindowCommand`](crate::WindowCommand): commands apply at
+    /// the owner's next turn, and this is sent as the window's animation
+    /// starts and stops (ADR-0254 §3). Called on the owner thread.
+    ///
+    /// # Errors
+    ///
+    /// [`Unsupported`] exactly when the window's
+    /// [`WindowCapabilities::frame_rate_hint`](crate::WindowCapabilities::frame_rate_hint)
+    /// is `Unavailable`: the window system takes no such request, or this
+    /// operating system build lacks it ([`NotOnThisDevice`](crate::UnsupportedReason::NotOnThisDevice)).
+    fn set_frame_rate_hint(&self, hint: crate::FrameRateHint) -> Result<(), Unsupported>;
 
     /// Register a callback for the GPU surface's availability.
     ///

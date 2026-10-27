@@ -3,6 +3,8 @@
 //! - [`limits`] and [`mode`]: the pure half, compiled and tested on every
 //!   host: the size limits the system asks for and the mode the window
 //!   tracks with what its way back needs, as rules over plain values;
+//! - [`material`]: the pure half too: from which build the window draws a
+//!   material behind it;
 //! - `window`: [`WindowsWindow`], the handle a host hands out, how it opens
 //!   and what its commands ask of the OS;
 //! - `set`: [`WindowSet`], the windows of a platform, which the loop holds as
@@ -147,6 +149,90 @@ pub(crate) mod mode {
                 fullscreen: self.holds_fullscreen(),
                 maximized: self.is_maximized(),
             }
+        }
+    }
+}
+
+pub(crate) mod material {
+    //! Which Windows builds draw a material behind a window: the gate the
+    //! window's [`WindowCapabilities::material`](flui_platform::WindowCapabilities::material)
+    //! and `set_material` both follow, so the two cannot disagree.
+
+    #![forbid(unsafe_code)]
+
+    use flui_platform::{Availability, Unsupported, UnsupportedReason};
+
+    use crate::version::gate::windows::WindowsBuild;
+    use crate::version::gate::{Gate, Since};
+
+    /// `DWMWA_SYSTEMBACKDROP_TYPE`, the desktop window manager attribute that
+    /// draws a system material behind a window, from Windows 11 22H2 (build
+    /// 22621). Without it a window draws no material: its capability is
+    /// `Unavailable` and `set_material` answers `NotOnThisDevice`.
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct SystemBackdrop;
+
+    impl Gate for SystemBackdrop {
+        type Version = WindowsBuild;
+        const SINCE: u64 = 22621;
+    }
+
+    /// What windows draw materials with on `build`: the proof it has the
+    /// attribute, or why not.
+    pub(crate) fn gate(build: WindowsBuild) -> Result<Since<SystemBackdrop>, Unsupported> {
+        build
+            .since::<SystemBackdrop>()
+            .ok_or(Unsupported::new(UnsupportedReason::NotOnThisDevice))
+    }
+
+    /// The material capability of a window whose platform passed or failed
+    /// the [`gate`].
+    pub(crate) const fn availability(
+        gate: &Result<Since<SystemBackdrop>, Unsupported>,
+    ) -> Availability {
+        match gate {
+            Ok(_) => Availability::Native,
+            Err(_) => Availability::Unavailable,
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use flui_platform::{Availability, UnsupportedReason};
+
+        use super::{SystemBackdrop, availability, gate};
+        use crate::version::gate::testing::row;
+        use crate::version::gate::windows::WindowsBuild;
+
+        /// One row per build around the gate: below it a window has no
+        /// material and is told `NotOnThisDevice`; from it on, it has one.
+        #[test]
+        fn system_backdrop_gate_table() {
+            let mut failures = row::<SystemBackdrop>(
+                "SystemBackdrop",
+                WindowsBuild::from_number(22620),
+                WindowsBuild::from_number(22621),
+                WindowsBuild::UNKNOWN,
+            );
+            let cases = [
+                (WindowsBuild::from_number(19045), Availability::Unavailable),
+                (WindowsBuild::from_number(22000), Availability::Unavailable),
+                (WindowsBuild::from_number(22620), Availability::Unavailable),
+                (WindowsBuild::UNKNOWN, Availability::Unavailable),
+                (WindowsBuild::from_number(22621), Availability::Native),
+                (WindowsBuild::from_number(26100), Availability::Native),
+            ];
+            for (build, wanted) in cases {
+                let answer = gate(build);
+                let reason_holds = match &answer {
+                    Ok(_) => wanted == Availability::Native,
+                    Err(refused) => refused.reason == UnsupportedReason::NotOnThisDevice,
+                };
+                if availability(&answer) != wanted || !reason_holds {
+                    failures.push(format!("{build}: {answer:?}, wanted {wanted:?}"));
+                }
+            }
+            assert!(failures.is_empty(), "{failures:#?}");
         }
     }
 }

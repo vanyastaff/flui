@@ -454,6 +454,12 @@ pub(crate) mod source {
             self.max_rate_changed.swap(false, Ordering::AcqRel)
         }
 
+        /// Whether `ANativeWindow_setFrameRate` resolved: API 30 and a library
+        /// that has it.
+        fn takes_frame_rate_requests(&self) -> bool {
+            self.set_frame_rate.is_some()
+        }
+
         /// Ask the system for the refresh rate `hint` names on `window`, if this
         /// system has the request (API 30).
         #[expect(unsafe_code, reason = "calls ANativeWindow_setFrameRate")]

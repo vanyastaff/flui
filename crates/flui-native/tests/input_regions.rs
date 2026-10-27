@@ -66,10 +66,15 @@ fn headless_reports_input_regions_and_sends_only_changes() {
         EXCLUSION,
         Rect::from_ltrb(0.0, 0.0, 10.0, 20.0),
     )];
-    window.set_input_regions(&regions);
-    window.set_input_regions(&regions);
+    let send = || {
+        window
+            .set_input_regions(&regions)
+            .expect("the headless window takes input regions");
+    };
+    send();
+    send();
     mock(&window).simulate_scale_factor_change(2.0);
-    window.set_input_regions(&regions);
+    send();
     assert_eq!(
         mock(&window).input_region_updates(),
         vec![vec![device(0, 0, 10, 20)], vec![device(0, 0, 20, 40)]]

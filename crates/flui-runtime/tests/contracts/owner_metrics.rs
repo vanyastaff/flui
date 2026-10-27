@@ -2228,6 +2228,24 @@ impl flui_platform::PlatformWindow for GeometryWindow {
     ) -> Result<(), flui_platform::CursorError> {
         self.inner.set_cursor(cursor)
     }
+    fn set_frame_rate_hint(
+        &self,
+        hint: flui_platform::FrameRateHint,
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.inner.set_frame_rate_hint(hint)
+    }
+    fn set_input_regions(
+        &self,
+        regions: &[flui_platform::input_regions::InputRegion],
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.inner.set_input_regions(regions)
+    }
+    fn set_material(
+        &self,
+        material: flui_platform::WindowMaterial,
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.inner.set_material(material)
+    }
     /// The display the test scripted, with what the wrapped window reports.
     fn state(&self) -> flui_platform::WindowState {
         self.inner
@@ -2329,7 +2347,10 @@ impl flui_platform::PlatformWindow for RegionWindow {
     fn drag_source(&self) -> Option<std::sync::Arc<dyn flui_platform::drag::PlatformDragSource>> {
         None
     }
-    fn set_input_regions(&self, regions: &[flui_platform::input_regions::InputRegion]) {
+    fn set_input_regions(
+        &self,
+        regions: &[flui_platform::input_regions::InputRegion],
+    ) -> Result<(), flui_platform::Unsupported> {
         self.sent.lock().expect("sent regions").push(regions.len());
         if self
             .panic_next
@@ -2337,6 +2358,19 @@ impl flui_platform::PlatformWindow for RegionWindow {
         {
             panic!("scripted input-region failure");
         }
+        Ok(())
+    }
+    fn set_frame_rate_hint(
+        &self,
+        hint: flui_platform::FrameRateHint,
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.inner.set_frame_rate_hint(hint)
+    }
+    fn set_material(
+        &self,
+        material: flui_platform::WindowMaterial,
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.inner.set_material(material)
     }
 }
 

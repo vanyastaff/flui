@@ -209,6 +209,10 @@ mod hooks {
         /// this system has the request.
         fn request_frame_rate(&self, window: &NativeWindow, hint: FrameRateHint);
 
+        /// Whether this system takes a refresh-rate request at all
+        /// (`ANativeWindow_setFrameRate`, API 30).
+        fn takes_frame_rate_requests(&self) -> bool;
+
         /// Watch the refresh rate where the system reports it, on the thread
         /// whose looper runs the app, until the watch is dropped on that
         /// thread.

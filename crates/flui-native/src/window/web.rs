@@ -36,9 +36,9 @@ use crate::{
     window::state::{ReportedFacts, WindowStateCell},
 };
 use flui_platform::{
-    AdmittedCommand, ApplyError, CursorError, PlatformWindow, WindowAppearance,
-    WindowBackgroundAppearance, WindowCapabilities, WindowCommand, WindowExecutionState,
-    WindowGeometry, WindowId, WindowMode, WindowOptions, WindowState,
+    AdmittedCommand, ApplyError, CursorError, PlatformWindow, Unsupported, UnsupportedReason,
+    WindowAppearance, WindowCapabilities, WindowCommand, WindowExecutionState, WindowGeometry,
+    WindowId, WindowMaterial, WindowMode, WindowOptions, WindowState,
 };
 
 use crate::owner::web::listener::CanvasListener;
@@ -1170,8 +1170,23 @@ impl PlatformWindow for WebWindow {
         Ok(())
     }
 
-    fn set_background_appearance(&self, _appearance: WindowBackgroundAppearance) {
-        // Not applicable for web canvas
+    /// A page has no say over what the browser draws behind it.
+    fn set_material(&self, _material: WindowMaterial) -> Result<(), Unsupported> {
+        Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
+    }
+
+    /// The browser paces `requestAnimationFrame` to the display; a page asks
+    /// for no rate.
+    fn set_frame_rate_hint(&self, _hint: flui_platform::FrameRateHint) -> Result<(), Unsupported> {
+        Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
+    }
+
+    /// A page hands the system no input region.
+    fn set_input_regions(
+        &self,
+        _regions: &[flui_platform::input_regions::InputRegion],
+    ) -> Result<(), Unsupported> {
+        Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
     }
 
     fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {

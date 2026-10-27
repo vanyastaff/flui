@@ -770,6 +770,37 @@ impl PlatformWindow for WinitWindow {
         Ok(())
     }
 
+    /// winit 0.30 has a material only per OS (`set_system_backdrop` on
+    /// Windows, `set_blur` on KDE), none it draws everywhere.
+    fn set_material(
+        &self,
+        _material: flui_platform::WindowMaterial,
+    ) -> Result<(), flui_platform::Unsupported> {
+        Err(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::NotOnThisPlatform,
+        ))
+    }
+
+    /// winit takes no refresh-rate request.
+    fn set_frame_rate_hint(
+        &self,
+        _hint: flui_platform::FrameRateHint,
+    ) -> Result<(), flui_platform::Unsupported> {
+        Err(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::NotOnThisPlatform,
+        ))
+    }
+
+    /// winit hands the system no input region.
+    fn set_input_regions(
+        &self,
+        _regions: &[flui_platform::input_regions::InputRegion],
+    ) -> Result<(), flui_platform::Unsupported> {
+        Err(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::NotOnThisPlatform,
+        ))
+    }
+
     crate::owner::handlers::impl_window_callback_setters!(callbacks);
 
     // GPU integration: `winit::window::Window` implements `HasWindowHandle`/

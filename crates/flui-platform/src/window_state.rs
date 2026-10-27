@@ -384,7 +384,10 @@ impl WindowState {
 /// the window system does provide (a fullscreen made of a borderless window
 /// sized to its monitor), and [`Unavailable`](Availability::Unavailable)
 /// exactly when [`WindowCommand::admit`] answers
-/// [`AdmissionError::Unsupported`]; a boolean could not say "only
+/// [`AdmissionError::Unsupported`] — or, for the verbs a window takes outside
+/// the command queue ([`frame_rate_hint`](Self::frame_rate_hint),
+/// [`material`](Self::material)), when the verb answers
+/// [`Unsupported`](crate::Unsupported); a boolean could not say "only
 /// approximately". Fields are public so a backend can start from
 /// [`NONE`](Self::NONE) or [`ALL`](Self::ALL) and set the difference.
 ///
@@ -432,6 +435,13 @@ pub struct WindowCapabilities {
     pub observes_minimized: Availability,
     /// A saved position can be applied again when the window opens.
     pub places_at_open: Availability,
+    /// [`PlatformWindow::set_frame_rate_hint`](crate::PlatformWindow::set_frame_rate_hint):
+    /// the window system takes a refresh-rate request for the window.
+    pub frame_rate_hint: Availability,
+    /// [`PlatformWindow::set_material`](crate::PlatformWindow::set_material):
+    /// the window system draws every [`WindowMaterial`](crate::WindowMaterial)
+    /// behind the window.
+    pub material: Availability,
     /// The window whose snapshot publishes these capabilities; `None` for
     /// capabilities built by hand. Kept by [`WindowState::successor`].
     owner: Option<CapabilitiesOwner>,
@@ -475,7 +485,7 @@ impl std::hash::Hash for WindowCapabilities {
 impl WindowCapabilities {
     /// Every field but the revision, for equality and hashing. Destructured,
     /// so a field the type gains does not compile until it is listed here.
-    const fn honoured(&self) -> [Availability; 16] {
+    const fn honoured(&self) -> [Availability; 18] {
         let Self {
             sets_title,
             sets_position,
@@ -493,6 +503,8 @@ impl WindowCapabilities {
             observes_position,
             observes_minimized,
             places_at_open,
+            frame_rate_hint,
+            material,
             owner: _,
             revision: _,
         } = *self;
@@ -513,6 +525,8 @@ impl WindowCapabilities {
             observes_position,
             observes_minimized,
             places_at_open,
+            frame_rate_hint,
+            material,
         ]
     }
 }
@@ -536,6 +550,8 @@ impl WindowCapabilities {
         observes_position: Availability::Unavailable,
         observes_minimized: Availability::Unavailable,
         places_at_open: Availability::Unavailable,
+        frame_rate_hint: Availability::Unavailable,
+        material: Availability::Unavailable,
         owner: None,
         revision: WindowRevision::ZERO,
     };
@@ -559,6 +575,8 @@ impl WindowCapabilities {
         observes_position: Availability::Native,
         observes_minimized: Availability::Native,
         places_at_open: Availability::Native,
+        frame_rate_hint: Availability::Native,
+        material: Availability::Native,
         owner: None,
         revision: WindowRevision::ZERO,
     };

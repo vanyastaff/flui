@@ -532,7 +532,11 @@ fn raise(hwnd: HWND) -> POINTL {
 fn platform_over(transport: &Arc<OleTransfer>) -> WindowsPlatform {
     WindowsPlatform::try_from_parts(
         |positions| {
-            crate::window::windows::WindowSet::new(WindowConfiguration::default(), positions)
+            crate::window::windows::WindowSet::new(
+                WindowConfiguration::default(),
+                positions,
+                crate::version::gate::windows::WindowsBuild::read(),
+            )
         },
         |windows| {
             WindowsLoop::with_drag::<Windows>(

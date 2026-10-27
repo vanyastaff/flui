@@ -473,11 +473,13 @@ fn the_headless_window_drops_input_regions_no_host_could_send() {
     const EXCLUSION: InputRegionKind = InputRegionKind::SystemGestureExclusion;
     let window = HeadlessWindow::new(40, 24);
     let beyond_i32 = f64::from(i32::MAX) + 10.0;
-    window.set_input_regions(&[
-        InputRegion::new(EXCLUSION, Rect::from_ltrb(0.0, 0.0, beyond_i32, 4.0)),
-        InputRegion::new(EXCLUSION, Rect::from_ltrb(0.0, 0.0, f64::INFINITY, 4.0)),
-        InputRegion::new(EXCLUSION, Rect::from_ltrb(1.0, 2.0, 3.0, 4.0)),
-    ]);
+    window
+        .set_input_regions(&[
+            InputRegion::new(EXCLUSION, Rect::from_ltrb(0.0, 0.0, beyond_i32, 4.0)),
+            InputRegion::new(EXCLUSION, Rect::from_ltrb(0.0, 0.0, f64::INFINITY, 4.0)),
+            InputRegion::new(EXCLUSION, Rect::from_ltrb(1.0, 2.0, 3.0, 4.0)),
+        ])
+        .expect("the test host takes input regions");
     assert_eq!(
         window.input_region_updates(),
         vec![vec![DeviceInputRegion::new(
