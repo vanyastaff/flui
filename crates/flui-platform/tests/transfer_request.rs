@@ -1,6 +1,7 @@
 //! Public transport delivery, cancellation and executor recovery contracts.
-use flui_foundation::{ClaimSlot, claim_slot};
-use flui_platform::data_transfer::{TransferError, TransferPayload, TransferRequest};
+use flui_platform::data_transfer::{
+    TransferCompleter, TransferError, TransferPayload, TransferRequest,
+};
 use std::future::Future;
 use std::io::Read;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -9,26 +10,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Wake, Waker};
 use std::time::{Duration, Instant};
-
-/// The producer half a backend keeps of a pending request: the claim slot it
-/// completes the request through.
-struct Producer(ClaimSlot<Result<TransferPayload, TransferError>>);
-
-impl Producer {
-    fn complete(self, result: Result<TransferPayload, TransferError>) {
-        drop(self.0.deliver(result));
-    }
-
-    fn is_cancelled(&self) -> bool {
-        self.0.is_abandoned()
-    }
-}
-
-/// A pending request and its producer, as a backend makes them.
-fn channel() -> (TransferRequest, Producer) {
-    let (slot, handle) = claim_slot(Arc::new(|| {}));
-    (TransferRequest::pending(handle), Producer(slot))
-}
 
 fn poll(
     request: &mut TransferRequest,
@@ -51,7 +32,7 @@ fn retain_failure(result: std::thread::Result<()>, expected: &str) {
     flui_foundation::panic::retain_opaque_payload(payload);
 }
 fn next_request() {
-    let (mut request, completer) = channel();
+    let (mut request, completer) = TransferRequest::channel();
     assert!(poll(&mut request, Waker::noop()).is_pending());
     completer.complete(Ok(TransferPayload::Text("next".into())));
     assert_text(&mut request, "next");
@@ -88,7 +69,7 @@ fn cloning_waker(action: impl Fn() + Send + Sync + 'static) -> Waker {
 }
 
 fn clone_reenters_completion() {
-    let (mut request, completer) = channel();
+    let (mut request, completer) = TransferRequest::channel();
     let owner = Arc::new(Mutex::new(Some(completer)));
     let clone_owner = Arc::clone(&owner);
     let waker = cloning_waker(move || {
@@ -135,7 +116,7 @@ fn executor(calls: &Arc<AtomicUsize>, fail: bool, captures: Vec<Bomb>) -> Waker 
     }))
 }
 fn clone_failure_preserves_registration() {
-    let (mut request, completer) = channel();
+    let (mut request, completer) = TransferRequest::channel();
     let calls = Arc::new(AtomicUsize::new(0));
     let previous = executor(&calls, false, vec![]);
     assert!(poll(&mut request, &previous).is_pending());
@@ -152,7 +133,7 @@ fn clone_failure_preserves_registration() {
     next_request();
 }
 fn wake_failure_retains_aggregate_and_delivery() {
-    let (mut request, completer) = channel();
+    let (mut request, completer) = TransferRequest::channel();
     let drops = Arc::new(AtomicUsize::new(0));
     let calls = Arc::new(AtomicUsize::new(0));
     let waker = executor(
@@ -174,7 +155,7 @@ fn wake_failure_retains_aggregate_and_delivery() {
     next_request();
 }
 fn owner_disconnect_during_unwind_preserves_primary() {
-    let (mut request, completer) = channel();
+    let (mut request, completer) = TransferRequest::channel();
     let drops = Arc::new(AtomicUsize::new(0));
     let calls = Arc::new(AtomicUsize::new(0));
     let waker = executor(
@@ -200,7 +181,7 @@ fn owner_disconnect_during_unwind_preserves_primary() {
     next_request();
 }
 fn cancellation_during_unwind_preserves_primary() {
-    let (mut request, completer) = channel();
+    let (mut request, completer) = TransferRequest::channel();
     let drops = Arc::new(AtomicUsize::new(0));
     let calls = Arc::new(AtomicUsize::new(0));
     let waker = executor(
@@ -223,7 +204,7 @@ fn cancellation_during_unwind_preserves_primary() {
     next_request();
 }
 fn cancellation_wake_failure_preserves_cancelled_state() {
-    let (mut request, completer) = channel();
+    let (mut request, completer) = TransferRequest::channel();
     let drops = Arc::new(AtomicUsize::new(0));
     let calls = Arc::new(AtomicUsize::new(0));
     let waker = executor(
@@ -243,7 +224,7 @@ fn cancellation_wake_failure_preserves_cancelled_state() {
     completer.complete(Ok(TransferPayload::Text("discarded".into())));
     next_request();
 }
-struct ReenterOnRetirement(Arc<Mutex<Option<Producer>>>);
+struct ReenterOnRetirement(Arc<Mutex<Option<TransferCompleter>>>);
 #[expect(
     clippy::manual_noop_waker,
     reason = "executor retirement must invoke the reentrant Drop hook; Waker::noop has none"
@@ -265,7 +246,7 @@ impl Drop for ReenterOnRetirement {
     }
 }
 fn displaced_executor_retirement_reenters_producer() {
-    let (mut request, completer) = channel();
+    let (mut request, completer) = TransferRequest::channel();
     let owner = Arc::new(Mutex::new(Some(completer)));
     let previous = Waker::from(Arc::new(ReenterOnRetirement(Arc::clone(&owner))));
     assert!(poll(&mut request, &previous).is_pending());
@@ -297,13 +278,13 @@ fn ready_skips_executor_clone() {
 }
 fn cancellation_and_disconnect_resolve() {
     fn require_send<T: Send>(_: &T) {}
-    let (request, completer) = channel();
+    let (request, completer) = TransferRequest::channel();
     require_send(&request);
     require_send(&completer);
     drop(request);
     assert!(completer.is_cancelled());
     completer.complete(Ok(TransferPayload::Text("discarded".into())));
-    let (mut request, completer) = channel();
+    let (mut request, completer) = TransferRequest::channel();
     assert!(poll(&mut request, Waker::noop()).is_pending());
     drop(completer);
     assert!(matches!(
