@@ -2520,6 +2520,53 @@ graph LR
   `cross-typecheck` (нет `zig`; job в CI); winit conformance (см. выше); браузер — у координатора:
   снимок холста после наведения мыши, смены `prefers-color-scheme`, `freeze`/`resume` страницы и
   изменения масштаба страницы несёт эти факты новой ревизией.
+  **Ревью (vanyastaff/flui#1911), коммиты поверх.** (1) Паника в `on_state_changed` больше не
+  теряет колбэк факта: издатель (`StatePublisher`) только читает окно и отвечает `Publication`
+  (`Changed`, `Unchanged`, `Held`), ничего не объявляя, а `WindowCallbacks` кладёт
+  `on_state_changed` и колбэк факта в одно событие очереди `Published { changed, facts }`, каждый
+  в своей изоляции; первая ошибка всплывает после обоих (`resurface_first`). Для фактов вне
+  очереди окна (safe area, немедленный lifecycle и resize iOS) — `publish_then`, то же правило.
+  Тест `a_panicking_state_callback_still_delivers_the_resize` (`window_state_contract`): без
+  изоляции объявления падает. (2) Win32: пока окно держит публикацию (`WM_DPICHANGED`, переход в
+  полноэкранный режим), издатель отвечает `Held`, факт ждёт в `WindowCallbacks::held` и уходит за
+  публикацией, снимающей удержание (`announce` в `window_state`); `on_resize` больше не обгоняет
+  `on_state_changed`. Тест `a_dpi_change_announces_the_snapshot_before_the_resize`: с `Unchanged`
+  вместо `Held` падает (как и `a_state_read_inside_a_callback_never_sees_a_half_made_change`,
+  которая теперь ждёт, что колбэк внутри удержанного изменения читает целое новое окно, а не
+  прежнее). Вне owner-потока факт на Win32 не доставляется: все факты идут из оконной процедуры;
+  отказ контекста оставляет снимок устаревшим, следующее чтение владельца публикует.
+  (3) Издатель Win32 читает контекст только с `WindowIdentity` своего окна: переиспользованный
+  `HWND` ничего чужого не публикует. (4) `a_live_resize_publishes_inside_its_modal_loop` ловит
+  порядок (`on_resize` после снимка с его метриками) и метрики против readback Win32 (без метрик в
+  выборке падает); `Readback` — без `Default`, поля `focused`, `active`, `visible` обязательны
+  (`bool`), `metrics: Option` — «нет рисуемой площади». (5) Новый факт `WindowState::active`
+  (`with_active`): Win32 — `WM_ACTIVATE` (окно, чьё собственное всплывающее окно держит
+  клавиатуру, активно и без фокуса), прочие хосты понятия, отдельного от фокуса, не имеют (ключевое
+  окно AppKit, `Focused` winit, фокус холста, сцена, Activity) — у них это фокус. Тест
+  `activation_is_a_fact_apart_from_focus` (без публикации в `WM_ACTIVATE` падает), строка
+  `activation` в `each_window_fact_advances_the_revision`, `active` в `Readback`.
+  (6) `WindowCallbacks::publish_through(Weak<W>, fn(&W) -> Publication)` вместо пяти одинаковых
+  замыканий (winit, AppKit, UIKit, Android, Web; headless — через `SnapshotSource`); у каждого хоста
+  `read_state`. (7) Факты сверх геометрии — один тип `window::state::ReportedFacts` с `onto`; его
+  строит каждый хост (у Android — `Kept`, что окно хранит из прежних отчётов; у winit —
+  `reported_facts`). (8) Doc Android на месте, тест переименован в
+  `each_window_fact_reaches_the_snapshot_before_its_callback` (ADR-0254 называет
+  `window_facts_arrive_only_in_the_snapshot` для состояния после LY41, когда колбэков фактов не
+  станет), `dispatch_hover_status_change` закрыт по `lifecycle_closed`, комментарии «`false`» →
+  `Unavailable`. Сверх строки ещё раз: порядок образцовых команд conformance (рамка, затем
+  изменяемость: окно Win32 без рамки не бывает изменяемым) и невидимость снимка Win32 под
+  маскировкой DWM или при заблокированной сессии. Conformance «снимок против readback» не
+  запускалась на winit, AppKit, UIKit, Web и Android — записано в `docs/gaps.md` (запись 9).
+  Изменения форм для LY41: `StatePublisher` возвращает `Publication`, `WindowCallbacks::{announce,
+  publish_through}`, `WindowState::active`, поля `Readback` обязательны. Прогон поймал взаимную
+  блокировку winit: выборка дважды брала `is_focused` в одном выражении (временный замок жив до
+  конца оператора) — флаг читается один раз. Проверки: `cargo fmt`; clippy рабочего пространства
+  и `flui-native`/`flui-app` с `winit-backend` (Windows); nextest семи крейтов — 689 из 690, с
+  `winit-backend` — 364 из 365 (оба раза падает только trybuild `owner_thread_token_has_no_default`
+  с `main`, см. выше); clippy Android `--all-targets`, macOS `--all-targets` (`clang` и `llvm-ar`
+  LLVM) обычный и с `winit-backend`, iOS lib, wasm32 lib; `wasm-check`, `wasm-test` — 51; `checks`,
+  `doc-strict`; WSL — clippy без признаков, с `winit-backend` и `--all-features`, nextest 318, 446
+  (1 пропущен), 300, rustdoc.
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`
