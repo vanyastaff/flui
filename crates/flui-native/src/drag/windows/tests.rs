@@ -828,7 +828,7 @@ fn a_window_closed_by_its_drag_callback_is_left() {
         if matches!(event, DragDropEvent::Entered { .. })
             && let Some(window) = closer.borrow_mut().take()
         {
-            window.close();
+            let _ = window.apply(flui_platform::WindowCommand::Close);
         }
     });
     *closing.borrow_mut() = Some(Arc::clone(&target.host));
@@ -1338,7 +1338,7 @@ fn a_drop_concluded_after_its_window_closed_releases_the_data_object() {
     assert_eq!(drop_on(&ole, &data, at, BOTH), DROPEFFECT_COPY);
     drop((data, ole));
     let offer = target.offer.borrow().clone().expect("an offer");
-    target.host.close();
+    let _ = target.host.apply(flui_platform::WindowCommand::Close);
     let _ = pump_until(|| false, Duration::from_millis(50));
     assert!(
         !released.get(),

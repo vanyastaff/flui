@@ -388,10 +388,6 @@ impl WindowInputs for InputWindows {
         Some(self.of(window)?.hovered.get())
     }
 
-    fn modifiers(&self, window: WindowRef) -> Option<Modifiers> {
-        Some(self.of(window)?.modifiers.get())
-    }
-
     /// `None` too while the registry is borrowed by a message being decoded.
     fn press_kind(
         &self,
@@ -872,7 +868,7 @@ impl InputWindow {
     /// for a mouse under `EnableMouseInPointer`.
     fn set_hovered(&self, hovered: bool) {
         if self.hovered.replace(hovered) != hovered {
-            self.callbacks.dispatch_hover_status_change(hovered);
+            self.callbacks.report_hover(hovered);
         }
     }
 

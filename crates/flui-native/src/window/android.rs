@@ -16,11 +16,11 @@ use std::sync::{
 use android_activity::AndroidApp;
 use android_activity::ndk::configuration::UiModeNight;
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::{EdgeInsets, Point, Size};
+use flui_foundation::geometry::{EdgeInsets, Size};
 use flui_platform::input_regions::{InputRegion, InputRegionKind, ProjectedInputRegions};
 use flui_platform::{
-    DisplayId, FrameRateHint, WindowAppearance, WindowCapabilities, WindowCommand,
-    WindowCommandError, WindowEvent, WindowGeometry, WindowOptions, WindowState,
+    FrameRateHint, WindowAppearance, WindowCapabilities, WindowCommand, WindowCommandError,
+    WindowGeometry, WindowOptions, WindowState,
 };
 use parking_lot::Mutex;
 
@@ -81,8 +81,7 @@ pub struct AndroidWindow {
     preferences: Arc<dyn ActivityPreferences>,
     /// The platform's API level, for the safe-area gates.
     api: AndroidApi,
-    /// The night mode last reported to `on_appearance_changed`, which
-    /// `appearance` returns.
+    /// The night mode last reported, which the snapshot's appearance reads.
     appearance: Arc<Mutex<WindowAppearance>>,
     displays: Arc<dyn crate::owner::android::HostDisplays>,
     /// The last refresh-rate request, applied again to every native window that
@@ -167,10 +166,16 @@ impl AndroidWindow {
         &self.callbacks
     }
 
+    /// The native window's size in device pixels; zero while there is none.
+    fn device_size(&self) -> Size<i32> {
+        let (width, height) = self.native_size();
+        Size::new(width, height)
+    }
+
     fn accept_safe_area(&self, sample: Option<safe_area::Sample>) {
-        let size = self.physical_size();
-        let scale = self.scale_factor();
-        let changed = {
+        let size = self.device_size();
+        let scale = self.scale();
+        {
             let mut capture = self.safe_area.lock();
             let Some(sample) = sample else {
                 return;
@@ -192,9 +197,8 @@ impl AndroidWindow {
                 return;
             }
             capture.accepted = insets;
-            insets
-        };
-        self.callbacks.dispatch_safe_area_change(changed);
+        }
+        ActivityWindow::publish_state(self);
         self.request_redraw();
     }
 
@@ -286,6 +290,10 @@ impl ActivityWindow for AndroidWindow {
         let _ = self.current_state();
     }
 
+    fn scale(&self) -> f64 {
+        native_scale(&self.app, self.preferences.as_ref())
+    }
+
     /// The view's installation finished: what the window can do now.
     fn refresh_capabilities(&self) {
         self.callbacks
@@ -340,7 +348,7 @@ impl ActivityWindow for AndroidWindow {
             }
         };
         if std::mem::replace(&mut *self.appearance.lock(), appearance) != appearance {
-            self.callbacks.dispatch_appearance_changed();
+            ActivityWindow::publish_state(self);
         }
     }
 
@@ -601,13 +609,6 @@ impl host::Window<AndroidLoop> for AndroidWindow {
         // The Activity fills its display with no frame, title or border.
         Size::new(0.0, 0.0)
     }
-
-    fn on_event(owner: &AndroidLoop, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        crate::owner::call_point::install(
-            &owner.handler(|handlers| &mut handlers.window_event),
-            callback,
-        );
-    }
 }
 
 /// The light/dark half of the activity's configuration: night mode is the
@@ -641,36 +642,9 @@ impl PlatformWindow for AndroidWindow {
         WindowId(1)
     }
 
-    fn physical_size(&self) -> Size<i32> {
-        let (w, h) = self.native_size();
-        Size::new(w, h)
-    }
-
-    fn logical_size(&self) -> Size<f64> {
-        let (w, h) = self.native_size();
-        let scale = self.scale_factor();
-        if scale > 0.0 {
-            Size::new(w as f64 / scale, h as f64 / scale)
-        } else {
-            Size::new(w as f64, h as f64)
-        }
-    }
-
-    fn appearance(&self) -> WindowAppearance {
-        *self.appearance.lock()
-    }
-
-    fn display_id(&self) -> Option<DisplayId> {
-        self.displays.activity_display()
-    }
-
     fn set_frame_rate_hint(&self, hint: FrameRateHint) {
         *self.frame_rate_hint.lock() = hint;
         self.apply_frame_rate_hint();
-    }
-
-    fn scale_factor(&self) -> f64 {
-        native_scale(&self.app, self.preferences.as_ref())
     }
 
     fn gesture_geometry(
@@ -694,25 +668,8 @@ impl PlatformWindow for AndroidWindow {
         self.preferences.gesture_geometry().map(Some)
     }
 
-    fn execution_state(&self) -> WindowExecutionState {
-        execution_of(&self.activity)
-    }
-
-    fn safe_area_insets(&self) -> EdgeInsets {
-        self.safe_area.lock().accepted
-    }
-
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
         Some(Arc::clone(&self.facets.chrome))
-    }
-
-    /// An Activity cannot bring its task to the front itself: the user and
-    /// the system decide which task is shown, on every Android device.
-    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
-        Err(
-            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
-                .into(),
-        )
     }
 
     fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
@@ -730,21 +687,11 @@ impl PlatformWindow for AndroidWindow {
         }
     }
 
-    fn is_focused(&self) -> bool {
-        self.activity.focused.load(Ordering::SeqCst)
-    }
-
-    fn is_visible(&self) -> bool {
-        self.activity.visible.load(Ordering::SeqCst)
-    }
-
-    fn capabilities(&self) -> WindowCapabilities {
-        WindowCapabilities::NONE
-    }
-
     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
-        // The system owns the surface: every command is refused unless it asks
-        // for what the window already is.
+        // The system owns the surface and the Activity's lifetime: every
+        // command is refused unless it asks for what the window already is.
+        // An Activity cannot bring its task to the front itself: the user and
+        // the system decide which task is shown.
         command.admit(&WindowCapabilities::NONE)?;
         Ok(())
     }
@@ -780,7 +727,7 @@ impl PlatformWindow for AndroidWindow {
         if self.api.since::<GestureExclusion>().is_none() {
             return;
         }
-        let scale = self.scale_factor();
+        let scale = self.scale();
         let rects: Vec<[i32; 4]> = {
             let mut projection = self.input_regions.lock();
             let Some(sent) = projection.update(regions, scale, None) else {
@@ -887,12 +834,6 @@ impl PlatformWindow for AndroidWindow {
         // SAFETY: The Android display handle is always valid while the app is running
         #[expect(unsafe_code)]
         Ok(unsafe { raw_window_handle::DisplayHandle::borrow_raw(raw) })
-    }
-
-    // ==================== Additional query methods ====================
-
-    fn mouse_position(&self) -> Point<f64> {
-        Point::default()
     }
 }
 

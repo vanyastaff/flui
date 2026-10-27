@@ -139,7 +139,7 @@ fn font_digest(font_bytes: &[u8]) -> FontDigest {
 /// hook (`runner.rs`'s `install_exit_policy_hook`) into
 /// `flui_native::Platform::set_exit_policy_hook`. The winit
 /// backend's `CloseRequested` handling and the headless backend's window
-/// `close()`/`simulate_close()` both consult that hook — via the shared
+/// `WindowCommand::Close` and `simulate_close()` both consult that hook — via the shared
 /// `flui_native::PlatformHandlers::exit_policy` slot — instead of
 /// deciding from their own native window count alone; see
 /// `closing_the_last_window_reentrantly_from_inside_a_dispatch_still_exits`
@@ -984,7 +984,7 @@ impl AppRuntime {
             let Some(window) = window else {
                 return false;
             };
-            if window.execution_state() != WindowExecutionState::Running {
+            if window.state().execution != WindowExecutionState::Running {
                 return false;
             }
             window.request_redraw();

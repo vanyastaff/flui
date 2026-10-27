@@ -41,7 +41,7 @@ use crate::{
     platform::PlatformExecutor,
     platform::PlatformReadyCallback,
 };
-use flui_platform::{DisplayId, DisplaySnapshot, WindowEvent, WindowId, WindowOptions};
+use flui_platform::{DisplayId, DisplaySnapshot, WindowId, WindowOptions};
 
 /// The value a deferred (or synchronous) window-open request resolves to —
 /// mirrors the winit backend's own private `OpenWindowResult` alias
@@ -118,9 +118,7 @@ impl host::Displays<HeadlessLoop> for HeadlessLoop {
 /// callbacks through it.
 pub(crate) trait TrackedWindows: OpenWindows {
     /// Builds a window under the locked `state` and tracks it; `platform` is
-    /// the lock `state` came from, which the window keeps to close. The caller
-    /// announces the window (`WindowEvent::Created`) once it released the
-    /// lock.
+    /// the lock `state` came from, which the window keeps to close.
     fn open(
         self: Arc<Self>,
         state: &mut HeadlessState,
@@ -341,19 +339,6 @@ impl HeadlessLoop {
         let mut state = self.state.lock();
         f(&mut state)
     }
-}
-
-/// Call the application's window-event handler with `event` through the call
-/// point, with the state lock released: the handler re-enters the embedder's
-/// runtime, which may open a window, install another handler or quit
-/// (ADR-0039). Its panic reaches the caller. An event emitted from inside the
-/// handler finds the slot empty and is dropped, as on winit.
-pub(crate) fn emit_window_event(state: &Mutex<HeadlessState>, event: WindowEvent) {
-    call(
-        &Field::new(state, |state| &mut state.handlers.window_event),
-        |handler| handler(event),
-    )
-    .or_resume(());
 }
 
 /// Stop the platform and run the application's quit handler, once: it is
@@ -834,7 +819,6 @@ impl HeadlessDeferredWindowOpens {
             let window = windows.open(&mut state, Arc::downgrade(&platform_state), options);
             (slot, window)
         };
-        emit_window_event(&platform_state, WindowEvent::Created(window.id()));
 
         // The requester may have already abandoned the request (dropped its
         // `PendingWindow` before this call) -- `deliver`'s `Err` hands the

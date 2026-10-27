@@ -44,7 +44,9 @@ fn retire_session(state: SessionState) {
         } => {
             receipt.cancel();
             contain(|| drop(acknowledgement));
-            contain(|| window.close());
+            contain(|| {
+                super::discard_window(window.as_ref(), "a cancelled session");
+            });
         }
     }
 }
@@ -123,7 +125,9 @@ impl<K: Eq + Hash + Clone> SessionController<K> {
                 .as_mut()
                 .expect("BUG: live controller owns installer"))(Arc::clone(&window))?;
         if let Some(Err(error)) = receipt.outcome() {
-            contain(|| window.close());
+            contain(|| {
+                super::discard_window(window.as_ref(), "a failed session installation");
+            });
             return Err(error.into());
         }
         self.sessions.insert(
@@ -186,7 +190,9 @@ impl<K: Eq + Hash + Clone> SessionController<K> {
                 acknowledge(acknowledgement);
             } else {
                 contain(|| drop(acknowledgement));
-                contain(|| window.close());
+                contain(|| {
+                    super::discard_window(window.as_ref(), "a session nobody acknowledged");
+                });
                 if let Err(error) = outcome {
                     contain(|| tracing::error!(%error, "scene runtime installation failed"));
                 }
@@ -468,7 +474,7 @@ mod tests {
             }))).expect("owner drains abandoned installation");
             let registered = APP_RUNTIME.with(|slot| slot.borrow().installed_host.native().contains_address(address.get().expect("admitted address")));
             assert!(!registered, "dropping pending readiness authority cancels publication without a native close callback");
-            retained_window.close();
+            let _ = retained_window.apply(flui_platform::WindowCommand::Close);
             Ok(())
         })).expect("headless receipt cancellation host");
     }

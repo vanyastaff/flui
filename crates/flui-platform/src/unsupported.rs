@@ -5,7 +5,6 @@
 //! for, and [`UnsupportedReason`] says which. Every error and outcome that can
 //! mean absence embeds it instead of a unit variant of its own:
 //! [`WindowCommandError`](crate::WindowCommandError),
-//! [`WindowShowError`](crate::WindowShowError),
 //! [`CursorError`](crate::CursorError), [`DragError`](crate::drag::DragError),
 //! [`HapticOutcome`](crate::haptics::HapticOutcome),
 //! [`StorageError`](crate::StorageError),

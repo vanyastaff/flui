@@ -148,7 +148,7 @@ impl UiRuntime {
     ///
     /// `window` becomes this presentation's own native window (cursor,
     /// haptics, redraw-poke — see `PresentationState::new`'s wiring).
-    /// Its pipeline is seeded with `window.scale_factor()` before
+    /// Its pipeline is seeded with the scale of the window's snapshot before
     /// construction — the same DPR-before-first-frame ordering
     /// the UI runtime's constructor uses for its own primary presentation
     /// (there, the caller reads the window's scale factor and passes it in
@@ -157,7 +157,7 @@ impl UiRuntime {
     /// remember to). Without this, a non-primary presentation's
     /// `RenderView` and first frame would disagree with its OWN window's
     /// actual scale — silently defaulting to `1.0` regardless of what
-    /// `window.scale_factor()` actually reports.
+    /// the window's snapshot actually reports.
     #[must_use]
     pub fn assemble_presentation(
         &self,

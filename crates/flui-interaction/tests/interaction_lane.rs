@@ -442,35 +442,18 @@ impl flui_platform::PlatformWindow for CaptureWakeWindow {
     fn id(&self) -> flui_platform::WindowId {
         flui_platform::WindowId::new(21)
     }
-    fn physical_size(&self) -> flui_foundation::geometry::Size<i32> {
-        flui_foundation::geometry::Size::new(80, 80)
-    }
-    fn logical_size(&self) -> flui_foundation::geometry::Size<f64> {
-        flui_foundation::geometry::Size::new(80.0, 80.0)
-    }
-    fn scale_factor(&self) -> f64 {
-        1.0
-    }
     fn request_redraw(&self) {
         self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         panic!("capture wake failure");
-    }
-    fn is_focused(&self) -> bool {
-        true
-    }
-    fn is_visible(&self) -> bool {
-        true
     }
     fn set_cursor(&self, _: flui_platform::CursorIcon) -> Result<(), flui_platform::CursorError> {
         Ok(())
     }
     fn state(&self) -> flui_platform::WindowState {
-        let size = self.logical_size();
+        let size = flui_foundation::geometry::Size::new(80.0, 80.0);
         flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
-    }
-
-    fn capabilities(&self) -> flui_platform::WindowCapabilities {
-        flui_platform::WindowCapabilities::NONE
+            .with_focused(true)
+            .with_metrics(flui_foundation::geometry::WindowMetrics::from_logical(size, 1.0).ok())
     }
 
     fn apply(
@@ -494,12 +477,6 @@ impl flui_platform::PlatformWindow for CaptureWakeWindow {
     }
     fn drag_source(&self) -> Option<std::sync::Arc<dyn flui_platform::drag::PlatformDragSource>> {
         None
-    }
-    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
-        Err(
-            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
-                .into(),
-        )
     }
 }
 

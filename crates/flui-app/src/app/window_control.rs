@@ -17,9 +17,7 @@ use std::sync::{Arc, Weak};
 use flui_foundation::PresentationAddress;
 use flui_foundation::panic::FirstPanic;
 use flui_platform::PlatformWindow;
-use flui_platform::{
-    WindowCapabilities, WindowCommand, WindowCommandError, WindowControl, WindowState,
-};
+use flui_platform::{WindowCommand, WindowCommandError, WindowControl, WindowState};
 use flui_view::__runtime::WindowSource;
 use flui_view::WindowHandle;
 
@@ -186,7 +184,7 @@ impl WindowCommandQueues {
             let queue = queue.upgrade()?;
             // A source that closed keeps its queue until it is dropped; its
             // handle answers closed, and a closed window has no handle to give.
-            (queue.address == address && handle.capabilities().is_ok()).then(|| handle.clone())
+            (queue.address == address && handle.state().is_ok()).then(|| handle.clone())
         })
     }
 
@@ -200,7 +198,7 @@ impl WindowCommandQueues {
             let queue = queue.upgrade()?;
             // A closed window keeps its queue until it is dropped; it is not
             // handed out.
-            (queue.address == address && handle.capabilities().is_ok())
+            (queue.address == address && handle.state().is_ok())
                 .then(|| queue.window.upgrade())
                 .flatten()
         })
@@ -268,20 +266,13 @@ impl WindowControl for HostWindowControl {
         }
     }
 
-    fn capabilities(&self) -> WindowCapabilities {
-        self.queue
-            .window
-            .upgrade()
-            .map_or(WindowCapabilities::NONE, |window| window.capabilities())
-    }
-
     fn submit(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
         let window = self
             .queue
             .window
             .upgrade()
             .ok_or(WindowCommandError::Closed)?;
-        command.admit(&window.capabilities())?;
+        command.admit(&window.state().capabilities)?;
         self.enqueue(Queued::Command(command))
     }
 

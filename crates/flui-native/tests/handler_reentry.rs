@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use flui_native::{HeadlessPlatform, HostWindow, Platform};
 use flui_platform::{
-    DispatchEventResult, SessionEndAnswer, SessionEndPhase, SystemNotice, WindowEvent,
+    DispatchEventResult, SessionEndAnswer, SessionEndPhase, SystemNotice, WindowCommand,
     WindowOptions,
 };
 use parking_lot::Mutex;
@@ -90,11 +90,6 @@ type InstallHandler = fn(&dyn Platform, OnDrop);
 const APPLICATION_HANDLERS: &[(&str, InstallHandler)] = &[
     ("on_quit", |platform, capture| {
         platform.on_quit(Box::new(move || {
-            let _ = &capture;
-        }));
-    }),
-    ("on_window_event", |platform, capture| {
-        platform.on_window_event(Box::new(move |_| {
             let _ = &capture;
         }));
     }),
@@ -175,11 +170,6 @@ const WINDOW_CALLBACKS: &[(&str, InstallCallback)] = &[
             let _ = &capture;
         }));
     }),
-    ("on_resize", |window, capture| {
-        window.on_resize(Box::new(move |_| {
-            let _ = &capture;
-        }));
-    }),
     ("on_state_changed", |window, capture| {
         window.on_state_changed(Box::new(move || {
             let _ = &capture;
@@ -194,41 +184,6 @@ const WINDOW_CALLBACKS: &[(&str, InstallCallback)] = &[
         window.on_should_close(Box::new(move || {
             let _ = &capture;
             true
-        }));
-    }),
-    ("on_safe_area_change", |window, capture| {
-        window.on_safe_area_change(Box::new(move |_| {
-            let _ = &capture;
-        }));
-    }),
-    ("on_execution_state_change", |window, capture| {
-        window.on_execution_state_change(Box::new(move |_| {
-            let _ = &capture;
-        }));
-    }),
-    ("on_active_status_change", |window, capture| {
-        window.on_active_status_change(Box::new(move |_| {
-            let _ = &capture;
-        }));
-    }),
-    ("on_visibility_status_change", |window, capture| {
-        window.on_visibility_status_change(Box::new(move |_| {
-            let _ = &capture;
-        }));
-    }),
-    ("on_hover_status_change", |window, capture| {
-        window.on_hover_status_change(Box::new(move |_| {
-            let _ = &capture;
-        }));
-    }),
-    ("on_appearance_changed", |window, capture| {
-        window.on_appearance_changed(Box::new(move || {
-            let _ = &capture;
-        }));
-    }),
-    ("on_display_changed", |window, capture| {
-        window.on_display_changed(Box::new(move || {
-            let _ = &capture;
         }));
     }),
     ("on_surface_status_change", |window, capture| {
@@ -268,18 +223,18 @@ fn headless() -> Arc<HeadlessPlatform> {
     Arc::new(HeadlessPlatform::new())
 }
 
-/// A window-event handler that, told a window was created, installs its
-/// successor, opens another window and quits: each reaches the platform, the
-/// successor hears the nested window, and the handler that ran is retired.
-fn headless_window_event_handler_reenters() {
-    within("headless window-event handler", || {
+/// A window's close callback that opens another window, registers that
+/// window's close callback and quits: each reaches the platform, the nested
+/// window's callback hears it close, and the callback that ran is retired.
+fn headless_close_callback_reenters() {
+    within("headless close callback", || {
         let platform = headless();
         let quits = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&quits);
         platform.on_quit(Box::new(move || {
             counted.fetch_add(1, Ordering::SeqCst);
         }));
-        let successor_heard = Arc::new(Mutex::new(Vec::new()));
+        let successor_heard = Arc::new(AtomicUsize::new(0));
         let retired = Arc::new(AtomicBool::new(false));
         let witness = Witness(Arc::clone(&retired));
         let nested_window = Arc::new(Mutex::new(None));
@@ -288,36 +243,38 @@ fn headless_window_event_handler_reenters() {
             Arc::clone(&successor_heard),
             Arc::clone(&nested_window),
         );
-        let mut first = true;
-        platform.on_window_event(Box::new(move |event| {
-            let _ = &witness;
-            if !std::mem::take(&mut first) {
-                return;
-            }
-            let platform = weak.upgrade().expect("the platform");
-            let heard = Arc::clone(&heard);
-            platform.on_window_event(Box::new(move |event| heard.lock().push(event)));
-            let window = platform
-                .open_window(WindowOptions::default())
-                .expect("a window opens from inside the handler");
-            *nested.lock() = Some(window.id());
-            platform.quit();
-            assert!(matches!(event, WindowEvent::Created(_)));
-        }));
-
-        let _window = platform
+        let window = platform
             .open_window(WindowOptions::default())
             .expect("a window");
+        window.on_close(Box::new(move || {
+            let _ = &witness;
+            let platform = weak.upgrade().expect("the platform");
+            let window = platform
+                .open_window(WindowOptions::default())
+                .expect("a window opens from inside the callback");
+            window.on_close(Box::new(move || {
+                heard.fetch_add(1, Ordering::SeqCst);
+            }));
+            *nested.lock() = Some(window);
+            platform.quit();
+        }));
 
-        let nested = nested_window.lock().expect("the handler opened a window");
-        assert!(
-            matches!(successor_heard.lock().as_slice(), [WindowEvent::Created(id)] if *id == nested),
-            "the successor hears the window opened from inside the first handler"
-        );
+        let _ = window.apply(WindowCommand::Close);
+
+        let nested = nested_window
+            .lock()
+            .take()
+            .expect("the callback opened a window");
         assert_eq!(quits.load(Ordering::SeqCst), 1, "the quit reached the host");
         assert!(
             retired.load(Ordering::SeqCst),
-            "the handler that ran is retired once it returns"
+            "the callback that ran is retired once it returns"
+        );
+        let _ = nested.apply(WindowCommand::Close);
+        assert_eq!(
+            successor_heard.load(Ordering::SeqCst),
+            1,
+            "the window opened from inside the first callback closes through its own"
         );
     });
 }
@@ -477,7 +434,7 @@ fn headless_exit_policy_hook_that_opens_a_window_keeps_the_platform() {
         let window = platform
             .open_window(WindowOptions::default())
             .expect("a window");
-        window.close();
+        let _ = window.apply(flui_platform::WindowCommand::Close);
 
         assert!(opened.lock().is_some(), "the hook ran and opened a window");
         assert_eq!(
@@ -486,7 +443,7 @@ fn headless_exit_policy_hook_that_opens_a_window_keeps_the_platform() {
             "the window the hook opened keeps the platform running"
         );
         let window = opened.lock().take().expect("the hook's window");
-        window.close();
+        let _ = window.apply(flui_platform::WindowCommand::Close);
         assert_eq!(
             quits.load(Ordering::SeqCst),
             1,
@@ -501,8 +458,8 @@ fn handlers_run_outside_every_lock_of_the_headless_platform() {
         "handlers_run_outside_every_lock_of_the_headless_platform",
         &[
             (
-                "a window-event handler installs, opens and quits",
-                headless_window_event_handler_reenters,
+                "a close callback opens a window and quits",
+                headless_close_callback_reenters,
             ),
             (
                 "a session-end hook replaces itself",
@@ -608,7 +565,7 @@ mod win32 {
     use std::time::{Duration, Instant};
 
     use flui_native::{Platform, WindowsPlatform};
-    use flui_platform::{WindowEvent, WindowOptions};
+    use flui_platform::{WindowCommand, WindowOptions};
     use parking_lot::Mutex;
     use windows::Win32::UI::WindowsAndMessaging::{
         DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage, WM_QUIT,
@@ -654,10 +611,10 @@ mod win32 {
         done()
     }
 
-    /// A window-event handler that, told a window closed, installs its
-    /// successor, opens another window and quits.
-    fn window_event_handler_reenters() {
-        within("Win32 window-event handler", || {
+    /// A window's close callback that, inside `WM_DESTROY`, opens another
+    /// window, registers that window's close callback and quits.
+    fn close_callback_reenters() {
+        within("Win32 close callback", || {
             let platform = platform();
             let successor_heard = Arc::new(AtomicUsize::new(0));
             let nested_window = Arc::new(Mutex::new(None));
@@ -666,30 +623,23 @@ mod win32 {
                 Arc::clone(&successor_heard),
                 Arc::clone(&nested_window),
             );
-            let mut first = true;
-            platform.on_window_event(Box::new(move |event| {
-                if !matches!(event, WindowEvent::Closed(_)) || !std::mem::take(&mut first) {
-                    return;
-                }
+            let window = platform.open_window(hidden()).expect("a window");
+            window.on_close(Box::new(move || {
                 let platform = weak.upgrade().expect("the platform");
-                let heard = Arc::clone(&heard);
-                platform.on_window_event(Box::new(move |event| {
-                    if matches!(event, WindowEvent::Closed(_)) {
-                        heard.fetch_add(1, Ordering::SeqCst);
-                    }
+                let window = platform
+                    .open_window(hidden())
+                    .expect("a window opens from inside the callback");
+                window.on_close(Box::new(move || {
+                    heard.fetch_add(1, Ordering::SeqCst);
                 }));
-                *nested.lock() = Some(
-                    platform
-                        .open_window(hidden())
-                        .expect("a window opens from inside the handler"),
-                );
+                *nested.lock() = Some(window);
                 platform.quit();
             }));
 
-            platform.open_window(hidden()).expect("a window").close();
+            let _ = window.apply(WindowCommand::Close);
             assert!(pump_until(|| nested_window.lock().is_some()));
             let nested = nested_window.lock().take().expect("the nested window");
-            nested.close();
+            let _ = nested.apply(WindowCommand::Close);
             assert!(pump_until(|| successor_heard.load(Ordering::SeqCst) == 1));
         });
     }
@@ -706,7 +656,7 @@ mod win32 {
             let platform = platform();
             let window = platform.open_window(hidden()).expect("a window");
             replaced_window_callbacks_reach_their_window(&window);
-            window.close();
+            let _ = window.apply(flui_platform::WindowCommand::Close);
         });
     }
 
@@ -789,8 +739,8 @@ mod win32 {
             "handlers_run_outside_every_borrow_of_the_win32_platform",
             &[
                 (
-                    "a window-event handler installs, opens and quits",
-                    window_event_handler_reenters,
+                    "a close callback opens a window and quits",
+                    close_callback_reenters,
                 ),
                 (
                     "replaced application handlers reach the platform",

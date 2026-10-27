@@ -13,7 +13,7 @@ and data-transfer vocabulary, with no OS backend behind them.
 - Input vocabulary: `PlatformInput`, `DispatchEventResult`, `DragDropEvent`,
   the pointer and keyboard types, and the pixel conversion helpers.
 - The per-window contract `PlatformWindow` and the window vocabulary:
-  `WindowId`, `WindowOptions`, `WindowReveal`, `WindowEvent`,
+  `WindowId`, `WindowOptions`, `WindowReveal`,
   `WindowExecutionState`, `CursorIcon` and the errors window operations return.
 - The window state contract (ADR-0237): the `WindowState` snapshot a window
   publishes with a `WindowRevision`, the `WindowCommand`s it takes through

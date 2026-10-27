@@ -814,7 +814,7 @@ fn a_window_offers_its_text_services_as_its_host() {
         "TSF ends the composition it holds in the focused store (none here)"
     );
 
-    window.close();
+    let _ = window.apply(flui_platform::WindowCommand::Close);
     assert_eq!(
         host.complete_composition(&erased(&store)),
         Err(TextStoreHostError::Unsupported(
@@ -947,7 +947,13 @@ fn a_moved_window_tells_tsf_its_layout_changed() {
         // of the suggested rectangle, a live local here, at the DPI it has.
         unsafe {
             GetWindowRect(hwnd, &raw mut rect).expect("window rectangle");
-            let dpi = (window.scale_factor() * 96.0).round() as usize;
+            let scale = window
+                .state()
+                .metrics
+                .expect("a drawable window")
+                .scale()
+                .get();
+            let dpi = (scale * 96.0).round() as usize;
             SendMessageW(
                 hwnd,
                 WM_DPICHANGED,
@@ -987,7 +993,7 @@ fn a_moved_window_tells_tsf_its_layout_changed() {
         );
         host.focus_store(None);
     });
-    window.close();
+    let _ = window.apply(flui_platform::WindowCommand::Close);
 }
 
 /// A window's DPI change reaches its text services as the new scale is set,
@@ -1030,7 +1036,7 @@ fn a_rescaled_window_answers_layout_at_its_new_scale() {
         (services.scale() * 96.0 - dpi as f64).abs() < 1e-9,
         "the text services answer at the window's new scale"
     );
-    window.close();
+    let _ = window.apply(flui_platform::WindowCommand::Close);
 }
 
 /// One row: its name, and the case run against the shared window.
@@ -1116,7 +1122,7 @@ fn the_text_services_answer_a_completion_for_its_store() {
             failed.push(name);
         }
     }
-    window.close();
+    let _ = window.apply(flui_platform::WindowCommand::Close);
     assert!(failed.is_empty(), "failed cases: {failed:?}");
 }
 
@@ -1315,7 +1321,7 @@ fn a_panicking_activation_diagnostic_orphans_no_window() {
                 crate::text::windows::testing::services_of(hwnd).is_some(),
                 "the window's text services are active"
             );
-            window.close();
+            let _ = window.apply(flui_platform::WindowCommand::Close);
         }
         Ok(Err(error)) => panic!("the open failed: {error}"),
         Err(_) => assert!(
@@ -1433,7 +1439,7 @@ fn a_window_dropped_after_its_platform_retires_tsf_inside_com() {
 
     SHUTDOWN_IN_APARTMENT.set(None);
     drop(platform);
-    window.close();
+    let _ = window.apply(flui_platform::WindowCommand::Close);
     drop(window);
     assert!(
         apartment.upgrade().is_none(),

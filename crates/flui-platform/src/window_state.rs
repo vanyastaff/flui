@@ -326,6 +326,14 @@ impl WindowState {
         self
     }
 
+    /// Whether the window's content can be seen: it is shown and not
+    /// minimized. A window manager may keep a minimized window shown; its
+    /// content is still not on screen, so its frames are not drawn.
+    #[must_use]
+    pub fn is_seen(&self) -> bool {
+        self.visible && self.mode != WindowMode::Minimized
+    }
+
     /// The snapshot that follows this one with `sample`: this very value when
     /// `sample` differs from it in nothing but the revision, otherwise
     /// `sample` at the next revision. The revision `sample` carries is
@@ -389,6 +397,9 @@ pub struct WindowCapabilities {
     /// [`WindowCommand::Activate`]: bring the window to the front and request
     /// focus.
     pub activates: Availability,
+    /// [`WindowCommand::Close`]: destroy the window. A window whose platform
+    /// owns its lifetime (an Android activity) cannot close itself.
+    pub closes: Availability,
     /// The snapshot's [`WindowGeometry::position`] is reported.
     pub observes_position: Availability,
     /// [`WindowMode::Minimized`] is ever published.
@@ -412,6 +423,7 @@ impl WindowCapabilities {
         hides: Availability::Unavailable,
         shows: Availability::Unavailable,
         activates: Availability::Unavailable,
+        closes: Availability::Unavailable,
         observes_position: Availability::Unavailable,
         observes_minimized: Availability::Unavailable,
         places_at_open: Availability::Unavailable,
@@ -432,6 +444,7 @@ impl WindowCapabilities {
         hides: Availability::Native,
         shows: Availability::Native,
         activates: Availability::Native,
+        closes: Availability::Native,
         observes_position: Availability::Native,
         observes_minimized: Availability::Native,
         places_at_open: Availability::Native,
@@ -458,6 +471,7 @@ impl WindowCapabilities {
             WindowCommand::Hide => self.hides,
             WindowCommand::Show => self.shows,
             WindowCommand::Activate => self.activates,
+            WindowCommand::Close => self.closes,
         }
     }
 
@@ -493,6 +507,10 @@ pub enum WindowCommand {
     Hide,
     /// Bring the window to the front and request focus.
     Activate,
+    /// Close and destroy the window: a decision already made, which asks no
+    /// should-close veto (ADR-0123). Asking whether the window may close is
+    /// [`WindowControl::request_close`].
+    Close,
 }
 
 impl WindowCommand {
@@ -523,7 +541,8 @@ impl WindowCommand {
             | Self::SetMode(_)
             | Self::Show
             | Self::Hide
-            | Self::Activate => true,
+            | Self::Activate
+            | Self::Close => true,
         };
         if valid {
             Ok(())
@@ -595,14 +614,12 @@ impl WindowCommandError {
 /// (ADR-0237 decision 4). The host implements it over its window; a handle in
 /// the view layer calls it.
 pub trait WindowControl {
-    /// The window's last published snapshot.
+    /// The window's last published snapshot, with the capabilities that say
+    /// which commands it honours.
     fn state(&self) -> WindowState;
 
-    /// Which commands the window honours.
-    fn capabilities(&self) -> WindowCapabilities;
-
-    /// Validate `command`, check it against the capabilities and queue it for
-    /// the owner's next turn.
+    /// Validate `command`, check it against the snapshot's capabilities and
+    /// queue it for the owner's next turn.
     ///
     /// # Errors
     /// What [`WindowCommand::admit`] refuses, or

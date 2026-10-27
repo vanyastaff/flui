@@ -560,10 +560,7 @@ trait depends on `flui-platform` instead.
   `ModeFlags`: minimized before fullscreen before maximized; winit's
   queries, AppKit's flags, the X11 window manager's properties and the Win32
   window's tracked mode each read their report into the flags and nothing
-  else), the one rule by which a window reports whether its surface is seen
-  (`window::visibility::ReportedVisibility`: the runtime hears an answer
-  only when it changes; the winit, Win32, AppKit and Web windows each read
-  the answer from their own OS), the desktop window configuration
+  else), the desktop window configuration
   (`window::config`, crate-private: its windows open with F11 as the
   fullscreen key) and the acknowledgement
   a host waits for before it publishes a window it attached
@@ -571,16 +568,14 @@ trait depends on `flui-platform` instead.
   `PendingWindowInstallation`, `InstallationCancelled`).
   `window::state::mapping` reads one table through winit's flags, the X11
   window manager's properties, AppKit's raw flags (which keep full screen
-  above a miniaturized flag, a row of their own) and the Win32 tracked mode;
-  `window::visibility::mapping` reads one table through the Win32 surface
-  rules (`WM_SIZE`, `WM_SHOWWINDOW`) and AppKit's occlusion bit into the
-  rule, and through the rule itself for winit and the Web, whose answers
-  come from FFI. Each platform's
+  above a miniaturized flag, a row of their own) and the Win32 tracked mode.
+  Whether a window is seen is two facts of its snapshot, `visible` and its
+  mode, which `WindowState::is_seen` reads together; each window reads both
+  from its own OS. Each platform's
   window is one file beside it (`android`, `web`, `winit`, `headless`, and
   `linux/x11`, the live X11 layer the winit host uses), or a directory where
-  its halves or one OS object need one: `windows/` (the pure `limits`, `mode`
-  and `surface`, which says what `WM_SIZE`, `WM_SHOWWINDOW` and the creation
-  style imply for the surface; the window, the set and position, the
+  its halves or one OS object need one: `windows/` (the pure `limits` and
+  `mode`; the window, the set and position, the
   procedure and the backdrop under `cfg(windows)`) and `apple/` (the pure
   `geometry` with its `frame`, `mode`, `surface` (the occlusion bit) and
   `screen_edges`, `macos` with its `delegate` and its public `ext`, and
@@ -781,52 +776,63 @@ trait depends on `flui-platform` instead.
   result would not be a `flui_engine::WindowTarget` until upcast.
 - **A window publishes a state snapshot and takes commands (ADR-0237).** There
   is one window trait. `PlatformWindow::state` returns an immutable
-  `WindowState` with a revision, `apply` takes a `WindowCommand`, and
-  `capabilities` says which commands the window honours, each as an
+  `WindowState` with a revision, and `apply` takes a `WindowCommand`; the
+  snapshot's `capabilities` say which commands the window honours, each as an
   `Availability`: `apply` answers `Unsupported` exactly when the matching
   capability is `Unavailable`, `Emulated` marks what the host builds itself
-  (the Win32 borderless fullscreen), and the capabilities of each backend are
-  what its `apply` carries out today. The snapshot describes what the OS
-  reported, not what a command asked for, and holds every fact of the window
-  (ADR-0254 §1): the drawable `WindowMetrics` (a report that is not a drawable
-  area keeps the last), appearance, display, safe area, execution state,
-  focus, visibility, hover and the capabilities.
-- **Every fact callback is preceded by the snapshot that holds the fact.**
-  Each host sets a `StatePublisher` on the window's `WindowCallbacks` when the
-  window opens (`publish_through`, over a weak reference to the window); every
-  fact dispatch (resize and scale, focus, visibility, hover, appearance,
-  display, safe area, execution state) runs it first. The publisher reads the
-  window again and answers `Publication` (changed, unchanged, held) without
-  announcing anything; `on_state_changed` and the fact's own callback then go
-  as one `Published` event, each contained, so a panic in either loses
-  neither and the first failure resurfaces after both ran. This happens in the
-  OS callback that reported the fact (each `WM_SIZE` of a Win32 live resize
+  (the Win32 borderless fullscreen, the Web's close, which retires the
+  canvas), and the capabilities of each backend are what its `apply` carries
+  out today. Showing, activating and closing are commands like the others
+  (`Show`, `Activate`, `Close`); there is no method twin. The snapshot
+  describes what the OS reported, not what a command asked for, and holds
+  every fact of the window (ADR-0254 §1): the drawable `WindowMetrics` (a
+  report that is not a drawable area keeps the last), appearance, display,
+  safe area, execution state, focus, activation, visibility, hover and the
+  capabilities.
+- **The snapshot is the one source of a window fact.** No getter and no
+  per-fact callback exists beside it: a consumer reads `state()` and hears
+  `on_state_changed`, and one that needs to know which fact changed compares
+  the snapshot with the last one it saw (`flui-app`'s
+  `RuntimeEvent::of_state_change`). Whether a window is seen is
+  `WindowState::is_seen`: visible and not minimized. Each host sets a
+  `StatePublisher` on the window's `WindowCallbacks` when the window opens
+  (`publish_through`, over a weak reference to the window). The publisher
+  reads the window again and answers `Publication` (changed, unchanged,
+  held) without announcing anything; `publish_state` runs it and
+  raises `on_state_changed` when the revision grew, so each fact the OS
+  reports is one revision and one notification. This happens in the OS
+  callback that reported the fact (each `WM_SIZE` of a Win32 live resize
   inside its modal loop). While a window holds its publishing back (Win32
-  through a DPI change or a fullscreen switch), the facts wait in
-  `WindowCallbacks` and follow the publication that ends the hold
-  (`announce`). The Win32 publisher reads only a context whose
-  `WindowIdentity` is its window's, so a recycled handle publishes nothing of
-  another window; every fact comes from the window procedure on the owner
-  thread, and a read the context refuses leaves the snapshot stale for the
-  owner's next read. A fact another feature reports reaches the snapshot the
-  same way: the hover is what the last `dispatch_hover_status_change` said
-  (`WindowCallbacks::hovered`), whether Win32 or web input, AppKit's tracking
-  area or winit's cursor events reported it. An observation committed at its
-  delivery point (the Web's focus and visibility) is published right after
-  its commit. The facts beyond geometry (metrics, appearance, safe area,
-  execution, hover, activation, capabilities) are one value,
-  `window::state::ReportedFacts`, that every host builds. Activation is
-  Win32's `WM_ACTIVATE` (a window whose owned popup has the keyboard is active
-  and not focused); the other hosts have no notion apart from focus (AppKit's
-  key window, winit's `Focused`, the canvas focus, the scene and the
-  Activity), so their activation is their focus.
+  through a DPI change or a fullscreen switch), the change publishes and
+  announces once, when the hold ends, so a callback reads the finished new
+  state. A `StateChanged` queued inside a callback that panics is still
+  delivered: its revision is already published. The Win32 publisher reads
+  only a context whose `WindowIdentity` is its window's, so a recycled
+  handle publishes nothing of another window; every fact comes from the
+  window procedure on the owner thread, and a read the context refuses
+  leaves the snapshot stale for the owner's next read. A fact another
+  feature reports reaches the snapshot the same way: the hover is what the
+  last `WindowCallbacks::report_hover` said, whether Win32 or web input,
+  AppKit's tracking area or winit's cursor events reported it. An
+  observation committed at its delivery point (the Web's focus and
+  visibility) is published right after its commit. The facts beyond
+  geometry (metrics, appearance, safe area, execution, hover, activation,
+  capabilities) are one value, `window::state::ReportedFacts`, that every
+  host builds. Activation is Win32's `WM_ACTIVATE` (a window whose owned
+  popup has the keyboard is active and not focused); the other hosts have
+  no notion apart from focus (AppKit's key window, winit's `Focused`, the
+  canvas focus, the scene and the Activity), so their activation is their
+  focus. `window_facts_arrive_only_in_the_snapshot` pins one revision and
+  one notification per fact; a `compile_fail` doctest on `PlatformWindow`
+  pins that the getters are gone.
   Every backend keeps its last snapshot in a `window::state::WindowStateCell`
   (built like `DisplaySource`): an OS event marks the cell stale, the next read
   samples the OS with no lock held, and a sample equal to the published one
   keeps the revision. `on_state_changed` is raised after the publish, outside
   the cell, only when the revision grew. Win32 and AppKit refresh from their
   window messages and delegate callbacks, winit from its window events, the
-  Web from the layout, focus and visibility observers; the headless window
+  Web from the layout, focus and visibility observers and on each owner
+  wake, which is how a screen change reaches it; the headless window
   keeps a model that stands in for the OS (`HeadlessWindowPolicy` makes it clamp a size
   or decline a maximize) and publishes after each command or `simulate_*`
   call. The iOS window rereads its metrics and lifecycle on each `state` call
@@ -1005,8 +1011,9 @@ stale.
 **macOS.** `NSApplicationDidChangeScreenParametersNotification` (attach,
 removal, mode, refresh rate, arrangement, scale) is the invalidation: the
 handler stores one atomic flag and wakes the owner, and the owner samples on its
-own turn. A window raises `on_display_changed` from `windowDidChangeScreen:`
-and from a backing-property change, and marks the snapshot stale first because
+own turn. A window publishes its state, the display among it, from
+`windowDidChangeScreen:` and from a backing-property change, and marks the
+display snapshot stale first because
 the snapshot carries each display's scale. A window that resolves its screen to
 a display the published sample does not hold (a monitor plugged in since)
 marks it stale too. The key is `CGDisplayCreateUUIDFromDisplayID` under
@@ -1139,9 +1146,9 @@ against the golden when a `WM_POINTER` mouse id is its own contact. A wheel turn
 goes through the window's registry (`ContactRegistry::wheel`) only so the native
 capture journals it; it belongs to no contact sequence.
 
-The window's hover (`is_hovered`, `on_hover_status_change`, the immediate cursor
-apply) follows the mouse on either route through one `WindowContext::set_hovered`,
-which raises a change only when the hover changed: `WM_MOUSEMOVE`/`WM_MOUSELEAVE`
+The window's hover (the snapshot's `hovered`, the immediate cursor apply)
+follows the mouse on either route through one `WindowContext::set_hovered`,
+which publishes (`WindowCallbacks::report_hover`) only when the hover changed: `WM_MOUSEMOVE`/`WM_MOUSELEAVE`
 on the legacy route, and on the `WM_POINTER` route every mouse message but a
 capture change enters and `WM_POINTERLEAVE` leaves. The hover is settled before
 the input of its message reaches user code, so a callback that pumps a message
@@ -1400,17 +1407,18 @@ native key. The lookup reads the last sample and never takes one, because the
 host calls it while deriving window displays from a snapshot it already
 accepted. A handle the sample lacks (a monitor plugged in since) answers `None`,
 never the primary, and invalidates the snapshot once per revision (a repeated
-miss costs nothing), so the next owner turn samples it. The window raises `on_display_changed` from `WM_WINDOWPOSCHANGED` when that handle differs
-from the last one it saw (the default procedure derives `WM_MOVE` and `WM_SIZE`
-from it, so a drag on one monitor raises one hint at most) and from
-`WM_DPICHANGED`. A move across monitors of different DPI raises two hints
-(the monitor change, then the DPI change); both only wake the owner, which
-derives once per turn, so they coalesce. Rows: `os_display_classification` and `os_capability_table`
+miss costs nothing), so the next owner turn samples it. The window's display
+is a field of its state snapshot, read again on `WM_WINDOWPOSCHANGED` (the
+default procedure derives `WM_MOVE` and `WM_SIZE` from it) and on
+`WM_DPICHANGED`, which holds publishing until the new rectangle has landed.
+An equal sample keeps the revision, so a drag on one monitor announces no
+display change, and a move across monitors of different DPI announces one
+snapshot per change. Rows: `os_display_classification` and `os_capability_table`
 (pure), `display_change_message_invalidates_the_snapshot_and_wakes_the_owner`
 (in `src`, it counts samples, as do the DPI and work-area rows) and the
 native contract rows `refresh_is_the_rational_active_mode`,
-`window_display_is_a_display_of_the_snapshot`, `dpi_change_raises_the_display_hint` and
-`moves_within_one_monitor_raise_no_display_hint`. A transition between two monitors needs a second monitor and
+`window_display_is_a_display_of_the_snapshot`, `a_dpi_change_publishes_the_new_scale_once` and
+`moves_within_one_monitor_keep_the_display`. A transition between two monitors needs a second monitor and
 is not a CI row; it ran by hand (see
 `docs/platform-parity.md`). Unplugging a monitor on Windows was not run.
 
@@ -1534,12 +1542,13 @@ everything else (no preference, prefers light, a missing key) light. It is kept
 beside the snapshot, not in it, because brightness is presentation-specific
 (ADR-0172): the owner's wake hands the accepted value to each window, and a
 window with no winit theme of its own (X11 always, Wayland without an app
-override) reports it and fires `on_appearance_changed` when it changed. One
-read failing neither discards nor delays the other's accepted value.
+override) publishes it in its window state, a new revision only when it
+changed. One read failing neither discards nor delays the other's accepted
+value.
 
-`PlatformWindow::appearance` is the user's theme on every backend, never a
-value the backend chose for its own chrome, and `on_appearance_changed` fires
-only when it changed. Windows reads `AppsUseLightTheme` and sets the DWM dark
+The snapshot's `appearance` is the user's theme on every backend, never a
+value the backend chose for its own chrome, and `on_state_changed` announces
+it only when it changed. Windows reads `AppsUseLightTheme` and sets the DWM dark
 title-bar flag to match it on creation and on each `WM_SETTINGCHANGE` that
 changed it, until the app picks the chrome through `Win32Window` or opens the
 window with a theme of its own (`Win32WindowOptions::theme`;
@@ -1754,7 +1763,7 @@ Registration methods take
 one for Win32 makes that safe without changing a signature.
 
 - **Storage.** A window's callbacks (`WindowCallbacks`) live by value in its
-  `WindowContext`; the platform-level handlers (`on_quit`, `on_window_event`,
+  `WindowContext`; the platform-level handlers (`on_quit`,
   `on_keyboard_layout_change`) live as `Rc<RefCell<PlatformHandlers>>` in the
   `OwnerControlContext` of the owner message window, shared by every window
   context; the owner-turn callback lives in that context's `OwnerTurnSlot`.
@@ -2103,14 +2112,14 @@ in both cases.
 away must say so through `PlatformWindow::on_surface_status_change` **before** the
 handle behind any surface built from it dies, so the presentation can drop that
 surface at the right moment. A backend that never emits the signal is harmless:
-the surface is never released, which is the pre-#1146 behavior and the same shape
-the visibility callback already documents. A backend that emits `false` and never
+the surface is never released, which is the pre-#1146 behavior. A backend that
+emits `false` and never
 `true` is not harmless, because the presentation stays released, every later frame
 is a skipped one, and the window paints nothing forever.
 
 **Choice:** `on_surface_status_change(Box<dyn FnMut(bool) + Send>)`, a defaulted
-no-op, following the `on_active_status_change`/`on_visibility_status_change`
-family's shape: stored in `owner::handlers::WindowCallbacks`, dispatched through
+no-op, following the window callbacks' shape: stored in
+`owner::handlers::WindowCallbacks`, dispatched through
 the same FIFO and the call point. `false` means "release the surface before this
 callback returns"; `true` means "a surface valid for the handle available now must
 exist", which the runner acts on unconditionally rather than by comparing it
@@ -2345,10 +2354,10 @@ from `CGDisplayModeGetRefreshRate` over the display's *current* mode
 screen via `NSScreenNumber` — the same display id `display.rs` reads for its
 bounds. A rate of 0 is `None`: CoreGraphics reports 0 for modes it cannot
 describe and some displays do, and a 0 turned into a period is infinite. The
-window names its display through `PlatformWindow::display_id`, **cached** in
+window names its display in its state snapshot, **cached** in
 `MacOSWindowState` beside `scale_factor`: re-read in the handler that already
 updates the scale (`handle_backing_properties_changed`, reached from
-`handle_screen_changed`), which then raises `on_display_changed`, and seeded when
+`handle_screen_changed`), which then publishes the window's state, and seeded when
 the platform binds its display registry to the new window, which is safe there
 because the window is created at the origin — a point on a screen — so
 `-[NSWindow screen]` answers rather than returning nil. Caching is the one place
@@ -2656,15 +2665,16 @@ unsupported; proxy window creation support is separate from wake/quit support.
 
 ### Reveal without changing window mode
 
-`PlatformWindow::show` is distinct from `restore`: restoring also removes
+`WindowCommand::Show` is distinct from a restore: restoring also removes
 maximization, while revealing a resident application's existing main window must
-preserve maximized/fullscreen mode and geometry. The operation reveals and
+preserve maximized/fullscreen mode and geometry. The command reveals and
 requests focus; operating-system focus policy still decides whether focus moves.
 AppKit deminiaturizes then orders the window forward. Win32 queries
 `WINDOWPLACEMENT` fallibly and interprets `WPF_RESTORETOMAXIMIZED` only for minimized
-placement, using `SW_SHOW` for non-minimized windows. Winit 0.30.13 Wayland reveal
-is rejected as `WindowShowError::Unsupported` (`NotOnThisPlatform`) before mutation because unminimize
-and focus are unsupported there. Closed retained windows return `Closed`.
+placement, using `SW_SHOW` for non-minimized windows. A winit 0.30.13 Wayland
+window leaves `shows` and `activates` `Unavailable`, so `admit` refuses the
+command before any mutation: unminimize and focus are unsupported there. A
+closed window refuses every command with `Closed`.
 
 Sources: [winit Window](https://docs.rs/winit/0.30.13/winit/window/struct.Window.html),
 [Win32 WINDOWPLACEMENT](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-windowplacement).
@@ -2887,9 +2897,10 @@ window sees the display gain a name, not change.
 two screens of equal pixel ratio but different size raises no event, so the bounds are
 stale until the next one. The estimate is the presented cadence: a power saver, a
 throttled frame or a variable-refresh panel lowers it. Both are documented on the
-module. `WebWindow::display_id` names the current screen; the window raises no
-`on_display_changed` because every event above already wakes the owner, whose turn
-re-derives each window's display from the snapshot.
+module. The window's state names the current screen. Every event above wakes
+the owner, and the wake reads the window's state again before the owner's turn,
+so the turn sees the window's display and the display snapshot of the same
+moment (`web_window_names_the_display_the_snapshot_describes`).
 
 **Alternatives considered:**
 - Reading `screen.refreshRate` or any version-keyed table: no such property is

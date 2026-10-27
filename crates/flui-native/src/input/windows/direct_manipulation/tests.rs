@@ -304,7 +304,7 @@ fn the_window_pumps_paces_and_pauses_its_viewport() {
         eprintln!("case: {name}");
         let f = fixture(*nested);
         case(&f);
-        f.window.close();
+        let _ = f.window.apply(flui_platform::WindowCommand::Close);
     }
 }
 
@@ -359,7 +359,7 @@ fn a_focus_loss_stamps_its_cancellations_in_order() {
         timeline.windows(2).all(|pair| pair[0].1 <= pair[1].1),
         "every stamp follows the one delivered before it: {timeline:?}"
     );
-    f.window.close();
+    let _ = f.window.apply(flui_platform::WindowCommand::Close);
 }
 
 /// Red-check: drop `release_touchpad` from `WM_DESTROY` (the open pan is
@@ -373,7 +373,7 @@ fn destroying_the_window_cancels_what_is_open_before_it_closes() {
     f.window.on_close(Box::new(move || {
         closes.lock().expect("log").push("close".to_owned());
     }));
-    f.window.close();
+    let _ = f.window.apply(flui_platform::WindowCommand::Close);
     assert_eq!(f.lines(), ["Began 8", "Cancelled 0", "close"]);
 }
 
@@ -406,7 +406,7 @@ fn a_failed_viewport_withdraws_the_touchpad_capabilities() {
         "the failed viewport is released"
     );
     assert_eq!(capabilities(f.hwnd), input_availability::windows(false));
-    f.window.close();
+    let _ = f.window.apply(flui_platform::WindowCommand::Close);
 }
 
 /// Make the window's cursor unreadable, and forget where it was last read
@@ -454,7 +454,7 @@ fn an_unreadable_cursor_never_places_a_manipulation_at_the_origin() {
     assert_eq!(f.lines(), Vec::<String>::new(), "nothing to place it at");
     assert!(!take_timer(f.hwnd), "nothing is left pumping");
     assert_eq!(queued(f.hwnd), 0, "nothing is left queued");
-    f.window.close();
+    let _ = f.window.apply(flui_platform::WindowCommand::Close);
 }
 
 /// The viewport's event handler holds the window's `Rc` queue, so it does

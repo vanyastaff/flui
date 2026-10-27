@@ -199,7 +199,7 @@ impl OwnerWindow {
 /// clones instead of a borrow means no reference into the context survives
 /// user code, which may tear the owner window down.
 pub(crate) struct OwnerShares {
-    /// The platform-level handlers (`on_quit`, `on_window_event`, ...),
+    /// The platform-level handlers (`on_quit`, `on_keyboard_layout_change`, ...),
     /// shared with every window context this platform opens.
     pub(crate) handlers: Rc<RefCell<PlatformHandlers>>,
     /// Where the owner-turn callback waits between turns.

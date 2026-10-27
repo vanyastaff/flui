@@ -4,7 +4,7 @@
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::{Bounds, EdgeInsets, Point, Size, WindowMetrics};
+use flui_foundation::geometry::{Bounds, Point, Size};
 use parking_lot::Mutex;
 use raw_window_handle::{
     HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle, Win32WindowHandle,
@@ -19,11 +19,11 @@ use windows::{
             HiDpi::{GetDpiForSystem, GetDpiForWindow},
             WindowsAndMessaging::{
                 CW_USEDEFAULT, CreateWindowExW, DestroyWindow, GCLP_HBRBACKGROUND, GWL_EXSTYLE,
-                GWL_STYLE, GWLP_USERDATA, GetClientRect, GetCursorPos, GetForegroundWindow,
-                GetWindowLongPtrW, GetWindowRect, IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND,
-                IDC_IBEAM, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE,
-                IDC_WAIT, IsIconic, IsWindowVisible, IsZoomed, LoadCursorW, PostMessageW, SW_HIDE,
-                SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED,
+                GWL_STYLE, GWLP_USERDATA, GetClientRect, GetWindowLongPtrW, GetWindowRect,
+                IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_IBEAM, IDC_NO, IDC_SIZEALL,
+                IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT, IsIconic,
+                IsWindowVisible, IsZoomed, LoadCursorW, PostMessageW, SW_HIDE, SW_MAXIMIZE,
+                SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED,
                 SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
                 SetClassLongPtrW, SetCursor, SetForegroundWindow, SetWindowLongPtrW,
                 SetWindowPlacement, SetWindowPos, SetWindowTextW, ShowWindow, WM_CLOSE, WS_CAPTION,
@@ -36,9 +36,8 @@ use windows::{
 
 use flui_platform::{
     CursorError, DispatchEventResult, PlatformInput, PlatformWindow, SizeConstraints, Unsupported,
-    UnsupportedReason, WindowAppearance, WindowBackgroundAppearance, WindowCapabilities,
-    WindowCommand, WindowCommandError, WindowExecutionState, WindowId, WindowMode, WindowOptions,
-    WindowReveal, WindowState,
+    UnsupportedReason, WindowBackgroundAppearance, WindowCapabilities, WindowCommand,
+    WindowCommandError, WindowId, WindowMode, WindowOptions, WindowReveal, WindowState,
 };
 
 use flui_platform::os_options::WindowsCornerPreference;
@@ -49,8 +48,8 @@ use super::proc::{
     restyled, sample_state, to_screen, to_workspace,
 };
 use super::set::{
-    USER_DEFAULT_SCREEN_DPI, WindowSet, checked_logical_to_device, logical_to_device, open_spot,
-    outer_size, placement_of, restore_rectangle, workspace_origin,
+    USER_DEFAULT_SCREEN_DPI, WindowSet, checked_logical_to_device, open_spot, outer_size,
+    placement_of, restore_rectangle, workspace_origin,
 };
 use crate::host::WindowFacets;
 use crate::owner::windows::WINDOW_CLASS_NAME;
@@ -195,6 +194,7 @@ pub(crate) const fn window_capabilities() -> WindowCapabilities {
     capabilities.shows = Native;
     capabilities.hides = Native;
     capabilities.activates = Native;
+    capabilities.closes = Native;
     capabilities.observes_position = Native;
     capabilities.observes_minimized = Native;
     capabilities.places_at_open = Native;
@@ -405,7 +405,6 @@ impl WindowsWindow {
             let mut origin = POINT::default();
             let _ = ClientToScreen(hwnd, &raw mut origin);
 
-            let created_style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
             let deferred = options.visible && options.reveal == WindowReveal::AfterFirstFrame;
             let state = Arc::new(Mutex::new(WindowRecord {
                 bounds: Bounds {
@@ -451,13 +450,6 @@ impl WindowsWindow {
             use super::proc::WindowContext;
 
             let window_id = WindowId(hwnd.0 as u64);
-            // Seed the visibility edge filter from the window's ACTUAL
-            // style, not a default: a visible undecorated window is created
-            // `WS_POPUP | WS_VISIBLE` (already visible before this context
-            // installs), so the creation-time `ShowWindow(SW_SHOW)` below
-            // never delivers a `WM_SHOWWINDOW` edge for it — a `false`
-            // seed would swallow that window's first minimize. See
-            // `surface::initial_visibility`'s doc.
             let config = windows.config.clone();
             let callbacks = Arc::new(WindowCallbacks::counting_frames(frames.counter()));
             // Each fact the window reports, its input's hover included, is
@@ -493,7 +485,6 @@ impl WindowsWindow {
                 windows: Arc::downgrade(&windows),
                 window_state: Arc::downgrade(&state),
                 snapshot: Arc::clone(&snapshot),
-                handlers: Rc::clone(&handlers),
                 exit_policy,
                 callbacks: Arc::clone(&callbacks),
                 hooks: Rc::clone(&window_hooks),
@@ -513,13 +504,8 @@ impl WindowsWindow {
                 }),
                 publish_hold: std::cell::Cell::new(0),
                 limits_waived: std::cell::Cell::new(false),
-                visibility_muted: std::cell::Cell::new(false),
                 show_requests: std::cell::Cell::new(0),
-                // A window whose reveal waits for its first frame is visible to
-                // the runtime already: its frames must run to earn the reveal.
-                visibility: super::proc::Visibility::new(
-                    deferred || super::surface::initial_visibility(created_style),
-                ),
+                visibility: super::proc::Visibility::new(),
                 cloak_watch: super::proc::CloakWatch::start(),
                 in_size_move: std::cell::Cell::new(false),
                 last_resize: std::cell::Cell::new(None),
@@ -534,7 +520,6 @@ impl WindowsWindow {
                 ledger: std::cell::RefCell::new(crate::owner::hwnd_affinity::ContextLedger::new()),
                 identity,
                 displays: Arc::clone(&displays),
-                last_monitor: std::cell::Cell::new(None),
                 appearance: std::cell::Cell::new(appearance),
                 active: std::cell::Cell::new(false),
                 chrome_follows_system: std::cell::Cell::new(chrome_follows_system),
@@ -658,10 +643,8 @@ impl WindowsWindow {
         if !self.owns_handle() {
             return;
         }
-        // SAFETY: plain queries and a plain call on this wrapper's live window.
-        let minimized = unsafe { IsIconic(self.hwnd) }.as_bool();
         super::proc::with_window_context(self.hwnd, "show_first", |ctx| {
-            ctx.end_first_show(minimized);
+            ctx.settle_shown();
         });
         // SAFETY: a plain call on this wrapper's window handle.
         if let Err(error) = unsafe { UpdateWindow(self.hwnd) }.ok() {
@@ -1156,10 +1139,9 @@ impl WindowsWindow {
             // The first frame no longer shows it; an explicit show still does.
             ctx.first_show
                 .set(ctx.first_show.get().without_frame_wait());
-            // A window hidden before it was ever shown sends no `WM_SHOWWINDOW`;
-            // the runtime still has to hear that it is no longer visible.
-            ctx.report_surface_visibility(false);
         });
+        // A window hidden before it was ever shown sends no `WM_SHOWWINDOW`:
+        // the record above is what its snapshot reads.
     }
 
     /// Get current scale factor
@@ -1382,24 +1364,6 @@ impl PlatformWindow for WindowsWindow {
         }
     }
 
-    fn physical_size(&self) -> Size<i32> {
-        let state = self.state.lock();
-        let logical = state.bounds.size;
-        let scale = state.scale_factor;
-        Size::new(
-            logical_to_device(logical.width, scale),
-            logical_to_device(logical.height, scale),
-        )
-    }
-
-    fn logical_size(&self) -> Size<f64> {
-        self.state.lock().bounds.size
-    }
-
-    fn scale_factor(&self) -> f64 {
-        self.state.lock().scale_factor
-    }
-
     fn gesture_geometry(
         &self,
     ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
@@ -1433,20 +1397,6 @@ impl PlatformWindow for WindowsWindow {
         Self::redraw_native(self.hwnd);
     }
 
-    fn is_focused(&self) -> bool {
-        self.state.lock().focused
-    }
-
-    fn is_visible(&self) -> bool {
-        // A locked session or a cloak hides a shown window. Off the owner
-        // thread only the shown state is known.
-        self.state.lock().visible
-            && !super::proc::with_window_context(self.hwnd, "is_visible", |ctx| {
-                ctx.visibility.occluded()
-            })
-            .unwrap_or(false)
-    }
-
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
         super::proc::with_window_context(self.hwnd, "set_cursor", |ctx| {
             ctx.cursor.set(cursor);
@@ -1473,15 +1423,11 @@ impl PlatformWindow for WindowsWindow {
             .unwrap_or_else(|| self.snapshot.published())
     }
 
-    fn capabilities(&self) -> WindowCapabilities {
-        window_capabilities()
-    }
-
     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
         if !handle_available(super::proc::teardown_route(self.hwnd, self.context)) {
             return Err(WindowCommandError::Closed);
         }
-        command.admit(&PlatformWindow::capabilities(self))?;
+        command.admit(&window_capabilities())?;
         match command {
             WindowCommand::SetTitle(title) => self.set_native_title(&title),
             WindowCommand::SetPosition(at) => self.set_outer_position(at)?,
@@ -1513,17 +1459,13 @@ impl PlatformWindow for WindowsWindow {
             }
             WindowCommand::SetMode(mode) => self.set_mode(mode)?,
             WindowCommand::Hide => self.hide_native(),
-            WindowCommand::Show => self.show().map_err(|error| match error {
-                flui_platform::WindowShowError::Closed => WindowCommandError::Closed,
-                flui_platform::WindowShowError::Native { message } => {
-                    WindowCommandError::Backend { message }
-                }
-                flui_platform::WindowShowError::Unsupported(unsupported) => unsupported.into(),
-                other => WindowCommandError::Backend {
-                    message: other.to_string(),
-                },
-            })?,
-            WindowCommand::Activate => self.activate(),
+            WindowCommand::Show => self.show_window()?,
+            WindowCommand::Activate => self.activate_window(),
+            // A destroyed window has no state left to publish.
+            WindowCommand::Close => {
+                self.close_window();
+                return Ok(());
+            }
             // Every other command is refused by `admit` through a capability
             // this backend leaves `Unavailable`.
             _ => {
@@ -1539,135 +1481,6 @@ impl PlatformWindow for WindowsWindow {
         Ok(())
     }
 
-    fn is_active(&self) -> bool {
-        // SAFETY: `GetForegroundWindow` takes no arguments; comparing its
-        // result to `self.hwnd` is a plain integer/handle comparison.
-        unsafe { GetForegroundWindow() == self.hwnd }
-    }
-
-    /// `false` for a window its input does not hold (off its owner thread,
-    /// or closed).
-    fn is_hovered(&self) -> bool {
-        self.hovered() == Some(true)
-    }
-
-    fn mouse_position(&self) -> Point<f64> {
-        // SAFETY: `cursor_pos` is a stack-local `POINT`; `&raw mut
-        // cursor_pos` gives both `GetCursorPos` and `ScreenToClient` a
-        // valid, correctly-sized out-parameter. The `is_ok()`/`as_bool()`
-        // short-circuit means `cursor_pos` is only read after both calls
-        // reported success, so it is never read uninitialized.
-        unsafe {
-            let mut cursor_pos = POINT::default();
-            if GetCursorPos(&raw mut cursor_pos).is_ok()
-                && ScreenToClient(self.hwnd, &raw mut cursor_pos).as_bool()
-            {
-                let scale = self.state.lock().scale_factor;
-                Point::new(cursor_pos.x as f64 / scale, cursor_pos.y as f64 / scale)
-            } else {
-                Point::default()
-            }
-        }
-    }
-
-    /// None held for a window its input does not hold (off its owner thread,
-    /// or closed).
-    fn modifiers(&self) -> flui_platform::keyboard::Modifiers {
-        crate::owner::windows::window_inputs()
-            .and_then(|inputs| {
-                inputs.modifiers(super::proc::WindowRef::new(self.hwnd, self.identity))
-            })
-            .unwrap_or(flui_platform::Modifiers::NONE)
-    }
-
-    fn appearance(&self) -> WindowAppearance {
-        // The user's theme, read from any thread without the window context.
-        // Not the DWM dark-mode flag: this backend sets that flag to match,
-        // so reading it back would report the backend's own choice.
-        super::backdrop::system_appearance()
-    }
-
-    fn display_id(&self) -> Option<flui_platform::DisplayId> {
-        // A destroyed or recycled `HWND` names another window's monitor: refuse
-        // it with the identity probe `window_handle` uses.
-        if !handle_available(super::proc::teardown_route(self.hwnd, self.context)) {
-            return None;
-        }
-        self.displays.display_of_window(self.hwnd)
-    }
-
-    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
-        use windows::Win32::UI::WindowsAndMessaging::{
-            SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, WPF_RESTORETOMAXIMIZED,
-        };
-        crate::owner::hwnd_affinity::show_owned_window(
-            || {
-                use crate::owner::hwnd_affinity::TeardownRoute;
-                let route = super::proc::teardown_route(self.hwnd, self.context);
-                if route != TeardownRoute::DestroyDirect {
-                    return route;
-                }
-                // The wrapper and its live context carry the same identity,
-                // minted once and never reused, so unlike the raw context
-                // address it cannot be recycled. Only inspect it under the
-                // owner guard.
-                if super::proc::with_window_context(self.hwnd, "show identity", |context| {
-                    context.identity == self.identity
-                }) == Some(true)
-                {
-                    route
-                } else {
-                    TeardownRoute::StaleHandle
-                }
-            },
-            || {
-                super::proc::with_window_context(self.hwnd, "show", |ctx| {
-                    ctx.note_show_request();
-                    let first = ctx.first_show.replace(FirstShow::Done).mode();
-                    // SAFETY: the identity check proves this wrapper's live HWND
-                    // on its owner thread. The context guard pins userdata through
-                    // ShowWindow reentry; placement is an initialized out pointer.
-                    unsafe {
-                        let placement = placement_of(self.hwnd).map_err(|error| {
-                            flui_platform::WindowShowError::Native {
-                                message: error.to_string(),
-                            }
-                        })?;
-                        if let Some(mode) = first {
-                            ctx.begin_first_show(mode);
-                        }
-                        let command = if let Some(mode) = first {
-                            first_show_command(mode)
-                        } else if placement.showCmd == SW_SHOWMINIMIZED.0 as u32 {
-                            if placement.flags.0 & WPF_RESTORETOMAXIMIZED.0 != 0 {
-                                SW_SHOWMAXIMIZED
-                            } else {
-                                SW_RESTORE
-                            }
-                        } else {
-                            SW_SHOW
-                        };
-                        // Return value describes previous visibility, not success.
-                        let _ = ShowWindow(self.hwnd, command);
-                        if first.is_some() && self.owns_handle() {
-                            ctx.end_first_show(IsIconic(self.hwnd).as_bool());
-                        }
-                        Ok(())
-                    }
-                })
-                .unwrap_or(Err(flui_platform::WindowShowError::Closed))
-            },
-            || {
-                // SAFETY: the adapter rechecked wrapper identity after ShowWindow,
-                // on the same owner thread, before this callback-capable call.
-                // Foreground policy may deny the request without failing show.
-                unsafe {
-                    let _ = SetForegroundWindow(self.hwnd);
-                }
-            },
-        )
-    }
-
     fn reveal_after_first_frame(&self) {
         // Only a window whose reveal was deferred waits for this call; one
         // opened hidden, or already shown, ignores it.
@@ -1678,67 +1491,6 @@ impl PlatformWindow for WindowsWindow {
         if deferred {
             self.show_first();
             tracing::debug!("Windows: window revealed after its first presented frame");
-        }
-    }
-
-    fn activate(&self) {
-        // Activating a window that was never shown shows it.
-        self.show_first();
-        // SAFETY: `SetForegroundWindow` takes `self.hwnd` by value, no
-        // pointer arguments.
-        unsafe {
-            if let Err(error) = SetForegroundWindow(self.hwnd).ok() {
-                tracing::warn!(hwnd = ?self.hwnd, ?error, "SetForegroundWindow failed");
-            }
-        }
-    }
-
-    fn close(&self) {
-        use crate::owner::hwnd_affinity::TeardownRoute;
-        match super::proc::teardown_route(self.hwnd, self.context) {
-            TeardownRoute::DestroyDirect => {
-                // SAFETY: `DestroyWindow` takes `self.hwnd` by value; the
-                // route just established this is the owning thread, the only
-                // one Win32 permits the call from, and where `WM_DESTROY`
-                // (handled in `platform.rs`, reclaiming the `GWLP_USERDATA`
-                // allocation) is dispatched synchronously before the call
-                // returns.
-                unsafe {
-                    if let Err(error) = DestroyWindow(self.hwnd) {
-                        tracing::warn!(hwnd = ?self.hwnd, ?error, "DestroyWindow (PlatformWindow::close) failed");
-                    }
-                }
-            }
-            TeardownRoute::PostClose => {
-                // Cross-thread close cannot call `DestroyWindow` (Win32
-                // forbids it off the creating thread), so it goes through
-                // the documented mechanism instead: post `WM_CLOSE` to the
-                // owner thread's queue. Note the behavioral nuance: the
-                // owner-side `WM_CLOSE` arm consults the window's
-                // should-close veto before destroying, so a vetoing window
-                // treats a cross-thread `close()` as a close *request*.
-                //
-                // SAFETY: `PostMessageW` takes the handle and plain
-                // integers by value — nothing dereferenced, delivery
-                // marshalled by the OS to the owning thread.
-                unsafe {
-                    if let Err(error) =
-                        PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0))
-                    {
-                        tracing::warn!(hwnd = ?self.hwnd, ?error, "PostMessageW(WM_CLOSE) (cross-thread PlatformWindow::close) failed");
-                    }
-                }
-            }
-            TeardownRoute::AlreadyGone => {
-                tracing::debug!(hwnd = ?self.hwnd, "close: the native window is already gone");
-            }
-            TeardownRoute::StaleHandle => {
-                tracing::debug!(
-                    hwnd = ?self.hwnd,
-                    "close: the handle no longer names this wrapper's window \
-                     (recycled by the OS); leaving its new owner untouched"
-                );
-            }
         }
     }
 
@@ -1793,12 +1545,6 @@ impl PlatformWindow for WindowsWindow {
         });
     }
 
-    fn on_resize(&self, callback: Box<dyn FnMut(WindowMetrics) + Send>) {
-        self.register("on_resize", move |callbacks| {
-            install(&callbacks.on_resize, callback);
-        });
-    }
-
     fn on_state_changed(&self, callback: Box<dyn FnMut() + Send>) {
         self.register("on_state_changed", move |callbacks| {
             install(&callbacks.on_state_changed, callback);
@@ -1814,48 +1560,6 @@ impl PlatformWindow for WindowsWindow {
     fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
         self.register("on_should_close", move |callbacks| {
             install(&callbacks.on_should_close, callback);
-        });
-    }
-
-    fn on_safe_area_change(&self, callback: Box<dyn FnMut(EdgeInsets) + Send>) {
-        self.register("on_safe_area_change", move |callbacks| {
-            callbacks.set_safe_area_callback(callback);
-        });
-    }
-
-    fn on_execution_state_change(&self, callback: Box<dyn FnMut(WindowExecutionState) + Send>) {
-        self.register("on_execution_state_change", move |callbacks| {
-            callbacks.set_execution_state_callback(callback);
-        });
-    }
-
-    fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        self.register("on_active_status_change", move |callbacks| {
-            install(&callbacks.on_active_status_change, callback);
-        });
-    }
-
-    fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        self.register("on_visibility_status_change", move |callbacks| {
-            install(&callbacks.on_visibility_status_change, callback);
-        });
-    }
-
-    fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        self.register("on_hover_status_change", move |callbacks| {
-            install(&callbacks.on_hover_status_change, callback);
-        });
-    }
-
-    fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
-        self.register("on_appearance_changed", move |callbacks| {
-            install(&callbacks.on_appearance_changed, callback);
-        });
-    }
-
-    fn on_display_changed(&self, callback: Box<dyn FnMut() + Send>) {
-        self.register("on_display_changed", move |callbacks| {
-            install(&callbacks.on_display_changed, callback);
         });
     }
 
@@ -1875,6 +1579,146 @@ impl PlatformWindow for WindowsWindow {
         &self,
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
         HasDisplayHandle::display_handle(self)
+    }
+}
+
+/// The bodies of the show, activate and close commands.
+impl WindowsWindow {
+    /// Show the window, unminimizing it and requesting foreground focus; the
+    /// maximized or fullscreen mode is kept.
+    fn show_window(&self) -> Result<(), WindowCommandError> {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, WPF_RESTORETOMAXIMIZED,
+        };
+        crate::owner::hwnd_affinity::show_owned_window(
+            || {
+                use crate::owner::hwnd_affinity::TeardownRoute;
+                let route = super::proc::teardown_route(self.hwnd, self.context);
+                if route != TeardownRoute::DestroyDirect {
+                    return route;
+                }
+                // The wrapper and its live context carry the same identity,
+                // minted once and never reused, so unlike the raw context
+                // address it cannot be recycled. Only inspect it under the
+                // owner guard.
+                if super::proc::with_window_context(self.hwnd, "show identity", |context| {
+                    context.identity == self.identity
+                }) == Some(true)
+                {
+                    route
+                } else {
+                    TeardownRoute::StaleHandle
+                }
+            },
+            || {
+                super::proc::with_window_context(self.hwnd, "show", |ctx| {
+                    ctx.note_show_request();
+                    let first = ctx.first_show.replace(FirstShow::Done).mode();
+                    // SAFETY: the identity check proves this wrapper's live HWND
+                    // on its owner thread. The context guard pins userdata through
+                    // ShowWindow reentry; placement is an initialized out pointer.
+                    unsafe {
+                        let placement = placement_of(self.hwnd).map_err(|error| {
+                            WindowCommandError::Backend {
+                                message: error.to_string(),
+                            }
+                        })?;
+                        if let Some(mode) = first {
+                            ctx.begin_first_show(mode);
+                        }
+                        let command = if let Some(mode) = first {
+                            first_show_command(mode)
+                        } else if placement.showCmd == SW_SHOWMINIMIZED.0 as u32 {
+                            if placement.flags.0 & WPF_RESTORETOMAXIMIZED.0 != 0 {
+                                SW_SHOWMAXIMIZED
+                            } else {
+                                SW_RESTORE
+                            }
+                        } else {
+                            SW_SHOW
+                        };
+                        // Return value describes previous visibility, not success.
+                        let _ = ShowWindow(self.hwnd, command);
+                        if first.is_some() && self.owns_handle() {
+                            ctx.settle_shown();
+                        }
+                        Ok(())
+                    }
+                })
+                .unwrap_or(Err(WindowCommandError::Closed))
+            },
+            || {
+                // SAFETY: the adapter rechecked wrapper identity after ShowWindow,
+                // on the same owner thread, before this callback-capable call.
+                // Foreground policy may deny the request without failing show.
+                unsafe {
+                    let _ = SetForegroundWindow(self.hwnd);
+                }
+            },
+        )
+    }
+
+    fn activate_window(&self) {
+        // Activating a window that was never shown shows it.
+        self.show_first();
+        // SAFETY: `SetForegroundWindow` takes `self.hwnd` by value, no
+        // pointer arguments.
+        unsafe {
+            if let Err(error) = SetForegroundWindow(self.hwnd).ok() {
+                tracing::warn!(hwnd = ?self.hwnd, ?error, "SetForegroundWindow failed");
+            }
+        }
+    }
+
+    fn close_window(&self) {
+        use crate::owner::hwnd_affinity::TeardownRoute;
+        match super::proc::teardown_route(self.hwnd, self.context) {
+            TeardownRoute::DestroyDirect => {
+                // SAFETY: `DestroyWindow` takes `self.hwnd` by value; the
+                // route just established this is the owning thread, the only
+                // one Win32 permits the call from, and where `WM_DESTROY`
+                // (handled in `platform.rs`, reclaiming the `GWLP_USERDATA`
+                // allocation) is dispatched synchronously before the call
+                // returns.
+                unsafe {
+                    if let Err(error) = DestroyWindow(self.hwnd) {
+                        tracing::warn!(hwnd = ?self.hwnd, ?error, "DestroyWindow (WindowCommand::Close) failed");
+                    }
+                }
+            }
+            TeardownRoute::PostClose => {
+                // Cross-thread close cannot call `DestroyWindow` (Win32
+                // forbids it off the creating thread), so the owner thread
+                // destroys the window when it takes the posted message. Not
+                // `WM_CLOSE`: that asks the should-close veto, and a close
+                // command is not a request. The message names this window,
+                // so a handle reused before it arrives is left alone.
+                let (low, high) = self.identity.halves();
+                // SAFETY: `PostMessageW` takes the handle and plain
+                // integers by value — nothing dereferenced, delivery
+                // marshalled by the OS to the owning thread.
+                unsafe {
+                    if let Err(error) = PostMessageW(
+                        Some(self.hwnd),
+                        super::proc::CLOSE_WINDOW,
+                        WPARAM(low),
+                        LPARAM(high),
+                    ) {
+                        tracing::warn!(hwnd = ?self.hwnd, ?error, "PostMessageW(WM_CLOSE) (cross-thread WindowCommand::Close) failed");
+                    }
+                }
+            }
+            TeardownRoute::AlreadyGone => {
+                tracing::debug!(hwnd = ?self.hwnd, "close: the native window is already gone");
+            }
+            TeardownRoute::StaleHandle => {
+                tracing::debug!(
+                    hwnd = ?self.hwnd,
+                    "close: the handle no longer names this wrapper's window \
+                     (recycled by the OS); leaving its new owner untouched"
+                );
+            }
+        }
     }
 }
 
@@ -2113,7 +1957,6 @@ impl WindowsWindow {
             super::proc::with_window_context(self.hwnd(), "restore_hidden", |ctx| {
                 let _hold = ctx.hold_publishing();
                 let requests = ctx.show_requests.get();
-                ctx.visibility_muted.set(true);
                 self.show_native(SW_RESTORE);
                 // The restore runs user callbacks. If one closed this window and
                 // opened another on the handle, or asked for this one to be shown,
@@ -2122,14 +1965,8 @@ impl WindowsWindow {
                 if !overtaken {
                     self.show_native(SW_HIDE);
                 }
-                ctx.visibility_muted.set(false);
-                if self.owns_handle() {
-                    // SAFETY: plain queries of this wrapper's live window.
-                    let visible = unsafe {
-                        IsWindowVisible(self.hwnd()).as_bool() && !IsIconic(self.hwnd()).as_bool()
-                    };
-                    ctx.reconcile_visibility(visible);
-                }
+                // The publishing held above goes out once, with what the
+                // window is after both: the command that asked publishes it.
             });
             return;
         }

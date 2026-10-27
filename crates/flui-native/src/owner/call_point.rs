@@ -1,5 +1,5 @@
 //! The one point where the platform calls a handler: an application handler
-//! (`on_quit`, `on_window_event`, the session-end, exit-policy and
+//! (`on_quit`, the session-end, exit-policy and
 //! wake-deadline hooks, …) or a window's callback (ADR-0151 §10).
 //!
 //! A handler waits between calls in a [`HandlerSlot`], wherever its host keeps

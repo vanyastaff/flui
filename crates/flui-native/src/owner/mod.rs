@@ -124,7 +124,7 @@ use crate::host_window::{HostWindow, OwnerThreadToken};
 use crate::platform::{PathPromptOptions, Platform, PlatformExecutor};
 use crate::task::Task;
 use flui_platform::data_transfer::DataTransferSource;
-use flui_platform::{Clipboard, ClipboardItem, WindowEvent, WindowId, WindowOptions};
+use flui_platform::{Clipboard, ClipboardItem, WindowId, WindowOptions};
 use signal::{OwnerSignal, SignalTransport};
 
 // ============================================================================
@@ -435,11 +435,6 @@ impl SharedPlatform {
     /// Registers a callback for when the application is reopened (macOS).
     pub fn on_reopen(&self, callback: Box<dyn FnMut() + Send>) {
         self.platform.on_reopen(callback);
-    }
-
-    /// Registers a callback for window events.
-    pub fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        self.platform.on_window_event(callback);
     }
 
     /// Installs the hook this platform consults before exiting

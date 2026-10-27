@@ -279,7 +279,7 @@ fn native_terminal_callbacks_refuse_late_publication() {
                             if quit {
                                 owner.quit();
                             } else {
-                                window.close();
+                                let _ = window.apply(flui_platform::WindowCommand::Close);
                             }
                         })),
                     }))
@@ -343,7 +343,7 @@ fn a_prepared_single_window_rejects_close_and_quit_before_publication() {
                 if quit {
                     owner.quit();
                 } else {
-                    window.close();
+                    let _ = window.apply(flui_platform::WindowCommand::Close);
                 }
                 let result = prepared
                     .submit()
@@ -394,7 +394,7 @@ fn a_quit_after_the_native_close_dispatches_no_second_close() {
                         .with(|slot| slot.borrow().installed_host.logical().runtime_count())
                 };
                 if native_close {
-                    window.close();
+                    let _ = window.apply(flui_platform::WindowCommand::Close);
                     assert_eq!(runtimes(), 0, "the native close retired the runtime");
                 }
                 let ((), log) = flui_testing::log_capture::capture(|| owner.quit());
@@ -1226,7 +1226,7 @@ fn unfinished_installation_closes_its_native_window() {
             "only unfinished installation owns native closure; deferred={deferred}, publish={publish}"
         );
         if publish {
-            window.close();
+            let _ = window.apply(flui_platform::WindowCommand::Close);
             assert_eq!(
                 closed.load(Ordering::SeqCst),
                 1,
@@ -1267,7 +1267,7 @@ fn agent_notification_follows_live_native_initialization() {
             self.live
                 .fetch_add(usize::from(window.is_open()), Ordering::SeqCst);
             if let Some(native) = self.close.take() {
-                native.close();
+                let _ = native.apply(flui_platform::WindowCommand::Close);
             }
         }
     }
@@ -1305,11 +1305,13 @@ fn agent_notification_follows_live_native_initialization() {
                 sink: ScriptedSink::always_presents(),
                 installed: Some(Box::new(move || match case {
                     DuringInstall::Keep | DuringInstall::CloseFromAgent => {}
-                    DuringInstall::Close => native.close(),
+                    DuringInstall::Close => {
+                        let _ = native.apply(flui_platform::WindowCommand::Close);
+                    }
                     DuringInstall::Teardown => teardown_platform_ui_runtime(),
                     DuringInstall::Panic => panic!("native initialization failed"),
                     DuringInstall::CloseAndPanic => {
-                        native.close();
+                        let _ = native.apply(flui_platform::WindowCommand::Close);
                         panic!("native initialization failed");
                     }
                 })),

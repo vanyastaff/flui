@@ -22,6 +22,47 @@ use super::installed_host::Installation;
 use super::native_bindings::PreparedNativeWindow;
 use super::owner_dispatch::{PresentationDispatcher, RuntimeTask, dispatch_platform_ui_runtime};
 
+/// What a runner sizes a window's surface and root layout from: the
+/// drawable area the window's snapshot reports, in device and logical pixels,
+/// and the scale between them.
+///
+/// A window that has reported no drawable area yet (it opened minimized)
+/// gives its content size at scale 1; the metrics it reports once it has one
+/// reach the presentation as a resize before anything is drawn there.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct SurfaceGeometry {
+    pub(super) physical: flui_foundation::geometry::Size<i32>,
+    pub(super) logical: flui_foundation::geometry::Size<f64>,
+    pub(super) scale: f64,
+}
+
+impl SurfaceGeometry {
+    pub(super) fn of(window: &dyn PlatformWindow) -> Self {
+        let state = window.state();
+        if let Some(metrics) = state.metrics {
+            return Self {
+                physical: metrics.physical(),
+                logical: metrics.logical(),
+                scale: metrics.scale().get(),
+            };
+        }
+        let logical = state.content_size;
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "a window's content size in logical pixels is far below i32::MAX"
+        )]
+        let physical = flui_foundation::geometry::Size::new(
+            logical.width.max(0.0).round() as i32,
+            logical.height.max(0.0).round() as i32,
+        );
+        Self {
+            physical,
+            logical,
+            scale: 1.0,
+        }
+    }
+}
+
 pub(super) struct WindowInstall {
     host: InstalledHost,
     prepared: PreparedInstall,
@@ -82,7 +123,10 @@ impl Drop for InstallationWindow {
         let mut first = None;
         if !self.published {
             self.closed.store(true, Ordering::Release);
-            first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| window.close())).err();
+            first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                super::discard_window(window.as_ref(), "an unpublished installation");
+            }))
+            .err();
         }
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(window))).err();
         crate::app::lifecycle_state::preserve_first_lifecycle_panic(
@@ -226,68 +270,71 @@ impl WindowInstall {
         self.initial.observations.push(observation);
     }
 
-    /// Follow the window's system light/dark appearance into
-    /// `MediaQueryData::platform_brightness`.
+    /// Follow the window's snapshot into its presentation: the one
+    /// subscription a window has for its facts (ADR-0254 §1).
     ///
-    /// The observer is registered before the seed is sampled, so a theme change
-    /// between the two is delivered rather than lost, and a user on a dark
-    /// desktop never starts light.
-    pub(super) fn observe_appearance(&mut self) {
+    /// Each `on_state_changed` reads the snapshot and compares it with the one
+    /// seen before (`RuntimeEvent::of_state_change`): the metrics, safe
+    /// area, appearance, execution state, focus, whether the content is seen
+    /// and the hover reach the presentation as the facts that changed, and
+    /// the `WindowHandle` subscribers get the new state. A change of display,
+    /// or of the scale its display gives the window, wakes the owner, whose
+    /// next turn samples the platform's display snapshot and re-derives every
+    /// window's display and refresh period (ADR-0236).
+    ///
+    /// The subscription is registered before the seed is read, so a change
+    /// between the two is compared against the seed rather than lost, and the
+    /// presentation starts with the window's real facts, display and period
+    /// before its first frame.
+    pub(super) fn observe_window(&mut self) {
         use super::owner_dispatch::RuntimeEvent;
 
         let window = Arc::clone(self.window.native());
         let dispatcher = self.dispatcher();
+        // Bound to this host's owner now, so a late change after a replacement
+        // wakes the retired owner only (a cheap defence; nothing pins it).
+        let proxy = super::host::with_owner_platform(flui_native::OwnerPlatform::proxy);
+        let seen = Arc::new(parking_lot::Mutex::new(None::<flui_platform::WindowState>));
         // Weak: the callback lives in the window's own handler table, and a
         // strong capture would keep the window alive past close.
         let observed = Arc::downgrade(&window);
-        window.on_appearance_changed(Box::new(move || {
-            if let Some(window) = observed.upgrade() {
-                let _ = dispatch_platform_ui_runtime(
-                    dispatcher,
-                    RuntimeTask::Event(RuntimeEvent::AppearanceChanged(window.appearance().into())),
-                );
-            }
-        }));
-        self.observe(WindowObservation::Brightness(window.appearance().into()));
-    }
-
-    /// Follow the display this window is on into the presentation's refresh
-    /// period (ADR-0236).
-    ///
-    /// The window's hint is registered before the seed is derived, so a move
-    /// between the two is delivered rather than lost, and the presentation
-    /// starts on its real display and period before its first frame. The hint
-    /// carries nothing: it wakes the owner, whose next turn samples the
-    /// platform's snapshot and re-derives every window. Without an installed
-    /// owner platform there is nothing to wake and the hint does nothing.
-    pub(super) fn observe_display(&mut self) {
-        let window = Arc::clone(self.window.native());
-        let dispatcher = self.dispatcher();
-        // Bound to this host's owner now, so a late hint after a replacement wakes the
-        // retired owner only (a cheap defence; nothing pins it).
-        let proxy = super::host::with_owner_platform(flui_native::OwnerPlatform::proxy);
-        window.on_display_changed(Box::new(move || {
-            if let Some(proxy) = &proxy {
+        let last = Arc::clone(&seen);
+        window.on_state_changed(Box::new(move || {
+            let Some(window) = observed.upgrade() else {
+                return;
+            };
+            // Read with no lock held: the window is platform code.
+            let next = window.state();
+            // The baseline moves before delivery: a change a subscriber makes
+            // re-enters here and is compared against this snapshot. Every
+            // event is then delivered, a panicking one included.
+            let followed = RuntimeEvent::follow(&mut last.lock(), next);
+            if followed.display_moved
+                && let Some(proxy) = &proxy
+            {
                 // A failed wake leaves the owner's retry debt; nothing to do.
                 let _ = proxy.wake();
             }
+            RuntimeEvent::deliver_each(followed.events, |event| {
+                // A refused delivery means the presentation is gone.
+                let _ = dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Event(event));
+            });
         }));
+        let seed = window.state();
+        *seen.lock() = Some(seed.clone());
+        self.observe(WindowObservation::Snapshot {
+            execution: seed.execution,
+            focused: seed.focused,
+            visible: seed.is_seen(),
+        });
+        if let Some(metrics) = seed.metrics {
+            self.observe(WindowObservation::Metrics(metrics));
+        }
+        self.observe(WindowObservation::SafeArea(seed.safe_area));
+        self.observe(WindowObservation::Brightness(seed.appearance.into()));
         self.host.displays().follow(dispatcher, &window);
-        let seed = self.host.displays().derive(window.as_ref());
-        self.observe(WindowObservation::Display(seed));
-    }
-
-    /// Follow the window's published state into the subscribers of its
-    /// `WindowHandle`. The notification carries nothing: it wakes the owner,
-    /// which reads the state and delivers it only when its revision is new.
-    pub(super) fn observe_window_state(&self) {
-        let dispatcher = self.dispatcher();
-        self.window.native().on_state_changed(Box::new(move || {
-            let _ = dispatch_platform_ui_runtime(
-                dispatcher,
-                RuntimeTask::Event(super::owner_dispatch::RuntimeEvent::WindowStateChanged),
-            );
-        }));
+        let display = self.host.displays().derive(window.as_ref());
+        self.observe(WindowObservation::Display(display));
     }
 
     /// Complete Web bootstrap wiring before sampling and publishing native state.
@@ -300,7 +347,7 @@ impl WindowInstall {
         driver: FrameDriver,
         platform: &flui_native::SharedPlatform,
     ) -> anyhow::Result<()> {
-        use super::owner_dispatch::{RuntimeEvent, install_input_wiring, with_owner_callback};
+        use super::owner_dispatch::{install_input_wiring, with_owner_callback};
 
         let window = Arc::clone(self.window.native());
         let dispatcher = self.dispatcher();
@@ -312,52 +359,10 @@ impl WindowInstall {
                     dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(binding, request));
             });
         }));
-        window.on_resize(Box::new(move |metrics| {
-            let _ = dispatch_platform_ui_runtime(
-                dispatcher,
-                RuntimeTask::Event(RuntimeEvent::Resized(metrics)),
-            );
-        }));
         self.terminal_callbacks(platform);
-        window.on_active_status_change(Box::new(move |focused| {
-            let _ = dispatch_platform_ui_runtime(
-                dispatcher,
-                RuntimeTask::Event(RuntimeEvent::WindowFocus(focused)),
-            );
-        }));
-        window.on_execution_state_change(Box::new(move |state| {
-            let _ = dispatch_platform_ui_runtime(
-                dispatcher,
-                RuntimeTask::Event(RuntimeEvent::WindowExecution(state)),
-            );
-        }));
-        window.on_visibility_status_change(Box::new(move |visible| {
-            let _ = dispatch_platform_ui_runtime(
-                dispatcher,
-                RuntimeTask::Event(RuntimeEvent::WindowVisibility(visible)),
-            );
-        }));
-        window.on_hover_status_change(Box::new(move |is_hovered| {
-            let _ = dispatch_platform_ui_runtime(
-                dispatcher,
-                RuntimeTask::Event(RuntimeEvent::WindowHover(is_hovered)),
-            );
-        }));
-        self.observe_appearance();
-        self.observe_display();
-        self.observe_window_state();
-        // Observers precede the snapshot. Keep redraw ownership published
+        // The subscription precedes the seed. Keep redraw ownership published
         // before lifecycle reconciliation can synchronously request a frame.
-        let metrics = window.metrics().ok().map(WindowObservation::Metrics);
-        let snapshot = WindowObservation::Snapshot {
-            execution: window.execution_state(),
-            focused: window.is_focused(),
-            visible: window.is_visible(),
-        };
-        self.observe(snapshot);
-        if let Some(metrics) = metrics {
-            self.observe(metrics);
-        }
+        self.observe_window();
         super::host::APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(window));
         self.submit()
             .outcome()

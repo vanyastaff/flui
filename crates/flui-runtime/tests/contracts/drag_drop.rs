@@ -895,23 +895,8 @@ impl PlatformWindow for WithDragSource {
     fn id(&self) -> flui_platform::WindowId {
         self.window.id()
     }
-    fn physical_size(&self) -> flui_foundation::geometry::Size<i32> {
-        self.window.physical_size()
-    }
-    fn logical_size(&self) -> flui_foundation::geometry::Size<f64> {
-        self.window.logical_size()
-    }
-    fn scale_factor(&self) -> f64 {
-        self.window.scale_factor()
-    }
     fn request_redraw(&self) {
         self.window.request_redraw();
-    }
-    fn is_focused(&self) -> bool {
-        self.window.is_focused()
-    }
-    fn is_visible(&self) -> bool {
-        self.window.is_visible()
     }
     fn set_cursor(
         &self,
@@ -924,9 +909,6 @@ impl PlatformWindow for WithDragSource {
     }
     fn state(&self) -> flui_platform::WindowState {
         self.window.state()
-    }
-    fn capabilities(&self) -> flui_platform::WindowCapabilities {
-        self.window.capabilities()
     }
     fn apply(
         &self,
@@ -942,9 +924,6 @@ impl PlatformWindow for WithDragSource {
     }
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
         self.window.system_chrome()
-    }
-    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
-        self.window.show()
     }
 }
 

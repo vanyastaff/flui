@@ -143,7 +143,12 @@ pub fn run_direct(
         // `WindowTarget` (issue #1043) — `Arc::clone(&window)` gives it its
         // own strong ref rather than a borrow, so the renderer stays sound
         // even if this scope's `window` binding is dropped first.
-        let phys_size = window.physical_size();
+        let phys_size = window
+            .state()
+            .metrics
+            .map_or_else(flui_foundation::geometry::Size::default, |metrics| {
+                metrics.physical()
+            });
         let renderer = pollster::block_on(Renderer::with_surface_color(
             Arc::clone(&window),
             config.surface_color,
@@ -228,9 +233,24 @@ pub fn run_direct(
             }
         }));
 
-        // 5. Register resize callback
+        // 5. Follow the window's snapshot: a change of its drawable metrics
+        // resizes the surface. Weak: the subscription lives in the window's
+        // own handler table.
         let renderer_resize = Arc::clone(&renderer);
-        window.on_resize(Box::new(move |metrics| {
+        let observed = Arc::downgrade(&window);
+        let mut sized = window.state().metrics;
+        window.on_state_changed(Box::new(move || {
+            let Some(window) = observed.upgrade() else {
+                return;
+            };
+            let metrics = window.state().metrics;
+            if metrics == sized {
+                return;
+            }
+            sized = metrics;
+            let Some(metrics) = metrics else {
+                return;
+            };
             let physical = metrics.physical();
             let (w, h) = (
                 physical.width.unsigned_abs(),

@@ -123,6 +123,7 @@ mod narrowing {
         );
         assert_eq!(win32.theme(), Ok(WindowsTheme::Light));
         assert_eq!(win32.backdrop(), Ok(WindowsBackdrop::MicaAlt));
-        window.close();
+        flui_platform::PlatformWindow::apply(window.as_ref(), flui_platform::WindowCommand::Close)
+            .expect("a Win32 window closes");
     }
 }

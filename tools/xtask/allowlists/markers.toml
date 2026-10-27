@@ -140,11 +140,6 @@ class = "slice"
 count = 3
 
 [[allow]]
-path = "crates/flui-platform/src/platform_window.rs"
-class = "spec-task"
-count = 2
-
-[[allow]]
 path = "crates/flui-native/ARCHITECTURE.md"
 class = "tracker-h"
 count = 2

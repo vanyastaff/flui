@@ -189,7 +189,8 @@ where
         // 2. Create GPU renderer (Vulkan backend on Android). `Renderer::new`
         // takes ownership of a `WindowTarget` (issue #1043) — `Arc::clone`
         // gives it its own strong ref rather than a borrow of `window`.
-        let phys_size = window.physical_size();
+        let geometry = super::window_install::SurfaceGeometry::of(window.as_ref());
+        let phys_size = geometry.physical;
         let renderer = pollster::block_on(Renderer::with_surface_color(
             Arc::clone(&window),
             config.surface_color,
@@ -208,7 +209,7 @@ where
         // LOGICAL size; the paint root's DPR transform maps to physical.
         // `UiRuntime::new` applies the DPR to the freshly built pipeline
         // before returning.
-        let scale_factor = window.scale_factor() as f64;
+        let scale_factor = geometry.scale;
         let ui_runtime = match super::host::build_ui_runtime(presentation_window, scale_factor) {
             Ok(ui_runtime) => ui_runtime,
             Err(error) => {
@@ -229,7 +230,7 @@ where
         config.install_input_tap(&ui_runtime);
         config.install_error_view_builder(&ui_runtime);
 
-        let logical = window.logical_size();
+        let logical = geometry.logical;
         let owner = APP_RUNTIME
             .with(|slot| slot.borrow().owner_platform.clone())
             .expect("BUG: Android owner installed before bootstrap");
@@ -330,26 +331,6 @@ where
             });
         }));
 
-        // 7. Register resize callback -> typed Resized event; the applier
-        // installed above (not this closure) actually touches the renderer.
-        window.on_resize(Box::new(move |metrics| {
-            let _ = dispatch_platform_ui_runtime(
-                owner_dispatch,
-                RuntimeTask::Event(RuntimeEvent::Resized(metrics)),
-            );
-        }));
-
-        window.on_safe_area_change(Box::new(move |insets| {
-            let _ = dispatch_platform_ui_runtime(
-                owner_dispatch,
-                RuntimeTask::Event(RuntimeEvent::SafeAreaChanged(insets)),
-            );
-        }));
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::SafeAreaChanged(window.safe_area_insets())),
-        );
-
         // 8. Lifecycle callbacks
         //
         // Detached is ui_runtime-dispatched so interrupted gesture state is drained
@@ -359,31 +340,6 @@ where
         owner_platform_installed(|owner| {
             installation.terminal_callbacks(&owner.shared());
         });
-
-        // The Activity's three lifecycle facts reach the runtime as they are,
-        // and `derive_lifecycle_state` builds the application state from them:
-        // on screen (`onStart`/`onStop`), allowed to run (`onResume`/`onPause`)
-        // and holding input focus. Focus alone must not stand for the other two
-        // (a dialog or the notification shade takes focus from a running
-        // Activity), so no callback here sets the lifecycle itself.
-        window.on_active_status_change(Box::new(move |focused| {
-            let _ = dispatch_platform_ui_runtime(
-                owner_dispatch,
-                RuntimeTask::Event(RuntimeEvent::WindowFocus(focused)),
-            );
-        }));
-        window.on_visibility_status_change(Box::new(move |visible| {
-            let _ = dispatch_platform_ui_runtime(
-                owner_dispatch,
-                RuntimeTask::Event(RuntimeEvent::WindowVisibility(visible)),
-            );
-        }));
-        window.on_execution_state_change(Box::new(move |state| {
-            let _ = dispatch_platform_ui_runtime(
-                owner_dispatch,
-                RuntimeTask::Event(RuntimeEvent::WindowExecution(state)),
-            );
-        }));
 
         // 8b. Surface availability (issue #1146): the release that has to
         // happen before the native window behind the surface dies, and the
@@ -497,19 +453,17 @@ where
         // `dispatch_platform_ui_runtime`; if the slot were still empty at that
         // point, anything resolving it during that frame would silently
         // no-op instead of waking the loop.
-        installation.observe_appearance();
-        installation.observe_display();
-        installation.observe_window_state();
-        // Registered above, so a fact that changed during bootstrap is not lost
-        // between this sample and the first callback.
-        installation.observe(flui_runtime::owner::WindowObservation::Snapshot {
-            execution: window.execution_state(),
-            focused: window.is_focused(),
-            visible: window.is_visible(),
-        });
-        if let Ok(metrics) = window.metrics() {
-            installation.observe(flui_runtime::owner::WindowObservation::Metrics(metrics));
-        }
+        //
+        // The Activity's three lifecycle facts reach the runtime as they are,
+        // and `derive_lifecycle_state` builds the application state from them:
+        // on screen (`onStart`/`onStop`), allowed to run (`onResume`/`onPause`)
+        // and holding input focus. Focus alone must not stand for the other two
+        // (a dialog or the notification shade takes focus from a running
+        // Activity). They arrive with the metrics, the insets, the night mode
+        // and the display through the window's one snapshot subscription,
+        // seeded from the snapshot read right after it, so a fact that changed
+        // during bootstrap is not lost.
+        installation.observe_window();
         APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(window));
 
         // Seed the host's own lifecycle as Resumed. It does not decide what a

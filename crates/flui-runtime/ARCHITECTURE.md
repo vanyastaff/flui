@@ -481,8 +481,8 @@ text owners, a window observation to metrics and lifecycle, a frame's vsync to t
 next render's motion sampling, and an AT request — decoded on the owner thread,
 after the adapter's thread only transported it — to the semantics owner with an
 assistive sequence id the binding minted. The window payload is the runtime's
-normalized `WindowObservation`, not `flui_platform::WindowEvent`, which keys
-raw window events by native id. `owner_input_contract`'s
+normalized `WindowObservation`, derived from the window's state snapshot, so
+no raw platform event crosses into it. `owner_input_contract`'s
 `accessibility_input_reaches_the_semantics_owner` pins the AT path.
 
 ### Recorded input is emitted where it is applied

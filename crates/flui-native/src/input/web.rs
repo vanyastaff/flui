@@ -662,7 +662,7 @@ pub(crate) mod events {
                 canvas.as_ref(),
                 kind,
                 Rc::new(move |_: web_sys::Event| {
-                    callbacks.dispatch_hover_status_change(hovered);
+                    callbacks.report_hover(hovered);
                 }),
             )?;
         }

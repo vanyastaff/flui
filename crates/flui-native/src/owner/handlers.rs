@@ -15,14 +15,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use flui_foundation::IdMint;
-use flui_foundation::geometry::{Size, WindowMetrics};
+
 use parking_lot::Mutex;
 
 use flui_platform::input_capabilities::InputCapabilities;
 
 use flui_platform::{
     DispatchEventResult, FrameRequest, PlatformInput, SessionEndAnswer, SessionEndPhase,
-    WindowEvent, WindowExecutionState,
 };
 
 use super::call_point::{Called, HandlerSlot, call, retire};
@@ -160,7 +159,7 @@ enum HeldEntry {
 }
 
 /// The application's handlers: what the platform calls on its own events
-/// (quit, a window event, the session ending, …).
+/// (quit, the session ending, …).
 ///
 /// A host keeps this set behind its own lock or `RefCell` and reaches each
 /// field as a `call_point::Field` slot: a handler is called
@@ -178,9 +177,6 @@ pub struct PlatformHandlers {
 
     /// Called when the application is reopened (macOS dock click)
     pub reopen: Option<Box<dyn FnMut() + Send>>,
-
-    /// Called when a window event occurs
-    pub window_event: Option<Box<dyn FnMut(WindowEvent) + Send>>,
 
     /// Called when URLs are opened (e.g., from file manager, browser)
     pub open_urls: Option<Box<dyn FnMut(Vec<String>) + Send>>,
@@ -228,7 +224,6 @@ impl PlatformHandlers {
         Self {
             quit: None,
             reopen: None,
-            window_event: None,
             open_urls: None,
             keyboard_layout_changed: None,
             session_end: None,
@@ -249,7 +244,6 @@ impl std::fmt::Debug for PlatformHandlers {
         f.debug_struct("PlatformHandlers")
             .field("quit", &self.quit.is_some())
             .field("reopen", &self.reopen.is_some())
-            .field("window_event", &self.window_event.is_some())
             .field("open_urls", &self.open_urls.is_some())
             .field(
                 "keyboard_layout_changed",
@@ -320,11 +314,10 @@ pub struct WindowCallbacks {
     /// Called when the platform requests a new frame to be rendered.
     pub on_request_frame: Mutex<Option<Box<dyn FnMut(FrameRequest) + Send>>>,
 
-    /// Called when the window is resized. Parameters: new size (logical), scale
-    /// factor.
-    pub on_resize: Mutex<Option<Box<dyn FnMut(WindowMetrics) + Send>>>,
-
-    /// Called when the window state may differ from the one last read.
+    /// Called when the window state differs from the one last published:
+    /// every fact of the window (metrics, focus, visibility, hover,
+    /// appearance, display, safe area, execution state, capabilities) reaches
+    /// its consumers through this one callback (ADR-0254 §1).
     pub on_state_changed: Mutex<Option<Box<dyn FnMut() + Send>>>,
 
     /// Called when the window is about to be destroyed. Only fires once
@@ -334,47 +327,11 @@ pub struct WindowCallbacks {
     /// Called to ask if the window should close. Return `false` to veto.
     pub on_should_close: Mutex<Option<Box<dyn FnMut() -> bool + Send>>>,
 
-    /// Called when the window gains or loses focus. Parameter: is_active.
-    pub on_active_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>,
-
-    /// Called when the window's visibility (occlusion) changes. Parameter:
-    /// is_visible (`true` when the window becomes visible/unoccluded).
-    ///
-    /// Distinct from `on_active_status_change`: a window can be visible but
-    /// unfocused (the `Inactive` lifecycle state), or focused but
-    /// not visible (unusual, but not excluded). Feeds the `AppLifecycleState`
-    /// derivation `ADR-0035` documents; winit's `WindowEvent::Occluded`
-    /// drives it on desktop, but only on X11 (Xlib's
-    /// `VisibilityFullyObscured` — full obscuration only), macOS, iOS, and
-    /// Web — winit 0.30 has no Wayland emitter for this event at all
-    /// ("Android / Wayland / Windows / Orbital: Unsupported", per winit's
-    /// own `WindowEvent::Occluded` doc). The native Win32 backend derives
-    /// its own signal from `WM_SIZE` minimize/restore plus `WM_SHOWWINDOW`
-    /// hide/show, and the native AppKit backend from
-    /// `windowDidChangeOcclusionState:`; the winit, Win32, AppKit and Web
-    /// windows report through the one rule in `window::visibility`.
-    /// The native Web backend samples the canvas document's `hidden` value
-    /// and observes Document `visibilitychange`, separately from canvas focus.
-    /// Where no signal is ever delivered, this callback simply never fires
-    /// — the window is treated as always visible (the same behavior as
-    /// before this callback existed).
-    pub on_visibility_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>,
-
-    /// Called when the mouse enters or leaves the window. Parameter:
-    /// is_hovered.
-    pub on_hover_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>,
-
-    /// Called when the system appearance (light/dark) changes.
-    pub on_appearance_changed: Mutex<Option<Box<dyn FnMut() + Send>>>,
-
-    /// Called when the display this window is on may have changed.
-    pub on_display_changed: Mutex<Option<Box<dyn FnMut() + Send>>>,
-
     /// Called when the GPU surface's availability changes. Parameter:
     /// `has_surface` (`false` means the surface must be released before this
     /// callback returns).
     ///
-    /// Distinct from the lifecycle callbacks above: a window can be resumed
+    /// Distinct from the snapshot's execution state: a window can be resumed
     /// and still have no usable swapchain, and Android's `Pause` does not
     /// clear `AndroidApp::native_window()` at all. See
     /// [`flui_platform::PlatformWindow::on_surface_status_change`] for the contract and for
@@ -382,10 +339,6 @@ pub struct WindowCallbacks {
     /// `false` is not.
     pub on_surface_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>,
 
-    safe_area_dispatch: Mutex<DispatchState<flui_foundation::geometry::EdgeInsets>>,
-    on_safe_area_change:
-        Mutex<Option<Box<dyn FnMut(flui_foundation::geometry::EdgeInsets) + Send>>>,
-    on_execution_state_change: Mutex<Option<Box<dyn FnMut(WindowExecutionState) + Send>>>,
     event_dispatch: Mutex<DispatchState<WindowCallbackEvent>>,
     /// Incremented each time a registered frame callback runs, nested
     /// requests drained later included; a request with no callback to run
@@ -393,16 +346,13 @@ pub struct WindowCallbacks {
     /// every window it opens ([`Self::counting_frames`]).
     frames_run: Arc<AtomicU64>,
     should_close_dispatching: Mutex<bool>,
-    /// Publishes the window's snapshot before each fact's own callback is
-    /// queued; see [`Self::set_state_publisher`].
+    /// Publishes the window's snapshot when the window system reports a fact;
+    /// see [`Self::set_state_publisher`].
     state_publisher: Mutex<Option<StatePublisher>>,
-    /// Fact events that arrived while the window held its publishing back,
-    /// delivered behind the publication that ends the hold.
-    held: Mutex<Vec<WindowCallbackEvent>>,
     /// What the last hover report said: whatever reports it (Win32 or web
     /// input, AppKit's tracking area, winit's cursor events), a hover reaches
-    /// the window through [`Self::dispatch_hover_status_change`] alone, and
-    /// the window's snapshot reads it here ([`Self::hovered`]).
+    /// the window through [`Self::report_hover`] alone, and the window's
+    /// snapshot reads it here ([`Self::hovered`]).
     hovered: AtomicBool,
 
     /// One-shot latch set by [`Self::clear`] before it takes any slot.
@@ -425,13 +375,11 @@ pub struct WindowCallbacks {
 /// [`WindowCallbacks::clear_then`].
 type RetirementNotice = Box<dyn FnOnce() + Send>;
 
-type StatusCallback = Box<dyn FnMut(bool) + Send>;
-
 /// Reads a window from its window system again and publishes what it read,
-/// announcing nothing: [`WindowCallbacks`] delivers `on_state_changed` with
-/// the fact that asked. A window's host builds it over a weak reference to
-/// the window ([`WindowCallbacks::publish_through`]), so the callbacks never
-/// keep their window alive.
+/// announcing nothing: [`WindowCallbacks::dispatch_state_changed`] delivers
+/// `on_state_changed`. A window's host builds it over a weak reference to the
+/// window ([`WindowCallbacks::publish_through`]), so the callbacks never keep
+/// their window alive.
 pub(crate) type StatePublisher = Arc<dyn Fn() -> Publication + Send + Sync>;
 
 /// What a [`StatePublisher`] did.
@@ -453,40 +401,12 @@ pub(crate) enum Publication {
     Held,
 }
 
-/// Resume the first of two contained failures, dropping the second.
-fn resurface_first(first: std::thread::Result<()>, second: std::thread::Result<()>) {
-    match (first, second) {
-        (Err(payload), second) => {
-            if let Err(later) = second {
-                contain_owner_callback(|| drop(later));
-            }
-            std::panic::resume_unwind(payload);
-        }
-        (Ok(()), Err(payload)) => std::panic::resume_unwind(payload),
-        (Ok(()), Ok(())) => {}
-    }
-}
-
 enum WindowCallbackEvent {
     Input(PlatformInput),
     RequestFrame(FrameRequest),
-    Resize(WindowMetrics),
     StateChanged,
     Close,
-    Active(bool, Option<Box<dyn FnOnce() + Send>>),
-    Execution(WindowExecutionState),
-    Visibility(bool, Option<Box<dyn FnOnce() + Send>>),
-    Hover(bool),
-    AppearanceChanged,
-    DisplayChanged,
     SurfaceStatus(bool),
-    /// A publication of the window's snapshot: `on_state_changed` when it
-    /// produced a new revision, then the facts that came with it, each
-    /// contained.
-    Published {
-        changed: bool,
-        facts: Vec<WindowCallbackEvent>,
-    },
     /// A deferred [`WindowCallbacks::clear`]: queued instead of run inline
     /// when `clear()` is called while this window's FIFO is already
     /// draining (a `close()` issued from inside one of this window's own
@@ -584,14 +504,6 @@ impl Drop for BooleanDispatchGuard<'_> {
     fn drop(&mut self) {
         *self.dispatching.lock() = false;
     }
-}
-
-#[cfg(target_os = "ios")]
-pub(crate) enum LifecycleEvent {
-    Execution(WindowExecutionState),
-    Focus(bool),
-    Visibility(bool),
-    Surface(bool),
 }
 
 /// One window callback's slot for a call, closed by a latch of the window
@@ -704,6 +616,7 @@ impl WindowCallbacks {
     }
 
     /// A callback's slot for immediate delivery, fenced at the close request.
+    #[cfg(target_os = "ios")]
     fn immediate<'a, T>(&'a self, slot: &'a Mutex<Option<T>>) -> Latched<'a, T> {
         Latched {
             slot,
@@ -724,18 +637,8 @@ impl WindowCallbacks {
     pub(crate) fn accepts_registration(&self) -> bool {
         !self.lifecycle_closed.load(Ordering::SeqCst)
     }
-    /// Set how this window publishes its snapshot (ADR-0254 §1). Every fact
-    /// dispatch below (resize and scale, focus, visibility, hover, appearance,
-    /// display, safe area, execution state) runs it first, on the calling
-    /// thread and with no lock of this set held; the publisher announces
-    /// nothing itself. When it published a new revision, `on_state_changed`
-    /// and the fact's own callback are delivered as one event, each
-    /// contained, so a panic in either loses neither and the first failure
-    /// resurfaces afterwards. When the window holds its publishing back (a
-    /// change made of several steps), the fact waits behind the publication
-    /// that ends the hold ([`Self::announce`]). A fact reported by another
-    /// feature (the input's hover) reaches the snapshot the same way as the
-    /// window's own. The host sets it once, when the window opens.
+    /// Set how this window publishes its snapshot (ADR-0254 §1). The host
+    /// sets it once, when the window opens; [`Self::publish_state`] runs it.
     pub(crate) fn set_state_publisher(&self, publisher: StatePublisher) {
         *self.state_publisher.lock() = Some(publisher);
     }
@@ -768,65 +671,22 @@ impl WindowCallbacks {
     }
 
     /// Publish the window's snapshot now, for a fact that has no callback of
-    /// its own, and announce it ([`Self::announce`]).
+    /// its own, and announce a new revision (`on_state_changed`). A host that
+    /// publishes by itself (the end of a held change) announces its new
+    /// revisions with [`Self::dispatch_state_changed`].
     pub(crate) fn publish_state(&self) {
-        match self.publish() {
-            Publication::Changed => self.announce(true),
-            Publication::Unchanged => self.announce(false),
-            Publication::Held => {}
+        if self.publish() == Publication::Changed {
+            self.dispatch_state_changed();
         }
     }
 
-    /// Announce a publication: `on_state_changed` when it produced a new
-    /// revision, then each fact callback held back while the window held its
-    /// publishing, in one event. A host calls it after every publication it
-    /// makes outside a fact dispatch.
-    pub(crate) fn announce(&self, changed: bool) {
-        let facts = std::mem::take(&mut *self.held.lock());
-        if !changed && facts.is_empty() {
-            return;
-        }
-        self.deliver_published(changed, facts);
-    }
-
-    /// Publish, then deliver `fact` behind the announcement.
-    fn dispatch_fact(&self, fact: WindowCallbackEvent) {
-        let changed = match self.publish() {
-            Publication::Held => {
-                self.held.lock().push(fact);
-                return;
-            }
-            Publication::Changed => true,
-            Publication::Unchanged => false,
-        };
-        let mut facts = std::mem::take(&mut *self.held.lock());
-        facts.push(fact);
-        self.deliver_published(changed, facts);
-    }
-
-    fn deliver_published(&self, changed: bool, facts: Vec<WindowCallbackEvent>) {
-        let Some(drain) = DispatchDrain::begin(
-            &self.event_dispatch,
-            WindowCallbackEvent::Published { changed, facts },
-        ) else {
-            return;
-        };
-        self.drain_events(drain);
-    }
-
-    /// Publish for a fact delivered outside the window's FIFO (safe area,
-    /// the iOS immediate lifecycle), then run `deliver`. The announcement and
-    /// the delivery are each contained; the first failure resurfaces after
-    /// both ran.
-    fn publish_then(&self, deliver: impl FnOnce()) {
-        let announced = match self.publish() {
-            Publication::Held => Ok(()),
-            outcome => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                self.announce(outcome == Publication::Changed);
-            })),
-        };
-        let delivered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(deliver));
-        resurface_first(announced, delivered);
+    /// The pointer entered (`true`) or left (`false`) the window. A hover
+    /// reaches the snapshot through here whichever feature reports it (Win32
+    /// or web input, AppKit's tracking area, winit's cursor events), with no
+    /// edge from the input to the window.
+    pub(crate) fn report_hover(&self, hovered: bool) {
+        self.hovered.store(hovered, Ordering::Release);
+        self.publish_state();
     }
 
     /// Create a new empty callback set
@@ -842,28 +702,18 @@ impl WindowCallbacks {
     pub fn counting_frames(frames_run: Arc<AtomicU64>) -> Self {
         Self {
             frames_run,
-            on_execution_state_change: Mutex::new(None),
-            on_safe_area_change: Mutex::new(None),
-            safe_area_dispatch: Mutex::new(DispatchState::new()),
             on_input: crate::owner::slot::OwnerSlot::new(),
             input_feed: Mutex::new(InputFeed::new()),
             input_wake: Mutex::new(None),
             unanswered_keys: Mutex::new(VecDeque::new()),
             on_request_frame: Mutex::new(None),
-            on_resize: Mutex::new(None),
             on_state_changed: Mutex::new(None),
             on_close: Mutex::new(None),
             on_should_close: Mutex::new(None),
-            on_active_status_change: Mutex::new(None),
-            on_visibility_status_change: Mutex::new(None),
-            on_hover_status_change: Mutex::new(None),
-            on_appearance_changed: Mutex::new(None),
-            on_display_changed: Mutex::new(None),
             on_surface_status_change: Mutex::new(None),
             event_dispatch: Mutex::new(DispatchState::new()),
             should_close_dispatching: Mutex::new(false),
             state_publisher: Mutex::new(None),
-            held: Mutex::new(Vec::new()),
             hovered: AtomicBool::new(false),
             cleared: AtomicBool::new(false),
             lifecycle_closed: AtomicBool::new(false),
@@ -899,7 +749,7 @@ impl WindowCallbacks {
     /// **Drain-ordered, not immediate, when called while this window's FIFO
     /// is already draining.** A close requested from inside one of this
     /// window's own callbacks (e.g. `on_input` — a widget calling
-    /// `window.close()` from its own gesture handler) reaches one of the
+    /// a `WindowCommand::Close` from its own gesture handler) reaches one of the
     /// call sites above SYNCHRONOUSLY, while that callback's own dispatch
     /// is still on the stack — so `dispatch_close()` finds the FIFO already
     /// dispatching and only QUEUES `Close` rather than invoking `on_close`
@@ -918,7 +768,7 @@ impl WindowCallbacks {
     /// own `Clear` arm.
     ///
     /// **The `cleared` latch never resets once set, but that does not make
-    /// every slot permanently inert.** The ten slots called through a
+    /// every slot permanently inert.** The four slots called through a
     /// `Latched` slot (every one except `on_close`) still accept a fresh
     /// registration after this call returns: that callback runs exactly once,
     /// the next time its event is dispatched, and only then does its slot
@@ -943,7 +793,7 @@ impl WindowCallbacks {
     /// returns: a backend uses it to order a notice after the release of what
     /// those callbacks own (a renderer and its surface). If the running
     /// callback unwinds, terminal clear and retirement notices still finish;
-    /// accepted native focus commits and notifications also finish, while
+    /// a state change already published is still announced, while
     /// ordinary nested events from the aborted transaction are discarded.
     pub fn clear_then(&self, on_retired: impl FnOnce() + Send + 'static) {
         self.clear_with(Some(Box::new(on_retired)));
@@ -977,48 +827,30 @@ impl WindowCallbacks {
         // way to stop it from restoring itself into a slot this call is
         // about to empty. See `Latched::restore`.
         self.cleared.store(true, Ordering::SeqCst);
-        let on_safe_area_change = self.on_safe_area_change.lock().take();
-        let on_execution_state_change = self.on_execution_state_change.lock().take();
         // Off the owner thread this reaches nothing; the callback then
         // retires at the owner's next call, whose slot sees `cleared`.
         let on_input = self.on_input.take();
         let held = std::mem::take(&mut self.input_feed.lock().held);
         let input_wake = self.input_wake.lock().take();
         let on_request_frame = self.on_request_frame.lock().take();
-        let on_resize = self.on_resize.lock().take();
         let on_state_changed = self.on_state_changed.lock().take();
         let on_close = self.on_close.lock().take();
         let on_should_close = self.on_should_close.lock().take();
-        let on_active_status_change = self.on_active_status_change.lock().take();
-        let on_visibility_status_change = self.on_visibility_status_change.lock().take();
-        let on_hover_status_change = self.on_hover_status_change.lock().take();
-        let on_appearance_changed = self.on_appearance_changed.lock().take();
-        let on_display_changed = self.on_display_changed.lock().take();
         let on_surface_status_change = self.on_surface_status_change.lock().take();
         let state_publisher = self.state_publisher.lock().take();
-        let held_facts = std::mem::take(&mut *self.held.lock());
         // Each slot retires independently: distinct panicking destructors must
         // never meet during the same unwind. No slot lock is held here.
-        contain_owner_callback(|| drop(on_safe_area_change));
-        contain_owner_callback(|| drop(on_execution_state_change));
         contain_owner_callback(|| drop(on_input));
         for input in held {
             contain_owner_callback(|| drop(input));
         }
         contain_owner_callback(|| drop(input_wake));
         contain_owner_callback(|| drop(on_request_frame));
-        contain_owner_callback(|| drop(on_resize));
         contain_owner_callback(|| drop(on_state_changed));
         contain_owner_callback(|| drop(on_close));
         contain_owner_callback(|| drop(on_should_close));
-        contain_owner_callback(|| drop(on_active_status_change));
-        contain_owner_callback(|| drop(on_visibility_status_change));
-        contain_owner_callback(|| drop(on_hover_status_change));
-        contain_owner_callback(|| drop(on_appearance_changed));
-        contain_owner_callback(|| drop(on_display_changed));
         contain_owner_callback(|| drop(on_surface_status_change));
         contain_owner_callback(|| drop(state_publisher));
-        contain_owner_callback(|| drop(held_facts));
     }
 
     fn drain_events(
@@ -1034,26 +866,13 @@ impl WindowCallbacks {
                 // observations must follow the already accepted tail.
                 while let Some(event) = drain.next() {
                     match event {
-                        WindowCallbackEvent::Active(focused, Some(commit)) => {
-                            // The backend has already accepted this observation.
-                            // Dropping it would lose both its getter commit and
-                            // notification, even after a duplicate native signal.
-                            contain_owner_callback(|| {
-                                self.deliver_status_observation(
-                                    &self.on_active_status_change,
-                                    focused,
-                                    Some(commit),
-                                );
-                            });
-                        }
-                        WindowCallbackEvent::Visibility(visible, Some(commit)) => {
-                            contain_owner_callback(|| {
-                                self.deliver_status_observation(
-                                    &self.on_visibility_status_change,
-                                    visible,
-                                    Some(commit),
-                                );
-                            });
+                        WindowCallbackEvent::StateChanged => {
+                            // The snapshot it announces is already published:
+                            // the window system's fact was accepted. Dropping
+                            // the notice would leave every consumer on the
+                            // previous snapshot until an unrelated change.
+                            call(&self.queued(&self.on_state_changed), |callback| callback())
+                                .or_contain((), "a window's state callback");
                         }
                         WindowCallbackEvent::Close
                             if self.lifecycle_closed.load(Ordering::SeqCst) =>
@@ -1125,59 +944,11 @@ impl WindowCallbacks {
                     })
                     .or_resume(());
                 }
-                WindowCallbackEvent::Resize(metrics) => {
-                    // Queued delivery is already fenced by `clear_now` having
-                    // emptied this slot before the event runs, so this slot
-                    // answers to `cleared`. The immediate iOS
-                    // `dispatch_metrics_resize` calls the same slot against
-                    // `lifecycle_closed` instead: its fence has to close at the
-                    // close REQUEST, which can arrive while a drain is still
-                    // holding `clear_now` back.
-                    call(&self.queued(&self.on_resize), |callback| callback(metrics)).or_resume(());
-                }
                 WindowCallbackEvent::StateChanged => {
                     call(&self.queued(&self.on_state_changed), |callback| callback()).or_resume(());
                 }
                 WindowCallbackEvent::Close => {
                     call(&Closing(&self.on_close), run_close).or_resume(());
-                }
-                WindowCallbackEvent::Execution(state) => {
-                    call(&self.queued(&self.on_execution_state_change), |callback| {
-                        callback(state);
-                    })
-                    .or_resume(());
-                }
-                WindowCallbackEvent::Active(is_active, commit) => {
-                    self.deliver_status_observation(
-                        &self.on_active_status_change,
-                        is_active,
-                        commit,
-                    );
-                }
-                WindowCallbackEvent::Visibility(is_visible, commit) => {
-                    self.deliver_status_observation(
-                        &self.on_visibility_status_change,
-                        is_visible,
-                        commit,
-                    );
-                }
-                WindowCallbackEvent::Hover(is_hovered) => {
-                    call(&self.queued(&self.on_hover_status_change), |callback| {
-                        callback(is_hovered);
-                    })
-                    .or_resume(());
-                }
-                WindowCallbackEvent::AppearanceChanged => {
-                    call(&self.queued(&self.on_appearance_changed), |callback| {
-                        callback();
-                    })
-                    .or_resume(());
-                }
-                WindowCallbackEvent::DisplayChanged => {
-                    call(&self.queued(&self.on_display_changed), |callback| {
-                        callback();
-                    })
-                    .or_resume(());
                 }
                 WindowCallbackEvent::SurfaceStatus(has_surface) => {
                     call(&self.queued(&self.on_surface_status_change), |callback| {
@@ -1191,45 +962,8 @@ impl WindowCallbacks {
                         contain_owner_callback(retired);
                     }
                 }
-                WindowCallbackEvent::Published { changed, facts } => {
-                    let announced = if changed {
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            call(&self.queued(&self.on_state_changed), |callback| callback())
-                                .or_resume(());
-                        }))
-                    } else {
-                        Ok(())
-                    };
-                    let mut delivered = Ok(());
-                    for fact in facts {
-                        let outcome =
-                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                self.deliver_event(fact, &mut None);
-                            }));
-                        if delivered.is_ok() {
-                            delivered = outcome;
-                        } else if let Err(later) = outcome {
-                            contain_owner_callback(|| drop(later));
-                        }
-                    }
-                    resurface_first(announced, delivered);
-                }
             }
         }
-    }
-
-    fn deliver_status_observation(
-        &self,
-        slot: &Mutex<Option<StatusCallback>>,
-        value: bool,
-        commit: Option<Box<dyn FnOnce() + Send>>,
-    ) {
-        if let Some(commit) = commit {
-            commit();
-            // Committed at its delivery point: the snapshot reads it now.
-            self.publish_state();
-        }
-        call(&self.queued(slot), |callback| callback(value)).or_resume(());
     }
 
     /// Dispatch an input event.
@@ -1586,21 +1320,6 @@ impl WindowCallbacks {
         self.drain_events(drain);
     }
 
-    /// Dispatch a resize event with the window's new metrics.
-    pub fn dispatch_resize(&self, metrics: WindowMetrics) {
-        self.dispatch_fact(WindowCallbackEvent::Resize(metrics));
-    }
-
-    /// [`Self::dispatch_resize`] for a backend that reports a logical size: the device size is
-    /// the logical size at `scale_factor`, rounded. A report that makes no metrics (a zero or
-    /// non-finite size, a non-positive or non-finite scale) is not delivered.
-    pub fn dispatch_logical_resize(&self, size: Size<f64>, scale_factor: f64) {
-        match WindowMetrics::from_logical(size, scale_factor) {
-            Ok(metrics) => self.dispatch_resize(metrics),
-            Err(reason) => tracing::debug!(%reason, "resize report dropped"),
-        }
-    }
-
     /// Dispatch a window state change.
     pub fn dispatch_state_changed(&self) {
         let Some(drain) =
@@ -1641,168 +1360,23 @@ impl WindowCallbacks {
         call(&self.queued(&self.on_should_close), |callback| callback()).or_resume(true)
     }
 
-    /// Deliver iOS lifecycle effects in its own serialized transaction, even when
-    /// an input/frame callback currently owns the general event FIFO. The caller
-    /// must serialize these effects, including callback capture destruction.
+    /// Deliver an iOS surface change in its own serialized transaction, even
+    /// when an input or frame callback owns the general event FIFO: the
+    /// `false` edge must release the surface before UIKit takes the layer
+    /// away. The caller serializes these effects, including callback capture
+    /// destruction. Fenced at the close request, not at slot teardown.
     #[cfg(target_os = "ios")]
-    pub(crate) fn dispatch_lifecycle_immediate(&self, event: LifecycleEvent) {
-        use LifecycleEvent::{Execution, Focus, Surface, Visibility};
-        let deliver = || match event {
-            Execution(value) => self.invoke_lifecycle(&self.on_execution_state_change, value),
-            Focus(value) => self.invoke_lifecycle(&self.on_active_status_change, value),
-            Visibility(value) => self.invoke_lifecycle(&self.on_visibility_status_change, value),
-            Surface(value) => self.invoke_lifecycle(&self.on_surface_status_change, value),
-        };
-        if matches!(event, Surface(_)) {
-            deliver();
-        } else {
-            self.publish_then(deliver);
-        }
-    }
-
-    fn invoke_lifecycle<T, F: FnMut(T)>(&self, slot: &Mutex<Option<F>>, value: T) {
+    pub(crate) fn dispatch_surface_immediate(&self, has_surface: bool) {
         if self.lifecycle_closed.load(Ordering::SeqCst) {
             return;
         }
-        call(&self.immediate(slot), |callback| callback(value))
-            .or_contain((), "a window's lifecycle callback");
-    }
-
-    /// Dispatch active status change (focus gained/lost).
-    pub fn dispatch_active_status_change(&self, is_active: bool) {
-        self.dispatch_fact(WindowCallbackEvent::Active(is_active, None));
-    }
-
-    /// Publish a backend observation at its causal delivery point, so getters
-    /// inside a queued focus callback describe that callback's own observation.
-    #[cfg(any(test, target_arch = "wasm32"))]
-    pub(crate) fn dispatch_focus_observation(
-        &self,
-        focused: bool,
-        commit: impl FnOnce() + Send + 'static,
-    ) {
-        let Some(drain) = DispatchDrain::begin(
-            &self.event_dispatch,
-            WindowCallbackEvent::Active(focused, Some(Box::new(commit))),
-        ) else {
-            return;
-        };
-        self.drain_events(drain);
-    }
-
-    /// Dispatch visibility status change (occlusion gained/lost).
-    pub fn dispatch_visibility_status_change(&self, is_visible: bool) {
-        self.dispatch_fact(WindowCallbackEvent::Visibility(is_visible, None));
-    }
-
-    /// Commit an accepted visibility observation immediately before its callback.
-    #[cfg(any(test, target_arch = "wasm32"))]
-    pub(crate) fn dispatch_visibility_observation(
-        &self,
-        visible: bool,
-        commit: impl FnOnce() + Send + 'static,
-    ) {
-        let Some(drain) = DispatchDrain::begin(
-            &self.event_dispatch,
-            WindowCallbackEvent::Visibility(visible, Some(Box::new(commit))),
-        ) else {
-            return;
-        };
-        self.drain_events(drain);
-    }
-
-    /// Replace a safe-area observer without holding storage through capture Drop.
-    pub fn set_safe_area_callback(
-        &self,
-        callback: Box<dyn FnMut(flui_foundation::geometry::EdgeInsets) + Send>,
-    ) {
-        let retired = {
-            let mut slot = self.on_safe_area_change.lock();
-            if self.lifecycle_closed.load(Ordering::SeqCst) {
-                Some(callback)
-            } else {
-                slot.replace(callback)
-            }
-        };
-        retire(retired);
-    }
-
-    /// Immediate metrics delivery, independently leased from the input FIFO.
-    pub fn dispatch_safe_area_change(&self, insets: flui_foundation::geometry::EdgeInsets) {
-        if self.lifecycle_closed.load(Ordering::SeqCst) {
-            return;
-        }
-        self.publish_then(|| {
-            let Some(mut drain) = DispatchDrain::begin(&self.safe_area_dispatch, insets) else {
-                return;
-            };
-            while let Some(insets) = drain.next() {
-                self.invoke_lifecycle(&self.on_safe_area_change, insets);
-            }
-        });
-    }
-
-    #[cfg(target_os = "ios")]
-    pub(crate) fn dispatch_metrics_resize(&self, size: Size<f64>, scale: f64) {
-        if self.lifecycle_closed.load(Ordering::SeqCst) {
-            return;
-        }
-        let Ok(metrics) = WindowMetrics::from_logical(size, scale) else {
-            return;
-        };
-        // Latched on `lifecycle_closed`, deliberately not the `cleared` flag
-        // the queued Resize arm calls against (see `drain_events`'s own arm):
-        // this is an IMMEDIATE delivery, so it is fenced the moment a close is
-        // requested — `clear()` sets this latch on entry — rather than at slot
-        // teardown, which can sit behind a still-running drain.
-        self.publish_then(|| {
-            call(&self.immediate(&self.on_resize), |callback| {
-                callback(metrics);
-            })
-            .or_contain((), "a window's resize callback");
-        });
-    }
-
-    /// Replace an execution observer, disposing captures outside the storage lock.
-    pub fn set_execution_state_callback(
-        &self,
-        callback: Box<dyn FnMut(WindowExecutionState) + Send>,
-    ) {
-        let retired = {
-            let mut slot = self.on_execution_state_change.lock();
-            if self.cleared.load(Ordering::SeqCst) {
-                Some(callback)
-            } else {
-                slot.replace(callback)
-            }
-        };
-        retire(retired);
-    }
-
-    /// Deliver an owner-thread execution observation through the window FIFO.
-    pub fn dispatch_execution_state_change(&self, state: WindowExecutionState) {
-        self.dispatch_fact(WindowCallbackEvent::Execution(state));
-    }
-
-    /// Dispatch hover status change (mouse enter/leave). A report after the
-    /// window began to close is not a fact of it any more.
-    pub fn dispatch_hover_status_change(&self, is_hovered: bool) {
-        if self.lifecycle_closed.load(Ordering::SeqCst) {
-            return;
-        }
-        self.hovered.store(is_hovered, Ordering::Release);
-        self.dispatch_fact(WindowCallbackEvent::Hover(is_hovered));
-    }
-
-    /// Dispatch appearance change (system theme changed).
-    pub fn dispatch_appearance_changed(&self) {
-        self.dispatch_fact(WindowCallbackEvent::AppearanceChanged);
-    }
-
-    /// Dispatch a display change hint (the window may be on another display, or
-    /// its display changed).
-    pub fn dispatch_display_changed(&self) {
-        self.dispatch_fact(WindowCallbackEvent::DisplayChanged);
+        call(
+            &self.immediate(&self.on_surface_status_change),
+            |callback| {
+                callback(has_surface);
+            },
+        )
+        .or_contain((), "a window's surface callback");
     }
 
     /// Dispatch a GPU-surface availability change. Parameter: `has_surface`
@@ -1830,7 +1404,7 @@ impl Default for WindowCallbacks {
     }
 }
 
-/// Emits the eleven `PlatformWindow` `on_*` callback-registration trait methods.
+/// Emits the six `PlatformWindow` `on_*` callback-registration trait methods.
 ///
 /// Every backend window stores its callbacks in a [`WindowCallbacks`] — either
 /// as a bare field or behind an `Arc` (auto-deref makes one body cover both) —
@@ -1865,13 +1439,6 @@ macro_rules! impl_window_callback_setters {
             $crate::owner::call_point::install(&self.$callbacks_field.on_request_frame, callback);
         }
 
-        fn on_resize(
-            &self,
-            callback: Box<dyn FnMut(::flui_foundation::geometry::WindowMetrics) + Send>,
-        ) {
-            $crate::owner::call_point::install(&self.$callbacks_field.on_resize, callback);
-        }
-
         fn on_state_changed(&self, callback: Box<dyn FnMut() + Send>) {
             $crate::owner::call_point::install(&self.$callbacks_field.on_state_changed, callback);
         }
@@ -1883,52 +1450,6 @@ macro_rules! impl_window_callback_setters {
         fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
             $crate::owner::call_point::install(&self.$callbacks_field.on_should_close, callback);
         }
-
-        fn on_safe_area_change(
-            &self,
-            callback: Box<dyn FnMut(flui_foundation::geometry::EdgeInsets) + Send>,
-        ) {
-            self.$callbacks_field.set_safe_area_callback(callback);
-        }
-
-        fn on_execution_state_change(
-            &self,
-            callback: Box<dyn FnMut(::flui_platform::WindowExecutionState) + Send>,
-        ) {
-            self.$callbacks_field.set_execution_state_callback(callback);
-        }
-        fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-            $crate::owner::call_point::install(
-                &self.$callbacks_field.on_active_status_change,
-                callback,
-            );
-        }
-
-        fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-            $crate::owner::call_point::install(
-                &self.$callbacks_field.on_visibility_status_change,
-                callback,
-            );
-        }
-
-        fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-            $crate::owner::call_point::install(
-                &self.$callbacks_field.on_hover_status_change,
-                callback,
-            );
-        }
-
-        fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
-            $crate::owner::call_point::install(
-                &self.$callbacks_field.on_appearance_changed,
-                callback,
-            );
-        }
-
-        fn on_display_changed(&self, callback: Box<dyn FnMut() + Send>) {
-            $crate::owner::call_point::install(&self.$callbacks_field.on_display_changed, callback);
-        }
-
         fn on_surface_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
             $crate::owner::call_point::install(
                 &self.$callbacks_field.on_surface_status_change,
@@ -1947,30 +1468,9 @@ impl std::fmt::Debug for WindowCallbacks {
         f.debug_struct("WindowCallbacks")
             .field("on_input", &self.on_input.is_occupied())
             .field("on_request_frame", &self.on_request_frame.lock().is_some())
-            .field("on_resize", &self.on_resize.lock().is_some())
             .field("on_state_changed", &self.on_state_changed.lock().is_some())
             .field("on_close", &self.on_close.lock().is_some())
             .field("on_should_close", &self.on_should_close.lock().is_some())
-            .field(
-                "on_active_status_change",
-                &self.on_active_status_change.lock().is_some(),
-            )
-            .field(
-                "on_visibility_status_change",
-                &self.on_visibility_status_change.lock().is_some(),
-            )
-            .field(
-                "on_hover_status_change",
-                &self.on_hover_status_change.lock().is_some(),
-            )
-            .field(
-                "on_appearance_changed",
-                &self.on_appearance_changed.lock().is_some(),
-            )
-            .field(
-                "on_display_changed",
-                &self.on_display_changed.lock().is_some(),
-            )
             .field(
                 "on_surface_status_change",
                 &self.on_surface_status_change.lock().is_some(),
@@ -2060,148 +1560,40 @@ mod tests {
         );
     }
 
-    fn accepted_focus_observations_survive_dispatch_unwind() {
-        accepted_status_observations_survive_dispatch_unwind(false);
-    }
-
-    fn accepted_visibility_observations_survive_dispatch_unwind() {
-        accepted_status_observations_survive_dispatch_unwind(true);
-    }
-
-    fn accepted_status_observations_survive_dispatch_unwind(visibility: bool) {
-        use std::sync::atomic::AtomicBool;
-
-        let dispatch: fn(&WindowCallbacks, bool, Box<dyn FnOnce() + Send>) = if visibility {
-            WindowCallbacks::dispatch_visibility_observation
-        } else {
-            WindowCallbacks::dispatch_focus_observation
-        };
-        for (opposing, reenter, fail_notification, expected) in [
-            (false, false, false, &[false][..]),
-            (true, false, false, &[false, true][..]),
-            (true, true, false, &[false, true, false][..]),
-            (true, true, true, &[false, true, false][..]),
-        ] {
-            let callbacks = Arc::new(WindowCallbacks::new());
-            let focused = Arc::new(AtomicBool::new(true));
-            let notifications = Arc::new(Mutex::new(Vec::new()));
-            let nested = Arc::downgrade(&callbacks);
-            let state = Arc::clone(&focused);
-            let delivered = Arc::clone(&notifications);
-            let first = AtomicBool::new(true);
-            let slot = if visibility {
-                &callbacks.on_visibility_status_change
-            } else {
-                &callbacks.on_active_status_change
-            };
-            *slot.lock() = Some(Box::new(move |value| {
-                assert_eq!(state.load(Ordering::SeqCst), value, "causal status getter");
-                delivered.lock().push(value);
-                if first.swap(false, Ordering::SeqCst) {
-                    if reenter {
-                        let state = Arc::clone(&state);
-                        dispatch(
-                            &nested.upgrade().expect("live owner"),
-                            false,
-                            Box::new(move || {
-                                state.store(false, Ordering::SeqCst);
-                            }),
-                        );
-                    }
-                    assert!(!fail_notification, "competing status failure");
-                }
-            }));
-            let changed = Arc::new(AtomicBool::new(false));
-            let delivered = Arc::clone(&changed);
-            *callbacks.on_state_changed.lock() = Some(Box::new(move || {
-                delivered.store(true, Ordering::SeqCst);
-            }));
-            let nested = Arc::downgrade(&callbacks);
-            let state = Arc::clone(&focused);
-            callbacks.set_input_callback(Box::new(move |input| {
-                if matches!(input, PlatformInput::Capabilities(_)) {
-                    return DispatchEventResult::default();
-                }
-                let owner = nested.upgrade().expect("live owner");
-                let state_lost = Arc::clone(&state);
-                dispatch(
-                    &owner,
-                    false,
-                    Box::new(move || {
-                        state_lost.store(false, Ordering::SeqCst);
-                    }),
-                );
-                if opposing {
-                    let state_restored = Arc::clone(&state);
-                    dispatch(
-                        &owner,
-                        true,
-                        Box::new(move || {
-                            state_restored.store(true, Ordering::SeqCst);
-                        }),
-                    );
-                }
-                owner.dispatch_state_changed();
-                panic!("original dispatch failure");
-            }));
-            let failure = catch_unwind(AssertUnwindSafe(|| {
-                callbacks.dispatch_input(PlatformInput::Ime(flui_platform::ImeEvent::Enabled));
-            }))
-            .expect_err("original callback failure");
-            assert_eq!(
-                flui_foundation::panic::payload_text(failure.as_ref()),
-                Some("original dispatch failure")
-            );
-            assert_eq!(&*notifications.lock(), expected, "accepted status delivery");
-            assert_eq!(
-                focused.load(Ordering::SeqCst),
-                *expected.last().expect("status")
-            );
-            assert!(
-                !changed.load(Ordering::SeqCst),
-                "aborted ordinary event was replayed"
-            );
-            let state = Arc::clone(&focused);
-            let delivered = notifications.lock().len();
-            dispatch(
-                &callbacks,
-                true,
-                Box::new(move || state.store(true, Ordering::SeqCst)),
-            );
-            assert_eq!(notifications.lock().len(), delivered + 1, "next delivery");
-            assert_eq!(
-                notifications.lock().last(),
-                Some(&true),
-                "next healthy observation"
-            );
-            callbacks.clear();
-        }
-    }
-
-    fn focus_recovery_finishes_a_reentrant_close() {
+    /// A snapshot published while a callback runs is announced after it,
+    /// even when that callback unwinds: the fact is already in the snapshot,
+    /// and an unannounced revision would leave every consumer on the previous
+    /// one. Other events queued behind the failed callback are discarded, and
+    /// a close requested from inside it still finishes.
+    fn a_state_change_survives_a_failed_callback() {
         use std::sync::atomic::AtomicBool;
 
         let callbacks = Arc::new(WindowCallbacks::new());
+        let announced = Arc::new(AtomicUsize::new(0));
+        let heard = Arc::clone(&announced);
+        *callbacks.on_state_changed.lock() = Some(Box::new(move || {
+            heard.fetch_add(1, Ordering::SeqCst);
+        }));
+        let frames = Arc::new(AtomicUsize::new(0));
+        let heard = Arc::clone(&frames);
+        *callbacks.on_request_frame.lock() = Some(Box::new(move |_| {
+            heard.fetch_add(1, Ordering::SeqCst);
+        }));
         let closed = Arc::new(AtomicBool::new(false));
         let notice = Arc::clone(&closed);
         *callbacks.on_close.lock() = Some(Box::new(move || {
             notice.store(true, Ordering::SeqCst);
         }));
         let nested = Arc::downgrade(&callbacks);
-        *callbacks.on_active_status_change.lock() = Some(Box::new(move |_| {
-            let owner = nested.upgrade().expect("live owner");
-            owner.dispatch_close();
-            owner.clear();
-        }));
-        let nested = Arc::downgrade(&callbacks);
         callbacks.set_input_callback(Box::new(move |input| {
             if matches!(input, PlatformInput::Capabilities(_)) {
                 return DispatchEventResult::default();
             }
-            nested
-                .upgrade()
-                .expect("live owner")
-                .dispatch_focus_observation(false, || {});
+            let owner = nested.upgrade().expect("live owner");
+            owner.dispatch_state_changed();
+            owner.dispatch_request_frame();
+            owner.dispatch_close();
+            owner.clear();
             panic!("original input failure");
         }));
         let failure = catch_unwind(AssertUnwindSafe(|| {
@@ -2212,11 +1604,17 @@ mod tests {
             flui_foundation::panic::payload_text(failure.as_ref()),
             Some("original input failure")
         );
-        assert!(
-            closed.load(Ordering::SeqCst),
-            "required terminal hook was lost"
+        assert_eq!(
+            announced.load(Ordering::SeqCst),
+            1,
+            "the state notice was lost"
         );
-        callbacks.dispatch_active_status_change(true);
+        assert_eq!(
+            frames.load(Ordering::SeqCst),
+            0,
+            "an aborted frame was replayed"
+        );
+        assert!(closed.load(Ordering::SeqCst), "the terminal hook was lost");
     }
 
     fn clear_multiple_panicking_captures(queued: bool) {
@@ -2231,8 +1629,9 @@ mod tests {
         let drops = Arc::new(AtomicU32::new(0));
         let first = Capture(drops.clone());
         let second = Capture(drops.clone());
-        *callbacks.on_resize.lock() = Some(Box::new(move |_| {
+        *callbacks.on_should_close.lock() = Some(Box::new(move || {
             let _ = &first;
+            true
         }));
         *callbacks.on_state_changed.lock() = Some(Box::new(move || {
             let _ = &second;
@@ -2256,7 +1655,7 @@ mod tests {
         assert_eq!(closed.load(Ordering::SeqCst), 1);
         assert_eq!(drops.load(Ordering::SeqCst), 2);
         assert!(callbacks.cleared.load(Ordering::SeqCst));
-        assert!(callbacks.on_resize.lock().is_none());
+        assert!(callbacks.on_should_close.lock().is_none());
         assert!(callbacks.on_state_changed.lock().is_none());
     }
 
@@ -2572,16 +1971,8 @@ mod tests {
     fn the_owner_thread_machinery_honours_its_contracts() {
         let cases: &[(&str, fn())] = &[
             (
-                "accepted focus observations survive dispatch unwind",
-                accepted_focus_observations_survive_dispatch_unwind,
-            ),
-            (
-                "accepted visibility observations survive dispatch unwind",
-                accepted_visibility_observations_survive_dispatch_unwind,
-            ),
-            (
-                "focus recovery finishes a reentrant close",
-                focus_recovery_finishes_a_reentrant_close,
+                "a state change survives a failed callback",
+                a_state_change_survives_a_failed_callback,
             ),
             #[cfg(target_os = "windows")]
             (

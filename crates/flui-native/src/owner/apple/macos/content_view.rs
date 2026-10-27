@@ -159,7 +159,7 @@ struct ViewContext {
     /// `doCommandBySelector:`, which the input method calls during it, hands
     /// back to the input.
     pending_key_event: Cell<*mut AnyObject>,
-    /// The appearance last reported to `on_appearance_changed`; AppKit also
+    /// The appearance last reported to the window's snapshot; AppKit also
     /// re-resolves the effective appearance for changes that keep the theme,
     /// such as the accent colour.
     appearance: Cell<WindowAppearance>,
@@ -365,7 +365,7 @@ fn dispatch_hover_change(this: &AnyObject, is_hovered: bool) {
     unsafe {
         with_this(this, |view| {
             if let Some(callbacks) = view.context.callbacks.upgrade() {
-                callbacks.dispatch_hover_status_change(is_hovered);
+                callbacks.report_hover(is_hovered);
             }
         });
     }
@@ -451,7 +451,7 @@ extern "C-unwind" fn view_did_change_effective_appearance(this: &AnyObject, _sel
                 })
                 .flatten();
                 if let Some(callbacks) = callbacks {
-                    callbacks.dispatch_appearance_changed();
+                    callbacks.publish_state();
                 }
             }
         },

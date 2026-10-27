@@ -76,7 +76,7 @@ pub(crate) struct ControlSender {
     /// keep-alive service completing must be able to end a lingering
     /// zero-window loop even if the command lane is saturated.
     exit_reevaluation_requested: Arc<AtomicBool>,
-    /// Windows whose programmatic `PlatformWindow::close` is waiting for the
+    /// Windows whose programmatic `WindowCommand::Close` is waiting for the
     /// owner to run the close teardown (issue #919), in request order, each
     /// at most once. Not a slot in the bounded command lane: a close is
     /// lifecycle traffic — losing one leaves a window that is hidden but
@@ -256,7 +256,7 @@ impl ControlSender {
     }
 
     /// Asks the owner to run the close teardown for `window_id` — the
-    /// programmatic [`PlatformWindow::close`](flui_platform::PlatformWindow::close) route (issue #919). The owner
+    /// programmatic [`WindowCommand::Close`](flui_platform::WindowCommand::Close) route (issue #919). The owner
     /// answers on its next turn with the SAME teardown a compositor close
     /// takes after its should-close veto (per-window close callback, map
     /// removal, cursor/drag cleanup, callback clear, exit-policy consult),
@@ -433,22 +433,7 @@ mod tests {
             flui_platform::WindowId(1)
         }
 
-        fn physical_size(&self) -> flui_foundation::geometry::Size<i32> {
-            flui_foundation::geometry::Size::default()
-        }
-        fn logical_size(&self) -> flui_foundation::geometry::Size<f64> {
-            flui_foundation::geometry::Size::default()
-        }
-        fn scale_factor(&self) -> f64 {
-            1.0
-        }
         fn request_redraw(&self) {}
-        fn is_focused(&self) -> bool {
-            false
-        }
-        fn is_visible(&self) -> bool {
-            true
-        }
         fn set_cursor(
             &self,
             _cursor: cursor_icon::CursorIcon,
@@ -456,12 +441,8 @@ mod tests {
             Ok(())
         }
         fn state(&self) -> flui_platform::WindowState {
-            let size = self.logical_size();
+            let size = flui_foundation::geometry::Size::default();
             flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
-        }
-
-        fn capabilities(&self) -> flui_platform::WindowCapabilities {
-            flui_platform::WindowCapabilities::NONE
         }
 
         fn apply(
@@ -486,13 +467,6 @@ mod tests {
 
         fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
             None
-        }
-
-        fn show(&self) -> Result<(), flui_platform::WindowShowError> {
-            Err(flui_platform::Unsupported::new(
-                flui_platform::UnsupportedReason::NotOnThisPlatform,
-            )
-            .into())
         }
     }
 
@@ -529,7 +503,7 @@ mod tests {
             }
             ClaimOutcome::OwnerGone => panic!("the owner never disconnects in this test"),
         };
-        assert!(window.is_visible());
+        assert!(window.state().visible);
     }
 
     /// The owner lane: a cross-thread request is processed on the owner, and

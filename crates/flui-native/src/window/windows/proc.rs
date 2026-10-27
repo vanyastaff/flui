@@ -16,17 +16,12 @@
 //! the application let through, which the window's own keys answer, and the
 //! session's lock, which hides it.
 
-use std::{
-    cell::{Cell, RefCell},
-    rc::Rc,
-    sync::Arc,
-};
+use std::{cell::Cell, rc::Rc, sync::Arc};
 
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::{
-    SizeConstraints, WindowAppearance, WindowEvent, WindowGeometry, WindowId, WindowMode,
-    WindowState,
+    SizeConstraints, WindowAppearance, WindowGeometry, WindowId, WindowMode, WindowState,
 };
 use parking_lot::Mutex;
 use windows::Win32::{
@@ -58,8 +53,8 @@ use super::frame_timing::{RefreshTiming, refresh_timing};
 use super::mode::NativeMode;
 use super::set::{WindowSet, checked_logical_to_device, restore_rectangle};
 use super::window::WindowsWindow;
-use crate::owner::call_point::{Field, call};
-use crate::owner::handlers::{PlatformHandlers, Publication, WindowCallbacks};
+
+use crate::owner::handlers::{Publication, WindowCallbacks};
 use crate::owner::hwnd_affinity::ContextLedger;
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::owner::windows::HostDisplays;
@@ -71,7 +66,6 @@ use crate::owner::windows::{
 use crate::owner::windows::{get_x_lparam, get_y_lparam};
 use crate::window::config::WindowConfiguration;
 use crate::window::state::{ReportedFacts, WindowStateCell, mode_of};
-use crate::window::visibility::ReportedVisibility;
 
 /// Posted to a window nothing paints, so its frame still runs: a hidden window
 /// never receives `WM_PAINT`.
@@ -80,6 +74,11 @@ pub(crate) const REQUEST_FRAME: u32 = WM_APP + 1;
 /// Posted by the fullscreen hotkey once the app let its key through
 /// ([`WindowContext::apply_window_hotkey`]).
 pub(crate) const TOGGLE_FULLSCREEN: u32 = WM_APP + 3;
+
+/// Posted by a `WindowCommand::Close` applied off the owner thread, where
+/// `DestroyWindow` is forbidden. It destroys the window it names without
+/// asking the veto: a close command is not a close request.
+pub(crate) const CLOSE_WINDOW: u32 = WM_APP + 4;
 
 pub(crate) use crate::owner::windows::WindowRef;
 
@@ -120,18 +119,11 @@ pub(crate) struct WindowContext {
     /// The published window state, shared with the wrapper; refreshed by
     /// [`Self::publish_window_state`].
     pub snapshot: Arc<WindowStateCell>,
-    /// The platform-level handlers, shared with the owner control context.
-    /// `Rc<RefCell<..>>`: every holder lives on the owner thread, and no
-    /// borrow is held while a handler runs.
-    pub handlers: Rc<RefCell<PlatformHandlers>>,
     /// Asks the owner to consult the exit policy once this window's
     /// `WM_DESTROY` leaves the platform tracking no window.
     pub exit_policy: crate::owner::windows::control::ExitPolicyRequest,
     /// The platform's monitors: a DPI change invalidates their snapshot.
     pub displays: Arc<dyn HostDisplays>,
-    /// The monitor handle `WM_WINDOWPOSCHANGED` last saw this window on, `None`
-    /// before the first message; a change raises `on_display_changed`.
-    pub last_monitor: std::cell::Cell<Option<std::num::NonZeroIsize>>,
     /// Per-window callbacks for event delivery, shared with the features the
     /// class's hooks announced the window to and released by `WM_DESTROY` on
     /// the owner thread.
@@ -158,8 +150,8 @@ pub(crate) struct WindowContext {
     pub last_size: std::cell::Cell<Size<i32>>,
     /// Window configuration (hotkeys, debouncing, etc.)
     pub config: WindowConfiguration,
-    /// The user's app theme as last sampled and reported to
-    /// `on_appearance_changed`; the chrome is drawn in it while
+    /// The user's app theme as last sampled, which the window reports in
+    /// the snapshot; the chrome is drawn in it while
     /// `chrome_follows_system`.
     pub appearance: std::cell::Cell<WindowAppearance>,
     /// Whether the last `WM_ACTIVATE` made the window the active one of its
@@ -188,9 +180,6 @@ pub(crate) struct WindowContext {
     /// Set while the window is being put into fullscreen, before its mode says
     /// so: the size limits do not apply to the rectangle it is given.
     pub limits_waived: std::cell::Cell<bool>,
-    /// Set while a hidden window is restored and hidden again: the show and
-    /// the hide are not the window appearing, so no visibility is reported.
-    pub visibility_muted: std::cell::Cell<bool>,
     /// How many times the app asked for the window to be shown; see
     /// [`Self::note_show_request`].
     pub show_requests: std::cell::Cell<u32>,
@@ -198,18 +187,8 @@ pub(crate) struct WindowContext {
     /// in its mode, so the first sight of it is already maximized or
     /// fullscreen, not a normal window that jumps.
     pub(crate) first_show: std::cell::Cell<FirstShow>,
-    /// The window's visibility as the runtime sees it (hidden-surface
-    /// gating): the surface, which `WM_SIZE` (minimize/restore) and
-    /// `WM_SHOWWINDOW` (hide/show) report through the pure rules in
-    /// `super::surface`, less a cloak or a locked session. Seeded
-    /// from the window's ACTUAL creation style
-    /// (`surface::initial_visibility(GWL_STYLE)`, see its doc) — a decorated
-    /// window is created hidden (`false`, and the creation-time
-    /// `ShowWindow`'s `WM_SHOWWINDOW` edge flips it), while an undecorated
-    /// window is created `WS_POPUP | WS_VISIBLE` (`true`, and no
-    /// creation-time edge ever fires). A constant seed would desync the
-    /// edge filter for one of the two and swallow that window's first real
-    /// transition.
+    /// What hides a shown window from its snapshot: a cloak or a locked
+    /// session.
     pub(crate) visibility: Visibility,
     /// The window's subscription to cloak changes.
     pub(crate) cloak_watch: CloakWatch,
@@ -283,14 +262,11 @@ impl WindowContext {
         window_step(&hooks, WindowRef::new(hwnd, self.identity), step);
     }
 
-    /// Tell the window's resize callback its client size, `device` pixels, at
-    /// its current scale.
-    pub(crate) fn dispatch_resize(&self, device: Size<i32>) {
-        let scale = self.scale.scale();
-        self.last_resize.set(Some((device, scale)));
-        if let Ok(metrics) = flui_foundation::geometry::WindowMetrics::new(device, scale) {
-            self.callbacks.dispatch_resize(metrics);
-        }
+    /// The window's client size is `device` pixels at its current scale:
+    /// publish the snapshot, whose metrics read the client area.
+    pub(crate) fn report_resize(&self, device: Size<i32>) {
+        self.last_resize.set(Some((device, self.scale.scale())));
+        self.callbacks.publish_state();
     }
 
     /// Complete cache updates before callback-capable native/user code.
@@ -315,14 +291,15 @@ impl WindowContext {
         let published = self
             .snapshot
             .state_with(|| sample_state(hwnd, &record, self.tracking(hwnd)));
-        // With the fact callbacks the hold kept back, behind the announcement.
-        self.callbacks.announce(published.changed);
+        // `on_state_changed` when the revision grew.
+        if published.changed {
+            self.callbacks.dispatch_state_changed();
+        }
         published.state
     }
 
-    /// Read the window again for its state publisher, announcing nothing: the
-    /// fact that asked is delivered behind the announcement, or, while
-    /// publishing is held, behind the publication that ends the hold.
+    /// Read the window again for its state publisher, announcing nothing; a
+    /// a change of several steps is announced once, when it ends.
     pub(crate) fn read_window_state(&self, hwnd: HWND) -> Publication {
         self.snapshot.invalidate();
         if self.publish_hold.get() > 0 {
@@ -366,35 +343,6 @@ impl WindowContext {
         self.publish_hold
             .set(self.publish_hold.get().saturating_add(1));
         PublishHold(&self.publish_hold)
-    }
-
-    /// Dispatch a window event to the platform-level handler.
-    #[inline]
-    pub(crate) fn dispatch_event(&self, event: WindowEvent) {
-        self.call_handler(
-            |handlers| &mut handlers.window_event,
-            |handler| handler(event),
-        );
-    }
-
-    /// Runs one platform-level handler through the call point: out of its
-    /// slot, so no `RefCell` borrow is held while it runs, then put back
-    /// only if the slot is still empty. A handler registered while this one
-    /// was out — including by this handler itself — is the newer
-    /// registration and wins; the one that ran is then retired. Its panic
-    /// unwinds to the window procedure's boundary, which aborts.
-    ///
-    /// The restore touches `self` AFTER the handler returns, and the handler
-    /// may have closed this very window — that is sound only because every
-    /// caller holds a [`ContextGuard`] over `self`, which defers the
-    /// context's free past the borrow even when the handler's close runs a
-    /// nested `WM_DESTROY` (which merely retires it).
-    fn call_handler<H>(
-        &self,
-        project: fn(&mut PlatformHandlers) -> &mut Option<H>,
-        body: impl FnOnce(&mut H),
-    ) {
-        call(&Field::new(&*self.handlers, project), body).or_resume(());
     }
 }
 
@@ -659,9 +607,9 @@ impl WindowMessages for WindowProc {
             WM_CREATE | WM_CLOSE | WM_DESTROY | WM_ERASEBKGND | WM_ENTERSIZEMOVE
             | WM_EXITSIZEMOVE | WM_ENTERMENULOOP | WM_EXITMENULOOP | WM_PAINT | WM_SIZE
             | WM_SHOWWINDOW | WM_MOVE | WM_DPICHANGED | WM_WINDOWPOSCHANGING
-            | WM_WINDOWPOSCHANGED | TOGGLE_FULLSCREEN | WM_SETTEXT | WM_STYLECHANGED
-            | WM_GETMINMAXINFO | REQUEST_FRAME | WM_SETCURSOR | WM_SETFOCUS | WM_KILLFOCUS
-            | WM_ACTIVATE | WM_SETTINGCHANGE => true,
+            | WM_WINDOWPOSCHANGED | TOGGLE_FULLSCREEN | CLOSE_WINDOW | WM_SETTEXT
+            | WM_STYLECHANGED | WM_GETMINMAXINFO | REQUEST_FRAME | WM_SETCURSOR | WM_SETFOCUS
+            | WM_KILLFOCUS | WM_ACTIVATE | WM_SETTINGCHANGE => true,
             WM_TIMER => wparam.0 == MODAL_DEADLINE_TIMER,
             WM_SYSCOMMAND => (wparam.0 & 0xFFF0) == SC_KEYMENU as usize,
             _ => false,
@@ -734,19 +682,13 @@ impl WindowProc {
                     tracing::debug!("WM_CLOSE for HWND {:?}", hwnd);
 
                     if let Some(ctx) = ctx {
-                        // Ask per-window callback if close should proceed
-                        let should_close = ctx.callbacks.dispatch_should_close();
-
-                        if should_close {
-                            // Dispatch CloseRequested to global handlers
-                            ctx.dispatch_event(WindowEvent::CloseRequested {
-                                window_id: ctx.window_id,
-                            });
-                            if let Err(error) = DestroyWindow(hwnd) {
-                                tracing::warn!(?hwnd, ?error, "DestroyWindow failed on WM_CLOSE");
-                            }
+                        // Ask per-window callback if close should proceed; a
+                        // `false` vetoes the close.
+                        if ctx.callbacks.dispatch_should_close()
+                            && let Err(error) = DestroyWindow(hwnd)
+                        {
+                            tracing::warn!(?hwnd, ?error, "DestroyWindow failed on WM_CLOSE");
                         }
-                        // If !should_close, the close is vetoed
                     } else if let Err(error) = DestroyWindow(hwnd) {
                         tracing::warn!(
                             ?hwnd,
@@ -772,9 +714,6 @@ impl WindowProc {
 
                         // Fire per-window on_close callback (FnOnce)
                         ctx.callbacks.dispatch_close();
-
-                        // Dispatch Closed event to global handlers
-                        ctx.dispatch_event(WindowEvent::Closed(ctx.window_id));
 
                         // Release every remaining registered callback now,
                         // while the HWND is still valid (Win32 only frees it
@@ -932,9 +871,6 @@ impl WindowProc {
                         // strand the wake that asked for it.
                         if let Some(ctx) = ctx {
                             ctx.request_frame();
-                            ctx.dispatch_event(WindowEvent::RedrawRequested {
-                                window_id: ctx.window_id,
-                            });
                         }
                         let _ = EndPaint(hwnd, &raw const ps);
                     }
@@ -942,7 +878,9 @@ impl WindowProc {
                 }
 
                 WM_SIZE => {
-                    use super::surface::{SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED};
+                    use windows::Win32::UI::WindowsAndMessaging::{
+                        SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED,
+                    };
 
                     // WM_SIZE dimensions are unsigned16, unlike signed
                     // mouse and WM_MOVE coordinates packed in the same shape.
@@ -963,8 +901,8 @@ impl WindowProc {
                             });
                         }
 
-                        // Handle state transition and dispatch appropriate event
-                        let (new_mode, event) = match size_type {
+                        // Handle the state transition
+                        let new_mode = match size_type {
                             SIZE_MINIMIZED => {
                                 tracing::info!("📦 Window Minimized");
                                 // Validate transition
@@ -983,13 +921,13 @@ impl WindowProc {
                                 };
                                 if prev_mode.can_transition_to(&candidate) {
                                     // Preserve the last non-minimized client size.
-                                    (candidate, None)
+                                    candidate
                                 } else {
                                     tracing::warn!(
                                         "⚠️  Invalid state transition: {:?} -> Minimized (transition ignored)",
                                         prev_mode
                                     );
-                                    (prev_mode, None)
+                                    prev_mode
                                 }
                             }
                             SIZE_MAXIMIZED => {
@@ -999,22 +937,16 @@ impl WindowProc {
                                 if prev_mode.is_fullscreen() {
                                     // A fullscreen window covers its monitor as a
                                     // popup; it does not become maximized.
-                                    (prev_mode, None)
+                                    prev_mode
                                 } else if prev_mode.can_transition_to(&candidate) {
                                     ctx.last_size.set(size);
-                                    (
-                                        candidate,
-                                        Some(WindowEvent::Resized {
-                                            window_id: ctx.window_id,
-                                            size,
-                                        }),
-                                    )
+                                    candidate
                                 } else {
                                     tracing::warn!(
                                         "⚠️  Invalid state transition: {:?} -> Maximized (transition ignored)",
                                         prev_mode
                                     );
-                                    (prev_mode, None)
+                                    prev_mode
                                 }
                             }
                             SIZE_RESTORED => {
@@ -1022,20 +954,16 @@ impl WindowProc {
                                 // minimized/maximized (a real state change), and a plain
                                 // resize while already Normal (same state — NOT a transition).
                                 // `can_transition_to` rejects same-state by design, so it must
-                                // NOT gate this event: a normal-state resize is always a valid
-                                // `Resized`. Gating on it dropped the event (and the last_size
-                                // update) on every live-resize drag step.
+                                // NOT gate this report: a normal-state resize always resizes.
+                                // Gating on it dropped the report (and the last_size update)
+                                // on every live-resize drag step.
                                 ctx.last_size.set(size);
                                 if prev_mode.is_minimized() || prev_mode.is_maximized() {
                                     tracing::info!("📐 Window Restored: {}x{}", width, height);
                                 } else {
                                     tracing::debug!("📐 Window Resized: {}x{}", width, height);
                                 }
-                                let event = WindowEvent::Resized {
-                                    window_id: ctx.window_id,
-                                    size,
-                                };
-                                let restored = match prev_mode {
+                                match prev_mode {
                                     // A resize does not end fullscreen.
                                     NativeMode::Fullscreen { .. } => prev_mode,
                                     // Restoring a minimized fullscreen window
@@ -1044,8 +972,7 @@ impl WindowProc {
                                         from_fullscreen: Some(restore_bounds),
                                     } => NativeMode::Fullscreen { restore_bounds },
                                     _ => NativeMode::Normal,
-                                };
-                                (restored, Some(event))
+                                }
                             }
                             _ => {
                                 // Regular resize while in current state
@@ -1053,13 +980,7 @@ impl WindowProc {
                                 if prev_mode.is_normal() {
                                     ctx.last_size.set(size);
                                 }
-                                (
-                                    prev_mode,
-                                    Some(WindowEvent::Resized {
-                                        window_id: ctx.window_id,
-                                        size,
-                                    }),
-                                )
+                                prev_mode
                             }
                         };
 
@@ -1073,26 +994,9 @@ impl WindowProc {
                             ctx.step(hwnd, WindowStep::Minimized);
                         }
 
-                        // Hidden-surface gating, minimize/restore half: it
-                        // reaches `dispatch_visibility_status_change`, the wire
-                        // the runtime's `FrameClock` gate and `AppLifecycleState`
-                        // derivation hang off. Decided by the pure rule in
-                        // `surface` (host-tested).
-                        if !ctx.visibility_muted.get()
-                            && let Some(visible) =
-                                super::surface::size_visibility(size_type, prev_mode.is_minimized())
-                        {
-                            ctx.report_surface_visibility(visible);
-                        }
-
-                        // Fire per-window on_resize callback (for all size changes except minimize)
+                        // Every size change but a minimize reaches the metrics.
                         if size_type != SIZE_MINIMIZED {
-                            ctx.dispatch_resize(size);
-                        }
-
-                        // Dispatch event to global handlers if any
-                        if let Some(event) = event {
-                            ctx.dispatch_event(event);
+                            ctx.report_resize(size);
                         }
 
                         // During a live resize, render synchronously at the new size,
@@ -1117,8 +1021,6 @@ impl WindowProc {
                 }
 
                 WM_SHOWWINDOW => {
-                    // Hidden-surface gating, hide/show half (the
-                    // minimize/restore half lives in the WM_SIZE arm above).
                     // Only `lParam == 0` — a genuine
                     // `ShowWindow`-driven `WS_VISIBLE` change — is handled:
                     // the nonzero status values (`SW_PARENTCLOSING`,
@@ -1132,14 +1034,6 @@ impl WindowProc {
                         let shown = wparam.0 != 0;
                         ctx.update_window_state(|state| state.visible = shown);
                         ctx.publish_window_state(hwnd);
-                        if !ctx.visibility_muted.get()
-                            && let Some(visible) = super::surface::show_window_visibility(
-                                shown,
-                                ctx.mode.get().is_minimized(),
-                            )
-                        {
-                            ctx.report_surface_visibility(visible);
-                        }
                     }
                     // DefWindowProc continues the ordinary show/hide
                     // processing this message announces. (Already inside
@@ -1198,13 +1092,9 @@ impl WindowProc {
 
                 WM_WINDOWPOSCHANGED => {
                     // `WM_MOVE` and `WM_SIZE` come from the default procedure;
-                    // the monitor is checked once the move has landed.
+                    // the snapshot reads the monitor once the move has landed.
                     let result = DefWindowProcW(hwnd, msg, wparam, lparam);
                     if let Some(ctx) = ctx {
-                        let monitor = ctx.displays.nearest_monitor(hwnd);
-                        if ctx.last_monitor.replace(monitor) != monitor {
-                            ctx.callbacks.dispatch_display_changed();
-                        }
                         // Position, size and z-order changes all land here.
                         ctx.publish_window_state(hwnd);
                         // A window shown on another virtual desktop is shown
@@ -1221,6 +1111,22 @@ impl WindowProc {
                 TOGGLE_FULLSCREEN => {
                     if ctx.is_some_and(|ctx| ctx.identity.halves() == (wparam.0, lparam.0)) {
                         WindowsWindow::toggle_fullscreen_for_hwnd(hwnd);
+                    }
+                    LRESULT(0)
+                }
+
+                // A close command applied off this thread. It names the
+                // window it closes, so a handle reused since is left alone,
+                // and it asks no veto, unlike `WM_CLOSE`.
+                CLOSE_WINDOW => {
+                    if ctx.is_some_and(|ctx| ctx.identity.halves() == (wparam.0, lparam.0))
+                        && let Err(error) = DestroyWindow(hwnd)
+                    {
+                        tracing::warn!(
+                            ?hwnd,
+                            ?error,
+                            "DestroyWindow (posted WindowCommand::Close) failed"
+                        );
                     }
                     LRESULT(0)
                 }
@@ -1252,9 +1158,6 @@ impl WindowProc {
                 REQUEST_FRAME => {
                     if let Some(ctx) = ctx {
                         ctx.request_frame();
-                        ctx.dispatch_event(WindowEvent::RedrawRequested {
-                            window_id: ctx.window_id,
-                        });
                     }
                     LRESULT(0)
                 }
@@ -1296,14 +1199,6 @@ impl WindowProc {
                     if let Some(ctx) = ctx {
                         ctx.update_window_state(|state| state.focused = true);
                         ctx.publish_window_state(hwnd);
-                        // Fire per-window on_active_status_change callback
-                        ctx.callbacks.dispatch_active_status_change(true);
-
-                        // Dispatch FocusChanged to global handlers
-                        ctx.dispatch_event(WindowEvent::FocusChanged {
-                            window_id: ctx.window_id,
-                            focused: true,
-                        });
                     }
 
                     LRESULT(0)
@@ -1316,14 +1211,6 @@ impl WindowProc {
                         ctx.update_window_state(|state| state.focused = false);
                         ctx.step(hwnd, WindowStep::FocusLost);
                         ctx.publish_window_state(hwnd);
-                        // Fire per-window on_active_status_change callback
-                        ctx.callbacks.dispatch_active_status_change(false);
-
-                        // Dispatch FocusChanged to global handlers
-                        ctx.dispatch_event(WindowEvent::FocusChanged {
-                            window_id: ctx.window_id,
-                            focused: false,
-                        });
                     }
 
                     LRESULT(0)
@@ -1343,7 +1230,7 @@ impl WindowProc {
                                 // A build that refuses the attribute keeps its chrome.
                                 let _ = super::backdrop::apply_chrome(hwnd, appearance);
                             }
-                            ctx.callbacks.dispatch_appearance_changed();
+                            ctx.publish_window_state(hwnd);
                         }
                     }
                     DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -1619,7 +1506,7 @@ impl WindowsWindow {
             // is an error return, not UB. The window CAN die mid-closure:
             // `SetWindowPos` synchronously re-enters `window_proc`
             // (`WM_SIZE`/`WM_MOVE`), whose arms dispatch framework
-            // callbacks, and `ctx.dispatch_event` below does so directly —
+            // callbacks —
             // a callback may close this window, running a nested
             // `WM_DESTROY` right here. What stays valid regardless is
             // `ctx` itself: the gate's `ContextGuard` defers the context
@@ -1829,26 +1716,18 @@ impl WindowContext {
         // window once, at its new size.
         let hold = self.hold_publishing();
         self.update_window_state(|state| state.scale_factor = new_scale);
-        self.dispatch_event(flui_platform::WindowEvent::ScaleFactorChanged {
-            window_id: self.window_id,
-            scale_factor: new_scale,
-        });
-        // The handler may have closed the window: its rectangle, resize and
-        // frame are then not for whatever window has the handle now.
-        if !self.still_owns(hwnd) {
-            return;
-        }
         self.apply_dpi_rectangle(hwnd, suggested, new_scale / old_scale);
-        // So may the resize callback the rectangle's `WM_SIZE` ran.
+        // The state callback the rectangle's `WM_SIZE` ran may have closed the
+        // window: its resize and frame are then not for whatever window has
+        // the handle now.
         if !self.still_owns(hwnd) {
             return;
         }
         drop(hold);
         self.publish_window_state(hwnd);
 
-        // The runtime takes a new scale from a resize. When the rectangle kept
-        // the client size in device pixels, or the move failed, no `WM_SIZE`
-        // brought it.
+        // When the rectangle kept the client size in device pixels, or the
+        // move failed, no `WM_SIZE` brought the new metrics.
         let mut client = RECT::default();
         // SAFETY: `client` is a stack local out-parameter.
         let measured = unsafe { GetClientRect(hwnd, &raw mut client) }.is_ok();
@@ -1864,16 +1743,12 @@ impl WindowContext {
                         f64::from(size.height) / new_scale,
                     );
                 });
-                self.publish_window_state(hwnd);
-                self.dispatch_resize(size);
+                self.report_resize(size);
                 self.redraw_if_still_owned(hwnd);
             }
         }
         // The field's screen rectangles follow the new scale and rectangle.
         self.step(hwnd, WindowStep::ScaleApplied);
-        // After the state above is current: the hint wakes the owner, which
-        // samples the snapshot and re-derives.
-        self.callbacks.dispatch_display_changed();
     }
 
     /// Give the window the rectangle its new DPI asks for; `ratio` is the new
@@ -1960,31 +1835,19 @@ pub(crate) struct Occlusion {
     pub(crate) session_locked: bool,
 }
 
-/// The parts of a window's visibility, and what the runtime was last told.
+/// What hides a shown window from its snapshot.
 pub(crate) struct Visibility {
-    /// What the surface rules last said: shown and not minimized.
-    surface: Cell<bool>,
     occlusion: Cell<Occlusion>,
-    /// Last value dispatched through
-    /// `WindowCallbacks::dispatch_visibility_status_change`.
-    reported: Cell<ReportedVisibility>,
 }
 
 impl Visibility {
-    /// A window whose surface starts out `surface`, in a session that is
-    /// locked now or not. The runtime's first reading
-    /// (`PlatformWindow::is_visible`) leaves out the occlusion.
-    pub(crate) fn new(surface: bool) -> Self {
-        let occlusion = Occlusion {
-            cloaked: false,
-            session_locked: session_locked_now(),
-        };
+    /// A window in a session that is locked now or not.
+    pub(crate) fn new() -> Self {
         Self {
-            surface: Cell::new(surface),
-            occlusion: Cell::new(occlusion),
-            reported: Cell::new(ReportedVisibility::new(
-                surface && !occlusion.session_locked,
-            )),
+            occlusion: Cell::new(Occlusion {
+                cloaked: false,
+                session_locked: session_locked_now(),
+            }),
         }
     }
 
@@ -1993,21 +1856,9 @@ impl Visibility {
         let occlusion = self.occlusion.get();
         occlusion.cloaked || occlusion.session_locked
     }
-
-    fn visible(&self) -> bool {
-        let occlusion = self.occlusion.get();
-        self.surface.get() && !occlusion.cloaked && !occlusion.session_locked
-    }
 }
 
 impl WindowContext {
-    /// The surface rules say the window's surface is (`true`) or is not
-    /// shown; the runtime hears of a change in its visibility.
-    pub(crate) fn report_surface_visibility(&self, surface: bool) {
-        self.visibility.surface.set(surface);
-        self.settle_visibility();
-    }
-
     /// The session locked (`true`) or unlocked, as the lifecycle's hook tells
     /// the window ([`WindowStep::SessionLocked`]).
     pub(crate) fn set_session_locked(&self, locked: bool) {
@@ -2045,13 +1896,9 @@ impl WindowContext {
 
     fn settle_visibility(&self) {
         // A cloak or a lock hides a shown window in its snapshot too: read it
-        // again, whether or not the report below changes.
+        // again and publish it, which says nothing when nothing changed.
         self.snapshot.invalidate();
-        let visible = self.visibility.visible();
-        if let Some(visible) = ReportedVisibility::report_in(&self.visibility.reported, visible) {
-            tracing::debug!(visible, "window visibility changed");
-            self.callbacks.dispatch_visibility_status_change(visible);
-        }
+        self.callbacks.publish_state();
     }
 }
 
@@ -2326,21 +2173,12 @@ impl WindowContext {
         }
     }
 
-    /// After a window was first shown. A window that came up minimized is not
-    /// visible to the runtime, whatever it was told before (a deferred window
-    /// is told it is visible so that its frames run). Whether it did is read
-    /// from the window, not from the mode asked for: a launcher can choose the
-    /// first show state.
-    pub(crate) fn end_first_show(&self, minimized: bool) {
-        if minimized {
-            self.report_surface_visibility(false);
-        }
-    }
-
-    /// Tell the runtime the window's real visibility if what it was told after
-    /// a muted restore disagrees with it (a show that came in meanwhile).
-    pub(crate) fn reconcile_visibility(&self, visible: bool) {
-        self.report_surface_visibility(visible);
+    /// After a window was first shown, or restored and hidden again: publish
+    /// what the window is now. A window that came up minimized has the
+    /// minimized mode in its snapshot, whatever the first show asked for (a
+    /// launcher can choose the first show state).
+    pub(crate) fn settle_shown(&self) {
+        self.callbacks.publish_state();
     }
 
     /// Note that the app asked for the window to be shown, so a restore that

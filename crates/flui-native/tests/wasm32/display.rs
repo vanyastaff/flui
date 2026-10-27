@@ -1007,22 +1007,24 @@ async fn web_window_names_the_display_the_snapshot_describes() {
     let snapshot = running.snapshot();
     let main = snapshot.displays()[0].id;
     let side = snapshot.displays()[1].id;
-    assert_eq!(window.display_id(), Some(main), "the current screen");
+    assert_eq!(window.state().display, Some(main), "the current screen");
     assert_eq!(
-        snapshot.window_display(window.display_id()).map(|d| d.id),
+        snapshot
+            .window_display(window.state().display)
+            .map(|d| d.id),
         Some(main)
     );
 
     move_window_to_side_screen();
     settle().await;
-    assert_eq!(window.display_id(), Some(side), "follows currentScreen");
+    assert_eq!(window.state().display, Some(side), "follows currentScreen");
 
     // The period reaches the window through the snapshot it names.
     run_frames(0.0, 8.333, 35);
     settle().await;
     let display = running
         .snapshot()
-        .window_display(window.display_id())
+        .window_display(window.state().display)
         .expect("window display");
     assert!(near(
         display
@@ -1116,7 +1118,7 @@ async fn web_granting_screen_access_keeps_the_window_display() {
         }
     };
     let before = running.snapshot();
-    let id = window.display_id().expect("the one screen");
+    let id = window.state().display.expect("the one screen");
     assert_eq!(
         before.get(id).map(|d| d.name.as_str()),
         Some("Browser Screen")
@@ -1128,7 +1130,7 @@ async fn web_granting_screen_access_keeps_the_window_display() {
     settle().await;
     let after = running.snapshot();
     assert_eq!(
-        window.display_id(),
+        window.state().display,
         Some(id),
         "the window saw no display change"
     );
@@ -1138,7 +1140,11 @@ async fn web_granting_screen_access_keeps_the_window_display() {
 
     revoke_permission();
     settle().await;
-    assert_eq!(window.display_id(), Some(id), "and none when access ends");
+    assert_eq!(
+        window.state().display,
+        Some(id),
+        "and none when access ends"
+    );
     drop(window);
     running.quit();
     settle().await;
@@ -1263,16 +1269,39 @@ fn open_recorded_window(running: &Running) -> (Arc<dyn HostWindow>, Arc<Mutex<Ve
     };
     let resized = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&resized);
-    window.on_resize(Box::new(move |metrics| {
-        let scale = metrics.scale().get();
-        seen.lock().expect("resizes").push(scale);
+    let observed = Arc::downgrade(&window);
+    let mut last = window.state().metrics;
+    window.on_state_changed(Box::new(move || {
+        let Some(window) = observed.upgrade() else {
+            return;
+        };
+        let metrics = window.state().metrics;
+        if metrics == last {
+            return;
+        }
+        last = metrics;
+        if let Some(metrics) = metrics {
+            seen.lock().expect("resizes").push(metrics.scale().get());
+        }
     }));
     (window, resized)
 }
 
+/// The drawable metrics the window's snapshot carries.
+fn metrics(window: &Arc<dyn HostWindow>) -> flui_foundation::geometry::WindowMetrics {
+    window
+        .state()
+        .metrics
+        .expect("an open canvas has drawable metrics")
+}
+
 fn physical_size(window: &Arc<dyn HostWindow>) -> [i32; 2] {
-    let size = window.physical_size();
+    let size = metrics(window).physical();
     [size.width, size.height]
+}
+
+fn scale(window: &Arc<dyn HostWindow>) -> f64 {
+    metrics(window).scale().get()
 }
 
 #[wasm_bindgen_test]
@@ -1282,7 +1311,7 @@ async fn web_window_backing_store_follows_a_pixel_ratio_change_without_a_resize(
     let running = Running::start();
     settle().await;
     let (window, resized) = open_recorded_window(&running);
-    assert_eq!(window.scale_factor(), 1.0);
+    assert_eq!(scale(&window), 1.0);
     assert_eq!(canvas_backing_size(), [300, 150], "the 300×150 box at 1×");
     assert_eq!(
         pixel_ratio_listeners(),
@@ -1294,7 +1323,7 @@ async fn web_window_backing_store_follows_a_pixel_ratio_change_without_a_resize(
     // stays, so no `ResizeObserver` entry and no `resize` event arrive.
     set_pixel_ratio(2.0);
     settle().await;
-    assert_eq!(window.scale_factor(), 2.0, "the window follows the ratio");
+    assert_eq!(scale(&window), 2.0, "the window follows the ratio");
     assert_eq!(
         canvas_backing_size(),
         [600, 300],
@@ -1327,7 +1356,7 @@ async fn web_window_backing_store_is_the_device_pixel_size_the_browser_reports()
     // small canvas) brings no observer entry; the window's own watch sees it.
     set_pixel_ratio(1.5);
     settle().await;
-    assert_eq!(window.scale_factor(), 1.5, "the watch synced the window");
+    assert_eq!(scale(&window), 1.5, "the watch synced the window");
     assert_eq!(canvas_backing_size(), [450, 225]);
 
     // At 1.5× the browser snaps a 301×150 box to 451×225 device pixels,
@@ -1357,7 +1386,7 @@ async fn web_window_backing_store_is_the_device_pixel_size_the_browser_reports()
     // 1.501× would be 452.
     set_pixel_ratio(1.501);
     settle().await;
-    assert_eq!(window.scale_factor(), 1.501);
+    assert_eq!(scale(&window), 1.501);
     assert_eq!(
         canvas_backing_size(),
         [451, 225],
@@ -1372,7 +1401,7 @@ async fn web_window_backing_store_is_the_device_pixel_size_the_browser_reports()
     change_canvas_boxes(302, 150, 452, 225, 0.0, "content-box border-box");
     settle().await;
     assert_eq!(
-        window.logical_size().width,
+        window.state().content_size.width,
         302.0,
         "the window follows the reflow"
     );
@@ -1399,7 +1428,7 @@ async fn web_window_backing_store_is_the_device_pixel_size_the_browser_reports()
     change_canvas_boxes(322, 170, 452, 225, 10.0, "border-box");
     settle().await;
     assert_eq!(
-        window.logical_size().width,
+        window.state().content_size.width,
         322.0,
         "the window follows the padding"
     );
@@ -1538,8 +1567,16 @@ async fn web_window_backing_store_leaves_a_page_canvas_box_where_it_was() {
             [width * 2, height * 2],
             "{page}: the store at 2× did not move the box"
         );
-        assert_eq!(window.logical_size().width, f64::from(width), "{page}");
-        assert_eq!(window.logical_size().height, f64::from(height), "{page}");
+        assert_eq!(
+            window.state().content_size.width,
+            f64::from(width),
+            "{page}"
+        );
+        assert_eq!(
+            window.state().content_size.height,
+            f64::from(height),
+            "{page}"
+        );
         assert_eq!(canvas_size_writes(), pinned, "{page}");
 
         drop(window);
@@ -1573,7 +1610,7 @@ async fn web_window_backing_store_is_estimated_where_the_browser_reports_css_pix
 
     lay_out_canvas(301, 150, 451, 225);
     settle().await;
-    assert_eq!(window.scale_factor(), 1.5);
+    assert_eq!(scale(&window), 1.5);
     assert_eq!(
         canvas_backing_size(),
         [452, 225],
@@ -1586,7 +1623,7 @@ async fn web_window_backing_store_is_estimated_where_the_browser_reports_css_pix
     change_canvas_boxes(321, 170, 0, 0, 10.0, "border-box");
     settle().await;
     assert_eq!(
-        window.logical_size().width,
+        window.state().content_size.width,
         321.0,
         "the window follows the padding"
     );

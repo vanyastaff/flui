@@ -9,7 +9,7 @@ use flui_platform::haptics::HapticOutcome;
 use flui_platform::text_store::TextStoreHostError;
 use flui_platform::{
     CursorError, InvalidPreference, PreferenceQueryError, StorageError, Unsupported,
-    UnsupportedReason, WindowCommandError, WindowShowError,
+    UnsupportedReason, WindowCommandError,
 };
 
 /// Every reason there is.
@@ -49,11 +49,6 @@ fn window_commands() {
     carries(WindowCommandError::from, WindowCommandError::unsupported);
     assert_eq!(WindowCommandError::Closed.unsupported(), None);
     assert_eq!(WindowCommandError::InvalidGeometry.unsupported(), None);
-}
-
-fn showing_a_window() {
-    carries(WindowShowError::from, WindowShowError::unsupported);
-    assert_eq!(WindowShowError::Closed.unsupported(), None);
 }
 
 fn cursors() {
@@ -118,7 +113,6 @@ fn every_error_carries_its_reason() {
         "every_error_carries_its_reason",
         &[
             ("window commands", window_commands),
-            ("showing a window", showing_a_window),
             ("cursors", cursors),
             ("drags", drags),
             ("storage", storage),

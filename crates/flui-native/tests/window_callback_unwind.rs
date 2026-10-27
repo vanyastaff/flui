@@ -157,8 +157,9 @@ fn terminal_retirement_survives_an_admitted_callback_failure() {
         );
         assert_eq!(
             moves.load(Ordering::SeqCst),
-            usize::from(!callback_panics),
-            "ordinary queued events from an aborted transaction remain discarded"
+            1,
+            "a state change queued in an aborted transaction is still announced: its \
+             revision is already published"
         );
         callbacks.dispatch_request_frame();
         callbacks.clear();

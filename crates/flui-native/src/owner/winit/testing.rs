@@ -29,7 +29,7 @@ use flui_platform::input_capabilities::{InputCapabilities, PointerKindSet};
 use flui_platform::{
     Clipboard, DataTransferOffer, DataTransferSource, DisplayId, DisplaySnapshot, DragDropEvent,
     InMemoryClipboard, NullDataTransferSource, PlatformInput, SystemPreferences,
-    WindowCapabilities, WindowEvent, WindowId, WindowOptions,
+    WindowCapabilities, WindowId, WindowOptions,
 };
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::WindowId as WinitWindowId;
@@ -46,7 +46,6 @@ use crate::error::PlatformError;
 use crate::host::{self, Absent, Host, position};
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
-use crate::owner::call_point::install;
 use crate::owner::notices::testing::NoNotices;
 use crate::owner::notices::{NoticeChannel, StaleOnWake};
 use crate::owner::signal::OwnerSignal;
@@ -395,13 +394,6 @@ impl host::Window<WinitLoop> for NoWindows {
 
     fn frame_inset(_: &WinitLoop, _: &NoWindows, _: f64) -> Size<f64> {
         Size::new(0.0, 0.0)
-    }
-
-    fn on_event(owner: &WinitLoop, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        install(
-            &owner.handler(|state| &mut state.handlers.window_event),
-            callback,
-        );
     }
 }
 

@@ -117,6 +117,16 @@ pub(crate) fn presentation_window(
         ))
 }
 
+/// Close a window the runner is discarding: one whose installation failed or
+/// was cancelled, or whose open nobody waits for any more. No caller is left
+/// to hear a refusal (Android's one window does not close) or a failure, and
+/// the presentation behind it is already torn down, so it is logged.
+pub(super) fn discard_window(window: &dyn flui_platform::PlatformWindow, why: &'static str) {
+    if let Err(error) = window.apply(flui_platform::WindowCommand::Close) {
+        tracing::warn!(%error, why, "a discarded window did not close");
+    }
+}
+
 /// Keep a weak reference to a window the runner is about to present, so the
 /// escape hatch finds the host's window behind a presentation's command queue.
 /// Windows already dropped leave the list here.
@@ -190,7 +200,7 @@ pub fn window_handle(
 /// and then the exit-policy question if this was the last window.
 ///
 /// The handler is deliberately not asked again: every backend's own
-/// `PlatformWindow::close` bypasses its native close-request path for the
+/// `WindowCommand::Close` bypasses its native close-request path for the
 /// same reason (AppKit's `-close` does not send `windowShouldClose:`;
 /// Win32's `DestroyWindow` does not send `WM_CLOSE`).
 ///
@@ -212,14 +222,15 @@ pub fn window_handle(
 /// # Backend behaviour
 ///
 /// This resolves the close fully on the **headless**, **winit**, **Win32**
-/// and **AppKit** backends, whose `PlatformWindow::close` performs a real
+/// and **AppKit** backends, whose `WindowCommand::Close` performs a real
 /// close. Timing differs: on **winit** the teardown (`on_close`, window-map
 /// removal, exit-policy consult) runs on the event-loop owner's next turn,
 /// after this call returns — never synchronously inside it (issue #919's
 /// fix) — while the **headless** double runs `on_close` synchronously
-/// inside `close()`. On **web** and **Android** the veto itself is inert
+/// inside the command. On **web** and **Android** the veto itself is inert
 /// (neither backend consults `dispatch_should_close`), so there is nothing
-/// to resolve.
+/// to resolve; an Android window refuses the close
+/// ([`CloseRequestError::Refused`](crate::CloseRequestError::Refused)).
 ///
 /// # Errors
 ///
@@ -238,7 +249,7 @@ pub fn request_presentation_close(
     use crate::app::close_request::CloseRequestError;
 
     // Read the owner thread and the router in ONE visit, then leave the
-    // thread-local: `PlatformWindow::close` fires the window's own
+    // thread-local: `WindowCommand::Close` fires the window's own
     // `on_close`, which re-enters `APP_RUNTIME` through
     // `close_this_window`. A thread that hosts no loop has `owner_thread`
     // unset — that, not an empty router, is what distinguishes "you are on

@@ -44,7 +44,7 @@ use flui_platform::{
     ClipboardItem, DeviceId, DisplaySnapshot, HapticFeedback, PlatformHaptics,
     PlatformSystemChrome, SessionEndAnswer, SessionEndPhase, StorageName, SystemNotice,
     SystemPreferences, SystemUiOverlayStyle, Unsupported, UnsupportedReason, WindowCapabilities,
-    WindowEvent, WindowId, WindowOptions,
+    WindowId, WindowOptions,
 };
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
@@ -213,9 +213,6 @@ pub trait Window<O> {
 
     /// [`Platform::window_frame_inset`].
     fn frame_inset(owner: &O, shared: &Self::Shared, scale_factor: f64) -> Size<f64>;
-
-    /// [`Platform::on_window_event`].
-    fn on_event(owner: &O, callback: Box<dyn FnMut(WindowEvent) + Send>);
 }
 
 /// The text position: what one window, `W`, holds of the text feature.
@@ -502,10 +499,6 @@ impl<O> Window<O> for Absent<position::Window> {
 
     fn frame_inset(_: &O, (): &(), _: f64) -> Size<f64> {
         Size::new(0.0, 0.0)
-    }
-
-    fn on_event(_: &O, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        drop(callback);
     }
 }
 

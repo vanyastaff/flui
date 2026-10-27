@@ -19,12 +19,13 @@
 //! - **Bad numbers never reach the window system.** A size that is not finite
 //!   and positive is refused as
 //!   [`InvalidGeometry`](WindowCommandError::InvalidGeometry).
-//! - **A closed window refuses.** Every command after the window closed is
-//!   [`Closed`](WindowCommandError::Closed).
+//! - **A closed window refuses.** Every command after the window closed —
+//!   through [`WindowCommand::Close`] where the window takes it, else the way
+//!   the window system closes it — is [`Closed`](WindowCommandError::Closed).
 //! - **The snapshot agrees with the window system.** Once the window system
 //!   has settled, each fact the fixture reads back by its own means (the
-//!   drawable metrics and scale, focus, visibility) is the snapshot's, and the
-//!   snapshot's capabilities are the window's (ADR-0254 §1).
+//!   drawable metrics and scale, focus, visibility) is the snapshot's
+//!   (ADR-0254 §1). The capabilities the checks read are the snapshot's.
 //!
 //! [`check`] returns each violated promise by name; [`assert_conforms`] panics
 //! listing them.
@@ -158,7 +159,7 @@ fn capabilities_are_honest(fixture: &mut dyn WindowFixture) -> Result<(), String
     let window = fixture.window();
     let mut broken = Vec::new();
     for command in sample_commands(&window.state()) {
-        let capable = window.capabilities().permits(&command);
+        let capable = window.state().capabilities.permits(&command);
         let answer = window.apply(command.clone());
         fixture.settle();
         match (capable, &answer) {
@@ -185,7 +186,7 @@ fn capabilities_are_honest(fixture: &mut dyn WindowFixture) -> Result<(), String
 
 fn accepted_commands_converge(fixture: &mut dyn WindowFixture) -> Result<(), String> {
     let window = fixture.window();
-    let capabilities = window.capabilities();
+    let capabilities = window.state().capabilities;
     let mut broken = Vec::new();
     for command in sample_commands(&window.state()) {
         if !capabilities.permits(&command) || window.apply(command.clone()).is_err() {
@@ -263,7 +264,7 @@ fn revisions_mean_change(fixture: &mut dyn WindowFixture) -> Result<(), String> 
         return Err("two reads with nothing between them differ".to_owned());
     }
     let command = WindowCommand::SetTitle("a title nobody had".to_owned());
-    if !window.capabilities().permits(&command) {
+    if !window.state().capabilities.permits(&command) {
         return Ok(());
     }
     window
@@ -285,7 +286,7 @@ fn revisions_mean_change(fixture: &mut dyn WindowFixture) -> Result<(), String> 
 
 fn bad_numbers_are_refused(fixture: &mut dyn WindowFixture) -> Result<(), String> {
     let window = fixture.window();
-    let capabilities = window.capabilities();
+    let capabilities = window.state().capabilities;
     let mut broken = Vec::new();
     for command in [
         WindowCommand::SetSize(Size::new(f64::NAN, 100.0)),
@@ -342,17 +343,11 @@ fn the_snapshot_agrees_with_the_window_system(
     let mut compare = |step: &str, fixture: &dyn WindowFixture| {
         let state = window.state();
         broken.extend(disagreements(step, &state, fixture.readback()));
-        if state.capabilities != window.capabilities() {
-            broken.push(format!(
-                "{step}: the snapshot's capabilities are {:?}, the window's {:?}",
-                state.capabilities,
-                window.capabilities()
-            ));
-        }
     };
     compare("at open", fixture);
     for command in sample_commands(&window.state()) {
-        if !window.capabilities().permits(&command) || window.apply(command.clone()).is_err() {
+        if !window.state().capabilities.permits(&command) || window.apply(command.clone()).is_err()
+        {
             continue;
         }
         fixture.settle();
@@ -363,10 +358,19 @@ fn the_snapshot_agrees_with_the_window_system(
 
 fn a_closed_window_refuses(fixture: &mut dyn WindowFixture) -> Result<(), String> {
     let window = fixture.window();
-    fixture.close();
     let mut broken = Vec::new();
+    // Closed by the command where the window takes it, the way the
+    // application closes a window; else the way the window system would.
+    if window.state().capabilities.permits(&WindowCommand::Close) {
+        if let Err(error) = window.apply(WindowCommand::Close) {
+            broken.push(format!("Close is supported but answered {error:?}"));
+        }
+        fixture.settle();
+    } else {
+        fixture.close();
+    }
     for command in sample_commands(&window.state()) {
-        if !window.capabilities().permits(&command) {
+        if !window.state().capabilities.permits(&command) {
             continue;
         }
         match window.apply(command.clone()) {

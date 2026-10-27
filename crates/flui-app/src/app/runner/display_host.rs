@@ -142,7 +142,7 @@ impl DisplayHost {
     pub(super) fn derive(&self, window: &dyn PlatformWindow) -> DisplayUpdate {
         let snapshot = self.snapshot();
         // The window answers outside any host borrow: it is platform code.
-        let id = window.display_id();
+        let id = window.state().display;
         DisplayUpdate::new(snapshot.and_then(|snapshot| snapshot.window_display(id)))
     }
 

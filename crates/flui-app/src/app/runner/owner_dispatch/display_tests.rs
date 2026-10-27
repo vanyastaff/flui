@@ -147,7 +147,7 @@ fn install_window(
     let runtime = build_ui_runtime(Arc::clone(&window), 1.0).expect("runtime");
     let mut installation = prepare_ui_runtime_alongside(runtime, Arc::clone(&window));
     let dispatcher = installation.dispatcher();
-    installation.observe_display();
+    installation.observe_window();
     let binding = deadlines.map(|deadlines| {
         installation
             .frame_driver(super::super::frame_driver::FrameDriver::TestDeadlines(

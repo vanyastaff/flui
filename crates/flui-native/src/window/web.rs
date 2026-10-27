@@ -34,12 +34,11 @@ use crate::{
     owner::web::WebLoop,
     text::WindowTextInput,
     window::state::{ReportedFacts, WindowStateCell},
-    window::visibility::ReportedVisibility,
 };
 use flui_platform::{
     CursorError, PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowCapabilities,
-    WindowCommand, WindowCommandError, WindowEvent, WindowExecutionState, WindowGeometry, WindowId,
-    WindowMode, WindowOptions, WindowState,
+    WindowCommand, WindowCommandError, WindowExecutionState, WindowGeometry, WindowId, WindowMode,
+    WindowOptions, WindowState,
 };
 
 use crate::owner::web::listener::CanvasListener;
@@ -79,18 +78,21 @@ pub(crate) struct StatePublisher {
 }
 
 impl StatePublisher {
+    /// The page's report of the window now.
+    fn sample(&self) -> WindowState {
+        sample_state(
+            &self.canvas,
+            &self.state,
+            self.displays.current_display(),
+            self.callbacks.hovered(),
+        )
+    }
+
     /// The published state, read from the page again first when something
     /// invalidated it; `on_state_changed` is raised when that produced a new
     /// revision.
     fn current(&self) -> WindowState {
-        let published = self.cell.state_with(|| {
-            sample_state(
-                &self.canvas,
-                &self.state,
-                self.displays.current_display(),
-                self.callbacks.hovered(),
-            )
-        });
+        let published = self.cell.state_with(|| self.sample());
         if published.changed {
             self.callbacks.dispatch_state_changed();
         }
@@ -107,16 +109,7 @@ impl StatePublisher {
     /// nothing.
     fn read(&self) -> crate::owner::handlers::Publication {
         self.cell.invalidate();
-        self.cell
-            .state_with(|| {
-                sample_state(
-                    &self.canvas,
-                    &self.state,
-                    self.displays.current_display(),
-                    self.callbacks.hovered(),
-                )
-            })
-            .outcome()
+        self.cell.state_with(|| self.sample()).outcome()
     }
 }
 
@@ -622,7 +615,7 @@ impl WebWindow {
             query.as_ref(),
             "change",
             Rc::new(move |_: web_sys::Event| {
-                callbacks.dispatch_appearance_changed();
+                callbacks.publish_state();
             }),
         )
     }
@@ -708,7 +701,6 @@ impl WebWindow {
             canvas: self.canvas.clone(),
             editor,
             state: Arc::clone(&self.state),
-            callbacks: Arc::clone(&self.callbacks),
             observed: Cell::new(self.state.lock().focused),
             publisher: self.publisher(),
         }
@@ -730,8 +722,7 @@ impl WebWindow {
                 .owner_document()
                 .expect("BUG: window construction verified the canvas document"),
             state: Arc::clone(&self.state),
-            callbacks: Arc::clone(&self.callbacks),
-            observed: Cell::new(ReportedVisibility::new(self.state.lock().visible)),
+            observed: Cell::new(self.state.lock().visible),
             accepting,
             publisher: self.publisher(),
         }
@@ -792,7 +783,6 @@ pub(crate) struct FocusSync {
     canvas: web_sys::HtmlCanvasElement,
     editor: EditorSlot,
     state: Arc<Mutex<WebWindowState>>,
-    callbacks: Arc<WindowCallbacks>,
     observed: Cell<bool>,
     publisher: StatePublisher,
 }
@@ -823,12 +813,9 @@ impl FocusSync {
         if self.observed.replace(focused) == focused {
             return;
         }
-        let state = Arc::clone(&self.state);
-        let cell = Arc::clone(&self.publisher.cell);
-        self.callbacks.dispatch_focus_observation(focused, move || {
-            state.lock().focused = focused;
-            cell.invalidate();
-        });
+        // Committed where the snapshot reads it, then published.
+        self.state.lock().focused = focused;
+        self.publisher.cell.invalidate();
         self.publisher.publish();
     }
 }
@@ -836,8 +823,7 @@ impl FocusSync {
 pub(crate) struct VisibilitySync {
     pub(crate) document: web_sys::Document,
     state: Arc<Mutex<WebWindowState>>,
-    callbacks: Arc<WindowCallbacks>,
-    observed: Cell<ReportedVisibility>,
+    observed: Cell<bool>,
     accepting: Rc<Cell<bool>>,
     publisher: StatePublisher,
 }
@@ -846,19 +832,12 @@ impl VisibilitySync {
     pub(crate) fn sync(&self) {
         let visible = !self.document.hidden();
         // A host getter can synchronously retire this registration.
-        if !self.accepting.get() {
+        if !self.accepting.get() || self.observed.replace(visible) == visible {
             return;
         }
-        let Some(visible) = ReportedVisibility::report_in(&self.observed, visible) else {
-            return;
-        };
-        let state = Arc::clone(&self.state);
-        let cell = Arc::clone(&self.publisher.cell);
-        self.callbacks
-            .dispatch_visibility_observation(visible, move || {
-                state.lock().visible = visible;
-                cell.invalidate();
-            });
+        // Committed where the snapshot reads it, then published.
+        self.state.lock().visible = visible;
+        self.publisher.cell.invalidate();
         self.publisher.publish();
     }
 }
@@ -872,7 +851,8 @@ pub(crate) struct ExecutionSync {
 
 impl ExecutionSync {
     /// The page is frozen (`Suspended`) or runs again (`Running`). The state
-    /// lock is released before the dispatch, which runs embedder callbacks.
+    /// lock is released before the snapshot is published, which runs embedder
+    /// callbacks.
     pub(crate) fn set(&self, next: WindowExecutionState) {
         {
             let mut state = self.state.lock();
@@ -881,7 +861,7 @@ impl ExecutionSync {
             }
             state.execution = next;
         }
-        self.callbacks.dispatch_execution_state_change(next);
+        self.callbacks.publish_state();
     }
 }
 
@@ -978,13 +958,6 @@ impl LayoutSync {
         }
         apply_backing_size(&self.canvas, backing);
         self.publisher.publish();
-        let physical = flui_foundation::geometry::DeviceSize::new(
-            i32::try_from(backing.width).unwrap_or(i32::MAX),
-            i32::try_from(backing.height).unwrap_or(i32::MAX),
-        );
-        if let Ok(metrics) = flui_foundation::geometry::WindowMetrics::new(physical, scale_factor) {
-            self.callbacks.dispatch_resize(metrics);
-        }
         self.callbacks.dispatch_request_frame();
     }
 }
@@ -1044,6 +1017,8 @@ pub(crate) const fn window_capabilities() -> WindowCapabilities {
     let mut capabilities = WindowCapabilities::NONE;
     capabilities.sets_title = flui_platform::Availability::Native;
     capabilities.enters_fullscreen = flui_platform::Availability::Native;
+    // The page keeps its tab: the canvas is retired and its embedder told.
+    capabilities.closes = flui_platform::Availability::Emulated;
     capabilities
 }
 
@@ -1108,9 +1083,6 @@ impl host::Window<WebLoop> for WebWindow {
             s.window_callbacks = Some(callbacks);
         });
 
-        // Notify window created
-        WebLoop::dispatch_window_event(&owner.state, WindowEvent::Created(WindowId(0)));
-
         let window = Arc::new(window);
         window
             .callbacks
@@ -1137,37 +1109,11 @@ impl host::Window<WebLoop> for WebWindow {
         // A canvas has no title bar or borders: its outer size is its content size.
         Size::new(0.0, 0.0)
     }
-
-    fn on_event(owner: &WebLoop, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        crate::owner::call_point::install(
-            &WebLoop::handler(&owner.state, |state| &mut state.handlers.window_event),
-            callback,
-        );
-    }
 }
 
 impl PlatformWindow for WebWindow {
     fn id(&self) -> WindowId {
         self.id
-    }
-
-    fn physical_size(&self) -> Size<i32> {
-        // The canvas's backing store, so the surface the embedder configures
-        // from this answer and the store it renders into agree.
-        let backing = self.state.lock().backing;
-        Size::new(
-            i32::try_from(backing.width).unwrap_or(i32::MAX),
-            i32::try_from(backing.height).unwrap_or(i32::MAX),
-        )
-    }
-
-    fn logical_size(&self) -> Size<f64> {
-        let state = self.state.lock();
-        Size::new(state.width, state.height)
-    }
-
-    fn scale_factor(&self) -> f64 {
-        self.state.lock().scale_factor
     }
 
     /// Served by the page's next animation frame: the platform's
@@ -1178,34 +1124,24 @@ impl PlatformWindow for WebWindow {
     /// dispatch, in a loop that holds the page's only thread.
     fn request_redraw(&self) {}
 
-    fn is_focused(&self) -> bool {
-        self.state.lock().focused
-    }
-
-    fn is_visible(&self) -> bool {
-        self.state.lock().visible
-    }
-
-    fn execution_state(&self) -> WindowExecutionState {
-        self.state.lock().execution
-    }
-
     // ==================== State and commands (ADR-0237) ====================
 
     fn state(&self) -> WindowState {
         self.publisher().current()
     }
 
-    fn capabilities(&self) -> WindowCapabilities {
-        window_capabilities()
-    }
-
     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
         if self.registration.borrow().is_none() {
             return Err(WindowCommandError::Closed);
         }
-        command.admit(&PlatformWindow::capabilities(self))?;
+        command.admit(&window_capabilities())?;
         match command {
+            // A page cannot close its tab: closing the window retires the
+            // canvas's registration and tells the embedder.
+            WindowCommand::Close => {
+                self.retire(true);
+                return Ok(());
+            }
             WindowCommand::SetTitle(title) => {
                 self.state.lock().title.clone_from(&title);
                 if let Some(document) = web_sys::window().and_then(|w| w.document()) {
@@ -1241,28 +1177,6 @@ impl PlatformWindow for WebWindow {
         Ok(())
     }
 
-    fn is_active(&self) -> bool {
-        self.state.lock().focused
-    }
-
-    fn appearance(&self) -> WindowAppearance {
-        page_appearance()
-    }
-
-    /// The browser's screen the page is on: the one screen of a tab, or the
-    /// current screen when the Window Management API lists several. The id is
-    /// the snapshot's, so the host derives the period from it.
-    fn display_id(&self) -> Option<flui_platform::DisplayId> {
-        if self.registration.borrow().is_none() {
-            return None;
-        }
-        self.displays.current_display()
-    }
-
-    fn close(&self) {
-        self.retire(true);
-    }
-
     fn set_background_appearance(&self, _appearance: WindowBackgroundAppearance) {
         // Not applicable for web canvas
     }
@@ -1283,15 +1197,6 @@ impl PlatformWindow for WebWindow {
             .borrow()
             .as_ref()
             .map(|facets| Arc::clone(&facets.chrome))
-    }
-
-    /// A page cannot raise its own tab or window: the browser decides what is
-    /// shown, in every browser.
-    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
-        Err(
-            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
-                .into(),
-        )
     }
 
     fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
@@ -1322,9 +1227,6 @@ impl PlatformWindow for WebWindow {
     fn on_request_frame(&self, callback: Box<dyn FnMut(flui_platform::FrameRequest) + Send>) {
         self.install_callback(&self.callbacks.on_request_frame, callback);
     }
-    fn on_resize(&self, callback: Box<dyn FnMut(flui_foundation::geometry::WindowMetrics) + Send>) {
-        self.install_callback(&self.callbacks.on_resize, callback);
-    }
     fn on_state_changed(&self, callback: Box<dyn FnMut() + Send>) {
         self.install_callback(&self.callbacks.on_state_changed, callback);
     }
@@ -1333,44 +1235,6 @@ impl PlatformWindow for WebWindow {
     }
     fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
         self.install_callback(&self.callbacks.on_should_close, callback);
-    }
-    fn on_safe_area_change(
-        &self,
-        callback: Box<dyn FnMut(flui_foundation::geometry::EdgeInsets) + Send>,
-    ) {
-        let accepting = self.registration.borrow().is_some();
-        crate::owner::panic_boundary::contain_owner_callback(|| {
-            if accepting {
-                self.callbacks.set_safe_area_callback(callback);
-            } else {
-                drop(callback);
-            }
-        });
-    }
-    fn on_execution_state_change(
-        &self,
-        callback: Box<dyn FnMut(flui_platform::WindowExecutionState) + Send>,
-    ) {
-        let accepting = self.registration.borrow().is_some();
-        crate::owner::panic_boundary::contain_owner_callback(|| {
-            if accepting {
-                self.callbacks.set_execution_state_callback(callback);
-            } else {
-                drop(callback);
-            }
-        });
-    }
-    fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        self.install_callback(&self.callbacks.on_active_status_change, callback);
-    }
-    fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        self.install_callback(&self.callbacks.on_visibility_status_change, callback);
-    }
-    fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        self.install_callback(&self.callbacks.on_hover_status_change, callback);
-    }
-    fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
-        self.install_callback(&self.callbacks.on_appearance_changed, callback);
     }
     fn on_surface_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
         self.install_callback(&self.callbacks.on_surface_status_change, callback);

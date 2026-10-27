@@ -46,8 +46,8 @@ use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::{
-    SizeConstraints, WindowAppearance, WindowCapabilities, WindowCommand, WindowCommandError,
-    WindowGeometry, WindowMode, WindowState,
+    SizeConstraints, WindowCapabilities, WindowCommand, WindowCommandError, WindowGeometry,
+    WindowMode, WindowState,
 };
 
 use crate::window::apple::geometry::{
@@ -85,17 +85,15 @@ use crate::owner::apple::macos::display_pass;
 use crate::owner::apple::macos::{
     ContentViewRef, HostDisplays, WindowRegistry, debug_assert_appkit_main_thread,
 };
-use crate::owner::call_point::install;
 use crate::owner::handlers::CallbackWindow;
 use crate::{
     owner::OpenWindowError,
     owner::handlers::WindowCallbacks,
     window::config::WindowConfiguration,
     window::state::{ReportedFacts, WindowStateCell, mode_of},
-    window::visibility::ReportedVisibility,
 };
 use flui_platform::{
-    CursorError, DisplayId, PlatformWindow, WindowEvent, WindowId, WindowOptions, WindowReveal,
+    CursorError, DisplayId, PlatformWindow, WindowId, WindowOptions, WindowReveal,
 };
 
 /// macOS window wrapper around NSWindow
@@ -241,7 +239,7 @@ struct MacOSWindowState {
 
     /// The display this window is on. Cached, not queried per call: reading it
     /// messages the window's screen, which is AppKit traffic this backend keeps
-    /// on the owner lane, while `PlatformWindow::display_id` is a plain `&self`
+    /// on the owner lane, while `PlatformWindow::state` is a plain `&self`
     /// accessor any thread may call. Refreshed wherever `scale_factor` is —
     /// `windowDidChangeScreen:` and `windowDidChangeBackingProperties:`.
     display: Option<DisplayId>,
@@ -259,15 +257,12 @@ struct MacOSWindowState {
     /// window enters when first shown.
     sequence: ModeSequence,
 
-    /// Last surface-visibility value dispatched through
-    /// `WindowCallbacks::dispatch_visibility_status_change` (hidden-surface
-    /// gating), fed by `windowDidChangeOcclusionState:`. Edge filter:
-    /// AppKit documents that the notification may fire for reasons other
-    /// than the visible bit flipping, so an unchanged value is never
-    /// re-dispatched (`window::visibility::ReportedVisibility`). Starts
-    /// `true` — a freshly created window is treated as visible until AppKit
-    /// says otherwise, matching every other backend's initial state.
-    occlusion_visible: ReportedVisibility,
+    /// The visible bit of the window's `occlusionState`, as
+    /// `windowDidChangeOcclusionState:` last read it: a window fully covered,
+    /// on another space or hidden is not visible in its snapshot. Starts
+    /// `true` — a freshly created window is visible until AppKit says
+    /// otherwise.
+    occlusion_visible: bool,
 
     /// The window was opened `visible: true` with
     /// [`WindowReveal::AfterFirstFrame`] and is ordered front, but at
@@ -628,7 +623,7 @@ impl MacOSWindow {
                     cursor: CursorIcon::default(),
                     normal: None,
                     sequence: ModeSequence::default(),
-                    occlusion_visible: ReportedVisibility::new(true),
+                    occlusion_visible: true,
                     first_reveal_pending,
                 })),
                 windows_map: Arc::clone(&windows_map),
@@ -1147,13 +1142,6 @@ impl host::Window<MacOSLoop> for MacOSWindow {
         );
         decorated_frame_inset(main)
     }
-
-    fn on_event(owner: &MacOSLoop, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        install(
-            &owner.handler(|handlers| &mut handlers.window_event),
-            callback,
-        );
-    }
 }
 
 /// What every AppKit window honours and observes, known before one exists
@@ -1174,6 +1162,7 @@ const fn window_capabilities() -> WindowCapabilities {
     capabilities.hides = Native;
     capabilities.shows = Native;
     capabilities.activates = Native;
+    capabilities.closes = Native;
     capabilities.observes_position = Native;
     capabilities.observes_minimized = Native;
     capabilities.places_at_open = Native;
@@ -1285,30 +1274,6 @@ impl PlatformWindow for MacOSWindow {
             .and_then(crate::text::WindowTextInput::ime)
     }
 
-    fn physical_size(&self) -> Size<i32> {
-        let state = self.state.lock();
-        let logical = state.bounds.size;
-        let scale = state.scale_factor;
-        Size::new(
-            (logical.width * scale).round() as i32,
-            (logical.height * scale).round() as i32,
-        )
-    }
-
-    fn logical_size(&self) -> Size<f64> {
-        let state = self.state.lock();
-        state.bounds.size
-    }
-
-    fn scale_factor(&self) -> f64 {
-        let state = self.state.lock();
-        state.scale_factor
-    }
-
-    fn display_id(&self) -> Option<DisplayId> {
-        self.state.lock().display
-    }
-
     /// # Thread affinity — owner-routed
     ///
     /// This method is called from whatever thread completed a future, through
@@ -1359,63 +1324,17 @@ impl PlatformWindow for MacOSWindow {
         );
     }
 
-    fn is_focused(&self) -> bool {
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
-            // body runs on the owner thread — inline on the OS main thread for
-            // a main-lane owner, or dispatched onto the lane under the
-            // reentrancy guard — before the message is sent.
-            let is_key: bool = msg_send![self.ns_window, isKeyWindow];
-            is_key
-        })
-    }
-
-    fn appearance(&self) -> WindowAppearance {
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        route_on_owner(owner, owner_is_main, || {
-            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
-            // body runs on the owner thread before it is messaged.
-            let window = unsafe { &*self.ns_window };
-            // The window's appearance, not NSApp's: a window may override it.
-            content_view::effective_appearance(
-                window
-                    .downcast_ref::<objc2_app_kit::NSWindow>()
-                    .expect("BUG: MacOSWindow wraps an NSWindow"),
-            )
-        })
-    }
-
-    fn is_visible(&self) -> bool {
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
-            // body runs on the owner thread — inline on the OS main thread for a main-lane
-            // owner, or dispatched onto the lane under the reentrancy guard — before the
-            // message is sent.
-            let is_visible: bool = msg_send![self.ns_window, isVisible];
-            is_visible
-        })
-    }
-
     // ==================== State and commands (ADR-0237) ====================
 
     fn state(&self) -> WindowState {
         self.current_state()
     }
 
-    fn capabilities(&self) -> WindowCapabilities {
-        window_capabilities()
-    }
-
     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
         if self.closed.load(Ordering::SeqCst) {
             return Err(WindowCommandError::Closed);
         }
-        command.admit(&PlatformWindow::capabilities(self))?;
+        command.admit(&window_capabilities())?;
         match command {
             WindowCommand::SetTitle(title) => self.set_native_title(&title),
             WindowCommand::SetPosition(at) => self.set_native_position(at)?,
@@ -1428,18 +1347,14 @@ impl PlatformWindow for MacOSWindow {
                 self.set_style_bit(NSWindowStyleMask::Titled, on)?;
             }
             WindowCommand::SetMode(mode) => self.change_mode(mode)?,
-            WindowCommand::Show => self.show().map_err(|error| match error {
-                flui_platform::WindowShowError::Closed => WindowCommandError::Closed,
-                flui_platform::WindowShowError::Native { message } => {
-                    WindowCommandError::Backend { message }
-                }
-                flui_platform::WindowShowError::Unsupported(unsupported) => unsupported.into(),
-                other => WindowCommandError::Backend {
-                    message: other.to_string(),
-                },
-            })?,
+            WindowCommand::Show => self.show_window()?,
             WindowCommand::Hide => self.hide()?,
-            WindowCommand::Activate => self.activate(),
+            WindowCommand::Activate => self.activate_window(),
+            // AppKit tears the window down through `windowWillClose:`.
+            WindowCommand::Close => {
+                self.close_window();
+                return Ok(());
+            }
             // A command added to the contract that this backend has not met
             // is refused, not ignored.
             _ => {
@@ -1451,41 +1366,6 @@ impl PlatformWindow for MacOSWindow {
         }
         self.publish_state();
         Ok(())
-    }
-
-    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
-        // An explicit show settles a deferred first reveal: the window is
-        // made opaque along with being ordered.
-        let settle_reveal = self.take_pending_first_reveal();
-        let shown = route_on_owner(self.owner, self.owner_is_main, || {
-            if self.closed.load(Ordering::SeqCst) {
-                return Err(flui_platform::WindowShowError::Closed);
-            }
-            // SAFETY: self retains the native window; routing establishes its
-            // owner lane. Deminiaturizing and ordering do not toggle zoom/fullscreen.
-            unsafe {
-                if settle_reveal {
-                    let _: () = msg_send![self.ns_window, setAlphaValue: 1.0f64];
-                }
-                let minimized: bool = msg_send![self.ns_window, isMiniaturized];
-                if minimized {
-                    let _: () = msg_send![self.ns_window, deminiaturize: NIL];
-                }
-                if self.closed.load(Ordering::SeqCst) {
-                    return Err(flui_platform::WindowShowError::Closed);
-                }
-                let _: () = msg_send![self.ns_window, makeKeyAndOrderFront: NIL];
-            }
-            if self.closed.load(Ordering::SeqCst) {
-                Err(flui_platform::WindowShowError::Closed)
-            } else {
-                Ok(())
-            }
-        });
-        if shown.is_ok() {
-            self.enter_mode_when_shown();
-        }
-        shown
     }
 
     fn reveal_after_first_frame(&self) {
@@ -1505,47 +1385,6 @@ impl PlatformWindow for MacOSWindow {
             let _: () = msg_send![self.ns_window, setAlphaValue: 1.0f64];
         });
         tracing::debug!("macOS: window revealed after its first presented frame");
-    }
-
-    fn activate(&self) {
-        let settle_reveal = self.take_pending_first_reveal();
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
-            // body runs on the owner thread — inline on the OS main thread for a main-lane
-            // owner, or dispatched onto the lane under the reentrancy guard — before the
-            // message is sent.
-            if settle_reveal {
-                let _: () = msg_send![self.ns_window, setAlphaValue: 1.0f64];
-            }
-            let _: () = msg_send![self.ns_window, makeKeyAndOrderFront: NIL];
-        });
-        self.enter_mode_when_shown();
-    }
-
-    fn close(&self) {
-        // No separate flag-set needed here: AppKit's `-[NSWindow close]`
-        // posts `NSWindowWillCloseNotification` (routing to the delegate's
-        // `windowWillClose:`, and so to `handle_close` below) whether or
-        // not `windowShouldClose:` was ever asked — the same notification a
-        // user-initiated close takes. `handle_close` is therefore reached
-        // by every route through this window's own `close`, and is where
-        // `closed` is actually set.
-        //
-        // The routed programmatic close does not change close-request callback
-        // delivery: the should-close consultation round-trips through AppKit's
-        // `windowShouldClose:` delegate (delivered on main), which vetoes a
-        // wrong-thread delivery before invoking the handler.
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
-            // body runs on the owner thread — inline on the OS main thread for a main-lane
-            // owner, or dispatched onto the lane under the reentrancy guard — before the
-            // message is sent.
-            let _: () = msg_send![self.ns_window, close];
-        });
     }
 
     // The explicit `arrowCursor` list below is intentional documentation of
@@ -1636,6 +1475,87 @@ impl PlatformWindow for MacOSWindow {
         &self,
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
         HasDisplayHandle::display_handle(self)
+    }
+}
+
+/// The bodies of the show, activate and close commands.
+impl MacOSWindow {
+    /// Show the window, deminiaturizing it and making it key; the zoomed or
+    /// fullscreen mode is kept.
+    fn show_window(&self) -> Result<(), WindowCommandError> {
+        // An explicit show settles a deferred first reveal: the window is
+        // made opaque along with being ordered.
+        let settle_reveal = self.take_pending_first_reveal();
+        let shown = route_on_owner(self.owner, self.owner_is_main, || {
+            if self.closed.load(Ordering::SeqCst) {
+                return Err(WindowCommandError::Closed);
+            }
+            // SAFETY: self retains the native window; routing establishes its
+            // owner lane. Deminiaturizing and ordering do not toggle zoom/fullscreen.
+            unsafe {
+                if settle_reveal {
+                    let _: () = msg_send![self.ns_window, setAlphaValue: 1.0f64];
+                }
+                let minimized: bool = msg_send![self.ns_window, isMiniaturized];
+                if minimized {
+                    let _: () = msg_send![self.ns_window, deminiaturize: NIL];
+                }
+                if self.closed.load(Ordering::SeqCst) {
+                    return Err(WindowCommandError::Closed);
+                }
+                let _: () = msg_send![self.ns_window, makeKeyAndOrderFront: NIL];
+            }
+            if self.closed.load(Ordering::SeqCst) {
+                Err(WindowCommandError::Closed)
+            } else {
+                Ok(())
+            }
+        });
+        if shown.is_ok() {
+            self.enter_mode_when_shown();
+        }
+        shown
+    }
+
+    fn activate_window(&self) {
+        let settle_reveal = self.take_pending_first_reveal();
+        let owner = self.owner;
+        let owner_is_main = self.owner_is_main;
+        route_on_owner(owner, owner_is_main, || unsafe {
+            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
+            // body runs on the owner thread — inline on the OS main thread for a main-lane
+            // owner, or dispatched onto the lane under the reentrancy guard — before the
+            // message is sent.
+            if settle_reveal {
+                let _: () = msg_send![self.ns_window, setAlphaValue: 1.0f64];
+            }
+            let _: () = msg_send![self.ns_window, makeKeyAndOrderFront: NIL];
+        });
+        self.enter_mode_when_shown();
+    }
+
+    fn close_window(&self) {
+        // No separate flag-set needed here: AppKit's `-[NSWindow close]`
+        // posts `NSWindowWillCloseNotification` (routing to the delegate's
+        // `windowWillClose:`, and so to `handle_close` below) whether or
+        // not `windowShouldClose:` was ever asked — the same notification a
+        // user-initiated close takes. `handle_close` is therefore reached
+        // by every route through this window's own `close`, and is where
+        // `closed` is actually set.
+        //
+        // The routed programmatic close does not change close-request callback
+        // delivery: the should-close consultation round-trips through AppKit's
+        // `windowShouldClose:` delegate (delivered on main), which vetoes a
+        // wrong-thread delivery before invoking the handler.
+        let owner = self.owner;
+        let owner_is_main = self.owner_is_main;
+        route_on_owner(owner, owner_is_main, || unsafe {
+            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
+            // body runs on the owner thread — inline on the OS main thread for a main-lane
+            // owner, or dispatched onto the lane under the reentrancy guard — before the
+            // message is sent.
+            let _: () = msg_send![self.ns_window, close];
+        });
     }
 }
 
@@ -1842,9 +1762,14 @@ impl MacOSWindow {
 
     /// The window as AppKit reports it now.
     fn sample_state(&self) -> WindowState {
-        let (display, normal, scale) = {
+        let (display, normal, scale, occlusion_visible) = {
             let state = self.state.lock();
-            (state.display, state.normal, state.scale_factor)
+            (
+                state.display,
+                state.normal,
+                state.scale_factor,
+                state.occlusion_visible,
+            )
         };
         let hovered = self.callbacks.hovered();
         route_on_owner(self.owner, self.owner_is_main, || {
@@ -1890,7 +1815,7 @@ impl MacOSWindow {
                 } else {
                     normal
                 })
-                .with_visible(is_shown(on_screen, flags.miniaturized))
+                .with_visible(is_shown(on_screen, flags.miniaturized) && occlusion_visible)
                 .with_focused(focused)
                 .with_title(Some(title))
                 .with_resizable(flags.resizable)

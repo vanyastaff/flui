@@ -64,11 +64,15 @@ impl MediaQuerySource {
         window: &dyn flui_platform::PlatformWindow,
         device_pixel_ratio: f64,
     ) -> Self {
+        let snapshot = window.state();
         Self {
             data: RefCell::new(MediaQueryData {
-                size: window.logical_size(),
+                size: snapshot.metrics.map_or(
+                    snapshot.content_size,
+                    flui_foundation::geometry::WindowMetrics::logical,
+                ),
                 device_pixel_ratio,
-                view_padding: window.safe_area_insets(),
+                view_padding: snapshot.safe_area,
                 ..MediaQueryData::default()
             }),
             ..Self::default()
