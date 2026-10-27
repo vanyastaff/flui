@@ -309,7 +309,7 @@ mod uri_list {
         uri.push_str(prefix);
         for byte in rest.bytes() {
             match byte {
-                b'\\' if style == PathStyle::Windows => uri.push('/'),
+                b'\\' if matches!(style, PathStyle::Windows) => uri.push('/'),
                 b'A'..=b'Z'
                 | b'a'..=b'z'
                 | b'0'..=b'9'

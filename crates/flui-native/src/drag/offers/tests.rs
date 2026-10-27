@@ -249,6 +249,7 @@ fn a_written_path_reads_back() {
 /// A path that is not Unicode has no `file:` URI a reader would take back, so
 /// none is written: an unpaired surrogate on Windows, bytes that are not UTF-8
 /// on Unix.
+#[cfg(any(windows, unix))]
 #[test]
 fn a_path_that_is_not_unicode_is_left_out() {
     #[cfg(windows)]
