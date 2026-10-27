@@ -30,6 +30,7 @@ use crate::owner::android::java_view::{ActivityDragSource, JavaView};
 use crate::owner::android::{
     ActivityFlags, ActivityPreferences, ActivityRef, ActivityWindow, ActivityWindowId, AndroidLoop,
 };
+use crate::window::capabilities::{ActivityFacts, activity_capabilities, pointer_icon_absence};
 
 use crate::text::WindowTextInput;
 use crate::{
@@ -133,6 +134,7 @@ impl AndroidWindow {
             &app,
             preferences.as_ref(),
             displays.as_ref(),
+            api,
             &activity,
             &Kept {
                 appearance,
@@ -253,6 +255,7 @@ impl AndroidWindow {
             &self.app,
             self.preferences.as_ref(),
             self.displays.as_ref(),
+            self.api,
             &self.activity,
             &Kept {
                 appearance: *self.appearance.lock(),
@@ -441,6 +444,7 @@ fn sample_state(
     app: &AndroidApp,
     preferences: &dyn ActivityPreferences,
     displays: &dyn crate::owner::android::HostDisplays,
+    api: AndroidApi,
     activity: &ActivityFlags,
     kept: &Kept,
 ) -> WindowState {
@@ -468,18 +472,22 @@ fn sample_state(
         hovered: kept.hovered,
         // An Activity has no activation apart from its window's focus.
         active: focused,
-        capabilities: activity_capabilities(displays),
+        capabilities: activity_capabilities(activity_facts(api, displays)),
     }
     .onto(state)
 }
 
-/// What an Activity's window honours: no command, as the system owns the
-/// surface and the Activity's lifetime, and a refresh-rate request where the
-/// system takes one.
-fn activity_capabilities(displays: &dyn crate::owner::android::HostDisplays) -> WindowCapabilities {
-    let mut capabilities = WindowCapabilities::NONE;
-    capabilities.frame_rate_hint = displays.frame_rate_hint();
-    capabilities
+/// What the system said at `api` and at the displays' last sample that an
+/// Activity's window capabilities rest on.
+fn activity_facts(
+    api: AndroidApi,
+    displays: &dyn crate::owner::android::HostDisplays,
+) -> ActivityFacts {
+    ActivityFacts {
+        api,
+        frame_rate_hint: displays.frame_rate_hint(),
+        cross_window_blur: displays.cross_window_blur(),
+    }
 }
 
 /// Running while the Activity is resumed, independent of focus and of the
@@ -608,7 +616,7 @@ impl host::Window<AndroidLoop> for AndroidWindow {
     }
 
     fn capabilities(owner: &AndroidLoop, _: &WindowPositions<ActivityRef>) -> WindowCapabilities {
-        activity_capabilities(owner.displays.as_ref())
+        activity_capabilities(activity_facts(owner.api, owner.displays.as_ref()))
     }
 
     fn frame_inset(_: &AndroidLoop, _: &WindowPositions<ActivityRef>, _: f64) -> Size<f64> {
@@ -711,11 +719,9 @@ impl PlatformWindow for AndroidWindow {
         self.current_state()
     }
 
+    /// Not set: the reason [`pointer_icon_absence`] gives at this API level.
     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
-        Err(
-            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
-                .into(),
-        )
+        Err(Unsupported::from(pointer_icon_absence(self.api)).into())
     }
 
     fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {

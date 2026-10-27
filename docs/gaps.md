@@ -263,6 +263,7 @@ request.
 
 - Backdrop materials, transparency, icon, capture exclusion.
 - The contract's window material (`WindowCommand::SetMaterial`: `Opaque`, `System`) is drawn on Windows (Mica, build 22621 and later; a Win32 window still opens on it) and on macOS (`NSVisualEffectView`'s window-background material, type-checked only); Linux, Web and mobile report it `Unavailable`. The backdrop material and Liquid Glass of `flui::native::macos` ran on macOS 27 (an M1, 2026-10-27, `an_appkit_backdrop_goes_behind_the_content_and_comes_away`); the contract's material on macOS waits for its Mac run; no window icon on Windows or Linux.
+- What the OS has and the host does not drive answers `NotYetOnThisHost`, not `NotOnThisPlatform`: the material on iOS (`UIVisualEffectView`), on Android from API 31 where the device blurs across windows, and on an AppKit window off the main lane; the macOS frame-rate hint from macOS 14 (`NSView.displayLink`); the pointer's shape on Android from API 24 (`PointerIcon`) and on an iPad from iOS 13.4 (`UIPointerStyle`). Below those versions, on an iPhone, or with the device's cross-window blur off, the answer is `NotOnThisDevice`. Only the rules' table tests ran (on Windows); none of the iOS, Android or macOS paths has run on a device.
 
 ### 21. Unaudited rows
 

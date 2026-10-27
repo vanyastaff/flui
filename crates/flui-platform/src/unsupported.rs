@@ -16,7 +16,10 @@
 //!
 //! No reason names an operating-system version: a version gate that refused
 //! answers [`UnsupportedReason::NotOnThisDevice`], which says the device lacks
-//! the thing and invites no branch on which version has it (ADR-0244).
+//! the thing and invites no branch on which version has it (ADR-0244). What
+//! the operating system has and the host does not implement yet answers
+//! [`UnsupportedReason::NotYetOnThisHost`], so "never on this platform" and
+//! "not in FLUI yet" stay apart.
 //!
 //! [`Availability`] says how a capability is delivered where it is: by the
 //! operating system, made up by the host from other input, or not at all.
@@ -32,6 +35,17 @@ pub enum UnsupportedReason {
     /// This device lacks it: its operating system build or its hardware. The
     /// reason names no version.
     NotOnThisDevice,
+    /// The operating system has it, but this FLUI host does not implement it
+    /// yet.
+    ///
+    /// Of the three lasting absences it is the one a later FLUI may remove:
+    /// [`NotOnThisPlatform`](Self::NotOnThisPlatform) says no device of this
+    /// platform has the thing, [`NotOnThisDevice`](Self::NotOnThisDevice)
+    /// that this device or its operating system build lacks it, and this
+    /// that the platform has it and the host has no path to it. It is not
+    /// [retryable](Unsupported::is_retryable): the same build of the host
+    /// answers the same way every time.
+    NotYetOnThisHost,
     /// The application did not declare what the platform requires for it.
     NotDeclared {
         /// The declaration that is missing: a manifest permission, a property
@@ -47,11 +61,62 @@ pub enum UnsupportedReason {
     NoWindow,
 }
 
+/// Where a capability that is not here is missing: the platform, this device
+/// or this host. These are the reasons a capability that lasts can be absent
+/// for, which a host records against the capability and every refusal of it
+/// answers ([`WindowCapabilities::unavailable`](crate::WindowCapabilities::unavailable)).
+///
+/// None of them is [retryable](Unsupported::is_retryable): a capability is
+/// published as `Unavailable` until the host publishes it again, so a reason
+/// that asks to be tried again ([`UnsupportedReason::Unavailable`]) is not one
+/// a capability can carry, nor are the reasons about a window or a
+/// registration that has gone ([`NoWindow`](UnsupportedReason::NoWindow),
+/// [`NotRegistered`](UnsupportedReason::NotRegistered)).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CapabilityAbsence {
+    /// No device of this platform has it
+    /// ([`UnsupportedReason::NotOnThisPlatform`]).
+    #[default]
+    NotOnThisPlatform,
+    /// The platform has it and this device or its operating system build
+    /// lacks it ([`UnsupportedReason::NotOnThisDevice`]).
+    NotOnThisDevice,
+    /// The operating system has it and this host does not implement it yet
+    /// ([`UnsupportedReason::NotYetOnThisHost`]).
+    NotYetOnThisHost,
+}
+
+impl From<CapabilityAbsence> for UnsupportedReason {
+    fn from(absence: CapabilityAbsence) -> Self {
+        absence.reason()
+    }
+}
+
+impl CapabilityAbsence {
+    /// The reason a refusal of the capability answers.
+    #[must_use]
+    pub const fn reason(self) -> UnsupportedReason {
+        match self {
+            Self::NotOnThisPlatform => UnsupportedReason::NotOnThisPlatform,
+            Self::NotOnThisDevice => UnsupportedReason::NotOnThisDevice,
+            Self::NotYetOnThisHost => UnsupportedReason::NotYetOnThisHost,
+        }
+    }
+}
+
+impl From<CapabilityAbsence> for Unsupported {
+    fn from(absence: CapabilityAbsence) -> Self {
+        Self::new(absence.reason())
+    }
+}
+
 impl fmt::Display for UnsupportedReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotOnThisPlatform => f.write_str("not on this platform"),
             Self::NotOnThisDevice => f.write_str("not on this device"),
+            Self::NotYetOnThisHost => f.write_str("not yet implemented by this host"),
             Self::NotDeclared { what } => write!(f, "the application does not declare {what}"),
             Self::Unavailable => f.write_str("unavailable for now"),
             Self::NotRegistered => f.write_str("nothing is registered to provide it"),
@@ -99,10 +164,18 @@ impl Unsupported {
 
     /// Whether asking again later may succeed: the reason is
     /// [`UnsupportedReason::Unavailable`]. Every other reason holds until the
-    /// device, the application or its windows change.
+    /// device, the application, its windows or the host itself change.
     #[must_use]
     pub const fn is_retryable(self) -> bool {
-        matches!(self.reason, UnsupportedReason::Unavailable)
+        match self.reason {
+            UnsupportedReason::Unavailable => true,
+            UnsupportedReason::NotOnThisPlatform
+            | UnsupportedReason::NotOnThisDevice
+            | UnsupportedReason::NotYetOnThisHost
+            | UnsupportedReason::NotDeclared { .. }
+            | UnsupportedReason::NotRegistered
+            | UnsupportedReason::NoWindow => false,
+        }
     }
 }
 

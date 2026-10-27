@@ -96,6 +96,9 @@ pub(crate) trait HostDisplays: StaleOnWake {
     /// Mark the screens stale and wake the owner behind `signal` when AppKit
     /// reports a change of screen parameters, until the watch is dropped.
     fn observe(self: Arc<Self>, signal: &Arc<OwnerSignal>) -> Watch;
+
+    /// The macOS version the process runs on, read once (ADR-0244).
+    fn version(&self) -> crate::version::gate::apple::MacOSVersion;
 }
 
 use std::{collections::HashMap, path::PathBuf, sync::Arc};

@@ -3170,6 +3170,34 @@ graph LR
   305; rustdoc `--document-private-items` нашёл ссылку на удалённый `set_material`
   (исправлено). Не запускалось: Mac и iPhone для новых путей (материал macOS, частота кадров iOS,
   края iOS из чужого потока) — запрошено у владельца; `cross-typecheck`; браузер.
+  **Дополнение к LY43 и словарю LY38** — ветка `platform/not-yet-on-this-host` (владелец одобрил
+  2026-10-27). Новая причина `UnsupportedReason::NotYetOnThisHost`: ОС это умеет, хост FLUI ещё
+  нет; не повторяемая. Отличает «на этой платформе никогда» (`NotOnThisPlatform`) и «у этого
+  устройства нет» (`NotOnThisDevice`) от «FLUI ещё не сделал». `unavailable_on_this_device`
+  обобщён в `WindowCapabilities::unavailable(command, absence)`: тип `CapabilityAbsence`
+  (`NotOnThisPlatform`, `NotOnThisDevice`, `NotYetOnThisHost`, байт на слот) не пускает
+  повторяемые и оконные причины; `refusal` отвечает им; равенство сравнивает отсутствие только у
+  недоступных слотов; слоты объявлены один раз макросом, `slot()` сопоставляет команды
+  исчерпывающе. Подсказка частоты и входные области — глаголы, свою причину отвечают сами (их
+  ничто не допускает по возможностям). Поправки ADR-0152, ADR-0254 §6 (следуют решению
+  владельца), ADR-0151 §4. Шлюз версии — `NotOnThisDevice`, с версии — `NotYetOnThisHost`:
+  материал Android (`BackgroundBlur`, API 31, и `isCrossWindowBlurEnabled` из выборки
+  дисплеев), курсор Android (`PointerIcons`, API 24), указатель iPad (`PointerInteraction`,
+  iOS 13.4, только iPad), частота кадров macOS (`ViewDisplayLink`, macOS 14; новый
+  `MacOSVersion` с полом из `platform-support.toml`, читается в `MacosDisplays`). Материал iOS и
+  AppKit вне главной полосы — `NotYetOnThisHost`; значение `Win32Window` новее хоста — тоже.
+  Правила вынесены в чистую модель окна `window::capabilities`, которую дисплеи не называют
+  (они отдают версию и факты). Оставлены `NotOnThisPlatform` (входные области контракта —
+  исключение системных жестов, не сквозной ввод): Win32, AppKit и веб входные области, winit на
+  всех целях (Linux тоже — прошлое изменение отменено), частота кадров winit на Linux и Windows
+  (на macOS — ответ AppKit), Win32 частота кадров, drag пером и касанием в OLE, хаптика Linux,
+  `Absent`, неизвестный `WriteMode`, headless. Тесты: `every_error_carries_its_reason`
+  (`each reason answers retry and message`); `window_command_validate` (каждая команда с
+  `NotOnThisDevice` и `NotYetOnThisHost`, `an_absence_left_in_an_available_slot_is_no_difference`,
+  `no_absence_is_retryable`); `native_capability_absences`,
+  `native_window_gate_table`, строки `PointerIcons` и `BackgroundBlur` в `os_version_gate_table`.
+  Каждый падает при откате своей правки (проверено). На устройствах iOS, Android и macOS пути не
+  запускались.
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`

@@ -46,6 +46,7 @@ use crate::error::PlatformError;
 use crate::owner::apple::macos::bounds_of;
 use crate::owner::signal::OwnerSignal;
 use crate::owner::watch::Watch;
+use crate::version::gate::apple::MacOSVersion;
 
 // `CGDisplayCreateUUIDFromDisplayID` is declared by CoreGraphics but exported
 // by the ColorSync framework, which is why winit links the same one.
@@ -124,9 +125,11 @@ impl crate::owner::notices::StaleOnWake for MacosDisplays {
 }
 
 /// The displays of one macOS platform: their ids and the last snapshot, which
-/// the [`DisplaySource`] keeps until an event invalidates it.
+/// the [`DisplaySource`] keeps until an event invalidates it, and the OS
+/// version, read once (ADR-0244).
 pub struct MacosDisplays {
     source: DisplaySource,
+    version: MacOSVersion,
 }
 
 impl std::fmt::Debug for MacosDisplays {
@@ -139,6 +142,7 @@ impl MacosDisplays {
     pub(crate) fn new() -> Self {
         Self {
             source: DisplaySource::new(),
+            version: MacOSVersion::read(),
         }
     }
 
@@ -256,6 +260,10 @@ impl Drop for ScreenObserver {
 }
 
 impl crate::owner::apple::macos::HostDisplays for MacosDisplays {
+    fn version(&self) -> MacOSVersion {
+        self.version
+    }
+
     /// The last sample while nothing has invalidated it, otherwise a fresh
     /// one.
     fn snapshot(&self, mtm: MainThreadMarker) -> Result<DisplaySnapshot, PlatformError> {
@@ -292,6 +300,10 @@ impl crate::owner::apple::macos::HostDisplays for MacosDisplays {
 /// starts on resume) and by a window whose screen is one the last sample lacks.
 #[cfg(feature = "winit-backend")]
 impl crate::owner::winit::HostDisplays for MacosDisplays {
+    fn version(&self) -> MacOSVersion {
+        self.version
+    }
+
     /// The current snapshot: the last sample unless something invalidated it.
     /// [`PlatformError::Displays`] off the main thread, where `NSScreen` is
     /// not read.
