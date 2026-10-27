@@ -1,7 +1,7 @@
 # Where FLUI falls short
 
 > [!NOTE]
-> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-27 · **Change:** minor (entry 9: no close request on the Web and Android; previously minor: entry 9: Android cannot close its window; entry 4: the browser run of the window snapshot is owed; previously minor: entry 20: the macOS backdrop material and Liquid Glass are reachable through `flui::native::macos`, unrun; previously minor: entry 30, panic containment not gated, closed by `cargo xtask panic-boundary`, its Apple runs a bullet on entry 4, and entries 31–40 renumbered 30–39; entry 2: the desktop accessibility adapters are always on; previously minor: a bullet on entry 15, an Android touch held through Home; before that minor: entry 23, preferences polled on Android, closed and entries 24–41 renumbered 23–40; entry 14 retitled now that every host reads contrast and languages; previously minor: entries 39–41: add-to-app embedding, gamepad and D-pad, rotary input; before that minor: entries 32–38: live resize, present-mode and tearing control, launch handoff, quality-bar partials, power-aware pacing, the locale edge, accessibility bridge fidelity; a bullet each on entries 1, 14, 18, 24, 25, 26, 27, 28, 29 and 30; before that major: entries 23–31: the quality bar — polling, presentation feedback, HDR and colour, sandboxing, secure entry, latency modes, distribution, activation, panic gating)
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-27 · **Change:** minor (entries 4 and 9: the AppKit window ran the window conformance on an M1, macOS 27.0, its hand checks still owed; entry 9: two AppKit mode defects found in review, not yet fixed; previously minor: entry 9: no close request on the Web and Android; previously minor: entry 9: Android cannot close its window; entry 4: the browser run of the window snapshot is owed; previously minor: entry 20: the macOS backdrop material and Liquid Glass are reachable through `flui::native::macos`, unrun; previously minor: entry 30, panic containment not gated, closed by `cargo xtask panic-boundary`, its Apple runs a bullet on entry 4, and entries 31–40 renumbered 30–39; entry 2: the desktop accessibility adapters are always on; previously minor: a bullet on entry 15, an Android touch held through Home; before that minor: entry 23, preferences polled on Android, closed and entries 24–41 renumbered 23–40; entry 14 retitled now that every host reads contrast and languages; previously minor: entries 39–41: add-to-app embedding, gamepad and D-pad, rotary input; before that minor: entries 32–38: live resize, present-mode and tearing control, launch handoff, quality-bar partials, power-aware pacing, the locale edge, accessibility bridge fidelity; a bullet each on entries 1, 14, 18, 24, 25, 26, 27, 28, 29 and 30; before that major: entries 23–31: the quality bar — polling, presentation feedback, HDR and colour, sandboxing, secure entry, latency modes, distribution, activation, panic gating)
 
 The work list. One entry per shortfall, ranked by how much it stops someone from choosing FLUI for a
 production app on that environment. Each entry says what is missing, the evidence, who it hurts and
@@ -22,7 +22,7 @@ request.
 | 6 | [Clipboard is broken on three environments](#6-clipboard-is-broken-on-three-environments) | Android, Wayland, Web; all for rich | Every app with copy and paste |
 | 7 | [File dialogs, open URL, reveal, trash, message box and share exist on Windows only, or nowhere](#7-file-dialogs-open-url-reveal-trash-message-box-and-share-exist-on-windows-only-or-nowhere) | all | Every document app; any app with a link |
 | 8 | [No native drag and drop](#8-no-native-drag-and-drop) | all | Document, media and file-manager apps |
-| 9 | [Window control has run only on Windows and an X11 test server](#9-window-control-has-run-only-on-windows-and-an-x11-test-server) | desktop | Every desktop app |
+| 9 | [Window control has run only on Windows, an X11 test server and the AppKit conformance kit](#9-window-control-has-run-only-on-windows-an-x11-test-server-and-the-appkit-conformance-kit) | desktop | Every desktop app |
 | 10 | [No custom title bar, popups or owned windows](#10-no-custom-title-bar-popups-or-owned-windows) | desktop | Apps with modern chrome; every menu and dropdown |
 | 11 | [No native menus](#11-no-native-menus) | macOS, iPadOS; Windows | Every macOS app |
 | 12 | [Lifecycle holes](#12-lifecycle-holes) | all | Apps that save state or hold resources |
@@ -94,7 +94,11 @@ request.
 - Device checks exist for a handful of rows, and the macOS and iOS drivers are Python and Swift.
 - Display runs still owed:
   - the macOS and iOS display sources (type-checked, never run)
-  - the macOS and iOS window lifecycle (window state and commands, sleep, lock, session end, memory pressure; [#1736](https://github.com/vanyastaff/flui/issues/1736))
+  - the macOS window by hand: the AppKit window conformance kit passes on an M1, macOS 27.0,
+    2026-10-27 (nextest flui-native 233/233), and [#1736](https://github.com/vanyastaff/flui/issues/1736)
+    still lists a drag, the y-axis and a second display; the green button, Cmd-M and the Dock;
+    opening options; displays (UUID and bounds); sleep, lock and memory-pressure notices; session end
+  - the iOS window lifecycle (the memory warning and `applicationWillTerminate:`)
   - a window moved between two monitors on every host but Windows
   - unplugging a monitor on Windows
   - in a browser, the page moved to another screen changing the window snapshot's `display`, and
@@ -146,19 +150,21 @@ request.
 - **Still missing:** `NSDraggingDestination` and every other native drag source and target.
 - Planned in the [interaction spec](plans/specs/flui-interaction/completeness/tasks.md) (ADR-0211; T28–T31, T35, T37 and the per-OS tickets).
 
-### 9. Window control has run only on Windows and an X11 test server
+### 9. Window control has run only on Windows, an X11 test server and the AppKit conformance kit
 
 > **Environments:** desktop · **Who it hurts:** Every desktop app · **Parity:** [Windows](platform-parity.md#windows)
 
 - **Runs:** title, mode, fullscreen, position, size and constraint commands with a state readback ship on every desktop host ([ADR-0237](adr/ADR-0237-window-state-and-host-notices.md)).
-- **Missing:** macOS carries them out and reads them back type-checked only, never run ([#1736](https://github.com/vanyastaff/flui/issues/1736)).
+- **macOS:** the AppKit window conformance kit passes on an M1, macOS 27.0, 2026-10-27 (nextest flui-native 233/233). No live change was made by hand: [#1736](https://github.com/vanyastaff/flui/issues/1736) still lists a drag, the y-axis and a second display; the green button, Cmd-M and the Dock; opening options; displays (UUID and bounds); sleep, lock and memory-pressure notices; session end.
+  - **A subscriber's `SetMode(Normal)` after full screen can leave the window maximized.** `windowDidExitFullScreen:` publishes the window before AppKit puts back the frame it had before full screen; only the held mode waits for the owner lane's next turn. A window zoomed before full screen therefore publishes `Normal`, unzoomed, and a `SetMode(Normal)` its subscriber sends from that publish plans no un-zoom and is not held, so AppKit then restores the zoom. Proposed fix: defer the publish with the held mode. Reported on [#1736](https://github.com/vanyastaff/flui/issues/1736).
+  - **Two commands in one turn are admitted against the published mode, not the queued one.** `capabilities_of` reads the window's current flags, so a zoomed window sent `SetMode(Normal)` and then `SetResizable(false)` in the same turn has the second refused (`sets_resizable` is unavailable while maximized) although the first takes the window back to normal. Reported on [#1736](https://github.com/vanyastaff/flui/issues/1736).
 - X11 ran only on an Xvfb server with the test standing in for the window manager.
 - winit cannot read a title back on Linux, so the snapshot holds the one last set.
 - Wayland never reports minimized.
 - Placement restore ran only on Windows; live resize is not audited.
-- **The snapshot against the window system** (`window_conformance`'s `the_snapshot_agrees_with_the_window_system`: metrics, focus, activation, visibility and capabilities read back by the fixture's own means) ran on headless and on Win32 only.
+- **The snapshot against the window system** (`window_conformance`'s `the_snapshot_agrees_with_the_window_system`: metrics, focus, activation, visibility and capabilities read back by the fixture's own means) ran on headless, on Win32 and on AppKit (an M1, macOS 27.0, 2026-10-27).
   - winit: not run; the real-loop harness runs a scenario on a worker thread, while the fixture's `apply` and `settle` need owner turns between commands.
-  - AppKit and UIKit: not run, type-checked only, queued in [#1840](https://github.com/vanyastaff/flui/issues/1840).
+  - UIKit: not run, type-checked only, queued in [#1840](https://github.com/vanyastaff/flui/issues/1840).
   - Web: not run; the browser suite has no fixture that reads the canvas back apart from the window.
   - Android: not run; the conformance needs a device fixture.
 - **Android cannot close its window:** `WindowCommand::Close` is `Unavailable` there (one native window, which the application does not finish), so a programmatic close answers `CloseRequestError::Refused`.
@@ -476,5 +482,6 @@ request.
 | 2026-10-26 | minor | Entry 15: `PlatformInput::PointerFrame` carries a frame from a backend; the Win32 touch and pen path reads it with `GetPointerFrameInfo` (synthetic data only, live touch run pending) |
 | 2026-10-26 | minor | Entry 20: the macOS backdrop material and Liquid Glass come back through the escape hatch `flui::native::macos` (`AppKitWindow::set_backdrop`), type-checked only and listed in [#1840](https://github.com/vanyastaff/flui/issues/1840); Windows still forces Mica |
 | 2026-10-26 | minor | Entry 9: the window snapshot holds every window fact, and the window conformance compares it with what the window system reads back; it ran on headless and Win32, and the winit, AppKit, UIKit, Web and Android runs are listed |
+| 2026-10-27 | minor | Entries 4 and 9: the AppKit window conformance kit passes on an M1, macOS 27.0 (nextest flui-native 233/233), and entry 9 is retitled for it; the hand checks of [#1736](https://github.com/vanyastaff/flui/issues/1736) stay owed. Entry 9 gains two AppKit mode defects found in review: a subscriber's `SetMode(Normal)` planned from the frame published inside `windowDidExitFullScreen:`, and admission against the published mode rather than the queued one |
 
 </details>
