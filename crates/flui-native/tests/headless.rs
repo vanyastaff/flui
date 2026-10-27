@@ -40,7 +40,7 @@ fn flui_headless_env_var_selects_the_headless_platform() {
 // ============================================================================
 // Exit-policy hook (issue #555's live-loop wiring) -- driven entirely through
 // the PUBLIC `Platform`/`PlatformWindow` surface, exactly as a real embedder
-// would: `open_window`, the returned window's own `close()`, `on_quit`,
+// would: `open_window`, the returned window's own `WindowCommand::Close`, `on_quit`,
 // `set_exit_policy_hook`. No internal `MockWindow`/`HeadlessState` access.
 // This is "the real platform loop path" for the headless backend: the same
 // `PlatformHandlers::exit_policy` slot and `notify_closed` bookkeeping the

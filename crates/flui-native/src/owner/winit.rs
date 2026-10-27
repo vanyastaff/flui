@@ -2219,6 +2219,8 @@ impl WinitApp {
                     route = "programmatic",
                     "harness self-close deadline reached; applying WindowCommand::Close"
                 );
+                // A winit window always closes; the one refusal left is a
+                // window that closed since the lookup, which is the goal.
                 let _ = window.apply(flui_platform::WindowCommand::Close);
             }
         }

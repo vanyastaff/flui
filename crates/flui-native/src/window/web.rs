@@ -78,18 +78,21 @@ pub(crate) struct StatePublisher {
 }
 
 impl StatePublisher {
+    /// The page's report of the window now.
+    fn sample(&self) -> WindowState {
+        sample_state(
+            &self.canvas,
+            &self.state,
+            self.displays.current_display(),
+            self.callbacks.hovered(),
+        )
+    }
+
     /// The published state, read from the page again first when something
     /// invalidated it; `on_state_changed` is raised when that produced a new
     /// revision.
     fn current(&self) -> WindowState {
-        let published = self.cell.state_with(|| {
-            sample_state(
-                &self.canvas,
-                &self.state,
-                self.displays.current_display(),
-                self.callbacks.hovered(),
-            )
-        });
+        let published = self.cell.state_with(|| self.sample());
         if published.changed {
             self.callbacks.dispatch_state_changed();
         }
@@ -106,16 +109,7 @@ impl StatePublisher {
     /// nothing.
     fn read(&self) -> crate::owner::handlers::Publication {
         self.cell.invalidate();
-        self.cell
-            .state_with(|| {
-                sample_state(
-                    &self.canvas,
-                    &self.state,
-                    self.displays.current_display(),
-                    self.callbacks.hovered(),
-                )
-            })
-            .outcome()
+        self.cell.state_with(|| self.sample()).outcome()
     }
 }
 

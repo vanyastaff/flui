@@ -126,7 +126,8 @@ impl WindowFixture for Fixture {
         Readback {
             metrics: system.metrics,
             focused: system.focused,
-            active: system.active,
+            // The headless desktop's activation is its focus.
+            active: system.focused,
             visible: system.visible,
         }
     }

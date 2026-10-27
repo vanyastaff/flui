@@ -1688,20 +1688,22 @@ impl WindowsWindow {
             }
             TeardownRoute::PostClose => {
                 // Cross-thread close cannot call `DestroyWindow` (Win32
-                // forbids it off the creating thread), so it goes through
-                // the documented mechanism instead: post `WM_CLOSE` to the
-                // owner thread's queue. Note the behavioral nuance: the
-                // owner-side `WM_CLOSE` arm consults the window's
-                // should-close veto before destroying, so a vetoing window
-                // treats a cross-thread `close()` as a close *request*.
-                //
+                // forbids it off the creating thread), so the owner thread
+                // destroys the window when it takes the posted message. Not
+                // `WM_CLOSE`: that asks the should-close veto, and a close
+                // command is not a request. The message names this window,
+                // so a handle reused before it arrives is left alone.
+                let (low, high) = self.identity.halves();
                 // SAFETY: `PostMessageW` takes the handle and plain
                 // integers by value — nothing dereferenced, delivery
                 // marshalled by the OS to the owning thread.
                 unsafe {
-                    if let Err(error) =
-                        PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0))
-                    {
+                    if let Err(error) = PostMessageW(
+                        Some(self.hwnd),
+                        super::proc::CLOSE_WINDOW,
+                        WPARAM(low),
+                        LPARAM(high),
+                    ) {
                         tracing::warn!(hwnd = ?self.hwnd, ?error, "PostMessageW(WM_CLOSE) (cross-thread WindowCommand::Close) failed");
                     }
                 }

@@ -180,7 +180,7 @@ fn winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone() {
 /// also have fired on the worker thread, and the loop only ended
 /// because the worker's failure-path `request_quit` unparked it.
 ///
-/// Pinned, in one real-event-loop run, from a cross-thread `close()`:
+/// Pinned, in one real-event-loop run, from a cross-thread `WindowCommand::Close`:
 /// 1. the window leaves the tracking map and is reported not visible;
 /// 2. `on_close` fires on the OWNER thread, not the calling worker —
 ///    an embedder's owner-affine close handling (`flui-app` rejects

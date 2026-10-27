@@ -1314,7 +1314,9 @@ impl PlatformWindow for IOSWindow {
     fn state(&self) -> WindowState {
         self.snapshot.invalidate();
         let published = self.snapshot.state_with(|| self.sample_state());
-        self.callbacks.announce(published.changed);
+        if published.changed {
+            self.callbacks.dispatch_state_changed();
+        }
         published.state
     }
 

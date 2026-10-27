@@ -433,8 +433,20 @@ impl WebLoop {
                 // A wake is how a screen change reaches the page: the window
                 // reads which screen it is on again before the owner's turn, so
                 // the turn sees the display in the window's snapshot.
-                if let Some(window) = window {
-                    window.publish_state();
+                // Contained, as the session-end hook is: a state callback
+                // that panics must not cost the owner its turn.
+                if let Some(window) = window
+                    && let Err(payload) =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            window.publish_state();
+                        }))
+                {
+                    tracing::error!(
+                        panic = ?flui_foundation::panic::payload_text(payload.as_ref()),
+                        "the window's state callback panicked on a wake"
+                    );
+                    // An arbitrary payload's drop may panic again.
+                    std::mem::forget(payload);
                 }
                 if let Some(owner) = owner
                     && owner.signal.drive()

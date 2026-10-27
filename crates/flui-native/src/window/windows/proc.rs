@@ -75,6 +75,11 @@ pub(crate) const REQUEST_FRAME: u32 = WM_APP + 1;
 /// ([`WindowContext::apply_window_hotkey`]).
 pub(crate) const TOGGLE_FULLSCREEN: u32 = WM_APP + 3;
 
+/// Posted by a `WindowCommand::Close` applied off the owner thread, where
+/// `DestroyWindow` is forbidden. It destroys the window it names without
+/// asking the veto: a close command is not a close request.
+pub(crate) const CLOSE_WINDOW: u32 = WM_APP + 4;
+
 pub(crate) use crate::owner::windows::WindowRef;
 
 /// The window context a [`WindowRef`] names: the owner declares the
@@ -287,7 +292,9 @@ impl WindowContext {
             .snapshot
             .state_with(|| sample_state(hwnd, &record, self.tracking(hwnd)));
         // `on_state_changed` when the revision grew.
-        self.callbacks.announce(published.changed);
+        if published.changed {
+            self.callbacks.dispatch_state_changed();
+        }
         published.state
     }
 
@@ -600,9 +607,9 @@ impl WindowMessages for WindowProc {
             WM_CREATE | WM_CLOSE | WM_DESTROY | WM_ERASEBKGND | WM_ENTERSIZEMOVE
             | WM_EXITSIZEMOVE | WM_ENTERMENULOOP | WM_EXITMENULOOP | WM_PAINT | WM_SIZE
             | WM_SHOWWINDOW | WM_MOVE | WM_DPICHANGED | WM_WINDOWPOSCHANGING
-            | WM_WINDOWPOSCHANGED | TOGGLE_FULLSCREEN | WM_SETTEXT | WM_STYLECHANGED
-            | WM_GETMINMAXINFO | REQUEST_FRAME | WM_SETCURSOR | WM_SETFOCUS | WM_KILLFOCUS
-            | WM_ACTIVATE | WM_SETTINGCHANGE => true,
+            | WM_WINDOWPOSCHANGED | TOGGLE_FULLSCREEN | CLOSE_WINDOW | WM_SETTEXT
+            | WM_STYLECHANGED | WM_GETMINMAXINFO | REQUEST_FRAME | WM_SETCURSOR | WM_SETFOCUS
+            | WM_KILLFOCUS | WM_ACTIVATE | WM_SETTINGCHANGE => true,
             WM_TIMER => wparam.0 == MODAL_DEADLINE_TIMER,
             WM_SYSCOMMAND => (wparam.0 & 0xFFF0) == SC_KEYMENU as usize,
             _ => false,
@@ -1104,6 +1111,22 @@ impl WindowProc {
                 TOGGLE_FULLSCREEN => {
                     if ctx.is_some_and(|ctx| ctx.identity.halves() == (wparam.0, lparam.0)) {
                         WindowsWindow::toggle_fullscreen_for_hwnd(hwnd);
+                    }
+                    LRESULT(0)
+                }
+
+                // A close command applied off this thread. It names the
+                // window it closes, so a handle reused since is left alone,
+                // and it asks no veto, unlike `WM_CLOSE`.
+                CLOSE_WINDOW => {
+                    if ctx.is_some_and(|ctx| ctx.identity.halves() == (wparam.0, lparam.0))
+                        && let Err(error) = DestroyWindow(hwnd)
+                    {
+                        tracing::warn!(
+                            ?hwnd,
+                            ?error,
+                            "DestroyWindow (posted WindowCommand::Close) failed"
+                        );
                     }
                     LRESULT(0)
                 }

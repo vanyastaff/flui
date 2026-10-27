@@ -798,7 +798,7 @@ trait depends on `flui-platform` instead.
   `StatePublisher` on the window's `WindowCallbacks` when the window opens
   (`publish_through`, over a weak reference to the window). The publisher
   reads the window again and answers `Publication` (changed, unchanged,
-  held) without announcing anything; `publish_state` runs it and `announce`
+  held) without announcing anything; `publish_state` runs it and
   raises `on_state_changed` when the revision grew, so each fact the OS
   reports is one revision and one notification. This happens in the OS
   callback that reported the fact (each `WM_SIZE` of a Win32 live resize

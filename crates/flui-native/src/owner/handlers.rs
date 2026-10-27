@@ -376,7 +376,7 @@ pub struct WindowCallbacks {
 type RetirementNotice = Box<dyn FnOnce() + Send>;
 
 /// Reads a window from its window system again and publishes what it read,
-/// announcing nothing: [`WindowCallbacks::announce`] delivers
+/// announcing nothing: [`WindowCallbacks::dispatch_state_changed`] delivers
 /// `on_state_changed`. A window's host builds it over a weak reference to the
 /// window ([`WindowCallbacks::publish_through`]), so the callbacks never keep
 /// their window alive.
@@ -671,20 +671,11 @@ impl WindowCallbacks {
     }
 
     /// Publish the window's snapshot now, for a fact that has no callback of
-    /// its own, and announce it ([`Self::announce`]).
+    /// its own, and announce a new revision (`on_state_changed`). A host that
+    /// publishes by itself (the end of a held change) announces its new
+    /// revisions with [`Self::dispatch_state_changed`].
     pub(crate) fn publish_state(&self) {
-        match self.publish() {
-            Publication::Changed => self.announce(true),
-            Publication::Unchanged => self.announce(false),
-            Publication::Held => {}
-        }
-    }
-
-    /// Announce a publication: `on_state_changed` when it produced a new
-    /// revision. A host calls it after every publication it makes itself,
-    /// outside [`Self::publish_state`] (the end of a held change).
-    pub(crate) fn announce(&self, changed: bool) {
-        if changed {
+        if self.publish() == Publication::Changed {
             self.dispatch_state_changed();
         }
     }
@@ -758,7 +749,7 @@ impl WindowCallbacks {
     /// **Drain-ordered, not immediate, when called while this window's FIFO
     /// is already draining.** A close requested from inside one of this
     /// window's own callbacks (e.g. `on_input` — a widget calling
-    /// `window.close()` from its own gesture handler) reaches one of the
+    /// a `WindowCommand::Close` from its own gesture handler) reaches one of the
     /// call sites above SYNCHRONOUSLY, while that callback's own dispatch
     /// is still on the stack — so `dispatch_close()` finds the FIFO already
     /// dispatching and only QUEUES `Close` rather than invoking `on_close`

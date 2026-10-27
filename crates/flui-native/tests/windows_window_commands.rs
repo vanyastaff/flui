@@ -1364,12 +1364,47 @@ fn a_locked_session_or_a_cloak_hides_a_shown_window() {
     assert_eq!(*events.lock().expect("log"), [false, true, false, true]);
 }
 
+/// A close command applied from another thread closes the window on its
+/// owner's next message, without asking the should-close veto: a command is
+/// not a close request.
+fn a_close_from_another_thread_asks_no_veto() {
+    let platform = platform();
+    let window = open(&platform, options());
+    settle();
+    let asked = Arc::new(AtomicUsize::new(0));
+    let veto = Arc::clone(&asked);
+    window.on_should_close(Box::new(move || {
+        veto.fetch_add(1, Ordering::SeqCst);
+        false
+    }));
+    let closed = Arc::new(AtomicBool::new(false));
+    let heard = Arc::clone(&closed);
+    window.on_close(Box::new(move || heard.store(true, Ordering::SeqCst)));
+    let elsewhere = Arc::clone(&window);
+    std::thread::spawn(move || {
+        elsewhere
+            .apply(flui_platform::WindowCommand::Close)
+            .expect("a close command is admitted");
+    })
+    .join()
+    .expect("the closing thread");
+    assert!(
+        pump_until(Duration::from_secs(1), || closed.load(Ordering::SeqCst)),
+        "the owner closed the window"
+    );
+    assert_eq!(asked.load(Ordering::SeqCst), 0, "the veto was asked");
+}
+
 #[test]
 fn native_window_commands() {
     let cases: &[(&str, fn())] = &[
         (
             "a_window_opened_at_open_is_shown",
             a_window_opened_at_open_is_shown,
+        ),
+        (
+            "a_close_from_another_thread_asks_no_veto",
+            a_close_from_another_thread_asks_no_veto,
         ),
         (
             "a_deferred_window_is_hidden_until_its_first_frame",

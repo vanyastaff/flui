@@ -1,7 +1,7 @@
 //! The winit window: [`WinitWindow`], the backend's [`PlatformWindow`], a thin
 //! wrapper over `Arc<winit::window::Window>` carrying the platform-minted
 //! [`WindowId`], the per-window callback table, and the route its
-//! programmatic `close()` takes back to the event-loop owner
+//! programmatic `WindowCommand::Close` takes back to the event-loop owner
 //! (`ControlSender`, crate-private); [`plan`], what the backend decides about
 //! a window before and while it exists; and [`WinitWindows`], which opens the
 //! windows the loop tracks (`owner::winit::LoopWindows`).
@@ -79,7 +79,7 @@ pub struct WinitWindow {
     /// The route a programmatic [`WindowCommand::Close`] takes to the
     /// event-loop owner (issue #919). The close teardown needs the live
     /// `ActiveEventLoop` (to end the loop when this was the last window),
-    /// which only an owner-turn callback holds — so `close()` cannot run it
+    /// which only an owner-turn callback holds — so the command cannot run it
     /// in place; it posts a non-droppable per-window request and the owner
     /// runs the exact teardown the compositor's `CloseRequested` arm runs.
     close_lane: ControlSender,
@@ -156,7 +156,7 @@ impl std::fmt::Debug for WinitWindow {
 impl WinitWindow {
     /// Create a new WinitWindow wrapper, addressed by the platform-minted
     /// `id` the caller already allocated for it, with the owner lane its
-    /// programmatic `close()` reports to. Backend-private: only this
+    /// programmatic `WindowCommand::Close` reports to. Backend-private: only this
     /// backend's own window creation can supply that lane, so nothing
     /// outside it can construct a window whose close would go nowhere.
     ///
@@ -318,7 +318,7 @@ impl WinitWindow {
     }
 
     /// Read the window again for its state publisher, announcing nothing:
-    /// `WindowCallbacks::announce` delivers `on_state_changed`. A minimize
+    /// `WindowCallbacks::dispatch_state_changed` delivers `on_state_changed`. A minimize
     /// the X11 window manager reports is the snapshot's mode, which
     /// `WindowState::is_seen` reads.
     fn read_state(&self) -> Publication {

@@ -335,11 +335,9 @@ pub struct HeadlessWindowSystem {
     /// The drawable area and scale; `None` for a size or scale that is not a
     /// drawable area.
     pub metrics: Option<flui_foundation::geometry::WindowMetrics>,
-    /// Whether the window has input focus.
+    /// Whether the window has input focus. The headless desktop has no
+    /// activation apart from focus, so this is its activation too.
     pub focused: bool,
-    /// Whether the window is the active window of the simulated desktop: its
-    /// focus, which the headless host has no notion apart from.
-    pub active: bool,
     /// Whether the window is shown and open.
     pub visible: bool,
 }
@@ -734,7 +732,9 @@ impl MockWindow {
             &self.capabilities,
             &self.callbacks,
         );
-        self.callbacks.announce(published.changed);
+        if published.changed {
+            self.callbacks.dispatch_state_changed();
+        }
         published.state
     }
 
@@ -822,7 +822,6 @@ impl MockWindow {
             )
             .ok(),
             focused: state.focused,
-            active: state.focused,
             visible: state.visible && !state.closed,
         }
     }

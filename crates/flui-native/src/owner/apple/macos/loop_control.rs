@@ -465,6 +465,8 @@ impl LoopControl {
         }
         for window in &windows {
             cleanup_step(|| {
+                // An AppKit window always closes; the one refusal left is a
+                // window already closed, which is what quitting wants.
                 let _ = PlatformWindow::apply(window.as_ref(), flui_platform::WindowCommand::Close);
             });
         }
