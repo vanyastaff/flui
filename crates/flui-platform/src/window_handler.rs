@@ -8,38 +8,7 @@
 //! [`WindowState`](crate::WindowState) snapshot when
 //! [`state_changed`](WindowHandler::state_changed) says it moved.
 
-use std::marker::PhantomData;
-use std::rc::Rc;
-
 use crate::{DispatchEventResult, FrameRequest, PlatformInput};
-
-/// Proof that a handler method runs on the thread its handler lives on: the
-/// platform's owner thread, which builds every window handler.
-///
-/// A handler is held as an `Rc`, which never leaves the thread that made it,
-/// so the thread that holds one is that thread: [`Self::holding`] is the only
-/// way to make a proof. The proof itself is neither `Send` nor `Sync`, so it
-/// stays on that thread too.
-///
-/// ```compile_fail,E0277
-/// fn assert_send<T: Send>() {}
-/// assert_send::<flui_platform::OwnerThread>();
-/// ```
-#[derive(Clone, Copy, Debug)]
-pub struct OwnerThread {
-    _thread_bound: PhantomData<*const ()>,
-}
-
-impl OwnerThread {
-    /// The proof for a call made by whoever holds `handler`, on the thread
-    /// the handler lives on.
-    #[must_use]
-    pub fn holding<H: WindowHandler + ?Sized>(_handler: &Rc<H>) -> Self {
-        Self {
-            _thread_bound: PhantomData,
-        }
-    }
-}
 
 /// What a [`WindowHandler`] answers when its window is asked to close.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -76,8 +45,8 @@ pub enum SurfaceChange {
 /// The obligations of the code that opened a window, called by the window's
 /// host (ADR-0254 §4).
 ///
-/// Every method is called on the owner thread, with an [`OwnerThread`] proof,
-/// outside any lock or borrow the host holds, so a method may drive the
+/// The host keeps the handler as an `Rc` on the thread that opened the window
+/// and calls every method there, outside any lock or borrow it holds, so a method may drive the
 /// window, open another one or quit. A method that re-enters the window
 /// (a command that closes it, an input that requests a frame) does not run
 /// the nested delivery inside itself: it is queued behind the running method
@@ -102,18 +71,18 @@ pub trait WindowHandler {
     /// queued behind it and answered at once with one of the deferred forms
     /// of [`DispatchEventResult`] (ADR-0207): its outcome is not known when the
     /// platform needs the answer.
-    fn input(&self, owner: OwnerThread, event: PlatformInput) -> DispatchEventResult;
+    fn input(&self, event: PlatformInput) -> DispatchEventResult;
 
     /// The window published a new [`WindowState`](crate::WindowState): one
     /// call per revision, whichever facts changed, and no payload: the handler
     /// reads the snapshot and compares it with the one it saw last. A host
     /// calls it inside the OS callback that reported the change where the OS
     /// gives one (each step of a Win32 live resize, inside its modal loop).
-    fn state_changed(&self, owner: OwnerThread);
+    fn state_changed(&self);
 
     /// The platform wants a frame for this window, with what it reported
     /// about the frame (ADR-0257).
-    fn frame_requested(&self, owner: OwnerThread, request: FrameRequest);
+    fn frame_requested(&self, request: FrameRequest);
 
     /// The user or the operating system asks the window to close. The answer
     /// decides: [`CloseDecision::Close`] closes it, and
@@ -121,11 +90,11 @@ pub trait WindowHandler {
     /// (ADR-0123). A close the application itself decided, a
     /// [`WindowCommand::Close`](crate::WindowCommand::Close), is not asked
     /// again. Asked again while it runs, the window answers `KeepOpen` for it.
-    fn close_requested(&self, owner: OwnerThread) -> CloseDecision;
+    fn close_requested(&self) -> CloseDecision;
 
     /// The window has closed and left its host's tracking: called once, as
     /// the last obligation. The host drops the handler afterwards.
-    fn closed(&self, owner: OwnerThread);
+    fn closed(&self);
 
     /// The surface behind the window is about to become invalid, or a valid
     /// one must exist again.
@@ -138,7 +107,7 @@ pub trait WindowHandler {
     /// A host whose surface never goes away while its window is open never
     /// calls it, which costs nothing; a host that releases must also ask for a
     /// rebuild, or the window stays blank.
-    fn surface_changed(&self, owner: OwnerThread, change: SurfaceChange);
+    fn surface_changed(&self, change: SurfaceChange);
 }
 
 #[cfg(test)]
@@ -146,7 +115,5 @@ mod tests {
     use super::*;
 
     /// The handler a window keeps is an `Rc`, so it must be a trait object.
-    const _: fn(&Rc<dyn WindowHandler>) -> OwnerThread = OwnerThread::holding::<dyn WindowHandler>;
-
-    static_assertions::assert_not_impl_any!(OwnerThread: Send, Sync);
+    const _: Option<std::rc::Rc<dyn WindowHandler>> = None;
 }

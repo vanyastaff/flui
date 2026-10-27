@@ -8,14 +8,13 @@
 //! reaction runs, so a reaction that panics is still on the record.
 //!
 //! ```
-//! use flui_platform::{CloseDecision, OwnerThread, WindowHandler};
+//! use flui_platform::{CloseDecision, WindowHandler};
 //! use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
 //!
 //! let handler = RecordingWindowHandler::new();
 //! handler.react_to_close_request(|| CloseDecision::KeepOpen);
-//! let owner = OwnerThread::holding(&handler);
-//! assert_eq!(handler.close_requested(owner), CloseDecision::KeepOpen);
-//! handler.state_changed(owner);
+//! assert_eq!(handler.close_requested(), CloseDecision::KeepOpen);
+//! handler.state_changed();
 //! assert_eq!(
 //!     handler.calls(),
 //!     [HandlerCall::CloseRequested, HandlerCall::StateChanged]
@@ -26,8 +25,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use flui_platform::{
-    CloseDecision, DispatchEventResult, FrameRequest, OwnerThread, PlatformInput, SurfaceChange,
-    WindowHandler,
+    CloseDecision, DispatchEventResult, FrameRequest, PlatformInput, SurfaceChange, WindowHandler,
 };
 
 /// One call a [`RecordingWindowHandler`] received.
@@ -189,14 +187,14 @@ impl RecordingWindowHandler {
 }
 
 impl WindowHandler for RecordingWindowHandler {
-    fn input(&self, _owner: OwnerThread, event: PlatformInput) -> DispatchEventResult {
+    fn input(&self, event: PlatformInput) -> DispatchEventResult {
         self.record(HandlerCall::Input(event.clone()), |reactions| {
             &reactions.input
         })
         .map_or_else(DispatchEventResult::default, |reaction| reaction(event))
     }
 
-    fn state_changed(&self, _owner: OwnerThread) {
+    fn state_changed(&self) {
         if let Some(reaction) = self.record(HandlerCall::StateChanged, |reactions| {
             &reactions.state_changed
         }) {
@@ -204,7 +202,7 @@ impl WindowHandler for RecordingWindowHandler {
         }
     }
 
-    fn frame_requested(&self, _owner: OwnerThread, request: FrameRequest) {
+    fn frame_requested(&self, request: FrameRequest) {
         if let Some(reaction) = self.record(HandlerCall::FrameRequested(request), |reactions| {
             &reactions.frame_requested
         }) {
@@ -212,20 +210,20 @@ impl WindowHandler for RecordingWindowHandler {
         }
     }
 
-    fn close_requested(&self, _owner: OwnerThread) -> CloseDecision {
+    fn close_requested(&self) -> CloseDecision {
         self.record(HandlerCall::CloseRequested, |reactions| {
             &reactions.close_requested
         })
         .map_or(CloseDecision::Close, |reaction| reaction(()))
     }
 
-    fn closed(&self, _owner: OwnerThread) {
+    fn closed(&self) {
         if let Some(reaction) = self.record(HandlerCall::Closed, |reactions| &reactions.closed) {
             reaction(());
         }
     }
 
-    fn surface_changed(&self, _owner: OwnerThread, change: SurfaceChange) {
+    fn surface_changed(&self, change: SurfaceChange) {
         if let Some(reaction) = self.record(HandlerCall::SurfaceChanged(change), |reactions| {
             &reactions.surface_changed
         }) {

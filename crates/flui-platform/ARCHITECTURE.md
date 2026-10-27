@@ -93,10 +93,12 @@ this one path (ADR-0151 §9).
   one required method per obligation (`input`, `state_changed`,
   `frame_requested`, `close_requested`, `closed`, `surface_changed`) and no
   registration beside it, so nothing a window delivers can arrive before a
-  handler exists or fall into an inert default. The handler is `!Send`, and
-  each method receives an `OwnerThread`, a `!Send` proof that it runs on the
-  thread that owns the window; the proof is minted only by a call that holds
-  the handler's `Rc`. `close_requested` answers a `CloseDecision`;
+  handler exists or fall into an inert default. The host holds it as an
+  `Rc<dyn WindowHandler>`, so it stays on the thread that opened the window
+  and every method runs there. A method takes no platform argument: the
+  owner's platform is a host type (`OwnerPlatform`), which this crate cannot
+  name, and a handler that drives the platform captures what it needs.
+  `close_requested` answers a `CloseDecision`;
   `surface_changed` names its `SurfaceChange` (`Release` before the surface
   goes, `Rebuild` when a valid one must exist again).
 - **"Not here" has one vocabulary.** Every error and outcome that can mean

@@ -53,8 +53,8 @@ use flui_layer::{CanvasLayer, Layer, LayerTree, Scene};
 use flui_native::current_platform;
 use flui_painting::{paint::Paint, styling::Color};
 use flui_platform::{
-    CloseDecision, DispatchEventResult, FrameRequest, OwnerThread, PlatformInput, SurfaceChange,
-    WindowHandler, WindowOptions,
+    CloseDecision, DispatchEventResult, FrameRequest, PlatformInput, SurfaceChange, WindowHandler,
+    WindowOptions,
 };
 
 /// Build a scene with colored rectangles (fallback when no plugin is loaded).
@@ -69,30 +69,30 @@ struct SceneWindow {
 }
 
 impl WindowHandler for SceneWindow {
-    fn input(&self, _owner: OwnerThread, _input: PlatformInput) -> DispatchEventResult {
+    fn input(&self, _input: PlatformInput) -> DispatchEventResult {
         DispatchEventResult::default()
     }
 
-    fn state_changed(&self, _owner: OwnerThread) {
+    fn state_changed(&self) {
         if let Some(resized) = self.resized.borrow_mut().as_mut() {
             resized();
         }
     }
 
-    fn frame_requested(&self, _owner: OwnerThread, _request: FrameRequest) {
+    fn frame_requested(&self, _request: FrameRequest) {
         if let Some(frame) = self.frame.borrow_mut().as_mut() {
             frame();
         }
     }
 
-    fn close_requested(&self, _owner: OwnerThread) -> CloseDecision {
+    fn close_requested(&self) -> CloseDecision {
         CloseDecision::Close
     }
 
-    fn closed(&self, _owner: OwnerThread) {}
+    fn closed(&self) {}
 
     // A desktop window keeps its surface while it is open.
-    fn surface_changed(&self, _owner: OwnerThread, _change: SurfaceChange) {}
+    fn surface_changed(&self, _change: SurfaceChange) {}
 }
 
 fn physical_size(window: &dyn flui_platform::PlatformWindow) -> Size<i32> {

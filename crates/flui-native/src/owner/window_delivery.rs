@@ -23,8 +23,7 @@ use parking_lot::Mutex;
 
 use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::{
-    CloseDecision, DispatchEventResult, FrameRequest, OwnerThread, PlatformInput, SurfaceChange,
-    WindowHandler,
+    CloseDecision, DispatchEventResult, FrameRequest, PlatformInput, SurfaceChange, WindowHandler,
 };
 
 use super::call_point::{HandlerSlot, call, retire};
@@ -470,32 +469,30 @@ impl WindowDelivery {
             Delivery::Snapshot => self.deliver_snapshot_if_due(),
             Delivery::Input(event) => {
                 self.deliver_snapshot_if_due();
-                let result = call(&self.handler(), |handler| {
-                    handler.input(OwnerThread::holding(handler), event)
-                })
-                .or_resume(DispatchEventResult::default());
+                let result = call(&self.handler(), |handler| handler.input(event))
+                    .or_resume(DispatchEventResult::default());
                 input_result.get_or_insert(result);
             }
             Delivery::Frame(request) => call(&self.handler(), |handler| {
                 // Counted before the call, so a frame that unwinds still
                 // counts as one that ran.
                 self.frames_run.fetch_add(1, Ordering::Relaxed);
-                handler.frame_requested(OwnerThread::holding(handler), request);
+                handler.frame_requested(request);
             })
             .or_resume(()),
             Delivery::StateChanged => call(&self.handler(), |handler| {
-                handler.state_changed(OwnerThread::holding(handler));
+                handler.state_changed();
             })
             .or_resume(()),
             Delivery::Closed => {
                 self.closed.store(true, Ordering::SeqCst);
                 call(&self.handler(), |handler| {
-                    handler.closed(OwnerThread::holding(handler));
+                    handler.closed();
                 })
                 .or_resume(());
             }
             Delivery::Surface(change) => call(&self.handler(), |handler| {
-                handler.surface_changed(OwnerThread::holding(handler), change);
+                handler.surface_changed(change);
             })
             .or_resume(()),
             Delivery::Clear(_) => unreachable!("BUG: a clear was delivered above"),
@@ -514,10 +511,7 @@ impl WindowDelivery {
             front.capabilities
         };
         call(&self.handler(), |handler| {
-            handler.input(
-                OwnerThread::holding(handler),
-                PlatformInput::Capabilities(capabilities),
-            );
+            handler.input(PlatformInput::Capabilities(capabilities));
         })
         .or_contain((), "a window handler's input (the capability snapshot)");
     }
@@ -632,10 +626,8 @@ impl WindowDelivery {
             }
         }
         let _asked = Asked(&self.asking_to_close);
-        let decision = call(&self.handler(), |handler| {
-            handler.close_requested(OwnerThread::holding(handler))
-        })
-        .or_resume(CloseDecision::Close);
+        let decision = call(&self.handler(), |handler| handler.close_requested())
+            .or_resume(CloseDecision::Close);
         decision == CloseDecision::Close
     }
 
@@ -649,7 +641,7 @@ impl WindowDelivery {
             return;
         }
         call(&self.handler(), |handler| {
-            handler.surface_changed(OwnerThread::holding(handler), change);
+            handler.surface_changed(change);
         })
         .or_contain((), "a window handler's surface change");
     }

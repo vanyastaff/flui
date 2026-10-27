@@ -2,7 +2,7 @@
 
 - `WindowHandler`: what a window delivers, one required method per obligation (`input`,
   `state_changed`, `frame_requested`, `close_requested`, `closed`, `surface_changed`), each called
-  on the owner thread with an `OwnerThread` proof. `CloseDecision { Close, KeepOpen }` answers a
+  on the thread that opened the window. `CloseDecision { Close, KeepOpen }` answers a
   close request; `SurfaceChange { Release, Rebuild }` names a surface change.
 - `WindowRequest` and `WindowHandlerFactory`: a window opened from another thread through
   `PlatformProxy::open_window` carries a `Send` factory that builds its handler on the owner

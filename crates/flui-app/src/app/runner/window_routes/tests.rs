@@ -6,15 +6,11 @@ use std::rc::Rc;
 
 use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::{
-    Availability, CloseDecision, DispatchEventResult, ImeEvent, OwnerThread, PlatformInput,
-    SurfaceChange, WindowHandler,
+    Availability, CloseDecision, DispatchEventResult, ImeEvent, PlatformInput, SurfaceChange,
+    WindowHandler,
 };
 
 use super::WindowRoutes;
-
-fn owner(routes: &Rc<WindowRoutes>) -> OwnerThread {
-    OwnerThread::holding(routes)
-}
 
 /// Before its input route the handler takes no input, keeps the capability
 /// snapshot, and hands the route the newest capabilities first.
@@ -23,25 +19,22 @@ fn the_input_route_hears_the_capabilities_first() {
     let pen = InputCapabilities::builder()
         .pen(Availability::Native)
         .build();
-    let early = routes.input(
-        owner(&routes),
-        PlatformInput::Capabilities(InputCapabilities::UNAVAILABLE),
-    );
+    let early = routes.input(PlatformInput::Capabilities(InputCapabilities::UNAVAILABLE));
     assert_eq!(early, DispatchEventResult::default());
-    let ignored = routes.input(owner(&routes), PlatformInput::Ime(ImeEvent::Enabled));
+    let ignored = routes.input(PlatformInput::Ime(ImeEvent::Enabled));
     assert_eq!(
         ignored,
         DispatchEventResult::default(),
         "nothing takes it yet"
     );
-    routes.input(owner(&routes), PlatformInput::Capabilities(pen));
+    routes.input(PlatformInput::Capabilities(pen));
     let heard = Rc::new(RefCell::new(Vec::new()));
     let log = Rc::clone(&heard);
     routes.route_input(move |input| {
         log.borrow_mut().push(input);
         DispatchEventResult::resolved(false, true)
     });
-    routes.input(owner(&routes), PlatformInput::Ime(ImeEvent::Enabled));
+    routes.input(PlatformInput::Ime(ImeEvent::Enabled));
     let heard = heard.borrow();
     assert_eq!(heard.len(), 2, "{heard:?}");
     assert!(matches!(heard[0], PlatformInput::Capabilities(c) if c == pen));
@@ -52,8 +45,8 @@ fn the_input_route_hears_the_capabilities_first() {
 /// when it is set; a close request with no route closes the window.
 fn a_close_heard_early_runs_its_route() {
     let routes = WindowRoutes::new();
-    assert_eq!(routes.close_requested(owner(&routes)), CloseDecision::Close);
-    routes.closed(owner(&routes));
+    assert_eq!(routes.close_requested(), CloseDecision::Close);
+    routes.closed();
     let ran = Rc::new(Cell::new(0));
     let count = Rc::clone(&ran);
     routes.route_closed(move || count.set(count.get() + 1));
@@ -71,11 +64,11 @@ fn a_route_survives_its_panic_and_yields_to_its_successor() {
         panic!("the route fails");
     });
     let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        routes.surface_changed(owner(&routes), SurfaceChange::Release);
+        routes.surface_changed(SurfaceChange::Release);
     }));
     assert!(failed.is_err());
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        routes.surface_changed(owner(&routes), SurfaceChange::Rebuild);
+        routes.surface_changed(SurfaceChange::Rebuild);
     }));
     assert_eq!(calls.get(), 2, "the panicking route was lost");
 
@@ -88,8 +81,8 @@ fn a_route_survives_its_panic_and_yields_to_its_successor() {
             .expect("live routes")
             .route_state_changed(move || reached.set(true));
     });
-    routes.state_changed(owner(&routes));
-    routes.state_changed(owner(&routes));
+    routes.state_changed();
+    routes.state_changed();
     assert!(successor.get(), "the route set from inside its call lost");
 }
 

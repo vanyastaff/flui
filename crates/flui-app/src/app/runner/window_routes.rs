@@ -26,8 +26,8 @@ use std::rc::{Rc, Weak};
 
 use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::{
-    CloseDecision, DispatchEventResult, FrameRequest, OwnerThread, PlatformInput, PlatformWindow,
-    SurfaceChange, WindowHandler, WindowId,
+    CloseDecision, DispatchEventResult, FrameRequest, PlatformInput, PlatformWindow, SurfaceChange,
+    WindowHandler, WindowId,
 };
 
 use super::host::APP_RUNTIME;
@@ -173,7 +173,7 @@ impl WindowRoutes {
 }
 
 impl WindowHandler for WindowRoutes {
-    fn input(&self, _owner: OwnerThread, event: PlatformInput) -> DispatchEventResult {
+    fn input(&self, event: PlatformInput) -> DispatchEventResult {
         let capabilities = match &event {
             PlatformInput::Capabilities(capabilities) => Some(*capabilities),
             _ => None,
@@ -188,21 +188,21 @@ impl WindowHandler for WindowRoutes {
         DispatchEventResult::default()
     }
 
-    fn state_changed(&self, _owner: OwnerThread) {
+    fn state_changed(&self) {
         let _ = self.state_changed.call(());
     }
 
-    fn frame_requested(&self, _owner: OwnerThread, request: FrameRequest) {
+    fn frame_requested(&self, request: FrameRequest) {
         let _ = self.frame_requested.call(request);
     }
 
-    fn close_requested(&self, _owner: OwnerThread) -> CloseDecision {
+    fn close_requested(&self) -> CloseDecision {
         self.close_requested
             .call(())
             .unwrap_or(CloseDecision::Close)
     }
 
-    fn closed(&self, _owner: OwnerThread) {
+    fn closed(&self) {
         let route = self.closed.borrow_mut().take();
         match route {
             Some(route) => route(),
@@ -210,7 +210,7 @@ impl WindowHandler for WindowRoutes {
         }
     }
 
-    fn surface_changed(&self, _owner: OwnerThread, change: SurfaceChange) {
+    fn surface_changed(&self, change: SurfaceChange) {
         let _ = self.surface_changed.call(change);
     }
 }

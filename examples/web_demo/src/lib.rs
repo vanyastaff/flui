@@ -13,8 +13,7 @@ use wasm_bindgen::prelude::*;
 use flui_foundation::geometry::WindowMetrics;
 use flui_native::HostWindow;
 use flui_platform::{
-    CloseDecision, DispatchEventResult, FrameRequest, OwnerThread, PlatformInput, SurfaceChange,
-    WindowHandler,
+    CloseDecision, DispatchEventResult, FrameRequest, PlatformInput, SurfaceChange, WindowHandler,
 };
 
 /// The canvas window's handler: logs every input event and each new drawable
@@ -32,7 +31,7 @@ fn log(line: &str) {
 }
 
 impl WindowHandler for ConsoleLog {
-    fn input(&self, _owner: OwnerThread, input: PlatformInput) -> DispatchEventResult {
+    fn input(&self, input: PlatformInput) -> DispatchEventResult {
         match &input {
             PlatformInput::Pointer(pe) => {
                 use flui_platform::pointer::PointerEvent;
@@ -76,7 +75,7 @@ impl WindowHandler for ConsoleLog {
         DispatchEventResult::resolved(false, true)
     }
 
-    fn state_changed(&self, _owner: OwnerThread) {
+    fn state_changed(&self) {
         let window = self.window.borrow().as_ref().and_then(Weak::upgrade);
         let Some(window) = window else {
             return;
@@ -96,18 +95,18 @@ impl WindowHandler for ConsoleLog {
     }
 
     // No GPU renderer in this demo: a frame draws nothing.
-    fn frame_requested(&self, _owner: OwnerThread, _request: FrameRequest) {}
+    fn frame_requested(&self, _request: FrameRequest) {}
 
-    fn close_requested(&self, _owner: OwnerThread) -> CloseDecision {
+    fn close_requested(&self) -> CloseDecision {
         CloseDecision::Close
     }
 
-    fn closed(&self, _owner: OwnerThread) {
+    fn closed(&self) {
         log("Window closed");
     }
 
     // Nothing renders into the canvas's surface.
-    fn surface_changed(&self, _owner: OwnerThread, _change: SurfaceChange) {}
+    fn surface_changed(&self, _change: SurfaceChange) {}
 }
 
 /// Entry point invoked by the generated JS glue on module load: brings up the

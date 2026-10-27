@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use flui_native::{OwnerPlatform, WindowOpen};
 use flui_platform::{
-    CloseDecision, DispatchEventResult, FrameRequest, OwnerThread, PlatformInput, SurfaceChange,
+    CloseDecision, DispatchEventResult, FrameRequest, PlatformInput, SurfaceChange,
     WindowHandler, WindowOptions,
 };
 
@@ -15,22 +15,22 @@ struct Counting {
 }
 
 impl WindowHandler for Counting {
-    fn input(&self, _owner: OwnerThread, _event: PlatformInput) -> DispatchEventResult {
+    fn input(&self, _event: PlatformInput) -> DispatchEventResult {
         self.seen.set(self.seen.get() + 1);
         DispatchEventResult::default()
     }
 
-    fn state_changed(&self, _owner: OwnerThread) {}
+    fn state_changed(&self) {}
 
-    fn frame_requested(&self, _owner: OwnerThread, _request: FrameRequest) {}
+    fn frame_requested(&self, _request: FrameRequest) {}
 
-    fn close_requested(&self, _owner: OwnerThread) -> CloseDecision {
+    fn close_requested(&self) -> CloseDecision {
         CloseDecision::Close
     }
 
-    fn closed(&self, _owner: OwnerThread) {}
+    fn closed(&self) {}
 
-    fn surface_changed(&self, _owner: OwnerThread, _change: SurfaceChange) {}
+    fn surface_changed(&self, _change: SurfaceChange) {}
 }
 
 fn open(owner: &OwnerPlatform) -> Option<WindowOpen> {
