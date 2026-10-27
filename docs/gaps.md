@@ -176,7 +176,7 @@ request.
 
 > **Environments:** macOS, iPadOS; Windows · **Who it hurts:** Every macOS app · **Parity:** [Menus](platform-parity.md#menus)
 
-- No macOS menu bar (no Quit or Edit menu).
+- No macOS menu bar (no Quit or Edit menu), so the shortcuts its items carry do nothing: Ctrl-Cmd-F leaves a full-screen window full screen.
 - No native context menus, no Dock menu or jump list.
 
 ### 12. Lifecycle holes
