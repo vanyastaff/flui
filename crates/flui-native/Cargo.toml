@@ -523,6 +523,13 @@ name = "os_extensions"
 path = "tests/os_extensions.rs"
 harness = false
 
+# The AppKit window against the window conformance checks: its own harness,
+# because AppKit windows are built on the main thread.
+[[test]]
+name = "appkit_window"
+path = "tests/appkit_window.rs"
+harness = false
+
 [[test]]
 name = "wasm32"
 path = "tests/wasm32.rs"
