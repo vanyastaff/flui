@@ -245,7 +245,7 @@ overlapping, equal-time sensor and future-reading cases through the public API.
 
 ### Data-transfer delivery shares the foundation claim slot
 
-`TransferRequest::channel` uses `ClaimSlot` for cancellation, executor
+`TransferRequest::pending` makes the pair over one `ClaimSlot` for cancellation, executor
 registration and delivery. A producer is consumed by completion, so no
 owner registry remains to wake on abandonment. Producer disconnection maps to
 `TransferError::SourceGone`; polling any resolved request again is a caller

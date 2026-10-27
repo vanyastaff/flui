@@ -16,9 +16,7 @@ use std::{
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_foundation::{ClaimSlot, DataTransferId, claim_slot};
 use flui_platform::InMemoryClipboard;
-use flui_platform::data_transfer::{
-    DropFeedback, OfferTable, RepresentationDescriptor, TransferActions,
-};
+use flui_platform::data_transfer::{DropFeedback, RepresentationDescriptor, TransferActions};
 use flui_platform::drag::{OsDragEndHook, OsDragProvider, OsDragStart, PlatformDragSource};
 use parking_lot::Mutex;
 
@@ -71,6 +69,9 @@ pub(crate) trait HeadlessHost: 'static {
     /// The simulated system's pointer devices, none attached.
     fn devices() -> Box<dyn SimulatedDevices>;
 
+    /// The table the simulated system mints its drag offers in, empty.
+    fn offers() -> Box<dyn SimulatedOffers>;
+
     /// The drag source a window opened now in `state`'s system hands out:
     /// none until a test lets the windows start sessions.
     fn drag_source(state: &HeadlessState) -> Option<Arc<dyn PlatformDragSource>>;
@@ -99,6 +100,18 @@ pub(crate) trait SimulatedDevices: Send {
 
     /// The kinds of the devices attached now.
     fn present(&self) -> flui_platform::input_capabilities::PointerKindSet;
+}
+
+/// The table the simulated system mints its drag offers in, which the drag
+/// feature keeps ([`HeadlessHost::offers`]) and the loop holds with the rest
+/// of the system's drag state ([`OsDrags`]).
+pub(crate) trait SimulatedOffers: Send {
+    /// Mint a live offer announcing `representations`.
+    fn mint(&mut self, representations: Arc<[RepresentationDescriptor]>) -> DataTransferId;
+
+    /// Retire live offer `id`, so it is stale for good; a stale `id` is a
+    /// no-op.
+    fn retire(&mut self, id: DataTransferId);
 }
 
 /// The displays position is the loop's: the snapshot it holds.
@@ -148,9 +161,8 @@ pub struct HeadlessLoop {
 /// holds open and the session in flight. The loop holds it as it holds the
 /// rest of the simulated system; `drag::headless` plays the sessions over it
 /// and is the platform's one data-transfer source over it.
-#[derive(Default)]
 pub(crate) struct OsDrags {
-    pub(crate) table: OfferTable,
+    pub(crate) table: Box<dyn SimulatedOffers>,
     pub(crate) session: Option<OsDragSession>,
     /// The providers behind offers still open at the system, by id, so a
     /// target may fetch after the drop until it concludes it.
@@ -289,7 +301,11 @@ impl HeadlessLoop {
     /// window feature's.
     pub(crate) fn new<H: HeadlessHost>(windows: Arc<dyn TrackedWindows>) -> Self {
         let state = HeadlessState {
-            drags: Arc::default(),
+            drags: Arc::new(Mutex::new(OsDrags {
+                table: H::offers(),
+                session: None,
+                open: HashMap::new(),
+            })),
             os_drag_start: None,
             owner_signal: Weak::new(),
             handlers: PlatformHandlers::new(),
@@ -884,6 +900,10 @@ mod tests {
 
         fn devices() -> Box<dyn SimulatedDevices> {
             Box::new(NoDevices)
+        }
+
+        fn offers() -> Box<dyn SimulatedOffers> {
+            Box::new(crate::drag::offers::OfferTable::default())
         }
 
         fn drag_source(

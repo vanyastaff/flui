@@ -5,7 +5,8 @@
 //! ([`assembly`], ADR-0217 §3), the key rules ([`keys`]: Win32's tables, which
 //! the winit host on Windows reads too, the adapter from `keyboard-types`
 //! and the one table of key locations), the availability table
-//! ([`availability`], ADR-0213), the one wheel step (`scroll`) and the event
+//! ([`availability`], ADR-0213), the input-region projection (`regions`,
+//! ADR-0217 §5), the one wheel step (`scroll`) and the event
 //! timeline below. Every
 //! backend stamps against the one process epoch,
 //! [`flui_foundation::event_epoch`], which the interaction clock also counts
@@ -30,6 +31,7 @@ pub mod assembly;
 pub mod availability;
 #[doc(hidden)]
 pub mod keys;
+pub(crate) mod regions;
 pub(crate) mod scroll;
 
 #[doc(hidden)]

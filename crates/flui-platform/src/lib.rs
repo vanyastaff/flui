@@ -155,7 +155,6 @@ pub use host_notice::{
 pub use ime::ImeEvent;
 pub use input::{
     DispatchEventResult, DragDropEvent, EmptyPointerFrame, PlatformInput, PointerFrame,
-    delta_offset_from_coords, device_to_logical, logical_to_device, offset_from_coords,
 };
 pub use keyboard::{Code, Key, KeyEvent, KeyState, Location, Modifiers, NamedKey};
 pub use locale::{InvalidLocale, Locale};

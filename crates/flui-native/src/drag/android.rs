@@ -41,9 +41,11 @@ mod clip {
 
     use flui_platform::data_transfer::{
         Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat,
-        TransferPayload, TransferUri,
+        TransferPayload,
     };
     use flui_platform::drag::{IDENTITY_ESSENCE, OsDragEnd};
+
+    use crate::drag::offers::{PathStyle, TransferUri};
 
     /// `View.DRAG_FLAG_GLOBAL`: the drag may leave the source's window.
     pub(super) const DRAG_FLAG_GLOBAL: i32 = 1 << 8;
@@ -185,8 +187,9 @@ mod clip {
                 Held::Payload(TransferPayload::Html(html))
             }),
             ClipSource::UriList if clip.uris.is_empty() => Held::Missing,
-            ClipSource::UriList => Held::Payload(TransferPayload::UriList(
-                clip.uris.iter().cloned().map(TransferUri::Uri).collect(),
+            ClipSource::UriList => Held::Payload(TransferUri::list_payload(
+                clip.uris.iter().cloned().map(TransferUri::Uri),
+                PathStyle::Posix,
             )),
             ClipSource::Identity => Held::Payload(TransferPayload::Custom {
                 mime: match &descriptor.format {
@@ -266,15 +269,20 @@ mod clip {
                     parts.html = Some(html.clone());
                     true
                 }
-                Some(TransferPayload::UriList(uris)) => {
-                    let before = parts.uris.len();
-                    parts.uris.extend(uris.iter().filter_map(|uri| match uri {
-                        TransferUri::Uri(uri) if !uri.starts_with("file:") => Some(uri.clone()),
-                        _ => None,
-                    }));
-                    parts.uris.len() > before
-                }
-                _ => false,
+                Some(payload) => match TransferUri::list_of(payload, PathStyle::Posix) {
+                    Some(uris) => {
+                        let before = parts.uris.len();
+                        parts
+                            .uris
+                            .extend(uris.into_iter().filter_map(|uri| match uri {
+                                TransferUri::Uri(uri) if !uri.starts_with("file:") => Some(uri),
+                                _ => None,
+                            }));
+                        parts.uris.len() > before
+                    }
+                    None => false,
+                },
+                None => false,
             };
             if carried {
                 parts.mime_types.push(mime_type(&descriptor.format));
@@ -338,9 +346,9 @@ use flui_foundation::{DataTransferId, geometry::Point};
 use flui_platform::{
     DragDropEvent, Unsupported, UnsupportedReason,
     data_transfer::{
-        DataTransferOffer, DataTransferSource, DropFeedback, OfferRecord, OfferTable,
-        RepresentationDescriptor, RepresentationIndex, TransferActions, TransferError,
-        TransferLimits, TransferPayload, TransferRequest,
+        DataTransferOffer, DataTransferSource, DropFeedback, RepresentationDescriptor,
+        RepresentationIndex, TransferActions, TransferError, TransferLimits, TransferPayload,
+        TransferRequest,
     },
     drag::{DragError, OsDragEndHook, OsDragRequest, OsDragStart, PlatformDragSource},
 };
@@ -354,6 +362,7 @@ use parking_lot::Mutex;
 
 #[cfg(target_os = "android")]
 use crate::{
+    drag::offers::OfferTable,
     owner::android::java_view::{ActivityDragSource, JavaView, ViewEvent, ViewTransfer},
     owner::panic_boundary::contain_owner_callback,
     owner::slot::OwnerSlot,
@@ -435,9 +444,7 @@ impl AndroidTransfer {
                 .into_iter()
                 .unzip();
         let representations: Arc<[RepresentationDescriptor]> = Arc::from(representations);
-        let id = offers
-            .table
-            .mint(OfferRecord::new(Arc::clone(&representations)));
+        let id = offers.table.mint(Arc::clone(&representations));
         offers.feedback.insert(id, DropFeedback::default());
         offers.sources.insert(id, sources);
         DataTransferOffer::new(id, representations)
@@ -592,10 +599,7 @@ impl AndroidTransfer {
                     (DragDropEvent::Exited { id }, None)
                 }
                 Some(action) => {
-                    let representations = offers
-                        .table
-                        .get(id)
-                        .map(|record| Arc::clone(record.representations()));
+                    let representations = offers.table.get(id).map(Arc::clone);
                     let sources = offers.sources.remove(&id).unwrap_or_default();
                     let values = representations
                         .iter()
@@ -673,7 +677,7 @@ impl DataTransferSource for AndroidTransfer {
                 let Some(view) = self.view.upgrade() else {
                     return TransferRequest::ready(Err(TransferError::SourceGone));
                 };
-                let (request, completer) = TransferRequest::channel();
+                let (request, completer) = TransferRequest::pending();
                 let spawned = std::thread::Builder::new()
                     .name("flui-drop-read".into())
                     .spawn(move || {

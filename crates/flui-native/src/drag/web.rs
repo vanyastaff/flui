@@ -47,7 +47,7 @@
 mod mapping {
     use flui_platform::data_transfer::{
         DropFeedback, Mime, RepresentationDescriptor, RepresentationIndex, TransferActions,
-        TransferFormat, TransferPayload, TransferUri,
+        TransferFormat, TransferPayload,
     };
     use flui_platform::drag::OsDragProvider;
 
@@ -181,14 +181,12 @@ mod mapping {
         match format {
             TransferFormat::Text => TransferPayload::Text(text),
             TransferFormat::Html => TransferPayload::Html(text),
-            // RFC 2483: one URI per CRLF-separated line, `#` lines are comments.
-            TransferFormat::UriList => TransferPayload::UriList(
-                text.lines()
-                    .map(str::trim)
-                    .filter(|line| !line.is_empty() && !line.starts_with('#'))
-                    .map(|line| TransferUri::Uri(line.to_owned()))
-                    .collect(),
-            ),
+            // The browser's `text/uri-list` string is already the list
+            // (RFC 2483): delivered as the browser gave it.
+            TransferFormat::UriList => TransferPayload::Custom {
+                mime: Mime::new("text/uri-list"),
+                bytes: std::sync::Arc::from(text.into_bytes()),
+            },
             TransferFormat::Image { .. } | TransferFormat::Custom { .. } => {
                 payload_of_bytes(format, text.into_bytes())
             }
@@ -256,16 +254,7 @@ mod mapping {
         };
         let text = match payload {
             TransferPayload::Text(text) | TransferPayload::Html(text) => text.clone(),
-            TransferPayload::UriList(uris) => uris
-                .iter()
-                .map(|uri| match uri {
-                    TransferUri::Uri(uri) => uri.clone(),
-                    TransferUri::Path(path) => format!("file://{}", path.display()),
-                })
-                .collect::<Vec<_>>()
-                .join("\r\n"),
             TransferPayload::Custom { bytes, .. } => std::str::from_utf8(bytes).ok()?.to_owned(),
-            TransferPayload::Image(image) => std::str::from_utf8(&image.bytes).ok()?.to_owned(),
         };
         Some((dom_type, text))
     }
@@ -290,9 +279,9 @@ use flui_foundation::{DataTransferId, geometry::Point};
 use flui_platform::{
     DragDropEvent, PlatformInput, Unsupported, UnsupportedReason,
     data_transfer::{
-        DataTransferOffer, DataTransferSource, DropFeedback, Mime, OfferRecord, OfferTable,
-        RepresentationDescriptor, RepresentationIndex, TransferActions, TransferError,
-        TransferFormat, TransferLimits, TransferPayload, TransferRequest,
+        DataTransferOffer, DataTransferSource, DropFeedback, Mime, RepresentationDescriptor,
+        RepresentationIndex, TransferActions, TransferError, TransferFormat, TransferLimits,
+        TransferPayload, TransferRequest,
     },
     drag::{DragError, OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource},
 };
@@ -303,7 +292,7 @@ use wasm_bindgen::JsCast;
 
 #[cfg(target_arch = "wasm32")]
 use crate::{
-    drag::offers::payload_of_bytes,
+    drag::offers::{OfferTable, payload_of_bytes},
     owner::handlers::WindowCallbacks,
     owner::panic_boundary::contain_owner_callback,
     owner::web::event::{answer, pointer_position},
@@ -373,9 +362,7 @@ impl WebTransfer {
         let (sources, representations): (Vec<_>, Vec<_>) = offered.into_iter().unzip();
         let representations: Arc<[RepresentationDescriptor]> = Arc::from(representations);
         let mut offers = self.offers.lock();
-        let id = offers
-            .table
-            .mint(OfferRecord::new(Arc::clone(&representations)));
+        let id = offers.table.mint(Arc::clone(&representations));
         offers.feedback.insert(id, DropFeedback::default());
         offers
             .held
@@ -410,10 +397,7 @@ impl WebTransfer {
         };
         let representations = {
             let offers = self.offers.lock();
-            offers
-                .table
-                .get(id)
-                .map(|record| Arc::clone(record.representations()))
+            offers.table.get(id).map(Arc::clone)
         };
         let Some(representations) = representations else {
             return;
@@ -505,9 +489,8 @@ impl DataTransferSource for WebTransfer {
                     let format = offers
                         .table
                         .get(id)
-                        .and_then(|record| {
-                            record
-                                .representations()
+                        .and_then(|representations| {
+                            representations
                                 .get(usize::from(representation.0))
                                 .map(|descriptor| descriptor.format.clone())
                         })
@@ -543,7 +526,7 @@ impl DataTransferSource for WebTransfer {
                         limit: limits.max_bytes,
                     }));
                 }
-                let (request, completer) = TransferRequest::channel();
+                let (request, completer) = TransferRequest::pending();
                 js_sys::futures::spawn_local(async move {
                     let result = js_sys::futures::JsFuture::from(file.array_buffer())
                         .await

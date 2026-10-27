@@ -34,12 +34,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use flui_foundation::geometry::{Bounds, Size};
+use flui_foundation::geometry::{Bounds, DevicePixelRatio, Size};
 use flui_foundation::{ManualClock, PresentationId};
 use flui_platform::TextStoreHost;
 use flui_platform::data_transfer::{RepresentationDescriptor, TransferActions};
 use flui_platform::drag::{DragError, OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource};
-use flui_platform::input_regions::{DeviceInputRegion, InputRegion, ProjectedInputRegions};
+use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
 use flui_platform::{
     CursorError, CursorIcon, DisplayId, InMemoryClipboard, PlatformInput, PlatformTextInput,
     PlatformWindow, Unsupported, UnsupportedReason, WindowId,
@@ -84,8 +84,7 @@ pub struct HeadlessWindow {
     /// The revision of the state [`PlatformWindow::state`] reports: advanced by
     /// every change this double makes to it.
     revision: Mutex<flui_platform::WindowRevision>,
-    input_regions: Mutex<ProjectedInputRegions>,
-    input_region_updates: Mutex<Vec<Vec<DeviceInputRegion>>>,
+    input_regions: Mutex<SentInputRegions>,
     haptics: Arc<flui_platform::haptics::FakeHaptics>,
     os_drags: Arc<HeadlessOsDrags>,
 }
@@ -96,6 +95,47 @@ impl std::fmt::Debug for HeadlessWindow {
             .field("size", &self.size)
             .field("text_input", &self.text_input.is_some())
             .finish_non_exhaustive()
+    }
+}
+
+/// What a [`HeadlessWindow`] handed its simulated OS of its input regions, played as a
+/// backend plays it (ADR-0217 §5): a frame's logical regions are projected to device pixels
+/// at the window's scale by the projection every backend uses
+/// ([`DeviceInputRegion::project`]: rounded outward, a region that is empty, not finite or
+/// beyond `i32` dropped), and the OS is handed the set only when the pixels, the scale or
+/// the display changed. A window starts with nothing claimed, so an empty first set is no
+/// change.
+#[derive(Debug, Default)]
+struct SentInputRegions {
+    /// The scale (`f64::to_bits`) and display `sent` was projected for; `None` until the
+    /// first projection.
+    key: Option<(u64, Option<DisplayId>)>,
+    sent: Vec<DeviceInputRegion>,
+    updates: Vec<Vec<DeviceInputRegion>>,
+}
+
+impl SentInputRegions {
+    fn update(&mut self, regions: &[InputRegion], scale: f64, display: Option<DisplayId>) {
+        // A scale that is not a positive finite number projects nothing; the OS keeps
+        // what it holds.
+        let Some(ratio) = DevicePixelRatio::new(scale) else {
+            return;
+        };
+        let projected: Vec<DeviceInputRegion> = regions
+            .iter()
+            .filter_map(|region| DeviceInputRegion::project(*region, ratio).ok())
+            .collect();
+        let key = Some((scale.to_bits(), display));
+        let unchanged = if self.key.is_none() {
+            projected.is_empty()
+        } else {
+            self.key == key && self.sent == projected
+        };
+        self.key = key;
+        if !unchanged {
+            self.updates.push(projected.clone());
+            self.sent = projected;
+        }
     }
 }
 
@@ -114,7 +154,6 @@ impl HeadlessWindow {
             display: Mutex::new(None),
             revision: Mutex::new(flui_platform::WindowRevision::ZERO),
             input_regions: Mutex::default(),
-            input_region_updates: Mutex::default(),
             haptics: Arc::new(flui_platform::haptics::FakeHaptics::new()),
             os_drags: Arc::new(HeadlessOsDrags::default()),
         }
@@ -192,11 +231,11 @@ impl HeadlessWindow {
     }
 
     /// Every input-region set this window handed the OS, in device pixels and delivery
-    /// order: one entry per change the backend's projection saw, none for a frame that
-    /// re-sent an unchanged set (ADR-0217 §5).
+    /// order: one entry per change the backend's projection
+    /// saw, none for a frame that re-sent an unchanged set (ADR-0217 §5).
     #[must_use]
     pub fn input_region_updates(&self) -> Vec<Vec<DeviceInputRegion>> {
-        self.input_region_updates.lock().clone()
+        self.input_regions.lock().updates.clone()
     }
 
     /// The logical size in device pixels at the current scale factor: a
@@ -248,14 +287,7 @@ impl PlatformWindow for HeadlessWindow {
     fn set_input_regions(&self, regions: &[InputRegion]) {
         let scale = *self.scale_factor.lock();
         let display = *self.display.lock();
-        let sent = self
-            .input_regions
-            .lock()
-            .update(regions, scale, display)
-            .map(<[DeviceInputRegion]>::to_vec);
-        if let Some(sent) = sent {
-            self.input_region_updates.lock().push(sent);
-        }
+        self.input_regions.lock().update(regions, scale, display);
     }
 
     /// Shown and focused, with no position (as on Wayland), its logical size

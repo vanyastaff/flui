@@ -22,7 +22,7 @@
 //!
 use crate::{keyboard::KeyEvent, pointer::PointerEvent};
 use flui_foundation::DataTransferId;
-use flui_foundation::geometry::{Offset, Point};
+use flui_foundation::geometry::Point;
 
 /// Result of dispatching an input event through a callback
 ///
@@ -289,50 +289,4 @@ pub enum DragDropEvent {
         /// The retired session's offer id (now stale by construction).
         id: DataTransferId,
     },
-}
-
-// ============================================================================
-// Platform conversion utilities
-// ============================================================================
-
-/// Convert device (physical) pixels to logical pixels
-///
-/// Platform implementations should use this to convert native coordinates
-/// to framework coordinates (logical pixels).
-///
-/// # Example
-///
-/// ```rust,ignore
-/// // Windows: WM_MOUSEMOVE gives physical pixels
-/// let physical_x = 1920; // On 2x DPI display
-/// let physical_y = 1080;
-/// let scale_factor = 2.0;
-///
-/// let logical_pos = Offset::new(
-///     (device_to_logical(physical_x as f64, scale_factor)),
-///     (device_to_logical(physical_y as f64, scale_factor))
-/// );
-/// // Result: (960, 540) logical pixels
-/// ```
-#[inline]
-pub fn device_to_logical(device_pixels: f64, scale_factor: f64) -> f64 {
-    device_pixels / scale_factor
-}
-
-/// Convert logical pixels to device (physical) pixels
-#[inline]
-pub fn logical_to_device(logical_pixels: f64, scale_factor: f64) -> f64 {
-    logical_pixels * scale_factor
-}
-
-/// Helper to create an Offset from raw coordinates
-#[inline]
-pub fn offset_from_coords(x: f64, y: f64) -> Offset<f64> {
-    Offset::new(x, y)
-}
-
-/// Helper to create a delta Offset from raw coordinates
-#[inline]
-pub fn delta_offset_from_coords(dx: f64, dy: f64) -> Offset<f64> {
-    Offset::new(dx, dy)
 }

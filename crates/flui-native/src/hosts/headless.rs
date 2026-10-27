@@ -7,12 +7,15 @@ use flui_platform::InMemoryClipboard;
 use crate::accessibility::headless::FakeAccessibility;
 use crate::display::headless::{DisplaySpec, laid_out};
 use crate::drag::headless::{DragDouble, HeadlessDragSource};
+use crate::drag::offers::OfferTable;
 use crate::haptics::headless::FakeHaptics;
 use crate::host::Host;
 use crate::input::headless::{AttachedDevices, HeadlessInputDevices};
 use crate::lifecycle::headless::HeadlessHostEvents;
 use crate::lifecycle::notice::SystemNotices;
-use crate::owner::headless::{HeadlessHost, HeadlessLoop, HeadlessState, SimulatedDevices};
+use crate::owner::headless::{
+    HeadlessHost, HeadlessLoop, HeadlessState, SimulatedDevices, SimulatedOffers,
+};
 use crate::owner::notices::NoticeChannel;
 use crate::platform::HostPlatform;
 use crate::preferences::headless::HeadlessPreferences;
@@ -54,6 +57,10 @@ impl HeadlessHost for Headless {
 
     fn devices() -> Box<dyn SimulatedDevices> {
         Box::new(AttachedDevices::default())
+    }
+
+    fn offers() -> Box<dyn SimulatedOffers> {
+        Box::new(OfferTable::default())
     }
 
     fn drag_source(
