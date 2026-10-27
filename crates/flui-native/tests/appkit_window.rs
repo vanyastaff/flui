@@ -30,6 +30,7 @@ mod cases {
     use std::time::{Duration, Instant};
 
     use flui_foundation::geometry::{Size, WindowMetrics};
+    use flui_native::testing::appkit;
     use flui_native::{HostWindow, MacOSPlatform, Platform as _};
     use flui_platform::{
         Availability, PlatformWindow, WindowCommand, WindowMaterial, WindowOptions,
@@ -87,40 +88,6 @@ mod cases {
         app
     }
 
-    /// Run AppKit for `span`: its events, the main queue the owner lane posts
-    /// to, and the animations a mode change plays.
-    #[expect(
-        unsafe_code,
-        reason = "`nextEventMatchingMask:untilDate:inMode:dequeue:` with an `NSDate`, which \
-                  this crate's objc2-foundation features leave unbound"
-    )]
-    fn run_appkit(app: &NSApplication, span: Duration) {
-        use objc2::runtime::AnyObject;
-        use objc2::{class, msg_send};
-        use objc2_app_kit::{NSEvent, NSEventMask};
-        use objc2_foundation::NSDefaultRunLoopMode;
-
-        let deadline = Instant::now() + span;
-        while Instant::now() < deadline {
-            // SAFETY: plain class and instance messages on the main thread;
-            // the date and the event are retained for the calls that use them.
-            unsafe {
-                let until: Retained<AnyObject> =
-                    msg_send![class!(NSDate), dateWithTimeIntervalSinceNow: 0.02_f64];
-                let event: Option<Retained<NSEvent>> = msg_send![
-                    app,
-                    nextEventMatchingMask: NSEventMask::Any,
-                    untilDate: &*until,
-                    inMode: NSDefaultRunLoopMode,
-                    dequeue: true
-                ];
-                if let Some(event) = event {
-                    app.sendEvent(&event);
-                }
-            }
-        }
-    }
-
     /// The AppKit window behind an open FLUI window's raw handle.
     #[expect(
         unsafe_code,
@@ -141,7 +108,9 @@ mod cases {
         view.window().expect("the FLUI view is in its window")
     }
 
-    /// An AppKit window for the conformance checks.
+    /// An AppKit window for the conformance checks. Dropping it closes the
+    /// window and settles, so a case that fails part way leaves no window for
+    /// the next one.
     struct AppKitFixture {
         app: Retained<NSApplication>,
         _platform: MacOSPlatform,
@@ -189,7 +158,7 @@ mod cases {
             let mut last = self.window.state().revision;
             let mut quiet_since = Instant::now();
             while Instant::now() < deadline {
-                run_appkit(&self.app, Duration::from_millis(50));
+                appkit::run_for(Duration::from_millis(50));
                 let now = self.window.state().revision;
                 if now == last {
                     if quiet_since.elapsed() >= Duration::from_secs(1) {
@@ -202,6 +171,9 @@ mod cases {
             }
         }
 
+        /// The window system's own close, the title bar's close button: the
+        /// checks reach it only for a window that does not take
+        /// `WindowCommand::Close`. Cleanup is `Drop`'s.
         fn close(&mut self) {
             self.ns_window.performClose(None);
             self.settle();
@@ -211,6 +183,15 @@ mod cases {
         /// region.
         fn input_regions(&self) -> Availability {
             flui_native::input::availability::macos().input_regions()
+        }
+    }
+
+    impl Drop for AppKitFixture {
+        fn drop(&mut self) {
+            // A window the checks closed already is closed; any other refusal
+            // is logged, so a case already unwinding keeps its first failure.
+            self.window.close_for_cleanup();
+            self.settle();
         }
     }
 
@@ -275,7 +256,5 @@ mod cases {
             !fixture.ns_window.isZoomed(),
             "AppKit kept the zoom of a window asked for normal mode"
         );
-        let _ = fixture.window.admit_and_apply(WindowCommand::Close);
-        fixture.settle();
     }
 }

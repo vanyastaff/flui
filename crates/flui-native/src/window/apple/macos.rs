@@ -196,7 +196,7 @@ pub struct MacOSWindow {
 //
 // One of those bodies reaches the lane by an extra hop rather than by a second
 // door: `request_redraw`'s deferral hands its `setNeedsDisplay:` to
-// `owner_lane::exec_async_guarded`, which installs the lane guard *before* the
+// `owner_lane::exec_async_on_owner`, which installs the lane guard *before* the
 // body runs and then routes that body through `route_on_owner` like the rest.
 // The deferral changes *when* the call lands, never *which thread* issues it —
 // which is why it does not weaken this argument.
@@ -914,9 +914,9 @@ impl MacOSWindow {
         key: u64,
         hop: u8,
     ) {
-        crate::owner::apple::macos::exec_async_guarded(owner, move || {
+        crate::owner::apple::macos::exec_async_on_owner(owner, move || {
             // The hop onto the lane is asynchronous, but the AppKit message
-            // inside it is still routed: `exec_async_guarded` installed the lane
+            // inside it is still routed: `exec_async_on_owner` installed the lane
             // guard before this body, so `route_on_owner` runs it inline and
             // records its witness. One routed throat for every AppKit-messaging
             // body, with no second door beside it.
@@ -1752,7 +1752,7 @@ impl Drop for MacOSWindow {
         if crate::owner::apple::macos::on_owner_thread(owner, self.owner_is_main) {
             crate::owner::apple::macos::run_cleanup_guarded(teardown);
         } else {
-            crate::owner::apple::macos::exec_async_guarded(owner, move || {
+            crate::owner::apple::macos::exec_async_on_owner(owner, move || {
                 crate::owner::apple::macos::run_cleanup_guarded(teardown);
             });
         }

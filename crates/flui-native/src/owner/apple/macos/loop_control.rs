@@ -17,7 +17,7 @@ use std::time::Duration;
 use flui_platform::{SessionEndAnswer, SessionEndPhase};
 
 use super::owner_lane::{
-    exec_async_guarded, owner_queue, report_contained_panic, run_cleanup_guarded as cleanup_step,
+    exec_async_on_owner, owner_queue, report_contained_panic, run_cleanup_guarded as cleanup_step,
 };
 use crate::{
     error::PlatformError,
@@ -79,7 +79,7 @@ impl LoopControl {
             let weak = weak.clone();
             let owner_signal = crate::owner::signal::OwnerSignal::new(Arc::new(move || {
                 let weak = weak.clone();
-                exec_async_guarded(owner_queue(), move || {
+                exec_async_on_owner(owner_queue(), move || {
                     cleanup_step(|| {
                         if let Some(control) = weak.upgrade()
                             && control.owner_signal.drive()
@@ -135,7 +135,7 @@ impl LoopControl {
     /// process go, must not happen under the code that dropped the block.
     pub(super) fn session_end_released(self: &Arc<Self>) {
         let weak = Arc::downgrade(self);
-        exec_async_guarded(owner_queue(), move || {
+        exec_async_on_owner(owner_queue(), move || {
             cleanup_step(|| {
                 if let Some(control) = weak.upgrade() {
                     let owed = control.terminate_gate.lock().released();
@@ -289,7 +289,7 @@ impl LoopControl {
         };
         if enqueue {
             let weak = Arc::downgrade(self);
-            exec_async_guarded(owner_queue(), move || {
+            exec_async_on_owner(owner_queue(), move || {
                 // The outer GCD helper predates hostile panic payload handling.
                 // Contain the complete delivery here before its trampoline sees it.
                 cleanup_step(|| {
@@ -366,7 +366,7 @@ impl LoopControl {
         };
         if enqueue {
             let weak = Arc::downgrade(self);
-            exec_async_guarded(owner_queue(), move || {
+            exec_async_on_owner(owner_queue(), move || {
                 if let Some(control) = weak.upgrade() {
                     control.evaluate();
                 }

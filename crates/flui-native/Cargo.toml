@@ -169,6 +169,8 @@ objc2-foundation = { workspace = true, features = [
     "NSGeometry",
     "NSEnumerator",
     "NSRunLoop",
+    # The deadline `testing::appkit` waits for an event until.
+    "NSDate",
     "NSBundle",
     "NSRange",
     "NSNotification",
@@ -475,6 +477,12 @@ x11 = ["dep:x11rb", "dep:rustix"]
 # the recording codec lives in the tests.
 native-capture = []
 
+# The `testing` module (ADR-0243): what a test of a native host's windows
+# needs from the host itself, such as turns of the AppKit event loop. Off by
+# default and not part of the release API; this crate's tests turn it on
+# through the dev-dependency on itself.
+testing = []
+
 # The `unexpected_cfgs` check-cfg declaration for objc 0.2's
 # `cfg(feature = "cargo-clippy")` probes lives in build.rs — Cargo forbids
 # mixing local lint keys with `workspace = true`.
@@ -486,6 +494,9 @@ workspace = true
 # headless backend. Checkout-only test edge: versionless, so Cargo drops it
 # from the published manifest; flui-testing never depends on this crate.
 flui-testing = { path = "../flui-testing" }
+# The host's own test support, the `testing` module. Checkout-only test edge:
+# versionless, so Cargo drops it from the published manifest.
+flui-native = { path = ".", features = ["testing"] }
 # Application-side error handling in tests only — never a normal
 # dependency again: no `anyhow` token may appear in this crate's public API.
 anyhow = { workspace = true }
@@ -632,7 +643,7 @@ platforms = ["windows", "apple", "android", "web", "linux", "winit", "headless"]
 groups = { apple = ["macos", "ios"], linux = ["wayland", "x11"] }
 base = ["owner", "version", "storage"]
 hosts = "hosts"
-crate-level = ["host", "platform", "host_window", "error", "executor", "task", "os"]
+crate-level = ["host", "platform", "host_window", "error", "executor", "task", "os", "testing"]
 # The one edge between platform files of one feature: the winit host on Linux
 # reads the compositor's outputs through the Linux source, which leaves with
 # winit. No window file names another feature's: a window's text input,
