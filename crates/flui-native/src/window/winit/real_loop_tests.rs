@@ -538,8 +538,8 @@ mod wayland_window {
     use flui_foundation::geometry::Point;
 
     use super::*;
+    use flui_platform::CommandRefusal;
     use flui_platform::{AdmissionError, WindowCapabilities, WindowCommand, WindowMode};
-    use flui_testing::window_commands::CommandRefusal;
     use winit::event_loop::EventLoop;
 
     /// What a window answers for a command its capabilities leave out.

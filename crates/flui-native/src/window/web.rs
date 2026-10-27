@@ -1151,9 +1151,7 @@ impl PlatformWindow for WebWindow {
             WindowCommand::SetMode(WindowMode::Fullscreen) => {
                 let el: &web_sys::Element = self.canvas.as_ref();
                 el.request_fullscreen()
-                    .map_err(|error| ApplyError::Platform {
-                        message: format!("{error:?}"),
-                    })?;
+                    .map_err(|error| ApplyError::failed(format!("{error:?}")))?;
             }
             WindowCommand::SetMode(WindowMode::Normal) => {
                 if let Some(document) = self.canvas.owner_document()

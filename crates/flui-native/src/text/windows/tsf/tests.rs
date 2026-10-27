@@ -1123,8 +1123,10 @@ fn the_text_services_answer_a_completion_for_its_store() {
             failed.push(name);
         }
     }
-    window.close_now();
+    // The cases' own failures first: a close that fails after them must not
+    // hide which cases did.
     assert!(failed.is_empty(), "failed cases: {failed:?}");
+    window.close_now();
 }
 
 /// A subscriber that panics on the one event whose message is `.0`.

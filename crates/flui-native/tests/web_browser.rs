@@ -434,7 +434,7 @@ impl CanvasWindow {
 
 impl Drop for CanvasWindow {
     fn drop(&mut self) {
-        self.window.close_now();
+        self.window.close_for_cleanup();
     }
 }
 
@@ -1200,7 +1200,7 @@ impl HostedCanvas {
 
 impl Drop for HostedCanvas {
     fn drop(&mut self) {
-        self.window.close_now();
+        self.window.close_for_cleanup();
         self.owner.quit();
     }
 }

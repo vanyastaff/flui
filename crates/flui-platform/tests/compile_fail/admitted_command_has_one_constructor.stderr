@@ -1,9 +1,11 @@
-error[E0451]: fields `command` and `revision` of struct `AdmittedCommand` are private
- --> tests/compile_fail/admitted_command_has_one_constructor.rs:5:9
+error: cannot construct `AdmittedCommand` with struct literal syntax due to private fields
+ --> tests/compile_fail/admitted_command_has_one_constructor.rs:4:13
   |
 4 |     let _ = AdmittedCommand {
-  |             --------------- in this type
+  |             ^^^^^^^^^^^^^^^
 5 |         command: WindowCommand::Show,
-  |         ^^^^^^^ private field
+  |         ---------------------------- private field
 6 |         revision: WindowRevision::ZERO,
-  |         ^^^^^^^^ private field
+  |         ------------------------------ private field
+  |
+  = note: ...and other private field `owner` that was not provided

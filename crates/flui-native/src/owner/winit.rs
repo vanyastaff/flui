@@ -2221,15 +2221,9 @@ impl WinitApp {
                 );
                 // A winit window always takes a close; the one failure left
                 // is a window that closed since the lookup, which is the goal.
-                match flui_platform::WindowCommand::Close.admit(&window.state().capabilities) {
-                    Ok(close) => {
-                        if let Err(error) = window.apply(close) {
-                            tracing::debug!(%error, "the harness close found the window closed");
-                        }
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "the harness window does not take a close");
-                    }
+                if let Err(refusal) = flui_platform::WindowCommand::Close.admit_and_apply(&*window)
+                {
+                    tracing::debug!(?refusal, "the harness close was not carried out");
                 }
             }
         }

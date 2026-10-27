@@ -582,6 +582,7 @@ globals = [
     { item = "input::android::AndroidInput::motion::FIRST_MOTION_SEEN", grant = "ADR-0097", class = "diagnostic", reason = "logs the first motion event at a higher level; no behavior reads it" },
     { item = "owner::slot::LAST_SLOT_KEY", grant = "ADR-0097", class = "counter", reason = "owner-slot keys, advanced by `try_update` so exhaustion refuses the slot instead of reissuing a key" },
     { item = "owner::slot::OWNER_VALUES", exit = "ADR-0082", reason = "owner-thread storage of the shared backends' non-Send input callbacks until each backend's owner context holds them, as Win32's does" },
+    { item = "window::state::NEXT_CAPABILITIES_OWNER", grant = "ADR-0097", class = "counter", reason = "capabilities owners, one per window cell, advanced by a checked `fetch_update` so exhaustion refuses instead of reissuing an owner" },
     { item = "window::headless::NEXT_HEADLESS_WINDOW_ID", grant = "ADR-0097", class = "counter", reason = "headless window IDs, advanced by `try_update` so exhaustion is an error" },
     { item = "owner::apple::ios::DELEGATE_STATE", grant = "ADR-0097", class = "trampoline", reason = "UIKit delegate methods reach the platform through it; they carry no user-data pointer" },
     { item = "owner::apple::macos::display_pass::IN_DISPLAY_PASS", grant = "ADR-0097", class = "process", reason = "marks AppKit's `drawRect:` display pass on the main thread, which the process has once" },

@@ -21,13 +21,13 @@ use flui_foundation::PresentationAddress;
 use flui_foundation::panic::FirstPanic;
 use flui_platform::PlatformWindow;
 use flui_platform::{
-    AdmissionError, AdmittedCommand, ApplyError, SubmitError, WindowCommand, WindowControl,
-    WindowState,
+    AdmissionError, AdmittedCommand, ApplyError, CommandRefusal, SubmitError, WindowCommand,
+    WindowControl, WindowState,
 };
 use flui_view::__runtime::WindowSource;
 use flui_view::WindowHandle;
 
-use super::close_request::{CloseReason, CloseRequestRouter, CloseResponse};
+use super::close_request::{CloseReason, CloseRequestError, CloseRequestRouter, CloseResponse};
 
 /// One unit of queued work for a window, applied in the order it was queued.
 enum Queued {
@@ -105,56 +105,45 @@ impl WindowQueue {
     }
 
     /// Close the window unless the application's close-request handler vetoes.
-    /// `true` when the window is closed or was already gone.
+    /// `true` when the window is closed or was already gone, which ends the
+    /// batch. A close the window refused (its capabilities do not take one) or
+    /// its window system failed leaves the window open, so the rest of the
+    /// batch still applies to it.
     fn close_with_veto(&self) -> bool {
         if self.router.consult(self.address, CloseReason::Program) != CloseResponse::Close {
             return false;
         }
-        if let Err(error) = self.router.request_close(self.address) {
-            tracing::debug!(%error, "a queued window close found the window already gone");
+        match self.router.request_close(self.address) {
+            Ok(())
+            | Err(CloseRequestError::Failed {
+                error: ApplyError::Closed,
+                ..
+            }) => true,
+            Err(error @ (CloseRequestError::Refused { .. } | CloseRequestError::Failed { .. })) => {
+                tracing::warn!(%error, "a queued window close was not carried out; the window stays");
+                false
+            }
+            Err(error) => {
+                tracing::debug!(%error, "a queued window close found the window already gone");
+                true
+            }
         }
-        true
     }
 }
 
-/// Why a window did not carry out a command the framework applied: its
-/// capabilities refused it, or the world did (ADR-0254 §2).
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum CommandRefusal {
-    /// The window's capabilities do not take the command, or its numbers
-    /// cannot describe a window.
-    #[error(transparent)]
-    Admission(#[from] AdmissionError),
-    /// The window closed, or its window system refused or failed the command.
-    #[error(transparent)]
-    Apply(#[from] ApplyError),
-}
-
-/// Apply `admitted` to `window`. A command whose capabilities moved after it
-/// was admitted is admitted again against the window's snapshot now, the
-/// framework being its caller, and applied in its place; one the window no
-/// longer honours is refused then.
-pub(crate) fn apply_admitted(
+/// Apply `admitted` to `window`. A command the window answers
+/// [`Superseded`](ApplyError::Superseded) — its capabilities changed after the
+/// command was admitted — is given back, admitted again against the window's
+/// snapshot now (the queue is its caller) and applied in its place; one the
+/// window no longer honours is refused then.
+fn apply_admitted(
     window: &dyn PlatformWindow,
     admitted: AdmittedCommand,
 ) -> Result<(), CommandRefusal> {
-    let command = admitted.command().clone();
     match window.apply(admitted) {
-        Err(ApplyError::Superseded) => {
-            let readmitted = command.admit(&window.state().capabilities)?;
-            Ok(window.apply(readmitted)?)
-        }
+        Err(ApplyError::Superseded { command }) => command.admit_and_apply(window),
         outcome => Ok(outcome?),
     }
-}
-
-/// Admit `command` against `window`'s snapshot and apply it now, outside any
-/// queue: for the runner's own commands (a reveal, a close it decided).
-pub(crate) fn apply_now(
-    window: &dyn PlatformWindow,
-    command: WindowCommand,
-) -> Result<(), CommandRefusal> {
-    apply_admitted(window, command.admit(&window.state().capabilities)?)
 }
 
 /// Report a queued command the window did not carry out: a failure of the
@@ -163,10 +152,10 @@ pub(crate) fn apply_now(
 /// application.
 fn report(window: &dyn PlatformWindow, refusal: &CommandRefusal) {
     match refusal {
-        CommandRefusal::Apply(ApplyError::Platform { message }) => {
+        CommandRefusal::Apply(ApplyError::Platform(failure)) => {
             tracing::warn!(
                 window = ?window.id(),
-                %message,
+                %failure,
                 "the window system failed a window command"
             );
         }

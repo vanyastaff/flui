@@ -7,8 +7,9 @@ use std::sync::Arc;
 
 use flui_native::{HeadlessPlatform, HostWindow, MockWindow, Platform};
 use flui_platform::{
-    AdmittedCommand, ApplyError, CursorError, CursorIcon, PlatformHaptics, PlatformSystemChrome,
-    PlatformTextInput, PlatformWindow, WindowCommand, WindowId, WindowMode, WindowState,
+    AdmittedCommand, ApplyError, CommandRefusal, CursorError, CursorIcon, PlatformHaptics,
+    PlatformSystemChrome, PlatformTextInput, PlatformWindow, WindowCommand, WindowId, WindowMode,
+    WindowState,
 };
 use flui_platform::{WindowCapabilities, WindowOptions};
 use flui_testing::window_conformance::{self, Readback, WindowFixture};
@@ -40,6 +41,18 @@ impl PlatformWindow for Faulty {
     fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
         if command.command() == &WindowCommand::Close && matches!(self.1, Fault::IgnoresClose) {
             return Ok(());
+        }
+        if matches!(self.1, Fault::IgnoresTheToken) {
+            // A host that checks the command against what it honours now,
+            // not against the capabilities the token was admitted under.
+            let command = command.command().clone();
+            return match command.admit_and_apply(&*self.0) {
+                Ok(()) => Ok(()),
+                Err(CommandRefusal::Apply(error)) => Err(error),
+                Err(CommandRefusal::Admission(_)) => Err(ApplyError::failed(
+                    "the window does not honour it now".to_owned(),
+                )),
+            };
         }
         self.0.apply(command)
     }
@@ -86,6 +99,9 @@ enum Fault {
     IgnoresClose,
     /// The window's snapshot claims capabilities the window does not have.
     ClaimsWhatItCannot,
+    /// The window applies a command it honours now, whatever capabilities the
+    /// token was admitted under.
+    IgnoresTheToken,
     /// The window's snapshot holds no metrics.
     SnapshotWithoutFacts,
 }
@@ -100,7 +116,8 @@ impl Fixture {
             Some(
                 fault @ (Fault::ClaimsWhatItCannot
                 | Fault::SnapshotWithoutFacts
-                | Fault::IgnoresClose),
+                | Fault::IgnoresClose
+                | Fault::IgnoresTheToken),
             ) => Arc::new(Faulty(Arc::clone(&model) as _, fault)),
             _ => Arc::clone(&model) as _,
         };
@@ -141,11 +158,12 @@ impl WindowFixture for Fixture {
             ] {
                 // The faulty window system reverts what it can, while the
                 // window is open; what it cannot revert stays.
-                if let Ok(admitted) = command.admit(&self.window.state().capabilities) {
-                    match self.window.apply(admitted) {
-                        Ok(()) | Err(ApplyError::Closed) => {}
-                        Err(error) => panic!("the headless window failed a revert: {error}"),
-                    }
+                match command.admit_and_apply(&*self.window) {
+                    Ok(())
+                    | Err(
+                        CommandRefusal::Admission(_) | CommandRefusal::Apply(ApplyError::Closed),
+                    ) => {}
+                    Err(error) => panic!("the headless window failed a revert: {error}"),
                 }
             }
         }
@@ -156,6 +174,18 @@ impl WindowFixture for Fixture {
         if !matches!(self.fault, Some(Fault::IgnoresClose)) {
             self.mock().simulate_close();
         }
+    }
+
+    /// The simulated window system stops reporting where the window opens
+    /// again, and keeps the rest.
+    fn revise_capabilities(&mut self) -> bool {
+        let mut revised = self.model.state().capabilities;
+        revised.places_at_open = match revised.places_at_open {
+            flui_platform::Availability::Unavailable => flui_platform::Availability::Native,
+            _ => flui_platform::Availability::Unavailable,
+        };
+        self.mock().simulate_capabilities(revised);
+        true
     }
 }
 
@@ -224,6 +254,14 @@ fn a_window_that_claims_what_it_cannot_do_is_caught() {
     );
 }
 
+fn a_window_that_ignores_the_token_is_caught() {
+    let checks = caught(Fault::IgnoresTheToken);
+    assert_eq!(
+        checks,
+        ["a_command_admitted_before_a_revision_is_superseded"]
+    );
+}
+
 fn a_snapshot_without_the_windows_facts_is_caught() {
     let checks = caught(Fault::SnapshotWithoutFacts);
     assert_eq!(checks, ["the_snapshot_agrees_with_the_window_system"]);
@@ -253,6 +291,10 @@ fn window_conformance_checks() {
             (
                 "a_snapshot_without_the_windows_facts_is_caught",
                 a_snapshot_without_the_windows_facts_is_caught as fn(),
+            ),
+            (
+                "a_window_that_ignores_the_token_is_caught",
+                a_window_that_ignores_the_token_is_caught as fn(),
             ),
         ],
     );

@@ -226,17 +226,18 @@ impl MainController {
         if let Some(open) = &self.open {
             // Shown, then asked for focus: a window system that cannot give
             // focus (Wayland) still shows the window.
-            use crate::app::window_control::{CommandRefusal, apply_now};
-            let result = apply_now(&*open.window, flui_platform::WindowCommand::Show)
-                .and_then(|()| {
-                    match apply_now(&*open.window, flui_platform::WindowCommand::Activate) {
+            use flui_platform::{CommandRefusal, WindowCommand};
+            let result = WindowCommand::Show
+                .admit_and_apply(&*open.window)
+                .and_then(
+                    |()| match WindowCommand::Activate.admit_and_apply(&*open.window) {
                         Err(CommandRefusal::Admission(
                             flui_platform::AdmissionError::Unsupported(_),
                         ))
                         | Ok(()) => Ok(()),
                         Err(error) => Err(error),
-                    }
-                })
+                    },
+                )
                 .map(|()| open.address)
                 .map_err(|error| AppWindowError::Show {
                     source: Arc::new(error),

@@ -35,8 +35,8 @@ use windows::{
 };
 
 use flui_platform::{
-    AdmittedCommand, ApplyError, CursorError, DispatchEventResult, PlatformInput, PlatformWindow,
-    SizeConstraints, Unsupported, UnsupportedReason, WindowBackgroundAppearance,
+    AdmittedCommand, ApplyError, CursorError, DispatchEventResult, PlatformFailure, PlatformInput,
+    PlatformWindow, SizeConstraints, Unsupported, UnsupportedReason, WindowBackgroundAppearance,
     WindowCapabilities, WindowCommand, WindowId, WindowMode, WindowOptions, WindowReveal,
     WindowState,
 };
@@ -164,9 +164,7 @@ impl std::fmt::Debug for WindowsWindow {
 
 /// A Win32 call that failed, as the error of the command that made it.
 fn backend_error(what: &str, error: windows::core::Error) -> ApplyError {
-    ApplyError::Platform {
-        message: format!("{what} failed: {error}"),
-    }
+    ApplyError::failed(format!("{what} failed: {error}"))
 }
 
 /// A command's logical pair in device pixels, refused before any call when
@@ -175,11 +173,7 @@ fn backend_error(what: &str, error: windows::core::Error) -> ApplyError {
 fn device_pair(x: f64, y: f64, scale: f64) -> Result<(i32, i32), ApplyError> {
     checked_logical_to_device(x, scale)
         .zip(checked_logical_to_device(y, scale))
-        .ok_or_else(|| ApplyError::Platform {
-            message: format!(
-                "({x}, {y}) at scale {scale} is beyond the device pixels Win32 can hold"
-            ),
-        })
+        .ok_or(ApplyError::Platform(PlatformFailure::OutOfRange))
 }
 
 /// What every Win32 window honours and observes, known before one exists
@@ -1616,10 +1610,8 @@ impl WindowsWindow {
                     // on its owner thread. The context guard pins userdata through
                     // ShowWindow reentry; placement is an initialized out pointer.
                     unsafe {
-                        let placement =
-                            placement_of(self.hwnd).map_err(|error| ApplyError::Platform {
-                                message: error.to_string(),
-                            })?;
+                        let placement = placement_of(self.hwnd)
+                            .map_err(|error| ApplyError::failed(error.to_string()))?;
                         if let Some(mode) = first {
                             ctx.begin_first_show(mode);
                         }

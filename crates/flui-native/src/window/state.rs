@@ -59,9 +59,7 @@ impl ReportedFacts {
     all(target_os = "linux", feature = "winit-backend")
 ))]
 pub(crate) fn not_carried_out(command: &flui_platform::WindowCommand) -> flui_platform::ApplyError {
-    flui_platform::ApplyError::Platform {
-        message: format!("this window system does not carry out {command:?}"),
-    }
+    flui_platform::ApplyError::failed(format!("this window system does not carry out {command:?}"))
 }
 
 /// What a window system says of a window, as the three facts its mode is
@@ -160,6 +158,22 @@ pub(crate) struct WindowStateCell {
     invalidations: AtomicU64,
 }
 
+/// The capabilities owners handed out so far, one per window cell.
+static NEXT_CAPABILITIES_OWNER: AtomicU64 = AtomicU64::new(1);
+
+/// A capabilities owner no window of this process had before. Advanced with a
+/// checked add, so the source refuses instead of reissuing a number.
+fn next_capabilities_owner() -> flui_platform::CapabilitiesOwner {
+    let number = NEXT_CAPABILITIES_OWNER
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+            next.checked_add(1)
+        })
+        .expect("BUG: 2^64 windows opened in one process");
+    flui_platform::CapabilitiesOwner::new(
+        std::num::NonZeroU64::new(number).expect("BUG: the owner source starts at one"),
+    )
+}
+
 impl crate::owner::notices::StaleOnWake for WindowStateCell {
     fn mark_stale(&self) {
         self.invalidate();
@@ -174,7 +188,12 @@ impl WindowStateCell {
     }
 
     /// A cell publishing `initial`, stale: the first `state_with` reads the OS.
-    pub(crate) fn new(initial: WindowState) -> Self {
+    /// Its capabilities are stamped with a capabilities owner no other window
+    /// of the process has, which every later snapshot keeps, so a command
+    /// admitted for another window, or against capabilities built by hand,
+    /// never opens on this one.
+    pub(crate) fn new(mut initial: WindowState) -> Self {
+        initial.capabilities = initial.capabilities.owned_by(next_capabilities_owner());
         Self {
             last: Mutex::new(Slot {
                 state: initial,

@@ -122,9 +122,7 @@ pub(crate) fn presentation_window(
 /// to hear a refusal (Android's one window does not close) or a failure, and
 /// the presentation behind it is already torn down, so it is logged.
 pub(super) fn discard_window(window: &dyn flui_platform::PlatformWindow, why: &'static str) {
-    if let Err(error) =
-        crate::app::window_control::apply_now(window, flui_platform::WindowCommand::Close)
-    {
+    if let Err(error) = flui_platform::WindowCommand::Close.admit_and_apply(window) {
         tracing::warn!(%error, why, "a discarded window did not close");
     }
 }

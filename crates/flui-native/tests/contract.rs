@@ -886,7 +886,7 @@ mod native_windows {
 
     impl Drop for ClosePointerTarget {
         fn drop(&mut self) {
-            self.0.close_now();
+            self.0.close_for_cleanup();
         }
     }
 

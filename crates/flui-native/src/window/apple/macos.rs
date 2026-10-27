@@ -1930,8 +1930,8 @@ impl MacOSWindow {
             // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
             // body runs on the owner lane.
             unsafe {
-                let height = primary_screen_height().ok_or_else(|| ApplyError::Platform {
-                    message: "there is no screen to measure a position from".into(),
+                let height = primary_screen_height().ok_or_else(|| {
+                    ApplyError::failed("there is no screen to measure a position from".into())
                 })?;
                 let point = cocoa_top_left_point(at, height);
                 let _: () = msg_send![
@@ -1980,9 +1980,9 @@ impl MacOSWindow {
             unsafe {
                 let mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
                 if mask.contains(NSWindowStyleMask::FullScreen) {
-                    return Err(ApplyError::Platform {
-                        message: "AppKit does not restyle a window while it is full screen".into(),
-                    });
+                    return Err(ApplyError::failed(
+                        "AppKit does not restyle a window while it is full screen".into(),
+                    ));
                 }
                 // A window that is no longer resizable reports a zoomed frame
                 // as normal and cannot be un-zoomed by the user, so it is
@@ -1992,9 +1992,9 @@ impl MacOSWindow {
                     && !on
                     && mode_of(flags.mode_flags()) != WindowMode::Normal
                 {
-                    return Err(ApplyError::Platform {
-                        message: "a window is made fixed-size only in normal mode".into(),
-                    });
+                    return Err(ApplyError::failed(
+                        "a window is made fixed-size only in normal mode".into(),
+                    ));
                 }
                 let wanted = if on { mask | bit } else { mask - bit };
                 if wanted == mask {
@@ -2018,10 +2018,9 @@ impl MacOSWindow {
             // body runs on the owner lane.
             unsafe {
                 if self.read_flags().fullscreen {
-                    return Err(ApplyError::Platform {
-                        message: "a full-screen window leaves full screen before it is hidden"
-                            .into(),
-                    });
+                    return Err(ApplyError::failed(
+                        "a full-screen window leaves full screen before it is hidden".into(),
+                    ));
                 }
                 let _: () = msg_send![self.ns_window, orderOut: NIL];
                 Ok(())
@@ -2045,10 +2044,9 @@ impl MacOSWindow {
             unsafe { self.read_flags() }
         });
         if !flags.resizable && matches!(mode, WindowMode::Maximized | WindowMode::Fullscreen) {
-            return Err(ApplyError::Platform {
-                message: "AppKit does not zoom or full-screen a window that cannot be resized"
-                    .into(),
-            });
+            return Err(ApplyError::failed(
+                "AppKit does not zoom or full-screen a window that cannot be resized".into(),
+            ));
         }
         let steps = self
             .state

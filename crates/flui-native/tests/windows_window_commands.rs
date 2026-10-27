@@ -12,7 +12,8 @@
     reason = "native Win32 calls against the real window system"
 )]
 
-use flui_testing::window_commands::{AdmitAndApply as _, CommandRefusal};
+use flui_platform::CommandRefusal;
+use flui_testing::window_commands::AdmitAndApply as _;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -22,8 +23,8 @@ use std::time::{Duration, Instant};
 use flui_foundation::geometry::{Point, Size, WindowMetrics};
 use flui_native::{HostWindow, Platform as _, WindowsPlatform};
 use flui_platform::{
-    ApplyError, DispatchEventResult, PlatformWindow, SizeConstraints, WindowCommand,
-    WindowGeometry, WindowMode, WindowOptions, WindowReveal, WindowState,
+    ApplyError, DispatchEventResult, PlatformFailure, PlatformWindow, SizeConstraints,
+    WindowCommand, WindowGeometry, WindowMode, WindowOptions, WindowReveal, WindowState,
 };
 use flui_testing::window_conformance::{self, Readback, WindowFixture};
 use windows::Win32::{
@@ -684,7 +685,7 @@ fn a_window_without_a_sizing_border_holds_its_limits() {
 /// applies, or the window system refuses it, and nothing overflows.
 fn beyond_win32(window: &Arc<dyn HostWindow>, command: WindowCommand) {
     match window.admit_and_apply(command.clone()) {
-        Ok(()) | Err(CommandRefusal::Apply(ApplyError::Platform { .. })) => {}
+        Ok(()) | Err(CommandRefusal::Apply(ApplyError::Platform(PlatformFailure::OutOfRange))) => {}
         Err(other) => panic!("{command:?} answered {other:?}"),
     }
 }
@@ -1013,7 +1014,9 @@ fn geometry_win32_cannot_hold_is_refused() {
         assert!(
             matches!(
                 window.admit_and_apply(command.clone()),
-                Err(CommandRefusal::Apply(ApplyError::Platform { .. }))
+                Err(CommandRefusal::Apply(ApplyError::Platform(
+                    PlatformFailure::OutOfRange
+                )))
             ),
             "{command:?}"
         );

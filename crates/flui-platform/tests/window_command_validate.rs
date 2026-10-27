@@ -3,9 +3,10 @@
 
 use flui_foundation::geometry::{EdgeInsets, Point, Size, WindowMetrics};
 use flui_platform::{
-    AdmissionError, ApplyError, Availability, SizeConstraints, Unsupported, UnsupportedReason,
-    WindowAppearance, WindowCapabilities, WindowCommand, WindowExecutionState, WindowGeometry,
-    WindowMode, WindowRevision, WindowRevisionExhausted, WindowState,
+    AdmissionError, AdmittedCommand, ApplyError, Availability, CapabilitiesOwner, SizeConstraints,
+    Unsupported, UnsupportedReason, WindowAppearance, WindowCapabilities, WindowCommand,
+    WindowExecutionState, WindowGeometry, WindowMode, WindowRevision, WindowRevisionExhausted,
+    WindowState,
 };
 
 fn size(width: f64, height: f64) -> Size<f64> {
@@ -359,20 +360,33 @@ fn the_capabilities_revision_moves_only_with_the_capabilities() {
     );
 }
 
+fn owner(number: u64) -> CapabilitiesOwner {
+    CapabilitiesOwner::new(std::num::NonZeroU64::new(number).expect("a non-zero owner"))
+}
+
+/// What opening `admitted` under `capabilities` answers, as the command or
+/// the fact that it was superseded.
+fn opens(admitted: AdmittedCommand, capabilities: &WindowCapabilities) -> Result<(), ()> {
+    match admitted.against(capabilities) {
+        Ok(_) => Ok(()),
+        Err(ApplyError::Superseded { .. }) => Err(()),
+        Err(other) => panic!("`against` answers only Superseded, not {other:?}"),
+    }
+}
+
 /// A token opens only under the capabilities it was admitted against: the
-/// same revision lets the command through; a moved revision, or capabilities
-/// that no longer honour it, answer `Superseded`; admitting it again against
-/// the new capabilities either opens or is refused by `admit`.
+/// same window at the same revision lets the command through; a moved
+/// revision answers `Superseded` and gives the command back, even for a
+/// command the new capabilities still honour; admitting it again against the
+/// new capabilities either opens or is refused by `admit`.
 fn a_token_opens_only_under_the_capabilities_it_was_admitted_against() {
-    let published = base_state()
-        .successor(base_state().with_capabilities(WindowCapabilities::ALL))
-        .expect("first capabilities");
+    let mut published = base_state().with_capabilities(WindowCapabilities::ALL);
+    published.capabilities = published.capabilities.owned_by(owner(1));
     let title = WindowCommand::SetTitle("t".into());
     let admitted = title
         .clone()
         .admit(&published.capabilities)
         .expect("the window honours titles");
-    assert_eq!(admitted.revision(), published.capabilities.revision());
     assert_eq!(admitted.command(), &title);
     assert_eq!(
         admitted.against(&published.capabilities),
@@ -391,7 +405,9 @@ fn a_token_opens_only_under_the_capabilities_it_was_admitted_against() {
         .expect("admitted before the change");
     assert_eq!(
         stale.against(&revised.capabilities),
-        Err(ApplyError::Superseded),
+        Err(ApplyError::Superseded {
+            command: title.clone()
+        }),
         "a title is still honoured, but it was checked against other capabilities"
     );
     assert_eq!(
@@ -404,12 +420,14 @@ fn a_token_opens_only_under_the_capabilities_it_was_admitted_against() {
     );
     let fullscreen = WindowCommand::SetMode(WindowMode::Fullscreen);
     assert_eq!(
-        fullscreen
-            .clone()
-            .admit(&published.capabilities)
-            .expect("admitted before the change")
-            .against(&revised.capabilities),
-        Err(ApplyError::Superseded)
+        opens(
+            fullscreen
+                .clone()
+                .admit(&published.capabilities)
+                .expect("admitted before the change"),
+            &revised.capabilities
+        ),
+        Err(())
     );
     assert!(
         matches!(
@@ -418,15 +436,33 @@ fn a_token_opens_only_under_the_capabilities_it_was_admitted_against() {
         ),
         "admitted again, the command the window lost is refused"
     );
-    let unhonoured = WindowCommand::Hide
-        .admit(&WindowCapabilities::ALL)
-        .expect("admitted where hiding is honoured");
+}
+
+/// A token is bound to its window: at the same revision, another window's
+/// capabilities, or capabilities built by hand, do not open it, and a token
+/// admitted against hand-built capabilities opens on no window.
+fn a_token_opens_only_on_the_window_it_was_admitted_for() {
+    let first = WindowCapabilities::ALL.owned_by(owner(1));
+    let second = WindowCapabilities::ALL.owned_by(owner(2));
+    assert_eq!(first.revision(), second.revision(), "the same revision");
+    let admit = |capabilities: &WindowCapabilities| {
+        WindowCommand::Hide
+            .admit(capabilities)
+            .expect("both honour hiding")
+    };
+    assert_eq!(opens(admit(&first), &first), Ok(()));
+    assert_eq!(opens(admit(&first), &second), Err(()), "another window");
     assert_eq!(
-        unhonoured.against(&WindowCapabilities::NONE),
-        Err(ApplyError::Superseded),
-        "capabilities of the same revision that do not honour it are not the ones it was \
-         admitted against"
+        opens(admit(&WindowCapabilities::ALL), &first),
+        Err(()),
+        "capabilities built by hand belong to no window"
     );
+    assert_eq!(
+        opens(admit(&first), &WindowCapabilities::ALL),
+        Err(()),
+        "nor does a window's token open under them"
+    );
+    assert_eq!(first, second, "equal in what they honour all the same");
 }
 
 #[test]
@@ -502,6 +538,10 @@ fn window_command_validate() {
             (
                 "a_token_opens_only_under_the_capabilities_it_was_admitted_against",
                 a_token_opens_only_under_the_capabilities_it_was_admitted_against,
+            ),
+            (
+                "a_token_opens_only_on_the_window_it_was_admitted_for",
+                a_token_opens_only_on_the_window_it_was_admitted_for,
             ),
         ],
     );

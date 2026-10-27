@@ -197,6 +197,32 @@ fn a_command_superseded_in_the_queue_is_admitted_again() {
     );
 }
 
+/// A close the window refuses (its window system lets the application close
+/// none of its windows) leaves the window open, so what was queued behind it
+/// still applies; only a close that goes ahead, or finds the window closed,
+/// ends the batch.
+fn a_refused_close_keeps_the_work_queued_behind_it() {
+    let mut cannot_close = WindowCapabilities::ALL;
+    cannot_close.closes = flui_platform::Availability::Unavailable;
+    let window = headless_window(cannot_close);
+    let rig = rig_with(
+        &window,
+        21,
+        WindowCommandQueues::default(),
+        router_for(&window, 21, None),
+    );
+    rig.handle.request_close().expect("accepted");
+    rig.handle
+        .set_title("after the refused close")
+        .expect("accepted");
+    rig.queues.apply_pending();
+    assert_eq!(
+        window.state().title.as_deref(),
+        Some("after the refused close"),
+        "the window stayed, and so did its queue"
+    );
+}
+
 fn the_handles_of_two_windows_do_not_mix() {
     let first = headless_window(WindowCapabilities::ALL);
     let second = headless_window(WindowCapabilities::ALL);
@@ -284,9 +310,7 @@ impl PlatformWindow for RecordingWindow {
     fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
         let command = command.against(&self.state().capabilities)?;
         if self.fail_titles && matches!(command, WindowCommand::SetTitle(_)) {
-            return Err(ApplyError::Platform {
-                message: "the system said no".into(),
-            });
+            return Err(ApplyError::failed("the system said no".into()));
         }
         self.applied.lock().expect("log").push(command);
         if let Some(during) = self.during_apply {
@@ -636,6 +660,10 @@ fn window_handle_contract() {
             (
                 "a_command_superseded_in_the_queue_is_admitted_again",
                 a_command_superseded_in_the_queue_is_admitted_again as fn(),
+            ),
+            (
+                "a_refused_close_keeps_the_work_queued_behind_it",
+                a_refused_close_keeps_the_work_queued_behind_it as fn(),
             ),
             (
                 "the_handles_of_two_windows_do_not_mix",

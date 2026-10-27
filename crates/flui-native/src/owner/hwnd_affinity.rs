@@ -291,9 +291,9 @@ pub(crate) fn show_owned_window(
         TeardownRoute::AlreadyGone | TeardownRoute::StaleHandle => {
             Err(flui_platform::ApplyError::Closed)
         }
-        TeardownRoute::PostClose => Err(flui_platform::ApplyError::Platform {
-            message: "show must run on the native window owner".into(),
-        }),
+        TeardownRoute::PostClose => Err(flui_platform::ApplyError::failed(
+            "show must run on the native window owner".into(),
+        )),
     };
     check()?;
     show()?;

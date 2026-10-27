@@ -75,6 +75,13 @@ pub trait WindowFixture {
 
     /// Close the window the way the window system would, and settle.
     fn close(&mut self);
+
+    /// Make the window system revise what the window honours, leaving the
+    /// title command honoured, and settle; `false` where the window system
+    /// gives a test no such lever, which skips the check that needs one.
+    fn revise_capabilities(&mut self) -> bool {
+        false
+    }
 }
 
 /// One promise a window broke.
@@ -131,6 +138,10 @@ const CHECKS: &[(&str, Check)] = &[
     (
         "the_snapshot_agrees_with_the_window_system",
         the_snapshot_agrees_with_the_window_system,
+    ),
+    (
+        "a_command_admitted_before_a_revision_is_superseded",
+        a_command_admitted_before_a_revision_is_superseded,
     ),
     ("a_closed_window_refuses", a_closed_window_refuses),
 ];
@@ -355,6 +366,38 @@ fn the_snapshot_agrees_with_the_window_system(
         compare(&format!("after {command:?}"), fixture);
     }
     finish(broken)
+}
+
+/// A command admitted against the capabilities the window had before the
+/// window system revised them is answered `Superseded` by the window, which
+/// checks the token against what its snapshot publishes now, and changes
+/// nothing.
+fn a_command_admitted_before_a_revision_is_superseded(
+    fixture: &mut dyn WindowFixture,
+) -> Result<(), String> {
+    let window = fixture.window();
+    let title = WindowCommand::SetTitle("admitted before the revision".to_owned());
+    let Ok(early) = title.clone().admit(&window.state().capabilities) else {
+        return Ok(());
+    };
+    if !fixture.revise_capabilities() {
+        return Ok(());
+    }
+    let before = window.state();
+    match window.apply(early) {
+        Err(ApplyError::Superseded { command }) if command == title => {}
+        other => {
+            return Err(format!(
+                "a title admitted before the capabilities changed answered {other:?}, not \
+                 Superseded"
+            ));
+        }
+    }
+    fixture.settle();
+    if window.state().title != before.title {
+        return Err("a superseded title reached the window".to_owned());
+    }
+    Ok(())
 }
 
 fn a_closed_window_refuses(fixture: &mut dyn WindowFixture) -> Result<(), String> {

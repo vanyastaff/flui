@@ -91,7 +91,7 @@ use flui_foundation::PresentationAddress;
 use flui_foundation::panic::payload_text;
 use flui_platform::PlatformWindow;
 
-use super::window_control::CommandRefusal;
+use flui_platform::CommandRefusal;
 pub use flui_view::CloseReason;
 use parking_lot::Mutex;
 
@@ -212,7 +212,7 @@ impl std::fmt::Debug for CloseRequestHandler {
 }
 
 /// Why a programmatic close could not be delivered.
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Debug, thiserror::Error, PartialEq)]
 #[non_exhaustive]
 pub enum CloseRequestError {
     /// No presentation is registered at this address — it was never
@@ -523,12 +523,12 @@ impl CloseRequestRouter {
         // Outside the lock: closing fires the window's own `on_close`,
         // which re-enters flui-app (`close_this_window`) and may re-enter
         // this router.
-        super::window_control::apply_now(&*window, flui_platform::WindowCommand::Close).map_err(
-            |refusal| match refusal {
+        flui_platform::WindowCommand::Close
+            .admit_and_apply(&*window)
+            .map_err(|refusal| match refusal {
                 CommandRefusal::Admission(error) => CloseRequestError::Refused { address, error },
                 CommandRefusal::Apply(error) => CloseRequestError::Failed { address, error },
-            },
-        )
+            })
     }
 }
 

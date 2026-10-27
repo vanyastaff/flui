@@ -5,7 +5,8 @@
 //! command whose capability is `Unavailable` with `Unsupported` and no change,
 //! and a command admitted before the capabilities changed is `Superseded`.
 
-use flui_testing::window_commands::{AdmitAndApply as _, CommandRefusal};
+use flui_platform::CommandRefusal;
+use flui_testing::window_commands::AdmitAndApply as _;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -346,8 +347,18 @@ fn a_command_admitted_before_a_capability_change_is_superseded() {
         "focus, then the capabilities"
     );
 
-    assert_eq!(window.apply(early_title), Err(ApplyError::Superseded));
-    assert_eq!(window.apply(early_maximize), Err(ApplyError::Superseded));
+    assert_eq!(
+        window.apply(early_title),
+        Err(ApplyError::Superseded {
+            command: title.clone()
+        })
+    );
+    assert_eq!(
+        window.apply(early_maximize),
+        Err(ApplyError::Superseded {
+            command: maximize.clone()
+        })
+    );
     assert_eq!(
         window.state(),
         after,
@@ -365,6 +376,40 @@ fn a_command_admitted_before_a_capability_change_is_superseded() {
         ))),
         "admitted again, what the window lost is refused"
     );
+}
+
+/// A command admitted for one window is never applied to another, even
+/// though both opened with the same capabilities at the same revision, and a
+/// command admitted against capabilities built by hand opens on no window.
+fn a_command_admitted_for_another_window_is_superseded() {
+    let platform = HeadlessPlatform::new();
+    let first = open(&platform);
+    let second = open(&platform);
+    assert_eq!(
+        first.state().capabilities.revision(),
+        second.state().capabilities.revision()
+    );
+    let title = WindowCommand::SetTitle("for the first".into());
+    let for_first = title
+        .clone()
+        .admit(&first.state().capabilities)
+        .expect("the first window takes titles");
+    assert_eq!(
+        second.apply(for_first),
+        Err(ApplyError::Superseded {
+            command: title.clone()
+        })
+    );
+    let by_hand = title
+        .clone()
+        .admit(&WindowCapabilities::ALL)
+        .expect("capabilities built by hand take titles");
+    assert_eq!(
+        first.apply(by_hand),
+        Err(ApplyError::Superseded { command: title })
+    );
+    assert_ne!(first.state().title.as_deref(), Some("for the first"));
+    assert_ne!(second.state().title.as_deref(), Some("for the first"));
 }
 
 fn the_user_resizing_and_moving_publish_too() {
@@ -599,6 +644,10 @@ fn window_state_contract() {
             (
                 "a_command_admitted_before_a_capability_change_is_superseded",
                 a_command_admitted_before_a_capability_change_is_superseded as fn(),
+            ),
+            (
+                "a_command_admitted_for_another_window_is_superseded",
+                a_command_admitted_for_another_window_is_superseded as fn(),
             ),
             (
                 "the_user_resizing_and_moving_publish_too",

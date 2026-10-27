@@ -28,6 +28,8 @@
 //! ([`ApplyError`]). An applied command is a request: its outcome is visible
 //! only in the next snapshot.
 
+use std::num::NonZeroU64;
+
 use flui_foundation::geometry::{EdgeInsets, Point, Size, WindowMetrics};
 
 use crate::{
@@ -345,10 +347,11 @@ impl WindowState {
     /// reported no drawable area) keeps this snapshot's: a report that is not
     /// a drawable area is never published.
     ///
-    /// The capabilities' own [`revision`](WindowCapabilities::revision) is
-    /// this function's to keep, so a sample's is ignored too: it stays this
-    /// snapshot's while the window honours the same commands the same way,
-    /// and becomes the new snapshot's revision when that changes.
+    /// The capabilities' own [`revision`](WindowCapabilities::revision) and
+    /// owner are this function's to keep, so a sample's are ignored too: the
+    /// owner stays this snapshot's, and the revision stays while the window
+    /// honours the same commands the same way and becomes the new snapshot's
+    /// revision when that changes.
     ///
     /// # Errors
     /// [`WindowRevisionExhausted`] when `sample` differs and this snapshot is
@@ -356,6 +359,7 @@ impl WindowState {
     pub fn successor(&self, mut sample: Self) -> Result<Self, WindowRevisionExhausted> {
         sample.revision = self.revision;
         sample.capabilities.revision = self.capabilities.revision;
+        sample.capabilities.owner = self.capabilities.owner;
         if sample.metrics.is_none() {
             sample.metrics = self.metrics;
         }
@@ -428,10 +432,30 @@ pub struct WindowCapabilities {
     pub observes_minimized: Availability,
     /// A saved position can be applied again when the window opens.
     pub places_at_open: Availability,
+    /// The window whose snapshot publishes these capabilities; `None` for
+    /// capabilities built by hand. Kept by [`WindowState::successor`].
+    owner: Option<CapabilitiesOwner>,
     /// The snapshot revision at which these capabilities were published;
     /// kept by [`WindowState::successor`], zero for capabilities no snapshot
     /// has published.
     revision: WindowRevision,
+}
+
+/// The window a snapshot's capabilities belong to, unique in the process: a
+/// host mints one per window it opens and stamps the window's first snapshot
+/// with it ([`WindowCapabilities::owned_by`]). An [`AdmittedCommand`] is bound
+/// to it, so a command admitted for one window is never applied to another,
+/// whatever their revisions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CapabilitiesOwner(NonZeroU64);
+
+impl CapabilitiesOwner {
+    /// The owner with this number. A host draws the numbers from one
+    /// process-wide source and never reuses one.
+    #[must_use]
+    pub const fn new(number: NonZeroU64) -> Self {
+        Self(number)
+    }
 }
 
 impl PartialEq for WindowCapabilities {
@@ -469,6 +493,7 @@ impl WindowCapabilities {
             observes_position,
             observes_minimized,
             places_at_open,
+            owner: _,
             revision: _,
         } = *self;
         [
@@ -511,6 +536,7 @@ impl WindowCapabilities {
         observes_position: Availability::Unavailable,
         observes_minimized: Availability::Unavailable,
         places_at_open: Availability::Unavailable,
+        owner: None,
         revision: WindowRevision::ZERO,
     };
 
@@ -533,6 +559,7 @@ impl WindowCapabilities {
         observes_position: Availability::Native,
         observes_minimized: Availability::Native,
         places_at_open: Availability::Native,
+        owner: None,
         revision: WindowRevision::ZERO,
     };
 
@@ -543,6 +570,15 @@ impl WindowCapabilities {
     #[must_use]
     pub const fn revision(&self) -> WindowRevision {
         self.revision
+    }
+
+    /// These capabilities as the ones `owner`'s snapshots publish: what a host
+    /// stamps on a window's first snapshot, which
+    /// [`WindowState::successor`] then carries to every later one.
+    #[must_use]
+    pub const fn owned_by(mut self, owner: CapabilitiesOwner) -> Self {
+        self.owner = Some(owner);
+        self
     }
 
     /// How this window honours `command`.
@@ -650,12 +686,13 @@ impl WindowCommand {
     /// must be valid, then the window must honour it. The only way to build
     /// the [`AdmittedCommand`] that
     /// [`PlatformWindow::apply`](crate::PlatformWindow::apply) takes; the
-    /// token is bound to the capabilities'
+    /// token is bound to the capabilities' window and
     /// [`revision`](WindowCapabilities::revision).
     ///
     /// Pass the capabilities of the window's published snapshot
-    /// ([`WindowState::capabilities`]): capabilities built by hand carry no
-    /// revision of that window.
+    /// ([`WindowState::capabilities`]): capabilities built by hand belong to
+    /// no window, and a host's window answers a token admitted against them
+    /// with [`ApplyError::Superseded`].
     ///
     /// # Errors
     /// What [`validate`](Self::validate) refuses, or
@@ -672,8 +709,33 @@ impl WindowCommand {
         }
         Ok(AdmittedCommand {
             command: self,
+            owner: capabilities.owner,
             revision: capabilities.revision,
         })
+    }
+
+    /// Admit this command against `window`'s snapshot now and apply it: the
+    /// one path for a caller that applies at once, with no queue in front of
+    /// the window. A command the window answers
+    /// [`Superseded`](ApplyError::Superseded) — its capabilities changed
+    /// between the read and the application — is admitted once more against
+    /// the snapshot then, and applied or refused.
+    ///
+    /// # Errors
+    /// [`CommandRefusal::Admission`] when the window's capabilities refuse
+    /// the command, [`CommandRefusal::Apply`] when the window does.
+    pub fn admit_and_apply<W: crate::PlatformWindow + ?Sized>(
+        self,
+        window: &W,
+    ) -> Result<(), CommandRefusal> {
+        let admitted = self.admit(&window.state().capabilities)?;
+        match window.apply(admitted) {
+            Err(ApplyError::Superseded { command }) => {
+                let readmitted = command.admit(&window.state().capabilities)?;
+                Ok(window.apply(readmitted)?)
+            }
+            outcome => Ok(outcome?),
+        }
     }
 }
 
@@ -688,16 +750,17 @@ fn positive_size(size: Size<f64>) -> bool {
 ///
 /// **What the token proves, and what it does not.** It proves the command was
 /// validated against the capabilities read at admission, and it carries their
-/// [`revision`](WindowCapabilities::revision): a window opens it with
-/// [`against`](Self::against) its current capabilities, which answers
-/// [`ApplyError::Superseded`] when they moved since, so a command is never
-/// applied under capabilities it was not checked against. The operating
-/// system still keeps the last word: it speaks through
+/// window and [`revision`](WindowCapabilities::revision): a window opens it
+/// with [`against`](Self::against) its current capabilities, which answers
+/// [`ApplyError::Superseded`] when they belong to another window or moved
+/// since, so a command is never applied under capabilities it was not checked
+/// against. The operating system still keeps the last word: it speaks through
 /// [`ApplyError::Platform`] and the next snapshot.
 #[derive(Debug, PartialEq)]
 #[must_use = "an admitted command does nothing until a window applies it"]
 pub struct AdmittedCommand {
     command: WindowCommand,
+    owner: Option<CapabilitiesOwner>,
     revision: WindowRevision,
 }
 
@@ -708,25 +771,26 @@ impl AdmittedCommand {
         &self.command
     }
 
-    /// The capabilities revision the command was admitted against.
-    #[must_use]
-    pub const fn revision(&self) -> WindowRevision {
-        self.revision
-    }
-
     /// The command, to carry out under `capabilities`: the window's own, as
     /// its last published snapshot holds them. The one way a window takes the
     /// command out of the token.
     ///
+    /// The contract is identity: the same window and the same capabilities
+    /// revision. Within one window, one revision is one set of capabilities
+    /// ([`WindowState::successor`] moves it with every change), so the
+    /// command they admitted is honoured without asking again.
+    ///
     /// # Errors
-    /// [`ApplyError::Superseded`] when `capabilities` are not the ones the
-    /// command was admitted against: their revision moved, or they no longer
-    /// honour it. The caller admits the command again.
+    /// [`ApplyError::Superseded`], carrying the command back, when
+    /// `capabilities` belong to another window or a later revision. The
+    /// caller admits it again.
     pub fn against(self, capabilities: &WindowCapabilities) -> Result<WindowCommand, ApplyError> {
-        if self.revision == capabilities.revision && capabilities.permits(&self.command) {
+        if self.owner == capabilities.owner && self.revision == capabilities.revision {
             Ok(self.command)
         } else {
-            Err(ApplyError::Superseded)
+            Err(ApplyError::Superseded {
+                command: self.command,
+            })
         }
     }
 }
@@ -760,24 +824,77 @@ impl AdmissionError {
 
 /// Why a window did not carry out an admitted command: what the world caused
 /// between admission and the operating system.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum ApplyError {
     /// The window has closed.
     #[error("the window is closed")]
     Closed,
-    /// What the window honours changed between admission and application:
-    /// the command was checked against capabilities the window no longer
-    /// has. Admit it again against the current snapshot.
-    #[error("the window's capabilities changed after the command was admitted")]
-    Superseded,
-    /// The operating system refused or failed the request, or cannot hold
-    /// its numbers.
-    #[error("the window system failed the command: {message}")]
-    Platform {
+    /// The command was admitted against capabilities that are not this
+    /// window's now: another window's, or ones its window has revised since.
+    /// Admit `command` again against the current snapshot.
+    #[error("the command was admitted against capabilities the window does not have now")]
+    Superseded {
+        /// The command, given back to be admitted again.
+        command: WindowCommand,
+    },
+    /// The window system refused or failed the request.
+    #[error("the window system did not carry out the command: {0}")]
+    Platform(PlatformFailure),
+}
+
+/// What the window system said of a command it did not carry out.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum PlatformFailure {
+    /// A number the command carries, finite and positive as admission holds
+    /// it, is beyond what the window system can represent (Win32's device
+    /// pixels at the window's scale).
+    #[error("a value is beyond what the window system can represent")]
+    OutOfRange,
+    /// The window system refused or failed the call.
+    #[error("{message}")]
+    Failed {
         /// What the window system reported.
         message: String,
     },
+}
+
+impl ApplyError {
+    /// A window-system failure with this message.
+    #[must_use]
+    pub fn failed(message: String) -> Self {
+        Self::Platform(PlatformFailure::Failed { message })
+    }
+}
+
+/// Why a command applied at once ([`WindowCommand::admit_and_apply`]) did not
+/// take effect: its admission refused it, or the window did.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "a command is refused at admission or at application; there is no third place"
+)]
+pub enum CommandRefusal {
+    /// The window's capabilities refuse the command, or its numbers describe
+    /// no window.
+    #[error(transparent)]
+    Admission(#[from] AdmissionError),
+    /// The window closed, its capabilities moved again, or its window system
+    /// did not carry the command out.
+    #[error(transparent)]
+    Apply(#[from] ApplyError),
+}
+
+impl CommandRefusal {
+    /// What is not here, when that is why the command was refused.
+    #[must_use]
+    pub const fn unsupported(&self) -> Option<Unsupported> {
+        match self {
+            Self::Admission(refused) => refused.unsupported(),
+            Self::Apply(_) => None,
+        }
+    }
 }
 
 /// Why [`WindowControl::submit`] did not queue a command.
