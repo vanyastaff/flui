@@ -226,15 +226,17 @@ impl MainController {
         if let Some(open) = &self.open {
             // Shown, then asked for focus: a window system that cannot give
             // focus (Wayland) still shows the window.
-            let result = open
-                .window
-                .apply(flui_platform::WindowCommand::Show)
-                .and_then(
-                    |()| match open.window.apply(flui_platform::WindowCommand::Activate) {
-                        Err(flui_platform::WindowCommandError::Unsupported(_)) | Ok(()) => Ok(()),
+            use crate::app::window_control::{CommandRefusal, apply_now};
+            let result = apply_now(&*open.window, flui_platform::WindowCommand::Show)
+                .and_then(|()| {
+                    match apply_now(&*open.window, flui_platform::WindowCommand::Activate) {
+                        Err(CommandRefusal::Admission(
+                            flui_platform::AdmissionError::Unsupported(_),
+                        ))
+                        | Ok(()) => Ok(()),
                         Err(error) => Err(error),
-                    },
-                )
+                    }
+                })
                 .map(|()| open.address)
                 .map_err(|error| AppWindowError::Show {
                     source: Arc::new(error),
@@ -786,6 +788,7 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     use flui_native::{HeadlessPlatform, Platform};
+    use flui_testing::window_commands::AdmitAndApply as _;
 
     use crate::app::runtime::ExitPolicy;
 
@@ -916,7 +919,7 @@ mod tests {
                                 "completion tail cannot publish during the current owner turn"
                             );
                             if close_before_publication {
-                                let _ = window.apply(flui_platform::WindowCommand::Close);
+                                window.close_now();
                             }
                             Ok(RenderedMain {
                                 window,

@@ -19,10 +19,10 @@ use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::input_regions::{DeviceInputRegion, InputRegion, ProjectedInputRegions};
 use flui_platform::text_store::TextStoreHost;
 use flui_platform::{
-    CursorError, DispatchEventResult, DisplayId, PlatformHaptics, PlatformInput, PlatformTextInput,
-    PlatformWindow, SizeConstraints, WindowAppearance, WindowBackgroundAppearance,
-    WindowCapabilities, WindowCommand, WindowCommandError, WindowGeometry, WindowId, WindowMode,
-    WindowOptions, WindowState,
+    AdmittedCommand, ApplyError, CursorError, DispatchEventResult, DisplayId, PlatformHaptics,
+    PlatformInput, PlatformTextInput, PlatformWindow, SizeConstraints, WindowAppearance,
+    WindowBackgroundAppearance, WindowCapabilities, WindowCommand, WindowGeometry, WindowId,
+    WindowMode, WindowOptions, WindowState,
 };
 use parking_lot::Mutex;
 
@@ -370,7 +370,6 @@ pub struct MockWindow {
     window_state: Arc<WindowStateCell>,
     /// What the window's state publisher reads; the callbacks hold it weakly.
     source: Arc<SnapshotSource>,
-    capabilities: WindowCapabilities,
     limits: HeadlessWindowPolicy,
     callbacks: Arc<WindowCallbacks>,
     /// What the window holds of the table's window-level positions.
@@ -472,6 +471,8 @@ struct MockWindowState {
     cursor: CursorIcon,
     /// The display this window is on; `None` when the platform has no displays.
     display: Option<DisplayId>,
+    /// What the simulated window system lets this window do now.
+    capabilities: WindowCapabilities,
 }
 
 impl MockWindowState {
@@ -552,11 +553,8 @@ impl MockWindowState {
 /// mode without `observes_minimized`, and no frame while fullscreen. A
 /// closed window is detached; a size or scale that is not a drawable area
 /// reports no metrics. The hover is what the last hover report said.
-fn sample_window_state(
-    model: &MockWindowState,
-    capabilities: &WindowCapabilities,
-    hovered: bool,
-) -> WindowState {
+fn sample_window_state(model: &MockWindowState, hovered: bool) -> WindowState {
+    let capabilities = &model.capabilities;
     let observed = |geometry: WindowGeometry| {
         WindowGeometry::new(
             geometry
@@ -607,11 +605,10 @@ fn sample_window_state(
 fn read_window_state(
     cell: &WindowStateCell,
     model: &Mutex<MockWindowState>,
-    capabilities: &WindowCapabilities,
     callbacks: &WindowCallbacks,
 ) -> crate::window::state::Published {
     cell.invalidate();
-    cell.state_with(|| sample_window_state(&model.lock(), capabilities, callbacks.hovered()))
+    cell.state_with(|| sample_window_state(&model.lock(), callbacks.hovered()))
 }
 
 /// What a window's state publisher reads: the model standing in for the OS,
@@ -619,7 +616,6 @@ fn read_window_state(
 struct SnapshotSource {
     cell: Arc<WindowStateCell>,
     model: Arc<Mutex<MockWindowState>>,
-    capabilities: WindowCapabilities,
     callbacks: Weak<WindowCallbacks>,
 }
 
@@ -628,7 +624,7 @@ impl SnapshotSource {
         self.callbacks
             .upgrade()
             .map_or(Publication::Unchanged, |callbacks| {
-                read_window_state(&self.cell, &self.model, &self.capabilities, &callbacks).outcome()
+                read_window_state(&self.cell, &self.model, &callbacks).outcome()
             })
     }
 }
@@ -673,6 +669,7 @@ impl MockWindow {
             appearance: WindowAppearance::default(),
             cursor: CursorIcon::default(),
             display,
+            capabilities,
         };
         model.size = model.clamp_size(options.size, &limits);
         if capabilities.permits(&WindowCommand::SetMode(options.mode)) {
@@ -683,14 +680,13 @@ impl MockWindow {
         if model.mode != WindowMode::Normal && options.normal_geometry.is_some() {
             model.normal_geometry = options.normal_geometry;
         }
-        let initial = sample_window_state(&model, &capabilities, false);
+        let initial = sample_window_state(&model, false);
         let state = Arc::new(Mutex::new(model));
         let window_state = Arc::new(WindowStateCell::new(initial));
         let callbacks = Arc::new(WindowCallbacks::new());
         let source = Arc::new(SnapshotSource {
             cell: Arc::clone(&window_state),
             model: Arc::clone(&state),
-            capabilities,
             callbacks: Arc::downgrade(&callbacks),
         });
         callbacks.publish_through(Arc::downgrade(&source), SnapshotSource::read);
@@ -699,7 +695,6 @@ impl MockWindow {
             state,
             window_state,
             source,
-            capabilities,
             limits,
             callbacks,
             facets: positions.for_window(&()),
@@ -726,12 +721,7 @@ impl MockWindow {
     /// `on_state_changed` after the cell's lock is released when the revision
     /// grew.
     fn publish_state(&self) -> WindowState {
-        let published = read_window_state(
-            &self.source.cell,
-            &self.source.model,
-            &self.capabilities,
-            &self.callbacks,
-        );
+        let published = read_window_state(&self.source.cell, &self.source.model, &self.callbacks);
         if published.changed {
             self.callbacks.dispatch_state_changed();
         }
@@ -925,6 +915,21 @@ impl MockWindow {
         self.publish_state();
     }
 
+    /// Simulate the window system revising what it lets this window do, as a
+    /// compositor that stops honouring a request does. Fires
+    /// `on_state_changed` when the snapshot differs, with the capabilities at
+    /// a new revision; a closed window ignores the report.
+    pub fn simulate_capabilities(&self, capabilities: WindowCapabilities) {
+        {
+            let mut state = self.state.lock();
+            if state.closed {
+                return;
+            }
+            state.capabilities = capabilities;
+        }
+        self.publish_state();
+    }
+
     /// Move this window to display `id`, as the user dragging it onto another
     /// monitor does. Fires `on_state_changed` when the snapshot differs; a
     /// closed window ignores the report.
@@ -1004,11 +1009,11 @@ impl PlatformWindow for MockWindow {
         self.publish_state()
     }
 
-    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+    fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
         if self.state.lock().closed {
-            return Err(WindowCommandError::Closed);
+            return Err(ApplyError::Closed);
         }
-        command.admit(&self.capabilities)?;
+        let command = command.against(&self.window_state.published_capabilities())?;
         if command == WindowCommand::Close {
             // Synchronous, as a same-thread Win32 `DestroyWindow` is: the
             // teardown and `on_close` run before this returns.

@@ -282,9 +282,9 @@ impl PlatformWindow for HeadlessWindow {
 
     fn apply(
         &self,
-        command: flui_platform::WindowCommand,
-    ) -> Result<(), flui_platform::WindowCommandError> {
-        command.admit(&flui_platform::WindowCapabilities::NONE)?;
+        command: flui_platform::AdmittedCommand,
+    ) -> Result<(), flui_platform::ApplyError> {
+        command.against(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
 }
@@ -1530,8 +1530,10 @@ impl flui_platform::WindowControl for HeadlessWindowControl {
     fn submit(
         &self,
         command: flui_platform::WindowCommand,
-    ) -> Result<(), flui_platform::WindowCommandError> {
-        command.admit(&flui_platform::WindowCapabilities::NONE)?;
+    ) -> Result<(), flui_platform::SubmitError> {
+        command
+            .admit(&flui_platform::WindowCapabilities::NONE)
+            .map(drop)?;
         Ok(())
     }
 

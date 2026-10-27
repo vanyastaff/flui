@@ -1,6 +1,7 @@
 //! Private driver fault matrix. Scene assertions use the product pump/sink;
 //! the seam injects native prelude and capture destruction failures without GPU.
 
+use flui_testing::window_commands::AdmitAndApply as _;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{
     Arc,
@@ -279,7 +280,7 @@ fn native_terminal_callbacks_refuse_late_publication() {
                             if quit {
                                 owner.quit();
                             } else {
-                                let _ = window.apply(flui_platform::WindowCommand::Close);
+                                window.close_now();
                             }
                         })),
                     }))
@@ -343,7 +344,7 @@ fn a_prepared_single_window_rejects_close_and_quit_before_publication() {
                 if quit {
                     owner.quit();
                 } else {
-                    let _ = window.apply(flui_platform::WindowCommand::Close);
+                    window.close_now();
                 }
                 let result = prepared
                     .submit()
@@ -394,7 +395,7 @@ fn a_quit_after_the_native_close_dispatches_no_second_close() {
                         .with(|slot| slot.borrow().installed_host.logical().runtime_count())
                 };
                 if native_close {
-                    let _ = window.apply(flui_platform::WindowCommand::Close);
+                    window.close_now();
                     assert_eq!(runtimes(), 0, "the native close retired the runtime");
                 }
                 let ((), log) = flui_testing::log_capture::capture(|| owner.quit());
@@ -1226,7 +1227,7 @@ fn unfinished_installation_closes_its_native_window() {
             "only unfinished installation owns native closure; deferred={deferred}, publish={publish}"
         );
         if publish {
-            let _ = window.apply(flui_platform::WindowCommand::Close);
+            window.close_now();
             assert_eq!(
                 closed.load(Ordering::SeqCst),
                 1,
@@ -1267,7 +1268,7 @@ fn agent_notification_follows_live_native_initialization() {
             self.live
                 .fetch_add(usize::from(window.is_open()), Ordering::SeqCst);
             if let Some(native) = self.close.take() {
-                let _ = native.apply(flui_platform::WindowCommand::Close);
+                native.close_now();
             }
         }
     }
@@ -1306,12 +1307,12 @@ fn agent_notification_follows_live_native_initialization() {
                 installed: Some(Box::new(move || match case {
                     DuringInstall::Keep | DuringInstall::CloseFromAgent => {}
                     DuringInstall::Close => {
-                        let _ = native.apply(flui_platform::WindowCommand::Close);
+                        native.close_now();
                     }
                     DuringInstall::Teardown => teardown_platform_ui_runtime(),
                     DuringInstall::Panic => panic!("native initialization failed"),
                     DuringInstall::CloseAndPanic => {
-                        let _ = native.apply(flui_platform::WindowCommand::Close);
+                        native.close_now();
                         panic!("native initialization failed");
                     }
                 })),

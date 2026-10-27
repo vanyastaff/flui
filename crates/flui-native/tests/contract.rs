@@ -204,6 +204,7 @@ mod native_windows {
     use flui_foundation::geometry::Size;
     use flui_native::{HostWindow, OwnerPlatform, Platform, WindowsPlatform};
     use flui_platform::{DispatchEventResult, WindowOptions};
+    use flui_testing::window_commands::AdmitAndApply as _;
     use std::{
         cell::RefCell,
         marker::PhantomData,
@@ -630,7 +631,7 @@ mod native_windows {
             "{id:?} is not in {:?}",
             snapshot.displays()
         );
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
     }
 
     #[expect(unsafe_code, reason = "sending WM_DPICHANGED to an owned window")]
@@ -683,7 +684,7 @@ mod native_windows {
             "a DPI change must publish its scale once"
         );
         send(dpi);
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
     }
 
     #[expect(unsafe_code, reason = "moving an owned window")]
@@ -731,7 +732,7 @@ mod native_windows {
             seeded,
             "a move that stays on one monitor changed the display"
         );
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
     }
 
     pub(super) fn run_requested_child() -> bool {
@@ -860,7 +861,7 @@ mod native_windows {
         window.on_close(Box::new(move || {
             close_observed.store(true, Ordering::SeqCst);
         }));
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
         assert!(
             closed.load(Ordering::SeqCst),
             "closing runs the close callback"
@@ -885,7 +886,7 @@ mod native_windows {
 
     impl Drop for ClosePointerTarget {
         fn drop(&mut self) {
-            let _ = self.0.apply(flui_platform::WindowCommand::Close);
+            self.0.close_now();
         }
     }
 
@@ -988,10 +989,7 @@ mod native_windows {
                         count
                     };
                     if count == 2 {
-                        let _ = weak
-                            .upgrade()
-                            .expect("live readmission window")
-                            .apply(flui_platform::WindowCommand::Close);
+                        weak.upgrade().expect("live readmission window").close_now();
                         callback_proxy
                             .request_quit()
                             .expect("quit after readmission");
@@ -1196,7 +1194,7 @@ mod native_windows {
         let platform = WindowsPlatform::new().expect("independent native owner after failed query");
         let window = open(&platform, true);
         let weak = Arc::downgrade(&window);
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
         drop(window);
         assert!(
             weak.upgrade().is_none(),
@@ -1364,10 +1362,7 @@ mod native_windows {
                             count
                         };
                         if count == 2 {
-                            let _ = weak
-                                .upgrade()
-                                .expect("due live window")
-                                .apply(flui_platform::WindowCommand::Close);
+                            weak.upgrade().expect("due live window").close_now();
                             if callback_pending.fetch_sub(1, Ordering::SeqCst) == 1 {
                                 callback_proxy
                                     .request_quit()
@@ -1406,10 +1401,7 @@ mod native_windows {
                         return Some(web_time::Instant::now());
                     }
                     if mode == "close" && first_query {
-                        let _ = first
-                            .upgrade()
-                            .expect("live first window")
-                            .apply(flui_platform::WindowCommand::Close);
+                        first.upgrade().expect("live first window").close_now();
                         hook_deadlines.lock().expect("deadline state")[0] = None;
                     }
                     hook_deadlines
@@ -1593,10 +1585,7 @@ mod native_windows {
                     }
                 }
                 if mode == "closed_in_callback" {
-                    let _ = weak
-                        .upgrade()
-                        .expect("live input window")
-                        .apply(flui_platform::WindowCommand::Close);
+                    weak.upgrade().expect("live input window").close_now();
                     let replacement =
                         open(&callback_platform.upgrade().expect("live platform"), true);
                     let closes = Arc::clone(&callback_replacement_closes);
@@ -1660,7 +1649,7 @@ mod native_windows {
                 flui_platform::PlatformWindow::window_handle(replacement.as_ref()).is_ok(),
                 "replacement remains natively live"
             );
-            let _ = replacement.apply(flui_platform::WindowCommand::Close);
+            replacement.close_now();
         }
         assert_eq!(
             close_count.load(Ordering::SeqCst),
@@ -1676,7 +1665,7 @@ mod native_windows {
             window.on_should_close(Box::new(|| true));
         }
         if mode == "vetoed" || mode == "prevented" {
-            let _ = window.apply(flui_platform::WindowCommand::Close);
+            window.close_now();
         }
         drop(window);
         assert!(
@@ -1685,7 +1674,7 @@ mod native_windows {
         );
         let next = open(&platform, true);
         let next_weak = Arc::downgrade(&next);
-        let _ = next.apply(flui_platform::WindowCommand::Close);
+        next.close_now();
         drop(next);
         assert!(
             next_weak.upgrade().is_none(),
@@ -1792,7 +1781,7 @@ mod native_windows {
             "the sent keydown, delivered inside the outer drain, reports its own \
              key and the outer keystroke keeps its translated character"
         );
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
     }
 
     // A dead key (an accent on an international layout) arrives as
@@ -2237,7 +2226,7 @@ mod native_windows {
             "{key}: the character after the menu key reaches input"
         );
         assert_eq!(closes.load(Ordering::SeqCst), 0, "{key}: window stays open");
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
     }
 
     fn consumed_alt_space_withdraws_its_system_char() {
@@ -2376,7 +2365,7 @@ mod native_windows {
                 "an unconsumed Alt+Space keeps its system character"
             );
         }
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
     }
 
     #[expect(
@@ -2406,7 +2395,7 @@ mod native_windows {
         );
         let next = open(&platform, true);
         let next_weak = Arc::downgrade(&next);
-        let _ = next.apply(flui_platform::WindowCommand::Close);
+        next.close_now();
         drop(next);
         assert!(
             next_weak.upgrade().is_none(),
@@ -2472,7 +2461,7 @@ mod native_windows {
                 "getter changed after native move"
             );
         }
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
     }
 
     #[expect(
@@ -2517,7 +2506,7 @@ mod native_windows {
                     .contains(flui_platform::keyboard::Modifiers::SHIFT)),
             "native character translation retains the Shift that produced the character"
         );
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
     }
 
     fn closed_window_retires_tracking() {
@@ -2525,7 +2514,7 @@ mod native_windows {
         for _ in 0..2 {
             let window = open(&platform, true);
             let weak = Arc::downgrade(&window);
-            let _ = window.apply(flui_platform::WindowCommand::Close);
+            window.close_now();
             drop(window);
             assert!(
                 weak.upgrade().is_none(),
@@ -2588,14 +2577,14 @@ mod native_windows {
         let subscriber =
             tracing_subscriber::registry().with(DestroyedWindows(Arc::clone(&destroyed)));
         tracing::subscriber::with_default(subscriber, || {
-            let _ = window.apply(flui_platform::WindowCommand::Close);
+            window.close_now();
         });
         assert_eq!(
             *destroyed.lock().expect("recorder lock"),
             [window.id().0],
             "closing one window traces its destruction, under its own identity, once"
         );
-        let _ = sibling.apply(flui_platform::WindowCommand::Close);
+        sibling.close_now();
     }
 
     /// Records how many destructions were traced when it is dropped — the
@@ -2652,7 +2641,7 @@ mod native_windows {
         window.on_state_changed(Box::new(move || {
             let _owned = (&surface, &install);
             if let Some(window) = weak.upgrade() {
-                let _ = window.apply(flui_platform::WindowCommand::Close);
+                window.close_now();
             }
         }));
         let id = window.id().0;
@@ -2702,17 +2691,14 @@ mod native_windows {
             drop(callback_owner.lock().expect("owner slot").take());
         }));
         drop(window);
-        let _ = weak
-            .upgrade()
-            .expect("tracked window")
-            .apply(flui_platform::WindowCommand::Close);
+        weak.upgrade().expect("tracked window").close_now();
         assert!(owner.lock().expect("owner slot").is_none());
         assert!(
             weak.upgrade().is_none(),
             "callback-released window remains tracked"
         );
         let next = open(&platform, true);
-        let _ = next.apply(flui_platform::WindowCommand::Close);
+        next.close_now();
     }
 
     #[expect(
@@ -2799,7 +2785,7 @@ mod native_windows {
             0,
             "an unchanged theme published a change"
         );
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
     }
 
     #[expect(
@@ -2883,7 +2869,7 @@ mod native_windows {
                 "the snapshot corrupted after resize"
             );
         }
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
     }
 
     fn resize_callback_observes_current_client_bounds() {
@@ -2911,7 +2897,7 @@ mod native_windows {
         }));
         for requested in [Size::new(500.0, 360.0), Size::new(440.0, 280.0)] {
             window
-                .apply(flui_platform::WindowCommand::SetSize(requested))
+                .admit_and_apply(flui_platform::WindowCommand::SetSize(requested))
                 .expect("the native window resizes");
             let values = observations.lock().expect("resize observations");
             let &(size, scale, observed, physical, observed_scale) =
@@ -2931,7 +2917,7 @@ mod native_windows {
             assert!((physical.width as f64 - size.width * scale).abs() <= 1.0);
             assert!((physical.height as f64 - size.height * scale).abs() <= 1.0);
         }
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
     }
 
     #[expect(
@@ -2944,7 +2930,7 @@ mod native_windows {
         // SAFETY: the live wrapper owns this HWND, queried on its creating thread.
         assert!(!unsafe { IsWindowVisible(hwnd_of(&window)) }.as_bool());
         assert!(!window.state().visible);
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
     }
 
     const MK_LBUTTON: usize = 0x0001;
@@ -3077,7 +3063,7 @@ mod native_windows {
             "an outside release keeps its negative client coordinates"
         );
         drop(log);
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
     }
 
     /// Another window taking the capture mid-press ends the sequence with a
@@ -3107,8 +3093,8 @@ mod native_windows {
         send_mouse(hwnd, WM_LBUTTONUP, 0, mouse_lparam(10, 10));
         assert!(captured().is_invalid(), "the release lets go");
         assert_eq!(kinds(&events), ["down", "cancel", "down", "up"]);
-        let _ = thief.apply(flui_platform::WindowCommand::Close);
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        thief.close_now();
+        window.close_now();
     }
 
     /// Losing focus or being minimised mid-press ends the sequence with a
@@ -3155,7 +3141,7 @@ mod native_windows {
         assert_eq!(kinds(&events), ["down", "cancel"], "minimising cancels");
         send_mouse(hwnd, WM_LBUTTONUP, 0, mouse_lparam(10, 10));
         assert_eq!(kinds(&events), ["down", "cancel"]);
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
     }
 
     /// A touch held when the window loses focus ends with a cancel, and the
@@ -3385,7 +3371,7 @@ mod native_windows {
             events.lock().expect("pointer log")
         );
         drop(device);
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
     }
 
     fn extended_mouse_buttons_share_contact_and_capture() {
@@ -3439,7 +3425,7 @@ mod native_windows {
         assert_eq!(first.pointer.id, last.pointer.id);
         assert_eq!(first.sample.pressure, None, "a mouse reports no sensor");
         drop(log);
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
     }
 
     #[expect(
@@ -3485,8 +3471,8 @@ mod native_windows {
         send_mouse(hwnd, WM_XBUTTONUP, 2 << 16, mouse_lparam(10, 10));
         assert_eq!(kinds(&events), ["down", "cancel", "down", "up"]);
         assert!(captured().is_invalid());
-        let _ = thief.apply(flui_platform::WindowCommand::Close);
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        thief.close_now();
+        window.close_now();
     }
 
     fn unknown_native_pointer_messages_do_not_invent_contacts() {
@@ -3512,7 +3498,7 @@ mod native_windows {
         send_mouse(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, mouse_lparam(10, 10));
         send_mouse(hwnd, WM_LBUTTONUP, 0, mouse_lparam(10, 10));
         assert_eq!(kinds(&events), ["down", "up"], "ordinary input recovers");
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
     }
 
     #[expect(
@@ -3566,7 +3552,7 @@ mod native_windows {
             eprintln!(
                 "CANNOT_VERIFY synthetic pointer delivery: shown target is occluded or the desktop is unavailable"
             );
-            let _ = window.apply(flui_platform::WindowCommand::Close);
+            window.close_now();
             return;
         }
         let events = record_pointer(&window);
@@ -3847,7 +3833,7 @@ mod native_windows {
                 );
             }
         }
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
     }
 
     /// A touch and a pen injected into a real window under `native-capture`
@@ -3993,7 +3979,7 @@ mod native_windows {
                 unsafe { DestroySyntheticPointerDevice(device) };
             }
             let delivered = events.lock().expect("pointer log").clone();
-            let _ = window.apply(flui_platform::WindowCommand::Close);
+            window.close_now();
             Some(delivered)
         });
         let Some(delivered) = delivered else {
@@ -4186,7 +4172,7 @@ mod native_windows {
                 return None;
             }
             let delivered = events.lock().expect("pointer log").clone();
-            let _ = window.apply(flui_platform::WindowCommand::Close);
+            window.close_now();
             Some(delivered)
         });
         let Some(delivered) = delivered else {
@@ -4278,7 +4264,7 @@ mod native_windows {
             eprintln!(
                 "CANNOT_VERIFY native wheel: shown target is occluded or desktop unavailable"
             );
-            let _ = window.apply(flui_platform::WindowCommand::Close);
+            window.close_now();
             return;
         }
         let events = record_pointer(&window);
@@ -4356,7 +4342,7 @@ mod native_windows {
             );
         }
         drop(log);
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
     }
 
     /// A mouse that reaches the window by `WM_POINTER` (the default under
@@ -4632,7 +4618,7 @@ mod native_windows {
             [true, false, true, false],
             "a capture lost with the cursor outside ends the hover"
         );
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
     }
 
     #[expect(
@@ -4734,7 +4720,7 @@ mod native_windows {
             assert_eq!(scroll.position.get().y, 40.0 / scale_of(&*window));
         }
         drop(log);
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
     }
 
     /// The mouse's `WM_POINTER` id while a mouse pointer message is current.
@@ -4902,7 +4888,7 @@ mod native_windows {
             window.state().hovered,
             "the mouse that entered again during the leave's callback still hovers"
         );
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
     }
 
     /// Delaying dispatch cannot compress the time between generated samples.
@@ -4971,7 +4957,7 @@ mod native_windows {
             "event timestamps preserve queue generation time rather than dispatch time"
         );
         drop(log);
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
     }
 
     /// A key carries its message's generation time on the clock the mouse
@@ -5040,7 +5026,7 @@ mod native_windows {
                 step + 1
             );
         }
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
     }
 
     /// A pointer event carries the modifiers of its message — the
@@ -5070,7 +5056,7 @@ mod native_windows {
             ]
         );
         drop(log);
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
     }
 
     /// Runs `platform`'s message loop with `ready` as its bootstrap; returns
@@ -5264,6 +5250,7 @@ mod native_windows {
 /// it runs only in an AppKit-run-loop-pumping macOS process.
 #[cfg(target_os = "macos")]
 mod native_appkit {
+    use flui_testing::window_commands::AdmitAndApply as _;
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -5350,6 +5337,6 @@ mod native_appkit {
             ["key", "key"],
             "the nested press is queued, never run inside the callback, and delivered once"
         );
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        window.close_now();
     }
 }

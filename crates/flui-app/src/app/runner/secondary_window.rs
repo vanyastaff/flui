@@ -1213,6 +1213,7 @@ mod tests {
     use super::*;
     use flui_native::{HeadlessPlatform, Platform};
     use flui_runtime::{owner::WindowObservation, ui_runtime::UiRuntime};
+    use flui_testing::window_commands::AdmitAndApply as _;
     use std::{cell::Cell, rc::Rc, sync::atomic::Ordering};
 
     // Inject a renderer through the same completion transport without requiring
@@ -1330,7 +1331,7 @@ mod tests {
                                         resize: Some(Box::new(move |_| {
                                             observed.set(Some(retained.load(Ordering::Acquire)));
                                             if matches!(case, InstallCase::ClosedDuringInitialization | InstallCase::ClosedDuringInitializationThenPanic) {
-                                                let _ = closing_window.apply(flui_platform::WindowCommand::Close);
+                                                closing_window.close_now();
                                             }
                                             assert!(
                                                 !matches!(case, InstallCase::InitializationPanic | InstallCase::ClosedDuringInitializationThenPanic),
@@ -1353,7 +1354,7 @@ mod tests {
                                 "publication is queued in the completion tail"
                             );
                             if case == InstallCase::Closed {
-                                let _ = window.apply(flui_platform::WindowCommand::Close);
+                                window.close_now();
                             }
                             Ok(receipt)
                         })),

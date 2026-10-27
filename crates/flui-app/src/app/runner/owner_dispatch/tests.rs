@@ -1,6 +1,7 @@
 //! Unit tests for `owner_dispatch.rs`, declared there as its child module `owner_dispatch_tests`
 //! through `#[path]`, so `super::*` still reaches the dispatcher's private items.
 
+use flui_testing::window_commands::AdmitAndApply as _;
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -86,9 +87,9 @@ impl PlatformWindow for ReentrantIdentityWindow {
 
     fn apply(
         &self,
-        command: flui_platform::WindowCommand,
-    ) -> Result<(), flui_platform::WindowCommandError> {
-        command.admit(&flui_platform::WindowCapabilities::NONE)?;
+        command: flui_platform::AdmittedCommand,
+    ) -> Result<(), flui_platform::ApplyError> {
+        command.against(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
 
@@ -2516,7 +2517,7 @@ fn closing_the_last_window_reentrantly_from_inside_a_dispatch_still_exits() {
             // `close_this_window(dispatcher)` -> `close_presentation` ->
             // a nested `dispatch_platform_ui_runtime` on the SAME ui_runtime this
             // Frame task's own dispatch already checked out.
-            let _ = window_a.apply(flui_platform::WindowCommand::Close);
+            window_a.close_now();
         })),
     )
     .expect("the outer Frame dispatch itself must not be refused");

@@ -18,7 +18,7 @@ use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::{
     Clipboard, ClipboardItem, CursorError, CursorIcon, DisplaySnapshot, PlatformWindow,
     SessionEndAnswer, SessionEndPhase, StorageName, SystemNotice, SystemPreferences,
-    WindowCapabilities, WindowCommand, WindowCommandError, WindowGeometry, WindowId,
+    AdmittedCommand, ApplyError, WindowCapabilities, WindowGeometry, WindowId,
     WindowOptions, WindowState,
 };
 use flui_semantics::platform::PlatformAccessibility;
@@ -151,8 +151,8 @@ impl PlatformWindow for OutsideWindow {
         WindowState::new(WindowGeometry::new(None, Size::default()), Size::default())
     }
 
-    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
-        command.admit(&WindowCapabilities::NONE)?;
+    fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
+        command.against(&WindowCapabilities::NONE)?;
         Ok(())
     }
 

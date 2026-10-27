@@ -12,6 +12,7 @@
     reason = "native Win32 calls against the real window system"
 )]
 
+use flui_testing::window_commands::{AdmitAndApply as _, CommandRefusal};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -21,7 +22,7 @@ use std::time::{Duration, Instant};
 use flui_foundation::geometry::{Point, Size, WindowMetrics};
 use flui_native::{HostWindow, Platform as _, WindowsPlatform};
 use flui_platform::{
-    DispatchEventResult, PlatformWindow, SizeConstraints, WindowCommand, WindowCommandError,
+    ApplyError, DispatchEventResult, PlatformWindow, SizeConstraints, WindowCommand,
     WindowGeometry, WindowMode, WindowOptions, WindowReveal, WindowState,
 };
 use flui_testing::window_conformance::{self, Readback, WindowFixture};
@@ -128,7 +129,7 @@ fn content_is(state: &WindowState, width: f64, height: f64) -> bool {
 
 fn apply(window: &Arc<dyn HostWindow>, command: WindowCommand) {
     window
-        .apply(command.clone())
+        .admit_and_apply(command.clone())
         .unwrap_or_else(|error| panic!("{command:?} is supported: {error}"));
 }
 
@@ -679,13 +680,28 @@ fn a_window_without_a_sizing_border_holds_its_limits() {
     );
 }
 
+/// Send a command whose numbers a maximized Win32 window may hold or not: it
+/// applies, or the window system refuses it, and nothing overflows.
+fn beyond_win32(window: &Arc<dyn HostWindow>, command: WindowCommand) {
+    match window.admit_and_apply(command.clone()) {
+        Ok(()) | Err(CommandRefusal::Apply(ApplyError::Platform { .. })) => {}
+        Err(other) => panic!("{command:?} answered {other:?}"),
+    }
+}
+
 fn a_position_beyond_the_screens_does_not_overflow() {
     let platform = platform();
     let window = open(&platform, options());
     apply(&window, WindowCommand::SetMode(WindowMode::Maximized));
-    let _ = window.apply(WindowCommand::SetPosition(Point::new(3.0e9, 3.0e9)));
-    let _ = window.apply(WindowCommand::SetSize(Size::new(3.0e9, 3.0e9)));
-    let _ = window.apply(WindowCommand::SetPosition(Point::new(-3.0e9, -3.0e9)));
+    beyond_win32(
+        &window,
+        WindowCommand::SetPosition(Point::new(3.0e9, 3.0e9)),
+    );
+    beyond_win32(&window, WindowCommand::SetSize(Size::new(3.0e9, 3.0e9)));
+    beyond_win32(
+        &window,
+        WindowCommand::SetPosition(Point::new(-3.0e9, -3.0e9)),
+    );
     apply(&window, WindowCommand::SetMode(WindowMode::Normal));
 }
 
@@ -755,7 +771,9 @@ fn a_show_asked_for_while_a_hidden_window_is_restored_is_kept() {
             log.lock().expect("log").push(next.is_seen());
         }
         if previous.metrics != next.metrics || previous.mode != next.mode {
-            let _ = window.apply(WindowCommand::Show);
+            window
+                .admit_and_apply(WindowCommand::Show)
+                .expect("the restored window shows");
         }
     });
     apply(&window, WindowCommand::SetMode(WindowMode::Normal));
@@ -990,9 +1008,13 @@ fn geometry_win32_cannot_hold_is_refused() {
         WindowCommand::SetPosition(Point::new(1.0e12, 0.0)),
         WindowCommand::SetPosition(Point::new(0.0, -1.0e12)),
     ] {
-        assert_eq!(
-            window.apply(command.clone()),
-            Err(WindowCommandError::InvalidGeometry),
+        // Finite and positive, the numbers pass admission; the device range
+        // is Win32's own limit, so the window system refuses them.
+        assert!(
+            matches!(
+                window.admit_and_apply(command.clone()),
+                Err(CommandRefusal::Apply(ApplyError::Platform { .. }))
+            ),
             "{command:?}"
         );
     }
@@ -1247,7 +1269,9 @@ impl WindowFixture for Win32Fixture {
     }
 
     fn close(&mut self) {
-        let _ = self.window.apply(flui_platform::WindowCommand::Close);
+        self.window
+            .admit_and_apply(flui_platform::WindowCommand::Close)
+            .expect("a Win32 window closes");
         settle();
     }
 }
@@ -1383,7 +1407,7 @@ fn a_close_from_another_thread_asks_no_veto() {
     let elsewhere = Arc::clone(&window);
     std::thread::spawn(move || {
         elsewhere
-            .apply(flui_platform::WindowCommand::Close)
+            .admit_and_apply(flui_platform::WindowCommand::Close)
             .expect("a close command is admitted");
     })
     .join()

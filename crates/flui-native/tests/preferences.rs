@@ -80,6 +80,7 @@ fn windows_reads_preferences_before_a_user_window_exists() {
         .gesture_geometry()
         .expect("native geometry query")
         .expect("Windows observes mouse geometry");
+    use flui_testing::window_commands::AdmitAndApply as _;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::{
         Foundation::HWND,
@@ -123,7 +124,7 @@ fn windows_reads_preferences_before_a_user_window_exists() {
         refused,
         Err(flui_platform::PreferenceQueryError::WrongThread)
     );
-    let _ = window.apply(flui_platform::WindowCommand::Close);
+    window.close_now();
     assert_eq!(
         window.gesture_geometry(),
         Err(flui_platform::PreferenceQueryError::Unsupported(

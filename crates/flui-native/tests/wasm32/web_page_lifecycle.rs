@@ -3,6 +3,7 @@
 //! `fullscreenchange`, and a canvas losing and regaining its WebGL context.
 //! Runs on Node in the wasm lane; nothing here touches a real browser.
 
+use flui_testing::window_commands::AdmitAndApply as _;
 use std::sync::{Arc, Mutex};
 
 use flui_native::{HostWindow, WindowOpen};
@@ -363,7 +364,7 @@ async fn web_page_events_leave_with_the_window() {
     assert_eq!(surfaces.lock().unwrap().len(), 1);
 
     window
-        .apply(flui_platform::WindowCommand::Close)
+        .admit_and_apply(flui_platform::WindowCommand::Close)
         .expect("a page retires its canvas");
     assert_eq!(
         document_listeners(),

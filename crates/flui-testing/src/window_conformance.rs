@@ -1,27 +1,29 @@
 //! What every window backend promises about its state and commands
-//! (ADR-0237), checked from outside.
+//! (ADR-0237, ADR-0254), checked from outside.
 //!
 //! A backend runs [`assert_conforms`] against a [`WindowFixture`] of its window.
-//! The checks drive the window only through [`PlatformWindow`], the way the
-//! application's window handle does, so a backend cannot pass by being tested
+//! The checks drive the window only through [`PlatformWindow`], admitting each
+//! command against the capabilities of the window's snapshot the way the
+//! application's window queue does, so a backend cannot pass by being tested
 //! against its own assumptions:
 //!
-//! - **Capabilities are honest.** A command is refused as
-//!   [`Unsupported`](WindowCommandError::Unsupported) exactly when its
-//!   capability is `false`: never accepted and ignored, never refused while
-//!   claimed, and refused for good — its reason is not one worth asking again
-//!   ([`Unsupported::is_retryable`](flui_platform::Unsupported::is_retryable)).
+//! - **Capabilities are honest.** Admission refuses a command as
+//!   [`Unsupported`](AdmissionError::Unsupported) exactly when its capability
+//!   is `Unavailable`, for good — its reason is not one worth asking again
+//!   ([`Unsupported::is_retryable`](flui_platform::Unsupported::is_retryable))
+//!   — and the window applies every command its capabilities admitted: never
+//!   claimed and then refused.
 //! - **State converges.** A command the window accepted shows in its
 //!   [`state`](PlatformWindow::state) once the window system has settled: the
 //!   title, size, position, mode, visibility, flags and constraints it asked for.
 //! - **Revisions mean change.** Reading the state twice with nothing between
 //!   keeps its revision; a command that changed something raises it.
 //! - **Bad numbers never reach the window system.** A size that is not finite
-//!   and positive is refused as
-//!   [`InvalidGeometry`](WindowCommandError::InvalidGeometry).
-//! - **A closed window refuses.** Every command after the window closed —
-//!   through [`WindowCommand::Close`] where the window takes it, else the way
-//!   the window system closes it — is [`Closed`](WindowCommandError::Closed).
+//!   and positive is refused at admission as
+//!   [`InvalidGeometry`](AdmissionError::InvalidGeometry), so no window sees it.
+//! - **A closed window refuses.** Every admitted command after the window
+//!   closed — through [`WindowCommand::Close`] where the window takes it, else
+//!   the way the window system closes it — is [`Closed`](ApplyError::Closed).
 //! - **The snapshot agrees with the window system.** Once the window system
 //!   has settled, each fact the fixture reads back by its own means (the
 //!   drawable metrics and scale, focus, visibility) is the snapshot's
@@ -34,8 +36,11 @@ use std::sync::Arc;
 
 use flui_foundation::geometry::{Point, Size, WindowMetrics};
 use flui_platform::{
-    PlatformWindow, SizeConstraints, WindowCommand, WindowCommandError, WindowMode, WindowState,
+    AdmissionError, ApplyError, PlatformWindow, SizeConstraints, WindowCommand, WindowMode,
+    WindowState,
 };
+
+use crate::window_commands::AdmitAndApply;
 
 /// What the window system says of the window now, read by the fixture by its
 /// own means (the operating system's queries, a headless host's model), never
@@ -159,25 +164,29 @@ fn capabilities_are_honest(fixture: &mut dyn WindowFixture) -> Result<(), String
     let window = fixture.window();
     let mut broken = Vec::new();
     for command in sample_commands(&window.state()) {
-        let capable = window.state().capabilities.permits(&command);
-        let answer = window.apply(command.clone());
-        fixture.settle();
-        match (capable, &answer) {
-            (false, Err(WindowCommandError::Unsupported(refused))) if refused.is_retryable() => {
+        let capabilities = window.state().capabilities;
+        let capable = capabilities.availability(&command).is_available();
+        match (capable, command.clone().admit(&capabilities)) {
+            (false, Err(AdmissionError::Unsupported(refused))) if refused.is_retryable() => {
                 broken.push(format!(
                     "{command:?} is not supported but was refused as {refused}, which asks to be \
                      tried again"
                 ));
             }
-            (false, Err(WindowCommandError::Unsupported(_))) | (true, Ok(())) => {}
+            (false, Err(AdmissionError::Unsupported(_))) => {}
             (false, other) => broken.push(format!(
-                "{command:?} is not supported but answered {other:?}, not Unsupported"
+                "{command:?} is not supported but admission answered {other:?}, not Unsupported"
             )),
-            (true, Err(WindowCommandError::Unsupported(_))) => {
-                broken.push(format!("{command:?} is supported but was refused"));
+            (true, Err(refused)) => {
+                broken.push(format!(
+                    "{command:?} is supported but admission refused it: {refused}"
+                ));
             }
-            (true, Err(other)) => {
-                broken.push(format!("{command:?} is supported but answered {other:?}"));
+            (true, Ok(admitted)) => {
+                if let Err(error) = window.apply(admitted) {
+                    broken.push(format!("{command:?} is supported but answered {error:?}"));
+                }
+                fixture.settle();
             }
         }
     }
@@ -189,7 +198,7 @@ fn accepted_commands_converge(fixture: &mut dyn WindowFixture) -> Result<(), Str
     let capabilities = window.state().capabilities;
     let mut broken = Vec::new();
     for command in sample_commands(&window.state()) {
-        if !capabilities.permits(&command) || window.apply(command.clone()).is_err() {
+        if window.admit_and_apply(command.clone()).is_err() {
             continue;
         }
         fixture.settle();
@@ -268,8 +277,8 @@ fn revisions_mean_change(fixture: &mut dyn WindowFixture) -> Result<(), String> 
         return Ok(());
     }
     window
-        .apply(command)
-        .map_err(|error| format!("SetTitle was refused: {error}"))?;
+        .admit_and_apply(command)
+        .map_err(|refusal| format!("SetTitle was refused: {refusal:?}"))?;
     fixture.settle();
     let after = window.state();
     if after.title == first.title {
@@ -286,24 +295,17 @@ fn revisions_mean_change(fixture: &mut dyn WindowFixture) -> Result<(), String> 
 
 fn bad_numbers_are_refused(fixture: &mut dyn WindowFixture) -> Result<(), String> {
     let window = fixture.window();
-    let capabilities = window.state().capabilities;
     let mut broken = Vec::new();
     for command in [
         WindowCommand::SetSize(Size::new(f64::NAN, 100.0)),
         WindowCommand::SetSize(Size::new(-5.0, 100.0)),
         WindowCommand::SetPosition(Point::new(f64::INFINITY, 0.0)),
     ] {
-        if !capabilities.permits(&command) {
-            continue;
-        }
-        let before = window.state();
-        match window.apply(command.clone()) {
-            Err(WindowCommandError::InvalidGeometry) => {}
-            other => broken.push(format!("{command:?} answered {other:?}")),
-        }
-        fixture.settle();
-        if window.state() != before {
-            broken.push(format!("{command:?} changed the window"));
+        // Before the capabilities: no window, whatever it honours, is handed
+        // numbers that describe none.
+        match command.clone().admit(&window.state().capabilities) {
+            Err(AdmissionError::InvalidGeometry) => {}
+            other => broken.push(format!("{command:?} was admitted as {other:?}")),
         }
     }
     finish(broken)
@@ -346,8 +348,7 @@ fn the_snapshot_agrees_with_the_window_system(
     };
     compare("at open", fixture);
     for command in sample_commands(&window.state()) {
-        if !window.state().capabilities.permits(&command) || window.apply(command.clone()).is_err()
-        {
+        if window.admit_and_apply(command.clone()).is_err() {
             continue;
         }
         fixture.settle();
@@ -362,19 +363,21 @@ fn a_closed_window_refuses(fixture: &mut dyn WindowFixture) -> Result<(), String
     // Closed by the command where the window takes it, the way the
     // application closes a window; else the way the window system would.
     if window.state().capabilities.permits(&WindowCommand::Close) {
-        if let Err(error) = window.apply(WindowCommand::Close) {
-            broken.push(format!("Close is supported but answered {error:?}"));
+        if let Err(refusal) = window.admit_and_apply(WindowCommand::Close) {
+            broken.push(format!("Close is supported but answered {refusal:?}"));
         }
         fixture.settle();
     } else {
         fixture.close();
     }
     for command in sample_commands(&window.state()) {
-        if !window.state().capabilities.permits(&command) {
+        // What the closed window's last snapshot admits still reaches it, as
+        // a command queued before the close does.
+        let Ok(admitted) = command.clone().admit(&window.state().capabilities) else {
             continue;
-        }
-        match window.apply(command.clone()) {
-            Err(WindowCommandError::Closed) => {}
+        };
+        match window.apply(admitted) {
+            Err(ApplyError::Closed) => {}
             other => broken.push(format!("{command:?} after close answered {other:?}")),
         }
     }

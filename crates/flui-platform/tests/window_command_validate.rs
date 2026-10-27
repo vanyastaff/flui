@@ -3,8 +3,8 @@
 
 use flui_foundation::geometry::{EdgeInsets, Point, Size, WindowMetrics};
 use flui_platform::{
-    Availability, SizeConstraints, Unsupported, UnsupportedReason, WindowAppearance,
-    WindowCapabilities, WindowCommand, WindowCommandError, WindowExecutionState, WindowGeometry,
+    AdmissionError, ApplyError, Availability, SizeConstraints, Unsupported, UnsupportedReason,
+    WindowAppearance, WindowCapabilities, WindowCommand, WindowExecutionState, WindowGeometry,
     WindowMode, WindowRevision, WindowRevisionExhausted, WindowState,
 };
 
@@ -19,7 +19,7 @@ fn constraints(min: Option<Size<f64>>, max: Option<Size<f64>>) -> WindowCommand 
 fn invalid(command: &WindowCommand) {
     assert_eq!(
         command.validate(),
-        Err(WindowCommandError::InvalidGeometry),
+        Err(AdmissionError::InvalidGeometry),
         "{command:?} must be refused before any OS call"
     );
 }
@@ -110,8 +110,16 @@ fn commands_without_numbers_are_always_valid() {
 
 type Capability = fn(&mut WindowCapabilities) -> &mut Availability;
 
+/// What admitting `command` against `capabilities` answers, the token aside.
+fn admits(
+    command: &WindowCommand,
+    capabilities: &WindowCapabilities,
+) -> Result<(), AdmissionError> {
+    command.clone().admit(capabilities).map(|_admitted| ())
+}
+
 fn admit_refuses_exactly_when_the_capability_is_unavailable() {
-    let rows: [(WindowCommand, Capability); 12] = [
+    let rows: [(WindowCommand, Capability); 13] = [
         (WindowCommand::SetTitle("t".into()), |c| &mut c.sets_title),
         (WindowCommand::SetPosition(Point::new(1.0, 1.0)), |c| {
             &mut c.sets_position
@@ -134,23 +142,24 @@ fn admit_refuses_exactly_when_the_capability_is_unavailable() {
         (WindowCommand::Show, |c| &mut c.shows),
         (WindowCommand::Hide, |c| &mut c.hides),
         (WindowCommand::Activate, |c| &mut c.activates),
+        (WindowCommand::Close, |c| &mut c.closes),
     ];
     for (command, capability) in rows {
         let mut all = WindowCapabilities::ALL;
-        assert_eq!(command.admit(&all), Ok(()), "{command:?}");
+        assert_eq!(admits(&command, &all), Ok(()), "{command:?}");
         *capability(&mut all) = Availability::Emulated;
-        assert_eq!(command.admit(&all), Ok(()), "{command:?} emulated");
+        assert_eq!(admits(&command, &all), Ok(()), "{command:?} emulated");
         *capability(&mut all) = Availability::Unavailable;
         assert_eq!(
-            command.admit(&all),
-            Err(WindowCommandError::Unsupported(Unsupported::new(
+            admits(&command, &all),
+            Err(AdmissionError::Unsupported(Unsupported::new(
                 UnsupportedReason::NotOnThisPlatform
             ))),
             "{command:?} without its capability"
         );
         assert_eq!(
-            command.admit(&WindowCapabilities::NONE),
-            Err(WindowCommandError::Unsupported(Unsupported::new(
+            admits(&command, &WindowCapabilities::NONE),
+            Err(AdmissionError::Unsupported(Unsupported::new(
                 UnsupportedReason::NotOnThisPlatform
             ))),
             "{command:?} on a window that honours nothing"
@@ -160,7 +169,10 @@ fn admit_refuses_exactly_when_the_capability_is_unavailable() {
 
 fn restoring_normal_needs_no_capability() {
     assert_eq!(
-        WindowCommand::SetMode(WindowMode::Normal).admit(&WindowCapabilities::NONE),
+        admits(
+            &WindowCommand::SetMode(WindowMode::Normal),
+            &WindowCapabilities::NONE
+        ),
         Ok(())
     );
 }
@@ -168,8 +180,8 @@ fn restoring_normal_needs_no_capability() {
 fn admit_checks_numbers_before_capabilities() {
     let bad = WindowCommand::SetSize(size(-1.0, 10.0));
     assert_eq!(
-        bad.admit(&WindowCapabilities::NONE),
-        Err(WindowCommandError::InvalidGeometry)
+        admits(&bad, &WindowCapabilities::NONE),
+        Err(AdmissionError::InvalidGeometry)
     );
 }
 
@@ -302,6 +314,121 @@ fn a_report_that_is_not_drawable_keeps_the_metrics() {
     );
 }
 
+/// The capabilities' revision is the snapshot revision at which what the
+/// window honours last changed: a change of another fact leaves it, a change
+/// of a capability moves it to the new snapshot's, and a sample's own is
+/// ignored.
+fn the_capabilities_revision_moves_only_with_the_capabilities() {
+    let mut honours_title = WindowCapabilities::ALL;
+    honours_title.sets_title = Availability::Unavailable;
+    let first = base_state()
+        .successor(base_state().with_capabilities(WindowCapabilities::ALL))
+        .expect("capabilities change");
+    assert_eq!(first.capabilities.revision(), first.revision);
+    let focused = first
+        .successor(
+            base_state()
+                .with_capabilities(WindowCapabilities::ALL)
+                .with_focused(true),
+        )
+        .expect("focus changes");
+    assert_eq!(focused.revision.get(), first.revision.get() + 1);
+    assert_eq!(
+        focused.capabilities.revision(),
+        first.revision,
+        "focus is not a capability"
+    );
+    let revised = focused
+        .successor(
+            base_state()
+                .with_capabilities(honours_title)
+                .with_focused(true),
+        )
+        .expect("a capability changes");
+    assert_eq!(revised.capabilities.revision(), revised.revision);
+    let again = revised
+        .successor(
+            base_state()
+                .with_capabilities(honours_title)
+                .with_focused(true),
+        )
+        .expect("an equal sample");
+    assert_eq!(
+        again, revised,
+        "the sample's own capabilities revision is ignored"
+    );
+}
+
+/// A token opens only under the capabilities it was admitted against: the
+/// same revision lets the command through; a moved revision, or capabilities
+/// that no longer honour it, answer `Superseded`; admitting it again against
+/// the new capabilities either opens or is refused by `admit`.
+fn a_token_opens_only_under_the_capabilities_it_was_admitted_against() {
+    let published = base_state()
+        .successor(base_state().with_capabilities(WindowCapabilities::ALL))
+        .expect("first capabilities");
+    let title = WindowCommand::SetTitle("t".into());
+    let admitted = title
+        .clone()
+        .admit(&published.capabilities)
+        .expect("the window honours titles");
+    assert_eq!(admitted.revision(), published.capabilities.revision());
+    assert_eq!(admitted.command(), &title);
+    assert_eq!(
+        admitted.against(&published.capabilities),
+        Ok(title.clone()),
+        "under the capabilities it was admitted against"
+    );
+
+    let mut without_fullscreen = WindowCapabilities::ALL;
+    without_fullscreen.enters_fullscreen = Availability::Unavailable;
+    let revised = published
+        .successor(base_state().with_capabilities(without_fullscreen))
+        .expect("a capability changes");
+    let stale = title
+        .clone()
+        .admit(&published.capabilities)
+        .expect("admitted before the change");
+    assert_eq!(
+        stale.against(&revised.capabilities),
+        Err(ApplyError::Superseded),
+        "a title is still honoured, but it was checked against other capabilities"
+    );
+    assert_eq!(
+        title
+            .clone()
+            .admit(&revised.capabilities)
+            .expect("admitted again")
+            .against(&revised.capabilities),
+        Ok(title)
+    );
+    let fullscreen = WindowCommand::SetMode(WindowMode::Fullscreen);
+    assert_eq!(
+        fullscreen
+            .clone()
+            .admit(&published.capabilities)
+            .expect("admitted before the change")
+            .against(&revised.capabilities),
+        Err(ApplyError::Superseded)
+    );
+    assert!(
+        matches!(
+            fullscreen.admit(&revised.capabilities),
+            Err(AdmissionError::Unsupported(_))
+        ),
+        "admitted again, the command the window lost is refused"
+    );
+    let unhonoured = WindowCommand::Hide
+        .admit(&WindowCapabilities::ALL)
+        .expect("admitted where hiding is honoured");
+    assert_eq!(
+        unhonoured.against(&WindowCapabilities::NONE),
+        Err(ApplyError::Superseded),
+        "capabilities of the same revision that do not honour it are not the ones it was \
+         admitted against"
+    );
+}
+
 #[test]
 fn window_command_validate() {
     crate::run_table(
@@ -367,6 +494,14 @@ fn window_command_validate() {
             (
                 "a_report_that_is_not_drawable_keeps_the_metrics",
                 a_report_that_is_not_drawable_keeps_the_metrics,
+            ),
+            (
+                "the_capabilities_revision_moves_only_with_the_capabilities",
+                the_capabilities_revision_moves_only_with_the_capabilities,
+            ),
+            (
+                "a_token_opens_only_under_the_capabilities_it_was_admitted_against",
+                a_token_opens_only_under_the_capabilities_it_was_admitted_against,
             ),
         ],
     );

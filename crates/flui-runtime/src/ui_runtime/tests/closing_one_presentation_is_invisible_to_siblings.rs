@@ -523,8 +523,8 @@ impl flui_platform::PlatformWindow for OwnershipWindow {
     }
     fn apply(
         &self,
-        command: flui_platform::WindowCommand,
-    ) -> Result<(), flui_platform::WindowCommandError> {
+        command: flui_platform::AdmittedCommand,
+    ) -> Result<(), flui_platform::ApplyError> {
         self.delegate.apply(command)
     }
 }

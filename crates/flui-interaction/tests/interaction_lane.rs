@@ -458,9 +458,9 @@ impl flui_platform::PlatformWindow for CaptureWakeWindow {
 
     fn apply(
         &self,
-        command: flui_platform::WindowCommand,
-    ) -> Result<(), flui_platform::WindowCommandError> {
-        command.admit(&flui_platform::WindowCapabilities::NONE)?;
+        command: flui_platform::AdmittedCommand,
+    ) -> Result<(), flui_platform::ApplyError> {
+        command.against(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
 

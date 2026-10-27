@@ -283,15 +283,15 @@ impl Default for ContextLedger {
 #[cfg(target_os = "windows")]
 pub(crate) fn show_owned_window(
     route: impl Fn() -> TeardownRoute,
-    show: impl FnOnce() -> Result<(), flui_platform::WindowCommandError>,
+    show: impl FnOnce() -> Result<(), flui_platform::ApplyError>,
     focus: impl FnOnce(),
-) -> Result<(), flui_platform::WindowCommandError> {
+) -> Result<(), flui_platform::ApplyError> {
     let check = || match route() {
         TeardownRoute::DestroyDirect => Ok(()),
         TeardownRoute::AlreadyGone | TeardownRoute::StaleHandle => {
-            Err(flui_platform::WindowCommandError::Closed)
+            Err(flui_platform::ApplyError::Closed)
         }
-        TeardownRoute::PostClose => Err(flui_platform::WindowCommandError::Backend {
+        TeardownRoute::PostClose => Err(flui_platform::ApplyError::Platform {
             message: "show must run on the native window owner".into(),
         }),
     };

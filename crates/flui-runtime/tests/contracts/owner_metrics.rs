@@ -2237,9 +2237,9 @@ impl flui_platform::PlatformWindow for GeometryWindow {
 
     fn apply(
         &self,
-        command: flui_platform::WindowCommand,
-    ) -> Result<(), flui_platform::WindowCommandError> {
-        command.admit(&flui_platform::WindowCapabilities::NONE)?;
+        command: flui_platform::AdmittedCommand,
+    ) -> Result<(), flui_platform::ApplyError> {
+        command.against(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
 
@@ -2312,9 +2312,9 @@ impl flui_platform::PlatformWindow for RegionWindow {
     }
     fn apply(
         &self,
-        command: flui_platform::WindowCommand,
-    ) -> Result<(), flui_platform::WindowCommandError> {
-        command.admit(&flui_platform::WindowCapabilities::NONE)?;
+        command: flui_platform::AdmittedCommand,
+    ) -> Result<(), flui_platform::ApplyError> {
+        command.against(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
     fn text_input(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformTextInput>> {
@@ -2365,8 +2365,10 @@ impl flui_platform::WindowControl for SharedControl {
     fn submit(
         &self,
         command: flui_platform::WindowCommand,
-    ) -> Result<(), flui_platform::WindowCommandError> {
-        command.admit(&flui_platform::WindowCapabilities::NONE)?;
+    ) -> Result<(), flui_platform::SubmitError> {
+        command
+            .admit(&flui_platform::WindowCapabilities::NONE)
+            .map(drop)?;
         Ok(())
     }
     fn request_close(&self) {}

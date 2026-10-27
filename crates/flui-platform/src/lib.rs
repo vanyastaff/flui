@@ -186,6 +186,7 @@ pub use window::{
     WindowId, WindowOptions, WindowReveal,
 };
 pub use window_state::{
-    SizeConstraints, WindowCapabilities, WindowCommand, WindowCommandError, WindowControl,
-    WindowGeometry, WindowMode, WindowRevision, WindowRevisionExhausted, WindowState,
+    AdmissionError, AdmittedCommand, ApplyError, SizeConstraints, SubmitError, WindowCapabilities,
+    WindowCommand, WindowControl, WindowGeometry, WindowMode, WindowRevision,
+    WindowRevisionExhausted, WindowState,
 };

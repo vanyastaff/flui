@@ -7,18 +7,17 @@ use std::sync::Arc;
 
 use flui_native::{HeadlessPlatform, HostWindow, MockWindow, Platform};
 use flui_platform::{
-    CursorError, CursorIcon, PlatformHaptics, PlatformSystemChrome, PlatformTextInput,
-    PlatformWindow, Unsupported, UnsupportedReason, WindowCommand, WindowCommandError, WindowId,
-    WindowMode, WindowState,
+    AdmittedCommand, ApplyError, CursorError, CursorIcon, PlatformHaptics, PlatformSystemChrome,
+    PlatformTextInput, PlatformWindow, WindowCommand, WindowId, WindowMode, WindowState,
 };
 use flui_platform::{WindowCapabilities, WindowOptions};
 use flui_testing::window_conformance::{self, Readback, WindowFixture};
 
-/// A headless window with a fault of its own: it refuses what it does not
-/// take as unavailable for now, as if asking again could succeed
-/// ([`Fault::RefusesForNow`]), stays open when told to close
-/// ([`Fault::IgnoresClose`]), or publishes a snapshot without the facts the
-/// window system reports ([`Fault::SnapshotWithoutFacts`]).
+/// A headless window with a fault of its own: its snapshot claims every
+/// capability while the window takes none ([`Fault::ClaimsWhatItCannot`]),
+/// it stays open when told to close ([`Fault::IgnoresClose`]), or it
+/// publishes a snapshot without the facts the window system reports
+/// ([`Fault::SnapshotWithoutFacts`]).
 struct Faulty(Arc<dyn PlatformWindow>, Fault);
 
 impl PlatformWindow for Faulty {
@@ -30,22 +29,19 @@ impl PlatformWindow for Faulty {
     }
     fn state(&self) -> WindowState {
         let mut state = self.0.state();
-        if matches!(self.1, Fault::SnapshotWithoutFacts) {
+        match self.1 {
             // The snapshot of a window that keeps its metrics to itself.
-            state.metrics = None;
+            Fault::SnapshotWithoutFacts => state.metrics = None,
+            Fault::ClaimsWhatItCannot => state.capabilities = WindowCapabilities::ALL,
+            _ => {}
         }
         state
     }
-    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
-        if command == WindowCommand::Close && matches!(self.1, Fault::IgnoresClose) {
+    fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
+        if command.command() == &WindowCommand::Close && matches!(self.1, Fault::IgnoresClose) {
             return Ok(());
         }
-        self.0.apply(command).map_err(|error| match error {
-            WindowCommandError::Unsupported(_) if matches!(self.1, Fault::RefusesForNow) => {
-                Unsupported::new(UnsupportedReason::Unavailable).into()
-            }
-            other => other,
-        })
+        self.0.apply(command)
     }
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
         self.0.set_cursor(cursor)
@@ -88,8 +84,8 @@ enum Fault {
     RevertsWhileSettling,
     /// The window stays open when asked to close.
     IgnoresClose,
-    /// The window refuses what it does not take as unavailable for now.
-    RefusesForNow,
+    /// The window's snapshot claims capabilities the window does not have.
+    ClaimsWhatItCannot,
     /// The window's snapshot holds no metrics.
     SnapshotWithoutFacts,
 }
@@ -102,7 +98,9 @@ impl Fixture {
             .expect("a headless window opens");
         let window: Arc<dyn PlatformWindow> = match fault {
             Some(
-                fault @ (Fault::RefusesForNow | Fault::SnapshotWithoutFacts | Fault::IgnoresClose),
+                fault @ (Fault::ClaimsWhatItCannot
+                | Fault::SnapshotWithoutFacts
+                | Fault::IgnoresClose),
             ) => Arc::new(Faulty(Arc::clone(&model) as _, fault)),
             _ => Arc::clone(&model) as _,
         };
@@ -141,7 +139,14 @@ impl WindowFixture for Fixture {
                 WindowCommand::SetResizable(true),
                 WindowCommand::SetDecorated(true),
             ] {
-                let _ = self.window.apply(command);
+                // The faulty window system reverts what it can, while the
+                // window is open; what it cannot revert stays.
+                if let Ok(admitted) = command.admit(&self.window.state().capabilities) {
+                    match self.window.apply(admitted) {
+                        Ok(()) | Err(ApplyError::Closed) => {}
+                        Err(error) => panic!("the headless window failed a revert: {error}"),
+                    }
+                }
             }
         }
     }
@@ -202,15 +207,21 @@ fn a_window_that_stays_open_is_caught_accepting_commands_after_close() {
     assert_eq!(checks, ["a_closed_window_refuses"]);
 }
 
-fn a_window_that_refuses_for_now_what_it_never_takes_is_caught() {
+fn a_window_that_claims_what_it_cannot_do_is_caught() {
     let checks: Vec<_> = window_conformance::check(&mut Fixture::new(
         WindowCapabilities::NONE,
-        Some(Fault::RefusesForNow),
+        Some(Fault::ClaimsWhatItCannot),
     ))
     .into_iter()
     .map(|violation| violation.check)
     .collect();
-    assert_eq!(checks, ["capabilities_are_honest"]);
+    // The checks that send a claimed command see it fail too; the honesty
+    // check names the cause first.
+    assert_eq!(
+        checks.first(),
+        Some(&"capabilities_are_honest"),
+        "caught by {checks:?}"
+    );
 }
 
 fn a_snapshot_without_the_windows_facts_is_caught() {
@@ -236,8 +247,8 @@ fn window_conformance_checks() {
                 a_window_that_stays_open_is_caught_accepting_commands_after_close as fn(),
             ),
             (
-                "a_window_that_refuses_for_now_what_it_never_takes_is_caught",
-                a_window_that_refuses_for_now_what_it_never_takes_is_caught as fn(),
+                "a_window_that_claims_what_it_cannot_do_is_caught",
+                a_window_that_claims_what_it_cannot_do_is_caught as fn(),
             ),
             (
                 "a_snapshot_without_the_windows_facts_is_caught",

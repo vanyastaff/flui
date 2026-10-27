@@ -19,8 +19,8 @@ use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{EdgeInsets, Size};
 use flui_platform::input_regions::{InputRegion, InputRegionKind, ProjectedInputRegions};
 use flui_platform::{
-    FrameRateHint, WindowAppearance, WindowCapabilities, WindowCommand, WindowCommandError,
-    WindowGeometry, WindowOptions, WindowState,
+    AdmittedCommand, ApplyError, FrameRateHint, WindowAppearance, WindowCapabilities,
+    WindowCommand, WindowGeometry, WindowOptions, WindowState,
 };
 use parking_lot::Mutex;
 
@@ -687,12 +687,12 @@ impl PlatformWindow for AndroidWindow {
         }
     }
 
-    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+    fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
         // The system owns the surface and the Activity's lifetime: every
         // command is refused unless it asks for what the window already is.
         // An Activity cannot bring its task to the front itself: the user and
         // the system decide which task is shown.
-        command.admit(&WindowCapabilities::NONE)?;
+        command.against(&self.snapshot.published_capabilities())?;
         Ok(())
     }
 

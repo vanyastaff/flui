@@ -912,8 +912,8 @@ impl PlatformWindow for WithDragSource {
     }
     fn apply(
         &self,
-        command: flui_platform::WindowCommand,
-    ) -> Result<(), flui_platform::WindowCommandError> {
+        command: flui_platform::AdmittedCommand,
+    ) -> Result<(), flui_platform::ApplyError> {
         self.window.apply(command)
     }
     fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {

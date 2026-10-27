@@ -36,9 +36,9 @@ use crate::{
     window::state::{ReportedFacts, WindowStateCell},
 };
 use flui_platform::{
-    CursorError, PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowCapabilities,
-    WindowCommand, WindowCommandError, WindowExecutionState, WindowGeometry, WindowId, WindowMode,
-    WindowOptions, WindowState,
+    AdmittedCommand, ApplyError, CursorError, PlatformWindow, WindowAppearance,
+    WindowBackgroundAppearance, WindowCapabilities, WindowCommand, WindowExecutionState,
+    WindowGeometry, WindowId, WindowMode, WindowOptions, WindowState,
 };
 
 use crate::owner::web::listener::CanvasListener;
@@ -1130,11 +1130,11 @@ impl PlatformWindow for WebWindow {
         self.publisher().current()
     }
 
-    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+    fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
         if self.registration.borrow().is_none() {
-            return Err(WindowCommandError::Closed);
+            return Err(ApplyError::Closed);
         }
-        command.admit(&window_capabilities())?;
+        let command = command.against(&self.snapshot.published_capabilities())?;
         match command {
             // A page cannot close its tab: closing the window retires the
             // canvas's registration and tells the embedder.
@@ -1151,7 +1151,7 @@ impl PlatformWindow for WebWindow {
             WindowCommand::SetMode(WindowMode::Fullscreen) => {
                 let el: &web_sys::Element = self.canvas.as_ref();
                 el.request_fullscreen()
-                    .map_err(|error| WindowCommandError::Backend {
+                    .map_err(|error| ApplyError::Platform {
                         message: format!("{error:?}"),
                     })?;
             }
@@ -1164,12 +1164,7 @@ impl PlatformWindow for WebWindow {
             }
             // Every other command is refused by `admit` through a capability
             // this backend leaves `Unavailable`.
-            _ => {
-                return Err(flui_platform::Unsupported::new(
-                    flui_platform::UnsupportedReason::NotOnThisPlatform,
-                )
-                .into());
-            }
+            other => return Err(crate::window::state::not_carried_out(&other)),
         }
         // The page answers a fullscreen request later, with
         // `fullscreenchange`; the title is ours to report at once.

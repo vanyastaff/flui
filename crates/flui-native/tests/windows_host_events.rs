@@ -9,6 +9,7 @@
     reason = "native Win32 calls against the real window system"
 )]
 
+use flui_testing::window_commands::AdmitAndApply as _;
 use std::sync::{Arc, Mutex};
 
 use flui_native::{Platform as _, WindowsPlatform};
@@ -370,7 +371,7 @@ fn a_block_is_registered_on_the_visible_window() {
     host.platform.release_session_end();
     assert_eq!(reason_held_for(window_hwnd), None);
     // The window goes with the case: the next one must not find it visible.
-    let _ = window.apply(flui_platform::WindowCommand::Close);
+    window.close_now();
 }
 
 fn a_second_query_replaces_the_first_block() {

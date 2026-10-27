@@ -8,7 +8,10 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use flui_foundation::geometry::{EdgeInsets, WindowMetrics};
-use flui_platform::{WindowAppearance, WindowCapabilities, WindowExecutionState, WindowState};
+use flui_platform::{
+    ApplyError, WindowAppearance, WindowCapabilities, WindowCommand, WindowExecutionState,
+    WindowState,
+};
 use parking_lot::Mutex;
 
 /// The facts a window reports beyond its geometry, mode and flags, as each
@@ -45,6 +48,16 @@ impl ReportedFacts {
             .with_hovered(self.hovered)
             .with_active(self.active)
             .with_capabilities(self.capabilities)
+    }
+}
+
+/// The answer to a command a host has no way to carry out. `admit` refuses it
+/// first, through a capability the host names `Unavailable`, so a window
+/// reaches this only for a command the contract gained before the host learnt
+/// it: the window system cannot do it, and the caller hears so.
+pub(crate) fn not_carried_out(command: &WindowCommand) -> ApplyError {
+    ApplyError::Platform {
+        message: format!("this window system does not carry out {command:?}"),
     }
 }
 
@@ -174,6 +187,15 @@ impl WindowStateCell {
     /// at any point.
     pub(crate) fn invalidate(&self) {
         self.invalidations.fetch_add(1, Ordering::Release);
+    }
+
+    /// The capabilities of the last published snapshot, without reading the
+    /// OS: what an admitted command is opened against
+    /// ([`AdmittedCommand::against`](flui_platform::AdmittedCommand::against)),
+    /// so a command admitted against the snapshot a caller read applies
+    /// unless what the window honours was published as changed since.
+    pub(crate) fn published_capabilities(&self) -> WindowCapabilities {
+        self.last.lock().state.capabilities
     }
 
     /// The last published snapshot, without reading the OS.
