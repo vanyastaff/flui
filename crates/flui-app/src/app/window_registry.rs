@@ -21,7 +21,7 @@
 //! user code between those writes. Closure withdraws native routes before user
 //! cleanup; active leases retain their original host across TLS replacement.
 
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_foundation::PresentationAddress;
 use flui_platform::{PlatformWindow, WindowId};
@@ -35,7 +35,7 @@ pub(crate) struct PreparedWindowRegistration {
 }
 
 impl PreparedWindowRegistration {
-    pub(crate) fn new(window: &Arc<dyn PlatformWindow>) -> Self {
+    pub(crate) fn new(window: &Rc<dyn PlatformWindow>) -> Self {
         Self { id: window.id() }
     }
 }

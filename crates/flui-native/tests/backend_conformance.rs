@@ -14,6 +14,7 @@
 //! ([`Fault`]), so a row that cannot fail is caught.
 
 use std::num::NonZeroU64;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -850,7 +851,7 @@ impl PlatformDragSource for ProfileDragSource {
 struct Headless {
     assembly: SharedAssembly,
     _owner: OwnerPlatform,
-    window: Arc<dyn HostWindow>,
+    window: Rc<dyn HostWindow>,
     handler: std::rc::Rc<flui_testing::window_handler::RecordingWindowHandler>,
     capabilities: InputCapabilities,
 }
@@ -963,7 +964,7 @@ impl BackendUnderTest for Headless {
 struct Win32Window {
     assembly: SharedAssembly,
     // Field order: the window closes before its platform goes.
-    window: Arc<dyn HostWindow>,
+    window: Rc<dyn HostWindow>,
     _platform: flui_native::WindowsPlatform,
     capabilities: InputCapabilities,
 }

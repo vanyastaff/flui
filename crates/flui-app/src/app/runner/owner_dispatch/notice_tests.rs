@@ -54,7 +54,7 @@ impl Drop for Rig {
 
 /// An installed window and the lifecycle handle its widgets hear notices from.
 struct Win {
-    _window: Arc<dyn PlatformWindow>,
+    _window: Rc<dyn PlatformWindow>,
     dispatcher: PresentationDispatcher,
     lifecycle: LifecycleHandle,
 }
@@ -65,9 +65,9 @@ fn open_window() -> Win {
             .expect("an installed owner")
             .and_then(flui_native::WindowOpen::try_ready)
             .expect("headless windows are ready");
-    let window: Arc<dyn PlatformWindow> = host_window;
-    let runtime = build_ui_runtime(Arc::clone(&window), 1.0).expect("runtime");
-    let installation = prepare_ui_runtime_alongside(runtime, Arc::clone(&window));
+    let window: Rc<dyn PlatformWindow> = host_window;
+    let runtime = build_ui_runtime(Rc::clone(&window), 1.0).expect("runtime");
+    let installation = prepare_ui_runtime_alongside(runtime, Rc::clone(&window));
     let dispatcher = installation.dispatcher();
     installation
         .submit()

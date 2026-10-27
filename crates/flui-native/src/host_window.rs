@@ -7,8 +7,8 @@
 //! [`Platform::open_window`](crate::Platform::open_window),
 //! [`WindowOpen::Ready`](crate::WindowOpen::Ready) and
 //! [`PendingWindow`](crate::PendingWindow) hand the runner an
-//! `Arc<dyn HostWindow>`, the runner reads [`HostWindow::accessibility`] once
-//! and passes the window on as an `Arc<dyn PlatformWindow>` (an upcast).
+//! `Rc<dyn HostWindow>`, the runner reads [`HostWindow::accessibility`] once
+//! and passes the window on as an `Rc<dyn PlatformWindow>` (an upcast).
 //!
 //! Every backend fixes its bridge when it builds the window, so reading it
 //! once at open time sees the same bridge a later read would.
@@ -28,12 +28,8 @@ use std::any::Any;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_platform::text_store::TextStoreHost;
-use raw_window_handle::{
-    DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,
-};
-
 use flui_platform::PlatformWindow;
+use flui_platform::text_store::TextStoreHost;
 use flui_semantics::platform::PlatformAccessibility;
 
 mod sealed {
@@ -164,20 +160,5 @@ pub trait HostWindow: sealed::Sealed + PlatformWindow {
     /// controls). Every window gets this one body, through the seal.
     fn as_any(&self) -> &dyn Any {
         sealed::Sealed::any(self)
-    }
-}
-
-// Without these, `Arc<dyn HostWindow>` would not be a raw-handle target, and a
-// renderer built straight from an `open_window` result (before the upcast)
-// would not compile.
-impl HasWindowHandle for dyn HostWindow + '_ {
-    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
-        PlatformWindow::window_handle(self)
-    }
-}
-
-impl HasDisplayHandle for dyn HostWindow + '_ {
-    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
-        PlatformWindow::display_handle(self)
     }
 }

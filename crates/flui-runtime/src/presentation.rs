@@ -152,7 +152,7 @@ pub enum PointerResamplingError {
 /// the host instead of the window's push capability. Owner-thread state, so
 /// a `PresentationWindow` is not `Send`.
 pub struct PresentationWindow {
-    window: Arc<dyn PlatformWindow>,
+    window: Rc<dyn PlatformWindow>,
     accessibility: Option<Arc<dyn PlatformAccessibility>>,
     text_store_host: Option<Rc<dyn TextStoreHost>>,
     pointer_resampling: PointerResampling,
@@ -174,7 +174,7 @@ impl std::fmt::Debug for PresentationWindow {
 impl PresentationWindow {
     /// Pairs `window` with the bridge its backend exposes, if any.
     pub fn new(
-        window: Arc<dyn PlatformWindow>,
+        window: Rc<dyn PlatformWindow>,
         accessibility: Option<Arc<dyn PlatformAccessibility>>,
     ) -> Self {
         Self {
@@ -225,7 +225,7 @@ impl PresentationWindow {
 
     /// The window itself.
     #[must_use]
-    pub fn window(&self) -> &Arc<dyn PlatformWindow> {
+    pub fn window(&self) -> &Rc<dyn PlatformWindow> {
         &self.window
     }
 
@@ -249,19 +249,19 @@ impl PresentationWindow {
 /// that needs the bridge wired names it in [`PresentationWindow::new`]
 /// instead.
 #[cfg(any(test, feature = "testing"))]
-impl From<Arc<dyn PlatformWindow>> for PresentationWindow {
-    fn from(window: Arc<dyn PlatformWindow>) -> Self {
+impl From<Rc<dyn PlatformWindow>> for PresentationWindow {
+    fn from(window: Rc<dyn PlatformWindow>) -> Self {
         Self::new(window, None)
     }
 }
 
-/// The `From<Arc<dyn PlatformWindow>>` conversion above
+/// The `From<Rc<dyn PlatformWindow>>` conversion above
 /// for a borrowed window, for tests that reuse one window across several
 /// installs; it bypasses the window's bridge the same way.
 #[cfg(any(test, feature = "testing"))]
-impl From<&Arc<dyn PlatformWindow>> for PresentationWindow {
-    fn from(window: &Arc<dyn PlatformWindow>) -> Self {
-        Self::new(Arc::clone(window), None)
+impl From<&Rc<dyn PlatformWindow>> for PresentationWindow {
+    fn from(window: &Rc<dyn PlatformWindow>) -> Self {
+        Self::new(Rc::clone(window), None)
     }
 }
 
@@ -272,9 +272,9 @@ impl From<&Arc<dyn PlatformWindow>> for PresentationWindow {
 #[cfg(any(test, feature = "testing"))]
 pub(crate) fn test_platform_window(
     platform_text_input: Option<Arc<dyn PlatformTextInput>>,
-) -> Arc<dyn PlatformWindow> {
+) -> Rc<dyn PlatformWindow> {
     use crate::testing::TestWindow;
-    Arc::new(
+    Rc::new(
         TestWindow::new()
             .focused(true)
             .with_text_input(platform_text_input),
@@ -384,7 +384,7 @@ pub struct PresentationState {
     /// a widget that stores one keeps the tree alive past the close — and
     /// under `WindowPolicy::Shared` the UI runtime outlives any single presentation too.
     alive: RefCell<Option<Rc<()>>>,
-    window: Weak<dyn PlatformWindow>,
+    window: std::rc::Weak<dyn PlatformWindow>,
     /// The window's identity, read once at assembly: recordings address input
     /// by it even after the window itself is gone (ADR-0215 §1).
     window_id: flui_platform::WindowId,
@@ -597,7 +597,7 @@ impl PresentationState {
     /// A window without the capability (`bridge` is `None`) wires nothing:
     /// the pipeline keeps its documented publish-nowhere placeholder.
     fn wire_platform_accessibility(
-        window: &Arc<dyn PlatformWindow>,
+        window: &Rc<dyn PlatformWindow>,
         bridge: Option<&Arc<dyn PlatformAccessibility>>,
         pipeline: &PipelineCell,
         semantics: &SemanticsHost,
@@ -622,7 +622,7 @@ impl PresentationState {
         let enabled_flag = semantics.platform_semantics_enabled_handle();
         let republish_flag = semantics.full_republish_handle();
         let wake = Arc::clone(wake);
-        let awaken_window = Arc::downgrade(window);
+        let awaken_window = window.redraw_requester();
         bridge.set_activation_listener(Arc::new(move |active| {
             enabled_flag.store(active, Ordering::Relaxed);
             if active {
@@ -634,10 +634,10 @@ impl PresentationState {
             }
             // The flag alone changes nothing until a frame runs: wake the
             // loop and poke this window so the reconcile actually happens.
+            // The adapter calls from its own thread, so the window is asked
+            // through its requester (ADR-0254 §5).
             wake();
-            if let Some(window) = awaken_window.upgrade() {
-                window.request_redraw();
-            }
+            awaken_window.request_redraw();
         }));
         // Assistive technology may have attached before this window existed
         // — the transition the listener waits for has already happened.
@@ -664,15 +664,15 @@ impl PresentationState {
     /// wiring).
     fn build_gestures(
         id: PresentationId,
-        window: &Arc<dyn PlatformWindow>,
+        window: &Rc<dyn PlatformWindow>,
         clock: &ClockSource,
         preset: flui_interaction::GestureProfiles,
     ) -> GestureBinding {
         // The arena's deadlines read the ui_runtime's clock: a recognizer's
         // timeout and the frame that polls it share one timeline.
         let gestures = GestureBinding::with_settings_and_clock(preset, Arc::new(clock.clone()));
-        flui_interaction::__runtime::set_pointer_capture_wake(&gestures, Arc::downgrade(window));
-        let cursor_window = Arc::downgrade(window);
+        flui_interaction::__runtime::set_pointer_capture_wake(&gestures, Rc::downgrade(window));
+        let cursor_window = Rc::downgrade(window);
         gestures
             .mouse_tracker()
             .set_cursor_change_callback(Rc::new(move |device_id, cursor| {
@@ -716,12 +716,12 @@ impl PresentationState {
     /// the refresh period of the display the host last delivered for the
     /// window (ADR-0210 §4, ADR-0236 §6).
     fn build_haptics(
-        window: &Arc<dyn PlatformWindow>,
+        window: &Rc<dyn PlatformWindow>,
         display: &Rc<Cell<Option<flui_platform::WindowDisplay>>>,
         gestures: &GestureBinding,
         request_frame: impl Fn() + 'static,
     ) -> flui_interaction::HapticsHost {
-        let actuator = Arc::downgrade(window);
+        let actuator = Rc::downgrade(window);
         let display = Rc::downgrade(display);
         let haptics = flui_interaction::HapticsHost::builder(gestures, move || {
             actuator.upgrade().and_then(|window| window.haptics())
@@ -840,26 +840,25 @@ impl PresentationState {
         // (`UiRuntime::construct` wires it to this same `wake`), so the closure
         // no longer calls `wake` directly.
         //
-        // Pokes this presentation's own window through a weak reference.
-        // The runtime wake targets its primary window; a runtime with several
-        // presentations still needs this addressed secondary wake. It is gated
-        // on `ensure_visual_update`'s return so it fires only when the
-        // scheduler actually accepted the demand.
+        // Pokes this presentation's own window through its redraw requester:
+        // a mark can come from any thread (a signal written on a worker), and
+        // the window is the owner thread's (ADR-0254 §5). The runtime wake
+        // targets its primary window; a runtime with several presentations
+        // still needs this addressed secondary wake. It is gated on
+        // `ensure_visual_update`'s return so it fires only when the scheduler
+        // actually accepted the demand.
         //
         // One poke per frame, not one per mark: a hundred state changes before
         // the next frame make one platform request. The latch reopens when the
         // next pump samples this presentation (`release_redraw_poke`), and a
         // demand the scheduler declined does not close it.
         let scheduler = capabilities.scheduler.frame_waker();
-        let redraw_window = Arc::downgrade(&window);
+        let redraw_window = window.redraw_requester();
         let redraw_poked = Arc::new(AtomicBool::new(false));
         let poked = Arc::clone(&redraw_poked);
         let request_frame = Arc::new(move || {
-            if scheduler.ensure_visual_update()
-                && !poked.swap(true, Ordering::AcqRel)
-                && let Some(window) = redraw_window.upgrade()
-            {
-                window.request_redraw();
+            if scheduler.ensure_visual_update() && !poked.swap(true, Ordering::AcqRel) {
+                redraw_window.request_redraw();
             }
         });
         let vsync = Vsync::new();
@@ -892,7 +891,7 @@ impl PresentationState {
         let drag_and_drop = flui_interaction::drag::DragAndDrop::new(
             capabilities.drag.clone(),
             id,
-            Arc::downgrade(&window),
+            Rc::downgrade(&window),
             gestures.mouse_tracker(),
         );
         widgets.with_build_owner_mut(|owner| {
@@ -949,7 +948,7 @@ impl PresentationState {
             frame_rate: Cell::default(),
             alive: RefCell::new(Some(alive)),
             window_id: window.id(),
-            window: Arc::downgrade(&window),
+            window: Rc::downgrade(&window),
             accessibility: accessibility.as_ref().map(Arc::downgrade),
             gestures,
             haptics,
@@ -1009,7 +1008,7 @@ impl PresentationState {
     pub(crate) fn new_for_test_with_window(
         id: PresentationId,
         pipeline: PipelineCell,
-        window: Arc<dyn PlatformWindow>,
+        window: Rc<dyn PlatformWindow>,
     ) -> Self {
         let gestures = Self::build_gestures(
             id,
@@ -1071,7 +1070,7 @@ impl PresentationState {
             frame_rate: Cell::default(),
             alive: RefCell::new(Some(alive)),
             window_id: window.id(),
-            window: Arc::downgrade(&window),
+            window: Rc::downgrade(&window),
             accessibility: accessibility.as_ref().map(Arc::downgrade),
             gestures,
             haptics,
@@ -1124,7 +1123,7 @@ impl PresentationState {
         pipeline: PipelineCell,
         platform_text_input: Option<Arc<dyn PlatformTextInput>>,
     ) -> Self {
-        let window: Arc<dyn PlatformWindow> = test_platform_window(platform_text_input);
+        let window: Rc<dyn PlatformWindow> = test_platform_window(platform_text_input);
         Self::new_for_test_with_window(id, pipeline, window)
     }
 

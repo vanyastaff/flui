@@ -4,6 +4,7 @@ use super::*;
 use crate::app::runner::window_routes::OwnerOpenRouted as _;
 use flui_native::{HeadlessPlatform, Platform};
 use flui_runtime::ui_runtime::UiRuntime;
+use std::sync::Arc;
 
 fn installed_capture(
     run: impl FnOnce(
@@ -27,7 +28,7 @@ fn installed_capture(
                 .try_ready()?;
             let runtime = UiRuntime::new(
                 flui_runtime::presentation::PresentationWindow::new(
-                    Arc::clone(&window) as Arc<dyn flui_platform::PlatformWindow>,
+                    Rc::clone(&window) as Rc<dyn flui_platform::PlatformWindow>,
                     None,
                 )
                 .with_text_store_host(Some(flui_testing::RecordingTextStoreHost::new())),
@@ -44,7 +45,7 @@ fn installed_capture(
                 ui_runtime_id: runtime.id(),
                 presentation_id: runtime.presentation_id(),
             };
-            let record = NativeTextSizing::prepare(address, Arc::clone(&window), Rc::clone(&owner));
+            let record = NativeTextSizing::prepare(address, Rc::clone(&window), Rc::clone(&owner));
             let calls = Rc::new(Cell::new(0));
             let observed = Rc::clone(&calls);
             *record.capture_sampler.borrow_mut() = Some(Box::new(move || {

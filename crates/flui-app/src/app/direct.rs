@@ -142,8 +142,8 @@ pub fn run_direct(
             };
 
         // 2. Create GPU renderer. `Renderer::new` takes ownership of a
-        // `WindowTarget` (issue #1043) — `Arc::clone(&window)` gives it its
-        // own strong ref rather than a borrow, so the renderer stays sound
+        // `WindowTarget` (issue #1043): the window's surface target, which it
+        // owns rather than borrows, so the renderer stays sound
         // even if this scope's `window` binding is dropped first.
         let phys_size = window
             .state()
@@ -152,7 +152,7 @@ pub fn run_direct(
                 metrics.physical()
             });
         let renderer = pollster::block_on(Renderer::with_surface_color(
-            Arc::clone(&window),
+            window.surface_target(),
             config.surface_color,
         ));
         let mut renderer = match renderer {
@@ -239,7 +239,7 @@ pub fn run_direct(
         // resizes the surface. Weak: the route lives in the window's
         // own handler.
         let renderer_resize = Arc::clone(&renderer);
-        let observed = Arc::downgrade(&window);
+        let observed = std::rc::Rc::downgrade(&window);
         let sized = std::cell::Cell::new(window.state().metrics);
         routes.route_state_changed(move || {
             let Some(window) = observed.upgrade() else {
@@ -288,7 +288,7 @@ pub fn run_direct(
         // wants to refuse a close here owns the loop already and opens
         // its window with a handler of its own — the
         // presentation-addressed API would have nothing to key on.
-        let closing = std::sync::Arc::downgrade(&window);
+        let closing = std::rc::Rc::downgrade(&window);
         routes.route_close_requested(
             || {
                 tracing::debug!(

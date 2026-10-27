@@ -195,10 +195,6 @@ struct WebWindowState {
     execution: WindowExecutionState,
 }
 
-// SAFETY: WASM is single-threaded — no data races possible
-unsafe impl Send for WebWindow {}
-unsafe impl Sync for WebWindow {}
-
 /// The canvas's current CSS box in CSS pixels and the device pixel ratio,
 /// read from the live layout. `None` when the box is empty — a canvas that
 /// is `display: none`, or not yet laid out — since an empty surface is not
@@ -1036,7 +1032,7 @@ impl host::Window<WebLoop> for WebWindow {
         positions: &Arc<WindowPositions<CanvasRef>>,
         options: WindowOptions,
         handler: Rc<dyn flui_platform::WindowHandler>,
-    ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
+    ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
         tracing::info!(title = %options.title, "Creating web window (canvas)");
 
         let window = Self::new(
@@ -1079,12 +1075,10 @@ impl host::Window<WebLoop> for WebWindow {
             s.window_delivery = Some(delivery);
         });
 
-        let window = Arc::new(window);
+        let window = Rc::new(window);
         window
             .delivery
-            .publish_through(Arc::downgrade(&window), |window: &WebWindow| {
-                window.publisher().read()
-            });
+            .publish_through_owner(&window, |window: &WebWindow| window.publisher().read());
         Ok(window)
     }
 
@@ -1119,6 +1113,20 @@ impl PlatformWindow for WebWindow {
     /// would get it at once, at the same frame time, inside its own
     /// dispatch, in a loop that holds the page's only thread.
     fn request_redraw(&self) {}
+
+    /// The page's animation frames serve every request, as
+    /// [`request_redraw`](PlatformWindow::request_redraw) says: there is
+    /// nothing to carry, from the page's only thread or any other.
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        Arc::new(|| {})
+    }
+
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        Arc::new(WebSurface {
+            canvas: self.canvas.clone(),
+            retirement: self.delivery.retirement(),
+        })
+    }
 
     // ==================== State and commands (ADR-0237) ====================
 
@@ -1208,19 +1216,37 @@ impl PlatformWindow for WebWindow {
             .set_property("cursor", cursor.name())
             .map_err(|error| CursorError::Backend(format!("{error:?}")))
     }
+}
 
-    // ==================== GPU Surface Handles ====================
+/// A canvas window's surface target (ADR-0254 §5): the canvas element, until
+/// the window retires.
+struct WebSurface {
+    canvas: web_sys::HtmlCanvasElement,
+    retirement: crate::owner::window_delivery::Retirement,
+}
 
+// SAFETY: the target holds a JavaScript object, which belongs to the thread
+// of the page that made it. This crate builds the web host for
+// `wasm32-unknown-unknown` without the `atomics` target feature, where the
+// page's one thread is the only thread: the target is made, read and dropped
+// there, so no other thread can reach the object.
+#[cfg(not(target_feature = "atomics"))]
+unsafe impl Send for WebSurface {}
+// SAFETY: see `Send` above: with one thread, a shared reference is never
+// used concurrently.
+#[cfg(not(target_feature = "atomics"))]
+unsafe impl Sync for WebSurface {}
+
+impl raw_window_handle::HasWindowHandle for WebSurface {
     fn window_handle(
         &self,
     ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
-        let accepting = self.registration.borrow().is_some();
-        if !accepting {
-            return Err(raw_window_handle::HandleError::Unavailable);
-        }
         use raw_window_handle::{RawWindowHandle, WebCanvasWindowHandle, WindowHandle};
 
-        // WebCanvasWindowHandle expects a NonNull<c_void> pointer to the canvas object
+        if self.retirement.is_retired() {
+            return Err(raw_window_handle::HandleError::Unavailable);
+        }
+        // The handle points at the canvas object this target holds.
         let obj: &wasm_bindgen::JsValue = self.canvas.as_ref();
         let ptr = std::ptr::NonNull::new(
             std::ptr::from_ref(obj)
@@ -1228,21 +1254,30 @@ impl PlatformWindow for WebWindow {
                 .cast::<std::ffi::c_void>(),
         )
         .expect("BUG: a reference can never be null");
-        let handle = WebCanvasWindowHandle::new(ptr);
-        let raw = RawWindowHandle::WebCanvas(handle);
-        // SAFETY: The canvas element is valid for the lifetime of this borrow
+        let raw = RawWindowHandle::WebCanvas(WebCanvasWindowHandle::new(ptr));
+        // SAFETY: the pointer is to the canvas `JsValue` this target owns,
+        // valid for the borrow of `self` the handle carries.
         Ok(unsafe { WindowHandle::borrow_raw(raw) })
     }
+}
 
+impl raw_window_handle::HasDisplayHandle for WebSurface {
     fn display_handle(
         &self,
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
         use raw_window_handle::{DisplayHandle, RawDisplayHandle, WebDisplayHandle};
 
         let raw = RawDisplayHandle::Web(WebDisplayHandle::new());
-        // SAFETY: Web display handle is always valid
+        // SAFETY: a web display handle carries no fields: there is nothing
+        // for `borrow_raw` to keep valid.
         Ok(unsafe { DisplayHandle::borrow_raw(raw) })
     }
+}
+
+impl flui_platform::SurfaceTarget for WebSurface {
+    /// The page presents on its animation frames: there is nothing to arm
+    /// before a present, so it returns at once.
+    fn pre_present_notify(&self) {}
 }
 
 #[wasm_bindgen(inline_js = "

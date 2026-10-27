@@ -1263,7 +1263,7 @@ async fn web_screen_change_keeps_the_period_while_the_current_screen_is_known() 
 }
 
 /// A window opened on `running`, and the scale of every resize it reports.
-fn open_recorded_window(running: &Running) -> (Arc<dyn HostWindow>, Arc<Mutex<Vec<f64>>>) {
+fn open_recorded_window(running: &Running) -> (Rc<dyn HostWindow>, Arc<Mutex<Vec<f64>>>) {
     let handler = flui_testing::window_handler::RecordingWindowHandler::new();
     let window = {
         let owner = running.owner.borrow();
@@ -1279,7 +1279,7 @@ fn open_recorded_window(running: &Running) -> (Arc<dyn HostWindow>, Arc<Mutex<Ve
     };
     let resized = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&resized);
-    let observed = Arc::downgrade(&window);
+    let observed = std::rc::Rc::downgrade(&window);
     let last = std::cell::Cell::new(window.state().metrics);
     handler.react_to_state_change(move || {
         let Some(window) = observed.upgrade() else {
@@ -1297,19 +1297,19 @@ fn open_recorded_window(running: &Running) -> (Arc<dyn HostWindow>, Arc<Mutex<Ve
 }
 
 /// The drawable metrics the window's snapshot carries.
-fn metrics(window: &Arc<dyn HostWindow>) -> flui_foundation::geometry::WindowMetrics {
+fn metrics(window: &Rc<dyn HostWindow>) -> flui_foundation::geometry::WindowMetrics {
     window
         .state()
         .metrics
         .expect("an open canvas has drawable metrics")
 }
 
-fn physical_size(window: &Arc<dyn HostWindow>) -> [i32; 2] {
+fn physical_size(window: &Rc<dyn HostWindow>) -> [i32; 2] {
     let size = metrics(window).physical();
     [size.width, size.height]
 }
 
-fn scale(window: &Arc<dyn HostWindow>) -> f64 {
+fn scale(window: &Rc<dyn HostWindow>) -> f64 {
     metrics(window).scale().get()
 }
 

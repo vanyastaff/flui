@@ -789,7 +789,7 @@ impl WindowProc {
                         // `WindowHandler::frame_requested` — which in `flui-app`'s wiring
                         // owns this window's GPU renderer, whose
                         // `wgpu::Surface` is built from the
-                        // `Arc<dyn PlatformWindow>` clone the renderer owns
+                        // `Rc<dyn PlatformWindow>` clone the renderer owns
                         // (ADR-0063) — stays pinned forever: window (through
                         // its callback slots) → frame closure → raster lane
                         // → renderer → surface → `Arc<WindowsWindow>`, a

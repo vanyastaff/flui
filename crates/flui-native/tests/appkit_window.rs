@@ -26,7 +26,7 @@ fn main() {
 
 #[cfg(target_os = "macos")]
 mod cases {
-    use std::sync::Arc;
+    use std::rc::Rc;
     use std::time::{Duration, Instant};
 
     use flui_foundation::geometry::{Size, WindowMetrics};
@@ -127,9 +127,10 @@ mod cases {
         reason = "the FLUI view behind an open AppKit window's raw window handle"
     )]
     fn ns_window_of(window: &dyn HostWindow) -> Retained<NSWindow> {
-        use raw_window_handle::RawWindowHandle;
+        use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
 
-        let handle = window.window_handle().expect("a live AppKit window");
+        let target = window.surface_target();
+        let handle = target.window_handle().expect("a live AppKit window");
         let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
             panic!("an AppKit window hands out an AppKit handle");
         };
@@ -145,13 +146,13 @@ mod cases {
     struct AppKitFixture {
         app: Retained<NSApplication>,
         _platform: MacOSPlatform,
-        window: Arc<dyn HostWindow>,
+        window: Rc<dyn HostWindow>,
         ns_window: Retained<NSWindow>,
     }
 
     impl WindowFixture for AppKitFixture {
-        fn window(&self) -> Arc<dyn PlatformWindow> {
-            Arc::clone(&self.window) as Arc<dyn PlatformWindow>
+        fn window(&self) -> Rc<dyn PlatformWindow> {
+            Rc::clone(&self.window) as Rc<dyn PlatformWindow>
         }
 
         fn readback(&self) -> Readback {

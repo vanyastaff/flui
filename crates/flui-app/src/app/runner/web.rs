@@ -75,7 +75,7 @@ where
         routes.adopt(host.id());
         let presentation_window =
             super::presentation_window(host).with_pointer_resampling(config.pointer_resampling);
-        let window = Arc::clone(presentation_window.window());
+        let window = std::rc::Rc::clone(presentation_window.window());
 
         // 2. Shared renderer slot — starts as None, filled async once the WebGPU
         //    adapter is available. `Option` lets the frame callback skip frames that
@@ -144,7 +144,7 @@ where
                 wake();
             });
         }
-        let mut installation = prepare_platform_ui_runtime(ui_runtime, Arc::clone(&window));
+        let mut installation = prepare_platform_ui_runtime(ui_runtime, std::rc::Rc::clone(&window));
         installation.dev_agent(config.dev_agent.zip(agent_window));
         owner_platform_installed(|owner| {
             installation.submit_web(
@@ -202,7 +202,7 @@ where
 
 pub(super) struct WebFrameDriver {
     renderer: std::sync::Arc<parking_lot::Mutex<Option<flui_engine::Renderer>>>,
-    window: std::sync::Arc<dyn flui_platform::PlatformWindow>,
+    window: std::rc::Rc<dyn flui_platform::PlatformWindow>,
     /// What the browser or the renderer reported lost, and not yet rebuilt.
     gpu_loss: std::sync::Arc<GpuLossLedger>,
     /// Wakes the owner: the next turn rebuilds without waiting for a frame.
@@ -369,7 +369,8 @@ impl WebFrameDriver {
         use std::sync::Arc;
         let renderer_slot = Arc::clone(&self.renderer);
         let surface_color = self.surface_color;
-        let window = Arc::clone(&self.window);
+        let window = std::rc::Rc::clone(&self.window);
+        let surface = window.surface_target();
         let (gpu_loss, wake) = (Arc::clone(&self.gpu_loss), Arc::clone(&self.owner_wake));
         let frame_latency = self.frame_latency;
         wasm_bindgen_futures::spawn_local(async move {
@@ -383,7 +384,7 @@ impl WebFrameDriver {
                     (Some(renderer), built)
                 }
                 None => match flui_engine::Renderer::with_surface_color(
-                    Arc::clone(&window),
+                    surface,
                     surface_color,
                 )
                 .await

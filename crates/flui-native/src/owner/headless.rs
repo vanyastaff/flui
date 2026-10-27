@@ -47,7 +47,7 @@ use flui_platform::{DisplayId, DisplaySnapshot, WindowHandler, WindowId, WindowO
 /// mirrors the winit backend's own private `OpenWindowResult` alias
 /// (`owner/winit/control.rs`) so both backends complete a
 /// [`ClaimSlot`]/[`PendingWindow`] pair with an identical shape.
-type OpenWindowResult = Result<Arc<dyn HostWindow>, OpenWindowError>;
+type OpenWindowResult = Result<crate::owner::OpenedWindow, OpenWindowError>;
 
 /// Builds the text-store host a headless window offers
 /// ([`HeadlessPlatform::with_text_store_host`](crate::HeadlessPlatform::with_text_store_host)).
@@ -142,7 +142,11 @@ pub(crate) trait TrackedWindows: OpenWindows {
         platform: Weak<Mutex<HeadlessState>>,
         options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
-    ) -> Arc<dyn HostWindow>;
+    ) -> Rc<dyn HostWindow>;
+
+    /// Keep `window`, which a deferred open built, until it closes: its
+    /// opener gets its identity, never the window (ADR-0254 §4).
+    fn keep_deferred(&self, window: &Rc<dyn HostWindow>);
 
     /// What every open window delivers to its handler, in the order they
     /// opened.
@@ -850,7 +854,7 @@ impl HeadlessDeferredWindowOpens {
     /// the call is not on the owner thread whose handler the oldest request
     /// carries, which it leaves pending. The window's handler hears the
     /// capability snapshot before this returns.
-    pub fn resolve_next(&self) -> Option<Arc<dyn HostWindow>> {
+    pub fn resolve_next(&self) -> Option<Rc<dyn HostWindow>> {
         let platform_state = self.state.upgrade()?;
 
         // Pop the request and build its window under one lock acquisition,
@@ -874,12 +878,13 @@ impl HeadlessDeferredWindowOpens {
                 .take()
                 .expect("BUG: a deferred open resolves on the owner thread that made it");
             let windows = Arc::clone(&state.windows);
-            let window = windows.open(
+            let window = Arc::clone(&windows).open(
                 &mut state,
                 Arc::downgrade(&platform_state),
                 options,
                 handler,
             );
+            windows.keep_deferred(&window);
             (slot, window)
         };
         // The lock is released: the handler hears its window's capabilities
@@ -894,7 +899,7 @@ impl HeadlessDeferredWindowOpens {
         // test driving `resolve_next` directly (rather than through a real
         // `PendingWindow`) legitimately wants it regardless of whether some
         // OTHER requester abandoned their own claim to it.
-        if let Err(_unclaimed) = slot.deliver(Ok(Arc::clone(&window))) {
+        if let Err(_unclaimed) = slot.deliver(Ok(crate::owner::OpenedWindow::new(&window))) {
             tracing::debug!(
                 "resolved a deferred window open whose PendingWindow was \
                  already abandoned by the requester; the created mock window \
@@ -1004,7 +1009,11 @@ mod tests {
             _: Weak<Mutex<HeadlessState>>,
             _: WindowOptions,
             _: Rc<dyn WindowHandler>,
-        ) -> Arc<dyn HostWindow> {
+        ) -> Rc<dyn HostWindow> {
+            unreachable!("the test opens no window")
+        }
+
+        fn keep_deferred(&self, _: &Rc<dyn HostWindow>) {
             unreachable!("the test opens no window")
         }
 

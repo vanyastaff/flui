@@ -954,8 +954,8 @@ impl Renderer {
         target: impl WindowTarget,
         requested: SurfaceColor,
     ) -> EngineResult<Self> {
-        // An `Arc<dyn PlatformWindow>` (the common caller shape) becomes an
-        // `Arc<Arc<dyn PlatformWindow>>` here — forced: `Arc<dyn
+        // An `Rc<dyn PlatformWindow>` (the common caller shape) becomes an
+        // `Arc<Rc<dyn PlatformWindow>>` here — forced: `Arc<dyn
         // PlatformWindow>` cannot upcast to `Arc<dyn WindowTarget>` without
         // `PlatformWindow: WindowTarget`, which would invert the
         // flui-native → flui-engine layer edge (`cargo xtask workspace`).

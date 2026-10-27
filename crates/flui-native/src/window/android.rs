@@ -552,7 +552,7 @@ impl host::Window<AndroidLoop> for AndroidWindow {
         positions: &Arc<WindowPositions<ActivityRef>>,
         options: WindowOptions,
         handler: Rc<dyn flui_platform::WindowHandler>,
-    ) -> Result<Arc<dyn crate::host_window::HostWindow>, OpenWindowError> {
+    ) -> Result<Rc<dyn crate::host_window::HostWindow>, OpenWindowError> {
         if options.input_latency == flui_platform::InputLatency::Low {
             // NativeActivity takes touch from the native input queue, which
             // `requestUnbufferedDispatch` does not reach (docs/gaps.md).
@@ -600,7 +600,9 @@ impl host::Window<AndroidLoop> for AndroidWindow {
             }
         }
         tracing::info!("Android window created (wrapping ANativeWindow)");
-        Ok(window)
+        // The application holds its own handle on the same window; the looper
+        // keeps this one.
+        Ok(Rc::new(AndroidWindow::clone(&window)))
     }
 
     fn active(owner: &AndroidLoop, _: &WindowPositions<ActivityRef>) -> Option<WindowId> {
@@ -690,12 +692,21 @@ impl PlatformWindow for AndroidWindow {
             .and_then(WindowTextInput::ime)
     }
 
-    /// Callable from any thread: the first request since the last frame wakes
-    /// the looper, which otherwise blocks until something else does.
+    /// The first request since the last frame wakes the looper, which
+    /// otherwise blocks until something else does.
     fn request_redraw(&self) {
-        if !self.redraw_requested.swap(true, Ordering::SeqCst) {
-            self.app.create_waker().wake();
-        }
+        flui_platform::RedrawRequester::request_redraw(&self.redraw());
+    }
+
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        Arc::new(self.redraw())
+    }
+
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        Arc::new(AndroidSurface {
+            app: self.app.clone(),
+            retirement: self.delivery.retirement(),
+        })
     }
 
     fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
@@ -766,85 +777,100 @@ impl PlatformWindow for AndroidWindow {
         }));
         Ok(())
     }
+}
 
-    // ==================== Callback Registration ====================
+impl AndroidWindow {
+    /// How any thread asks this window for a frame.
+    fn redraw(&self) -> AndroidRedraw {
+        AndroidRedraw {
+            app: self.app.clone(),
+            requested: Arc::clone(&self.redraw_requested),
+            retirement: self.delivery.retirement(),
+        }
+    }
+}
 
-    // ==================== Window Handles (GPU integration) ====================
+/// An Android window's redraw requester: the first request since the last
+/// frame wakes the looper, from any thread.
+struct AndroidRedraw {
+    app: AndroidApp,
+    requested: Arc<AtomicBool>,
+    retirement: crate::owner::window_delivery::Retirement,
+}
 
+impl flui_platform::RedrawRequester for AndroidRedraw {
+    fn request_redraw(&self) {
+        if !self.retirement.is_retired() && !self.requested.swap(true, Ordering::SeqCst) {
+            self.app.create_waker().wake();
+        }
+    }
+}
+
+/// An Android window's surface target (ADR-0254 §5): the Activity's
+/// `ANativeWindow`, re-queried on every call.
+///
+/// It answers `Unavailable` while the Activity has no native window, from
+/// `TerminateWindow` to the next `InitWindow`, and once the window was retired
+/// (the looper's exit). An ordinary pause keeps the native window, and the
+/// target with it: the surface is released by the handler's
+/// `surface_changed(Release)`, not by this answer.
+struct AndroidSurface {
+    app: AndroidApp,
+    retirement: crate::owner::window_delivery::Retirement,
+}
+
+impl raw_window_handle::HasWindowHandle for AndroidSurface {
     fn window_handle(
         &self,
     ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
-        // Get the ANativeWindow pointer from the AndroidApp and construct the handle
-        // manually. We can't delegate to NativeWindow::window_handle() because
-        // that borrows a temporary.
-        //
-        // This already satisfies `PlatformWindow::window_handle`'s MUST
-        // (see that trait method's doc): `native_window()` answers `None`
-        // exactly when no ANativeWindow is live, and the `ok_or` below maps
-        // that straight to `Unavailable` — no separate flag needed. The span
-        // where it is `None` runs from `MainEvent::TerminateWindow` to the
-        // next `MainEvent::InitWindow` (`owner/android/looper.rs`'s event
-        // loop, module doc's "Surface Lifecycle" section), and that span is
-        // open at both ends *inside* those callbacks: the field is still
-        // `Some` while the `TerminateWindow` callback runs (the applier clears
-        // it in `post_exec_cmd` once the callback has returned) and already
-        // `Some` while the `InitWindow` callback runs (it is set in
-        // `pre_exec_cmd` before the callback). Note what that span is
-        // NOT: an ordinary `MainEvent::Pause` leaves `native_window()`
-        // `Some`, because `AppCmd::TermWindow` is what clears it and a pause
-        // does not apply that command.
+        if self.retirement.is_retired() {
+            return Err(raw_window_handle::HandleError::Unavailable);
+        }
+        // `native_window()` answers `None` exactly while no ANativeWindow is
+        // live: from `MainEvent::TerminateWindow` (cleared in `post_exec_cmd`
+        // once that callback returned) to the next `MainEvent::InitWindow`
+        // (set in `pre_exec_cmd` before it). A pause does not clear it.
         let native_window = self
             .app
             .native_window()
             .ok_or(raw_window_handle::HandleError::Unavailable)?;
-        // NativeWindow::ptr() returns NonNull<ANativeWindow>; cast to NonNull<c_void>
-        // for rwh
+        // The handle is built by hand: `NativeWindow::window_handle` would
+        // borrow the temporary.
         let ptr = native_window.ptr().cast();
-        let handle = raw_window_handle::AndroidNdkWindowHandle::new(ptr);
-        let raw = raw_window_handle::RawWindowHandle::AndroidNdk(handle);
-        // SAFETY: `ptr` is the ANativeWindow `AndroidApp` currently holds,
-        // re-queried immediately above. The bound on that pointer is the
-        // ANativeWindow refcount, and it is NOT this borrow. `ndk::NativeWindow`
-        // is a refcounted wrapper (`Clone` calls `ANativeWindow_acquire`,
-        // `Drop` calls `ANativeWindow_release`); `AndroidApp::native_window()`
-        // returns a clone of the glue guard's field
-        // (`android-activity` 0.6.1, `native_activity/mod.rs`); and the guard
-        // holds the last strong clone the Rust side keeps, dropping it in
-        // `post_exec_cmd(AppCmd::TermWindow)` — `guard.window = None`,
-        // `native_activity/glue.rs` — which the main loop applies *after* the
-        // `MainEvent::TerminateWindow` callback returns (`pre_exec_cmd` →
-        // callback → `post_exec_cmd`). The `'_` on the returned handle is the
-        // borrow of `self` and does not encode that bound: `AndroidLoop`
-        // keeps holding its `AndroidWindow` across a pause, and the only
-        // writes to that field are `Window::open` (this file), which fills it,
-        // and `AndroidLoop::run`'s exit path (`owner/android/looper.rs`),
-        // which takes it exactly once, after the last dispatch, so for every
-        // handle this method ever returns, `self` and the borrow outlive the
-        // pointer.
-        //
-        // The obligation that carries the weight is therefore
-        // consumer-enforced, not type-enforced: nothing may dereference the
-        // handle once the window has been terminated, and this type cannot
-        // express that, because `native_window()` keeps answering `Some`
-        // through the very callback that precedes the release. `flui-app`'s
-        // Android runner discharges it by releasing the wgpu surface built
-        // from this handle inside `WindowHandler::surface_changed(Release)`, which
-        // `MainEvent::Pause` and `MainEvent::TerminateWindow` both deliver —
-        // the second one still inside the callback, before the release above.
+        let raw = raw_window_handle::RawWindowHandle::AndroidNdk(
+            raw_window_handle::AndroidNdkWindowHandle::new(ptr),
+        );
+        // SAFETY: `ptr` is the ANativeWindow `AndroidApp` holds now, queried
+        // just above; it stays valid while the glue keeps its reference, which
+        // it drops in `post_exec_cmd(AppCmd::TermWindow)`, after the
+        // `TerminateWindow` callback returns. The handle's `'_` is the borrow
+        // of this target and does not encode that, so the obligation is the
+        // consumer's: `flui-app` releases the surface built from this handle in
+        // `WindowHandler::surface_changed(Release)`, which `Pause` and
+        // `TerminateWindow` deliver before the release.
         #[expect(unsafe_code)]
         Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(raw) })
     }
+}
 
+impl raw_window_handle::HasDisplayHandle for AndroidSurface {
     fn display_handle(
         &self,
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
-        // Android always uses the default Android display
-        let handle = raw_window_handle::AndroidDisplayHandle::new();
-        let raw = raw_window_handle::RawDisplayHandle::Android(handle);
-        // SAFETY: The Android display handle is always valid while the app is running
+        let raw = raw_window_handle::RawDisplayHandle::Android(
+            raw_window_handle::AndroidDisplayHandle::new(),
+        );
+        // SAFETY: an Android display handle carries no fields: there is
+        // nothing for `borrow_raw` to keep valid.
         #[expect(unsafe_code)]
         Ok(unsafe { raw_window_handle::DisplayHandle::borrow_raw(raw) })
     }
+}
+
+impl flui_platform::SurfaceTarget for AndroidSurface {
+    /// Android has no frame callback to arm before a present: it returns at
+    /// once.
+    fn pre_present_notify(&self) {}
 }
 
 mod safe_area {

@@ -328,7 +328,7 @@ pub(crate) trait OpenRouted {
 
 #[cfg(test)]
 impl<P: flui_native::Platform + ?Sized> OpenRouted for P {
-    type Opened = std::sync::Arc<dyn flui_native::HostWindow>;
+    type Opened = Rc<dyn flui_native::HostWindow>;
 
     fn open_routed(
         &self,

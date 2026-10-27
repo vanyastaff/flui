@@ -163,10 +163,10 @@ fn replaced_application_handlers_reach_the_platform(platform: &Arc<dyn Platform>
 /// method runs.
 struct Reentry {
     platform: Weak<dyn Platform>,
-    window: RefCell<Weak<dyn HostWindow>>,
+    window: RefCell<std::rc::Weak<dyn HostWindow>>,
     options: fn() -> WindowOptions,
     /// The windows opened from inside a method, kept open by the test.
-    opened: RefCell<Vec<Arc<dyn HostWindow>>>,
+    opened: RefCell<Vec<Rc<dyn HostWindow>>>,
     /// Whether the method re-entered yet: it re-enters once.
     done: Cell<bool>,
 }
@@ -175,7 +175,7 @@ impl Reentry {
     fn new(platform: &Arc<dyn Platform>, options: fn() -> WindowOptions) -> Rc<Self> {
         Rc::new(Self {
             platform: Arc::downgrade(platform),
-            window: RefCell::new(Weak::<flui_native::MockWindow>::new()),
+            window: RefCell::new(std::rc::Weak::<flui_native::MockWindow>::new()),
             options,
             opened: RefCell::new(Vec::new()),
             done: Cell::new(false),
@@ -237,7 +237,7 @@ enum Method {
 /// Makes a window call a handler method; `reentered` answers whether the
 /// method ran, for a host that calls it on a later message. `false` when the
 /// window never called it.
-type Trigger = dyn Fn(&Arc<dyn HostWindow>, &dyn Fn() -> bool) -> bool;
+type Trigger = dyn Fn(&Rc<dyn HostWindow>, &dyn Fn() -> bool) -> bool;
 
 /// Opens a window delivering to a handler whose `method` re-enters, makes the
 /// window call that method with `trigger`, and checks every re-entry reached
@@ -256,7 +256,7 @@ fn a_handler_method_reenters(
     let window = platform
         .open_window(options(), handler)
         .expect("a window opens");
-    *reentry.window.borrow_mut() = Arc::downgrade(&window);
+    *reentry.window.borrow_mut() = Rc::downgrade(&window);
     let before = quits.map(|quits| quits.load(Ordering::SeqCst));
     let probe = Rc::clone(&reentry);
     assert!(
@@ -313,7 +313,7 @@ fn a_handler_dropped_at_close_reaches_the_platform(
 }
 
 /// Raises something on a window from inside a handler method.
-type Raise = dyn Fn(&Arc<dyn HostWindow>);
+type Raise = dyn Fn(&Rc<dyn HostWindow>);
 
 /// A close request the window system raises synchronously from inside the
 /// handler's `input` (a `WM_CLOSE` sent by the input's own handling) is not
@@ -327,8 +327,8 @@ fn a_close_request_raised_inside_input_waits_for_it(
     settle: &dyn Fn(&dyn Fn() -> bool) -> bool,
 ) {
     let handler = RecordingWindowHandler::new();
-    let own: Rc<RefCell<Weak<dyn HostWindow>>> =
-        Rc::new(RefCell::new(Weak::<flui_native::MockWindow>::new()));
+    let own: Rc<RefCell<std::rc::Weak<dyn HostWindow>>> =
+        Rc::new(RefCell::new(std::rc::Weak::<flui_native::MockWindow>::new()));
     let in_input = Rc::new(Cell::new(false));
     let asked_inside = Rc::new(Cell::new(false));
     let closed = Rc::new(Cell::new(false));
@@ -361,7 +361,7 @@ fn a_close_request_raised_inside_input_waits_for_it(
     let window = platform
         .open_window(options(), handler.clone())
         .expect("a window opens");
-    *own.borrow_mut() = Arc::downgrade(&window);
+    *own.borrow_mut() = Rc::downgrade(&window);
     send_input(&window);
     assert!(
         settle(&|| closed.get()),
@@ -395,7 +395,7 @@ fn headless_handler_methods_reenter() {
             }));
             (headless as Arc<dyn Platform>, quits)
         };
-        let mock = |window: &Arc<dyn HostWindow>| {
+        let mock = |window: &Rc<dyn HostWindow>| {
             window
                 .as_any()
                 .downcast_ref::<flui_native::MockWindow>()
@@ -468,7 +468,7 @@ fn headless_handler_methods_reenter() {
 fn headless_close_request_inside_input_waits_for_it() {
     within("headless close request inside input", || {
         let platform: Arc<dyn Platform> = headless();
-        let mock = |window: &Arc<dyn HostWindow>| {
+        let mock = |window: &Rc<dyn HostWindow>| {
             window
                 .as_any()
                 .downcast_ref::<flui_native::MockWindow>()
@@ -634,6 +634,11 @@ fn headless_exit_policy_hook_that_opens_a_window_keeps_the_platform() {
                         flui_testing::window_handler::RecordingWindowHandler::new(),
                     )
                     .expect("a window opens from inside the hook");
+                let window = window
+                    .as_any()
+                    .downcast_ref::<flui_native::MockWindow>()
+                    .expect("a headless platform opens mock windows")
+                    .clone();
                 *kept.lock() = Some(window);
             }
             true
@@ -936,7 +941,10 @@ mod win32 {
                         SendMessageW(hwnd, WM_CLOSE, None, None);
                     }
                     assert!(
-                        flui_platform::PlatformWindow::window_handle(window.as_ref()).is_ok(),
+                        raw_window_handle::HasWindowHandle::window_handle(
+                            &*window.surface_target()
+                        )
+                        .is_ok(),
                         "the window was destroyed inside `input`"
                     );
                 }),

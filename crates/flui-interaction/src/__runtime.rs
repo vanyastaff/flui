@@ -89,7 +89,7 @@ pub fn close_gestures(owner: &crate::GestureBinding, mode: CloseMode) {
 /// Install the owning presentation's weak redraw capability for logical capture release.
 pub fn set_pointer_capture_wake(
     owner: &crate::GestureBinding,
-    window: std::sync::Weak<dyn flui_platform::PlatformWindow>,
+    window: std::rc::Weak<dyn flui_platform::PlatformWindow>,
 ) {
     owner.set_pointer_capture_wake(window);
 }

@@ -280,7 +280,7 @@ impl Drop for Poke {
 /// of drags.
 struct Window {
     handler: Rc<RecordingWindowHandler>,
-    host: Arc<dyn HostWindow>,
+    host: Rc<dyn HostWindow>,
     hwnd: HWND,
     ole: IDropTarget,
     seen: Rc<RefCell<Vec<String>>>,
@@ -838,7 +838,7 @@ fn a_fetch_from_inside_the_provider_is_refused_not_reentered() {
 fn a_window_closed_by_its_drag_callback_is_left() {
     let platform = WindowsPlatform::new().expect("platform");
     let transfer = platform.data_transfer();
-    let closing: Rc<RefCell<Option<Arc<dyn HostWindow>>>> = Rc::default();
+    let closing: Rc<RefCell<Option<Rc<dyn HostWindow>>>> = Rc::default();
     let closer = Rc::clone(&closing);
     let mut answer = answering(&transfer, Some(TransferActions::COPY));
     let target = open(&platform, "flui closing target", move |event| {
@@ -849,7 +849,7 @@ fn a_window_closed_by_its_drag_callback_is_left() {
             window.close_now();
         }
     });
-    *closing.borrow_mut() = Some(Arc::clone(&target.host));
+    *closing.borrow_mut() = Some(Rc::clone(&target.host));
     let ole = target.ole.clone();
     let ended = Rc::new(Cell::new(None));
     let data = data_object(request(&ended));

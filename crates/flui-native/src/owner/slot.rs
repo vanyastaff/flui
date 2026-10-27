@@ -143,6 +143,158 @@ impl<T: 'static> OwnerSlot<T> {
     }
 }
 
+/// A weak reference to a value of the owner thread, such as a window, that
+/// any thread may carry (in a queued close, a state publisher, an opened
+/// window's answer): it upgrades on the thread that made it, and nowhere
+/// else (ADR-0254 §5).
+pub(crate) struct OwnerWeak<T: ?Sized + 'static>(OwnerSlot<std::rc::Weak<T>>);
+
+impl<T: ?Sized + 'static> OwnerWeak<T> {
+    /// A weak reference to `value`, made on its owner thread.
+    pub(crate) fn new(value: &std::rc::Rc<T>) -> Self {
+        let slot = OwnerSlot::new();
+        if slot.replace(std::rc::Rc::downgrade(value)).is_err() {
+            tracing::error!("a weak owner reference could not be kept: owner slots are exhausted");
+        }
+        Self(slot)
+    }
+
+    /// The value, on the owner thread while it lives; `None` anywhere else.
+    pub(crate) fn upgrade(&self) -> Option<std::rc::Rc<T>> {
+        self.0.cloned()?.upgrade()
+    }
+}
+
+/// A value of a `Send + Sync` host structure that only its owner thread
+/// reaches, such as a host's table of its open windows, which are not `Send`
+/// (ADR-0254 §5).
+///
+/// The cell binds to the thread that first stores into it
+/// ([`Self::with_bound`]): a host stores on its owner thread only, so that is
+/// the owner, wherever the structure was built. Every other thread reaches
+/// nothing. `T` is borrowed for the closure alone: a caller runs no user code
+/// inside it.
+pub(crate) struct OwnerCell<T: 'static> {
+    slot: std::sync::OnceLock<OwnerSlot<std::rc::Rc<RefCell<T>>>>,
+}
+
+impl<T: Default + 'static> OwnerCell<T> {
+    /// A cell no thread has stored into yet.
+    pub(crate) const fn new() -> Self {
+        Self {
+            slot: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Run `f` with the value, binding the cell to the calling thread when no
+    /// thread stored into it yet; `None` on any thread but the one it is
+    /// bound to.
+    pub(crate) fn with_bound<R>(&self, f: impl FnOnce(&mut T) -> R) -> Option<R> {
+        let slot = self.slot.get_or_init(OwnerSlot::new);
+        let cell = if let Some(cell) = slot.cloned() {
+            cell
+        } else {
+            let cell = std::rc::Rc::new(RefCell::new(T::default()));
+            slot.replace(std::rc::Rc::clone(&cell)).ok()?;
+            cell
+        };
+        let mut value = cell.borrow_mut();
+        Some(f(&mut value))
+    }
+
+    /// Run `f` with the value on the thread the cell is bound to; `None`
+    /// anywhere else, and before any thread stored into it.
+    pub(crate) fn with<R>(&self, f: impl FnOnce(&mut T) -> R) -> Option<R> {
+        let cell = self.slot.get()?.cloned()?;
+        let mut value = cell.borrow_mut();
+        Some(f(&mut value))
+    }
+}
+
+impl<T: Default + 'static> Default for OwnerCell<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A map of a `Send + Sync` host structure that only its owner thread
+/// reaches: an [`OwnerCell`] of a `HashMap`, for a host's table of open
+/// windows. Off the owner thread it is empty and takes nothing.
+pub(crate) struct OwnerMap<K: 'static, V: 'static> {
+    cell: OwnerCell<HashMap<K, V>>,
+}
+
+impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V> {
+    /// A map no thread has stored into yet.
+    pub(crate) const fn new() -> Self {
+        Self {
+            cell: OwnerCell::new(),
+        }
+    }
+
+    /// Store `value` under `key`, binding the map to the calling thread when
+    /// nothing was stored yet: what it replaced, or `value` back when the
+    /// caller is not the owner.
+    ///
+    /// # Errors
+    ///
+    /// Hands `value` back off the owner thread.
+    pub(crate) fn insert(&self, key: K, value: V) -> Result<Option<V>, V> {
+        let mut value = Some(value);
+        self.cell
+            .with_bound(|map| map.insert(key, value.take().expect("BUG: stored once")))
+            .ok_or_else(|| value.take().expect("BUG: not stored off the owner"))
+    }
+
+    /// Take the value under `key` out.
+    pub(crate) fn remove(&self, key: &K) -> Option<V> {
+        self.cell.with(|map| map.remove(key)).flatten()
+    }
+
+    /// A clone of the value under `key`.
+    pub(crate) fn get(&self, key: &K) -> Option<V> {
+        self.cell.with(|map| map.get(key).cloned()).flatten()
+    }
+
+    /// A snapshot of the keys and values: what is done with them next may
+    /// open or close windows.
+    pub(crate) fn entries(&self) -> Vec<(K, V)> {
+        self.cell
+            .with(|map| {
+                map.iter()
+                    .map(|(key, value)| (*key, value.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// A snapshot of the values.
+    pub(crate) fn values(&self) -> Vec<V> {
+        self.cell
+            .with(|map| map.values().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// A snapshot of the keys.
+    pub(crate) fn keys(&self) -> Vec<K> {
+        self.cell
+            .with(|map| map.keys().copied().collect())
+            .unwrap_or_default()
+    }
+
+    /// Whether the map holds nothing; `true` off the owner thread, which holds
+    /// nothing.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.cell.with(|map| map.is_empty()).unwrap_or(true)
+    }
+}
+
+impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> Default for OwnerMap<K, V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: 'static> Drop for OwnerSlot<T> {
     fn drop(&mut self) {
         let value = self.take();

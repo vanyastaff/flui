@@ -1,6 +1,7 @@
 //! Input regions on the backend side (ADR-0217 §5): the headless window hands its simulated
 //! OS a set only when the projection changed.
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::geometry::{DevicePoint, DeviceRect, Rect};
@@ -30,7 +31,7 @@ fn owner() -> OwnerPlatform {
 fn open(
     owner: &OwnerPlatform,
     handler: &std::rc::Rc<flui_testing::window_handler::RecordingWindowHandler>,
-) -> Arc<dyn HostWindow> {
+) -> Rc<dyn HostWindow> {
     owner
         .open_window(WindowOptions::default(), handler.clone())
         .expect("open")
@@ -38,7 +39,7 @@ fn open(
         .expect("ready")
 }
 
-fn mock(window: &Arc<dyn HostWindow>) -> &MockWindow {
+fn mock(window: &Rc<dyn HostWindow>) -> &MockWindow {
     window.as_any().downcast_ref::<MockWindow>().expect("mock")
 }
 

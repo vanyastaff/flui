@@ -5,6 +5,7 @@ use flui_platform::PlatformWindow;
 use flui_scheduler::AppLifecycleState;
 use flui_view::{StatelessView, View};
 use parking_lot::Mutex;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use super::device_recovery::{
@@ -23,13 +24,13 @@ use super::owner_dispatch::{
 use crate::app::AppConfig;
 
 pub(super) struct RenderedMain {
-    pub(super) window: Arc<dyn PlatformWindow>,
+    pub(super) window: Rc<dyn PlatformWindow>,
     pub(super) address: flui_foundation::PresentationAddress,
     pub(super) installation: super::installed_host::Installation,
 }
 
 struct InstallRollback {
-    window: Arc<dyn PlatformWindow>,
+    window: Rc<dyn PlatformWindow>,
     dispatcher: Option<PresentationDispatcher>,
     committed: bool,
 }
@@ -68,7 +69,7 @@ pub(super) fn install_desktop_window<V>(
     root: V,
     config: &AppConfig,
     worker_reload: WorkerReload,
-    host: Arc<dyn HostWindow>,
+    host: Rc<dyn HostWindow>,
     host_lifecycle: AppLifecycleState,
 ) -> Result<RenderedMain, crate::app::AppWindowError>
 where
@@ -76,9 +77,9 @@ where
 {
     let presentation_window =
         super::presentation_window(host).with_pointer_resampling(config.pointer_resampling);
-    let window = Arc::clone(presentation_window.window());
+    let window = Rc::clone(presentation_window.window());
     let mut rollback = InstallRollback {
-        window: Arc::clone(&window),
+        window: Rc::clone(&window),
         dispatcher: None,
         committed: false,
     };
@@ -94,12 +95,14 @@ where
     let first_reveal = Arc::new(FirstReveal::new());
 
     // 2. Create GPU renderer directly (no DesktopEmbedder). `Renderer::new`
-    // takes ownership of a `WindowTarget` (issue #1043) — `Arc::clone`
-    // gives it its own strong ref rather than a borrow of `window`.
+    // takes ownership of a `WindowTarget` (issue #1043): the window's
+    // surface target, which the raster side may hold on any thread, never
+    // the window itself (ADR-0254 §5).
     let geometry = super::window_install::SurfaceGeometry::of(window.as_ref());
     let phys_size = geometry.physical;
+    let surface = window.surface_target();
     let renderer = pollster::block_on(Renderer::with_surface_color(
-        Arc::clone(&window),
+        Arc::clone(&surface),
         config.surface_color,
     ));
     let mut renderer = match renderer {
@@ -116,7 +119,7 @@ where
     // The platform's frame-pacing signal (Wayland frame callbacks) is
     // armed by the renderer right before each present — see
     // `install_pre_present_hook`'s own doc and ADR-0058.
-    install_pre_present_hook(&mut renderer, &window);
+    install_pre_present_hook(&mut renderer, surface);
 
     // 3. Mount root widget at the LOGICAL size; the framework lays out
     // in logical pixels and the paint root's DPR transform maps to the
@@ -178,7 +181,7 @@ where
         "UiRuntime constructed"
     );
     let textures = ui_runtime.texture_registry(ui_runtime.presentation_id());
-    let mut installation = prepare_ui_runtime_alongside(ui_runtime, Arc::clone(&window));
+    let mut installation = prepare_ui_runtime_alongside(ui_runtime, Rc::clone(&window));
     let owner_dispatch = installation.dispatcher();
     rollback.dispatcher = Some(owner_dispatch);
 
@@ -255,7 +258,7 @@ where
                 lane: Arc::clone(&lane),
                 worker_reload,
                 deadlines,
-                reveal_window: Arc::downgrade(&window),
+                reveal_window: Rc::downgrade(&window),
             },
         ))
         .map_err(|error| crate::app::AppWindowError::Mount {
@@ -342,7 +345,7 @@ where
     // `dispatch_platform_ui_runtime`; if the slot were still empty at that
     // point, anything resolving it during that frame would silently
     // no-op instead of waking the loop.
-    APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(Arc::clone(&window)));
+    APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(Rc::clone(&window)));
 
     // Start the host through the shared lifecycle dispatch. Each
     // presentation derives its initial state from observed native facts,
@@ -382,7 +385,7 @@ pub(super) struct DesktopFrameDriver {
     pub(super) deadlines: Arc<DesktopWakeDeadlines>,
     lane: Arc<Mutex<crate::app::raster_lane::RasterLane<Renderer>>>,
     worker_reload: WorkerReload,
-    reveal_window: std::sync::Weak<dyn PlatformWindow>,
+    reveal_window: std::rc::Weak<dyn PlatformWindow>,
 }
 
 /// Presentation-owned pacing sources, retained even while its driver is leased.

@@ -50,6 +50,7 @@ pub(crate) use scene::{SceneConsumer, SceneInstallation};
 use std::cell::RefCell;
 use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -286,8 +287,8 @@ pub(crate) trait SceneWindows: Send + Sync {
         signal: std::sync::Weak<OwnerSignal>,
         displays: Arc<dyn HostDisplays>,
         touches: Box<dyn ViewTouches>,
-        handler: std::rc::Rc<dyn flui_platform::WindowHandler>,
-    ) -> Arc<dyn SceneWindow>;
+        handler: Rc<dyn flui_platform::WindowHandler>,
+    ) -> Rc<dyn SceneWindow>;
 }
 
 /// An iOS window as the features beside it reach it (ADR-0151 §3), on the
@@ -324,7 +325,7 @@ struct SceneOrigin {
 struct SessionRecord {
     origin: SceneOrigin,
     session: Retained<UISceneSession>,
-    window: Arc<dyn SceneWindow>,
+    window: Rc<dyn SceneWindow>,
     installed: bool,
     attaching: bool,
     retiring: bool,
@@ -541,12 +542,12 @@ impl IOSLoop {
         retire(consumer);
     }
 
-    pub(crate) fn active(&self) -> Option<Arc<dyn SceneWindow>> {
+    pub(crate) fn active(&self) -> Option<Rc<dyn SceneWindow>> {
         self.state()
             .borrow()
             .session
             .as_ref()
-            .map(|record| Arc::clone(&record.window))
+            .map(|record| Rc::clone(&record.window))
     }
 
     /// UIKit is about to terminate the process: let the application write what
@@ -1098,7 +1099,7 @@ impl IOSLoop {
                     state.session = Some(SessionRecord {
                         origin: origin.clone(),
                         session,
-                        window: Arc::clone(&window),
+                        window: Rc::clone(&window),
                         installed: false,
                         attaching: false,
                         retiring: false,
@@ -1116,7 +1117,7 @@ impl IOSLoop {
         Some(origin)
     }
 
-    fn current(&self, origin: &SceneOrigin) -> Option<(Arc<dyn SceneWindow>, bool)> {
+    fn current(&self, origin: &SceneOrigin) -> Option<(Rc<dyn SceneWindow>, bool)> {
         if !self.signal.accepting() {
             return None;
         }
@@ -1129,7 +1130,7 @@ impl IOSLoop {
                     && record.origin.session == origin.session
                     && record.origin.attachment == origin.attachment
             })
-            .map(|record| (Arc::clone(&record.window), record.installed))
+            .map(|record| (Rc::clone(&record.window), record.installed))
     }
 
     fn enqueue(&self, action: SceneAction) {
@@ -1193,7 +1194,7 @@ impl IOSLoop {
                     .session
                     .as_ref()
                     .filter(|record| record.origin.session == *session)
-                    .map(|record| Arc::clone(&record.window)),
+                    .map(|record| Rc::clone(&record.window)),
                 SceneAction::Rollback(origin) => state
                     .session
                     .as_ref()
@@ -1201,7 +1202,7 @@ impl IOSLoop {
                         record.origin.session == origin.session
                             && record.origin.attachment == origin.attachment
                     })
-                    .map(|record| Arc::clone(&record.window)),
+                    .map(|record| Rc::clone(&record.window)),
                 SceneAction::Observe(origin, LifecycleObservation::Background)
                 | SceneAction::Disconnect(origin) => state
                     .session
@@ -1210,7 +1211,7 @@ impl IOSLoop {
                         record.origin.session == origin.session
                             && record.origin.attachment <= origin.attachment
                     })
-                    .map(|record| Arc::clone(&record.window)),
+                    .map(|record| Rc::clone(&record.window)),
                 _ => None,
             };
             state.pending.push_back(action);
@@ -1336,7 +1337,7 @@ impl IOSLoop {
                             record.attaching = true;
                             record.retiring = false;
                             (
-                                Arc::clone(&record.window),
+                                Rc::clone(&record.window),
                                 record.installed,
                                 record.installation.take(),
                             )
@@ -1362,7 +1363,7 @@ impl IOSLoop {
                     consumer.connected(
                         origin.session.clone(),
                         origin.attachment,
-                        Arc::clone(&window) as Arc<dyn HostWindow>,
+                        Rc::clone(&window) as Rc<dyn HostWindow>,
                         reconnect,
                         proxy,
                     )

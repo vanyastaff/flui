@@ -138,8 +138,8 @@ fn runtime_frame_wake_reaches_its_window_after_sibling_installation() {
             .expect("open B")
             .try_ready()
             .expect("ready B");
-            let a_window: Arc<dyn flui_platform::PlatformWindow> = a_host.clone();
-            let b_window: Arc<dyn flui_platform::PlatformWindow> = b_host.clone();
+            let a_window: Rc<dyn flui_platform::PlatformWindow> = a_host.clone();
+            let b_window: Rc<dyn flui_platform::PlatformWindow> = b_host.clone();
             crate::app::runner::window_routes::WindowRoutes::of(&*a_window).route_frame_requested(
                 move |_| {
                     a_seen.fetch_add(1, Ordering::SeqCst);
@@ -150,14 +150,14 @@ fn runtime_frame_wake_reaches_its_window_after_sibling_installation() {
                     b_seen.fetch_add(1, Ordering::SeqCst);
                 },
             );
-            APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(Arc::clone(&a_window)));
+            APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(Rc::clone(&a_window)));
             let mut a = super::super::host::build_ui_runtime(
                 super::super::presentation_window(a_host),
                 1.0,
             )
             .expect("runtime A");
             a.pump_background();
-            APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(Arc::clone(&b_window)));
+            APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(Rc::clone(&b_window)));
             let mut b = super::super::host::build_ui_runtime(
                 super::super::presentation_window(b_host),
                 1.0,

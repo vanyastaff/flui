@@ -293,7 +293,7 @@ fn bootstrap_ios<V>(
     root: V,
     config: AppConfig,
     worker_reload: WorkerReload,
-    host: Arc<dyn HostWindow>,
+    host: Rc<dyn HostWindow>,
 ) -> anyhow::Result<super::installed_host::Installation>
 where
     V: View + StatelessView + Clone + 'static,
@@ -307,9 +307,9 @@ where
         with_owner_platform(f).expect("BUG: bootstrap_ios runs only after install_owner_platform")
     }
 
-    let presentation_window = super::presentation_window(Arc::clone(&host))
+    let presentation_window = super::presentation_window(Rc::clone(&host))
         .with_pointer_resampling(config.pointer_resampling);
-    let window = Arc::clone(presentation_window.window());
+    let window = Rc::clone(presentation_window.window());
 
     // 0b. This window's device-recovery backoff, constructed before the
     // wake-deadline hook below so the hook can carry its deadline.
@@ -342,12 +342,13 @@ where
         }));
     });
 
-    // 2. Create the GPU renderer (Metal on iOS). `Renderer::new` takes its own
-    // strong `Arc` of the window as the surface target (issue #1043).
+    // 2. Create the GPU renderer (Metal on iOS). `Renderer::new` takes
+    // ownership of a `WindowTarget` (issue #1043): the window's surface
+    // target, never the window (ADR-0254 §5).
     let geometry = super::window_install::SurfaceGeometry::of(window.as_ref());
     let phys_size = geometry.physical;
     let renderer = pollster::block_on(Renderer::with_surface_color(
-        Arc::clone(&window),
+        window.surface_target(),
         config.surface_color,
     ));
     let mut renderer = match renderer {
@@ -407,7 +408,7 @@ where
         .as_ref()
         .and_then(|agent| agent.vend(&ui_runtime, ui_runtime.presentation_id()));
     let textures = ui_runtime.texture_registry(ui_runtime.presentation_id());
-    let mut installation = prepare_ui_runtime_alongside(ui_runtime, Arc::clone(&window));
+    let mut installation = prepare_ui_runtime_alongside(ui_runtime, Rc::clone(&window));
     installation.text_sizing(native_sizing);
     let owner_dispatch = installation.dispatcher();
 

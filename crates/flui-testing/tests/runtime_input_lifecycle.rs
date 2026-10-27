@@ -49,7 +49,7 @@ fn dispatch(realm: &UiRuntime, id: PresentationId, event: PointerEvent) {
 }
 
 fn install_secondary(realm: &mut UiRuntime) -> PresentationId {
-    let window: Arc<dyn PlatformWindow> = Arc::new(TestWindow::new().focused(false));
+    let window: Rc<dyn PlatformWindow> = Rc::new(TestWindow::new().focused(false));
     let presentation = realm.assemble_presentation(window);
     realm.install_presentation(presentation)
 }

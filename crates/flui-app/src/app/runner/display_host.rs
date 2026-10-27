@@ -12,7 +12,7 @@
 //! derivation again on the next sample.
 
 use std::cell::RefCell;
-use std::sync::{Arc, Weak};
+use std::rc::Rc;
 
 use flui_platform::PlatformWindow;
 use flui_platform::{DisplaySnapshot, FrameRateHint};
@@ -26,7 +26,7 @@ struct FollowedWindow {
     dispatcher: PresentationDispatcher,
     /// Weak: the window's own callback table holds the hint that reaches the
     /// host, so a strong reference here would keep a closed window alive.
-    window: Weak<dyn PlatformWindow>,
+    window: std::rc::Weak<dyn PlatformWindow>,
     /// The refresh rate the runtime last asked for on this window's behalf.
     demand: FrameRateDemand,
 }
@@ -73,11 +73,11 @@ impl DisplayHost {
     pub(super) fn follow(
         &self,
         dispatcher: PresentationDispatcher,
-        window: &Arc<dyn PlatformWindow>,
+        window: &Rc<dyn PlatformWindow>,
     ) {
         self.state.borrow_mut().windows.push(FollowedWindow {
             dispatcher,
-            window: Arc::downgrade(window),
+            window: Rc::downgrade(window),
             demand: FrameRateDemand::Idle,
         });
     }
@@ -149,7 +149,7 @@ impl DisplayHost {
     /// The derived display of every live followed window. Windows that are gone
     /// are forgotten.
     pub(super) fn updates(&self) -> Vec<(PresentationDispatcher, DisplayUpdate)> {
-        let live: Vec<(PresentationDispatcher, Arc<dyn PlatformWindow>)> = {
+        let live: Vec<(PresentationDispatcher, Rc<dyn PlatformWindow>)> = {
             let mut state = self.state.borrow_mut();
             state
                 .windows

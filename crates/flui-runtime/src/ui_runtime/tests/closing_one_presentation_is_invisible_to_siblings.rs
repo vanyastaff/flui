@@ -481,7 +481,7 @@ fn run_ui_runtime_sibling_child() {
 
 struct OwnershipWindow {
     delegate: crate::testing::TestWindow,
-    external: std::sync::Weak<parking_lot::Mutex<Option<Arc<dyn flui_platform::PlatformWindow>>>>,
+    external: std::rc::Weak<RefCell<Option<Rc<dyn flui_platform::PlatformWindow>>>>,
     armed: AtomicBool,
     fail_callback: bool,
     _captures: DropCompetition,
@@ -493,6 +493,12 @@ impl flui_platform::PlatformWindow for OwnershipWindow {
     }
     fn request_redraw(&self) {
         self.delegate.request_redraw();
+    }
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        self.delegate.redraw_requester()
+    }
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        self.delegate.surface_target()
     }
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
         self.delegate.text_input()
@@ -524,7 +530,7 @@ impl flui_platform::PlatformWindow for OwnershipWindow {
     ) -> Result<(), flui_platform::CursorError> {
         if self.armed.load(Ordering::Relaxed) {
             if let Some(external) = self.external.upgrade() {
-                external.lock().take();
+                external.borrow_mut().take();
             }
             assert!(!self.fail_callback, "window cursor failure");
         }
@@ -582,7 +588,7 @@ fn run_platform_ownership_child(kind: &str) {
     let cursor_first = kind == "cursor-platform";
     let window_drops = Arc::new(AtomicUsize::new(0));
     let bridge_drops = Arc::new(AtomicUsize::new(0));
-    let external_window = Arc::new(parking_lot::Mutex::new(None));
+    let external_window = Rc::new(RefCell::new(None));
     let external_bridge = Arc::new(parking_lot::Mutex::new(None));
     // The window and the bridge are framework-owned (ADR-0127): close
     // releases them even after a failure, so their captures must drop.
@@ -596,9 +602,9 @@ fn run_platform_ownership_child(kind: &str) {
             drops: Arc::clone(counts),
         },
     };
-    let window = Arc::new(OwnershipWindow {
+    let window = Rc::new(OwnershipWindow {
         delegate: crate::testing::TestWindow::new().focused(true),
-        external: Arc::downgrade(&external_window),
+        external: Rc::downgrade(&external_window),
         armed: AtomicBool::new(false),
         fail_callback: fail_window || cursor_first,
         _captures: bundle(&window_drops),
@@ -610,7 +616,7 @@ fn run_platform_ownership_child(kind: &str) {
         fail_callback: fail_bridge || cursor_first,
         _captures: bundle(&bridge_drops),
     });
-    *external_window.lock() = Some(window.clone() as Arc<dyn flui_platform::PlatformWindow>);
+    *external_window.borrow_mut() = Some(window.clone() as Rc<dyn flui_platform::PlatformWindow>);
     *external_bridge.lock() =
         Some(bridge.clone() as Arc<dyn flui_semantics::platform::PlatformAccessibility>);
     let mut ui_runtime = UiRuntime::new(
@@ -672,7 +678,7 @@ fn run_platform_ownership_child(kind: &str) {
         2,
         "close releases the accessibility bridge"
     );
-    assert!(external_window.lock().is_none());
+    assert!(external_window.borrow().is_none());
     assert!(external_bridge.lock().is_none());
     assert!(!ui_runtime.close_presentation_entered(a));
 }

@@ -68,7 +68,8 @@ mod windows_window_commands;
 /// host's window type and its `HWND` are not public (ADR-0151 §8).
 #[cfg(target_os = "windows")]
 fn win32_handle(window: &dyn flui_native::HostWindow) -> windows::Win32::Foundation::HWND {
-    let handle = flui_platform::PlatformWindow::window_handle(window)
+    let surface = flui_platform::PlatformWindow::surface_target(window);
+    let handle = raw_window_handle::HasWindowHandle::window_handle(&*surface)
         .expect("a live Win32 window has a handle");
     let raw_window_handle::RawWindowHandle::Win32(handle) = handle.as_raw() else {
         panic!("not a Win32 window");
@@ -89,7 +90,7 @@ fn run_table(table: &str, cases: &[(&str, fn())]) {
 /// A window and the recording handler it was opened with: a test drives the
 /// window and sets what each handler method does.
 struct Opened {
-    window: std::sync::Arc<dyn flui_native::HostWindow>,
+    window: std::rc::Rc<dyn flui_native::HostWindow>,
     handler: std::rc::Rc<flui_testing::window_handler::RecordingWindowHandler>,
 }
 
@@ -120,7 +121,7 @@ impl Opened {
 }
 
 impl std::ops::Deref for Opened {
-    type Target = std::sync::Arc<dyn flui_native::HostWindow>;
+    type Target = std::rc::Rc<dyn flui_native::HostWindow>;
 
     fn deref(&self) -> &Self::Target {
         &self.window

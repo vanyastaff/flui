@@ -37,6 +37,25 @@ use super::slot::OwnerSlot;
 /// its follow-up right after the answer, so a few suffice.
 const UNANSWERED_KEYS: usize = 8;
 
+/// Whether a window's native retirement has started, as any thread reads it.
+///
+/// Every host clears its window's delivery where the native window is
+/// retired (Win32's `WM_DESTROY`, AppKit's `windowWillClose:`, winit's close
+/// completion, the Android loop's exit, UIKit's scene teardown, the web
+/// canvas's retirement, the headless close), so this is set before the
+/// native window it describes is gone. A window's surface target and redraw
+/// requester (ADR-0254 §5) live on other threads and outlive the window: they
+/// read it to answer for a window that is no longer there.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Retirement(Arc<AtomicBool>);
+
+impl Retirement {
+    /// Whether the window's native retirement has started.
+    pub(crate) fn is_retired(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
 /// A window's handler as an owner-thread slot: a call takes a clone, so the
 /// handler stays installed while one of its methods runs and may be called
 /// again from inside it.
@@ -259,7 +278,7 @@ pub struct WindowDelivery {
     closed: AtomicBool,
     /// The window's native retirement has started: an immediate delivery
     /// cannot overtake a clear queued in the FIFO.
-    retiring: AtomicBool,
+    retiring: Retirement,
 }
 
 impl WindowDelivery {
@@ -306,7 +325,7 @@ impl WindowDelivery {
             state_publisher: Mutex::new(None),
             hovered: AtomicBool::new(false),
             closed: AtomicBool::new(false),
-            retiring: AtomicBool::new(false),
+            retiring: Retirement::default(),
         }
     }
 
@@ -338,6 +357,23 @@ impl WindowDelivery {
         window: std::sync::Weak<W>,
         publish: fn(&W) -> Publication,
     ) {
+        self.set_state_publisher(Arc::new(move || {
+            window
+                .upgrade()
+                .map_or(Publication::Unchanged, |window| publish(&window))
+        }));
+    }
+
+    /// [`Self::publish_through`] for a window that lives on the owner thread
+    /// (ADR-0254 §5): the window is reached, and read, there alone; a
+    /// publication raised elsewhere publishes nothing, and the owner's next
+    /// read publishes what changed.
+    pub(crate) fn publish_through_owner<W: 'static>(
+        &self,
+        window: &Rc<W>,
+        publish: fn(&W) -> Publication,
+    ) {
+        let window = super::slot::OwnerWeak::new(window);
         self.set_state_publisher(Arc::new(move || {
             window
                 .upgrade()
@@ -399,6 +435,12 @@ impl WindowDelivery {
         self.clear_with(None);
     }
 
+    /// What tells the window's surface target and redraw requester, on any
+    /// thread, that this window was retired: set by [`Self::clear`].
+    pub(crate) fn retirement(&self) -> Retirement {
+        self.retiring.clone()
+    }
+
     /// [`Self::clear`], then `on_retired` once the handler was let go: when
     /// this window's FIFO is draining, that is after the running method
     /// returns and the queued clear runs, not when this call returns. A backend
@@ -410,7 +452,7 @@ impl WindowDelivery {
     }
 
     fn clear_with(&self, retired: Option<RetirementNotice>) {
-        self.retiring.store(true, Ordering::SeqCst);
+        self.retiring.0.store(true, Ordering::SeqCst);
         self.drain(Delivery::Clear(retired));
     }
 
@@ -764,7 +806,7 @@ impl WindowDelivery {
     #[cfg(target_os = "ios")]
     #[must_use = "the handler's panic is the first failure: resume it"]
     pub(crate) fn dispatch_surface_immediate(&self, change: SurfaceChange) -> Option<Failure> {
-        if self.retiring.load(Ordering::SeqCst) || self.closed.load(Ordering::SeqCst) {
+        if self.retiring.is_retired() || self.closed.load(Ordering::SeqCst) {
             return None;
         }
         match call(&self.handler(), |handler| handler.surface_changed(change)) {

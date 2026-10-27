@@ -3,6 +3,8 @@
 //! This module provides platform-agnostic entry points that delegate
 //! to platform-specific implementations via flui-native.
 
+use std::rc::Rc;
+
 use flui_view::{StatelessView, View};
 
 use super::AppConfig;
@@ -103,7 +105,7 @@ use web::run_web;
 /// [`OwnerPlatform`](flui_native::OwnerPlatform); without one installed
 /// (no loop on this thread) the window has none.
 pub(crate) fn presentation_window(
-    host: std::sync::Arc<dyn flui_native::HostWindow>,
+    host: Rc<dyn flui_native::HostWindow>,
 ) -> crate::app::presentation::PresentationWindow {
     #[cfg(feature = "native")]
     keep_native_window(&host);
@@ -116,6 +118,24 @@ pub(crate) fn presentation_window(
         .with_gesture_profiles(flui_interaction::GestureProfiles::preset(
             flui_platform::TargetPlatform::current(),
         ))
+}
+
+/// The window a deferred open built, taken on the owner thread, which is the
+/// only one that reaches it (ADR-0254 §4): one that closed before it could be
+/// installed is a failure of its open.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(super) fn opened_window(
+    opened: flui_native::OpenedWindow,
+) -> Result<Rc<dyn flui_native::HostWindow>, flui_native::OpenWindowError> {
+    opened
+        .window()
+        .ok_or_else(|| flui_native::OpenWindowError::Backend {
+            message: "the window closed before it was installed".to_owned(),
+        })
 }
 
 /// Close a window the runner is discarding: one whose installation failed or
@@ -141,12 +161,12 @@ pub(crate) fn close_granted_request(window: &dyn flui_platform::PlatformWindow) 
 /// escape hatch finds the host's window behind a presentation's command queue.
 /// Windows already dropped leave the list here.
 #[cfg(feature = "native")]
-fn keep_native_window(host: &std::sync::Arc<dyn flui_native::HostWindow>) {
+fn keep_native_window(host: &Rc<dyn flui_native::HostWindow>) {
     host::APP_RUNTIME.with(|slot| {
         let state = slot.borrow();
         let mut windows = state.native_windows.borrow_mut();
         windows.retain(|window| window.strong_count() > 0);
-        windows.push(std::sync::Arc::downgrade(host));
+        windows.push(Rc::downgrade(host));
     });
 }
 
@@ -157,16 +177,16 @@ fn keep_native_window(host: &std::sync::Arc<dyn flui_native::HostWindow>) {
 #[cfg(feature = "native")]
 pub(crate) fn native_window(
     address: flui_foundation::PresentationAddress,
-) -> Option<std::sync::Arc<dyn flui_native::HostWindow>> {
+) -> Option<Rc<dyn flui_native::HostWindow>> {
     host::APP_RUNTIME.with(|slot| {
         let state = slot.try_borrow().ok()?;
         if state.owner_thread != Some(std::thread::current().id()) {
             return None;
         }
         let presented = state.window_commands.window_for(address)?;
-        let presented = std::sync::Arc::as_ptr(&presented).cast::<()>();
+        let presented = Rc::as_ptr(&presented).cast::<()>();
         state.native_windows.borrow().iter().find_map(|window| {
-            (std::sync::Weak::as_ptr(window).cast::<()>() == presented)
+            (std::rc::Weak::as_ptr(window).cast::<()>() == presented)
                 .then(|| window.upgrade())
                 .flatten()
         })
@@ -174,7 +194,7 @@ pub(crate) fn native_window(
 }
 
 fn text_store_host_of(
-    window: &std::sync::Arc<dyn flui_native::HostWindow>,
+    window: &Rc<dyn flui_native::HostWindow>,
 ) -> Option<std::rc::Rc<dyn flui_platform::TextStoreHost>> {
     host::with_owner_platform(|owner| owner.text_store_host(window)).flatten()
 }

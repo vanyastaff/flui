@@ -175,8 +175,9 @@ pub(crate) fn exec_on_owner<R: Send>(
 ///
 /// Unlike [`exec_on_owner`] this NEVER BLOCKS the caller: `f` is dispatched
 /// with `Queue::exec_async` and the function returns immediately. Its purpose
-/// is teardown tails that must not hang window close — `MacOSWindow`'s `Drop`
-/// routes its AppKit tail here and lets the lane run it if and when it
+/// is work that must not hold its caller — a redraw a window's requester
+/// carries to the owner from another thread, a redraw deferred past a display
+/// pass, the loop's own turns — and that the lane runs if and when it
 /// services. If the lane is not servicing (pre-`run`, or the run loop is
 /// gone), `f` simply never runs and is dropped WITH ITS CAPTURES — which is
 /// exactly why `f` must be `'static` and own its state. `f` runs under the

@@ -91,7 +91,7 @@ struct Win {
     native: MockWindow,
     /// The platform keeps its windows alive; the headless one does not, so the
     /// test does.
-    _window: Arc<dyn PlatformWindow>,
+    _window: Rc<dyn PlatformWindow>,
     dispatcher: PresentationDispatcher,
     /// Redraws the window was asked for.
     redraws: Arc<AtomicUsize>,
@@ -130,7 +130,7 @@ fn install_window(
         .downcast_ref::<MockWindow>()
         .expect("headless window")
         .clone();
-    let window: Arc<dyn PlatformWindow> = host_window;
+    let window: Rc<dyn PlatformWindow> = host_window;
     if let Some(index) = display {
         native.simulate_move_to(rig.ids[index]).expect("move");
     }
@@ -147,8 +147,8 @@ fn install_window(
             counter.fetch_add(1, Ordering::SeqCst);
         },
     );
-    let runtime = build_ui_runtime(Arc::clone(&window), 1.0).expect("runtime");
-    let mut installation = prepare_ui_runtime_alongside(runtime, Arc::clone(&window));
+    let runtime = build_ui_runtime(Rc::clone(&window), 1.0).expect("runtime");
+    let mut installation = prepare_ui_runtime_alongside(runtime, Rc::clone(&window));
     let dispatcher = installation.dispatcher();
     installation.observe_window();
     let binding = deadlines.map(|deadlines| {

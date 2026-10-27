@@ -8,9 +8,9 @@
 
 use std::{
     cell::Cell,
-    rc::Rc,
+    rc::{Rc, Weak},
     sync::{
-        Arc, Weak,
+        Arc,
         atomic::{AtomicBool, Ordering},
     },
     thread,
@@ -24,7 +24,7 @@ use flui_platform::{CloseDecision, WindowCommand, WindowOptions};
 use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
 
 /// A headless window delivering to `handler`, and its platform.
-fn open(handler: &Rc<RecordingWindowHandler>) -> (HeadlessPlatform, Arc<dyn HostWindow>) {
+fn open(handler: &Rc<RecordingWindowHandler>) -> (HeadlessPlatform, Rc<dyn HostWindow>) {
     let platform = HeadlessPlatform::new();
     let window = platform
         .open_window(WindowOptions::default(), handler.clone())
@@ -33,7 +33,7 @@ fn open(handler: &Rc<RecordingWindowHandler>) -> (HeadlessPlatform, Arc<dyn Host
     (platform, window)
 }
 
-fn mock(window: &Weak<dyn HostWindow>) -> Arc<dyn HostWindow> {
+fn mock(window: &Weak<dyn HostWindow>) -> Rc<dyn HostWindow> {
     window.upgrade().expect("the window is open")
 }
 
@@ -44,7 +44,7 @@ fn a_request_queued_behind_a_failed_frame_is_delivered() {
     let handler = RecordingWindowHandler::new();
     let (_platform, window) = open(&handler);
     let calls = Rc::new(Cell::new(0_u32));
-    let weak = Arc::downgrade(&window);
+    let weak = Rc::downgrade(&window);
     let counted = Rc::clone(&calls);
     handler.react_to_frame(move |_| {
         let call = counted.get();
@@ -75,7 +75,7 @@ fn a_nested_close_request_keeps_the_window() {
     let handler = RecordingWindowHandler::new();
     let (_platform, window) = open(&handler);
     let nested = Rc::new(Cell::new(None));
-    let weak = Arc::downgrade(&window);
+    let weak = Rc::downgrade(&window);
     let heard = Rc::clone(&nested);
     handler.react_to_close_request(move || {
         if heard.get().is_none() {
@@ -107,7 +107,7 @@ fn a_nested_close_request_keeps_the_window() {
 fn a_close_from_a_failed_method_still_finishes() {
     let handler = RecordingWindowHandler::new();
     let (_platform, window) = open(&handler);
-    let weak = Arc::downgrade(&window);
+    let weak = Rc::downgrade(&window);
     handler.react_to_frame(move |_| {
         flui_testing::window_commands::AdmitAndApply::close_for_cleanup(&*mock(&weak));
         panic!("the frame fails after closing");
@@ -279,7 +279,7 @@ fn a_retirement_notice_contains_its_capture_failure() {
         }
         let handler = RecordingWindowHandler::new();
         let (_platform, window) = open(&handler);
-        let weak = Arc::downgrade(&window);
+        let weak = Rc::downgrade(&window);
         let hostile = Hostile;
         handler.react_to_frame(move |_| {
             let _ = &hostile;

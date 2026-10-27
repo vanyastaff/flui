@@ -654,7 +654,7 @@ mod material_tests {
     //! machine runs and on a build below the gate the platform is told it
     //! runs. The desktop window manager's own attribute is the readback.
 
-    use std::sync::Arc;
+    use std::rc::Rc;
 
     use flui_platform::{
         AdmissionError, ApplyError, Availability, CommandRefusal, PlatformFailure, Unsupported,
@@ -675,7 +675,7 @@ mod material_tests {
 
     const NOT_ON_THIS_DEVICE: Unsupported = Unsupported::new(UnsupportedReason::NotOnThisDevice);
 
-    fn open(platform: &crate::WindowsPlatform) -> (Arc<dyn HostWindow>, HWND) {
+    fn open(platform: &crate::WindowsPlatform) -> (Rc<dyn HostWindow>, HWND) {
         let window = platform
             .open_window(
                 WindowOptions::default().with_title("flui material"),

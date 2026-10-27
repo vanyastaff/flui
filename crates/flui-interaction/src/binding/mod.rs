@@ -320,7 +320,7 @@ pub struct InvalidSamplingWindow;
 /// render hit-test entries and route tokens remain on the separate data plane.
 pub struct GestureBinding {
     close: CloseCoordinator,
-    capture_wake: RefCell<Option<std::sync::Weak<dyn flui_platform::PlatformWindow>>>,
+    capture_wake: RefCell<Option<std::rc::Weak<dyn flui_platform::PlatformWindow>>>,
     contacts: PointerSequences,
     moves: MoveCoalescer,
     scrolls: ScrollSequences,
@@ -583,7 +583,7 @@ impl GestureBinding {
             .capture_wake
             .borrow()
             .as_ref()
-            .and_then(std::sync::Weak::upgrade);
+            .and_then(std::rc::Weak::upgrade);
         if let Some(window) = window {
             window.request_redraw();
         }
@@ -625,7 +625,7 @@ impl GestureBinding {
 
     pub(crate) fn set_pointer_capture_wake(
         &self,
-        window: std::sync::Weak<dyn flui_platform::PlatformWindow>,
+        window: std::rc::Weak<dyn flui_platform::PlatformWindow>,
     ) {
         self.arena.arena().set_deadline_wake(window.clone());
         *self.capture_wake.borrow_mut() = Some(window);

@@ -16,11 +16,10 @@ use cursor_icon::CursorIcon;
 use flui_foundation::geometry::Point;
 
 use crate::{
-    AdmittedCommand, ApplyError, CursorError, PlatformHaptics, PlatformTextInput, Unsupported,
-    WindowId, WindowState,
+    AdmittedCommand, ApplyError, CursorError, PlatformHaptics, PlatformTextInput, RedrawRequester,
+    SurfaceTarget,
+    Unsupported, WindowId, WindowState,
 };
-
-use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 /// What lies under a point given in one window's coordinates, as
 /// [`PlatformWindow::window_at`] answers.
@@ -59,12 +58,11 @@ pub enum WindowAt {
 ///
 /// # Thread affinity
 ///
-/// `Send + Sync` on this trait is what lets a backend store a window and a
-/// wake path carry one across threads. It is not permission to drive a window
-/// from any thread. **The default for every method that drives a window —
-/// anything reaching a native windowing API — is: call it on the thread that
-/// owns the platform event loop.** A method callable from elsewhere says so on
-/// itself; silence on the rest is this rule applying, not an omission.
+/// A window is neither `Send` nor `Sync` (ADR-0254 §5): it lives on the thread
+/// that owns the platform event loop, and every method is called there,
+/// because no other thread can hold one. The thread that presents frames gets
+/// the window's [`SurfaceTarget`] from [`surface_target`](Self::surface_target)
+/// instead, which is `Send + Sync`.
 ///
 /// A worker that needs the owner to act reaches it through
 /// `flui_native::PlatformProxy`, the recorded cross-thread-to-owner lane
@@ -74,8 +72,13 @@ pub enum WindowAt {
 /// deferred window creation. Direct backends create windows through their
 /// owner capability; browser signals follow ADR-0196.
 ///
-/// How each backend enforces this default is recorded in `flui-native`'s
-/// `ARCHITECTURE.md`.
+/// A window cannot be sent to another thread:
+///
+/// ```compile_fail,E0277
+/// fn send(window: std::rc::Rc<dyn flui_platform::PlatformWindow>) {
+///     std::thread::spawn(move || window.request_redraw());
+/// }
+/// ```
 ///
 /// # One source of truth
 ///
@@ -96,9 +99,10 @@ pub enum WindowAt {
 /// use flui_platform::input_regions::InputRegion;
 /// use flui_platform::{
 ///     AdmissionError, AdmittedCommand, ApplyError, CursorError, CursorIcon, FrameRateHint,
-///     PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow, Unsupported,
-///     UnsupportedReason, WindowCapabilities, WindowCommand, WindowGeometry, WindowId,
-///     WindowMaterial, WindowMode, WindowState,
+///     NoNativeSurface, PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
+///     RedrawRequester,
+///     SurfaceTarget, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand,
+///     WindowGeometry, WindowId, WindowMaterial, WindowMode, WindowState,
 /// };
 /// use flui_foundation::geometry::Size;
 ///
@@ -109,6 +113,12 @@ pub enum WindowAt {
 ///         WindowId(7)
 ///     }
 ///     fn request_redraw(&self) {}
+///     fn redraw_requester(&self) -> Arc<dyn RedrawRequester> {
+///         Arc::new(|| {})
+///     }
+///     fn surface_target(&self) -> Arc<dyn SurfaceTarget> {
+///         Arc::new(NoNativeSurface)
+///     }
 ///     fn state(&self) -> WindowState {
 ///         WindowState::new(WindowGeometry::new(None, Size::default()), Size::default())
 ///     }
@@ -158,6 +168,9 @@ pub enum WindowAt {
 ///     .admit(&capabilities)
 ///     .expect("every window has the normal mode");
 /// assert_eq!(window.apply(normal), Ok(()));
+/// // A window with no native surface hands out none.
+/// let target = window.surface_target();
+/// assert!(raw_window_handle::HasWindowHandle::window_handle(&*target).is_err());
 /// ```
 ///
 /// A window takes only what [`WindowCommand::admit`](crate::WindowCommand::admit) built, and nothing but
@@ -186,9 +199,10 @@ pub enum WindowAt {
 /// use flui_platform::input_regions::InputRegion;
 /// use flui_platform::{
 ///     AdmissionError, AdmittedCommand, ApplyError, CursorError, CursorIcon, FrameRateHint,
-///     PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow, Unsupported,
-///     UnsupportedReason, WindowCapabilities, WindowCommand, WindowGeometry, WindowId,
-///     WindowMaterial, WindowMode, WindowState,
+///     NoNativeSurface, PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
+///     RedrawRequester,
+///     SurfaceTarget, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand,
+///     WindowGeometry, WindowId, WindowMaterial, WindowMode, WindowState,
 /// };
 /// use flui_foundation::geometry::Size;
 ///
@@ -199,6 +213,12 @@ pub enum WindowAt {
 ///         WindowId(7)
 ///     }
 ///     fn request_redraw(&self) {}
+///     fn redraw_requester(&self) -> Arc<dyn RedrawRequester> {
+///         Arc::new(|| {})
+///     }
+///     fn surface_target(&self) -> Arc<dyn SurfaceTarget> {
+///         Arc::new(NoNativeSurface)
+///     }
 ///     fn state(&self) -> WindowState {
 ///         WindowState::new(WindowGeometry::new(None, Size::default()), Size::default())
 ///     }
@@ -242,7 +262,7 @@ pub enum WindowAt {
 ///     let _ = window.as_any();
 /// }
 /// ```
-pub trait PlatformWindow: Send + Sync {
+pub trait PlatformWindow {
     /// This window's platform-internal identity.
     ///
     /// A window that cannot state its identity cannot be demultiplexed
@@ -269,69 +289,29 @@ pub trait PlatformWindow: Send + Sync {
         Ok(None)
     }
 
-    /// Request that this window produce a frame.
+    /// Request that this window produce a frame: the handler's
+    /// [`frame_requested`](crate::WindowHandler::frame_requested) runs on a
+    /// later owner turn.
     ///
-    /// **Owner thread only**, per this trait's [Thread
-    /// affinity](#thread-affinity) default. ADR-0045 decision 5 settles the
-    /// direction — "the raster side never calls
-    /// `PlatformWindow::request_redraw`, on any backend" — and lists the
-    /// alternative, calling it directly on backends where it appears to work,
-    /// as rejected.
-    ///
-    /// **No supported worker-side route exists yet.** The intended one is a
-    /// redraw verb on `flui_native::PlatformProxy`, and it is absent
-    /// on *every* backend, not just the lane-less ones: that lane carries only
-    /// `open_window` and `request_quit`. So a worker needing a frame today has
-    /// no conforming call available — which is precisely why the two paths
-    /// below violate this rule instead of being fixable at their call sites.
-    ///
-    /// The rule is spelled out here rather than left to the default because
-    /// `Send + Sync` makes the wrong call compile from anywhere, and because
-    /// what the wrong call costs differs per backend in a way that hides it:
-    ///
-    /// - **winit** posts and the loop delivers later; **Win32**'s
-    ///   `InvalidateRect` leaves `WM_PAINT` for the owning thread's pump;
-    ///   **android** sets an atomic. All three tolerate a cross-thread call, so
-    ///   exercising one there proves nothing about the rule.
-    /// - **headless** carries a cross-thread request to the owner's next turn,
-    ///   where the window handler's `frame_requested` runs; **web** has one
-    ///   thread.
-    /// - **macOS** messages `-[NSView setNeedsDisplay:]` inside an `unsafe`
-    ///   block whose `unsafe impl Send` justification IS main-thread affinity.
-    ///   It is the only backend where the wrong call is *unsound* rather than
-    ///   merely tolerated, and it is type-checked by `cross-typecheck` (with
-    ///   Win32 and android) but never linked or executed anywhere.
-    ///
-    /// # Violated on two paths (issue #949)
-    ///
-    /// Stating the rule does not enforce it. Neither of these can be fixed by
-    /// its own caller: both need the proxy's redraw verb, which needs
-    /// transports the lane-less backends do not have yet (tracked by #949,
-    /// scoped with #559 and #551).
-    ///
-    /// - `flui_app`'s frame wake handle — **unconditional**. It is installed as
-    ///   the scheduler's `on_frame_scheduled` hook and handed to async wakers,
-    ///   so it fires on whatever thread completed the future. No test pins
-    ///   it.
-    /// - `flui_runtime`'s AccessKit activation listener — **conditional**: every
-    ///   Win32, AppKit and Linux winit window has an adapter, but the listener
-    ///   fires only once an assistive technology attaches, on the thread the
-    ///   adapter calls it from (AT-SPI's is the adapter's own). No test pins
-    ///   this one.
+    /// The raster side never calls it (ADR-0045 decision 5). A thread other
+    /// than the owner that wants a frame asks through the window's
+    /// [`redraw_requester`](Self::redraw_requester).
     fn request_redraw(&self);
 
-    /// Tell the backend a frame is about to be presented for this window —
-    /// called once per presented frame, immediately before the present.
+    /// What asks this window for a frame from any thread: the same request as
+    /// [`request_redraw`](Self::request_redraw), carried to the owner where
+    /// the window system needs that. It does not keep the window open.
+    fn redraw_requester(&self) -> Arc<dyn RedrawRequester>;
+
+    /// The window's surface, as the thread that presents its frames holds it
+    /// (ADR-0254 §5).
     ///
-    /// On Wayland this is what makes [`request_redraw`](Self::request_redraw)
-    /// compositor-paced: winit arms the surface's frame callback here, and
-    /// withholds the next `RedrawRequested` until the compositor delivers
-    /// it — one per display refresh while the surface is visible, none at
-    /// all while it is fully hidden, so a running animation is paced by the
-    /// panel and an occluded window costs nothing. Without this call every
-    /// `request_redraw` is delivered immediately, whatever the display is
-    /// doing. A no-op on backends with no such protocol.
-    fn pre_present_notify(&self) {}
+    /// Every call returns a target for the same native surface. It answers
+    /// [`HandleError::Unavailable`](raw_window_handle::HandleError::Unavailable)
+    /// once this window is gone, and does not keep the window open. Required,
+    /// with no default: a window with no native surface hands out
+    /// [`NoNativeSurface`](crate::NoNativeSurface).
+    fn surface_target(&self) -> Arc<dyn SurfaceTarget>;
 
     // ==================== State and commands (ADR-0237) ====================
 
@@ -508,132 +488,4 @@ pub trait PlatformWindow: Send + Sync {
     /// is `Unavailable`: the window system takes no such request, or this
     /// operating system build lacks it ([`NotOnThisDevice`](crate::UnsupportedReason::NotOnThisDevice)).
     fn set_frame_rate_hint(&self, hint: crate::FrameRateHint) -> Result<(), Unsupported>;
-
-    // ==================== Window Handles (for GPU integration)
-    // ====================
-
-    /// Get a window handle for creating GPU surfaces (wgpu, etc.)
-    ///
-    /// Concrete platform windows (WindowsWindow, MacOSWindow) implement
-    /// `raw_window_handle::HasWindowHandle` and delegate through this method.
-    /// Headless windows return `HandleError::Unavailable`.
-    ///
-    /// # Contract: MUST answer `Unavailable` once the native window is gone
-    ///
-    /// [`raw_window_handle::HasWindowHandle`]'s own contract is an
-    /// object-lifetime claim, not a borrow-lifetime one: the returned handle
-    /// "should last for the lifetime of the object", and the implementation
-    /// "should return an error if the application is inactive" (that trait's
-    /// doc, `raw-window-handle` 0.6.2). The `'_` in this signature is the
-    /// borrow of `self`, which is a different bound and does not encode the
-    /// pointer's validity — the Android backend below demonstrates the gap:
-    /// its `AndroidWindow` is held across a pause and answers `Ok` there,
-    /// while the `ANativeWindow` the returned handle wraps is released by the
-    /// command applied *after* the `TerminateWindow` callback returns.
-    /// Upstream also makes a type-level claim beyond that prose: the
-    /// `WindowHandle<'a>` type's doc says all pointers within it "are
-    /// guaranteed to be valid and not dangling for the lifetime of the
-    /// handle", and that is the claim `WindowHandle::borrow_raw`'s `# Safety`
-    /// answers to. The Android backend cannot meet that claim by
-    /// construction, because the handle's `'a` is the borrow of `self` and
-    /// nothing ties the pointer's life to it; the SAFETY block on
-    /// `AndroidWindow::window_handle` says so and names the consumer-enforced
-    /// obligation that stands in for it.
-    ///
-    /// So this trait states the contract the engine needs, and it is stricter
-    /// than upstream's: an engine holding a long-lived `Arc<dyn PlatformWindow>`
-    /// (issue #1043) relies on it, re-querying this method on recovery rather
-    /// than reusing a handle captured earlier, and a stale `Ok` handed back
-    /// for a destroyed or suspended window is exactly the unsound escape that
-    /// design closes. Every implementor **must** return
-    /// `Err(HandleError::Unavailable)` once its native window is destroyed or
-    /// otherwise unusable — never a handle whose pointee no longer exists, or
-    /// exists but is temporarily unusable.
-    ///
-    /// How each backend satisfies this:
-    /// - **winit** — delegates to the wrapped `winit::Window`, which owns the
-    ///   native window for as long as it is alive; there is no destroyed
-    ///   state to detect separately.
-    /// - **Win32** (`WindowsWindow`) — consults the pure `teardown_route`
-    ///   identity probe (`flui-native`'s `owner::hwnd_affinity`) and returns
-    ///   `Unavailable` for `AlreadyGone`/`StaleHandle` instead of handing out a handle
-    ///   wrapping a destroyed or recycled `HWND`.
-    /// - **AppKit** (`MacOSWindow`) — an explicit `closed` flag, set from the
-    ///   `windowWillClose:` delegate callback, which AppKit's own `-close`
-    ///   posts on every route through it regardless of the should-close
-    ///   veto (see `MacOSWindow::close`'s own doc), so no second call site
-    ///   needs to set it.
-    /// - **Android** (`AndroidWindow`) — answers `Unavailable` exactly when
-    ///   `AndroidApp::native_window()` is `None`, and `android-activity`
-    ///   0.6.1 leaves that `Some` across an ordinary pause: the command that
-    ///   clears it is applied after the `TerminateWindow` callback returns,
-    ///   and the new window is set before the `InitWindow` callback runs. So
-    ///   across an ordinary pause — one with no `TerminateWindow` inside it —
-    ///   this method keeps answering `Ok` for the whole span between the
-    ///   `Pause` and the matching `Resume`; a `TerminateWindow` inside that
-    ///   span flips the answer to `Unavailable` from
-    ///   `post_exec_cmd(TermWindow)` until `pre_exec_cmd(InitWindow)`. Either
-    ///   way the answer is **not** the same thing as the surface's validity:
-    ///   the swapchain dies with the window, at `TerminateWindow`, and a
-    ///   pause that keeps the window keeps the swapchain too. The release is
-    ///   driven by the handler's
-    ///   [`surface_changed`](crate::WindowHandler::surface_changed), not by
-    ///   this method's answer.
-    /// - **Headless** — always `Unavailable` (no native handle exists).
-    fn window_handle(
-        &self,
-    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
-        Err(raw_window_handle::HandleError::Unavailable)
-    }
-
-    /// Get a display handle for creating GPU surfaces (wgpu, etc.)
-    ///
-    /// Concrete platform windows (WindowsWindow, MacOSWindow) implement
-    /// `raw_window_handle::HasDisplayHandle` and delegate through this method.
-    /// Headless windows return `HandleError::Unavailable`.
-    ///
-    /// This MUST applies at minimum to [`window_handle`](Self::window_handle),
-    /// whose returned handle wraps a per-window native identity that
-    /// genuinely goes away. It is inert on the two native desktop backends
-    /// this repository implements today because their display-handle types
-    /// carry no such identity to go stale: `WindowsDisplayHandle` and
-    /// `AppKitDisplayHandle` are both zero-field placeholders (Windows and
-    /// AppKit multi-monitor enumeration happens through separate APIs, not
-    /// through this handle), so `WindowsWindow`/`MacOSWindow` return `Ok`
-    /// from `display_handle` unconditionally rather than gating it on the
-    /// same destroyed/closed check `window_handle` uses — there is nothing
-    /// in the handle itself for that check to protect. A future backend
-    /// whose display handle DOES wrap a live native reference must still
-    /// honor the MUST there.
-    fn display_handle(
-        &self,
-    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
-        Err(raw_window_handle::HandleError::Unavailable)
-    }
-}
-
-impl HasWindowHandle for dyn PlatformWindow + '_ {
-    fn window_handle(
-        &self,
-    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
-        PlatformWindow::window_handle(self)
-    }
-}
-
-impl HasDisplayHandle for dyn PlatformWindow + '_ {
-    fn display_handle(
-        &self,
-    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
-        PlatformWindow::display_handle(self)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The shared window a renderer holds is a raw-handle target on its own,
-    /// with no other crate in the graph enabling `raw-window-handle/alloc`.
-    const fn assert_bounds<T: HasWindowHandle + HasDisplayHandle + Send + Sync + 'static>() {}
-    const _: () = assert_bounds::<std::sync::Arc<dyn PlatformWindow>>();
 }

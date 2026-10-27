@@ -10,7 +10,9 @@
 //! behind the content ([`MacOSBackdrop`]: a material or Liquid Glass).
 //!
 //! The loop holds the windows it tracks as `HostWindow`s
-//! (`owner::apple::macos`).
+//! (`owner::apple::macos`). A window lives on the AppKit main thread, its
+//! owner; the thread that presents its frames holds its `MacOSSurface`, and
+//! any thread asks it for a frame through its `MacOSRedraw` (ADR-0254 §5).
 
 // Direct AppKit objc calls have no safe wrapper: the window is one of the
 // crate's `unsafe` FFI islands, opted out at its module boundary.
@@ -32,9 +34,10 @@ pub use ext::{
     AppKitWindow, MacOSCollectionBehavior, MacOSWindowExt, MacOSWindowLevel, TabJoinError,
 };
 
+use std::cell::OnceCell;
 use std::rc::Rc;
 use std::sync::{
-    Arc,
+    Arc, OnceLock,
     atomic::{AtomicBool, Ordering},
 };
 
@@ -84,20 +87,27 @@ use crate::owner::apple::MacOSLoop;
 use crate::owner::apple::macos::content_view::{self, ViewHooks};
 use crate::owner::apple::macos::display_pass;
 use crate::owner::apple::macos::{
-    ContentViewRef, HostDisplays, WindowRegistry, debug_assert_appkit_main_thread,
+    ContentViewRef, HostDisplays, WeakWakePump, WindowRegistry, debug_assert_appkit_main_thread,
+    exec_async_guarded, on_owner_thread,
 };
 
 use crate::{
     owner::OpenWindowError,
-    owner::window_delivery::WindowDelivery,
-    window::config::WindowConfiguration,
+    owner::slot::OwnerWeak,
+    owner::window_delivery::{Retirement, WindowDelivery},
     window::state::{ReportedFacts, WindowStateCell, mode_of},
 };
 use flui_platform::{
-    CursorError, DisplayId, PlatformWindow, WindowHandler, WindowId, WindowOptions, WindowReveal,
+    CursorError, DisplayId, PlatformWindow, RedrawRequester, SurfaceTarget, WindowHandler,
+    WindowId, WindowOptions, WindowReveal,
 };
 
-/// macOS window wrapper around NSWindow
+/// macOS window wrapper around NSWindow.
+///
+/// Neither `Send` nor `Sync` (ADR-0254 §5): it is made on the AppKit main
+/// thread, its owner, and every AppKit message it sends is sent there, because
+/// no other thread can reach it. What other threads need of it is handed out
+/// apart from it: its `MacOSSurface` and its `MacOSRedraw`.
 pub struct MacOSWindow {
     /// Native window handle (NSWindow*)
     ns_window: ObjcId,
@@ -114,7 +124,7 @@ pub struct MacOSWindow {
     view: ObjcId,
 
     /// Window state
-    state: Arc<Mutex<MacOSWindowState>>,
+    state: Mutex<MacOSWindowState>,
 
     /// Reference to all windows
     windows_map: WindowRegistry,
@@ -122,29 +132,26 @@ pub struct MacOSWindow {
     /// Per-window callbacks (input, resize, close, ...)
     delivery: Arc<WindowDelivery>,
 
-    /// Set once `windowWillClose:` has fired for this window (or `close()`
-    /// completed without it firing — see `close()`'s own doc). Shared via
-    /// `Arc` like every other per-window field here, so every clone of this
-    /// wrapper sees the same window's closed state instead of each tracking
-    /// its own. Consulted by [`HasWindowHandle::window_handle`] because,
-    /// with `setReleasedWhenClosed:NO` set at construction, `-[NSWindow
-    /// close]` no longer deallocates `ns_window` — so its view stays
-    /// answerable long after the window is meaningless to hand a GPU handle
-    /// for, and only this flag (not a nil check) can tell the two apart.
+    /// Set once `windowWillClose:` has fired for this window, and by the
+    /// window's [`Drop`] before it releases the NSWindow. Shared with the
+    /// window's surface targets and with the features beside it
+    /// ([`ContentViewRef`]), which outlive the window: with
+    /// `setReleasedWhenClosed:NO` set at construction, `-[NSWindow close]` no
+    /// longer deallocates `ns_window`, so its view stays answerable long after
+    /// the window is meaningless to hand a GPU handle for, and only this flag
+    /// (not a nil check) can tell the two apart.
     closed: Arc<AtomicBool>,
-    loop_control: std::sync::OnceLock<std::sync::Weak<crate::owner::apple::macos::LoopControl>>,
+    loop_control: OnceLock<std::sync::Weak<crate::owner::apple::macos::LoopControl>>,
 
-    /// Window configuration
-    config: WindowConfiguration,
-
-    /// The owner lane every thread-affine AppKit message travels through
-    /// (see `owner::apple::macos::owner_lane`). The AppKit main queue for
-    /// windows created by [`MacOSWindow::new`].
+    /// The window's owner lane (see `owner::apple::macos::owner_lane`): the
+    /// AppKit main queue, which runs on the thread the window lives on. What
+    /// reaches the window later or from another thread — a deferred redraw, a
+    /// held mode change, the features beside it — is queued here.
     owner: &'static dispatch::Queue,
 
     /// True when `owner` is the main queue, so "on the main thread" is
-    /// equivalent to "on the owner lane" for the direct-path probe in
-    /// [`crate::owner::apple::macos::exec_on_owner`].
+    /// equivalent to "on the owner lane" for
+    /// [`crate::owner::apple::macos::on_owner_thread`].
     owner_is_main: bool,
 
     /// What the table's positions made for this window once its content view
@@ -153,82 +160,21 @@ pub struct MacOSWindow {
     /// carries; the actuator; and the system chrome.
     facets: WindowFacets,
 
-    /// The platform's wake pump, armed from [`PlatformWindow::request_redraw`].
-    ///
-    /// `Weak`, and a `OnceLock`: the pump is platform-owned and outlives every
-    /// window, so a window must not keep it alive — and the slot is filled
-    /// once, by the window position's `open` right after construction. A
-    /// window constructed without a platform leaves it empty and simply never
-    /// arms one.
-    wake_pump: std::sync::OnceLock<crate::owner::apple::macos::WeakWakePump>,
+    /// What asks this window for a frame from any thread, and arms the
+    /// platform's wake pump as it does. Set once, right after the window is
+    /// made, since it reaches the window through a weak reference to it.
+    redraw: OnceCell<Arc<MacOSRedraw>>,
 
     /// The platform's display registry, by which this window turns its
     /// screen into a [`DisplayId`]. A `OnceLock` filled once by
     /// the window position's `open` right after construction, like the wake
     /// pump; a window built without a platform names no display.
-    displays: std::sync::OnceLock<Arc<dyn HostDisplays>>,
+    displays: OnceLock<Arc<dyn HostDisplays>>,
 
     /// The published window state (ADR-0237). Seeded from the creation
     /// options; the first read replaces it with what AppKit reports.
     snapshot: Arc<WindowStateCell>,
 }
-
-// SAFETY: the remaining fields are `Arc`/`Mutex`-protected, and sharing the
-// wrapper across threads is required by the `PlatformWindow: Send + Sync`
-// contract.
-//
-// # The NSWindow pointer is only messaged from the owner lane or from AppKit
-//
-// The raw `ns_window` pointer is thread-affine by AppKit's own doctrine
-// (NSWindow is "generally not thread-safe"). What makes it sound to share this
-// wrapper across threads is that every AppKit-messaging body of the public
-// window surface is now mechanically routed: each travels through
-// `route_on_owner` (this file), which dispatches the body onto the window's
-// owner lane — the AppKit main queue in production, a caller-supplied serial
-// queue for test windows (see `owner::apple::macos::owner_lane`) — so no
-// off-owner caller ever reaches AppKit bare. `request_redraw` was the first such site
-// (issue #949); the sweep (issue #1194) extended the routing to every class-A
-// body in the public window surface: the 12 `PlatformWindow` mutators,
-// `request_redraw` itself, the 12 `WindowTrait` bodies, and the 11
-// `MacOSWindowExtTrait` bodies. Off-owner callers of those methods (e.g. the
-// scheduler's frame-wake hook completing on an IO-lane worker) therefore
-// observe the routing, not a call-graph fact.
-//
-// One of those bodies reaches the lane by an extra hop rather than by a second
-// door: `request_redraw`'s deferral hands its `setNeedsDisplay:` to
-// `owner_lane::exec_async_guarded`, which installs the lane guard *before* the
-// body runs and then routes that body through `route_on_owner` like the rest.
-// The deferral changes *when* the call lands, never *which thread* issues it —
-// which is why it does not weaken this argument.
-//
-// What remains outside the routed surface, and why each part is still sound:
-// AppKit-delivered callbacks (delegate/view/event closures) run on the main
-// thread by construction — AppKit does not deliver them elsewhere; the
-// raw-handle accessors are `!Send` outputs whose enforcement is upstream
-// (raw-window-metal's `Layer::from_ns_view` hard-panics off the main thread
-// before surface creation) plus `debug_assert_appkit_main_thread`-guarded
-// platform entries (ADR-0039) — their un-routed read of the window's view is the
-// owner-sweep plan's recorded class-E residual, a deliberate carve-out of the
-// routing sweep rather than a local lapse. [`Drop`] releases its AppKit tail
-// inline on the owner; off-owner it queues the tail without blocking. If that
-// queue is no longer servicing, the window stays over-retained — a leak, never
-// an off-main deallocation. The close delegate's autorelease pin protects the
-// native receiver while callback-local Rust wrappers drop. `OwnerLaneId` is
-// consumed only on the owner thread (directly or under its queue guard).
-//
-// What the routing does NOT provide is the wake relay ADR-0045 decision 5
-// mandates end-to-end: the scheduler hook still calls `request_redraw`
-// directly. A relay (the hook posts, the owner thread drains) remains the
-// real fix for the async lane and is scoped to the `PlatformProxy` redraw verb
-// (#551/#559), not built here.
-unsafe impl Send for MacOSWindow {}
-// SAFETY: see `Send` above, including its statement of what is NOT enforced.
-// Interior mutability is Mutex-guarded; the raw pointer's thread affinity is
-// enforced by `route_on_owner` for the routed public surface, by the
-// main-thread construction contract for AppKit-delivered callbacks, by the
-// downstream `MainThreadMarker` hard panic for the surface-lease accessors,
-// and by the owner-lane fire-and-forget tail for [`Drop`].
-unsafe impl Sync for MacOSWindow {}
 
 /// Mutable window state
 struct MacOSWindowState {
@@ -310,9 +256,9 @@ fn defers_first_reveal(options: &WindowOptions) -> bool {
 
 impl MacOSWindow {
     /// Clear the deferred-first-reveal flag, returning whether it was set:
-    /// the one call that decides which caller performs the reveal. Taken
-    /// under the state lock and never inside an owner route, so it cannot
-    /// be held across an AppKit message.
+    /// the one call that decides which caller performs the reveal. The state
+    /// lock is released before the caller sends any AppKit message, so it is
+    /// never held across one.
     fn take_pending_first_reveal(&self) -> bool {
         std::mem::replace(&mut self.state.lock().first_reveal_pending, false)
     }
@@ -333,10 +279,11 @@ impl MacOSWindow {
         windows_map: WindowRegistry,
         windows: &MacOSWindows,
         view_hooks: ViewHooks,
-    ) -> Result<Arc<Self>, OpenWindowError> {
-        // Production windows route every thread-affine AppKit message through
-        // the AppKit main queue — the one lane all other process AppKit
-        // traffic already serializes on (see `owner::apple::macos::owner_lane`).
+    ) -> Result<Rc<Self>, OpenWindowError> {
+        // A window's owner lane is the AppKit main queue — the one lane all
+        // other process AppKit traffic already serializes on (see
+        // `owner::apple::macos::owner_lane`) — and the window is made on the
+        // main thread, which that queue runs on.
         Self::new_inner(
             options,
             handler,
@@ -392,25 +339,18 @@ impl MacOSWindow {
     /// Called once by the window position's `open`, immediately after
     /// construction and before the window is handed to anyone who could
     /// redraw it.
-    fn install_wake_pump(&self, pump: crate::owner::apple::macos::WeakWakePump) {
+    fn install_wake_pump(&self, pump: WeakWakePump) {
         // A second install is silently ignored rather than racing the first:
         // the slot is read on every redraw, so "first writer wins" is the
         // only outcome that cannot leave a window flipping between pumps.
-        let _ = self.wake_pump.set(pump);
+        let _ = self.redraw().wake_pump.set(pump);
     }
 
-    /// Arm the platform's wake pump, if this window has one.
-    ///
-    /// Called from [`PlatformWindow::request_redraw`] — the point that means
-    /// "a frame is coming" for this window — because a frame arms its
-    /// fallback deadline while it runs, and the pump is what looks back at
-    /// that deadline once the frame has gone. See
-    /// `owner::apple::macos::wake_pump` for why the second look is needed at
-    /// all.
-    fn arm_wake_pump(&self) {
-        if let Some(pump) = self.wake_pump.get().and_then(std::sync::Weak::upgrade) {
-            pump.arm();
-        }
+    /// The window's redraw requester.
+    fn redraw(&self) -> &Arc<MacOSRedraw> {
+        self.redraw
+            .get()
+            .expect("BUG: a window's redraw requester is set as the window is made")
     }
 
     fn new_inner(
@@ -421,7 +361,7 @@ impl MacOSWindow {
         view_hooks: ViewHooks,
         owner: &'static dispatch::Queue,
         owner_is_main: bool,
-    ) -> Result<Arc<Self>, OpenWindowError> {
+    ) -> Result<Rc<Self>, OpenWindowError> {
         // SAFETY: must run on the owner thread (enforced by the platform's
         // event-loop ownership); all messaged objects are alive: the freshly allocated
         // NSWindow is checked for NIL before further use.
@@ -617,10 +557,10 @@ impl MacOSWindow {
             // detaches it before releasing the window and with it the view.
             let facets = windows.positions.for_window(&this);
 
-            let window = Arc::new(Self {
+            let window = Rc::new(Self {
                 ns_window,
                 view: content_view,
-                state: Arc::new(Mutex::new(MacOSWindowState {
+                state: Mutex::new(MacOSWindowState {
                     bounds: Bounds {
                         origin: Point::new(frame.origin.x, frame.origin.y),
                         size: content_size,
@@ -632,17 +572,16 @@ impl MacOSWindow {
                     sequence: ModeSequence::default(),
                     occlusion_visible: true,
                     first_reveal_pending,
-                })),
+                }),
                 windows_map: Arc::clone(&windows_map),
                 delivery,
                 closed,
-                loop_control: std::sync::OnceLock::new(),
-                config: windows.config.clone(),
+                loop_control: OnceLock::new(),
                 owner,
                 owner_is_main,
                 facets,
-                wake_pump: std::sync::OnceLock::new(),
-                displays: std::sync::OnceLock::new(),
+                redraw: OnceCell::new(),
+                displays: OnceLock::new(),
                 snapshot: Arc::new(WindowStateCell::new(
                     WindowState::new(WindowGeometry::new(None, options.size), options.size)
                         .with_title(Some(options.title.clone()))
@@ -652,9 +591,20 @@ impl MacOSWindow {
                 )),
             });
 
+            let redraw = Arc::new(MacOSRedraw {
+                window: Arc::new(OwnerWeak::new(&window)),
+                owner,
+                owner_is_main,
+                wake_pump: OnceLock::new(),
+            });
+            assert!(
+                window.redraw.set(redraw).is_ok(),
+                "BUG: a window's redraw requester is set once, as the window is made"
+            );
+
             window
                 .delivery
-                .publish_through(Arc::downgrade(&window), Self::read_state);
+                .publish_through_owner(&window, Self::read_state);
 
             // Enable mouse tracking for mouse moved events
             content_view::enable_mouse_tracking(content_view);
@@ -663,13 +613,16 @@ impl MacOSWindow {
             let _: Bool = msg_send![ns_window, makeFirstResponder: content_view];
 
             // Set window delegate for lifecycle events
-            let delegate = create_window_delegate(Arc::downgrade(&window));
+            let delegate = create_window_delegate(Rc::downgrade(&window));
             let _: () = msg_send![ns_window, setDelegate: delegate];
 
-            // Store in windows map
+            // Store in windows map, which the owner thread alone reaches: the
+            // window is made there.
             let window_id = ns_window as u64;
-            let tracked: Arc<dyn HostWindow> = Arc::clone(&window) as _;
-            let _prev = windows_map.lock().insert(window_id, tracked);
+            let tracked: Rc<dyn HostWindow> = Rc::clone(&window) as _;
+            if windows_map.insert(window_id, tracked).is_err() {
+                tracing::error!("a macOS window was made off its owner thread and is not tracked");
+            }
 
             // The rectangle the window returns to is what it has now, placed
             // as asked; then it enters the mode it opens in. A hidden window
@@ -711,31 +664,14 @@ impl MacOSWindow {
     }
 }
 
-/// Route one AppKit-messaging body through the window's owner lane.
+/// Choose which arm a redraw request takes on the owner thread — the
+/// display-pass deferral, or the inline send — and start it.
 ///
-/// This is the single throat every swept class-A body travels through: the
-/// body runs ON the owner lane — inline on the OS main thread for a
-/// main-lane owner, or dispatched under the reentrancy guard from any other
-/// thread — so the lane, not a call-graph fact or a debug assert, is the
-/// enforcement. A free function rather than a method so it can be exercised
-/// on any lane without constructing a real window.
-pub(crate) fn route_on_owner<R: Send>(
-    owner: &'static dispatch::Queue,
-    owner_is_main: bool,
-    f: impl FnOnce() -> R + Send,
-) -> R {
-    crate::owner::apple::macos::exec_on_owner(owner, owner_is_main, f)
-}
-
-/// Choose which arm a redraw request takes — the display-pass deferral, or the
-/// inline send — and start it.
-///
-/// Free-standing for the same reason [`route_on_owner`] is: an always-run test
-/// can pin the *choice* without an NSWindow, which a bare test process cannot
-/// construct. Both arms arrive as closures, so what a test observes is exactly
-/// which one started; what the window's own `request_redraw` supplies for them
-/// is pinned by the bundled frame-pump probe, which reads frames rather than
-/// closures.
+/// Free-standing so an always-run test can pin the *choice* without an
+/// NSWindow, which a bare test process cannot construct. Both arms arrive as
+/// closures, so what a test observes is exactly which one started; what the
+/// window's own `request_redraw` supplies for them is pinned by the bundled
+/// frame-pump probe, which reads frames rather than closures.
 ///
 /// AppKit discards a `setNeedsDisplay:` issued while it is displaying the view,
 /// and the frame a display pass runs asks for its next frame from exactly there
@@ -746,12 +682,13 @@ pub(crate) fn route_on_owner<R: Send>(
 /// then; this is ADR-0039 §4(c) realised on AppKit — a wake that arrives while
 /// the drain gate is closed defers rather than draining.
 ///
-/// A request from any other moment is already delivered after the pass (its lane
-/// hop waits for it), so it stays inline rather than paying a turn. The marker's
-/// grain is the thread, not this window's pass, so a request for another window
-/// issued while any view on this thread is displaying also defers: conservative,
-/// and one lane turn late at worst, never dropped.
-fn dispatch_redraw_request(defer: impl FnOnce(), send_inline: impl FnOnce() + Send) {
+/// A request from any other moment is already outside the pass (a request from
+/// another thread reaches the owner on a lane turn of its own), so it stays
+/// inline rather than paying a turn. The marker's grain is the thread, not this
+/// window's pass, so a request for another window issued while any view on this
+/// thread is displaying also defers: conservative, and one lane turn late at
+/// worst, never dropped.
+fn dispatch_redraw_request(defer: impl FnOnce(), send_inline: impl FnOnce()) {
     if display_pass::in_display_pass() {
         defer();
         return;
@@ -762,36 +699,30 @@ fn dispatch_redraw_request(defer: impl FnOnce(), send_inline: impl FnOnce() + Se
 impl MacOSWindow {
     /// Ask AppKit to display this window's content view.
     ///
-    /// The one place `setNeedsDisplay:` is sent: `request_redraw`'s inline path
-    /// calls it from inside its routed body, and the deferred path calls it
-    /// from inside a routed body too, one turn of the lane later. `deferred`
-    /// records which of the two sent it, because the two are only
-    /// distinguishable in a log by their timing otherwise, and telling "the
-    /// frame re-armed itself and the pump continued" from "the frame re-armed
-    /// itself and was discarded" is what this whole path exists to make
-    /// observable.
+    /// The one place `setNeedsDisplay:` is sent: a request outside a display
+    /// pass sends it at once, and a deferred one a turn of the owner lane
+    /// later. `deferred` records which of the two sent it, because the two are
+    /// only distinguishable in a log by their timing otherwise, and telling
+    /// "the frame re-armed itself and the pump continued" from "the frame
+    /// re-armed itself and was discarded" is what this whole path exists to
+    /// make observable.
     ///
     /// # Safety
     ///
-    /// - The caller must be on this window's owner lane: `ns_window` and its
-    ///   content view are thread-affine AppKit objects. Both call sites reach
-    ///   here from inside a `route_on_owner` body, which is what makes that
-    ///   true; the `debug_assert` below re-checks it against the same predicate
-    ///   `route_on_owner` routes with, so a caller that skips the routing
-    ///   throat fails loudly in debug builds instead of messaging AppKit
-    ///   off-lane.
-    /// - `self` must own a live `ns_window`, which `&self` guarantees: the
-    ///   wrapper's balancing `release` runs only from [`Drop`], and the
-    ///   deferred path finds this window through the shared map, so a window
-    ///   that closed first is absent from it rather than messaged.
+    /// The caller must be on this window's owner lane: `ns_window` and its
+    /// content view are thread-affine AppKit objects. A window is neither
+    /// `Send` nor `Sync`, so whoever holds `&self` is on the thread that made
+    /// it; the `debug_assert` below checks that this thread is the lane's.
+    /// `&self` keeps `ns_window` live: the wrapper's balancing `release` runs
+    /// only from [`Drop`].
     unsafe fn set_needs_display(&self, deferred: bool) {
         debug_assert!(
-            crate::owner::apple::macos::on_owner_thread(self.owner, self.owner_is_main),
+            on_owner_thread(self.owner, self.owner_is_main),
             "BUG: set_needs_display must run on the window's owner lane"
         );
         unsafe {
             // SAFETY: per the function's contract, the caller is on the owner
-            // lane (re-checked by the assertion above) and `ns_window` is live,
+            // lane (checked by the assertion above) and `ns_window` is live,
             // so its view hierarchy, which holds `self.view`, is too. The view
             // is NIL-checked before messaging.
             let content_view = self.view;
@@ -855,139 +786,225 @@ impl MacOSWindow {
         }
     }
 
-    /// Start the deferral of a redraw request onto the next turn of the owner
-    /// lane. See [`Self::defer_redraw`] for the mechanism.
-    fn defer_redraw_request(&self) {
-        Self::defer_redraw(
-            self.owner,
-            self.owner_is_main,
-            Arc::clone(&self.windows_map),
-            self.ns_window as u64,
-            0,
+    /// Ask AppKit for a frame of this window now, on its owner thread: inline,
+    /// or a lane turn later from inside a display pass
+    /// ([`dispatch_redraw_request`]). `handle` is this window's weak handle,
+    /// which the deferred turn finds it through.
+    fn redraw_on_owner(&self, handle: &Arc<OwnerWeak<Self>>) {
+        dispatch_redraw_request(
+            // The deferral runs a lane turn later, after this call has
+            // returned, so it carries the window's weak handle rather than a
+            // borrow of it.
+            || defer_redraw(self.owner, Arc::clone(handle), 0),
+            // SAFETY: a window is used on its owner thread only (it is neither
+            // `Send` nor `Sync`), which is the owner lane's.
+            || unsafe { self.set_needs_display(false) },
         );
     }
+}
 
-    /// Defer a redraw request to the next turn of the owner lane, delivering it
-    /// there if that turn lands outside AppKit's display pass.
-    ///
-    /// The caller is inside AppKit's display pass of this window's view, where
-    /// `setNeedsDisplay:` is discarded; this hands the same call to the lane so
-    /// it lands after the pass has unwound instead of during it. This is
-    /// ADR-0039 §4(c) realised on AppKit: the frame transaction is a region the
-    /// drain gate is closed for, and a wake arriving while it is closed defers
-    /// rather than draining.
-    ///
-    /// The body must NOT ride `route_on_owner`'s inline arm, which is where a
-    /// call from inside `drawRect:` otherwise lands — a display pass runs on
-    /// the owner thread, so `exec_on_owner` takes its main-thread shortcut, and
-    /// the `setNeedsDisplay:` would be issued *during* the pass: the exact call
-    /// AppKit discards, i.e. the bug this path exists to fix. Hence
-    /// asynchronous, and never blocking. A synchronous dispatch would also
-    /// self-deadlock on a serial *test* lane dispatching to itself; on the
-    /// main-lane production path it would not hang — it would silently do the
-    /// wrong thing, which is worse.
-    ///
-    /// The turn reaches the window through the shared window map rather than
-    /// capturing a raw AppKit pointer, so a window that closed before the turn
-    /// runs is simply no longer found — no dangling `id`, and no `Weak` cycle
-    /// for the window to hold on itself. Two honest limits of that scheme:
-    ///
-    /// - The key is the NSWindow pointer — the pointer-as-id ADR-0039 §4 already
-    ///   names as an ABA hazard for multi-window sessions. Address reuse cannot
-    ///   make this message a *dead* object (the wrapper's balancing `release`
-    ///   is queued on this same lane and runs only from [`Drop`], so a free
-    ///   always follows any block already queued ahead of it), but it could in
-    ///   principle make it message a *different* live window: one spurious
-    ///   redraw, and the reason that ADR's monotonic-mint follow-up is the real
-    ///   fix rather than this lookup.
-    /// - Membership in the map is the whole test, so a window removed from the
-    ///   map while still open (only a test harness does that today) drops a
-    ///   deferred request that the inline path — which messages `self.ns_window`
-    ///   directly — would have delivered.
-    ///
-    /// `hop` counts the turns this request has already taken; see the re-check
-    /// below for why it exists and [`MAX_DEFER_HOPS`] for why it is bounded.
-    fn defer_redraw(
-        owner: &'static dispatch::Queue,
-        owner_is_main: bool,
-        windows_map: WindowRegistry,
-        key: u64,
-        hop: u8,
-    ) {
-        crate::owner::apple::macos::exec_async_guarded(owner, move || {
-            // The hop onto the lane is asynchronous, but the AppKit message
-            // inside it is still routed: `exec_async_guarded` installed the lane
-            // guard before this body, so `route_on_owner` runs it inline and
-            // records its witness. One routed throat for every AppKit-messaging
-            // body, with no second door beside it.
-            route_on_owner(owner, owner_is_main, || {
-                // This turn is supposed to run after the pass has unwound, and
-                // that is what a lane turn normally is: the run loop services
-                // the lane at its top level, after AppKit's display pass has
-                // returned. The premise is only as strong as the drain, though.
-                // A display pass that opens a nested run loop — a modal panel, a
-                // drag session, a menu track — services this same lane from
-                // *inside* itself, so a turn can land in a pass after all, and
-                // messaging AppKit from there would discard the request again,
-                // silently: a discarded deferral leaves the same trace as a
-                // working one. So the turn re-checks and re-defers rather than
-                // trusting the timing.
-                if display_pass::in_display_pass() {
-                    if hop < MAX_DEFER_HOPS {
-                        tracing::trace!(
-                            hop,
-                            "request_redraw: the deferred turn landed inside another display \
-                             pass (a nested run loop is draining the owner lane); deferring again"
-                        );
-                        Self::defer_redraw(owner, owner_is_main, windows_map, key, hop + 1);
-                    } else {
-                        // Dropped rather than sent: a `setNeedsDisplay:` issued
-                        // here is the call AppKit throws away, so sending it
-                        // would only produce a misleading "sent" trace. The pump
-                        // stays stalled until the nested loop returns and
-                        // something requests a redraw again, which is the
-                        // residual this backend has anyway — the warning names
-                        // the situation instead of leaving it to look like a
-                        // healthy request.
-                        tracing::warn!(
-                            hop = MAX_DEFER_HOPS,
-                            "request_redraw: a redraw re-arm is still inside a display pass \
-                             after the deferral budget; dropping it. A nested run loop is \
-                             draining the owner lane from inside a display pass, so no turn of \
-                             that lane can land outside one; frames stay stalled until that \
-                             loop returns and something requests a redraw again."
-                        );
-                    }
-                    return;
-                }
-                // The lookup clones the `Arc` and drops the guard with the
-                // statement: the map lock is never held across an AppKit call.
-                let tracked = windows_map.lock().get(&key).cloned();
-                // Every window the map holds is a `MacOSWindow`: only this
-                // file's constructor adds one.
-                if let Some(window) = tracked
-                    .as_deref()
-                    .and_then(|window| window.as_any().downcast_ref::<MacOSWindow>())
-                {
-                    // SAFETY: `route_on_owner` ran this body on the owner lane,
-                    // and finding the wrapper in the map means its NSWindow is
-                    // live (the entry is removed before the wrapper's release).
-                    unsafe { window.set_needs_display(true) };
-                } else {
-                    // Closed (or never in the map) before the deferred turn:
-                    // the request has nothing left to redraw, which is not an
-                    // error.
-                    tracing::trace!(
-                        "request_redraw: window closed before the deferred request ran; request dropped"
-                    );
-                }
-            });
+/// Defer a redraw request to the next turn of the owner lane, delivering it
+/// there if that turn lands outside AppKit's display pass.
+///
+/// The caller is inside AppKit's display pass of this window's view, where
+/// `setNeedsDisplay:` is discarded; this hands the same call to the lane so
+/// it lands after the pass has unwound instead of during it. This is
+/// ADR-0039 §4(c) realised on AppKit: the frame transaction is a region the
+/// drain gate is closed for, and a wake arriving while it is closed defers
+/// rather than draining. Hence asynchronous, and never blocking: a display
+/// pass runs on the owner thread, so a synchronous hop would run the body
+/// inline, during the pass — the exact call AppKit discards.
+///
+/// The turn reaches the window through its weak handle, which upgrades on the
+/// owner thread alone and keeps no window alive: a window dropped before the
+/// turn runs is not found, and one that closed meanwhile is found but not
+/// messaged — the request has nothing left to redraw.
+///
+/// `hop` counts the turns this request has already taken; see the re-check
+/// below for why it exists and [`MAX_DEFER_HOPS`] for why it is bounded.
+fn defer_redraw(owner: &'static dispatch::Queue, window: Arc<OwnerWeak<MacOSWindow>>, hop: u8) {
+    exec_async_guarded(owner, move || {
+        // This turn is supposed to run after the pass has unwound, and that is
+        // what a lane turn normally is: the run loop services the lane at its
+        // top level, after AppKit's display pass has returned. The premise is
+        // only as strong as the drain, though. A display pass that opens a
+        // nested run loop — a modal panel, a drag session, a menu track —
+        // services this same lane from *inside* itself, so a turn can land in
+        // a pass after all, and messaging AppKit from there would discard the
+        // request again, silently: a discarded deferral leaves the same trace
+        // as a working one. So the turn re-checks and re-defers rather than
+        // trusting the timing.
+        if display_pass::in_display_pass() {
+            if hop < MAX_DEFER_HOPS {
+                tracing::trace!(
+                    hop,
+                    "request_redraw: the deferred turn landed inside another display \
+                     pass (a nested run loop is draining the owner lane); deferring again"
+                );
+                defer_redraw(owner, window, hop + 1);
+            } else {
+                // Dropped rather than sent: a `setNeedsDisplay:` issued here is
+                // the call AppKit throws away, so sending it would only produce
+                // a misleading "sent" trace. The pump stays stalled until the
+                // nested loop returns and something requests a redraw again,
+                // which is the residual this backend has anyway — the warning
+                // names the situation instead of leaving it to look like a
+                // healthy request.
+                tracing::warn!(
+                    hop = MAX_DEFER_HOPS,
+                    "request_redraw: a redraw re-arm is still inside a display pass \
+                     after the deferral budget; dropping it. A nested run loop is \
+                     draining the owner lane from inside a display pass, so no turn of \
+                     that lane can land outside one; frames stay stalled until that \
+                     loop returns and something requests a redraw again."
+                );
+            }
+            return;
+        }
+        match window.upgrade() {
+            Some(window) if !window.closed.load(Ordering::SeqCst) => {
+                // SAFETY: the handle upgraded, so this turn runs on the
+                // window's owner thread (the only one it upgrades on), under
+                // the lane guard `exec_async_guarded` installed.
+                unsafe { window.set_needs_display(true) };
+            }
+            _ => tracing::trace!(
+                "request_redraw: window closed before the deferred request ran; request dropped"
+            ),
+        }
+    });
+}
+
+/// A macOS window's redraw requester (ADR-0254 §5): what asks the window for a
+/// frame from any thread.
+///
+/// It holds the window's weak handle, which upgrades on the owner thread
+/// alone, so it keeps no window alive and reaches nothing once the window is
+/// gone. A request first arms the platform's wake pump, from whichever thread
+/// asks: a frame arms its fallback deadline while it runs, and the pump is what
+/// looks back at that deadline once the frame has gone (see
+/// `owner::apple::macos::wake_pump`). Then, on the owner thread, it asks AppKit
+/// for the frame at once; from any other thread it queues that on the owner
+/// lane and returns without waiting, since AppKit's views are the main
+/// thread's alone.
+struct MacOSRedraw {
+    /// The window, on its owner thread while it lives.
+    window: Arc<OwnerWeak<MacOSWindow>>,
+    /// The window's owner lane.
+    owner: &'static dispatch::Queue,
+    /// Whether `owner` is the main queue.
+    owner_is_main: bool,
+    /// The platform's wake pump. `Weak`, and a `OnceLock`: the pump is
+    /// platform-owned and outlives every window, so a requester must not keep
+    /// it alive — and the slot is filled once, by the window position's
+    /// `open` right after construction. A window constructed without a
+    /// platform leaves it empty and never arms one.
+    wake_pump: OnceLock<WeakWakePump>,
+}
+
+impl RedrawRequester for MacOSRedraw {
+    fn request_redraw(&self) {
+        // A frame is coming, so the wake pump should look at the deadline that
+        // frame is about to arm. Before the frame is asked for, not after: a
+        // deferred request is a lane turn away, and the pump needs to be
+        // scheduled no later than the frame itself.
+        if let Some(pump) = self.wake_pump.get().and_then(std::sync::Weak::upgrade) {
+            pump.arm();
+        }
+        if on_owner_thread(self.owner, self.owner_is_main) {
+            if let Some(window) = self.window.upgrade() {
+                window.redraw_on_owner(&self.window);
+            }
+            return;
+        }
+        let window = Arc::clone(&self.window);
+        exec_async_guarded(self.owner, move || {
+            if let Some(owned) = window.upgrade() {
+                owned.redraw_on_owner(&window);
+            }
         });
     }
 }
 
+/// A macOS window's surface target (ADR-0254 §5): the window's content view,
+/// as an `AppKitWindowHandle`, until the window closes.
+///
+/// It answers `Unavailable` once `closed` is set — by `windowWillClose:`, or
+/// by the window's [`Drop`] for a window dropped without closing — or the
+/// window's delivery is retired.
+struct MacOSSurface {
+    /// The window's `FLUIContentView`, the `ns_view` of its handle. Never
+    /// messaged, retained or dereferenced here.
+    view: ObjcId,
+    /// The window's closed flag.
+    closed: Arc<AtomicBool>,
+    /// Whether the window's native retirement has started.
+    retirement: Retirement,
+}
+
+// SAFETY: the target holds the content view's address, the window's `closed`
+// flag and its `Retirement`; the latter two are atomics. It never messages,
+// retains or dereferences the view: the address goes into an
+// `AppKitWindowHandle` only while neither `closed` nor the retirement is set.
+// The view is freed only by the window's release of its NSWindow, in the
+// window's `Drop` on the main thread, which sets `closed` first; and an AppKit
+// surface is made from the handle on the main thread alone (raw-window-metal's
+// `Layer::from_ns_view` checks it), where the handle query and its use run with
+// no free of the view between them.
+unsafe impl Send for MacOSSurface {}
+// SAFETY: see `Send` above: a shared reference reads the atomics and copies
+// the address, and nothing else.
+unsafe impl Sync for MacOSSurface {}
+
+impl MacOSSurface {
+    /// Whether the window is gone, so no handle is handed out.
+    fn is_gone(&self) -> bool {
+        self.closed.load(Ordering::SeqCst) || self.retirement.is_retired()
+    }
+}
+
+impl HasWindowHandle for MacOSSurface {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        if self.is_gone() {
+            return Err(raw_window_handle::HandleError::Unavailable);
+        }
+        // raw-window-handle 0.6 AppKitWindowHandle expects the NSView, not
+        // the NSWindow: the FLUI view, which stays the surface view whatever
+        // the window's content view is.
+        let ns_view = std::ptr::NonNull::new(self.view.cast::<std::ffi::c_void>())
+            .ok_or(raw_window_handle::HandleError::Unavailable)?;
+        let handle = AppKitWindowHandle::new(ns_view);
+        // SAFETY: the window has not closed, so its view hierarchy holds the
+        // view; the handle stops being handed out once it closes.
+        Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(RawWindowHandle::AppKit(handle)) })
+    }
+}
+
+impl HasDisplayHandle for MacOSSurface {
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        if self.is_gone() {
+            return Err(raw_window_handle::HandleError::Unavailable);
+        }
+        let handle = AppKitDisplayHandle::new();
+        // SAFETY: AppKit display handles carry no pointer; always valid.
+        Ok(unsafe {
+            raw_window_handle::DisplayHandle::borrow_raw(RawDisplayHandle::AppKit(handle))
+        })
+    }
+}
+
+impl SurfaceTarget for MacOSSurface {
+    /// AppKit has no frame callback to arm before a present: the display pass
+    /// paces this window's frames. It returns at once.
+    fn pre_present_notify(&self) {}
+}
+
 /// How many owner-lane turns a deferred redraw request may take before it is
-/// dropped ([`MacOSWindow::defer_redraw`]).
+/// dropped ([`defer_redraw`]).
 ///
 /// One turn is the point of the deferral, so a value above 1 only exists for
 /// the nested-run-loop case: each retry re-queues onto a lane that is being
@@ -1031,24 +1048,19 @@ impl crate::host_window::HostWindow for MacOSWindow {
     }
 }
 
-/// What the macOS windows open with: the window configuration the platform
-/// was built with, and the table's window-level positions. The loop keeps the
-/// open windows themselves (`WindowRegistry`), because its wake pump and its
-/// stop reach them.
+/// What the macOS windows open with: the table's window-level positions. The
+/// loop keeps the open windows themselves (`WindowRegistry`), because its wake
+/// pump and its stop reach them.
 #[derive(Debug)]
 pub struct MacOSWindows {
-    config: WindowConfiguration,
     positions: WindowPositions<ContentViewRef>,
 }
 
 impl MacOSWindows {
-    /// The windows of a platform built with `config`, whose table's
-    /// window-level positions are `positions`.
-    pub(crate) fn new(
-        config: WindowConfiguration,
-        positions: WindowPositions<ContentViewRef>,
-    ) -> Self {
-        Self { config, positions }
+    /// The windows of a platform whose table's window-level positions are
+    /// `positions`.
+    pub(crate) fn new(positions: WindowPositions<ContentViewRef>) -> Self {
+        Self { positions }
     }
 }
 
@@ -1081,7 +1093,7 @@ impl host::Window<MacOSLoop> for MacOSWindow {
         windows: &Arc<MacOSWindows>,
         mut options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
-    ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
+    ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
         owner
             .affinity
             .debug_assert_owner("MacOSPlatform::open_window");
@@ -1281,54 +1293,23 @@ impl PlatformWindow for MacOSWindow {
             .and_then(crate::text::WindowTextInput::ime)
     }
 
-    /// # Thread affinity — owner-routed
-    ///
-    /// This method is called from whatever thread completed a future, through
-    /// the scheduler's `on_frame_scheduled` hook (issue #949), so its AppKit
-    /// body — `setNeedsDisplay:` on the window's view — is dispatched onto the
-    /// window's owner lane (the AppKit main queue for production windows, a
-    /// caller-supplied serial lane for test windows; see
-    /// `owner::apple::macos::owner_lane`) and executes on the owner thread,
-    /// never bare on a caller on another thread.
-    ///
-    /// It was the FIRST mechanically-routed AppKit message site in this file;
-    /// issue #1194 swept the whole public window surface, so the routing is no
-    /// longer this method's distinction: every class-A body — the 12
-    /// `PlatformWindow` mutators, this method, the 12 `WindowTrait` bodies, and
-    /// the 11 `MacOSWindowExtTrait` bodies — travels through the same
-    /// `route_on_owner` throat, and the one body that has to arrive a lane turn
-    /// later (the deferral below) is wrapped in it too, so it is witnessed like
-    /// the rest. What is not on that surface is sound for the reasons the
-    /// `unsafe impl Send`/`Sync` SAFETY block states (AppKit-delivered
-    /// callbacks, upstream-enforced raw-handle accessors, the fire-and-forget
-    /// `Drop` tail).
-    ///
-    /// What the routing does NOT provide is the wake relay ADR-0045 decision 5
-    /// mandates end-to-end: the hook still calls this method directly. A relay
-    /// (the hook posts, the owner thread drains) remains scoped to the
-    /// `PlatformProxy` redraw verb (#559).
+    /// What the window's `MacOSRedraw` does, on the owner thread: arm the
+    /// wake pump, then `setNeedsDisplay:` on the window's view, a lane turn
+    /// later from inside a display pass.
     fn request_redraw(&self) {
-        // A frame is coming, so the platform's wake pump should look at the
-        // deadline that frame is about to arm. Before the routing below, not
-        // after: the deferred arm is a lane turn away, and the pump needs to
-        // be scheduled no later than the frame itself.
-        self.arm_wake_pump();
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        dispatch_redraw_request(
-            // The deferral re-derives everything it needs from `self` because
-            // it runs a lane turn later, after this call has returned — it
-            // cannot borrow anything of this frame's.
-            || self.defer_redraw_request(),
-            || {
-                route_on_owner(owner, owner_is_main, || unsafe {
-                    // SAFETY: the body runs on the window's owner lane — inline
-                    // on the OS main thread for a main-lane owner, or dispatched
-                    // onto the lane under the reentrancy guard.
-                    self.set_needs_display(false);
-                });
-            },
-        );
+        self.redraw().request_redraw();
+    }
+
+    fn redraw_requester(&self) -> Arc<dyn RedrawRequester> {
+        Arc::clone(self.redraw()) as _
+    }
+
+    fn surface_target(&self) -> Arc<dyn SurfaceTarget> {
+        Arc::new(MacOSSurface {
+            view: self.view,
+            closed: Arc::clone(&self.closed),
+            retirement: self.delivery.retirement(),
+        })
     }
 
     // ==================== State and commands (ADR-0237) ====================
@@ -1373,21 +1354,17 @@ impl PlatformWindow for MacOSWindow {
     }
 
     fn reveal_after_first_frame(&self) {
-        // The flag is settled under the state lock and outside the owner
-        // route, so a second caller racing this one sees `false`: the
-        // window becomes opaque exactly once for its deferred reveal.
+        // The flag is settled before the message, so a second call sees
+        // `false`: the window becomes opaque exactly once for its deferred
+        // reveal.
         if !self.take_pending_first_reveal() || self.closed.load(Ordering::SeqCst) {
             return;
         }
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
-            // body runs on the owner thread — inline on the OS main thread for a main-lane
-            // owner, or dispatched onto the lane under the reentrancy guard — before the
-            // message is sent.
+        // SAFETY: `ns_window` is alive for the lifetime of `self`, and a
+        // window is used on its owner thread only.
+        unsafe {
             let _: () = msg_send![self.ns_window, setAlphaValue: 1.0f64];
-        });
+        }
         tracing::debug!("macOS: window revealed after its first presented frame");
     }
 
@@ -1422,17 +1399,14 @@ impl PlatformWindow for MacOSWindow {
     // visible (objc 0.2's differing expansion hid it).
     #[allow(clippy::match_same_arms)]
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            self.state.lock().cursor = cursor;
+        self.state.lock().cursor = cursor;
 
-            // SAFETY: every selector below is an NSCursor class constructor
-            // available on the supported macOS baseline. The returned singleton
-            // remains owned by AppKit and `set` only selects it for the current
-            // pointer location. The body runs on the owner thread — inline on
-            // the OS main thread for a main-lane owner, or dispatched onto the
-            // lane under the reentrancy guard — before the messages are sent.
+        // SAFETY: every selector below is an NSCursor class constructor
+        // available on the supported macOS baseline. The returned singleton
+        // remains owned by AppKit and `set` only selects it for the current
+        // pointer location. A window is used on its owner thread only, the
+        // AppKit main thread.
+        unsafe {
             let ns_cursor: ObjcId = match cursor {
                 CursorIcon::ContextMenu => msg_send![class!(NSCursor), contextualMenuCursor],
                 CursorIcon::Pointer => msg_send![class!(NSCursor), pointingHandCursor],
@@ -1487,21 +1461,7 @@ impl PlatformWindow for MacOSWindow {
             }
             let _: () = msg_send![ns_cursor, set];
             Ok(())
-        })
-    }
-
-    // ==================== Callback Registration ====================
-
-    fn window_handle(
-        &self,
-    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
-        HasWindowHandle::window_handle(self)
-    }
-
-    fn display_handle(
-        &self,
-    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
-        HasDisplayHandle::display_handle(self)
+        }
     }
 }
 
@@ -1513,51 +1473,51 @@ impl MacOSWindow {
         // An explicit show settles a deferred first reveal: the window is
         // made opaque along with being ordered.
         let settle_reveal = self.take_pending_first_reveal();
-        let shown = route_on_owner(self.owner, self.owner_is_main, || {
+        self.order_front(settle_reveal)?;
+        self.enter_mode_when_shown();
+        Ok(())
+    }
+
+    /// Deminiaturize the window and order it front as the key window, made
+    /// opaque first when `settle_reveal`. A window that closes meanwhile (a
+    /// deminiaturize reaches the delegate) answers `Closed`.
+    fn order_front(&self, settle_reveal: bool) -> Result<(), ApplyError> {
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(ApplyError::Closed);
+        }
+        // SAFETY: self retains the native window, and a window is used on its
+        // owner thread only. Deminiaturizing and ordering do not toggle
+        // zoom/fullscreen.
+        unsafe {
+            if settle_reveal {
+                let _: () = msg_send![self.ns_window, setAlphaValue: 1.0f64];
+            }
+            let minimized: bool = msg_send![self.ns_window, isMiniaturized];
+            if minimized {
+                let _: () = msg_send![self.ns_window, deminiaturize: NIL];
+            }
             if self.closed.load(Ordering::SeqCst) {
                 return Err(ApplyError::Closed);
             }
-            // SAFETY: self retains the native window; routing establishes its
-            // owner lane. Deminiaturizing and ordering do not toggle zoom/fullscreen.
-            unsafe {
-                if settle_reveal {
-                    let _: () = msg_send![self.ns_window, setAlphaValue: 1.0f64];
-                }
-                let minimized: bool = msg_send![self.ns_window, isMiniaturized];
-                if minimized {
-                    let _: () = msg_send![self.ns_window, deminiaturize: NIL];
-                }
-                if self.closed.load(Ordering::SeqCst) {
-                    return Err(ApplyError::Closed);
-                }
-                let _: () = msg_send![self.ns_window, makeKeyAndOrderFront: NIL];
-            }
-            if self.closed.load(Ordering::SeqCst) {
-                Err(ApplyError::Closed)
-            } else {
-                Ok(())
-            }
-        });
-        if shown.is_ok() {
-            self.enter_mode_when_shown();
+            let _: () = msg_send![self.ns_window, makeKeyAndOrderFront: NIL];
         }
-        shown
+        if self.closed.load(Ordering::SeqCst) {
+            Err(ApplyError::Closed)
+        } else {
+            Ok(())
+        }
     }
 
     fn activate_window(&self) {
         let settle_reveal = self.take_pending_first_reveal();
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
-            // body runs on the owner thread — inline on the OS main thread for a main-lane
-            // owner, or dispatched onto the lane under the reentrancy guard — before the
-            // message is sent.
+        // SAFETY: `ns_window` is alive for the lifetime of `self`, and a
+        // window is used on its owner thread only.
+        unsafe {
             if settle_reveal {
                 let _: () = msg_send![self.ns_window, setAlphaValue: 1.0f64];
             }
             let _: () = msg_send![self.ns_window, makeKeyAndOrderFront: NIL];
-        });
+        }
         self.enter_mode_when_shown();
     }
 
@@ -1570,198 +1530,53 @@ impl MacOSWindow {
         // by every route through this window's own `close`, and is where
         // `closed` is actually set.
         //
-        // The routed programmatic close does not change close-request callback
-        // delivery: the should-close consultation round-trips through AppKit's
-        // `windowShouldClose:` delegate (delivered on main), which vetoes a
-        // wrong-thread delivery before invoking the handler.
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
-            // body runs on the owner thread — inline on the OS main thread for a main-lane
-            // owner, or dispatched onto the lane under the reentrancy guard — before the
-            // message is sent.
-            let _: () = msg_send![self.ns_window, close];
-        });
-    }
-}
-
-// Implement raw-window-handle for wgpu integration
-impl HasWindowHandle for MacOSWindow {
-    fn window_handle(
-        &self,
-    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
-        use std::ptr::NonNull;
-
-        // Refuse once the window has closed (see `handle_close`'s own doc
-        // for when `closed` is set). With `setReleasedWhenClosed: NO` set
-        // at construction, `-[NSWindow close]` no longer deallocates
-        // `ns_window`, so `contentView` below would otherwise keep
-        // answering long after the window is meaningless to hand a GPU
-        // handle for — a caller re-acquiring a handle from a retained
-        // `Arc<dyn PlatformWindow>` (issue #1043's recovery path) needs
-        // this flag, not a NIL check, to learn the window is gone.
-        if self.closed.load(Ordering::SeqCst) {
-            return Err(raw_window_handle::HandleError::Unavailable);
-        }
-
-        // raw-window-handle 0.6 AppKitWindowHandle expects the NSView, not
-        // the NSWindow: the FLUI view, which stays the surface view whatever
-        // the window's content view is.
-        let ns_view = NonNull::new(self.view.cast::<std::ffi::c_void>())
-            .ok_or(raw_window_handle::HandleError::Unavailable)?;
-        let handle = AppKitWindowHandle::new(ns_view);
-
-        // SAFETY: the handle is valid for the lifetime of `&self` (the view
-        // is retained by the window, which `self` keeps alive).
-        Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(RawWindowHandle::AppKit(handle)) })
-    }
-}
-
-impl HasDisplayHandle for MacOSWindow {
-    fn display_handle(
-        &self,
-    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
-        let handle = AppKitDisplayHandle::new();
-        // SAFETY: AppKit display handles carry no pointer; always valid.
-        Ok(unsafe {
-            raw_window_handle::DisplayHandle::borrow_raw(RawDisplayHandle::AppKit(handle))
-        })
-    }
-}
-
-impl Clone for MacOSWindow {
-    fn clone(&self) -> Self {
-        Self {
-            ns_window: self.ns_window,
-            view: self.view,
-            state: Arc::clone(&self.state),
-            windows_map: Arc::clone(&self.windows_map),
-            delivery: Arc::clone(&self.delivery),
-            closed: Arc::clone(&self.closed),
-            loop_control: self.loop_control.clone(),
-            config: self.config.clone(),
-            // The lane is a property of the window, not of any one handle:
-            // every clone of this wrapper routes through the same owner.
-            owner: self.owner,
-            owner_is_main: self.owner_is_main,
-            // The clone shares the same window, so it shares the same
-            // NSAccessibility bridge (one subclass per content view, never
-            // two) and the same text input, actuator and chrome.
-            facets: self.facets.clone(),
-            // A clone shares the window, so it arms the same platform pump —
-            // a redraw asked for through any handle must schedule the wake
-            // deadline's landing place, or a clone would be a way to redraw
-            // without the loop being able to come back.
-            wake_pump: self.wake_pump.clone(),
-            // A clone shares the window, so it names the same display.
-            displays: self.displays.clone(),
-            snapshot: Arc::clone(&self.snapshot),
-        }
-    }
-}
-
-/// An Objective-C object id owned by the drop-tail closure and only ever
-/// messaged ON its owner lane.
-struct OwnerLaneId(ObjcId);
-
-// SAFETY: `id` is `*mut Object`; a raw pointer is `!Send` because it generally
-// carries no ownership or thread guarantee. This use provides both. The wrapper
-// OWNS one outstanding retain (the window's balancing `release` is the ONLY
-// message ever sent through it), and it is consumed either ON the owner lane —
-// the object's home thread, where it was created — or dropped un-run, leaving
-// the object over-retained (a leak, never a use-after-free). No code outside
-// the owner lane ever dereferences it. This is the same ownership + affinity
-// justification the file already makes for `unsafe impl Send for MacOSWindow {}`,
-// scoped down to a single owned message.
-unsafe impl Send for OwnerLaneId {}
-
-impl OwnerLaneId {
-    /// Send the wrapper's one balancing `release` message. Consumes the
-    /// wrapper (so the caller's capture is the whole `OwnerLaneId`, a `Send`
-    /// value, rather than its raw field).
-    ///
-    /// # Safety
-    /// `self.0` must reference a live window that still holds this wrapper's
-    /// outstanding retain, and the send must execute ON the owner lane — the
-    /// object's home thread — under the lane guard.
-    unsafe fn send_release(self) {
-        // SAFETY: the fn-level safety contract — live window, outstanding
-        // retain, owner-lane call — is exactly the precondition `msg_send!`
-        // requires of its receiver.
+        // SAFETY: `ns_window` is alive for the lifetime of `self`, and a
+        // window is used on its owner thread only.
         unsafe {
-            let _: () = msg_send![self.0, release];
+            let _: () = msg_send![self.ns_window, close];
         }
     }
 }
 
 impl Drop for MacOSWindow {
     fn drop(&mut self) {
-        // Last-clone gate: ONLY the final `Arc` wrapper clone owns teardown.
-        // Every earlier clone drop returns with no work — and MUST: a live
-        // clone's accessibility bridge is still in service, and only one
-        // balancing `release` may ever be sent (an unconditional tail from
-        // every clone would over-dealloc a live window).
-        //
-        // The gate IS this proxy: `self.state`'s `Arc` is held 1:1 by wrapper
-        // clones — the ONLY clone site is `Clone for MacOSWindow` — so
-        // `strong_count(&self.state) == 1` holds exactly when this is the
-        // last wrapper clone. A future that clones the state `Arc`
-        // independently (not through the wrapper) would silently degrade
-        // teardown into a permanent leak — safe in direction, but silent; the
-        // invariant is documented here so the gate is understood as the proxy
-        // it is.
-        if Arc::strong_count(&self.state) != 1 {
-            return;
-        }
+        // A window is dropped where it lives: it is neither `Send` nor
+        // `Sync`, and is made on the AppKit main thread.
+        debug_assert!(
+            on_owner_thread(self.owner, self.owner_is_main),
+            "BUG: a macOS window is dropped on its owner thread"
+        );
         tracing::debug!("Closing NSWindow {:p}", self.ns_window);
 
-        // Rust-only clean-up, never routed (no AppKit contact, no lane).
-        let window_id = self.ns_window as u64;
-        let _prev = self.windows_map.lock().remove(&window_id);
+        // The window's surface targets and the features beside it outlive
+        // it; from here on they hand out nothing of a view the release below
+        // may free. A window that closed set this already.
+        self.closed.store(true, Ordering::SeqCst);
 
-        // On-owner teardown executes now, including after NSApplication.run
-        // returns. The close delegate pins its native receiver in the outer
-        // autorelease pool, so a final callback-local wrapper drop cannot
-        // deallocate the receiver under AppKit's close stack. Off-owner Drop
-        // remains nonblocking; an unserviced owner queue can still leak its
-        // retained native tail, never release AppKit objects on a worker.
-        let owner = self.owner;
-        let ns_window = OwnerLaneId(self.ns_window);
+        // The close delegate pins its native receiver in the outer autorelease
+        // pool, so a final callback-local wrapper drop cannot deallocate the
+        // receiver under AppKit's close stack.
+        //
+        // `detach()` runs before the release, preserving accesskit's
+        // documented precondition (unhook the dynamic subclass while the
+        // content view is still alive). A bridge failure must not skip the
+        // native window's balancing release, so each step is a cleanup
+        // boundary of its own.
         let a11y = Arc::clone(&self.facets.accessibility);
         let text = Arc::clone(&self.facets.text);
-        let teardown = move || unsafe {
-            // SAFETY: the tail runs on the owner thread, directly or under its
-            // queue guard, so
-            // the a11y unhook and the Window release both execute
-            // owner-affine. `detach()` runs before the release in the same
-            // block, preserving accesskit's documented precondition (unhook
-            // the dynamic subclass while the content view is still alive).
-            // A bridge failure must not skip the native window's balancing
-            // release. Keep it inside its own cleanup boundary.
-            crate::owner::apple::macos::run_cleanup_guarded(|| a11y.detach());
-            crate::owner::apple::macos::run_cleanup_guarded(|| text.detach());
-            // SAFETY: `send_release` consumes the whole `OwnerLaneId` (the
-            // closure's capture is then that `Send` newtype, never its raw
-            // field), and its own contract — live still-retained window, send
-            // on the owner lane — is met here: the wrapper was built from this
-            // value's `ns_window` before the last clone dropped, and this body
-            // runs on the owner thread.
-            ns_window.send_release();
-        };
-        if crate::owner::apple::macos::on_owner_thread(owner, self.owner_is_main) {
-            crate::owner::apple::macos::run_cleanup_guarded(teardown);
-        } else {
-            crate::owner::apple::macos::exec_async_guarded(owner, move || {
-                crate::owner::apple::macos::run_cleanup_guarded(teardown);
-            });
-        }
+        crate::owner::apple::macos::run_cleanup_guarded(|| a11y.detach());
+        crate::owner::apple::macos::run_cleanup_guarded(|| text.detach());
+        let ns_window = self.ns_window;
+        crate::owner::apple::macos::run_cleanup_guarded(|| {
+            // SAFETY: the wrapper owns the `alloc`/`init` +1 of `ns_window`
+            // (`releasedWhenClosed` is off), and this is the one balancing
+            // release, sent on the owner thread.
+            unsafe {
+                let _: () = msg_send![ns_window, release];
+            }
+        });
     }
 }
-
-// ============================================================================
-// Window routing tests — always-run wrapper pin + `#[ignore]`d site tests
-// ============================================================================
 
 impl MacOSWindow {
     /// The window's published state, read from AppKit again first when
@@ -1799,85 +1614,81 @@ impl MacOSWindow {
             )
         };
         let hovered = self.delivery.hovered();
-        route_on_owner(self.owner, self.owner_is_main, || {
-            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
-            // body runs on the owner thread — inline on the OS main thread for
-            // a main-lane owner, or dispatched onto the lane under the
-            // reentrancy guard — before the messages are sent. `title`
-            // returns an autoreleased NSString whose UTF8String buffer is
-            // copied before returning.
-            unsafe {
-                let frame: NSRect = msg_send![self.ns_window, frame];
-                let content: NSRect = msg_send![self.ns_window, contentRectForFrameRect: frame];
-                let flags = self.read_flags();
-                let on_screen: bool = msg_send![self.ns_window, isVisible];
-                let focused: bool = msg_send![self.ns_window, isKeyWindow];
-                let min: NSSize = msg_send![self.ns_window, contentMinSize];
-                let max: NSSize = msg_send![self.ns_window, contentMaxSize];
-                let ns_title: ObjcId = msg_send![self.ns_window, title];
-                let title = if ns_title == NIL {
+        // SAFETY: `ns_window` is alive for the lifetime of `self`, and a
+        // window is used on its owner thread only. `title` returns an
+        // autoreleased NSString whose UTF8String buffer is copied before
+        // returning.
+        unsafe {
+            let frame: NSRect = msg_send![self.ns_window, frame];
+            let content: NSRect = msg_send![self.ns_window, contentRectForFrameRect: frame];
+            let flags = self.read_flags();
+            let on_screen: bool = msg_send![self.ns_window, isVisible];
+            let focused: bool = msg_send![self.ns_window, isKeyWindow];
+            let min: NSSize = msg_send![self.ns_window, contentMinSize];
+            let max: NSSize = msg_send![self.ns_window, contentMaxSize];
+            let ns_title: ObjcId = msg_send![self.ns_window, title];
+            let title = if ns_title == NIL {
+                String::new()
+            } else {
+                let c_str: *const i8 = msg_send![ns_title, UTF8String];
+                if c_str.is_null() {
                     String::new()
                 } else {
-                    let c_str: *const i8 = msg_send![ns_title, UTF8String];
-                    if c_str.is_null() {
-                        String::new()
-                    } else {
-                        std::ffi::CStr::from_ptr(c_str)
-                            .to_string_lossy()
-                            .into_owned()
-                    }
-                };
-                let mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
-                let mode = mode_of(flags.mode_flags());
-                let position = primary_screen_height().and_then(|height| {
-                    top_left_of_frame(crate::owner::apple::macos::bounds_of(frame), height)
-                });
-                let state = WindowState::new(
-                    WindowGeometry::new(position, Size::new(frame.size.width, frame.size.height)),
-                    Size::new(content.size.width, content.size.height),
-                )
-                .with_mode(mode)
-                .with_normal_geometry(if mode == WindowMode::Normal {
-                    None
-                } else {
-                    normal
-                })
-                .with_visible(is_shown(on_screen, flags.miniaturized) && occlusion_visible)
-                .with_focused(focused)
-                .with_title(Some(title))
-                .with_resizable(flags.resizable)
-                .with_decorated(mask.contains(NSWindowStyleMask::Titled))
-                .with_constraints(constraints_of_content_limits(
-                    Size::new(min.width, min.height),
-                    Size::new(max.width, max.height),
-                ))
-                .with_display(display);
-                ReportedFacts {
-                    metrics: flui_foundation::geometry::WindowMetrics::from_logical(
-                        Size::new(content.size.width, content.size.height),
-                        scale,
-                    )
-                    .ok(),
-                    // The window's appearance, not NSApp's: a window may
-                    // override it.
-                    appearance: content_view::effective_appearance(
-                        (&*self.ns_window)
-                            .downcast_ref::<objc2_app_kit::NSWindow>()
-                            .expect("BUG: MacOSWindow wraps an NSWindow"),
-                    ),
-                    // A desktop window has no safe area and AppKit never
-                    // suspends one.
-                    safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
-                    execution: flui_platform::WindowExecutionState::Running,
-                    hovered,
-                    // The key window is the one this host reports active;
-                    // the main window has no report of its own here.
-                    active: focused,
-                    capabilities: capabilities_of(flags, window_capabilities(self.owner_is_main)),
+                    std::ffi::CStr::from_ptr(c_str)
+                        .to_string_lossy()
+                        .into_owned()
                 }
-                .onto(state)
+            };
+            let mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+            let mode = mode_of(flags.mode_flags());
+            let position = primary_screen_height().and_then(|height| {
+                top_left_of_frame(crate::owner::apple::macos::bounds_of(frame), height)
+            });
+            let state = WindowState::new(
+                WindowGeometry::new(position, Size::new(frame.size.width, frame.size.height)),
+                Size::new(content.size.width, content.size.height),
+            )
+            .with_mode(mode)
+            .with_normal_geometry(if mode == WindowMode::Normal {
+                None
+            } else {
+                normal
+            })
+            .with_visible(is_shown(on_screen, flags.miniaturized) && occlusion_visible)
+            .with_focused(focused)
+            .with_title(Some(title))
+            .with_resizable(flags.resizable)
+            .with_decorated(mask.contains(NSWindowStyleMask::Titled))
+            .with_constraints(constraints_of_content_limits(
+                Size::new(min.width, min.height),
+                Size::new(max.width, max.height),
+            ))
+            .with_display(display);
+            ReportedFacts {
+                metrics: flui_foundation::geometry::WindowMetrics::from_logical(
+                    Size::new(content.size.width, content.size.height),
+                    scale,
+                )
+                .ok(),
+                // The window's appearance, not NSApp's: a window may
+                // override it.
+                appearance: content_view::effective_appearance(
+                    (&*self.ns_window)
+                        .downcast_ref::<objc2_app_kit::NSWindow>()
+                        .expect("BUG: MacOSWindow wraps an NSWindow"),
+                ),
+                // A desktop window has no safe area and AppKit never
+                // suspends one.
+                safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
+                execution: flui_platform::WindowExecutionState::Running,
+                hovered,
+                // The key window is the one this host reports active;
+                // the main window has no report of its own here.
+                active: focused,
+                capabilities: capabilities_of(flags, window_capabilities(self.owner_is_main)),
             }
-        })
+            .onto(state)
+        }
     }
 
     /// What AppKit says about the window's mode, as flags.
@@ -1899,21 +1710,22 @@ impl MacOSWindow {
         }
     }
 
+    // Every body below messages `ns_window`, which is alive for the lifetime
+    // of `self`, on the window's owner thread: a window is used there only, as
+    // it is neither `Send` nor `Sync`.
+
     /// The window's outer rectangle now.
     fn outer_geometry(&self) -> WindowGeometry {
-        route_on_owner(self.owner, self.owner_is_main, || {
-            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
-            // body runs on the owner lane.
-            unsafe {
-                let frame: NSRect = msg_send![self.ns_window, frame];
-                WindowGeometry::new(
-                    primary_screen_height().and_then(|height| {
-                        top_left_of_frame(crate::owner::apple::macos::bounds_of(frame), height)
-                    }),
-                    Size::new(frame.size.width, frame.size.height),
-                )
-            }
-        })
+        // SAFETY: see the note above these bodies.
+        unsafe {
+            let frame: NSRect = msg_send![self.ns_window, frame];
+            WindowGeometry::new(
+                primary_screen_height().and_then(|height| {
+                    top_left_of_frame(crate::owner::apple::macos::bounds_of(frame), height)
+                }),
+                Size::new(frame.size.width, frame.size.height),
+            )
+        }
     }
 
     /// Remember the outer rectangle if the window is in normal mode: the
@@ -1931,133 +1743,110 @@ impl MacOSWindow {
         self.record_normal_if(|flags| !(flags.miniaturized || flags.is_maximized()));
     }
 
-    fn record_normal_if(&self, is_normal: impl FnOnce(WindowFlags) -> bool + Send) {
-        let in_normal_mode = route_on_owner(self.owner, self.owner_is_main, || {
-            // SAFETY: `ns_window` is alive; the body runs on the owner lane.
-            is_normal(unsafe { self.read_flags() })
-        });
-        if in_normal_mode {
+    fn record_normal_if(&self, is_normal: impl FnOnce(WindowFlags) -> bool) {
+        // SAFETY: see the note above these bodies.
+        if is_normal(unsafe { self.read_flags() }) {
             let outer = self.outer_geometry();
             self.state.lock().normal = Some(outer);
         }
     }
 
     fn set_native_title(&self, title: &str) {
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive; the NSString is created from a
-            // valid Rust string and ownership passes to the window; the body
-            // runs on the owner thread — inline on the OS main thread for a
-            // main-lane owner, or dispatched onto the lane under the reentrancy
-            // guard — before the message is sent.
+        // SAFETY: see the note above these bodies; the NSString is created
+        // from a valid Rust string and the window copies it.
+        unsafe {
             let ns_title = NSString::from_str(title);
             let _: () = msg_send![self.ns_window, setTitle: &*ns_title];
-        });
+        }
     }
 
     /// Move the window's outer top-left corner.
     fn set_native_position(&self, at: Point<f64>) -> Result<(), ApplyError> {
-        route_on_owner(self.owner, self.owner_is_main, || {
-            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
-            // body runs on the owner lane.
-            unsafe {
-                let height = primary_screen_height().ok_or_else(|| {
-                    ApplyError::failed("there is no screen to measure a position from".into())
-                })?;
-                let point = cocoa_top_left_point(at, height);
-                let _: () = msg_send![
-                    self.ns_window,
-                    setFrameTopLeftPoint: NSPoint::new(point.x, point.y)
-                ];
-                Ok(())
-            }
-        })
+        // SAFETY: see the note above these bodies.
+        unsafe {
+            let height = primary_screen_height().ok_or_else(|| {
+                ApplyError::failed("there is no screen to measure a position from".into())
+            })?;
+            let point = cocoa_top_left_point(at, height);
+            let _: () = msg_send![
+                self.ns_window,
+                setFrameTopLeftPoint: NSPoint::new(point.x, point.y)
+            ];
+        }
+        Ok(())
     }
 
     /// Resize the content area, not the frame: on decorated windows a
     /// frame-sized `setFrame:` would shrink the content by the title bar.
     fn set_content_size(&self, size: Size<f64>) {
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
-            // body runs on the owner thread — inline on the OS main thread for
-            // a main-lane owner, or dispatched onto the lane under the
-            // reentrancy guard — before the message is sent.
+        // SAFETY: see the note above these bodies.
+        unsafe {
             let ns_size = NSSize::new(size.width, size.height);
             let _: () = msg_send![self.ns_window, setContentSize: ns_size];
-        });
+        }
     }
 
     fn set_native_constraints(&self, constraints: SizeConstraints) {
         let (min, max) = content_limits_of_constraints(constraints);
-        route_on_owner(self.owner, self.owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
-            // body runs on the owner lane.
+        // SAFETY: see the note above these bodies.
+        unsafe {
             let _: () =
                 msg_send![self.ns_window, setContentMinSize: NSSize::new(min.width, min.height)];
             let _: () =
                 msg_send![self.ns_window, setContentMaxSize: NSSize::new(max.width, max.height)];
-        });
+        }
     }
 
     /// Switch one style-mask bit (resizable, titled) on or off, keeping the
     /// content area where it is: removing the title bar shrinks the frame, not
     /// the content.
     fn set_style_bit(&self, bit: NSWindowStyleMask, on: bool) -> Result<(), ApplyError> {
-        route_on_owner(self.owner, self.owner_is_main, || {
-            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
-            // body runs on the owner lane.
-            unsafe {
-                let mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
-                if mask.contains(NSWindowStyleMask::FullScreen) {
-                    return Err(ApplyError::failed(
-                        "AppKit does not restyle a window while it is full screen".into(),
-                    ));
-                }
-                // A window that is no longer resizable reports a zoomed frame
-                // as normal and cannot be un-zoomed by the user, so it is
-                // restyled only from the mode it can be asked to return to.
-                let flags = self.read_flags();
-                if bit == NSWindowStyleMask::Resizable
-                    && !on
-                    && mode_of(flags.mode_flags()) != WindowMode::Normal
-                {
-                    return Err(ApplyError::failed(
-                        "a window is made fixed-size only in normal mode".into(),
-                    ));
-                }
-                let wanted = if on { mask | bit } else { mask - bit };
-                if wanted == mask {
-                    return Ok(());
-                }
-                let frame: NSRect = msg_send![self.ns_window, frame];
-                let content: NSRect = msg_send![self.ns_window, contentRectForFrameRect: frame];
-                let _: () = msg_send![self.ns_window, setStyleMask: wanted];
-                let restyled: NSRect = msg_send![self.ns_window, frameRectForContentRect: content];
-                let _: () = msg_send![self.ns_window, setFrame: restyled, display: YES];
-                Ok(())
+        // SAFETY: see the note above these bodies.
+        unsafe {
+            let mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+            if mask.contains(NSWindowStyleMask::FullScreen) {
+                return Err(ApplyError::failed(
+                    "AppKit does not restyle a window while it is full screen".into(),
+                ));
             }
-        })
+            // A window that is no longer resizable reports a zoomed frame as
+            // normal and cannot be un-zoomed by the user, so it is restyled
+            // only from the mode it can be asked to return to.
+            let flags = self.read_flags();
+            if bit == NSWindowStyleMask::Resizable
+                && !on
+                && mode_of(flags.mode_flags()) != WindowMode::Normal
+            {
+                return Err(ApplyError::failed(
+                    "a window is made fixed-size only in normal mode".into(),
+                ));
+            }
+            let wanted = if on { mask | bit } else { mask - bit };
+            if wanted == mask {
+                return Ok(());
+            }
+            let frame: NSRect = msg_send![self.ns_window, frame];
+            let content: NSRect = msg_send![self.ns_window, contentRectForFrameRect: frame];
+            let _: () = msg_send![self.ns_window, setStyleMask: wanted];
+            let restyled: NSRect = msg_send![self.ns_window, frameRectForContentRect: content];
+            let _: () = msg_send![self.ns_window, setFrame: restyled, display: YES];
+        }
+        Ok(())
     }
 
     /// Order the window out. A full-screen window is refused: ordering it out
     /// leaves its empty Space behind.
     fn hide(&self) -> Result<(), ApplyError> {
-        route_on_owner(self.owner, self.owner_is_main, || {
-            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
-            // body runs on the owner lane.
-            unsafe {
-                if self.read_flags().fullscreen {
-                    return Err(ApplyError::failed(
-                        "a full-screen window leaves full screen before it is hidden".into(),
-                    ));
-                }
-                let _: () = msg_send![self.ns_window, orderOut: NIL];
-                Ok(())
+        // SAFETY: see the note above these bodies.
+        unsafe {
+            if self.read_flags().fullscreen {
+                return Err(ApplyError::failed(
+                    "a full-screen window leaves full screen before it is hidden".into(),
+                ));
             }
-        })
+            let _: () = msg_send![self.ns_window, orderOut: NIL];
+        }
+        Ok(())
     }
 
     /// Take the window to `mode` from whichever mode it is in. AppKit's zoom
@@ -2071,10 +1860,8 @@ impl MacOSWindow {
     /// wins, and it also replaces the mode a hidden window was to enter when
     /// first shown.
     fn change_mode(&self, mode: WindowMode) -> Result<(), ApplyError> {
-        let flags = route_on_owner(self.owner, self.owner_is_main, || {
-            // SAFETY: `ns_window` is alive; the body runs on the owner lane.
-            unsafe { self.read_flags() }
-        });
+        // SAFETY: see the note above these bodies.
+        let flags = unsafe { self.read_flags() };
         if !flags.resizable && matches!(mode, WindowMode::Maximized | WindowMode::Fullscreen) {
             return Err(ApplyError::failed(
                 "AppKit does not zoom or full-screen a window that cannot be resized".into(),
@@ -2088,28 +1875,26 @@ impl MacOSWindow {
         if !steps.is_empty() {
             self.record_normal();
         }
-        route_on_owner(self.owner, self.owner_is_main, || {
-            for step in &steps {
-                // SAFETY: `ns_window` is alive; the body runs on the owner
-                // lane. Each message is the AppKit request the step names.
-                unsafe {
-                    match step {
-                        ModeStep::Deminiaturize => {
-                            let _: () = msg_send![self.ns_window, deminiaturize: NIL];
-                        }
-                        ModeStep::Miniaturize => {
-                            let _: () = msg_send![self.ns_window, miniaturize: NIL];
-                        }
-                        ModeStep::Zoom | ModeStep::Unzoom => {
-                            let _: () = msg_send![self.ns_window, zoom: NIL];
-                        }
-                        ModeStep::EnterFullscreen | ModeStep::ExitFullscreen => {
-                            let _: () = msg_send![self.ns_window, toggleFullScreen: NIL];
-                        }
+        for step in &steps {
+            // SAFETY: see the note above these bodies. Each message is the
+            // AppKit request the step names.
+            unsafe {
+                match step {
+                    ModeStep::Deminiaturize => {
+                        let _: () = msg_send![self.ns_window, deminiaturize: NIL];
+                    }
+                    ModeStep::Miniaturize => {
+                        let _: () = msg_send![self.ns_window, miniaturize: NIL];
+                    }
+                    ModeStep::Zoom | ModeStep::Unzoom => {
+                        let _: () = msg_send![self.ns_window, zoom: NIL];
+                    }
+                    ModeStep::EnterFullscreen | ModeStep::ExitFullscreen => {
+                        let _: () = msg_send![self.ns_window, toggleFullScreen: NIL];
                     }
                 }
             }
-        });
+        }
         Ok(())
     }
 

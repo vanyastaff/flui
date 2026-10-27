@@ -102,7 +102,7 @@ struct Rig {
     effects: Effects,
     window: PresentationDispatcher,
     controller: flui_animation::DrivenController,
-    _native_window: Arc<dyn flui_platform::PlatformWindow>,
+    _native_window: Rc<dyn flui_platform::PlatformWindow>,
 }
 
 impl Rig {
@@ -116,7 +116,7 @@ impl Rig {
         let clock = ManualClock::new();
         let window = crate::owner_publication::window();
         // A native host owns the window; the runtime holds it weakly.
-        let native_window = Arc::clone(window.window());
+        let native_window = Rc::clone(window.window());
         let runtime = UiRuntime::new(
             window,
             1.0,

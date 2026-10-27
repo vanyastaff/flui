@@ -10,7 +10,7 @@ use std::sync::atomic::Ordering;
 use flui_foundation::geometry::Point;
 use objc2::msg_send;
 
-use super::{BObjC, MacOSWindow, NIL, NO, YES, route_on_owner};
+use super::{BObjC, MacOSWindow, NIL, NO, YES};
 use crate::host_window::HostWindow;
 
 // ============================================================================
@@ -62,7 +62,8 @@ impl MacOSWindowExt for dyn HostWindow + '_ {
 }
 
 /// What an AppKit window offers beyond the window contract. Every command
-/// runs on the window's owner lane, wherever it is called from.
+/// runs on the window's owner thread, the AppKit main thread: the only thread
+/// that holds the window.
 /// [`MacOSWindowExt::appkit`] gives one only for an AppKit window, so none of
 /// these can meet another host's window.
 #[derive(Debug, Clone, Copy)]
@@ -211,38 +212,28 @@ impl AppKitWindow<'_> {
     /// Let AppKit group this window with others into tabs (macOS 10.12+).
     pub fn enable_tabbing(self) {
         let this = self.0;
-        route_on_owner(this.owner, this.owner_is_main, || unsafe {
+        unsafe {
             // SAFETY: `ns_window` is alive for the lifetime of `self` (which
-            // `this` reborrows), and the body runs on the owner thread — inline on
-            // the OS main thread for a main-lane owner, or dispatched onto the
-            // lane under the reentrancy guard — before the message is sent.
-            // Capturing `this` (a `&MacOSWindow`)
-            // rather than the raw-pointer field is what keeps the closure
-            // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
+            // `this` reborrows), and a window is used on its owner thread only.
             // Enable automatic tabbing (macOS 10.12+)
             let tabbing_mode: isize = 1; // NSWindowTabbingModeAutomatic
             let _: () = msg_send![this.ns_window, setTabbingMode: tabbing_mode];
 
             tracing::debug!("Window tabbing enabled");
-        });
+        }
     }
 
     /// Keep AppKit from grouping this window into tabs.
     pub fn disable_tabbing(self) {
         let this = self.0;
-        route_on_owner(this.owner, this.owner_is_main, || unsafe {
+        unsafe {
             // SAFETY: `ns_window` is alive for the lifetime of `self` (which
-            // `this` reborrows), and the body runs on the owner thread — inline on
-            // the OS main thread for a main-lane owner, or dispatched onto the
-            // lane under the reentrancy guard — before the message is sent.
-            // Capturing `this` (a `&MacOSWindow`)
-            // rather than the raw-pointer field is what keeps the closure
-            // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
+            // `this` reborrows), and a window is used on its owner thread only.
             let tabbing_mode: isize = 2; // NSWindowTabbingModeDisallowed
             let _: () = msg_send![this.ns_window, setTabbingMode: tabbing_mode];
 
             tracing::debug!("Window tabbing disabled");
-        });
+        }
     }
 
     /// Add `other` to this window's tab group.
@@ -284,10 +275,10 @@ impl AppKitWindow<'_> {
         if !this.owner_is_main || !other.owner_is_main || !std::ptr::eq(this.owner, other.owner) {
             return Err(TabJoinError::NotOnTheMainLane);
         }
-        route_on_owner(this.owner, this.owner_is_main, || unsafe {
+        unsafe {
             // SAFETY: both borrowed wrappers own live NSWindows, constructed
             // with releasedWhenClosed:NO. The checks above establish one main
-            // owner lane; this route executes there. Extra retains keep both
+            // owner lane, the thread both live on. Extra retains keep both
             // receivers alive through synchronous AppKit callback reentry.
             if this.closed.load(Ordering::Acquire) || other.closed.load(Ordering::Acquire) {
                 return Err(TabJoinError::Closed);
@@ -300,41 +291,31 @@ impl AppKitWindow<'_> {
             };
             let _: () = msg_send![this.ns_window, addTabbedWindow:other.ns_window ordered:0]; // NSWindowAbove
             Ok(())
-        })
+        }
     }
 
     /// Toggle native fullscreen, with AppKit's animation and a Space of its
     /// own (macOS 10.7+).
     pub fn toggle_native_fullscreen(self) {
         let this = self.0;
-        route_on_owner(this.owner, this.owner_is_main, || unsafe {
+        unsafe {
             // SAFETY: `ns_window` is alive for the lifetime of `self` (which
-            // `this` reborrows), and the body runs on the owner thread — inline on
-            // the OS main thread for a main-lane owner, or dispatched onto the
-            // lane under the reentrancy guard — before the message is sent.
-            // Capturing `this` (a `&MacOSWindow`)
-            // rather than the raw-pointer field is what keeps the closure
-            // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
+            // `this` reborrows), and a window is used on its owner thread only.
             let _: () = msg_send![this.ns_window, toggleFullScreen: NIL];
             tracing::debug!("Toggled native fullscreen");
-        });
+        }
     }
 
     /// Set the window's level (its z-ordering).
     pub fn set_window_level(self, level: MacOSWindowLevel) {
         let this = self.0;
-        route_on_owner(this.owner, this.owner_is_main, || unsafe {
+        unsafe {
             // SAFETY: `ns_window` is alive for the lifetime of `self` (which
-            // `this` reborrows), and the body runs on the owner thread — inline on
-            // the OS main thread for a main-lane owner, or dispatched onto the
-            // lane under the reentrancy guard — before the message is sent.
-            // Capturing `this` (a `&MacOSWindow`)
-            // rather than the raw-pointer field is what keeps the closure
-            // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
+            // `this` reborrows), and a window is used on its owner thread only.
             let level_value = level.to_ns_value();
             let _: () = msg_send![this.ns_window, setLevel: level_value];
             tracing::debug!("Set window level to {:?} ({})", level, level_value);
-        });
+        }
     }
 
     /// The window's level; a level AppKit reports that no
@@ -342,11 +323,9 @@ impl AppKitWindow<'_> {
     #[must_use]
     pub fn window_level(self) -> MacOSWindowLevel {
         let this = self.0;
-        route_on_owner(this.owner, this.owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
-            // body runs on the owner thread — inline on the OS main thread for a main-lane
-            // owner, or dispatched onto the lane under the reentrancy guard — before the
-            // message is sent.
+        unsafe {
+            // SAFETY: `ns_window` is alive for the lifetime of `self`, and a
+            // window is used on its owner thread only.
             let level_value: isize = msg_send![this.ns_window, level];
             match level_value {
                 0 => MacOSWindowLevel::Normal,
@@ -359,58 +338,43 @@ impl AppKitWindow<'_> {
                 _ if level_value == isize::MAX - 1 => MacOSWindowLevel::FloatingPanel,
                 _ => MacOSWindowLevel::Normal, // Default to normal for unknown values
             }
-        })
+        }
     }
 
     /// Set how the window behaves with Spaces, Exposé and fullscreen.
     pub fn set_collection_behavior(self, behavior: MacOSCollectionBehavior) {
         let this = self.0;
-        route_on_owner(this.owner, this.owner_is_main, || unsafe {
+        unsafe {
             // SAFETY: `ns_window` is alive for the lifetime of `self` (which
-            // `this` reborrows), and the body runs on the owner thread — inline on
-            // the OS main thread for a main-lane owner, or dispatched onto the
-            // lane under the reentrancy guard — before the message is sent.
-            // Capturing `this` (a `&MacOSWindow`)
-            // rather than the raw-pointer field is what keeps the closure
-            // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
+            // `this` reborrows), and a window is used on its owner thread only.
             let _: () = msg_send![this.ns_window, setCollectionBehavior: behavior.bits() as usize];
             tracing::debug!("Set collection behavior: {:?}", behavior);
-        });
+        }
     }
 
     /// Give the window a shadow, or take it away.
     pub fn set_has_shadow(self, has_shadow: bool) {
         let this = self.0;
-        route_on_owner(this.owner, this.owner_is_main, || unsafe {
+        unsafe {
             // SAFETY: `ns_window` is alive for the lifetime of `self` (which
-            // `this` reborrows), and the body runs on the owner thread — inline on
-            // the OS main thread for a main-lane owner, or dispatched onto the
-            // lane under the reentrancy guard — before the message is sent.
-            // Capturing `this` (a `&MacOSWindow`)
-            // rather than the raw-pointer field is what keeps the closure
-            // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
+            // `this` reborrows), and a window is used on its owner thread only.
             let value: BObjC = if has_shadow { YES } else { NO };
             let _: () = msg_send![this.ns_window, setHasShadow: value];
             tracing::debug!("Set window shadow: {}", has_shadow);
-        });
+        }
     }
 
     /// Set the window's alpha, from 0.0 (transparent) to 1.0 (opaque); a
     /// value outside is clamped.
     pub fn set_alpha(self, alpha: f64) {
         let this = self.0;
-        route_on_owner(this.owner, this.owner_is_main, || unsafe {
+        unsafe {
             // SAFETY: `ns_window` is alive for the lifetime of `self` (which
-            // `this` reborrows), and the body runs on the owner thread — inline on
-            // the OS main thread for a main-lane owner, or dispatched onto the
-            // lane under the reentrancy guard — before the message is sent.
-            // Capturing `this` (a `&MacOSWindow`)
-            // rather than the raw-pointer field is what keeps the closure
-            // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
+            // `this` reborrows), and a window is used on its owner thread only.
             let clamped_alpha = alpha.clamp(0.0, 1.0);
             let _: () = msg_send![this.ns_window, setAlphaValue: clamped_alpha];
             tracing::debug!("Set window alpha: {}", clamped_alpha);
-        });
+        }
     }
 
     /// The window's backing scale factor (2.0 on a Retina display).

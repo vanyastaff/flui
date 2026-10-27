@@ -34,7 +34,7 @@ type Log = Arc<Mutex<Vec<String>>>;
 
 struct Fixture {
     // Field order: the window closes before its platform goes.
-    window: Arc<dyn HostWindow>,
+    window: Rc<dyn HostWindow>,
     handler: Rc<RecordingWindowHandler>,
     _platform: WindowsPlatform,
     hwnd: HWND,

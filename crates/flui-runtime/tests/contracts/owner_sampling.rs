@@ -207,7 +207,7 @@ fn scheduling_observation_case(scope: ObservationScope) {
 
 /// A runtime's native window and the handler it delivers to.
 struct ManualWindow {
-    _native: Arc<dyn flui_platform::PlatformWindow>,
+    _native: Rc<dyn flui_platform::PlatformWindow>,
     handler: Rc<flui_testing::window_handler::RecordingWindowHandler>,
 }
 
@@ -216,7 +216,7 @@ fn manual_runtime(clock: ManualClock) -> (UiRuntime, ManualWindow) {
     let window = crate::owner_publication::window_with(Rc::clone(&handler));
     // A native host owns the window; the runtime intentionally holds it weakly.
     let native_window = ManualWindow {
-        _native: Arc::clone(window.window()),
+        _native: Rc::clone(window.window()),
         handler,
     };
     let runtime = UiRuntime::new(

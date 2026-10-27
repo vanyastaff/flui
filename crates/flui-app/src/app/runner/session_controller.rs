@@ -6,7 +6,11 @@ use crate::app::hot_reload::WorkerWatcherGuard;
 use flui_native::HostWindow;
 use flui_native::WindowInstallation;
 use flui_runtime::dev_agent::DevAgentAttachment;
-use std::{collections::HashMap, hash::Hash, sync::Arc};
+use std::{
+    collections::HashMap,
+    hash::Hash,
+    rc::{Rc, Weak},
+};
 
 pub(super) fn contain(body: impl FnOnce()) {
     if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
@@ -14,17 +18,17 @@ pub(super) fn contain(body: impl FnOnce()) {
     }
 }
 
-type SessionInstaller = Box<dyn FnMut(Arc<dyn HostWindow>) -> anyhow::Result<Installation>>;
+type SessionInstaller = Box<dyn FnMut(Rc<dyn HostWindow>) -> anyhow::Result<Installation>>;
 
 enum SessionState {
     Installing {
         receipt: Installation,
         acknowledgement: WindowInstallation,
-        window: Arc<dyn HostWindow>,
+        window: Rc<dyn HostWindow>,
     },
     Ready {
         dispatcher: PresentationDispatcher,
-        window: std::sync::Weak<dyn HostWindow>,
+        window: Weak<dyn HostWindow>,
     },
 }
 
@@ -61,7 +65,7 @@ pub(in crate::app) struct SessionController<K: Eq + Hash> {
 }
 impl<K: Eq + Hash + Clone> SessionController<K> {
     pub(super) fn new(
-        installer: impl FnMut(Arc<dyn HostWindow>) -> anyhow::Result<Installation> + 'static,
+        installer: impl FnMut(Rc<dyn HostWindow>) -> anyhow::Result<Installation> + 'static,
         watcher: Option<WorkerWatcherGuard>,
         agent: Option<DevAgentAttachment>,
     ) -> Self {
@@ -76,7 +80,7 @@ impl<K: Eq + Hash + Clone> SessionController<K> {
     pub(super) fn connect(
         &mut self,
         key: K,
-        window: Arc<dyn HostWindow>,
+        window: Rc<dyn HostWindow>,
         reconnect: bool,
         acknowledgement: WindowInstallation,
     ) -> anyhow::Result<Option<PresentationDispatcher>> {
@@ -86,7 +90,7 @@ impl<K: Eq + Hash + Clone> SessionController<K> {
                     dispatcher,
                     window: retained,
                 } => {
-                    if !std::sync::Weak::ptr_eq(retained, &Arc::downgrade(&window)) {
+                    if !Weak::ptr_eq(retained, &Rc::downgrade(&window)) {
                         anyhow::bail!("session reconnect changed its logical window");
                     }
                     let dispatcher = *dispatcher;
@@ -106,7 +110,7 @@ impl<K: Eq + Hash + Clone> SessionController<K> {
                     window: retained,
                     ..
                 } => {
-                    if !Arc::ptr_eq(retained, &window) {
+                    if !Rc::ptr_eq(retained, &window) {
                         anyhow::bail!("pending session reconnect changed its logical window");
                     }
                     let previous = std::mem::replace(previous, acknowledgement);
@@ -123,7 +127,7 @@ impl<K: Eq + Hash + Clone> SessionController<K> {
             (self
                 .installer
                 .as_mut()
-                .expect("BUG: live controller owns installer"))(Arc::clone(&window))?;
+                .expect("BUG: live controller owns installer"))(Rc::clone(&window))?;
         if let Some(Err(error)) = receipt.outcome() {
             contain(|| {
                 super::discard_window(window.as_ref(), "a failed session installation");
@@ -184,7 +188,7 @@ impl<K: Eq + Hash + Clone> SessionController<K> {
                     key,
                     SessionState::Ready {
                         dispatcher,
-                        window: Arc::downgrade(&window),
+                        window: Rc::downgrade(&window),
                     },
                 );
                 acknowledge(acknowledgement);
@@ -251,6 +255,7 @@ mod tests {
     use std::{
         cell::{Cell, RefCell},
         rc::Rc,
+        sync::Arc,
     };
 
     #[derive(Clone)]
@@ -352,7 +357,7 @@ mod tests {
                 let _ = ui_runtime.draw_frame(flui_rendering::constraints::BoxConstraints::tight(
                     flui_foundation::geometry::Size::new(80.0, 80.0),
                 ));
-                let window: Arc<dyn flui_platform::PlatformWindow> = window;
+                let window: Rc<dyn flui_platform::PlatformWindow> = window;
                 Ok(prepare_ui_runtime_alongside(ui_runtime, window).submit())
             },
             None,
@@ -382,7 +387,7 @@ mod tests {
             let reconnected = controller
                 .connect(
                     "first",
-                    Arc::clone(&first),
+                    Rc::clone(&first),
                     native_acknowledged,
                     acknowledgement(),
                 )
@@ -464,7 +469,7 @@ mod tests {
         let _clear = super::super::host::OwnerHostClearGuard::arm();
         Box::new(flui_native::HeadlessPlatform::new()).run(Box::new(move |owner| {
             let window = owner.open_routed(flui_platform::WindowOptions::default())?.try_ready()?;
-            let retained_window = Arc::clone(&window);
+            let retained_window = Rc::clone(&window);
             let outer = install_platform_ui_runtime(crate::app::ui_runtime::UiRuntime::for_test(), &crate::app::window_test_support::headless_test_window());
             let address = Rc::new(Cell::new(None));
             let admitted = Rc::clone(&address);
@@ -520,7 +525,7 @@ mod tests {
                         let mut controller = installing.borrow_mut();
                         assert!(
                             controller
-                                .connect("scene", Arc::clone(&window), false, initial)
+                                .connect("scene", Rc::clone(&window), false, initial)
                                 .expect("admitted")
                                 .is_none()
                         );

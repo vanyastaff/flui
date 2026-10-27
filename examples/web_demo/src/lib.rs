@@ -6,7 +6,6 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::{Arc, Weak};
 
 use wasm_bindgen::prelude::*;
 
@@ -22,7 +21,9 @@ use flui_platform::{
 #[derive(Default)]
 struct ConsoleLog {
     /// The window, to read its snapshot when it changes; set once it opened.
-    window: RefCell<Option<Weak<dyn HostWindow>>>,
+    /// The handler keeps it for the page: a window is its owner thread's, and
+    /// the page is the owner. It lets go when the window closes.
+    window: RefCell<Option<Rc<dyn HostWindow>>>,
     /// The drawable size logged last.
     logged: Cell<Option<WindowMetrics>>,
 }
@@ -77,7 +78,7 @@ impl WindowHandler for ConsoleLog {
     }
 
     fn state_changed(&self) {
-        let window = self.window.borrow().as_ref().and_then(Weak::upgrade);
+        let window = self.window.borrow().clone();
         let Some(window) = window else {
             return;
         };
@@ -106,6 +107,7 @@ impl WindowHandler for ConsoleLog {
 
     fn closed(&self) {
         log("Window closed");
+        let _window = self.window.borrow_mut().take();
     }
 
     // Nothing renders into the canvas's surface.
@@ -134,7 +136,7 @@ pub fn start() {
     let window = platform
         .open_window(options, handler.clone())
         .expect("Failed to create canvas");
-    *handler.window.borrow_mut() = Some(Arc::downgrade(&window));
+    *handler.window.borrow_mut() = Some(Rc::clone(&window));
 
     let opened = window.state();
     handler.logged.set(opened.metrics);
@@ -147,17 +149,10 @@ pub fn start() {
 
     log("FLUI Web Demo ready! Try clicking and typing on the canvas.");
 
+    // On the web `run` returns as soon as its callback has, while the page
+    // keeps running: the window's handler keeps the window until it closes.
+    drop(window);
     platform
-        .run(Box::new(move |owner| {
-            // On the web `run` returns as soon as this callback has, while the
-            // page keeps running. The platform keeps its quit handler until it
-            // quits, so the handler owns the window: dropping the window
-            // retires the canvas, and with it the window's handler.
-            let mut window = Some(window);
-            owner
-                .shared()
-                .on_quit(Box::new(move || drop(window.take())));
-            Ok(())
-        }))
+        .run(Box::new(|_owner| Ok(())))
         .expect("platform event loop exited with an error");
 }

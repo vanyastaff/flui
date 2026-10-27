@@ -2,8 +2,8 @@
 //! process, and the handlers of what the delegate reports (resize, move,
 //! focus, occlusion, close, backing scale and screen changes).
 
+use std::rc::{Rc, Weak};
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Weak};
 
 use flui_foundation::geometry::{Point, Size};
 use flui_platform::DisplayId;
@@ -40,7 +40,9 @@ pub(super) unsafe fn display_of_screen(
 pub(super) fn create_window_delegate(window: Weak<MacOSWindow>) -> ObjcId {
     // SAFETY: the delegate class is registered before alloc/init; the boxed
     // Weak pointer stored in the ivar is reclaimed in the delegate's
-    // `dealloc`, so it lives exactly as long as the delegate.
+    // `dealloc`, so it lives exactly as long as the delegate. AppKit sends
+    // the delegate's methods, `dealloc` among them, on the main thread, where
+    // the window and its reference counts live.
     unsafe {
         // Get or create delegate class
         let class = get_or_create_delegate_class();
@@ -135,9 +137,10 @@ fn get_or_create_delegate_class() -> &'static Class {
         }
 
         // The delegate callbacks below share one invariant: they run on the
-        // main thread, on a live `FLUIWindowDelegate` whose `window_ptr` ivar
-        // holds the `Box<Weak<MacOSWindow>>` that `create_window_delegate`
-        // stored, which is what `get_window_from_delegate` requires.
+        // main thread, where the window lives, on a live `FLUIWindowDelegate`
+        // whose `window_ptr` ivar holds the `Box<Weak<MacOSWindow>>` that
+        // `create_window_delegate` stored, which is what
+        // `get_window_from_delegate` requires.
 
         // windowWillMiniaturize: comes before the window leaves normal mode,
         // while its frame is still the one it returns to.
@@ -460,8 +463,10 @@ fn get_or_create_delegate_class() -> &'static Class {
 /// # Safety
 ///
 /// `delegate` must be a live FLUIWindowDelegate whose `window_ptr` ivar is
-/// either null or points to a `Weak<MacOSWindow>` owned by that delegate.
-unsafe fn get_window_from_delegate(delegate: &Object) -> Option<Arc<MacOSWindow>> {
+/// either null or points to a `Weak<MacOSWindow>` owned by that delegate, and
+/// the call must run on the main thread, where the window and its reference
+/// counts live.
+unsafe fn get_window_from_delegate(delegate: &Object) -> Option<Rc<MacOSWindow>> {
     // SAFETY: per the function contract the ivar is null or a valid
     // Box<Weak<MacOSWindow>> pointer owned by the delegate.
     unsafe {
@@ -495,12 +500,16 @@ impl MacOSWindow {
     /// `windowDidExitFullScreen:` returns, so inside it a window that went full
     /// screen zoomed still reads as unzoomed, and a held `Normal` would plan no
     /// un-zoom and leave it maximized. It is also taken after the publish,
-    /// since a subscriber that runs in it may command a newer one.
-    fn handle_transition_ended(&self) {
+    /// since a subscriber that runs in it may command a newer one. A window
+    /// dropped before that turn has no mode left to take.
+    fn handle_transition_ended(self: &Rc<Self>) {
         self.state.lock().sequence.step_ended();
         self.publish_state();
-        let window = self.clone();
+        let window = crate::owner::slot::OwnerWeak::new(self);
         crate::owner::apple::macos::exec_async_guarded(self.owner, move || {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
             let held = window.state.lock().sequence.take_held();
             if let Some(mode) = held
                 && let Err(error) = window.change_mode(mode)
@@ -592,8 +601,8 @@ impl MacOSWindow {
     /// Returns true to allow close, false to prevent. Asked behind a running
     /// handler method (a `performClose:` sent from inside `input`), the
     /// window is kept for now and closed later if the handler grants it.
-    fn handle_close_request(self: &Arc<Self>) -> bool {
-        let window = Arc::downgrade(self);
+    fn handle_close_request(self: &Rc<Self>) -> bool {
+        let window = crate::owner::slot::OwnerWeak::new(self);
         let decision = self.delivery.dispatch_close_request(move || {
             if let Some(window) = window.upgrade() {
                 window.close_window();
@@ -619,12 +628,11 @@ impl MacOSWindow {
         }
 
         // Untrack from the platform's window map here, on the owner thread the
-        // delegate notification runs on, rather than from `Drop` — `Drop` is the
-        // only other removal site and is unreachable while the map itself pins a
-        // wrapper clone (issue #1147). Removing the entry lets the wrapper reach
-        // `Drop`'s last-clone gate (and so the NSWindow release + a11y teardown
-        // tail) as soon as the application drops its final external handle;
-        // without it, every closed window stays pinned for the process lifetime.
+        // delegate notification runs on: the map holds the window strongly, so
+        // removing the entry lets the window drop (and so release its NSWindow
+        // and detach its bridge) as soon as the application drops its last
+        // handle; without it, every closed window stays pinned for the process
+        // lifetime.
         //
         // Removal precedes `dispatch_close()` so the closing window is already
         // untracked when user close callbacks run. Unlike the repo's winit
@@ -632,29 +640,28 @@ impl MacOSWindow {
         // callbacks (owner/winit.rs dispatch_close before windows.remove) —
         // this ordering is safe here because the macOS map is private with no
         // content readers: the early removal is observable only as the intended
-        // lifetime change. `Drop`'s removal stays as an idempotent safety net.
-        let _prev = self.windows_map.lock().remove(&(self.ns_window as u64));
+        // lifetime change. The removed entry drops at the end of this
+        // statement's scope, and the delegate holds the window meanwhile.
+        let _prev = self.windows_map.remove(&(self.ns_window as u64));
 
         self.delivery.dispatch_close();
         tracing::debug!("Window closed");
 
         // Release every remaining registered callback now, while
         // `ns_window` is still valid (this delegate method runs before
-        // AppKit tears the window down further). Without this, the frame
-        // the handler's `frame_requested` — which in
-        // `flui-app`'s wiring owns this window's GPU renderer, whose
-        // `wgpu::Surface` is built from the `Arc<dyn PlatformWindow>` clone
-        // the renderer owns (ADR-0063) — stays pinned forever: window
-        // (through its callback slots) → frame closure → raster lane →
-        // renderer → surface → `Arc<MacOSWindow>`, a cycle nothing else
-        // here breaks.
+        // AppKit tears the window down further): the handler owns, in
+        // `flui-app`'s wiring, this window's GPU renderer, whose
+        // `wgpu::Surface` is built from the window's surface target, and that
+        // surface goes while the window's view is still there (ADR-0063).
+        // The clear also retires the delivery, so the surface target answers
+        // `Unavailable` from here on.
         self.delivery.clear();
 
         // Match winit's own `windowWillClose:` handling: NIL the delegate
         // so no further delegate method can fire against a window this
         // wrapper now treats as closed. Harmless even without this today
-        // (the delegate holds only a `Weak<MacOSWindow>`), but this is the
-        // documented AppKit-recommended cleanup, not just a FLUI habit.
+        // (the delegate holds only a weak reference to the window), but this
+        // is the documented AppKit-recommended cleanup, not just a FLUI habit.
         //
         // SAFETY: `ns_window` is alive for the lifetime of `self`.
         unsafe {

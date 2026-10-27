@@ -3,6 +3,7 @@
 //! pass the first and name the check that catches every fault. Checks that
 //! cannot fail prove nothing.
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_native::{HeadlessPlatform, HostWindow, MockWindow, Platform};
@@ -20,7 +21,7 @@ use flui_testing::window_conformance::{self, Readback, WindowFixture};
 /// it stays open when told to close ([`Fault::IgnoresClose`]), or it
 /// publishes a snapshot without the facts the window system reports
 /// ([`Fault::SnapshotWithoutFacts`]).
-struct Faulty(Arc<dyn PlatformWindow>, Fault);
+struct Faulty(Rc<dyn PlatformWindow>, Fault);
 
 impl PlatformWindow for Faulty {
     fn id(&self) -> WindowId {
@@ -28,6 +29,12 @@ impl PlatformWindow for Faulty {
     }
     fn request_redraw(&self) {
         self.0.request_redraw();
+    }
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        self.0.redraw_requester()
+    }
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        self.0.surface_target()
     }
     fn state(&self) -> WindowState {
         let mut state = self.0.state();
@@ -97,9 +104,9 @@ impl PlatformWindow for Faulty {
 /// A headless window under `capabilities`, with `fault` applied to how the
 /// fixture settles or closes it.
 struct Fixture {
-    window: Arc<dyn PlatformWindow>,
+    window: Rc<dyn PlatformWindow>,
     /// The headless window itself, whose model is the window system.
-    model: Arc<dyn HostWindow>,
+    model: Rc<dyn HostWindow>,
     fault: Option<Fault>,
 }
 
@@ -152,15 +159,15 @@ impl Fixture {
                 flui_testing::window_handler::RecordingWindowHandler::new(),
             )
             .expect("a headless window opens");
-        let window: Arc<dyn PlatformWindow> = match fault {
+        let window: Rc<dyn PlatformWindow> = match fault {
             Some(
                 fault @ (Fault::ClaimsWhatItCannot
                 | Fault::SnapshotWithoutFacts
                 | Fault::IgnoresClose
                 | Fault::IgnoresTheToken
                 | Fault::VerbsIgnoreTheirCapabilities),
-            ) => Arc::new(Faulty(Arc::clone(&model) as _, fault)),
-            _ => Arc::clone(&model) as _,
+            ) => Rc::new(Faulty(Rc::clone(&model) as _, fault)),
+            _ => Rc::clone(&model) as _,
         };
         Self {
             window,
@@ -171,8 +178,8 @@ impl Fixture {
 }
 
 impl WindowFixture for Fixture {
-    fn window(&self) -> Arc<dyn PlatformWindow> {
-        Arc::clone(&self.window)
+    fn window(&self) -> Rc<dyn PlatformWindow> {
+        Rc::clone(&self.window)
     }
 
     /// The headless host's model: what its window system says, read apart

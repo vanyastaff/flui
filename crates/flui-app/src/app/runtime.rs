@@ -23,7 +23,7 @@ use flui_native::OwnerPlatform;
 use flui_painting::{FontCollection, HostFontFeed};
 #[cfg(target_os = "android")]
 use flui_platform::WindowExecutionState;
-use flui_platform::{Clipboard, PlatformWindow};
+use flui_platform::{Clipboard, PlatformWindow, RedrawRequester};
 use parking_lot::Mutex;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -223,18 +223,21 @@ pub enum WindowPolicy {
 /// host) find the WRONG one — this handle's `Arc` clones sidestep thread-local
 /// resolution entirely, so firing it only ever touches shared, thread-safe
 /// state and always reaches the intended owner.
+///
+/// The window itself is the owner thread's (ADR-0254 §5): what this handle
+/// pokes is the window's redraw requester.
 #[derive(Clone)]
 struct FrameWakeHandle {
     needs_redraw: Arc<AtomicBool>,
-    redraw_window: Arc<Mutex<Option<Arc<dyn PlatformWindow>>>>,
+    redraw: Arc<Mutex<Option<Arc<dyn RedrawRequester>>>>,
 }
 
 impl FrameWakeHandle {
     fn wake_frame(&self) {
         self.needs_redraw.store(true, Ordering::Relaxed);
-        let window = self.redraw_window.lock().as_ref().cloned();
-        if let Some(window) = window {
-            window.request_redraw();
+        let redraw = self.redraw.lock().as_ref().cloned();
+        if let Some(redraw) = redraw {
+            redraw.request_redraw();
             tracing::trace!("wake_frame: platform window request_redraw sent");
         }
     }
@@ -286,7 +289,7 @@ pub(crate) struct AppRuntime {
     /// operating system may reuse.
     #[cfg(feature = "native")]
     pub(super) native_windows:
-        std::cell::RefCell<Vec<std::sync::Weak<dyn flui_native::HostWindow>>>,
+        std::cell::RefCell<Vec<std::rc::Weak<dyn flui_native::HostWindow>>>,
     /// The session end the host is answering: every presentation's subscribers
     /// hold their blocks on this one request, so the answer to the operating
     /// system is the aggregate. Kept from the query until the session end is
@@ -383,16 +386,15 @@ pub(crate) struct AppRuntime {
     /// pending redraw request, and [`Self::frame_wake_callback`] hands a
     /// clone of this exact `Arc` to callbacks that may fire from any thread.
     needs_redraw: Arc<AtomicBool>,
-    /// The window [`Self::wake_frame`] pokes via
-    /// [`PlatformWindow::request_redraw`], installed by
+    /// The window [`Self::wake_frame`] pokes, installed by
     /// [`Self::set_redraw_window`] once the UI runtime's window is open and
     /// cleared at teardown. Distinct from `PresentationState.window`
-    /// (per-presentation, `Weak`, used for cursor/haptics/close): this slot
-    /// is `Arc`-strong and `Send + Sync` specifically so
-    /// [`Self::frame_wake_callback`] can hand a cross-thread-safe clone to a
-    /// callback that fires off the owner thread, which a `Weak` field owned
-    /// by a `!Send` `UiRuntime` cannot support.
-    redraw_window: Arc<Mutex<Option<Arc<dyn PlatformWindow>>>>,
+    /// (per-presentation, `Weak`, used for cursor/haptics/close). The window
+    /// is the owner thread's, like this runtime.
+    redraw_window: Rc<RefCell<Option<Rc<dyn PlatformWindow>>>>,
+    /// That window's redraw requester, which [`Self::frame_wake_callback`]
+    /// hands to callbacks that fire off the owner thread (ADR-0254 §5).
+    redraw_requester: Arc<Mutex<Option<Arc<dyn RedrawRequester>>>>,
     /// The platform's clipboard capability, moved here from the retired
     /// `AppBinding` — a process/loop-scoped OS-session capability,
     /// vended to presentations rather than owned by one. `set_platform_clipboard`/
@@ -498,7 +500,8 @@ impl AppRuntime {
             service_registry: ServiceRegistry::new(),
             pending_host_executors: None,
             needs_redraw: Arc::new(AtomicBool::new(false)),
-            redraw_window: Arc::new(Mutex::new(None)),
+            redraw_window: Rc::default(),
+            redraw_requester: Arc::new(Mutex::new(None)),
             platform_clipboard: Arc::new(Mutex::new(None)),
             platform_data_transfer: Arc::new(Mutex::new(None)),
             host_storage: None,
@@ -933,7 +936,7 @@ impl AppRuntime {
         .min()
     }
 
-    pub(super) fn close_requests(&self) -> Arc<super::close_request::CloseRequestRouter> {
+    pub(super) fn close_requests(&self) -> Rc<super::close_request::CloseRequestRouter> {
         self.installed_host.native().close_requests()
     }
 
@@ -990,7 +993,7 @@ impl AppRuntime {
     fn wake_handle(&self) -> FrameWakeHandle {
         FrameWakeHandle {
             needs_redraw: Arc::clone(&self.needs_redraw),
-            redraw_window: Arc::clone(&self.redraw_window),
+            redraw: Arc::clone(&self.redraw_requester),
         }
     }
 
@@ -998,10 +1001,10 @@ impl AppRuntime {
     /// frame wake it does not mark the UI runtime dirty; operations in the batch
     /// request a frame themselves when their effects require one.
     #[cfg(target_os = "android")]
-    pub(super) fn owner_turn_window_poke(&self) -> Arc<dyn Fn() -> bool + Send + Sync> {
-        let redraw_window = Arc::clone(&self.redraw_window);
-        Arc::new(move || {
-            let window = redraw_window.lock().as_ref().cloned();
+    pub(super) fn owner_turn_window_poke(&self) -> Rc<dyn Fn() -> bool> {
+        let redraw_window = Rc::clone(&self.redraw_window);
+        Rc::new(move || {
+            let window = redraw_window.borrow().as_ref().cloned();
             let Some(window) = window else {
                 return false;
             };
@@ -1063,8 +1066,12 @@ impl AppRuntime {
     /// UI runtime's window is open, before anything that could synchronously
     /// observe it (the initial redraw request, `Lifecycle::Started`) runs —
     /// otherwise the first such observer would silently see no window.
-    pub(super) fn set_redraw_window(&self, window: Arc<dyn PlatformWindow>) {
-        let _prev = self.redraw_window.lock().replace(window);
+    pub(super) fn set_redraw_window(&self, window: Rc<dyn PlatformWindow>) {
+        let _requester = self
+            .redraw_requester
+            .lock()
+            .replace(window.redraw_requester());
+        let _prev = self.redraw_window.borrow_mut().replace(window);
     }
 
     /// Test-only: read-only access to the installed redraw-poke window,
@@ -1077,7 +1084,8 @@ impl AppRuntime {
         &self,
         f: impl FnOnce(&dyn PlatformWindow) -> R,
     ) -> Option<R> {
-        self.redraw_window.lock().as_ref().map(|w| f(w.as_ref()))
+        let window = self.redraw_window.borrow().clone();
+        window.map(|w| f(w.as_ref()))
     }
 
     /// Remove the installed redraw-poke window at teardown, so a torn-down
@@ -1100,8 +1108,9 @@ impl AppRuntime {
         )
     )]
     #[must_use = "drop the returned window only after releasing TLS borrows"]
-    pub(super) fn clear_redraw_window(&self) -> Option<Arc<dyn PlatformWindow>> {
-        self.redraw_window.lock().take()
+    pub(super) fn clear_redraw_window(&self) -> Option<Rc<dyn PlatformWindow>> {
+        let _requester = self.redraw_requester.lock().take();
+        self.redraw_window.borrow_mut().take()
     }
 
     /// Remove the installed redraw-poke window if (and only if) it is the
@@ -1124,9 +1133,10 @@ impl AppRuntime {
     pub(super) fn release_redraw_window_for(
         &self,
         id: flui_platform::WindowId,
-    ) -> Option<Arc<dyn PlatformWindow>> {
-        let mut slot = self.redraw_window.lock();
+    ) -> Option<Rc<dyn PlatformWindow>> {
+        let mut slot = self.redraw_window.borrow_mut();
         if slot.as_ref().is_some_and(|window| window.id() == id) {
+            let _requester = self.redraw_requester.lock().take();
             slot.take()
         } else {
             None

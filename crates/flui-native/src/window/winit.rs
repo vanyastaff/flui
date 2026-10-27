@@ -66,7 +66,7 @@ pub struct WinitWindow {
     window: Arc<Window>,
     is_focused: parking_lot::Mutex<bool>,
     is_visible: parking_lot::Mutex<bool>,
-    delivery: WindowDelivery,
+    delivery: Arc<WindowDelivery>,
     /// What the table's positions made for this window with it: its
     /// accessibility bridge (on Linux its AT-SPI announcement, so a screen
     /// reader that attaches at any later point finds it on the bus), its
@@ -239,7 +239,7 @@ impl WinitWindow {
             is_focused: parking_lot::Mutex::new(true),
             is_visible: parking_lot::Mutex::new(options.visible),
             occluded: AtomicBool::new(false),
-            delivery: WindowDelivery::new(handler, InputCapabilities::UNAVAILABLE),
+            delivery: Arc::new(WindowDelivery::new(handler, InputCapabilities::UNAVAILABLE)),
             facets,
             #[cfg(target_os = "linux")]
             portal_dark: std::sync::atomic::AtomicBool::new(false),
@@ -659,7 +659,7 @@ impl Drop for WinitWindow {
     fn drop(&mut self) {
         // Teardown-order invariant: the window's handler may own this
         // window's GPU renderer, whose `wgpu::Surface` is built from the
-        // `Arc<dyn PlatformWindow>` clone the renderer owns (ADR-0063) —
+        // `Rc<dyn PlatformWindow>` clone the renderer owns (ADR-0063) —
         // that surface must be destroyed while the native window behind
         // that clone is still alive (on Wayland, destroying the swapchain
         // after the `wl_surface` is a use-after-free on the surface's
@@ -674,6 +674,69 @@ impl Drop for WinitWindow {
     }
 }
 
+/// A winit window's surface target (ADR-0254 §5).
+///
+/// It holds the winit window, which is `Send + Sync`, so the handles it
+/// hands out stay backed while the renderer that owns the target lives; the
+/// window's handler owns that renderer and lets go of it when the window
+/// closes. Once the window's retirement started (its close completed, or the
+/// loop released it at quit), both handle queries answer `Unavailable`.
+struct WinitSurface {
+    window: Arc<Window>,
+    retirement: crate::owner::window_delivery::Retirement,
+}
+
+impl HasWindowHandle for WinitSurface {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        if self.retirement.is_retired() {
+            return Err(raw_window_handle::HandleError::Unavailable);
+        }
+        self.window.window_handle()
+    }
+}
+
+impl HasDisplayHandle for WinitSurface {
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        if self.retirement.is_retired() {
+            return Err(raw_window_handle::HandleError::Unavailable);
+        }
+        self.window.display_handle()
+    }
+}
+
+impl flui_platform::SurfaceTarget for WinitSurface {
+    /// On Wayland this arms the surface's frame callback, so the next
+    /// `request_redraw` waits for the compositor; winit makes it nothing
+    /// elsewhere.
+    fn pre_present_notify(&self) {
+        if !self.retirement.is_retired() {
+            self.window.pre_present_notify();
+        }
+    }
+}
+
+/// A winit window's redraw requester: winit takes a redraw request from any
+/// thread. It holds the winit window weakly, so a requester kept by a waker
+/// never keeps a closed window on screen.
+struct WinitRedraw {
+    window: std::sync::Weak<Window>,
+    retirement: crate::owner::window_delivery::Retirement,
+}
+
+impl flui_platform::RedrawRequester for WinitRedraw {
+    fn request_redraw(&self) {
+        if !self.retirement.is_retired()
+            && let Some(window) = self.window.upgrade()
+        {
+            window.request_redraw();
+        }
+    }
+}
+
 impl PlatformWindow for WinitWindow {
     fn id(&self) -> WindowId {
         self.id
@@ -683,10 +746,18 @@ impl PlatformWindow for WinitWindow {
         self.window.request_redraw();
     }
 
-    fn pre_present_notify(&self) {
-        // The Wayland frame-callback arm (see the trait doc); harmless
-        // elsewhere. winit documents this as "call before presenting".
-        self.window.pre_present_notify();
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        Arc::new(WinitRedraw {
+            window: Arc::downgrade(&self.window),
+            retirement: self.delivery.retirement(),
+        })
+    }
+
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        Arc::new(WinitSurface {
+            window: Arc::clone(&self.window),
+            retirement: self.delivery.retirement(),
+        })
     }
 
     fn state(&self) -> WindowState {
@@ -792,23 +863,6 @@ impl PlatformWindow for WinitWindow {
         Err(flui_platform::Unsupported::new(
             flui_platform::UnsupportedReason::NotOnThisPlatform,
         ))
-    }
-
-    // GPU integration: `winit::window::Window` implements `HasWindowHandle`/
-    // `HasDisplayHandle` directly — without these overrides both fall through
-    // to the trait defaults (`Err(HandleError::Unavailable)`), which is what
-    // made every wgpu surface creation on this backend fail regardless of
-    // which GPU backend was compiled in.
-    fn window_handle(
-        &self,
-    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
-        self.window.window_handle()
-    }
-
-    fn display_handle(
-        &self,
-    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
-        self.window.display_handle()
     }
 
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
@@ -943,6 +997,10 @@ impl LoopWindow for WinitWindow {
         self.closed
             .store(true, std::sync::atomic::Ordering::Release);
     }
+
+    fn shared_delivery(&self) -> &Arc<WindowDelivery> {
+        &self.delivery
+    }
 }
 
 /// Connects the view of a window manager that wakes `signal` when a window it
@@ -1036,7 +1094,7 @@ impl LoopWindows for WinitWindows {
         event_loop: &ActiveEventLoop,
         seed: WindowSeed<'_>,
         options: WindowOptions,
-    ) -> Result<Arc<dyn LoopWindow>, OpenWindowError> {
+    ) -> Result<Rc<dyn LoopWindow>, OpenWindowError> {
         let display =
             PlacementDisplay::choose(seed.displays.snapshot().ok().as_ref(), options.display);
         let plan = OpenPlan::new(
@@ -1079,11 +1137,11 @@ impl LoopWindows for WinitWindows {
         let notices = seed.notices;
         #[cfg(target_os = "linux")]
         let signal = seed.signal;
-        let window = Arc::new(WinitWindow::new(seed, raw_window, &options, &plan, self));
+        let window = Rc::new(WinitWindow::new(seed, raw_window, &options, &plan, self));
         notices.mark_stale_on_wake(window.state_cell());
         window
             .delivery
-            .publish_through(Arc::downgrade(&window), WinitWindow::read_state);
+            .publish_through_owner(&window, WinitWindow::read_state);
         // Before the window is mapped: the window manager reads the mode a
         // window opens in from the properties the view writes.
         #[cfg(target_os = "linux")]
@@ -1115,7 +1173,7 @@ impl host::Window<WinitLoop> for WinitWindow {
         _: &Arc<WinitWindows>,
         options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
-    ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
+    ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
         tracing::info!(?options, "Requesting window creation");
 
         // Same-thread fast path: called synchronously from inside `on_ready`

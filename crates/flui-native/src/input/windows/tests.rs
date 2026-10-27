@@ -4,7 +4,7 @@
 //! through `WindowInputs`.
 
 use flui_testing::window_commands::AdmitAndApply as _;
-use std::sync::Arc;
+use std::rc::Rc;
 use std::sync::atomic::AtomicU64;
 
 use flui_foundation::geometry::Size;
@@ -22,7 +22,7 @@ use crate::owner::windows::{
 use crate::platform::Platform as _;
 use crate::window::windows::WindowsWindow;
 
-fn open(platform: &WindowsPlatform, title: &str) -> Arc<dyn HostWindow> {
+fn open(platform: &WindowsPlatform, title: &str) -> Rc<dyn HostWindow> {
     platform
         .open_window(
             WindowOptions::default()
@@ -33,7 +33,7 @@ fn open(platform: &WindowsPlatform, title: &str) -> Arc<dyn HostWindow> {
         .expect("window")
 }
 
-fn window_ref(window: &Arc<dyn HostWindow>) -> WindowRef {
+fn window_ref(window: &Rc<dyn HostWindow>) -> WindowRef {
     let window = window
         .as_any()
         .downcast_ref::<WindowsWindow>()

@@ -127,6 +127,7 @@ mod platform_window;
 pub mod pointer;
 mod preferences;
 mod storage;
+mod surface_target;
 mod system_chrome;
 mod target_platform;
 mod testing;
@@ -179,6 +180,7 @@ pub use preferences::{
 pub use storage::{
     Storage, StorageError, StorageFuture, StorageName, Stored, StoredVersion, WriteMode,
 };
+pub use surface_target::{NoNativeSurface, RedrawRequester, SurfaceTarget};
 pub use system_chrome::{PlatformSystemChrome, SystemUiOverlayStyle};
 pub use target_platform::TargetPlatform;
 pub use text_input::PlatformTextInput;

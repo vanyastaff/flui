@@ -10,7 +10,7 @@
 #[cfg(not(target_os = "android"))]
 use crate::app::runner::window_routes::OpenRouted as _;
 #[cfg(not(target_os = "android"))]
-use std::sync::Arc;
+use std::rc::Rc;
 
 #[cfg(not(target_os = "android"))]
 use flui_native::HostWindow;
@@ -22,13 +22,13 @@ pub(crate) use flui_runtime::testing::TestWindow;
 /// platform's own capabilities (haptics, deferred opens, exit policy) rather
 /// than a state-level double.
 #[cfg(not(target_os = "android"))]
-pub(crate) fn headless_test_window() -> Arc<dyn PlatformWindow> {
+pub(crate) fn headless_test_window() -> Rc<dyn PlatformWindow> {
     headless_test_host_window()
 }
 
 /// [`headless_test_window`] as the runner receives it from `open_window`.
 #[cfg(not(target_os = "android"))]
-pub(crate) fn headless_test_host_window() -> Arc<dyn HostWindow> {
+pub(crate) fn headless_test_host_window() -> Rc<dyn HostWindow> {
     flui_native::headless_platform()
         .open_routed(flui_platform::WindowOptions::default())
         .expect("headless platform should create a test window")

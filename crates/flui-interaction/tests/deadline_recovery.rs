@@ -24,6 +24,14 @@ thread_local! {
     static WAKE_ACTION: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
 }
 
+/// Runs the wake action this thread armed, once.
+fn wake() {
+    let action = WAKE_ACTION.with(|action| action.borrow_mut().take());
+    if let Some(action) = action {
+        action();
+    }
+}
+
 struct WakeWindow {
     drops: Arc<std::sync::atomic::AtomicUsize>,
     panic_on_drop: bool,
@@ -34,10 +42,13 @@ impl flui_platform::PlatformWindow for WakeWindow {
         flui_platform::WindowId(1)
     }
     fn request_redraw(&self) {
-        let action = WAKE_ACTION.with(|action| action.borrow_mut().take());
-        if let Some(action) = action {
-            action();
-        }
+        wake();
+    }
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        Arc::new(wake)
+    }
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        Arc::new(flui_platform::NoNativeSurface)
     }
     flui_platform::window_takes_no_frame_verbs!();
 
@@ -680,11 +691,11 @@ fn disarm_wake_cannot_make_an_old_up_retire_a_replacement_contact() {
     use flui_interaction::{GestureRecognizer as _, LongPressGestureRecognizer};
     let clock = ManualClock::new();
     let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
-    let window: Arc<dyn flui_platform::PlatformWindow> = Arc::new(WakeWindow {
+    let window: Rc<dyn flui_platform::PlatformWindow> = Rc::new(WakeWindow {
         drops: Arc::default(),
         panic_on_drop: false,
     });
-    flui_interaction::__runtime::set_pointer_capture_wake(&binding, Arc::downgrade(&window));
+    flui_interaction::__runtime::set_pointer_capture_wake(&binding, Rc::downgrade(&window));
     let notices = Rc::new(Cell::new(0));
     let captured = Rc::clone(&notices);
     let recognizer = LongPressGestureRecognizer::builder(binding.arena().clone())
@@ -719,16 +730,16 @@ fn a_wake_failure_retains_the_last_backend_owner_before_unwind() {
         let clock = ManualClock::new();
         let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
         let drops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let window: Arc<dyn flui_platform::PlatformWindow> = Arc::new(WakeWindow {
+        let window: Rc<dyn flui_platform::PlatformWindow> = Rc::new(WakeWindow {
             drops: Arc::clone(&drops),
             panic_on_drop: true,
         });
-        flui_interaction::__runtime::set_pointer_capture_wake(&binding, Arc::downgrade(&window));
-        let owner = Arc::new(std::sync::Mutex::new(Some(window)));
-        let released = Arc::clone(&owner);
+        flui_interaction::__runtime::set_pointer_capture_wake(&binding, Rc::downgrade(&window));
+        let owner = Rc::new(RefCell::new(Some(window)));
+        let released = Rc::clone(&owner);
         WAKE_ACTION.with(|action| {
             *action.borrow_mut() = Some(Box::new(move || {
-                drop(released.lock().expect("backend owner fixture").take());
+                drop(released.borrow_mut().take());
                 panic!("wake delivery first failure");
             }));
         });
@@ -751,7 +762,7 @@ fn a_wake_failure_retains_the_last_backend_owner_before_unwind() {
             0,
             "last backend ownership retained before propagation"
         );
-        assert!(owner.lock().expect("fixture owner").is_none());
+        assert!(owner.borrow().is_none());
         assert_eq!(
             flui_interaction::__runtime::next_deadline_snapshot(&binding),
             Some(at(&clock)),

@@ -3,8 +3,9 @@
 //!
 //! The model is what two or more platforms share: the published state, its
 //! staleness and the mode decided from a window system's flags ([`state`]),
-//! the window configuration the Win32 and AppKit hosts are built with (`config`) and the acknowledgement a host waits for before it
-//! publishes a window it attached ([`installation`]). Each platform file
+//! and the acknowledgement a host waits for before it publishes a window it
+//! attached ([`installation`]); beside it is the window configuration the
+//! Win32 host is built with (`config`). Each platform file
 //! implements the window position of its host's table, and its system chrome
 //! (the `Chrome` position) beside it.
 //!
@@ -12,7 +13,7 @@
 //! what it asks of the window feature, a platform file here implements it, and
 //! `hosts/<os>.rs` hands the loop the window feature's object.
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(windows)]
 pub(crate) mod config;
 pub(crate) mod installation;
 pub(crate) mod state;

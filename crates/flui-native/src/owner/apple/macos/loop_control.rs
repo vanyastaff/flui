@@ -405,7 +405,7 @@ impl LoopControl {
             self.quit();
             return;
         }
-        if !self.windows.lock().is_empty() {
+        if !self.windows.is_empty() {
             return;
         }
         // The hook may replace itself, open a window, request another turn, or quit.
@@ -423,7 +423,7 @@ impl LoopControl {
                 return;
             }
         };
-        if allowed && self.state.lock().phase == Phase::Running && self.windows.lock().is_empty() {
+        if allowed && self.state.lock().phase == Phase::Running && self.windows.is_empty() {
             self.quit();
         }
     }
@@ -458,7 +458,7 @@ impl LoopControl {
         }
         self.owner_signal.close();
         // No queued cleanup: these resources must be released while main is alive.
-        let windows: Vec<_> = self.windows.lock().values().cloned().collect();
+        let windows = self.windows.values();
         for window in &windows {
             cleanup_step(|| window.delivery().clear());
         }
@@ -473,7 +473,12 @@ impl LoopControl {
                 }
             });
         }
-        let remaining = std::mem::take(&mut *self.windows.lock());
+        let remaining: Vec<_> = self
+            .windows
+            .keys()
+            .into_iter()
+            .filter_map(|key| self.windows.remove(&key))
+            .collect();
         cleanup_step(|| drop(remaining));
         cleanup_step(|| drop(windows));
         call(
@@ -656,12 +661,11 @@ impl Drop for LoopOwnership {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn control() -> Arc<LoopControl> {
         LoopControl::new(
-            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(crate::owner::slot::OwnerMap::new()),
             Arc::new(Mutex::new(PlatformHandlers::default())),
         )
     }

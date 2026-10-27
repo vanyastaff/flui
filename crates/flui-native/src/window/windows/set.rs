@@ -5,7 +5,6 @@
 use std::{collections::HashMap, rc::Rc, sync::Arc};
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use parking_lot::Mutex;
 use windows::Win32::{
     Foundation::{HWND, RECT},
     Graphics::Gdi::UpdateWindow,
@@ -25,6 +24,7 @@ use crate::host::WindowPositions;
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
 use crate::owner::handlers::OpenWindows;
+use crate::owner::slot::OwnerCell;
 use crate::owner::windows::{ClassWindows, WindowsLoop};
 use crate::version::gate::Since;
 use crate::version::gate::windows::WindowsBuild;
@@ -39,7 +39,8 @@ use crate::window::config::WindowConfiguration;
 /// it when the window closes. Public where it is defined, as the host's table
 /// names it, and nameable only inside the crate.
 pub struct WindowSet {
-    by_handle: Mutex<HashMap<isize, Arc<WindowsWindow>>>,
+    /// The windows, on the owner thread: a window is not `Send`.
+    by_handle: OwnerCell<HashMap<isize, Rc<WindowsWindow>>>,
     pub(super) config: WindowConfiguration,
     /// What every window hands out of the window-level positions.
     pub(super) positions: WindowPositions<WindowRef>,
@@ -57,7 +58,7 @@ impl WindowSet {
         build: WindowsBuild,
     ) -> Self {
         Self {
-            by_handle: Mutex::new(HashMap::new()),
+            by_handle: OwnerCell::new(),
             config,
             positions,
             material: material::gate(build),
@@ -76,34 +77,40 @@ impl WindowSet {
         &self,
         hwnd: HWND,
         identity: crate::owner::windows::WindowIdentity,
-    ) -> Option<(Arc<WindowsWindow>, bool)> {
+    ) -> Option<(Rc<WindowsWindow>, bool)> {
         let key = hwnd.0 as isize;
-        let mut windows = self.by_handle.lock();
-        if windows
-            .get(&key)
-            .is_some_and(|window| window.identity == identity)
-        {
-            windows
-                .remove(&key)
-                .map(|window| (window, windows.is_empty()))
-        } else {
-            None
-        }
+        self.by_handle
+            .with(|windows| {
+                if windows
+                    .get(&key)
+                    .is_some_and(|window| window.identity == identity)
+                {
+                    windows
+                        .remove(&key)
+                        .map(|window| (window, windows.is_empty()))
+                } else {
+                    None
+                }
+            })
+            .flatten()
+    }
+
+    /// A snapshot of the windows, taken on the owner thread: what each of them
+    /// does next may run user code, which may open or close windows.
+    fn snapshot(&self) -> Vec<Rc<WindowsWindow>> {
+        self.by_handle
+            .with(|windows| windows.values().cloned().collect())
+            .unwrap_or_default()
     }
 }
 
 impl std::fmt::Debug for WindowSet {
-    // `try_lock`, never `lock`: `parking_lot::Mutex` is not reentrant and
-    // BLOCKS rather than panicking, so formatting this value while the same
-    // thread already holds the set would deadlock silently — and a Debug impl
-    // gets called from assertion messages and `tracing` fields, which is
-    // exactly where a lock is likely to be held. Same pattern
-    // `parking_lot::Mutex<T>: Debug` itself uses.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut out = f.debug_struct("WindowSet");
-        match self.by_handle.try_lock() {
-            Some(windows) => out.field("windows", &windows.len()),
-            None => out.field("windows", &format_args!("<locked>")),
+        // Off the owner thread the count is not there to read.
+        match self.by_handle.with(|windows| windows.len()) {
+            Some(windows) => out.field("windows", &windows),
+            None => out.field("windows", &format_args!("<owner's>")),
         };
         out.field("config", &self.config)
             .field("positions", &self.positions)
@@ -113,8 +120,12 @@ impl std::fmt::Debug for WindowSet {
 }
 
 impl OpenWindows for WindowSet {
+    /// Asked on the owner thread; a set no window was ever stored into is
+    /// empty.
     fn is_empty(&self) -> bool {
-        self.by_handle.lock().is_empty()
+        self.by_handle
+            .with(|windows| windows.is_empty())
+            .unwrap_or(true)
     }
 }
 
@@ -124,14 +135,12 @@ impl ClassWindows for WindowSet {
     fn redraw_for_deadline(&self) {
         // Traverse a bounded identity snapshot without a per-frame Vec.
         // A minimized window's frame request runs user code, which may open
-        // or close windows; each owning Arc is cloned under the set's lock and
-        // used only after releasing it.
+        // or close windows; each owning `Rc` is cloned out of the set and used
+        // only after the set is let go.
         let Some(limit) = self
             .by_handle
-            .lock()
-            .values()
-            .map(|window| window.identity)
-            .max()
+            .with(|windows| windows.values().map(|window| window.identity).max())
+            .flatten()
         else {
             return;
         };
@@ -139,13 +148,17 @@ impl ClassWindows for WindowSet {
         loop {
             let next = self
                 .by_handle
-                .lock()
-                .values()
-                .filter(|window| {
-                    after.is_none_or(|after| window.identity > after) && window.identity <= limit
+                .with(|windows| {
+                    windows
+                        .values()
+                        .filter(|window| {
+                            after.is_none_or(|after| window.identity > after)
+                                && window.identity <= limit
+                        })
+                        .min_by_key(|window| window.identity)
+                        .cloned()
                 })
-                .min_by_key(|window| window.identity)
-                .cloned();
+                .flatten();
             let Some(window) = next else {
                 break;
             };
@@ -174,16 +187,10 @@ impl ClassWindows for WindowSet {
 
     fn paint_invalid(&self) {
         // A snapshot: a paint runs user code, which may open or close windows.
-        let painted: Vec<HWND> = self
-            .by_handle
-            .lock()
-            .values()
-            .map(|window| window.hwnd())
-            .collect();
-        for hwnd in painted {
+        for window in self.snapshot() {
             // SAFETY: a window this thread created; a handle closed by an
             // earlier paint fails the call harmlessly. Nothing is borrowed.
-            let _ = unsafe { UpdateWindow(hwnd) };
+            let _ = unsafe { UpdateWindow(window.hwnd()) };
         }
     }
 }
@@ -198,7 +205,7 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
         windows: &Arc<WindowSet>,
         options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
-    ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
+    ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
         if !owner.owner_control.signal.accepting() {
             return Err(OpenWindowError::OwnerGone {
                 rejected: Some(Box::new(options)),
@@ -228,7 +235,9 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
         let hwnd_value = window.hwnd().0 as isize;
 
         // Store window
-        let _prev = windows.by_handle.lock().insert(hwnd_value, window.clone());
+        let _prev = windows
+            .by_handle
+            .with_bound(|tracked| tracked.insert(hwnd_value, Rc::clone(&window)));
 
         Ok(window)
     }

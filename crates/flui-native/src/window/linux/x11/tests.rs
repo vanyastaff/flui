@@ -11,7 +11,6 @@
 //! (`owner::winit::testing::QuietHost`), under a table of its own
 //! ([`X11Windows`]): the window, its probe and the loop, without the host's.
 
-use flui_testing::window_commands::AdmitAndApply as _;
 use flui_testing::window_handler::RecordingWindowHandler;
 use std::{
     rc::Rc,
@@ -35,7 +34,8 @@ use x11rb::{
 use crate::WindowRequest;
 use crate::host::{Absent, Host, position};
 use crate::host_window::HostWindow;
-use crate::owner::winit::testing::{QuietHost, run_window_scenario};
+use crate::owner::slot::OwnerWeak;
+use crate::owner::winit::testing::{QuietHost, ScenarioWindow, run_window_scenario};
 use crate::owner::winit::{LoopWindow, WinitLoop};
 use crate::platform::HostPlatform;
 use crate::window::linux::x11::connect_window_manager;
@@ -84,7 +84,7 @@ fn build_x11_event_loop() -> EventLoop<()> {
 }
 
 /// Poll (bounded, 5 s) until `check` holds of the window's snapshot.
-fn until_state(window: &Arc<dyn HostWindow>, what: &str, check: impl Fn(&WindowState) -> bool) {
+fn until_state(window: &ScenarioWindow, what: &str, check: impl Fn(&WindowState) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let state = window.state();
@@ -103,7 +103,7 @@ fn until_state(window: &Arc<dyn HostWindow>, what: &str, check: impl Fn(&WindowS
 /// `expected`, the last of which `is_visible` answers. A report may follow
 /// a publication on another thread, hence the wait.
 fn until_reports(
-    window: &Arc<dyn HostWindow>,
+    window: &ScenarioWindow,
     reports: &Mutex<Vec<bool>>,
     expected: &[bool],
     what: &str,
@@ -181,13 +181,16 @@ fn recorded(options: WindowOptions) -> WindowRequest {
 /// id and a connection to the server.
 fn run_x11_scenario(
     opening: WindowRequest,
-    scenario: impl FnOnce(Arc<dyn HostWindow>, u32, &RustConnection) + Send + 'static,
+    scenario: impl FnOnce(ScenarioWindow, u32, &RustConnection) + Send + 'static,
 ) {
     run_x11_window(platform(), opening, move |window, server| {
         let id = window
-            .as_any()
-            .downcast_ref::<WinitWindow>()
-            .and_then(LoopWindow::x11_id)
+            .with(|window| {
+                window
+                    .as_any()
+                    .downcast_ref::<WinitWindow>()
+                    .and_then(LoopWindow::x11_id)
+            })
             .expect("an X11 window has an id once the probe is attached");
         scenario(window, id, server);
     });
@@ -197,7 +200,7 @@ fn run_x11_scenario(
 fn run_x11_window(
     host: Arc<HostPlatform<X11Windows>>,
     opening: WindowRequest,
-    scenario: impl FnOnce(Arc<dyn HostWindow>, &RustConnection) + Send + 'static,
+    scenario: impl FnOnce(ScenarioWindow, &RustConnection) + Send + 'static,
 ) {
     run_window_scenario(
         host.shared_owner(),
@@ -229,7 +232,7 @@ fn x11_window_takes_commands_and_publishes_what_the_server_holds() {
     // and the notifications in all, from when the scenario starts watching.
     let changes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let visibility = Arc::new(Mutex::new(vec![true]));
-    let watched: Arc<Mutex<Option<std::sync::Weak<dyn HostWindow>>>> = Arc::default();
+    let watched: Arc<Mutex<Option<OwnerWeak<dyn HostWindow>>>> = Arc::default();
     let (counter, reported, observed) = (
         Arc::clone(&changes),
         Arc::clone(&visibility),
@@ -238,7 +241,7 @@ fn x11_window_takes_commands_and_publishes_what_the_server_holds() {
     let opening = WindowRequest::new(opening, move || -> Rc<dyn WindowHandler> {
         let handler = RecordingWindowHandler::new();
         handler.react_to_state_change(move || {
-            let Some(window) = observed.lock().as_ref().and_then(std::sync::Weak::upgrade) else {
+            let Some(window) = observed.lock().as_ref().and_then(OwnerWeak::upgrade) else {
                 return;
             };
             counter.fetch_add(1, Ordering::SeqCst);
@@ -256,7 +259,8 @@ fn x11_window_takes_commands_and_publishes_what_the_server_holds() {
         assert_eq!(map_state(server, id), MapState::UNMAPPED);
         assert!(window.state().visible);
         assert_eq!(window.state().capabilities, WindowCapabilities::ALL);
-        *watched.lock() = Some(Arc::downgrade(&window));
+        let watching = Arc::clone(&watched);
+        window.with(move |window| *watching.lock() = Some(OwnerWeak::new(window)));
 
         window.reveal_after_first_frame();
         until_map_state(server, id, MapState::VIEWABLE);

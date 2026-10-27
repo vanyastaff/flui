@@ -97,12 +97,12 @@ extern "C" {
 
 /// The page's window and the handler it was opened with.
 struct PageWindow {
-    window: Arc<dyn HostWindow>,
+    window: Rc<dyn HostWindow>,
     handler: Rc<RecordingWindowHandler>,
 }
 
 impl std::ops::Deref for PageWindow {
-    type Target = Arc<dyn HostWindow>;
+    type Target = Rc<dyn HostWindow>;
 
     fn deref(&self) -> &Self::Target {
         &self.window
@@ -146,7 +146,7 @@ fn recorder<T: Send + 'static>() -> (Log<T>, Log<T>) {
 /// per change.
 fn record_executions(window: &PageWindow) -> Arc<Mutex<Vec<WindowExecutionState>>> {
     let (seen, log) = recorder();
-    let observed = Arc::downgrade(&window.window);
+    let observed = std::rc::Rc::downgrade(&window.window);
     let last = Cell::new(window.state().execution);
     window.handler.react_to_state_change(move || {
         let Some(window) = observed.upgrade() else {

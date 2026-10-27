@@ -291,8 +291,9 @@ pub use platform::{PathPromptOptions, Platform, PlatformExecutor, PlatformReadyC
 // The owner-thread capability (ADR-0039 §1): minted only by a backend,
 // handed to `on_ready`, never re-exported with a public minting seam.
 pub use owner::{
-    OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform,
-    WaitError, WakeRegistrationError, WindowHandlerFactory, WindowOpen, WindowRequest,
+    OpenWindowError, OpenedWindow, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError,
+    SharedPlatform, WaitError, WakeRegistrationError, WindowHandlerFactory, WindowOpen,
+    WindowRequest,
 };
 
 /// Get the current platform implementation

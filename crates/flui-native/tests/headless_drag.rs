@@ -33,7 +33,7 @@ const LINK: TransferActions = TransferActions::LINK;
 struct Desktop {
     dnd: HeadlessDragAndDrop,
     transfer: Arc<dyn DataTransferSource>,
-    window: Arc<dyn HostWindow>,
+    window: Rc<dyn HostWindow>,
     seen: Rc<RefCell<Vec<DragDropEvent>>>,
     _owner: flui_native::OwnerPlatform,
 }

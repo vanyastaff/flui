@@ -6,10 +6,10 @@ use flui_rendering::constraints::BoxConstraints;
 
 use super::*;
 
-fn counting_window(id: u64) -> (Arc<dyn PlatformWindow>, Arc<AtomicU32>) {
+fn counting_window(id: u64) -> (Rc<dyn PlatformWindow>, Arc<AtomicU32>) {
     let window = crate::testing::TestWindow::new().with_id(id);
     let redraw_calls = window.redraw_calls_handle();
-    (Arc::new(window), redraw_calls)
+    (Rc::new(window), redraw_calls)
 }
 
 /// The same edge, fired from a foreign thread — the shape an async
@@ -210,7 +210,7 @@ pub(crate) fn many_frame_requests_before_a_frame_poke_the_window_once() {
 
     let (window, redraws) = counting_window(1);
     // A presentation holds its window weakly; the host keeps it alive.
-    let ui_runtime = UiRuntime::for_test_with_window(Arc::clone(&window));
+    let ui_runtime = UiRuntime::for_test_with_window(Rc::clone(&window));
     let before = redraws.load(AtomicOrdering::Relaxed);
     let owners: Vec<_> = (0..100)
         .map(|_| {
@@ -247,14 +247,14 @@ pub(crate) fn a_secondary_presentation_is_laid_out_at_its_own_size() {
     ui_runtime
         .attach_root_widget(&SizedBox::square(10.0))
         .expect("primary root");
-    let window: Arc<dyn PlatformWindow> = Arc::new(
+    let window: Rc<dyn PlatformWindow> = Rc::new(
         crate::testing::TestWindow::new()
             .focused(false)
             .with_scale_factor(2.0)
             .with_sizes(Size::new(600, 400), Size::new(300.0, 200.0)),
     );
     // A presentation holds its window weakly; the host keeps it alive.
-    let assembled = ui_runtime.assemble_presentation(Arc::clone(&window));
+    let assembled = ui_runtime.assemble_presentation(Rc::clone(&window));
     let secondary = ui_runtime.install_presentation(assembled);
     ui_runtime
         .attach_root_widget_to_for_test(secondary, &SizedBox::expand())

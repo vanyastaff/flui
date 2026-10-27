@@ -1,5 +1,6 @@
 //! Prepare native wiring and resources before admitting joint publication.
 
+use std::rc::Rc;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -74,7 +75,7 @@ pub(super) struct WindowInstall {
 
 /// Owns native closure until the complete logical/native installation succeeds.
 pub(super) struct InstallationWindow {
-    window: Option<Arc<dyn PlatformWindow>>,
+    window: Option<Rc<dyn PlatformWindow>>,
     closed: Arc<AtomicBool>,
     published: bool,
     agent: Option<(
@@ -84,7 +85,7 @@ pub(super) struct InstallationWindow {
 }
 
 impl InstallationWindow {
-    fn new(window: Arc<dyn PlatformWindow>) -> Self {
+    fn new(window: Rc<dyn PlatformWindow>) -> Self {
         Self {
             window: Some(window),
             closed: Arc::new(AtomicBool::new(false)),
@@ -93,7 +94,7 @@ impl InstallationWindow {
         }
     }
 
-    pub(super) fn native(&self) -> &Arc<dyn PlatformWindow> {
+    pub(super) fn native(&self) -> &Rc<dyn PlatformWindow> {
         self.window
             .as_ref()
             .expect("BUG: live installation retains its native window")
@@ -159,7 +160,7 @@ impl WindowInstall {
     pub(super) fn new(
         host: InstalledHost,
         prepared: PreparedInstall,
-        window: Arc<dyn PlatformWindow>,
+        window: Rc<dyn PlatformWindow>,
     ) -> Self {
         let address = prepared.address();
         let window = InstallationWindow::new(window);
@@ -250,7 +251,7 @@ impl WindowInstall {
             handler,
         ));
         let router = self.host.native().close_requests();
-        let closing = std::sync::Arc::downgrade(self.window.native());
+        let closing = Rc::downgrade(self.window.native());
         WindowRoutes::of(&**self.window.native()).route_close_requested(
             move || match router.consult(address, crate::app::close_request::CloseReason::User) {
                 CloseResponse::Close => flui_platform::CloseDecision::Close,
@@ -296,7 +297,7 @@ impl WindowInstall {
     pub(super) fn observe_window(&mut self) {
         use super::owner_dispatch::RuntimeEvent;
 
-        let window = Arc::clone(self.window.native());
+        let window = Rc::clone(self.window.native());
         let dispatcher = self.dispatcher();
         // Bound to this host's owner now, so a late change after a replacement
         // wakes the retired owner only (a cheap defence; nothing pins it).
@@ -304,7 +305,7 @@ impl WindowInstall {
         let seen = Arc::new(parking_lot::Mutex::new(None::<flui_platform::WindowState>));
         // Weak: the route lives in the window's own handler, and a strong
         // capture would keep the window alive past close.
-        let observed = Arc::downgrade(&window);
+        let observed = Rc::downgrade(&window);
         let last = Arc::clone(&seen);
         WindowRoutes::of(&*window).route_state_changed(move || {
             let Some(window) = observed.upgrade() else {
@@ -356,7 +357,7 @@ impl WindowInstall {
     ) -> anyhow::Result<()> {
         use super::owner_dispatch::{install_input_wiring, with_owner_callback};
 
-        let window = Arc::clone(self.window.native());
+        let window = Rc::clone(self.window.native());
         let dispatcher = self.dispatcher();
         install_input_wiring(dispatcher, window.as_ref());
         let binding = self.frame_driver(driver)?.binding;

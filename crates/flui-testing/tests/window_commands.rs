@@ -3,7 +3,7 @@
 //! (`close_for_cleanup`), so a test already unwinding keeps its first failure.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_native::{HeadlessPlatform, HostWindow, Platform as _};
 use flui_platform::{WindowCapabilities, WindowOptions};
@@ -11,7 +11,7 @@ use flui_testing::window_commands::AdmitAndApply as _;
 
 /// A headless window whose window system lets the application close nothing,
 /// as Android's one window.
-fn a_window_that_cannot_close() -> Arc<dyn HostWindow> {
+fn a_window_that_cannot_close() -> Rc<dyn HostWindow> {
     HeadlessPlatform::new()
         .with_window_capabilities(WindowCapabilities::NONE)
         .open_window(
@@ -22,7 +22,7 @@ fn a_window_that_cannot_close() -> Arc<dyn HostWindow> {
 }
 
 /// Closes its window when dropped, as a test's guard does.
-struct ClosesOnDrop(Arc<dyn HostWindow>);
+struct ClosesOnDrop(Rc<dyn HostWindow>);
 
 impl Drop for ClosesOnDrop {
     fn drop(&mut self) {

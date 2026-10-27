@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use flui_runtime::HostInput;
 use flui_runtime::owner::RuntimeOperation;
 #[cfg(all(test, not(target_os = "android")))]
@@ -327,9 +329,9 @@ impl RuntimeEvent {
 #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
 pub(super) fn install_platform_ui_runtime(
     ui_runtime: crate::app::ui_runtime::UiRuntime,
-    window: &std::sync::Arc<dyn flui_platform::PlatformWindow>,
+    window: &Rc<dyn flui_platform::PlatformWindow>,
 ) -> PresentationDispatcher {
-    let prepared = prepare_replacement_ui_runtime(ui_runtime, std::sync::Arc::clone(window));
+    let prepared = prepare_replacement_ui_runtime(ui_runtime, Rc::clone(window));
     let dispatcher = prepared.dispatcher();
     prepared
         .submit()
@@ -342,7 +344,7 @@ pub(super) fn install_platform_ui_runtime(
 #[cfg(any(test, target_os = "android", target_arch = "wasm32"))]
 pub(super) fn prepare_platform_ui_runtime(
     ui_runtime: crate::app::ui_runtime::UiRuntime,
-    window: std::sync::Arc<dyn flui_platform::PlatformWindow>,
+    window: Rc<dyn flui_platform::PlatformWindow>,
 ) -> super::window_install::WindowInstall {
     APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
@@ -360,7 +362,7 @@ pub(super) fn prepare_platform_ui_runtime(
 #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
 pub(super) fn prepare_replacement_ui_runtime(
     ui_runtime: crate::app::ui_runtime::UiRuntime,
-    window: std::sync::Arc<dyn flui_platform::PlatformWindow>,
+    window: Rc<dyn flui_platform::PlatformWindow>,
 ) -> super::window_install::WindowInstall {
     let host = super::InstalledHost::new();
     let prepared = host.logical().prepare_runtime(ui_runtime);
@@ -382,9 +384,9 @@ pub(super) fn prepare_replacement_ui_runtime(
 #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
 pub(super) fn install_ui_runtime_alongside(
     ui_runtime: crate::app::ui_runtime::UiRuntime,
-    window: &std::sync::Arc<dyn flui_platform::PlatformWindow>,
+    window: &Rc<dyn flui_platform::PlatformWindow>,
 ) -> Result<PresentationDispatcher, super::installed_host::InstallError> {
-    let prepared = prepare_ui_runtime_alongside(ui_runtime, std::sync::Arc::clone(window));
+    let prepared = prepare_ui_runtime_alongside(ui_runtime, Rc::clone(window));
     let dispatcher = prepared.dispatcher();
     prepared
         .submit()
@@ -395,7 +397,7 @@ pub(super) fn install_ui_runtime_alongside(
 
 pub(super) fn prepare_ui_runtime_alongside(
     ui_runtime: crate::app::ui_runtime::UiRuntime,
-    window: std::sync::Arc<dyn flui_platform::PlatformWindow>,
+    window: Rc<dyn flui_platform::PlatformWindow>,
 ) -> super::window_install::WindowInstall {
     let host = APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
@@ -425,7 +427,7 @@ pub(super) fn prepare_presentation_alongside(
         return Err(InstallPresentationError::RuntimeUnavailable);
     }
     let host = APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
-    let native = std::sync::Arc::clone(window.window());
+    let native = Rc::clone(window.window());
     let prepared = host
         .logical()
         .prepare_presentation(dispatcher.address, window)

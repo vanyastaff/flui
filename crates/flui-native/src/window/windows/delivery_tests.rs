@@ -1,7 +1,6 @@
 //! A delivery another thread raises for a Win32 window reaches its handler in
 //! a turn of the window's own message queue, with nothing else to carry it.
 
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use flui_platform::WindowOptions;
@@ -54,10 +53,13 @@ fn a_delivery_raised_on_another_thread_reaches_the_handler_with_no_other_input()
     pump_until(|| false);
     handler.take_calls();
 
-    let raised = Arc::clone(&window);
-    std::thread::spawn(move || raised.delivery().dispatch_state_changed())
-        .join()
-        .expect("the worker");
+    let raised = window.delivery();
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| raised.dispatch_state_changed())
+            .join()
+            .expect("the worker");
+    });
     assert!(
         handler.calls().is_empty(),
         "nothing ran on the worker: {:?}",

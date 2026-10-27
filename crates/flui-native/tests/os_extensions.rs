@@ -49,8 +49,8 @@ mod cases {
         ),
         #[cfg(target_os = "windows")]
         (
-            "a_win32_view_refuses_another_thread_and_a_closed_window",
-            a_win32_view_refuses_another_thread_and_a_closed_window,
+            "a_win32_view_refuses_a_closed_window",
+            a_win32_view_refuses_a_closed_window,
         ),
         #[cfg(target_os = "macos")]
         (
@@ -173,11 +173,11 @@ mod cases {
         }
     }
 
-    /// A Win32 window's view answers why it did nothing: off the window's
-    /// owner thread it touches nothing, and once the window is closed it
-    /// reaches no handle, which the system may have given another window.
+    /// A Win32 window's view answers why it did nothing: once the window is
+    /// closed it reaches no handle, which the system may have given another
+    /// window.
     #[cfg(target_os = "windows")]
-    fn a_win32_view_refuses_another_thread_and_a_closed_window() {
+    fn a_win32_view_refuses_a_closed_window() {
         use flui_native::os::windows::{Win32WindowError, WindowsWindowExt};
         use flui_platform::os_options::WindowsCornerPreference;
         use flui_platform::{Unsupported, UnsupportedReason};
@@ -191,18 +191,6 @@ mod cases {
             )
             .expect("a Win32 window opens");
         let win32 = window.win32().expect("a Win32 window has its view");
-        let elsewhere = std::thread::scope(|scope| {
-            scope
-                .spawn(|| win32.set_corner_preference(WindowsCornerPreference::DoNotRound))
-                .join()
-                .expect("the other thread returns")
-        });
-        assert_eq!(elsewhere, Err(Win32WindowError::NotOnTheOwnerThread));
-        assert_eq!(
-            win32.corner_preference(),
-            Ok(WindowsCornerPreference::Round),
-            "the refused call changed nothing"
-        );
         window.close_now();
         let closed = Err(Win32WindowError::Unsupported(Unsupported::new(
             UnsupportedReason::NoWindow,
@@ -247,9 +235,10 @@ mod cases {
             reason = "the FLUI view behind an open AppKit window's raw window handle"
         )]
         fn of(window: &dyn HostWindow) -> Self {
-            use raw_window_handle::RawWindowHandle;
+            use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
 
-            let handle = window.window_handle().expect("a live AppKit window");
+            let target = window.surface_target();
+            let handle = target.window_handle().expect("a live AppKit window");
             let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
                 panic!("an AppKit window hands out an AppKit handle");
             };

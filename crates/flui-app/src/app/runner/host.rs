@@ -267,14 +267,14 @@ pub(super) fn build_ui_runtime(
     let window = window.into();
     let redraw = Arc::new(AtomicBool::new(false));
     let pending = Arc::clone(&redraw);
-    let target = Arc::downgrade(window.window());
+    // The wake fires on any thread (an async task's waker, a signal written
+    // on a worker): it asks the window through its requester (ADR-0254 §5).
+    let target = window.window().redraw_requester();
     #[cfg(target_os = "ios")]
     let proxy = with_owner_platform(flui_native::OwnerPlatform::proxy);
     let wake = Arc::new(move || {
         pending.store(true, std::sync::atomic::Ordering::Release);
-        if let Some(window) = target.upgrade() {
-            window.request_redraw();
-        }
+        target.request_redraw();
         #[cfg(target_os = "ios")]
         if let Some(proxy) = &proxy {
             let _ = proxy.wake();
@@ -301,7 +301,7 @@ pub(super) fn build_ui_runtime(
     if let Some(preferences) = preferences {
         host = host.with_preferences(preferences);
     }
-    let native = Arc::clone(window.window());
+    let native = Rc::clone(window.window());
     let ui_runtime = crate::app::ui_runtime::UiRuntime::new(window, scale_factor, host)?;
     attach_window_control(&ui_runtime, &native);
     Ok(ui_runtime)
@@ -404,7 +404,7 @@ fn deliver_contained(
 /// is attached after this returns.
 fn attach_window_control(
     ui_runtime: &crate::app::ui_runtime::UiRuntime,
-    window: &Arc<dyn flui_platform::PlatformWindow>,
+    window: &Rc<dyn flui_platform::PlatformWindow>,
 ) {
     let (queues, wake, router) = APP_RUNTIME.with(|slot| {
         let state = slot.borrow();

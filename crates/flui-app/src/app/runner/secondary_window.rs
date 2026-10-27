@@ -3,7 +3,7 @@
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 #[cfg(all(
     not(target_os = "android"),
@@ -242,7 +242,7 @@ struct SecondaryWindowInstallConfig {
 struct PendingCompletion {
     reply: Option<Arc<crate::app::application_control::Reply>>,
     config: SecondaryWindowInstallConfig,
-    window: Arc<dyn flui_native::HostWindow>,
+    window: Rc<dyn flui_native::HostWindow>,
     stage: CompletionStage,
 }
 
@@ -267,7 +267,7 @@ enum CompletionStage {
 ))]
 pub(super) type OpenedWindow = (
     PresentationDispatcher,
-    Arc<dyn flui_platform::PlatformWindow>,
+    Rc<dyn flui_platform::PlatformWindow>,
 );
 
 /// Owns the generic root until preparation and returns its publication receipt.
@@ -278,7 +278,7 @@ pub(super) type OpenedWindow = (
 ))]
 type SecondaryWindowInstall = Box<
     dyn FnOnce(
-        Arc<dyn flui_native::HostWindow>,
+        Rc<dyn flui_native::HostWindow>,
     ) -> Result<super::installed_host::Installation, AppWindowError>,
 >;
 
@@ -306,7 +306,7 @@ impl PendingCompletion {
                 if !config.reservation.0.begin_install() {
                     return Err(AppWindowError::Cancelled);
                 }
-                install(Arc::clone(&window))?
+                install(Rc::clone(&window))?
             }
             CompletionStage::Publishing(receipt) => receipt,
         };
@@ -528,7 +528,11 @@ thread_local! {
     not(target_arch = "wasm32")
 ))]
 fn discard_pending_open(mut request: PendingOpen) {
-    if let Some(Ok(window)) = request.pending.try_take() {
+    if let Some(Ok(window)) = request
+        .pending
+        .try_take()
+        .map(|taken| taken.and_then(super::opened_window))
+    {
         super::discard_window(window.as_ref(), "an open nobody waits for");
     }
     // An unresolved handle is disclaimed; a delivered handle is explicitly
@@ -699,17 +703,22 @@ pub(super) fn drain_pending_secondary_window_completions(
                 PENDING_SECONDARY_WINDOW_OPENS.with(|queue| queue.borrow_mut().push(request));
             }
             Ok(std::task::Poll::Pending) => {}
-            Ok(std::task::Poll::Ready(Ok(window))) => {
-                request.routes.adopt(window.id());
-                PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
-                    queue.borrow_mut().push(PendingCompletion {
-                        reply: None,
-                        config: request.config,
-                        window,
-                        stage: CompletionStage::Bare,
+            Ok(std::task::Poll::Ready(Ok(opened))) => match super::opened_window(opened) {
+                Ok(window) => {
+                    request.routes.adopt(window.id());
+                    PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
+                        queue.borrow_mut().push(PendingCompletion {
+                            reply: None,
+                            config: request.config,
+                            window,
+                            stage: CompletionStage::Bare,
+                        });
                     });
-                });
-            }
+                }
+                Err(error) => {
+                    tracing::error!(%error, "pending secondary window creation failed");
+                }
+            },
             Ok(std::task::Poll::Ready(Err(error))) => {
                 tracing::error!(%error, "pending secondary window creation failed");
             }
@@ -732,7 +741,7 @@ pub(super) fn drain_pending_secondary_window_completions(
             PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| queue.borrow_mut().push(completion));
             continue;
         }
-        let window = Arc::clone(&completion.window);
+        let window = Rc::clone(&completion.window);
         let reply = completion.reply.clone();
         let detail = completion.config.frame_failure_detail;
         let result =
@@ -965,13 +974,13 @@ where
                 queue.borrow_mut().push(PendingCompletion {
                     reply: Some(reply),
                     config: install_config,
-                    window: Arc::clone(&window),
+                    window: Rc::clone(&window),
                     stage: CompletionStage::Content(Box::new(move |window| {
                         super::desktop::install_desktop_window(
                             root,
                             &config_for_install,
                             reload,
-                            Arc::clone(&window),
+                            Rc::clone(&window),
                             host,
                         )
                         .map(|rendered| rendered.installation)
@@ -1058,10 +1067,10 @@ fn spawn_pending_secondary_window_completion(
 ))]
 fn finish_open_secondary_window(
     config: SecondaryWindowInstallConfig,
-    host: Arc<dyn flui_native::HostWindow>,
+    host: Rc<dyn flui_native::HostWindow>,
 ) -> Result<Option<OpenedWindow>, AppWindowError> {
-    let window: Arc<dyn flui_platform::PlatformWindow> = Arc::clone(&host) as _;
-    struct Uninstalled(Option<Arc<dyn flui_platform::PlatformWindow>>);
+    let window: Rc<dyn flui_platform::PlatformWindow> = Rc::clone(&host) as _;
+    struct Uninstalled(Option<Rc<dyn flui_platform::PlatformWindow>>);
     impl Drop for Uninstalled {
         fn drop(&mut self) {
             if let Some(window) = self.0.take()
@@ -1073,7 +1082,7 @@ fn finish_open_secondary_window(
             }
         }
     }
-    let mut uninstalled = Uninstalled(Some(Arc::clone(&window)));
+    let mut uninstalled = Uninstalled(Some(Rc::clone(&window)));
     if !secondary_install_admitted(&config.loop_identity) || !config.reservation.0.begin_install() {
         return Err(AppWindowError::Cancelled);
     }
@@ -1102,7 +1111,7 @@ fn finish_open_secondary_window(
                 })?;
                 prepare_presentation_alongside(
                     shared_with,
-                    super::presentation_window(Arc::clone(&host))
+                    super::presentation_window(Rc::clone(&host))
                         .with_pointer_resampling(config.pointer_resampling),
                 )
                 .map_err(mount_error)?
@@ -1111,7 +1120,7 @@ fn finish_open_secondary_window(
                 let scale_factor =
                     super::window_install::SurfaceGeometry::of(window.as_ref()).scale;
                 let ui_runtime = super::host::build_ui_runtime(
-                    super::presentation_window(Arc::clone(&host))
+                    super::presentation_window(Rc::clone(&host))
                         .with_pointer_resampling(config.pointer_resampling),
                     scale_factor,
                 )
@@ -1128,7 +1137,7 @@ fn finish_open_secondary_window(
                 // `open_secondary_window`'s current contract this ui_runtime has no
                 // root widget or renderer, so secondary handler ownership is
                 // blocked on the documented secondary-window rendering contract.
-                prepare_ui_runtime_alongside(ui_runtime, Arc::clone(&window))
+                prepare_ui_runtime_alongside(ui_runtime, Rc::clone(&window))
             }
         };
     let owner_dispatch = installation.dispatcher();
@@ -1323,12 +1332,12 @@ mod tests {
                             runtime
                                 .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 30.0))
                                 .expect("root");
-                            let window: Arc<dyn flui_platform::PlatformWindow> = window;
-                            let closing_window = Arc::clone(&window);
+                            let window: Rc<dyn flui_platform::PlatformWindow> = window;
+                            let closing_window = Rc::clone(&window);
                             let mut prepared =
                                 super::super::owner_dispatch::prepare_ui_runtime_alongside(
                                     runtime,
-                                    Arc::clone(&window),
+                                    Rc::clone(&window),
                                 );
                             installed_address.set(Some(prepared.dispatcher().address));
                             prepared
@@ -1637,7 +1646,7 @@ mod tests {
                     let stage = if first {
                         let receipt = super::super::owner_dispatch::prepare_ui_runtime_alongside(
                             UiRuntime::for_test(),
-                            Arc::clone(&window) as Arc<dyn flui_platform::PlatformWindow>,
+                            Rc::clone(&window) as Rc<dyn flui_platform::PlatformWindow>,
                         )
                         .submit();
                         assert!(matches!(receipt.outcome(), Some(Ok(()))));

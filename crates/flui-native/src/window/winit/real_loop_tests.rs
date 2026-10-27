@@ -8,11 +8,11 @@
 //! (`owner::winit::testing`): the event loop a test thread may build, the
 //! application a test runs it with and the waits for the loop.
 
-use flui_testing::window_commands::AdmitAndApply as _;
 use std::{
     collections::HashSet,
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     path::PathBuf,
+    rc::Rc,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -29,13 +29,13 @@ use winit::{
     event_loop::ActiveEventLoop, window::WindowId as WinitWindowId,
 };
 
-use crate::owner::winit::WinitApp;
+use crate::WinitPlatform;
 use crate::owner::winit::testing::{
     build_test_event_loop, install_control_lane, install_test_owner_signal, wait_for_map_len,
     wait_for_running,
 };
-use crate::{WinitPlatform, host_window::HostWindow};
-use flui_platform::{WindowCommand, WindowOptions};
+use crate::owner::winit::{LoopWindow, WinitApp};
+use flui_platform::WindowOptions;
 use flui_testing::window_handler::RecordingWindowHandler;
 
 /// A request for a window with `options`, whose handler, built on the owner,
@@ -142,19 +142,8 @@ fn winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone() {
                 "orphan-window unwind",
             );
 
-            let (windows_len, cursor_positions_still_has_orphan) =
-                platform_for_worker.with_state(|state| {
-                    (
-                        state.windows.len(),
-                        state.cursor_positions_for_test().contains_key(&orphan_id),
-                    )
-                });
-            assert_eq!(
-                windows_len,
-                keys_before.len(),
-                "unwind_orphan_window must also remove the windows-map entry, \
-                 not just window_id_map"
-            );
+            let cursor_positions_still_has_orphan = platform_for_worker
+                .with_state(|state| state.cursor_positions_for_test().contains_key(&orphan_id));
             assert!(
                 !cursor_positions_still_has_orphan,
                 "unwind_orphan_window must also remove the orphan's \
@@ -165,19 +154,26 @@ fn winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone() {
                 "unwind_orphan_window's data_transfer.forget_window call must \
                  retire the orphan's in-flight drag session"
             );
+            keys_before.len()
         }));
 
         control_for_worker.request_quit_for_test();
-        if let Err(payload) = outcome {
-            resume_unwind(payload);
-        }
+        outcome.unwrap_or_else(|payload| resume_unwind(payload))
     });
 
     let mut app = WinitApp::for_test(Arc::clone(&platform), host, lane, None);
     event_loop
         .run_app(&mut app)
         .expect("event loop runs to completion");
-    worker.join().expect("worker thread does not panic");
+    let windows_before = worker.join().expect("worker thread does not panic");
+    // The windows map is the owner's: it is read here, on the thread that ran
+    // the loop.
+    assert_eq!(
+        platform.with_state(|state| state.windows.keys().len()),
+        windows_before,
+        "unwind_orphan_window must also remove the windows-map entry, \
+         not just window_id_map"
+    );
 }
 
 /// Programmatic close runs the owner's full close teardown and exits
@@ -191,7 +187,7 @@ fn winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone() {
 /// also have fired on the worker thread, and the loop only ended
 /// because the worker's failure-path `request_quit` unparked it.
 ///
-/// Pinned, in one real-event-loop run, from a cross-thread `WindowCommand::Close`:
+/// Pinned, in one real-event-loop run, from a close requested on another thread:
 /// 1. the window leaves the tracking map and is reported not visible;
 /// 2. `WindowHandler::closed` fires on the OWNER thread, not the calling worker —
 ///    an embedder's owner-affine close handling (`flui-app` rejects
@@ -225,6 +221,9 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
         move_before_close: Arc<AtomicBool>,
         /// The moves held before a wake, one per wake.
         injected: Arc<AtomicUsize>,
+        /// The window, parked on the owner before the close so the drop
+        /// flag cannot be the window's own drop.
+        kept: Option<Rc<dyn LoopWindow>>,
     }
 
     impl ApplicationHandler for ExitObserver {
@@ -249,6 +248,12 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
             if self.move_before_close.load(Ordering::SeqCst)
                 && let Some(window) = window
             {
+                if self.kept.is_none() {
+                    self.kept = self
+                        .inner
+                        .platform
+                        .with_state(|state| state.windows.values().into_iter().next());
+                }
                 let moved = |x: f64| WinitWindowEvent::CursorMoved {
                     device_id: winit::event::DeviceId::dummy(),
                     position: winit::dpi::PhysicalPosition::new(x, 8.0),
@@ -304,8 +309,6 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
     let injected = Arc::new(AtomicUsize::new(0));
     let callback_dropped = Arc::new(AtomicBool::new(false));
     let close_thread: Arc<Mutex<Option<thread::ThreadId>>> = Arc::new(Mutex::new(None));
-    // Parked here so the drop flag cannot be this Arc's own drop.
-    let kept_window: Arc<Mutex<Option<Arc<dyn HostWindow>>>> = Arc::new(Mutex::new(None));
     let close_asked = Arc::new(AtomicUsize::new(0));
     let close_asked_for_worker = Arc::clone(&close_asked);
 
@@ -314,7 +317,6 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
     let exiting_for_worker = Arc::clone(&exiting);
     let callback_dropped_for_worker = Arc::clone(&callback_dropped);
     let close_thread_for_worker = Arc::clone(&close_thread);
-    let kept_window_for_worker = Arc::clone(&kept_window);
     let move_before_close_for_worker = Arc::clone(&move_before_close);
     let injected_for_worker = Arc::clone(&injected);
     let seen_for_worker = Arc::clone(&seen);
@@ -373,8 +375,6 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
             };
             wait_for_map_len(&platform_for_worker, 1, "window registration");
 
-            let _prev = kept_window_for_worker.lock().replace(Arc::clone(&window));
-
             // Every owner wake from here on holds a pointer move first; one
             // armed wake has run before the close is posted, so the wake
             // that runs the close is an armed one by construction.
@@ -388,15 +388,9 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
 
             // The programmatic close, from a thread that is NOT the
             // owner — the hardest case for the teardown's thread rules.
-            window
-                .admit_and_apply(WindowCommand::Close)
-                .expect("a winit window closes");
+            control_for_worker.request_close_window(window.id());
 
             wait_for_map_len(&platform_for_worker, 0, "programmatic close map removal");
-            assert!(
-                !window.state().visible,
-                "the teardown reports the closed window as not visible"
-            );
 
             // The teardown's own exit-policy consult must end the loop;
             // bounded so a missing exit is a loud failure, not a hang.
@@ -425,11 +419,20 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
         exiting,
         move_before_close,
         injected: Arc::clone(&injected),
+        kept: None,
     };
     event_loop
         .run_app(&mut app)
         .expect("event loop runs to completion");
     worker.join().expect("worker thread does not panic");
+    let kept = app
+        .kept
+        .take()
+        .expect("the owner parked the window before the close");
+    assert!(
+        !kept.state().visible,
+        "the teardown reports the closed window as not visible"
+    );
 
     let seen = seen.lock().clone();
     let injected = injected.load(Ordering::SeqCst);
@@ -472,7 +475,6 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
         "a programmatic close was never a request, so the window is not asked \
          whether it should close"
     );
-    let kept = kept_window.lock().take();
     drop(kept);
 }
 
@@ -487,35 +489,27 @@ fn a_linux_winit_window_hands_out_its_at_spi_bridge() {
     let platform = host.shared_owner();
     let event_loop = build_test_event_loop();
     install_test_owner_signal(&platform, &event_loop);
-    let (control, lane) = install_control_lane(&platform, &event_loop);
+    let (_control, lane) = install_control_lane(&platform, &event_loop);
 
-    let platform_for_worker = Arc::clone(&platform);
-    let worker = thread::spawn(move || {
-        // Caught, so the quit below always unparks `run_app`.
-        let outcome = catch_unwind(AssertUnwindSafe(|| {
-            wait_for_running(&platform_for_worker);
-            let handle = control
-                .request_open_window(request(options("accessibility")))
-                .expect("lane accepts the request");
-            let ClaimOutcome::Delivered(window) = handle.wait() else {
-                panic!("the owner delivers the window to its only claimant");
-            };
-            window
-                .expect("window creation succeeds")
-                .accessibility()
-                .is_some()
-        }));
-        control.request_quit_for_test();
-        outcome.unwrap_or_else(|payload| resume_unwind(payload))
+    // The window is the owner's: it is opened and read there, as the loop
+    // becomes ready.
+    let bridged = Arc::new(AtomicBool::new(false));
+    let read = Arc::clone(&bridged);
+    let on_ready: crate::platform::PlatformReadyCallback = Box::new(move |owner| {
+        let window = owner
+            .open_window(options("accessibility"), RecordingWindowHandler::new())?
+            .try_ready()?;
+        read.store(window.accessibility().is_some(), Ordering::SeqCst);
+        owner.quit();
+        Ok(())
     });
 
-    let mut app = WinitApp::for_test(Arc::clone(&platform), host, lane, None);
+    let mut app = WinitApp::for_test(Arc::clone(&platform), host, lane, Some(on_ready));
     event_loop
         .run_app(&mut app)
         .expect("event loop runs to completion");
-    let bridged = worker.join().expect("worker thread does not panic");
     assert!(
-        bridged,
+        bridged.load(Ordering::SeqCst),
         "a winit window on Linux hands out its AT-SPI bridge"
     );
 }
@@ -533,6 +527,7 @@ mod wayland_window {
     use super::*;
     use flui_platform::CommandRefusal;
     use flui_platform::{AdmissionError, WindowCapabilities, WindowCommand, WindowMode};
+    use flui_testing::window_commands::AdmitAndApply as _;
     use winit::event_loop::EventLoop;
 
     /// What a window answers for a command its capabilities leave out.
@@ -559,27 +554,26 @@ mod wayland_window {
         let platform = host.shared_owner();
         let event_loop = build_wayland_event_loop();
         install_test_owner_signal(&platform, &event_loop);
-        let (control, lane) = install_control_lane(&platform, &event_loop);
+        let (_control, lane) = install_control_lane(&platform, &event_loop);
 
-        let platform_for_worker = Arc::clone(&platform);
-        let host_for_worker = Arc::clone(&host);
-        let control_for_worker = control;
-        let worker = thread::spawn(move || {
+        // The window is the owner's: it is opened and driven there, as the
+        // loop becomes ready.
+        let host_on_owner = Arc::clone(&host);
+        let checked = Arc::new(AtomicBool::new(false));
+        let done = Arc::clone(&checked);
+        let on_ready: crate::platform::PlatformReadyCallback = Box::new(move |owner| {
             let outcome = catch_unwind(AssertUnwindSafe(|| {
-                wait_for_running(&platform_for_worker);
-                let window = match control_for_worker
-                    .request_open_window(super::request(
+                let window = owner
+                    .open_window(
                         WindowOptions::default()
                             .with_title("wayland-window")
                             .with_size(Size::new(320.0, 240.0))
                             .with_position(Some(Point::new(40.0, 60.0))),
-                    ))
-                    .expect("lane accepts the request")
-                    .wait()
-                {
-                    ClaimOutcome::Delivered(result) => result.expect("window creation succeeds"),
-                    _ => panic!("the window request is delivered"),
-                };
+                        RecordingWindowHandler::new(),
+                    )
+                    .expect("the window opens")
+                    .try_ready()
+                    .expect("the window opens at once");
                 let capabilities = window.state().capabilities;
                 assert!(
                     !capabilities.sets_position.is_available()
@@ -600,7 +594,7 @@ mod wayland_window {
                         && capabilities.maximizes.is_available()
                 );
                 assert_eq!(
-                    crate::platform::Platform::window_capabilities(&*host_for_worker),
+                    crate::platform::Platform::window_capabilities(&*host_on_owner),
                     capabilities
                 );
                 assert_ne!(capabilities, WindowCapabilities::ALL);
@@ -638,16 +632,22 @@ mod wayland_window {
                 window.reveal_after_first_frame();
                 assert!(window.state().visible);
             }));
-            control_for_worker.request_quit_for_test();
+            // Caught, so the loop always quits; the failure resumes below.
+            owner.quit();
             if let Err(payload) = outcome {
                 resume_unwind(payload);
             }
+            done.store(true, Ordering::SeqCst);
+            Ok(())
         });
 
-        let mut app = WinitApp::for_test(Arc::clone(&platform), host, lane, None);
+        let mut app = WinitApp::for_test(Arc::clone(&platform), host, lane, Some(on_ready));
         event_loop
             .run_app(&mut app)
             .expect("event loop runs to completion");
-        worker.join().expect("worker thread does not panic");
+        assert!(
+            checked.load(Ordering::SeqCst),
+            "the window's checks ran on the owner"
+        );
     }
 }

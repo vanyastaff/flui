@@ -37,7 +37,7 @@
 //! [`check`] returns each violated promise by name; [`assert_conforms`] panics
 //! listing them.
 
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_foundation::geometry::{Point, Rect, Size, WindowMetrics};
 use flui_platform::input_regions::{InputRegion, InputRegionKind};
@@ -74,7 +74,7 @@ pub struct Readback {
 /// A window under test, as the checks drive it.
 pub trait WindowFixture {
     /// The window under test, open and visible, in normal mode.
-    fn window(&self) -> Arc<dyn PlatformWindow>;
+    fn window(&self) -> Rc<dyn PlatformWindow>;
 
     /// What the window system says of the window now.
     fn readback(&self) -> Readback;

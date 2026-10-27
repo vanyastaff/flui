@@ -218,12 +218,12 @@ fn nonce() -> ProcessNonce {
 
 /// A headless window and the handler it was opened with.
 struct Window {
-    host: Arc<dyn HostWindow>,
+    host: Rc<dyn HostWindow>,
     handler: Rc<RecordingWindowHandler>,
 }
 
 impl std::ops::Deref for Window {
-    type Target = Arc<dyn HostWindow>;
+    type Target = Rc<dyn HostWindow>;
 
     fn deref(&self) -> &Self::Target {
         &self.host
@@ -238,7 +238,7 @@ fn open(platform: &HeadlessPlatform) -> (Window, PresentationWindow) {
     let accessibility = window.accessibility();
     (
         Window {
-            host: Arc::clone(&window),
+            host: Rc::clone(&window),
             handler,
         },
         PresentationWindow::new(window, accessibility),
@@ -342,7 +342,7 @@ fn side_by_side(first: &ReceiverAnchor, second: &ReceiverAnchor) -> World {
     world
 }
 
-fn headless(window: &Arc<dyn HostWindow>) -> &MockWindow {
+fn headless(window: &Rc<dyn HostWindow>) -> &MockWindow {
     window
         .as_any()
         .downcast_ref::<MockWindow>()
@@ -398,14 +398,14 @@ impl World {
     fn start_in(
         &self,
         presentation: PresentationId,
-        window: &Arc<dyn HostWindow>,
+        window: &Rc<dyn HostWindow>,
         items: Vec<DragItem>,
         allowed: AllowedActions,
     ) -> Rc<DragSession> {
         let window = as_platform(window);
         Rc::new(
             self.handle
-                .start(DragStart::new(presentation, items, allowed).window(Arc::downgrade(&window)))
+                .start(DragStart::new(presentation, items, allowed).window(Rc::downgrade(&window)))
                 .expect("a drag starts"),
         )
     }
@@ -453,7 +453,7 @@ impl World {
     }
 }
 
-fn as_platform(window: &Arc<dyn HostWindow>) -> Arc<dyn PlatformWindow> {
+fn as_platform(window: &Rc<dyn HostWindow>) -> Rc<dyn PlatformWindow> {
     window.clone()
 }
 
@@ -617,7 +617,7 @@ fn a_drag_between_runtimes_delivers_serialized_representations_only() {
                     vec![DragItem::new().with_value(7_i32).with_text("hello")],
                     AllowedActions::new(MOVE, COPY),
                 )
-                .window(Arc::downgrade(&window)),
+                .window(Rc::downgrade(&window)),
             )
             .expect("a drag starts"),
     );
@@ -678,7 +678,7 @@ fn a_window_that_cannot_start_the_session_keeps_the_drag_in_its_window() {
                 vec![DragItem::new().with_text("x")],
                 AllowedActions::new(MOVE, COPY),
             )
-            .window(Arc::downgrade(&as_platform(&window))),
+            .window(Rc::downgrade(&as_platform(&window))),
         )
         .expect("starts in the window");
     let outcome = runtime.enter(|_| {
@@ -906,7 +906,7 @@ impl PlatformDragSource for FirstStartPanics {
 
 /// A headless window that starts OS drags through `source`.
 struct WithDragSource {
-    window: Arc<dyn PlatformWindow>,
+    window: Rc<dyn PlatformWindow>,
     source: Arc<dyn PlatformDragSource>,
 }
 
@@ -916,6 +916,12 @@ impl PlatformWindow for WithDragSource {
     }
     fn request_redraw(&self) {
         self.window.request_redraw();
+    }
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        self.window.redraw_requester()
+    }
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        self.window.surface_target()
     }
     fn set_cursor(
         &self,
@@ -964,13 +970,13 @@ impl PlatformWindow for WithDragSource {
 fn a_start_that_panics_is_a_refusal_and_the_next_still_starts() {
     let platform = HeadlessPlatform::new();
     let (host, _) = open(&platform);
-    let window: Arc<dyn PlatformWindow> = Arc::new(WithDragSource {
+    let window: Rc<dyn PlatformWindow> = Rc::new(WithDragSource {
         window: as_platform(&host),
         source: Arc::new(FirstStartPanics::default()),
     });
     let runtime = runtime_over(
         &platform,
-        PresentationWindow::new(Arc::clone(&window), None),
+        PresentationWindow::new(Rc::clone(&window), None),
         nonce(),
     );
     let start = || {
@@ -982,7 +988,7 @@ fn a_start_that_panics_is_a_refusal_and_the_next_still_starts() {
                     vec![DragItem::new().with_text("x")],
                     AllowedActions::new(MOVE, COPY),
                 )
-                .window(Arc::downgrade(&window)),
+                .window(Rc::downgrade(&window)),
             )
             .expect("starts in the window")
     };

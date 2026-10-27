@@ -115,7 +115,7 @@ pub struct DragStart {
     allowed: AllowedActions,
     reach: Option<DragReach>,
     pointer: Option<PointerInfo>,
-    window: Option<std::sync::Weak<dyn PlatformWindow>>,
+    window: Option<std::rc::Weak<dyn PlatformWindow>>,
     hit_test: Option<HitTestHandle>,
     capture: Option<PointerCapture>,
     observer: Option<Rc<dyn DragObserver>>,
@@ -155,7 +155,7 @@ impl DragStart {
 
     /// The window the drag starts in: it says when the pointer leaves, and
     /// starts the OS session.
-    pub fn window(mut self, window: std::sync::Weak<dyn PlatformWindow>) -> Self {
+    pub fn window(mut self, window: std::rc::Weak<dyn PlatformWindow>) -> Self {
         self.window = Some(window);
         self
     }
@@ -951,7 +951,7 @@ impl DragHandle {
         validate_session(allowed, reach, data.has_serialized())?;
         let (timing, available) = window
             .as_ref()
-            .and_then(std::sync::Weak::upgrade)
+            .and_then(std::rc::Weak::upgrade)
             .and_then(|window| window.drag_source())
             .map_or((OsDragStart::OnLeavingWindow, false), |drag_source| {
                 (drag_source.start_timing(), true)
@@ -1265,7 +1265,7 @@ struct Running {
     parts: ViewParts,
     hit_test: Option<HitTestHandle>,
     kind: PointerKind,
-    window: Option<std::sync::Weak<dyn PlatformWindow>>,
+    window: Option<std::rc::Weak<dyn PlatformWindow>>,
     observer: Option<Rc<dyn DragObserver>>,
     cursor: Option<Rc<DragCursor>>,
     stage_system: bool,
@@ -1344,7 +1344,7 @@ fn locate(shared: &Shared, running: &Running, global: Offset<f64>) -> Over {
         hit_test,
         position: global,
     };
-    let window = running.window.as_ref().and_then(std::sync::Weak::upgrade);
+    let window = running.window.as_ref().and_then(std::rc::Weak::upgrade);
     let Some(window) = window else {
         return here;
     };

@@ -6,7 +6,7 @@
 //! - [`TestWindow`]: a [`PlatformWindow`] value with every knob the UI runtime
 //!   tests vary (id, scale factor, sizes, focus, visibility, an injected
 //!   text-input capability) and recorders for what the UI runtime asked of it
-//!   (redraws, pre-present notifications, the cursor).
+//!   (redraws and the cursor).
 //! - [`ScriptedSink`]: a [`FrameSink`] whose submit verdicts a test scripts.
 //!
 //! Neither the window nor the sink is `flui_native`'s `MockWindow` or a raster backend: those are
@@ -27,7 +27,7 @@ use crate::sink::{FrameSink, SubmitVerdict};
 
 /// Configurable [`PlatformWindow`] double. Construct with [`TestWindow::new`],
 /// adjust via the builder-style setters, then `Arc::new` it where an
-/// `Arc<dyn PlatformWindow>` is needed.
+/// `Rc<dyn PlatformWindow>` is needed.
 pub struct TestWindow {
     id: WindowId,
     scale_factor: f64,
@@ -49,9 +49,6 @@ pub struct TestWindow {
     /// already hold (an `Arc<AtomicU32>` readable without a lock). They cannot
     /// drift: both are written in the single `request_redraw` body below.
     redraw_threads: Arc<parking_lot::Mutex<Vec<std::thread::ThreadId>>>,
-    /// How many times `pre_present_notify` ran — see
-    /// [`TestWindow::pre_present_notifies_handle`].
-    pre_present_notifies: Arc<AtomicU32>,
     text_input: Option<Arc<dyn PlatformTextInput>>,
     /// Reported from [`PlatformWindow::system_chrome`].
     system_chrome: Option<Arc<dyn flui_platform::PlatformSystemChrome>>,
@@ -94,7 +91,6 @@ impl TestWindow {
             visible: true,
             redraw_calls: Arc::new(AtomicU32::new(0)),
             redraw_threads: Arc::new(parking_lot::Mutex::new(Vec::new())),
-            pre_present_notifies: Arc::new(AtomicU32::new(0)),
             text_input: None,
             system_chrome: None,
             accessibility: None,
@@ -172,14 +168,6 @@ impl TestWindow {
         self.accessibility.clone()
     }
 
-    /// A handle on the pre-present-notify counter, for a test that must
-    /// observe the count from inside a sink script (at the moment of the
-    /// submit) rather than after the fact.
-    #[must_use]
-    pub fn pre_present_notifies_handle(&self) -> Arc<AtomicU32> {
-        Arc::clone(&self.pre_present_notifies)
-    }
-
     /// The counter [`PlatformWindow::request_redraw`] bumps — clone it out
     /// before `Arc`-ing the window.
     #[must_use]
@@ -201,18 +189,34 @@ impl TestWindow {
     }
 }
 
+fn record_redraw(
+    calls: &AtomicU32,
+    threads: &parking_lot::Mutex<Vec<std::thread::ThreadId>>,
+) {
+    calls.fetch_add(1, Ordering::Relaxed);
+    threads.lock().push(std::thread::current().id());
+}
+
 impl PlatformWindow for TestWindow {
     fn id(&self) -> WindowId {
         self.id
     }
 
-    fn pre_present_notify(&self) {
-        self.pre_present_notifies.fetch_add(1, Ordering::Relaxed);
+    fn request_redraw(&self) {
+        record_redraw(&self.redraw_calls, &self.redraw_threads);
     }
 
-    fn request_redraw(&self) {
-        self.redraw_calls.fetch_add(1, Ordering::Relaxed);
-        self.redraw_threads.lock().push(std::thread::current().id());
+    /// Records into the same counter and thread list as
+    /// [`Self::request_redraw`], from whichever thread asks.
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        let calls = Arc::clone(&self.redraw_calls);
+        let threads = Arc::clone(&self.redraw_threads);
+        Arc::new(move || record_redraw(&calls, &threads))
+    }
+
+    /// No native window: [`flui_platform::NoNativeSurface`].
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        Arc::new(flui_platform::NoNativeSurface)
     }
 
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {

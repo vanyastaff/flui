@@ -6,7 +6,7 @@
 //! (`window::apple::ios`) adapts that handler to [`SceneConsumer`], so the
 //! loop drives sessions without naming the installation it hands over.
 
-use std::sync::Arc;
+use std::rc::Rc;
 
 use crate::{BootstrapError, HostWindow, PlatformProxy};
 
@@ -35,7 +35,7 @@ pub(crate) trait SceneConsumer {
     fn window_handler(
         &mut self,
         session: &IOSSceneSessionId,
-    ) -> std::rc::Rc<dyn flui_platform::WindowHandler>;
+    ) -> Rc<dyn flui_platform::WindowHandler>;
 
     /// `window` connected to `session` as `attachment`; `reconnect` says the
     /// session installed its application before. Returns what the loop
@@ -51,7 +51,7 @@ pub(crate) trait SceneConsumer {
         &mut self,
         session: IOSSceneSessionId,
         attachment: IOSSceneAttachmentId,
-        window: Arc<dyn HostWindow>,
+        window: Rc<dyn HostWindow>,
         reconnect: bool,
         wake: PlatformProxy,
     ) -> Result<Box<dyn SceneInstallation>, BootstrapError>;

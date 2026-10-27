@@ -14,6 +14,7 @@
 
 use flui_platform::CommandRefusal;
 use flui_testing::window_commands::AdmitAndApply as _;
+use std::rc::Rc;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -80,28 +81,28 @@ fn open(platform: &WindowsPlatform, options: WindowOptions) -> Opened {
     Opened::on(platform, options).expect("a Win32 window opens")
 }
 
-fn hwnd_of(window: &Arc<dyn HostWindow>) -> HWND {
+fn hwnd_of(window: &Rc<dyn HostWindow>) -> HWND {
     crate::win32_handle(window.as_ref())
 }
 
-fn shown(window: &Arc<dyn HostWindow>) -> bool {
+fn shown(window: &Rc<dyn HostWindow>) -> bool {
     // SAFETY: a plain query of the live window, on its creating thread.
     unsafe { IsWindowVisible(hwnd_of(window)) }.as_bool()
 }
 
-fn style(window: &Arc<dyn HostWindow>) -> u32 {
+fn style(window: &Rc<dyn HostWindow>) -> u32 {
     // SAFETY: a plain query of the live window.
     unsafe { GetWindowLongPtrW(hwnd_of(window), GWL_STYLE) as u32 }
 }
 
-fn rect(window: &Arc<dyn HostWindow>) -> RECT {
+fn rect(window: &Rc<dyn HostWindow>) -> RECT {
     let mut rect = RECT::default();
     // SAFETY: `rect` is a stack local out-parameter.
     unsafe { GetWindowRect(hwnd_of(window), &raw mut rect) }.expect("the window rectangle");
     rect
 }
 
-fn monitor_rect(window: &Arc<dyn HostWindow>) -> RECT {
+fn monitor_rect(window: &Rc<dyn HostWindow>) -> RECT {
     let mut info = MONITORINFO {
         cbSize: std::mem::size_of::<MONITORINFO>() as u32,
         ..Default::default()
@@ -114,7 +115,7 @@ fn monitor_rect(window: &Arc<dyn HostWindow>) -> RECT {
     info.rcMonitor
 }
 
-fn covers_its_monitor(window: &Arc<dyn HostWindow>) -> bool {
+fn covers_its_monitor(window: &Rc<dyn HostWindow>) -> bool {
     let (window_rect, monitor) = (rect(window), monitor_rect(window));
     window_rect.left == monitor.left
         && window_rect.top == monitor.top
@@ -130,7 +131,7 @@ fn content_is(state: &WindowState, width: f64, height: f64) -> bool {
     near(state.content_size.width, width) && near(state.content_size.height, height)
 }
 
-fn apply(window: &Arc<dyn HostWindow>, command: WindowCommand) {
+fn apply(window: &Rc<dyn HostWindow>, command: WindowCommand) {
     window
         .admit_and_apply(command.clone())
         .unwrap_or_else(|error| panic!("{command:?} is supported: {error}"));
@@ -685,7 +686,7 @@ fn a_window_without_a_sizing_border_holds_its_limits() {
 
 /// Send a command whose numbers a maximized Win32 window may hold or not: it
 /// applies, or the window system refuses it, and nothing overflows.
-fn beyond_win32(window: &Arc<dyn HostWindow>, command: WindowCommand) {
+fn beyond_win32(window: &Rc<dyn HostWindow>, command: WindowCommand) {
     match window.admit_and_apply(command.clone()) {
         Ok(()) | Err(CommandRefusal::Apply(ApplyError::Platform(PlatformFailure::OutOfRange))) => {}
         Err(other) => panic!("{command:?} answered {other:?}"),
@@ -735,9 +736,9 @@ fn a_hidden_windows_frame_request_reaches_its_frame_callback() {
 /// `window`'s handler from here on, as a consumer compares them.
 fn on_changes(
     window: &Opened,
-    changed: impl FnMut(&Arc<dyn HostWindow>, &WindowState, &WindowState) + 'static,
+    changed: impl FnMut(&Rc<dyn HostWindow>, &WindowState, &WindowState) + 'static,
 ) {
-    let weak = Arc::downgrade(&window.window);
+    let weak = Rc::downgrade(&window.window);
     let seen = std::cell::RefCell::new(window.state());
     let changed = std::cell::RefCell::new(changed);
     window.handler.react_to_state_change(move || {
@@ -911,7 +912,7 @@ fn settle() {
     let _ = pump_until(Duration::from_millis(150), || false);
 }
 
-fn send(window: &Arc<dyn HostWindow>, message: u32, wparam: usize, lparam: isize) {
+fn send(window: &Rc<dyn HostWindow>, message: u32, wparam: usize, lparam: isize) {
     // SAFETY: a message to the live window on its own thread; a pointer in
     // `lparam` is the caller's live local.
     unsafe {
@@ -925,7 +926,7 @@ fn send(window: &Arc<dyn HostWindow>, message: u32, wparam: usize, lparam: isize
 }
 
 /// A `WM_DPICHANGED` for `dpi` that suggests `suggested`.
-fn dpi_changed(window: &Arc<dyn HostWindow>, dpi: usize, suggested: RECT) {
+fn dpi_changed(window: &Rc<dyn HostWindow>, dpi: usize, suggested: RECT) {
     send(
         window,
         WM_DPICHANGED,
@@ -1029,7 +1030,7 @@ fn geometry_win32_cannot_hold_is_refused() {
     assert_eq!(after.outer, before.outer);
 }
 
-fn press_f11(window: &Arc<dyn HostWindow>) {
+fn press_f11(window: &Rc<dyn HostWindow>) {
     // F11's scan code is 0x57.
     send(window, WM_KEYDOWN, usize::from(VK_F11.0), 0x0057_0001);
 }
@@ -1210,7 +1211,7 @@ struct Heard {
 fn listen_for_snapshots(window: &Opened) -> Arc<std::sync::Mutex<Vec<Heard>>> {
     let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
     let log = Arc::clone(&heard);
-    let weak = Arc::downgrade(window);
+    let weak = Rc::downgrade(window);
     let address = hwnd_of(window).0 as isize;
     window.handler.react_to_state_change(move || {
         let Some(window) = weak.upgrade() else {
@@ -1287,13 +1288,13 @@ fn activation_is_a_fact_apart_from_focus() {
 /// A Win32 window for the conformance checks of `flui-testing`.
 struct Win32Fixture {
     _platform: WindowsPlatform,
-    window: Arc<dyn HostWindow>,
+    window: Rc<dyn HostWindow>,
     hwnd: HWND,
 }
 
 impl WindowFixture for Win32Fixture {
-    fn window(&self) -> Arc<dyn PlatformWindow> {
-        Arc::clone(&self.window) as Arc<dyn PlatformWindow>
+    fn window(&self) -> Rc<dyn PlatformWindow> {
+        Rc::clone(&self.window) as Rc<dyn PlatformWindow>
     }
 
     fn readback(&self) -> Readback {
@@ -1430,10 +1431,9 @@ fn a_locked_session_or_a_cloak_hides_a_shown_window() {
     assert_eq!(*events.lock().expect("log"), [false, true, false, true]);
 }
 
-/// A close command applied from another thread closes the window on its
-/// owner's next message, without asking the should-close veto: a command is
-/// not a close request.
-fn a_close_from_another_thread_asks_no_veto() {
+/// A close command closes the window without asking the should-close veto: a
+/// command is not a close request.
+fn a_close_command_asks_no_veto() {
     let platform = platform();
     let window = open(&platform, options());
     settle();
@@ -1448,14 +1448,9 @@ fn a_close_from_another_thread_asks_no_veto() {
     window
         .handler
         .react_to_close(move || heard.store(true, Ordering::SeqCst));
-    let elsewhere = Arc::clone(&window);
-    std::thread::spawn(move || {
-        elsewhere
-            .admit_and_apply(flui_platform::WindowCommand::Close)
-            .expect("a close command is admitted");
-    })
-    .join()
-    .expect("the closing thread");
+    window
+        .admit_and_apply(flui_platform::WindowCommand::Close)
+        .expect("a close command is admitted");
     assert!(
         pump_until(Duration::from_secs(1), || closed.load(Ordering::SeqCst)),
         "the owner closed the window"
@@ -1470,10 +1465,7 @@ fn native_window_commands() {
             "a_window_opened_at_open_is_shown",
             a_window_opened_at_open_is_shown,
         ),
-        (
-            "a_close_from_another_thread_asks_no_veto",
-            a_close_from_another_thread_asks_no_veto,
-        ),
+        ("a_close_command_asks_no_veto", a_close_command_asks_no_veto),
         (
             "a_deferred_window_is_hidden_until_its_first_frame",
             a_deferred_window_is_hidden_until_its_first_frame,

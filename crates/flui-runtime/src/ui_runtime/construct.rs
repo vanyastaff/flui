@@ -274,7 +274,7 @@ impl UiRuntime {
     /// If the UI runtime's interaction lane cannot be created.
     #[cfg(any(test, feature = "testing"))]
     #[must_use]
-    pub fn for_test_with_window(window: Arc<dyn flui_platform::PlatformWindow>) -> Self {
+    pub fn for_test_with_window(window: Rc<dyn flui_platform::PlatformWindow>) -> Self {
         let identity = crate::runtime_services::next_identity();
         // The no-op `wake` still must set THIS SAME `needs_redraw` flag —
         // in production the two are the same fact through AppRuntime's

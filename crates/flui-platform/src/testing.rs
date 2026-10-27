@@ -24,6 +24,8 @@
 ///     flui_platform::window_takes_no_frame_verbs!();
 /// #   fn id(&self) -> WindowId { WindowId(1) }
 /// #   fn request_redraw(&self) {}
+/// #   fn surface_target(&self) -> Arc<dyn SurfaceTarget> { Arc::new(NoNativeSurface) }
+/// #   fn redraw_requester(&self) -> Arc<dyn RedrawRequester> { Arc::new(|| {}) }
 /// #   fn state(&self) -> WindowState {
 /// #       WindowState::new(WindowGeometry::new(None, Size::default()), Size::default())
 /// #   }

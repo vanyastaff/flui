@@ -98,7 +98,7 @@ pub(crate) trait HostDisplays: StaleOnWake {
     fn observe(self: Arc<Self>, signal: &Arc<OwnerSignal>) -> Watch;
 }
 
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, rc::Rc, sync::Arc};
 
 use flui_foundation::OwnerAffinity;
 use objc2::MainThreadMarker;
@@ -120,6 +120,7 @@ use crate::{
     owner::handlers::{PlatformHandlers, SessionEndHook},
     owner::notices::{LifecycleHooks, NoticeChannel, StaleOnWake},
     owner::signal::OwnerSignal,
+    owner::slot::OwnerMap,
     owner::sources::SystemPreferenceSource,
     owner::watch::Watch,
     platform::Platform,
@@ -130,10 +131,16 @@ use flui_platform::{DisplayId, DisplaySnapshot, PlatformWindow, SystemPreference
 
 /// The windows the macOS loop tracks, keyed by `NSWindow` pointer: the window
 /// feature's, which the loop holds without naming them (ADR-0151 §10). Each
-/// window adds itself when it opens and removes itself when it goes; the loop
+/// window adds itself when it opens and removes itself when it closes; the loop
 /// asks them for frames from the wake pump and closes them when the
-/// application stops.
-pub(crate) type WindowRegistry = Arc<Mutex<HashMap<u64, Arc<dyn HostWindow>>>>;
+/// application stops. A window is not `Send` (ADR-0254 §5), so only the AppKit
+/// main thread, where every window is made, reaches the map; elsewhere it is
+/// empty.
+///
+/// The key only removes a window on its own close and is never looked up: a
+/// pointer the system reuses for a later window cannot reach an earlier one,
+/// since a window leaves the map before its `NSWindow` is released.
+pub(crate) type WindowRegistry = Arc<OwnerMap<u64, Rc<dyn HostWindow>>>;
 
 /// A macOS window as the features beside it reach it (ADR-0151 §3): its
 /// content view, whether it has closed, and the owner lane every AppKit
@@ -246,9 +253,10 @@ pub(crate) fn debug_assert_appkit_main_thread(op: &'static str) {
 // `NativeOwner`, which only the main thread reads and which releases its value
 // there wherever the loop is dropped; the preference source and the notice
 // sources are read and started on the main thread only, and what they hold of
-// AppKit is notification-centre tokens, which any thread may remove; every
-// other field is `Arc`/`Mutex`-protected. `host::Loop: Send + Sync` requires
-// the wrapper to be shareable.
+// AppKit is notification-centre tokens, which any thread may remove; the
+// window map is reached by the owner thread alone; every other field is
+// `Arc`/`Mutex`-protected. `host::Loop: Send + Sync` requires the wrapper to be
+// shareable.
 unsafe impl Send for MacOSLoop {}
 // SAFETY: see `Send` above — interior mutability is Mutex-guarded, the
 // screen observer is reached only through a main-thread marker, and the raw
@@ -257,21 +265,12 @@ unsafe impl Sync for MacOSLoop {}
 
 impl std::fmt::Debug for MacOSLoop {
     // Hand-written: the remaining fields are raw platform handles and callback
-    // payloads with no useful Debug form.
-    //
-    // `try_lock`, never `lock`: `parking_lot::Mutex` is not reentrant and
-    // BLOCKS rather than panicking, so formatting this value while the same
-    // thread already holds `windows` would deadlock silently — and a Debug
-    // impl gets called from assertion messages and `tracing` fields, which is
-    // exactly where a lock is likely to be held. Same pattern
-    // `parking_lot::Mutex<T>: Debug` itself uses.
+    // payloads with no useful Debug form. The window count is the owner
+    // thread's; anywhere else the map reads empty.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut out = f.debug_struct("MacOSLoop");
-        match self.windows.try_lock() {
-            Some(windows) => out.field("windows", &windows.len()),
-            None => out.field("windows", &format_args!("<locked>")),
-        };
-        out.finish_non_exhaustive()
+        f.debug_struct("MacOSLoop")
+            .field("windows", &self.windows.keys().len())
+            .finish_non_exhaustive()
     }
 }
 
@@ -310,17 +309,16 @@ impl MacOSLoop {
             // Bind the fields the wake pump needs as locals first: the pump is
             // passed a wake closure over the window map, and both must exist
             // before the struct literal that owns them.
-            let windows: WindowRegistry = Arc::new(Mutex::new(HashMap::new()));
+            let windows: WindowRegistry = Arc::new(OwnerMap::new());
             let handlers = Arc::new(Mutex::new(PlatformHandlers::default()));
             let wake_pump = wake_pump::WakePump::new(Arc::clone(&handlers), {
                 let windows = Arc::clone(&windows);
                 Box::new(move || {
-                    // Clone the window handles out and drop the guard
-                    // before messaging any of them: `request_redraw`
-                    // reaches the owner lane, and ADR-0038 §5's
-                    // discipline for re-entrant calls applies to a lock
-                    // held across one just as it does to the handler lock.
-                    let open: Vec<Arc<dyn HostWindow>> = windows.lock().values().cloned().collect();
+                    // The pump wakes on the owner thread, where the map is
+                    // reached. The handles are cloned out before any of them
+                    // is asked for a frame, so no borrow of the map is held
+                    // while a window runs (ADR-0038 §5).
+                    let open: Vec<Rc<dyn HostWindow>> = windows.values();
                     for window in open {
                         // A frame for a window whose surface is already
                         // gone is the renderer's to decline — this only

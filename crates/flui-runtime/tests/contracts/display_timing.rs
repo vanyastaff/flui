@@ -84,7 +84,7 @@ impl OwnerEffects for Effects {
 
 /// A window that counts how often the gesture geometry was re-read.
 struct CountingWindow {
-    inner: Arc<dyn PlatformWindow>,
+    inner: Rc<dyn PlatformWindow>,
     geometry_reads: Arc<std::sync::atomic::AtomicUsize>,
 }
 
@@ -94,6 +94,12 @@ impl PlatformWindow for CountingWindow {
     }
     fn request_redraw(&self) {
         self.inner.request_redraw();
+    }
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        self.inner.redraw_requester()
+    }
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        self.inner.surface_target()
     }
     fn set_cursor(
         &self,
@@ -435,7 +441,7 @@ fn haptic_frame_deadline_follows_the_display() {
 
 fn display_change_runs_the_dpi_geometry_barrier() {
     let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let window: Arc<dyn PlatformWindow> = Arc::new(CountingWindow {
+    let window: Rc<dyn PlatformWindow> = Rc::new(CountingWindow {
         inner: flui_native::headless_platform()
             .open_window(
                 flui_platform::WindowOptions::default(),
@@ -445,7 +451,7 @@ fn display_change_runs_the_dpi_geometry_barrier() {
         geometry_reads: Arc::clone(&reads),
     });
     // The presentation holds its window weakly; the platform keeps it alive.
-    let _platform_keeps_the_window = Arc::clone(&window);
+    let _platform_keeps_the_window = Rc::clone(&window);
     let rig = rig_with(PresentationWindow::new(window, None));
     let count = || reads.load(std::sync::atomic::Ordering::SeqCst);
     let before = count();

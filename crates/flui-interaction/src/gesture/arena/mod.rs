@@ -1775,7 +1775,7 @@ impl GestureArena {
 
     pub(crate) fn set_deadline_wake(
         &self,
-        window: std::sync::Weak<dyn flui_platform::PlatformWindow>,
+        window: std::rc::Weak<dyn flui_platform::PlatformWindow>,
     ) {
         self.shared.observers.set_wake(window.clone());
         self.shared.deadlines.set_wake(window);

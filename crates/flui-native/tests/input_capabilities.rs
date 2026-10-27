@@ -76,7 +76,7 @@ fn session(platform: HeadlessPlatform) -> Session {
 
 impl Session {
     /// A window delivering to `handler`.
-    fn open(&self, handler: &Rc<RecordingWindowHandler>) -> Arc<dyn HostWindow> {
+    fn open(&self, handler: &Rc<RecordingWindowHandler>) -> Rc<dyn HostWindow> {
         self.owner
             .open_window(WindowOptions::default(), handler.clone())
             .expect("open")
@@ -85,7 +85,7 @@ impl Session {
     }
 }
 
-fn mock(window: &Arc<dyn HostWindow>) -> &MockWindow {
+fn mock(window: &Rc<dyn HostWindow>) -> &MockWindow {
     window.as_any().downcast_ref::<MockWindow>().expect("mock")
 }
 
@@ -265,7 +265,7 @@ fn a_native_event_during_a_callback_is_queued_not_dropped() {
     let log = Arc::new(Mutex::new(Vec::new()));
     let nested = Arc::new(Mutex::new(None));
     let (sink, answer) = (Arc::clone(&log), Arc::clone(&nested));
-    let reentry = Arc::downgrade(&window);
+    let reentry = Rc::downgrade(&window);
     handler.react_to_input(move |input| {
         let kind = seen(&input);
         sink.lock().push(format!("enter {kind:?}"));
@@ -303,7 +303,7 @@ fn a_reentrant_event_needing_an_answer_is_unhandled_and_delivered_once() {
         let log = Arc::new(Mutex::new(Vec::new()));
         let answers = Arc::new(Mutex::new(Vec::new()));
         let (sink, answered) = (Arc::clone(&log), Arc::clone(&answers));
-        let reentry = Arc::downgrade(&window);
+        let reentry = Rc::downgrade(&window);
         handler.react_to_input(move |input| {
             let kind = seen(&input);
             sink.lock().push(kind.clone());
@@ -355,7 +355,7 @@ fn input_raised_from_input_is_delivered_after_it() {
     let deepest = Rc::new(Cell::new(0_u32));
     let raised = Rc::new(Cell::new(0_u32));
     let (inside, max, count) = (Rc::clone(&depth), Rc::clone(&deepest), Rc::clone(&raised));
-    let reentry = Arc::downgrade(&window);
+    let reentry = Rc::downgrade(&window);
     handler.react_to_input(move |input| {
         if matches!(input, PlatformInput::Ime(_)) {
             inside.set(inside.get() + 1);
