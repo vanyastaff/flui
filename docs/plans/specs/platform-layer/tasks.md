@@ -3439,6 +3439,74 @@ graph LR
   --all-targets --features winit-backend` и `--all-features`), rustdoc; xvfb nextest 306 из 306
   и 353 из 353; без xvfb — 661 из 662 (прежний случай X-сервера WSLg).
 
+- [x] **LY78** — ветка `platform/wayland`, начата на вершине LY46 `8138ab489`, после слияния
+  vanyastaff/flui#1927 перенесена на `main` @ `d6e469a2b`. **Хост.** `hosts/linux.rs` — таблица
+  `Wayland`: `Loop`, `Displays`, `Preferences`, `Lifecycle` — `WaylandLoop`; `Window` —
+  `WaylandWindow`; `Accessibility` — `UnixAccessibility`; `Storage` — `UserDataDirs`; `Input`, `Text`,
+  `Clipboard`, `Drag`, `Haptics`, `Chrome` — `Absent` (ввод, IME, clipboard и DnD — LY79, LY80).
+  `WaylandPlatform::new() -> Result<_, PlatformError>`, публично `flui_native::WaylandPlatform`.
+  **Цикл** (`owner/linux/wayland.rs`): соединение `wayland-client` на libwayland (`wayland-backend`
+  с `client_system` и `dlopen`: указатели `wl_display`/`wl_surface` для wgpu и чтение того же
+  дисплея драйвером со своего потока), глобалы `wl_compositor` (до v6), `xdg_wm_base` (до v6),
+  `wp_viewporter`, все `wl_output` (только чтобы `enter` называл выход); владелец спит в `poll` на
+  сокете (`prepare_read`) и `eventfd`, который пишут сигнал владельца и запросчик перерисовки,
+  своего таймера нет. Ход: отдать события (диспетчеризация объектов окна только записывает), каждому
+  окну `settle` без локов цикла (ack configure и commit, снимок, вопрос закрытия, кадр), ход сигнала,
+  политика выхода при закрытии последнего окна (`HostDecides` — выход). Чистый модуль `wait`
+  (правило ADR-0249): дедлайн, наступивший один раз, превращается в запросы кадров, предложенный
+  повторно ожидание не ограничивает. Хуки цикла заполняет таблица: `WaylandDisplays`
+  (`display::linux::wayland::WaylandDisplaySource` над `LinuxDisplays`, выход по глобалу → дисплей и
+  масштаб), `WaylandPreferences` (портал `PreferenceSource`, схема цветов для окон),
+  `WaylandNotices` (logind и pressure — `HostNoticeSource`), канал notice. `run` — на потоке,
+  создавшем платформу (там `OwnerMap` окон), один раз. **Окно** (`window/linux/wayland.rs`): чистый
+  `configure` (состояния и `wm_capabilities` из массивов протокола, правило размера `Sizing`,
+  возможности, `protocol_extent`) и `toplevel`: `xdg_toplevel` на `wl_surface`, размер через
+  `wp_viewport` (буфер любого размера валиден при ресайзе, масштаб — `preferred_buffer_scale` v6,
+  иначе масштаб выхода), снимок из подтверждённых configure, команды: заголовок, размер, ограничения,
+  изменяемость (эмуляция `min == max`), режимы, закрытие; позиция, скрытие/показ, материал —
+  `NotOnThisPlatform`, рамка и активация — `NotYetOnThisHost`; возможности следуют
+  `wm_capabilities` (нет — `NotOnThisDevice`). Видимость — то, что сказал композитор: поверхность
+  вошла в выход и не `suspended`. Цель поверхности держит `Arc` хэндла `wl_surface` (уничтожается
+  последним держателем) и клон соединения; `pre_present_notify` взводит frame callback, следующий
+  кадр ждёт `done`. **Общие правки** (пересекаются с LY82): `zbus`, `accesskit_unix`, `futures-util`
+  — безусловные Linux-зависимости; `accessibility::{bridge, linux}` — `target_os = "linux"`,
+  `UnixAccessibility` — позиция доступности для любой ссылки на окно; `desktop = ["wayland"]`;
+  источники `preferences::linux`, `lifecycle::linux` — под `wayland` (его включает и
+  `winit-backend`); `hosts/linux.rs`, `display/linux/wayland.rs`, `Cargo.toml`.
+  **Выбор хоста** в `current_platform()`: во время работы, winit, пока он собран (`flui-app` на
+  Linux), иначе Wayland для сессии Wayland, иначе ошибка с причиной (`choose_linux_host`).
+  **Решения сверх строки (для владельца):** (1) winit выбирается первым, пока собран: у нативного
+  хоста нет ввода; (2) окно, открытое с `visible: false`, на Wayland не скрыть — оно невидимо до
+  первого кадра; (3) после ack configure окно делает commit сразу (viewport уже дал поверхности
+  размер): без этого Weston меряет следующий configure от неподтверждённого состояния; (4) Weston
+  возвращает развёрнутость при выходе из fullscreen — окно, идущее в `Normal`, снимает её после
+  configure без fullscreen; (5) `testing::wayland` (`run_for`, `present`, `compositor_report`) и
+  `wl_shm` под `testing` — тест рисует пустые кадры вместо рендерера; (6) `frame-callback`-темп
+  сделан здесь (строка LY81 его называет). **Тесты** (откат проверен для каждого):
+  `an_idle_wayland_loop_blocks_until_it_is_woken`, `a_due_deadline_is_offered_once`
+  (`owner::linux::wayland::wait`), `a_configure_names_the_toplevel_states`,
+  `a_window_takes_the_size_its_configure_gives`, `the_capabilities_follow_the_compositor`,
+  `an_extent_reaches_the_protocol_within_its_range` (`window::linux::wayland::configure`),
+  `the_linux_host_follows_the_session` (корень); `tests/wayland_window.rs` против Weston:
+  `the_wayland_window_conforms` (conformance окна; без commit после ack падает
+  «after SetMode(Normal), the mode is Fullscreen»), `a_redraw_from_another_thread_reaches_the_window`
+  (без пробуждения запросчиком — 0 кадров), `a_wayland_run_ends_with_its_last_window` (без
+  удержания хуков прогона политика выхода не спрашивается — 0), `a_due_deadline_no_frame_serves_leaves_the_loop_idle`
+  (без правила предложенного дедлайна — 542 365 вопросов за полсекунды),
+  `a_window_maximized_before_fullscreen_returns_to_normal`. Тесты пропускаются, где
+  `WAYLAND_DISPLAY` не называет композитор (CI). `contract::test_window_lifecycle_contract` без
+  `FLUI_HEADLESS` под Weston теперь открывает нативное окно Wayland и проходит. `module-dag` — 316
+  модулей, 343 ребра, 1 исключение (без изменений); `globals` — 57 (статиков не добавлено).
+  Проверки: Windows — `cargo fmt`, clippy рабочего пространства `--all-targets -D warnings`,
+  `checks`, `doc-strict`, `deps` (deny, shear); WSL Ubuntu 24.04 — clippy `flui-native --all-targets`
+  без признаков, по умолчанию (`wayland`), с `winit-backend` и `--all-features`; rustdoc
+  `-D warnings --document-private-items` обычный и с `winit-backend`; nextest под Weston 13.0
+  (`--backend=headless`, desktop-shell, свой сокет, не WSLg) по умолчанию — 251 из 251, с
+  `winit-backend` под xvfb — 310 (7 пропущены) и тесты Wayland 7 из 7, `--all-features` — 311 и 7,
+  `flui-app` — 48. Не запускалось: композиторы рабочего стола (GNOME, KDE, Hyprland), wgpu на
+  поверхности нативного хоста (цель проверена через `raw-window-handle` и conformance), Mac, iPhone,
+  Android, браузер, `cross-typecheck`.
+
 ## Отступление от порядка, решённое владельцем
 
 - 2026-10-21: LY22 ждёт свои зависимости (LY24, LY9, text-ime, teardown), хотя ни одна ветка не

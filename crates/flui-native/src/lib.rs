@@ -140,18 +140,18 @@
 //!
 //! # Feature Flags
 //!
-//! - `default` (`desktop`): the native desktop backend for the target OS. It
-//!   does not include winit.
-//! - `winit-backend`: the winit backend, the Linux windowing path today. It
-//!   brings `wayland` and `x11`, and on Linux the AT-SPI accessibility bridge.
-//! - `wayland`, `x11`: on Linux, the clients the display source uses to read the
-//!   outputs and their refresh rates from the compositor. On other targets they
-//!   add nothing.
+//! - `default` (`desktop`): the native desktop backend for the target OS, on
+//!   Linux the Wayland host (`wayland`). It does not include winit.
+//! - `winit-backend`: the winit backend, which `current_platform` picks on
+//!   Linux while it is built. It brings `wayland` and `x11`.
+//! - `wayland`: on Linux, the native Wayland host (`WaylandPlatform`) and the
+//!   client the display source reads the compositor's outputs with. `x11`: the
+//!   X11 client of the display source. On other targets they add nothing.
 //! - `testing`: the `testing` module, test support for a native host's own
 //!   windows (ADR-0243). Not part of the release API.
 //!
-//! Accessibility has no feature: Win32, AppKit and Linux winit windows always
-//! hand out their operating system's AccessKit adapter. The headless testing
+//! Accessibility has no feature: Win32, AppKit, Wayland and Linux winit
+//! windows always hand out their operating system's AccessKit adapter. The headless testing
 //! platform needs no feature.
 //!
 //! # Input capabilities
@@ -321,8 +321,9 @@ pub use owner::{
 ///    - Selection order (first match wins):
 ///      - `cfg(windows)` → `WindowsPlatform`
 ///      - `cfg(target_os = "macos")` → `MacOSPlatform`
-///      - `cfg(target_os = "linux")` → `WinitPlatform` (the `winit-backend`
-///        feature)
+///      - `cfg(target_os = "linux")` → chosen at run time: `WinitPlatform`
+///        while the `winit-backend` feature is built, else `WaylandPlatform`
+///        for a Wayland session
 ///      - `cfg(target_os = "android")` → an error: the Android host starts
 ///        over the Activity `android_main` is handed (`android_platform`)
 ///      - `cfg(target_os = "ios")` → `IOSPlatform`
@@ -342,10 +343,10 @@ pub use owner::{
 /// - **Windows**: Returns `WindowsPlatform` - fully implemented with Win32 API
 /// - **macOS**: Returns `MacOSPlatform` - the native AppKit backend: windows,
 ///   input, clipboard, IME, displays, and a vsync-paced frame loop
-/// - **Linux**: Returns `WinitPlatform` if the `winit-backend` feature is
-///   enabled (the native Wayland and X11 host replaces it, ADR-0151
-///   section 11); otherwise returns an error. `flui-app` enables
-///   `winit-backend` for Linux builds.
+/// - **Linux**: Returns `WinitPlatform` while the `winit-backend` feature is
+///   built (`flui-app` builds it on Linux until the native hosts carry input,
+///   ADR-0151 section 11); otherwise `WaylandPlatform` when `WAYLAND_DISPLAY`
+///   names a compositor, and an error for an X11 session or none.
 /// - **Android**: Returns an error: the host needs the Activity, which the
 ///   system hands only to `android_main`; `android_platform(app)` starts it
 /// - **iOS**: Returns `IOSPlatform` - the native UIKit backend: windows, touch
@@ -360,7 +361,7 @@ pub use owner::{
 /// |----------|--------|---------|----------|
 /// | Windows | ✅ Production | 10/10 | Full featured; no executing coverage in CI (lint-only via `cross-typecheck`) |
 /// | macOS | ✅ Native AppKit | 9/10 | Windowing, input, clipboard, IME, displays, vsync-paced frame loop; lint-only + bundled probes locally, no CI test job |
-/// | Linux | 🪟 winit fallback (`winit-backend`) | 5/10 | Windowing + input; native Wayland/X11 still a stub |
+/// | Linux | 🪟 winit fallback (`winit-backend`) | 5/10 | Windowing + input; the native Wayland host has windows, displays, preferences, lifecycle and AT-SPI, no input yet |
 /// | Android | 📋 Stub | 2/10 | Roadmap complete |
 /// | iOS | ✅ Native UIKit | 7/10 | Windowing, touch, clipboard, displays, `CADisplayLink` frame source; lint-only in CI (simulator verified) |
 /// | Web | 📋 Stub | 2/10 | Roadmap complete |
@@ -372,7 +373,8 @@ pub use owner::{
 /// - Platform is not supported (should not happen with cfg guards)
 /// - It is called on Android, whose host starts over the Activity
 ///   (`android_platform`)
-/// - Linux is reached without the `winit-backend` feature enabled
+/// - Linux is reached without `winit-backend` and with no Wayland compositor
+///   to connect to
 ///
 /// # Examples
 ///

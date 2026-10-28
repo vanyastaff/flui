@@ -23,7 +23,8 @@
 //! - `hwnd_affinity`: the Win32 rules for which thread may reach a window
 //!   and when its user data is torn down, which the owner control and the
 //!   loop apply (on Windows, and in tests on every host);
-//! - `windows`, `apple`, `android`, `web`, `winit` and [`headless`]: each
+//! - `windows`, `apple`, `android`, `web`, `linux` (Wayland), `winit` and
+//!   [`headless`]: each
 //!   platform's loop, its wakes and what it owns of the thread, each on the
 //!   targets its host runs on (headless everywhere); `redraw_poll`, the redraw
 //!   decision around one native poll, and `modal_pace`, how often a Windows
