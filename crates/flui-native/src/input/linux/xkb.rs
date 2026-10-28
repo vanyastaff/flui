@@ -5,9 +5,10 @@
 //! Two halves:
 //!
 //! - the tables, pure and compiled on every host: an evdev key code's
-//!   [`Code`] ([`code_of`]), a keysym's [`NamedKey`] ([`keysym_key`]), the
-//!   [`Key`] a press means from its keysym and the text XKB gives it
-//!   ([`key_of`]), the [`Modifiers`] the named XKB modifiers hold
+//!   [`Code`](flui_platform::keyboard::Code) ([`code_of`]), a keysym's
+//!   [`NamedKey`](flui_platform::keyboard::NamedKey) ([`keysym_key`]), the
+//!   [`Key`](flui_platform::keyboard::Key) a press means from its keysym and the text XKB gives it
+//!   ([`key_of`]), the [`Modifiers`](flui_platform::keyboard::Modifiers) the named XKB modifiers hold
 //!   ([`modifiers_of`]) and a layout's name in a keymap's text
 //!   ([`group_name`]);
 //! - `keymap`, a compiled keymap and its state over libxkbcommon, loaded at

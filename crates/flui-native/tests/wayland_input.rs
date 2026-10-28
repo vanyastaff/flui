@@ -326,6 +326,16 @@ mod cases {
                 .iter()
                 .any(|event| matches!(event, PointerEvent::Scroll(_)))
         });
+        // The capture journals the seats' registry as the session goes.
+        #[cfg(all(debug_assertions, feature = "native-capture"))]
+        assert!(
+            recorder
+                .journals()
+                .snapshot()
+                .first()
+                .is_some_and(|recording| !recording.rows.is_empty()),
+            "the seats' registry is journalled"
+        );
         fake(KEY_PRESS_EVENT, X_KEY_A, None);
         fake(KEY_RELEASE_EVENT, X_KEY_A, None);
         turn_until(&platform, &window, &handler, "the key", |calls| {
@@ -405,22 +415,26 @@ mod cases {
         let [recording] = recordings.as_slice() else {
             panic!("one registry, the seats': {}", recordings.len());
         };
-        let replayed: Vec<PointerEvent> = recording
-            .replay()
-            .into_iter()
-            .filter_map(|input| match input {
-                PlatformInput::Pointer(event) => Some(event),
-                _ => None,
-            })
-            .collect();
+        let pointers = |inputs: Vec<PlatformInput>| -> Vec<PointerEvent> {
+            inputs
+                .into_iter()
+                .filter_map(|input| match input {
+                    PlatformInput::Pointer(event) => Some(event),
+                    _ => None,
+                })
+                .collect()
+        };
+        let replayed = pointers(recording.replay());
         assert_eq!(replayed.as_slice(), heard, "the journal replays to what the window heard");
+        let mut out = Vec::new();
+        recording.write(&mut out).expect("a recording writes");
+        let read = super::codec::NativeRecording::read(out.as_slice()).expect("it reads back");
+        assert_eq!(pointers(read.replay()), replayed, "the written recording replays alike");
         if std::env::var_os("FLUI_NATIVE_RECORDING_BLESS").is_some() {
             let path = concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/tests/native_recording/wayland_weston_mouse_wheel.jsonl"
             );
-            let mut out = Vec::new();
-            recording.write(&mut out).expect("a recording writes");
             std::fs::write(path, out).expect("the recording is written");
         }
     }

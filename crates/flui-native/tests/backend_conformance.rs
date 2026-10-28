@@ -1180,8 +1180,8 @@ fn wayland_window_conforms() {
         ALL_KINDS
     };
     assert_backend_conforms(&mut SharedAssembly::new(Profile {
-        capabilities,
         kinds,
+        capabilities,
         ..wayland()
     }));
     flui_testing::window_commands::AdmitAndApply::close_for_cleanup(&*window);
