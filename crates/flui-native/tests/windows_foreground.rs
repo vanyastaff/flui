@@ -22,7 +22,7 @@ use std::rc::Rc;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
-use flui_native::{HostWindow, WindowsPlatform};
+use flui_native::{HostWindow, Platform as _, WindowsPlatform};
 use flui_platform::{WindowCommand, WindowOptions};
 use flui_testing::window_commands::AdmitAndApply as _;
 use windows::Win32::Foundation::HWND;
@@ -69,7 +69,8 @@ fn messages_until(limit: Duration, mut done: impl FnMut() -> bool) -> bool {
 }
 
 fn foreground() -> HWND {
-    // SAFETY: a plain query.
+    // SAFETY: the call reads no memory of the caller's and returns an opaque
+    // handle, compared here and never dereferenced.
     unsafe { GetForegroundWindow() }
 }
 
@@ -193,12 +194,26 @@ fn an_activation_takes_the_foreground_only_when_it_is_handed_over() {
     let _ = messages_until(Duration::from_millis(150), || false);
 
     let mut peer = Peer::start();
+    // Where this process is in front, it lets the other application take the
+    // foreground as a click would: Windows then tells this one it lost it.
+    // SAFETY: the call reads no memory of the caller's; it changes only which
+    // process may set the foreground next.
+    let _ = unsafe { AllowSetForegroundWindow(peer.child.id()) };
     assert_eq!(
         peer.ask("front"),
         "true",
         "the other application takes the foreground"
     );
     assert_eq!(foreground(), peer.hwnd, "the other application is in front");
+
+    // Bringing "the application" forward touches no window of another one.
+    platform.activate(true);
+    let _ = messages_until(Duration::from_millis(150), || false);
+    assert_eq!(
+        foreground(),
+        peer.hwnd,
+        "Platform::activate took the foreground"
+    );
 
     window
         .admit_and_apply(WindowCommand::Activate)
@@ -217,7 +232,7 @@ fn an_activation_takes_the_foreground_only_when_it_is_handed_over() {
         "the window asked for attention: its taskbar button flashed (flashes: {flashed:?})"
     );
 
-    // SAFETY: a plain query.
+    // SAFETY: the call reads no memory of the caller's and cannot fail.
     let pid = unsafe { GetCurrentProcessId() };
     assert_eq!(
         peer.ask(&format!("allow {pid}")),
@@ -280,7 +295,9 @@ fn foreground_peer() {
         )
     }
     .expect("the peer's window");
-    // SAFETY: the window this thread just made.
+    // SAFETY: `hwnd` is the live top-level window this thread made, so the
+    // shell may post to it; the message name is a static NUL-terminated
+    // string.
     let shell_hook = unsafe {
         let _ = ShowWindow(hwnd, SW_SHOWNORMAL);
         assert!(RegisterShellHookWindow(hwnd).as_bool(), "the shell hook");
@@ -326,14 +343,16 @@ fn foreground_peer() {
                     .next()
                     .and_then(|pid| pid.parse().ok())
                     .expect("allow names a process");
-                // SAFETY: takes a process identifier by value.
+                // SAFETY: the call reads no memory of the caller's; it changes
+                // only which process may set the foreground next.
                 let allowed = unsafe { AllowSetForegroundWindow(pid) }.is_ok();
                 say(format!("allow {allowed}"));
             }
             _ => break,
         }
     }
-    // SAFETY: the window this thread made.
+    // SAFETY: `hwnd` is the window this thread made and still owns; it is
+    // destroyed once, on its own thread, and not used after.
     let _ = unsafe { DestroyWindow(hwnd) };
 }
 
@@ -347,13 +366,20 @@ fn take_foreground(hwnd: HWND) -> bool {
     // front, whose input is joined only for the one call and let go after;
     // the input array is a stack local of the size named.
     unsafe {
-        let ours = GetCurrentThreadId();
-        let theirs = GetWindowThreadProcessId(GetForegroundWindow(), None);
-        let joined =
-            theirs != 0 && theirs != ours && AttachThreadInput(ours, theirs, true).as_bool();
-        let _ = SetForegroundWindow(hwnd);
-        if joined {
-            let _ = AttachThreadInput(ours, theirs, false);
+        // Handed the right by the process in front (the starter, when the
+        // test's window is in front), the call is the click's own. Without
+        // it, joining the input of the thread in front lets it through; a
+        // joined queue tells the thread left behind nothing of losing the
+        // foreground, so this is only the fallback.
+        if !SetForegroundWindow(hwnd).as_bool() {
+            let ours = GetCurrentThreadId();
+            let theirs = GetWindowThreadProcessId(GetForegroundWindow(), None);
+            let joined =
+                theirs != 0 && theirs != ours && AttachThreadInput(ours, theirs, true).as_bool();
+            let _ = SetForegroundWindow(hwnd);
+            if joined {
+                let _ = AttachThreadInput(ours, theirs, false);
+            }
         }
         let key = |flags: KEYBD_EVENT_FLAGS| INPUT {
             r#type: INPUT_KEYBOARD,

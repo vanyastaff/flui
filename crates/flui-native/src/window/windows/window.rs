@@ -1643,9 +1643,9 @@ enum Foreground {
 /// This is the only place a window asks for the foreground: nothing forces
 /// it past those rules (no attached input queue, no injected keystroke).
 fn request_foreground(hwnd: HWND) -> Foreground {
-    // SAFETY: `SetForegroundWindow` takes the window's handle by value and
-    // reads nothing through it; a handle that no longer names a window is
-    // refused, not dereferenced.
+    // SAFETY: an `HWND` is an opaque handle Win32 validates on every call;
+    // a stale one is refused, so no window this process does not own can be
+    // reached through it.
     if unsafe { SetForegroundWindow(hwnd) }.as_bool() {
         Foreground::Granted
     } else {
@@ -1669,9 +1669,9 @@ fn ask_attention(hwnd: HWND) {
         uCount: 0,
         dwTimeout: 0,
     };
-    // SAFETY: `flash` is a stack local of the size its `cbSize` names, read
-    // through the typed pointer for the duration of the call. The return
-    // value is the window's caption state before the call, not a failure.
+    // SAFETY: the pointer is to a live, initialised `FLASHWINFO` whose
+    // `cbSize` matches its type, which Win32 reads only for the call. The
+    // return value is the caption's state before the call, not a failure.
     let _ = unsafe { FlashWindowEx(&raw const flash) };
 }
 
