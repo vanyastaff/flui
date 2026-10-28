@@ -5,7 +5,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Barrier};
 
 use flui_foundation::geometry::Point;
 use flui_interaction::events::{PointerEventExt, PointerKind, make_move_event};
@@ -15,16 +15,40 @@ use flui_platform::pointer::{
 };
 use flui_platform::{EventTime, Modifiers};
 
-static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    /// The allocations made on this thread. The count is per thread because
+    /// the measured code runs on the test's own thread while the harness's
+    /// main thread keeps allocating (its bookkeeping for the test it just
+    /// spawned), and a process-wide count would charge those to the
+    /// measurement. Constant-initialised with no destructor, so reading it
+    /// from the allocator never allocates.
+    static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Start counting this thread's allocations from zero.
+fn reset_allocations() {
+    ALLOCATIONS.set(0);
+}
+
+/// The allocations this thread made since [`reset_allocations`].
+fn allocations() -> usize {
+    ALLOCATIONS.get()
+}
+
+fn count_allocation() {
+    // `try_with`: an allocation during the thread's own teardown is not
+    // counted rather than a panic inside the allocator.
+    let _ = ALLOCATIONS.try_with(|count| count.set(count.get() + 1));
+}
 
 struct CountingAllocator;
 
 // SAFETY: This test allocator forwards every allocation operation to
 // `std::alloc::System` with the exact layout/pointer contract it received. The
-// only added behavior is an atomic counter increment before `alloc`.
+// only added behavior is a thread-local counter increment before `alloc`.
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        count_allocation();
         // SAFETY: Forwarding the caller-provided layout unchanged to the
         // wrapped system allocator preserves `GlobalAlloc::alloc`'s contract.
         unsafe { System.alloc(layout) }
@@ -37,14 +61,14 @@ unsafe impl GlobalAlloc for CountingAllocator {
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        count_allocation();
         // SAFETY: Forwarding the original pointer/layout plus requested size
         // unchanged to the wrapped system allocator preserves the contract.
         unsafe { System.realloc(ptr, layout, new_size) }
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        count_allocation();
         // SAFETY: Forwarding the caller-provided layout unchanged to the
         // wrapped system allocator preserves `GlobalAlloc::alloc_zeroed`.
         unsafe { System.alloc_zeroed(layout) }
@@ -53,6 +77,31 @@ unsafe impl GlobalAlloc for CountingAllocator {
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
+
+/// What another thread allocates while a measurement runs (the harness's main
+/// thread, a sibling test) is not charged to it.
+#[test]
+fn allocation_count_is_the_measuring_threads_own() {
+    let start = Arc::new(Barrier::new(2));
+    let done = Arc::new(Barrier::new(2));
+    let other = std::thread::spawn({
+        let (start, done) = (Arc::clone(&start), Arc::clone(&done));
+        move || {
+            start.wait();
+            drop(std::hint::black_box(vec![0_u8; 64]));
+            done.wait();
+        }
+    });
+    reset_allocations();
+    start.wait();
+    done.wait();
+    assert_eq!(
+        allocations(),
+        0,
+        "another thread's allocation is not this thread's"
+    );
+    other.join().expect("the allocating thread");
+}
 
 fn hit_entry(index: usize, target: PointerTarget) -> HitTestEntry {
     HitTestEntry::new(RenderId::new(index + 1)).pointer_target(target)
@@ -94,7 +143,7 @@ fn resolved_route_move_invocation_allocates_no_heap_after_setup() {
                 .is_none()
         );
 
-        ALLOCATIONS.store(0, Ordering::Relaxed);
+        reset_allocations();
         assert!(
             handle
                 .invoke_pointer_route(route, &event)
@@ -102,7 +151,7 @@ fn resolved_route_move_invocation_allocates_no_heap_after_setup() {
                 .is_none()
         );
         assert_eq!(
-            ALLOCATIONS.load(Ordering::Relaxed),
+            allocations(),
             0,
             "cached Move route invocation must not allocate after setup"
         );
@@ -111,8 +160,6 @@ fn resolved_route_move_invocation_allocates_no_heap_after_setup() {
         handle.release_route(route).expect("release route");
     });
 
-    // Keep every counting case in this one test: a global allocator counter
-    // must not race a sibling test in the same Rust test process.
     for target_count in [1_usize, 4, 16] {
         for shape in [
             RouteShape::Global,
@@ -174,13 +221,13 @@ fn binding_frame_coalescing_moves_bounded_history() {
     // Warm the coalescer's slot before counting.
     binding.handle_pointer_event(&moves[0], |_| HitTestResult::new());
     binding.flush_pending_moves();
-    ALLOCATIONS.store(0, Ordering::Relaxed);
+    reset_allocations();
     for movement in &moves[1..] {
         let _ = binding.dispatch_pointer_on(InputSurface::Window, movement, |_| {
             panic!("a contact keeps its route")
         });
     }
-    let allocations = ALLOCATIONS.load(Ordering::Relaxed);
+    let allocations = allocations();
     binding.flush_pending_moves();
     assert!(
         allocations <= 16,
@@ -235,12 +282,12 @@ fn steady_hover_allocates_nothing() {
         }
         tracker.update_with_motion(&moves[0], PointerMotionKind::Hover, &path);
         tracker.update_with_motion(&moves[1], PointerMotionKind::Hover, &path);
-        ALLOCATIONS.store(0, Ordering::Relaxed);
+        reset_allocations();
         for movement in &moves[2..] {
             tracker.update_with_motion(movement, PointerMotionKind::Hover, &path);
         }
         assert_eq!(
-            ALLOCATIONS.load(Ordering::Relaxed),
+            allocations(),
             0,
             "an unchanged hover keeps its regions and collections"
         );
@@ -248,15 +295,11 @@ fn steady_hover_allocates_nothing() {
 }
 
 fn empty_hit_test_result_allocates_nothing() {
-    ALLOCATIONS.store(0, Ordering::Relaxed);
+    reset_allocations();
     let result = flui_interaction::HitTestResult::new();
     assert!(result.is_empty());
     drop(result);
-    assert_eq!(
-        ALLOCATIONS.load(Ordering::Relaxed),
-        0,
-        "an empty hit test result owns no storage"
-    );
+    assert_eq!(allocations(), 0, "an empty hit test result owns no storage");
 }
 
 fn resampler_packets(down_time: u64) -> [PointerEvent; 3] {
@@ -312,7 +355,7 @@ fn measure_resampler_delivery(stop: bool) {
         );
         deliveries += 1;
     };
-    ALLOCATIONS.store(0, Ordering::Relaxed);
+    reset_allocations();
     if stop {
         resampler.stop(&mut consume);
     } else {
@@ -322,7 +365,7 @@ fn measure_resampler_delivery(stop: bool) {
             &mut consume,
         );
     }
-    let allocations = ALLOCATIONS.load(Ordering::Relaxed);
+    let allocations = allocations();
     assert_eq!(
         allocations, 0,
         "unchanged-time measured history delivery reuses owned storage: stop={stop}"
@@ -398,9 +441,9 @@ fn saturated_resampler_admission_reuses_bounded_history_storage() {
         resampler.add_event_at(movement(millis), base + Duration::from_millis(millis));
     }
     let last = movement(301);
-    ALLOCATIONS.store(0, Ordering::Relaxed);
+    reset_allocations();
     resampler.add_event_at(last, base + Duration::from_millis(301));
-    let allocations = ALLOCATIONS.load(Ordering::Relaxed);
+    let allocations = allocations();
     // The queue retires the older packet, so its checked history storage can
     // transfer to the newer packet. At most one growth allocation is needed.
     assert!(
@@ -567,9 +610,9 @@ fn measure_route_shape(target_count: usize, shape: RouteShape, history: bool) {
         }
         let route = handle.resolve_pointer_route(&path).expect("resolve route").token();
         assert!(handle.invoke_pointer_route(route, &event).expect("warm invocation").is_none());
-        ALLOCATIONS.store(0, Ordering::Relaxed);
+        reset_allocations();
         let result = handle.invoke_pointer_route(route, &event).expect("measured invocation");
-        let allocations = ALLOCATIONS.load(Ordering::Relaxed);
+        let allocations = allocations();
         assert!(result.is_none());
         assert_eq!(deliveries.get(), target_count * 2);
         if !history || !translated {
@@ -605,11 +648,11 @@ fn arena_decisions_allocate_nothing_for_observation_without_observers() {
     let entry = &entries[0];
 
     // Close, claim, win and reject: every decision an observer would hear.
-    ALLOCATIONS.store(0, Ordering::Relaxed);
+    reset_allocations();
     arena.close(pointer);
     entry.resolve(GestureDisposition::Accepted);
     assert_eq!(
-        ALLOCATIONS.load(Ordering::Relaxed),
+        allocations(),
         0,
         "with no observer registered the arena records nothing"
     );

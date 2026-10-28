@@ -33,7 +33,7 @@
     target_os = "macos",
     target_os = "ios",
     target_os = "android",
-    target_os = "linux",
+    linux_host,
     all(test, not(target_arch = "wasm32"))
 ))]
 pub(crate) const OPAQUE_PANIC_PAYLOAD: &str = "non-string panic payload";
@@ -48,7 +48,7 @@ pub(crate) const OPAQUE_PANIC_PAYLOAD: &str = "non-string panic payload";
     target_os = "macos",
     target_os = "ios",
     target_os = "android",
-    target_os = "linux",
+    linux_host,
     all(test, not(target_arch = "wasm32"))
 ))]
 #[must_use]
@@ -62,7 +62,7 @@ pub(crate) fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> &st
     target_os = "macos",
     target_os = "ios",
     target_os = "android",
-    target_os = "linux",
+    linux_host,
     all(test, not(target_arch = "wasm32"))
 ))]
 pub(crate) enum AfterPanic<A, R> {
@@ -74,14 +74,9 @@ pub(crate) enum AfterPanic<A, R> {
     Answer(fn(A) -> R),
     /// The state behind the entry may be torn mid-dispatch, and answering
     /// would let the OS run more of it: the process ends once the panic is
-    /// logged.
-    #[cfg_attr(
-        not(any(target_os = "windows", target_os = "macos", target_os = "ios")),
-        expect(
-            dead_code,
-            reason = "only the Win32, AppKit and UIKit entries have no answer to give"
-        )
-    )]
+    /// logged. Only the Win32, AppKit and UIKit entries have no answer to
+    /// give.
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "ios"))]
     Abort,
 }
 
@@ -105,7 +100,7 @@ pub(crate) enum AfterPanic<A, R> {
     target_os = "macos",
     target_os = "ios",
     target_os = "android",
-    target_os = "linux",
+    linux_host,
     all(test, not(target_arch = "wasm32"))
 ))]
 pub(crate) fn os_entry<A, R>(
@@ -127,6 +122,7 @@ where
                 end_process(entry, shown, "its answer after the panic panicked too")
             })
         }
+        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "ios"))]
         AfterPanic::Abort => end_process(entry, shown, "the state behind it may be torn"),
     }
 }
@@ -137,7 +133,7 @@ where
     target_os = "macos",
     target_os = "ios",
     target_os = "android",
-    target_os = "linux",
+    linux_host,
     all(test, not(target_arch = "wasm32"))
 ))]
 fn end_process(entry: &'static str, args: Option<&dyn std::fmt::Debug>, why: &'static str) -> ! {
@@ -198,7 +194,7 @@ pub(crate) fn contain_os_entry<R>(entry: &'static str, body: impl FnOnce() -> R)
     target_os = "macos",
     target_os = "ios",
     target_os = "android",
-    target_os = "linux",
+    linux_host,
     all(test, not(target_arch = "wasm32"))
 ))]
 fn contained<R>(
