@@ -83,11 +83,15 @@ pub(crate) mod screen {
 
     /// `-[NSScreen maximumPotentialExtendedDynamicRangeColorComponentValue]`
     /// (macOS 10.15). Before it a screen reports no extended-range headroom.
-    #[cfg(any(target_os = "macos", test))]
+    ///
+    /// Only the x86_64 floor (10.13) lies below it; arm64's floor (11.0) is
+    /// above it, so there the call is made directly and a gate would not
+    /// compile (ADR-0244).
+    #[cfg(all(any(target_os = "macos", test), not(target_arch = "aarch64")))]
     #[derive(Debug, Clone, Copy)]
     pub(crate) struct MacosPotentialHeadroom;
 
-    #[cfg(any(target_os = "macos", test))]
+    #[cfg(all(any(target_os = "macos", test), not(target_arch = "aarch64")))]
     impl crate::version::gate::Gate for MacosPotentialHeadroom {
         type Version = crate::version::gate::apple::MacOSVersion;
         const SINCE: u64 = crate::version::gate::apple::MacOSVersion::new(10, 15, 0).rank();
@@ -119,8 +123,8 @@ pub(crate) mod screen {
     /// that does not describe one.
     pub(crate) fn screen_color(p3: bool, potential: Option<f64>) -> DisplayColor {
         let gamut = crate::display::source::p3_or_srgb(p3);
-        // A finite `f64` beyond `f32` becomes infinite here, which `new` refuses.
-        match potential.and_then(|value| Headroom::new(value as f32).ok()) {
+        // A finite `f64` beyond `f32` becomes infinite here, which `try_new` refuses.
+        match potential.and_then(|value| Headroom::try_new(value as f32).ok()) {
             Some(headroom) if headroom > Headroom::SDR => DisplayColor::high(gamut, Ok(headroom)),
             _ => DisplayColor::standard(gamut),
         }
@@ -208,9 +212,11 @@ pub(crate) mod screen {
 
         use flui_foundation::geometry::{Bounds, Point, Size};
 
+        #[cfg(not(target_arch = "aarch64"))]
+        use super::MacosPotentialHeadroom;
         use super::{
-            IosPotentialHeadroom, MacosPotentialHeadroom, SameObject, ScreenLedger, change_screen,
-            device_bounds_of_screen, macos_display_key, macos_display_persistent_key, screen_color,
+            IosPotentialHeadroom, SameObject, ScreenLedger, change_screen, device_bounds_of_screen,
+            macos_display_key, macos_display_persistent_key, screen_color,
         };
 
         /// Each screen report Apple gives, to the display colour it means.
@@ -222,7 +228,7 @@ pub(crate) mod screen {
                 screen_color(true, Some(16.0)),
                 DisplayColor::high(
                     ColorGamut::DisplayP3,
-                    Ok(Headroom::new(16.0).expect("headroom"))
+                    Ok(Headroom::try_new(16.0).expect("headroom"))
                 ),
                 "an XDR panel"
             );
@@ -248,18 +254,23 @@ pub(crate) mod screen {
         /// The headroom reports' gates: none before the release that has them.
         #[test]
         fn potential_headroom_gate_table() {
-            use crate::version::gate::apple::{AppleVersion, MacOSVersion};
+            use crate::version::gate::apple::AppleVersion;
 
-            assert!(
-                MacOSVersion::new(10, 14, 6)
-                    .since::<MacosPotentialHeadroom>()
-                    .is_none()
-            );
-            assert!(
-                MacOSVersion::new(10, 15, 0)
-                    .since::<MacosPotentialHeadroom>()
-                    .is_some()
-            );
+            #[cfg(not(target_arch = "aarch64"))]
+            {
+                use crate::version::gate::apple::MacOSVersion;
+
+                assert!(
+                    MacOSVersion::new(10, 14, 6)
+                        .since::<MacosPotentialHeadroom>()
+                        .is_none()
+                );
+                assert!(
+                    MacOSVersion::new(10, 15, 0)
+                        .since::<MacosPotentialHeadroom>()
+                        .is_some()
+                );
+            }
             assert!(
                 AppleVersion::new(15, 7, 0)
                     .since::<IosPotentialHeadroom>()

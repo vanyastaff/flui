@@ -348,13 +348,13 @@ fn panel(id: DisplayId) -> DisplayInfo {
 fn headroom_refuses_what_is_not_a_finite_multiple_of_white() {
     for refused in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, 0.99, -2.0] {
         assert_eq!(
-            Headroom::new(refused),
+            Headroom::try_new(refused),
             Err(InvalidHeadroom),
             "{refused} is no headroom"
         );
     }
-    assert_eq!(Headroom::new(1.0), Ok(Headroom::SDR));
-    assert_eq!(Headroom::new(4.5).map(Headroom::get), Ok(4.5));
+    assert_eq!(Headroom::try_new(1.0), Ok(Headroom::SDR));
+    assert_eq!(Headroom::try_new(4.5).map(Headroom::get), Ok(4.5));
 }
 
 fn headroom_from_luminance_is_the_peak_over_white() {
@@ -436,7 +436,7 @@ fn a_profile_change_is_a_new_revision() {
     let first = DisplaySnapshot::empty()
         .successor(vec![sdr.clone()])
         .expect("revision");
-    let three = Headroom::new(3.0).expect("headroom");
+    let three = Headroom::try_new(3.0).expect("headroom");
     let hdr = sdr.with_color(Ok(DisplayColor::high(ColorGamut::Rec2020, Ok(three))));
     let second = first.successor(vec![hdr.clone()]).expect("revision");
     assert!(

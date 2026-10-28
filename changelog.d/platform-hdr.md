@@ -4,7 +4,7 @@
   `SurfaceColorSpace` surfaces are shown in (a `ColorGamut` and a `DynamicRange`) and its
   `Headroom` over SDR white, or the `CapabilityAbsence` that says why the platform gives none.
   `DisplayInfo::color_space()` and `DisplayInfo::headroom()` answer that absence as `Unsupported`.
-  A headroom is finite and at least 1 by construction (`Headroom::new`,
+  A headroom is finite and at least 1 by construction (`Headroom::try_new`,
   `Headroom::from_luminance`). HDR switching on or off, or the headroom moving, is a new snapshot
   revision. Windows reads `IDXGIOutput6::GetDesc1` and the SDR white level; macOS
   `canRepresentDisplayGamut:` and the potential extended-dynamic-range headroom; iOS the display

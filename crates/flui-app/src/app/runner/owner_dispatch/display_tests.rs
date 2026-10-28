@@ -515,7 +515,7 @@ fn a_surface_is_set_up_for_the_colour_of_its_window_s_display() {
 
     let hdr = DisplayColor::high(
         ColorGamut::Rec2020,
-        Ok(Headroom::new(3.0).expect("headroom")),
+        Ok(Headroom::try_new(3.0).expect("headroom")),
     );
     rig.controls
         .simulate_display_change(rig.ids[LEFT], DisplayChange::Color(Ok(hdr)))

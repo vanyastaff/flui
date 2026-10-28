@@ -3914,7 +3914,7 @@ graph LR
   слушатель `registerHdrSdrRatioChangedListener` (нужен Java в `FluiView`) не подписан.
   **Тесты** (откат проверен для каждого, скрипт подставляет откат, гоняет тест и
   восстанавливает файл): `display_colour_table` (`flui-platform`; без `is_finite` в
-  `Headroom::new` падает), `a_profile_change_reaches_the_snapshot_as_a_new_revision` в
+  `Headroom::try_new` падает), `a_profile_change_reaches_the_snapshot_as_a_new_revision` в
   `headless_displays_contract` (без применения `DisplayChange::Color` падает),
   `dxgi_colour_reports_map_to_the_display_colour` и
   `an_hdr_output_without_a_usable_peak_has_no_headroom` в `os_display_classification` (без
@@ -3981,6 +3981,17 @@ graph LR
   на Android `--all-targets`, macOS `--all-targets`, iOS lib (`flui-app` с LLVM и пустым
   `SDKROOT`), wasm32 lib; `wasm-check`, `wasm-test` — 51, `native-features`, `checks`. WSL:
   clippy девяти вариантов, xvfb `--all-features` — 477 из 477, Weston 13 — 32 из 32.
+  **После сессии Mac.** На arm64 macOS `flui-native` не собирался: E0080 «a gate at or below the
+  floor» — шлюз `MacosPotentialHeadroom` (10.15) ниже пола arm64 (11.0). Теперь на `aarch64`
+  отчёт читается напрямую, шлюз и его строка в таблице — только вне `aarch64` (пол x86_64 —
+  10.13). `Headroom::new` переименован в `Headroom::try_new` (фаллибельный конструктор).
+  **Почему кросс-clippy на Windows не поймал:** проверка пола — `const { assert!(..) }` внутри
+  обобщённой `version::gate::since::<F>()`; она вычисляется при мономорфизации, то есть только
+  при кодогенерации. `cargo clippy`/`check` её не делают, поэтому clippy под
+  `--target aarch64-apple-darwin` зелёный, а `cargo heli build -p flui-native --lib --target
+  aarch64-apple-darwin` (с теми же LLVM-переменными) падает с E0080 — проверено на коде до
+  исправления; тестовая сборка на Windows-хосте берёт пол x86_64. Шлюз Apple проверять кросс-
+  **сборкой** lib под `aarch64-apple-darwin`, не только clippy.
 
 - [x] **LY95** — ветка `platform/activation` от `main` @ `8aee131f6` (LY81). **Wayland**
   (`window/linux/wayland.rs`, чистый модуль `window/linux/wayland/activation.rs` — механизм

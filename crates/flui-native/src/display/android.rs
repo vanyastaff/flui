@@ -100,7 +100,7 @@ pub(crate) mod sample {
         }
         let headroom = report
             .highest_hdr_sdr_ratio
-            .and_then(|ratio| Headroom::new(ratio).ok())
+            .and_then(|ratio| Headroom::try_new(ratio).ok())
             .filter(|headroom| *headroom > Headroom::SDR)
             .ok_or(CapabilityAbsence::NotOnThisDevice);
         Ok(DisplayColor::high(gamut, headroom))
@@ -356,7 +356,7 @@ pub(crate) mod sample {
                 display_color(Ok(report(true, true, Some(4.92)))),
                 Ok(DisplayColor::high(
                     ColorGamut::DisplayP3,
-                    Ok(Headroom::new(4.92).expect("headroom"))
+                    Ok(Headroom::try_new(4.92).expect("headroom"))
                 ))
             );
             for ratio in [

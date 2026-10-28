@@ -923,7 +923,7 @@ mod surface_lifecycle_tests {
 
         let hdr = DisplayColor::high(
             ColorGamut::Rec2020,
-            Ok(Headroom::new(4.0).expect("headroom")),
+            Ok(Headroom::try_new(4.0).expect("headroom")),
         );
         let sdr = DisplayColor::standard(ColorGamut::Srgb);
         let lane = parking_lot::Mutex::new(crate::app::raster_lane::RasterLane::new(

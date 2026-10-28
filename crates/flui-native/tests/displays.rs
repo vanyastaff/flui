@@ -211,7 +211,7 @@ fn a_profile_change_reaches_the_snapshot_as_a_new_revision() {
 
     let hdr = DisplayColor::high(
         ColorGamut::Rec2020,
-        Ok(Headroom::new(2.5).expect("headroom")),
+        Ok(Headroom::try_new(2.5).expect("headroom")),
     );
     controls
         .simulate_display_change(id, DisplayChange::Color(Ok(hdr)))

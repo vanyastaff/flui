@@ -217,7 +217,7 @@ pub(crate) mod sample {
                 display_color(Some(output(DXGI_HDR10, 1000.0, Some(3125)))),
                 Ok(DisplayColor::high(
                     ColorGamut::Rec2020,
-                    Ok(Headroom::new(4.0).expect("headroom"))
+                    Ok(Headroom::try_new(4.0).expect("headroom"))
                 ))
             );
             // HDR on, a 400-nit panel, the SDR brightness set to 480 nits
