@@ -7,7 +7,7 @@
 //!   the compositor sends means for the window (its states, the size it
 //!   takes, what the compositor lets it do); [`frame`], when it delivers a
 //!   frame; [`decoration`], who draws its frame; [`scale`], the scale its
-//!   buffer is drawn at; [`foreign`], how a portal names it;
+//!   buffer is drawn at; `foreign`, how a portal names it (read by tests until the window reference carries it);
 //! - `toplevel`: `WaylandWindow`, the `PlatformWindow` over the protocol
 //!   objects, and the dispatch of those objects on the owner's queue
 //!   (`owner::linux::wayland::WaylandState`).
@@ -49,8 +49,9 @@
 //! frame as its options and commands say, and has the frame the compositor
 //! answers with. Elsewhere it has none: this host draws no frame of its own
 //! yet ([`decoration`]). Where it offers `xdg-foreign`, the window is exported
-//! as it opens and keeps its portal parent ([`foreign::PortalParent`]), which
-//! the contract's window reference is to carry to the capability crates.
+//! as it opens, so a portal can parent its dialog to it; the handle reaches
+//! the capability crates with the contract's window reference, and only tests
+//! read it until then (`foreign`).
 //!
 //! # The surface
 //!
@@ -1038,6 +1039,9 @@ pub(crate) mod scale {
     }
 }
 
+// Read by tests alone until the contract's window reference carries the
+// portal parent to the capability crates; that reader drops this `cfg`.
+#[cfg(any(test, feature = "testing"))]
 pub(crate) mod foreign {
     //! A Wayland window as another client names it (`xdg-foreign`): the
     //! handle the compositor gives the window's export, which a portal takes
@@ -1059,7 +1063,6 @@ pub(crate) mod foreign {
         }
 
         /// The identifier a portal takes.
-        #[cfg(any(test, feature = "testing"))]
         pub(crate) fn as_str(&self) -> &str {
             &self.0
         }
@@ -1124,6 +1127,7 @@ mod toplevel {
         Sizing, ToplevelStates, WmCapabilities, capabilities, clamp, protocol_extent,
     };
     use super::decoration::{Decoration, FrameDrawer};
+    #[cfg(any(test, feature = "testing"))]
     use super::foreign::PortalParent;
     use super::frame::{Pacing, first_live, waiting_on_callback};
     use super::scale::{ScaleTold, buffer_scale};
@@ -1199,7 +1203,9 @@ mod toplevel {
         /// The last frame mode as the protocol sent it.
         #[cfg(any(test, feature = "testing"))]
         raw_frame_mode: Option<u32>,
-        /// The handle of the window's export (`xdg-foreign`).
+        /// The handle of the window's export (`xdg-foreign`), which only
+        /// tests read so far.
+        #[cfg(any(test, feature = "testing"))]
         exported: Option<String>,
         /// What the compositor lets the toplevel do.
         wm: Option<WmCapabilities>,
@@ -1359,11 +1365,8 @@ mod toplevel {
 
     impl std::fmt::Debug for WaylandWindow {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            // The portal parent names the window to other clients, which a
-            // log of it helps match against a portal's.
             f.debug_struct("WaylandWindow")
                 .field("id", &self.id)
-                .field("portal_parent", &self.portal_parent())
                 .finish_non_exhaustive()
         }
     }
@@ -2109,12 +2112,14 @@ mod toplevel {
         }
     }
 
+    // Read by tests alone until the contract's window reference carries it;
+    // that reader drops this `cfg`.
+    #[cfg(any(test, feature = "testing"))]
     impl WaylandWindow {
         /// The window as an XDG Desktop Portal names the parent of the dialog
         /// it shows: the handle the compositor gave the window's export
         /// (`xdg-foreign`), so the dialog stays above the window and moves
-        /// with it. The contract's window reference carries it to the
-        /// capability crates.
+        /// with it.
         ///
         /// `None` where the compositor offers no `zxdg_exporter_v2`, before
         /// it answered the export, and once the window closed, when its
@@ -2432,6 +2437,8 @@ mod toplevel {
     }
 
     impl Dispatch<ZxdgExportedV2, Arc<ToplevelRecord>> for WaylandState {
+        /// The handle is kept where something reads it: only tests, until
+        /// the contract's window reference carries it.
         fn event(
             _: &mut Self,
             _: &ZxdgExportedV2,
@@ -2440,9 +2447,12 @@ mod toplevel {
             _: &Connection,
             _: &QueueHandle<Self>,
         ) {
+            #[cfg(any(test, feature = "testing"))]
             if let zxdg_exported_v2::Event::Handle { handle } = event {
                 record.protocol.lock().exported = Some(handle);
             }
+            #[cfg(not(any(test, feature = "testing")))]
+            let _ = (event, record);
         }
     }
 

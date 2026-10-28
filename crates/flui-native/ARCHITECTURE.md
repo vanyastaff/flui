@@ -996,11 +996,12 @@ trait depends on `flui-platform` instead.
   occluded: it is given no frame and gives up no frame callback until the
   compositor shows it again, when the frame asked for meanwhile is delivered
   (`frame::Pacing`). Where the compositor offers `xdg-foreign` v2 the window is
-  exported as it opens and keeps its portal parent `wayland:<handle>`
-  (`foreign::PortalParent`) until it closes. The portal parent is a
+  exported as it opens, and the export lives until the window closes. Its
+  portal parent `wayland:<handle>` (`foreign::PortalParent`) is a
   cross-platform fact (X11 names a window `x11:<XID>`), so it reaches the
   capability crates through the contract's window reference, not through an
-  OS extension. The window tells its AT-SPI bridge each change of the
+  OS extension; until that reader exists the handle is kept and read under
+  `testing` only. The window tells its AT-SPI bridge each change of the
   compositor's activation, which `UnixAccessibility::focus_changed` passes to
   the adapter (the X11 window already called it); the bridge reaches the
   adapter through `AtSpiAdapter`, the two calls it makes of
