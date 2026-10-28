@@ -12,7 +12,8 @@ use std::time::Duration;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::{
-    DisplayId, DisplayInfo, DisplayKey, DisplayRegistry, DisplayRevisionExhausted, DisplaySnapshot,
+    CapabilityAbsence, ColorGamut, DisplayColor, DisplayId, DisplayInfo, DisplayKey,
+    DisplayRegistry, DisplayRevisionExhausted, DisplaySnapshot,
 };
 use parking_lot::Mutex;
 
@@ -32,11 +33,12 @@ pub struct DisplaySpec {
     scale_factor: f64,
     refresh_period: Option<Duration>,
     persistent_key: Option<String>,
+    color: Result<DisplayColor, CapabilityAbsence>,
 }
 
 impl DisplaySpec {
-    /// A display of `width` by `height` device pixels at scale 1 whose
-    /// refresh period is unknown.
+    /// A standard-range sRGB display of `width` by `height` device pixels at
+    /// scale 1 whose refresh period is unknown.
     #[must_use]
     pub fn new(name: impl Into<String>, width: i32, height: i32) -> Self {
         Self {
@@ -45,7 +47,16 @@ impl DisplaySpec {
             scale_factor: 1.0,
             refresh_period: None,
             persistent_key: None,
+            color: Ok(DisplayColor::standard(ColorGamut::Srgb)),
         }
+    }
+
+    /// The display's colour profile, as [`DisplayInfo::color`] reports it: a
+    /// colour space and headroom, or the reason a platform would give none.
+    #[must_use]
+    pub fn with_color(mut self, color: Result<DisplayColor, CapabilityAbsence>) -> Self {
+        self.color = color;
+        self
     }
 
     /// The key that names this display again in another run, as
@@ -74,7 +85,7 @@ impl DisplaySpec {
 
 impl Default for DisplaySpec {
     /// The single display a platform without `with_displays` has: 1920 by
-    /// 1080 at scale 1, refresh period unknown.
+    /// 1080 at scale 1, standard-range sRGB, refresh period unknown.
     fn default() -> Self {
         Self::new("Headless Display", 1920, 1080)
     }
@@ -91,6 +102,9 @@ pub enum DisplayChange {
     ScaleFactor(f64),
     /// The display was renamed. A field no window pacing reads.
     Name(String),
+    /// The display's colour profile changed: HDR switched on or off, the
+    /// headroom moved, or the colour can no longer be read.
+    Color(Result<DisplayColor, CapabilityAbsence>),
 }
 
 /// Why a simulated display change or move was refused.
@@ -121,8 +135,9 @@ pub(crate) fn laid_out(specs: Vec<DisplaySpec>) -> DisplaySnapshot {
                 .expect("BUG: a fresh registry has ids for the displays a test names");
             let bounds = Bounds::new(Point::new(next_x, 0), spec.size);
             next_x = next_x.saturating_add(spec.size.width);
-            let mut info =
-                DisplayInfo::new(id, spec.name, bounds, spec.scale_factor).with_primary(index == 0);
+            let mut info = DisplayInfo::new(id, spec.name, bounds, spec.scale_factor)
+                .with_primary(index == 0)
+                .with_color(spec.color);
             if let Some(period) = spec.refresh_period {
                 info = info.with_refresh_period(period);
             }
@@ -160,6 +175,7 @@ fn apply(
         }
         DisplayChange::ScaleFactor(scale_factor) => display.scale_factor = scale_factor,
         DisplayChange::Name(name) => display.name = name,
+        DisplayChange::Color(color) => display.color = color,
     }
     *snapshot = snapshot.successor(displays)?;
     Ok(())

@@ -26,7 +26,9 @@ pub(crate) mod sample {
     //! sampled display a window's nearest monitor is, and from which build the
     //! display query is virtual-mode aware. Every host runs their tests.
 
-    use flui_platform::{DisplayId, DisplayKey, RefreshPeriod};
+    use flui_platform::{
+        CapabilityAbsence, ColorGamut, DisplayColor, DisplayId, DisplayKey, Headroom, RefreshPeriod,
+    };
 
     use crate::version::gate::Gate;
     use crate::version::gate::windows::WindowsBuild;
@@ -93,15 +95,136 @@ pub(crate) mod sample {
         mint(&monitor.key)
     }
 
+    /// `DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709`: the output shows sRGB in
+    /// standard range (HDR off).
+    pub(crate) const DXGI_SRGB: i32 = 0;
+    /// `DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020`: the output takes an HDR10
+    /// signal (HDR on).
+    pub(crate) const DXGI_HDR10: i32 = 12;
+    /// `DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P2020`: a wide-gamut output in
+    /// standard range.
+    pub(crate) const DXGI_WIDE_SDR: i32 = 17;
+
+    /// What Windows reports about the colour of one output:
+    /// `DXGI_OUTPUT_DESC1`'s colour space and peak, and the SDR white level of
+    /// its display target.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub(crate) struct OutputColor {
+        /// `DXGI_OUTPUT_DESC1::ColorSpace`, a `DXGI_COLOR_SPACE_TYPE`.
+        pub(crate) color_space: i32,
+        /// `DXGI_OUTPUT_DESC1::MaxLuminance`, in nits; zero where the display
+        /// reports none.
+        pub(crate) max_luminance: f32,
+        /// `DISPLAYCONFIG_SDR_WHITE_LEVEL::SDRWhiteLevel`, in thousandths of
+        /// 80 nits; `None` when the query failed or the monitor has no path.
+        pub(crate) sdr_white_level: Option<u32>,
+    }
+
+    /// The colour of a Windows display from what DXGI and the display
+    /// configuration report for it.
+    ///
+    /// No output (DXGI lists none for the monitor, or the system predates
+    /// `IDXGIOutput6`) is a device without the report. An HDR10 output is high
+    /// range in BT.2020, its headroom the peak over the SDR white level; a peak
+    /// or white level it does not report leaves the headroom absent rather than
+    /// guessed. A colour space this host does not know is not read yet.
+    pub(crate) fn display_color(
+        output: Option<OutputColor>,
+    ) -> Result<DisplayColor, CapabilityAbsence> {
+        let output = output.ok_or(CapabilityAbsence::NotOnThisDevice)?;
+        match output.color_space {
+            DXGI_SRGB => Ok(DisplayColor::standard(ColorGamut::Srgb)),
+            DXGI_WIDE_SDR => Ok(DisplayColor::standard(ColorGamut::Rec2020)),
+            DXGI_HDR10 => {
+                let headroom = output
+                    .sdr_white_level
+                    .ok_or(CapabilityAbsence::NotOnThisDevice)
+                    .and_then(|level| {
+                        // 1000 is 80 nits; the product of a `u32` and 0.08 is
+                        // finite in `f32`.
+                        let white_nits = level as f32 * 0.08;
+                        Headroom::from_luminance(output.max_luminance, white_nits)
+                            .map_err(|_| CapabilityAbsence::NotOnThisDevice)
+                    });
+                Ok(DisplayColor::high(ColorGamut::Rec2020, headroom))
+            }
+            _ => Err(CapabilityAbsence::NotYetOnThisHost),
+        }
+    }
+
     #[cfg(test)]
     mod tests {
         use std::time::Duration;
 
-        use flui_platform::{DisplayKey, DisplayRegistry, RefreshPeriod};
+        use flui_platform::{
+            CapabilityAbsence, ColorGamut, DisplayColor, DisplayKey, DisplayRegistry, Headroom,
+            RefreshPeriod,
+        };
 
         use super::{
-            QdcVirtualModeAware, SampledMonitor, WindowsBuild, display_period, resolve_display,
+            DXGI_HDR10, DXGI_SRGB, DXGI_WIDE_SDR, OutputColor, QdcVirtualModeAware, SampledMonitor,
+            WindowsBuild, display_color, display_period, resolve_display,
         };
+
+        fn output(color_space: i32, max_luminance: f32, level: Option<u32>) -> OutputColor {
+            OutputColor {
+                color_space,
+                max_luminance,
+                sdr_white_level: level,
+            }
+        }
+
+        /// Each colour report Windows gives, to the display colour it means.
+        fn dxgi_colour_reports_map_to_the_display_colour() {
+            assert_eq!(
+                display_color(Some(output(DXGI_SRGB, 270.0, Some(1000)))),
+                Ok(DisplayColor::standard(ColorGamut::Srgb)),
+                "HDR off is SDR whatever the panel's peak"
+            );
+            assert_eq!(
+                display_color(Some(output(DXGI_WIDE_SDR, 400.0, None))),
+                Ok(DisplayColor::standard(ColorGamut::Rec2020))
+            );
+            // HDR on, a 1000-nit peak, SDR white at 250 nits (level 3125).
+            assert_eq!(
+                display_color(Some(output(DXGI_HDR10, 1000.0, Some(3125)))),
+                Ok(DisplayColor::high(
+                    ColorGamut::Rec2020,
+                    Ok(Headroom::new(4.0).expect("headroom"))
+                ))
+            );
+            assert_eq!(
+                display_color(None),
+                Err(CapabilityAbsence::NotOnThisDevice),
+                "no DXGI output for the monitor"
+            );
+            assert_eq!(
+                display_color(Some(output(3, 400.0, None))),
+                Err(CapabilityAbsence::NotYetOnThisHost),
+                "a studio-range space this host does not read"
+            );
+        }
+
+        /// An HDR output whose peak or white level is missing or broken keeps
+        /// its range and publishes no headroom, never a NaN or an infinity.
+        fn an_hdr_output_without_a_usable_peak_has_no_headroom() {
+            for (peak, level) in [
+                (0.0, Some(1000)),
+                (f32::NAN, Some(1000)),
+                (f32::INFINITY, Some(1000)),
+                (1000.0, Some(0)),
+                (1000.0, None),
+            ] {
+                assert_eq!(
+                    display_color(Some(output(DXGI_HDR10, peak, level))),
+                    Ok(DisplayColor::high(
+                        ColorGamut::Rec2020,
+                        Err(CapabilityAbsence::NotOnThisDevice)
+                    )),
+                    "peak {peak}, white level {level:?}"
+                );
+            }
+        }
 
         /// The display query's gate, the row of `version::gate`'s table for the
         /// marker declared here: no proof before build 18362, one from it on, and
@@ -257,6 +380,14 @@ pub(crate) mod sample {
                         "a_monitor_missing_from_the_sample_is_unknown_not_the_primary",
                         a_monitor_missing_from_the_sample_is_unknown_not_the_primary as fn(),
                     ),
+                    (
+                        "dxgi_colour_reports_map_to_the_display_colour",
+                        dxgi_colour_reports_map_to_the_display_colour as fn(),
+                    ),
+                    (
+                        "an_hdr_output_without_a_usable_peak_has_no_headroom",
+                        an_hdr_output_without_a_usable_peak_has_no_headroom as fn(),
+                    ),
                 ],
             );
         }
@@ -311,12 +442,23 @@ pub(crate) mod source {
     use parking_lot::Mutex;
     use windows::Win32::{
         Devices::Display::{
+            DISPLAYCONFIG_DEVICE_INFO_GET_SDR_WHITE_LEVEL,
             DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_MODE_INFO,
-            DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SOURCE_DEVICE_NAME, DisplayConfigGetDeviceInfo,
+            DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SDR_WHITE_LEVEL,
+            DISPLAYCONFIG_SOURCE_DEVICE_NAME, DisplayConfigGetDeviceInfo,
             GetDisplayConfigBufferSizes, QDC_ONLY_ACTIVE_PATHS, QDC_VIRTUAL_MODE_AWARE,
             QUERY_DISPLAY_CONFIG_FLAGS, QueryDisplayConfig,
         },
-        Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, FALSE, HWND, LPARAM, RECT, TRUE},
+        Foundation::{
+            ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, FALSE, HWND, LPARAM, LUID, RECT, TRUE,
+        },
+        Graphics::Dxgi::{
+            Common::{
+                DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P2020,
+                DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020,
+            },
+            CreateDXGIFactory1, IDXGIFactory1, IDXGIOutput6,
+        },
         Graphics::Gdi::{
             DEVMODEW, DISPLAY_DEVICE_ACTIVE, DISPLAY_DEVICEW, ENUM_CURRENT_SETTINGS,
             EnumDisplayDevicesW, EnumDisplayMonitors, EnumDisplaySettingsW, GetMonitorInfoW, HDC,
@@ -328,9 +470,12 @@ pub(crate) mod source {
         },
     };
     // BOOL moved from Win32::Foundation to windows_core in windows 0.62
-    use windows::core::{BOOL, PCWSTR};
+    use windows::core::{BOOL, Interface, PCWSTR};
 
-    use super::sample::{QdcVirtualModeAware, SampledMonitor, display_period, resolve_display};
+    use super::sample::{
+        DXGI_HDR10, DXGI_SRGB, DXGI_WIDE_SDR, OutputColor, QdcVirtualModeAware, SampledMonitor,
+        display_color, display_period, resolve_display,
+    };
     use crate::display::source::DisplaySource;
     use crate::error::PlatformError;
     use crate::owner::panic_boundary::{AfterPanic, os_entry};
@@ -495,6 +640,7 @@ pub(crate) mod source {
         /// that resolve a window's nearest monitor.
         fn read(&self) -> (Vec<DisplayInfo>, Vec<SampledMonitor>) {
             let paths = query_source_paths(display_config_flags(self.build)).unwrap_or_default();
+            let colors = dxgi_outputs();
             let mut displays = Vec::new();
             let mut sampled = Vec::new();
             for monitor in enumerate_monitors() {
@@ -529,6 +675,15 @@ pub(crate) mod source {
                 display.refresh_period = display_period(path.map(|path| path.refresh), || {
                     current_mode_frequency(&monitor.device_name)
                 });
+                let output = colors
+                    .iter()
+                    .find(|color| color.monitor == monitor.handle)
+                    .map(|color| OutputColor {
+                        color_space: color.color_space,
+                        max_luminance: color.max_luminance,
+                        sdr_white_level: path.and_then(sdr_white_level),
+                    });
+                display = display.with_color(display_color(output));
                 displays.push(display);
                 sampled.push(SampledMonitor {
                     handle: monitor.handle,
@@ -537,6 +692,87 @@ pub(crate) mod source {
             }
             (displays, sampled)
         }
+    }
+
+    // The pure half names the DXGI colour spaces by value, so it builds where
+    // the `windows` crate does not; these hold the two to the same numbers.
+    const _: () = {
+        assert!(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709.0 == DXGI_SRGB);
+        assert!(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020.0 == DXGI_HDR10);
+        assert!(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P2020.0 == DXGI_WIDE_SDR);
+    };
+
+    /// One DXGI output's colour report, by the monitor it drives.
+    struct DxgiOutput {
+        monitor: isize,
+        color_space: i32,
+        max_luminance: f32,
+    }
+
+    /// More adapters, and more outputs on one adapter, than a machine has.
+    const MAX_DXGI_ENUMERATION: u32 = 64;
+
+    /// The colour every DXGI output reports through `IDXGIOutput6::GetDesc1`.
+    ///
+    /// A fresh factory per sample: a factory's output list is fixed when it
+    /// is created, and a sample runs only after something invalidated the
+    /// last one. Empty when the factory cannot be made; an output without
+    /// `IDXGIOutput6` (before Windows 10 1703) is left out, and its monitor
+    /// then reports no colour.
+    fn dxgi_outputs() -> Vec<DxgiOutput> {
+        // SAFETY: `CreateDXGIFactory1` takes only the interface id the generic
+        // names and returns an owned interface or an error.
+        let Ok(factory) = (unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }) else {
+            return Vec::new();
+        };
+        let mut outputs = Vec::new();
+        for adapter_index in 0..MAX_DXGI_ENUMERATION {
+            // SAFETY: `factory` is a live factory; an index past the last
+            // adapter answers `DXGI_ERROR_NOT_FOUND`, which ends the loop.
+            let Ok(adapter) = (unsafe { factory.EnumAdapters1(adapter_index) }) else {
+                break;
+            };
+            for output_index in 0..MAX_DXGI_ENUMERATION {
+                // SAFETY: as above, for the adapter's outputs.
+                let Ok(output) = (unsafe { adapter.EnumOutputs(output_index) }) else {
+                    break;
+                };
+                let Ok(output) = output.cast::<IDXGIOutput6>() else {
+                    continue;
+                };
+                // SAFETY: `output` is a live `IDXGIOutput6`; the description
+                // is returned by value.
+                let Ok(desc) = (unsafe { output.GetDesc1() }) else {
+                    continue;
+                };
+                outputs.push(DxgiOutput {
+                    monitor: desc.Monitor.0 as isize,
+                    color_space: desc.ColorSpace.0,
+                    max_luminance: desc.MaxLuminance,
+                });
+            }
+        }
+        outputs
+    }
+
+    /// The SDR white level of the display target behind `path`, in
+    /// thousandths of 80 nits; `None` when the query fails.
+    fn sdr_white_level(path: &SourcePath) -> Option<u32> {
+        let mut request = DISPLAYCONFIG_SDR_WHITE_LEVEL::default();
+        request.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_SDR_WHITE_LEVEL;
+        request.header.size = std::mem::size_of::<DISPLAYCONFIG_SDR_WHITE_LEVEL>() as u32;
+        // The key packs the LUID as `(HighPart << 32) | LowPart`; this
+        // unpacks it bit for bit.
+        request.header.adapterId = LUID {
+            LowPart: path.adapter_luid as u32,
+            HighPart: ((path.adapter_luid >> 32) as u32).cast_signed(),
+        };
+        request.header.id = path.target_id;
+        // SAFETY: `request` is a `DISPLAYCONFIG_SDR_WHITE_LEVEL` whose header
+        // carries the matching request type and the struct's own size, so the
+        // OS writes no further than the struct; it outlives the call.
+        let status = unsafe { DisplayConfigGetDeviceInfo(&raw mut request.header) };
+        (status == 0).then_some(request.SDRWhiteLevel)
     }
 
     /// The `dmDisplayFrequency` of the current mode of the adapter output
