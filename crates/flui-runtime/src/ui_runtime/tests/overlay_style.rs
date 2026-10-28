@@ -81,7 +81,7 @@ fn styled_runtime() -> Fixture {
     let scene = graph.signal(0_u32);
     let writer = ui_runtime
         .presentation_widgets_for_test(ui_runtime.presentation_id())
-        .with_build_owner(|owner| owner.writer_source());
+        .with_build_owner(flui_view::BuildOwner::writer_source);
     ui_runtime
         .attach_root_widget(&Styled { scene })
         .expect("root attaches");

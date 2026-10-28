@@ -671,7 +671,7 @@ pub(crate) mod local_history {
         let drops = Rc::new(std::cell::Cell::new(0));
         let capture = Dropped(Rc::clone(&drops));
         let removal_writes = Rc::clone(&written);
-        let removal_writer = writer.clone();
+        let removal_writer = writer;
         let _entry = local.add(LocalHistoryEntry::new().on_remove(move || {
             let _ = &capture;
             removal_writes

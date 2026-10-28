@@ -960,10 +960,6 @@ impl PostFrameHandle {
     /// Queue `into_entry(value)`, or hand `value` back, unwrapped, with the
     /// closed lane whose failure custody decides its fate (`None`: the lane
     /// itself is gone).
-    #[expect(
-        clippy::type_complexity,
-        reason = "the refusal pairs the value with the custody that decides its fate"
-    )]
     fn admit<T>(
         &self,
         value: T,

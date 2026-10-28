@@ -51,7 +51,7 @@ fn graph_of(ui_runtime: &UiRuntime, id: PresentationId) -> Reactive {
 fn writer_of(ui_runtime: &UiRuntime, id: PresentationId) -> flui_view::WriterSource {
     ui_runtime
         .presentation_widgets_for_test(id)
-        .with_build_owner(|owner| owner.writer_source())
+        .with_build_owner(flui_view::BuildOwner::writer_source)
 }
 
 pub(crate) fn a_write_to_a_secondary_presentations_signal_rebuilds_its_reader() {
