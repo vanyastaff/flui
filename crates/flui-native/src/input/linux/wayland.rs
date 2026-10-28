@@ -67,6 +67,22 @@ pub mod repeat {
 
     use web_time::Instant;
 
+    /// The fastest repeat honoured. Desktops offer up to some 100 repeats a
+    /// second; a thousand is past anything a display shows or a user can
+    /// stop in time, so a faster rate from a compositor is a fault, and
+    /// taken as this.
+    pub const MAX_RATE: u32 = 1_000;
+    /// The shortest interval between two repeats, so the loop never repeats
+    /// on every turn.
+    pub const MIN_INTERVAL: Duration = Duration::from_millis(1);
+
+    /// The interval between repeats at `rate` a second, within
+    /// [`MAX_RATE`] and [`MIN_INTERVAL`].
+    #[must_use]
+    pub fn interval(rate: u32) -> Duration {
+        (Duration::from_secs(1) / rate.clamp(1, MAX_RATE)).max(MIN_INTERVAL)
+    }
+
     /// The held key's repeat.
     #[derive(Debug, Clone, Default)]
     pub struct KeyRepeat {
@@ -83,9 +99,9 @@ pub mod repeat {
         /// the key held.
         pub fn configure(&mut self, rate: i32, delay: i32) {
             let rate = u32::try_from(rate).ok().filter(|rate| *rate > 0);
-            let delay = u64::try_from(delay).unwrap_or(0);
-            self.timing =
-                rate.map(|rate| (Duration::from_millis(delay), Duration::from_secs(1) / rate));
+            // A negative delay is no delay; the largest `i32` is some 24 days.
+            let delay = Duration::from_millis(u64::try_from(delay).unwrap_or(0));
+            self.timing = rate.map(|rate| (delay, interval(rate)));
             if self.timing.is_none() {
                 self.held = None;
             }
@@ -95,7 +111,7 @@ pub mod repeat {
         /// keymap says so) and repeat is on. Any other key held stops.
         pub fn press(&mut self, code: u32, repeats: bool, now: Instant) {
             self.held = match self.timing {
-                Some((delay, _)) if repeats => Some((code, now + delay)),
+                Some((delay, _)) if repeats => now.checked_add(delay).map(|at| (code, at)),
                 _ => None,
             };
         }
@@ -169,6 +185,38 @@ pub mod repeat {
             assert_eq!(repeat.due(), None, "repeat turned off");
             repeat.press(30, true, start);
             assert_eq!(repeat.due(), None, "off until turned on");
+        }
+
+        /// A compositor's rate past any keyboard's is held to the fastest
+        /// repeat honoured: the interval never reaches zero, so a held key
+        /// due now is not due again on the next turn, and the loop sleeps
+        /// between repeats. A negative delay is none; the largest is kept.
+        #[test]
+        fn a_compositor_rate_cannot_spin_the_loop() {
+            let start = Instant::now();
+            let mut repeat = KeyRepeat::default();
+            repeat.configure(i32::MAX, 0);
+            repeat.press(30, true, start);
+            assert_eq!(repeat.take_due(start), Some(30));
+            let next = repeat.due().expect("still held");
+            assert!(
+                next >= start + MIN_INTERVAL,
+                "the next repeat is {:?} after this one",
+                next - start
+            );
+            assert_eq!(repeat.take_due(start), None, "not due again at once");
+            assert_eq!(interval(u32::MAX), Duration::from_millis(1));
+            assert_eq!(interval(25), Duration::from_millis(40));
+
+            repeat.configure(25, -5);
+            repeat.press(30, true, start);
+            assert_eq!(repeat.due(), Some(start), "a negative delay is none");
+            repeat.configure(25, i32::MAX);
+            repeat.press(30, true, start);
+            assert!(
+                repeat.due().is_some_and(|due| due > start),
+                "the longest delay"
+            );
         }
     }
 }
