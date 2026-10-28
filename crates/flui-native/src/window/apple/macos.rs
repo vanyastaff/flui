@@ -1585,13 +1585,14 @@ impl MacOSWindow {
 
     /// The window as AppKit reports it now.
     fn sample_state(&self) -> WindowState {
-        let (display, normal, scale, occlusion_visible) = {
+        let (display, normal, scale, occlusion_visible, heading) = {
             let state = self.state.lock();
             (
                 state.display,
                 state.normal,
                 state.scale_factor,
                 state.occlusion_visible,
+                state.sequence.heading(std::time::Instant::now()),
             )
         };
         let hovered = self.delivery.hovered();
@@ -1668,6 +1669,7 @@ impl MacOSWindow {
                 active: focused,
                 capabilities: capabilities_of(
                     flags,
+                    heading,
                     appkit_window_capabilities(self.owner_is_main),
                 ),
             }
@@ -1797,13 +1799,20 @@ impl MacOSWindow {
             // normal and cannot be un-zoomed by the user, so it is restyled
             // only from the mode it can be asked to return to.
             let flags = self.read_flags();
-            if bit == NSWindowStyleMask::Resizable
-                && !on
-                && mode_of(flags.mode_flags()) != WindowMode::Normal
-            {
-                return Err(ApplyError::failed(
-                    "a window is made fixed-size only in normal mode".into(),
-                ));
+            if bit == NSWindowStyleMask::Resizable {
+                let mut state = self.state.lock();
+                if on {
+                    state.sequence.drop_fixed_size();
+                } else if mode_of(flags.mode_flags()) != WindowMode::Normal {
+                    // Heading for normal mode, the restyle waits for the step
+                    // to end (`handle_transition_ended`).
+                    if state.sequence.hold_fixed_size(std::time::Instant::now()) {
+                        return Ok(());
+                    }
+                    return Err(ApplyError::failed(
+                        "a window is made fixed-size only in normal mode".into(),
+                    ));
+                }
             }
             let wanted = if on { mask | bit } else { mask - bit };
             if wanted == mask {

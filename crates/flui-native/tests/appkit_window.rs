@@ -52,6 +52,10 @@ mod cases {
             a_window_zoomed_before_full_screen_returns_to_normal,
         ),
         (
+            "a_window_sent_to_normal_takes_a_fixed_size_in_the_same_turn",
+            a_window_sent_to_normal_takes_a_fixed_size_in_the_same_turn,
+        ),
+        (
             "a_redraw_from_another_thread_is_queued_without_waiting",
             a_redraw_from_another_thread_is_queued_without_waiting,
         ),
@@ -390,6 +394,51 @@ mod cases {
             view.load().is_none(),
             "the closed window's FLUI view outlived it"
         );
+    }
+
+    /// A window told to go back to normal from another mode and then to stop
+    /// being resizable, in one turn, does both: the second command is
+    /// admitted against the mode the first takes the window to, though
+    /// AppKit's transition may still be animating, and the window ends
+    /// normal, at its size before, and fixed in size. A fixed-size window
+    /// reads as zoomed whatever its frame, so the frame is the witness.
+    fn a_window_sent_to_normal_takes_a_fixed_size_in_the_same_turn() {
+        use flui_platform::WindowMode::{Fullscreen, Maximized, Minimized, Normal};
+
+        for from in [Maximized, Fullscreen, Minimized] {
+            let mut fixture = open("normal and fixed in one turn");
+            let normal = fixture.ns_window.frame();
+            fixture
+                .window
+                .admit_and_apply(WindowCommand::SetMode(from))
+                .unwrap_or_else(|refusal| panic!("SetMode({from:?}) was refused: {refusal:?}"));
+            fixture.settle();
+            assert_eq!(fixture.window.state().mode, from);
+
+            fixture
+                .window
+                .admit_and_apply(WindowCommand::SetMode(Normal))
+                .unwrap_or_else(|refusal| panic!("SetMode(Normal) from {from:?}: {refusal:?}"));
+            fixture
+                .window
+                .admit_and_apply(WindowCommand::SetResizable(false))
+                .unwrap_or_else(|refusal| {
+                    panic!("SetResizable(false) after SetMode(Normal) from {from:?}: {refusal:?}")
+                });
+            fixture.settle();
+
+            let state = fixture.window.state();
+            assert_eq!(state.mode, Normal, "from {from:?}: the window ends normal");
+            assert!(
+                !state.resizable,
+                "from {from:?}: the window ends fixed in size"
+            );
+            assert_eq!(
+                fixture.ns_window.frame().size,
+                normal.size,
+                "from {from:?}: the window is back to its size before"
+            );
+        }
     }
 
     /// AppKit keeps a window's zoom under full screen and puts it back only

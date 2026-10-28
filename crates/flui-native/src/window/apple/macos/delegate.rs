@@ -9,6 +9,7 @@ use flui_foundation::geometry::{Point, Size};
 use flui_platform::DisplayId;
 use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
 use objc2::{ClassType, class, msg_send, sel};
+use objc2_app_kit::NSWindowStyleMask;
 use objc2_foundation::NSRect;
 
 use super::{BObjC, Class, MacOSWindow, NIL, NO, ObjcId, Object, YES};
@@ -515,6 +516,18 @@ impl MacOSWindow {
                 && let Err(error) = window.change_mode(mode)
             {
                 tracing::debug!(%error, "a window could not finish changing mode");
+            }
+            // A fixed size asked for on the way to normal mode, set now that
+            // the window is there; held again if a held mode set off another
+            // step toward it.
+            let fixed_size = window.state.lock().sequence.take_fixed_size();
+            if fixed_size {
+                match window.set_style_bit(NSWindowStyleMask::Resizable, false) {
+                    Ok(()) => window.publish_state(),
+                    Err(error) => {
+                        tracing::debug!(%error, "a window could not be made fixed-size");
+                    }
+                }
             }
         });
     }

@@ -409,15 +409,21 @@ pub(crate) mod mode {
     }
 
     /// What a window with these flags honours of `every`, the commands an
-    /// AppKit window takes in normal mode.
+    /// AppKit window takes in normal mode, while it is `heading` for a mode,
+    /// if a step toward one animates.
     ///
     /// AppKit zooms and full-screens only a resizable window, restyles none and
     /// orders none out while it is full screen, and a window is made fixed-size
-    /// only from normal mode (a fixed-size window reports a zoomed frame as
+    /// only in normal mode (a fixed-size window reports a zoomed frame as
     /// normal, and the user could not un-zoom it). The snapshot says so, so
-    /// admission refuses such a command before AppKit does.
+    /// admission refuses such a command before AppKit does. The mode that
+    /// decides the last is the one the window is heading for: a window coming
+    /// back from the Dock still reads as miniaturized while it animates, and a
+    /// fixed size asked for in the same turn as the return is one for a normal
+    /// window.
     pub(crate) fn capabilities_of(
         flags: WindowFlags,
+        heading: Option<WindowMode>,
         every: flui_platform::WindowCapabilities,
     ) -> flui_platform::WindowCapabilities {
         use flui_platform::Availability::Unavailable;
@@ -431,7 +437,8 @@ pub(crate) mod mode {
             honoured.sets_decorated = Unavailable;
             honoured.hides = Unavailable;
         }
-        if mode_of(flags.mode_flags()) != WindowMode::Normal {
+        let mode = heading.unwrap_or_else(|| mode_of(flags.mode_flags()));
+        if mode != WindowMode::Normal {
             honoured.sets_resizable = Unavailable;
         }
         honoured
@@ -528,8 +535,14 @@ pub(crate) mod mode {
         held: Option<WindowMode>,
         /// When the step that is animating started.
         animating_since: Option<Instant>,
+        /// The mode the last command sent the window toward; while a step
+        /// animates, the window's mode for what it may be told next.
+        heading: Option<WindowMode>,
         /// The mode a window that opened hidden enters when it is first shown.
         when_shown: Option<WindowMode>,
+        /// A fixed size asked for while the window heads for normal mode,
+        /// set once the step ends.
+        fixed_size_held: bool,
     }
 
     impl ModeSequence {
@@ -542,18 +555,39 @@ pub(crate) mod mode {
             target: WindowMode,
         ) -> Vec<ModeStep> {
             self.when_shown = None;
-            if self
-                .animating_since
-                .is_some_and(|since| now.saturating_duration_since(since) < ANIMATION_LIMIT)
-            {
+            if self.animates(now) {
                 self.held = Some(target);
+                self.heading = Some(target);
                 return Vec::new();
             }
             let steps = steps_to(flags, target);
             let (batch, asks_again) = next_batch(&steps);
             self.held = asks_again.then_some(target);
             self.animating_since = batch.iter().any(|step| step.animates()).then_some(now);
+            // Only a command that leaves a step animating says where the
+            // window is heading; one AppKit carried out at once leaves its
+            // flags to say it, and a step the user starts later is not one
+            // toward this target.
+            self.heading = self.animating_since.is_some().then_some(target);
             batch.to_vec()
+        }
+
+        /// Whether a step started at most [`ANIMATION_LIMIT`] before `now` is
+        /// still animating.
+        fn animates(&self, now: Instant) -> bool {
+            self.animating_since
+                .is_some_and(|since| now.saturating_duration_since(since) < ANIMATION_LIMIT)
+        }
+
+        /// The mode the window is heading for while a step toward it
+        /// animates, at `now`; `None` when nothing animates, and the window's
+        /// flags say its mode.
+        pub(crate) fn heading(&self, now: Instant) -> Option<WindowMode> {
+            if self.animates(now) {
+                self.heading
+            } else {
+                None
+            }
         }
 
         /// A step that animates has started, from this backend or from the user.
@@ -561,15 +595,38 @@ pub(crate) mod mode {
             self.animating_since = Some(now);
         }
 
-        /// The step that was animating is over, or failed.
+        /// The step that was animating is over, or failed: the window's flags
+        /// say its mode again.
         pub(crate) fn step_ended(&mut self) {
             self.animating_since = None;
+            self.heading = None;
         }
 
         /// The mode held back for the step that ended, if there is one, to be
         /// commanded again from the window's new state.
         pub(crate) fn take_held(&mut self) -> Option<WindowMode> {
             self.held.take()
+        }
+
+        /// A window asked to be fixed in size: whether that waits for the
+        /// step taking it to normal mode, at `now`. AppKit's flags still say
+        /// the mode it is leaving, and restyling a window mid-transition
+        /// leaves it in that mode, so the restyle is held until the step ends.
+        pub(crate) fn hold_fixed_size(&mut self, now: Instant) -> bool {
+            let held = self.heading(now) == Some(WindowMode::Normal);
+            self.fixed_size_held |= held;
+            held
+        }
+
+        /// The window was made resizable after all: a held fixed size is
+        /// dropped, the newer command winning.
+        pub(crate) fn drop_fixed_size(&mut self) {
+            self.fixed_size_held = false;
+        }
+
+        /// Whether a fixed size waits for the step that ended.
+        pub(crate) fn take_fixed_size(&mut self) -> bool {
+            std::mem::take(&mut self.fixed_size_held)
         }
 
         /// A window that opened hidden enters `mode` when it is first shown.
@@ -866,7 +923,7 @@ pub(crate) mod mode {
                 },
             ];
             for expected in rows {
-                let honoured = capabilities_of(flags(expected.flags), every);
+                let honoured = capabilities_of(flags(expected.flags), None, every);
                 let actual = Row {
                     flags: expected.flags,
                     maximizes: honoured.maximizes,
@@ -877,6 +934,89 @@ pub(crate) mod mode {
                 };
                 assert_eq!(actual, expected);
             }
+        }
+
+        /// A window coming back from the Dock still reads as miniaturized
+        /// while it animates; a fixed size asked for meanwhile is one for the
+        /// normal window it is heading to. A command AppKit carried out at
+        /// once, a step that ended and one that outlived the limit leave the
+        /// flags to say the mode.
+        #[test]
+        fn a_window_heading_for_normal_may_be_made_fixed_size() {
+            use flui_platform::Availability::{Native, Unavailable};
+            use flui_platform::WindowCapabilities;
+
+            let mut every = WindowCapabilities::NONE;
+            every.sets_resizable = Native;
+            let fixed =
+                |flags: WindowFlags, heading| capabilities_of(flags, heading, every).sets_resizable;
+            let now = Instant::now();
+
+            let mut sequence = ModeSequence::default();
+            let steps = sequence.command(now, flags("MR"), Normal);
+            assert_eq!(steps, [ModeStep::Deminiaturize]);
+            assert_eq!(sequence.heading(now), Some(Normal));
+            assert_eq!(fixed(flags("MR"), sequence.heading(now)), Native);
+            assert_eq!(
+                fixed(flags("MR"), None),
+                Unavailable,
+                "the flags alone say miniaturized"
+            );
+            assert_eq!(
+                sequence.heading(now + ANIMATION_LIMIT),
+                None,
+                "a step past the limit no longer says where the window goes"
+            );
+            sequence.step_ended();
+            assert_eq!(sequence.heading(now), None);
+
+            let mut sequence = ModeSequence::default();
+            assert_eq!(
+                sequence.command(now, flags("ZR"), Normal),
+                [ModeStep::Unzoom]
+            );
+            assert_eq!(
+                sequence.heading(now),
+                None,
+                "an un-zoom is carried out at once"
+            );
+
+            let mut sequence = ModeSequence::default();
+            sequence.command(now, flags("R"), Minimized);
+            assert_eq!(sequence.heading(now), Some(Minimized));
+            assert_eq!(
+                fixed(flags("R"), sequence.heading(now)),
+                Unavailable,
+                "heading for the Dock"
+            );
+        }
+
+        /// A fixed size asked for on the way to normal mode waits for the
+        /// step to end and is set once; a newer resizable drops it, and one
+        /// asked for heading anywhere else is refused, not held.
+        #[test]
+        fn a_fixed_size_waits_for_the_step_to_normal_mode() {
+            let now = Instant::now();
+            let mut sequence = ModeSequence::default();
+            sequence.command(now, flags("MR"), Normal);
+            assert!(
+                sequence.hold_fixed_size(now),
+                "held while heading for normal"
+            );
+            assert!(sequence.take_fixed_size(), "set once the step ends");
+            assert!(!sequence.take_fixed_size(), "and only once");
+
+            sequence.hold_fixed_size(now);
+            sequence.drop_fixed_size();
+            assert!(!sequence.take_fixed_size(), "the newer resizable wins");
+
+            let mut sequence = ModeSequence::default();
+            sequence.command(now, flags("R"), Minimized);
+            assert!(
+                !sequence.hold_fixed_size(now),
+                "heading for the Dock is refused"
+            );
+            assert!(!sequence.take_fixed_size());
         }
     }
 }
