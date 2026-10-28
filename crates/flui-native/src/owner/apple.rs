@@ -23,6 +23,8 @@
 pub(crate) mod ios;
 #[cfg(target_os = "macos")]
 pub(crate) mod macos;
+#[cfg(any(target_os = "macos", test))]
+pub(crate) mod metal_layer;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod native_owner;
 #[cfg(any(target_os = "macos", test))]

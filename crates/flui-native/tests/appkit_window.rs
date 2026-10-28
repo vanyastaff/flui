@@ -64,6 +64,14 @@ mod cases {
             a_newer_mode_drops_a_fixed_size_held_for_normal,
         ),
         (
+            "a_window_behind_a_backdrop_still_reports_its_frames",
+            a_window_behind_a_backdrop_still_reports_its_frames,
+        ),
+        (
+            "one_redraw_is_one_frame_request",
+            one_redraw_is_one_frame_request,
+        ),
+        (
             "a_redraw_from_another_thread_is_queued_without_waiting",
             a_redraw_from_another_thread_is_queued_without_waiting,
         ),
@@ -176,12 +184,12 @@ mod cases {
         app
     }
 
-    /// The AppKit window behind an open FLUI window's raw handle.
+    /// The FLUI view an open FLUI window's raw handle names.
     #[expect(
         unsafe_code,
         reason = "the FLUI view behind an open AppKit window's raw window handle"
     )]
-    fn ns_window_of(window: &dyn HostWindow) -> Retained<NSWindow> {
+    fn ns_view_of(window: &dyn HostWindow) -> Retained<NSView> {
         use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
 
         let target = window.surface_target();
@@ -192,9 +200,15 @@ mod cases {
         // SAFETY: an AppKit window's handle names its FLUI view, which the
         // open window's view hierarchy keeps alive; retaining it gives this
         // test its own reference on the main thread the cases run on.
-        let view = unsafe { Retained::retain(handle.ns_view.as_ptr().cast::<NSView>()) }
-            .expect("the handle names a view");
-        view.window().expect("the FLUI view is in its window")
+        unsafe { Retained::retain(handle.ns_view.as_ptr().cast::<NSView>()) }
+            .expect("the handle names a view")
+    }
+
+    /// The AppKit window behind an open FLUI window's raw handle.
+    fn ns_window_of(window: &dyn HostWindow) -> Retained<NSWindow> {
+        ns_view_of(window)
+            .window()
+            .expect("the FLUI view is in its window")
     }
 
     /// An AppKit window for the conformance checks. Dropping it closes the
@@ -282,6 +296,59 @@ mod cases {
         /// hands out its view.
         fn has_native_surface(&self) -> bool {
             true
+        }
+
+        /// Drawables presented into the window's own layer the way wgpu's
+        /// Metal backend presents them: each from the layer's `nextDrawable`,
+        /// by a command buffer's `presentDrawable:`. Metal reports a shown
+        /// drawable on a thread of its own, so the frames go out over a few
+        /// refreshes before the window asks for its next frame.
+        #[expect(unsafe_code, reason = "the backing layer of the window's FLUI view")]
+        fn present_and_request_frame(&mut self) -> Option<flui_platform::FrameRequest> {
+            use objc2::runtime::{AnyObject, ProtocolObject};
+            use objc2_metal::{
+                MTLCommandBuffer as _, MTLCommandQueue as _, MTLCreateSystemDefaultDevice,
+                MTLDevice as _, MTLDrawable, MTLPixelFormat,
+            };
+            use objc2_quartz_core::CAMetalLayer;
+
+            let view = ns_view_of(self.window.as_ref());
+            // SAFETY: `layer` answers the live view's backing layer.
+            let layer: Option<Retained<AnyObject>> = unsafe { objc2::msg_send![&*view, layer] };
+            let layer = layer
+                .expect("the FLUI view is layer-backed")
+                .downcast::<CAMetalLayer>()
+                .expect("the FLUI view's layer is a CAMetalLayer");
+            let device = MTLCreateSystemDefaultDevice().expect("a Metal device");
+            layer.setDevice(Some(&device));
+            layer.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
+            let queue = device.newCommandQueue().expect("a Metal command queue");
+            for _ in 0..10 {
+                let drawable = layer.nextDrawable().expect("a drawable");
+                let buffer = queue.commandBuffer().expect("a Metal command buffer");
+                buffer.presentDrawable(ProtocolObject::<dyn MTLDrawable>::from_ref(&*drawable));
+                buffer.commit();
+                appkit::run_for(Duration::from_millis(20));
+            }
+            self.handler.take_calls();
+            self.window.request_redraw();
+            self.settle();
+            let request = self
+                .handler
+                .take_calls()
+                .into_iter()
+                .rev()
+                .find_map(|call| match call {
+                    HandlerCall::FrameRequested(request) => Some(request),
+                    _ => None,
+                });
+            if let Some(request) = request {
+                eprintln!(
+                    "the next frame request: vsync {:?}, presented {:?}",
+                    request.vsync, request.presented
+                );
+            }
+            request
         }
     }
 
@@ -373,6 +440,49 @@ mod cases {
             frames(&fixture.handler) >= 1,
             "the redraw asked for on another thread produced no frame request"
         );
+    }
+
+    /// A backdrop material makes an `NSVisualEffectView` the window's content
+    /// view and moves FLUI's view inside it; the view keeps its own layer, and
+    /// the frames drawn into it are still reported shown.
+    fn a_window_behind_a_backdrop_still_reports_its_frames() {
+        let mut fixture = open("presented behind a backdrop");
+        fixture
+            .window
+            .admit_and_apply(WindowCommand::SetMaterial(WindowMaterial::System))
+            .unwrap_or_else(|refusal| panic!("SetMaterial(System) was refused: {refusal:?}"));
+        fixture.settle();
+        assert_eq!(fixture.material(), Some(WindowMaterial::System));
+        let request = fixture
+            .present_and_request_frame()
+            .expect("the window asks for a frame");
+        assert!(
+            request.presented.is_some(),
+            "a frame shown behind a backdrop was reported: {request:?}"
+        );
+    }
+
+    /// A redraw is one frame request: the view's layer asks it for content
+    /// once per display pass, whichever of AppKit's routes reaches it.
+    fn one_redraw_is_one_frame_request() {
+        let fixture = open("one frame per redraw");
+        let frames = |handler: &RecordingWindowHandler| {
+            handler
+                .take_calls()
+                .iter()
+                .filter(|call| matches!(call, HandlerCall::FrameRequested(_)))
+                .count()
+        };
+        for _ in 0..3 {
+            fixture.handler.take_calls();
+            fixture.window.request_redraw();
+            appkit::run_for(Duration::from_millis(300));
+            assert_eq!(
+                frames(&fixture.handler),
+                1,
+                "one redraw asked for one frame"
+            );
+        }
     }
 
     /// A surface target holds a reference of its own to its window's view, so

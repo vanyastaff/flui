@@ -214,7 +214,7 @@ trait depends on `flui-platform` instead.
   text input's `ViewText`, one of each per view, made by the table's
   `MacosHost::view_hooks`, routes a key press between them, and enters the
   display pass (`owner::apple::macos::display_pass`) for the frame its
-  `drawRect:` asks the window for. On iOS the window's view hands its
+  `updateLayer` asks the window for. On iOS the window's view hands its
   touches to the input's `ViewTouches` (`IosHost::view_touches`, one per
   view), and its display link's cadence and its screen to the loop's
   `HostDisplays` (`observe_link`, `move_window`, `forget_link`). A
@@ -873,8 +873,15 @@ trait depends on `flui-platform` instead.
     read (`SwapChainStatistics::Dxgi`) from the performance counter, measuring
     the refresh period between two reports (`frame_timing::PresentTracker`:
     a read naming the present or refresh already reported is no report, and
-    `SwapChainStatistics::DxgiDisjoint` forgets the last refresh). Either
-    reports into the window's
+    `SwapChainStatistics::DxgiDisjoint` forgets the last refresh). The
+    AppKit window reports from its view's backing layer, not the target:
+    `owner::apple::metal_layer::FluiMetalLayer` (from `makeBackingLayer`)
+    is the `CAMetalLayer` wgpu takes as the view's root layer and gets every
+    drawable from, and its `nextDrawable` adds a presented handler to each,
+    which Metal calls on a thread of its own with the drawable's
+    `presentedTime`, rebased from `CACurrentMediaTime` onto the event clock,
+    with the refresh of the window's display.
+    Each reports into the window's
     `handlers::PresentationReports`, which the `WindowDelivery` keeps and
     `dispatch_frame` empties into the next frame request
     (`FrameRequest::presented`): the newest report wins, a report no later
@@ -883,9 +890,10 @@ trait depends on `flui-platform` instead.
     (`MockWindow::simulate_presented`). The web and X11 windows answer
     `NotOnThisPlatform` (a browser names the frame's start, never its showing;
     an X11 present completes on the GPU driver's connection), winit
-    `NotYetOnThisHost`, and AppKit, UIKit and the Activity
-    `NotYetOnThisHost` (`window::capabilities::PRESENTATION`: the drawable and
-    the swap chain that know are wgpu's). Only the web target and
+    `NotYetOnThisHost`, and UIKit and the Activity
+    `NotYetOnThisHost` (`window::capabilities::PRESENTATION`: a UIKit view
+    backed by its own `CAMetalLayer` showed nothing on the iOS Simulator, and
+    Android's swap chain that knows is wgpu's). Only the web target and
     `MainRetainedView` carry an `unsafe impl Send`/`Sync`, whose SAFETY
     names the invariant;
   - its `RedrawRequester` (`redraw_requester()`), how a waker, a signal
@@ -2489,7 +2497,7 @@ silently), and the delivery's ordering rows pin the call itself. The Android arm
 on this host runs the Android backend, so their mapping is an inference from `android-activity`'s
 documented contract, recorded rather than measured.
 
-### AppKit's frame source stays `drawRect:`, and its re-arm crosses one owner-lane turn
+### AppKit's frame source stays the view's display pass, and its re-arm crosses one owner-lane turn
 
 **Rule:** a display-driven backend's produce signal must be able to re-arm itself
 from inside the frame it just produced. AppKit discards a `setNeedsDisplay:`
@@ -2499,10 +2507,23 @@ frame. A re-arm AppKit silently drops is worse than a missing feature: the pump
 stops with no error, no log line, and a perfectly healthy-looking request behind
 it.
 
-**Choice:** `drawRect:` stays the frame source. It is the signal AppKit actually
-delivers — the view is live and the frame carries its own dirty rect — and the
-produce contract the engine consumes is dispatched from it (`owner::apple::macos::content_view`'s `draw_rect`
-→ `WindowDelivery::dispatch_request_frame`). What changed is the re-arm.
+**Choice:** the view's display pass stays the frame source. It is the signal
+AppKit actually delivers, and the produce contract the engine consumes is
+dispatched from it (`owner::apple::macos::content_view`'s `update_layer` →
+`WindowDelivery::dispatch_request_frame`). The pass reaches the view through
+its layer, not `drawRect:`: the view is backed by its own `CAMetalLayer`
+(`owner::apple::metal_layer::FluiMetalLayer`, from `makeBackingLayer`), which
+wgpu draws into directly and whose drawables report when they were shown, and
+a `drawRect:` view's bitmap would cover the drawable after every pass. Such a
+view draws through `updateLayer` (`wantsUpdateLayer`), with the redraw policy
+set to `DuringViewResize`, the one a `drawRect:` view has: a view that makes
+its own backing layer is otherwise never redrawn. AppKit's own backing layers
+hand their `display` to the view; `CAMetalLayer`'s does nothing, and the view
+answers no `displayLayer:`, so `FluiMetalLayer::display` calls the view's
+`updateLayer` itself. The in-pass `setNeedsDisplay:` measurement below was
+taken on `drawRect:`; the same re-arm runs from `updateLayer`, and
+`appkit_window::a_redraw_from_another_thread_is_queued_without_waiting` and the
+frame pump of a running app pass on it. What changed is the re-arm.
 `owner::apple::macos::display_pass` marks the thread for the duration of the frame
 AppKit asked for (an RAII guard, nesting-safe, thread-local), and
 `window/apple/macos.rs::dispatch_redraw_request` — the single decision point `request_redraw`

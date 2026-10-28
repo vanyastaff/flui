@@ -95,6 +95,7 @@ use crate::owner::apple::macos::{
     ContentViewRef, HostDisplays, WeakWakePump, WindowRegistry, debug_assert_appkit_main_thread,
     exec_async_on_owner, on_owner_thread,
 };
+use crate::owner::apple::metal_layer::{LayerRefresh, NewRefresh};
 
 use crate::{
     owner::OpenWindowError,
@@ -118,7 +119,7 @@ pub struct MacOSWindow {
     ns_window: ObjcId,
 
     /// This window's `FLUIContentView` (NSView*): the view that receives
-    /// input, IME and appearance changes, draws on `drawRect:`, carries the
+    /// input, IME and appearance changes, draws on `updateLayer`, carries the
     /// accessibility bridge, and is the `ns_view` of the raw window handle.
     ///
     /// Fixed for the window's lifetime and read from here, never from
@@ -196,6 +197,10 @@ struct MacOSWindowState {
     /// accessor any thread may call. Refreshed wherever `scale_factor` is —
     /// `windowDidChangeScreen:` and `windowDidChangeBackingProperties:`.
     display: Option<DisplayId>,
+
+    /// The refresh last pushed to the layer's presentation reports, by the
+    /// display snapshot it was read from (`sync_layer_refresh`).
+    layer_refresh: LayerRefresh,
 
     /// Cursor selected by this exact window's presentation.
     cursor: CursorIcon,
@@ -323,6 +328,7 @@ impl MacOSWindow {
         // screen change and must not flip between registries.
         if self.displays.set(displays).is_ok() {
             self.refresh_display();
+            self.sync_layer_refresh();
         }
     }
 
@@ -348,6 +354,29 @@ impl MacOSWindow {
         let changed = state.display != id;
         state.display = id;
         changed
+    }
+
+    /// Push the refresh of the display this window is on to its layer's
+    /// presentation reports, when the display snapshot or the window's
+    /// display moved since the last push: a rate change on the same display
+    /// reaches it as a new snapshot revision. Owner lane on the main thread,
+    /// where the screens are read; elsewhere the reports keep what they have.
+    fn sync_layer_refresh(&self) {
+        let (Some(displays), Some(mtm)) = (self.displays.get(), objc2::MainThreadMarker::new())
+        else {
+            return;
+        };
+        let Ok(snapshot) = displays.snapshot(mtm) else {
+            return;
+        };
+        let push = {
+            let mut state = self.state.lock();
+            let display = state.display;
+            state.layer_refresh.update(&snapshot, display)
+        };
+        if let Some(NewRefresh(refresh)) = push {
+            content_view::set_layer_refresh(&self.view, refresh);
+        }
     }
 
     /// Hand this window the platform's wake pump.
@@ -583,6 +612,7 @@ impl MacOSWindow {
                     },
                     scale_factor: scale,
                     display: None,
+                    layer_refresh: LayerRefresh::default(),
                     cursor: CursorIcon::default(),
                     normal: None,
                     sequence: ModeSequence::default(),
@@ -691,7 +721,7 @@ impl MacOSWindow {
 ///
 /// AppKit discards a `setNeedsDisplay:` issued while it is displaying the view,
 /// and the frame a display pass runs asks for its next frame from exactly there
-/// (`drawRect:` → frame request → scheduler wake): that one request is dropped
+/// (`updateLayer` → frame request → scheduler wake): that one request is dropped
 /// and the pump stops for good — no frame, no wake, no frame. See
 /// `display_pass` for the measurement behind that. The same call one turn
 /// of the owner lane later is honoured instead, because the pass has unwound by
@@ -736,6 +766,9 @@ impl MacOSWindow {
             on_owner_thread(self.owner, self.owner_is_main),
             "BUG: set_needs_display must run on the window's owner lane"
         );
+        // The frame this asks for carries the display's current refresh: a
+        // rate change since the last frame is a new snapshot revision.
+        self.sync_layer_refresh();
         unsafe {
             // SAFETY: per the function's contract, the caller is on the owner
             // lane (checked by the assertion above) and `ns_window` is live;
@@ -743,10 +776,10 @@ impl MacOSWindow {
             let content_view = self.view_ptr();
             let _: () = msg_send![content_view, setNeedsDisplay: YES];
             // AppKit owns the display pass that turns this into a
-            // `drawRect:` — nothing in this backend can observe it, so the
+            // call of `updateLayer` — nothing in this backend can observe it, so the
             // two ends of the pump are instrumented separately: this line
-            // (the request went out) and `view.rs`'s `draw_rect` (AppKit
-            // asked for content). A request with no matching `drawRect:` is
+            // (the request went out) and the content view's `update_layer` (AppKit
+            // asked for content). A request with no matching `updateLayer` is
             // otherwise invisible from here, so when a trace subscriber is
             // attached, report the AppKit state the display pass is gated
             // on. The reads are msg_sends, so they are behind the level
