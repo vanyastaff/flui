@@ -531,7 +531,9 @@ fn an_activation_asks_the_compositor_with_a_token() {
         .expect("a second window opens");
     for _ in 0..10 {
         run_for(&fixture.platform, Duration::from_millis(50)).expect("the loop turns");
-        cover.surface_target().pre_present_notify();
+        cover
+            .surface_target()
+            .pre_present_notify(flui_platform::SwapChainStatistics::None);
         let _ = present(cover.as_ref());
     }
     fixture.settle();
