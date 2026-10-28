@@ -558,8 +558,7 @@ pub fn location_for_code(code: Code) -> Location {
 /// producer for one press (ADR-0069), so it produces no key at all, neither
 /// a character nor a named key, and its release none either.
 pub fn taken_by_input_method(vk_code: u16) -> bool {
-    let _ = (vk_code, vk::PROCESSKEY);
-    false
+    vk_code == vk::PROCESSKEY
 }
 
 /// Decode a keydown's `WM_CHAR` burst (the UTF-16 code units of every

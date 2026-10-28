@@ -182,7 +182,10 @@ struct InputWindow {
     pending_high_surrogate: Cell<Option<u16>>,
     /// Physical keys held down that were pressed as dead keys, so their
     /// release reports `Dead` like the press.
-    held_dead_keys: RefCell<raw::HeldDeadKeys>,
+    held_dead_keys: RefCell<raw::HeldKeys>,
+    /// Physical keys held down whose press an input method took
+    /// (`VK_PROCESSKEY`): their release is no key either.
+    keys_taken_by_input_method: RefCell<raw::HeldKeys>,
     /// Whether the window is destroyed: a callback can close it, and a later
     /// window can take its handle.
     gone: Cell<bool>,
@@ -211,6 +214,7 @@ impl InputWindow {
             touchpad: direct_manipulation::TouchpadSlot::default(),
             pending_high_surrogate: Cell::new(None),
             held_dead_keys: RefCell::default(),
+            keys_taken_by_input_method: RefCell::default(),
             gone: Cell::new(false),
         }
     }
@@ -589,6 +593,24 @@ impl InputWindows {
                         // Track modifiers.
                         ctx.modifiers.set(raw::message_modifiers());
 
+                        // A key the input method took is its composition,
+                        // not a key: nothing is dispatched for it, and no
+                        // character is drained, so what a legacy input
+                        // method posts for its result arrives as text of
+                        // its own (the stray `WM_CHAR` arm).
+                        let (scan_code, extended, _) =
+                            crate::input::keys::parse_key_lparam(lparam.0);
+                        let mut taken = ctx.keys_taken_by_input_method.borrow_mut();
+                        if crate::input::keys::taken_by_input_method(vk) {
+                            taken.press(scan_code, extended);
+                            drop(taken);
+                            return Some(DefWindowProcW(hwnd, msg, wparam, lparam));
+                        }
+                        // A press the application gets is proof the key was
+                        // released where its release went unseen.
+                        taken.release(scan_code, extended);
+                        drop(taken);
+
                         // Merge the fully-translated character(s) for this
                         // keystroke into the keydown. The message loop runs
                         // `TranslateMessage` before `DispatchMessageW` (see
@@ -674,6 +696,18 @@ impl InputWindows {
                         let time = ctx.message_clock.message_time();
                         // Track modifiers.
                         ctx.modifiers.set(raw::message_modifiers());
+
+                        // The release of a key the input method took, under
+                        // `VK_PROCESSKEY` or its own, is no key either.
+                        let (scan_code, extended, _) =
+                            crate::input::keys::parse_key_lparam(lparam.0);
+                        let released = ctx
+                            .keys_taken_by_input_method
+                            .borrow_mut()
+                            .release(scan_code, extended);
+                        if released || crate::input::keys::taken_by_input_method(wparam.0 as u16) {
+                            return Some(DefWindowProcW(hwnd, msg, wparam, lparam));
+                        }
 
                         use raw::key_up_event;
                         let event = {
@@ -2005,7 +2039,7 @@ mod raw {
         wparam: WPARAM,
         lparam: LPARAM,
         stroke: Keystroke,
-        held_dead: &mut HeldDeadKeys,
+        held_dead: &mut HeldKeys,
         time: u64,
     ) -> PlatformInput {
         let vk = wparam.0 as u16;
@@ -2065,7 +2099,7 @@ mod raw {
     pub fn key_up_event(
         wparam: WPARAM,
         lparam: LPARAM,
-        held_dead: &mut HeldDeadKeys,
+        held_dead: &mut HeldKeys,
         time: u64,
     ) -> PlatformInput {
         let vk = wparam.0 as u16;
@@ -2121,21 +2155,22 @@ mod raw {
         Dead,
     }
 
-    /// The physical keys currently held down that were pressed as dead keys, so
-    /// each one's release reports `Dead` like its press, even if the keyboard
+    /// Physical keys currently held down whose press was of one kind (a dead
+    /// key, a key an input method took), by scancode and extended flag, so
+    /// each one's release is reported like its press, even if the keyboard
     /// layout or the modifiers changed while it was held. Owned per window.
     #[derive(Debug, Default)]
-    pub struct HeldDeadKeys(Vec<(u16, bool)>);
+    pub struct HeldKeys(Vec<(u16, bool)>);
 
-    impl HeldDeadKeys {
-        fn press(&mut self, scan_code: u16, extended: bool) {
+    impl HeldKeys {
+        pub(super) fn press(&mut self, scan_code: u16, extended: bool) {
             if !self.0.contains(&(scan_code, extended)) {
                 self.0.push((scan_code, extended));
             }
         }
 
-        /// Whether the released key was pressed as a dead key; forgets it.
-        fn release(&mut self, scan_code: u16, extended: bool) -> bool {
+        /// Whether the released key was pressed as one of these; forgets it.
+        pub(super) fn release(&mut self, scan_code: u16, extended: bool) -> bool {
             let before = self.0.len();
             self.0.retain(|held| *held != (scan_code, extended));
             self.0.len() != before
