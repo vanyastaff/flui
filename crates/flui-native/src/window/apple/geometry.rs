@@ -438,7 +438,7 @@ pub(crate) mod mode {
             honoured.hides = Unavailable;
         }
         let mode = heading.unwrap_or_else(|| mode_of(flags.mode_flags()));
-        if mode != WindowMode::Normal {
+        if flags.fullscreen || mode != WindowMode::Normal {
             honoured.sets_resizable = Unavailable;
         }
         honoured
@@ -521,6 +521,37 @@ pub(crate) mod mode {
     /// for good.
     pub(crate) const ANIMATION_LIMIT: Duration = Duration::from_secs(3);
 
+    /// A command held back while the window heads for the mode it may be
+    /// carried out in, and carried out once the step ends.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum HeldCommand {
+        /// Stop being resizable.
+        FixedSize,
+    }
+
+    /// What a window asked to be fixed in size does now.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum FixedSize {
+        /// Restyle it now.
+        Apply,
+        /// Restyle it once the step taking it to normal mode ends.
+        Held,
+        /// Refuse, saying why.
+        Refused(&'static str),
+    }
+
+    /// What a window does once the step that animated ends: plan the held
+    /// mode again from its new flags, then carry out the held commands, in
+    /// the order they arrived.
+    #[derive(Debug, Default, PartialEq, Eq)]
+    pub(crate) struct AfterStep {
+        pub(crate) mode: Option<WindowMode>,
+        pub(crate) commands: Vec<HeldCommand>,
+    }
+
+    /// Why a window is not made fixed-size in another mode.
+    const FIXED_SIZE_IN_NORMAL_MODE: &str = "a window is made fixed-size only in normal mode";
+
     /// The order in which a window's mode commands reach AppKit.
     ///
     /// AppKit ignores a toggle sent while a full-screen or Dock step animates, and
@@ -528,11 +559,17 @@ pub(crate) mod mode {
     /// arrives during one, and the rest of a mode whose first step is one, are held
     /// here and planned again from the window's flags when the step's notification
     /// arrives. The newest command wins, and it replaces the mode a hidden window
-    /// was to enter when first shown.
+    /// was to enter when first shown. A style command for the mode the window is
+    /// heading to waits with it, behind the held mode; a newer mode command drops
+    /// it, and so does a step that outlived [`ANIMATION_LIMIT`], so no old
+    /// obligation fires on a later step of the user's own.
     #[derive(Debug, Default)]
     pub(crate) struct ModeSequence {
         /// The mode held back until the animating step ends.
         held: Option<WindowMode>,
+        /// The commands held back until the animating step ends, in arrival
+        /// order, carried out after the held mode.
+        held_commands: Vec<HeldCommand>,
         /// When the step that is animating started.
         animating_since: Option<Instant>,
         /// The mode the last command sent the window toward; while a step
@@ -540,14 +577,11 @@ pub(crate) mod mode {
         heading: Option<WindowMode>,
         /// The mode a window that opened hidden enters when it is first shown.
         when_shown: Option<WindowMode>,
-        /// A fixed size asked for while the window heads for normal mode,
-        /// set once the step ends.
-        fixed_size_held: bool,
     }
 
     impl ModeSequence {
         /// The steps to send now to take a window with `flags` to `target`, at
-        /// `now`.
+        /// `now`. A style command held for an older target is dropped.
         pub(crate) fn command(
             &mut self,
             now: Instant,
@@ -555,6 +589,7 @@ pub(crate) mod mode {
             target: WindowMode,
         ) -> Vec<ModeStep> {
             self.when_shown = None;
+            self.held_commands.clear();
             if self.animates(now) {
                 self.held = Some(target);
                 self.heading = Some(target);
@@ -590,8 +625,25 @@ pub(crate) mod mode {
             }
         }
 
-        /// A step that animates has started, from this backend or from the user.
+        /// A step that outlived [`ANIMATION_LIMIT`] at `now` gives up: what
+        /// it said of where the window was heading, and the commands held for
+        /// it. Answers whether that changed anything, so the window's
+        /// published capabilities are read again.
+        pub(crate) fn expire(&mut self, now: Instant) -> bool {
+            if self.animating_since.is_none() || self.animates(now) {
+                return false;
+            }
+            self.animating_since = None;
+            self.heading = None;
+            self.held_commands.clear();
+            true
+        }
+
+        /// A step that animates has started, from this backend or from the
+        /// user. A step that outlived the limit gives up first, so its held
+        /// commands do not land on this one.
         pub(crate) fn step_started(&mut self, now: Instant) {
+            self.expire(now);
             self.animating_since = Some(now);
         }
 
@@ -602,31 +654,38 @@ pub(crate) mod mode {
             self.heading = None;
         }
 
-        /// The mode held back for the step that ended, if there is one, to be
-        /// commanded again from the window's new state.
-        pub(crate) fn take_held(&mut self) -> Option<WindowMode> {
-            self.held.take()
+        /// What the window does now that the step ended: the held mode, then
+        /// the held commands, in arrival order.
+        pub(crate) fn take_after_step(&mut self) -> AfterStep {
+            AfterStep {
+                mode: self.held.take(),
+                commands: std::mem::take(&mut self.held_commands),
+            }
         }
 
-        /// A window asked to be fixed in size: whether that waits for the
-        /// step taking it to normal mode, at `now`. AppKit's flags still say
-        /// the mode it is leaving, and restyling a window mid-transition
-        /// leaves it in that mode, so the restyle is held until the step ends.
-        pub(crate) fn hold_fixed_size(&mut self, now: Instant) -> bool {
-            let held = self.heading(now) == Some(WindowMode::Normal);
-            self.fixed_size_held |= held;
-            held
+        /// A window with `flags` asked, at `now`, to be fixed in size. A
+        /// window that is no longer resizable reports a zoomed frame as normal
+        /// and cannot be un-zoomed by the user, so it is restyled only in
+        /// normal mode; heading there, it waits for the step to end, since
+        /// AppKit's flags still say the mode it is leaving and a restyle
+        /// mid-transition leaves it in that mode.
+        pub(crate) fn fix_size(&mut self, now: Instant, flags: WindowFlags) -> FixedSize {
+            self.expire(now);
+            match self.heading(now) {
+                Some(WindowMode::Normal) => {
+                    self.held_commands.push(HeldCommand::FixedSize);
+                    FixedSize::Held
+                }
+                None if mode_of(flags.mode_flags()) == WindowMode::Normal => FixedSize::Apply,
+                Some(_) | None => FixedSize::Refused(FIXED_SIZE_IN_NORMAL_MODE),
+            }
         }
 
         /// The window was made resizable after all: a held fixed size is
         /// dropped, the newer command winning.
-        pub(crate) fn drop_fixed_size(&mut self) {
-            self.fixed_size_held = false;
-        }
-
-        /// Whether a fixed size waits for the step that ended.
-        pub(crate) fn take_fixed_size(&mut self) -> bool {
-            std::mem::take(&mut self.fixed_size_held)
+        pub(crate) fn make_resizable(&mut self) {
+            self.held_commands
+                .retain(|command| *command != HeldCommand::FixedSize);
         }
 
         /// A window that opened hidden enters `mode` when it is first shown.
@@ -640,7 +699,6 @@ pub(crate) mod mode {
             self.when_shown.take()
         }
     }
-
     #[cfg(test)]
     mod tests {
         use WindowMode::{Fullscreen, Maximized, Minimized, Normal};
@@ -789,8 +847,12 @@ pub(crate) mod mode {
             assert_eq!(sequence.command(at(start, 1), flags("FR"), Normal), []);
             // The step ends; the held mode is commanded again from the real flags.
             sequence.step_ended();
-            assert_eq!(sequence.take_held(), Some(Normal));
-            assert_eq!(sequence.take_held(), None, "a held mode is taken once");
+            assert_eq!(sequence.take_after_step().mode, Some(Normal));
+            assert_eq!(
+                sequence.take_after_step().mode,
+                None,
+                "a held mode is taken once"
+            );
             assert_eq!(
                 sequence.command(at(start, 2), flags("FR"), Normal),
                 [ModeStep::ExitFullscreen]
@@ -806,12 +868,16 @@ pub(crate) mod mode {
                 [ModeStep::ExitFullscreen]
             );
             sequence.step_ended();
-            assert_eq!(sequence.take_held(), Some(Minimized));
+            assert_eq!(sequence.take_after_step().mode, Some(Minimized));
             assert_eq!(
                 sequence.command(at(start, 1), flags("R"), Minimized),
                 [ModeStep::Miniaturize]
             );
-            assert_eq!(sequence.take_held(), None, "nothing is left to ask again");
+            assert_eq!(
+                sequence.take_after_step().mode,
+                None,
+                "nothing is left to ask again"
+            );
         }
 
         #[test]
@@ -992,31 +1058,119 @@ pub(crate) mod mode {
         }
 
         /// A fixed size asked for on the way to normal mode waits for the
-        /// step to end and is set once; a newer resizable drops it, and one
-        /// asked for heading anywhere else is refused, not held.
+        /// step to end, and is carried out then, once; once there, it is
+        /// carried out at once. A newer resizable drops it, and one asked for
+        /// heading anywhere else is refused, not held.
         #[test]
         fn a_fixed_size_waits_for_the_step_to_normal_mode() {
             let now = Instant::now();
             let mut sequence = ModeSequence::default();
             sequence.command(now, flags("MR"), Normal);
-            assert!(
-                sequence.hold_fixed_size(now),
-                "held while heading for normal"
+            assert_eq!(sequence.fix_size(now, flags("MR")), FixedSize::Held);
+            sequence.step_ended();
+            assert_eq!(
+                sequence.take_after_step().commands,
+                [HeldCommand::FixedSize],
+                "carried out once the step ends"
             );
-            assert!(sequence.take_fixed_size(), "set once the step ends");
-            assert!(!sequence.take_fixed_size(), "and only once");
+            assert_eq!(sequence.take_after_step(), AfterStep::default(), "and once");
+            assert_eq!(
+                sequence.fix_size(now, flags("R")),
+                FixedSize::Apply,
+                "in normal mode"
+            );
 
-            sequence.hold_fixed_size(now);
-            sequence.drop_fixed_size();
-            assert!(!sequence.take_fixed_size(), "the newer resizable wins");
+            let mut sequence = ModeSequence::default();
+            sequence.command(now, flags("MR"), Normal);
+            sequence.fix_size(now, flags("MR"));
+            sequence.make_resizable();
+            sequence.step_ended();
+            assert!(
+                sequence.take_after_step().commands.is_empty(),
+                "the newer resizable wins"
+            );
 
             let mut sequence = ModeSequence::default();
             sequence.command(now, flags("R"), Minimized);
+            assert!(matches!(
+                sequence.fix_size(now, flags("R")),
+                FixedSize::Refused(_)
+            ));
+            sequence.step_ended();
             assert!(
-                !sequence.hold_fixed_size(now),
-                "heading for the Dock is refused"
+                sequence.take_after_step().commands.is_empty(),
+                "refused, not held"
             );
-            assert!(!sequence.take_fixed_size());
+        }
+
+        /// The step ends: the held mode is planned first, then the held
+        /// commands, in the order they arrived, so a fixed size meant for the
+        /// normal window the held mode leads to lands after it.
+        #[test]
+        fn the_held_mode_comes_before_the_held_commands() {
+            let now = Instant::now();
+            let mut sequence = ModeSequence::default();
+            // A zoomed window in full screen: leaving it first, then un-zooming.
+            assert_eq!(
+                sequence.command(now, flags("FZR"), Normal),
+                [ModeStep::ExitFullscreen]
+            );
+            assert_eq!(sequence.fix_size(now, flags("FZR")), FixedSize::Held);
+            sequence.step_ended();
+            assert_eq!(
+                sequence.take_after_step(),
+                AfterStep {
+                    mode: Some(Normal),
+                    commands: vec![HeldCommand::FixedSize],
+                }
+            );
+        }
+
+        /// No old obligation fires late: a newer mode command drops the held
+        /// commands, and so does a step that outlived the limit, before a
+        /// later step of the user's own starts.
+        #[test]
+        fn a_held_command_is_dropped_by_a_newer_mode_or_the_limit() {
+            let now = Instant::now();
+
+            let mut sequence = ModeSequence::default();
+            sequence.command(now, flags("MR"), Normal);
+            sequence.fix_size(now, flags("MR"));
+            sequence.command(now, flags("MR"), Maximized);
+            sequence.step_ended();
+            let after = sequence.take_after_step();
+            assert_eq!(after.mode, Some(Maximized), "the newer mode is held");
+            assert!(
+                after.commands.is_empty(),
+                "the fixed size went with the older mode"
+            );
+
+            let mut sequence = ModeSequence::default();
+            sequence.command(now, flags("MR"), Normal);
+            sequence.fix_size(now, flags("MR"));
+            let late = now + ANIMATION_LIMIT;
+            assert!(sequence.expire(late), "the step gave up");
+            assert!(!sequence.expire(late), "once");
+            assert_eq!(sequence.heading(late), None);
+            sequence.step_started(late);
+            sequence.step_ended();
+            assert!(
+                sequence.take_after_step().commands.is_empty(),
+                "the user's own step later carries out nothing old"
+            );
+        }
+
+        /// A window still full screen is not made fixed-size, whatever mode
+        /// it heads for: AppKit restyles no full-screen window.
+        #[test]
+        fn a_full_screen_window_heading_for_normal_stays_resizable() {
+            use flui_platform::Availability::Unavailable;
+            use flui_platform::WindowCapabilities;
+
+            let mut every = WindowCapabilities::NONE;
+            every.sets_resizable = flui_platform::Availability::Native;
+            let honoured = capabilities_of(flags("FR"), Some(Normal), every);
+            assert_eq!(honoured.sets_resizable, Unavailable);
         }
     }
 }

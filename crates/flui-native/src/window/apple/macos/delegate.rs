@@ -15,6 +15,7 @@ use objc2_foundation::NSRect;
 use super::{BObjC, Class, MacOSWindow, NIL, NO, ObjcId, Object, YES};
 use crate::owner::apple::macos::HostDisplays;
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
+use crate::window::apple::geometry::mode::HeldCommand;
 
 /// The display a raw `NSScreen*` names, or `None` when the pointer is nil (a
 /// window not on any screen) or the source leaves that screen out.
@@ -511,21 +512,24 @@ impl MacOSWindow {
             let Some(window) = window.upgrade() else {
                 return;
             };
-            let held = window.state.lock().sequence.take_held();
-            if let Some(mode) = held
+            // The held mode first, then the held commands in arrival order: a
+            // fixed size meant for the normal window the held mode leads to
+            // lands after it, held again if that mode set off another step.
+            let after = window.state.lock().sequence.take_after_step();
+            if let Some(mode) = after.mode
                 && let Err(error) = window.change_mode(mode)
             {
                 tracing::debug!(%error, "a window could not finish changing mode");
             }
-            // A fixed size asked for on the way to normal mode, set now that
-            // the window is there; held again if a held mode set off another
-            // step toward it.
-            let fixed_size = window.state.lock().sequence.take_fixed_size();
-            if fixed_size {
-                match window.set_style_bit(NSWindowStyleMask::Resizable, false) {
-                    Ok(()) => window.publish_state(),
-                    Err(error) => {
-                        tracing::debug!(%error, "a window could not be made fixed-size");
+            for command in after.commands {
+                match command {
+                    HeldCommand::FixedSize => {
+                        match window.set_style_bit(NSWindowStyleMask::Resizable, false) {
+                            Ok(()) => window.publish_state(),
+                            Err(error) => {
+                                tracing::debug!(%error, "a window could not be made fixed-size");
+                            }
+                        }
                     }
                 }
             }
