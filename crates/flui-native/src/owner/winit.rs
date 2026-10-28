@@ -910,10 +910,7 @@ impl WinitLoop {
     }
 
     /// Look up a previously-created window by [`WindowId`] and return the
-    /// exact stored allocation as a [`HostWindow`]. Named `window_by_id`
-    /// (not `window_handle`) to avoid colliding with the unrelated
-    /// [`PlatformWindow::window_handle`](flui_platform::PlatformWindow::window_handle)
-    /// raw GPU-handle accessor.
+    /// exact stored allocation as a [`HostWindow`].
     pub(crate) fn window_by_id(
         &self,
         window_id: WindowId,

@@ -752,6 +752,10 @@ mod tests {
     thread_local! {
         /// The router a [`RegisterOnDrop`] registers on: a handler is `Send`,
         /// the router, which holds windows, is not.
+        #[allow(
+            clippy::missing_const_for_thread_local,
+            reason = "the initializer is `const`; clippy for the Android target reports it anyway"
+        )]
         static ROUTER: std::cell::RefCell<std::rc::Weak<CloseRequestRouter>> =
             const { std::cell::RefCell::new(std::rc::Weak::new()) };
     }

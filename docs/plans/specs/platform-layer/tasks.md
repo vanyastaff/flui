@@ -3212,6 +3212,83 @@ graph LR
   480, поворот — один `android_main`, значения в `MediaQuery`. Остаток LY63: `targetSdk` из `platform-support.toml`, путь
   Gradle, правила R8, `windowSoftInputMode`, golden манифеста и `build.gradle.kts`, список в
   генерируемом манифесте `FluiActivity` (LY62).
+- [x] **LY46** — ветка `platform/surface-target`, от `main` @ `136947eff` (LY43, LY44), слит `main`
+  @ `e617f109a` (#1923, #1924, #1925). **Контракт.** `PlatformWindow` без `Send + Sync`; окна
+  отдаются как `Rc<dyn HostWindow>`/`Rc<dyn PlatformWindow>`, слабые ссылки — `std::rc::Weak`.
+  Новое: `SurfaceTarget: HasWindowHandle + HasDisplayHandle + Send + Sync + 'static` с
+  обязательным `pre_present_notify`; `PlatformWindow::surface_target()` (обязательный);
+  `NoNativeSurface` — цель окна без нативной поверхности (doctest контракта, двойники).
+  `PlatformWindow::pre_present_notify`, `window_handle`, `display_handle` и
+  `HasWindowHandle`/`HasDisplayHandle` для `dyn PlatformWindow`/`dyn HostWindow` удалены. Рассказ
+  `request_redraw` (≈50 строк, «нарушено на двух путях») заменён двумя фразами: вызов с чужого
+  потока не компилируется. **Решение сверх строки (для владельца):** два пути с чужого потока
+  (`FrameWakeHandle` `flui-app` и слушатель активации AccessKit в `flui-runtime`, а также
+  `request_frame` презентации, который зовут сигналы, записанные на рабочих потоках) нуждались в
+  законном маршруте. Выбран `RedrawRequester` (`Send + Sync`, `request_redraw`) и обязательный
+  `PlatformWindow::redraw_requester()`; любое `Fn() + Send + Sync` — запросчик. Альтернатива —
+  глагол `PlatformProxy::request_redraw(WindowId)` по ADR-0045 п. 5 — требовала бы поиск окна по
+  идентификатору в каждом транспорте и недоступна `flui-runtime` (ADR-0083). **Ядро.**
+  `owner::window_delivery::Retirement` — признак начатого вывода окна (ставит
+  `WindowDelivery::clear`, то есть `WM_DESTROY`, `windowWillClose:`, завершение закрытия winit,
+  выход лупера Android, сцена UIKit, отставка холста, закрытие headless); `owner::slot::{OwnerCell,
+  OwnerMap, OwnerWeak}` — хранение `!Send` окон в `Send + Sync` структурах хоста, доступное только
+  потоку владельца; `WindowDelivery::publish_through_owner`. Цели и запросчики по хостам: Win32
+  `Win32Surface` (HWND и адрес контекста числами, `Retirement` + проба идентичности
+  `teardown_route`; `unsafe impl` не нужен), winit `WinitSurface` (держит `Arc<Window>`,
+  `Retirement`; `pre_present_notify` взводит frame callback Wayland) и `WinitRedraw` (слабо),
+  Android `AndroidSurface` (`native_window()` на каждый запрос: `Unavailable` только для
+  завершённого окна) и `AndroidRedraw`, web `WebSurface` (единственный `unsafe impl Send + Sync`
+  вне Apple, под `cfg(not(target_feature = "atomics"))`, SAFETY называет инвариант), headless
+  (всегда `Unavailable`, счёт `pre_present_notifies`). AppKit: `unsafe impl Send/Sync` у
+  `MacOSWindow` и `route_on_owner` удалены, `MacOSSurface` (указатель вида, флаг закрытия,
+  `Retirement`, флаг ставит и `Drop`) с SAFETY-инвариантом, `MacOSRedraw` с чужого потока ставит
+  перерисовку в ленту владельца (`exec_async_on_owner`) и не блокирует; реестр окон — `OwnerMap`,
+  отложенная перерисовка держит `OwnerWeak` вместо ключа-указателя. UIKit: `IOSSurface` с
+  инвариантным SAFETY, `IOSRedraw` — флаг спроса для `CADisplayLink`. Таблицы окон хостов: Win32
+  `WindowSet` — `OwnerCell`, winit `windows` — `OwnerMap`, Android — `ActivityWindow: Send + Sync`
+  (окно конкретно `Send`, приложению отдаётся клон в `Rc`). `PendingWindow`: `wait()` отдаёт
+  `WindowId`, `try_take` и future — `OpenedWindow` (идентичность; окно — только на владельце,
+  слабо); headless держит окно отложенного открытия до закрытия (`keep_deferred`), как
+  нативные хосты. **`flui-app`, `flui-runtime`.** Рендерер строится из `window.surface_target()`,
+  `install_pre_present_hook` берёт цель; `FrameWakeHandle`, пробуждение UI-рантайма, слушатель
+  активации и `request_frame` презентации зовут `redraw_requester()`; `CloseRequestRouter` — `Rc`.
+  `thread_local!` в `host.rs` оставлен: причина другая — регистрации уровня приложения
+  (`on_wake`, `on_host_notice`, `on_session_end`, хуки политики выхода и дедлайна) остаются
+  `Send` до `AppHandler` (LY45); документация поля переписана. Пример `web_demo` держит окно в
+  обработчике до закрытия (`on_quit` требует `Send`). **Тесты** (откат проверен для каждого):
+  trybuild `a_platform_window_cannot_cross_a_thread` (`flui-platform/tests/compile_fail`;
+  с возвращёнными `Send + Sync` — mismatch) и `assert_not_impl_any!` в
+  `tests/surface_target.rs` (с `Send + Sync` не компилируется), там же
+  `a_window_with_no_native_surface_hands_out_no_handle`; Win32 в `native_window_commands`:
+  `a_surface_target_is_unavailable_once_its_window_closed` (без проверки жизни в цели падает:
+  «a closed window's target hands out no handle») и
+  `a_redraw_asked_from_another_thread_reaches_the_window` (с пустым запросчиком падает);
+  `main_window_installer_matrix` (без `keep_deferred` падает: «coalesced intents invoke one
+  installer, left 0»). Синхронный `state_changed` в живом resize Win32 — существующая строка
+  `a_live_resize_publishes_inside_its_modal_loop`, зелёная. Перенос тестов: двойники окна
+  получили запросчик и цель, сценарии X11 водят окно через `ScenarioWindow` (вызовы уходят на
+  владельца ходом `OwnerSignal`); переименованы `a_close_command_asks_no_veto` (было
+  `a_close_from_another_thread_asks_no_veto`) и `a_win32_view_refuses_a_closed_window` (было
+  `a_win32_view_refuses_another_thread_and_a_closed_window`), поток-переход из них убран —
+  тип его запрещает. **Документы:** ARCHITECTURE.md `flui-platform`, `flui-native`, README
+  `flui-native`, `docs/architecture.md`, ADR-0058 (`SurfaceTarget::pre_present_notify`),
+  комментарии `flui-engine` и `flui-scheduler`, `changelog.d/platform-surface-target.md`;
+  `docs/platform-parity.md`/`docs/gaps.md` без изменений (поддержка по платформам та же, запись
+  gaps о `SurfaceTarget` стала верной).
+  Проверки (Windows): `cargo fmt`; clippy `-D warnings` рабочего пространства `--all-targets`
+  обычный и с `flui-native/winit-backend,flui/native`; nextest `flui-platform`, `flui-runtime`,
+  `flui-interaction`, `flui-testing`, `flui-app`, `flui-view`, `flui-sdk` — 418 из 418 (15
+  пропущены), `flui-native`, `flui-engine` — 358 из 359 (падает только trybuild
+  `owner_thread_token_has_no_default`, как на `main`); clippy Android `--all-targets`, wasm32
+  lib, iOS lib (`DOCS_RS=1`), macOS `--all-targets` обычный и с `winit-backend`; `checks`,
+  `doc-strict`, `wasm-check`, `wasm-test` — 51, `globals` — 57, `module-dag` — 1 исключение.
+  WSL Ubuntu 24.04: clippy трёх вариантов чистый; nextest под xvfb `--all-features` — 308 из 308,
+  `flui-native`+`flui-app` с `winit-backend` — 354 из 354; без xvfb — 662 из 663 (прежний
+  `x11_window_takes_commands_and_publishes_what_the_server_holds` против X-сервера WSLg).
+  Живой пример: `counter` на Windows (DX12, RTX 3070 Ti) — поверхность создана из цели, кадры
+  рисуются, три нажатия дают «3», `WM_CLOSE` завершает процесс без предупреждений.
+  Не запускалось: Mac и iPhone (vanyastaff/flui#1840; список в PR), `cross-typecheck`,
+  Android-устройство, браузер.
 
 ## Отступление от порядка, решённое владельцем
 

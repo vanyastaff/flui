@@ -888,7 +888,7 @@ impl MockWindow {
     }
 
     /// How many times the frame pump has called
-    /// [`PlatformWindow::pre_present_notify`] on this window — one per
+    /// [`SurfaceTarget::pre_present_notify`](flui_platform::SurfaceTarget::pre_present_notify) on this window's surface target — one per
     /// presented frame, before the present, is the contract.
     #[must_use]
     pub fn pre_present_notifies(&self) -> u64 {

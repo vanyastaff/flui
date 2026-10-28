@@ -369,10 +369,10 @@ impl WindowDelivery {
     /// publication raised elsewhere publishes nothing, and the owner's next
     /// read publishes what changed.
     #[cfg_attr(
-        all(windows, not(feature = "winit-backend")),
+        any(all(windows, not(feature = "winit-backend")), target_os = "android"),
         expect(
             dead_code,
-            reason = "the Win32 window publishes through its window procedure"
+            reason = "the Win32 window publishes through its window procedure, and the Android window, which the looper shares, through `publish_through`"
         )
     )]
     pub(crate) fn publish_through_owner<W: 'static>(
