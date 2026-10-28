@@ -132,7 +132,12 @@ graph LR
 - [x] T2b — #1460, #1465
 - [x] T6 — #1497, #1774, #1805, #1821
 - [ ] T3 — runtime: долг якоря, gate, pointer-down вне поля
-- [ ] T4 — остаток: `VK_PROCESSKEY`, ACP на Linux CI
+- [x] T4 — остаток: `VK_PROCESSKEY`, ACP на Linux CI; #1955. Перевод ACP — модуль
+  `text/windows/acp.rs` (с ним слот сессии), `document.rs` только переносит значения; строки
+  R11, R14, R18 из таблицы выше — на Linux (WSL) и Windows. Взятая IME клавиша и её отпускание
+  (под `VK_PROCESSKEY` или своей клавишей) не доставляются; Win32-строка
+  `a_key_the_input_method_took_is_not_delivered` в `tests/contract.rs`. Win32-тесты TSF
+  зелёные до и после переноса; зонд `text_services_probe` (`#[ignore]`) не запускался
 - [ ] T5 — остаток: unmount и хук закрытия
 - [ ] T9 — остаток: реконверсия
 - [ ] T11 — строки IME на приложении приёмки
