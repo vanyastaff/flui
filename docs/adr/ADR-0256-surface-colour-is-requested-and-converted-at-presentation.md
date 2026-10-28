@@ -2,6 +2,25 @@
 
 - **Status:** Accepted (2026-10-26). Not implemented on Apple: the Metal colour spaces are in the
   candidate list but have no run behind them (Confirmation).
+- **Amended:** 2026-10-28 — §2, §5 and §6, decided by the coordinator of the platform-layer
+  feature, to whom the owner left the architecture, once the platform layer reports each
+  display's colour (`DisplayInfo::color`: a `SurfaceColorSpace` and a `Headroom`).
+  (1) §2: the display's state is the platform's report where there is one, and wgpu's
+  `DisplayHdrInfo` only without it, because the platform reads the display (DXGI, `NSScreen`,
+  Android's `Display`, the Wayland image description) while the surface's report is what wgpu
+  derives from the same sources less completely. A high-range display whose headroom is no
+  more than SDR white is SDR, whatever range it reports: Windows with the SDR brightness above
+  the panel's peak and a Wayland output whose target peak is below its reference white both
+  report that. The gamut decides `WideGamut`: a display the platform reports in sRGB gets the
+  8-bit sRGB surface (a wider one would show nothing more and costs the working target), a
+  P3 or BT.2020 one the wide surface. (2) §5: on Apple the headroom is the screen's *potential*
+  extended-range headroom, because the current one stays at white until a layer asks for
+  extended range, so reading it would never grant the surface that asks. (3) §6: hosts now
+  report profile changes as display snapshot revisions, and a window's `WindowDisplay` carries
+  its display's colour; the renderer takes the new colour before the next frame
+  (`Renderer::set_display_color`), configures its held surface again when it was set up for
+  another, and resolves every later recreation and recovery against the newest report, so a
+  window dragged from an HDR monitor to an SDR one leaves HDR.
 - **Date:** 2026-10-26
 - **Related:** [ADR-0254](ADR-0254-window-contract.md) (the per-window configuration the request
   joins), [ADR-0244](ADR-0244-os-version-floors-and-gates.md) (capabilities are asked for, never
@@ -106,9 +125,11 @@ peak is not reported uses `h = 4.0`. The headroom is read when the surface is co
 - A request not met is a downgrade, not an error (§1); only a surface without any sRGB pair
   fails.
 - Device recovery and surface recreation resolve the original request again against the new
-  capabilities; `surface_color()` follows the surface.
-- The display entering or leaving HDR mode while the app runs is not observed: the configuration
-  changes at the next recreation. The change-event row in `docs/platform-parity.md` stays ❌.
+  capabilities and the newest display report; `surface_color()` follows the surface.
+- The display entering or leaving HDR mode, or the window moving to another display, reaches the
+  window as a changed `WindowDisplay`; before the next frame the renderer takes the display's new
+  colour and configures its held surface again (amended 2026-10-28). A released surface takes it
+  at its recreation.
 
 ## Pros and cons of the options
 
@@ -150,10 +171,16 @@ peak is not reported uses `h = 4.0`. The headroom is read when the surface is co
   `an_adapter_that_cannot_blend_the_working_format_gets_srgb8`,
   `a_surface_without_the_sdr_pair_is_refused_whatever_was_asked` (selection).
 - `tone_mapping_is_the_identity_up_to_white_and_bounded_by_the_headroom`.
+- The amendment: `the_platform_colour_decides_the_display_state_over_the_surface_report`,
+  `a_high_range_display_without_headroom_over_white_gets_no_hdr`,
+  `wide_gamut_follows_the_display_gamut`,
+  `a_recreation_after_the_display_changes_resolves_its_new_range` (`flui-engine`),
+  `a_display_colour_change_reaches_the_renderer_before_the_frame` and
+  `a_surface_is_set_up_for_the_colour_of_its_window_s_display` (`flui-app`).
 - Not run: any HDR or P3 display on Windows, Linux or the Web, and every Metal space. Those cells in
   `docs/platform-parity.md` stay ❌ until a run on that platform.
 
 ## More information
 
-Revisit when a wide-gamut source type lands (images with a profile, video), when a host reports
-HDR changes, or when linear-light blending is proposed.
+Revisit when a wide-gamut source type lands (images with a profile, video), or when linear-light
+blending is proposed.

@@ -153,6 +153,16 @@ pub(super) fn refresh_preferences_with(
     Ok(())
 }
 
+/// The colour profile of the display `window` is on, by the installed host's
+/// accepted snapshot: the display report a renderer for `window` is set up
+/// with.
+pub(super) fn display_color_of(
+    window: &dyn flui_platform::PlatformWindow,
+) -> Option<flui_platform::DisplayColor> {
+    let host = APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
+    host.displays().color_of(window)
+}
+
 /// Sample the platform's displays, accept the snapshot, then tell every
 /// followed window which display it is on (ADR-0236).
 ///

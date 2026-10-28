@@ -311,6 +311,19 @@ impl WebFrameDriver {
                 return;
             };
 
+            // A changed colour of the page's screen sets the canvas surface up
+            // again before this frame paints (ADR-0256 §6).
+            let display = ui_runtime
+                .window_display(ui_runtime.presentation_id())
+                .and_then(|display| display.color);
+            match r.set_display_color(display) {
+                Ok(true) => ui_runtime.mark_primary_needs_full_repaint(),
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "the surface could not be set up for its display's colour");
+                }
+            }
+
             let textures = ui_runtime.texture_registry(ui_runtime.presentation_id());
             let mut sink = DirectSink::new(r).with_textures(textures);
             let _ = ui_runtime.pump(&mut SampledClock(now), &mut sink);
@@ -366,6 +379,8 @@ impl WebFrameDriver {
         let surface_color = self.surface_color;
         let window = std::rc::Rc::clone(&self.window);
         let surface = window.surface_target();
+        // Read on the owner before the build leaves it.
+        let display = super::host::display_color_of(window.as_ref());
         let (gpu_loss, wake) = (Arc::clone(&self.gpu_loss), Arc::clone(&self.owner_wake));
         let frame_latency = self.frame_latency;
         wasm_bindgen_futures::spawn_local(async move {
@@ -379,7 +394,9 @@ impl WebFrameDriver {
                     (Some(renderer), built)
                 }
                 None => {
-                    match flui_engine::Renderer::with_surface_color(surface, surface_color).await {
+                    match flui_engine::Renderer::with_surface_color(surface, surface_color, display)
+                        .await
+                    {
                         Ok(mut renderer) => {
                             renderer.set_frame_latency(frame_latency);
                             (Some(renderer), Ok(()))

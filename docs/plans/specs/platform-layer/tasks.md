@@ -3876,6 +3876,124 @@ graph LR
   с не тем размером, и цикл падает. Проверки: WSL под Weston nextest `flui-native` по умолчанию
   и `--all-features`, clippy четырёх вариантов, Windows clippy рабочего пространства, `checks`,
   nextest `xtask`.
+- [x] **LY92** — ветка `platform/hdr`, от `main` @ `c666bacfc` (#1935). **Контракт.** У
+  `DisplayInfo` новое поле `color: Result<DisplayColor, CapabilityAbsence>` (по умолчанию
+  `NotYetOnThisHost`), `with_color` и запросы `color_space()`/`headroom()`, отвечающие
+  `Unsupported` с причиной. `DisplayColor { color_space: SurfaceColorSpace, headroom:
+  Result<Headroom, CapabilityAbsence> }` строится только через `standard(gamut)` (запас ровно
+  1) и `high(gamut, headroom)`; `SurfaceColorSpace { gamut: ColorGamut, dynamic_range:
+  DynamicRange }` (`Srgb`/`DisplayP3`/`Rec2020`, `Standard`/`High`, все `non_exhaustive`);
+  `Headroom` — конечное кратное белого не меньше 1 (`new`, `from_luminance` с отказом при
+  переполнении отношения, `SDR`). Событие смены профиля — новая ревизия снимка дисплеев с иным
+  `color`: тот же монотонный порядок, что у смены режима. **Источники.** Windows:
+  `IDXGIOutput6::GetDesc1` (свежая фабрика на выборку, сопоставление по `HMONITOR`) и
+  `DISPLAYCONFIG_SDR_WHITE_LEVEL` цели; HDR10 — `High` в BT.2020 с запасом «пик / белый SDR»,
+  без пика или уровня белого — `NotOnThisDevice`, неизвестное пространство —
+  `NotYetOnThisHost`; константы DXGI чистой половины сверены `const`-проверкой. macOS:
+  `canRepresentDisplayGamut:` и `maximumPotentialExtendedDynamicRangeColorComponentValue`
+  (шлюз 10.15); iOS: `displayGamut` коллекции признаков и `potentialEDRHeadroom` (шлюз 16).
+  Android: `isWideColorGamut`, `isHdr` (шлюз API 26) и `getHighestHdrSdrRatio` (API 35),
+  цвет в строке журнала дисплея. Wayland: `wp_color_management_v1` (фича `staging`
+  `wayland-protocols`, версия 2): описание изображения каждого выхода, `get_information`,
+  повторно на `image_description_changed`; модель нумерует описания и принимает `done` только
+  новейшего; без протокола — `NotOnThisDevice`. X11 — `NotYetOnThisHost` (`_ICC_PROFILE` не
+  читается). Web: `matchMedia` по `(dynamic-range: high)` и `(color-gamut: p3|rec2020)`,
+  слушатели `change` помечают снимок устаревшим; запас — `NotOnThisPlatform`, цвет прочих
+  экранов списка — `NotOnThisPlatform`. Headless: `DisplaySpec::with_color` (по умолчанию SDR
+  sRGB) и `DisplayChange::Color`. **Движок.** `flui-engine` зависит от `flui-platform` (R → C,
+  разрешено); `Renderer::with_surface_color(target, color, display: Option<DisplayColor>)`,
+  `ResolvedSurfaceColor::resolve(.., display, hdr, ..)`: при цвете платформы диапазон и запас
+  берутся из него (запас платформы, затем поверхности, затем 4,0), без него — из
+  `DisplayHdrInfo` wgpu, как раньше; пересоздание и восстановление поверхности решают по тому
+  же отчёту (`ColorRequest`). `flui-app` даёт каждому рендереру цвет дисплея окна из
+  принятого снимка хоста (`display_color_of`; режим `direct` — из выборки).
+  **Решения сверх строки (для владельца):** (1) запас Apple — потенциальный, не текущий:
+  текущий равен 1, пока слой не попросил расширенный диапазон, и HDR не выбирался бы никогда;
+  (2) цвет платформы важнее отчёта wgpu, а охват на решение `WideGamut` не влияет — ADR-0256 §2
+  называет только `DisplayHdrInfo`, текст ADR не менялся; (3) живая перенастройка поверхности
+  при смене профиля не сделана: ADR-0256 §6 («не наблюдается, до следующего пересоздания»)
+  остаётся в силе, снять его — новое решение; (4) `ColorMode` окна Android не выставляется и
+  слушатель `registerHdrSdrRatioChangedListener` (нужен Java в `FluiView`) не подписан.
+  **Тесты** (откат проверен для каждого, скрипт подставляет откат, гоняет тест и
+  восстанавливает файл): `display_colour_table` (`flui-platform`; без `is_finite` в
+  `Headroom::try_new` падает), `a_profile_change_reaches_the_snapshot_as_a_new_revision` в
+  `headless_displays_contract` (без применения `DisplayChange::Color` падает),
+  `dxgi_colour_reports_map_to_the_display_colour` и
+  `an_hdr_output_without_a_usable_peak_has_no_headroom` в `os_display_classification` (без
+  ветки HDR10 падает), `the_platform_colour_decides_the_display_state_over_the_surface_report`
+  (`flui-engine`; без цвета платформы падает),
+  `a_surface_is_set_up_for_the_colour_of_its_window_s_display` в `display_delivery_contract`
+  (`flui-app`; `color_on` без цвета падает), `wayland_image_descriptions_map_to_the_display_colour`
+  и `a_newer_image_description_wins_over_an_older_one` в `wayland_output_model` (без сверки
+  номера описания падает), `android_colour_reports_map_to_the_display_colour` и
+  `android_colour_gate_table` в `android_display_table` (без фильтра запаса над белым падает),
+  `apple_screen_reports_map_to_the_display_colour` и `potential_headroom_gate_table` (без
+  условия «над белым» падает), `browser_colour_queries_map_to_the_display_colour` (без ветки
+  `rec2020` падает), wasm `web_colour_follows_the_media_queries` (Node, контролируемая граница
+  браузера), Windows `windows_displays_report_their_colour` (живой Win32-источник).
+  **Прогон на Windows** (2026-10-28, Windows 11, один монитор 3440×1440 без HDR, RTX 3070 Ti):
+  источник прочёл SDR sRGB с запасом 1, как `dxdiag` (`DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709`,
+  270 нит, «HDR Not Supported»); живую смену профиля показать не на чем, системные настройки
+  не менялись. Проверки (Windows): `cargo fmt`; clippy рабочего пространства `--all-targets`
+  обычный и с `flui-native/winit-backend,flui/native`; nextest `flui-platform`,
+  `flui-native`, `flui-app` — 408 из 409 (`open_real_window` падает только рядом с другими
+  тестами реальных окон, один — зелёный), с `winit-backend` — 403 из 403; `flui-engine
+  --features testing` в один поток — 94 из 94; clippy Android `--all-targets`, macOS
+  `--all-targets` (LLVM-окружение), iOS lib (`DOCS_RS=1`), wasm32 lib; `wasm-check`,
+  `wasm-test` — 51; `native-features`, `checks` (в том числе `workspace`, `reach`,
+  `module-dag`, `globals`, `file-length`, `markers`, `testing`, `docs-paths`), `doc-strict`.
+  WSL Ubuntu 24.04: clippy `flui-native` пяти вариантов признаков, `flui-app`, `flui-engine`,
+  `flui-platform`, `flui --features native` — чисто; nextest под xvfb `--all-features` — 342 из
+  342; без дисплея — 410 из 438, падают только тесты, которым нужен X- или Wayland-сервер
+  (winit, окна X11, предпочтения Linux); гейт API-замыкания под nightly со std всех шести
+  целей — 4 пакета чисты. Не запускалось: Mac и iPhone (vanyastaff/flui#1840; список в PR),
+  Android-устройство, браузер, композитор с `wp_color_management_v1`, `cross-typecheck` (CI).
+  **Исправления после ревью (#1942).** Слиты `main` @ `f11b154c6` (#1936) и `817fb6bbd` (#1939).
+  Решения координатора записаны поправкой ADR-0256 (§2, §5, §6). Дефекты: (1) рендерер держит
+  новейший отчёт дисплея отдельно от того, по которому настроена поверхность
+  (`Renderer::set_display_color`, `next_color_request`): пересоздание и восстановление решают по
+  новейшему, держимая поверхность перенастраивается; `WindowDisplay` несёт `color`, смена профиля
+  доходит до презентации, и раннеры desktop, Android, iOS (`follow_display_color` перед кадром)
+  и Web передают цвет рендереру; (2) высокий диапазон с запасом не выше белого — SDR (Windows с
+  яркостью SDR выше пика панели, Wayland с целевым пиком ниже опорного белого); (3) Wayland: для
+  PQ запас только от `target_luminance`, `max` первичного объёма (потолок кривой 10 000 кд/м²)
+  берётся лишь для расширенных кривых; (4) Android: исключение в отчёте цвета одного дисплея
+  снимает только его цвет (`Err(NotOnThisDevice)`), выборка остаётся; (5) doc-комментарий
+  `single_screen` в `display/web.rs` вернулся к своей функции. Решения: охват решает `WideGamut`
+  (sRGB-дисплей — `Srgb8`); `SurfaceColorSpace::SRGB` удалён (читателя не было); `ColorMode`
+  Android: `OsWindowOptions::android` (`AndroidWindowOptions`, `AndroidColorMode`), `flui-app`
+  ставит его из `AppConfig::surface_color`, окно Activity зовёт `Window.setColorMode` на главном
+  потоке Java с API 26 (`WindowColorMode`). Мелкое: `ResolvedSurfaceColor` держит
+  `ColorRequest`; `p3_or_srgb` — один помощник для Apple и Android; цветовое пространство
+  Windows — перечисление `OutputColorSpace`. **Не покрыто:** слушатель
+  `Display.registerHdrSdrRatioChangedListener` (нужен Java-класс в `FluiView`): сдвиг HDR/SDR на
+  Android читается только при смене конфигурации и возобновлении — записано в `docs/gaps.md`.
+  Тесты (откат проверен для каждого bash-скриптом: строковая подстановка, тест, `git checkout`
+  файла): `a_high_range_display_without_headroom_over_white_gets_no_hdr`,
+  `wide_gamut_follows_the_display_gamut`, `a_recreation_after_the_display_changes_resolves_its_new_range`
+  (`flui-engine`, GPU), `a_display_colour_change_reaches_the_renderer_before_the_frame`
+  (`surface_lifecycle_matrix`), `display_delivery_contract` (цвет в `WindowDisplay`),
+  `wayland_output_model` (PQ без цели), `os_display_classification` (яркость выше пика),
+  `an_activity_asks_for_the_colour_mode_of_its_surface`,
+  `the_android_colour_mode_follows_the_requested_surface_colour`;
+  `a_display_whose_colour_report_failed_keeps_its_other_facts` проверяет чистую часть, путь JNI
+  только типизирован. Проверки: Windows clippy рабочего пространства (обычный и с
+  `winit-backend,flui/native`), nextest `flui-platform`, `flui-native`, `flui-app` — 447 из 447,
+  `flui-engine --features testing` в один поток — 96 из 96; clippy `flui-app` и `flui-native`
+  на Android `--all-targets`, macOS `--all-targets`, iOS lib (`flui-app` с LLVM и пустым
+  `SDKROOT`), wasm32 lib; `wasm-check`, `wasm-test` — 51, `native-features`, `checks`. WSL:
+  clippy девяти вариантов, xvfb `--all-features` — 477 из 477, Weston 13 — 32 из 32.
+  **После сессии Mac.** На arm64 macOS `flui-native` не собирался: E0080 «a gate at or below the
+  floor» — шлюз `MacosPotentialHeadroom` (10.15) ниже пола arm64 (11.0). Теперь на `aarch64`
+  отчёт читается напрямую, шлюз и его строка в таблице — только вне `aarch64` (пол x86_64 —
+  10.13). `Headroom::new` переименован в `Headroom::try_new` (фаллибельный конструктор).
+  **Почему кросс-clippy на Windows не поймал:** проверка пола — `const { assert!(..) }` внутри
+  обобщённой `version::gate::since::<F>()`; она вычисляется при мономорфизации, то есть только
+  при кодогенерации. `cargo clippy`/`check` её не делают, поэтому clippy под
+  `--target aarch64-apple-darwin` зелёный, а `cargo heli build -p flui-native --lib --target
+  aarch64-apple-darwin` (с теми же LLVM-переменными) падает с E0080 — проверено на коде до
+  исправления; тестовая сборка на Windows-хосте берёт пол x86_64. Шлюз Apple проверять кросс-
+  **сборкой** lib под `aarch64-apple-darwin`, не только clippy.
 
 - [x] **LY95** — ветка `platform/activation` от `main` @ `8aee131f6` (LY81). **Wayland**
   (`window/linux/wayland.rs`, чистый модуль `window/linux/wayland/activation.rs` — механизм
