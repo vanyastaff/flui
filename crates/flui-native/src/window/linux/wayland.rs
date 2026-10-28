@@ -1265,8 +1265,8 @@ mod toplevel {
     use crate::owner::linux::PortalSlot;
     use crate::owner::linux::wayland::activation::ActivationToken;
     use crate::owner::linux::wayland::{
-        LastInput, LiveOutputs, LoopWaker, LoopWindow, OutputName, PresentationTime,
-        WaylandDisplays, WaylandLoop, WaylandState, WindowSeed, WindowTable,
+        LastInput, LiveOutputs, LoopWaker, LoopWindow, OutputName, PresentationTime, SeatWindow,
+        WaylandDisplays, WaylandInput, WaylandLoop, WaylandState, WindowSeed, WindowTable,
     };
     use crate::owner::window_delivery::{Publication, Retirement, WindowDelivery};
     use crate::text::WindowTextInput;
@@ -1505,6 +1505,8 @@ mod toplevel {
         /// The last user input, which an activation token names.
         last_input: LastInput,
         live: LiveOutputs,
+        /// The seats' input, which the window joined as it opened.
+        input: Arc<dyn WaylandInput>,
         applied: RefCell<Applied>,
         closed: Cell<bool>,
         /// Whether the accessibility bridge was last told the window is the
@@ -1606,6 +1608,7 @@ mod toplevel {
                 signal,
                 waker,
                 notices,
+                input,
             } = owner.seed()?;
             let record = Arc::new(ToplevelRecord::new());
             let queue = protocol.queue.clone();
@@ -1699,11 +1702,27 @@ mod toplevel {
                 portal,
                 table,
                 waker,
+                input,
                 applied: RefCell::new(applied),
                 closed: Cell::new(false),
                 bridge_focus: Cell::new(false),
                 #[cfg(any(test, feature = "testing"))]
                 shm: protocol.shm,
+            });
+            // The input gives the window its capabilities before the handler
+            // hears its snapshot, and its input from the compositor's first
+            // event.
+            let state = Arc::downgrade(&window.state);
+            window.input.attach(SeatWindow {
+                id,
+                surface: window.surface.0.clone(),
+                delivery: Arc::clone(&window.delivery),
+                scale: Arc::new(move || {
+                    state
+                        .upgrade()
+                        .and_then(|state| state.published().metrics)
+                        .map_or(1.0, |metrics| metrics.scale().get())
+                }),
             });
             // From here a failure retires the window like any other close.
             if let Err(error) = owner.roundtrip() {
@@ -1993,8 +2012,10 @@ mod toplevel {
             self.retire();
         }
 
-        /// Let go of the handler, then destroy the role objects.
+        /// Leave the seats' input, let go of the handler, then destroy the
+        /// role objects.
         fn retire(&self) {
+            self.input.detach(self.id);
             let roles = self.roles.borrow_mut().take();
             self.delivery.clear_then(move || {
                 if let Some(roles) = roles {
@@ -2320,12 +2341,10 @@ mod toplevel {
             Ok(())
         }
 
-        /// The cursor is the input feature's, which this host does not carry
-        /// yet (`cursor-shape`).
-        fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
-            Err(CursorError::Unsupported(Unsupported::new(
-                UnsupportedReason::NotYetOnThisHost,
-            )))
+        /// The cursor is the seats' input's, which shows it through
+        /// `cursor-shape` while the pointer is over the window.
+        fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
+            self.input.set_cursor(self.id, cursor)
         }
 
         /// A Wayland compositor takes no refresh-rate request.

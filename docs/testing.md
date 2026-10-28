@@ -157,7 +157,11 @@ and needs `openbox` too (`apt install openbox`). On Linux the native Wayland
 host's tests (`wayland_window::`) run in a step of their own against the
 compositor `WAYLAND_DISPLAY` names, and skip themselves without one; CI starts a
 headless Weston (`weston --backend=headless --socket=…`) and sets
-`FLUI_REQUIRE_WAYLAND=1`, which makes a missing compositor a failure. Weston
+`FLUI_REQUIRE_WAYLAND=1`, which makes a missing compositor a failure. The
+`wayland_input` harness, the Wayland host's input from a real seat, starts an
+Xvfb and a Weston on its X11 backend of its own and drives them through XTest;
+it skips itself without `Xvfb` or `weston`, and fails then under
+`FLUI_REQUIRE_WAYLAND`. Weston
 13 has no `xdg_activation_v1`, so there
 `an_activation_asks_the_compositor_with_a_token` checks only the refusal; the
 token's whole path (asked, answered, handed back, the window left behind its

@@ -3442,6 +3442,164 @@ graph LR
   `checks`, `doc-strict`, `wasm-check`. WSL: clippy трёх вариантов (в том числе `-p flui-native
   --all-targets --features winit-backend` и `--all-features`), rustdoc; xvfb nextest 306 из 306
   и 353 из 353; без xvfb — 661 из 662 (прежний случай X-сервера WSLg).
+- [x] **LY79** — ветка `platform/wayland-input`, начата на `main` @ `c8401e35b`, `main` @
+  `ee5480c57` (#1933) влит слиянием. **Позиция ввода** таблицы `Wayland` — `WaylandLoop`; цикл
+  держит ввод через хук `owner::linux::wayland::WaylandInput`, который заполняет таблица
+  (`WaylandHost::input` → `input::linux::wayland::SeatInput`). Цикл предлагает хуку каждый глобал,
+  которого не связывает сам (и при запуске, и в `wl_registry.global`/`global_remove`); ввод
+  связывает `wl_seat` (до v9), `zwp_tablet_manager_v2` (v1, без dial), `zwp_pointer_gestures_v1`
+  (v1) и `wp_cursor_shape_manager_v1` (v1) и делает устройства сидения по его capabilities и
+  менеджерам в любом порядке. Окно входит во ввод при открытии (`SeatWindow`: `WindowId`,
+  `wl_surface`, `Arc<WindowDelivery>`) до снимка возможностей и выходит при отставке
+  (`retire`); `set_cursor` идёт через тот же хук; окно не называет фичу ввода. **Запись и
+  доставка.** Диспетчеризация объектов сидения идёт внутри заимствования очереди и только
+  записывает: событие копируется в проводное (`input::linux::wayland::wire`, чистое) или в
+  событие клавиатуры, поверхность находится по идентичности прокси, не по номеру протокола.
+  Каждый ход после чтения очереди и до `settle` окон цикл зовёт `deliver`: проводные события
+  собираются одним `ContactRegistry` (`SeatAssembly`), клавиши — keymap композитора
+  (`input::linux::xkb`, libxkbcommon через `xkbcommon-dl`, загрузка во время работы), каждое
+  событие уходит в доставку окна без занятой ячейки (`OwnerCell`) ввода; события, записанные
+  roundtrip-ом обработчика, доставляются в тот же ход. Повтор клавиши — на клиенте
+  (`repeat::KeyRepeat` по `repeat_info`), ожидание цикла ограничено следующим повтором
+  (`LoopTurn::input_due`). Раскладка — `name[GroupN]` текста keymap для действующей группы,
+  колбэки раскладки зовутся вне ячеек. Возможности окна — `availability::wayland` по глобалам
+  плюс присутствие из реестра; изменение присутствия доходит до каждого окна.
+  **Решения сверх строки (для владельца):** (1) метка времени композитора читается на
+  `CLOCK_MONOTONIC` (`NativeTime::TickMillis`), только если лежит в пределах секунды от
+  монотонных часов при приходе, иначе событие получает время прихода — X11-бэкенд Weston
+  ставит время X-сервера (видно в записи); (2) координаты — логические поверхности, масштаб
+  чтения 1; (3) уход указателя с зажатой кнопкой отменяет нажатие (`CaptureLost`), открытый
+  пальцевый скролл — `Cancelled`; (4) `pan` строки — это `wl_pointer.axis` от `finger` с фазами
+  до `axis_stop`; инерции Wayland не присылает, строка conformance про momentum держится общей
+  грамматикой; swipe и hold — композитора, не транслируются; (5) pinch: масштаб «с начала»
+  становится множителем каждого обновления, поворот — радианы по часовой, `dx/dy` сдвигают
+  фокус от курсора; (6) инструменты планшета: `mouse`/`lens` — мышь, `eraser` — ластик пера,
+  остальное — перо; `BTN_STYLUS`/`BTN_STYLUS2` — вторичная и вспомогательная кнопки; кнопки
+  pad не читаются; (7) без `cursor-shape` (Weston 13) `set_cursor` отвечает `Unsupported
+  { NotYetOnThisHost }`, запасного курсора из темы нет; (8) `xkbcommon-dl` 0.4 не даёт
+  `xkb_keymap_layout_get_name`, отсюда имя из текста keymap; (9) `input::linux::xkb` — модуль
+  группы `linux`, его чистые таблицы (evdev → `Code`, keysym → `NamedKey`, модификаторы,
+  имя группы) годятся и для X11 (LY83). **Общие правки:** `owner/linux/wayland.rs` (хук,
+  `LoopTurn::input_due`, `host::Input` для `WaylandLoop`), `window/linux/wayland.rs` (attach,
+  detach, `set_cursor`), `hosts/linux.rs` (позиция и `WaylandHost::input`), `input/mod.rs`
+  (`pub mod linux`), `input/availability.rs` (`wayland`), `lib.rs` (комментарий выбора хоста),
+  `Cargo.toml` (`xkbcommon-dl` в `wayland`, `staging` у `wayland-protocols`, `time` у
+  `rustix`, dev-зависимость `x11rb` с `xtest`, цель `wayland_input`), тестовый кодек записей
+  (`Backend::Wayland`, `notched` у шага скролла), `record` переехал из `journal.rs` в
+  `capture.rs`. `current_platform` не тронут: у Wayland-хоста нет текста (IME), clipboard,
+  drag and drop (LY80), декораций и дробного масштаба (LY81), у X11-хоста нет ввода (LY83) —
+  winit остаётся первым, **решение для владельца**. **Тесты** (откат проверен для каждого):
+  `a_mouse_is_one_pointer_from_enter_to_leave`, `a_leave_with_a_button_held_cancels_the_press`
+  (без отмены падает), `a_wheel_frame_is_one_step_in_detents` (без `value120` падает),
+  `a_finger_scroll_is_phased_until_its_stop` (без `axis_stop` падает),
+  `the_touches_of_a_frame_are_one_pointer_frame` (без `framed` падает),
+  `a_tablet_frame_is_one_reading_per_change`, `a_pinch_is_one_pan_zoom_about_the_cursor` (с
+  накопленным масштабом как множителем падает), `a_device_that_goes_ends_its_contacts`,
+  `a_closed_windows_contacts_end_unheard`, `a_stamp_off_the_monotonic_clock_takes_the_arrival`
+  (без порога падает), `a_button_code_is_its_owned_button` (`input::linux::wayland::wire`);
+  `a_held_key_repeats_after_its_delay_at_its_rate` (без догона падает),
+  `a_cursor_shows_as_its_protocol_shape`; `an_evdev_code_names_its_physical_key`,
+  `a_keysym_names_its_key_or_types_its_text`, `the_named_xkb_modifiers_are_the_modifiers_held`,
+  `a_layout_is_named_by_its_group` (`input::linux::xkb`); строки повтора в
+  `an_idle_wayland_loop_blocks_until_it_is_woken` (без `input_due` падает).
+  `tests/wayland_input.rs` — свой harness: Xvfb, Weston на X11-бэкенде с kiosk-shell, ввод XTest;
+  `a_compositor_seat_reaches_the_window`: снимок первым, вход курсора, движение, клик в
+  поставленной точке, щелчок колеса — один шаг `Detents (0, -1)` без фаз, клавиша `a` (`KeyA`)
+  по keymap Weston, имя раскладки непустое (без `set_input_capabilities` в attach падает на
+  снимке; без фокуса клавиатуры — по таймауту клавиши). С `native-capture` журнал реестра
+  воспроизводится ровно в то, что слышало окно, пишется и читается обратно; запись
+  `wayland_weston_mouse_wheel.jsonl` (снята этим прогоном) воспроизводит
+  `wayland_recordings_decode_to_their_host_input`. Conformance: профиль `wayland` (метка через
+  правило диспетчера, keysym XKB, без актуатора: `haptics` профиля стал `Option`) и `wayland
+  window` — снимок настоящего окна под композитором; таблица сломанных бэкендов — строки wrap
+  и клавиши меню на профиле Wayland. Касание, перо и pinch в безголовом композиторе не
+  производятся: их держат только тесты трансляции; курсорные формы не запускались (в Weston 13
+  нет `cursor-shape`). **Документы:** ARCHITECTURE.md (раздел о записи и доставке сидений),
+  `docs/platform-parity.md` (заметки, ячейки Wayland остаются за winit), `docs/gaps.md` (записи
+  5 и метки времени), `docs/testing.md`, `changelog.d/platform-wayland-input.md`.
+  Проверки: `cargo fmt`; Windows — clippy рабочего пространства `--all-targets -D warnings`,
+  nextest `flui-native` 333 из 333 (OLE drag на реальных окнах прошёл на повторе), clippy
+  Android `--all-targets` и macOS `--all-targets` (через LLVM) с `testing,winit-backend`,
+  `wasm-check`, `checks`, `doc-strict`, `module-dag` (337 модулей, 355 рёбер, 1 исключение),
+  `file-length`, `globals` (57), `markers`, `testing`. WSL Ubuntu 24.04: clippy `-p flui-native
+  -D warnings` с `--all-targets` и без для по умолчанию, `--no-default-features`, `… x11`,
+  `… wayland`, `… winit-backend`, `… testing`, `--all-features` — чисто; rustdoc `-D warnings
+  --document-private-items` по умолчанию и с `winit-backend`; nextest под xvfb (`FLUI_HEADLESS=1`,
+  `dbus-run-session`) `--all-features` 365 из 365, по умолчанию 310 из 310; под безголовым Weston
+  13 (`FLUI_REQUIRE_WAYLAND=1`) тесты Wayland, conformance, записи и `wayland_input` — 13 из 13.
+  Не запускалось: композиторы рабочего стола (GNOME, KDE, Hyprland), сенсорный экран, перо,
+  тачпад (pinch, пальцевый скролл), `cursor-shape`, смена раскладки на живой сессии, Mac, iPhone,
+  Android, браузер, `cross-typecheck`.
+  **Исправления после ревью (vanyastaff/flui#1937)**, коммитами поверх, слиянием. (1) Клавиатура
+  каждого сидения своя: проводные события клавиатуры несут типизированный `SeatKey`, keymap,
+  окно и повтор — у каждого сидения (`keyboards::Keyboards`); (2) сборка знает сидение каждого
+  устройства (`DeviceAdded { seat }`), удалённое сидение (`SeatRemoved`) убирает все свои
+  устройства, инструменты планшета тоже, с отменой открытых последовательностей; (3)
+  модификаторы уходят вместе с клавиатурой (`KeyboardLeft`); (4) повтор не начинается без окна
+  у клавиатуры; (5) keymap больше 8 МиБ отвергается, NUL снимается в одном месте
+  (`keymap_text`); (6) кнопки кадра планшета — `SmallVec`, ни одна не теряется; вид инструмента —
+  `OwnerCell`; `group_name` пропускает объявление без кавычек; клавиши штампуются
+  `SeatAssembly::stamp`; удалены `WireTime::with_stamp`, `SeatAssembly::{contacts, modifiers}`;
+  (7) отменённый pinch отменяет и поворот — дефекта не было: `PanZoomAccumulator::apply` по
+  `Cancelled` любого компонента снимает весь жест, тест `a_cancelled_pinch_ends_whole` это
+  держит и с откатом проходит; (8) без `cursor-shape` курсор берётся из темы (`wayland-cursor`,
+  `XCURSOR_THEME`/`XCURSOR_SIZE`) на своей поверхности указателя, масштаб окна округляется вверх
+  (`cursor::theme_scale`), `testing::wayland::cursor_report`. CI: conformance настоящего окна
+  перенесена в `wayland_window::the_wayland_window_input_conforms` (набор с композитором; в
+  наборе Xvfb `WAYLAND_DISPLAY` пуст при `FLUI_REQUIRE_WAYLAND=1`); `wayland_input` не требует
+  имени раскладки и пишет начало keymap, если имени нет. `WindowStateCell::published` открыт
+  для `wayland_host`. Тесты (откат проверен): `each_seat_keeps_its_own_keyboard`,
+  `a_key_with_no_window_does_not_repeat`, `a_keymap_is_read_within_its_limit`,
+  `a_removed_seat_ends_its_pens`, `modifiers_leave_with_the_keyboard`,
+  `every_button_of_a_tablet_frame_is_delivered`, `a_theme_cursor_is_drawn_at_the_window_scale`,
+  строка `group_name` без кавычек, `a_compositor_seat_reaches_the_window` (без темы курсора
+  падает «a cursor was shown»). Проверки: WSL — `cargo xtask native-features`, clippy семи
+  вариантов признаков с `--all-targets` и без, rustdoc; наборы как в CI: Xvfb (`FLUI_HEADLESS=1`,
+  `WAYLAND_DISPLAY=''`, `FLUI_REQUIRE_WAYLAND=1`) 366 из 366, Wayland под Weston 7 из 7;
+  Windows — clippy рабочего пространства, nextest `flui-native` 341 из 341, clippy Android и
+  macOS, `wasm-check`, `checks`, `doc-strict`, `module-dag`, `file-length`, `globals`,
+  `markers`, `testing`.
+  **Слияния с LY81 (#1934) и LY83 (#1936)**, слиянием, не rebase. Клавиатура Wayland читается
+  через общий модуль LY83 `input::linux::xkb` (`Keyboard`: keymap, состояние, compose, нажатые
+  клавиши); свой дубль (`Keymap`) удалён. Новый вариант `KeymapSource::Compositor { text }` —
+  keymap из fd композитора: `keymap_length` (не больше `KEYMAP_LIMIT`, 8 МиБ) и `keymap_text`
+  (единственное место, где снимается NUL) перенесены в чистую часть `xkb`; новая keymap того же
+  сидения читается в его `Keyboard` (`reload`), при уходе клавиатуры из окна держимые клавиши
+  отпускаются в нём (`Keyboard::leave`), compose сбрасывается. Имя раскладки — имя группы XKB в
+  тексте keymap (`KeymapSource::layout_name`); если имени нет, в лог идёт начало keymap.
+  `KeymapSource::x11_device` заменил разбор варианта в `x11.rs` (две строки). Тест
+  `a_compositor_keymap_composes_dead_keys` (keymap US intl., скомпилированная libxkbcommon и
+  отданная как текст композитора): dead acute и `e` дают `é`, раскладка названа «English (US,
+  intl., with dead keys)»; без compose для keymap композитора и без имени группы падает.
+  Проверки: `cargo xtask native-features`, WSL clippy семи вариантов с `--all-targets` и без,
+  rustdoc; наборы как в CI: Xvfb 391 из 391, Wayland под Weston 13 из 13; `wayland_input` —
+  раскладка «English (US)», курсор из темы.
+  **Слияние с LY95 (#1940).** `LastInput::record` получил настоящих вызывающих и потерял
+  `cfg(test)`: ввод сидений записывает нажатие клавиши, кнопки, касание и вход клавиатуры в
+  окно (сидение, serial, поверхность); `WaylandHost::input` получает `LastInput`, который цикл
+  кладёт и в протокол окон. `testing::wayland::last_input_serial`; в `wayland_input` serial входа
+  клавиатуры, клика и клавиши растут (без записи кнопки, клавиши или входа клавиатуры падает).
+  Касание в Weston не производится — его запись не запускалась; токен на sway не запускался (в
+  Weston 13 нет `xdg_activation_v1`). Repeat: частота не выше 1000 в секунду, интервал не
+  короче 1 мс (`a_compositor_rate_cannot_spin_the_loop`, находка Codex); тест compose читает
+  собственную keymap, не системную. Касания ограничены (находка Codex): реестр держит не больше
+  `MAX_TOUCHES` = 32 касаний на устройство, следующее нажатие отклоняется (`Exhausted`) — это
+  закрывает и путь X11, где касание идёт по touch id в реестр
+  (`a_device_holds_a_bounded_number_of_touches`); сенсор Wayland отклоняет `down` сверх 32, а
+  незакрытый кадр отдаёт частями после 256 шагов (`a_touchscreen_holds_a_bounded_number_of_touches`);
+  оба теста падают без ограничения. Сидение держит не больше 16 инструментов планшета, лишний
+  уничтожается. Правило «всё, что наполняет пир, ограничено» (ARCHITECTURE.md): клавиатура xkb
+  держит не больше 128 клавиш и отклоняет код вне keymap (`a_keyboard_holds_a_bounded_number_of_keys`,
+  Wayland и X11); кадр планшета отдаётся частями после 32 кнопок
+  (`a_tablet_frame_gathers_a_bounded_number_of_buttons`); в очереди одна keymap на сидение
+  (`a_seat_queues_one_keymap`); X11 знает не больше 128 устройств и 36 валюаторов на каждое
+  (`the_devices_and_valuators_known_are_bounded`); каждый тест падает без своего ограничения.
+  Сидений не больше 16, выходов не больше 64 — проверено только чтением, их привязку достигает
+  лишь композитор. Планшеты и пэды уничтожаются при появлении, менеджер привязывается один раз;
+  keymap стоит в очереди как fd композитора, более новая закрывает прежнюю непрочитанной, читается
+  одна при доставке (1000 keymap держат один открытый fd). Наблюдатель дисплеев (LY92) читает не
+  больше 64 выходов и держит по одному описанию цвета с его информацией на выход; не запускалось
+  — в Weston 13 нет ни `tablet-v2`, ни управления цветом.
 - [x] **LY83** — ветка `platform/x11-input` от `main` @ `c8401e35b`, слито `main` @ `ee5480c57`
   (#1933). **Позиция ввода** таблицы `X11` — цикл (`type Input = X11Loop`): таблица делает
   `input::linux::x11::X11Input` (`X11Host::input`), цикл держит его через хук

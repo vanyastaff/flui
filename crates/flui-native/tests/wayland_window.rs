@@ -257,6 +257,13 @@ impl Drop for WaylandFixture {
     }
 }
 
+/// The input conformance table on a real Wayland window's capability
+/// snapshot (`backend_conformance::wayland_window_conforms`).
+#[test]
+fn the_wayland_window_input_conforms() {
+    super::backend_conformance::wayland_window_conforms();
+}
+
 #[test]
 fn the_wayland_window_conforms() {
     let Some(platform) = platform("the_wayland_window_conforms") else {

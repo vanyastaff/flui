@@ -56,7 +56,7 @@ use super::source::LinuxDisplays;
 use super::view::OutputView;
 use super::wayland_model::{ColorEvent, OutputEvent, TransferRange, WaylandOutputs};
 use crate::error::PlatformError;
-use crate::owner::linux::wayland::{OutputFacts, OutputName, WaylandDisplays};
+use crate::owner::linux::wayland::{MAX_OUTPUTS, OutputFacts, OutputName, WaylandDisplays};
 use crate::owner::notices::StaleOnWake;
 use crate::owner::signal::OwnerSignal;
 use crate::owner::watch::Watch;
@@ -147,6 +147,16 @@ struct BoundOutput {
     color: Option<WpColorManagementOutputV1>,
     /// The image description asked for last; a newer one replaces it.
     description: Option<WpImageDescriptionV1>,
+    /// The number of the description still being read: asked for, and its
+    /// information not yet done. One is in flight per output at a time, so a
+    /// compositor announcing changes without end, or never finishing one,
+    /// leaves at most one description and one information object live.
+    reading: Option<u64>,
+    /// Its information was asked for.
+    informed: bool,
+    /// A change was announced while one was being read: the next is asked
+    /// for once that one ends.
+    stale: bool,
 }
 
 impl BoundOutput {
@@ -211,12 +221,52 @@ impl State {
         let Some(color) = &bound.color else {
             return;
         };
+        if bound.reading.is_some() {
+            bound.stale = true;
+            return;
+        }
         self.next_description = number.checked_add(1);
         let description = color.get_image_description(queue, (global, number));
         if let Some(previous) = bound.description.replace(description) {
             previous.destroy();
         }
+        bound.reading = Some(number);
+        bound.informed = false;
         self.outputs.describe(global, number);
+    }
+
+    /// The description `described` is ready: ask for its information, once,
+    /// while it is the one being read.
+    fn inform(
+        &mut self,
+        (global, number): Described,
+        description: &WpImageDescriptionV1,
+        queue: &QueueHandle<Self>,
+    ) {
+        let Some(bound) = self.bound.iter_mut().find(|bound| bound.global == global) else {
+            return;
+        };
+        if bound.reading != Some(number) || bound.informed {
+            return;
+        }
+        bound.informed = true;
+        // The information object destroys itself after its `done`.
+        let _info = description.get_information(queue, (global, number));
+    }
+
+    /// The description `described` was read or failed: ask for the next if a
+    /// change was announced meanwhile.
+    fn read(&mut self, (global, number): Described, queue: &QueueHandle<Self>) {
+        let Some(bound) = self.bound.iter_mut().find(|bound| bound.global == global) else {
+            return;
+        };
+        if bound.reading != Some(number) {
+            return;
+        }
+        bound.reading = None;
+        if std::mem::take(&mut bound.stale) {
+            self.describe(global, queue);
+        }
     }
 
     fn apply_color(&mut self, (global, number): Described, event: ColorEvent) {
@@ -233,6 +283,12 @@ impl State {
         if interface == WlOutput::interface().name {
             // Version 1 has no `done`: its burst never ends, so it never applies.
             if version < 2 || self.bound.iter().any(|bound| bound.global == name) {
+                return;
+            }
+            // The loop binds no more, so a display past them is one no
+            // window could name.
+            if self.bound.len() >= MAX_OUTPUTS {
+                tracing::debug!(name, "a Wayland output past {MAX_OUTPUTS} was not read");
                 return;
             }
             let output = registry.bind::<WlOutput, u32, Self>(
@@ -255,6 +311,9 @@ impl State {
                 xdg,
                 color: None,
                 description: None,
+                reading: None,
+                informed: false,
+                stale: false,
             });
             self.watch_color(self.bound.len() - 1, queue);
         } else if interface == WpColorManagerV1::interface().name && self.color_manager.is_none() {
@@ -450,12 +509,12 @@ impl Dispatch<WpImageDescriptionV1, Described> for State {
         match event {
             wp_image_description_v1::Event::Ready { .. }
             | wp_image_description_v1::Event::Ready2 { .. } => {
-                // The information object destroys itself after its `done`.
-                let _info = description.get_information(queue, *described);
+                state.inform(*described, description, queue);
             }
             wp_image_description_v1::Event::Failed { .. } => {
                 let (global, number) = *described;
                 state.changed |= state.outputs.color_failed(global, number);
+                state.read(*described, queue);
             }
             _ => {}
         }
@@ -469,9 +528,14 @@ impl Dispatch<WpImageDescriptionInfoV1, Described> for State {
         event: wp_image_description_info_v1::Event,
         described: &Described,
         _: &Connection,
-        _: &QueueHandle<Self>,
+        queue: &QueueHandle<Self>,
     ) {
         use wp_image_description_info_v1::Event;
+        if let Event::Done = event {
+            state.apply_color(*described, ColorEvent::Done);
+            state.read(*described, queue);
+            return;
+        }
         let event = match event {
             Event::PrimariesNamed { primaries } => ColorEvent::NamedPrimaries(match primaries {
                 WEnum::Value(Primaries::Srgb) => Some(ColorGamut::Srgb),
@@ -500,7 +564,6 @@ impl Dispatch<WpImageDescriptionInfoV1, Described> for State {
                 reference: reference_lum,
             },
             Event::TargetLuminance { max_lum, .. } => ColorEvent::TargetLuminance { max: max_lum },
-            Event::Done => ColorEvent::Done,
             _ => return,
         };
         state.apply_color(*described, event);
