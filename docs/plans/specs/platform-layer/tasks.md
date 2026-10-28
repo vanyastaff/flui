@@ -3396,6 +3396,48 @@ graph LR
   рисуются, три нажатия дают «3», `WM_CLOSE` завершает процесс без предупреждений.
   Не запускалось: Mac и iPhone (vanyastaff/flui#1840; список в PR), `cross-typecheck`,
   Android-устройство, браузер.
+  **Решение владельца (2026-10-27):** `RedrawRequester` одобрен; ADR-0254 получил строку
+  `Amended` с причинами, ADR-0045 §5 помечен как заменённый в части ADR-0254.
+  **Исправления после ревью (#1927).** Слит `main` @ `c2f90d5d8` (LY45, `AppHandler`) и
+  сессия Mac (`9f8bc89c8`, тест `a_redraw_from_another_thread_is_queued_without_waiting`).
+  ADR: статус ADR-0254 описывает сделанное (решения 1–5), устаревший текст ADR-0063, ADR-0082,
+  ADR-0135 исправлен. Цели поверхности: AppKit и UIKit держат вид (`MainRetainedView`: retain на
+  главном потоке, release на главном — с чужого потока через главную очередь,
+  `main_release::release_on_main`), вне главного потока — `Unavailable`; Android держит счётную
+  ссылку `NativeWindow` и вне лупера отвечает `Unavailable` (раньше указатель временного
+  `NativeWindow` мог пережить его). Документация `SurfaceTarget`/`RedrawRequester`: где делается
+  поверхность, что цель держит живым, отставка вместо «флага закрытия». `NoNativeSurface`
+  перенесён в `flui_platform::testing` (ADR-0243). `OpenedWindow::window()` отдаёт
+  `OpenedWindowReach { Open, Closed, OtherThread }`, сообщение `opened_window` в `flui-app`
+  различает оба отказа. `OwnerSlot`, сброшенный на чужом потоке, оставляет значение владельцу
+  (кладбище сирот, хоронится при следующем обращении владельца к любому слоту), `OwnerCell`
+  привязан к потоку, который его создал; `request_redraw` Win32 и winit проверяют отставку.
+  Строка соответствия `a_surface_target_is_send_sync_and_unavailable_after_close`
+  (`flui-testing`, с `pre_present_notify` раз за кадр; фикстура объявляет
+  `has_native_surface`), прогнана на headless, Win32, winit; AppKit — на Mac. Отчётные метки
+  «(issue #1043)» убраны из `flui-app` и `examples/scene_render.rs`. Мёртвый код wasm32 в
+  `flui-app` (`install_exit_policy_hook`, `has_pending_installs`, `PrimarySurfaceRestored` и др.,
+  11 предупреждений) есть на `main` @ `c2f90d5d8` и только в `check --all-targets` для wasm32,
+  который CI не запускает; `wasm-check` чист на обеих ветках — не тронут. Тесты (откат проверен
+  для каждого): `a_value_dropped_elsewhere_is_released_in_a_main_turn` (с release на месте
+  падает), `a_value_whose_slot_dropped_elsewhere_is_dropped_at_the_owners_next_use` (без записи
+  в кладбище падает), `an_owner_map_belongs_to_the_thread_that_made_it`,
+  `a_winit_surface_target_answers_until_its_window_closes` (без проверки отставки в цели winit
+  падает), `a_surface_target_that_blocks_or_withholds_is_caught` (ловит цель, которая блокирует
+  или не отдаёт описатель), переписанный Win32 `a_surface_target_is_unavailable_once_its_window_closed`
+  (проверки при удерживаемом окне, последний шаг проверяет исчезновение слабой ссылки).
+  Проверки (Windows): `cargo fmt`; clippy рабочего пространства `--all-targets` обычный и с
+  `flui-native/winit-backend,flui/native`; nextest `flui-platform`, `flui-runtime`,
+  `flui-interaction`, `flui-testing`, `flui-app`, `flui-view`, `flui-sdk` — 419 из 419;
+  `flui-native`, `flui-engine` — 354 из 357: trybuild `owner_thread_token_has_no_default` (как на
+  `main`), `ole_drag_and_drop_on_real_windows` и `open_real_window` падают только рядом с другими
+  тестами реальных окон, по одному зелёные; с `winit-backend` — 374 из 376 (тот же trybuild и
+  `app_handler_obligation_table` из LY45, по одному зелёный). `.stderr`
+  `platform_and_host_window_are_sealed` обновлён (строки сдвинулись). clippy с
+  `flui-native/testing,flui-native/winit-backend` для Android, iOS, macOS (и macOS без признаков);
+  `checks`, `doc-strict`, `wasm-check`. WSL: clippy трёх вариантов (в том числе `-p flui-native
+  --all-targets --features winit-backend` и `--all-features`), rustdoc; xvfb nextest 306 из 306
+  и 353 из 353; без xvfb — 661 из 662 (прежний случай X-сервера WSLg).
 
 ## Отступление от порядка, решённое владельцем
 

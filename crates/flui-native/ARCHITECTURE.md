@@ -831,17 +831,22 @@ trait depends on `flui-platform` instead.
   `PlatformWindow` impl, and its accessibility bridge is fixed when the window
   is built, so a runner may read it once. Neither `dyn PlatformWindow` nor
   `dyn HostWindow` is `Send` or `Sync`; what other threads hold of a window
-  is `Send + Sync` and keeps nothing of it alive:
+  is `Send + Sync` and does not keep the window open:
   - its `SurfaceTarget` (`surface_target()`), from which the renderer takes
     the raw window and display handles. It answers `Unavailable` once the
     window's `Retirement` started (`WindowDelivery::clear`, where every host
     retires its native window) and, per host, when Win32's identity probe no
-    longer finds the window behind its handle, AppKit's or UIKit's closed
-    flag is set, or the Android activity has no native window. Its
-    `pre_present_notify` arms the Wayland frame callback on winit and returns
-    at once elsewhere. Only the web and Apple targets hold a non-`Send`
-    object and carry an `unsafe impl Send + Sync`, whose SAFETY names the
-    invariant;
+    longer finds the window behind its handle, on any thread but the main
+    one for AppKit and UIKit, on any thread but the looper for Android, or
+    when the Android activity has no native window. A target keeps alive
+    what its handle names, so a handle it gave out never dangles: winit's
+    holds the `Arc<winit::Window>`, the Apple targets a retained reference
+    to the content view (`MainRetainedView`, taken and released on the main
+    thread, a drop elsewhere posts the release there), Android's a counted
+    `NativeWindow`. Its `pre_present_notify` arms the Wayland frame callback
+    on winit and returns at once elsewhere. Only the web target and
+    `MainRetainedView` carry an `unsafe impl Send`/`Sync`, whose SAFETY
+    names the invariant;
   - its `RedrawRequester` (`redraw_requester()`), how a waker, a signal
     written on a worker or an accessibility adapter's thread asks for a
     frame: Win32, winit and Android ask the window system directly, AppKit
@@ -850,7 +855,10 @@ trait depends on `flui-platform` instead.
   A host table of open windows (`WindowSet`, winit's `windows`, the AppKit
   registry) holds them in `owner::slot::{OwnerCell, OwnerMap}`, which only the
   owner thread reaches; `OwnerWeak` is the `Send` weak reference a queued
-  close or state publisher carries.
+  close or state publisher carries. A cell or map belongs to the thread that
+  made it. A slot dropped on another thread leaves its value to the owner,
+  which drops it at its next use of any slot; values still held when the
+  owner thread exits are leaked, never dropped during thread-local teardown.
 - **A window publishes a state snapshot and takes commands (ADR-0237).** There
   is one window trait. `PlatformWindow::state` returns an immutable
   `WindowState` with a revision, and `apply` takes an `AdmittedCommand`

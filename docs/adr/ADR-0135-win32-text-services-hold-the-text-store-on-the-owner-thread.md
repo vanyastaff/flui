@@ -51,7 +51,7 @@ composition must still end somewhere.
    lock and keeps the text, the one function every caller uses; it returns the lock's outcome,
    and a `Deferred` commit is accepted work its caller owes a later run. The host is shared as
    `Rc<dyn TextStoreHost>` and is not `Send`.
-2. **Only owner-thread proof reaches it.** `OwnerPlatform::text_store_host(&Arc<dyn HostWindow>)`
+2. **Only owner-thread proof reaches it.** `OwnerPlatform::text_store_host(&Rc<dyn HostWindow>)`
    reads the window's host through `HostWindow::text_store_host`, whose argument, an
    `OwnerThreadToken`, only `OwnerPlatform` can build: its type is public in a private module, so
    the method cannot be called outside `flui-native`. The token proves the platform's owner

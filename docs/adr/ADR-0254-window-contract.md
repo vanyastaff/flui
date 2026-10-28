@@ -1,9 +1,12 @@
 # ADR-0254: One window truth: a state snapshot, admitted commands, one handler and an owner-local window
 
-- **Status:** Accepted (2026-10-20). Implemented in part: decision 4's application level — one
-  `AppHandler` passed to `Platform::run` in place of the registrations. The rest lands as
-  separate changes, and a platform's row in `docs/platform-parity.md` moves only after a
-  run on that platform (Confirmation).
+- **Status:** Accepted (2026-10-20). Decisions 1 to 5 are implemented: the snapshot, admitted
+  commands, the per-frame verbs and the material command, the window handler and the
+  `AppHandler` passed to `Platform::run`, and the owner-local window with its surface target and
+  redraw requester. What remains of decisions 6 to 8 lands as separate changes, in the order of
+  the platform-layer feature's tasks. A platform's row in `docs/platform-parity.md` moves only
+  after a run on that platform (Confirmation): the AppKit and UIKit hosts of decision 5 are
+  type-checked here and run on a Mac separately.
 - **Date:** 2026-10-20
 - **Amended:** 2026-10-27 — decision 4, approved by the owner: (1) a `WindowHandler` method takes
   no `&OwnerPlatform`, because `WindowHandler` is the contract's and `OwnerPlatform` is the host
@@ -25,6 +28,15 @@
   exit policy of its own had to answer `false`, which silently changed the hosts' behaviour (the
   Win32, AppKit and winit loops no longer ended with their last window); `HostDecides` keeps the
   host's own default, as with no handler bound.
+- **Amended:** 2026-10-27 — decision 5, approved by the owner: (1) a thread that is not a window's
+  owner asks it for a frame through `PlatformWindow::redraw_requester()`, a `Send + Sync`
+  `RedrawRequester` (any `Fn() + Send + Sync` closure is one), not through a `PlatformProxy`
+  verb, because a verb naming a window would need a lookup from the window's identity to the
+  window in every transport, and `flui-runtime`, which asks for frames from signals written on
+  workers, has no edge to the host crate (ADR-0083); (2) a deferred open resolves to an
+  `OpenedWindow`, the window's identity on any thread and the window on its owner thread only;
+  (3) an AppKit window asked for a frame from another thread queues the redraw on its owner lane
+  and returns at once, where it used to block until the lane ran it.
 - **Supersedes:**
   - [ADR-0237](ADR-0237-window-state-and-host-notices.md), in part: the window-scoped getters and
     per-fact callbacks that sit beside the snapshot; decision 3's refusal inside `apply` (it moves

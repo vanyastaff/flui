@@ -22,7 +22,10 @@ this one path (ADR-0151 §9).
   rational rates converted in `u128` (`refresh_value_classification_table`). A snapshot
   never substitutes 60 Hz; that is a consumer's policy (ADR-0236).
 - **Flat root.** Every public item is re-exported at the crate root; the
-  modules are private except six whose types keep their module path:
+  modules are private except seven whose types keep their module path:
+  `testing`, what a test double's window is written with (`NoNativeSurface`, and the
+  `window_takes_no_frame_verbs!` macro it defines, exported at the root as every
+  `macro_export` is), which production code has no use for;
   `os_options`, one operating system's window creation options, which are not
   everyone's vocabulary; `haptics`, the second haptic tier with its requests and outcomes, which
   the facade and `flui-sdk` re-export only under `unstable-input` (ADR-0210 §9)
@@ -149,11 +152,14 @@ this one path (ADR-0151 §9).
   `assert_not_impl_any!` in `tests/surface_target.rs`). The thread that
   presents frames takes `surface_target()`: a `SurfaceTarget`
   (`HasWindowHandle + HasDisplayHandle + Send + Sync + 'static`) that answers
-  `HandleError::Unavailable` once the window is gone, keeps the window
-  neither open nor alive, and has the required `pre_present_notify` the
-  raster side calls before each present. A thread that wants a frame asks
+  `HandleError::Unavailable` once the window is gone, does not keep the
+  window open (it may keep the native object its surface draws into alive,
+  as wgpu needs), and has the required `pre_present_notify` the raster side
+  calls before each present. The Apple targets hand out their view on the
+  main thread only, where AppKit and UIKit make a surface, and Android's on
+  its looper thread. A thread that wants a frame asks
   `redraw_requester()`, a `RedrawRequester`; any `Fn() + Send + Sync` closure
-  is one, which is what a test double hands out. `NoNativeSurface` is the
+  is one, which is what a test double hands out. `testing::NoNativeSurface` is the
   target of a window with no native surface. `raw-window-handle` appears only
   through the two handle traits and their
   `WindowHandle`/`DisplayHandle`/`HandleError` (ADR-0089).
