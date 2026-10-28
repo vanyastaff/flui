@@ -15,6 +15,13 @@ fn main() {
     cases::main();
 }
 
+// The X11 host's input on the harness's server, through XTest.
+#[cfg(target_os = "linux")]
+mod x11_input;
+// The native recordings an input session captured are held against.
+#[cfg(all(target_os = "linux", debug_assertions, feature = "native-capture"))]
+mod native_recording;
+
 #[cfg(target_os = "linux")]
 mod cases {
     use std::cell::RefCell;
@@ -90,11 +97,17 @@ mod cases {
             })
         };
         // A listing, or a run with nothing to run, starts no server.
-        let session = (!arguments.list && CASES.iter().any(|(name, _)| !filtered_out(name)))
-            .then(Session::start);
-        let trials = CASES
+        let cases: Vec<(&str, fn())> = CASES
             .iter()
-            .map(|&(name, case)| {
+            .chain(crate::x11_input::CASES)
+            .copied()
+            .chain(recording_cases())
+            .collect();
+        let session = (!arguments.list && cases.iter().any(|(name, _)| !filtered_out(name)))
+            .then(Session::start);
+        let trials = cases
+            .into_iter()
+            .map(|(name, case)| {
                 libtest_mimic::Trial::test(name, move || {
                     case();
                     Ok(())
@@ -104,6 +117,20 @@ mod cases {
         let conclusion = libtest_mimic::run(&arguments, trials);
         drop(session);
         conclusion.exit();
+    }
+
+    /// The recordings an X11 session is held against are this harness's too,
+    /// with their codec's contracts, in a build that captures.
+    fn recording_cases() -> Vec<(&'static str, fn())> {
+        // The list is the module's whole, so nothing it builds is unused
+        // here; `platform_it` runs the rest.
+        #[cfg(all(debug_assertions, feature = "native-capture"))]
+        return crate::native_recording::contracts()
+            .into_iter()
+            .filter(|(name, _)| name.contains("x11"))
+            .collect();
+        #[cfg(not(all(debug_assertions, feature = "native-capture")))]
+        Vec::new()
     }
 
     /// An X server of the harness's own with a window manager on it, which
@@ -171,6 +198,10 @@ mod cases {
             unsafe {
                 std::env::set_var("DISPLAY", display);
                 std::env::remove_var("WAYLAND_DISPLAY");
+                // A locale whose compose table XKB has, for the dead keys
+                // the input cases type; the table is X's, no locale need
+                // be installed.
+                std::env::set_var("LC_CTYPE", "en_US.UTF-8");
             }
             let window_manager = Command::new("openbox")
                 .arg("--sm-disable")
@@ -241,7 +272,7 @@ mod cases {
         }
     }
 
-    fn atom(connection: &RustConnection, name: &str) -> u32 {
+    pub(crate) fn atom(connection: &RustConnection, name: &str) -> u32 {
         connection
             .intern_atom(false, name.as_bytes())
             .expect("request")
@@ -303,11 +334,11 @@ mod cases {
     /// An X11 window for the conformance checks, read back on a connection of
     /// the test's own. Dropping it closes the window and settles, so a case
     /// that fails part way leaves no window for the next one.
-    struct X11Fixture {
-        platform: X11Platform,
-        window: Rc<dyn HostWindow>,
-        xid: u32,
-        server: RustConnection,
+    pub(crate) struct X11Fixture {
+        pub(crate) platform: X11Platform,
+        pub(crate) window: Rc<dyn HostWindow>,
+        pub(crate) xid: u32,
+        pub(crate) server: RustConnection,
         /// `_NET_SUPPORTED` as the window manager left it, put back as the
         /// fixture goes.
         supported: Option<Vec<u32>>,
@@ -315,13 +346,26 @@ mod cases {
 
     impl X11Fixture {
         fn open(title: &str) -> Self {
+            Self::open_with(title, RecordingWindowHandler::new())
+        }
+
+        /// A window delivering to `handler`.
+        pub(crate) fn open_with(title: &str, handler: Rc<RecordingWindowHandler>) -> Self {
+            Self::open_with_handler(title, handler)
+        }
+
+        /// A window delivering to any `handler`.
+        pub(crate) fn open_with_handler(
+            title: &str,
+            handler: Rc<dyn flui_platform::WindowHandler>,
+        ) -> Self {
             let platform = X11Platform::new().expect("the X11 platform");
             let window = platform
                 .open_window(
                     WindowOptions::default()
                         .with_title(title)
                         .with_size(Size::new(400.0, 300.0)),
-                    RecordingWindowHandler::new(),
+                    handler,
                 )
                 .expect("an X11 window opens");
             let xid = xid_of(window.as_ref());
@@ -339,7 +383,7 @@ mod cases {
             fixture
         }
 
-        fn root(&self) -> u32 {
+        pub(crate) fn root(&self) -> u32 {
             self.server.setup().roots[0].root
         }
     }
