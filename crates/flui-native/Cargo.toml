@@ -398,6 +398,12 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
     "UIImpactFeedbackGenerator",
     "UINotificationFeedbackGenerator",
     "UISelectionFeedbackGenerator",
+    # The invisible responder the system keyboard types into (ADR-0255
+    # decision 11): the protocol, its traits, and the writing direction its
+    # positions answer.
+    "UITextInput",
+    "UITextInputTraits",
+    "NSText",
 ] }
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
     "CADisplayLink",

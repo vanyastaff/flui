@@ -34,7 +34,7 @@ use flui_platform::text_store::TextStoreHost;
 use crate::host::{Absent, position};
 
 pub(crate) mod android;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) mod apple;
 pub(crate) mod headless;
 #[cfg(any(target_os = "android", target_arch = "wasm32", test))]
