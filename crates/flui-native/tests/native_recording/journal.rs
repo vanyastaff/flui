@@ -30,6 +30,7 @@ impl Recorder {
     }
 
     /// A handle that reads the recordings while the capture goes on.
+    #[cfg(test)]
     pub fn journals(&self) -> Journals {
         Journals(Arc::clone(&self.journals))
     }
@@ -42,9 +43,11 @@ impl Recorder {
 }
 
 /// The recordings of a live [`Recorder`].
+#[cfg(test)]
 #[derive(Clone)]
 pub struct Journals(Arc<Mutex<Vec<NativeRecording>>>);
 
+#[cfg(test)]
 impl Journals {
     /// The recordings journalled so far.
     pub fn snapshot(&self) -> Vec<NativeRecording> {

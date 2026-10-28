@@ -91,6 +91,7 @@ fn without_times(line: &str) -> String {
 /// their number and positions differ from run to run; who moved, pressed,
 /// hovered, pinched or scrolled, in which order and with which sensor
 /// readings at each press, does not.
+#[cfg(test)]
 pub fn grammar(recording: &NativeRecording) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     for input in recording.replay() {
@@ -146,6 +147,7 @@ pub fn grammar(recording: &NativeRecording) -> Vec<String> {
 }
 
 /// The sensor readings a press carries, to two decimals.
+#[cfg(test)]
 fn sensors(sample: &flui_platform::pointer::PointerSample) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();
@@ -220,6 +222,7 @@ fn hold(name: &str, fresh: &NativeRecording, compare: fn(&NativeRecording) -> Ve
 /// `<name>.delivered.txt` (one `Debug` line each), and then to the shape of
 /// its [`grammar`]. Returns how many sessions were held; none without the
 /// variable.
+#[cfg(test)]
 pub fn hold_pulled_device_recordings() -> usize {
     let Some(directory) = std::env::var_os("FLUI_DEVICE_RECORDING_DIR") else {
         return 0;
@@ -265,6 +268,7 @@ pub fn hold_pulled_device_recordings() -> usize {
     names.len()
 }
 
+#[cfg(test)]
 fn touch(action: ReadingAction, ms: u64) -> NativeReading {
     NativeReading::new(
         NativeContact(7),
@@ -275,6 +279,7 @@ fn touch(action: ReadingAction, ms: u64) -> NativeReading {
     .at(10.0, 20.0, 1.0)
 }
 
+#[cfg(test)]
 const PRESS: ReadingAction = ReadingAction::Press(PointerButton::PRIMARY);
 
 /// A registry driven through every call a checked-in recording makes
@@ -284,6 +289,7 @@ const PRESS: ReadingAction = ReadingAction::Press(PointerButton::PRIMARY);
 /// call, not as the gesture readings replay derives from it. A capture
 /// writes no provenance note. A live capture's journals read the same
 /// recording before it ends, as the device probe reads them.
+#[cfg(test)]
 pub fn a_captured_registry_journals_the_recording_it_replays() {
     for (name, text) in RECORDINGS {
         let mut original = recording(text);
@@ -301,6 +307,7 @@ pub fn a_captured_registry_journals_the_recording_it_replays() {
 /// A registry reports to the capture installed when it was created, for as
 /// long as that capture's guard lives; a stale guard does not uninstall a
 /// newer capture.
+#[cfg(test)]
 pub fn a_registry_reports_to_its_own_capture_while_it_lives() {
     let calls: Arc<Mutex<Vec<(u8, u32)>>> = Arc::default();
     let sink = |name: u8| {
@@ -330,6 +337,7 @@ pub fn a_registry_reports_to_its_own_capture_while_it_lives() {
 
 /// A sink that panics is dropped and its capture ends, and the registry is
 /// left as if the call had not been made.
+#[cfg(test)]
 pub fn a_panicking_sink_ends_its_capture_and_leaves_the_registry_unchanged() {
     struct Dropped(Arc<AtomicBool>);
     impl Drop for Dropped {
@@ -368,6 +376,7 @@ pub fn a_panicking_sink_ends_its_capture_and_leaves_the_registry_unchanged() {
 /// A sink may release its own capture, or install a replacement, from inside
 /// a call: the release ends the capture after that call, and the replacement
 /// takes only registries created after it.
+#[cfg(test)]
 pub fn a_sink_may_release_or_replace_its_capture_from_inside_a_call() {
     let held: Arc<Mutex<Option<CaptureGuard>>> = Arc::default();
     let replacement: Arc<Mutex<Option<CaptureGuard>>> = Arc::default();
@@ -401,6 +410,7 @@ pub fn a_sink_may_release_or_replace_its_capture_from_inside_a_call() {
 }
 
 /// The capture rows of `native_recording_contracts`.
+#[cfg(test)]
 pub const CASES: [(&str, fn()); 4] = [
     (
         "a_captured_registry_journals_the_recording_it_replays",
