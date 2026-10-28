@@ -28,6 +28,8 @@ pub use meaning::*;
 mod meaning {
     #![forbid(unsafe_code)]
 
+    use std::ops::Range;
+
     use flui_platform::keyboard::{Code, Key, Modifiers, NamedKey};
 
     use crate::input::keys::scancode_to_code;
@@ -431,18 +433,20 @@ mod meaning {
             const { std::cell::Cell::new(0) };
     }
 
-    /// The names a keymap's text gives its layouts, by zero-based index: the
-    /// `name[GroupN]` its symbols section declares, as libxkbcommon writes it
-    /// out, matched without regard to case; empty for a layout it names
-    /// none. Read once per keymap, in one pass over its text, so naming the
-    /// layout in effect is a lookup.
+    /// Where in a keymap's text the names of its layouts are, by zero-based
+    /// index: the `name[GroupN]` its symbols section declares, as libxkbcommon
+    /// writes it out, matched without regard to case; an empty range for a
+    /// layout it names none. Ranges into the text rather than copies of it,
+    /// so a keymap whose names are most of its text holds them once. Read
+    /// once per keymap, in one pass over its text, so naming the layout in
+    /// effect is a lookup.
     #[must_use]
-    pub fn group_names(keymap: &str) -> Vec<String> {
+    pub fn group_names(keymap: &str) -> Vec<Range<usize>> {
         const WANTED: &str = "name[group";
         #[cfg(test)]
         GROUP_NAME_READS.with(|reads| reads.set(reads.get() + 1));
         let lower = keymap.to_ascii_lowercase();
-        let mut names: Vec<String> = Vec::new();
+        let mut names: Vec<Range<usize>> = Vec::new();
         let mut from = 0;
         while let Some(found) = lower[from..].find(WANTED) {
             let at = from + found + WANTED.len();
@@ -471,10 +475,11 @@ mod meaning {
                 continue;
             };
             if names.len() <= index {
-                names.resize(index + 1, String::new());
+                names.resize(index + 1, 0..0);
             }
             if names[index].is_empty() {
-                rest[..end].clone_into(&mut names[index]);
+                let start = keymap.len() - rest.len();
+                names[index] = start..start + end;
             }
         }
         names
@@ -554,10 +559,10 @@ mod keyboard {
         Compositor {
             /// The keymap's text.
             text: String,
-            /// The names it gives its layouts, by index, read from the text
-            /// once: naming the layout in effect is a lookup, however often
-            /// the compositor switches.
-            layouts: Vec<String>,
+            /// Where in the text it names its layouts, by index, read once:
+            /// naming the layout in effect is a lookup, however often the
+            /// compositor switches.
+            layouts: Vec<std::ops::Range<usize>>,
         },
     }
 
@@ -606,10 +611,10 @@ mod keyboard {
         #[cfg(wayland_host)]
         pub(crate) fn layout_name(&self, layout: u32) -> Option<&str> {
             match self {
-                Self::Compositor { layouts, .. } => usize::try_from(layout)
+                Self::Compositor { text, layouts } => usize::try_from(layout)
                     .ok()
                     .and_then(|index| layouts.get(index))
-                    .map(String::as_str)
+                    .and_then(|range| text.get(range.clone()))
                     .filter(|name| !name.is_empty()),
                 #[cfg(x11_host)]
                 Self::X11 { .. } => None,
@@ -1293,18 +1298,51 @@ mod tests {
             \tname[Group2]= \"Russian\";\n\
             \tkey <AE01> { [ 1, exclam ] };\n\
             };\n};";
-        assert_eq!(group_names(keymap), ["English (US)", "Russian"]);
-        assert!(group_names("name[group1]").is_empty(), "no value");
+        let named = |keymap: &str| -> Vec<String> {
+            group_names(keymap)
+                .into_iter()
+                .map(|range| keymap[range].to_owned())
+                .collect()
+        };
+        assert_eq!(named(keymap), ["English (US)", "Russian"]);
+        assert!(named("name[group1]").is_empty(), "no value");
         assert_eq!(
-            group_names("name[Group1]=unquoted;\n name[Group1]=\"German\";"),
+            named("name[Group1]=unquoted;\n name[Group1]=\"German\";"),
             ["German"],
             "a declaration without quotes is passed over for the next"
         );
         assert_eq!(
-            group_names("name[Group3]=\"Third\"; name[Group99]=\"Past\"; name[Group]=\"None\";"),
+            named("name[Group3]=\"Third\"; name[Group99]=\"Past\"; name[Group]=\"None\";"),
             ["", "", "Third"],
             "an unnamed group is empty, and one past the limit or unnumbered is passed over"
         );
+    }
+
+    /// A keymap whose layout names are nearly all of its text holds them
+    /// once: the names are where the text has them, not copies.
+    #[test]
+    #[cfg(wayland_host)]
+    fn layout_names_are_held_in_the_keymap_text() {
+        use std::fmt::Write as _;
+
+        let long = "x".repeat(1024 * 1024);
+        let mut text = String::new();
+        for group in 1..=4 {
+            writeln!(text, "name[Group{group}]=\"{long}\";").expect("a string takes text");
+        }
+        let source = KeymapSource::compositor(text.into_bytes()).expect("the keymap is text");
+        let KeymapSource::Compositor { text, .. } = &source else {
+            panic!("a compositor's keymap");
+        };
+        let held = text.as_bytes().as_ptr_range();
+        for layout in 0..4 {
+            let name = source.layout_name(layout).expect("the layout is named");
+            assert_eq!(name.len(), long.len());
+            assert!(
+                held.contains(&name.as_ptr()),
+                "layout {layout}'s name is a copy, not the keymap's text"
+            );
+        }
     }
 
     /// A keymap is read up to its NUL and only within the limit.

@@ -6,8 +6,8 @@ use flui_platform::pointer::{
 };
 
 use super::{
-    Axis, AxisLabel, DeviceDescription, DeviceRole, RereadPerTurn, ScrollAxis, X11Pointers,
-    XiAction, XiEvent, XiMaster, XiSlave, XiTime, button, role, valuators,
+    Axis, AxisLabel, DeviceDescription, DeviceRole, ScrollAxis, X11Pointers, XiAction, XiEvent,
+    XiMaster, XiSlave, XiTime, button, role, valuators,
 };
 use crate::input::assembly::{NativeCancel, NativeClock, NativeSurface};
 
@@ -688,17 +688,150 @@ fn a_valuator_mask_past_its_numbers_is_skipped() {
     assert_eq!(valuators(&[0b11], &[1.0]), [(0, 1.0)]);
 }
 
+/// The kind and verb of each contact event in `events`.
+fn verbs(events: &[PointerEvent]) -> Vec<(&'static str, PointerKind)> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            PointerEvent::Down(press) => Some(("down", press.pointer.kind)),
+            PointerEvent::Up(release) => Some(("up", release.pointer.kind)),
+            PointerEvent::Move(movement) => Some(("move", movement.pointer.kind)),
+            _ => None,
+        })
+        .collect()
+}
+
 #[test]
-/// A server sending notice after notice in one turn has its state read at
-/// most twice: at the first notice and at the turn's end; the next turn reads
-/// at its first notice again.
-fn a_turn_of_notices_reads_the_server_at_most_twice() {
-    let reads = RereadPerTurn::default();
-    let mut made = (0..10_000).filter(|_| reads.ask()).count();
-    made += usize::from(reads.end_turn());
-    assert_eq!(made, 2, "reads made in a turn");
-    assert!(reads.ask(), "the next turn's first notice reads at once");
-    assert!(!reads.end_turn(), "a turn of one notice reads once");
+/// A tablet plugged in within one batch of events, after the mouse moved,
+/// draws as a pen with its pressure: the hierarchy change asks the server for
+/// the device it adds at once, so the pen's events that follow find it, and
+/// the mouse never holds a button.
+fn a_pen_plugged_in_mid_batch_draws_as_a_pen() {
+    let time = EventTime::from_nanos(5);
+    let mut pointers = X11Pointers::new(NativeClock::epoch_only());
+    let _ = pointers.devices(
+        &[master(), device(XTEST, "Virtual core XTEST pointer")],
+        time,
+    );
+    let mut events = feed(
+        &mut pointers,
+        &[
+            event(XiAction::Enter, XTEST, (5.0, 5.0)),
+            event(XiAction::Motion, XTEST, (6.0, 5.0)),
+        ],
+    );
+    let mut asked = Vec::new();
+    let plugged = pointers.hierarchy(
+        &[],
+        &[],
+        &[STYLUS],
+        |id| {
+            asked.push(id);
+            (id == STYLUS).then(stylus)
+        },
+        time,
+    );
+    let pen = |action, at| XiEvent {
+        detail: 1,
+        valuators: vec![(2, 32_767.5), (3, 30.0), (4, -64.0)],
+        ..event(action, STYLUS, at)
+    };
+    events.extend(feed(
+        &mut pointers,
+        &[
+            pen(XiAction::ButtonPress, (40.0, 40.0)),
+            pen(XiAction::Motion, (41.0, 40.0)),
+            pen(XiAction::ButtonRelease, (42.0, 40.0)),
+        ],
+    ));
+    let tip = PointerKind::Pen { tool: PenTool::Tip };
+    assert_eq!(
+        verbs(&events),
+        [
+            ("move", PointerKind::Mouse),
+            ("down", tip),
+            ("move", tip),
+            ("up", tip),
+        ],
+        "{events:?}"
+    );
+    assert_eq!(asked, [STYLUS], "the added device is asked of the server");
+    assert!(
+        plugged.iter().any(|(_, input)| matches!(
+            input,
+            PlatformInput::Pointer(PointerEvent::DeviceAdded(change))
+                if matches!(change.kind, PointerKind::Pen { .. })
+        )),
+        "{plugged:?}"
+    );
+    let down = events
+        .iter()
+        .find_map(|event| match event {
+            PointerEvent::Down(press) => Some(press),
+            _ => None,
+        })
+        .expect("the pen's press");
+    assert!(down.sample.pressure.is_some(), "the pen's pressure is read");
+}
+
+#[test]
+/// A hierarchy change costs one query per device it names, however many
+/// changes come: 10 000 changes each adding a device ask 10 000 times, never
+/// the whole list, and the devices known stay bounded.
+fn a_hierarchy_change_asks_only_for_what_it_names() {
+    let time = EventTime::from_nanos(5);
+    let mut pointers = X11Pointers::new(NativeClock::epoch_only());
+    let _ = pointers.devices(&[master()], time);
+    let mut asked = 0;
+    for id in 100..10_100 {
+        let _ = pointers.hierarchy(
+            &[],
+            &[],
+            &[id],
+            |queried| {
+                asked += 1;
+                Some(device(queried, "Spurious pointer"))
+            },
+            time,
+        );
+    }
+    assert_eq!(asked, 10_000, "queries made");
+    let known = pointers.devices.len() + pointers.masters.len();
+    assert!(known <= super::MAX_DEVICES, "{known} devices known");
+}
+
+#[test]
+/// A device's classes changed: the scroll valuators the change carries are
+/// read from its next event, with no query.
+fn a_device_change_brings_its_own_classes() {
+    let mut pointers = pointers();
+    let at = (10.0, 10.0);
+    pointers.classes_changed(
+        XiSlave(TOUCHPAD),
+        &[],
+        &[ScrollAxis {
+            number: 7,
+            horizontal: false,
+            increment: 10.0,
+        }],
+    );
+    let scrolled = |value: f64| XiEvent {
+        valuators: vec![(7, value)],
+        ..event(XiAction::Motion, TOUCHPAD, at)
+    };
+    let events = feed(
+        &mut pointers,
+        &[
+            event(XiAction::Enter, TOUCHPAD, at),
+            scrolled(100.0),
+            scrolled(125.0),
+        ],
+    );
+    assert_eq!(
+        scrolls(&events),
+        [(0.0, 2.5, ScrollPrecision::Precise)],
+        "{events:?}"
+    );
 }
 
 #[test]
