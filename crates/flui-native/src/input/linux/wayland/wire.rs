@@ -21,9 +21,9 @@ use smallvec::SmallVec;
 
 use crate::input::assembly::{
     Assembled, ContactRegistry, ContactScroll, DecodeError, GestureComponent, GestureDelta,
-    GesturePhase, GestureReading, NativeCancel, NativeClock, NativeContact, NativeDevice,
-    NativeReading, NativeSurface, NativeTime, PenAngles, RawSensors, ReadingAction, ReadingTime,
-    ScrollPhases, ScrollReading, decode, framed,
+    GesturePhase, GestureReading, MAX_TOUCHES, NativeCancel, NativeClock, NativeContact,
+    NativeDevice, NativeReading, NativeSurface, NativeTime, PenAngles, RawSensors, ReadingAction,
+    ReadingTime, ScrollPhases, ScrollReading, decode, framed,
 };
 use crate::input::scroll::{WheelAmount, wheel_step};
 
@@ -453,6 +453,26 @@ struct TouchState {
     open: Vec<(i32, NativeSurface)>,
     steps: Vec<TouchStep>,
     shapes: Vec<(i32, (f64, f64))>,
+}
+
+/// The steps a touchscreen's frame gathers before it is delivered unclosed:
+/// every held touch moving several times over.
+const MAX_TOUCH_STEPS: usize = MAX_TOUCHES * 8;
+
+impl TouchState {
+    fn is_open(&self, id: i32) -> bool {
+        self.open.iter().any(|(open, _)| *open == id)
+    }
+
+    /// The touches still down once the gathered frame's lifts are delivered.
+    fn held(&self) -> usize {
+        let lifting = self
+            .steps
+            .iter()
+            .filter(|step| matches!(step.action, ReadingAction::Release(_)))
+            .count();
+        self.open.len().saturating_sub(lifting)
+    }
 }
 
 /// What a tablet tool's current frame gathered.
@@ -907,9 +927,18 @@ impl SeatAssembly {
 
     fn touch(&mut self, device: NativeDevice, event: TouchWire, time: WireTime) -> Out {
         let mut out = Out::new();
+        // A frame the compositor never closes is delivered in parts rather
+        // than gathered without end.
+        if self.touch_state(device).steps.len() >= MAX_TOUCH_STEPS {
+            self.touch_frame(device, &mut out);
+        }
         let state = self.touch_state(device);
         match event {
             TouchWire::Down { surface, id, x, y } => {
+                if !state.is_open(id) && state.held() >= MAX_TOUCHES {
+                    tracing::debug!(id, "a Wayland touch past {MAX_TOUCHES} held was refused");
+                    return out;
+                }
                 state.open.retain(|(open, _)| *open != id);
                 state.open.push((id, surface));
                 state.steps.push(TouchStep {
@@ -919,22 +948,25 @@ impl SeatAssembly {
                     time,
                 });
             }
-            TouchWire::Up { id } => state.steps.push(TouchStep {
+            // A touch that is not open was refused or has ended: its steps
+            // would find no surface.
+            TouchWire::Up { id } if state.is_open(id) => state.steps.push(TouchStep {
                 id,
                 action: ReadingAction::Release(PointerButton::PRIMARY),
                 position: None,
                 time,
             }),
-            TouchWire::Motion { id, x, y } => state.steps.push(TouchStep {
+            TouchWire::Motion { id, x, y } if state.is_open(id) => state.steps.push(TouchStep {
                 id,
                 action: ReadingAction::Move,
                 position: Some((x, y)),
                 time,
             }),
-            TouchWire::Shape { id, major, minor } => {
+            TouchWire::Shape { id, major, minor } if state.is_open(id) => {
                 state.shapes.retain(|(shaped, _)| *shaped != id);
                 state.shapes.push((id, (major, minor)));
             }
+            TouchWire::Up { .. } | TouchWire::Motion { .. } | TouchWire::Shape { .. } => {}
             TouchWire::Frame => self.touch_frame(device, &mut out),
             TouchWire::Cancel => {
                 self.touch_frame(device, &mut out);

@@ -804,3 +804,42 @@ fn every_button_of_a_tablet_frame_is_delivered() {
         .count();
     assert_eq!((pressed, released), (5, 5), "{lines:?}");
 }
+
+#[test]
+/// A compositor that sends touch ids it never lifts, in a frame it never
+/// closes, leaves `MAX_TOUCHES` open and a bounded frame: the rest are
+/// refused, and a cancel ends exactly the held ones.
+fn a_touchscreen_holds_a_bounded_number_of_touches() {
+    let mut assembly = seated();
+    let downs: Vec<SeatEvent> = (0..10_000)
+        .map(|id| {
+            touch(TouchWire::Down {
+                surface: WINDOW,
+                id,
+                x: 10.0,
+                y: 10.0,
+            })
+        })
+        .collect();
+    let mut lines = feed(&mut assembly, &downs);
+    let state = &assembly.touches[0];
+    assert!(state.open.len() <= MAX_TOUCHES, "{} open", state.open.len());
+    assert!(
+        state.steps.len() <= MAX_TOUCH_STEPS,
+        "{} steps",
+        state.steps.len()
+    );
+
+    lines.extend(feed(
+        &mut assembly,
+        &[touch(TouchWire::Frame), touch(TouchWire::Cancel)],
+    ));
+    let count = |verb: &str| {
+        lines
+            .iter()
+            .map(|line| line.matches(verb).count())
+            .sum::<usize>()
+    };
+    assert_eq!(count("down p"), MAX_TOUCHES, "{lines:?}");
+    assert_eq!(count("cancel p"), MAX_TOUCHES, "{lines:?}");
+}

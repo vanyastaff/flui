@@ -100,6 +100,10 @@ const CURSOR_SHAPE_VERSION: u32 = 1;
 const POINTER_FRAMES: u32 = 5;
 /// `wl_compositor` version 3: a cursor surface takes a buffer scale.
 const COMPOSITOR_VERSION: u32 = 3;
+/// The tablet tools a seat keeps: a pen, its eraser, an airbrush and a lens
+/// for each of a few tablets. A compositor announcing tools it never removes
+/// is refused past this rather than held forever.
+const MAX_TOOLS: usize = 16;
 
 /// `CLOCK_MONOTONIC`, the clock compositors stamp input on.
 fn monotonic() -> Duration {
@@ -2002,15 +2006,24 @@ impl Dispatch<ZwpTabletSeatV2, SeatData> for WaylandState {
             && let Some(shared) = data.shared.upgrade()
             && let Some(tool) = id.data::<ToolData>()
         {
+            // The seat keeps its tools, which go with it.
+            let kept = shared.objects.with(|objects| {
+                let seat = objects
+                    .seats
+                    .iter_mut()
+                    .find(|seat| seat.key == data.seat)?;
+                (seat.tools.len() < MAX_TOOLS).then(|| seat.tools.push(id.clone()))
+            });
+            if kept.flatten().is_none() {
+                // A tool it does not keep has no device: its events are
+                // dropped until it goes.
+                tracing::debug!("a Wayland tablet tool past {MAX_TOOLS} on its seat was refused");
+                id.destroy();
+                return;
+            }
             let _ = tool
                 .held
                 .set((Arc::downgrade(&shared), shared.label(), data.seat));
-            // The seat keeps its tools, which go with it.
-            shared.objects.with(|objects| {
-                if let Some(seat) = objects.seats.iter_mut().find(|seat| seat.key == data.seat) {
-                    seat.tools.push(id.clone());
-                }
-            });
         }
     }
 
