@@ -99,6 +99,7 @@ impl SurfaceLifecycle for flui_engine::Renderer {
 /// The seam through which a runner hands its renderer the colour of the
 /// display its window is on (ADR-0256 §6), narrowed from the concrete
 /// renderer as [`SurfaceLifecycle`] is.
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) trait DisplayColorFollow {
     /// Take `display` as the colour of the window's display: whether the held
     /// surface was configured again for it.
@@ -108,6 +109,7 @@ pub(super) trait DisplayColorFollow {
     ) -> Result<bool, EngineError>;
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl DisplayColorFollow for flui_engine::Renderer {
     fn follow_display_color(
         &mut self,
@@ -125,13 +127,10 @@ impl DisplayColorFollow for flui_engine::Renderer {
 /// A lane busy at this moment leaves it to the next frame, which reads the
 /// display again, so no report is lost. A failure is logged and the surface
 /// keeps the configuration it had.
-#[cfg_attr(
-    target_arch = "wasm32",
-    expect(
-        dead_code,
-        reason = "the Web renderer is not behind a raster lane; its runner calls the renderer"
-    )
-)]
+///
+/// Not on the Web: its renderer is not behind a raster lane, and its runner
+/// hands the renderer the colour itself.
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) fn follow_display_color<B>(
     lane: &parking_lot::Mutex<crate::app::raster_lane::RasterLane<B>>,
     display: Option<flui_platform::DisplayColor>,

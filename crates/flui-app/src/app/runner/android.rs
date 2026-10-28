@@ -568,14 +568,14 @@ impl AndroidFrameDriver {
                         "frame skipped: raster lane already held by an outer \
                                  frame dispatch"
                     );
-                    return (WakeAction::Skip, now);
+                    return (WakeAction::Skip, now, None);
                 };
                 let plugin_rendered = lane.with_backend(|r| {
                     let (w, h) = r.size();
                     hot_reload_frame.try_render_frame(r, w as f64, h as f64)
                 });
                 if plugin_rendered {
-                    return (WakeAction::Skip, now);
+                    return (WakeAction::Skip, now, None);
                 }
             }
 
@@ -615,7 +615,7 @@ impl AndroidFrameDriver {
                 FallbackGate::default(),
             );
             if action != WakeAction::Render {
-                return (action, now);
+                return (action, now, None);
             }
 
             // A retry owed by a genuine surface-recreation failure gets

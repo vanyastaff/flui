@@ -551,7 +551,7 @@ impl IosFrameDriver {
                 FallbackGate::default(),
             );
             if action != WakeAction::Render {
-                return (action, now);
+                return (action, now, None);
             }
 
             // A retry owed by a genuine surface-recreation failure gets
