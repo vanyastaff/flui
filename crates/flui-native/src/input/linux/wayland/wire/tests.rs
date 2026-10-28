@@ -55,12 +55,11 @@ fn feed(assembly: &mut SeatAssembly, events: &[SeatEvent]) -> Vec<String> {
             time: at(ms),
             event: *event,
         }) {
-            match routed {
-                Routed::To(surface, input) => {
-                    lines.push(format!("s{} {}", surface.0, describe(&input)))
-                }
-                Routed::Everywhere(input) => lines.push(format!("all {}", describe(&input))),
-            }
+            let line = match routed {
+                Routed::To(surface, input) => format!("s{} {}", surface.0, describe(&input)),
+                Routed::Everywhere(input) => format!("all {}", describe(&input)),
+            };
+            lines.push(line);
         }
     }
     lines

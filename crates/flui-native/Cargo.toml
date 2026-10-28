@@ -540,6 +540,10 @@ wasm-bindgen-test.workspace = true
 [target.'cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))'.dev-dependencies]
 libtest-mimic.workspace = true
 
+# `wayland_input` drives a Weston's X11 backend through XTest.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+x11rb = { workspace = true, features = ["xtest"] }
+
 # Main-thread winit ownership plus one private D-Bus service per process.
 # libtest-mimic supplies the Cargo/nextest protocol without a custom parser.
 [[test]]
@@ -570,6 +574,15 @@ name = "x11_window"
 path = "tests/x11_window.rs"
 harness = false
 required-features = ["x11"]
+
+# The native Wayland host's input from a real compositor seat: its own
+# harness, because it starts an X server and a Weston on it and names that
+# Weston in the process's environment before anything connects.
+[[test]]
+name = "wayland_input"
+path = "tests/wayland_input.rs"
+harness = false
+required-features = ["wayland"]
 
 [[test]]
 name = "wasm32"

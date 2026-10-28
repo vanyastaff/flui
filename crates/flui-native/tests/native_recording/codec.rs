@@ -116,6 +116,9 @@ pub enum Backend {
     /// DOM `PointerEvent`s.
     #[serde(rename = "web")]
     Web,
+    /// A Wayland compositor's seats.
+    #[serde(rename = "wayland")]
+    Wayland,
     /// The headless backend.
     #[serde(rename = "headless")]
     Headless,
@@ -1231,6 +1234,10 @@ struct ScrollDto {
     delta: [f64; 2],
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     precise: bool,
+    /// A wheel that says its step is whole notches (Wayland's `value120`);
+    /// neither this nor `precise` is a step of unknown precision.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    notched: bool,
     time_ns: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     modifiers: Vec<String>,
@@ -1255,9 +1262,10 @@ impl TryFrom<&ContactScroll> for ScrollDto {
                 })
             })
             .transpose()?;
-        let precise = match reading.precision {
-            ScrollPrecision::Precise => true,
-            ScrollPrecision::Unknown => false,
+        let (precise, notched) = match reading.precision {
+            ScrollPrecision::Precise => (true, false),
+            ScrollPrecision::Notched => (false, true),
+            ScrollPrecision::Unknown => (false, false),
             _ => return Err(DtoError::Unmirrored("ScrollPrecision")),
         };
         Ok(Self {
@@ -1274,6 +1282,7 @@ impl TryFrom<&ContactScroll> for ScrollDto {
             },
             delta: [reading.delta.x(), reading.delta.y()],
             precise,
+            notched,
             time_ns: nanos(reading.time),
             modifiers: modifiers_dto(reading.modifiers)?,
         })
@@ -1305,10 +1314,15 @@ impl TryFrom<ScrollDto> for ContactScroll {
             }),
             delta: ScrollDelta::try_new(unit, dto.delta[0], dto.delta[1])
                 .map_err(|error| DtoError::Invalid(format!("scroll delta: {error}")))?,
-            precision: if dto.precise {
-                ScrollPrecision::Precise
-            } else {
-                ScrollPrecision::Unknown
+            precision: match (dto.precise, dto.notched) {
+                (true, false) => ScrollPrecision::Precise,
+                (false, true) => ScrollPrecision::Notched,
+                (false, false) => ScrollPrecision::Unknown,
+                (true, true) => {
+                    return Err(DtoError::Invalid(
+                        "a scroll step is precise or notched, not both".to_owned(),
+                    ));
+                }
             },
             time: EventTime::from_nanos(dto.time_ns),
             modifiers: modifiers(&dto.modifiers)?,

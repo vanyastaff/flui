@@ -1,0 +1,7 @@
+{"flui_native_recording":1,"backend":"wayland","epoch_ns":100,"uptime_ns":12500545648080,"reserved_contact":18446744073709551615,"devices":[{"device":1,"kinds":["mouse"]}]}
+{"row":"add_device","device":1,"kind":"mouse","time_ns":466170}
+{"row":"reading","reading":{"surface":1,"device":1,"contact":18446744073709551615,"kind":"mouse","action":"enter","time":{"epoch_ns":36354921},"position":[512.0,384.0]}}
+{"row":"reading","reading":{"surface":1,"device":1,"contact":18446744073709551615,"kind":"mouse","action":"move","time":{"epoch_ns":46830826},"position":[100.0,120.0]}}
+{"row":"reading","reading":{"surface":1,"device":1,"contact":18446744073709551615,"kind":"mouse","action":{"press":1},"time":{"epoch_ns":67347279}}}
+{"row":"reading","reading":{"surface":1,"device":1,"contact":18446744073709551615,"kind":"mouse","action":{"release":1},"time":{"epoch_ns":67349665}}}
+{"row":"scroll","scroll":{"surface":1,"device":1,"contact":18446744073709551615,"unit":"detents","delta":[0.0,-1.0],"notched":true,"time_ns":67351510}}

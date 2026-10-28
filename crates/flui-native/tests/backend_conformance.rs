@@ -34,9 +34,11 @@ use flui_native::input::assembly::{
     ScrollReading, decode,
 };
 use flui_native::input::availability::{
-    self as input_availability, AndroidInputApis, WinitSession,
+    self as input_availability, AndroidInputApis, WaylandInputGlobals, WinitSession,
 };
 use flui_native::input::keys::vk_to_key;
+use flui_native::input::linux::wayland::wire::WireTime;
+use flui_native::input::linux::xkb::{key_of, keysym as xkb_keysym};
 use flui_native::input::web::keys::key_composition;
 use flui_native::{HeadlessPlatform, HostWindow, MockWindow, OwnerPlatform, Platform as _};
 use flui_platform::Availability;
@@ -83,6 +85,9 @@ enum ClockShape {
     UptimeSeconds,
     /// Android, the web and headless: already on the event epoch.
     Epoch,
+    /// Wayland: the compositor's 32-bit millisecond stamp with the monotonic
+    /// clock read on arrival, and no counter.
+    Tick,
 }
 
 /// What one backend's OS layer feeds the shared decoder.
@@ -92,8 +97,9 @@ struct Profile {
     kinds: &'static [PointerKind],
     names_devices: bool,
     capabilities: InputCapabilities,
-    /// The degradation table its haptic actuator plays by.
-    haptics: HapticsTable,
+    /// The degradation table its haptic actuator plays by; `None` for a
+    /// backend whose windows have no actuator.
+    haptics: Option<HapticsTable>,
     /// When its windows start an OS drag session, for a backend that does.
     drag: Option<OsDragStart>,
     /// The shared key decoder its OS layer feeds, for a backend that has one.
@@ -101,12 +107,13 @@ struct Profile {
 }
 
 /// A shared key decoder: Win32's virtual-key table, AppKit's key-code
-/// table, or the web's rule for a key of the input method (its key names
-/// come from the DOM, not a table).
+/// table, XKB's keysym table, or the web's rule for a key of the input
+/// method (its key names come from the DOM, not a table).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum KeyDecoder {
     Win32,
     AppKit,
+    Xkb,
     Web,
     Android,
 }
@@ -119,7 +126,7 @@ fn win32() -> Profile {
         kinds: ALL_KINDS,
         names_devices: true,
         capabilities: input_availability::windows(true),
-        haptics: HapticsTable::Win32 { pen: false },
+        haptics: Some(HapticsTable::Win32 { pen: false }),
         drag: Some(input_availability::DESKTOP_DRAG_START),
         keys: Some(KeyDecoder::Win32),
     }
@@ -128,7 +135,7 @@ fn win32() -> Profile {
 /// Win32 with a haptic pen in range of the window.
 fn win32_pen() -> Profile {
     Profile {
-        haptics: HapticsTable::Win32 { pen: true },
+        haptics: Some(HapticsTable::Win32 { pen: true }),
         ..win32()
     }
 }
@@ -139,7 +146,7 @@ fn appkit() -> Profile {
         kinds: &[PointerKind::Mouse],
         names_devices: false,
         capabilities: input_availability::macos(),
-        haptics: HapticsTable::AppKit,
+        haptics: Some(HapticsTable::AppKit),
         drag: None,
         keys: Some(KeyDecoder::AppKit),
     }
@@ -151,7 +158,7 @@ fn uikit() -> Profile {
         kinds: &[PointerKind::Touch, PEN],
         names_devices: false,
         capabilities: input_availability::ios(),
-        haptics: HapticsTable::UiKit,
+        haptics: Some(HapticsTable::UiKit),
         drag: None,
         keys: None,
     }
@@ -167,7 +174,7 @@ fn android() -> Profile {
             touchpad_gestures: true,
             drag_source: true,
         }),
-        haptics: HapticsTable::Android,
+        haptics: Some(HapticsTable::Android),
         drag: Some(input_availability::DESKTOP_DRAG_START),
         keys: Some(KeyDecoder::Android),
     }
@@ -202,7 +209,7 @@ fn web() -> Profile {
         kinds: ALL_KINDS,
         names_devices: false,
         capabilities: input_availability::web(false),
-        haptics: HapticsTable::Web,
+        haptics: Some(HapticsTable::Web),
         drag: Some(input_availability::WEB_DRAG_START),
         keys: Some(KeyDecoder::Web),
     }
@@ -215,9 +222,28 @@ fn x11() -> Profile {
         kinds: &[PointerKind::Mouse],
         names_devices: false,
         capabilities: input_availability::winit(WinitSession::X11),
-        haptics: HapticsTable::Web,
+        haptics: Some(HapticsTable::Web),
         drag: None,
         keys: None,
+    }
+}
+
+/// A Wayland window on a compositor with `tablet-v2` and
+/// `pointer-gestures`: its seats name every device, its stamps are the
+/// compositor's milliseconds, its keys come through XKB's keysyms, and a
+/// desktop window has no haptic actuator and starts no drag yet.
+fn wayland() -> Profile {
+    Profile {
+        clock: ClockShape::Tick,
+        kinds: ALL_KINDS,
+        names_devices: true,
+        capabilities: input_availability::wayland(WaylandInputGlobals {
+            tablet: true,
+            pointer_gestures: true,
+        }),
+        haptics: None,
+        drag: None,
+        keys: Some(KeyDecoder::Xkb),
     }
 }
 
@@ -491,6 +517,27 @@ impl SharedAssembly {
             ClockShape::Epoch => {
                 ReadingTime::epoch(EventTime::from_nanos(EPOCH.as_nanos() + nanos))
             }
+            ClockShape::Tick => {
+                // The Wayland dispatch's own rule: the stamp read against the
+                // monotonic clock on arrival.
+                let observed_ms = nanos / 1_000_000;
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "the stamp is the low 32 bits of the uptime"
+                )]
+                let tick = observed_ms as u32;
+                let observed_ms = if self.faulty(Fault::TickOnly) {
+                    u64::from(tick)
+                } else {
+                    observed_ms
+                };
+                WireTime::stamped(
+                    tick,
+                    observed_ms,
+                    EventTime::from_nanos(EPOCH.as_nanos() + nanos),
+                )
+                .reading_time()
+            }
         };
         if self.faulty(Fault::StampEachReading) {
             let clock = self.contacts.clock();
@@ -593,6 +640,8 @@ impl SharedAssembly {
         let key = match (decoder, step.key) {
             (KeyDecoder::Win32, StepKey::Menu) => vk_to_key(0x5D, step.shift),
             (KeyDecoder::Win32, StepKey::F10) => vk_to_key(0x79, step.shift),
+            (KeyDecoder::Xkb, StepKey::Menu) => key_of(xkb_keysym::MENU, ""),
+            (KeyDecoder::Xkb, StepKey::F10) => key_of(xkb_keysym::F10, ""),
             (KeyDecoder::AppKit, StepKey::Menu) => keycode_to_key(kvk::PC_MENU)?,
             (KeyDecoder::AppKit, StepKey::F10) => keycode_to_key(kvk::F10)?,
             _ => return None,
@@ -762,7 +811,7 @@ fn native_clock(shape: ClockShape) -> NativeClock {
                 frequency: NonZeroU64::new(QPC_HZ).expect("nonzero"),
             }),
         ),
-        ClockShape::UptimeSeconds => NativeClock::new(EPOCH, Duration::ZERO, None),
+        ClockShape::UptimeSeconds | ClockShape::Tick => NativeClock::new(EPOCH, Duration::ZERO, None),
         ClockShape::Epoch => NativeClock::epoch_only(),
     }
 }
@@ -790,6 +839,8 @@ impl BackendUnderTest for SharedAssembly {
                 .wrapping_after(Duration::from_millis(1 << 32)),
             ClockShape::UptimeSeconds => ClockProfile::coarse(Duration::from_micros(1)),
             ClockShape::Epoch => ClockProfile::coarse(Duration::from_nanos(1)),
+            ClockShape::Tick => ClockProfile::coarse(Duration::from_millis(1))
+                .wrapping_after(Duration::from_millis(1 << 32)),
         }
     }
 
@@ -808,8 +859,9 @@ impl BackendUnderTest for SharedAssembly {
     }
 
     fn haptics(&mut self) -> Option<Arc<dyn PlatformHaptics>> {
+        let table = self.profile.haptics?;
         Some(Arc::new(TableHaptics {
-            table: self.profile.haptics,
+            table,
             fault: self.fault,
         }))
     }
@@ -888,7 +940,7 @@ impl Headless {
             names_devices: true,
             capabilities,
             // Unused: the headless rows play on the window's own actuator.
-            haptics: HapticsTable::Win32 { pen: false },
+            haptics: Some(HapticsTable::Win32 { pen: false }),
             drag: None,
             keys: None,
         };
@@ -1078,6 +1130,63 @@ fn web_decoders_conform() {
     assert_backend_conforms(&mut SharedAssembly::new(web()));
 }
 
+fn wayland_decoders_conform() {
+    assert_backend_conforms(&mut SharedAssembly::new(wayland()));
+}
+
+/// The native Wayland backend on the compositor `WAYLAND_DISPLAY` names: a
+/// real window's capability snapshot, which the compositor's globals decide,
+/// with the shared decoder standing in for the seat translation in front of
+/// it (`input::linux::wayland::wire`, tested beside it and against a Weston
+/// seat by `wayland_input`). Skipped where no compositor answers, and failed
+/// there when `FLUI_REQUIRE_WAYLAND` is set.
+#[cfg(all(target_os = "linux", feature = "wayland"))]
+fn wayland_window_conforms() {
+    if std::env::var_os("WAYLAND_DISPLAY").is_none_or(|name| name.is_empty()) {
+        assert!(
+            std::env::var_os("FLUI_REQUIRE_WAYLAND").is_none(),
+            "FLUI_REQUIRE_WAYLAND is set and WAYLAND_DISPLAY names no compositor"
+        );
+        eprintln!("wayland window: skipped, WAYLAND_DISPLAY names no compositor");
+        return;
+    }
+    let platform = flui_native::WaylandPlatform::new().expect("the compositor answers");
+    let handler = flui_testing::window_handler::RecordingWindowHandler::new();
+    let window = platform
+        .open_window(WindowOptions::default(), handler.clone())
+        .expect("a Wayland window");
+    let capabilities = handler
+        .inputs()
+        .into_iter()
+        .find_map(|input| match input {
+            PlatformInput::Capabilities(capabilities) => Some(capabilities),
+            _ => None,
+        })
+        .expect("the snapshot is the handler's first input");
+    assert_eq!(
+        capabilities.precise_scroll(),
+        Availability::Native,
+        "a Wayland window scrolls precisely"
+    );
+    assert_eq!(
+        window.haptics().map(|haptics| haptics.capabilities(None)),
+        Some(HapticCapabilities::NONE),
+        "a desktop compositor has no actuator"
+    );
+    // A compositor without `tablet-v2` reports no pen.
+    let kinds: &'static [PointerKind] = if capabilities.pen() == Availability::Unavailable {
+        &[PointerKind::Touch, PointerKind::Mouse]
+    } else {
+        ALL_KINDS
+    };
+    assert_backend_conforms(&mut SharedAssembly::new(Profile {
+        capabilities,
+        kinds,
+        ..wayland()
+    }));
+    flui_testing::window_commands::AdmitAndApply::close_for_cleanup(&*window);
+}
+
 fn x11_decoders_conform() {
     assert_backend_conforms(&mut SharedAssembly::new(x11()));
 }
@@ -1109,6 +1218,9 @@ fn every_backend_passes_the_conformance_table() {
             ("android without FluiView", android_without_view_conforms),
             ("web", web_decoders_conform),
             ("x11", x11_decoders_conform),
+            ("wayland", wayland_decoders_conform),
+            #[cfg(all(target_os = "linux", feature = "wayland"))]
+            ("wayland window", wayland_window_conforms),
             ("uikit with OS drag", uikit_os_drag_conforms),
         ],
     );
@@ -1141,6 +1253,8 @@ const BROKEN: &[BrokenRow] = &[
     ),
     ("event_times_never_go_back", Fault::Unfloored, web),
     ("the_coarse_clock_wraps_forward", Fault::TickOnly, win32),
+    // Wayland's stamp wraps too, read through its own rule.
+    ("the_coarse_clock_wraps_forward", Fault::TickOnly, wayland),
     (
         "precise_readings_are_stamped_from_the_counter",
         Fault::CoarseOnly,
@@ -1247,6 +1361,12 @@ const BROKEN: &[BrokenRow] = &[
         "menu_keys_arrive_as_the_bindings_name_them",
         Fault::MenuKeyUnidentified,
         win32,
+    ),
+    // XKB's keysym table names the menu key too.
+    (
+        "menu_keys_arrive_as_the_bindings_name_them",
+        Fault::MenuKeyUnidentified,
+        wayland,
     ),
     (
         "a_key_during_composition_is_the_input_methods",
