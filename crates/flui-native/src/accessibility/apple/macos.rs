@@ -221,7 +221,7 @@ impl crate::host::Accessibility<crate::owner::apple::macos::ContentViewRef> for 
         // SAFETY: the window makes its part as it opens, on the main thread,
         // after installing `window.view` as its content view; the view lives
         // until the window's own teardown, which detaches the bridge (unhooking
-        // the subclass) before it releases the window and with it the view.
+        // the subclass) before it releases the window and then the view.
         Arc::new(unsafe { Self::new(window.view.cast::<std::ffi::c_void>()) })
     }
 }

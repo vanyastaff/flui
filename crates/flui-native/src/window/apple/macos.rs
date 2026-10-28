@@ -42,6 +42,7 @@ use std::sync::{
 };
 
 use cursor_icon::CursorIcon;
+use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
 use objc2::{MainThreadMarker, msg_send};
 use objc2::{class, sel};
@@ -120,9 +121,10 @@ pub struct MacOSWindow {
     /// Fixed for the window's lifetime and read from here, never from
     /// `-[NSWindow contentView]`: a backdrop material makes an
     /// `NSVisualEffectView` the content view and re-parents this view inside
-    /// it. Not retained by the wrapper: the window's view hierarchy holds it,
-    /// and a path that detaches it retains it across the detach.
-    view: ObjcId,
+    /// it. The wrapper owns it: it outlives every re-parenting, and is
+    /// released after the window's [`Drop`] has detached what is hooked to
+    /// it and released the NSWindow.
+    view: Retained<AnyObject>,
 
     /// Window state
     state: Mutex<MacOSWindowState>,
@@ -256,6 +258,11 @@ fn defers_first_reveal(options: &WindowOptions) -> bool {
 }
 
 impl MacOSWindow {
+    /// The window's FLUI view, as the address AppKit messages take.
+    fn view_ptr(&self) -> ObjcId {
+        Retained::as_ptr(&self.view).cast_mut()
+    }
+
     /// Clear the deferred-first-reveal flag, returning whether it was set:
     /// the one call that decides which caller performs the reveal. The state
     /// lock is released before the caller sends any AppKit message, so it is
@@ -546,16 +553,16 @@ impl MacOSWindow {
             // What the features beside the window make their part of it from.
             let closed = Arc::new(AtomicBool::new(false));
             let this = ContentViewRef {
-                view: content_view,
+                view: Retained::as_ptr(&content_view).cast_mut(),
                 closed: Arc::clone(&closed),
                 owner,
                 owner_is_main,
             };
-            let _: () = msg_send![ns_window, setContentView: content_view];
+            let _: () = msg_send![ns_window, setContentView: &*content_view];
 
             // Made once the content view is installed: the bridge subclasses
             // it for VoiceOver, on the main thread, and the window's teardown
-            // detaches it before releasing the window and with it the view.
+            // detaches it before releasing the window and then the view.
             let facets = windows.positions.for_window(&this);
 
             let window = Rc::new(Self {
@@ -608,10 +615,10 @@ impl MacOSWindow {
                 .publish_through_owner(&window, Self::read_state);
 
             // Enable mouse tracking for mouse moved events
-            content_view::enable_mouse_tracking(content_view);
+            content_view::enable_mouse_tracking(window.view_ptr());
 
             // Make content view first responder to receive keyboard events
-            let _: Bool = msg_send![ns_window, makeFirstResponder: content_view];
+            let _: Bool = msg_send![ns_window, makeFirstResponder: &*window.view];
 
             // Set window delegate for lifecycle events
             let delegate = create_window_delegate(Rc::downgrade(&window));
@@ -723,16 +730,10 @@ impl MacOSWindow {
         );
         unsafe {
             // SAFETY: per the function's contract, the caller is on the owner
-            // lane (checked by the assertion above) and `ns_window` is live,
-            // so its view hierarchy, which holds `self.view`, is too. The view
-            // is NIL-checked before messaging.
-            let content_view = self.view;
-            if content_view == NIL {
-                tracing::trace!(
-                    deferred,
-                    "request_redraw: window has no content view; request dropped"
-                );
-            } else {
+            // lane (checked by the assertion above) and `ns_window` is live;
+            // the window holds `self.view`.
+            let content_view = self.view_ptr();
+            {
                 let _: () = msg_send![content_view, setNeedsDisplay: YES];
                 // AppKit owns the display pass that turns this into a
                 // `drawRect:` — nothing in this backend can observe it, so the
@@ -1272,8 +1273,8 @@ impl PlatformWindow for MacOSWindow {
     fn surface_target(&self) -> Arc<dyn SurfaceTarget> {
         Arc::new(MacOSSurface {
             // SAFETY: `self.view` is the window's content view, which the
-            // window's view hierarchy holds while the window lives.
-            view: unsafe { super::MainRetainedView::retain(self.view) },
+            // window holds while it lives.
+            view: unsafe { super::MainRetainedView::retain(self.view_ptr()) },
             closed: Arc::clone(&self.closed),
             retirement: self.delivery.retirement(),
         })
@@ -1546,6 +1547,8 @@ impl Drop for MacOSWindow {
                 let _: () = msg_send![ns_window, release];
             }
         });
+        // The wrapper's own reference to its view goes as `self.view` drops,
+        // after this body: once nothing is hooked to the view any more.
     }
 }
 

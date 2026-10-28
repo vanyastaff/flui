@@ -32,6 +32,7 @@ use std::sync::Weak;
 
 use flui_foundation::geometry::Bounds;
 use flui_platform::{PlatformInput, WindowAppearance};
+use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, AnyProtocol, Bool, ClassBuilder, Sel};
 use objc2::{ClassType, msg_send, sel};
 use objc2_app_kit::{
@@ -167,12 +168,14 @@ struct ViewContext {
 
 /// Create the content view of a window whose callbacks are `callbacks`, with
 /// the parts `hooks` make: it becomes the window's content view and first
-/// responder, and receives its keyboard, mouse and scroll events.
+/// responder, and receives its keyboard, mouse and scroll events. The caller
+/// owns the view; dropping the last reference frees it, and its context with
+/// it.
 pub(crate) fn create(
     frame: NSRect,
     delivery: Weak<WindowDelivery>,
     hooks: ViewHooks,
-) -> *mut AnyObject {
+) -> Retained<AnyObject> {
     // SAFETY: FLUIContentView is registered before alloc/init; the boxed
     // ViewContext pointer is stored in the view's ivar and released in
     // `dealloc`, so it lives exactly as long as the view.
@@ -198,7 +201,9 @@ pub(crate) fn create(
         let slot: *mut *mut std::ffi::c_void = ivar.load_ptr(&*view);
         *slot = context;
 
-        view
+        // SAFETY: `alloc`/`initWithFrame:` hand back a +1 reference, which
+        // the `Retained` takes over.
+        Retained::from_raw(view).expect("BUG: initWithFrame: answers the view it was sent to")
     }
 }
 
