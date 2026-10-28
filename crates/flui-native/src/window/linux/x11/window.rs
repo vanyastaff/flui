@@ -381,9 +381,11 @@ impl X11Window {
             let mut record = self.record.borrow_mut();
             let focus_changed =
                 std::mem::replace(&mut record.focus_told, state.focused) != state.focused;
+            // A change of a size known before: the first one an `Expose`
+            // paints.
             let content = state.metrics.map(WindowMetrics::physical);
-            let resized = content.is_some() && record.content != content;
-            if resized {
+            let resized = record.content.is_some() && content.is_some() && record.content != content;
+            if content.is_some() {
                 record.content = content;
             }
             (focus_changed, resized)

@@ -92,3 +92,23 @@ impl HostPlatform<X11> {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::any::TypeId;
+
+    use super::X11;
+    use crate::accessibility::linux::UnixAccessibility;
+    use crate::host::Host;
+
+    /// Every X11 window hands out the AT-SPI bridge, with no feature of its
+    /// own (ADR-0151 §15): the table names the adapter, not `Absent`, so a
+    /// window a screen reader cannot see does not compile into the host.
+    #[test]
+    fn x11_windows_hand_out_the_at_spi_bridge() {
+        assert_eq!(
+            TypeId::of::<<X11 as Host>::Accessibility>(),
+            TypeId::of::<UnixAccessibility>()
+        );
+    }
+}

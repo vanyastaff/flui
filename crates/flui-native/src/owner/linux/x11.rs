@@ -636,6 +636,9 @@ impl host::Loop for X11Loop {
         }
         tracing::info!("Running the X11 platform");
         self.signal.bind_owner();
+        // The delivery holds the platform and the hooks weakly: they live in
+        // this frame until the loop ends, declared before the guard so they
+        // outlive it and the handler still hears the quit.
         let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::with_signal(
             Arc::clone(&platform),
             Arc::clone(&self.signal),
@@ -657,7 +660,7 @@ impl host::Loop for X11Loop {
         *self.preferences.lock() = Some(Arc::downgrade(&preferences));
         guard.preferences = Some(preferences);
         self.app
-            .ready(OwnerPlatform::new(Arc::clone(&platform), hooks))
+            .ready(OwnerPlatform::new(Arc::clone(&platform), Arc::clone(&hooks)))
             .map_err(PlatformError::bootstrap)?;
         self.signal
             .start()

@@ -545,6 +545,15 @@ name = "appkit_window"
 path = "tests/appkit_window.rs"
 harness = false
 
+# The native X11 host's window against the window conformance checks, and its
+# loop: its own harness, because it starts an X server and a window manager of
+# its own before anything connects.
+[[test]]
+name = "x11_window"
+path = "tests/x11_window.rs"
+harness = false
+required-features = ["x11"]
+
 [[test]]
 name = "wasm32"
 path = "tests/wasm32.rs"
