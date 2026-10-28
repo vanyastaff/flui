@@ -108,14 +108,16 @@ pub(super) fn clone_routes<'a, R: Clone + 'a>(
     std::mem::take(&mut cloned.0)
 }
 
+/// The printed path of each of `routes`, in order: how `Debug` shows a stack.
+pub(super) fn paths<'a, R: Routable + 'a>(routes: impl Iterator<Item = &'a R>) -> Vec<String> {
+    routes.map(|route| route.to_path().to_string()).collect()
+}
+
 impl<R: Routable> fmt::Debug for Router<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Router")
             .field("route_type", &type_name::<R>())
-            .field(
-                "initial",
-                &self.initial.last().map(|route| route.to_path().to_string()),
-            )
+            .field("initial", &paths(self.initial.iter()))
             .finish_non_exhaustive()
     }
 }
@@ -159,6 +161,12 @@ impl<R: Routable> Router<R> {
     ///
     /// Every route becomes a page, bottom to top, without a transition; the
     /// top is the location the router opens at.
+    ///
+    /// The cost grows with the stack: the first frame builds all `N` pages,
+    /// and every covered page then stays mounted with its state, since a
+    /// router's pages keep their state while covered
+    /// ([`PageRoute::maintain_state`]). An application that saves deep
+    /// stacks may trim what it restores.
     ///
     /// # Errors
     ///
@@ -275,8 +283,9 @@ pub struct RouterState<R: Routable> {
 
 impl<R: Routable> fmt::Debug for RouterState<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let routes = self.shared.routes();
         f.debug_struct("RouterState")
-            .field("location", &self.shared.location().map(|p| p.to_string()))
+            .field("stack", &paths(routes.0.iter().map(|route| &**route)))
             .finish_non_exhaustive()
     }
 }
@@ -304,10 +313,10 @@ impl<R: Routable> RouterState<R> {
             let mut route = Terminal::new(route);
             let page = self.shared.page_route(&route);
             let id = self.shared.navigator.seed_page(page);
-            self.shared.stack.borrow_mut().push(RouterEntry {
-                id,
-                route: route.take_value(),
-            });
+            self.shared
+                .stack
+                .borrow_mut()
+                .push(RouterEntry::new(id, route.take_value()));
         }
     }
 }
@@ -358,7 +367,19 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
 /// One page on the router's stack.
 pub(super) struct RouterEntry<R> {
     pub(super) id: RouteId,
-    pub(super) route: R,
+    /// Shared so a reader can hold the route past the stack's borrow and run
+    /// user code on it (`Clone`, `to_path`) there: see
+    /// [`RouterShared::routes`].
+    pub(super) route: Rc<R>,
+}
+
+impl<R> RouterEntry<R> {
+    pub(super) fn new(id: RouteId, route: R) -> Self {
+        Self {
+            id,
+            route: Rc::new(route),
+        }
+    }
 }
 
 /// Outgoing route values are retired without a stack borrow. An earlier
@@ -449,12 +470,23 @@ impl<R: Routable> RouterShared<R> {
         page
     }
 
+    /// The routes on the stack, bottom to top, taken under a borrow that is
+    /// released before this returns: a route's `Clone` or `to_path` run on
+    /// them may drive this router. Retired without unwind-dropping a route.
+    pub(super) fn routes(&self) -> RouterRetiredValues<Rc<R>> {
+        RouterRetiredValues(
+            self.stack
+                .borrow()
+                .iter()
+                .map(|entry| Rc::clone(&entry.route))
+                .collect(),
+        )
+    }
+
     /// The top route's path; `None` only before the first page is seeded.
     pub(super) fn location(&self) -> Option<RoutePath> {
-        self.stack
-            .borrow()
-            .last()
-            .map(|entry| entry.route.to_path())
+        let routes = self.routes();
+        routes.0.last().map(|route| route.to_path())
     }
 
     /// Drop the page `id` names, if it is one of this router's.

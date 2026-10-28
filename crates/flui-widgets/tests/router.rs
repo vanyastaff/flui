@@ -19,8 +19,8 @@ use flui_animation::Vsync;
 use flui_painting::styling::Color;
 use flui_widgets::prelude::*;
 use flui_widgets::{
-    ColoredBox, GestureDetector, NavigatorHandle, NavigatorObserver, PopupRoute, RouteId,
-    RouteParseError, RouterError, Text, VsyncScope,
+    ColoredBox, GestureDetector, NavigatorHandle, NavigatorObserver, PopupRoute, RouteAnimation,
+    RouteId, RouteParseError, RouterError, Text, VsyncScope,
 };
 
 const FRAME: Duration = Duration::from_millis(50);
@@ -186,7 +186,7 @@ fn pages(home: &Probe) -> impl Fn(&AppRoute, &dyn BuildContext) -> BoxedView + '
     }
 }
 
-fn mount(router: Router<AppRoute>) -> LaidOut {
+fn mount<R: Routable>(router: Router<R>) -> LaidOut {
     let vsync = Vsync::new();
     let mut laid = lay_out_animated(
         VsyncScope::new(vsync.clone(), router),
@@ -1486,6 +1486,207 @@ pub(crate) fn empty_stack_is_refused() {
         Router::<AppRoute>::from_stack(Vec::new(), pages(&home)),
         Err(RouterError::EmptyStack)
     ));
+}
+
+/// A restored stack opens on its top with no entrance transition, and the
+/// first frame builds every page on it.
+pub(crate) fn from_stack_opens_without_a_transition() {
+    let stack = vec![
+        AppRoute::Home,
+        AppRoute::Note { id: 5 },
+        AppRoute::Tag { name: "x".into() },
+    ];
+    let built = Rc::new(RefCell::new(Vec::<AppRoute>::new()));
+    let entrances = Rc::new(RefCell::new(Vec::<f64>::new()));
+    let pages = {
+        let built = Rc::clone(&built);
+        move |route: &AppRoute, _cx: &dyn BuildContext| {
+            built.borrow_mut().push(route.clone());
+            text(route.to_path().to_string())
+        }
+    };
+    let transitions = {
+        let entrances = Rc::clone(&entrances);
+        move |_cx: &dyn BuildContext,
+              animation: &RouteAnimation,
+              _secondary: &RouteAnimation,
+              child: BoxedView| {
+            entrances.borrow_mut().push(animation.value());
+            child
+        }
+    };
+    let router = Router::from_stack(stack.clone(), pages)
+        .expect("a non-empty stack")
+        .transitions(transitions);
+    let vsync = Vsync::new();
+    let laid = lay_out_animated(
+        VsyncScope::new(vsync.clone(), router),
+        tight(400.0, 400.0),
+        vsync,
+    );
+
+    assert!(
+        laid_out_text(&laid, "/tag/x"),
+        "the top is laid out on the first frame"
+    );
+    let entrances = entrances.borrow();
+    assert!(!entrances.is_empty(), "the pages were built");
+    assert!(
+        entrances.iter().all(|value| *value == 1.0),
+        "no restored page runs an entrance: {entrances:?}"
+    );
+    for route in &stack {
+        assert!(
+            built.borrow().contains(route),
+            "the first frame builds {route:?}"
+        );
+    }
+}
+
+/// `stack()` lists pages only: a popup above the top page is not a route.
+pub(crate) fn stack_leaves_out_popups() {
+    let (mut laid, home) = two_screen_app();
+    let router = home.handle();
+    router
+        .push(AppRoute::Note { id: 1 })
+        .expect("mounted router");
+    settle(&mut laid);
+    let _result = home
+        .navigator()
+        .push(PopupRoute::<()>::new(|_cx, _a, _s| text("Dialog".into())));
+    settle(&mut laid);
+
+    assert!(laid_out_text(&laid, "Dialog"));
+    assert_eq!(
+        router.stack(),
+        vec![AppRoute::Home, AppRoute::Note { id: 1 }]
+    );
+}
+
+/// `Debug` on a router and on its handle prints every route on the stack.
+pub(crate) fn debug_prints_the_whole_stack() {
+    let probe = Probe::default();
+    let stack = vec![
+        AppRoute::Home,
+        AppRoute::Note { id: 5 },
+        AppRoute::Tag { name: "x".into() },
+    ];
+    let printed = r#"["/", "/note/5", "/tag/x"]"#;
+    let router = Router::from_stack(stack, recording_pages(&probe)).expect("a non-empty stack");
+    let view = format!("{router:?}");
+    assert!(view.contains(printed), "{view}");
+
+    let _laid = mount(router);
+    let handle = format!("{:?}", probe.handle());
+    assert!(handle.contains(printed), "{handle}");
+}
+
+/// A route whose `Clone`, once armed, pops the router it is on.
+struct PoppingRoute {
+    index: u32,
+    router: Rc<RefCell<Option<RouterHandle<PoppingRoute>>>>,
+    armed: Rc<Cell<bool>>,
+}
+
+impl Clone for PoppingRoute {
+    fn clone(&self) -> Self {
+        if self.armed.replace(false) {
+            let router = self.router.borrow().clone().expect("the page was mounted");
+            assert_eq!(router.pop(), Ok(true), "the clone pops the top page");
+        }
+        Self {
+            index: self.index,
+            router: Rc::clone(&self.router),
+            armed: Rc::clone(&self.armed),
+        }
+    }
+}
+
+impl PartialEq for PoppingRoute {
+    fn eq(&self, other: &Self) -> bool {
+        self.index == other.index
+    }
+}
+
+impl Routable for PoppingRoute {
+    fn to_path(&self) -> RoutePath {
+        RoutePath::root().join(self.index)
+    }
+
+    fn from_path(path: &RoutePath) -> Result<Self, RouteParseError> {
+        Err(RouteParseError::NoMatch { path: path.clone() })
+    }
+}
+
+/// A page that keeps its `Router<PoppingRoute>` handle in `router`.
+#[derive(Clone)]
+struct HandleKeeper {
+    router: Rc<RefCell<Option<RouterHandle<PoppingRoute>>>>,
+}
+
+impl View for HandleKeeper {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+impl StatefulView for HandleKeeper {
+    type State = HandleKeeperState;
+    fn create_state(&self) -> HandleKeeperState {
+        HandleKeeperState {
+            router: Rc::clone(&self.router),
+        }
+    }
+}
+
+struct HandleKeeperState {
+    router: Rc<RefCell<Option<RouterHandle<PoppingRoute>>>>,
+}
+
+impl ViewState<HandleKeeper> for HandleKeeperState {
+    fn init_state(&mut self, cx: &dyn LifecycleContext) {
+        *self.router.borrow_mut() =
+            Some(Router::<PoppingRoute>::handle(cx).expect("a Router<PoppingRoute> above"));
+    }
+
+    fn build(&self, _view: &HandleKeeper, _cx: &dyn BuildContext) -> impl IntoView {
+        Text::new("page")
+    }
+}
+
+/// `stack()` and `current()` clone routes after releasing the router's
+/// stack, so a route's `Clone` may drive the router; each reads the stack as
+/// it was when called.
+pub(crate) fn a_route_clone_may_drive_its_router() {
+    let router = Rc::new(RefCell::new(None));
+    let armed = Rc::new(Cell::new(false));
+    let route = |index| PoppingRoute {
+        index,
+        router: Rc::clone(&router),
+        armed: Rc::clone(&armed),
+    };
+    let keeper = HandleKeeper {
+        router: Rc::clone(&router),
+    };
+    let restored = Router::from_stack(vec![route(0), route(1), route(2)], move |_route, _cx| {
+        keeper.clone().boxed()
+    })
+    .expect("a non-empty stack");
+    let mut laid = mount(restored);
+    settle(&mut laid);
+    let handle = router.borrow().clone().expect("the page was mounted");
+    let indices = |routes: Vec<PoppingRoute>| routes.iter().map(|r| r.index).collect::<Vec<_>>();
+
+    armed.set(true);
+    assert_eq!(indices(handle.stack()), [0, 1, 2], "the stack as read");
+    assert!(!armed.get(), "a clone popped the top page");
+    assert_eq!(indices(handle.stack()), [0, 1]);
+
+    armed.set(true);
+    assert_eq!(handle.current().index, 1, "the top as read");
+    assert!(!armed.get(), "the clone popped the top page");
+    assert_eq!(indices(handle.stack()), [0]);
+    settle(&mut laid);
 }
 
 // ============================================================================
