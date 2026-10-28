@@ -960,7 +960,12 @@ trait depends on `flui-platform` instead.
   deadline that came due is offered to the windows as frame requests once
   (`wait::offer_now`); one already offered never bounds the wait again, so a
   window that declines its frames, or one the compositor does not draw, leaves
-  the loop idle. The window (`window::linux::wayland`) sizes its surface
+  the loop idle. A turn whose dispatch recorded events ends before it would
+  block, so they are applied first, and a flush the socket cut short makes the
+  wait watch the socket for writing (`wait::before_poll`). A frame callback a
+  skipped present never committed is given up after `frame::CALLBACK_GRACE`.
+  The host and the display source connect to the one socket `WAYLAND_DISPLAY`
+  names. The window (`window::linux::wayland`) sizes its surface
   through `wp_viewport`, so a buffer of any size is valid during a resize and
   each configure takes effect with a commit; its capabilities follow the
   compositor's `wm_capabilities`. `current_platform` picks the winit host

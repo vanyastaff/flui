@@ -188,12 +188,41 @@ fn hack_passes(packages: &str) -> [Cmd; 2] {
 /// test that is a test failing with `ECONNRESET` when another test's process
 /// exits. The screen is `xvfb-run`'s default, which the X11 tests lay their
 /// windows out on.
+/// `WAYLAND_DISPLAY` is cleared, so the winit tests take Xvfb's X11 display
+/// even where a compositor runs beside it; the native Wayland host's tests
+/// run apart ([`wayland_suite_linux`]).
 fn platform_suite_linux() -> Cmd {
     Cmd::new("xvfb-run")
         .args(["-a", "-s", "-screen 0 1280x1024x24 -noreset"])
         .args(["cargo", "nextest", "run", "-p", "flui-native"])
         .args(["--locked", "--all-features", "--no-fail-fast"])
         .env("FLUI_HEADLESS", "1")
+        .env("WAYLAND_DISPLAY", "")
+}
+
+/// The native Wayland host's tests, against the compositor `WAYLAND_DISPLAY`
+/// names. CI starts a headless Weston and sets `FLUI_REQUIRE_WAYLAND`, so a
+/// missing compositor fails them; elsewhere they skip themselves without one.
+const WAYLAND_TESTS: &str = "test(/^wayland_window::/)";
+
+/// [`WAYLAND_TESTS`] with every feature, as the X11 suite builds them.
+fn wayland_suite_linux() -> Cmd {
+    Cmd::cargo(["nextest", "run", "-p", "flui-native"]).args([
+        "--locked",
+        "--all-features",
+        "--no-fail-fast",
+        "-E",
+        WAYLAND_TESTS,
+    ])
+}
+
+/// The X11 and headless suite, which leaves the Wayland tests to their own
+/// run.
+fn platform_suite_linux_filtered() -> Cmd {
+    platform_suite_linux().args([
+        "-E".to_owned(),
+        format!("not (group(trybuild) | {WAYLAND_TESTS})"),
+    ])
 }
 
 /// Portable external compiler checks; no native window or event loop runs.
@@ -212,18 +241,21 @@ fn platform_compiler_tests() -> Cmd {
 /// flui-native's suite on `host`: under Xvfb on Linux, directly on Windows
 /// (native Windows needs neither), skipped elsewhere. Compiler checks run
 /// separately in the nested stage.
-fn platform_suite(host: Host) -> Step {
+fn platform_suite(host: Host) -> Vec<Step> {
     match host {
-        Host::Linux => platform_suite_linux()
-            .args(["-E", "not (group(trybuild))"])
-            .into(),
-        Host::Windows => Cmd::cargo(["nextest", "run", "-p", "flui-native"])
-            .args(["--locked", "--all-features", "--no-fail-fast", "-E", "not (group(trybuild))"])
-            .into(),
-        Host::MacOs | Host::Other => Step::Note(
+        Host::Linux => vec![
+            platform_suite_linux_filtered().into(),
+            wayland_suite_linux().into(),
+        ],
+        Host::Windows => vec![
+            Cmd::cargo(["nextest", "run", "-p", "flui-native"])
+                .args(["--locked", "--all-features", "--no-fail-fast", "-E", "not (group(trybuild))"])
+                .into(),
+        ],
+        Host::MacOs | Host::Other => vec![Step::Note(
             "Skipping native flui-native tests on this host: the CI-mirroring invocation needs xvfb-run (Linux-only) for the winit backend X11-dependent tests; see docs/testing.md."
                 .to_owned(),
-        ),
+        )],
     }
 }
 
@@ -253,9 +285,8 @@ fn native_platform_plan(host: Host) -> Vec<Step> {
             })
             .collect(),
         Host::Linux => vec![
-            platform_suite_linux()
-                .args(["-E", "not (group(trybuild))"])
-                .into(),
+            platform_suite_linux_filtered().into(),
+            wayland_suite_linux().into(),
         ],
         Host::Other => vec![Step::Note("platform-test: unsupported host".to_owned())],
     }
@@ -347,20 +378,17 @@ enum Stages {
 fn test_plan(host: Host, stages: Stages) -> Vec<Step> {
     let base = || scoped_nextest(host, &format!("not ({NESTED})"));
     let nested = scoped_nextest(host, NESTED);
+    let with_platform = |rest: Vec<Step>| {
+        let mut steps = vec![base().into()];
+        steps.extend(platform_suite(host));
+        steps.extend(rest);
+        steps
+    };
     let mut steps = match stages {
-        Stages::All => vec![
-            base().into(),
-            platform_suite(host),
-            nested.into(),
-            platform_compiler_tests().into(),
-        ],
-        Stages::Fast => vec![
-            base().into(),
-            platform_suite(host),
-            Step::Note(
+        Stages::All => with_platform(vec![nested.into(), platform_compiler_tests().into()]),
+        Stages::Fast => with_platform(vec![Step::Note(
                 "test --fast: SKIPPED the nested tests (trybuild compile_fail suites, flui-cli cli_create::generated_* and ios_cargo_artifact_fixtures, flui::facade_consumer; groups in .config/nextest.toml). Run them with: cargo xtask test --nested".to_owned(),
-            ),
-        ],
+            )]),
         Stages::Nested => vec![nested.into(), platform_compiler_tests().into()],
         Stages::NestedGroup(group) => {
             let mut steps = vec![scoped_nextest(host, group.filterset()).into()];
@@ -369,14 +397,12 @@ fn test_plan(host: Host, stages: Stages) -> Vec<Step> {
             }
             steps
         }
-        Stages::NoTrybuild => vec![
-            base().into(),
-            platform_suite(host),
+        Stages::NoTrybuild => with_platform(vec![
             scoped_nextest(host, "group(nested-cargo)").into(),
             Step::Note(
                 "test --no-trybuild: SKIPPED the trybuild suites. Run them with: cargo xtask test --nested --nested-group trybuild".to_owned(),
             ),
-        ],
+        ]),
     };
     if matches!(stages, Stages::All | Stages::Fast | Stages::NoTrybuild) {
         steps.insert(0, reload_fixture_build().into());
@@ -1050,6 +1076,12 @@ mod tests {
         steps.iter().map(ToString::to_string).collect()
     }
 
+    /// flui-native under Xvfb, with the Wayland tests left to their own run.
+    const LINUX_PLATFORM_SUITE: &str = "$ FLUI_HEADLESS=1 WAYLAND_DISPLAY='' xvfb-run -a -s '-screen 0 1280x1024x24 -noreset' cargo nextest run -p flui-native --locked --all-features --no-fail-fast -E 'not (group(trybuild) | test(/^wayland_window::/))'";
+
+    /// The native Wayland host's tests, against the compositor CI starts.
+    const LINUX_WAYLAND_SUITE: &str = "$ cargo nextest run -p flui-native --locked --all-features --no-fail-fast -E 'test(/^wayland_window::/)'";
+
     const SCOPE: &str = "--workspace --exclude flui-native --locked --no-fail-fast --lib --bins --tests --features flui/material,flui/cupertino,flui/native,flui-devtools/agent";
 
     fn native_host_suites_only_build_their_packages() {
@@ -1069,9 +1101,7 @@ mod tests {
         );
         assert_eq!(
             lines(&native_platform_plan(Host::Linux)),
-            [
-                "$ FLUI_HEADLESS=1 xvfb-run -a -s '-screen 0 1280x1024x24 -noreset' cargo nextest run -p flui-native --locked --all-features --no-fail-fast -E 'not (group(trybuild))'"
-            ]
+            [LINUX_PLATFORM_SUITE, LINUX_WAYLAND_SUITE]
         );
         assert_eq!(
             lines(&cli_test_plan()),
@@ -1130,10 +1160,14 @@ mod tests {
             lines(&test_plan(Host::Linux, Stages::All)),
             [
                 "$ cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked".to_owned(),
-                format!("$ cargo nextest run {SCOPE} -E 'not (group(nested-cargo) | group(trybuild))'"),
-                "$ FLUI_HEADLESS=1 xvfb-run -a -s '-screen 0 1280x1024x24 -noreset' cargo nextest run -p flui-native --locked --all-features --no-fail-fast -E 'not (group(trybuild))'".to_owned(),
+                format!(
+                    "$ cargo nextest run {SCOPE} -E 'not (group(nested-cargo) | group(trybuild))'"
+                ),
+                LINUX_PLATFORM_SUITE.to_owned(),
+                LINUX_WAYLAND_SUITE.to_owned(),
                 format!("$ cargo nextest run {SCOPE} -E 'group(nested-cargo) | group(trybuild)'"),
-                "$ cargo nextest run -p flui-native --test compiler_guards --locked --no-fail-fast".to_owned(),
+                "$ cargo nextest run -p flui-native --test compiler_guards --locked --no-fail-fast"
+                    .to_owned(),
             ]
         );
         assert_eq!(
@@ -1145,12 +1179,12 @@ mod tests {
                 .starts_with("Skipping native flui-native")
         );
         let fast = lines(&test_plan(Host::Linux, Stages::Fast));
-        assert_eq!(fast.len(), 4);
-        assert!(fast[3].starts_with("test --fast: SKIPPED the nested tests"));
+        assert_eq!(fast.len(), 5);
+        assert!(fast[4].starts_with("test --fast: SKIPPED the nested tests"));
         assert!(
-            fast[3].ends_with("cargo xtask test --nested"),
+            fast[4].ends_with("cargo xtask test --nested"),
             "{}",
-            fast[3]
+            fast[4]
         );
         // Nested stages include the portable platform compiler leg.
         assert_eq!(

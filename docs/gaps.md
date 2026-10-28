@@ -120,6 +120,7 @@ request.
 
 - It replaces the winit fallback.
 - The native Wayland host has its foundation (`WaylandPlatform`): the loop, `xdg-shell` windows with the snapshot and commands, displays, preferences, lifecycle and AT-SPI, run against a headless Weston. Missing there: input (keyboard, pointer, touch, pen, gestures, cursor), text input, clipboard, drag and drop, decorations (`xdg-decoration`; a window opens without a frame where the compositor draws none), fractional scale, activation (`xdg-activation`), and a run under a desktop compositor (GNOME, KDE, Hyprland). `current_platform` picks winit while it is built, which `flui-app` does on Linux.
+- A Wayland window opened with `visible: false` cannot be hidden: Wayland has no hide for a toplevel, so it stays unshown only until it draws its first frame, and no command shows or hides it later (`hides`/`shows` are `Unavailable`).
 - The native X11 host does not exist yet.
 - winit leaves the clipboard inert on pure Wayland, reports no occlusion on Wayland, has no pen, no pinch and no window bounds.
 - winit reports no event when a window crosses to another Wayland output of equal scale (the `wl_surface.enter` events belong to its connection).
