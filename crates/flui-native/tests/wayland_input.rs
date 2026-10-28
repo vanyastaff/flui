@@ -39,7 +39,7 @@ mod cases {
     use std::time::{Duration, Instant};
 
     use cursor_icon::CursorIcon;
-    use flui_native::testing::wayland::{present, run_for};
+    use flui_native::testing::wayland::{cursor_report, present, run_for};
     use flui_native::{HostWindow, Platform as _, WaylandPlatform};
     use flui_platform::keyboard::{Code, Key, KeyState};
     use flui_platform::pointer::{PointerButton, PointerEvent, PointerKind, ScrollUnit};
@@ -60,6 +60,12 @@ mod cases {
     const X_KEY_A: u8 = 38;
 
     pub(super) fn main() {
+        // What the host reports of the compositor (its keymap, among them)
+        // reaches the test's output.
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(std::io::stderr)
+            .try_init();
         let arguments = libtest_mimic::Arguments::from_args();
         let session = (!arguments.list).then(Session::start).flatten();
         let trials = vec![libtest_mimic::Trial::test(
@@ -424,15 +430,22 @@ mod cases {
                 (KeyState::Up, Key::character("a"), Code::KeyA),
             ]
         );
+        // A keymap may name no layout (Weston's X11 backend on CI's Xvfb
+        // sends none): the key above is what the keymap is checked by.
+        eprintln!("keyboard layout: {:?}", platform.keyboard_layout());
+        // The cursor shows over the window: by `cursor-shape` where the
+        // compositor has it, from the cursor theme where it has not (Weston
+        // 13).
+        window
+            .set_cursor(CursorIcon::Pointer)
+            .expect("the window shows a cursor");
+        run_for(&platform, Duration::from_millis(20)).expect("the loop turns");
+        let shown = cursor_report(&platform).expect("a cursor was shown");
         assert!(
-            !platform.keyboard_layout().is_empty(),
-            "the keymap names its layout"
+            shown.name == "4" || shown.scale >= 1,
+            "the pointer cursor, by shape (4) or from the theme: {shown:?}"
         );
-        // Weston 13 has no `cursor-shape`: the host says so rather than
-        // pretend.
-        if let Err(error) = window.set_cursor(CursorIcon::Pointer) {
-            assert!(error.unsupported().is_some(), "{error}");
-        }
+        eprintln!("cursor: {shown:?}");
 
         #[cfg(all(debug_assertions, feature = "native-capture"))]
         hold_recording(recorder, &pointer);

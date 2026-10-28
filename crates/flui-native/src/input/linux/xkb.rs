@@ -432,8 +432,14 @@ mod meaning {
             let Some(rest) = rest.strip_prefix('=') else {
                 continue;
             };
-            let rest = rest.trim_start().strip_prefix('"')?;
-            let end = rest.find('"')?;
+            // A declaration without a quoted value names nothing: the next
+            // one may.
+            let Some(rest) = rest.trim_start().strip_prefix('"') else {
+                continue;
+            };
+            let Some(end) = rest.find('"') else {
+                continue;
+            };
             return Some(rest[..end].to_owned());
         }
         None
@@ -492,11 +498,12 @@ mod keymap {
     }
 
     impl Keymap {
-        /// Compile the keymap `text` (XKB's text format v1); `None` when
-        /// libxkbcommon cannot be loaded or refuses the text.
+        /// Compile the keymap `text` (XKB's text format v1, without its
+        /// terminating NUL); `None` when libxkbcommon cannot be loaded or
+        /// refuses the text.
         pub(crate) fn compile(text: &str) -> Option<Self> {
             let api = xkbcommon_option()?;
-            let source = CString::new(text.trim_end_matches('\0')).ok()?;
+            let source = CString::new(text).ok()?;
             // SAFETY: `xkb_context_new` takes flags only and returns an owned
             // context or null.
             let context = NonNull::new(unsafe {
@@ -760,6 +767,11 @@ mod tests {
         assert_eq!(group_name(keymap, 1).as_deref(), Some("Russian"));
         assert_eq!(group_name(keymap, 2), None);
         assert_eq!(group_name("name[group1]", 0), None, "no value");
+        assert_eq!(
+            group_name("name[Group1]=unquoted;\n name[Group1]=\"German\";", 0).as_deref(),
+            Some("German"),
+            "a declaration without quotes is passed over for the next"
+        );
         assert_eq!(group_name(keymap, u32::MAX), None);
     }
 }

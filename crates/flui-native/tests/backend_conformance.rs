@@ -1141,9 +1141,11 @@ fn wayland_decoders_conform() {
 /// with the shared decoder standing in for the seat translation in front of
 /// it (`input::linux::wayland::wire`, tested beside it and against a Weston
 /// seat by `wayland_input`). Skipped where no compositor answers, and failed
-/// there when `FLUI_REQUIRE_WAYLAND` is set.
+/// there when `FLUI_REQUIRE_WAYLAND` is set. Run by
+/// `wayland_window::the_wayland_window_input_conforms`, in the Wayland suite
+/// that has a compositor, not in this table, which runs where none is named.
 #[cfg(all(target_os = "linux", feature = "wayland"))]
-fn wayland_window_conforms() {
+pub(crate) fn wayland_window_conforms() {
     if std::env::var_os("WAYLAND_DISPLAY").is_none_or(|name| name.is_empty()) {
         assert!(
             std::env::var_os("FLUI_REQUIRE_WAYLAND").is_none(),
@@ -1221,8 +1223,6 @@ fn every_backend_passes_the_conformance_table() {
             ("web", web_decoders_conform),
             ("x11", x11_decoders_conform),
             ("wayland", wayland_decoders_conform),
-            #[cfg(all(target_os = "linux", feature = "wayland"))]
-            ("wayland window", wayland_window_conforms),
             ("uikit with OS drag", uikit_os_drag_conforms),
         ],
     );

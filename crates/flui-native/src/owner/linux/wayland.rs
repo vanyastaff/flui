@@ -25,6 +25,12 @@
 //! each to settle after every read, and the window feature implements the
 //! dispatch of its own protocol objects on `WaylandState`.
 
+#[cfg(all(
+    target_os = "linux",
+    feature = "wayland",
+    any(test, feature = "testing")
+))]
+pub(crate) use event_loop::ShownCursor;
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(crate) use event_loop::{
     LiveOutputs, LoopWaker, LoopWindow, OutputFacts, OutputName, SeatWindow, WaylandDisplays,
@@ -413,6 +419,20 @@ mod event_loop {
         pub(crate) surface: WlSurface,
         /// What its input is delivered through.
         pub(crate) delivery: Arc<WindowDelivery>,
+        /// Its device pixels per logical pixel now, which a theme cursor
+        /// over it is drawn at.
+        pub(crate) scale: Arc<dyn Fn() -> f64 + Send + Sync>,
+    }
+
+    /// The cursor the input last showed, for a test.
+    #[cfg(any(test, feature = "testing"))]
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct ShownCursor {
+        /// The name it was found by: a `cursor-shape` value's number, or the
+        /// theme cursor's name.
+        pub(crate) name: String,
+        /// The buffer scale a theme cursor was drawn at; `0` for a shape.
+        pub(crate) scale: i32,
     }
 
     /// What the loop and its windows ask of the seats' input: the input
@@ -465,6 +485,10 @@ mod event_loop {
 
         /// The loop ends: let go of the windows and the callbacks.
         fn release(&self);
+
+        /// The cursor the input last showed, for a test.
+        #[cfg(any(test, feature = "testing"))]
+        fn shown_cursor(&self) -> Option<ShownCursor>;
     }
 
     /// An output by its global's name, which the compositor numbers alike for
@@ -1128,6 +1152,12 @@ mod event_loop {
         /// The window the compositor last activated.
         pub(crate) fn active_window(&self) -> Option<WindowId> {
             self.windows.active()
+        }
+
+        /// The cursor the seats' input last showed, for a test.
+        #[cfg(any(test, feature = "testing"))]
+        pub(crate) fn shown_cursor(&self) -> Option<ShownCursor> {
+            self.input.shown_cursor()
         }
 
         /// Run turns for `span` on the owner thread, for a test that drives

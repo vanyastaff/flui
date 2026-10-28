@@ -70,15 +70,6 @@ impl WireTime {
         }
     }
 
-    /// This time with the compositor's `stamp` (a tablet frame's).
-    #[must_use]
-    pub const fn with_stamp(self, stamp: u32) -> Self {
-        Self {
-            stamp: Some(stamp),
-            ..self
-        }
-    }
-
     /// The reading time this is: the compositor's stamp on the monotonic
     /// clock when it lies within [`TRUSTED_SKEW_MS`] of the arrival, wrap
     /// included; the arrival otherwise.
@@ -306,15 +297,23 @@ pub enum PinchWire {
     },
 }
 
+/// A seat, by a key minted when the input bound it: a `wl_seat` global's
+/// name can be announced again for another seat after its removal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SeatKey(pub u64);
+
 /// What one seat object reported.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SeatEvent {
-    /// A device came: a pointer, a touchscreen or a tablet tool.
+    /// A device of `seat` came: a pointer, a touchscreen or a tablet tool.
     DeviceAdded {
         /// Its label.
         device: NativeDevice,
         /// What it is.
         kind: PointerKind,
+        /// The seat it belongs to, whose keyboard's modifiers its readings
+        /// carry and whose removal removes it.
+        seat: SeatKey,
     },
     /// A device went.
     DeviceRemoved {
@@ -353,8 +352,19 @@ pub enum SeatEvent {
         /// What it said.
         event: PinchWire,
     },
-    /// The keyboard's modifiers changed.
-    Modifiers(Modifiers),
+    /// The modifiers of `seat`'s keyboard changed.
+    Modifiers {
+        /// The seat.
+        seat: SeatKey,
+        /// What its keyboard holds.
+        modifiers: Modifiers,
+    },
+    /// `seat`'s keyboard left its window: the modifiers it held no longer
+    /// reach the window, whose next readings carry none until it returns.
+    KeyboardLeft(SeatKey),
+    /// The compositor removed `seat`: every device of it goes, the
+    /// sequences its devices held open ending as removed.
+    SeatRemoved(SeatKey),
     /// The window of `surface` closed: what it held open ends unheard.
     SurfaceGone(NativeSurface),
 }
@@ -446,18 +456,20 @@ struct TouchState {
 }
 
 /// What a tablet tool's current frame gathered.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 struct ToolFrame {
     entered: Option<NativeSurface>,
     left: bool,
     down: bool,
     up: bool,
     moved: bool,
-    buttons: [Option<(u32, bool)>; 4],
+    /// Every button change of the frame, in order: none is dropped, so none
+    /// is left held.
+    buttons: SmallVec<[(u32, bool); 4]>,
 }
 
 /// A tablet tool: where it is, what its axes hold, and its frame.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct ToolState {
     device: NativeDevice,
     surface: Option<NativeSurface>,
@@ -481,7 +493,10 @@ struct PinchState {
 pub struct SeatAssembly {
     contacts: ContactRegistry,
     scrolling: ScrollPhases,
-    modifiers: Modifiers,
+    /// The seat of each device announced.
+    seats: Vec<(NativeDevice, SeatKey)>,
+    /// What each seat's keyboard holds, while it is in a window.
+    modifiers: Vec<(SeatKey, Modifiers)>,
     pointers: Vec<PointerState>,
     touches: Vec<TouchState>,
     tools: Vec<ToolState>,
@@ -499,7 +514,8 @@ impl SeatAssembly {
         Self {
             contacts: ContactRegistry::new(clock).with_reserved_contact(MOUSE),
             scrolling: ScrollPhases::default(),
-            modifiers: Modifiers::NONE,
+            seats: Vec::new(),
+            modifiers: Vec::new(),
             pointers: Vec::new(),
             touches: Vec::new(),
             tools: Vec::new(),
@@ -513,24 +529,16 @@ impl SeatAssembly {
         self.contacts.devices().present()
     }
 
-    /// The registry the readings are decoded against.
-    #[must_use]
-    pub const fn contacts(&self) -> &ContactRegistry {
-        &self.contacts
-    }
-
-    /// The modifiers the keyboard holds.
-    #[must_use]
-    pub const fn modifiers(&self) -> Modifiers {
-        self.modifiers
-    }
-
     /// The input `wire` assembles into, each for its window or for every
     /// window.
     pub fn assemble(&mut self, wire: SeatWire) -> Vec<Routed> {
         let time = wire.time;
         let out = match wire.event {
-            SeatEvent::DeviceAdded { device, kind } => self.device_added(device, kind, time),
+            SeatEvent::DeviceAdded { device, kind, seat } => {
+                self.seats.retain(|(held, _)| *held != device);
+                self.seats.push((device, seat));
+                self.device_added(device, kind, time)
+            }
             SeatEvent::DeviceRemoved { device } => self.device_removed(device, time),
             SeatEvent::Pointer { device, event } => self.pointer(device, event, time),
             SeatEvent::Touch { device, event } => self.touch(device, event, time),
@@ -544,9 +552,29 @@ impl SeatAssembly {
                 pointer,
                 event,
             } => self.pinch(device, pointer, event, time),
-            SeatEvent::Modifiers(modifiers) => {
-                self.modifiers = modifiers;
+            SeatEvent::Modifiers { seat, modifiers } => {
+                self.modifiers.retain(|(held, _)| *held != seat);
+                self.modifiers.push((seat, modifiers));
                 Out::new()
+            }
+            SeatEvent::KeyboardLeft(seat) => {
+                self.modifiers.retain(|(held, _)| *held != seat);
+                Out::new()
+            }
+            SeatEvent::SeatRemoved(seat) => {
+                self.modifiers.retain(|(held, _)| *held != seat);
+                // Each removal drops the device from the seats, so the next
+                // device of the seat is the first left.
+                let mut out = Out::new();
+                while let Some(device) = self
+                    .seats
+                    .iter()
+                    .find(|(_, held)| *held == seat)
+                    .map(|(device, _)| *device)
+                {
+                    out.extend(self.device_removed(device, time));
+                }
+                out
             }
             SeatEvent::SurfaceGone(surface) => {
                 self.surface_gone(surface, time);
@@ -556,7 +584,19 @@ impl SeatAssembly {
         out.into_vec()
     }
 
-    fn stamp(&self, time: WireTime) -> EventTime {
+    /// What the keyboard of `device`'s seat holds; none for a device of no
+    /// seat announced, or of one whose keyboard is in no window.
+    fn modifiers_of(&self, device: NativeDevice) -> Modifiers {
+        self.seats
+            .iter()
+            .find(|(held, _)| *held == device)
+            .and_then(|(_, seat)| self.modifiers.iter().find(|(held, _)| held == seat))
+            .map_or(Modifiers::NONE, |(_, modifiers)| *modifiers)
+    }
+
+    /// `time` on the event timeline, as the readings are stamped.
+    #[must_use]
+    pub fn stamp(&self, time: WireTime) -> EventTime {
         self.contacts
             .stamp(time.reading_time())
             .unwrap_or(time.arrival)
@@ -591,6 +631,7 @@ impl SeatAssembly {
         self.touches.retain(|touch| touch.device != Some(device));
         self.tools.retain(|tool| tool.device != device);
         self.pinches.retain(|pinch| pinch.device != device);
+        self.seats.retain(|(held, _)| *held != device);
         let (ended, removed) = self.contacts.remove_device(device, time);
         let mut out: Out = ended
             .into_iter()
@@ -653,7 +694,7 @@ impl SeatAssembly {
         NativeReading::new(MOUSE, PointerKind::Mouse, action, time.reading_time())
             .on(surface)
             .from_device(device)
-            .with_modifiers(self.modifiers)
+            .with_modifiers(self.modifiers_of(device))
     }
 
     fn pointer(&mut self, device: NativeDevice, event: PointerWire, time: WireTime) -> Out {
@@ -844,7 +885,7 @@ impl SeatAssembly {
             delta,
             precision,
             time: self.stamp(time),
-            modifiers: self.modifiers,
+            modifiers: self.modifiers_of(device),
         };
         if let Some(input) = self.contacts.scroll(&reading) {
             out.push(Routed::To(surface, input));
@@ -906,7 +947,7 @@ impl SeatAssembly {
                         ReadingAction::Cancel(NativeCancel::Platform),
                         time,
                     )
-                    .with_modifiers(self.modifiers);
+                    .with_modifiers(self.modifiers_of(device));
                     self.decode(&reading, &mut out);
                 }
             }
@@ -934,7 +975,7 @@ impl SeatAssembly {
                 state.open.retain(|(id, _)| *id != step.id);
             }
             let mut reading = touch_reading(device, surface, step.id, step.action, step.time)
-                .with_modifiers(self.modifiers);
+                .with_modifiers(self.modifiers_of(device));
             if let Some((x, y)) = step.position {
                 reading = reading.at(x, y, 1.0);
             }
@@ -1013,11 +1054,7 @@ impl SeatAssembly {
                 state.sensors.tangential_pressure = Some(f64::from(position) / 65_535.0);
                 frame.moved = true;
             }
-            ToolWire::Button { code, pressed } => {
-                if let Some(slot) = frame.buttons.iter_mut().find(|slot| slot.is_none()) {
-                    *slot = Some((code, pressed));
-                }
-            }
+            ToolWire::Button { code, pressed } => frame.buttons.push((code, pressed)),
             ToolWire::Frame => self.tool_frame(device, kind, time, &mut out),
         }
         out
@@ -1036,12 +1073,7 @@ impl SeatAssembly {
         if let Some(surface) = frame.entered {
             state.surface = Some(surface);
         }
-        let ToolState {
-            surface,
-            position: (x, y),
-            sensors,
-            ..
-        } = *state;
+        let (surface, (x, y), sensors) = (state.surface, state.position, state.sensors);
         let Some(surface) = surface else {
             return;
         };
@@ -1052,7 +1084,7 @@ impl SeatAssembly {
             NativeReading::new(TOOL, kind, action, time.reading_time())
                 .on(surface)
                 .from_device(device)
-                .with_modifiers(self.modifiers)
+                .with_modifiers(self.modifiers_of(device))
                 .with_sensors(sensors)
         };
         let mut readings: SmallVec<[NativeReading; 6]> = SmallVec::new();
@@ -1064,7 +1096,7 @@ impl SeatAssembly {
         } else if frame.moved {
             readings.push(reading(ReadingAction::Move).at(x, y, 1.0));
         }
-        for (code, pressed) in frame.buttons.into_iter().flatten() {
+        for (code, pressed) in frame.buttons {
             let button = button_of(code);
             readings.push(reading(if pressed {
                 ReadingAction::Press(button)
@@ -1101,6 +1133,17 @@ impl SeatAssembly {
                     .find(|state| state.device == pointer)
                     .map_or((0.0, 0.0), |state| state.position);
                 self.pinches.retain(|pinch| pinch.device != device);
+                // The gesture object is its pointer's seat's: that seat's
+                // removal ends it too.
+                if let Some(seat) = self
+                    .seats
+                    .iter()
+                    .find(|(held, _)| *held == pointer)
+                    .map(|(_, seat)| *seat)
+                {
+                    self.seats.retain(|(held, _)| *held != device);
+                    self.seats.push((device, seat));
+                }
                 self.pinches.push(PinchState {
                     device,
                     surface,
@@ -1153,11 +1196,20 @@ impl SeatAssembly {
                     ),
                 ]
             }
-            PinchWire::End { cancelled: true } => smallvec::smallvec![(
-                GestureComponent::Scale,
-                GesturePhase::Cancelled,
-                GestureDelta::None
-            )],
+            // Both components end: the gesture is cancelled whole, not left
+            // to whichever component the assembly cancels first.
+            PinchWire::End { cancelled: true } => smallvec::smallvec![
+                (
+                    GestureComponent::Scale,
+                    GesturePhase::Cancelled,
+                    GestureDelta::None
+                ),
+                (
+                    GestureComponent::Rotation,
+                    GesturePhase::Cancelled,
+                    GestureDelta::None
+                ),
+            ],
             PinchWire::End { cancelled: false } => smallvec::smallvec![
                 (
                     GestureComponent::Scale,
@@ -1196,7 +1248,7 @@ impl SeatAssembly {
             .on(pinch.surface)
             .from_device(device)
             .with_primary(true)
-            .with_modifiers(self.modifiers)
+            .with_modifiers(self.modifiers_of(pointer))
             .at(pinch.focal.0, pinch.focal.1, 1.0);
             self.decode(&reading, &mut out);
         }

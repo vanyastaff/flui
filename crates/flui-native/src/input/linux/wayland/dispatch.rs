@@ -28,13 +28,17 @@ use flui_platform::pointer::{PenTool, PointerEvent, PointerKind};
 use flui_platform::{
     CursorError, EventTime, PlatformInput, Unsupported, UnsupportedReason, WindowId,
 };
+use wayland_client::protocol::wl_buffer::WlBuffer;
+use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_keyboard::{self, KeymapFormat, WlKeyboard};
 use wayland_client::protocol::wl_pointer::{self, WlPointer};
 use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::protocol::wl_seat::{self, Capability, WlSeat};
-use wayland_client::protocol::wl_surface::WlSurface;
+use wayland_client::protocol::wl_shm::{self, WlShm};
+use wayland_client::protocol::wl_surface::{self, WlSurface};
 use wayland_client::protocol::wl_touch::{self, WlTouch};
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum, event_created_child};
+use wayland_cursor::CursorTheme;
 use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::{
     self, WpCursorShapeDeviceV1,
 };
@@ -66,16 +70,18 @@ use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_v2::{self, ZwpTabletV
 use web_time::Instant;
 
 use super::cursor;
-use super::repeat::KeyRepeat;
+use super::keyboards::{Keyboards, keymap_length, keymap_text};
 use super::wire::{
-    Axis, AxisSource, PinchWire, PointerWire, Routed, SeatAssembly, SeatEvent, SeatWire, ToolWire,
-    TouchWire, WireTime,
+    Axis, AxisSource, PinchWire, PointerWire, Routed, SeatAssembly, SeatEvent, SeatKey, SeatWire,
+    ToolWire, TouchWire, WireTime,
 };
 use crate::input::assembly::{NativeClock, NativeDevice, NativeSurface};
 use crate::input::availability::{self, WaylandInputGlobals};
 use crate::input::event_timestamp_ns;
 use crate::input::keys::location_for_code;
 use crate::input::linux::xkb::{Keymap, code_of, key_of};
+#[cfg(any(test, feature = "testing"))]
+use crate::owner::linux::wayland::ShownCursor;
 use crate::owner::linux::wayland::{SeatWindow, WaylandInput, WaylandState};
 use crate::owner::panic_boundary::contain_owner_callback;
 use crate::owner::slot::OwnerCell;
@@ -92,6 +98,8 @@ const GESTURES_VERSION: u32 = 1;
 const CURSOR_SHAPE_VERSION: u32 = 1;
 /// The `wl_pointer` version from which events come in frames.
 const POINTER_FRAMES: u32 = 5;
+/// `wl_compositor` version 3: a cursor surface takes a buffer scale.
+const COMPOSITOR_VERSION: u32 = 3;
 
 /// `CLOCK_MONOTONIC`, the clock compositors stamp input on.
 fn monotonic() -> Duration {
@@ -114,31 +122,42 @@ fn arrival(stamp: Option<u32>) -> WireTime {
     }
 }
 
-/// What a dispatch records for the next delivery.
+/// What a dispatch records for the next delivery. Each keyboard event names
+/// its seat: every seat's keyboard has its own keymap, window and repeat.
 #[derive(Debug)]
 enum Wire {
-    /// A pointer, touch, tool or pinch event, or a device that came or went.
+    /// A pointer, touch, tool or pinch event, or a device or seat that came
+    /// or went.
     Seat(SeatWire),
-    /// The keyboard's keymap, as text.
-    Keymap(String),
-    /// The keyboard entered the window of a surface, or left (`None`).
-    KeyFocus(Option<NativeSurface>),
+    /// A keyboard's keymap, as text.
+    Keymap { seat: SeatKey, text: String },
+    /// A keyboard entered the window of a surface, or left (`None`).
+    KeyFocus {
+        seat: SeatKey,
+        focus: Option<NativeSurface>,
+    },
     /// A key changed.
     Key {
+        seat: SeatKey,
         time: WireTime,
         code: u32,
         pressed: bool,
     },
-    /// The modifier and layout masks.
+    /// A keyboard's modifier and layout masks.
     Modifiers {
+        seat: SeatKey,
         depressed: u32,
         latched: u32,
         locked: u32,
         group: u32,
         time: WireTime,
     },
-    /// The compositor's key repeat settings.
-    RepeatInfo { rate: i32, delay: i32 },
+    /// A keyboard's repeat settings.
+    RepeatInfo {
+        seat: SeatKey,
+        rate: i32,
+        delay: i32,
+    },
 }
 
 /// A window the input delivers to.
@@ -147,6 +166,7 @@ struct Attached {
     surface: WlSurface,
     delivery: Arc<WindowDelivery>,
     cursor: CursorIcon,
+    scale: Arc<dyn Fn() -> f64 + Send + Sync>,
 }
 
 /// A pointer's objects.
@@ -155,6 +175,8 @@ struct PointerObjects {
     device: NativeDevice,
     pinch: Option<ZwpPointerGesturePinchV1>,
     shape: Option<WpCursorShapeDeviceV1>,
+    /// The surface a theme cursor is drawn on, made at its first.
+    cursor_surface: Option<WlSurface>,
     /// The window surface it is over and the serial of its enter.
     focus: Option<(NativeSurface, u32)>,
 }
@@ -162,11 +184,14 @@ struct PointerObjects {
 /// One seat's objects.
 struct SeatObjects {
     name: u32,
+    key: SeatKey,
     seat: WlSeat,
     pointer: Option<PointerObjects>,
     keyboard: Option<WlKeyboard>,
     touch: Option<(WlTouch, NativeDevice)>,
     tablet: Option<ZwpTabletSeatV2>,
+    /// The tablet tools the tablet seat announced and has not removed.
+    tools: Vec<ZwpTabletToolV2>,
 }
 
 /// The protocol objects the input made.
@@ -176,25 +201,43 @@ struct Objects {
     tablet: Option<(u32, ZwpTabletManagerV2)>,
     gestures: Option<(u32, ZwpPointerGesturesV1)>,
     shapes: Option<(u32, WpCursorShapeManagerV1)>,
+    /// `wl_shm`, which theme cursors are drawn with.
+    shm: Option<(u32, WlShm)>,
+    /// `wl_compositor`, which makes the cursor surfaces.
+    compositor: Option<WlCompositor>,
+    /// The connection and queue the globals came on.
+    connection: Option<(Connection, QueueHandle<WaylandState>)>,
+    /// What theme cursors are drawn from, once all of it is bound.
+    cursor_source: Option<CursorSource>,
 }
 
-/// The keyboard: the compositor's keymap and the window it types into.
-#[derive(Default)]
-struct Keyboard {
-    keymap: Option<Keymap>,
-    focus: Option<NativeSurface>,
-    repeat: KeyRepeat,
-    /// The layout's name as last reported.
+impl Objects {
+    /// Draw theme cursors once `wl_shm` and `wl_compositor` are both bound.
+    fn settle_cursor_source(&mut self) {
+        self.cursor_source = match (&self.shm, &self.compositor, &self.connection) {
+            (Some((_, shm)), Some(compositor), Some((connection, queue))) => Some(CursorSource {
+                connection: connection.clone(),
+                shm: shm.clone(),
+                compositor: compositor.clone(),
+                queue: queue.clone(),
+            }),
+            _ => None,
+        };
+    }
+}
+
+/// What the delivery side keeps: the assembly, each seat's keymap and
+/// keyboard, the layout last named, and the capabilities the windows were
+/// last given.
+struct Delivering {
+    assembly: SeatAssembly,
+    keymaps: Vec<(SeatKey, Keymap)>,
+    keyboards: Keyboards,
+    /// The layout's name as last reported, of the keyboard whose keymap or
+    /// group changed last.
     layout: String,
     /// The layout changed since the callbacks last heard.
     layout_changed: bool,
-}
-
-/// What the delivery side keeps: the assembly, the keyboard, and the
-/// capabilities the windows were last given.
-struct Delivering {
-    assembly: SeatAssembly,
-    keyboard: Keyboard,
     capabilities: InputCapabilities,
 }
 
@@ -207,9 +250,21 @@ struct Shared {
     layout_callbacks: OwnerCell<Vec<Box<dyn FnMut() + Send>>>,
     /// The last device label minted.
     labels: AtomicU64,
+    /// The last seat key minted.
+    seat_keys: AtomicU64,
+    /// The cursor theme loaded at each buffer scale a cursor was drawn at.
+    themes: OwnerCell<Vec<(i32, CursorTheme)>>,
+    /// The cursor last shown, for a test.
+    #[cfg(any(test, feature = "testing"))]
+    shown: OwnerCell<Option<ShownCursor>>,
 }
 
 impl Shared {
+    /// A seat key no seat had.
+    fn seat_key(&self) -> SeatKey {
+        SeatKey(self.seat_keys.fetch_add(1, Ordering::Relaxed) + 1)
+    }
+
     fn record(&self, wire: Wire) {
         self.wires.with(|wires| wires.push(wire));
     }
@@ -270,11 +325,18 @@ impl SeatInput {
             delivering: OwnerCell::new(),
             layout_callbacks: OwnerCell::new(),
             labels: AtomicU64::new(0),
+            seat_keys: AtomicU64::new(0),
+            themes: OwnerCell::new(),
+            #[cfg(any(test, feature = "testing"))]
+            shown: OwnerCell::new(),
         });
         shared.delivering.with(|delivering| {
             *delivering = Some(Delivering {
                 assembly: SeatAssembly::new(clock),
-                keyboard: Keyboard::default(),
+                keymaps: Vec::new(),
+                keyboards: Keyboards::default(),
+                layout: String::new(),
+                layout_changed: false,
                 capabilities: availability::wayland(WaylandInputGlobals::default()),
             });
         });
@@ -290,26 +352,30 @@ impl SeatInput {
         version: u32,
         queue: &QueueHandle<WaylandState>,
     ) {
+        let key = self.shared.seat_key();
         let seat = registry.bind::<WlSeat, SeatData, WaylandState>(
             name,
             version.min(SEAT_VERSION),
             queue,
             SeatData {
                 shared: Arc::downgrade(&self.shared),
+                seat: key,
             },
         );
         self.shared.objects.with(|objects| {
             let tablet = objects
                 .tablet
                 .as_ref()
-                .map(|(_, manager)| tablet_seat(manager, &seat, queue, &self.shared));
+                .map(|(_, manager)| tablet_seat(manager, &seat, key, queue, &self.shared));
             objects.seats.push(SeatObjects {
                 name,
+                key,
                 seat,
                 pointer: None,
                 keyboard: None,
                 touch: None,
                 tablet,
+                tools: Vec::new(),
             });
         });
     }
@@ -324,15 +390,21 @@ impl SeatInput {
                     .as_mut()
                     .expect("BUG: the input holds its assembly from construction");
                 match wire {
-                    Wire::Seat(wire) => delivering
-                        .assembly
-                        .assemble(wire)
-                        .into_iter()
-                        .map(|routed| match routed {
-                            Routed::To(surface, input) => (Target::Surface(surface), input),
-                            Routed::Everywhere(input) => (Target::Everywhere, input),
-                        })
-                        .collect(),
+                    Wire::Seat(wire) => {
+                        if let SeatEvent::SeatRemoved(seat) = wire.event {
+                            delivering.keyboards.remove(seat);
+                            delivering.keymaps.retain(|(held, _)| *held != seat);
+                        }
+                        delivering
+                            .assembly
+                            .assemble(wire)
+                            .into_iter()
+                            .map(|routed| match routed {
+                                Routed::To(surface, input) => (Target::Surface(surface), input),
+                                Routed::Everywhere(input) => (Target::Everywhere, input),
+                            })
+                            .collect()
+                    }
                     other => delivering.keyboard_wire(other),
                 }
             })
@@ -421,17 +493,21 @@ impl SeatInput {
         self.shared
             .delivering
             .with(|delivering| {
-                let delivering = delivering.as_mut()?;
-                let code = delivering.keyboard.repeat.take_due(Instant::now())?;
+                let Some(delivering) = delivering.as_mut() else {
+                    return Vec::new();
+                };
                 let time = EventTime::from_nanos(event_timestamp_ns());
-                let event = delivering.key_event(code, KeyState::Down, time)?;
-                let focus = delivering.keyboard.focus?;
-                Some(vec![(
-                    Target::Surface(focus),
-                    PlatformInput::Keyboard(event.with_repeat(Repeat::AutoRepeat)),
-                )])
+                let due = delivering.keyboards.take_due(Instant::now());
+                due.into_iter()
+                    .filter_map(|(seat, code, focus)| {
+                        let event = delivering.key_event(seat, code, KeyState::Down, time)?;
+                        Some((
+                            Target::Surface(focus),
+                            PlatformInput::Keyboard(event.with_repeat(Repeat::AutoRepeat)),
+                        ))
+                    })
+                    .collect()
             })
-            .flatten()
             .unwrap_or_default()
     }
 
@@ -442,9 +518,9 @@ impl SeatInput {
             .shared
             .delivering
             .with(|delivering| {
-                delivering.as_mut().is_some_and(|delivering| {
-                    std::mem::take(&mut delivering.keyboard.layout_changed)
-                })
+                delivering
+                    .as_mut()
+                    .is_some_and(|delivering| std::mem::take(&mut delivering.layout_changed))
             })
             .unwrap_or(false);
         if !changed {
@@ -474,10 +550,23 @@ enum Target {
 }
 
 impl Delivering {
-    /// The key event of key `code` going `state` at `time`, as the keymap
-    /// reads it now; `None` before a keymap came.
-    fn key_event(&self, code: u32, state: KeyState, time: EventTime) -> Option<KeyEvent> {
-        let keymap = self.keyboard.keymap.as_ref()?;
+    fn keymap(&self, seat: SeatKey) -> Option<&Keymap> {
+        self.keymaps
+            .iter()
+            .find(|(held, _)| *held == seat)
+            .map(|(_, keymap)| keymap)
+    }
+
+    /// The key event of `seat`'s key `code` going `state` at `time`, as its
+    /// keymap reads it now; `None` before a keymap came.
+    fn key_event(
+        &self,
+        seat: SeatKey,
+        code: u32,
+        state: KeyState,
+        time: EventTime,
+    ) -> Option<KeyEvent> {
+        let keymap = self.keymap(seat)?;
         let facts = keymap.key(code);
         let physical = code_of(code);
         Some(
@@ -489,58 +578,65 @@ impl Delivering {
 
     fn keyboard_wire(&mut self, wire: Wire) -> Vec<(Target, PlatformInput)> {
         match wire {
-            Wire::Keymap(text) => {
-                self.keyboard.repeat.stop();
-                self.keyboard.keymap = Keymap::compile(&text);
-                if self.keyboard.keymap.is_none() {
-                    tracing::warn!("the compositor's keymap was not compiled: keys are unread");
+            Wire::Keymap { seat, text } => {
+                self.keyboards.stop(seat);
+                self.keymaps.retain(|(held, _)| *held != seat);
+                match Keymap::compile(&text) {
+                    Some(keymap) => self.keymaps.push((seat, keymap)),
+                    None => {
+                        tracing::warn!("the compositor's keymap was not compiled: keys are unread");
+                    }
                 }
-                self.note_layout();
-                self.assembly.assemble(SeatWire {
-                    time: arrival(None),
-                    event: SeatEvent::Modifiers(self.modifiers()),
-                });
+                self.note_layout(seat);
+                if self.layout.is_empty() {
+                    let head: String = text.chars().take(400).collect();
+                    tracing::info!(%head, "the compositor's keymap names no layout");
+                }
+                if self.keyboards.focused(seat).is_some() {
+                    self.send_modifiers(seat, arrival(None));
+                }
                 Vec::new()
             }
-            Wire::KeyFocus(focus) => {
-                self.keyboard.focus = focus;
-                self.keyboard.repeat.stop();
+            Wire::KeyFocus { seat, focus } => {
+                self.keyboards.focus(seat, focus);
+                if focus.is_none() {
+                    // What the keyboard held stays with it: the window's next
+                    // readings carry no modifier it no longer hears of.
+                    self.assembly.assemble(SeatWire {
+                        time: arrival(None),
+                        event: SeatEvent::KeyboardLeft(seat),
+                    });
+                }
                 Vec::new()
             }
             Wire::Key {
+                seat,
                 time,
                 code,
                 pressed,
             } => {
-                let stamp = self
-                    .assembly
-                    .contacts()
-                    .stamp(time.reading_time())
-                    .unwrap_or(time.arrival);
-                let state = if pressed {
-                    KeyState::Down
-                } else {
-                    KeyState::Up
-                };
-                if pressed {
+                let stamp = self.assembly.stamp(time);
+                let (state, focus) = if pressed {
                     let repeats = self
-                        .keyboard
-                        .keymap
-                        .as_ref()
+                        .keymap(seat)
                         .is_some_and(|keymap| keymap.key(code).repeats);
-                    self.keyboard.repeat.press(code, repeats, Instant::now());
+                    (
+                        KeyState::Down,
+                        self.keyboards.press(seat, code, repeats, Instant::now()),
+                    )
                 } else {
-                    self.keyboard.repeat.release(code);
-                }
-                let Some(focus) = self.keyboard.focus else {
+                    (KeyState::Up, self.keyboards.release(seat, code))
+                };
+                let Some(focus) = focus else {
                     return Vec::new();
                 };
-                self.key_event(code, state, stamp)
+                self.key_event(seat, code, state, stamp)
                     .map(|event| (Target::Surface(focus), PlatformInput::Keyboard(event)))
                     .into_iter()
                     .collect()
             }
             Wire::Modifiers {
+                seat,
                 depressed,
                 latched,
                 locked,
@@ -548,45 +644,44 @@ impl Delivering {
                 time,
             } => {
                 let layout_moved = self
-                    .keyboard
-                    .keymap
-                    .as_mut()
-                    .is_some_and(|keymap| keymap.update(depressed, latched, locked, group));
+                    .keymaps
+                    .iter_mut()
+                    .find(|(held, _)| *held == seat)
+                    .is_some_and(|(_, keymap)| keymap.update(depressed, latched, locked, group));
                 if layout_moved {
-                    self.note_layout();
+                    self.note_layout(seat);
                 }
-                self.assembly.assemble(SeatWire {
-                    time,
-                    event: SeatEvent::Modifiers(self.modifiers()),
-                });
+                if self.keyboards.focused(seat).is_some() {
+                    self.send_modifiers(seat, time);
+                }
                 Vec::new()
             }
-            Wire::RepeatInfo { rate, delay } => {
-                self.keyboard.repeat.configure(rate, delay);
+            Wire::RepeatInfo { seat, rate, delay } => {
+                self.keyboards.configure(seat, rate, delay);
                 Vec::new()
             }
             Wire::Seat(_) => Vec::new(),
         }
     }
 
-    fn modifiers(&self) -> flui_platform::keyboard::Modifiers {
-        self.keyboard
-            .keymap
-            .as_ref()
-            .map_or(flui_platform::keyboard::Modifiers::NONE, Keymap::modifiers)
+    /// Tell the assembly what `seat`'s keyboard holds now.
+    fn send_modifiers(&mut self, seat: SeatKey, time: WireTime) {
+        let modifiers = self
+            .keymap(seat)
+            .map_or(flui_platform::keyboard::Modifiers::NONE, Keymap::modifiers);
+        self.assembly.assemble(SeatWire {
+            time,
+            event: SeatEvent::Modifiers { seat, modifiers },
+        });
     }
 
-    /// Note the layout's name, and that it changed when it did.
-    fn note_layout(&mut self) {
-        let layout = self
-            .keyboard
-            .keymap
-            .as_ref()
-            .map(Keymap::layout)
-            .unwrap_or_default();
-        if layout != self.keyboard.layout {
-            self.keyboard.layout = layout;
-            self.keyboard.layout_changed = true;
+    /// Note the name of `seat`'s layout, and that the layout changed when it
+    /// did.
+    fn note_layout(&mut self, seat: SeatKey) {
+        let layout = self.keymap(seat).map(Keymap::layout).unwrap_or_default();
+        if layout != self.layout {
+            self.layout = layout;
+            self.layout_changed = true;
         }
     }
 }
@@ -600,7 +695,31 @@ impl WaylandInput for SeatInput {
         version: u32,
         queue: &QueueHandle<WaylandState>,
     ) {
-        if interface == WlSeat::interface().name {
+        self.shared.objects.with(|objects| {
+            if objects.connection.is_none()
+                && let Some(backend) = registry.backend().upgrade()
+            {
+                objects.connection = Some((Connection::from_backend(backend), queue.clone()));
+            }
+        });
+        if interface == WlShm::interface().name {
+            let shm = registry.bind::<WlShm, CursorShm, WaylandState>(name, 1, queue, CursorShm);
+            self.shared.objects.with(|objects| {
+                objects.shm = Some((name, shm));
+                objects.settle_cursor_source();
+            });
+        } else if interface == WlCompositor::interface().name {
+            let compositor = registry.bind::<WlCompositor, (), WaylandState>(
+                name,
+                version.min(COMPOSITOR_VERSION),
+                queue,
+                (),
+            );
+            self.shared.objects.with(|objects| {
+                objects.compositor = Some(compositor);
+                objects.settle_cursor_source();
+            });
+        } else if interface == WlSeat::interface().name {
             self.bind_seat(registry, name, version, queue);
         } else if interface == ZwpTabletManagerV2::interface().name {
             let manager = registry.bind::<ZwpTabletManagerV2, (), WaylandState>(
@@ -612,7 +731,13 @@ impl WaylandInput for SeatInput {
             self.shared.objects.with(|objects| {
                 for seat in &mut objects.seats {
                     if seat.tablet.is_none() {
-                        seat.tablet = Some(tablet_seat(&manager, &seat.seat, queue, &self.shared));
+                        seat.tablet = Some(tablet_seat(
+                            &manager,
+                            &seat.seat,
+                            seat.key,
+                            queue,
+                            &self.shared,
+                        ));
                     }
                 }
                 objects.tablet = Some((name, manager));
@@ -684,6 +809,10 @@ impl WaylandInput for SeatInput {
                 {
                     objects.shapes = None;
                 }
+                if objects.shm.as_ref().is_some_and(|(held, _)| *held == name) {
+                    objects.shm = None;
+                    objects.settle_cursor_source();
+                }
                 let index = objects.seats.iter().position(|seat| seat.name == name)?;
                 Some(objects.seats.remove(index))
             })
@@ -715,7 +844,7 @@ impl WaylandInput for SeatInput {
     fn next_due(&self) -> Option<Instant> {
         self.shared
             .delivering
-            .with(|delivering| delivering.as_ref()?.keyboard.repeat.due())
+            .with(|delivering| delivering.as_ref()?.keyboards.due())
             .flatten()
     }
 
@@ -734,6 +863,7 @@ impl WaylandInput for SeatInput {
                 surface: window.surface,
                 delivery: window.delivery,
                 cursor: CursorIcon::Default,
+                scale: window.scale,
             });
         });
     }
@@ -763,11 +893,8 @@ impl WaylandInput for SeatInput {
             }
         });
         self.shared.delivering.with(|delivering| {
-            if let Some(delivering) = delivering
-                && delivering.keyboard.focus == Some(surface)
-            {
-                delivering.keyboard.focus = None;
-                delivering.keyboard.repeat.stop();
+            if let Some(delivering) = delivering {
+                delivering.keyboards.forget_surface(surface);
             }
         });
         self.shared
@@ -793,30 +920,34 @@ impl WaylandInput for SeatInput {
                 "the window is not open on this Wayland loop".to_owned(),
             ));
         }
+        let scale = self
+            .shared
+            .windows
+            .with(|windows| {
+                windows
+                    .iter()
+                    .find(|held| held.id == id)
+                    .map(|held| (held.scale)())
+            })
+            .flatten()
+            .unwrap_or(1.0);
         let surface = surface_key(id);
-        let shown = self
+        let showable = self
             .shared
             .objects
             .with(|objects| {
-                let (_, manager) = objects.shapes.as_ref()?;
-                let version = manager.version();
-                for pointer in objects
-                    .seats
-                    .iter()
-                    .filter_map(|seat| seat.pointer.as_ref())
-                {
-                    if let (Some(shape), Some((focus, serial))) = (&pointer.shape, pointer.focus)
-                        && focus == surface
-                    {
-                        set_shape(shape, serial, cursor, version);
-                    }
-                }
-                Some(())
+                show_cursor(&self.shared, objects, surface, cursor, scale);
+                objects.shapes.is_some() || objects.cursor_source.is_some()
             })
-            .flatten();
-        shown.ok_or(CursorError::Unsupported(Unsupported::new(
-            UnsupportedReason::NotYetOnThisHost,
-        )))
+            .unwrap_or(false);
+        if showable {
+            Ok(())
+        } else {
+            // Neither `cursor-shape` nor `wl_shm` for a theme cursor.
+            Err(CursorError::Unsupported(Unsupported::new(
+                UnsupportedReason::NotOnThisDevice,
+            )))
+        }
     }
 
     fn keyboard_layout(&self) -> String {
@@ -825,7 +956,7 @@ impl WaylandInput for SeatInput {
             .with(|delivering| {
                 delivering
                     .as_ref()
-                    .map(|delivering| delivering.keyboard.layout.clone())
+                    .map(|delivering| delivering.layout.clone())
             })
             .flatten()
             .unwrap_or_default()
@@ -853,21 +984,203 @@ impl WaylandInput for SeatInput {
         contain_owner_callback(|| drop(windows));
         contain_owner_callback(|| drop(callbacks));
     }
-}
 
-/// Show `cursor` on the pointer of `shape` since its enter `serial`.
-fn set_shape(shape: &WpCursorShapeDeviceV1, serial: u32, cursor: CursorIcon, version: u32) {
-    if let Ok(value) = wp_cursor_shape_device_v1::Shape::try_from(cursor::shape(cursor, version)) {
-        shape.set_shape(serial, value);
-    } else {
-        tracing::debug!(?cursor, "the cursor has no shape on this compositor");
+    #[cfg(any(test, feature = "testing"))]
+    fn shown_cursor(&self) -> Option<ShownCursor> {
+        self.shared.shown.with(|shown| shown.clone()).flatten()
     }
 }
 
-/// The tablet seat of `seat`.
+/// `wl_shm` as the input binds it for theme cursors.
+pub(crate) struct CursorShm;
+
+/// A pointer's theme-cursor surface.
+pub(crate) struct CursorSurface;
+
+impl Dispatch<WlShm, CursorShm> for WaylandState {
+    fn event(
+        _: &mut Self,
+        _: &WlShm,
+        _: wl_shm::Event,
+        _: &CursorShm,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        // The formats it announces include the one cursor themes use.
+    }
+}
+
+impl Dispatch<WlSurface, CursorSurface> for WaylandState {
+    fn event(
+        _: &mut Self,
+        _: &WlSurface,
+        _: wl_surface::Event,
+        _: &CursorSurface,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        // A cursor surface's outputs and scale are its window's concern.
+    }
+}
+
+/// Show `cursor` on every pointer over the window of `surface`, since that
+/// pointer's enter: by its `cursor-shape` value where the compositor has
+/// `cursor-shape`, else as the cursor theme draws it at `scale`.
+fn show_cursor(
+    shared: &Shared,
+    objects: &mut Objects,
+    surface: NativeSurface,
+    cursor: CursorIcon,
+    scale: f64,
+) {
+    let shapes = objects
+        .shapes
+        .as_ref()
+        .map(|(_, manager)| manager.version());
+    let source = objects.cursor_source.clone();
+    for pointer in objects
+        .seats
+        .iter_mut()
+        .filter_map(|seat| seat.pointer.as_mut())
+    {
+        let Some((focus, serial)) = pointer.focus else {
+            continue;
+        };
+        if focus != surface {
+            continue;
+        }
+        match (&pointer.shape, shapes, &source) {
+            (Some(shape), Some(version), _) => {
+                let value = cursor::shape(cursor, version);
+                if let Ok(shape_value) = wp_cursor_shape_device_v1::Shape::try_from(value) {
+                    shape.set_shape(serial, shape_value);
+                    #[cfg(any(test, feature = "testing"))]
+                    shared.shown.with(|shown| {
+                        *shown = Some(ShownCursor {
+                            name: value.to_string(),
+                            scale: 0,
+                        });
+                    });
+                }
+            }
+            (_, _, Some(source)) => {
+                if let Some(drawn) =
+                    draw_theme_cursor(shared, source, pointer, serial, cursor, scale)
+                {
+                    #[cfg(any(test, feature = "testing"))]
+                    shared.shown.with(|shown| {
+                        *shown = Some(ShownCursor {
+                            name: drawn.0.to_owned(),
+                            scale: drawn.1,
+                        });
+                    });
+                    #[cfg(not(any(test, feature = "testing")))]
+                    let _ = drawn;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// What a theme cursor is drawn from: the connection, `wl_shm` and
+/// `wl_compositor` the input bound, and the owner's queue.
+#[derive(Clone)]
+struct CursorSource {
+    connection: Connection,
+    shm: WlShm,
+    compositor: WlCompositor,
+    queue: QueueHandle<WaylandState>,
+}
+
+/// The cursor theme's name and its size at scale one: `XCURSOR_THEME` and
+/// `XCURSOR_SIZE`, else the default theme at [`cursor::THEME_SIZE`].
+fn theme_setting() -> (String, u32) {
+    let name = std::env::var("XCURSOR_THEME")
+        .ok()
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "default".to_owned());
+    let size = std::env::var("XCURSOR_SIZE")
+        .ok()
+        .and_then(|size| size.parse::<u32>().ok())
+        .filter(|size| (1..=256).contains(size))
+        .unwrap_or(cursor::THEME_SIZE);
+    (name, size)
+}
+
+/// Draw `cursor` from the theme on `pointer`'s cursor surface at the buffer
+/// scale `scale` rounds up to, and set it since the enter `serial`. What was
+/// drawn, or `None` where the theme has no image of it.
+fn draw_theme_cursor(
+    shared: &Shared,
+    source: &CursorSource,
+    pointer: &mut PointerObjects,
+    serial: u32,
+    cursor: CursorIcon,
+    scale: f64,
+) -> Option<(&'static str, i32)> {
+    let scale = cursor::theme_scale(scale);
+    let surface = pointer
+        .cursor_surface
+        .get_or_insert_with(|| {
+            source
+                .compositor
+                .create_surface(&source.queue, CursorSurface)
+        })
+        .clone();
+    let drawn = shared
+        .themes
+        .with(|themes| {
+            let index = if let Some(index) = themes.iter().position(|(held, _)| *held == scale) {
+                index
+            } else {
+                let (name, size) = theme_setting();
+                let theme = CursorTheme::load_from_name(
+                    &source.connection,
+                    source.shm.clone(),
+                    &name,
+                    size.saturating_mul(scale.unsigned_abs()),
+                )
+                .ok()?;
+                themes.push((scale, theme));
+                themes.len() - 1
+            };
+            let theme = &mut themes[index].1;
+            cursor::theme_names(cursor).into_iter().find_map(|name| {
+                let image = &theme.get_cursor(name)?[0];
+                let (width, height) = image.dimensions();
+                let (x, y) = image.hotspot();
+                let buffer: &WlBuffer = image;
+                if surface.version() >= 3 {
+                    surface.set_buffer_scale(scale);
+                }
+                surface.attach(Some(buffer), 0, 0);
+                surface.damage(
+                    0,
+                    0,
+                    i32::try_from(width).unwrap_or(i32::MAX),
+                    i32::try_from(height).unwrap_or(i32::MAX),
+                );
+                surface.commit();
+                let hotspot = |at: u32| i32::try_from(at).unwrap_or(0) / scale;
+                pointer
+                    .pointer
+                    .set_cursor(serial, Some(&surface), hotspot(x), hotspot(y));
+                Some(name)
+            })
+        })
+        .flatten();
+    if drawn.is_none() {
+        tracing::debug!(?cursor, "the cursor theme has no image of the cursor");
+    }
+    drawn.map(|name| (name, scale))
+}
+
+/// The tablet seat of `seat`, whose key is `key`.
 fn tablet_seat(
     manager: &ZwpTabletManagerV2,
     seat: &WlSeat,
+    key: SeatKey,
     queue: &QueueHandle<WaylandState>,
     shared: &Arc<Shared>,
 ) -> ZwpTabletSeatV2 {
@@ -876,6 +1189,7 @@ fn tablet_seat(
         queue,
         SeatData {
             shared: Arc::downgrade(shared),
+            seat: key,
         },
     )
 }
@@ -898,19 +1212,36 @@ fn pinch(
     )
 }
 
-/// Let go of a seat's devices, each removed at `time`.
+/// Let go of a removed seat's objects. Every device of it, its tablet tools
+/// among them, goes with the seat (`SeatEvent::SeatRemoved`), ending what
+/// they held open.
 fn release_seat(seat: SeatObjects, shared: &Shared, time: WireTime) {
     if let Some(pointer) = seat.pointer {
-        release_pointer(pointer, shared, time);
-    }
-    if let Some(keyboard) = seat.keyboard {
-        release_keyboard(&keyboard, shared);
-    }
-    if let Some((touch, device)) = seat.touch {
-        if touch.version() >= 3 {
-            touch.release();
+        if let Some(pinch) = pointer.pinch {
+            pinch.destroy();
         }
-        shared.record_seat(time, SeatEvent::DeviceRemoved { device });
+        if let Some(surface) = pointer.cursor_surface {
+            surface.destroy();
+        }
+        if let Some(shape) = pointer.shape {
+            shape.destroy();
+        }
+        if pointer.pointer.version() >= 3 {
+            pointer.pointer.release();
+        }
+    }
+    if let Some(keyboard) = seat.keyboard
+        && keyboard.version() >= 3
+    {
+        keyboard.release();
+    }
+    if let Some((touch, _)) = seat.touch
+        && touch.version() >= 3
+    {
+        touch.release();
+    }
+    for tool in seat.tools {
+        tool.destroy();
     }
     if let Some(tablet) = seat.tablet {
         tablet.destroy();
@@ -918,6 +1249,7 @@ fn release_seat(seat: SeatObjects, shared: &Shared, time: WireTime) {
     if seat.seat.version() >= 5 {
         seat.seat.release();
     }
+    shared.record_seat(time, SeatEvent::SeatRemoved(seat.key));
 }
 
 fn release_pointer(pointer: PointerObjects, shared: &Shared, time: WireTime) {
@@ -931,6 +1263,9 @@ fn release_pointer(pointer: PointerObjects, shared: &Shared, time: WireTime) {
             );
         }
         pinch.destroy();
+    }
+    if let Some(surface) = pointer.cursor_surface {
+        surface.destroy();
     }
     if let Some(shape) = pointer.shape {
         shape.destroy();
@@ -946,11 +1281,11 @@ fn release_pointer(pointer: PointerObjects, shared: &Shared, time: WireTime) {
     );
 }
 
-fn release_keyboard(keyboard: &WlKeyboard, shared: &Shared) {
+fn release_keyboard(keyboard: &WlKeyboard, seat: SeatKey, shared: &Shared) {
     if keyboard.version() >= 3 {
         keyboard.release();
     }
-    shared.record(Wire::KeyFocus(None));
+    shared.record(Wire::KeyFocus { seat, focus: None });
 }
 
 // ---- The dispatch of the input's objects on the owner's queue: each records
@@ -959,6 +1294,7 @@ fn release_keyboard(keyboard: &WlKeyboard, shared: &Shared) {
 /// A seat's (and its tablet seat's) user data.
 pub(crate) struct SeatData {
     shared: Weak<Shared>,
+    seat: SeatKey,
 }
 
 /// A pointer's user data.
@@ -970,6 +1306,7 @@ pub(crate) struct PointerData {
 /// A keyboard's user data.
 pub(crate) struct KeyboardData {
     shared: Weak<Shared>,
+    seat: SeatKey,
 }
 
 /// A touchscreen's user data.
@@ -987,16 +1324,31 @@ pub(crate) struct PinchData {
 
 /// A tablet tool's user data, set when its seat announces it: the tool is
 /// made by the protocol, before the input sees it.
-#[derive(Default)]
 pub(crate) struct ToolData {
-    held: OnceLock<(Weak<Shared>, NativeDevice)>,
-    kind: parking_lot::Mutex<Option<PointerKind>>,
+    held: OnceLock<(Weak<Shared>, NativeDevice, SeatKey)>,
+    /// The kind its `type` event named, read on the owner thread alone.
+    kind: OwnerCell<Option<PointerKind>>,
 }
 
 impl ToolData {
-    fn shared(&self) -> Option<(Arc<Shared>, NativeDevice)> {
-        let (shared, device) = self.held.get()?;
-        Some((shared.upgrade()?, *device))
+    /// A tool's data, made by the dispatch on the owner thread.
+    fn new() -> Self {
+        Self {
+            held: OnceLock::new(),
+            kind: OwnerCell::new(),
+        }
+    }
+
+    fn shared(&self) -> Option<(Arc<Shared>, NativeDevice, SeatKey)> {
+        let (shared, device, seat) = self.held.get()?;
+        Some((shared.upgrade()?, *device, *seat))
+    }
+
+    fn kind(&self) -> PointerKind {
+        self.kind
+            .with(|kind| *kind)
+            .flatten()
+            .unwrap_or(PointerKind::Pen { tool: PenTool::Tip })
     }
 }
 
@@ -1020,23 +1372,18 @@ impl Dispatch<WlSeat, SeatData> for WaylandState {
             WEnum::Unknown(bits) => Capability::from_bits_truncate(bits),
         };
         let time = arrival(None);
-        let mut released: Vec<SeatObjects> = Vec::new();
+        let key = data.seat;
+        let mut gone_pointer = None;
+        let mut gone_keyboard = None;
+        let mut gone_touch = None;
         shared.objects.with(|objects| {
             let gestures = objects
                 .gestures
                 .as_ref()
                 .map(|(_, manager)| manager.clone());
             let shapes = objects.shapes.as_ref().map(|(_, manager)| manager.clone());
-            let Some(held) = objects.seats.iter_mut().find(|held| held.seat == *seat) else {
+            let Some(held) = objects.seats.iter_mut().find(|held| held.key == key) else {
                 return;
-            };
-            let mut gone = SeatObjects {
-                name: held.name,
-                seat: held.seat.clone(),
-                pointer: None,
-                keyboard: None,
-                touch: None,
-                tablet: None,
             };
             if capabilities.contains(Capability::Pointer) {
                 if held.pointer.is_none() {
@@ -1055,6 +1402,7 @@ impl Dispatch<WlSeat, SeatData> for WaylandState {
                         pointer,
                         device,
                         pinch: None,
+                        cursor_surface: None,
                         focus: None,
                     };
                     objects.pinch = gestures
@@ -1066,11 +1414,12 @@ impl Dispatch<WlSeat, SeatData> for WaylandState {
                         SeatEvent::DeviceAdded {
                             device,
                             kind: PointerKind::Mouse,
+                            seat: key,
                         },
                     );
                 }
             } else {
-                gone.pointer = held.pointer.take();
+                gone_pointer = held.pointer.take();
             }
             if capabilities.contains(Capability::Keyboard) {
                 if held.keyboard.is_none() {
@@ -1078,11 +1427,12 @@ impl Dispatch<WlSeat, SeatData> for WaylandState {
                         queue,
                         KeyboardData {
                             shared: Arc::downgrade(&shared),
+                            seat: key,
                         },
                     ));
                 }
             } else {
-                gone.keyboard = held.keyboard.take();
+                gone_keyboard = held.keyboard.take();
             }
             if capabilities.contains(Capability::Touch) {
                 if held.touch.is_none() {
@@ -1102,28 +1452,26 @@ impl Dispatch<WlSeat, SeatData> for WaylandState {
                         SeatEvent::DeviceAdded {
                             device,
                             kind: PointerKind::Touch,
+                            seat: key,
                         },
                     );
                 }
             } else {
-                gone.touch = held.touch.take();
+                gone_touch = held.touch.take();
             }
-            released.push(gone);
         });
-        for gone in released {
-            // The seat itself stays: only the devices it lost go.
-            if let Some(pointer) = gone.pointer {
-                release_pointer(pointer, &shared, time);
+        // The seat itself stays: only the devices it lost go.
+        if let Some(pointer) = gone_pointer {
+            release_pointer(pointer, &shared, time);
+        }
+        if let Some(keyboard) = gone_keyboard {
+            release_keyboard(&keyboard, key, &shared);
+        }
+        if let Some((touch, device)) = gone_touch {
+            if touch.version() >= 3 {
+                touch.release();
             }
-            if let Some(keyboard) = gone.keyboard {
-                release_keyboard(&keyboard, &shared);
-            }
-            if let Some((touch, device)) = gone.touch {
-                if touch.version() >= 3 {
-                    touch.release();
-                }
-                shared.record_seat(time, SeatEvent::DeviceRemoved { device });
-            }
+            shared.record_seat(time, SeatEvent::DeviceRemoved { device });
         }
     }
 }
@@ -1155,32 +1503,27 @@ impl Dispatch<WlPointer, PointerData> for WaylandState {
                 let Some(key) = shared.surface_of(&surface) else {
                     return;
                 };
-                let cursor = shared
+                let (cursor, scale) = shared
                     .windows
                     .with(|windows| {
                         windows
                             .iter()
                             .find(|window| surface_key(window.id) == key)
-                            .map(|window| window.cursor)
+                            .map(|window| (window.cursor, (window.scale)()))
                     })
                     .flatten()
-                    .unwrap_or_default();
+                    .unwrap_or((CursorIcon::Default, 1.0));
                 shared.objects.with(|objects| {
-                    let version = objects
-                        .shapes
-                        .as_ref()
-                        .map(|(_, manager)| manager.version());
-                    if let Some(held) = objects
+                    for held in objects
                         .seats
                         .iter_mut()
                         .filter_map(|seat| seat.pointer.as_mut())
-                        .find(|held| held.pointer == *pointer)
                     {
-                        held.focus = Some((key, serial));
-                        if let (Some(shape), Some(version)) = (&held.shape, version) {
-                            set_shape(shape, serial, cursor, version);
+                        if held.pointer == *pointer {
+                            held.focus = Some((key, serial));
                         }
                     }
+                    show_cursor(&shared, objects, key, cursor, scale);
                 });
                 (
                     arrival(None),
@@ -1322,6 +1665,7 @@ impl Dispatch<WlKeyboard, KeyboardData> for WaylandState {
         let Some(shared) = data.shared.upgrade() else {
             return;
         };
+        let seat = data.seat;
         let wire = match event {
             wl_keyboard::Event::Keymap { format, fd, size } => {
                 if format != WEnum::Value(KeymapFormat::XkbV1) {
@@ -1329,20 +1673,22 @@ impl Dispatch<WlKeyboard, KeyboardData> for WaylandState {
                     return;
                 }
                 match read_keymap(fd, size) {
-                    Ok(text) => Wire::Keymap(text),
+                    Ok(text) => Wire::Keymap { seat, text },
                     Err(error) => {
                         tracing::warn!(%error, "the compositor's keymap could not be read");
                         return;
                     }
                 }
             }
-            wl_keyboard::Event::Enter { surface, .. } => {
-                Wire::KeyFocus(shared.surface_of(&surface))
-            }
-            wl_keyboard::Event::Leave { .. } => Wire::KeyFocus(None),
+            wl_keyboard::Event::Enter { surface, .. } => Wire::KeyFocus {
+                seat,
+                focus: shared.surface_of(&surface),
+            },
+            wl_keyboard::Event::Leave { .. } => Wire::KeyFocus { seat, focus: None },
             wl_keyboard::Event::Key {
                 time, key, state, ..
             } => Wire::Key {
+                seat,
                 time: arrival(Some(time)),
                 code: key,
                 pressed: state == WEnum::Value(wl_keyboard::KeyState::Pressed),
@@ -1354,13 +1700,16 @@ impl Dispatch<WlKeyboard, KeyboardData> for WaylandState {
                 group,
                 ..
             } => Wire::Modifiers {
+                seat,
                 depressed: mods_depressed,
                 latched: mods_latched,
                 locked: mods_locked,
                 group,
                 time: arrival(None),
             },
-            wl_keyboard::Event::RepeatInfo { rate, delay } => Wire::RepeatInfo { rate, delay },
+            wl_keyboard::Event::RepeatInfo { rate, delay } => {
+                Wire::RepeatInfo { seat, rate, delay }
+            }
             _ => return,
         };
         shared.record(wire);
@@ -1368,16 +1717,15 @@ impl Dispatch<WlKeyboard, KeyboardData> for WaylandState {
 }
 
 /// The keymap text the compositor shared through `fd`, `size` bytes with its
-/// terminating NUL.
+/// terminating NUL, within the keymap limit (`keyboards::KEYMAP_LIMIT`).
 fn read_keymap(fd: OwnedFd, size: u32) -> std::io::Result<String> {
+    let length = keymap_length(size).ok_or_else(|| {
+        std::io::Error::other(format!("a keymap of {size} bytes is past the limit"))
+    })?;
     let file = std::fs::File::from(fd);
-    let length = usize::try_from(size).map_err(std::io::Error::other)?;
-    let mut text = vec![0_u8; length];
-    file.read_exact_at(&mut text, 0)?;
-    if let Some(end) = text.iter().position(|byte| *byte == 0) {
-        text.truncate(end);
-    }
-    String::from_utf8(text).map_err(std::io::Error::other)
+    let mut bytes = vec![0_u8; length];
+    file.read_exact_at(&mut bytes, 0)?;
+    keymap_text(bytes).ok_or_else(|| std::io::Error::other("the keymap is not UTF-8"))
 }
 
 impl Dispatch<WlTouch, TouchData> for WaylandState {
@@ -1495,13 +1843,21 @@ impl Dispatch<ZwpTabletSeatV2, SeatData> for WaylandState {
             && let Some(shared) = data.shared.upgrade()
             && let Some(tool) = id.data::<ToolData>()
         {
-            let _ = tool.held.set((Arc::downgrade(&shared), shared.label()));
+            let _ = tool
+                .held
+                .set((Arc::downgrade(&shared), shared.label(), data.seat));
+            // The seat keeps its tools, which go with it.
+            shared.objects.with(|objects| {
+                if let Some(seat) = objects.seats.iter_mut().find(|seat| seat.key == data.seat) {
+                    seat.tools.push(id.clone());
+                }
+            });
         }
     }
 
     event_created_child!(WaylandState, ZwpTabletSeatV2, [
         zwp_tablet_seat_v2::EVT_TABLET_ADDED_OPCODE => (ZwpTabletV2, ()),
-        zwp_tablet_seat_v2::EVT_TOOL_ADDED_OPCODE => (ZwpTabletToolV2, ToolData::default()),
+        zwp_tablet_seat_v2::EVT_TOOL_ADDED_OPCODE => (ZwpTabletToolV2, ToolData::new()),
         zwp_tablet_seat_v2::EVT_PAD_ADDED_OPCODE => (ZwpTabletPadV2, ()),
     ]);
 }
@@ -1526,14 +1882,14 @@ impl Dispatch<ZwpTabletToolV2, ToolData> for WaylandState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        let Some((shared, device)) = data.shared() else {
+        let Some((shared, device, seat)) = data.shared() else {
             return;
         };
-        let kind = || (*data.kind.lock()).unwrap_or(PointerKind::Pen { tool: PenTool::Tip });
+        let kind = || data.kind();
         let wire = match event {
             zwp_tablet_tool_v2::Event::Type { tool_type } => {
                 if let WEnum::Value(tool_type) = tool_type {
-                    *data.kind.lock() = Some(tool_kind(tool_type));
+                    data.kind.with(|kind| *kind = Some(tool_kind(tool_type)));
                 }
                 return;
             }
@@ -1543,11 +1899,17 @@ impl Dispatch<ZwpTabletToolV2, ToolData> for WaylandState {
                     SeatEvent::DeviceAdded {
                         device,
                         kind: kind(),
+                        seat,
                     },
                 );
                 return;
             }
             zwp_tablet_tool_v2::Event::Removed => {
+                shared.objects.with(|objects| {
+                    for held in &mut objects.seats {
+                        held.tools.retain(|held| held != tool);
+                    }
+                });
                 shared.record_seat(arrival(None), SeatEvent::DeviceRemoved { device });
                 tool.destroy();
                 return;

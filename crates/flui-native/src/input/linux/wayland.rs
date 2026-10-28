@@ -1,7 +1,8 @@
 //! The Wayland seats' input: keyboards through XKB, pointers with their
 //! axis frames, touchscreens, tablet tools (`tablet-v2`), a touchpad's pinch
-//! (`pointer-gestures`) and the cursor each window shows (`cursor-shape`),
-//! assembled through the shared pointer assembly.
+//! (`pointer-gestures`) and the cursor each window shows (`cursor-shape`, or
+//! the cursor theme where the compositor has none), assembled through the
+//! shared pointer assembly.
 //!
 //! Two halves:
 //!
@@ -9,7 +10,9 @@
 //!   what the seats' objects report, copied into plain wire events, into
 //!   owned input through one [`ContactRegistry`](crate::input::assembly::ContactRegistry);
 //!   [`repeat`], the client-side key repeat a Wayland compositor leaves to
-//!   the client; and [`cursor`], a cursor's `cursor-shape` value;
+//!   the client; [`keyboards`], each seat's keyboard apart from the others'
+//!   and the keymap's bounds; and [`cursor`], a cursor's `cursor-shape` value
+//!   and the scale and names a theme cursor is drawn by;
 //! - `dispatch`, the live one: `SeatInput`, the loop's input hook
 //!   (`owner::linux::wayland::WaylandInput`), which binds the input globals
 //!   as the compositor announces them, implements the dispatch of their
@@ -170,12 +173,268 @@ pub mod repeat {
     }
 }
 
+pub mod keyboards {
+    //! The seats' keyboards, each apart from the others: the window it types
+    //! into and the key it repeats, and the bounds of the keymap a compositor
+    //! shares.
+    //!
+    //! A key repeats only while its keyboard is in a window: a repeat that
+    //! reaches no one would only wake the loop.
+
+    #![forbid(unsafe_code)]
+
+    use web_time::Instant;
+
+    use super::repeat::KeyRepeat;
+    use super::wire::SeatKey;
+    use crate::input::assembly::NativeSurface;
+
+    /// The largest keymap the host reads: a desktop keymap is some tens of
+    /// kilobytes, so a size past this is a compositor's fault, not a keymap.
+    pub const KEYMAP_LIMIT: usize = 8 * 1024 * 1024;
+
+    /// The bytes to read for a keymap the compositor says is `size` long;
+    /// `None` for none, or past [`KEYMAP_LIMIT`].
+    #[must_use]
+    pub fn keymap_length(size: u32) -> Option<usize> {
+        usize::try_from(size)
+            .ok()
+            .filter(|length| (1..=KEYMAP_LIMIT).contains(length))
+    }
+
+    /// The keymap text in `bytes`: up to its terminating NUL, which the
+    /// protocol includes in the size; `None` when it is not UTF-8.
+    #[must_use]
+    pub fn keymap_text(mut bytes: Vec<u8>) -> Option<String> {
+        if let Some(end) = bytes.iter().position(|byte| *byte == 0) {
+            bytes.truncate(end);
+        }
+        String::from_utf8(bytes).ok()
+    }
+
+    /// One seat's keyboard.
+    #[derive(Debug, Clone)]
+    struct SeatKeyboard {
+        seat: SeatKey,
+        focus: Option<NativeSurface>,
+        repeat: KeyRepeat,
+    }
+
+    /// Every seat's keyboard.
+    #[derive(Debug, Clone, Default)]
+    pub struct Keyboards {
+        seats: Vec<SeatKeyboard>,
+    }
+
+    impl Keyboards {
+        fn seat(&mut self, seat: SeatKey) -> &mut SeatKeyboard {
+            let index = self
+                .seats
+                .iter()
+                .position(|keyboard| keyboard.seat == seat)
+                .unwrap_or_else(|| {
+                    self.seats.push(SeatKeyboard {
+                        seat,
+                        focus: None,
+                        repeat: KeyRepeat::default(),
+                    });
+                    self.seats.len() - 1
+                });
+            &mut self.seats[index]
+        }
+
+        /// `seat`'s compositor repeat settings.
+        pub fn configure(&mut self, seat: SeatKey, rate: i32, delay: i32) {
+            self.seat(seat).repeat.configure(rate, delay);
+        }
+
+        /// `seat`'s keyboard entered the window of `focus`, or left (`None`):
+        /// its held key stops repeating.
+        pub fn focus(&mut self, seat: SeatKey, focus: Option<NativeSurface>) {
+            let keyboard = self.seat(seat);
+            keyboard.focus = focus;
+            keyboard.repeat.stop();
+        }
+
+        /// The window `seat`'s keyboard types into.
+        #[must_use]
+        pub fn focused(&self, seat: SeatKey) -> Option<NativeSurface> {
+            self.seats
+                .iter()
+                .find(|keyboard| keyboard.seat == seat)
+                .and_then(|keyboard| keyboard.focus)
+        }
+
+        /// Key `code` of `seat` went down at `now`: it repeats when the keymap
+        /// says so and the keyboard is in a window. The window it is for.
+        pub fn press(
+            &mut self,
+            seat: SeatKey,
+            code: u32,
+            repeats: bool,
+            now: Instant,
+        ) -> Option<NativeSurface> {
+            let keyboard = self.seat(seat);
+            keyboard
+                .repeat
+                .press(code, repeats && keyboard.focus.is_some(), now);
+            keyboard.focus
+        }
+
+        /// Key `code` of `seat` came up. The window it is for.
+        pub fn release(&mut self, seat: SeatKey, code: u32) -> Option<NativeSurface> {
+            let keyboard = self.seat(seat);
+            keyboard.repeat.release(code);
+            keyboard.focus
+        }
+
+        /// `seat`'s keymap changed: its held key stops repeating.
+        pub fn stop(&mut self, seat: SeatKey) {
+            self.seat(seat).repeat.stop();
+        }
+
+        /// `seat` went with its keyboard.
+        pub fn remove(&mut self, seat: SeatKey) {
+            self.seats.retain(|keyboard| keyboard.seat != seat);
+        }
+
+        /// The window of `surface` closed: no keyboard types into it.
+        pub fn forget_surface(&mut self, surface: NativeSurface) {
+            for keyboard in &mut self.seats {
+                if keyboard.focus == Some(surface) {
+                    keyboard.focus = None;
+                    keyboard.repeat.stop();
+                }
+            }
+        }
+
+        /// When a held key next repeats, of any seat.
+        #[must_use]
+        pub fn due(&self) -> Option<Instant> {
+            self.seats
+                .iter()
+                .filter_map(|keyboard| keyboard.repeat.due())
+                .min()
+        }
+
+        /// The keys that repeat at `now`, each with its seat and window.
+        pub fn take_due(&mut self, now: Instant) -> Vec<(SeatKey, u32, NativeSurface)> {
+            self.seats
+                .iter_mut()
+                .filter_map(|keyboard| {
+                    let code = keyboard.repeat.take_due(now)?;
+                    Some((keyboard.seat, code, keyboard.focus?))
+                })
+                .collect()
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::time::Duration;
+
+        use super::*;
+
+        const A: SeatKey = SeatKey(1);
+        const B: SeatKey = SeatKey(2);
+        const FIRST: NativeSurface = NativeSurface(1);
+        const SECOND: NativeSurface = NativeSurface(2);
+
+        /// Each seat's keyboard keeps its own window and repeat: another
+        /// seat's keyboard leaving takes neither.
+        #[test]
+        fn each_seat_keeps_its_own_keyboard() {
+            let start = Instant::now();
+            let mut keyboards = Keyboards::default();
+            for seat in [A, B] {
+                keyboards.configure(seat, 25, 400);
+            }
+            keyboards.focus(A, Some(FIRST));
+            keyboards.focus(B, Some(SECOND));
+            assert_eq!(keyboards.press(A, 30, true, start), Some(FIRST));
+            keyboards.focus(B, None);
+            assert_eq!(keyboards.focused(A), Some(FIRST), "B's leave is B's");
+            assert_eq!(
+                keyboards.due(),
+                Some(start + Duration::from_millis(400)),
+                "A's key still repeats"
+            );
+            assert_eq!(
+                keyboards.take_due(start + Duration::from_millis(400)),
+                [(A, 30, FIRST)]
+            );
+            assert_eq!(keyboards.release(B, 30), None, "B's release is B's");
+            assert!(keyboards.due().is_some(), "and does not stop A's key");
+        }
+
+        /// A key pressed while its keyboard is in no window does not repeat,
+        /// so nothing wakes the loop for it.
+        #[test]
+        fn a_key_with_no_window_does_not_repeat() {
+            let start = Instant::now();
+            let mut keyboards = Keyboards::default();
+            keyboards.configure(A, 25, 400);
+            assert_eq!(keyboards.press(A, 30, true, start), None);
+            assert_eq!(keyboards.due(), None);
+            keyboards.focus(A, Some(FIRST));
+            keyboards.press(A, 30, true, start);
+            keyboards.forget_surface(FIRST);
+            assert_eq!(keyboards.due(), None, "its window closed");
+        }
+
+        /// A keymap is read up to its NUL and only within the limit.
+        #[test]
+        fn a_keymap_is_read_within_its_limit() {
+            assert_eq!(keymap_length(0), None);
+            assert_eq!(keymap_length(64_756), Some(64_756));
+            let limit = u32::try_from(KEYMAP_LIMIT).expect("fits");
+            assert_eq!(keymap_length(limit), Some(KEYMAP_LIMIT));
+            assert_eq!(keymap_length(limit + 1), None);
+            assert_eq!(
+                keymap_text(b"xkb_keymap {};\0\0".to_vec()).as_deref(),
+                Some("xkb_keymap {};")
+            );
+            assert_eq!(keymap_text(vec![0xff, 0xfe, 0]), None);
+        }
+    }
+}
+
 pub mod cursor {
-    //! The `cursor-shape` value of a cursor.
+    //! A cursor as the compositor shows it: its `cursor-shape` value, or,
+    //! where the compositor has no `cursor-shape`, the images of the cursor
+    //! theme (`XCURSOR_THEME` and `XCURSOR_SIZE`) at the window's scale.
 
     #![forbid(unsafe_code)]
 
     use cursor_icon::CursorIcon;
+
+    /// The theme size a cursor is drawn at where `XCURSOR_SIZE` names none.
+    pub const THEME_SIZE: u32 = 24;
+    /// The largest buffer scale a theme cursor is drawn at.
+    const MAX_THEME_SCALE: i32 = 8;
+
+    /// The integer buffer scale a theme cursor is drawn at on a window of
+    /// `scale` device pixels per logical pixel: rounded up, so it is never
+    /// blurred, and one for a scale that is not a positive finite number.
+    #[must_use]
+    pub fn theme_scale(scale: f64) -> i32 {
+        if !scale.is_finite() || scale <= 1.0 {
+            return 1;
+        }
+        let ceiling = scale.ceil().min(f64::from(MAX_THEME_SCALE));
+        #[expect(clippy::cast_possible_truncation, reason = "a whole number in 2..=8")]
+        let whole = ceiling as i32;
+        whole
+    }
+
+    /// The names a cursor theme may give `icon`, best first: its CSS name,
+    /// then the X cursor names themes used before.
+    #[must_use]
+    pub fn theme_names(icon: CursorIcon) -> Vec<&'static str> {
+        std::iter::once(icon.name())
+            .chain(icon.alt_names().iter().copied())
+            .collect()
+    }
 
     /// The `wp_cursor_shape_device_v1.shape` value that shows `icon` on a
     /// device of `version`: the protocol names the CSS cursors the icon
@@ -250,6 +509,28 @@ pub mod cursor {
                     "{icon:?} on version {version}"
                 );
             }
+        }
+
+        /// A theme cursor is drawn at the window's scale rounded up, within
+        /// bounds, and asked for by its CSS name before the older X names.
+        #[test]
+        fn a_theme_cursor_is_drawn_at_the_window_scale() {
+            for (scale, expected) in [
+                (1.0, 1),
+                (1.25, 2),
+                (2.0, 2),
+                (2.5, 3),
+                (16.0, 8),
+                (0.5, 1),
+                (f64::NAN, 1),
+                (f64::INFINITY, 1),
+            ] {
+                assert_eq!(theme_scale(scale), expected, "{scale}");
+            }
+            let names = theme_names(CursorIcon::Pointer);
+            assert_eq!(names.first(), Some(&"pointer"));
+            assert!(names.contains(&"hand2"), "{names:?}");
+            assert_eq!(theme_names(CursorIcon::Default).first(), Some(&"default"));
         }
     }
 }

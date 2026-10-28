@@ -58,6 +58,28 @@ pub struct CompositorReport {
     pub outputs: Vec<u32>,
 }
 
+/// The cursor the seats' input last showed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CursorReport {
+    /// A `cursor-shape` value's number, or the theme cursor's name.
+    pub name: String,
+    /// The buffer scale a theme cursor was drawn at; `0` for a shape.
+    pub scale: i32,
+}
+
+/// The cursor the seats of `platform`, a `WaylandPlatform`, last showed;
+/// `None` before one was shown.
+#[must_use]
+pub fn cursor_report<H: Host<Loop = WaylandLoop>>(
+    platform: &HostPlatform<H>,
+) -> Option<CursorReport> {
+    platform.owner().shown_cursor().map(|shown| CursorReport {
+        name: shown.name,
+        scale: shown.scale,
+    })
+}
+
 /// What the compositor sent `window`; `None` for a window of another host.
 #[must_use]
 pub fn compositor_report(window: &dyn HostWindow) -> Option<CompositorReport> {

@@ -995,10 +995,17 @@ mod toplevel {
             // The input gives the window its capabilities before the handler
             // hears its snapshot, and its input from the compositor's first
             // event.
+            let state = Arc::downgrade(&window.state);
             window.input.attach(SeatWindow {
                 id,
                 surface: window.surface.0.clone(),
                 delivery: Arc::clone(&window.delivery),
+                scale: Arc::new(move || {
+                    state
+                        .upgrade()
+                        .and_then(|state| state.published().metrics)
+                        .map_or(1.0, |metrics| metrics.scale().get())
+                }),
             });
             // From here a failure retires the window like any other close.
             if let Err(error) = owner.roundtrip() {

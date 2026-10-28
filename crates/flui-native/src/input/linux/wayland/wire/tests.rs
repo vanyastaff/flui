@@ -14,6 +14,8 @@ const TOUCHSCREEN: NativeDevice = NativeDevice(2);
 const PEN: NativeDevice = NativeDevice(3);
 const PINCHER: NativeDevice = NativeDevice(4);
 const EPOCH: EventTime = EventTime::from_nanos(1_000_000_000);
+const SEAT: SeatKey = SeatKey(1);
+const OTHER_SEAT: SeatKey = SeatKey(2);
 
 /// A seat's assembly whose clock's epoch is monotonic time zero.
 fn assembly() -> SeatAssembly {
@@ -40,7 +42,11 @@ fn seated() -> SeatAssembly {
     ] {
         let _announced = assembly.assemble(SeatWire {
             time: at(1),
-            event: SeatEvent::DeviceAdded { device, kind },
+            event: SeatEvent::DeviceAdded {
+                device,
+                kind,
+                seat: SEAT,
+            },
         });
     }
     assembly
@@ -517,6 +523,7 @@ fn a_device_that_goes_ends_its_contacts() {
             SeatEvent::DeviceAdded {
                 device: POINTER,
                 kind: PointerKind::Mouse,
+                seat: SEAT,
             },
             mouse(PointerWire::Enter {
                 surface: WINDOW,
@@ -627,4 +634,173 @@ fn a_button_code_is_its_owned_button() {
     ] {
         assert_eq!(button_of(code), expected, "{code:#x}");
     }
+}
+
+/// A cancelled pinch ends whole: its scale and its rotation both go, so the
+/// next pinch starts a gesture of its own.
+#[test]
+fn a_cancelled_pinch_ends_whole() {
+    let lines = feed(
+        &mut seated(),
+        &[
+            mouse(PointerWire::Enter {
+                surface: WINDOW,
+                x: 100.0,
+                y: 80.0,
+            }),
+            pinch(PinchWire::Begin { surface: WINDOW }),
+            pinch(PinchWire::Update {
+                dx: 0.0,
+                dy: 0.0,
+                scale: 2.0,
+                rotation: 30.0,
+            }),
+            pinch(PinchWire::End { cancelled: true }),
+            pinch(PinchWire::Begin { surface: WINDOW }),
+            pinch(PinchWire::Update {
+                dx: 0.0,
+                dy: 0.0,
+                scale: 1.5,
+                rotation: 0.0,
+            }),
+        ],
+    );
+    let pinches: Vec<&String> = lines.iter().filter(|line| line.contains("pinch")).collect();
+    assert_eq!(
+        pinches,
+        [
+            "s1 pinch p2 Trackpad start at 100,80",
+            "s1 pinch p2 Trackpad update 2.000 0.000 at 100,80",
+            "s1 pinch p2 Trackpad update 2.000 0.524 at 100,80",
+            "s1 pinch p2 Trackpad cancelled at 100,80",
+            "s1 pinch p3 Trackpad start at 100,80",
+            "s1 pinch p3 Trackpad update 1.500 0.000 at 100,80",
+        ],
+        "{lines:?}"
+    );
+}
+
+/// A removed seat takes every device of it: a pen still down is cancelled as
+/// removed, and every window hears the pen go; another seat's devices stay.
+#[test]
+fn a_removed_seat_ends_its_pens() {
+    let mut assembly = seated();
+    let other_pen = NativeDevice(9);
+    let _announced = assembly.assemble(SeatWire {
+        time: at(2),
+        event: SeatEvent::DeviceAdded {
+            device: other_pen,
+            kind: ERASER,
+            seat: OTHER_SEAT,
+        },
+    });
+    let lines = feed(
+        &mut assembly,
+        &[
+            eraser(ToolWire::ProximityIn { surface: WINDOW }),
+            eraser(ToolWire::Motion { x: 4.0, y: 4.0 }),
+            eraser(ToolWire::Down),
+            eraser(ToolWire::Frame),
+            SeatEvent::SeatRemoved(SEAT),
+        ],
+    );
+    let ending: Vec<&String> = lines
+        .iter()
+        .filter(|line| line.contains("cancel") || line.contains("removed"))
+        .collect();
+    assert_eq!(
+        ending,
+        [
+            "all removed Mouse",
+            "all removed Touch",
+            "s1 cancel p2 Pen { tool: Eraser } DeviceRemoved",
+            "all removed Pen { tool: Eraser }",
+        ],
+        "{lines:?}"
+    );
+    let other = assembly.assemble(SeatWire {
+        time: at(100),
+        event: SeatEvent::DeviceRemoved { device: other_pen },
+    });
+    assert_eq!(other.len(), 1, "the other seat's pen was still present");
+}
+
+/// The modifiers a keyboard held leave with it: a click after the keyboard
+/// left the window carries none.
+#[test]
+fn modifiers_leave_with_the_keyboard() {
+    let mut assembly = seated();
+    let modifiers_of_down = |routed: Vec<Routed>| {
+        routed.into_iter().find_map(|routed| match routed {
+            Routed::To(_, PlatformInput::Pointer(PointerEvent::Down(press))) => {
+                Some(press.modifiers)
+            }
+            _ => None,
+        })
+    };
+    let mut step = |ms, event| {
+        assembly.assemble(SeatWire {
+            time: at(ms),
+            event,
+        })
+    };
+    let click = |pressed| {
+        mouse(PointerWire::Button {
+            code: BTN_LEFT,
+            pressed,
+        })
+    };
+    step(
+        10,
+        mouse(PointerWire::Enter {
+            surface: WINDOW,
+            x: 1.0,
+            y: 1.0,
+        }),
+    );
+    step(
+        11,
+        SeatEvent::Modifiers {
+            seat: SEAT,
+            modifiers: Modifiers::ALT,
+        },
+    );
+    assert_eq!(
+        modifiers_of_down(step(12, click(true))),
+        Some(Modifiers::ALT)
+    );
+    step(13, click(false));
+    step(14, SeatEvent::KeyboardLeft(SEAT));
+    assert_eq!(
+        modifiers_of_down(step(15, click(true))),
+        Some(Modifiers::NONE),
+        "the keyboard left with Alt"
+    );
+}
+
+/// Every button change of a tablet frame is delivered, the fifth included,
+/// so none is left held.
+#[test]
+fn every_button_of_a_tablet_frame_is_delivered() {
+    let mut events = vec![
+        eraser(ToolWire::ProximityIn { surface: WINDOW }),
+        eraser(ToolWire::Motion { x: 4.0, y: 4.0 }),
+        eraser(ToolWire::Frame),
+    ];
+    for pressed in [true, false] {
+        events.extend((0..5).map(|index| {
+            eraser(ToolWire::Button {
+                code: 0x14b + index,
+                pressed,
+            })
+        }));
+        events.push(eraser(ToolWire::Frame));
+    }
+    let lines = feed(&mut seated(), &events);
+    let pressed = lines.iter().filter(|line| line.contains("Pressed")).count();
+    let released = lines
+        .iter()
+        .filter(|line| line.contains("Released"))
+        .count();
+    assert_eq!((pressed, released), (5, 5), "{lines:?}");
 }
