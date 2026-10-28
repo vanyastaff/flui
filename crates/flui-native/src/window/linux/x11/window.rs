@@ -60,7 +60,6 @@ use std::time::{Duration, Instant};
 
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{Point, Size, WindowMetrics};
-use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::{
     AdmittedCommand, ApplyError, CloseDecision, CursorError, DisplaySnapshot, PlatformTextInput,
     PlatformWindow, SizeConstraints, Unsupported, UnsupportedReason, WindowAppearance,
@@ -95,7 +94,8 @@ use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
 use crate::owner::handlers::OpenWindows;
 use crate::owner::linux::x11::{
-    Doorbell, HostDisplays, LoopWindows, WindowRef, X11Connection, X11Loop,
+    Doorbell, HostDisplays, InputTarget, LoopInput, LoopWindows, WindowRef, WindowScale,
+    X11Connection, X11Loop,
 };
 use crate::owner::slot::{OwnerMap, OwnerWeak};
 use crate::owner::wake_deadline::FrameCount;
@@ -316,6 +316,11 @@ pub struct X11Window {
     redraw: Arc<AtomicBool>,
     doorbell: Doorbell,
     displays: Arc<dyn HostDisplays>,
+    /// The windows' input, which delivers this window's pointers and keys
+    /// and shows its cursor.
+    input: Arc<dyn LoopInput>,
+    /// The scale the input reads this window's positions at.
+    input_scale: WindowScale,
     record: RefCell<Record>,
     closed: Cell<bool>,
     /// Where the X window is in its end.
@@ -432,6 +437,7 @@ impl X11Window {
             .and_then(|snapshot| display_of(snapshot, outer).or_else(|| snapshot.primary()));
         let scale = window_scale(display, record.scale);
         record.scale = scale;
+        self.input_scale.set(scale);
         // Remembered for a window whose platform is gone.
         record.support = support;
         let mode = mode_of(mode_flags(read.wm_state, read.net_state));
@@ -1015,7 +1021,16 @@ impl X11Window {
         }
         self.facets.text.detach();
         self.facets.accessibility.detach();
+        self.input.window_closed(self.window_ref());
         self.retire();
+    }
+
+    /// What a feature reaches this window by.
+    fn window_ref(&self) -> WindowRef {
+        WindowRef {
+            xid: self.xid,
+            id: self.id,
+        }
     }
 
     /// Let go of the handler (`WindowDelivery::clear_then`), once, and destroy
@@ -1110,6 +1125,7 @@ impl X11Window {
     /// which only a close delivers.
     fn release(&self) {
         self.closed.set(true);
+        self.input.window_closed(self.window_ref());
         self.retire();
     }
 }
@@ -1308,10 +1324,13 @@ impl PlatformWindow for X11Window {
         self.refresh_state();
     }
 
-    /// The pointer and its cursor are the input feature's on X11, which this
-    /// host does not have yet.
-    fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
-        Err(Unsupported::new(UnsupportedReason::NotYetOnThisHost).into())
+    /// The pointer and its cursor are the input feature's: it loads the
+    /// cursor from the theme and sets it on the window.
+    fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
+        if self.closed.get() {
+            return Err(Unsupported::new(UnsupportedReason::NoWindow).into());
+        }
+        self.input.set_cursor(self.window_ref(), cursor)
     }
 
     /// X11 takes no refresh-rate request.
@@ -1595,9 +1614,10 @@ impl X11Windows {
             WindowMode::Fullscreen if support.fullscreen => WindowMode::Fullscreen,
             _ => WindowMode::Normal,
         };
+        let input = Arc::clone(owner.input());
         let delivery = Arc::new(WindowDelivery::counting_frames(
             handler,
-            InputCapabilities::UNAVAILABLE,
+            input.capabilities(),
             self.frames.counter(),
         ));
         delivery.resume_through_signal(owner.signal());
@@ -1613,6 +1633,8 @@ impl X11Windows {
             redraw: Arc::new(AtomicBool::new(false)),
             doorbell: owner.doorbell().clone(),
             displays: Arc::clone(owner.displays()),
+            input,
+            input_scale: WindowScale::new(scale),
             record: RefCell::new(Record {
                 title: options.title.clone(),
                 constraints: SizeConstraints::new(options.min_size, options.max_size),
@@ -1652,6 +1674,11 @@ impl X11Windows {
                 message: "the X11 window table answers on its owner thread alone".into(),
             });
         }
+        window.input.window_opened(InputTarget {
+            window: window.window_ref(),
+            delivery: Arc::clone(&window.delivery),
+            scale: window.input_scale.clone(),
+        });
         // Mapped now unless it waits for its first frame or the application
         // asked for it hidden; one opened in a mode has it in its properties
         // by now.
