@@ -1265,12 +1265,8 @@ mod toplevel {
     use crate::owner::linux::PortalSlot;
     use crate::owner::linux::wayland::activation::ActivationToken;
     use crate::owner::linux::wayland::{
-        LastInput, LiveOutputs, LoopWaker, LoopWindow, OutputName, SeatWindow, WaylandDisplays,
-        WaylandInput, WaylandLoop, WaylandState, WindowSeed, WindowTable,
-    };
-    use crate::owner::linux::wayland::{
-        LastInput, LiveOutputs, LoopWaker, LoopWindow, OutputName, PresentationTime,
-        WaylandDisplays, WaylandLoop, WaylandState, WindowSeed, WindowTable,
+        LastInput, LiveOutputs, LoopWaker, LoopWindow, OutputName, PresentationTime, SeatWindow,
+        WaylandDisplays, WaylandInput, WaylandLoop, WaylandState, WindowSeed, WindowTable,
     };
     use crate::owner::window_delivery::{Publication, Retirement, WindowDelivery};
     use crate::text::WindowTextInput;

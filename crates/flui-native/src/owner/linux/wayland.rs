@@ -38,8 +38,8 @@ pub use event_loop::OutputName;
 pub(crate) use event_loop::ShownCursor;
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(crate) use event_loop::{
-    LastInput, LiveOutputs, LoopWaker, LoopWindow, OutputFacts, SeatWindow, PresentationTime, WaylandDisplays,
-    WaylandHost, WaylandInput, WaylandLoop, WaylandState, WindowSeed, WindowTable,
+    LastInput, LiveOutputs, LoopWaker, LoopWindow, OutputFacts, PresentationTime, SeatWindow,
+    WaylandDisplays, WaylandHost, WaylandInput, WaylandLoop, WaylandState, WindowSeed, WindowTable,
 };
 
 pub(crate) mod activation {
