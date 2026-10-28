@@ -3,8 +3,8 @@
 - **Статус:** Утверждена владельцем 2026-10-28; исполнение
 - **Design:** [design.md](design.md) (раздел «Решения владельца 2026-10-28»); требования —
   [requirements.md](requirements.md); контракт закрытия — [teardown/tasks.md](../teardown/tasks.md)
-- **Итог:** сделаны P1, P2; P6 сделана в части; P7, P8, P9 (Notes) устарели и заменены P10–P12.
-  Осталось семь задач: P3 и P10 можно начинать сейчас; P4, P5 и остаток P6 строятся на шве
+- **Итог:** сделаны P1, P2, P3; P6 сделана в части; P7, P8, P9 (Notes) устарели и заменены
+  P10–P12. Осталось шесть задач: P10 можно начинать сейчас; P4, P5 и остаток P6 строятся на шве
   возможностей после [platform-layer](../platform-layer/tasks.md) LY50 и LY52.
 - **Приложение приёмки** — задача P10 этой спеки. Его строки пишут три спеки: persistence (P11),
   teardown (T18), text-ime (T11).
@@ -128,7 +128,17 @@ graph LR
 
 - [x] P1 — #1457
 - [x] P2 — #1463, #1712
-- [ ] P3 — Router: весь стек
+- [x] P3 — #1948. `Router::from_stack` сажает весь стек без перехода (`empty_stack_is_refused`
+  по-прежнему отказывает пустому); `RouterHandle::stack` отдаёт все страницы без popup'ов;
+  `Clone` и `to_path` маршрута вызываются после снятия заимствования стека; `Debug` печатает весь
+  стек. `from_stack_restores_back_order` и `stack_reads_every_committed_edit` сняты с `ignore` и
+  перенесены в `router_and_widgets_app` вместе с `from_stack_opens_without_a_transition`,
+  `stack_leaves_out_popups`, `debug_prints_the_whole_stack` и
+  `a_route_clone_may_drive_its_router`. Откат исходников: Back с восстановленного верха —
+  `Ok(false)`, `stack()` — `[Note { id: 1 }]`; клон под заимствованием — «RefCell already
+  borrowed»; `Debug` только верха — `initial: ["/tag/x"]`. Проверено (Windows, 2026-10-28):
+  clippy `--workspace --all-targets -D warnings`; nextest `-p flui-widgets -p flui-view -p flui-app
+  -p flui`; `xtask checks`, `doc-strict`, `wasm-check`.
 - [ ] P10 — приложение приёмки
 - [ ] P4 — загрузка на шве (после LY50, LY52)
 - [ ] P6 — остаток: реестр сброса хоста (после LY52)
