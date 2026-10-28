@@ -74,6 +74,32 @@ fn foreground() -> HWND {
     unsafe { GetForegroundWindow() }
 }
 
+/// The process that owns the window in front, or zero for none.
+fn foreground_process() -> u32 {
+    let mut owner = 0_u32;
+    // SAFETY: `owner` is a live local Win32 writes a process id into; the
+    // foreground handle is opaque and never dereferenced.
+    unsafe {
+        let _ = GetWindowThreadProcessId(GetForegroundWindow(), Some(&raw mut owner));
+    }
+    owner
+}
+
+/// After `step`, the foreground is still the peer's: no window of this
+/// process took it. Another program of the desktop (an agent's test run on a
+/// shared machine) may have, which the message names, as it is no finding of
+/// this window's.
+fn stays_with(peer: &Peer, step: &str) {
+    assert_eq!(
+        foreground(),
+        peer.hwnd,
+        "after {step}, the foreground moved to process {} (this one is {}, the peer {})",
+        foreground_process(),
+        std::process::id(),
+        peer.child.id()
+    );
+}
+
 /// The other application, in a process of its own.
 struct Peer {
     child: Child,
@@ -209,21 +235,19 @@ fn an_activation_takes_the_foreground_only_when_it_is_handed_over() {
     // Bringing "the application" forward touches no window of another one.
     platform.activate(true);
     let _ = messages_until(Duration::from_millis(150), || false);
-    assert_eq!(
-        foreground(),
-        peer.hwnd,
-        "Platform::activate took the foreground"
-    );
+    assert_ne!(foreground(), hwnd, "Platform::activate took the foreground");
+    stays_with(&peer, "Platform::activate");
 
     window
         .admit_and_apply(WindowCommand::Activate)
         .unwrap_or_else(|refusal| panic!("Activate is supported: {refusal:?}"));
     let _ = messages_until(Duration::from_millis(300), || false);
-    assert_eq!(
+    assert_ne!(
         foreground(),
-        peer.hwnd,
+        hwnd,
         "the activation took the foreground from the application in front"
     );
+    stays_with(&peer, "the refused activation");
     let flashed = peer.ask("flashes");
     assert!(
         flashed
