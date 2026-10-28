@@ -467,12 +467,7 @@ web = []
 # (`hosts::linux`), and both read the outputs and their refresh rates from the
 # compositor for the display source (`display::linux`). On other targets the
 # features exist and add nothing.
-wayland = [
-    "dep:wayland-client",
-    "dep:wayland-protocols",
-    "dep:wayland-backend",
-    "dep:rustix",
-]
+wayland = ["dep:wayland-client", "dep:wayland-protocols", "dep:wayland-backend", "dep:rustix"]
 x11 = ["dep:x11rb", "dep:rustix"]
 
 # Debug builds only: `input::assembly::capture` journals every

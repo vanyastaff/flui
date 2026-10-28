@@ -24,7 +24,7 @@
 
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(crate) use event_loop::{
-    LoopWindow, LoopWaker, OutputFacts, PortalSlot, WaylandDisplays, WaylandHost, WaylandLoop,
+    LoopWaker, LoopWindow, OutputFacts, PortalSlot, WaylandDisplays, WaylandHost, WaylandLoop,
     WaylandNotices, WaylandPreferences, WaylandState, WindowSeed, WindowTable,
 };
 
@@ -63,7 +63,11 @@ pub(crate) mod wait {
 
     /// Whether the loop asks its windows for a frame for `deadline` now: it
     /// is due and was not offered yet.
-    pub(crate) fn offer_now(deadline: Option<Instant>, offered: Option<Instant>, now: Instant) -> bool {
+    pub(crate) fn offer_now(
+        deadline: Option<Instant>,
+        offered: Option<Instant>,
+        now: Instant,
+    ) -> bool {
         deadline.is_some_and(|deadline| deadline <= now && Some(deadline) != offered)
     }
 
@@ -366,7 +370,11 @@ mod event_loop {
         }
 
         /// Hold `window` as `id`, on the owner thread.
-        fn register(&self, id: WindowId, window: Rc<dyn LoopWindow>) -> Result<(), OpenWindowError> {
+        fn register(
+            &self,
+            id: WindowId,
+            window: Rc<dyn LoopWindow>,
+        ) -> Result<(), OpenWindowError> {
             match self.windows.insert(id, window) {
                 Ok(None) => Ok(()),
                 Ok(Some(previous)) => {
@@ -792,9 +800,12 @@ mod event_loop {
             if !self.signal.accepting() {
                 return Err(OpenWindowError::OwnerGone { rejected: None });
             }
-            let id = self.windows.issue().ok_or_else(|| OpenWindowError::Backend {
-                message: "the Wayland loop has issued every window identity".to_owned(),
-            })?;
+            let id = self
+                .windows
+                .issue()
+                .ok_or_else(|| OpenWindowError::Backend {
+                    message: "the Wayland loop has issued every window identity".to_owned(),
+                })?;
             Ok(WindowSeed {
                 id,
                 protocol: self.protocol.clone(),

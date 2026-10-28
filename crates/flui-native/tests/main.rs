@@ -53,6 +53,9 @@ mod input_regions;
 mod native_recording;
 #[path = "preferences.rs"]
 mod preferences;
+#[path = "wayland_window.rs"]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
+mod wayland_window;
 #[path = "window_callback_unwind.rs"]
 #[cfg(not(target_arch = "wasm32"))]
 mod window_callback_unwind;
@@ -60,9 +63,6 @@ mod window_callback_unwind;
 mod window_installation;
 #[path = "window_state.rs"]
 mod window_state;
-#[path = "wayland_window.rs"]
-#[cfg(all(target_os = "linux", feature = "wayland"))]
-mod wayland_window;
 #[path = "windows_host_events.rs"]
 #[cfg(target_os = "windows")]
 mod windows_host_events;

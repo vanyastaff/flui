@@ -494,6 +494,10 @@ pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {
 
 /// The winit host, as [`current_platform`] starts it on Linux.
 #[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the signature a build without the winit host answers with an error"
+)]
 fn start_winit() -> Result<Box<dyn Platform>, PlatformError> {
     Ok(Box::new(WinitPlatform::new()))
 }
@@ -578,6 +582,45 @@ fn choose_linux_host(
     }
 }
 
+/// Create a headless platform for testing
+///
+/// This is a convenience function for tests. Prefer using this over
+/// `current_platform()` in test code for clarity.
+///
+/// # Example
+///
+/// ```rust
+/// use flui_native::headless_platform;
+///
+/// let platform = headless_platform();
+/// assert_eq!(platform.name(), "Headless");
+/// ```
+pub fn headless_platform() -> Box<dyn Platform> {
+    Box::new(HeadlessPlatform::new())
+}
+
+/// The Android platform over the Activity the system handed `android_main`.
+///
+/// The one public item of the core host that names an `android-activity`
+/// type: the system hands the Activity only to the application's
+/// `android_main`, and the composition root passes it on here, as the
+/// facade's `run_app_android` takes it (ADR-0151 §8). Nothing the platform
+/// hands back names it.
+///
+/// ```rust,ignore
+/// #[unsafe(no_mangle)]
+/// fn android_main(app: android_activity::AndroidApp) {
+///     let platform = flui_native::android_platform(app);
+///     // `App` implements `AppHandler`: its `ready` is the bootstrap.
+///     let _ = platform.run(Rc::new(App::default()));
+/// }
+/// ```
+#[cfg(target_os = "android")]
+#[must_use]
+pub fn android_platform(app: android_activity::AndroidApp) -> Box<dyn Platform> {
+    Box::new(HostPlatform::<hosts::android::Android>::new(app))
+}
+
 #[cfg(test)]
 mod linux_host_tests {
     use super::{LinuxHost, LinuxHosts, choose_linux_host};
@@ -620,43 +663,4 @@ mod linux_host_tests {
             );
         }
     }
-}
-
-/// Create a headless platform for testing
-///
-/// This is a convenience function for tests. Prefer using this over
-/// `current_platform()` in test code for clarity.
-///
-/// # Example
-///
-/// ```rust
-/// use flui_native::headless_platform;
-///
-/// let platform = headless_platform();
-/// assert_eq!(platform.name(), "Headless");
-/// ```
-pub fn headless_platform() -> Box<dyn Platform> {
-    Box::new(HeadlessPlatform::new())
-}
-
-/// The Android platform over the Activity the system handed `android_main`.
-///
-/// The one public item of the core host that names an `android-activity`
-/// type: the system hands the Activity only to the application's
-/// `android_main`, and the composition root passes it on here, as the
-/// facade's `run_app_android` takes it (ADR-0151 §8). Nothing the platform
-/// hands back names it.
-///
-/// ```rust,ignore
-/// #[unsafe(no_mangle)]
-/// fn android_main(app: android_activity::AndroidApp) {
-///     let platform = flui_native::android_platform(app);
-///     // `App` implements `AppHandler`: its `ready` is the bootstrap.
-///     let _ = platform.run(Rc::new(App::default()));
-/// }
-/// ```
-#[cfg(target_os = "android")]
-#[must_use]
-pub fn android_platform(app: android_activity::AndroidApp) -> Box<dyn Platform> {
-    Box::new(HostPlatform::<hosts::android::Android>::new(app))
 }

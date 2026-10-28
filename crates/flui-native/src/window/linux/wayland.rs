@@ -18,7 +18,10 @@
 //! at admission. What the compositor tells the window comes in a configure:
 //! the toplevel's states (maximized, fullscreen, activated, tiled, suspended)
 //! and, when it sizes the window itself, the size. The window acknowledges a
-//! configure on the owner's next turn and publishes what it says.
+//! configure on the owner's next turn and publishes what it says. A window is
+//! shown once the compositor maps it, with its first frame, which the
+//! surface's entering an output says; one opened with `visible: false` stays
+//! unshown until it draws, since no command shows it later.
 //!
 //! # Size and scale
 //!
@@ -70,7 +73,11 @@ pub(crate) mod configure {
     /// The values of a protocol array of `u32`s, which the compositor writes
     /// in the host's byte order; a trailing partial value is ignored.
     fn values(raw: &[u8]) -> impl Iterator<Item = u32> + '_ {
-        raw.as_chunks::<4>().0.iter().copied().map(u32::from_ne_bytes)
+        raw.as_chunks::<4>()
+            .0
+            .iter()
+            .copied()
+            .map(u32::from_ne_bytes)
     }
 
     /// The states of a toplevel, as its last configure named them.
@@ -179,7 +186,10 @@ pub(crate) mod configure {
                 &WindowCommand::SetDecorated(true),
                 CapabilityAbsence::NotYetOnThisHost,
             )
-            .unavailable(&WindowCommand::Activate, CapabilityAbsence::NotYetOnThisHost);
+            .unavailable(
+                &WindowCommand::Activate,
+                CapabilityAbsence::NotYetOnThisHost,
+            );
         capabilities.sets_resizable = Availability::Emulated;
         capabilities.observes_position = Availability::Unavailable;
         capabilities.observes_minimized = Availability::Unavailable;
@@ -300,8 +310,8 @@ pub(crate) mod configure {
             constraints: SizeConstraints,
         ) -> bool {
             let before = self.content;
-            let suggested = (width > 0 && height > 0)
-                .then(|| Size::new(f64::from(width), f64::from(height)));
+            let suggested =
+                (width > 0 && height > 0).then(|| Size::new(f64::from(width), f64::from(height)));
             if states.sized_by_compositor() {
                 if let Some(size) = suggested {
                     self.content = size;
@@ -349,7 +359,10 @@ pub(crate) mod configure {
         use super::*;
 
         fn array(values: &[u32]) -> Vec<u8> {
-            values.iter().flat_map(|value| value.to_ne_bytes()).collect()
+            values
+                .iter()
+                .flat_map(|value| value.to_ne_bytes())
+                .collect()
         }
 
         /// A configure's states read as the protocol numbers them, a value of
@@ -386,13 +399,19 @@ pub(crate) mod configure {
             let none = SizeConstraints::NONE;
             let mut sizing = Sizing::new(Size::new(800.0, 600.0));
 
-            assert!(!sizing.configure(0, 0, normal, none), "0x0: the client decides");
+            assert!(
+                !sizing.configure(0, 0, normal, none),
+                "0x0: the client decides"
+            );
             assert_eq!(sizing.content(), Size::new(800.0, 600.0));
 
             assert!(sizing.configure(1920, 1080, maximized, none));
             assert_eq!(sizing.content(), Size::new(1920.0, 1080.0));
 
-            assert!(sizing.request(Size::new(640.0, 480.0), none), "leave the mode first");
+            assert!(
+                sizing.request(Size::new(640.0, 480.0), none),
+                "leave the mode first"
+            );
             assert_eq!(sizing.content(), Size::new(1920.0, 1080.0), "not yet");
             assert!(sizing.configure(1900, 1000, normal, none));
             assert_eq!(
@@ -409,9 +428,16 @@ pub(crate) mod configure {
                 "back to the normal size"
             );
 
-            let limits = SizeConstraints::new(Some(Size::new(200.0, 150.0)), Some(Size::new(1000.0, 700.0)));
+            let limits = SizeConstraints::new(
+                Some(Size::new(200.0, 150.0)),
+                Some(Size::new(1000.0, 700.0)),
+            );
             assert!(sizing.configure(1200, 100, normal, limits));
-            assert_eq!(sizing.content(), Size::new(1000.0, 150.0), "within the limits");
+            assert_eq!(
+                sizing.content(),
+                Size::new(1000.0, 150.0),
+                "within the limits"
+            );
             assert!(!sizing.request(Size::new(50.0, 50.0), limits));
             assert_eq!(sizing.content(), Size::new(200.0, 150.0));
             // Negative sizes are no size.
@@ -505,10 +531,10 @@ mod toplevel {
     use flui_foundation::geometry::{EdgeInsets, Size, WindowMetrics};
     use flui_platform::input_capabilities::InputCapabilities;
     use flui_platform::{
-        AdmittedCommand, ApplyError, CloseDecision, CursorError, PlatformTextInput,
-        PlatformWindow, SizeConstraints, Unsupported, UnsupportedReason, WindowCapabilities,
-        WindowCommand, WindowExecutionState, WindowGeometry, WindowHandler, WindowId, WindowMode,
-        WindowOptions, WindowState,
+        AdmittedCommand, ApplyError, CloseDecision, CursorError, PlatformTextInput, PlatformWindow,
+        SizeConstraints, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand,
+        WindowExecutionState, WindowGeometry, WindowHandler, WindowId, WindowMode, WindowOptions,
+        WindowState,
     };
     use flui_semantics::platform::PlatformAccessibility;
     use parking_lot::Mutex;
@@ -530,8 +556,8 @@ mod toplevel {
     use crate::host_window::{CoreHostWindow, HostWindow, OwnerThreadToken};
     use crate::owner::OpenWindowError;
     use crate::owner::linux::wayland::{
-        LoopWaker, LoopWindow, PortalSlot, WaylandDisplays, WaylandLoop, WaylandState,
-        WindowSeed, WindowTable,
+        LoopWaker, LoopWindow, PortalSlot, WaylandDisplays, WaylandLoop, WaylandState, WindowSeed,
+        WindowTable,
     };
     use crate::owner::window_delivery::{Publication, Retirement, WindowDelivery};
     use crate::text::WindowTextInput;
@@ -731,7 +757,15 @@ mod toplevel {
             let states = applied.sizing.states();
             let state = WindowState::new(WindowGeometry::new(None, content), content)
                 .with_mode(states.mode())
-                .with_visible(applied.configured && !states.suspended && !self.closed)
+                // Shown is what the compositor says: a surface it maps (a
+                // configured window with a frame) enters an output, and one it
+                // does not draw is suspended.
+                .with_visible(
+                    applied.configured
+                        && !applied.told.outputs.is_empty()
+                        && !states.suspended
+                        && !self.closed,
+                )
                 .with_focused(states.activated)
                 .with_title(Some(applied.title.clone()))
                 .with_constraints(applied.constraints)
@@ -777,9 +811,10 @@ mod toplevel {
             let surface = protocol
                 .compositor
                 .create_surface(&queue, Arc::clone(&record));
-            let xdg_surface = protocol
-                .wm_base
-                .get_xdg_surface(&surface, &queue, Arc::clone(&record));
+            let xdg_surface =
+                protocol
+                    .wm_base
+                    .get_xdg_surface(&surface, &queue, Arc::clone(&record));
             let toplevel = xdg_surface.get_toplevel(&queue, Arc::clone(&record));
             let viewport = protocol
                 .viewporter
@@ -961,7 +996,12 @@ mod toplevel {
         /// The surface's destination: the content size.
         fn size_surface(&self) {
             let content = self.applied.borrow().sizing.content();
-            if let Some(viewport) = self.roles.borrow().as_ref().and_then(|roles| roles.viewport.as_ref()) {
+            if let Some(viewport) = self
+                .roles
+                .borrow()
+                .as_ref()
+                .and_then(|roles| roles.viewport.as_ref())
+            {
                 set_destination(viewport, content);
             }
         }
@@ -1142,7 +1182,8 @@ mod toplevel {
         /// compositor has shown this one. Returns at once; one callback is
         /// out at a time.
         fn pre_present_notify(&self) {
-            if self.retirement.is_retired() || self.record.frame_pending.swap(true, Ordering::AcqRel)
+            if self.retirement.is_retired()
+                || self.record.frame_pending.swap(true, Ordering::AcqRel)
             {
                 return;
             }

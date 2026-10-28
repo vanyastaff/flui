@@ -126,7 +126,7 @@ impl WindowFixture for WaylandFixture {
             metrics,
             focused: report.activated,
             active: report.activated,
-            visible: report.configured && !report.suspended,
+            visible: report.configured && report.output.is_some() && !report.suspended,
             material: None,
         }
     }
@@ -193,8 +193,7 @@ fn the_wayland_window_conforms() {
 fn a_window_maximized_before_fullscreen_returns_to_normal() {
     use flui_platform::WindowMode::{Fullscreen, Maximized, Normal};
 
-    let Some(platform) = platform("a_window_maximized_before_fullscreen_returns_to_normal")
-    else {
+    let Some(platform) = platform("a_window_maximized_before_fullscreen_returns_to_normal") else {
         return;
     };
     let mut fixture = WaylandFixture::open(platform, "maximized under fullscreen");
@@ -237,11 +236,15 @@ fn a_redraw_from_another_thread_reaches_the_window() {
         "a settled window asks for no frame"
     );
 
+    // Asked while the loop blocks with nothing to do: only the wake reaches it
+    // before the run ends.
     let requester = fixture.window.redraw_requester();
-    std::thread::spawn(move || requester.request_redraw())
-        .join()
-        .expect("the asking thread");
-    run_for(&fixture.platform, Duration::from_millis(300)).expect("the loop turns");
+    let asking = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(100));
+        requester.request_redraw();
+    });
+    run_for(&fixture.platform, Duration::from_millis(400)).expect("the loop turns");
+    asking.join().expect("the asking thread");
     assert_eq!(
         frames(&fixture.handler),
         1,
@@ -275,7 +278,11 @@ fn a_wayland_run_ends_with_its_last_window() {
         .run(Rc::clone(&log) as _)
         .expect("the run ends");
     assert_eq!(log.count(AppCall::Ready), 1);
-    assert_eq!(log.count(AppCall::ExitPolicy), 1, "asked once, at the last close");
+    assert_eq!(
+        log.count(AppCall::ExitPolicy),
+        1,
+        "asked once, at the last close"
+    );
     assert_eq!(log.count(AppCall::Quit), 1, "the quit is heard once");
     assert_eq!(window_handler.count(&HandlerCall::Closed), 1);
 }

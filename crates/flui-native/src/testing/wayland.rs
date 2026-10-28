@@ -5,17 +5,22 @@
 use std::time::Duration;
 
 use crate::error::PlatformError;
+use crate::host::Host;
 use crate::host_window::HostWindow;
-use crate::hosts::WaylandPlatform;
+use crate::owner::linux::wayland::WaylandLoop;
+use crate::platform::HostPlatform;
 use crate::window::linux::wayland::WaylandWindow;
 
-/// Run the loop of `platform` for `span`: read what the compositor sends,
-/// let each window carry it out, and deliver what is due, as
-/// `Platform::run` does on each turn.
+/// Run the loop of `platform`, a `WaylandPlatform`, for `span`: read what the
+/// compositor sends, let each window carry it out, and deliver what is due,
+/// as `Platform::run` does on each turn.
 ///
 /// # Errors
 /// What a turn of the loop reports: the connection was lost.
-pub fn run_for(platform: &WaylandPlatform, span: Duration) -> Result<(), PlatformError> {
+pub fn run_for<H: Host<Loop = WaylandLoop>>(
+    platform: &HostPlatform<H>,
+    span: Duration,
+) -> Result<(), PlatformError> {
     platform.owner().turn_for(span)
 }
 
