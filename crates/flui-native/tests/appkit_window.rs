@@ -72,6 +72,14 @@ mod cases {
             a_surface_target_keeps_its_view_and_releases_it_on_main,
         ),
         (
+            "a_minimized_window_is_still_shown",
+            a_minimized_window_is_still_shown,
+        ),
+        (
+            "a_size_outside_the_constraints_is_held_to_them",
+            a_size_outside_the_constraints_is_held_to_them,
+        ),
+        (
             "a_closed_window_frees_its_view",
             a_closed_window_frees_its_view,
         ),
@@ -229,11 +237,14 @@ mod cases {
                 metrics,
                 focused,
                 active: focused && self.app.isActive(),
-                visible: ns_window.isVisible()
-                    && !miniaturized
+                // Shown, as `WindowState::visible` means it: on screen and
+                // not occluded, or in the Dock, where AppKit reports it
+                // neither (`is_seen` is what leaves a minimized window out).
+                visible: (ns_window.isVisible()
                     && ns_window
                         .occlusionState()
-                        .contains(NSWindowOcclusionState::Visible),
+                        .contains(NSWindowOcclusionState::Visible))
+                    || miniaturized,
                 material: self.material(),
             }
         }
@@ -480,6 +491,59 @@ mod cases {
             held - 1,
             "the main queue gave back the target's reference"
         );
+    }
+
+    /// A window in the Dock is still shown: AppKit reports it neither
+    /// `isVisible` nor visible in its occlusion state, but the user sees it
+    /// there, and a click brings it back.
+    fn a_minimized_window_is_still_shown() {
+        use flui_platform::WindowMode::Minimized;
+
+        let mut fixture = open("minimized and shown");
+        fixture
+            .window
+            .admit_and_apply(WindowCommand::SetMode(Minimized))
+            .unwrap_or_else(|refusal| panic!("SetMode(Minimized) was refused: {refusal:?}"));
+        fixture.settle();
+
+        let state = fixture.window.state();
+        assert_eq!(state.mode, Minimized);
+        assert!(state.visible, "a minimized window reads as shown");
+    }
+
+    /// A size outside the window's constraints is held to them, as a resize
+    /// by the user is: AppKit itself applies a content size below the
+    /// minimum.
+    fn a_size_outside_the_constraints_is_held_to_them() {
+        use flui_foundation::geometry::Size;
+        use flui_platform::SizeConstraints;
+
+        let mut fixture = open("size within the constraints");
+        let min = Size::new(400.0, 300.0);
+        let max = Size::new(900.0, 700.0);
+        fixture
+            .window
+            .admit_and_apply(WindowCommand::SetConstraints(SizeConstraints::new(
+                Some(min),
+                Some(max),
+            )))
+            .unwrap_or_else(|refusal| panic!("SetConstraints was refused: {refusal:?}"));
+        for (asked, held) in [
+            (Size::new(200.0, 100.0), min),
+            (Size::new(2000.0, 2000.0), max),
+            (Size::new(200.0, 2000.0), Size::new(400.0, 700.0)),
+        ] {
+            fixture
+                .window
+                .admit_and_apply(WindowCommand::SetSize(asked))
+                .unwrap_or_else(|refusal| panic!("SetSize({asked:?}) was refused: {refusal:?}"));
+            fixture.settle();
+            assert_eq!(
+                fixture.window.state().content_size,
+                held,
+                "SetSize({asked:?}) under {min:?}..{max:?}"
+            );
+        }
     }
 
     /// A window that closed and dropped, with no surface target left, takes

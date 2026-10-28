@@ -1645,7 +1645,7 @@ impl MacOSWindow {
             } else {
                 normal
             })
-            .with_visible(is_shown(on_screen, flags.miniaturized) && occlusion_visible)
+            .with_visible(is_shown(on_screen, occlusion_visible, flags.miniaturized))
             .with_focused(focused)
             .with_title(Some(title))
             .with_resizable(flags.resizable)
@@ -1773,10 +1773,18 @@ impl MacOSWindow {
 
     /// Resize the content area, not the frame: on decorated windows a
     /// frame-sized `setFrame:` would shrink the content by the title bar.
+    /// AppKit takes `setContentSize:` as given, below the window's minimum
+    /// too, so the size is first held to the window's limits, as a resize by
+    /// the user is.
     fn set_content_size(&self, size: Size<f64>) {
         // SAFETY: see the note above these bodies.
         unsafe {
-            let ns_size = NSSize::new(size.width, size.height);
+            let min: NSSize = msg_send![self.ns_window, contentMinSize];
+            let max: NSSize = msg_send![self.ns_window, contentMaxSize];
+            let ns_size = NSSize::new(
+                size.width.max(min.width).min(max.width),
+                size.height.max(min.height).min(max.height),
+            );
             let _: () = msg_send![self.ns_window, setContentSize: ns_size];
         }
     }
