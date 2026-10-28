@@ -3507,6 +3507,41 @@ graph LR
   pinch/swipe) и фаз прокрутки нет на X11 вообще; файловых диалогов портала нет на обоих
   нативных хостах. **Общее с LY79:** `input::linux::xkb` (`keys` и `Keyboard`), живая часть под
   `x11_host` — Wayland добавляет источник keymap из fd и свой признак.
+  **После ревью (vanyastaff/flui#1936)**, коммитом поверх, слито `main` @ `c666bacfc`. (1)
+  Устройство, которое иерархия называет снятым или выключенным (`SLAVE_REMOVED`,
+  `MASTER_REMOVED`, `DEVICE_DISABLED`), снимается до нового `XIQueryDevice`: его контакты
+  отменяются, снова названное под тем же id — новое устройство
+  (`a_pen_plugged_back_in_under_its_id_is_a_new_pen`; без снятия — Down остаётся). (2)
+  `cancel_surface` сбрасывает текущий контакт master-а только на своём окне, переход
+  запоминает окно контакта (`a_window_losing_the_focus_leaves_another_windows_pen_alone`). (3)
+  Потеря фокуса сбрасывает compose и отпускает зажатые клавиши в окне
+  (`Keyboard::leave`; `losing_the_focus_ends_a_dead_key_and_releases_held_keys`: dead_acute,
+  потеря фокуса, `e` — `e`, не `é`; keycode 247 через `ChangeKeyboardMapping`). (4) Сброс записи
+  вне заёма проверен: `a_handler_dropped_with_its_entry_may_set_a_cursor` (Drop обработчика
+  зовёт `set_cursor`). (5) `valuators` — `checked_*`, номер за `u16` пропускается
+  (`a_valuator_mask_past_its_numbers_is_skipped`). (6) Документы: строка
+  `browser_sessions_hold_against_their_goldens` в ARCHITECTURE.md, запись в gaps.md о
+  синтетических проверках. (7) Время — серверное (`NativeTime::TickMillis` с переходом через
+  перенос), пока в пределах 1 с от монотонных часов, иначе — по приходу
+  (`a_burst_keeps_the_spacing_of_the_servers_times`: шаг 4 мс сохраняется; Xvfb ставит время
+  монотонных часов — золотая запись перезаписана с тиками). (8) XInput 2.4: x11rb знает
+  `XI_GesturePinch*`, Xvfb объявляет 2.4; щипок — один pan-zoom, как `pointer-gestures` LY79
+  (свайпы, как и там, не доставляются); `availability::x11(gestures)`
+  (`a_touchpad_pinch_is_one_pan_zoom`, строка conformance `native x11` с щипками); на
+  устройстве не запускалось. (9) `input::linux::xkb` взял чистые таблицы LY79 (`code_of`,
+  `keysym_key`, `key_of`, `modifiers_of`, `group_name`) и их тесты; живой `Keyboard` читает
+  keymap из `KeymapSource` (`X11` держит `Arc<X11Connection>`), compose и зажатые клавиши — в
+  нём; LY79 добавляет источник из fd. Раскладка — имя группы XKB (`English (US)`). Мелочи:
+  `XiMaster`/`XiSlave`, `Target`, константы контактов с причиной, одна функция копирования
+  события, вход сенсорного экрана — не контакт (`a_touch_screens_crossing_is_no_contact`),
+  `FocusOut` доходит до окна при панике обработчика отмены
+  (`a_window_follows_its_focus_when_a_cancel_handler_panics`: цикл ловит панику, отдаёт событие
+  окнам, поднимает её), харнесс гоняет только строки X11 из `contracts()`. Откат проверен для
+  каждого из восьми исправлений. Проверки: `native-features`, WSL clippy 16 вариантов, nextest
+  под xvfb `--all-features` 369 из 369, по умолчанию 314 из 314, `x11_window` 14 из 14, rustdoc
+  трёх вариантов; Windows — clippy рабочего пространства, clippy Android и macOS, `wasm-check`,
+  `doc-strict`, `checks`, `module-dag`, `file-length`, `globals`, `markers`, `testing`,
+  `docs-paths`.
 - [x] **LY82** — ветка `platform/x11`, начата на вершине LY46 `8138ab489`, перенесена на `main`
   @ `d6e469a2b` после слияния #1927. **Хост.** `X11Platform = HostPlatform<X11>`
   (`hosts/linux.rs`): одно соединение libxcb (`owner::linux::x11::X11Connection`, x11rb
