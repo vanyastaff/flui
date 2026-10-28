@@ -1,8 +1,9 @@
 # ADR-0254: One window truth: a state snapshot, admitted commands, one handler and an owner-local window
 
-- **Status:** Accepted (2026-10-20). Not implemented: the code changes land as separate changes
-  after this record, and a platform's row in `docs/platform-parity.md` moves only after a run on
-  that platform (Confirmation).
+- **Status:** Accepted (2026-10-20). Implemented in part: decision 4's application level — one
+  `AppHandler` passed to `Platform::run` in place of the registrations. The rest lands as
+  separate changes, and a platform's row in `docs/platform-parity.md` moves only after a
+  run on that platform (Confirmation).
 - **Date:** 2026-10-20
 - **Amended:** 2026-10-27 — decision 4, approved by the owner: (1) a `WindowHandler` method takes
   no `&OwnerPlatform`, because `WindowHandler` is the contract's and `OwnerPlatform` is the host
@@ -42,7 +43,15 @@
     `dyn PlatformWindow` and `dyn HostWindow` in §3's second change.
   - [ADR-0039](ADR-0039-event-loop-affinity-capability.md) §3, in part: the sentence that the
     owner lane never carries closures. The deferred window open carries one `Send` factory
-    (decision 4).
+    (decision 4). §1 and §6, in part: the one-shot `PlatformReadyCallback` (`on_ready`) `run`
+    took, which is `AppHandler::ready` (decision 4); the owner capability it hands over and its
+    loop scope stay.
+  - [ADR-0044](ADR-0044-driver-loop-hybrid.md) §7, in part: the registered
+    `Platform::set_wake_deadline_hook`, which is `AppHandler::wake_deadline` (decision 4); the
+    wall-clock wake the loop computes from its answer stays.
+  - [ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md), in part: the
+    `Platform::on_open_urls` registration it names as a deep link's source, deleted by decision
+    4; the opened URLs and files reach the handler with the activation feature.
   - [ADR-0222](ADR-0222-window-appearance-is-a-presentation-observation.md), the delivery shape
     only: the appearance is a field of the window state snapshot and its change arrives through
     the handler's state-changed obligation, not through `appearance()` and
@@ -322,7 +331,8 @@ replaces the registrations `Platform` has today for application-level events and
 obligation (`ready` with the `OwnerPlatform`, quit requested, reopened, session end with its
 answer, host notice, and the two queries `exit_policy` and `wake_deadline`), each receiving
 `&OwnerPlatform` where the platform exists. `AppHandler` is a trait of the host crate, not of the
-contract: it names `OwnerPlatform`, and only `flui-app` implements it (ADR-0151 §9). The other
+contract: it names `OwnerPlatform`, so only code that runs a host itself implements it — `flui-app`,
+and an example or a test that drives `flui-native` directly (ADR-0151 §9). The other
 registrations are not carried over.
 `on_window_event` is deleted below. `on_keyboard_layout_change` becomes `pub(crate)` in the host
 crate with `keyboard_layout`, which nothing above the host reads. `on_open_urls` is deleted now,

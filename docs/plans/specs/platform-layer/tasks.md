@@ -3274,6 +3274,36 @@ graph LR
   warnings` обоих вариантов. Не запускалось: Android-устройство, Mac и iPhone (AppKit reopen и
   насос дедлайна, UIKit — только типизированы; vanyastaff/flui#1840), браузер (проверить: `pagehide`
   и `pageshow` доходят до `AppHandler::session_end`, выход отпускает окно), `cross-typecheck`.
+
+  **Исправления после ревью** (#1926). (1) Выход, поднятый внутри метода обработчика, на вебе и
+  Android больше не теряется: `AppDelivery::release`, вызванный во время доставки, ждёт её конца
+  и отпускает обработчик после того, как она доставила очередь (строка «a quit raised as the
+  loop ends inside a method is heard once» в `app_delivery_contracts`, из `host_notice` и из
+  `ready`). (2, 3, 5) `AppRoutes` принадлежат `RunnerHandler` (`Rc<RefCell<AppRoutes>>`);
+  `AppRuntime` хранит только слабые ссылки `run_routes` на маршруты живых запусков, а функции
+  `route_*` пишут в самый внутренний живой. Поколение установки и `try_borrow` ушли: вложенный
+  `run` не стирает маршруты внешнего, проваленная загрузка не отвечает чужими. Таблица
+  `app_handler_routes` в `flui-app` («a nested run leaves the outer run's routes», «a failed
+  bootstrap answers with no other run's routes»). Маршрут выхода рабочего стола и дедлайна
+  по-прежнему сверяют `loop_identity`: главное окно на поток одно. (4) `exit_policy` отвечает
+  `ExitAnswer { End, KeepRunning, HostDecides }`; без маршрута `flui-app` отвечает
+  `HostDecides`, и хост решает как без обработчика (Win32, AppKit, winit — выход, headless —
+  нет); прямой режим — `End`. Строки «an exit policy left to the host is the host's» и «a run
+  that routes no exit leaves it to the host». (6) R9.7: настройки идут прежним путём ADR-0172
+  через запуск с `AppHandler` — `a_panicking_preference_delivery_does_not_stop_later_changes`,
+  `a_replacement_platform_starts_a_new_preference_owner`,
+  `the_platform_preference_source_reaches_installed_consumers` (`flui-app`, через
+  `app_handler`) и `a_change_with_no_turn_callback_reaches_the_next_one_registered`
+  (`flui-native/tests/preferences.rs`). (7) Один набор: `flui_native::testing::app` (`AppLog`,
+  `AppCall`, `on_ready`, `with_log`, `run_keeping_owner`), `tests/support/app.rs` удалён;
+  Win32 `handlers` → `app_hooks`, проверка выхода получает `&AppDelivery`; документы о
+  реализациях `AppHandler` исправлены (ADR-0151 §9, ADR-0254 §4); ADR-0039 §1 и §6, ADR-0044
+  §7, ADR-0093 отмечены как замещённые ADR-0254 решением 4; статус ADR-0254 — реализован
+  частично. Каждый новый тест падает при откате (проверено: отложенное отпускание; старая
+  маршрутизация из `HEAD` — падают все три строки `app_handler_routes`). macOS: ответ
+  `applicationShouldTerminate:` на выход из сеанса не изменился — `TerminateGate` отвечает
+  `Now` или `Later` после объявления, `Cancel` только обычному выходу
+  (`loop_control.rs` `terminate_requested`, `terminate_gate.rs` `terminate_requested`).
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`

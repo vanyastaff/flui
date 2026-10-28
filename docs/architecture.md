@@ -162,8 +162,8 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     // ... plus file pickers, app activation, exit re-evaluation, preferences and data dirs
 }
 
-// AppHandler, the core host's trait, which only flui-app implements: ready(OwnerPlatform),
-// quit_requested, reopen, session_end, host_notice, exit_policy, wake_deadline (ADR-0254 §4).
+// AppHandler, the core host's trait, implemented by flui-app and by code that drives a host directly: ready(OwnerPlatform),
+// quit_requested, reopen, session_end, host_notice, exit_policy (an ExitAnswer), wake_deadline (ADR-0254 §4).
 let platform = current_platform()?; // Result<Box<dyn Platform>, PlatformError>
 ```
 

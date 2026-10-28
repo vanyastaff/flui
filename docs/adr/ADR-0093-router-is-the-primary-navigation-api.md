@@ -5,6 +5,9 @@
   Navigator, and `WidgetsApp::router`; in `flui-macros`, `#[derive(Routable)]`. The later steps
   are not implemented.
 - **Date:** 2026-09-25
+- **Superseded-by:** [ADR-0254](ADR-0254-window-contract.md) decision 4, in part: the
+  `Platform::on_open_urls` registration named here as a deep link's source is deleted; the
+  opened URLs and files reach `AppHandler` with the activation feature.
 - **Supersedes (on acceptance):** [ADR-0024](ADR-0024-named-routes-seam.md) (string-named
   routes; `RouteKey<T>` of its §3 carries over)
 - **Supersedes in part (on acceptance):** [ADR-0019](ADR-0019-navigator-routing-seam.md) (the
