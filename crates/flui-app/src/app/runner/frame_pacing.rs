@@ -34,7 +34,9 @@ pub(super) fn install_pre_present_hook(
     backend: &mut impl flui_engine::RasterBackend,
     surface: std::sync::Arc<dyn flui_platform::SurfaceTarget>,
 ) {
-    backend.set_pre_present_hook(Some(Box::new(move || surface.pre_present_notify())));
+    backend.set_pre_present_hook(Some(Box::new(move |statistics| {
+        surface.pre_present_notify(statistics);
+    })));
 }
 
 /// What a platform wake should do: run the full frame pipeline, service

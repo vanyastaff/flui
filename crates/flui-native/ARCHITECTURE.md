@@ -476,7 +476,17 @@ trait depends on `flui-platform` instead.
   measure a cadence, the iOS display link and the browser's frame estimate,
   publish through `MeasuredPeriod::offer`, which replaces the published
   period only when a measurement leaves its band (`outside_band`, the band
-  rule the estimate also judges its frames' agreement by).
+  rule the estimate also judges its frames' agreement by). Each platform
+  file's pure half also maps what its OS reports of a display's colour to the
+  contract's `DisplayColor` (DXGI colour spaces and luminances, Apple's gamut
+  and potential EDR headroom, Android's wide-gamut, HDR and highest HDR/SDR
+  ratio, a Wayland image description, the browser's colour queries), and a
+  report that is not a finite multiple of white publishes no headroom. Where
+  the OS reports nothing the colour is the `CapabilityAbsence` that says why:
+  X11 `NotYetOnThisHost`, a compositor without `wp_color_management_v1` or a
+  device below the API that reports it `NotOnThisDevice`, the browser's
+  headroom `NotOnThisPlatform`. The Wayland model numbers each image
+  description it asks for and takes over only the newest one's `done`.
   `display::source::mapping` reads one table of cadences through the
   Android sample, the Windows rule, the Wayland and RandR models, the
   display link and the estimator; the macOS source hands CoreGraphics' rate
@@ -855,7 +865,27 @@ trait depends on `flui-platform` instead.
     `NativeWindow`, the Wayland target an `Arc` of the window's `wl_surface`
     (destroyed when the last holder drops) and a clone of the connection. Its
     `pre_present_notify` arms the Wayland frame callback on winit and on the
-    native Wayland host, and returns at once elsewhere. Only the web target and
+    native Wayland host, and returns at once elsewhere. It is also where a
+    presentation report starts: the native Wayland target asks
+    `wp_presentation` for a feedback per commit, whose `presented` event the
+    window rebases from the compositor's clock (`clock_id`) onto the event
+    clock, and the Win32 target rebases the DXGI frame statistics the renderer
+    read (`SwapChainStatistics::Dxgi`) from the performance counter, measuring
+    the refresh period between two reports (`frame_timing::PresentTracker`:
+    a read naming the present or refresh already reported is no report, and
+    `SwapChainStatistics::DxgiDisjoint` forgets the last refresh). Either
+    reports into the window's
+    `handlers::PresentationReports`, which the `WindowDelivery` keeps and
+    `dispatch_frame` empties into the next frame request
+    (`FrameRequest::presented`): the newest report wins, a report no later
+    than one kept or carried is dropped, and one still ahead of the request's
+    delivery waits. The headless window reports what a test injects
+    (`MockWindow::simulate_presented`). The web and X11 windows answer
+    `NotOnThisPlatform` (a browser names the frame's start, never its showing;
+    an X11 present completes on the GPU driver's connection), winit
+    `NotYetOnThisHost`, and AppKit, UIKit and the Activity
+    `NotYetOnThisHost` (`window::capabilities::PRESENTATION`: the drawable and
+    the swap chain that know are wgpu's). Only the web target and
     `MainRetainedView` carry an `unsafe impl Send`/`Sync`, whose SAFETY
     names the invariant;
   - its `RedrawRequester` (`redraw_requester()`), how a waker, a signal

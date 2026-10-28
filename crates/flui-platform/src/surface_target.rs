@@ -61,9 +61,76 @@ pub trait SurfaceTarget: HasWindowHandle + HasDisplayHandle + Send + Sync + 'sta
     /// immediately before the present. On Wayland it arms the surface's frame
     /// callback, so the next redraw the window asks for waits for the
     /// compositor: one per display refresh while the surface is visible, none
-    /// while it is hidden. A host whose window system has no such protocol
-    /// returns at once, and says so where it implements this.
-    fn pre_present_notify(&self);
+    /// while it is hidden, and asks the compositor when the frame is shown. A
+    /// host whose window system has no such protocol returns at once, and says
+    /// so where it implements this.
+    ///
+    /// `statistics` is what the presenter read from its swap chain about the
+    /// frames it presented before this one, for a host whose platform reports
+    /// presentation there and nowhere the host can reach on its own (DXGI on
+    /// Windows): the host turns it into the window's
+    /// [`FrameRequest::presented`](crate::FrameRequest::presented). A presenter
+    /// that reads nothing passes [`SwapChainStatistics::None`].
+    fn pre_present_notify(&self, statistics: SwapChainStatistics);
+}
+
+/// What a presenter read from its swap chain before a present: the platform's
+/// own record of when its earlier frames reached the screen, in the platform's
+/// units, which the window's host rebases onto the event timeline.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SwapChainStatistics {
+    /// The presenter read nothing.
+    #[default]
+    None,
+    /// A DXGI swap chain's `GetFrameStatistics`.
+    Dxgi(DxgiFrameStatistics),
+    /// A DXGI swap chain's statistics broke off
+    /// (`DXGI_ERROR_FRAME_STATISTICS_DISJOINT`: a mode change, a move to
+    /// another output): the next statistics do not compare with the earlier
+    /// ones.
+    DxgiDisjoint,
+}
+
+/// A DXGI swap chain's frame statistics, as `IDXGISwapChain::GetFrameStatistics`
+/// fills `DXGI_FRAME_STATISTICS`, read before a present.
+///
+/// The statistics name the newest present the display has shown:
+/// [`present_count`](Self::present_count) is that present's number, and it was
+/// shown at the refresh [`sync_refresh_count`](Self::sync_refresh_count), which
+/// began at [`sync_qpc_time`](Self::sync_qpc_time) on the performance counter.
+/// A host reports a present once: a read naming the present or the refresh it
+/// last reported is a repeat.
+///
+/// ```
+/// use flui_platform::DxgiFrameStatistics;
+///
+/// let read = DxgiFrameStatistics::new(40, 1_201, 9_000_000);
+/// assert_eq!(read.present_count, 40);
+/// assert_eq!(read.sync_qpc_time, 9_000_000);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DxgiFrameStatistics {
+    /// `PresentCount`: the number of the newest present the display showed.
+    pub present_count: u32,
+    /// `SyncRefreshCount`: the refresh at which it was shown.
+    pub sync_refresh_count: u32,
+    /// `SyncQPCTime`: when that refresh began, in `QueryPerformanceCounter`
+    /// ticks.
+    pub sync_qpc_time: i64,
+}
+
+impl DxgiFrameStatistics {
+    /// The statistics a presenter read, field by field in declaration order.
+    #[must_use]
+    pub const fn new(present_count: u32, sync_refresh_count: u32, sync_qpc_time: i64) -> Self {
+        Self {
+            present_count,
+            sync_refresh_count,
+            sync_qpc_time,
+        }
+    }
 }
 
 /// Asks one window for a frame from any thread (ADR-0254 §5).

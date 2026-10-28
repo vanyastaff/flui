@@ -31,7 +31,7 @@ impl HasDisplayHandle for NoNativeSurface {
 
 impl crate::SurfaceTarget for NoNativeSurface {
     /// Nothing presents into a surface that does not exist.
-    fn pre_present_notify(&self) {}
+    fn pre_present_notify(&self, _: crate::SwapChainStatistics) {}
 }
 
 /// The per-frame verbs of a window double whose window system takes neither

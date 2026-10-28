@@ -229,12 +229,20 @@ impl UiRuntime {
         self.begin_recorded_input();
         self.deliver_input_records();
         let sampled = clock.frame_time();
-        let request = self.pending_frame_request();
+        let pending = self.pending_frame_request();
+        let request = pending.map(|(request, _)| request);
         let now = self.frame_time_for(request, sampled);
         self.last_frame_time.set(Some(now));
-        let deadline = request
-            .and_then(|request| request.target_present)
-            .and_then(|shown| self.instant_of(shown))
+        // Idle work runs until the instant the platform names for this frame's
+        // present, else until the next refresh the presentation's newest
+        // presentation report places, else until the host's deadline.
+        let deadline = pending
+            .and_then(|(request, presentation)| {
+                request
+                    .target_present
+                    .and_then(|shown| self.instant_of(shown))
+                    .or_else(|| presentation.clock().next_presentation_after(now))
+            })
             .map_or_else(
                 || clock.idle_deadline(now),
                 flui_scheduler::IdleDeadline::from,
@@ -399,12 +407,23 @@ impl UiRuntime {
 }
 
 impl UiRuntime {
-    /// The request of the newest frame delivered since the last pump, if any host delivered one.
-    fn pending_frame_request(&self) -> Option<flui_platform::FrameRequest> {
+    /// The request of the newest frame delivered since the last pump, if any host delivered one,
+    /// with the presentation it was delivered to.
+    fn pending_frame_request(
+        &self,
+    ) -> Option<(
+        flui_platform::FrameRequest,
+        &crate::presentation::PresentationState,
+    )> {
         self.presentations
             .iter()
-            .filter_map(|presentation| presentation.frame_request.get())
-            .max_by_key(|request| request.vsync)
+            .filter_map(|presentation| {
+                presentation
+                    .frame_request
+                    .get()
+                    .map(|request| (request, presentation))
+            })
+            .max_by_key(|(request, _)| request.vsync)
     }
 
     /// Forget requests this pump did not render, so a skipped frame's vsync never dates a later
@@ -417,7 +436,7 @@ impl UiRuntime {
 
     /// The instant on this runtime's clock that `time` names, or `None` past the last one the
     /// platform represents.
-    fn instant_of(&self, time: flui_platform::EventTime) -> Option<web_time::Instant> {
+    pub(super) fn instant_of(&self, time: flui_platform::EventTime) -> Option<web_time::Instant> {
         flui_foundation::MonotonicClock::epoch(&self.clock)
             .checked_add(std::time::Duration::from_nanos(time.as_nanos()))
     }

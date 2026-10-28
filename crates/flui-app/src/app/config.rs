@@ -695,8 +695,31 @@ impl From<&AppConfig> for flui_platform::WindowOptions {
             .with_position(config.position)
             .with_mode(config.mode)
             .with_input_latency(config.input_latency)
-            .with_os_options(config.os_options.clone())
+            .with_os_options(os_options_for(config))
     }
+}
+
+/// The application's per-system window options, with the Android window's
+/// colour mode following the surface colour it asks for where the
+/// application set no Android options of its own: Android composes a window
+/// in a wide gamut or in HDR only when the window asks.
+fn os_options_for(config: &AppConfig) -> flui_platform::os_options::OsWindowOptions {
+    use flui_platform::os_options::{AndroidColorMode, AndroidWindowOptions};
+
+    let mut options = config.os_options.clone();
+    let color_mode = match config.surface_color {
+        flui_engine::SurfaceColor::WideGamut => Some(AndroidColorMode::WideColorGamut),
+        flui_engine::SurfaceColor::Hdr => Some(AndroidColorMode::Hdr),
+        // `Srgb8` is the window's default and needs no options; a request a
+        // later engine adds asks for nothing either.
+        flui_engine::SurfaceColor::Srgb8 | _ => None,
+    };
+    if options.android.is_none()
+        && let Some(color_mode) = color_mode
+    {
+        options.android = Some(AndroidWindowOptions::default().with_color_mode(color_mode));
+    }
+    options
 }
 
 #[cfg(test)]
@@ -710,6 +733,41 @@ mod tests {
     use flui_runtime::{HostInput, InputRecord, InputTapFactory};
 
     use super::AppConfig;
+
+    /// The Android window asks for the colour mode the surface is requested
+    /// in, and an application's own Android options are kept as they are.
+    #[test]
+    fn the_android_colour_mode_follows_the_requested_surface_colour() {
+        use flui_platform::WindowOptions;
+        use flui_platform::os_options::{AndroidColorMode, AndroidWindowOptions, OsWindowOptions};
+
+        let mode = |config: &AppConfig| {
+            WindowOptions::from(config)
+                .os_options
+                .android
+                .map(|android| android.color_mode)
+        };
+        for (requested, expected) in [
+            (flui_engine::SurfaceColor::Srgb8, None),
+            (
+                flui_engine::SurfaceColor::WideGamut,
+                Some(AndroidColorMode::WideColorGamut),
+            ),
+            (flui_engine::SurfaceColor::Hdr, Some(AndroidColorMode::Hdr)),
+        ] {
+            assert_eq!(
+                mode(&AppConfig::new().with_surface_color(requested)),
+                expected,
+                "{requested:?}"
+            );
+        }
+        let own = AppConfig::new()
+            .with_surface_color(flui_engine::SurfaceColor::Hdr)
+            .with_os_options(OsWindowOptions::default().with_android(
+                AndroidWindowOptions::default().with_color_mode(AndroidColorMode::WideColorGamut),
+            ));
+        assert_eq!(mode(&own), Some(AndroidColorMode::WideColorGamut));
+    }
 
     /// Each runtime the app builds records through a fresh tap from the
     /// configured factory, and only its own input.

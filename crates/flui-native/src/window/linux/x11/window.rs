@@ -1207,8 +1207,10 @@ impl HasDisplayHandle for X11Surface {
 
 impl flui_platform::SurfaceTarget for X11Surface {
     /// X11 has no frame callback to arm: a present is paced by the swap
-    /// chain, and this returns at once.
-    fn pre_present_notify(&self) {}
+    /// chain, and this returns at once. The swap chain's completion events go
+    /// to the GPU driver's own connection, so the host learns nothing of when
+    /// the frame is shown.
+    fn pre_present_notify(&self, _: flui_platform::SwapChainStatistics) {}
 }
 
 /// An X11 window's redraw requester: any thread marks the window and rings

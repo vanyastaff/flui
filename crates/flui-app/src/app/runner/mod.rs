@@ -73,6 +73,7 @@ pub use android::{run_app_android, run_app_android_with_config};
     not(target_arch = "wasm32")
 ))]
 use desktop::run_desktop;
+pub(in crate::app) use display_host::color_on as display_color_on;
 pub use fonts::{FontRegistrationError, register_font};
 pub(crate) use host::{
     AppRoutes, OwnerHostClearGuard, app_handler, install_owner_platform, route_exit_policy,

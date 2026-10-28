@@ -22,9 +22,12 @@
 //!   work area (`_NET_WORKAREA` of the current desktop), the bounds without one.
 //! - **Native numbers** are the CRTCs behind the monitor's outputs: a winit
 //!   window on X11 names its monitor by its CRTC.
+//! - **Colour** is not read. X has no dynamic-range state; a gamut would come
+//!   from the `_ICC_PROFILE` property a colour manager sets on the root
+//!   window, which this host does not parse yet.
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform::{DisplayKey, RefreshPeriod};
+use flui_platform::{CapabilityAbsence, DisplayKey, RefreshPeriod};
 
 use super::view::{Identity, OutputView, intersection};
 
@@ -128,6 +131,7 @@ impl RandrState {
             refresh_period,
             is_primary: monitor.is_primary,
             persistent_key,
+            color: Err(CapabilityAbsence::NotYetOnThisHost),
         })
     }
 }

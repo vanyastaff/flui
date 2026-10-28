@@ -21,7 +21,10 @@ pub(crate) mod macos;
 pub(crate) mod screen {
     //! How the Apple sources key a screen and where they place it: a macOS
     //! screen by its display's UUID, its frame in device pixels; an iOS screen
-    //! by the number of the object a ledger retains.
+    //! by the number of the object a ledger retains; and the colour a screen
+    //! shows surfaces in.
+
+    use flui_platform::{DisplayColor, Headroom};
 
     /// The key of a macOS screen, from the `NSScreenNumber` of its
     /// `deviceDescription` and a lookup of the display UUID for a
@@ -75,6 +78,55 @@ pub(crate) mod screen {
         Bounds {
             origin: Point::new(device(frame.origin.x), device(top)),
             size: Size::new(device(frame.size.width), device(frame.size.height)),
+        }
+    }
+
+    /// `-[NSScreen maximumPotentialExtendedDynamicRangeColorComponentValue]`
+    /// (macOS 10.15). Before it a screen reports no extended-range headroom.
+    ///
+    /// Only the x86_64 floor (10.13) lies below it; arm64's floor (11.0) is
+    /// above it, so there the call is made directly and a gate would not
+    /// compile (ADR-0244).
+    #[cfg(all(any(target_os = "macos", test), not(target_arch = "aarch64")))]
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct MacosPotentialHeadroom;
+
+    #[cfg(all(any(target_os = "macos", test), not(target_arch = "aarch64")))]
+    impl crate::version::gate::Gate for MacosPotentialHeadroom {
+        type Version = crate::version::gate::apple::MacOSVersion;
+        const SINCE: u64 = crate::version::gate::apple::MacOSVersion::new(10, 15, 0).rank();
+    }
+
+    /// `UIScreen.potentialEDRHeadroom` (iOS 16). Before it a screen reports no
+    /// extended-range headroom.
+    #[cfg(any(target_os = "ios", test))]
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct IosPotentialHeadroom;
+
+    #[cfg(any(target_os = "ios", test))]
+    impl crate::version::gate::Gate for IosPotentialHeadroom {
+        type Version = crate::version::gate::apple::AppleVersion;
+        const SINCE: u64 = crate::version::gate::apple::AppleVersion::new(16, 0, 0).rank();
+    }
+
+    /// The colour of an Apple screen: whether it shows the Display P3 gamut,
+    /// and the extended-dynamic-range headroom it can reach
+    /// (`maximumPotentialExtendedDynamicRangeColorComponentValue` on macOS,
+    /// `potentialEDRHeadroom` on iOS), `None` where the system predates it.
+    ///
+    /// A screen whose potential headroom is over white is in high range at that
+    /// headroom. The potential, not the current value, because the current one
+    /// stays at white until a layer asks for extended range: reading it would
+    /// keep the surface that asks from ever being chosen. A screen without the
+    /// report, or with a potential at white or one that is not a finite multiple
+    /// of it, is standard range: no extended range is published from a value
+    /// that does not describe one.
+    pub(crate) fn screen_color(p3: bool, potential: Option<f64>) -> DisplayColor {
+        let gamut = crate::display::source::p3_or_srgb(p3);
+        // A finite `f64` beyond `f32` becomes infinite here, which `try_new` refuses.
+        match potential.and_then(|value| Headroom::try_new(value as f32).ok()) {
+            Some(headroom) if headroom > Headroom::SDR => DisplayColor::high(gamut, Ok(headroom)),
+            _ => DisplayColor::standard(gamut),
         }
     }
 
@@ -160,10 +212,76 @@ pub(crate) mod screen {
 
         use flui_foundation::geometry::{Bounds, Point, Size};
 
+        #[cfg(not(target_arch = "aarch64"))]
+        use super::MacosPotentialHeadroom;
         use super::{
-            SameObject, ScreenLedger, change_screen, device_bounds_of_screen, macos_display_key,
-            macos_display_persistent_key,
+            IosPotentialHeadroom, SameObject, ScreenLedger, change_screen, device_bounds_of_screen,
+            macos_display_key, macos_display_persistent_key, screen_color,
         };
+
+        /// Each screen report Apple gives, to the display colour it means.
+        #[test]
+        fn apple_screen_reports_map_to_the_display_colour() {
+            use flui_platform::{ColorGamut, DisplayColor, Headroom};
+
+            assert_eq!(
+                screen_color(true, Some(16.0)),
+                DisplayColor::high(
+                    ColorGamut::DisplayP3,
+                    Ok(Headroom::try_new(16.0).expect("headroom"))
+                ),
+                "an XDR panel"
+            );
+            assert_eq!(
+                screen_color(false, Some(1.0)),
+                DisplayColor::standard(ColorGamut::Srgb),
+                "an SDR monitor"
+            );
+            assert_eq!(
+                screen_color(true, None),
+                DisplayColor::standard(ColorGamut::DisplayP3),
+                "a system without the headroom report"
+            );
+            for broken in [f64::NAN, f64::INFINITY, 0.0, -3.0, f64::MAX] {
+                assert_eq!(
+                    screen_color(false, Some(broken)),
+                    DisplayColor::standard(ColorGamut::Srgb),
+                    "{broken} publishes no extended range"
+                );
+            }
+        }
+
+        /// The headroom reports' gates: none before the release that has them.
+        #[test]
+        fn potential_headroom_gate_table() {
+            use crate::version::gate::apple::AppleVersion;
+
+            #[cfg(not(target_arch = "aarch64"))]
+            {
+                use crate::version::gate::apple::MacOSVersion;
+
+                assert!(
+                    MacOSVersion::new(10, 14, 6)
+                        .since::<MacosPotentialHeadroom>()
+                        .is_none()
+                );
+                assert!(
+                    MacOSVersion::new(10, 15, 0)
+                        .since::<MacosPotentialHeadroom>()
+                        .is_some()
+                );
+            }
+            assert!(
+                AppleVersion::new(15, 7, 0)
+                    .since::<IosPotentialHeadroom>()
+                    .is_none()
+            );
+            assert!(
+                AppleVersion::new(16, 0, 0)
+                    .since::<IosPotentialHeadroom>()
+                    .is_some()
+            );
+        }
 
         const UUID_A: [u8; 16] = [0xA0; 16];
         const UUID_B: [u8; 16] = [0xB0; 16];

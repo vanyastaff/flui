@@ -1386,9 +1386,112 @@ fn activation_is_a_fact_apart_from_focus() {
 
 /// A Win32 window for the conformance checks of `flui-testing`.
 struct Win32Fixture {
-    _platform: WindowsPlatform,
+    platform: WindowsPlatform,
     window: Rc<dyn HostWindow>,
     hwnd: HWND,
+}
+
+/// A flip-model DXGI swap chain on a window, presented the way wgpu's DX12
+/// backend presents: its frame statistics read before each present and handed
+/// to the window's surface target.
+struct DxgiPresenter {
+    swap_chain: windows::Win32::Graphics::Dxgi::IDXGISwapChain1,
+    _device: windows::Win32::Graphics::Direct3D11::ID3D11Device,
+}
+
+impl DxgiPresenter {
+    /// A two-buffer swap chain on `hwnd`, on a hardware device or, where
+    /// there is none, WARP.
+    fn on(hwnd: HWND) -> Self {
+        use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP};
+        use windows::Win32::Graphics::Direct3D11::{
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice,
+        };
+        use windows::Win32::Graphics::Dxgi::Common::{
+            DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
+        };
+        use windows::Win32::Graphics::Dxgi::{
+            CreateDXGIFactory1, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_FLIP_DISCARD,
+            DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIFactory2,
+        };
+
+        let device = [D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP]
+            .into_iter()
+            .find_map(|driver| {
+                let mut device = None;
+                // SAFETY: the out-pointer is a local that outlives the call;
+                // no adapter, module or feature-level list is passed.
+                unsafe {
+                    D3D11CreateDevice(
+                        None,
+                        driver,
+                        windows::Win32::Foundation::HMODULE::default(),
+                        D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                        None,
+                        D3D11_SDK_VERSION,
+                        Some(&raw mut device),
+                        None,
+                        None,
+                    )
+                }
+                .ok()?;
+                device
+            })
+            .expect("a Direct3D 11 device");
+        // SAFETY: a plain factory creation.
+        let factory: IDXGIFactory2 = unsafe { CreateDXGIFactory1() }.expect("a DXGI factory");
+        let description = DXGI_SWAP_CHAIN_DESC1 {
+            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+            BufferCount: 2,
+            SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
+            ..Default::default()
+        };
+        // SAFETY: `hwnd` is the live test window, on its creating thread; the
+        // description outlives the call.
+        let swap_chain = unsafe {
+            factory.CreateSwapChainForHwnd(&device, hwnd, &raw const description, None, None)
+        }
+        .expect("a flip-model swap chain on the window");
+        Self {
+            swap_chain,
+            _device: device,
+        }
+    }
+
+    /// The statistics as wgpu's DX12 backend reads them before a present:
+    /// none until the display has shown one.
+    fn statistics(&self) -> flui_platform::SwapChainStatistics {
+        let mut statistics = windows::Win32::Graphics::Dxgi::DXGI_FRAME_STATISTICS::default();
+        // SAFETY: a read of the swap chain's counters on its presenting
+        // thread; `statistics` outlives the call that fills it.
+        let read = unsafe { self.swap_chain.GetFrameStatistics(&raw mut statistics) };
+        match read {
+            Ok(()) => {
+                flui_platform::SwapChainStatistics::Dxgi(flui_platform::DxgiFrameStatistics::new(
+                    statistics.PresentCount,
+                    statistics.SyncRefreshCount,
+                    statistics.SyncQPCTime,
+                ))
+            }
+            Err(_) => flui_platform::SwapChainStatistics::None,
+        }
+    }
+
+    /// Present the back buffer at the next refresh.
+    fn present(&self) {
+        // SAFETY: a present on the thread that made the swap chain.
+        unsafe {
+            self.swap_chain
+                .Present(1, windows::Win32::Graphics::Dxgi::DXGI_PRESENT(0))
+        }
+        .ok()
+        .expect("a present");
+    }
 }
 
 impl WindowFixture for Win32Fixture {
@@ -1421,6 +1524,70 @@ impl WindowFixture for Win32Fixture {
     fn has_native_surface(&self) -> bool {
         true
     }
+
+    /// Frames presented through a DXGI swap chain on a window of its own, as
+    /// a window an earlier check minimized shows none, each after handing the
+    /// window's target the statistics read before it, as the renderer does,
+    /// until the statistics have named a shown present twice (the second
+    /// measures the refresh period); the swap chain is let go before the
+    /// window's next frame, and the window closes after it. DXGI updates its
+    /// statistics when the compositor reports a flip, which can take many
+    /// presents.
+    fn present_and_request_frame(&mut self) -> Option<flui_platform::FrameRequest> {
+        let presenting = open(&self.platform, options());
+        settle();
+        let hwnd = hwnd_of(&presenting.window);
+        let target = presenting.window.surface_target();
+        {
+            let presenter = DxgiPresenter::on(hwnd);
+            let mut shown = std::collections::BTreeSet::new();
+            for _ in 0..300 {
+                let statistics = presenter.statistics();
+                if let flui_platform::SwapChainStatistics::Dxgi(read) = statistics
+                    && read.sync_qpc_time > 0
+                    && shown.insert(read.present_count)
+                {
+                    eprintln!(
+                        "DXGI before a present: present {} shown at refresh {}, QPC {}",
+                        read.present_count, read.sync_refresh_count, read.sync_qpc_time
+                    );
+                }
+                target.pre_present_notify(statistics);
+                presenter.present();
+                let _ = pump_until(Duration::ZERO, || false);
+                if shown.len() >= 2 {
+                    break;
+                }
+            }
+        }
+        presenting.handler.take_calls();
+        presenting.window.request_redraw();
+        settle();
+        let request =
+            presenting
+                .handler
+                .take_calls()
+                .into_iter()
+                .rev()
+                .find_map(|call| match call {
+                    flui_testing::window_handler::HandlerCall::FrameRequested(request) => {
+                        Some(request)
+                    }
+                    _ => None,
+                });
+        if let Some(request) = request {
+            eprintln!(
+                "the next frame request: vsync {:?}, presented {:?}",
+                request.vsync, request.presented
+            );
+        }
+        presenting
+            .window
+            .admit_and_apply(flui_platform::WindowCommand::Close)
+            .expect("a Win32 window closes");
+        settle();
+        request
+    }
 }
 
 fn the_win32_window_conforms() {
@@ -1428,7 +1595,7 @@ fn the_win32_window_conforms() {
     let window = open(&platform, options());
     let hwnd = hwnd_of(&window);
     window_conformance::assert_conforms(&mut Win32Fixture {
-        _platform: platform,
+        platform,
         window: window.window,
         hwnd,
     });

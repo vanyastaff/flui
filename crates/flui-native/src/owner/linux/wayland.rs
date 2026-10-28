@@ -29,8 +29,8 @@
 pub use event_loop::OutputName;
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(crate) use event_loop::{
-    LastInput, LiveOutputs, LoopWaker, LoopWindow, OutputFacts, WaylandDisplays, WaylandHost,
-    WaylandLoop, WaylandState, WindowSeed, WindowTable,
+    LastInput, LiveOutputs, LoopWaker, LoopWindow, OutputFacts, PresentationTime, WaylandDisplays,
+    WaylandHost, WaylandLoop, WaylandState, WindowSeed, WindowTable,
 };
 
 pub(crate) mod activation {
@@ -373,6 +373,7 @@ mod event_loop {
     use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_manager_v1::{
         self, WpFractionalScaleManagerV1,
     };
+    use wayland_protocols::wp::presentation_time::client::wp_presentation::{self, WpPresentation};
     use wayland_protocols::wp::viewporter::client::wp_viewporter::{self, WpViewporter};
     use wayland_protocols::xdg::activation::v1::client::xdg_activation_v1::{
         self, XdgActivationV1,
@@ -416,6 +417,9 @@ mod event_loop {
     const FRACTIONAL_SCALE_VERSION: u32 = 1;
     /// `zxdg_exporter_v2` has one version.
     const EXPORTER_VERSION: u32 = 1;
+    /// `wp_presentation` version 1; version 2 only lets a compositor round
+    /// its `refresh`.
+    const PRESENTATION_VERSION: u32 = 1;
     /// `xdg_activation_v1` has one version.
     const ACTIVATION_VERSION: u32 = 1;
 
@@ -482,6 +486,52 @@ mod event_loop {
         /// The global's name.
         pub(crate) const fn get(self) -> u32 {
             self.0
+        }
+    }
+
+    /// `wp_presentation`, through which a surface asks when each commit is
+    /// shown, and the clock the compositor stamps those times on.
+    #[derive(Clone)]
+    pub(crate) struct PresentationTime {
+        /// The global, which makes a feedback object per commit.
+        pub(crate) manager: WpPresentation,
+        /// The clock its `presented` events are stamped on.
+        pub(crate) clock: PresentationClock,
+    }
+
+    /// The clock a compositor stamps presentation times on, as its
+    /// `wp_presentation.clock_id` named it (`CLOCK_MONOTONIC` on every
+    /// compositor known); unknown until it has.
+    #[derive(Clone, Debug, Default)]
+    pub(crate) struct PresentationClock(Arc<std::sync::OnceLock<u32>>);
+
+    impl PresentationClock {
+        /// The clock's reading now, from its epoch; `None` before the
+        /// compositor named it, or for a clock this process cannot read.
+        pub(crate) fn now(&self) -> Option<Duration> {
+            let id = i32::try_from(*self.0.get()?).ok()?;
+            let clock = rustix::time::ClockId::try_from(id).ok()?;
+            let now = rustix::time::clock_gettime(clock);
+            Some(Duration::new(
+                u64::try_from(now.tv_sec).ok()?,
+                u32::try_from(now.tv_nsec).ok()?,
+            ))
+        }
+    }
+
+    impl Dispatch<WpPresentation, PresentationClock> for WaylandState {
+        fn event(
+            _: &mut Self,
+            _: &WpPresentation,
+            event: wp_presentation::Event,
+            clock: &PresentationClock,
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            // Sent once, right after the bind.
+            if let wp_presentation::Event::ClockId { clk_id } = event {
+                let _ = clock.0.set(clk_id);
+            }
         }
     }
 
@@ -921,6 +971,9 @@ mod event_loop {
         /// `zxdg_exporter_v2`, which hands out a handle another client
         /// (a portal's dialog) parents its window to.
         pub(crate) exporter: Option<ZxdgExporterV2>,
+        /// `wp_presentation`, which tells a surface when its commits are
+        /// shown; `None` where the compositor tells nothing.
+        pub(crate) presentation: Option<PresentationTime>,
         /// `xdg_activation_v1`, through which a window asks the compositor to
         /// activate it; `None` where the compositor takes no such request.
         pub(crate) activation: Option<XdgActivationV1>,
@@ -1069,6 +1122,13 @@ mod event_loop {
             let exporter = globals
                 .bind::<ZxdgExporterV2, _, _>(&handle, 1..=EXPORTER_VERSION, ())
                 .ok();
+            let presentation = {
+                let clock = PresentationClock::default();
+                globals
+                    .bind::<WpPresentation, _, _>(&handle, 1..=PRESENTATION_VERSION, clock.clone())
+                    .ok()
+                    .map(|manager| PresentationTime { manager, clock })
+            };
             let activation = globals
                 .bind::<XdgActivationV1, _, _>(&handle, 1..=ACTIVATION_VERSION, ())
                 .ok();
@@ -1113,6 +1173,7 @@ mod event_loop {
                     decoration,
                     fractional_scale,
                     exporter,
+                    presentation,
                     activation,
                     last_input: LastInput::default(),
                     live,
@@ -1249,6 +1310,11 @@ mod event_loop {
             self.protocol.decoration.is_some()
         }
 
+        /// Whether the compositor tells a surface when its commits are shown
+        /// (`wp_presentation`).
+        pub(crate) fn offers_presentation(&self) -> bool {
+            self.protocol.presentation.is_some()
+        }
         /// Whether the compositor takes activation requests
         /// (`xdg-activation`).
         pub(crate) fn offers_activation(&self) -> bool {

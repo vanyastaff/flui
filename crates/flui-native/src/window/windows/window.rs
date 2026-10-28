@@ -164,6 +164,9 @@ pub(crate) const fn window_capabilities(
     capabilities.observes_minimized = Native;
     capabilities.places_at_open = Native;
     capabilities.material = Native;
+    // From the frame statistics of the swap chain the renderer presents
+    // through, which it hands the surface target before each present.
+    capabilities.reports_presentation = Native;
     super::material::below_the_gate(capabilities, gate)
 }
 
@@ -694,6 +697,8 @@ impl WindowsWindow {
             hwnd: self.hwnd.0 as isize,
             context: self.context as isize,
             retirement: self.delivery.retirement(),
+            presented: self.delivery.presentation_reports(),
+            tracker: Mutex::default(),
         }
     }
 
@@ -1696,6 +1701,12 @@ pub(crate) struct Win32Surface {
     /// what the handle's `GWLP_USERDATA` holds now.
     context: isize,
     retirement: crate::owner::window_delivery::Retirement,
+    /// Where the presentations the renderer's swap chain reports go, for the
+    /// window's next frame request.
+    presented: crate::owner::handlers::PresentationReports,
+    /// What the statistics last reported, so each read reports only a new
+    /// present.
+    tracker: Mutex<super::frame_timing::PresentTracker>,
 }
 
 impl Win32Surface {
@@ -1758,9 +1769,70 @@ impl HasDisplayHandle for Win32Surface {
 }
 
 impl flui_platform::SurfaceTarget for Win32Surface {
-    /// Win32 has no frame callback to arm before a present: it returns at
-    /// once.
-    fn pre_present_notify(&self) {}
+    /// Win32 has no frame callback to arm before a present. DXGI frame
+    /// statistics the renderer read become the window's presentation report:
+    /// the newest present the display showed, at the refresh it began on,
+    /// rebased from the performance counter onto the event clock, with the
+    /// refresh period two reports measure. A read naming the present or the
+    /// refresh already reported reports nothing, and a disjoint read forgets
+    /// the last refresh ([`PresentTracker`](super::frame_timing::PresentTracker)).
+    fn pre_present_notify(&self, statistics: flui_platform::SwapChainStatistics) {
+        use std::num::NonZeroU64;
+        use windows::Win32::System::Performance::{
+            QueryPerformanceCounter, QueryPerformanceFrequency,
+        };
+
+        let read = match statistics {
+            flui_platform::SwapChainStatistics::Dxgi(read) => read,
+            flui_platform::SwapChainStatistics::DxgiDisjoint => {
+                self.tracker.lock().disjoint();
+                return;
+            }
+            _ => return,
+        };
+        if self.retirement.is_retired() {
+            return;
+        }
+        let (mut now, mut frequency) = (0_i64, 0_i64);
+        // SAFETY: each call writes one `i64` through a pointer to an
+        // initialized local that outlives it.
+        let read_counter = unsafe {
+            QueryPerformanceCounter(&raw mut now).is_ok()
+                && QueryPerformanceFrequency(&raw mut frequency).is_ok()
+        };
+        let (true, Ok(now), Some(frequency)) = (
+            read_counter,
+            u64::try_from(now),
+            u64::try_from(frequency).ok().and_then(NonZeroU64::new),
+        ) else {
+            return;
+        };
+        let shown = self.tracker.lock().read(
+            read.present_count,
+            read.sync_refresh_count,
+            read.sync_qpc_time,
+            now,
+            frequency,
+        );
+        let Some(shown) = shown else {
+            return;
+        };
+        let mut presented =
+            flui_platform::FramePresented::new(crate::owner::handlers::aged(shown.age));
+        if let Some(refresh) = shown.refresh {
+            presented = presented.with_refresh(refresh);
+        }
+        tracing::trace!(
+            target: "flui.present",
+            present = read.present_count,
+            sync_refresh = read.sync_refresh_count,
+            sync_qpc = read.sync_qpc_time,
+            at_ns = presented.at.as_nanos(),
+            refresh_ns = presented.refresh.map(|refresh| refresh.as_nanos()),
+            "DXGI reported a present shown"
+        );
+        self.presented.report(presented);
+    }
 }
 
 impl flui_platform::RedrawRequester for Win32Surface {

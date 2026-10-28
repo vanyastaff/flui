@@ -13,8 +13,12 @@ use flui_platform::{
     PlatformSystemChrome, PlatformTextInput, PlatformWindow, WindowCommand, WindowId, WindowMode,
     WindowState,
 };
-use flui_platform::{Availability, WindowCapabilities, WindowOptions};
+use flui_platform::{
+    Availability, CapabilityAbsence, EventTime, FramePresented, FrameRequest, WindowCapabilities,
+    WindowOptions,
+};
 use flui_testing::window_conformance::{self, Readback, WindowFixture};
+use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
 
 /// A headless window with a fault of its own: its snapshot claims every
 /// capability while the window takes none ([`Fault::ClaimsWhatItCannot`]),
@@ -45,6 +49,14 @@ impl PlatformWindow for Faulty {
             // The snapshot of a window that keeps its metrics to itself.
             Fault::SnapshotWithoutFacts => state.metrics = None,
             Fault::ClaimsWhatItCannot => state.capabilities = WindowCapabilities::ALL,
+            Fault::ClaimsPresentation => {
+                state.capabilities.reports_presentation = Availability::Native;
+            }
+            Fault::DisclaimsPresentation => {
+                state.capabilities = state
+                    .capabilities
+                    .without_presentation_feedback(CapabilityAbsence::NotOnThisPlatform);
+            }
             _ => {}
         }
         state
@@ -124,7 +136,7 @@ impl raw_window_handle::HasDisplayHandle for BlockingSurface {
 }
 
 impl flui_platform::SurfaceTarget for BlockingSurface {
-    fn pre_present_notify(&self) {
+    fn pre_present_notify(&self, _: flui_platform::SwapChainStatistics) {
         std::thread::sleep(std::time::Duration::from_secs(3));
     }
 }
@@ -135,6 +147,8 @@ struct Fixture {
     window: Rc<dyn PlatformWindow>,
     /// The headless window itself, whose model is the window system.
     model: Rc<dyn HostWindow>,
+    /// The handler the window was opened with, which hears its frames.
+    handler: Rc<RecordingWindowHandler>,
     fault: Option<Fault>,
 }
 
@@ -168,6 +182,12 @@ enum Fault {
     /// The fixture says the window has a native surface its target never
     /// hands out.
     SurfaceWithheld,
+    /// The window's snapshot says it reports presentation, and the window
+    /// system behind it reports none.
+    ClaimsPresentation,
+    /// The window's snapshot says it reports no presentation, and its frame
+    /// requests carry reports.
+    DisclaimsPresentation,
 }
 
 impl Fixture {
@@ -186,11 +206,9 @@ impl Fixture {
         if let Some(input) = input {
             platform = platform.with_input_availability(input);
         }
+        let handler = RecordingWindowHandler::new();
         let model = platform
-            .open_window(
-                WindowOptions::default(),
-                flui_testing::window_handler::RecordingWindowHandler::new(),
-            )
+            .open_window(WindowOptions::default(), Rc::clone(&handler) as _)
             .expect("a headless window opens");
         let window: Rc<dyn PlatformWindow> = match fault {
             Some(
@@ -199,13 +217,16 @@ impl Fixture {
                 | Fault::IgnoresClose
                 | Fault::IgnoresTheToken
                 | Fault::VerbsIgnoreTheirCapabilities
-                | Fault::PresentNotifyBlocks),
+                | Fault::PresentNotifyBlocks
+                | Fault::ClaimsPresentation
+                | Fault::DisclaimsPresentation),
             ) => Rc::new(Faulty(Rc::clone(&model) as _, fault)),
             _ => Rc::clone(&model) as _,
         };
         Self {
             window,
             model,
+            handler,
             fault,
         }
     }
@@ -278,6 +299,27 @@ impl WindowFixture for Fixture {
     /// A headless window has no native surface.
     fn has_native_surface(&self) -> bool {
         matches!(self.fault, Some(Fault::SurfaceWithheld))
+    }
+
+    /// One frame presented through the window's own target, which the
+    /// simulated window system shows at once and reports where the window
+    /// says it reports presentation; then the window's next frame.
+    fn present_and_request_frame(&mut self) -> Option<FrameRequest> {
+        self.model
+            .surface_target()
+            .pre_present_notify(flui_platform::SwapChainStatistics::None);
+        self.mock()
+            .simulate_presented(FramePresented::new(EventTime::now()));
+        self.handler.take_calls();
+        self.window.request_redraw();
+        self.handler
+            .take_calls()
+            .into_iter()
+            .rev()
+            .find_map(|call| match call {
+                HandlerCall::FrameRequested(request) => Some(request),
+                _ => None,
+            })
     }
 }
 
@@ -390,6 +432,23 @@ fn a_surface_target_that_blocks_or_withholds_is_caught() {
     }
 }
 
+fn a_window_whose_presentation_reports_disagree_with_its_capabilities_is_caught() {
+    assert_eq!(
+        window_conformance::check(&mut Fixture::new(
+            WindowCapabilities::NONE,
+            Some(Fault::ClaimsPresentation),
+        ))
+        .into_iter()
+        .map(|violation| violation.check)
+        .collect::<Vec<_>>(),
+        ["presentation_is_reported_exactly_when_claimed"]
+    );
+    assert_eq!(
+        caught(Fault::DisclaimsPresentation),
+        ["presentation_is_reported_exactly_when_claimed"]
+    );
+}
+
 fn a_snapshot_without_the_windows_facts_is_caught() {
     let checks = caught(Fault::SnapshotWithoutFacts);
     assert_eq!(checks, ["the_snapshot_agrees_with_the_window_system"]);
@@ -431,6 +490,11 @@ fn window_conformance_checks() {
             (
                 "a_window_whose_verbs_ignore_their_capabilities_is_caught",
                 a_window_whose_verbs_ignore_their_capabilities_is_caught as fn(),
+            ),
+            (
+                "a_window_whose_presentation_reports_disagree_with_its_capabilities_is_caught",
+                a_window_whose_presentation_reports_disagree_with_its_capabilities_is_caught
+                    as fn(),
             ),
         ],
     );
