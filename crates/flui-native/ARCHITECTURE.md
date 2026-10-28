@@ -3357,7 +3357,7 @@ table (`native x11`), and in `tests/x11_window.rs`
 held against `x11_xtest_mouse_and_wheel.jsonl`),
 `xtest_keys_reach_the_focused_window`,
 `losing_the_focus_ends_a_dead_key_and_releases_held_keys`,
-`a_window_follows_its_focus_when_a_cancel_handler_panics` and
+`a_window_follows_its_focus_when_a_handler_panics_at_its_loss` and
 `a_window_shows_the_cursor_it_asks_for`; the harness runs the X11 rows of the
 native recording contracts beside them. Tests of the window: the pure
 modules' tables

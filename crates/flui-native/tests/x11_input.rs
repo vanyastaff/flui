@@ -44,8 +44,8 @@ pub(crate) const CASES: &[(&str, fn())] = &[
         losing_the_focus_ends_a_dead_key_and_releases_held_keys,
     ),
     (
-        "a_window_follows_its_focus_when_a_cancel_handler_panics",
-        a_window_follows_its_focus_when_a_cancel_handler_panics,
+        "a_window_follows_its_focus_when_a_handler_panics_at_its_loss",
+        a_window_follows_its_focus_when_a_handler_panics_at_its_loss,
     ),
 ];
 
@@ -68,16 +68,52 @@ fn map_key(fixture: &X11Fixture, keycode: u8, keysym: u32) {
 }
 
 /// Move the focus off every window, to the root, as another client may.
-fn focus_root(fixture: &X11Fixture) {
-    fixture
-        .server
-        .set_input_focus(
-            x11rb::protocol::xproto::InputFocus::POINTER_ROOT,
+///
+/// The focus goes to a window of the test's own, mapped for it, rather than
+/// to the root: openbox gives the focus back to the last active window when
+/// it lands on the root ("focus fallback"), at a moment the case cannot
+/// control, and a case that reads the focus would race it.
+fn focus_elsewhere(fixture: &X11Fixture) -> u32 {
+    use x11rb::protocol::xproto::{CreateWindowAux, InputFocus, MapState, WindowClass};
+    let server = &fixture.server;
+    let elsewhere = server.generate_id().expect("an id");
+    server
+        .create_window(
+            x11rb::COPY_DEPTH_FROM_PARENT,
+            elsewhere,
             fixture.root(),
-            x11rb::CURRENT_TIME,
+            900,
+            700,
+            50,
+            50,
+            0,
+            WindowClass::INPUT_OUTPUT,
+            x11rb::COPY_FROM_PARENT,
+            &CreateWindowAux::new(),
         )
         .expect("request");
-    fixture.server.flush().expect("flush");
+    server.map_window(elsewhere).expect("request");
+    server.flush().expect("flush");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while server
+        .get_window_attributes(elsewhere)
+        .expect("request")
+        .reply()
+        .expect("its attributes")
+        .map_state
+        != MapState::VIEWABLE
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the window manager maps the other window"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    server
+        .set_input_focus(InputFocus::PARENT, elsewhere, x11rb::CURRENT_TIME)
+        .expect("request");
+    server.flush().expect("flush");
+    elsewhere
 }
 
 fn key_downs(handler: &RecordingWindowHandler) -> Vec<KeyEvent> {
@@ -125,7 +161,7 @@ fn losing_the_focus_ends_a_dead_key_and_releases_held_keys() {
     // The dead key, then the focus goes while Shift is held.
     xtest.tap(FREE_KEYCODE);
     xtest.key(keycode::SHIFT_L, true);
-    focus_root(&fixture);
+    focus_elsewhere(&fixture);
     run_for(&fixture.platform, Duration::from_millis(100)).expect("the loop turns");
     xtest.key(keycode::SHIFT_L, false);
     let released: Vec<(KeyState, Key)> = key_downs(&handler)
@@ -154,13 +190,16 @@ fn losing_the_focus_ends_a_dead_key_and_releases_held_keys() {
     map_key(&fixture, FREE_KEYCODE, 0);
 }
 
-/// A handler that panics at the cancel the focus loss delivers.
-struct PanicsAtTheCancel(Rc<RecordingWindowHandler>);
+/// A handler that panics at a key's release: the one the focus loss
+/// delivers for a key held as the focus goes.
+struct PanicsAtTheRelease(Rc<RecordingWindowHandler>);
 
-impl flui_platform::WindowHandler for PanicsAtTheCancel {
+impl flui_platform::WindowHandler for PanicsAtTheRelease {
     fn input(&self, event: PlatformInput) -> flui_platform::DispatchEventResult {
-        if matches!(event, PlatformInput::Pointer(PointerEvent::Cancel(_))) {
-            panic!("the handler panics at the cancel");
+        if let PlatformInput::Keyboard(key) = &event
+            && key.state() == KeyState::Up
+        {
+            panic!("the handler panics at the release");
         }
         self.0.input(event)
     }
@@ -186,13 +225,14 @@ impl flui_platform::WindowHandler for PanicsAtTheCancel {
     }
 }
 
-/// The window hears its focus going even when the handler panics at the
-/// cancel the input delivers for it first; the panic is raised after.
-fn a_window_follows_its_focus_when_a_cancel_handler_panics() {
+/// The window hears its focus going even when the handler panics at what the
+/// input delivers for that loss first (the release of a key held as the focus
+/// goes); the panic is raised after.
+fn a_window_follows_its_focus_when_a_handler_panics_at_its_loss() {
     park_pointer();
     let mut fixture = X11Fixture::open_with_handler(
         "focus and a panic",
-        Rc::new(PanicsAtTheCancel(RecordingWindowHandler::new())),
+        Rc::new(PanicsAtTheRelease(RecordingWindowHandler::new())),
     );
     fixture
         .window
@@ -201,9 +241,8 @@ fn a_window_follows_its_focus_when_a_cancel_handler_panics() {
     fixture.settle();
     assert!(fixture.window.state().focused, "the window has the focus");
     let xtest = Xtest::new(&fixture);
-    xtest.move_to(20, 20);
-    xtest.send(BUTTON_PRESS_EVENT, 1, (0, 0));
-    focus_root(&fixture);
+    xtest.key(keycode::A, true);
+    focus_elsewhere(&fixture);
     let turned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         run_for(&fixture.platform, Duration::from_millis(100))
     }));
@@ -214,7 +253,7 @@ fn a_window_follows_its_focus_when_a_cancel_handler_panics() {
     );
     fixture
         .server
-        .xtest_fake_input(BUTTON_RELEASE_EVENT, 1, 0, fixture.root(), 0, 0, 0)
+        .xtest_fake_input(KEY_RELEASE_EVENT, keycode::A, 0, fixture.root(), 0, 0, 0)
         .expect("request");
     fixture.server.flush().expect("flush");
 }
