@@ -2049,6 +2049,32 @@ impl ViewState<EditableText> for EditableTextState {
 
     fn dispose(&mut self) {
         self.accepts_semantics_actions.set(false);
+        // Owner code runs below (the controller's listeners, a detach that
+        // reaches the presentation): every later step still runs, and the
+        // first failure is resumed once dispose is complete.
+        let mut calls = OwnerCalls::new();
+        // No edit from here on reaches the owner: the field is going away
+        // (ADR-0142 item 4). The callback's last handle retires in scope.
+        let on_changed = self.on_changed.borrow_mut().take();
+        calls.retire(on_changed);
+        // This field's own rebuild listener goes first: the commit below
+        // must not schedule a build of a subtree that is being unmounted.
+        if let Some(id) = self.controller_listener_id.take() {
+            let controller = self.controller.borrow().clone();
+            calls.run(|| controller.remove_listener(id));
+        }
+        // A field unmounted while it holds the input (a route the program
+        // changed) keeps the composition it shows as committed text: the
+        // composing range ends in place and the controller's listeners hear
+        // of it, before the store detaches below and drops whatever the input
+        // method still had queued. A field that blurred first was committed
+        // then, and holds no client now. Read in a statement of its own: the
+        // commit runs owner code.
+        let holds_input = self.ime_token.borrow().is_some();
+        if holds_input {
+            let controller = self.controller.borrow().clone();
+            calls.run(|| controller.end_composition());
+        }
         let attachment = self.focus_attachment.borrow_mut().take();
         self.selection_drag.set(None);
         let owns_attachment = attachment
@@ -2087,11 +2113,6 @@ impl ViewState<EditableText> for EditableTextState {
         // attachment is detached below, so this is the one path that unconditionally
         // closes the IME session on unmount. Harmless no-op if the field
         // already blurred (and so already detached) before unmounting.
-        //
-        // Detaching runs owner code (a retired client, a failure the
-        // presentation reports): every later step still runs, and the first
-        // failure is resumed once dispose is complete.
-        let mut calls = OwnerCalls::new();
         let token = self.ime_token.borrow_mut().take();
         if let Some(token) = token
             && let Some(handle) = &self.ime_handle
@@ -2127,12 +2148,6 @@ impl ViewState<EditableText> for EditableTextState {
             let _ = calls.run(|| attachment.detach());
         }
         self.parent = None;
-
-        // Remove the controller listener we registered in init_state.
-        if let Some(id) = self.controller_listener_id.take() {
-            let controller = self.controller.borrow().clone();
-            calls.run(|| controller.remove_listener(id));
-        }
         self.focus_manager = None;
         calls.resume();
 

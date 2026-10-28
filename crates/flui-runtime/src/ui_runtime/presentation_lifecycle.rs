@@ -195,7 +195,9 @@ impl UiRuntime {
     /// [`TextInputOwner::complete_composition`](flui_interaction::TextInputOwner::complete_composition)
     /// does.
     pub fn commit_composition_for_close(&self, id: PresentationId) {
-        let _ = id;
+        if let Some(presentation) = self.presentations.get(id) {
+            presentation.text_input().complete_composition();
+        }
     }
 
     /// Attach the host's control of presentation `id`'s window: from now on its

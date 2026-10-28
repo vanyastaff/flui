@@ -47,8 +47,19 @@ struct FieldInner<T> {
     value_source: RefCell<Option<ValueSource<T>>>,
 }
 
-/// Receives each value the field is set to.
-type ValueSink<T> = Rc<dyn Fn(&T)>;
+/// Receives each value the field is set to, and why.
+type ValueSink<T> = Rc<dyn Fn(&T, ValueWrite)>;
+
+/// Why a value reaches a field's [`ValueSink`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ValueWrite {
+    /// The value changed: an edit or the application setting it. What the
+    /// sink already holds as that value stays as it is.
+    Change,
+    /// The form was reset to the value: the sink shows that value and
+    /// nothing else, whatever it holds.
+    Reset,
+}
 /// Supplies the field's current value.
 type ValueSource<T> = Rc<dyn Fn() -> T>;
 
@@ -195,10 +206,10 @@ impl<T: Clone + 'static> FieldInner<T> {
                     .is_some_and(|form| form.mode() == AutovalidateMode::OnUnfocus))
     }
 
-    fn push_to_sink(&self, value: &T) {
+    fn push_to_sink(&self, value: &T, write: ValueWrite) {
         let sink = self.value_sink.borrow().clone();
         if let Some(sink) = sink {
-            sink(value);
+            sink(value, write);
         }
     }
 
@@ -206,7 +217,7 @@ impl<T: Clone + 'static> FieldInner<T> {
         self.check_context(cx)?;
         *self.value.borrow_mut() = Some(value.clone());
         self.interacted.set(true);
-        self.push_to_sink(&value);
+        self.push_to_sink(&value, ValueWrite::Change);
         self.autovalidate();
         self.schedule_rebuild();
         if let Some(form) = self.form() {
@@ -227,7 +238,7 @@ impl<T: Clone + 'static> FieldInner<T> {
         // mutations above.
         self.schedule_rebuild();
         if let Some(initial) = &initial {
-            self.push_to_sink(initial);
+            self.push_to_sink(initial, ValueWrite::Reset);
         }
         let on_reset = self.on_reset.borrow().clone();
         if let Some(on_reset) = on_reset {
@@ -429,7 +440,7 @@ impl<T: Clone + 'static> FormFieldHandle<T> {
     /// writes the text into the controller too, so the two never disagree.
     pub fn set_value(&self, value: T) {
         *self.inner.value.borrow_mut() = Some(value.clone());
-        self.inner.push_to_sink(&value);
+        self.inner.push_to_sink(&value, ValueWrite::Change);
     }
 
     /// Validate, show the result, and report whether it passed.
