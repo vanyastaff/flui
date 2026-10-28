@@ -130,13 +130,13 @@ graph LR
 - [x] P2 — #1463, #1712
 - [x] P3 — #1948. `Router::from_stack` сажает весь стек без перехода (`empty_stack_is_refused`
   по-прежнему отказывает пустому); `RouterHandle::stack` отдаёт все страницы без popup'ов;
-  `Clone` и `to_path` маршрута вызываются после снятия заимствования стека; `Debug` печатает весь
-  стек. `from_stack_restores_back_order` и `stack_reads_every_committed_edit` сняты с `ignore` и
+  `Clone`, `to_path` и `==` маршрута (последнее — в `go`) вызываются после снятия заимствования
+  стека; `Debug` печатает весь стек. `from_stack_restores_back_order` и `stack_reads_every_committed_edit` сняты с `ignore` и
   перенесены в `router_and_widgets_app` вместе с `from_stack_opens_without_a_transition`,
-  `stack_leaves_out_popups`, `debug_prints_the_whole_stack` и
-  `a_route_clone_may_drive_its_router`. Откат исходников: Back с восстановленного верха —
-  `Ok(false)`, `stack()` — `[Note { id: 1 }]`; клон под заимствованием — «RefCell already
-  borrowed»; `Debug` только верха — `initial: ["/tag/x"]`. Проверено (Windows, 2026-10-28):
+  `stack_leaves_out_popups`, `debug_prints_the_whole_stack`,
+  `a_route_clone_may_drive_its_router` и `a_route_eq_may_drive_its_router_during_go`. Откат
+  исходников: Back с восстановленного верха — `Ok(false)`, `stack()` — `[Note { id: 1 }]`; клон
+  или сравнение в `go` под заимствованием — «RefCell already borrowed»; `Debug` только верха — `initial: ["/tag/x"]`. Проверено (Windows, 2026-10-28):
   clippy `--workspace --all-targets -D warnings`; nextest `-p flui-widgets -p flui-view -p flui-app
   -p flui`; `xtask checks`, `doc-strict`, `wasm-check`.
 - [ ] P10 — приложение приёмки
