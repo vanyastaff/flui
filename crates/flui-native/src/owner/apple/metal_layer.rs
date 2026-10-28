@@ -14,7 +14,7 @@
 
 use std::time::Duration;
 
-use flui_platform::FramePresented;
+use flui_platform::{DisplayId, DisplayRevision, DisplaySnapshot, FramePresented, RefreshPeriod};
 
 /// What a drawable shown at `presented_secs` reports, when `media_now_secs`
 /// is a reading of the same clock taken as the event clock read `event_now`
@@ -39,6 +39,46 @@ pub(crate) fn presented(
         Some(refresh) => report.with_refresh(refresh),
         None => report,
     })
+}
+
+/// The refresh a layer is told its display has now: `None` when the display
+/// has none, or the window is on no display.
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NewRefresh(pub(crate) Option<Duration>);
+
+/// The refresh a window's layer reports carry, kept current from the display
+/// snapshot: what was last pushed, by the snapshot revision and the display
+/// it was read for.
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, Default)]
+pub(crate) struct LayerRefresh {
+    pushed: Option<(DisplayRevision, Option<DisplayId>)>,
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl LayerRefresh {
+    /// What to push to the layer of a window on `display` under `snapshot`:
+    /// the display's refresh period, `None` inside when it has none or the
+    /// window is on no display; nothing to push when neither the snapshot nor
+    /// the display moved since the last push. A rate change on the same
+    /// display is a new snapshot revision, so it is pushed too.
+    pub(crate) fn update(
+        &mut self,
+        snapshot: &DisplaySnapshot,
+        display: Option<DisplayId>,
+    ) -> Option<NewRefresh> {
+        let read = (snapshot.revision(), display);
+        if self.pushed == Some(read) {
+            return None;
+        }
+        self.pushed = Some(read);
+        Some(NewRefresh(
+            display
+                .and_then(|id| snapshot.get(id)?.refresh_period)
+                .map(RefreshPeriod::get),
+        ))
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -73,10 +113,21 @@ mod layer {
         refresh_nanos: AtomicU64,
     }
 
+    /// The presented handler holds the feedback on a Metal thread.
+    const _: fn() = || {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Feedback>();
+    };
+
     impl Feedback {
         /// Report to `reports` from now on; a layer reports to one window.
         pub(crate) fn report_to(&self, reports: PresentationReports) {
-            let _ = self.reports.set(reports);
+            if self.reports.set(reports).is_err() {
+                tracing::warn!(
+                    target: "flui.present",
+                    "a Metal layer was told a second window to report to; it keeps the first"
+                );
+            }
         }
 
         /// The display under the window refreshes every `refresh`; `None`
@@ -132,7 +183,11 @@ mod layer {
         // - `CAMetalLayer` has no subclassing requirements beyond its
         //   superclasses'; Core Animation subclasses it the same way.
         // - The class does not implement `Drop`; its ivars drop with it.
-        /// The layer an Apple window's view is backed by: a `CAMetalLayer`
+        // - Every instance has its ivars set before `CALayer`'s initializer
+        //   runs: `init` sets fresh ones, and `initWithLayer:` shares the
+        //   `Arc` of the layer Core Animation copies, so a presentation copy
+        //   reports to the same window as its model layer.
+        /// The layer an AppKit window's view is backed by: a `CAMetalLayer`
         /// whose drawables report when they reached the screen.
         #[unsafe(super(CAMetalLayer, CALayer, NSObject))]
         #[name = "FLUIMetalLayer"]
@@ -251,14 +306,6 @@ mod layer {
     /// it. Metal calls the handler once, on a thread of its own; the block
     /// holds `feedback` until then.
     fn watch(drawable: &ProtocolObject<dyn CAMetalDrawable>, feedback: Arc<Feedback>) {
-        // A drawable without a presented handler (the iOS Simulator's have
-        // none) reports nothing, rather than failing the acquire.
-        // SAFETY: `respondsToSelector:` takes any selector.
-        let handles: bool =
-            unsafe { msg_send![drawable, respondsToSelector: objc2::sel!(addPresentedHandler:)] };
-        if !handles {
-            return;
-        }
         let handler = RcBlock::new(move |drawable: NonNull<ProtocolObject<dyn MTLDrawable>>| {
             os_entry(
                 "a drawable's presented handler",
@@ -280,7 +327,10 @@ mod layer {
 mod tests {
     use std::time::Duration;
 
-    use super::presented;
+    use flui_foundation::geometry::{Bounds, Point, Size};
+    use flui_platform::{DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot, RefreshPeriod};
+
+    use super::{LayerRefresh, NewRefresh, presented};
 
     /// A drawable's presented time lands as far before the event reading as
     /// it lies before the media clock's reading; a drawable never shown, or a
@@ -309,5 +359,55 @@ mod tests {
                 "{never} is no shown frame"
             );
         }
+    }
+
+    /// The refresh a layer carries follows the display snapshot: pushed when the
+    /// window is first placed, again when the same display changes its rate (a
+    /// new revision) or the window moves to another display, and not again while
+    /// nothing moved.
+    #[test]
+    fn a_layer_follows_its_display_s_refresh() {
+        let registry = DisplayRegistry::new();
+        let id = registry
+            .mint(&DisplayKey::AndroidId(1))
+            .expect("ids are not exhausted");
+        let other = registry
+            .mint(&DisplayKey::AndroidId(2))
+            .expect("ids are not exhausted");
+        let at = |hz: f64| {
+            let mut display = DisplayInfo::new(
+                id,
+                "panel",
+                Bounds::new(Point::new(0, 0), Size::new(1440, 900)),
+                2.0,
+            );
+            display.refresh_period = RefreshPeriod::from_hz(hz).ok();
+            display
+        };
+        let period = |hz: f64| NewRefresh(RefreshPeriod::from_hz(hz).ok().map(RefreshPeriod::get));
+        let first = DisplaySnapshot::empty()
+            .successor(vec![at(100.0)])
+            .expect("revisions are not exhausted");
+        let mut refresh = LayerRefresh::default();
+        assert_eq!(refresh.update(&first, Some(id)), Some(period(100.0)));
+        assert_eq!(refresh.update(&first, Some(id)), None, "nothing moved");
+        let slower = first
+            .successor(vec![at(60.0)])
+            .expect("revisions are not exhausted");
+        assert_eq!(
+            refresh.update(&slower, Some(id)),
+            Some(period(60.0)),
+            "the same display at 60 Hz"
+        );
+        assert_eq!(
+            refresh.update(&slower, Some(other)),
+            Some(NewRefresh(None)),
+            "a display the snapshot lacks"
+        );
+        assert_eq!(
+            refresh.update(&slower, None),
+            Some(NewRefresh(None)),
+            "on no display"
+        );
     }
 }

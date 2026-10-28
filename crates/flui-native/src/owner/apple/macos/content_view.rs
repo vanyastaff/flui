@@ -222,7 +222,10 @@ pub(crate) fn create(
     // (`NSViewLayerContentsRedrawDuringViewResize`), as a `drawRect:` view is.
     let layer: Option<Retained<AnyObject>> = unsafe {
         let _: () = msg_send![&*view, setWantsLayer: true];
-        let _: () = msg_send![&*view, setLayerContentsRedrawPolicy: 2isize];
+        let _: () = msg_send![
+            &*view,
+            setLayerContentsRedrawPolicy: objc2_app_kit::NSViewLayerContentsRedrawPolicy::DuringViewResize
+        ];
         msg_send![&*view, layer]
     };
     if let (Some(feedback), Some(reports)) = (layer.as_deref().and_then(feedback_of), reports) {
@@ -436,10 +439,7 @@ extern "C-unwind" fn mouse_exited(this: &AnyObject, sel: Sel, event: *mut AnyObj
 /// reached the screen.
 extern "C-unwind" fn make_backing_layer(_this: &AnyObject, _sel: Sel) -> *mut AnyObject {
     os_entry("makeBackingLayer", (), AfterPanic::Abort, || {
-        Retained::autorelease_return(Retained::into_super(Retained::into_super(
-            Retained::into_super(FluiMetalLayer::new()),
-        )))
-        .cast()
+        Retained::autorelease_return(FluiMetalLayer::new()).cast()
     })
 }
 

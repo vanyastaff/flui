@@ -22,8 +22,7 @@
 //!
 //! This module is the condition that decision is made on, kept apart from both
 //! ends so it can be tested without a window: [`DisplayPassGuard`] is entered
-//! by the view's `updateLayer` (once its `drawRect:`; the table was measured
-//! there) for the duration of the frame it dispatches, and
+//! by the view's `updateLayer` for the duration of the frame it dispatches, and
 //! consulted by the window's `request_redraw` to choose between setting the
 //! flag in place and deferring it.
 //!

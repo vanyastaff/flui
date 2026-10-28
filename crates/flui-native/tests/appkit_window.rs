@@ -64,6 +64,14 @@ mod cases {
             a_newer_mode_drops_a_fixed_size_held_for_normal,
         ),
         (
+            "a_window_behind_a_backdrop_still_reports_its_frames",
+            a_window_behind_a_backdrop_still_reports_its_frames,
+        ),
+        (
+            "one_redraw_is_one_frame_request",
+            one_redraw_is_one_frame_request,
+        ),
+        (
             "a_redraw_from_another_thread_is_queued_without_waiting",
             a_redraw_from_another_thread_is_queued_without_waiting,
         ),
@@ -432,6 +440,49 @@ mod cases {
             frames(&fixture.handler) >= 1,
             "the redraw asked for on another thread produced no frame request"
         );
+    }
+
+    /// A backdrop material makes an `NSVisualEffectView` the window's content
+    /// view and moves FLUI's view inside it; the view keeps its own layer, and
+    /// the frames drawn into it are still reported shown.
+    fn a_window_behind_a_backdrop_still_reports_its_frames() {
+        let mut fixture = open("presented behind a backdrop");
+        fixture
+            .window
+            .admit_and_apply(WindowCommand::SetMaterial(WindowMaterial::System))
+            .unwrap_or_else(|refusal| panic!("SetMaterial(System) was refused: {refusal:?}"));
+        fixture.settle();
+        assert_eq!(fixture.material(), Some(WindowMaterial::System));
+        let request = fixture
+            .present_and_request_frame()
+            .expect("the window asks for a frame");
+        assert!(
+            request.presented.is_some(),
+            "a frame shown behind a backdrop was reported: {request:?}"
+        );
+    }
+
+    /// A redraw is one frame request: the view's layer asks it for content
+    /// once per display pass, whichever of AppKit's routes reaches it.
+    fn one_redraw_is_one_frame_request() {
+        let fixture = open("one frame per redraw");
+        let frames = |handler: &RecordingWindowHandler| {
+            handler
+                .take_calls()
+                .iter()
+                .filter(|call| matches!(call, HandlerCall::FrameRequested(_)))
+                .count()
+        };
+        for _ in 0..3 {
+            fixture.handler.take_calls();
+            fixture.window.request_redraw();
+            appkit::run_for(Duration::from_millis(300));
+            assert_eq!(
+                frames(&fixture.handler),
+                1,
+                "one redraw asked for one frame"
+            );
+        }
     }
 
     /// A surface target holds a reference of its own to its window's view, so
