@@ -919,7 +919,7 @@ impl raw_window_handle::HasDisplayHandle for AndroidSurface {
 impl flui_platform::SurfaceTarget for AndroidSurface {
     /// Android has no frame callback to arm before a present: it returns at
     /// once.
-    fn pre_present_notify(&self) {}
+    fn pre_present_notify(&self, _: flui_platform::SwapChainStatistics) {}
 }
 
 mod safe_area {

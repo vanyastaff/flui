@@ -4173,6 +4173,105 @@ graph LR
   средствами удалённого управления не удалось), действие AccessKit (нажатие XCUITest — касание, а
   не `accessibilityActivate`), объявления.
 
+- [ ] **LY91** (не закрыта: остаётся Apple, см. ниже) — ветка `platform/present-feedback` от `main` @ `8aee131f6`. **Форма (для владельца).**
+  Обратная связь едет в запросе кадра: `FrameRequest::presented: Option<FramePresented { at:
+  EventTime, refresh: Option<Duration> }>` — самый новый показанный кадр окна с прошлого запроса,
+  на шкале ввода; никогда не прогноз (ожидаемый показ — `target_present`). Есть ли она у окна —
+  возможность `WindowCapabilities::reports_presentation`, причина отсутствия хранится в
+  возможностях (`without_presentation_feedback`, `presentation_feedback() -> Result<Availability,
+  Unsupported>`): у неё нет глагола, который ответил бы сам. Где ОС отдаёт показ только держателю
+  swap chain (DXGI), презентер передаёт прочитанное цели поверхности:
+  `SurfaceTarget::pre_present_notify(SwapChainStatistics)` (`None | Dxgi(DxgiFrameStatistics)`), хост
+  перебазирует. Ядро: `owner::handlers::PresentationReports` в `WindowDelivery` (любой поток
+  сообщает; новее побеждает; не позже уже сохранённого/отданного — отбрасывается; ещё не наступивший
+  ждёт), `dispatch_frame` кладёт его в запрос. **Источники.** Win32 — `flui-engine` читает
+  `GetFrameStatistics`/`GetLastPresentCount` DX12 swap chain через `wgpu::hal` перед каждым present
+  (единственный production `unsafe` движка, с `expect`), `Win32Surface` перебазирует `SyncQPCTime`
+  по счётчику и меряет период двумя чтениями (`frame_timing::shown_present`). Wayland — глобал
+  `wp_presentation` (часы из `clock_id`, `rustix` `time`), feedback на каждый commit,
+  `presented` → `rebased`; без глобала — `NotOnThisDevice`. Headless — `MockWindow::simulate_presented`,
+  `HeadlessHost::report_presented`. Web, X11 — `NotOnThisPlatform`; winit — `NotYetOnThisHost`.
+  **Решение для владельца:** AppKit, UIKit, Android — `NotYetOnThisHost`
+  (`window::capabilities::PRESENTATION`): `addPresentedHandler` нужен drawable, который wgpu 30 держит
+  у себя (путь — свой `CAMetalLayer` хоста: `makeBackingLayer` с переносом display pass из
+  `drawRect:` в `updateLayer` на AppKit, `layerClass` на UIKit; без прогона на Mac не делал); у
+  Android время показа — у Vulkan swap chain (`VK_GOOGLE_display_timing`, wgpu не читает), а frame
+  timelines называют ожидаемый показ, то есть `target_present`, и требуют кадров от
+  `AChoreographer_postVsyncCallback`. **Frame clock.** `FrameClock::record_presentation`,
+  `last_presentation`, `next_presentation_after` (`PresentationReport`, горизонт сетки
+  `PRESENTATION_GRID_HORIZON` = 240 обновлений); `note_frame_request` записывает отчёт в часы
+  презентации, `pump` ограничивает idle-работу: `target_present`, иначе следующее обновление по
+  сетке отчёта, иначе дедлайн хоста — **решение для владельца** (ADR-0257 п. 3 говорил «иначе
+  хоста»). Тик кадра по-прежнему vsync. `HostInput::Frame` получил `presented`, запись и DTO его
+  несут. Conformance: `presentation_is_reported_exactly_when_claimed` идёт первой (окно ещё в
+  исходном виде: Weston отбрасывает commit свёрнутого окна, Wayland не разворачивает),
+  `WindowFixture::present_and_request_frame`; фикстуры Win32 (своя flip-model DXGI swap chain на
+  D3D11), Wayland, headless. **Тесты** (откат проверен для каждого):
+  `a_presentation_report_rides_the_first_request_at_or_after_it`,
+  `a_platform_stamp_is_rebased_by_its_distance_from_the_reading`,
+  `a_shown_present_is_aged_and_two_reads_measure_the_period`,
+  `statistics_that_name_no_shown_present_place_none`, таблица `presentation_feedback`
+  (`flui-scheduler`, три случая), `a_presentation_report_bounds_the_idle_work_of_a_later_frame`
+  (и без записи в часы, и без использования в `pump`), `a_presentation_and_the_input_before_it_are_on_one_timeline`,
+  строка `HostInput::Frame` в `recording_vocabulary`,
+  `a_window_whose_presentation_reports_disagree_with_its_capabilities_is_caught`,
+  `the_headless_window_conforms_under_every_capability_set` (без инъекции падает),
+  `the_win32_window_conforms`, `the_wayland_window_conforms`,
+  `a_presented_event_names_its_time_and_refresh`, `the_report_follows_the_compositor`,
+  `native_capability_absences`, `the_presentation_report_answers_why_it_is_missing`. Ожидание
+  `a_window_that_claims_what_it_cannot_do_is_caught` стало парой первых проверок (порядок).
+  **Прогоны.** Windows 11, RTX 3070 Ti, 100 Гц: `counter` с индикатором — 477 показанных present за
+  ≈4,8 с, 474 из 476 соседних отчётов через одно обновление, показан present на 3 позади нового,
+  466 из 476 измеренных периодов в пределах 10 мкс от 10 мс; conformance с DXGI — отчёт с периодом
+  10,01 мс. Weston 13 headless (WSL): показ за 0,8 мс до следующего запроса, обновление
+  16,666666 мс; тесты Wayland 31 из 31. **Проверки:** `cargo fmt`; Windows — clippy рабочего
+  пространства `--all-targets -D warnings`; nextest `flui-platform`, `flui-scheduler`,
+  `flui-runtime`, `flui-testing`, `flui-app`, `flui-interaction`, `flui-view` — 437 из 437,
+  `flui-native`, `flui-engine` — 391 из 391; clippy macOS `--all-targets` (LLVM) обычный и с
+  `testing,winit-backend`, Android `--all-targets`, iOS lib `flui-native`; `checks`, `doc-strict`,
+  `wasm-check`, `module-dag` (+`--self-test`, 1 исключение), `globals` (+`--self-test`, 57),
+  `file-length`, `markers`, `testing`, `docs-paths`, `workspace`, `reach`,
+  `recording-vocabulary`; `api-closure` (WSL, nightly) — 4 пакета чисто. WSL Ubuntu 24.04: clippy
+  `flui-native` шести вариантов, `flui-app`, `flui-engine`, `flui --features native` — чисто;
+  nextest `--all-features` под xvfb без тестов Wayland — 351 из 351 (после слияния `main` @
+  `f11b154c6` — 373 из 373), тесты Wayland под Weston — 31
+  из 31; rustdoc `-D warnings --document-private-items` четырёх вариантов. Прогон без X-сервера
+  (`FLUI_HEADLESS=1`, `DISPLAY` снят) нашёл две устаревшие проверки возможностей (`plan`, тесты
+  X11 под winit сравнивали с `ALL`) — исправлены; там же падают тесты реального цикла winit и
+  `linux_preferences`, которым нужен дисплей, под xvfb они зелёные.
+  Не запускалось: Mac, iPhone (#1840; список в PR), Android-устройство, браузер, `cross-typecheck`.
+  **Решения координатора и исправления после ревью (vanyastaff/flui#1943)**, коммитами поверх,
+  слиянием `main` @ `817fb6bbd` (LY68) и @ `680fda761` (LY95: активация; вызовы `capabilities` Wayland
+  несут и активацию, и отчёт о показе, тест активации передаёт статистику презентера; DXGI-тест
+  Win32 уже в группе `desktop-foreground`). Форма обратной связи принята и записана поправкой ADR-0257
+  (`FrameRequest::presented`, `reports_presentation`, `SwapChainStatistics`, п. 3 — граница
+  idle по сетке свежего отчёта). Исправлено: (1) повторное чтение DXGI больше не новый отчёт —
+  `frame_timing::PresentTracker` отбрасывает чтение с тем же `PresentCount` или
+  `SyncRefreshCount` (`a_repeated_read_is_reported_once`, без правила падает); (2)
+  `DXGI_ERROR_FRAME_STATISTICS_DISJOINT` → `SwapChainStatistics::DxgiDisjoint`, трекер забывает
+  прошлое обновление (`a_disjoint_read_measures_no_period_across_it`, без сброса падает); (3)
+  `SAFETY:` движка называет предусловие `Surface::as_hal` и почему оно выполняется; (4)
+  ARCHITECTURE движка называет это единственное место; (5) мёртвые `pub` убраны:
+  `FrameClock::last_presentation` и `PresentationReport` (часы берут момент и интервал,
+  один тип `FramePresented` и одна проверка нулевого интервала, Wayland тоже),
+  `PRESENTATION_GRID_HORIZON` — `pub(crate)`, у `DxgiFrameStatistics` остались
+  `present_count`, `sync_refresh_count`, `sync_qpc_time` (все читает хост); (6) фикстуры Win32
+  и Wayland показывают кадры в своём новом окне, проверка вернулась на прежнее место, ожидание
+  `a_window_that_claims_what_it_cannot_do_is_caught` — прежнее; под Weston проверка после
+  сворачивающих проверок проходит (раньше там `Discarded`); (7) `HeadlessHost::report_presented`
+  следует возможности окна (`HeadlessWindow::with_presentation_reports`,
+  `a_window_that_reports_no_presentation_carries_none`, без проверки падает). Граница сетки — 8
+  обновлений (живой отчёт отстаёт на 3–4, измерено на Windows); `a_presentation_report_bounds_the_idle_work_of_a_later_frame`
+  получил случай устаревшего отчёта (с горизонтом 240 падает, как и таблица `presentation_feedback`).
+  `EventTime::now` — одно чтение часов событий. Android — `NotYetOnThisHost`, пути в gaps
+  (запись 23). **Apple — остаток LY91, в сессию Mac после слияния:** свой `CAMetalLayer` хоста
+  (`makeBackingLayer` с переносом display pass в `updateLayer` на AppKit, `layerClass` на UIKit),
+  `nextDrawable` которого вешает `addPresentedHandler:` на выданный drawable. Проверки после
+  исправлений и слияния LY95: Windows clippy рабочего пространства, nextest семи крейтов — 680 из 680; clippy
+  macOS, Android, iOS lib; `checks`, `doc-strict`, `wasm-check`, гейты; WSL clippy шести
+  вариантов и крейтов, xvfb 397 из 397, Weston 38 из 38, rustdoc, `api-closure` (4 пакета чисто).
+  `cross-typecheck` (гейт строки) — в CI этого PR.
+
 ## Отступление от порядка, решённое владельцем
 
 - 2026-10-21: LY22 ждёт свои зависимости (LY24, LY9, text-ime, teardown), хотя ни одна ветка не

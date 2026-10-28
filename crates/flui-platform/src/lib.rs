@@ -155,7 +155,7 @@ pub use display::{
     SurfaceColorSpace, WindowDisplay,
 };
 pub use event_time::EventTime;
-pub use frame_request::FrameRequest;
+pub use frame_request::{FramePresented, FrameRequest};
 pub use haptic_feedback::HapticFeedback;
 pub use haptics::PlatformHaptics;
 pub use host_notice::{
@@ -185,7 +185,9 @@ pub use preferences::{
 pub use storage::{
     Storage, StorageError, StorageFuture, StorageName, Stored, StoredVersion, WriteMode,
 };
-pub use surface_target::{RedrawRequester, SurfaceTarget};
+pub use surface_target::{
+    DxgiFrameStatistics, RedrawRequester, SurfaceTarget, SwapChainStatistics,
+};
 pub use system_chrome::{PlatformSystemChrome, SystemUiOverlayStyle};
 pub use target_platform::TargetPlatform;
 pub use text_input::PlatformTextInput;

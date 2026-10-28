@@ -1010,7 +1010,10 @@ pub(crate) const fn window_capabilities() -> WindowCapabilities {
     capabilities.enters_fullscreen = flui_platform::Availability::Native;
     // The page keeps its tab: the canvas is retired and its embedder told.
     capabilities.closes = flui_platform::Availability::Emulated;
-    capabilities
+    // A browser names when an animation frame starts (the
+    // `requestAnimationFrame` timestamp), never when the frame it painted
+    // reached the screen.
+    capabilities.without_presentation_feedback(flui_platform::CapabilityAbsence::NotOnThisPlatform)
 }
 
 impl std::fmt::Debug for WebWindow {
@@ -1279,8 +1282,9 @@ impl raw_window_handle::HasDisplayHandle for WebSurface {
 
 impl flui_platform::SurfaceTarget for WebSurface {
     /// The page presents on its animation frames: there is nothing to arm
-    /// before a present, so it returns at once.
-    fn pre_present_notify(&self) {}
+    /// before a present, so it returns at once. A browser reports no time a
+    /// frame reached the screen, so there is nothing to ask for either.
+    fn pre_present_notify(&self, _: flui_platform::SwapChainStatistics) {}
 }
 
 #[wasm_bindgen(inline_js = "
