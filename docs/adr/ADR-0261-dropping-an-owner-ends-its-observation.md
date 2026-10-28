@@ -1,8 +1,9 @@
 # ADR-0261: Dropping a build owner ends its tree observation
 
-- **Status:** Accepted (2026-10-28). Not implemented: `BuildOwner`'s `Drop` reclaims its key claims
-  only (`crates/flui-view/src/owner/build_owner.rs`), and `flui-testing` has no `DropLedger`; the
-  tests that count drops today each keep a probe of their own.
+- **Status:** Accepted (2026-10-28). Not implemented on `main`: `BuildOwner`'s `Drop` reclaims its
+  key claims only (`crates/flui-view/src/owner/build_owner.rs`; §1 is in review with the flui-view
+  guard work), and `flui-testing` has no `DropLedger`; the tests that count drops today each keep a
+  probe of their own.
 - **Date:** 2026-10-28
 - **Supersedes:** [ADR-0040](ADR-0040-tree-observation-seam.md) §3, the "Teardown
   honesty" item's sentences "A `BuildOwner` dropped without `clear_tree_observer` emits no
@@ -52,7 +53,7 @@ When does the stream end, and what proves the release?
 
 For §1:
 
-1. `BuildOwner`'s `Drop` takes the observer out of its slot and calls `detached()` once.
+1. `BuildOwner`'s `Drop` calls `detached()` once on the observer still in its slot.
 2. A teardown hook in the UI runtime that calls `clear_tree_observer` before dropping the owner.
 3. Keep the embedder's obligation.
 
@@ -65,19 +66,51 @@ Chosen option for §1: 1, because the owner is the one value that always goes wh
 
 ### §1. The owner's drop ends the stream
 
-`BuildOwner`'s `Drop` takes the observer out of its slot (`Option::take`) and, with no borrow of the
-owner held, calls `detached()` once through the same contained emission as every other event
-(`emit_observation`). A panic in `detached()` is contained and logged as for any observer
-(ADR-0040 §6), and the drop goes on. After `clear_tree_observer` the slot is empty and the
-drop calls nothing, so the stream has exactly one end however it ends.
+`BuildOwner`'s `Drop` leaves the observer in its slot and calls `detached()` once on a clone of
+its `Arc`, through the contained call `clear_tree_observer` and `set_tree_observer` already use for
+the observer they displace (`notify_detached`). Nothing of the owner is borrowed during the call.
+A panic in `detached()` is contained and logged as for any observer (ADR-0040 §6), its payload and
+that clone are retained, and the drop goes on.
 
-`detached()` is the last call the observer gets from that owner: the drop runs after the tree's
-unmounts, and the slot is empty before the call.
+```rust
+// flui-view
+impl Drop for BuildOwner {
+    fn drop(&mut self) {
+        // … reclaim the owner's key claims
+        if !std::thread::panicking()
+            && let Some(observer) = self.tree_observer.as_ref()
+        {
+            notify_detached(Arc::clone(observer)); // contained; the slot keeps its Arc
+        }
+    } // the fields drop after this, in declaration order, the slot among them
+}
+```
 
-On an exceptional path the observer is not called: while the owner is dropped inside an unwind, or
-by a close that holds a failure (ADR-0123), the observer's `Arc` is retained, not dropped and not
-called (ADR-0127 §2–3). Such a stream ends without `detached()`, as it does today for an observer
-that panicked.
+The observer stays in the slot because the slot is a field: taking it out would move its `Arc`'s
+drop ahead of the other fields', and the owner's fields are dropped in an order the key-retirement
+rules rely on. After `clear_tree_observer` or a replacement the slot holds no observer, or a new
+one, and the old observer was told then, so every stream has exactly one end. `detached()` is the
+last call the observer gets from that owner: the drop runs after the tree's unmounts, and nothing
+of the owner emits after it.
+
+On an exceptional path the observer is not called and not dropped:
+
+- **During an unwind.** `BuildOwner::drop` runs as the unwind passes, so `thread::panicking()` is
+  true there, and the drop does not call `detached()`; the slot's own `Drop` retains the `Arc`
+  (`mem::forget`) instead of dropping it (ADR-0127 §2–3).
+- **A close that holds a failure (ADR-0123).** Here `thread::panicking()` is false, since the
+  failure was caught, so the drop could not tell; it is never asked. That path never drops the
+  owner: `UiRuntime`'s `Drop` and presentation removal decide from the failure they hold
+  (`first.is_some()`) or from the presentation's own retained mode (`preserving_close()`), close
+  the presentation with `CloseMode::PreservingFailure`, and retain it whole with `mem::forget`
+  (`crates/flui-runtime/src/ui_runtime/mod.rs`, `ui_runtime/presentations.rs`). The
+  `BuildOwner` inside is never dropped, so its `Drop`, `detached()` included, never runs, and the
+  observer's `Arc` is retained with it.
+
+Such a stream ends without `detached()`, as it does today for an observer that panicked. A path
+that holds a failure and still drops the owner would be a defect of that path, not of this rule;
+`a_close_that_holds_a_failure_never_detaches` (`flui-runtime`) closes a presentation whose
+disposal panicked and asserts that `detached()` was not called and the observer is still alive.
 
 ### §2. A teardown test proves the release with sentinels from one ledger in the testing kit
 
@@ -110,8 +143,10 @@ gone.
 
 The ledger is one type in the kit, not a copy per test: the tests that count drops today keep six
 hand-written probes (`DropProbe` in `flui-widgets` and `flui-animation`, `DropCounter`, `DropFlag`),
-and a double two test files need moves into the kit (ADR-0243 D4). Those in crates that reach the
-kit move to it when they are next touched; a crate below `flui-testing` keeps its own.
+and a double two test files need moves into the kit (ADR-0243 D4). They move to it when they are
+next touched: a test under `tests/` uses `flui-testing` as a dev-dependency even in a crate below
+it (ADR-0243 D2). Only a unit test inside a crate's `src/` keeps a probe of its own, since it cannot
+pass the crate's types to the kit, and the testing allowlist names it.
 
 Why sentinels, and not counters or the observer:
 
@@ -150,13 +185,17 @@ holds the states planted in it.
 
 - `dropping_an_owner_with_an_observer_detaches_it_once` (`flui-view`): an owner dropped with an
   observer calls `detached()` once; after `clear_tree_observer` the drop calls nothing; no event
-  follows `detached()`.
-- `stale_handles_refuse_after_realm_drop`, one row per handle type.
-- §2: `acceptance_app_close_releases_every_owner_after_navigation` (the acceptance app through the
-  facade: Home, Note, Settings and back, then close; every ledger's `live()` is 0, and was above 0
-  before the close) and `last_window_close_releases_the_realm_through_the_runner` (`flui-app`'s
-  headless runner, a tree with sentinels closed by its last window); `drop_ledger_counts_each_sentinel_once`
-  (`flui-testing`): a sentinel dropped once counts once, a `mem::forget` leaves it live.
+  follows `detached()`; an owner dropped during an unwind calls nothing and retains the observer;
+  the owner's key-retirement rows keep passing, since the slot's field order is unchanged.
+- `a_close_that_holds_a_failure_never_detaches` (`flui-runtime`, new): the presentation is
+  retained whole, its owner never dropped, `detached()` never called.
+- `stale_handles_refuse_after_the_runtime_drops` (new), one row per handle type.
+- §2, three new tests: `acceptance_app_close_releases_every_owner_after_navigation` (the
+  acceptance app through the facade: Home, Note, Settings and back, then close; every ledger's
+  `live()` is 0, and was above 0 before the close),
+  `last_window_close_releases_the_runtime_through_the_runner` (`flui-app`'s headless runner, a
+  tree with sentinels closed by its last window), and `drop_ledger_counts_each_sentinel_once`
+  (`flui-testing`: a sentinel dropped once counts once, a `mem::forget` leaves it live).
 
 ## Pros and cons of the options
 

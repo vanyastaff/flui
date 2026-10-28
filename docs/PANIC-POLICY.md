@@ -75,10 +75,11 @@ and then resumed, and on Win32, AppKit and UIKit it reaches the OS entry's
 boundary, which aborts.
 
 The boundary for application code is `flui-app`'s owner dispatch, not the OS
-entry. Every application operation runs under its own catch there, so no
-application panic reaches `os_entry`. A panic that does reach an OS entry is
-a defect of FLUI itself, a panic in the native host's code or a handler of
-`flui-app` that let one out, and the entry keeps the answer it has for any
+entry. Every application operation runs under its own catch there, and the
+whole body of each `AppHandler` and `WindowHandler` method of `flui-app` runs
+under one more, so no application panic reaches `os_entry`. A panic that does
+reach an OS entry is a defect of FLUI itself, in the native host's own code
+outside any handler call, and the entry keeps the answer it has for any
 panic: a failure the OS understands, or, at the Win32 window procedure and
 the AppKit and UIKit entries that have none, the end of the process
 (ADR-0151 §16).
@@ -91,6 +92,7 @@ the AppKit and UIKit entries that have none, the end of the process
 | Layout or paint | one `frame_failure` report per failure; the frame is retried with backoff, at most one attempt per `FAILURE_RETRY_CAP` (1 s) once the streak is long |
 | Closing a UI runtime that is not the last | one `CallbackPanic` report; what was not yet destroyed is retained |
 | `dispose` or a `Drop` while the last window closes, or at loop exit | the flush registry is written, services and pools stop, then exit 101 with the panic's text |
+| Application code at exit (a destructor, `on_quit`) that blocks until `EXIT_WATCHDOG` (15 s from the start of the exit) | the watchdog writes the flush registry, then ends the process with 124 (`EXIT_CODE_HUNG`), without destructors |
 | A `BUG:` invariant inside an application operation | contained like any panic on the paths above, with `internal_invariant` set in its report |
 | A panic that reaches an OS entry (`os_entry`): a framework defect, never application code | the entry's answer to the OS; at the Win32 window procedure, the cloak hook and the AppKit and UIKit entries without one, an abort without the exit flush |
 | A value whose own fields panic twice in their drop glue | abort, a documented limit (ADR-0127) |

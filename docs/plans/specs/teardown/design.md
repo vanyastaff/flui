@@ -10,7 +10,7 @@
   [design](../text-ime/design.md)
 - **Решения владельца 2026-10-28:** Notes, `notes_flow`, `notes_faults`, live-smoke и
   `cargo xtask device windows-notes` удалены. Headless-строки на Notes идут на приложении
-  приёмки (persistence P10), нативные — через лейн `os` flui-driver. Выбор c2 и ответы на
+  приёмки (persistence P10), нативные — через лейн `os` flui-driver. Выбор 2b (ADR-0261) и ответы на
   вопросы 1–4 ниже приняты 2026-10-28 и записаны в ADR-0258 и ADR-0261 (tasks.md, шапка).
 
 Teardown **владеет** общим контрактом закрытия и завершения сеанса: close guard, причина
@@ -67,20 +67,21 @@ Teardown **владеет** общим контрактом закрытия и 
 
 ## Варианты
 
-### (a) Где локализуется паника пользовательского callback
+### (a) Где локализуется паника пользовательского callback (ADR-0258, варианты 1–3 и §4)
 
-| | a1. Per-task catch в диспетчере `flui-app` | a2. На трамплине платформы | a3. В диспетчере `flui-interaction` |
+| | 1. Per-task catch в диспетчере `flui-app` | 2. На входе ОС платформы | 3. В диспетчере `flui-interaction` |
 |---|---|---|---|
 | Суть | Каждая `RealmTask` под своим catch; паника даёт один отчёт, realm возвращается в слот, хвост FIFO исполняется | `window_proc` ловит и решает сам | catch вокруг жест/клавиатурных handler'ов |
 | Требования | R9, R11, R15, R23; все виды callback | Только «не abort» | Только жесты и клавиши |
 | Риск | Post-frame паника должна оставлять scheduler в `Idle` | Продолжение после порванного `WM_DESTROY` | Неполное покрытие |
 
-**Выбор: a1, без сетки a2** (ADR-0258 §4, решено 2026-10-28). Прежнее предложение — слот
-payload в `window_proc` с `DefWindowProcW` и `PostQuitMessage` — отклонено: приложенческая
+**Выбор: 1 и на входе ОС — 4b** (ADR-0258 §4, решено 2026-10-28). Прежнее предложение — слот
+payload в `window_proc` с `DefWindowProcW` и `PostQuitMessage` (4a) — отклонено: приложенческая
 паника ловится в `flui-app` и до входа ОС не доходит; до входа доходит только дефект самого FLUI,
-и вход ОС сохраняет свой ответ или abort (`os_entry`, ADR-0151 §16). Каждый метод `AppHandler` и
-`WindowHandler` в `flui-app` возвращается нормально после приложенческой паники; это проверяет
-`an_application_panic_never_leaves_a_handler`. Нажатая клавиша, чей handler запаниковал,
+и вход ОС сохраняет свой ответ или abort (`os_entry`, ADR-0151 §16). Тело каждого метода
+`AppHandler` и `WindowHandler` в `flui-app` целиком под одним catch (`RunnerHandler::contained`),
+так что метод возвращается нормально и после паники в собственной маршрутизации `flui-app`; это
+проверяет `an_application_panic_never_leaves_a_handler`. Нажатая клавиша, чей handler запаниковал,
 считается обработанной, поэтому Alt+F4 «по панике» не срабатывает.
 
 ### (b) Как паника teardown становится кодом 101 после flush
@@ -96,13 +97,13 @@ realm в `teardown_platform_realm`, `queued_turns`, `on_quit`, ошибка сб
 `CallbackPanic` и удержание. Возобновляется инертный payload (`&str`/`String`); непрозрачный
 удерживается, а возобновляется `String` с его текстом.
 
-### (c) Учёт `Drop` (вопрос 1)
+### (c) Учёт `Drop` (ADR-0261 §2, варианты 2a–2c)
 
-| | c1. Debug-счётчики во фреймворке | c2. Сторожа владения в фикстуре | c3. `TreeObserver` |
+| | 2a. Debug-счётчики во фреймворке | 2b. Сторожа одного `DropLedger` | 2c. `TreeObserver` |
 |---|---|---|---|
 | Доказывает | Счётчик, не `Drop`; новый `static` | Освобождение в `Drop`; slab-узлы переживают сброс только через `forget` или утечку realm, и оба случая оставляют сторожей живыми | Unmount ≠ `Drop` (ADR-0040) |
 
-**Выбор: c2** (ADR-0261 §2, решено 2026-10-28): `flui_testing::DropLedger` и `DropSentinel`,
+**Выбор: 2b** (ADR-0261 §2, решено 2026-10-28): `flui_testing::DropLedger` и `DropSentinel`,
 один журнал на вид значений, общий для приложения приёмки и тестов раннера, плюс типизированные
 отказы устаревших handle (R19) как доказательство того, что realm ушёл.
 
@@ -243,10 +244,10 @@ end и из `UiRealm::drop`:
 
 - **S1. `WM_QUERYENDSESSION`.** Для каждой presentation в слоте: вето с `CloseReason::SessionEnd`
   (обработчик и guard; `hold` пропускает, `require_decision` ветирует). Есть вето → `FALSE` и
-  `ShutdownBlockReasonCreate`, запись `PendingClose(SessionEnd)`. Кэш ответа живёт **одну пачку
-  сообщений** (D-L5): он нужен, потому что Windows шлёт запрос каждому окну верхнего уровня.
-  Кэш и причина блокировки снимаются, когда owner-цикл вернулся к ожиданию сообщений, или на
-  любом `WM_ENDSESSION`. Для извлечённого realm вето не спрашивается (D-L1); ответ `TRUE`,
+  `ShutdownBlockReasonCreate`, запись `PendingClose(SessionEnd)`. Кэша ответа нет (ADR-0260):
+  хост Win32 принимает сообщения сеанса одним окном-приёмником и спрашивает обработчик один раз
+  на фазу, так что ответ не нужно делить между окнами верхнего уровня. Причина блокировки
+  снимается на `WM_ENDSESSION`. Для извлечённого realm вето не спрашивается (D-L1); ответ `TRUE`,
   потому что его байты пишет сброс.
 - **S2. `WM_ENDSESSION(FALSE)`.** Причина блокировки снимается, отзывается только
   `PendingClose(SessionEnd)`, `changed()` будится.
@@ -311,6 +312,7 @@ helper локализации (catch, удержание payload по ADR-0127, 
 | R6 | Запись не успевает к дедлайну | `flush_within` → `DeadlineExceeded`; файл цел (persistence R21) | 0 |
 | R7, R12 | Паника в `dispose`/`Drop` при закрытии последнего окна | Слот → quit → сброс реестра → сервисы → пулы → `resume_unwind` | 101 |
 | R13 | Паника `Drop` захвата при закрытии последнего окна | Первая главная, хвост удержан | 101 |
+| R4 | Деструктор приложения или `on_quit` блокирует выход | Сторож `EXIT_WATCHDOG` (15 с с шага 1): сброс реестра 1 с, `end_process` (ADR-0258 §7) | 124 |
 | R14 | `Drop` внутри идущего unwind | Режим сохранения, `forget` | без abort |
 | — | Паника в доставке закрытия последнего realm | Терминальна | 101 |
 | — | Паника при закрытии не последнего realm | `CallbackPanic` + удержание (D4) | процесс жив |
@@ -335,7 +337,7 @@ teardown, поэтому код 101 проходит в обе стороны; �
 
 | Треб. | Тест (уровень; таблица) | Вид | Без изменения |
 |---|---|---|---|
-| R1 | `acceptance_app_close_releases_every_owner_after_navigation` (headless; приложение приёмки), `last_window_close_releases_the_realm_through_the_runner` (headless-runner; новая `runner_teardown_matrix`) | Характеризация | Сторож жив |
+| R1 | `acceptance_app_close_releases_every_owner_after_navigation` (headless; приложение приёмки), `last_window_close_releases_the_runtime_through_the_runner` (headless-runner; новая `runner_teardown_matrix`) | Характеризация | Сторож жив |
 | R2 | `closing_with_a_pending_load_retires_the_future_once` (headless-runner) | Характеризация | `Drop` ≠ 1 |
 | R3 | `dropping_an_owner_with_an_observer_detaches_it_once` (headless; `tree_observer_inspector`) | Fix | 0 вызовов |
 | R4 | `last_window_close_returns_ok_on_both_routes` (headless-runner); нативный прогон | Fix (нативный) | — |
@@ -343,19 +345,19 @@ teardown, поэтому код 101 проходит в обе стороны; �
 | R6 | `a_write_past_the_deadline_leaves_a_whole_file_and_exits_ok` (headless-runner, двойник хранилища с барьером) | Fix | Реестра нет |
 | R7 | `teardown_panic_flushes_the_registry_before_resuming` (ребёнок) | Fix | Нет маркера сброса |
 | R8 | `a_panicking_note_build_shows_error_view_and_other_screens_work` (headless) | Характеризация | — |
-| R9 | `a_panicking_tap_handler_reports_once_and_the_next_tap_works`, `a_panicking_post_frame_callback_reports_once_and_the_next_frame_builds` (ребёнок; `runner_teardown_matrix`); нативный: паника в Save (фикстура `examples/acceptance_app_faults.rs`) | Fix | Паника выходит из dispatch |
-| R10 | `a_repeating_paint_panic_backs_off_but_keeps_retrying` (headless; `headless_frame_driver_matrix`, строки 60, 120, 240 Гц без ввода: интервалы не убывают и не меньше `T`, после потолка — в `[FAILURE_RETRY_CAP, FAILURE_RETRY_CAP + T)`, за десять потолков не меньше девяти отчётов); `a_single_paint_panic_redraws_without_input`; `a_pointer_move_does_not_bypass_the_backoff`; `a_failure_streak_past_thirty_three_keeps_the_one_second_cap` (k до 40); `the_runner_sleeps_until_the_failure_retry_deadline` (headless-runner: платформа спит до дедлайна `next_wake`) | Fix | ~60/с; 0 после затишья; переполнение сдвига |
+| R9 | `a_panicking_tap_handler_reports_once_and_the_next_tap_works`, `a_panicking_post_frame_callback_reports_once_and_the_next_frame_builds` (ребёнок; `runner_teardown_matrix`); нативный: `save-panic` в фикстуре — примере `acceptance_app_faults` (P10, #1952) | Fix | Паника выходит из dispatch |
+| R10 | `a_repeating_paint_panic_backs_off_but_keeps_retrying` (headless; `headless_frame_driver_matrix`, строки 60, 120, 240 Гц без ввода: интервалы не меньше `T` и ниже потолка не убывают, после потолка — в `[FAILURE_RETRY_CAP, FAILURE_RETRY_CAP + T)`, за десять потолков не меньше девяти отчётов); `a_single_paint_panic_redraws_without_input`; `a_pointer_move_does_not_bypass_the_backoff`; `a_failure_streak_past_thirty_three_keeps_the_one_second_cap` (k до 40); `the_runner_sleeps_until_the_failure_retry_deadline` (headless-runner: платформа спит до дедлайна `next_wake`) | Fix | ~60/с; 0 после затишья; переполнение сдвига |
 | R11 | `user_panic_exit_code_matrix` (ребёнок, строка на путь, ни одна не ждёт abort); `an_application_panic_never_leaves_a_handler` (headless, строка на метод `AppHandler`/`WindowHandler`) | Fix | abort |
 | R4 | `a_hung_service_and_compute_job_end_within_the_exit_budget` (headless-runner, настенные часы, `EXIT_BUDGET` + 1 с) | Fix | 15 с |
+| R4 | `a_blocking_destructor_ends_the_process_with_the_hung_code` (ребёнок: деструктор приложения не возвращается; код 124 в пределах `EXIT_WATCHDOG` + 1 с, байты реестра на диске) | Fix | процесс не выходит |
 | R12 | `dispose_panic_on_last_window_close_resumes_after_flush` (ребёнок); нативный: паника в `dispose` → 101 | Fix | `0xC0000409` |
 | R13 | `capture_drop_panic_keeps_the_first_failure_and_still_flushes` (ребёнок) | Fix | Сброс пропущен |
 | R14 | `user_drop_panic_inside_an_unwind_is_retained` (ребёнок; `realm_and_presentation_isolation_matrix`) | Характеризация | abort |
-| R15–R20 | `close_requested_inside_a_frame_runs_once_on_the_next_turn`, `a_late_completion_after_close_requests_no_frame`, R17-строки роутера `flui-widgets`, `a_second_close_request_tears_down_once`, `stale_handles_refuse_after_realm_drop`, `device_loss_on_the_closing_frame_still_exits_ok` | Характеризация | — |
+| R15–R20 | `close_requested_inside_a_frame_runs_once_on_the_next_turn`, `a_late_completion_after_close_requests_no_frame`, R17-строки роутера `flui-widgets`, `a_second_close_request_tears_down_once`, `stale_handles_refuse_after_the_runtime_drops`, `device_loss_on_the_closing_frame_still_exits_ok` | Характеризация | — |
 | R21 | `closing_during_composition_commits_before_detached` (headless-runner); windows | Fix | Detached без preedit |
-| R22 | `session_end_flushes_the_registry_within_the_framework_budget` (доля фреймворка ≤ бюджет); `session_end_with_a_checked_out_realm_writes_registry_bytes_and_calls_no_user_code` (`simulate_session_end` из handler'а; счётчик вызовов наблюдателей = 0, байты на диске); нативный: сообщения сеанса окну приложения приёмки, перезапуск | Fix | Нет реестра; пользовательский код при извлечённом realm |
+| R22 | `session_end_flushes_the_registry_within_the_framework_budget` (доля фреймворка ≤ бюджет); `session_end_with_a_checked_out_runtime_writes_registry_bytes_and_calls_no_user_code` (`simulate_session_end` из handler'а; счётчик вызовов наблюдателей = 0, байты на диске); нативный: сообщения сеанса окну приложения приёмки, перезапуск | Fix | Нет реестра; пользовательский код при извлечённом realm |
 | — | `close_delivery_is_idempotent` (headless: вложенная доставка из наблюдателя Detached и повтор из `UiRealm::drop`, одна доставка) | Fix | Двойной Detached |
 | — | `a_cancelled_logoff_withdraws_only_the_session_entry` (`close_request_matrix`: крестик `User` остаётся `pending` после `Cancelled`) | Fix | — |
-| — | `the_query_cache_ends_with_its_burst` (`close_request_matrix`) | Fix | — |
 | — | `releasing_the_last_hold_queues_one_close` (`close_request_matrix`) | Fix | — |
 | R23 | `a_vetoed_close_disposes_nothing` (`close_request_matrix`) | Характеризация | — |
 | R24 | Строка README | — | — |
@@ -364,34 +366,34 @@ R1 доказывается парой «приложение приёмки н�
 
 **Ответы на открытые вопросы требований** (решено 2026-10-28; tasks.md T8, T9, T10, T18, T19).
 
-1. Механизм учёта — c2, `flui_testing::DropLedger` (ADR-0261 §2).
+1. Механизм учёта — 2b, `flui_testing::DropLedger` (ADR-0261 §2).
 2. Один срок выхода `EXIT_BUDGET` = 6 с на работу фреймворка (ADR-0258 §7); для сеанса — 3 с
    (ADR-0260).
-3. Фикстура `examples/acceptance_app_faults.rs`: отказ — её аргумент (`save-panic`,
+3. Фикстура — пример `acceptance_app_faults` (P10, #1952): отказ — её аргумент (`build-panic`, `save-panic`,
    `dispose-panic`), шов — аргумент конструктора приложения приёмки; env отвергнута (ADR-0258).
 4. Свойства против `FAILURE_RETRY_CAP` на 60, 120, 240 Гц вместо коридора 8–12 (ADR-0258 §6).
 
 ## ADR
 
-- **ADR (номер назначит оркестратор): «Owner-turn panic boundary and terminal exit».**
-  Supersedes ADR-0035 §5 в части «first panic resumes after restoration» и утверждение
-  `flui-runtime/ARCHITECTURE.md` «panic leaves the dispatch boundary». Решение:
-  (1) per-task catch, `CallbackPanic`; (2) терминальны сбои последнего realm и выхода из цикла
-  (D4), включая доставку закрытия; `resume_unwind` после сброса реестра, сервисов и пулов;
-  (3) входы ОС не меняются, приложенческая паника до них не доходит (ADR-0258 §4); (4) `Drop` не
-  возобновляет панику при живых пользовательских полях; (5) откат повтора кадра через
-  `next_wake`.
-- **ADR (номер назначит оркестратор): «Close guard, close reasons and the flush registry».**
-  `CloseReason`, `CloseGuard`/`PendingClose`/`CloseChanged` в `flui-view`; одна запись на
-  причину; отпускание последнего hold — одна операция закрытия; `FlushRegistry` вне realm как
-  единственный путь persisted-состояния на диск; общая идемпотентная доставка закрытия;
-  пользовательский код только в realm в слоте. Заменяет соответствующие пункты persistence
-  design (`close_now`/`abandon_close`/`requested`, запись из `AsyncDriver`).
-- **ADR (номер назначит оркестратор): «Session end».** Фазы S1–S6, кэш одной пачки,
+Записаны 2026-10-28, все `Accepted`, не реализованы:
+
+- **ADR-0258** «A user-code panic is contained at the owner turn, and only a terminal failure ends
+  the process, after the flush». Заменяет ADR-0035 §5 в части «first panic resumes» и утверждение
+  `flui-runtime/ARCHITECTURE.md` «panic leaves the dispatch boundary». §1 per-task catch,
+  `CallbackPanic`; §2 терминальны сбои последнего UI-runtime и выхода из цикла; §3 порядок выхода
+  и `resume_unwind` → 101; §4 входы ОС не меняются (4b), catch каждого метода обработчика
+  `flui-app` тотален; §5 `Drop` не возобновляет панику при живых пользовательских полях; §6 откат
+  повтора кадра и его мера (6d); §7 `EXIT_BUDGET` 6 с и сторож `EXIT_WATCHDOG` 15 с с кодом 124.
+- **ADR-0259** «close guard, причины закрытия и реестр сброса». `CloseReason`,
+  `CloseGuard`/`PendingClose`/`CloseChanged` в `flui-view`; одна запись на причину; отпускание
+  последнего hold — одна операция закрытия; `FlushRegistry` вне UI-runtime — единственный путь
+  persisted-состояния на диск; общая идемпотентная доставка закрытия; пользовательский код только
+  в UI-runtime в слоте.
+- **ADR-0260** «завершение сеанса». Фазы, без кэша ответа (одно окно-приёмник),
   `ShutdownBlockReason`, бюджет 3 с и порог 1 с для пользовательского кода, `SessionEnding` для
-  извлечённого realm, `PostQuitMessage` всегда.
-- **ADR (номер назначит оркестратор): «Owner drop ends observation».** Supersedes ADR-0040 в
-  части «Teardown honesty». Закрывает #1126.
+  извлечённого UI-runtime, quit всегда.
+- **ADR-0261** «drop владельца завершает наблюдение» (заменяет ADR-0040 в части «Teardown
+  honesty», закрывает #1126) и учёт освобождения через `DropLedger` (2b).
 - **PANIC-POLICY:** раздел «Callback panics and exit codes».
 
 ## Работы
@@ -402,7 +404,7 @@ R1 доказывается парой «приложение приёмки н�
 2. ‖ `flui-view`: `CloseReason`, `CloseGuard` и др., защёлка в `LifecycleSource`,
    `FlushRegistry`, `LifecycleContext::{close_guard, flush_registry}`, `detached()` в
    `BuildOwner::drop`; R3, `close_delivery_is_idempotent`.
-3. ‖ `flui-platform`: `SessionEnd`, `on_session_end`, Win32 сообщения сеанса с кэшем пачки и
+3. ‖ `flui-platform`: `SessionEnd`, `on_session_end`, Win32 сообщения сеанса (одно окно-приёмник, без кэша) и
    `ShutdownBlockReason*`, `simulate_session_end`, тест R5 (слота в `window_proc` нет, ADR-0258 §4).
 4. ‖ Приложение приёмки (persistence P10): шов отказов — аргумент конструктора; строки R1, R8 (tasks.md T18). Фикстуры Notes удалены.
 5. ‖ `flui-widgets`: строки R17.

@@ -1,6 +1,6 @@
 # ADR-0260: A session end consults the close guards, writes the flush registry inline, and tears down only with time to spare
 
-- **Status:** Proposed. Not implemented: the platform delivers the session end to
+- **Status:** Accepted (2026-10-28). Not implemented: the platform delivers the session end to
   `AppHandler::session_end`, and `flui-app` answers it from the notice subscribers alone
   (`answer_session_end`, `crates/flui-app/src/app/runner/host.rs`); no guard is consulted, nothing is
   flushed and nothing is torn down when the session ends.
@@ -117,7 +117,7 @@ end.
 
 - `session_end_flushes_the_registry_within_the_framework_budget`: the framework's share of the
   `Ending` phase stays within `SESSION_END_BUDGET`.
-- `session_end_with_a_checked_out_realm_writes_registry_bytes_and_calls_no_user_code`: the session
+- `session_end_with_a_checked_out_runtime_writes_registry_bytes_and_calls_no_user_code`: the session
   end simulated from inside a handler (`HeadlessPlatform::simulate_session_end`) runs no observer and
   leaves the published bytes on disk.
 - `a_cancelled_logoff_withdraws_only_the_session_entry`.

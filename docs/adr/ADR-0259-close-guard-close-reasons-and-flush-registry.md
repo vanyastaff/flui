@@ -1,12 +1,13 @@
 # ADR-0259: A presentation's close guard records closes by reason, and a host-owned flush registry is the one way persisted state reaches storage
 
-- **Status:** Proposed. The contract is in place and not wired: `CloseReason`, `CloseGuard`,
-  `CloseHold`, `PendingClose`, `CloseChanged` and `CloseGuardSource`
+- **Status:** Accepted (2026-10-28). Not implemented: the contract is in place and not wired:
+  `CloseReason`, `CloseGuard`, `CloseHold`, `PendingClose`, `CloseChanged` and `CloseGuardSource`
   (`crates/flui-view/src/close_guard.rs`), `FlushRegistry`, `FlushPublisher` and `FlushHost`
   (`crates/flui-view/src/flush_registry.rs`), `OwnerNotify` (`crates/flui-view/src/owner_notify.rs`),
   the close-delivery claim of `LifecycleSource` (`crates/flui-view/src/lifecycle.rs`) and
   `CloseRequest::reason` (`crates/flui-app/src/app/close_request.rs`). No presentation hands out a
-  guard, no hold refuses a close, and the registry keeps published bytes without writing them.
+  guard, no hold refuses a close, the registry keeps published bytes without writing them, and
+  `FlushHost` is not yet `Clone`.
 - **Date:** 2026-10-28
 - **Related:** [ADR-0258](ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md) (the exit order
   that flushes the registry; what a panic on a close path does),
@@ -156,7 +157,8 @@ impl FlushRegistry {
 impl FlushPublisher {
     pub fn publish(&self, bytes: Arc<[u8]>, mode: WriteMode, revision: Revision); // owner thread
 }
-// flui_view::__runtime, for the host only
+// flui_view::__runtime, for the host only; Clone (one Arc), Send + Sync
+#[derive(Clone)] pub struct FlushHost { /* Arc: the host's registry */ }
 impl FlushHost {
     pub fn new(storage: Arc<dyn Storage>, writer: FlushWriter, notify: OwnerNotify) -> Self;
     pub fn registry(&self) -> FlushRegistry;
@@ -180,7 +182,12 @@ impl FlushHost {
 - **The one path to storage.** A `Persisted` document encodes on the owner thread and publishes; it
   reads its status from `committed` and `state`. There is no write loop in the `AsyncDriver`.
   `flush_within` waits for the write in flight and writes the latest unconfirmed bytes of every name
-  before the deadline; it runs at loop exit (ADR-0258 §3) and inline at a session end (ADR-0260).
+  before the deadline. It runs at loop exit against the exit deadline's service share,
+  `SERVICE_SHUTDOWN_DEADLINE` (5 s), which lies inside `EXIT_BUDGET` (6 s) (ADR-0258 §3, §7); from
+  the exit watchdog's thread with one second, when the exit order hangs (ADR-0258 §7); and inline
+  at a session end within `SESSION_END_BUDGET` (ADR-0260). It may run on any thread: it takes the
+  registry's lock only to take and record slots, and two flushes at once still make one write in
+  flight per name.
 - **Not a widget capability.** `LifecycleContext` reaches the registry only through a crate-private
   token (`flush_registry_in_crate`), so the registry is part of `flui-view`'s persistence, not of the
   widget surface.

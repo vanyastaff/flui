@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (2026-10-28). Not implemented: today a caught panic is reported and then
   resumed, and on Win32 it reaches the window procedure's boundary, which aborts; the exit order
-  has no flush step and no shared deadline, and the frame retry has no backoff.
+  has no flush step, no shared deadline and no watchdog, and the frame retry has no backoff.
 - **Date:** 2026-10-28
 - **Supersedes:** [ADR-0035](ADR-0035-lifecycle-consolidation-and-frames-enabled.md)
   §5, its sentence "the first panic resumes after restoration and notification" only (a quit
@@ -27,10 +27,15 @@
   "Unwinding across FFI boundaries" (<https://doc.rust-lang.org/reference/panic.html>); Qt 6,
   *Exception Safety* (<https://doc.qt.io/qt-6/exceptionsafety.html>); Flutter, *Handling errors in
   Flutter* (<https://docs.flutter.dev/testing/errors>); Kubernetes, *Pod Lifecycle*, "Termination of
-  Pods" (<https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/>);
+  Pods" (<https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/>); systemd,
+  *systemd.service*, `TimeoutStopSec=`
+  (<https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html>); GNU coreutils,
+  *timeout invocation* (<https://www.gnu.org/software/coreutils/manual/html_node/timeout-invocation.html>);
   `chromium/chromium@b57678612bff5bf5c88c18146bdf5878292e6384`
-  `content/browser/renderer_host/debug_urls.cc` and
-  `chrome/android/javatests/src/org/chromium/chrome/test/crash/IntentionalCrashTest.java`
+  `content/browser/renderer_host/debug_urls.cc`,
+  `chrome/android/javatests/src/org/chromium/chrome/test/crash/IntentionalCrashTest.java`,
+  `chrome/browser/metrics/shutdown_watcher_helper.cc` and
+  `chrome/browser/metrics/thread_watcher_report_hang.cc`
 
 ## Context and problem statement
 
@@ -165,19 +170,32 @@ pub(crate) enum AfterPanic<A, R> {
     #[cfg(any(target_os = "windows", target_os = "macos", target_os = "ios"))]
     Abort,
 }
-// flui-app: every handler method contains the application work it starts
+// flui-app: the signatures are main's; each body is wrapped whole
 impl flui_native::AppHandler for RunnerHandler { // and `WindowHandler for WindowRoutes`
-    fn session_end(&mut self, phase: SessionEndPhase) -> SessionEndAnswer {
-        // §1: contained per operation; §2: terminal → host slot, quit; never resumes
+    fn session_end(
+        &self,
+        _: &flui_native::OwnerPlatform,
+        phase: flui_platform::SessionEndPhase,
+    ) -> flui_platform::SessionEndAnswer {
+        self.contained(flui_platform::SessionEndAnswer::Proceed, || answer_session_end(phase))
     }
-    // … each method the same
+    // … every method the same, each with the answer its entry gives after a failure
+}
+impl RunnerHandler {
+    /// The whole body under one catch: a panic is classified by §2 (terminal → host slot and
+    /// quit; otherwise one `CallbackPanic`), and the method returns `failed`. Never resumes.
+    fn contained<R>(&self, failed: R, body: impl FnOnce() -> R) -> R;
 }
 ```
 
-What still reaches an OS entry is a defect of FLUI itself: a panic in the native host's own code,
-or a handler method of `flui-app` that let a panic out. Both are framework defects whatever their
-text, so the boundary does not read `BUG:` there: every panic at an entry gets the entry's answer,
-or ends the process where the entry has none.
+The catch is total: it wraps each method's whole body, not only the application operations the
+body dispatches (which §1 already contains one by one), so a defect in `flui-app`'s own routing
+code is caught there too. What is left to reach an OS entry is `flui-native`'s own code.
+
+What still reaches an OS entry is a defect of FLUI itself: a panic in the native host's own code
+outside any handler call. It is a framework defect whatever its text, so the boundary does not read
+`BUG:` there: every panic at an entry gets the entry's answer, or ends the process where the entry
+has none.
 
 Why the abort stays for a host defect, instead of a parked payload and 101 (4a):
 
@@ -205,11 +223,13 @@ Why the abort stays for a host defect, instead of a parked payload and 101 (4a):
 - **An unwind cannot leave an `extern "system"` or `extern "C"` frame:** since Rust 1.81 it aborts
   (the Rust Reference, *Panic*). An answer or an abort is all an entry can do without the park.
 
-The exit-code matrix therefore has no abort row reachable from application code: a row per
-handler method proves that an application panic returns to the call point
-(`an_application_panic_never_leaves_a_handler`), and the native run proves it through the real
-window procedure. A host defect aborting is a documented outcome of a framework bug, not a row a
-user can reach.
+The exit-code matrix therefore has no abort row reachable from application code. The total catch
+is what makes that hold, and `an_application_panic_never_leaves_a_handler` proves it: one row per
+method of `AppHandler` and `WindowHandler`, each with application code that panics inside it, each
+failing if the panic leaves the method. The proof is the same on every host, because the methods
+are `flui-app`'s and the call point is shared, so the native run does not repeat it per path; it
+proves the outcomes a user sees (see Confirmation). A host defect aborting is a documented
+outcome of a framework bug, not a row a user can reach.
 
 ### §5. A destructor does not resume a panic while user values live
 
@@ -256,9 +276,12 @@ virtual clock records the instant of each `frame_failure` report of a paint that
 no input; the rows run at frame intervals of 1/60, 1/120 and 1/240 s. The test asserts the
 properties the requirement names, not the instants the formula yields:
 
-- **backoff:** each interval between reports is at least `T` and at least the one before it;
+- **backoff:** every interval is at least `T`, and below the cap each interval is at least the
+  one before it;
 - **bounded rate:** once an interval reaches `FAILURE_RETRY_CAP`, every later one lies in
-  `[FAILURE_RETRY_CAP, FAILURE_RETRY_CAP + T)`, so the steady rate is at most one attempt per cap;
+  `[FAILURE_RETRY_CAP, FAILURE_RETRY_CAP + T)`, so the steady rate is at most one attempt per cap.
+  Within that range the intervals may go up or down: an attempt lands on the first frame at or
+  after its deadline, so the jitter is up to one frame interval and is not held to an order;
 - **liveness:** over the ten caps that follow, at least nine reports arrive without input.
 
 The rows read `FAILURE_RETRY_CAP` and `T` rather than a count such as "8 to 12 in ten seconds", so a
@@ -294,8 +317,43 @@ the sum of the steps (15 s), and any new step would have added to it unseen.
 
 Steps 1 and 2 run application code (destructors, `on_quit`), which cannot be interrupted, so the
 deadline starts after them, as the session-end budget starts at the framework's own work
-(ADR-0260). The bound is the framework's: an application destructor that blocks delays the exit by
-its own time.
+(ADR-0260).
+
+**The whole exit is bounded by a watchdog.** Application code in steps 1 and 2 can block, and
+nothing outside the process ends a desktop application whose user closed its last window: its
+window is gone, and the process would linger, holding its files and its single-instance lock, until
+the session ends. So the exit order has an end-to-end bound, kept apart from the budget:
+
+```rust
+// flui-app, runner
+pub(crate) const EXIT_WATCHDOG: Duration = Duration::from_secs(15); // from step 1; > EXIT_BUDGET
+pub const EXIT_CODE_HUNG: i32 = 124;
+// flui-native: ends the process now, with no destructor, `atexit` handler or DLL detach
+pub fn end_process(code: i32) -> !; // TerminateProcess(GetCurrentProcess()) on Windows, _exit elsewhere
+```
+
+When step 1 starts, `flui-app` starts a watchdog thread that waits on a channel for
+`EXIT_WATCHDOG`; the exit order drops the sender when step 7 is reached, and the thread ends. If
+the wait times out, the watchdog logs the step the exit order is in (contained, like any log), writes
+the flush registry itself with `flush_within(now + 1 s)` (the registry is shared across threads,
+holds no lock across application code and runs none, ADR-0259 §5), and calls
+`end_process(EXIT_CODE_HUNG)`. `end_process` is not `std::process::exit`, because `exit` runs
+`atexit` handlers and, on Windows, DLL detach under the loader lock, either of which the hung
+thread may block. The code is 124, the one `timeout` from GNU coreutils returns when the command it
+ran timed out, so a supervisor reads a hung exit apart from a panic (101) and a crash.
+
+Fifteen seconds is the bound the teardown requirement set, and leaves application code nine
+seconds beyond `EXIT_BUDGET`. The watchdog is the framework's only use of `end_process`; it runs on
+the desktop and Android hosts, whose loops return, and not on iOS, whose `UIApplicationMain` never
+does, nor on the web.
+
+Systems that stop a process bound the whole stop the same way and end what is left: systemd sends
+`SIGKILL` once `TimeoutStopSec=` passes (*systemd.service*), Kubernetes once the termination grace
+period ends, Windows once `WM_ENDSESSION` returns (ADR-0260). Chromium's shutdown watchdog
+(`shutdown_watcher_helper.cc`, `thread_watcher_report_hang.cc`) only reports a hang
+(`DumpWithoutCrashing`) after a long per-channel timeout, and leaves ending the process to
+whatever stops it; a FLUI application whose last window closed has no such outer stopper, so the
+watchdog ends it.
 
 A pool job cut at the deadline loses nothing the application can still read: the UI runtimes are
 gone, the services have finished or were abandoned, and the pools cancel their root token first,
@@ -323,6 +381,11 @@ it ends (*Pod Lifecycle*, "Termination of Pods").
   is the OS's abort code, not 101 (§4).
 - Bad, because the pools get at least one second at exit instead of five each: a compute closure
   that runs longer is abandoned sooner (§7).
+- Good, because no exit lasts longer than `EXIT_WATCHDOG`: a blocking application destructor
+  costs the process code 124, after the registry is written, instead of a process that never
+  ends (§7).
+- Bad, because the watchdog ends the process without destructors: an application destructor that
+  would have finished after 15 s does not run to its end.
 - Neutral, because `BUG:` invariants keep their meaning: a framework defect inside an owner
   operation is contained like any panic, with `internal_invariant` set in its `CallbackPanic` so a
   handler can tell them apart, and one that reaches an OS entry ends the process there (§4).
@@ -343,10 +406,11 @@ was flushed before the panic resumed is what tells the fix from the old code, no
   one row per path of PANIC-POLICY's table; no row expects an abort.
 - §4: `an_application_panic_never_leaves_a_handler` (`flui-app`, headless): one row per method of
   `flui-app`'s `AppHandler` and `WindowHandler`, each driven through the headless platform with an
-  application operation that panics; the row fails when the panic unwinds out of the platform's
-  call (the call point's `or_resume`), which on Win32, AppKit and UIKit is the abort. The native
-  run below covers the same paths through the real window procedure. `cargo xtask panic-boundary`
-  keeps every OS entry behind `os_entry` (ADR-0151 §16).
+  application operation that panics, and one more per method with the panic in `flui-app`'s own
+  routing code before the operation is dispatched (the total catch); the row fails when the panic
+  unwinds out of the platform's call (the call point's `or_resume`), which on Win32, AppKit and
+  UIKit is the abort. `cargo xtask panic-boundary` keeps every OS entry behind `os_entry`
+  (ADR-0151 §16).
 - §5: `user_drop_panic_inside_an_unwind_is_retained` (a child: `dispose` panics and a future's
   `Drop` panics during the same unwind, without an abort).
 - §6: `a_repeating_paint_panic_backs_off_but_keeps_retrying` (the three properties, one row per
@@ -358,15 +422,21 @@ was flushed before the panic resumed is what tells the fix from the old code, no
   service that ignores cancellation and a compute closure that never returns; the loop returns
   within `EXIT_BUDGET` plus one second of slack, measured on the wall clock (the pools join on real
   threads). The old code, 5 s plus 5 s per pool, fails it.
+  `a_blocking_destructor_ends_the_process_with_the_hung_code` (a child whose application
+  destructor never returns): the child exits with `EXIT_CODE_HUNG` within `EXIT_WATCHDOG` plus one
+  second, and the registry bytes published before the close are on disk. The old code never exits,
+  and the parent's timeout fails the row.
 - The native exit codes are confirmed by a dated run of the acceptance app through flui-driver's
-  `os` lane, which reads the exit code of the process it launched (`gone { kind: process, exit }`):
-  Alt+F4 exits 0 within `EXIT_BUDGET`; a panic in a Save handler leaves the process running and
-  the next input works; a panic in `dispose` on the last window close exits 101, never
-  `0xC0000409`. The panic comes from a fixture binary, the example `acceptance_app_faults`, which
-  builds the acceptance app with the fault named by its argument (`save-panic`, `dispose-panic`)
-  through the same constructor seam the headless rows use; the launcher the other native runs use,
-  the example `acceptance_app`, has no fault switch. The lane launches the fixture with the
-  argument and drives it with OS input, so the panic travels the real window procedure.
+  `os` lane, which reads the exit code of the process it launched (`gone { kind: process, exit }`).
+  The rows prove what a user of a native window sees, which the headless rows cannot: Alt+F4 and a
+  programmatic close exit 0 within `EXIT_BUDGET`; a panic in the Save handler, reached by a real
+  click, leaves the process running and the next real key works; a panic in `dispose` when the last
+  window is closed by Alt+F4 exits 101, never `0xC0000409`; a panic in the note screen's `build`
+  shows the error view and the window keeps answering input. The faults come from a fixture
+  binary, the example `acceptance_app_faults` (added with the acceptance app, not on `main` yet),
+  which builds the app with the fault named by its argument (`build-panic`, `save-panic`,
+  `dispose-panic`) through the same constructor seam (`Faults`) the headless rows use; the
+  launcher the other native runs use, the example `acceptance_app`, has no fault switch.
 
 ## Pros and cons of the options
 
@@ -476,8 +546,8 @@ second past the exponent's clamp.
 
 #### 6d. The properties against the named cap, at several frame intervals (chosen)
 
-Backoff (intervals non-decreasing, at least `T`), bounded rate (once at the cap, every interval in
-`[cap, cap + T)`) and liveness (at least nine reports in ten caps without input), read against
+Backoff (every interval at least `T`, non-decreasing below the cap), bounded rate (once at the
+cap, every interval in `[cap, cap + T)`, in any order) and liveness (at least nine reports in ten caps without input), read against
 `FAILURE_RETRY_CAP` and `T`, at 60, 120 and 240 Hz.
 
 - Good, because one table holds both halves of the requirement, no hot loop and no stall.
@@ -500,12 +570,19 @@ today, and the native run asserts that bound.
 #### 7b. One exit deadline the exit order shares (chosen)
 
 `EXIT_BUDGET`, six seconds, bounds steps 3 to 6; the flush and the services keep their five, and
-the pools take what is left.
+the pools take what is left. `EXIT_WATCHDOG`, fifteen seconds from step 1, bounds the whole exit,
+application code included, and ends the process with `EXIT_CODE_HUNG` after writing the registry.
 
 - Good, because the bound is stated once, holds by construction, and a test can read it.
 - Good, because the flush keeps the time it has today.
+- Good, because the end-to-end bound the requirement set survives a blocking application
+  destructor.
 - Bad, because the pools join with less than their former grace when services are slow, and a
   compute closure that runs past the deadline is abandoned sooner.
+
+The end-to-end bound had two other forms. Without a watchdog, a blocking destructor keeps an
+invisible process alive until the session ends. A watchdog that only reports, as Chromium's does,
+leaves the same process alive; it suits a program something else will stop.
 
 #### 7c. No bound in the contract
 

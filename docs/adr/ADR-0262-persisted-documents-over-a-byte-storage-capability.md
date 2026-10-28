@@ -9,6 +9,9 @@
   `StorageError::Unsupported`, `set` refuses every value, and storage still reaches a UI runtime
   through `LifecycleContext::storage`.
 - **Date:** 2026-10-28
+- **Supersedes (on acceptance):** [ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md)
+  step 8, its "stack restoration as a list of paths" only (§6 here); web history, query and
+  fragment stay in step 8.
 - **Related:** [ADR-0259](ADR-0259-close-guard-close-reasons-and-flush-registry.md) (the flush
   registry every write goes through, and the close guard a document holds),
   [ADR-0260](ADR-0260-session-end-flushes-before-it-tears-down.md) (the registry is written inline
@@ -93,6 +96,14 @@ replaced and resolves `Superseded`. A bad name in a constant is a compile error.
 UI runtime as a built-in capability of the seam (ADR-0152), and `LifecycleContext::storage` is
 removed; without a configured directory (`AppConfig::with_storage_dir`) or on a platform without
 files, the capability is absent and a document is `Unavailable`.
+
+No cargo feature gates persistence: `AppConfig::with_storage_dir` is the one switch, and the types
+above build with the facade's default features. An application that persists depends, among
+FLUI's crates, on `flui` alone, with the features its widgets need (`material` for the acceptance
+app, `testing` for its headless rows), and on its own codec (`serde_json` in the acceptance app). A
+second, build-time switch for the same thing gave "the method is there and the storage is not" and
+multiplied `cfg` across the runners, so it was removed. `serde_json` stays out of the facade's
+graph whether persistence is used or not.
 
 ### §2. A write replaces the file atomically, and a version guards data against another instance
 
@@ -213,9 +224,9 @@ restoration of ADR-0093 step 8; web history, query and fragment stay there.
   `saved_status_appears_only_after_commit`, `codec_panic_is_contained_first_failure_kept`,
   `no_write_without_a_loaded_base`, `newer_version_is_never_written`,
   `older_version_decodes_or_reports_without_writing`, `oversized_file_is_refused_unread`,
-  `busy_retry_follows_the_realm_clock`, `a_later_edit_supersedes_an_unstarted_one`,
+  `busy_retry_follows_the_runtime_clock`, `a_later_edit_supersedes_an_unstarted_one`,
   `user_close_waits_for_an_in_flight_save`, `a_saving_document_holds_user_close_only`,
-  `two_realms_keep_independent_documents`.
+  `two_runtimes_keep_independent_documents`.
 - `FileStore`'s own tests: the atomic replacement, the lock and `Conflict`, the classification of
   OS errors.
 - `crates/flui-widgets/tests/contracts.rs`: `from_stack_restores_back_order`,
