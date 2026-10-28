@@ -1150,6 +1150,35 @@ trait depends on `flui-platform` instead.
   itself at its `done`). The display watch, on its own connection, reads at
   most the outputs the loop binds. No `wl_data_device` is bound yet, so no
   data offer arrives.
+- **Work per peer event is bounded.** What a compositor's or an X server's
+  event costs is a constant, or linear in that event's own bytes; never in
+  data the peer sent before (a keymap's size, a list's length), so a burst of
+  small events cannot cost a burst of large reads. Where an event needs such
+  data, it is read once when the data arrives and looked up after, or read at
+  most twice a loop turn. The handlers:
+  - a Wayland group change names its layout from where the keymap's text
+    names it, found once when the keymap was taken (`KeymapSource::Compositor`'s
+    `layouts`, ranges into the text rather than copies of it); a keymap is read
+    and compiled once per seat per delivery, its file at most 8 MiB
+    (`a_layout_switch_reads_no_keymap`, `layout_names_are_held_in_the_keymap_text`);
+  - an X11 hierarchy change removes what it names removed or disabled with no
+    read, and asks the server for each device it names added, enabled or
+    attached, by that device's id, as GTK's `handle_hierarchy_changed` and
+    winit's `xinput2_hierarchy_changed` do: one query per device the change
+    carries, at once, so a device's events later in the same batch find it
+    (`a_pen_plugged_in_mid_batch_draws_as_a_pen`,
+    `a_hierarchy_change_asks_only_for_what_it_names`); an `XIDeviceChanged`
+    applies the classes it carries, as GTK's `handle_device_changed` does, with
+    no query (`a_device_change_brings_its_own_classes`); an XKB keyboard or map
+    change reads the keymap again, bounded work since an X keymap is bounded by
+    the protocol (key codes 8 to 255, four groups); an XKB state change names
+    the layout from the names read with the keymap;
+  - the scans an event makes run over the bounded collections above: held keys
+    (128), a device's touches (32) and a touch frame's steps (256), a tablet
+    frame's buttons (32), the seats (16), outputs (64), the X11 devices (128)
+    and valuators (36), and the registry's contacts and devices, which those
+    bound; a window lookup scans the application's own windows;
+  - an X11 event's valuator mask is read in the event's own length.
 
 ---
 
