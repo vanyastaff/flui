@@ -27,9 +27,17 @@
 //!   one is not keyed by it.
 //! - There is no primary output and no work area; the usable area is the
 //!   bounds.
+//! - **Colour** comes from `wp_color_management_v1`, where the compositor has
+//!   it: the output's image description, described again whenever the
+//!   compositor says it changed. Each description is numbered and only the
+//!   newest one's `done` is taken over. Without the protocol, or when the
+//!   compositor cannot describe an output, the colour is absent on this
+//!   device.
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform::{DisplayKey, RefreshPeriod};
+use flui_platform::{
+    CapabilityAbsence, ColorGamut, DisplayColor, DisplayKey, Headroom, RefreshPeriod,
+};
 
 use super::view::{Identity, OutputView};
 
@@ -68,6 +76,82 @@ pub(crate) enum OutputEvent {
     Done,
 }
 
+/// One event of an output's image description (`wp_image_description_info_v1`
+/// of `wp_color_management_output_v1`), in the terms the model needs. The
+/// adapter maps the protocol's events onto these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ColorEvent {
+    /// `primaries_named`, as a gamut; `None` for a named set the model does
+    /// not class, which leaves the gamut to the chromaticities.
+    NamedPrimaries(Option<ColorGamut>),
+    /// `primaries`: the red primary's x chromaticity, times 1 000 000.
+    Primaries { red_x: i32 },
+    /// `tf_named` or `tf_power`: whether the transfer function carries values
+    /// above SDR white (PQ, HLG, the extended ones).
+    Transfer { high_range: bool },
+    /// `luminances`: the maximum and the reference white, in cd/m².
+    Luminances { max: u32, reference: u32 },
+    /// `target_luminance`: the maximum the output is driven to, in cd/m².
+    TargetLuminance { max: u32 },
+    /// `done`: the description is complete.
+    Done,
+}
+
+/// What the events of one image description said, until its `done`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ColorDescription {
+    named: Option<ColorGamut>,
+    red_x: Option<i32>,
+    high_range: Option<bool>,
+    max: Option<u32>,
+    reference: Option<u32>,
+    target_max: Option<u32>,
+}
+
+/// Red primaries from this x on are the BT.2020 red (0.708).
+const REC2020_RED_X: i32 = 700_000;
+/// Red primaries from this x on are the Display P3 red (0.680); below, the
+/// sRGB red (0.640).
+const P3_RED_X: i32 = 670_000;
+
+/// The colour an output's complete image description gives it.
+///
+/// The gamut is the named primaries' where the model classes them, otherwise
+/// the one the red chromaticity reaches. A description without primaries or a
+/// transfer function is one this host does not read. A high-range output's
+/// headroom is its target peak (or, without one, its maximum) over the
+/// reference white, absent when either is missing or they give no finite
+/// multiple.
+fn color_of(description: &ColorDescription) -> Result<DisplayColor, CapabilityAbsence> {
+    let gamut = description
+        .named
+        .or_else(|| {
+            description.red_x.map(|red_x| match red_x {
+                x if x >= REC2020_RED_X => ColorGamut::Rec2020,
+                x if x >= P3_RED_X => ColorGamut::DisplayP3,
+                _ => ColorGamut::Srgb,
+            })
+        })
+        .ok_or(CapabilityAbsence::NotYetOnThisHost)?;
+    if !description
+        .high_range
+        .ok_or(CapabilityAbsence::NotYetOnThisHost)?
+    {
+        return Ok(DisplayColor::standard(gamut));
+    }
+    let headroom = description
+        .target_max
+        .or(description.max)
+        .zip(description.reference)
+        .ok_or(CapabilityAbsence::NotOnThisDevice)
+        .and_then(|(peak, reference)| {
+            // Both are whole cd/m²: exact in `f32` up to 2^24, finite beyond.
+            Headroom::from_luminance(peak as f32, reference as f32)
+                .map_err(|_| CapabilityAbsence::NotOnThisDevice)
+        });
+    Ok(DisplayColor::high(gamut, headroom))
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 struct OutputState {
     position: Option<(i32, i32)>,
@@ -100,6 +184,21 @@ struct Output {
     /// logical size has not arrived: the first listing waits for it, so a
     /// hotplugged output is not published with a guessed size and scale.
     awaiting_logical_size: bool,
+    /// The colour of the last complete image description; absent on a
+    /// compositor without color management until one arrives.
+    color: Result<DisplayColor, CapabilityAbsence>,
+    /// The image description being described; replaced by a newer one, so an
+    /// older description never overwrites a newer colour.
+    describing: Option<(u64, ColorDescription)>,
+}
+
+impl Output {
+    /// Take `color` over; whether a listed output's colour changed.
+    fn set_color(&mut self, color: Result<DisplayColor, CapabilityAbsence>) -> bool {
+        let changed = self.color != color;
+        self.color = color;
+        changed && self.applied.is_some()
+    }
 }
 
 /// Every `wl_output` the compositor advertises.
@@ -120,7 +219,70 @@ impl WaylandOutputs {
             pending: OutputState::default(),
             applied: None,
             awaiting_logical_size: false,
+            color: Err(CapabilityAbsence::NotOnThisDevice),
+            describing: None,
         });
+    }
+
+    /// The output `global` is being described again, by the image description
+    /// numbered `description` (a number the adapter gives each description it
+    /// asks for, rising). Events of any earlier description are dropped from
+    /// now on.
+    pub(crate) fn describe(&mut self, global: u32, description: u64) {
+        if let Some(output) = self.output_mut(global) {
+            output.describing = Some((description, ColorDescription::default()));
+        }
+    }
+
+    /// Feed one event of the image description `description` of the output
+    /// `global`. Returns whether a listed output's colour changed, which only
+    /// the `done` of the newest description can cause.
+    pub(crate) fn apply_color(&mut self, global: u32, description: u64, event: ColorEvent) -> bool {
+        let Some(output) = self.output_mut(global) else {
+            return false;
+        };
+        let Some((current, pending)) = output.describing.as_mut() else {
+            return false;
+        };
+        if *current != description {
+            return false;
+        }
+        match event {
+            ColorEvent::NamedPrimaries(gamut) => pending.named = gamut,
+            ColorEvent::Primaries { red_x } => pending.red_x = Some(red_x),
+            ColorEvent::Transfer { high_range } => pending.high_range = Some(high_range),
+            ColorEvent::Luminances { max, reference } => {
+                pending.max = Some(max);
+                pending.reference = Some(reference);
+            }
+            ColorEvent::TargetLuminance { max } => pending.target_max = Some(max),
+            ColorEvent::Done => {
+                let color = color_of(pending);
+                output.describing = None;
+                return output.set_color(color);
+            }
+        }
+        false
+    }
+
+    /// The compositor could not describe the output `global` with the image
+    /// description `description` (`wp_image_description_v1.failed`). Returns
+    /// whether a listed output's colour changed.
+    pub(crate) fn color_failed(&mut self, global: u32, description: u64) -> bool {
+        let Some(output) = self.output_mut(global) else {
+            return false;
+        };
+        if output.describing.map(|(current, _)| current) != Some(description) {
+            return false;
+        }
+        output.describing = None;
+        output.set_color(Err(CapabilityAbsence::NotOnThisDevice))
+    }
+
+    fn output_mut(&mut self, global: u32) -> Option<&mut Output> {
+        self.outputs
+            .iter_mut()
+            .find(|output| output.global == global)
     }
 
     /// An xdg-output was requested for `global`, so its logical size will
@@ -232,7 +394,7 @@ impl WaylandOutputs {
             if let Some(name) = key_name {
                 taken_names.push(name);
             }
-            if let Some(view) = view_of(output.global, state, key_name) {
+            if let Some(view) = view_of(output.global, state, key_name, output.color) {
                 views.push(view);
             }
         }
@@ -240,7 +402,12 @@ impl WaylandOutputs {
     }
 }
 
-fn view_of(global: u32, state: &OutputState, key_name: Option<&str>) -> Option<OutputView> {
+fn view_of(
+    global: u32,
+    state: &OutputState,
+    key_name: Option<&str>,
+    color: Result<DisplayColor, CapabilityAbsence>,
+) -> Option<OutputView> {
     let mode = state.mode?;
     if mode.width <= 0 || mode.height <= 0 {
         return None;
@@ -283,6 +450,7 @@ fn view_of(global: u32, state: &OutputState, key_name: Option<&str>) -> Option<O
         refresh_period: RefreshPeriod::from_millihertz(i64::from(mode.refresh_millihertz)).ok(),
         is_primary: false,
         persistent_key: key_name.map(str::to_owned),
+        color,
     })
 }
 
@@ -668,6 +836,140 @@ mod tests {
         assert_eq!(outputs.views(), []);
     }
 
+    /// Feed `description` of `GLOBAL` its events and `done`; whether a listed
+    /// colour changed.
+    fn describe(outputs: &mut WaylandOutputs, description: u64, events: &[ColorEvent]) -> bool {
+        outputs.describe(GLOBAL, description);
+        for event in events {
+            outputs.apply_color(GLOBAL, description, *event);
+        }
+        outputs.apply_color(GLOBAL, description, ColorEvent::Done)
+    }
+
+    const SDR_SRGB: [ColorEvent; 3] = [
+        ColorEvent::NamedPrimaries(Some(ColorGamut::Srgb)),
+        ColorEvent::Primaries { red_x: 640_000 },
+        ColorEvent::Transfer { high_range: false },
+    ];
+
+    /// An HDR10 output: PQ in BT.2020, 203 cd/m² white, a 1000 cd/m² target.
+    const HDR10: [ColorEvent; 5] = [
+        ColorEvent::NamedPrimaries(Some(ColorGamut::Rec2020)),
+        ColorEvent::Primaries { red_x: 708_000 },
+        ColorEvent::Transfer { high_range: true },
+        ColorEvent::Luminances {
+            max: 10_000,
+            reference: 203,
+        },
+        ColorEvent::TargetLuminance { max: 1015 },
+    ];
+
+    /// Image descriptions to colours: named primaries, the red chromaticity
+    /// alone, the transfer function and the headroom from the luminances.
+    fn wayland_image_descriptions_map_to_the_display_colour() {
+        let colour_of = |events: &[ColorEvent]| {
+            let mut outputs = WaylandOutputs::default();
+            announce(&mut outputs, GLOBAL, vec![mode(1920, 1080, 60_000)]);
+            describe(&mut outputs, 0, events);
+            only(&outputs).color
+        };
+        assert_eq!(
+            colour_of(&SDR_SRGB),
+            Ok(DisplayColor::standard(ColorGamut::Srgb))
+        );
+        assert_eq!(
+            colour_of(&HDR10),
+            Ok(DisplayColor::high(
+                ColorGamut::Rec2020,
+                Ok(Headroom::new(5.0).expect("headroom"))
+            )),
+            "1015 over 203 cd/m²"
+        );
+        assert_eq!(
+            colour_of(&[
+                ColorEvent::NamedPrimaries(None),
+                ColorEvent::Primaries { red_x: 680_000 },
+                ColorEvent::Transfer { high_range: false },
+            ]),
+            Ok(DisplayColor::standard(ColorGamut::DisplayP3)),
+            "an unclassed named set falls to the chromaticities"
+        );
+        assert_eq!(
+            colour_of(&[
+                ColorEvent::Primaries { red_x: 708_000 },
+                ColorEvent::Transfer { high_range: true },
+                ColorEvent::Luminances {
+                    max: 1000,
+                    reference: 0,
+                },
+            ]),
+            Ok(DisplayColor::high(
+                ColorGamut::Rec2020,
+                Err(CapabilityAbsence::NotOnThisDevice)
+            )),
+            "a zero reference white gives no headroom, not an infinite one"
+        );
+        assert_eq!(
+            colour_of(&[ColorEvent::Transfer { high_range: false }]),
+            Err(CapabilityAbsence::NotYetOnThisHost),
+            "an ICC-only description is not read"
+        );
+    }
+
+    /// The compositor's colour follows its image description changes, and an
+    /// older description finishing late never replaces a newer one's colour.
+    fn a_newer_image_description_wins_over_an_older_one() {
+        let mut outputs = WaylandOutputs::default();
+        announce(&mut outputs, GLOBAL, vec![mode(1920, 1080, 60_000)]);
+        assert_eq!(
+            only(&outputs).color,
+            Err(CapabilityAbsence::NotOnThisDevice),
+            "no colour before any description: a compositor without the protocol"
+        );
+        assert!(describe(&mut outputs, 0, &SDR_SRGB), "the first colour");
+
+        // HDR goes on: description 1 is asked for, then the output changes
+        // again and description 2 replaces it before 1 has finished.
+        outputs.describe(GLOBAL, 1);
+        outputs.apply_color(GLOBAL, 1, HDR10[0]);
+        assert!(
+            !describe(&mut outputs, 2, &SDR_SRGB),
+            "the newest description is still SDR: no change"
+        );
+        for event in HDR10 {
+            outputs.apply_color(GLOBAL, 1, event);
+        }
+        assert!(
+            !outputs.apply_color(GLOBAL, 1, ColorEvent::Done),
+            "a superseded description's done changes nothing"
+        );
+        assert_eq!(
+            only(&outputs).color,
+            Ok(DisplayColor::standard(ColorGamut::Srgb))
+        );
+
+        assert!(describe(&mut outputs, 3, &HDR10), "HDR on is a change");
+        assert_eq!(
+            only(&outputs)
+                .color
+                .map(|color| color.color_space.dynamic_range),
+            Ok(flui_platform::DynamicRange::High)
+        );
+        outputs.describe(GLOBAL, 4);
+        assert!(
+            outputs.color_failed(GLOBAL, 4),
+            "a description the compositor cannot give leaves no colour"
+        );
+        assert!(
+            !outputs.color_failed(GLOBAL, 3),
+            "a failure of a finished description is stale"
+        );
+        assert_eq!(
+            only(&outputs).color,
+            Err(CapabilityAbsence::NotOnThisDevice)
+        );
+    }
+
     #[test]
     fn wayland_output_model() {
         crate::table_test::run_table(
@@ -713,6 +1015,14 @@ mod tests {
                 (
                     "an_output_without_a_usable_mode_is_not_listed",
                     an_output_without_a_usable_mode_is_not_listed,
+                ),
+                (
+                    "wayland_image_descriptions_map_to_the_display_colour",
+                    wayland_image_descriptions_map_to_the_display_colour,
+                ),
+                (
+                    "a_newer_image_description_wins_over_an_older_one",
+                    a_newer_image_description_wins_over_an_older_one,
                 ),
             ],
         );

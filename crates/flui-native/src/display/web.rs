@@ -1057,32 +1057,29 @@ pub(crate) mod color_query {
     use flui_platform::{CapabilityAbsence, ColorGamut, DisplayColor};
 
     /// Whether the screen can show high range.
-    pub(crate) const HIGH_RANGE: &str = "(dynamic-range: high)";
+    const HIGH_RANGE: &str = "(dynamic-range: high)";
     /// Whether the screen covers the BT.2020 gamut.
-    pub(crate) const REC2020: &str = "(color-gamut: rec2020)";
+    const REC2020: &str = "(color-gamut: rec2020)";
     /// Whether the screen covers the Display P3 gamut.
-    pub(crate) const P3: &str = "(color-gamut: p3)";
+    const P3: &str = "(color-gamut: p3)";
 
-    /// Which of the colour queries match.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub(crate) struct ColorMatches {
-        pub(crate) high_range: bool,
-        pub(crate) rec2020: bool,
-        pub(crate) p3: bool,
-    }
+    /// Every query the colour is read from, which a page listens to for its
+    /// change.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) const QUERIES: [&str; 3] = [HIGH_RANGE, REC2020, P3];
 
-    /// The display colour the matching queries describe: the widest gamut that
-    /// matches, high range with no headroom to read when `dynamic-range`
-    /// matches.
-    pub(crate) fn display_color(matches: ColorMatches) -> DisplayColor {
-        let gamut = if matches.rec2020 {
+    /// The display colour the queries `matches` answers describe: the widest
+    /// gamut that matches, high range with no headroom to read when
+    /// `dynamic-range` matches.
+    pub(crate) fn display_color(matches: impl Fn(&str) -> bool) -> DisplayColor {
+        let gamut = if matches(REC2020) {
             ColorGamut::Rec2020
-        } else if matches.p3 {
+        } else if matches(P3) {
             ColorGamut::DisplayP3
         } else {
             ColorGamut::Srgb
         };
-        if matches.high_range {
+        if matches(HIGH_RANGE) {
             DisplayColor::high(gamut, Err(CapabilityAbsence::NotOnThisPlatform))
         } else {
             DisplayColor::standard(gamut)
@@ -1096,11 +1093,12 @@ pub(crate) mod color_query {
         /// Each answer the colour queries give, to the display colour it means.
         #[test]
         fn browser_colour_queries_map_to_the_display_colour() {
-            let matching = |high_range, rec2020, p3| {
-                display_color(ColorMatches {
-                    high_range,
-                    rec2020,
-                    p3,
+            let matching = |high_range: bool, rec2020: bool, p3: bool| {
+                display_color(|query| match query {
+                    HIGH_RANGE => high_range,
+                    REC2020 => rec2020,
+                    P3 => p3,
+                    _ => panic!("{query} is no colour query"),
                 })
             };
             assert_eq!(
@@ -1197,7 +1195,7 @@ pub(crate) mod source {
         FeatureKind, FeatureProbe, GetScreenDetails, MatchMedia, PermissionsQuery, ScreenChange,
         WebFeature,
     };
-    use super::color_query::{ColorMatches, HIGH_RANGE, P3, REC2020, display_color};
+    use super::color_query::display_color;
     use super::refresh_estimate::RefreshEstimator;
     use super::screen_identity::RetainedScreens;
     use crate::display::source::DisplaySource;
@@ -1362,17 +1360,12 @@ pub(crate) mod source {
                 .features
                 .match_media
                 .ok_or(CapabilityAbsence::NotOnThisDevice)?;
-            let matches = |query: &str| {
+            Ok(display_color(|query| {
                 media
                     .query(window, query)
                     .ok()
                     .flatten()
                     .is_some_and(|list| list.matches())
-            };
-            Ok(display_color(ColorMatches {
-                high_range: matches(HIGH_RANGE),
-                rec2020: matches(REC2020),
-                p3: matches(P3),
             }))
         }
 
@@ -1704,7 +1697,7 @@ mod events {
     use web_sys::{Event, MediaQueryList};
 
     use super::capability::{GetScreenDetails, MatchMedia, PermissionsQuery, WebFeature};
-    use super::color_query::{HIGH_RANGE, P3, REC2020};
+    use super::color_query::QUERIES;
     use super::dppx_query::DppxWatch;
     use super::source::{WebDisplays, event_target, get};
     use crate::owner::signal::OwnerSignal;
@@ -1789,7 +1782,7 @@ mod events {
         let (Some(media), Some(window)) = (displays.features.match_media, web_sys::window()) else {
             return Vec::new();
         };
-        [HIGH_RANGE, REC2020, P3]
+        QUERIES
             .into_iter()
             .filter_map(|query| {
                 let list = media.query(&window, query).ok().flatten()?;

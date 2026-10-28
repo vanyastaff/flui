@@ -12,7 +12,9 @@ use std::collections::HashMap;
 use flui_foundation::geometry::Bounds;
 #[cfg(any(feature = "x11", test))]
 use flui_foundation::geometry::{Point, Size};
-use flui_platform::{DisplayId, DisplayInfo, DisplayKey, RefreshPeriod};
+use flui_platform::{
+    CapabilityAbsence, DisplayColor, DisplayId, DisplayInfo, DisplayKey, RefreshPeriod,
+};
 
 /// How an output is told apart from the others.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,6 +45,9 @@ pub(crate) struct OutputView {
     /// What names the output again after a restart; see
     /// [`DisplayInfo::persistent_key`].
     pub persistent_key: Option<String>,
+    /// The output's colour, or why the protocol gives none; see
+    /// [`DisplayInfo::color`].
+    pub color: Result<DisplayColor, CapabilityAbsence>,
 }
 
 /// The numbers one display answers to, with its id.
@@ -98,7 +103,8 @@ impl FreshIds {
             let Some(id) = id else { continue };
             let mut info = DisplayInfo::new(id, view.name.clone(), view.bounds, view.scale_factor)
                 .with_usable_bounds(view.usable_bounds)
-                .with_primary(view.is_primary);
+                .with_primary(view.is_primary)
+                .with_color(view.color);
             info.refresh_period = view.refresh_period;
             info.persistent_key.clone_from(&view.persistent_key);
             displays.push(info);
@@ -160,6 +166,7 @@ mod tests {
             refresh_period: None,
             is_primary: false,
             persistent_key: None,
+            color: Err(CapabilityAbsence::NotYetOnThisHost),
         }
     }
 
