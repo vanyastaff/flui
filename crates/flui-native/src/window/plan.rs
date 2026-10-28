@@ -418,7 +418,12 @@ mod tests {
     #[test]
     fn window_shell_capabilities() {
         let desktop = WindowShell::Desktop.capabilities();
-        assert_eq!(desktop, WindowCapabilities::ALL);
+        assert_eq!(
+            desktop,
+            WindowCapabilities::ALL
+                .without_presentation_feedback(flui_platform::CapabilityAbsence::NotYetOnThisHost),
+            "winit reports no presentation on any shell"
+        );
 
         let wayland = WindowShell::Wayland.capabilities();
         // (field, value on Wayland)
@@ -438,6 +443,7 @@ mod tests {
             ("observes_position", wayland.observes_position, false),
             ("observes_minimized", wayland.observes_minimized, false),
             ("places_at_open", wayland.places_at_open, false),
+            ("reports_presentation", wayland.reports_presentation, false),
         ];
         for (field, actual, expected) in table {
             assert_eq!(actual.is_available(), expected, "{field}");
