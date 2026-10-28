@@ -1537,7 +1537,7 @@ pub(crate) fn a_run_short_of_the_edge_of_a_long_list_hands_nothing_on() {
                 probe.connection(),
                 Scrollable::new()
                     .controller(controller.clone())
-                    .physics(Arc::new(GlideShort { short_by }))
+                    .physics(Rc::new(GlideShort { short_by }))
                     .child(SizedBox::new(300.0, 5.0e7)),
             ),
         )
@@ -1717,7 +1717,7 @@ pub(crate) fn a_new_chain_above_keeps_the_leaf_run() {
     for device in DEVICES {
         let (controller, vsync) = (ScrollController::new(), Vsync::new());
         let physics: flui_widgets::SharedScrollPhysics =
-            Arc::new(flui_widgets::BouncingScrollPhysics::new());
+            Rc::new(flui_widgets::BouncingScrollPhysics::new());
         let tree = |probe: &Rc<Probe>| {
             VsyncScope::new(
                 vsync.clone(),
@@ -2866,7 +2866,7 @@ fn list_at_the_top_of_a_bouncing_list(
         vsync.clone(),
         Scrollable::new()
             .controller(outer.clone())
-            .physics(Arc::new(flui_widgets::BouncingScrollPhysics::new()))
+            .physics(Rc::new(flui_widgets::BouncingScrollPhysics::new()))
             .child(content),
     )
     .boxed()
@@ -3813,7 +3813,7 @@ pub(crate) fn drag_autoscroll_from_past_an_edge_moves_by_its_step() {
     let (controller, vsync) = (ScrollController::new(), Vsync::new());
     let tree = VsyncScope::new(
         vsync.clone(),
-        list(&controller).physics(Arc::new(flui_widgets::BouncingScrollPhysics::new())),
+        list(&controller).physics(Rc::new(flui_widgets::BouncingScrollPhysics::new())),
     )
     .boxed();
     let laid = mounted(tree, vsync);

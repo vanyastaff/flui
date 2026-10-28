@@ -83,7 +83,7 @@ impl TextLinkRoute {
         self.key == other.key
             && self.pointer == other.pointer
             && self.activation.target() == other.activation.target()
-            && std::sync::Arc::ptr_eq(self.activation.handler(), other.activation.handler())
+            && std::rc::Rc::ptr_eq(self.activation.handler(), other.activation.handler())
     }
 }
 
@@ -374,8 +374,8 @@ impl SpanRuns {
                 config.set_role(SemanticsRole::Link);
                 config.set_focusable(true);
                 config.set_focused(focused == Some(link));
-                config.add_action(SemanticsAction::Click, std::sync::Arc::clone(handler));
-                config.add_action(SemanticsAction::Focus, std::sync::Arc::clone(handler));
+                config.add_action(SemanticsAction::Click, std::rc::Rc::clone(handler));
+                config.add_action(SemanticsAction::Focus, std::rc::Rc::clone(handler));
             }
             regions.push(SemanticsRegion::new(key, rect, config));
         }

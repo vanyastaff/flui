@@ -1,6 +1,7 @@
 //! Curve modifiers and erasure: `Flipped`, `ArcCurve` and shared pointers.
 
 use std::fmt;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use super::{Builtin, BuiltinCurve, Curve};
@@ -46,11 +47,11 @@ impl<C: Curve> Curve for Flipped<C> {
 
 /// A reference-counted, type-erased curve handle.
 ///
-/// Wraps any `impl Curve + Send + Sync + 'static` so that a single, stable
+/// Wraps any `impl Curve + 'static` so that a single, stable
 /// concrete type can be stored in widgets and animation controllers,
 /// regardless of which specific curve is used.
 ///
-/// `ArcCurve` implements `Curve + Clone + Send + Sync + Debug`, with value
+/// `ArcCurve` implements `Curve + Clone + Debug`, with value
 /// comparison for built-ins and identity comparison for custom curves.
 ///
 /// # Equality
@@ -62,7 +63,7 @@ impl<C: Curve> Curve for Flipped<C> {
 /// `.curve(curves::EASE_IN_OUT)` therefore hands an implicit animation an
 /// *unchanged* curve, and the animation keeps its run. Any other curve —
 /// yours, a [`Split`](super::Split), or a combinator over one — compares by identity
-/// (`Arc::ptr_eq`), because [`Curve`] has no equality of its own: reuse the
+/// (`Rc::ptr_eq`), because [`Curve`] has no equality of its own: reuse the
 /// same handle (clone it) to keep it equal across rebuilds.
 ///
 /// # Examples
@@ -87,7 +88,7 @@ pub struct ArcCurve(Erased);
 #[derive(Clone)]
 enum Erased {
     Builtin(BuiltinCurve),
-    Custom(Arc<dyn Curve + Send + Sync>),
+    Custom(Rc<dyn Curve>),
 }
 
 impl PartialEq for ArcCurve {
@@ -96,7 +97,7 @@ impl PartialEq for ArcCurve {
     fn eq(&self, other: &Self) -> bool {
         match (&self.0, &other.0) {
             (Erased::Builtin(a), Erased::Builtin(b)) => a == b,
-            (Erased::Custom(a), Erased::Custom(b)) => Arc::ptr_eq(a, b),
+            (Erased::Custom(a), Erased::Custom(b)) => Rc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -110,12 +111,12 @@ impl ArcCurve {
     /// Wrap `curve` in a reference-counted erased handle.
     ///
     /// A built-in curve is stored by value (and compares by value); any
-    /// other curve is moved behind an `Arc`. Cloning is a reference-count
+    /// other curve is moved behind an `Rc`. Cloning is a reference-count
     /// bump either way.
-    pub fn new(curve: impl Curve + Send + Sync + 'static) -> Self {
+    pub fn new(curve: impl Curve + 'static) -> Self {
         Self(match curve.builtin() {
             Some(builtin) => Erased::Builtin(builtin),
-            None => Erased::Custom(Arc::new(curve)),
+            None => Erased::Custom(Rc::new(curve)),
         })
     }
 }
@@ -153,7 +154,7 @@ impl fmt::Debug for ArcCurve {
     }
 }
 
-/// Blanket impl so `Arc<dyn Curve + Send + Sync>` can itself be used as a
+/// Blanket impl so `Arc<dyn Curve>` can itself be used as a
 /// `Curve` where object-safety is all that matters. Use [`ArcCurve`] when a
 /// stable concrete handle with configuration equality is needed.
 impl<C: Curve + ?Sized> Curve for Arc<C> {

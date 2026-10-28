@@ -3538,7 +3538,7 @@ fn harness_static_opacity_visibility_controls_semantics_and_actions() {
         for force_layer in [false, true] {
             let mut config = labelled("Static fade content");
             config.set_role(SemanticsRole::Button);
-            config.add_action(SemanticsAction::Click, Arc::new(|_| {}));
+            config.add_action(SemanticsAction::Click, std::rc::Rc::new(|_| {}));
             let child = box_node(
                 RenderSemanticsAnnotations::from_configuration(config).with_container(true),
             )
@@ -3611,7 +3611,7 @@ fn harness_sliver_offstage_removes_hidden_semantics_and_stale_actions() {
     };
     let mut config = labelled("Offstage sliver content");
     config.set_role(SemanticsRole::Button);
-    config.add_action(SemanticsAction::Click, Arc::new(|_| {}));
+    config.add_action(SemanticsAction::Click, std::rc::Rc::new(|_| {}));
     let mut run = RenderTester::mount(viewport(
         sliver_node(RenderSliverOffstage::hidden())
             .label("offstage")
@@ -5663,7 +5663,7 @@ fn harness_custom_paint_repaint_refreshes_region_geometry_identity_and_actions()
             region.config.set_role(SemanticsRole::Button);
             region.config.add_action(
                 SemanticsAction::Click,
-                Arc::new(move |_| {
+                std::rc::Rc::new(move |_| {
                     calls.fetch_add(1, Ordering::Relaxed);
                 }),
             );
@@ -5881,7 +5881,7 @@ impl CustomPainter for CapturingRegionPainter {
                 let key = if self.duplicate { 1 } else { index as u64 + 1 };
                 let mut region = semantic_region(key, "Draft region", index as f64);
                 let handler: flui_rendering::semantics::SemanticsActionHandler =
-                    Arc::new(move |_| {
+                    std::rc::Rc::new(move |_| {
                         std::hint::black_box(&capture);
                     });
                 if self.custom {
@@ -5929,7 +5929,7 @@ impl RenderBox for CapturingSemanticsMerge {
             };
             config.add_action(
                 flui_rendering::semantics::SemanticsAction::Click,
-                Arc::new(move |_| {
+                std::rc::Rc::new(move |_| {
                     std::hint::black_box(&capture);
                 }),
             );
@@ -6083,7 +6083,7 @@ fn harness_custom_paint_semantic_regions_keep_order_geometry_identity_and_action
     first.config.set_role(SemanticsRole::Button);
     first.config.add_action(
         SemanticsAction::Click,
-        Arc::new(move |_| {
+        std::rc::Rc::new(move |_| {
             count.fetch_add(1, Ordering::Relaxed);
         }),
     );
@@ -6209,7 +6209,7 @@ fn harness_custom_paint_regions_obey_merge_exclude_and_action_blocking() {
         region.config.set_role(SemanticsRole::Button);
         region
             .config
-            .add_action(SemanticsAction::Click, Arc::new(|_| {}));
+            .add_action(SemanticsAction::Click, std::rc::Rc::new(|_| {}));
         let painter = Rc::new(RegionPainter {
             regions: Rc::new(std::cell::RefCell::new(vec![region])),
             size: Rc::new(Cell::new(Size::ZERO)),
@@ -9843,7 +9843,7 @@ fn semantic_flow(delegate: SemanticFlowDelegate) -> FrameRun {
         config.set_role(SemanticsRole::Button);
         config.add_action(
             flui_rendering::semantics::SemanticsAction::Click,
-            Arc::new(|_| {}),
+            std::rc::Rc::new(|_| {}),
         );
         box_node(RenderSemanticsAnnotations::from_configuration(config).with_container(true))
             .child(box_node(RenderColoredBox::red(40.0, 40.0)))

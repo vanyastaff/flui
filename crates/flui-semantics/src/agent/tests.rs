@@ -25,7 +25,7 @@ fn e(index: u32) -> ElementId {
 }
 
 fn noop() -> crate::SemanticsActionHandler {
-    Arc::new(|_| {})
+    std::rc::Rc::new(|_| {})
 }
 
 fn placement() -> Placement {
@@ -577,7 +577,7 @@ fn disclosure_case(shape: Disclosure, expanded: bool) {
         c.set_expanded(expanded);
         let handler = || -> crate::SemanticsActionHandler {
             let log = Arc::clone(&log);
-            Arc::new(move |call: ActionCall| log.lock().expect("log").push(call.action()))
+            std::rc::Rc::new(move |call: ActionCall| log.lock().expect("log").push(call.action()))
         };
         c.add_action(SemanticsAction::Click, handler());
         if matches!(shape, Disclosure::Explicit) {
@@ -700,7 +700,7 @@ fn set_value_reaches_the_handler_with_its_payload() {
         c.set_role(SemanticsRole::TextInput);
         c.add_action(
             SemanticsAction::SetValue,
-            Arc::new(move |call| {
+            std::rc::Rc::new(move |call| {
                 sink.lock()
                     .expect("the test lock is not poisoned")
                     .push(call);
@@ -775,7 +775,7 @@ fn value_case(shape: &ValueShape, value: Option<&str>, expected: Option<Semantic
     let log = Arc::clone(&received);
     let handler = move || -> crate::SemanticsActionHandler {
         let log = Arc::clone(&log);
-        Arc::new(move |call| log.lock().expect("log").push(call))
+        std::rc::Rc::new(move |call| log.lock().expect("log").push(call))
     };
     let mut f = Fixture::new();
     let root = f.add(None, 1, |_| {});

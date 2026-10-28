@@ -165,7 +165,7 @@ impl Transition {
 
     /// Ease progress along `curve`, in both directions.
     #[must_use]
-    pub fn curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
+    pub fn curve(mut self, curve: impl Curve + 'static) -> Self {
         self.curve = Some(ArcCurve::new(curve));
         self
     }

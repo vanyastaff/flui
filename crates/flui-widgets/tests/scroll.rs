@@ -352,7 +352,7 @@ pub(crate) fn scrollable_drag_up_increases_scroll_offset() {
         .update_dimensions(300.0, 0.0, 500.0)
         .expect("ordered extents");
 
-    let physics: SharedScrollPhysics = Arc::new(ClampingScrollPhysics::default());
+    let physics: SharedScrollPhysics = Rc::new(ClampingScrollPhysics::default());
     let widget = Scrollable::new()
         .controller(controller.clone())
         .physics(physics)
@@ -594,7 +594,7 @@ pub(crate) fn bouncing_physics_fling_springs_back_after_overscroll() {
         .update_dimensions(300.0, 0.0, max_extent)
         .expect("ordered extents");
 
-    let physics: SharedScrollPhysics = Arc::new(BouncingScrollPhysics::new());
+    let physics: SharedScrollPhysics = Rc::new(BouncingScrollPhysics::new());
     let vsync = Vsync::new();
     let widget = Scrollable::new()
         .controller(controller.clone())
@@ -2654,7 +2654,7 @@ pub(crate) fn cancelling_bouncing_overscroll_settles_without_release_velocity() 
             vsync.clone(),
             Scrollable::new()
                 .controller(scroll.clone())
-                .physics(Arc::new(BouncingScrollPhysics::new()))
+                .physics(Rc::new(BouncingScrollPhysics::new()))
                 .child(SizedBox::new(300.0, 800.0)),
         ),
         tight(300.0, 300.0),
@@ -2726,7 +2726,7 @@ pub(crate) fn scroll_fling_rest_scales_with_device_pixel_ratio() {
     controller
         .update_dimensions(300.0, 0.0, 4700.0)
         .expect("ordered extents");
-    let recording = Arc::new(RecordingPhysics::default());
+    let recording = Rc::new(RecordingPhysics::default());
     let physics: SharedScrollPhysics = recording.clone();
     let widget = Scrollable::new()
         .controller(controller)
@@ -2879,7 +2879,7 @@ pub(crate) fn bouncing_fling_into_the_edge_overscrolls_and_returns() {
     controller
         .update_dimensions(300.0, 0.0, max_extent)
         .expect("ordered extents");
-    let physics: SharedScrollPhysics = Arc::new(BouncingScrollPhysics::new());
+    let physics: SharedScrollPhysics = Rc::new(BouncingScrollPhysics::new());
     let widget = Scrollable::new()
         .controller(controller.clone())
         .physics(physics)
@@ -2945,8 +2945,8 @@ pub(crate) fn clamping_fling_into_the_edge_rests_on_it() {
 /// and comes back.
 pub(crate) fn a_fling_rests_on_the_end_the_measured_rows_give() {
     let physics: [(SharedScrollPhysics, bool); 2] = [
-        (Arc::new(ClampingScrollPhysics::new()), false),
-        (Arc::new(BouncingScrollPhysics::new()), true),
+        (Rc::new(ClampingScrollPhysics::new()), false),
+        (Rc::new(BouncingScrollPhysics::new()), true),
     ];
     for (physics, bounces) in physics {
         let controller = ScrollController::new();
@@ -3048,7 +3048,7 @@ fn fling_rebuilt_as_the_end_moves_in(
     let (controller, vsync) = (ScrollController::new(), Vsync::new());
     let height = Rc::new(Cell::new(5300.0));
     let resized = Rc::new(flui_foundation::ChangeNotifier::new());
-    let first = Arc::clone(&physics);
+    let first = Rc::clone(&physics);
     let mut laid = crate::common::lay_out_animated(
         resizable_list(&controller, &height, &resized, &vsync, |list| {
             list.physics(first)
@@ -3084,8 +3084,8 @@ fn fling_rebuilt_as_the_end_moves_in(
 /// progress its simulation.
 pub(crate) fn a_rebuilt_run_keeps_the_physics_its_release_started_with() {
     let frames = fling_rebuilt_as_the_end_moves_in(
-        Arc::new(BouncingScrollPhysics::new()),
-        Arc::new(ClampingScrollPhysics::new()),
+        Rc::new(BouncingScrollPhysics::new()),
+        Rc::new(ClampingScrollPhysics::new()),
     );
     let past = frames
         .iter()
@@ -3148,7 +3148,7 @@ pub(crate) fn a_rebuild_taken_over_by_its_physics_stops_the_obsolete_run() {
     let resized = Rc::new(flui_foundation::ChangeNotifier::new());
     let mut laid = crate::common::lay_out_animated(
         resizable_list(&controller, &height, &resized, &vsync, |list| {
-            list.physics(Arc::new(JumpingPhysics))
+            list.physics(Rc::new(JumpingPhysics))
         }),
         tight(300.0, 300.0),
         vsync.clone(),
@@ -3317,7 +3317,7 @@ pub(crate) fn a_fresh_physics_each_build_keeps_the_fling_and_its_bounce() {
     let taps = Rc::new(Cell::new(0_u32));
     let tree = || {
         let taps = Rc::clone(&taps);
-        let physics: SharedScrollPhysics = Arc::new(BouncingScrollPhysics::new());
+        let physics: SharedScrollPhysics = Rc::new(BouncingScrollPhysics::new());
         VsyncScope::new(
             vsync.clone(),
             Scrollable::new()
@@ -3404,7 +3404,7 @@ fn nested_fling_content(
             }));
     }
     if bouncing {
-        child = child.physics(Arc::new(BouncingScrollPhysics::new()));
+        child = child.physics(Rc::new(BouncingScrollPhysics::new()));
     }
     let child = flui_widgets::Align::new(flui_painting::Alignment::TOP_LEFT)
         .child(SizedBox::new(200.0, 200.0).child(child));
@@ -3538,9 +3538,9 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
     for density_sensitive in [false, true] {
         let (outer, inner) = (ScrollController::new(), ScrollController::new());
         let physics: SharedScrollPhysics = if density_sensitive {
-            Arc::new(HighDensityPhysics)
+            Rc::new(HighDensityPhysics)
         } else {
-            Arc::new(ClampingScrollPhysics::new())
+            Rc::new(ClampingScrollPhysics::new())
         };
         let parent = Scrollable::new()
             .controller(outer.clone())
@@ -4068,7 +4068,7 @@ pub(crate) fn nested_fling_bouncing_parent_at_extent_absorbs_before_grandparent(
         .child(SizedBox::new(200.0, 1000.0));
     let middle_view = Scrollable::new()
         .controller(middle.clone())
-        .physics(Arc::new(BouncingScrollPhysics::new()))
+        .physics(Rc::new(BouncingScrollPhysics::new()))
         .child(flui_widgets::Column::new(vec![
             SizedBox::new(200.0, 800.0).boxed(),
             SizedBox::new(200.0, 200.0).child(leaf).boxed(),
@@ -4716,7 +4716,7 @@ pub(crate) fn nested_fling_custom_physics_failure_and_retirement_preserve_first_
         let fail_drop = Arc::new(AtomicBool::new(retirement_fault));
         let parent = Scrollable::new()
             .controller(outer.clone())
-            .physics(Arc::new(FaultPhysics {
+            .physics(Rc::new(FaultPhysics {
                 fail_boundary: Arc::clone(&fail_boundary),
                 fail_drop: Arc::clone(&fail_drop),
             }))

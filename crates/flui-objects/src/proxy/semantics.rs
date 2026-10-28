@@ -41,7 +41,7 @@ use flui_rendering::{
 ///
 /// A widget whose action handlers are owner-local closures keeps them in the
 /// owner's interaction lane under `target`, and advertises each action in the
-/// configuration through one `Send + Sync` `handler` that resolves `target`
+/// configuration through one shared `handler` that resolves `target`
 /// when the action is invoked. The render object stores the pair so a rebuild
 /// can replace the lane payload under the same ticket and reuse the same
 /// `handler`, which keeps the configuration comparing equal.

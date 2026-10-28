@@ -425,8 +425,8 @@ impl fmt::Display for AppLifecycleState {
     }
 }
 
-/// Listener callback for lifecycle state changes
-pub type LifecycleStateCallback = Box<dyn Fn(AppLifecycleState) + Send + Sync>;
+/// Listener for application lifecycle state changes, invoked on the UI owner.
+pub type LifecycleStateCallback = Rc<dyn Fn(AppLifecycleState)>;
 
 /// Frame phase - which part of the render pipeline is executing
 ///

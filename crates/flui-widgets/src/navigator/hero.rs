@@ -1105,7 +1105,7 @@ impl Hero {
     /// default is `curves::FAST_OUT_SLOW_IN`. A push eases on the **destination**
     /// hero's curve, a pop on the **source** hero's.
     #[must_use]
-    pub fn curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
+    pub fn curve(mut self, curve: impl Curve + 'static) -> Self {
         *self.curve = ArcCurve::new(curve);
         self
     }
@@ -1113,7 +1113,7 @@ impl Hero {
     /// The easing for the reverse direction: when unset, [`curve`](Self::curve)
     /// flipped.
     #[must_use]
-    pub fn reverse_curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
+    pub fn reverse_curve(mut self, curve: impl Curve + 'static) -> Self {
         self.reverse_curve = Some(ArcCurve::new(curve));
         self
     }

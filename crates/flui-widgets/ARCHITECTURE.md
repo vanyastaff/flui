@@ -2092,18 +2092,19 @@ others take their payload typed: `on_set_value` a `&str`,
 set does not cover. None needs `Send + Sync`: the closures never reach the
 configuration.
 
-**Why the handlers stay owner-local, and how the storage bound is met.**
-`SemanticsActionHandler` is
-`Arc<dyn Fn(ActionCall) + Send + Sync>`
+**Why the handlers stay owner-local, and where they are stored.**
+`SemanticsActionHandler` is the owner-local `Rc<dyn Fn(ActionCall)>`
 (`crates/flui-semantics/src/action.rs`), stored in a `SemanticsConfiguration`
-that rides in the annotation render object, which `RenderView::RenderObject`
-pins `Send + Sync + 'static`. The handler is *not* invoked across a thread —
-resolution is owner-local (`PipelineOwner::resolve_semantics_action`) and the
-UI runtime drains it at a frame boundary, inside its entry. So the widget keeps its
-closures and its `WriterSource` in the interaction lane as one table per node,
-stores only the lane's ticket on the render object (`SemanticsActionRoute`),
-and advertises every action through one `Send + Sync` handler that holds the
-ticket and resolves it when invoked. This is the shape the surveyed frameworks
+that rides in the annotation render object. The handler is never invoked
+across a thread — resolution is owner-local
+(`PipelineOwner::resolve_semantics_action`) and the UI runtime drains it at a
+frame boundary, inside its entry; an accessibility adapter sends a
+`SemanticsActionRequest`, not the handler. The widget keeps its closures and its
+`WriterSource` in the interaction lane as one table per node, stores only the
+lane's ticket on the render object (`SemanticsActionRoute`), and advertises
+every action through one handler that holds the ticket and resolves it when
+invoked. A rebuild replaces the table under the same ticket and reuses the same
+handler, so the configuration compares equal and raises no semantics update. This is the shape the surveyed frameworks
 point at — none puts `Send` on the handler; Bevy, Iced, Slint and Dioxus/Blitz
 put it on something the widget owns — reached through ADR-0086's lane payload.
 

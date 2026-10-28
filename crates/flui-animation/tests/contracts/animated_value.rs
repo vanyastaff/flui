@@ -10,7 +10,7 @@ use flui_animation::{
 };
 use flui_foundation::geometry::Offset;
 
-fn curve(curve: impl flui_animation::Curve + Send + Sync + 'static) -> MotionSpec {
+fn curve(curve: impl flui_animation::Curve + 'static) -> MotionSpec {
     MotionSpec::Curve {
         duration: Duration::from_secs(1),
         curve: ArcCurve::new(curve),
@@ -866,7 +866,7 @@ fn motion_spec_changes_keep_the_other_half() {
     );
     fn curve(
         millis: u64,
-        curve: impl flui_animation::Curve + Send + Sync + 'static,
+        curve: impl flui_animation::Curve + 'static,
     ) -> flui_animation::MotionSpec {
         flui_animation::MotionSpec::Curve {
             duration: Duration::from_millis(millis),

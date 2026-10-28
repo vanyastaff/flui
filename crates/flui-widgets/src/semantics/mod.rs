@@ -11,28 +11,25 @@
 //! widget's `WriterSource` opens (ADR-0086), exactly like a pointer callback:
 //! "activation toggles this control's own state" is a signal write.
 //!
-//! The configuration a semantics node carries still stores
-//! `flui_semantics::SemanticsActionHandler`, an `Arc<dyn Fn(..) + Send + Sync>`,
-//! because it rides in the semantics proxy render object, which
-//! `flui_view::RenderView` pins `Send + Sync`. So the widget's closures do not
-//! go there. They stay in the owner's interaction lane as one table per node,
-//! and the configuration advertises each action through one `Send + Sync`
-//! handler that holds only the lane's ticket. Invoking it resolves the ticket
-//! on the owner thread, inside the UI runtime, and runs the closure there.
+//! The widget's closures do not go into the configuration a semantics node
+//! carries. They stay in the owner's interaction lane as one table per node,
+//! and the configuration advertises each action through one
+//! `flui_semantics::SemanticsActionHandler` that holds only the lane's ticket.
+//! A rebuild replaces the table under the same ticket and reuses the same
+//! handler, so the configuration compares equal. Invoking the handler resolves
+//! the ticket inside the UI runtime and runs the closure there.
 //!
 //! An action invoked outside its UI runtime — no interaction lane active on the
 //! calling thread — has no owner to run in and is dropped with a warning. A
 //! [`Semantics`] mounted without an owner lane (a detached render-object
 //! context) advertises none of these actions, so no platform sees a control
 //! that nothing can run. [`Semantics::from_configuration`] still takes raw
-//! `Send + Sync` handlers; that
-//! is the `flui-semantics` surface, below this widget. `ARCHITECTURE.md` §17
-//! records the design.
+//! handlers; that is the `flui-semantics` surface, below this widget.
+//! `ARCHITECTURE.md` §17 records the design.
 
 use std::any::Any;
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::rc::Rc;
-use std::sync::Arc;
 
 use flui_foundation::geometry::Offset;
 use flui_interaction::{InteractionDispatchError, LocalPayloadTarget, resolve_local_payload};
@@ -941,10 +938,10 @@ impl Semantics {
         let mut configuration = self.configuration.clone();
         if let Some(route) = route {
             for (label, _) in &self.event_actions.custom {
-                configuration.add_custom_action(label.as_str(), Arc::clone(route.handler()));
+                configuration.add_custom_action(label.as_str(), Rc::clone(route.handler()));
             }
             for action in self.event_actions.actions() {
-                configuration.add_action(action, Arc::clone(route.handler()));
+                configuration.add_action(action, Rc::clone(route.handler()));
             }
         }
         configuration
@@ -976,7 +973,7 @@ impl Semantics {
         let cell = self.action_cell(ctx)?;
         match ctx.register_local_payload(cell) {
             Ok(target) => {
-                let handler: SemanticsActionHandler = Arc::new(move |call| deliver(target, call));
+                let handler: SemanticsActionHandler = Rc::new(move |call| deliver(target, call));
                 Some(SemanticsActionRoute::new(target, handler))
             }
             Err(error) => {

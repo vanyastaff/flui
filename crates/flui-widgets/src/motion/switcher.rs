@@ -216,14 +216,14 @@ impl AnimatedSwitcher {
 
     /// Overrides the curve applied while a child transitions in.
     #[must_use]
-    pub fn switch_in_curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
+    pub fn switch_in_curve(mut self, curve: impl Curve + 'static) -> Self {
         self.switch_in_curve = ArcCurve::new(curve);
         self
     }
 
     /// Overrides the curve applied while a child transitions out.
     #[must_use]
-    pub fn switch_out_curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
+    pub fn switch_out_curve(mut self, curve: impl Curve + 'static) -> Self {
         self.switch_out_curve = ArcCurve::new(curve);
         self
     }

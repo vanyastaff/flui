@@ -311,12 +311,7 @@ impl<T: Lerp + TwoWayConverter> KeyframesBuilder<T> {
     /// The curve belongs to this segment — the one arriving at `value` — and
     /// maps the segment's own progress. An overshooting curve extrapolates,
     /// as it does in a [`Tween`](crate::Tween).
-    pub fn to(
-        mut self,
-        value: T,
-        over: Duration,
-        curve: impl Curve + Send + Sync + 'static,
-    ) -> Self {
+    pub fn to(mut self, value: T, over: Duration, curve: impl Curve + 'static) -> Self {
         self.segments.push(Pending::Eased {
             value,
             over,

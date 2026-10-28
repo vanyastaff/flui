@@ -110,7 +110,7 @@ impl MotionSpec {
     /// Curve motion eased by `curve`, keeping this spec's duration. A spring
     /// has none to keep, so it takes [`DEFAULT_DURATION`](Self::DEFAULT_DURATION).
     #[must_use]
-    pub fn with_curve(self, curve: impl Curve + Send + Sync + 'static) -> Self {
+    pub fn with_curve(self, curve: impl Curve + 'static) -> Self {
         let duration = match self {
             Self::Curve { duration, .. } => duration,
             Self::Spring(_) => Self::DEFAULT_DURATION,

@@ -1302,7 +1302,6 @@ mod tests {
     use std::alloc::{GlobalAlloc, Layout, System};
     use std::cell::Cell;
     use std::rc::Rc;
-    use std::sync::Arc;
     use std::time::Duration;
 
     use flui_animation::AnimationController;
@@ -1387,7 +1386,7 @@ mod tests {
             OwnerConfig {
                 controller: controller.clone(),
                 fling: fling.controller().clone(),
-                physics: Arc::new(ClampingScrollPhysics::new()),
+                physics: Rc::new(ClampingScrollPhysics::new()),
                 snap: None,
                 axis: Axis::Vertical,
                 reversed: false,

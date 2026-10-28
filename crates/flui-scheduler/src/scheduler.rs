@@ -73,8 +73,8 @@ use crate::{
     config::TimingsCallback,
     duration::{FrameDuration, Milliseconds},
     frame::{
-        AppLifecycleState, FrameId, FrameTiming, OneShotFrameCallback, RecurringFrameCallback,
-        SchedulerPhase,
+        AppLifecycleState, FrameId, FrameTiming, LifecycleStateCallback, OneShotFrameCallback,
+        RecurringFrameCallback, SchedulerPhase,
     },
     frame_clock::ClockSource,
     id::{CallbackId, IdGenerator},
@@ -142,7 +142,7 @@ struct CancellablePersistentCallback {
 /// Lifecycle state listener with ID for removal
 struct LifecycleListener {
     id: CallbackId,
-    callback: Rc<dyn Fn(AppLifecycleState)>,
+    callback: LifecycleStateCallback,
 }
 
 /// How a frame that an [`end_of_frame`](UpdateScheduler::end_of_frame) waiter
@@ -2254,10 +2254,7 @@ impl UpdateScheduler {
     /// // Later, remove the listener
     /// scheduler.remove_lifecycle_state_listener(id);
     /// ```
-    pub fn add_lifecycle_state_listener(
-        &self,
-        callback: Rc<dyn Fn(AppLifecycleState)>,
-    ) -> CallbackId {
+    pub fn add_lifecycle_state_listener(&self, callback: LifecycleStateCallback) -> CallbackId {
         let id = self.inner.callbacks.id_gen.next();
         self.inner
             .callbacks

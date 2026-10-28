@@ -386,7 +386,7 @@ impl<T: Send + Clone + 'static> OpenContainer<T> {
     /// The morph's easing; the exit runs it flipped. Defaults to
     /// `FAST_OUT_SLOW_IN`.
     #[must_use]
-    pub fn curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
+    pub fn curve(mut self, curve: impl Curve + 'static) -> Self {
         self.curve = ArcCurve::new(curve);
         self
     }
