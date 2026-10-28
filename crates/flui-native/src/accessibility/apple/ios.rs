@@ -1,0 +1,238 @@
+//! UIAccessibility for iOS, via `accesskit_ios`'s low-level [`Adapter`]
+//! (ADR-0255 decision 12).
+//!
+//! The window's `FluiView` is FLUI's own class, so it forwards UIKit's
+//! container methods (`isAccessibilityElement`, `accessibilityElements`,
+//! `accessibilityHitTest:`) to the adapter itself; nothing is subclassed at
+//! run time. The view reaches the adapter through the accessibility slot
+//! the window's reference carries, which this bridge fills as the window
+//! opens.
+//!
+//! # Threads
+//!
+//! Every adapter method runs on the main thread, which is the owner thread
+//! on iOS ("all adapter methods must be called on the main thread"), and
+//! the adapter is held in a [`NativeOwner`], reachable there only. A
+//! publish from any other thread keeps a self-contained update for the next
+//! activation and drops the rest, as a publish with no assistive technology
+//! attached does.
+//!
+//! # Two objc2 generations
+//!
+//! `accesskit_ios` is built on objc2 0.5 beside FLUI's 0.6. The two meet only
+//! through raw pointers: the view goes in as a `*mut c_void`, the elements
+//! and the hit element come back as autoreleased object pointers, and a
+//! point crosses as its two coordinates.
+
+// This module calls the operating system directly, which has no safe wrapper:
+// the workspace lint `unsafe_code = "warn"` is opted out here, at the module
+// boundary, rather than for the whole crate (see `lib.rs`).
+#![expect(unsafe_code)]
+
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::sync::Arc;
+
+use accesskit::{ActionHandler, ActionRequest, ActivationHandler, DeactivationHandler, TreeUpdate};
+use accesskit_ios::Adapter;
+use objc2::MainThreadMarker;
+use objc2::runtime::AnyObject;
+
+use crate::accessibility::bridge::BridgeShared;
+
+use crate::owner::apple::ios::{NativeOwner, ViewAccessibility, ViewRef};
+use crate::owner::panic_boundary::{AfterPanic, os_entry};
+use flui_semantics::platform::{
+    AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
+};
+
+struct Activation(Arc<BridgeShared>);
+
+// Each handler runs the composition root's listener inside AccessKit's
+// UIAccessibility methods, which UIKit calls through `extern "C-unwind"`: a
+// panic in it is contained here and answers as if no listener ran.
+
+impl ActivationHandler for Activation {
+    fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
+        os_entry(
+            "AccessKit's activation",
+            (),
+            AfterPanic::Answer(|()| None),
+            || {
+                // Mark active and tell the composition root before reading
+                // the retained tree, as the other bridges do.
+                self.0.notify_activation(true);
+                self.0.retained()
+            },
+        )
+    }
+}
+
+struct Deactivation(Arc<BridgeShared>);
+
+impl DeactivationHandler for Deactivation {
+    /// VoiceOver turned off: unlike NSAccessibility, UIKit says so.
+    fn deactivate_accessibility(&mut self) {
+        os_entry(
+            "AccessKit's deactivation",
+            (),
+            AfterPanic::Answer(|()| ()),
+            || self.0.notify_activation(false),
+        );
+    }
+}
+
+struct Action(Arc<BridgeShared>);
+
+impl ActionHandler for Action {
+    fn do_action(&mut self, request: ActionRequest) {
+        os_entry(
+            "an AccessKit action",
+            (),
+            AfterPanic::Answer(|()| ()),
+            || self.0.notify_action(request),
+        );
+    }
+}
+
+/// The adapter as the window's view reaches it, through the slot its
+/// [`ViewRef`] carries (`owner::apple::ios::AccessibilitySlot`). `None` in the
+/// adapter once `detach` took it: the view then answers as a plain `UIView`.
+struct ViewBridge(Rc<RefCell<Option<Adapter>>>);
+
+impl ViewBridge {
+    /// The adapter, while the bridge has one.
+    fn with<R>(&self, body: impl FnOnce(&Adapter) -> R) -> Option<R> {
+        let adapter = self.0.try_borrow().ok()?;
+        adapter.as_ref().map(body)
+    }
+}
+
+impl ViewAccessibility for ViewBridge {
+    fn is_accessibility_element(&self) -> Option<bool> {
+        self.with(Adapter::is_accessibility_element)
+    }
+
+    fn accessibility_elements(&self) -> Option<*mut AnyObject> {
+        self.with(|adapter| adapter.accessibility_elements().cast::<AnyObject>())
+    }
+
+    fn hit_test(&self, x: f64, y: f64) -> Option<*mut AnyObject> {
+        let point = accesskit_ios::CGPoint { x, y };
+        self.with(|adapter| adapter.hit_test(point).cast::<AnyObject>())
+    }
+
+    /// An assistive technology already running gets the tree now.
+    fn view_did_appear(&self) {
+        if let Some(events) = self.with(Adapter::view_did_appear).flatten() {
+            events.raise();
+        }
+    }
+}
+
+/// UIAccessibility for one window.
+pub struct IosAccessibility {
+    shared: Arc<BridgeShared>,
+    /// The adapter, shared with the window's view. `None` once `detach` took
+    /// it: the view then answers as a plain `UIView`, and a publish only
+    /// retains.
+    adapter: NativeOwner<Rc<RefCell<Option<Adapter>>>>,
+}
+
+impl IosAccessibility {
+    /// The adapter on the main thread; `None` off it, after `detach`, or
+    /// while `detach` runs. A shared borrow, so a publish from inside one of
+    /// the view's forwarded calls still reaches it.
+    fn with_adapter<R>(&self, body: impl FnOnce(&Adapter) -> R) -> Option<R> {
+        let marker = MainThreadMarker::new()?;
+        let adapter = self.adapter.get(marker).try_borrow().ok()?;
+        adapter.as_ref().map(body)
+    }
+}
+
+/// Each UIKit window's view answers VoiceOver through its own adapter, made
+/// as the window opens, on the main thread.
+impl crate::host::Accessibility<ViewRef> for IosAccessibility {
+    fn for_window(window: &ViewRef) -> Arc<dyn crate::host::WindowAccessibility> {
+        let shared = Arc::new(BridgeShared::new());
+        let view = objc2::rc::Retained::as_ptr(&window.view)
+            .cast_mut()
+            .cast::<std::ffi::c_void>();
+        // SAFETY: `view` is the window's live `FluiView`, which the window
+        // holds for its whole life; the adapter keeps only a weak reference
+        // to it, so a view gone first leaves the adapter answering nothing.
+        // The window makes its part on the main thread.
+        let adapter = unsafe {
+            Adapter::new(
+                view,
+                Activation(Arc::clone(&shared)),
+                Action(Arc::clone(&shared)),
+                Deactivation(Arc::clone(&shared)),
+            )
+        };
+        let adapter = Rc::new(RefCell::new(Some(adapter)));
+        window
+            .accessibility
+            .fill(Rc::new(ViewBridge(Rc::clone(&adapter))));
+        Arc::new(Self {
+            shared,
+            adapter: NativeOwner::new(adapter, window.marker),
+        })
+    }
+}
+
+impl crate::host::WindowAccessibility for IosAccessibility {
+    /// Drop the adapter now, on the main thread, while the view is alive.
+    /// Every later call is a no-op. Idempotent.
+    fn detach(&self) {
+        let Some(marker) = MainThreadMarker::new() else {
+            return;
+        };
+        let adapter = self
+            .adapter
+            .get(marker)
+            .try_borrow_mut()
+            .ok()
+            .and_then(|mut slot| slot.take());
+        drop(adapter);
+    }
+
+    /// UIKit follows the key window itself.
+    fn focus_changed(&self, _focused: bool) {}
+}
+
+impl PlatformAccessibility for IosAccessibility {
+    fn publish(&self, update: TreeUpdate) {
+        // Only self-contained updates may answer a late activation; see
+        // `BridgeShared`.
+        self.shared.retain_if_self_contained(&update);
+        // Events are raised outside the adapter borrow: VoiceOver's
+        // notification handlers can re-enter.
+        let events = self
+            .with_adapter(|adapter| adapter.update_if_active(move || update))
+            .flatten();
+        if let Some(events) = events {
+            events.raise();
+        }
+    }
+
+    fn is_active(&self) -> bool {
+        self.shared.is_active()
+    }
+
+    fn set_activation_listener(&self, listener: AccessibilityActivationListener) {
+        self.shared.set_activation_listener(listener);
+    }
+
+    fn set_action_listener(&self, listener: AccessibilityActionListener) {
+        self.shared.set_action_listener(listener);
+    }
+}
+
+impl std::fmt::Debug for IosAccessibility {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IosAccessibility")
+            .field("active", &self.shared.is_active())
+            .finish_non_exhaustive()
+    }
+}
