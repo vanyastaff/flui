@@ -30,8 +30,7 @@ pub use event_loop::OutputName;
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(crate) use event_loop::{
     LastInput, LiveOutputs, LoopWaker, LoopWindow, OutputFacts, PresentationTime, WaylandDisplays,
-    WaylandHost,
-    WaylandLoop, WaylandState, WindowSeed, WindowTable,
+    WaylandHost, WaylandLoop, WaylandState, WindowSeed, WindowTable,
 };
 
 pub(crate) mod activation {
@@ -1134,9 +1133,9 @@ mod event_loop {
                 .bind::<XdgActivationV1, _, _>(&handle, 1..=ACTIVATION_VERSION, ())
                 .ok();
             #[cfg(any(test, feature = "testing"))]
-        let shm = globals
-            .bind::<wayland_client::protocol::wl_shm::WlShm, _, _>(&handle, 1..=1, ())
-            .ok();
+            let shm = globals
+                .bind::<wayland_client::protocol::wl_shm::WlShm, _, _>(&handle, 1..=1, ())
+                .ok();
             let live = LiveOutputs::default();
             let mut state = WaylandState {
                 outputs: Vec::new(),
