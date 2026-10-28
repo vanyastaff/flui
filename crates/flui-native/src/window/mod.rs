@@ -17,11 +17,7 @@
 #[cfg(windows)]
 pub(crate) mod config;
 pub(crate) mod installation;
-#[cfg(any(
-    feature = "winit-backend",
-    all(target_os = "linux", feature = "x11"),
-    test
-))]
+#[cfg(any(winit_host, x11_host))]
 pub(crate) mod plan;
 pub(crate) mod state;
 
@@ -32,10 +28,7 @@ pub(crate) mod apple;
 #[cfg(any(target_os = "android", target_os = "ios", target_os = "macos", test))]
 pub(crate) mod capabilities;
 pub(crate) mod headless;
-#[cfg(any(
-    all(target_os = "linux", any(feature = "winit-backend", feature = "x11")),
-    test
-))]
+#[cfg(any(linux_host, test))]
 pub(crate) mod linux {
     //! The Linux windows: the native X11 host's, and what the winit host reads
     //! of an X11 window that winit does not report.

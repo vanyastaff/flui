@@ -203,7 +203,7 @@ impl AppDelivery {
             target_os = "ios",
             target_os = "android",
             target_arch = "wasm32",
-            all(target_os = "linux", any(feature = "winit-backend", feature = "x11")),
+            linux_host,
             test
         )),
         expect(
@@ -302,7 +302,7 @@ impl AppDelivery {
             target_os = "macos",
             target_os = "ios",
             target_os = "android",
-            all(target_os = "linux", any(feature = "winit-backend", feature = "x11")),
+            linux_host,
             test
         )),
         expect(dead_code, reason = "the web and headless hosts have no idle wait")

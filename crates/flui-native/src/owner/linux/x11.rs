@@ -851,7 +851,7 @@ mod tests {
     /// queue, as libxcb's does.
     #[derive(Default)]
     struct Wire {
-        on_the_wire: RefCell<Vec<u32>>,
+        unread: RefCell<Vec<u32>>,
         queued: RefCell<VecDeque<u32>>,
         flushes: Cell<usize>,
     }
@@ -864,7 +864,7 @@ mod tests {
             self.flushes.set(self.flushes.get() + 1);
             self.queued
                 .borrow_mut()
-                .extend(self.on_the_wire.borrow_mut().drain(..));
+                .extend(self.unread.borrow_mut().drain(..));
             Ok(())
         }
 
@@ -877,8 +877,17 @@ mod tests {
     /// only the socket, which the flush emptied.
     #[test]
     fn an_event_the_flush_reads_keeps_the_loop_awake() {
-        // (case, on the wire, queued, wants a frame, outcome)
-        let table: [(&str, &[u32], &[u32], bool, BeforeWait<u32>); 5] = [
+        /// A case, the events on the wire, those queued, whether a frame is
+        /// wanted, and the outcome.
+        type Row = (
+            &'static str,
+            &'static [u32],
+            &'static [u32],
+            bool,
+            BeforeWait<u32>,
+        );
+
+        let table: [Row; 5] = [
             ("read by the flush", &[7], &[], false, BeforeWait::Event(7)),
             ("already queued", &[], &[5], false, BeforeWait::Event(5)),
             (
@@ -893,7 +902,7 @@ mod tests {
         ];
         for (case, wire, queued, frame, expected) in table {
             let source = Wire::default();
-            source.on_the_wire.borrow_mut().extend_from_slice(wire);
+            source.unread.borrow_mut().extend_from_slice(wire);
             source.queued.borrow_mut().extend(queued.iter().copied());
             let Ok(outcome) = before_wait(&source, || frame);
             assert_eq!(outcome, expected, "{case}");

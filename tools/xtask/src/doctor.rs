@@ -150,6 +150,24 @@ impl Doctor {
         }
     }
 
+    /// A shared library a process loads at run time (`dlopen`), found by its
+    /// `soname` in the dynamic linker's cache (`ldconfig -p`).
+    fn check_library(&mut self, scope: Scope, soname: &str, install: &str) {
+        let cache = ["ldconfig", "/sbin/ldconfig", "/usr/sbin/ldconfig"]
+            .into_iter()
+            .find_map(|ldconfig| {
+                let out = Command::new(ldconfig).arg("-p").output().ok()?;
+                out.status.success().then_some(out.stdout)
+            });
+        match cache {
+            Some(cache) if String::from_utf8_lossy(&cache).contains(soname) => {
+                self.row(scope, soname, true, "in the linker cache", "");
+            }
+            Some(_) => self.row(scope, soname, false, "not in the linker cache", install),
+            None => self.row(scope, soname, false, "ldconfig did not answer", install),
+        }
+    }
+
     /// The closing line: what is missing, for which command.
     fn summary(&self) -> String {
         let command = self.mode.command();
@@ -458,6 +476,11 @@ pub(crate) fn doctor(args: &DoctorArgs) -> anyhow::Result<ExitCode> {
             "openbox",
             "apt-get install openbox   (the X11 host's window conformance, tests/x11_window.rs)",
             &["--version"],
+        );
+        doctor.check_library(
+            Scope::Info,
+            "libxcb.so.1",
+            "apt-get install libxcb1   (the X11 host loads it at run time)",
         );
     }
     doctor.check_cargo_sub(

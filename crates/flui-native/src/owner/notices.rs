@@ -51,7 +51,7 @@ impl dyn NoticeChannel {
     target_os = "android",
     target_os = "macos",
     target_os = "ios",
-    all(target_os = "linux", any(feature = "winit-backend", feature = "x11"))
+    linux_host
 ))]
 pub(crate) trait LifecycleHooks {
     /// The application finished with a session end it answered with a block.

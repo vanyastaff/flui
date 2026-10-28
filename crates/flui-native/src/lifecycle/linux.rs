@@ -26,20 +26,20 @@
 //! what they queue sits apart, in a block per loop. What each source's answers
 //! mean is a pure rule beside it, which every host checks.
 
-#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
+#[cfg(linux_host)]
 use std::{
     collections::VecDeque,
     sync::{Arc, Weak},
 };
 
-#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
+#[cfg(linux_host)]
 use flui_platform::SystemNotice;
-#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
+#[cfg(linux_host)]
 use parking_lot::Mutex;
-#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
+#[cfg(linux_host)]
 use tokio::sync::oneshot;
 
-#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
+#[cfg(linux_host)]
 use crate::{
     executor::BackgroundExecutor,
     owner::{panic_boundary::contain_owner_callback, signal::OwnerSignal},
@@ -51,11 +51,11 @@ mod pressure;
 /// The most events waiting for the owner. Sleep, lock and shutdown are rare
 /// and pressure is limited to one per window, so a full inbox means the owner
 /// has stopped; the newest event is then the one dropped.
-#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
+#[cfg(linux_host)]
 const MAX_PENDING: usize = 256;
 
 /// What a source tells the owner.
-#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
+#[cfg(linux_host)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HostEvent {
     /// A notice for the host.
@@ -67,13 +67,13 @@ pub(crate) enum HostEvent {
 }
 
 /// An event with the completion its source may be waiting on.
-#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
+#[cfg(linux_host)]
 pub(crate) struct Delivery {
     event: HostEvent,
     done: Option<oneshot::Sender<()>>,
 }
 
-#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
+#[cfg(linux_host)]
 impl Delivery {
     /// Run `handle` on the event, then tell the source it was delivered. A
     /// `handle` that panics drops the completion too, which the source takes
@@ -89,13 +89,13 @@ impl Delivery {
 }
 
 /// The events waiting for the owner, and the way to wake it.
-#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
+#[cfg(linux_host)]
 struct Inbox {
     queue: Mutex<VecDeque<Delivery>>,
     signal: Weak<OwnerSignal>,
 }
 
-#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
+#[cfg(linux_host)]
 impl Inbox {
     /// Queue `event` and wake the owner.
     fn post(&self, event: HostEvent) {
@@ -134,7 +134,7 @@ impl Inbox {
 }
 
 /// The sources of system notices on Linux, running until dropped.
-#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
+#[cfg(linux_host)]
 pub(crate) struct HostNoticeSource {
     inbox: Arc<Inbox>,
     logind: tokio::task::JoinHandle<()>,
@@ -142,14 +142,14 @@ pub(crate) struct HostNoticeSource {
     _pressure: Option<pressure::PressureWatcher>,
 }
 
-#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
+#[cfg(linux_host)]
 impl std::fmt::Debug for HostNoticeSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HostNoticeSource").finish_non_exhaustive()
     }
 }
 
-#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
+#[cfg(linux_host)]
 impl HostNoticeSource {
     /// Start the sources. `signal` is woken when an event is waiting; it is
     /// held weakly.
@@ -173,7 +173,7 @@ impl HostNoticeSource {
     }
 }
 
-#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
+#[cfg(linux_host)]
 impl Drop for HostNoticeSource {
     fn drop(&mut self) {
         self.logind.abort();
@@ -318,11 +318,7 @@ mod x11 {
 #[cfg(all(target_os = "linux", feature = "x11"))]
 pub(crate) use x11::X11Notices;
 
-#[cfg(all(
-    test,
-    target_os = "linux",
-    any(feature = "winit-backend", feature = "x11")
-))]
+#[cfg(all(test, linux_host))]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 

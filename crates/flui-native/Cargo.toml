@@ -490,6 +490,10 @@ testing = []
 [lints]
 workspace = true
 
+[build-dependencies]
+# Names the compound `cfg` conditions once (`build.rs`), such as `linux_host`.
+cfg_aliases = { workspace = true }
+
 [dev-dependencies]
 # `assert_backend_conforms` (ADR-0215 §7) over the shared decoders and the
 # headless backend. Checkout-only test edge: versionless, so Cargo drops it

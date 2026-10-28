@@ -365,10 +365,8 @@ impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V
     }
 
     /// A snapshot of the keys.
-    #[cfg_attr(
-        all(target_os = "linux", not(feature = "winit-backend")),
-        expect(dead_code, reason = "the X11 host walks its table by entries")
-    )]
+    // The X11 host walks its table by entries.
+    #[cfg(any(winit_host, target_os = "macos"))]
     pub(crate) fn keys(&self) -> Vec<K> {
         self.cell
             .with(|map| map.keys().copied().collect())

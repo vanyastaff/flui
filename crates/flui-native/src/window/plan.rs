@@ -32,13 +32,8 @@ pub(crate) enum WindowShell {
     /// client can still minimize its window, but only the user can bring it
     /// back: asking for normal mode restores a maximized or fullscreen window
     /// and leaves a minimized one to the user.
-    #[cfg_attr(
-        all(not(feature = "winit-backend"), not(test)),
-        expect(
-            dead_code,
-            reason = "only the winit host opens windows on a Wayland shell"
-        )
-    )]
+    // Only the winit host opens windows on a Wayland shell so far.
+    #[cfg(any(winit_host, test))]
     Wayland,
 }
 
@@ -47,6 +42,7 @@ impl WindowShell {
     pub(super) const fn capabilities(self) -> WindowCapabilities {
         match self {
             Self::Desktop => WindowCapabilities::ALL,
+            #[cfg(any(winit_host, test))]
             Self::Wayland => {
                 let mut capabilities = WindowCapabilities::ALL;
                 capabilities.sets_position = flui_platform::Availability::Unavailable;
@@ -270,13 +266,8 @@ impl FrameInset {
     /// gets) if they show a frame: the window is decorated, and its outer
     /// extent is at least its content's in both dimensions, with some
     /// difference.
-    #[cfg_attr(
-        all(not(feature = "winit-backend"), not(test)),
-        expect(
-            dead_code,
-            reason = "the X11 host reads the frame the window manager reports instead"
-        )
-    )]
+    // The X11 host reads the frame the window manager reports instead.
+    #[cfg(any(winit_host, test))]
     pub(super) fn observe(&self, decorated: bool, outer: Size<i32>, content: Size<i32>) {
         if !decorated || outer.width < content.width || outer.height < content.height {
             return;

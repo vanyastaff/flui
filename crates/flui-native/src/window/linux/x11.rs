@@ -589,7 +589,7 @@ pub(crate) mod placement {
     pub(crate) const MAX_EXTENT: u16 = 32_767;
 
     /// Whether `scale` is a scale: finite and positive.
-    fn is_scale(scale: f64) -> bool {
+    pub(crate) fn is_scale(scale: f64) -> bool {
         scale.is_finite() && scale > 0.0
     }
 
@@ -704,6 +704,16 @@ pub(crate) mod placement {
         )
     }
 
+    /// The scale a window on `display` has: the display's, when it is a
+    /// scale, else `last`, the window's last good one. A window never
+    /// divides by a scale that is not finite and positive.
+    pub(crate) fn window_scale(display: Option<&DisplayInfo>, last: f64) -> f64 {
+        display
+            .map(|display| display.scale_factor)
+            .filter(|scale| is_scale(*scale))
+            .unwrap_or(last)
+    }
+
     /// The area two rectangles share, in square device pixels.
     fn overlap(a: Bounds<i32>, b: Bounds<i32>) -> i64 {
         let span = |start_a: i32, len_a: i32, start_b: i32, len_b: i32| {
@@ -806,6 +816,35 @@ pub(crate) mod placement {
                 WindowGeometry::new(Some(Point::new(4.0, 2.0)), Size::new(8.0, 6.0)),
                 "a scale that is not one is 1"
             );
+        }
+
+        /// A window takes its display's scale only when it is one; otherwise it
+        /// keeps the last good one, and never divides by zero or NaN.
+        #[test]
+        fn a_window_takes_its_displays_scale_only_when_it_is_one() {
+            let registry = DisplayRegistry::new();
+            let at = |scale: f64| {
+                let id = registry.mint(&DisplayKey::Unkeyed).expect("an id");
+                DisplayInfo::new(
+                    id,
+                    "display",
+                    Bounds::new(Point::new(0, 0), Size::new(1920, 1080)),
+                    scale,
+                )
+            };
+            // (case, display scale, last, scale taken)
+            let table = [
+                ("a scale", Some(2.0), 1.0, 2.0),
+                ("zero", Some(0.0), 1.5, 1.5),
+                ("negative", Some(-1.0), 1.5, 1.5),
+                ("not a number", Some(f64::NAN), 1.5, 1.5),
+                ("infinite", Some(f64::INFINITY), 1.5, 1.5),
+                ("no display", None, 1.25, 1.25),
+            ];
+            for (case, scale, last, expected) in table {
+                let display = scale.map(at);
+                assert_eq!(window_scale(display.as_ref(), last), expected, "{case}");
+            }
         }
 
         #[test]

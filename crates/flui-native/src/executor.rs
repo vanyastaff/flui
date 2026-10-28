@@ -119,7 +119,7 @@ impl BackgroundExecutor {
     /// The runtime the Linux sources spawn their D-Bus watches on. Not
     /// public: no public path of the core host names a tokio type
     /// (ADR-0151 §8).
-    #[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
+    #[cfg(linux_host)]
     pub(crate) fn handle(&self) -> &tokio::runtime::Handle {
         self.runtime().handle()
     }

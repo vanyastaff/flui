@@ -97,7 +97,7 @@ pub(crate) mod wake_deadline;
     target_os = "ios",
     target_os = "android",
     target_arch = "wasm32",
-    all(target_os = "linux", any(feature = "winit-backend", feature = "x11"))
+    linux_host
 ))]
 pub(crate) mod watch;
 pub(crate) mod window_delivery;
@@ -109,7 +109,7 @@ pub(crate) mod window_delivery;
     target_os = "macos",
     target_os = "ios",
     target_arch = "wasm32",
-    all(target_os = "linux", any(feature = "winit-backend", feature = "x11"))
+    linux_host
 ))]
 pub(crate) mod sources;
 #[cfg(target_arch = "wasm32")]

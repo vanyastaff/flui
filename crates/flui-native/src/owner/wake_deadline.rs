@@ -3,8 +3,6 @@
 //! (`AppHandler::wake_deadline`), and the rule that keeps a deadline no frame
 //! could service from spinning the loop. The Win32 and X11 loops wait on it.
 
-use std::sync::Arc;
-
 /// The last deadline the loop delivered. The application's handler answers
 /// with an instant only, so the same instant is either work no frame has had
 /// a chance to service, which must not spin, or work a frame left or accepted
@@ -67,17 +65,19 @@ impl ModalDelivery {
 /// into it when its handler's `frame_requested` produces a frame, so a frame
 /// request no handler ran a frame for (a declined one, or a window that let go
 /// of its handler) leaves it unchanged.
+#[cfg(any(windows, x11_host))]
 #[derive(Default)]
-pub(crate) struct FrameCount(Arc<std::sync::atomic::AtomicU64>);
+pub(crate) struct FrameCount(std::sync::Arc<std::sync::atomic::AtomicU64>);
 
+#[cfg(any(windows, x11_host))]
 impl FrameCount {
     pub(crate) fn get(&self) -> u64 {
         self.0.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// The counter a window's callbacks increment.
-    pub(crate) fn counter(&self) -> Arc<std::sync::atomic::AtomicU64> {
-        Arc::clone(&self.0)
+    pub(crate) fn counter(&self) -> std::sync::Arc<std::sync::atomic::AtomicU64> {
+        std::sync::Arc::clone(&self.0)
     }
 }
 
@@ -89,14 +89,12 @@ pub(crate) struct DeadlineArm {
 /// The wake deadline of a loop that waits with a timeout of its own: the
 /// deadline armed, and the last one delivered, by the rule of
 /// [`DeadlineDelivery`].
-#[cfg(any(all(target_os = "linux", feature = "x11"), test))]
 #[derive(Default)]
 pub(crate) struct WakeDeadline {
     armed: Option<DeadlineArm>,
     delivered: Option<DeadlineDelivery>,
 }
 
-#[cfg(any(all(target_os = "linux", feature = "x11"), test))]
 impl WakeDeadline {
     /// Whether the armed deadline is due at `now`. A due deadline is delivery
     /// debt: the caller asks every window for a frame, and the delivery is

@@ -86,7 +86,8 @@ use x11rb::wrapper::ConnectionExt as _;
 use super::hints::{motif_hints, size_limits};
 use super::mode::{NetWmState, NetWmStateAtoms, WmState, mode_flags, with_mode};
 use super::placement::{
-    FrameExtents, device_coordinate, device_extent, display_of, logical_geometry, outer_bounds,
+    FrameExtents, device_coordinate, device_extent, display_of, is_scale, logical_geometry,
+    outer_bounds, window_scale,
 };
 use super::support::{SupportAtoms, WindowManagerSupport, capabilities};
 use crate::host::{self, WindowFacets, WindowPositions};
@@ -354,15 +355,10 @@ impl X11Window {
     /// The window manager's support, read by the platform, or the last read
     /// once the platform is gone.
     fn support(&self) -> WindowManagerSupport {
-        let support = self
-            .windows
-            .upgrade()
-            .map(|windows| *windows.support.lock());
-        let mut record = self.record.borrow_mut();
-        if let Some(support) = support {
-            record.support = support;
+        match self.windows.upgrade() {
+            Some(windows) => *windows.support.lock(),
+            None => self.record.borrow().support,
         }
-        record.support
     }
 
     /// The colour scheme the system applies, as the platform last heard it.
@@ -434,8 +430,10 @@ impl X11Window {
         let display = snapshot
             .as_ref()
             .and_then(|snapshot| display_of(snapshot, outer).or_else(|| snapshot.primary()));
-        let scale = display.map_or(record.scale, |display| display.scale_factor);
+        let scale = window_scale(display, record.scale);
         record.scale = scale;
+        // Remembered for a window whose platform is gone.
+        record.support = support;
         let mode = mode_of(mode_flags(read.wm_state, read.net_state));
         let viewable = read.map_state == MapState::VIEWABLE;
         let visible = (record.reveal_pending || viewable)
@@ -1540,7 +1538,9 @@ impl X11Windows {
             placement,
             self.frame_inset.logical(placement.scale_factor),
         );
-        let scale = placement.scale_factor;
+        let scale = Some(placement.scale_factor)
+            .filter(|scale| is_scale(*scale))
+            .unwrap_or(1.0);
         let (Some(width), Some(height)) = (
             device_extent(plan.content_size.width, scale),
             device_extent(plan.content_size.height, scale),

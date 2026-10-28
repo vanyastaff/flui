@@ -52,12 +52,7 @@ impl ReportedFacts {
 /// first, through a capability the host names `Unavailable`, so a window
 /// reaches this only for a command the contract gained before the host learnt
 /// it: the window system cannot do it, and the caller hears so.
-#[cfg(any(
-    windows,
-    target_os = "macos",
-    target_arch = "wasm32",
-    all(target_os = "linux", any(feature = "winit-backend", feature = "x11"))
-))]
+#[cfg(any(windows, target_os = "macos", target_arch = "wasm32", linux_host))]
 pub(crate) fn not_carried_out(command: &flui_platform::WindowCommand) -> flui_platform::ApplyError {
     flui_platform::ApplyError::failed(format!("this window system does not carry out {command:?}"))
 }
@@ -66,12 +61,7 @@ pub(crate) fn not_carried_out(command: &flui_platform::WindowCommand) -> flui_pl
 /// decided from. Each platform reads them from its own report (winit's
 /// queries, AppKit's style mask and flags, the X11 window manager's
 /// properties, the Win32 window's tracked mode) and [`mode_of`] decides.
-#[cfg(any(
-    windows,
-    target_os = "macos",
-    all(target_os = "linux", any(feature = "winit-backend", feature = "x11")),
-    test
-))]
+#[cfg(any(windows, target_os = "macos", linux_host, test))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct ModeFlags {
     /// The window is minimized: iconic, in the Dock or on the taskbar.
@@ -85,12 +75,7 @@ pub(crate) struct ModeFlags {
 /// The mode of a window with these flags. A minimized window is hidden
 /// whatever else is set; a fullscreen one often keeps its maximized flag, so
 /// fullscreen comes before maximized.
-#[cfg(any(
-    windows,
-    target_os = "macos",
-    all(target_os = "linux", any(feature = "winit-backend", feature = "x11")),
-    test
-))]
+#[cfg(any(windows, target_os = "macos", linux_host, test))]
 pub(crate) const fn mode_of(flags: ModeFlags) -> flui_platform::WindowMode {
     use flui_platform::WindowMode;
     if flags.minimized {
