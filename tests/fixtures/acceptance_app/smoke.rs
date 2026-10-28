@@ -16,7 +16,11 @@ fn acceptance_app_walks_home_note_settings_and_back() {
 
     run.tap("Note 1");
     assert!(run.shows("Editing note 1"));
-    assert_eq!(run.title(), "Note 1", "the draft starts from the saved title");
+    assert_eq!(
+        run.title(),
+        "Note 1",
+        "the draft starts from the saved title"
+    );
     assert!(!run.shows("Compact rows: off"), "Home is covered");
 
     run.tap("Settings");
@@ -33,7 +37,10 @@ fn acceptance_app_walks_home_note_settings_and_back() {
     run.tap("Compact rows: off");
     assert!(run.shows("Compact rows: on"));
     run.tap("Settings");
-    assert!(run.shows("Compact rows are on"), "Settings reads Home's toggle");
+    assert!(
+        run.shows("Compact rows are on"),
+        "Settings reads Home's toggle"
+    );
 }
 
 #[test]

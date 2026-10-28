@@ -141,8 +141,13 @@ impl AppRun {
     fn press(&self, key: Key, modifiers: Modifiers) {
         for state in [KeyState::Down, KeyState::Up] {
             self.laid.dispatch_key(
-                KeyEvent::new(state, key.clone(), Code::Unidentified, EventTime::from_nanos(0))
-                    .with_modifiers(modifiers),
+                KeyEvent::new(
+                    state,
+                    key.clone(),
+                    Code::Unidentified,
+                    EventTime::from_nanos(0),
+                )
+                .with_modifiers(modifiers),
             );
         }
     }

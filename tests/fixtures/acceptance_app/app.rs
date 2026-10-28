@@ -224,10 +224,7 @@ impl ViewState<Root> for RootState {
     }
 
     fn build(&self, view: &Root, cx: &dyn BuildContext) -> impl IntoView {
-        let shared = self
-            .shared
-            .clone()
-            .expect("BUG: init_state precedes build");
+        let shared = self.shared.clone().expect("BUG: init_state precedes build");
         let attempt = self.attempt;
         let current = attempt.get(cx);
         let loader = Rc::clone(&view.loader);
@@ -295,10 +292,7 @@ impl ViewState<Screen> for ScreenState {
     }
 
     fn build(&self, view: &Screen, cx: &dyn BuildContext) -> impl IntoView {
-        let router = self
-            .router
-            .clone()
-            .expect("BUG: init_state precedes build");
+        let router = self.router.clone().expect("BUG: init_state precedes build");
         let shared = &view.shared;
         let content = match view.route {
             Route::Home => home(cx, shared, &router),
@@ -387,7 +381,9 @@ fn open_note(cx: &mut EventCx<'_>, shared: &Shared, router: &RouterHandle<Route>
 }
 
 fn home(cx: &dyn BuildContext, shared: &Shared, router: &RouterHandle<Route>) -> BoxedView {
-    let notes: Rc<[Note]> = shared.notebook.with(cx, |notebook| notebook.notes.clone().into());
+    let notes: Rc<[Note]> = shared
+        .notebook
+        .with(cx, |notebook| notebook.notes.clone().into());
     let compact = shared.compact.get(cx);
     let extent = if compact {
         COMPACT_ROW_HEIGHT
@@ -410,9 +406,14 @@ fn home(cx: &dyn BuildContext, shared: &Shared, router: &RouterHandle<Route>) ->
                     Some(
                         SizedBox::height(extent)
                             .child(
-                                on_current_page(&note.title, &router, &Route::Home, move |cx, router| {
-                                    open_note(cx, &shared, router, id);
-                                })
+                                on_current_page(
+                                    &note.title,
+                                    &router,
+                                    &Route::Home,
+                                    move |cx, router| {
+                                        open_note(cx, &shared, router, id);
+                                    },
+                                )
                                 .style(flat_row()),
                             )
                             .boxed(),
@@ -427,7 +428,11 @@ fn home(cx: &dyn BuildContext, shared: &Shared, router: &RouterHandle<Route>) ->
     Column::new(column![
         Row::new(vec![
             on_current_page(
-                if compact { "Compact rows: on" } else { "Compact rows: off" },
+                if compact {
+                    "Compact rows: on"
+                } else {
+                    "Compact rows: off"
+                },
                 router,
                 &Route::Home,
                 move |cx, _router| {
@@ -484,28 +489,34 @@ fn editor(
                 ..InputDecoration::default()
             })
             .validator(|value| value.trim().is_empty().then(|| "Enter a title".to_owned())),
-        on_current_page("Save note", router, &Route::Note { id }, move |cx, _router| {
-            assert!(
-                !save.faults.save_pressed,
-                "injected fault: pressing Save note panics"
-            );
-            let message = if validate.validate() {
-                let title = save.draft.text();
-                save.notebook
-                    .update(cx, |notebook| {
-                        if let Some(note) = notebook.notes.iter_mut().find(|note| note.id == id) {
-                            note.title.clone_from(&title);
-                        }
-                    })
+        on_current_page(
+            "Save note",
+            router,
+            &Route::Note { id },
+            move |cx, _router| {
+                assert!(
+                    !save.faults.save_pressed,
+                    "injected fault: pressing Save note panics"
+                );
+                let message = if validate.validate() {
+                    let title = save.draft.text();
+                    save.notebook
+                        .update(cx, |notebook| {
+                            if let Some(note) = notebook.notes.iter_mut().find(|note| note.id == id)
+                            {
+                                note.title.clone_from(&title);
+                            }
+                        })
+                        .expect("BUG: the root's signals outlive its screens");
+                    format!("Saved note {id}")
+                } else {
+                    "Fix the title".to_owned()
+                };
+                save.status
+                    .set(cx, message)
                     .expect("BUG: the root's signals outlive its screens");
-                format!("Saved note {id}")
-            } else {
-                "Fix the title".to_owned()
-            };
-            save.status
-                .set(cx, message)
-                .expect("BUG: the root's signals outlive its screens");
-        }),
+            }
+        ),
     ]))
     .handle(form.clone())
     .boxed()
