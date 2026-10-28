@@ -317,8 +317,23 @@ pub struct X11Window {
     displays: Arc<dyn HostDisplays>,
     record: RefCell<Record>,
     closed: Cell<bool>,
-    /// The X window's destruction is scheduled, after the handler's release.
-    retired: Cell<bool>,
+    /// Where the X window is in its end.
+    native: Cell<NativeWindow>,
+}
+
+/// Where an X window is in its end. Letting go of the handler is owed in
+/// every state but [`Released`](Self::Released): a window the server destroyed
+/// still holds a handler, and a renderer whose surface names a window that is
+/// gone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeWindow {
+    /// On the server, and the handler held.
+    Live,
+    /// Destroyed by another client (`DestroyNotify`); the handler still held.
+    DestroyedByServer,
+    /// The handler's release is scheduled (`WindowDelivery::clear_then`),
+    /// and with it the X window's destruction where the server still has it.
+    Released,
 }
 
 impl std::fmt::Debug for X11Window {
@@ -991,7 +1006,7 @@ impl X11Window {
             record.reveal_pending = false;
         }
         // The visible effect does not wait for the handler.
-        if !self.retired.get()
+        if self.native.get() == NativeWindow::Live
             && let Err(error) = self.xcb().unmap_window(self.xid)
         {
             tracing::debug!(%error, "cannot unmap a closing X11 window");
@@ -1005,16 +1020,24 @@ impl X11Window {
         self.retire();
     }
 
-    /// Schedule the X window's destruction for when the handler is let go of
-    /// (`WindowDelivery::clear_then`): the handler owns the renderer whose
-    /// surface names the window, and a surface must not outlive its window.
+    /// Let go of the handler (`WindowDelivery::clear_then`), once, and destroy
+    /// the X window after it, unless the server already has: the handler owns
+    /// the renderer whose surface names the window, and a surface must not
+    /// outlive its window. The retirement the release starts makes the
+    /// surface target and the redraw requester answer for a window that is
+    /// gone.
     fn retire(&self) {
-        if self.retired.replace(true) {
-            return;
-        }
+        let destroy = match self.native.replace(NativeWindow::Released) {
+            NativeWindow::Released => return,
+            NativeWindow::Live => true,
+            NativeWindow::DestroyedByServer => false,
+        };
         let connection = Arc::clone(&self.connection);
         let xid = self.xid;
         self.delivery.clear_then(move || {
+            if !destroy {
+                return;
+            }
             let destroyed = connection.xcb().destroy_window(xid);
             if let Err(error) = destroyed.and_then(|_| connection.xcb().flush()) {
                 tracing::debug!(%error, "cannot destroy an X11 window");
@@ -1067,9 +1090,12 @@ impl X11Window {
                 self.close_requested();
             }
             Event::DestroyNotify(_) => {
-                // Destroyed by another client: there is nothing left to
-                // destroy, only to close.
-                self.retired.set(true);
+                // Destroyed by another client (`xkill`): there is nothing
+                // left to destroy, but the window still closes and lets go of
+                // its handler.
+                if self.native.get() == NativeWindow::Live {
+                    self.native.set(NativeWindow::DestroyedByServer);
+                }
                 self.close();
             }
             Event::ConfigureNotify(_)
@@ -1607,7 +1633,7 @@ impl X11Windows {
                 scale,
             }),
             closed: Cell::new(false),
-            retired: Cell::new(false),
+            native: Cell::new(NativeWindow::Live),
         });
         owner.notices().mark_stale_on_wake(&window.cell);
         window

@@ -485,26 +485,19 @@ impl X11Loop {
         deadline: Option<web_time::Instant>,
     ) -> Result<(), PlatformError> {
         let connection = self.connection.xcb();
-        match connection.poll_for_event() {
-            Ok(Some(event)) => {
+        let before = before_wait(connection, || self.windows.wants_frame()).map_err(|error| {
+            PlatformError::EventLoop {
+                message: format!("the X server connection failed: {error}"),
+            }
+        })?;
+        match before {
+            BeforeWait::Event(event) => {
                 turns.queued.push_back(event);
                 return Ok(());
             }
-            Ok(None) => {}
-            Err(error) => {
-                return Err(PlatformError::EventLoop {
-                    message: format!("the X server connection failed: {error}"),
-                });
-            }
+            BeforeWait::Frame => return Ok(()),
+            BeforeWait::Sleep => {}
         }
-        if self.windows.wants_frame() {
-            return Ok(());
-        }
-        connection
-            .flush()
-            .map_err(|error| PlatformError::EventLoop {
-                message: format!("the X server connection failed: {error}"),
-            })?;
         let timeout =
             deadline.and_then(|deadline| poll_timeout(deadline, web_time::Instant::now()));
         let mut fds = [
@@ -571,6 +564,63 @@ struct Turns {
     queued: VecDeque<Event>,
     /// The display snapshot the windows last read themselves against.
     displays: Option<DisplayRevision>,
+}
+
+/// The connection as the loop's last step before it sleeps sees it.
+trait WaitSource {
+    type Event;
+    type Error: std::fmt::Display;
+
+    /// Send what is buffered. libxcb reads the socket while it writes, so a
+    /// flush may move events already on the wire into its own queue, where
+    /// `poll` on the socket does not see them.
+    fn send(&self) -> Result<(), Self::Error>;
+
+    /// The next event already read, if any.
+    fn take_event(&self) -> Result<Option<Self::Event>, Self::Error>;
+}
+
+impl WaitSource for XCBConnection {
+    type Event = Event;
+    type Error = x11rb::errors::ConnectionError;
+
+    fn send(&self) -> Result<(), Self::Error> {
+        x11rb::connection::Connection::flush(self)
+    }
+
+    fn take_event(&self) -> Result<Option<Event>, Self::Error> {
+        self.poll_for_event()
+    }
+}
+
+/// What the loop does instead of sleeping, if anything.
+#[derive(Debug, PartialEq, Eq)]
+enum BeforeWait<E> {
+    /// An event is already read: deliver it.
+    Event(E),
+    /// A window waits for a frame.
+    Frame,
+    /// Nothing is owed: sleep in `poll`.
+    Sleep,
+}
+
+/// The last step before the loop sleeps: flush first, and only then look for
+/// an event already read, since the flush may have read some; a window that
+/// waits for a frame keeps it awake too. The other order, an event looked for
+/// and then a flush, leaves what the flush read in libxcb's queue while `poll`
+/// sleeps on a socket that has nothing new.
+fn before_wait<S: WaitSource>(
+    source: &S,
+    wants_frame: impl FnOnce() -> bool,
+) -> Result<BeforeWait<S::Event>, S::Error> {
+    source.send()?;
+    if let Some(event) = source.take_event()? {
+        return Ok(BeforeWait::Event(event));
+    }
+    if wants_frame() {
+        return Ok(BeforeWait::Frame);
+    }
+    Ok(BeforeWait::Sleep)
 }
 
 /// How long the loop waits for `deadline` at `now`: rounded up to the
@@ -791,9 +841,65 @@ pub struct WindowRef {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::{Cell, RefCell};
+    use std::collections::VecDeque;
     use std::time::Duration;
 
-    use super::wait_for;
+    use super::{BeforeWait, WaitSource, before_wait, wait_for};
+
+    /// A connection with events on the wire, which a flush reads into the
+    /// queue, as libxcb's does.
+    #[derive(Default)]
+    struct Wire {
+        on_the_wire: RefCell<Vec<u32>>,
+        queued: RefCell<VecDeque<u32>>,
+        flushes: Cell<usize>,
+    }
+
+    impl WaitSource for Wire {
+        type Event = u32;
+        type Error = std::convert::Infallible;
+
+        fn send(&self) -> Result<(), Self::Error> {
+            self.flushes.set(self.flushes.get() + 1);
+            self.queued
+                .borrow_mut()
+                .extend(self.on_the_wire.borrow_mut().drain(..));
+            Ok(())
+        }
+
+        fn take_event(&self) -> Result<Option<u32>, Self::Error> {
+            Ok(self.queued.borrow_mut().pop_front())
+        }
+    }
+
+    /// An event the last flush read is delivered, not slept on: `poll` sees
+    /// only the socket, which the flush emptied.
+    #[test]
+    fn an_event_the_flush_reads_keeps_the_loop_awake() {
+        // (case, on the wire, queued, wants a frame, outcome)
+        let table: [(&str, &[u32], &[u32], bool, BeforeWait<u32>); 5] = [
+            ("read by the flush", &[7], &[], false, BeforeWait::Event(7)),
+            ("already queued", &[], &[5], false, BeforeWait::Event(5)),
+            (
+                "queued before the wire",
+                &[7],
+                &[5],
+                false,
+                BeforeWait::Event(5),
+            ),
+            ("a frame is owed", &[], &[], true, BeforeWait::Frame),
+            ("nothing", &[], &[], false, BeforeWait::Sleep),
+        ];
+        for (case, wire, queued, frame, expected) in table {
+            let source = Wire::default();
+            source.on_the_wire.borrow_mut().extend_from_slice(wire);
+            source.queued.borrow_mut().extend(queued.iter().copied());
+            let Ok(outcome) = before_wait(&source, || frame);
+            assert_eq!(outcome, expected, "{case}");
+            assert_eq!(source.flushes.get(), 1, "{case}: one flush");
+        }
+    }
 
     /// The wait for a deadline is rounded up to the millisecond, never down to
     /// a busy wait, and a deadline beyond what `poll` can be told is no limit.

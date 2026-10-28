@@ -59,6 +59,10 @@ mod cases {
             the_window_managers_close_asks_the_handler,
         ),
         (
+            "a_window_destroyed_by_another_client_closes_and_lets_go",
+            a_window_destroyed_by_another_client_closes_and_lets_go,
+        ),
+        (
             "a_frame_asked_for_on_another_thread_wakes_the_loop",
             a_frame_asked_for_on_another_thread_wakes_the_loop,
         ),
@@ -629,6 +633,48 @@ mod cases {
                 .and_then(|cookie| cookie.reply().ok())
                 .is_none()
         });
+    }
+
+    /// A window another client destroys (as `xkill` does) closes: its handler
+    /// hears `closed` once and is let go of, its surface target hands out no
+    /// handle for the window that is gone, and a frame asked for it reaches
+    /// nothing.
+    fn a_window_destroyed_by_another_client_closes_and_lets_go() {
+        let platform = X11Platform::new().expect("the X11 platform");
+        let server = RustConnection::connect(None)
+            .expect("the X server answers")
+            .0;
+        let handler = RecordingWindowHandler::new();
+        let window = platform
+            .open_window(WindowOptions::default(), Rc::clone(&handler) as _)
+            .expect("an X11 window opens");
+        let xid = xid_of(window.as_ref());
+        let target = window.surface_target();
+        let requester = window.redraw_requester();
+        run_for(&platform, Duration::from_millis(200)).expect("the loop turns");
+
+        server.destroy_window(xid).expect("request");
+        server.flush().expect("flush");
+        run_for(&platform, Duration::from_millis(200)).expect("the loop turns");
+
+        assert_eq!(handler.count(&HandlerCall::Closed), 1, "closed, once");
+        assert_eq!(
+            Rc::strong_count(&handler),
+            1,
+            "the window let go of its handler"
+        );
+        assert!(
+            matches!(target.window_handle(), Err(HandleError::Unavailable)),
+            "the target of a window the server destroyed hands out no handle"
+        );
+        handler.take_calls();
+        requester.request_redraw();
+        window.request_redraw();
+        run_for(&platform, Duration::from_millis(100)).expect("the loop turns");
+        assert!(
+            handler.take_calls().is_empty(),
+            "a destroyed window delivers nothing more"
+        );
     }
 
     /// A frame asked for on another thread wakes a loop that waits with no
