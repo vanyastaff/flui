@@ -351,6 +351,9 @@ tokio = { workspace = true, features = ["macros"] }
 #   - `objc2-quartz-core`'s `CADisplayLink` is the per-frame signal; QuartzCore
 #     rather than UIKit because `CADisplayLink` is declared there.
 [target.'cfg(target_os = "ios")'.dependencies]
+# Grapheme clusters, to delete a replaced run before the caret as the field
+# deletes it, a Backspace per cluster (`text::apple::composition`).
+icu_segmenter.workspace = true
 objc2 = { version = "0.6.4", features = ["std", "exception"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "block2",
@@ -411,6 +414,12 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
     "UIImpactFeedbackGenerator",
     "UINotificationFeedbackGenerator",
     "UISelectionFeedbackGenerator",
+    # The invisible responder the system keyboard types into (ADR-0255
+    # decision 11): the protocol, its traits, and the writing direction its
+    # positions answer.
+    "UITextInput",
+    "UITextInputTraits",
+    "NSText",
 ] }
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
     "CADisplayLink",
@@ -515,6 +524,8 @@ cfg_aliases = { workspace = true }
 # headless backend. Checkout-only test edge: versionless, so Cargo drops it
 # from the published manifest; flui-testing never depends on this crate.
 flui-testing = { path = "../flui-testing" }
+# `text::apple::composition`'s rules, which run on every host.
+icu_segmenter.workspace = true
 # The host's own test support, the `testing` module. Checkout-only test edge:
 # versionless, so Cargo drops it from the published manifest.
 flui-native = { path = ".", features = ["testing"] }

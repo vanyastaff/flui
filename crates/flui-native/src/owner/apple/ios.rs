@@ -315,6 +315,8 @@ pub struct ViewRef {
     pub(crate) signal: std::sync::Weak<OwnerSignal>,
     /// The window's system chrome.
     pub(crate) chrome: Arc<dyn flui_platform::PlatformSystemChrome>,
+    /// The window's delivery, which the keyboard's edits are told to.
+    pub(crate) delivery: std::sync::Weak<crate::owner::window_delivery::WindowDelivery>,
 }
 
 impl std::fmt::Debug for ViewRef {
