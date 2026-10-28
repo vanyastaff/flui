@@ -929,19 +929,22 @@ mod tests {
         assert!(describe(&mut outputs, 0, &SDR_SRGB), "the first colour");
 
         // HDR goes on: description 1 is asked for, then the output changes
-        // again and description 2 replaces it before 1 has finished.
+        // back and description 2 replaces it while 1's events still arrive.
         outputs.describe(GLOBAL, 1);
-        outputs.apply_color(GLOBAL, 1, HDR10[0]);
-        assert!(
-            !describe(&mut outputs, 2, &SDR_SRGB),
-            "the newest description is still SDR: no change"
-        );
+        outputs.describe(GLOBAL, 2);
         for event in HDR10 {
             outputs.apply_color(GLOBAL, 1, event);
         }
         assert!(
             !outputs.apply_color(GLOBAL, 1, ColorEvent::Done),
             "a superseded description's done changes nothing"
+        );
+        for event in SDR_SRGB {
+            outputs.apply_color(GLOBAL, 2, event);
+        }
+        assert!(
+            !outputs.apply_color(GLOBAL, 2, ColorEvent::Done),
+            "the newest description is still SDR: no change"
         );
         assert_eq!(
             only(&outputs).color,
