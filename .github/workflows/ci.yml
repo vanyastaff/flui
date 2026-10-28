@@ -310,7 +310,8 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────────────
   # test — the workspace suite on Linux (`cargo xtask test --fast`: nextest
-  # over TEST_SCOPE, then flui-native under Xvfb), then the build that
+  # over TEST_SCOPE, then flui-native under Xvfb, then its Wayland tests
+  # against a headless Weston), then the build that
   # links the examples and benches with the same packages and features, so it compiles
   # nothing twice (a target whose `required-features` the test scope leaves
   # off is compiled per feature by `feature-matrix`, not linked). The nested-cargo group runs beside it in `test-nested`.
@@ -366,6 +367,30 @@ jobs:
       # Xvfb and an openbox of its own, and its host loads libxcb at run time.
       - name: Ensure Xvfb, openbox, libxcb + xkbcommon are available (flui-native X11 tests)
         run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends xvfb openbox libxcb1 libxkbcommon-x11-0 libxkbcommon0
+
+      # The native Wayland host's tests (`cargo xtask test` runs them apart
+      # from the Xvfb suite) need a compositor: a headless Weston on a socket
+      # of its own. `FLUI_REQUIRE_WAYLAND` turns a missing compositor into a
+      # failure instead of a skip, as `FLUI_REQUIRE_GPU` does for the GPU
+      # suites. Weston loads libwayland, which the host dlopens too.
+      - name: Start a headless Weston (flui-native Wayland tests)
+        run: |
+          sudo apt-get install -y --no-install-recommends weston libwayland-client0
+          runtime_dir="$RUNNER_TEMP/xdg-runtime"
+          mkdir -p "$runtime_dir"
+          chmod 700 "$runtime_dir"
+          XDG_RUNTIME_DIR="$runtime_dir" nohup weston --backend=headless --socket=flui-weston \
+            --idle-time=0 --log="$RUNNER_TEMP/weston.log" > /dev/null 2>&1 &
+          for _ in $(seq 1 100); do
+            [ -S "$runtime_dir/flui-weston" ] && break
+            sleep 0.1
+          done
+          [ -S "$runtime_dir/flui-weston" ] || { cat "$RUNNER_TEMP/weston.log"; exit 1; }
+          {
+            echo "XDG_RUNTIME_DIR=$runtime_dir"
+            echo "WAYLAND_DISPLAY=flui-weston"
+            echo "FLUI_REQUIRE_WAYLAND=1"
+          } >> "$GITHUB_ENV"
 
       # The local command, so CI and a local run cannot drift. nextest gives
       # each test its own process, so a test that mutates a genuinely

@@ -1,9 +1,10 @@
 //! The Linux display source: the outputs of a Wayland compositor or an X
 //! server, their refresh rates, and a notice when they change.
 //!
-//! The first part of a native Linux backend, and the display source of the
-//! winit backend today. It connects to the compositor on a connection of its
-//! own, apart from any window system's, and reads two kinds of state:
+//! The displays of the native Wayland host (`wayland::WaylandDisplaySource`),
+//! of the native X11 host and of the winit host on Linux. It connects to the
+//! compositor on a connection of its own, apart from any window system's, and reads two kinds
+//! of state:
 //!
 //! - **Wayland**: `wl_output` (version 2 to 4) with `zxdg_output_v1` for the
 //!   logical position and size, applied only when the compositor closes a burst
@@ -20,18 +21,6 @@
 //!
 //! Which protocol is read follows the rule winit uses ([`protocol`]), so the
 //! source reads the compositor the windows live on.
-
-// The winit host reads the whole source (both protocols, and a window's
-// display by native number); the native X11 host reads the X11 half and names
-// a window's display by its rectangle, so a build without the winit host
-// compiles parts nothing calls until the native Wayland host reads the rest.
-#![cfg_attr(
-    not(feature = "winit-backend"),
-    allow(
-        dead_code,
-        reason = "the winit host is the one reader of the whole display source until the native Wayland host exists"
-    )
-)]
 
 #[cfg(any(
     all(target_os = "linux", any(feature = "wayland", feature = "x11")),
@@ -51,7 +40,7 @@ pub(crate) mod x11_model;
 mod session;
 
 #[cfg(all(target_os = "linux", feature = "wayland"))]
-mod wayland;
+pub(crate) mod wayland;
 
 #[cfg(all(target_os = "linux", feature = "x11"))]
 mod x11;

@@ -55,7 +55,6 @@ use flui_platform::{
     DisplayRevision, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice,
     SystemPreferences, WindowAppearance, WindowId,
 };
-use parking_lot::Mutex;
 use rustix::event::{EventfdFlags, PollFd, PollFlags, Timespec, eventfd, poll};
 use rustix::io::Errno;
 use x11rb::connection::Connection as _;
@@ -67,10 +66,10 @@ use crate::executor::BackgroundExecutor;
 use crate::host;
 use crate::owner::app_delivery::AppDelivery;
 use crate::owner::handlers::OpenWindows;
+use crate::owner::linux::{LinuxNotices, LinuxPreferences, PortalSlot, SessionLoop, xdg_open};
 use crate::owner::notices::{LifecycleHooks, NoticeChannel, StaleOnWake};
 use crate::owner::panic_boundary::contain_owner_callback;
 use crate::owner::signal::OwnerSignal;
-use crate::owner::sources::SystemPreferenceSource;
 use crate::owner::wake_deadline::WakeDeadline;
 use crate::owner::watch::Watch;
 use crate::owner::{DirectOwnerHooks, OwnerHooks, OwnerPlatform};
@@ -189,12 +188,19 @@ pub(crate) trait X11Host: 'static {
     /// The channel the host's notices take to the application.
     fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel>;
 
-    /// The Settings portal, which the loop starts as it runs.
-    fn preferences() -> Box<dyn PreferenceStart>;
+    /// The Settings portal's preferences, observed on `executor` and waking
+    /// the owner behind `signal`; started as the loop runs.
+    fn preferences(
+        executor: &BackgroundExecutor,
+        signal: &Arc<OwnerSignal>,
+    ) -> Arc<dyn LinuxPreferences>;
 
-    /// The sources of the host's notices (logind, memory pressure), which the
-    /// loop starts once the application can hear what they report.
-    fn host_notices() -> Box<dyn HostNoticeStart>;
+    /// The sources of the host's notices (logind, memory pressure), started
+    /// once the application can hear what they report.
+    fn host_notices(
+        executor: &BackgroundExecutor,
+        signal: &Arc<OwnerSignal>,
+    ) -> Arc<dyn LinuxNotices>;
 }
 
 /// The displays as the X11 loop keeps them: the snapshot, and the watch that
@@ -210,43 +216,6 @@ pub(crate) trait HostDisplays: StaleOnWake {
     /// Watch the outputs until the returned watch drops, waking the owner
     /// behind `signal` when they change.
     fn observe(self: Arc<Self>, signal: &Arc<OwnerSignal>) -> Watch;
-}
-
-/// The Settings portal as the X11 loop starts it, on its owner thread, before
-/// the application's bootstrap.
-pub(crate) trait PreferenceStart: Send + Sync {
-    /// Observe the portal on `executor`, waking the owner behind `signal` when
-    /// what it accepted changes.
-    fn start(
-        &self,
-        executor: &BackgroundExecutor,
-        signal: &Arc<OwnerSignal>,
-    ) -> Arc<dyn PortalPreferences>;
-}
-
-/// The portal's preferences as the X11 loop keeps them: the snapshot, and the
-/// colour scheme every window follows.
-pub(crate) trait PortalPreferences: SystemPreferenceSource + Send + Sync {
-    /// The colour scheme the portal reports.
-    fn appearance(&self) -> WindowAppearance;
-}
-
-/// The sources of the host's notices as the X11 loop starts them.
-pub(crate) trait HostNoticeStart: Send + Sync {
-    /// Start the sources on `executor`; they wake the owner behind `signal`
-    /// when something is queued.
-    fn start(
-        &self,
-        executor: &BackgroundExecutor,
-        signal: &Arc<OwnerSignal>,
-    ) -> Box<dyn HostNotices>;
-}
-
-/// The sources of the host's notices the X11 loop keeps.
-pub(crate) trait HostNotices {
-    /// Deliver what the sources queued since the loop's last turn, oldest
-    /// first, to `platform`'s notice channel and session end.
-    fn deliver(&self, platform: &X11Loop);
 }
 
 /// The windows the X11 loop holds through its hook: the window feature's,
@@ -296,11 +265,11 @@ pub struct X11Loop {
     notices: Arc<dyn NoticeChannel>,
     displays: Arc<dyn HostDisplays>,
     windows: Arc<dyn LoopWindows>,
-    preference_start: Box<dyn PreferenceStart>,
-    host_notice_start: Box<dyn HostNoticeStart>,
+    start_preferences: fn(&BackgroundExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxPreferences>,
+    start_host_notices: fn(&BackgroundExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxNotices>,
     background_executor: Arc<BackgroundExecutor>,
     /// The preference source while the loop runs.
-    preferences: Mutex<Option<Weak<dyn PortalPreferences>>>,
+    portal: PortalSlot,
     /// The application asked for its exit policy again.
     exit_reevaluation: AtomicBool,
     /// The thread that built the platform, which its windows belong to and
@@ -344,10 +313,10 @@ impl X11Loop {
             notices,
             displays,
             windows,
-            preference_start: H::preferences(),
-            host_notice_start: H::host_notices(),
+            start_preferences: H::preferences,
+            start_host_notices: H::host_notices,
             background_executor: Arc::new(BackgroundExecutor::new()),
-            preferences: Mutex::new(None),
+            portal: PortalSlot::default(),
             exit_reevaluation: AtomicBool::new(false),
             affinity,
         })
@@ -379,19 +348,6 @@ impl X11Loop {
         &self.notices
     }
 
-    /// Report `notice` to the application.
-    pub(crate) fn notice(&self, notice: SystemNotice) {
-        self.notices.dispatch(notice);
-    }
-
-    /// Ask the application about a phase of the session ending; with no
-    /// handler bound the session goes on.
-    pub(crate) fn session_end(&self, phase: SessionEndPhase) -> SessionEndAnswer {
-        self.app
-            .session_end(phase)
-            .or_resume(SessionEndAnswer::Proceed)
-    }
-
     /// Ask the application whether the loop may end now that no window is
     /// open; with no policy of its own, the loop ends, as a desktop loop does.
     fn exit_allowed(&self) -> bool {
@@ -400,8 +356,7 @@ impl X11Loop {
 
     /// The colour scheme the portal reported, to each window.
     fn deliver_appearance(&self) {
-        let source = self.preferences.lock().as_ref().and_then(Weak::upgrade);
-        if let Some(source) = source {
+        if let Some(source) = self.portal.source() {
             self.windows.observe_appearance(source.appearance());
         }
     }
@@ -461,7 +416,7 @@ impl X11Loop {
     /// Deliver what the system's sources queued for the owner: the host's
     /// notices, the portal's colour scheme, and a change of the displays,
     /// which every window reads itself again for.
-    fn read_sources(&self, turns: &mut Turns, host_notices: Option<&dyn HostNotices>) {
+    fn read_sources(&self, turns: &mut Turns, host_notices: Option<&dyn LinuxNotices>) {
         if let Some(host_notices) = host_notices {
             host_notices.deliver(self);
         }
@@ -514,7 +469,7 @@ impl X11Loop {
 
     /// The loop proper, after the application's bootstrap: until a quit, an
     /// exit the policy allows, or a failed connection.
-    fn run_loop(&self, host_notices: Option<&dyn HostNotices>) -> Result<(), PlatformError> {
+    fn run_loop(&self, host_notices: Option<&dyn LinuxNotices>) -> Result<(), PlatformError> {
         let mut turns = Turns::default();
         let mut deadline = WakeDeadline::default();
         loop {
@@ -643,8 +598,8 @@ fn wait_for(remaining: std::time::Duration) -> Option<Timespec> {
 struct RunGuard<'a> {
     platform: &'a X11Loop,
     display_watch: Option<Watch>,
-    preferences: Option<Arc<dyn PortalPreferences>>,
-    host_notices: Option<Box<dyn HostNotices>>,
+    preferences: Option<Arc<dyn LinuxPreferences>>,
+    host_notices: Option<Arc<dyn LinuxNotices>>,
 }
 
 impl Drop for RunGuard<'_> {
@@ -654,7 +609,7 @@ impl Drop for RunGuard<'_> {
         // Admission is closed, so a change a source still reports wakes
         // nobody; now the sources end.
         drop(self.display_watch.take());
-        *platform.preferences.lock() = None;
+        platform.portal.set(None);
         drop(self.preferences.take());
         drop(self.host_notices.take());
         contain_owner_callback(|| platform.windows.release());
@@ -704,10 +659,8 @@ impl host::Loop for X11Loop {
         // The displays and the portal are read before the bootstrap, which
         // opens windows on them and reads the preferences.
         guard.display_watch = Some(Arc::clone(&self.displays).observe(&self.signal));
-        let preferences = self
-            .preference_start
-            .start(&self.background_executor, &self.signal);
-        *self.preferences.lock() = Some(Arc::downgrade(&preferences));
+        let preferences = (self.start_preferences)(&self.background_executor, &self.signal);
+        self.portal.set(Some(&preferences));
         guard.preferences = Some(preferences);
         self.app
             .ready(OwnerPlatform::new(
@@ -723,10 +676,10 @@ impl host::Loop for X11Loop {
         // A sleep or a shutdown that arrived while the bootstrap ran would
         // have held logind's inhibitor with no turn to deliver it, so the
         // sources start only now.
-        guard.host_notices = Some(
-            self.host_notice_start
-                .start(&self.background_executor, &self.signal),
-        );
+        guard.host_notices = Some((self.start_host_notices)(
+            &self.background_executor,
+            &self.signal,
+        ));
         let result = self.run_loop(guard.host_notices.as_deref());
         drop(guard);
         result
@@ -744,6 +697,18 @@ impl host::Loop for X11Loop {
         if let Err(error) = self.doorbell.ring() {
             tracing::error!(%error, "an exit-policy request could not wake the X11 loop");
         }
+    }
+}
+
+impl SessionLoop for X11Loop {
+    fn notice(&self, notice: SystemNotice) {
+        self.notices.dispatch(notice);
+    }
+
+    fn session_end(&self, phase: SessionEndPhase) -> SessionEndAnswer {
+        self.app
+            .session_end(phase)
+            .or_resume(SessionEndAnswer::Proceed)
     }
 }
 
@@ -770,9 +735,18 @@ impl host::Preferences<X11Loop> for X11Loop {
                     .into(),
             });
         }
-        let source = owner.preferences.lock().as_ref().and_then(Weak::upgrade);
-        source.ok_or(PlatformError::PreferencesDeferred)?.sample()
+        owner
+            .portal
+            .source()
+            .ok_or(PlatformError::PreferencesDeferred)?
+            .sample()
     }
+}
+
+/// What a file prompt answers on this host: the file chooser portal is not
+/// spoken here yet.
+fn no_file_prompt() -> PlatformError {
+    flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotYetOnThisHost).into()
 }
 
 impl host::Services for X11Loop {
@@ -786,41 +760,42 @@ impl host::Services for X11Loop {
         })
     }
 
+    fn open_url(&self, url: &str) {
+        xdg_open(url.as_ref());
+    }
+
     fn reveal_path(&self, path: &Path) {
         // The extension, not the path: a document the user picked is their
         // data.
-        tracing::info!(extension = ?path.extension(), "Revealing path");
+        tracing::info!(extension = ?path.extension(), "revealing a path");
         if let Some(parent) = path.parent() {
-            let _ = std::process::Command::new("xdg-open").arg(parent).spawn();
+            xdg_open(parent.as_os_str());
         }
     }
 
     fn open_path(&self, path: &Path) {
-        tracing::info!(extension = ?path.extension(), "Opening path");
-        let _ = std::process::Command::new("xdg-open").arg(path).spawn();
+        tracing::info!(extension = ?path.extension(), "opening a path");
+        xdg_open(path.as_os_str());
     }
 
-    // The X11 host opens no URL and shows no file prompt: those services move
-    // to the system capability crate (ADR-0151 §9).
-    fn open_url(&self, url: &str) {
-        let _ = url;
-    }
-
+    /// The file chooser portal is the system capability crate's (ADR-0151
+    /// §3): this host has none, and says so.
     fn prompt_for_paths(
         &self,
         options: PathPromptOptions,
     ) -> Task<Result<Option<Vec<PathBuf>>, PlatformError>> {
         let _ = options;
-        Task::ready(Ok(None))
+        Task::ready(Err(no_file_prompt()))
     }
 
+    /// See [`Self::prompt_for_paths`].
     fn prompt_for_new_path(
         &self,
         directory: &Path,
         suggested_name: Option<&str>,
     ) -> Task<Result<Option<PathBuf>, PlatformError>> {
         let _ = (directory, suggested_name);
-        Task::ready(Ok(None))
+        Task::ready(Err(no_file_prompt()))
     }
 
     fn compositor_name(&self) -> &'static str {

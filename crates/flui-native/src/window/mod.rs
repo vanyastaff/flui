@@ -30,9 +30,13 @@ pub(crate) mod capabilities;
 pub(crate) mod headless;
 #[cfg(any(linux_host, test))]
 pub(crate) mod linux {
-    //! The Linux windows: the native X11 host's, and what the winit host reads
-    //! of an X11 window that winit does not report.
+    //! The Linux windows: the native Wayland host's (`wayland`), and the native
+    //! X11 host's with what the winit host reads of an X11 window that winit
+    //! does not report (`x11`).
 
+    #[cfg(any(wayland_host, test))]
+    pub(crate) mod wayland;
+    #[cfg(any(x11_host, test))]
     pub(crate) mod x11;
 }
 #[cfg(target_arch = "wasm32")]

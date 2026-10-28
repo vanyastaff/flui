@@ -380,7 +380,8 @@ impl WindowDelivery {
         all(target_os = "linux", feature = "x11"),
         target_os = "macos",
         target_os = "ios",
-        target_arch = "wasm32"
+        target_arch = "wasm32",
+        all(target_os = "linux", feature = "wayland")
     ))]
     pub(crate) fn publish_through_owner<W: 'static>(
         &self,
@@ -462,7 +463,8 @@ impl WindowDelivery {
     /// (a renderer and its surface).
     #[cfg(any(
         windows,
-        all(target_os = "linux", feature = "x11"),
+        wayland_host,
+        x11_host,
         all(test, not(target_arch = "wasm32"))
     ))]
     pub(crate) fn clear_then(&self, on_retired: impl FnOnce() + Send + 'static) {

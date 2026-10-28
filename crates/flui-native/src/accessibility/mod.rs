@@ -8,14 +8,14 @@
 //!
 //! - `windows`: UI Automation (`accesskit_windows`);
 //! - `apple`: NSAccessibility on macOS (`accesskit_macos`);
-//! - `linux`: AT-SPI (`accesskit_unix`), which the X11 and winit hosts use;
+//! - `linux`: AT-SPI (`accesskit_unix`), which every Linux host's windows
+//!   hand out (the Wayland, X11 and winit hosts');
 //! - `headless`: `FakeAccessibility`, which counts what was published while active.
 //!
 //! The adapters have no feature: every window of a host that has one hands it
-//! out, and each builds on every target of its operating system. Android, iOS
-//! and the Web have none yet: their tables name `Absent<Accessibility>`. The
-//! Linux adapter comes with every Linux build, as the Linux hosts do
-//! (ADR-0151 §15).
+//! out, and each compiles on its operating system always (ADR-0151 §15).
+//! Android, iOS and the Web have none yet: their tables name
+//! `Absent<Accessibility>`.
 
 #[cfg(target_os = "macos")]
 pub(crate) mod apple;

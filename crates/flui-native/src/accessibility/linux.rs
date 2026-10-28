@@ -7,10 +7,9 @@
 //! # Where it builds
 //!
 //! `accesskit_unix` brings ~66 crates (zbus, atspi, an async executor). AT-SPI
-//! *is* D-Bus, so there is no lighter path, and the Linux host reads the
+//! *is* D-Bus, so there is no lighter path, and every Linux host reads the
 //! Settings portal and logind over D-Bus anyway. The adapter therefore builds
-//! in every Linux build, as the Linux hosts do (the X11 host and the winit
-//! one), and has no feature of its own (ADR-0151 §15).
+//! on Linux always and has no feature of its own (ADR-0151 §15).
 //!
 //! # Nothing async reaches the frame path
 //!
@@ -151,20 +150,11 @@ impl crate::host::WindowAccessibility for UnixAccessibility {
     fn focus_changed(&self, _: bool) {}
 }
 
-/// Each X11 window announces itself on the AT-SPI bus as it opens.
-#[cfg(feature = "x11")]
-impl crate::host::Accessibility<crate::owner::linux::x11::WindowRef> for UnixAccessibility {
-    fn for_window(
-        _: &crate::owner::linux::x11::WindowRef,
-    ) -> Arc<dyn crate::host::WindowAccessibility> {
-        Arc::new(Self::new())
-    }
-}
-
-/// Each winit window on Linux announces itself on the AT-SPI bus.
-#[cfg(feature = "winit-backend")]
-impl crate::host::Accessibility<Arc<winit::window::Window>> for UnixAccessibility {
-    fn for_window(_: &Arc<winit::window::Window>) -> Arc<dyn crate::host::WindowAccessibility> {
+/// Each window of a Linux host announces itself on the AT-SPI bus. The
+/// adapter needs nothing of the window itself, so one implementation serves
+/// the windows of every Linux host, whatever their reference.
+impl<W: ?Sized> crate::host::Accessibility<W> for UnixAccessibility {
+    fn for_window(_: &W) -> Arc<dyn crate::host::WindowAccessibility> {
         Arc::new(Self::new())
     }
 }

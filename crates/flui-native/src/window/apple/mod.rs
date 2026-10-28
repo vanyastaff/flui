@@ -119,6 +119,96 @@ pub(crate) mod main_release {
     }
 }
 
+/// How a window is taken apart around the view it owns: each part hooked to
+/// the view is detached, then the window is released, then the view goes,
+/// each a cleanup boundary of its own. A view a detach failed on is kept for
+/// the rest of the process instead: the part may still be hooked to it (the
+/// accessibility bridge's dynamic subclass stays on the view until it is
+/// unhooked), and the view's `dealloc`, or VoiceOver, would reach what the
+/// failed detach left behind.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) mod teardown {
+    #![forbid(unsafe_code)]
+
+    /// Detach each of `hooked`, release the window, then let `view` go if
+    /// every detach completed. `guarded` runs one step as a cleanup boundary
+    /// and answers whether it completed.
+    pub(crate) fn take_apart<V>(
+        view: V,
+        hooked: &mut [&mut dyn FnMut()],
+        release_window: &mut dyn FnMut(),
+        guarded: impl Fn(&mut dyn FnMut()) -> bool,
+    ) {
+        let mut detached = true;
+        for detach in hooked.iter_mut() {
+            detached &= guarded(&mut **detach);
+        }
+        guarded(release_window);
+        let mut view = Some(view);
+        if detached {
+            guarded(&mut || drop(view.take()));
+        } else {
+            std::mem::forget(view);
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::cell::RefCell;
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        use super::take_apart;
+
+        /// A view that logs its release.
+        struct View<'log>(&'log RefCell<Vec<&'static str>>);
+
+        impl Drop for View<'_> {
+            fn drop(&mut self) {
+                self.0.borrow_mut().push("view");
+            }
+        }
+
+        fn guarded(step: &mut dyn FnMut()) -> bool {
+            catch_unwind(AssertUnwindSafe(step))
+                .map_err(std::mem::forget)
+                .is_ok()
+        }
+
+        fn take_apart_with(log: &RefCell<Vec<&'static str>>, accessibility_fails: bool) {
+            take_apart(
+                View(log),
+                &mut [
+                    &mut || {
+                        log.borrow_mut().push("accessibility");
+                        assert!(!accessibility_fails, "the accessibility detach failed");
+                    },
+                    &mut || log.borrow_mut().push("text"),
+                ],
+                &mut || log.borrow_mut().push("window"),
+                guarded,
+            );
+        }
+
+        #[test]
+        fn a_view_goes_after_its_window_once_every_part_is_detached() {
+            let log = RefCell::new(Vec::new());
+            take_apart_with(&log, false);
+            assert_eq!(*log.borrow(), ["accessibility", "text", "window", "view"]);
+        }
+
+        #[test]
+        fn a_view_a_detach_failed_on_is_kept() {
+            let log = RefCell::new(Vec::new());
+            take_apart_with(&log, true);
+            assert_eq!(
+                *log.borrow(),
+                ["accessibility", "text", "window"],
+                "every other step still ran, and the view was not released"
+            );
+        }
+    }
+}
+
 /// A content view a surface target keeps alive: retained on the main thread
 /// when the target is made, and released on the main thread whichever thread
 /// drops the target ([`main_release`]). Its pointer is read on the main

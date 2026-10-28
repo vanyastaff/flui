@@ -1,7 +1,7 @@
 //! The Linux host's system notices: sleep and wake, shutdown, the screen lock
 //! and memory pressure, gathered from the login manager and the kernel and
-//! handed to the owner. Every Linux host reads them: the X11 host and the winit
-//! host.
+//! handed to the owner. Every Linux host reads them: the Wayland and X11 hosts
+//! and the winit host.
 //!
 //! Two sources run beside the owner and never run application code:
 //!
@@ -22,8 +22,8 @@
 //! A source that cannot start (no system bus, a kernel without pressure
 //! information) leaves the others running and says so once in the log.
 //!
-//! The sources name no host; how the X11 and winit loops start them and deliver
-//! what they queue sits apart, in a block per loop. What each source's answers
+//! The sources name no host; how the native loops and the winit loop deliver
+//! what they queue sits apart, in a block each. What each source's answers
 //! mean is a pure rule beside it, which every host checks.
 
 #[cfg(linux_host)]
@@ -250,73 +250,47 @@ mod winit {
 #[cfg(all(target_os = "linux", feature = "winit-backend"))]
 pub(crate) use winit::WinitNotices;
 
-/// The X11 host's loop starts the sources once the application can hear what
-/// they queue, and delivers it on each owner turn.
-#[cfg(all(target_os = "linux", feature = "x11"))]
-mod x11 {
-    use std::sync::Arc;
-
-    use flui_foundation::panic::FirstPanic;
-    use flui_platform::{SessionEndAnswer, SessionEndPhase};
-
-    use super::{HostEvent, HostNoticeSource};
-    use crate::executor::BackgroundExecutor;
-    use crate::owner::linux::x11::{HostNoticeStart, HostNotices, X11Loop};
-    use crate::owner::signal::OwnerSignal;
-
-    /// The Linux sources of system notices as the X11 loop starts them.
-    #[derive(Debug)]
-    pub(crate) struct X11Notices;
-
-    impl HostNoticeStart for X11Notices {
-        fn start(
-            &self,
-            executor: &BackgroundExecutor,
-            signal: &Arc<OwnerSignal>,
-        ) -> Box<dyn HostNotices> {
-            Box::new(HostNoticeSource::start(executor, signal))
-        }
-    }
-
+/// The native Linux loops, Wayland's and X11's, start the sources once their
+/// owner can deliver what they queue, and deliver it on each of their turns.
+#[cfg(any(wayland_host, x11_host))]
+impl crate::owner::linux::LinuxNotices for HostNoticeSource {
     /// The source holds a sleep or shutdown until its event has been
-    /// delivered, so each runs to the end here before the next; a panicking
-    /// subscriber keeps neither the rest nor logind waiting, and the first
-    /// panic is raised once all have run.
-    impl HostNotices for HostNoticeSource {
-        fn deliver(&self, platform: &X11Loop) {
-            let mut panics = FirstPanic::new();
-            for delivery in self.take() {
-                panics.contain(|| {
-                    delivery.deliver_with(|event| match event {
-                        HostEvent::Notice(notice) => platform.notice(notice),
-                        // logind cannot hold a shutdown for the user: the
-                        // query's answer is not read, the application hears it
-                        // so it can start saving, then the shutdown.
-                        HostEvent::SessionEnding => {
-                            let mut phases = FirstPanic::new();
-                            let answer =
-                                phases.contain(|| platform.session_end(SessionEndPhase::Query));
-                            if answer == Some(SessionEndAnswer::Block) {
-                                tracing::info!(
-                                    "the application asked to hold the shutdown; logind cannot wait for the user, so it goes on"
-                                );
-                            }
-                            phases.contain(|| platform.session_end(SessionEndPhase::Ending));
-                            phases.resume();
+    /// delivered, so each runs to the end here before the next; a handler that
+    /// panics keeps neither the rest nor logind waiting, and the first panic
+    /// is raised once all have run.
+    fn deliver(&self, owner: &dyn crate::owner::linux::SessionLoop) {
+        use flui_foundation::panic::FirstPanic;
+        use flui_platform::{SessionEndAnswer, SessionEndPhase};
+
+        let mut panics = FirstPanic::new();
+        for delivery in self.take() {
+            panics.contain(|| {
+                delivery.deliver_with(|event| match event {
+                    HostEvent::Notice(notice) => owner.notice(notice),
+                    // Linux cannot hold a shutdown for the user: the query is
+                    // asked so the application can start saving, and its
+                    // answer is not read.
+                    HostEvent::SessionEnding => {
+                        let mut phases = FirstPanic::new();
+                        let answer =
+                            phases.contain(|| owner.session_end(SessionEndPhase::Query));
+                        if answer == Some(SessionEndAnswer::Block) {
+                            tracing::info!(
+                                "the application asked to hold the shutdown; logind cannot wait for the user, so it goes on"
+                            );
                         }
-                        HostEvent::SessionEndCancelled => {
-                            platform.session_end(SessionEndPhase::Cancelled);
-                        }
-                    });
+                        phases.contain(|| owner.session_end(SessionEndPhase::Ending));
+                        phases.resume();
+                    }
+                    HostEvent::SessionEndCancelled => {
+                        owner.session_end(SessionEndPhase::Cancelled);
+                    }
                 });
-            }
-            panics.resume();
+            });
         }
+        panics.resume();
     }
 }
-
-#[cfg(all(target_os = "linux", feature = "x11"))]
-pub(crate) use x11::X11Notices;
 
 #[cfg(all(test, linux_host))]
 mod tests {

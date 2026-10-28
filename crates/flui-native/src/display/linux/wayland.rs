@@ -12,9 +12,18 @@
 //! - `zxdg_output_v1` is bound where offered, at version 3 at most; it carries
 //!   the logical position and size. Its own `done` closes a burst only below
 //!   version 3, where `wl_output.done` does not cover it.
+//!
+//! [`WaylandDisplaySource`] is the native Wayland host's displays position over
+//! the source: the snapshot, the display and scale of an output a window's
+//! surface entered (both connections name an output by its global, which the
+//! compositor numbers for every client alike), and the watch that keeps them
+//! current.
 
 use std::os::fd::BorrowedFd;
 use std::os::unix::net::UnixStream;
+use std::sync::Arc;
+
+use flui_platform::DisplaySnapshot;
 
 use wayland_client::{
     Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum,
@@ -30,10 +39,77 @@ use wayland_protocols::xdg::xdg_output::zv1::client::{
     zxdg_output_v1::{self, ZxdgOutputV1},
 };
 
-use super::protocol::Environment;
+use super::protocol::{Environment, Protocol};
 use super::session::{DisplayError, Session, Step, wait_readable};
+use super::source::LinuxDisplays;
 use super::view::OutputView;
 use super::wayland_model::{OutputEvent, WaylandOutputs};
+use crate::error::PlatformError;
+use crate::owner::linux::wayland::{OutputFacts, OutputName, WaylandDisplays};
+use crate::owner::notices::StaleOnWake;
+use crate::owner::signal::OwnerSignal;
+use crate::owner::watch::Watch;
+
+/// The native Wayland host's displays: the compositor's outputs as the
+/// display source reads them on a connection of its own. Public where it is
+/// defined, as the host's table names it, and nameable only inside the crate.
+pub struct WaylandDisplaySource {
+    native: Arc<LinuxDisplays>,
+}
+
+impl std::fmt::Debug for WaylandDisplaySource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WaylandDisplaySource")
+            .finish_non_exhaustive()
+    }
+}
+
+impl WaylandDisplaySource {
+    /// The source, which reads the compositor on first use.
+    pub(crate) fn new() -> Self {
+        Self {
+            native: LinuxDisplays::new(),
+        }
+    }
+}
+
+/// A wake marks the outputs stale.
+impl StaleOnWake for WaylandDisplaySource {
+    fn mark_stale(&self) {
+        self.native.mark_stale();
+    }
+}
+
+impl WaylandDisplays for WaylandDisplaySource {
+    fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
+        self.native.snapshot()
+    }
+
+    fn output(&self, output: OutputName) -> Option<OutputFacts> {
+        let snapshot = self.native.snapshot().ok()?;
+        let display = self
+            .native
+            .display_of_native(Protocol::Wayland, output.get())?;
+        let info = snapshot.displays().iter().find(|info| info.id == display)?;
+        Some(OutputFacts {
+            display,
+            scale: info.scale_factor,
+        })
+    }
+
+    /// The display thread: dropping the watch stops it and closes its
+    /// connection. A source that cannot connect says so in the log and
+    /// answers its snapshots with the error.
+    fn observe(self: Arc<Self>, signal: &Arc<OwnerSignal>) -> Watch {
+        match self.native.watch(Protocol::Wayland, signal) {
+            Ok(watcher) => Watch::new(watcher),
+            Err(error) => {
+                tracing::warn!(%error, "the Wayland display source could not start");
+                Watch::new(())
+            }
+        }
+    }
+}
 
 const PROTOCOL: &str = "Wayland";
 /// The newest `wl_output` this adapter understands (it adds `name` and

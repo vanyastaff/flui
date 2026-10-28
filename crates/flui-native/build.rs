@@ -9,11 +9,18 @@ fn main() {
                 any(target_os = "windows", target_os = "macos", target_os = "linux")
             )
         },
+        // The native Wayland host.
+        wayland_host: { all(target_os = "linux", feature = "wayland") },
         // The native X11 host.
         x11_host: { all(target_os = "linux", feature = "x11") },
         // A Linux host whose loop reads the session's own sources: the
         // Settings portal, logind and memory pressure. A Linux host joins it
         // here by its feature.
-        linux_host: { all(target_os = "linux", any(feature = "winit-backend", feature = "x11")) },
+        linux_host: {
+            all(
+                target_os = "linux",
+                any(feature = "winit-backend", feature = "wayland", feature = "x11")
+            )
+        },
     }
 }

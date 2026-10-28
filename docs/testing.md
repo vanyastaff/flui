@@ -153,7 +153,11 @@ passes `--strict`, which makes a missing one a failure. The flui-native step
 of `test` needs `xvfb-run` on Linux (`apt install xvfb`), runs without it on
 Windows, and is skipped with a message on macOS. Its `x11_window` harness, the
 native X11 host's window conformance, starts an Xvfb and an openbox of its own
-and needs `openbox` too (`apt install openbox`).
+and needs `openbox` too (`apt install openbox`). On Linux the native Wayland
+host's tests (`wayland_window::`) run in a step of their own against the
+compositor `WAYLAND_DISPLAY` names, and skip themselves without one; CI starts a
+headless Weston (`weston --backend=headless --socket=…`) and sets
+`FLUI_REQUIRE_WAYLAND=1`, which makes a missing compositor a failure.
 
 xtask does not schedule its commands. On a host shared by several agents and
 checkouts, [heli](https://github.com/vanyastaff/heli) does: every cargo, the
@@ -952,7 +956,7 @@ cargo check -p flui-native --locked --all-targets --target aarch64-apple-darwin 
 cargo xtask deps --strict --only policy                       # deps job: cargo-deny bans / licenses / sources + cargo-shear
 cargo xtask deps --strict --only advisories                   # same job: RustSec advisories, blocking in the wide and full lanes; advisories.yml runs it daily on main
 cargo xtask doc-strict                                        # doc job
-cargo xtask test --fast                                       # test job: nextest over the test scope, then flui-native under Xvfb (FLUI_HEADLESS=1)
+cargo xtask test --fast                                       # test job: nextest over the test scope, then flui-native under Xvfb (FLUI_HEADLESS=1), then its Wayland tests
 cargo xtask build-all-targets                                 # same job: links the examples and benches the test scope reaches
 cargo xtask test --nested --nested-group native               # test-nested: generated projects and facade consumers
 cargo xtask test --nested --nested-group trybuild             # test-trybuild: compile-fail suites
