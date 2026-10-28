@@ -196,6 +196,12 @@ impl WindowFixture for WaylandFixture {
     /// first, or two seconds pass: `presented` follows the compositor's
     /// repaint, and the window's next frame request carries it.
     fn present_and_request_frame(&mut self) -> Option<flui_platform::FrameRequest> {
+        // A report of a frame shown before this one (the window's first
+        // commit) may still wait for a request: the one wanted is this frame's.
+        let presented_since = flui_platform::EventTime::from_nanos(
+            u64::try_from(flui_foundation::event_epoch().elapsed().as_nanos())
+                .expect("the test's time fits the event timeline"),
+        );
         self.window
             .surface_target()
             .pre_present_notify(flui_platform::SwapChainStatistics::None);
@@ -210,7 +216,14 @@ impl WindowFixture for WaylandFixture {
             run_for(&self.platform, Duration::from_millis(20)).expect("the loop turns");
             for call in self.handler.take_calls() {
                 if let HandlerCall::FrameRequested(request) = call {
-                    if request.presented.is_some() {
+                    if request
+                        .presented
+                        .is_some_and(|presented| presented.at >= presented_since)
+                    {
+                        eprintln!(
+                            "the frame request after a shown frame: vsync {:?}, presented {:?}",
+                            request.vsync, request.presented
+                        );
                         return Some(request);
                     }
                     last = Some(request);

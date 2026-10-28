@@ -407,11 +407,18 @@ fn a_window_that_claims_what_it_cannot_do_is_caught() {
     .into_iter()
     .map(|violation| violation.check)
     .collect();
-    // The checks that send a claimed command see it fail too; the honesty
-    // check names the cause first.
+    // The checks that send a claimed command see it fail too; of the checks
+    // that run before any command, the presentation check catches the claimed
+    // report the window never makes, and the honesty check names the
+    // commands' cause next.
     assert_eq!(
-        checks.first(),
-        Some(&"capabilities_are_honest"),
+        checks.get(..2),
+        Some(
+            &[
+                "presentation_is_reported_exactly_when_claimed",
+                "capabilities_are_honest"
+            ][..]
+        ),
         "caught by {checks:?}"
     );
 }

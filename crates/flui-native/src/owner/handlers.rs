@@ -4,7 +4,6 @@
 //! through its [`WindowDelivery`](super::window_delivery::WindowDelivery).
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use flui_platform::{EventTime, FramePresented, FrameRequest};
 use parking_lot::Mutex;
@@ -65,9 +64,9 @@ fn frame_request_at(
 /// of that clock taken now (`platform_now`): the stamp lies as far before or after this reading of
 /// the event clock as it lies from `platform_now`, so no epoch has to be aligned. A stamp further
 /// back than the timeline's start is its start.
-#[cfg(any(windows, wayland_host, test))]
+#[cfg(any(windows, wayland_host))]
 #[must_use]
-pub(crate) fn rebased(platform_now: Duration, stamp: Duration) -> EventTime {
+pub(crate) fn rebased(platform_now: std::time::Duration, stamp: std::time::Duration) -> EventTime {
     rebased_at(event_now().as_nanos(), platform_now, stamp)
 }
 
@@ -82,12 +81,17 @@ pub(crate) fn event_now() -> EventTime {
 /// a reading of the platform's clock is known; the timeline's start for an age longer than it.
 #[cfg(windows)]
 #[must_use]
-pub(crate) fn aged(age: Duration) -> EventTime {
-    rebased(age, Duration::ZERO)
+pub(crate) fn aged(age: std::time::Duration) -> EventTime {
+    rebased(age, std::time::Duration::ZERO)
 }
 
-fn rebased_at(event_now: u64, platform_now: Duration, stamp: Duration) -> EventTime {
-    let nanos = |d: Duration| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX);
+#[cfg(any(windows, wayland_host, test))]
+fn rebased_at(
+    event_now: u64,
+    platform_now: std::time::Duration,
+    stamp: std::time::Duration,
+) -> EventTime {
+    let nanos = |d: std::time::Duration| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX);
     // One of the two is zero: the stamp lies before the reading or after it.
     let (before, after) = (
         platform_now.saturating_sub(stamp),
@@ -166,7 +170,7 @@ mod tests {
     /// reading, on either side, and never before the timeline's start.
     #[test]
     fn a_platform_stamp_is_rebased_by_its_distance_from_the_reading() {
-        let ms = Duration::from_millis;
+        let ms = std::time::Duration::from_millis;
         let at = |platform_now, stamp| rebased_at(50_000_000, platform_now, stamp).as_nanos();
         assert_eq!(at(ms(900), ms(880)), 30_000_000, "20 ms before");
         assert_eq!(at(ms(900), ms(905)), 55_000_000, "5 ms after");

@@ -173,6 +173,13 @@ pub fn assert_conforms(fixture: &mut dyn WindowFixture) {
 type Check = fn(&mut dyn WindowFixture) -> Result<(), String>;
 
 const CHECKS: &[(&str, Check)] = &[
+    // First, while the window is as it opened (shown, in normal mode): a
+    // window system shows no frame of a window a later check minimized, and
+    // Wayland cannot bring one back.
+    (
+        "presentation_is_reported_exactly_when_claimed",
+        presentation_is_reported_exactly_when_claimed,
+    ),
     ("capabilities_are_honest", capabilities_are_honest),
     ("accepted_commands_converge", accepted_commands_converge),
     ("revisions_mean_change", revisions_mean_change),
@@ -188,10 +195,6 @@ const CHECKS: &[(&str, Check)] = &[
     (
         "per_frame_verbs_report_unsupported_exactly_when_unavailable",
         per_frame_verbs_report_unsupported_exactly_when_unavailable,
-    ),
-    (
-        "presentation_is_reported_exactly_when_claimed",
-        presentation_is_reported_exactly_when_claimed,
     ),
     (
         "a_surface_target_is_send_sync_and_unavailable_after_close",
