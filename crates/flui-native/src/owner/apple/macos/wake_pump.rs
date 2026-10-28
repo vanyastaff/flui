@@ -365,10 +365,14 @@ mod tests {
         // A tick already due: an earlier request of the burst scheduled it
         // for its own turn. This arm's target is now, which is no earlier, so
         // the pending tick must be left alone.
-        pump.pending_at.store(
-            micros_since_base(web_time::Instant::now()),
-            Ordering::Release,
-        );
+        let due = micros_since_base(web_time::Instant::now());
+        pump.pending_at.store(due, Ordering::Release);
+        // `pending_at` is whole microseconds from the base and never 0, so
+        // the tick stored can lie up to a microsecond ahead of now: an arm
+        // inside that microsecond is earlier, and moves it. Let it come due.
+        while base().elapsed() <= Duration::from_micros(due) {
+            std::hint::spin_loop();
+        }
         let before = pump.generation.load(Ordering::Acquire);
         pump.arm();
         assert_eq!(
