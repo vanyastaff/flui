@@ -3761,6 +3761,34 @@ graph LR
   с не тем размером, и цикл падает. Проверки: WSL под Weston nextest `flui-native` по умолчанию
   и `--all-features`, clippy четырёх вариантов, Windows clippy рабочего пространства, `checks`,
   nextest `xtask`.
+- [x] **LY68** — ветка `ios/uitextinput` от `main` @ `8aee131f6`. Доказательство сложилось, ADR-0255
+  не меняется. **Код.** `text/apple/composition.rs` — чистая модель документа клавиатуры (UTF-16, как
+  считает UIKit): marked-диапазон, выделение, правки `setMarkedText`/`insertText`/`unmarkText`/
+  `deleteBackward`/сброс, каждая отвечает тем, что сообщить полю (`Preedit`, `Commit`, удаление
+  перед кареткой); правила гоняются на любом хосте. `text/apple/ios/responder.rs` — невидимый
+  `FluiTextInputView` на `define_class!` (`UIKeyInput` + `UITextInput`: 32 метода протоколов, токенизатор
+  `UITextInputStringTokenizer`, слабый input delegate), свои `FluiTextPosition`/`FluiTextRange`;
+  каждый метод — один вызов `os_entry` (`panic-boundary` зелёный). Правки уходят окну как
+  `ImeEvent::Preedit`/`Commit` и `Backspace`, как у AppKit, после чего просится кадр; документ не
+  заимствован, пока работает код поля. Окно iOS отдаёт `WindowTextInput::Ime`: фокус поля
+  (`set_ime_allowed(true)`) делает responder первым, потеря фокуса сбрасывает композицию без
+  фиксации и отдаёт клавиатуру; `ViewRef` несёт `delivery` окна. `unmarkText` фиксирует
+  композицию как есть (семантика UIKit), а не отменяет, как `unmarkText` AppKit. Признаки
+  `objc2-ui-kit`: `UITextInput`, `UITextInputTraits`, `NSText`. **Прогон** (2026-10-28, MacBook Air
+  M1, macOS 27.0, Simulator iPhone Duo / iOS 27.1, без Simulator.app): проба `flui create` с
+  `EditableText`, экранная клавиатура нажималась XCUITest-раннером, собранным вручную
+  (`XCTRunner.app` с плоскими фреймворками и `.xctestrun`; `_Testing_CoreTransferable` исключён —
+  его идентификатор бандла совпадает с `_Testing_CoreGraphics`, установка падает
+  `DuplicateIdentifier`). После «Next keyboard» XCUITest не нажимает клавиши новой раскладки,
+  поэтому языки шли отдельными прогонами с одной клавиатурой в списке устройства. Японская
+  (Romaji): `n → に → にh → にほ → にほn → にほんg → にほんご`, пробел — `日本語`, `改行` —
+  `unmarkText` → `Commit("日本語")`, поле: `text="日本語" composing=None`. Китайская (девятиклавишная
+  пиньинь): `m → n → ng → ni → nig → ni h → ni ha → ni ham → ni hao` (разделитель U+2006), кандидат
+  `你好` → `Commit("你好")`, поле: `text="你好" composing=None`. Полная QWERTY-пиньинь в XCUITest
+  не нажимается (клавиши не hittable). Не проверено: размещение кандидатов на экране (скриншоты
+  этого устройства чёрные), скрытие клавиатуры, устройство. Тесты (`composition::tests`, 8):
+  мутация `unmark` в отмену роняет `unmarking_commits_the_composition_as_it_reads`. Проверки:
+  clippy `-D warnings` для `aarch64-apple-ios` (native, app) и macOS, `panic-boundary`.
 
 ## Отступление от порядка, решённое владельцем
 
