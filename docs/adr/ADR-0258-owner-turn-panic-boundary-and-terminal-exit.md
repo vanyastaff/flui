@@ -433,7 +433,7 @@ was flushed before the panic resumed is what tells the fix from the old code, no
   click, leaves the process running and the next real key works; a panic in `dispose` when the last
   window is closed by Alt+F4 exits 101, never `0xC0000409`; a panic in the note screen's `build`
   shows the error view and the window keeps answering input. The faults come from a fixture
-  binary, the example `acceptance_app_faults` (added with the acceptance app, not on `main` yet),
+  binary, the example `acceptance_app_faults` (added with the acceptance app),
   which builds the app with the fault named by its argument (`build-panic`, `save-panic`,
   `dispose-panic`) through the same constructor seam (`Faults`) the headless rows use; the
   launcher the other native runs use, the example `acceptance_app`, has no fault switch.
