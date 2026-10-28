@@ -7,8 +7,9 @@
 //!   [`Clipboard`] and the data-transfer transport
 //!   ([`data_transfer::DataTransferSource`], ADR-0038);
 //! - the display vocabulary: [`DisplaySnapshot`], [`DisplayInfo`], the opaque
-//!   [`DisplayId`] a [`DisplayRegistry`] issues, and the validated
-//!   [`RefreshPeriod`] (ADR-0236);
+//!   [`DisplayId`] a [`DisplayRegistry`] issues, the validated
+//!   [`RefreshPeriod`] (ADR-0236), and each display's colour profile
+//!   ([`DisplayColor`]: its [`SurfaceColorSpace`] and [`Headroom`]);
 //! - the byte-storage capability [`Storage`] and its vocabulary
 //!   ([`StorageName`], [`StoredVersion`], [`WriteMode`], [`StorageError`]);
 //! - the text store an input method pulls from ([`TextStore`] and the rest of
@@ -148,12 +149,13 @@ pub use clipboard::{Clipboard, ClipboardItem, InMemoryClipboard};
 pub use cursor_icon::CursorIcon;
 pub use data_transfer::{DataTransferOffer, DataTransferSource, NullDataTransferSource};
 pub use display::{
-    DisplayId, DisplayIdsExhausted, DisplayInfo, DisplayKey, DisplayRegistry, DisplayRevision,
-    DisplayRevisionExhausted, DisplaySnapshot, FrameRateHint, InvalidRefreshPeriod, RefreshPeriod,
-    WindowDisplay,
+    ColorGamut, DisplayColor, DisplayId, DisplayIdsExhausted, DisplayInfo, DisplayKey,
+    DisplayRegistry, DisplayRevision, DisplayRevisionExhausted, DisplaySnapshot, DynamicRange,
+    FrameRateHint, Headroom, InvalidHeadroom, InvalidRefreshPeriod, RefreshPeriod,
+    SurfaceColorSpace, WindowDisplay,
 };
 pub use event_time::EventTime;
-pub use frame_request::FrameRequest;
+pub use frame_request::{FramePresented, FrameRequest};
 pub use haptic_feedback::HapticFeedback;
 pub use haptics::PlatformHaptics;
 pub use host_notice::{
@@ -183,7 +185,9 @@ pub use preferences::{
 pub use storage::{
     Storage, StorageError, StorageFuture, StorageName, Stored, StoredVersion, WriteMode,
 };
-pub use surface_target::{RedrawRequester, SurfaceTarget};
+pub use surface_target::{
+    DxgiFrameStatistics, RedrawRequester, SurfaceTarget, SwapChainStatistics,
+};
 pub use system_chrome::{PlatformSystemChrome, SystemUiOverlayStyle};
 pub use target_platform::TargetPlatform;
 pub use text_input::PlatformTextInput;

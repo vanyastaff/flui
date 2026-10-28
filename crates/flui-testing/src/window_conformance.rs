@@ -26,6 +26,13 @@
 //!   regions, which a window takes outside the command queue because they are
 //!   sent every frame, answer `Unsupported` exactly when their capability is
 //!   `Unavailable` (ADR-0254 §3). The material is a command like the others.
+//! - **Presentation is reported exactly when claimed.** A window whose
+//!   capabilities say it reports when its frames reached the screen carries
+//!   the report on its first frame request after frames were shown, stamped
+//!   between the first present and the request's arrival; one that says it
+//!   does not names a lasting reason and carries none. A fixture that cannot
+//!   present ([`WindowFixture::present_and_request_frame`]) checks the reason
+//!   only.
 //! - **A closed window refuses.** Every admitted command after the window
 //!   closed — through [`WindowCommand::Close`] where the window takes it, else
 //!   the way the window system closes it — is [`Closed`](ApplyError::Closed).
@@ -42,8 +49,9 @@ use std::rc::Rc;
 use flui_foundation::geometry::{Point, Rect, Size, WindowMetrics};
 use flui_platform::input_regions::{InputRegion, InputRegionKind};
 use flui_platform::{
-    AdmissionError, ApplyError, Availability, FrameRateHint, PlatformWindow, SizeConstraints,
-    Unsupported, WindowCommand, WindowMaterial, WindowMode, WindowState,
+    AdmissionError, ApplyError, Availability, EventTime, FrameRateHint, FrameRequest,
+    PlatformWindow, SizeConstraints, Unsupported, WindowCommand, WindowMaterial, WindowMode,
+    WindowState,
 };
 
 use crate::window_commands::AdmitAndApply;
@@ -104,6 +112,21 @@ pub trait WindowFixture {
     /// hands out a window handle for while it is open, on the thread the
     /// checks run on (ADR-0254 §5); a headless window has none.
     fn has_native_surface(&self) -> bool;
+
+    /// Present frames into a window's surface the way a renderer does
+    /// (the surface target's
+    /// [`pre_present_notify`](flui_platform::SurfaceTarget::pre_present_notify)
+    /// with what the presenter read, then the present), let the window system
+    /// show them, then have the window ask for a frame and settle; the frame
+    /// request its handler received. The window is the fixture's where the
+    /// window system still shows it whatever the earlier checks did, else one
+    /// of the same host the fixture opens for this and closes after (a
+    /// minimized Wayland window shows no frame and cannot be restored). `None` where the fixture cannot present
+    /// into the window, which leaves the presentation check to the
+    /// capability's own honesty.
+    fn present_and_request_frame(&mut self) -> Option<FrameRequest> {
+        None
+    }
 }
 
 /// One promise a window broke.
@@ -168,6 +191,10 @@ const CHECKS: &[(&str, Check)] = &[
     (
         "per_frame_verbs_report_unsupported_exactly_when_unavailable",
         per_frame_verbs_report_unsupported_exactly_when_unavailable,
+    ),
+    (
+        "presentation_is_reported_exactly_when_claimed",
+        presentation_is_reported_exactly_when_claimed,
     ),
     (
         "a_surface_target_is_send_sync_and_unavailable_after_close",
@@ -484,6 +511,54 @@ fn per_frame_verbs_report_unsupported_exactly_when_unavailable(
     finish(broken)
 }
 
+/// `presentation_is_reported_exactly_when_claimed`: a window whose
+/// capabilities say it reports when its frames reached the screen carries a
+/// report on the first frame request after frames were shown, stamped on the
+/// event timeline between the first present and the time the request arrived;
+/// a window that says it does not answers why with a lasting reason and
+/// carries none.
+fn presentation_is_reported_exactly_when_claimed(
+    fixture: &mut dyn WindowFixture,
+) -> Result<(), String> {
+    let claimed = fixture
+        .window()
+        .state()
+        .capabilities
+        .presentation_feedback();
+    let mut broken = Vec::new();
+    if let Err(absent) = claimed
+        && absent.is_retryable()
+    {
+        broken.push(format!(
+            "presentation feedback is absent as {absent}, which asks to be tried again"
+        ));
+    }
+    let before = EventTime::now();
+    let Some(request) = fixture.present_and_request_frame() else {
+        return finish(broken);
+    };
+    let after = EventTime::now();
+    match (claimed, request.presented) {
+        (Ok(_), Some(presented)) if presented.at < before || presented.at > after => {
+            broken.push(format!(
+                "a frame shown after {before:?} was reported at {:?}, outside the time up to its \
+                 request's arrival at {after:?}",
+                presented.at
+            ));
+        }
+        (Ok(_), Some(_)) | (Err(_), None) => {}
+        (Ok(availability), None) => broken.push(format!(
+            "presentation feedback is {availability:?}, but the request after shown frames \
+             carried no report"
+        )),
+        (Err(absent), Some(presented)) => broken.push(format!(
+            "presentation feedback is absent as {absent}, but a request carried a report at {:?}",
+            presented.at
+        )),
+    }
+    finish(broken)
+}
+
 /// Close the window by the command where the window takes it, the way the
 /// application closes a window; else the way the window system would. A
 /// window already closed (by an earlier check) is left as it is.
@@ -534,7 +609,7 @@ fn a_surface_target_is_send_sync_and_unavailable_after_close(
     let (done, returned) = std::sync::mpsc::channel();
     let presenting = std::sync::Arc::clone(&target);
     std::thread::spawn(move || {
-        presenting.pre_present_notify();
+        presenting.pre_present_notify(flui_platform::SwapChainStatistics::None);
         let _ = done.send(());
     });
     if returned

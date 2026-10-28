@@ -44,6 +44,9 @@ mod observer_delivery;
 #[path = "owner_retirement_custody.rs"]
 mod owner_retirement_custody;
 
+#[path = "presentation_feedback.rs"]
+mod presentation_feedback;
+
 /// Runs every case even after one fails, then panics listing the failing case names.
 pub(crate) fn run_table(table: &str, cases: &[(&str, fn())]) {
     let failed: Vec<&str> = cases

@@ -30,7 +30,10 @@ use crate::owner::android::java_view::{ActivityDragSource, JavaView};
 use crate::owner::android::{
     ActivityFlags, ActivityPreferences, ActivityRef, ActivityWindow, ActivityWindowId, AndroidLoop,
 };
-use crate::window::capabilities::{ActivityFacts, activity_capabilities, pointer_icon_absence};
+use crate::window::capabilities::{
+    ActivityFacts, WindowColorMode, activity_capabilities, activity_color_mode,
+    pointer_icon_absence,
+};
 
 use crate::text::WindowTextInput;
 use crate::{
@@ -571,6 +574,31 @@ impl host::Window<AndroidLoop> for AndroidWindow {
         let id = owner.window_ids.next().ok_or(OpenWindowError::Backend {
             message: "the Activity's window identities are used up".to_owned(),
         })?;
+        if let Some(mode) = options
+            .os_options
+            .android
+            .as_ref()
+            .and_then(|android| activity_color_mode(android.color_mode))
+        {
+            if owner.api.since::<WindowColorMode>().is_some() {
+                let app = owner.app.clone();
+                // The window's attributes belong to the Java main thread.
+                owner.app.run_on_java_main_thread(Box::new(move || {
+                    if let Err(error) = color_mode::apply(&app, mode) {
+                        tracing::warn!(
+                            target: "flui_native::android",
+                            %error,
+                            "the window's colour mode was not set"
+                        );
+                    }
+                }));
+            } else {
+                tracing::debug!(
+                    target: "flui_native::android",
+                    "below API 26 the window keeps the display's default colour mode"
+                );
+            }
+        }
         let cancelled = owner.input.capture_lost();
         let reference = ActivityRef {
             id,
@@ -891,7 +919,7 @@ impl raw_window_handle::HasDisplayHandle for AndroidSurface {
 impl flui_platform::SurfaceTarget for AndroidSurface {
     /// Android has no frame callback to arm before a present: it returns at
     /// once.
-    fn pre_present_notify(&self) {}
+    fn pre_present_notify(&self, _: flui_platform::SwapChainStatistics) {}
 }
 
 mod safe_area {
@@ -1103,6 +1131,40 @@ mod safe_area {
                 assert!(sample.logical(size, scale).is_none());
             }
         }
+    }
+}
+
+mod color_mode {
+    //! Ask the Activity's window for a colour mode (`Window.setColorMode`,
+    //! API 26+).
+
+    use android_activity::AndroidApp;
+    use jni::{JValue, jni_sig, jni_str};
+
+    /// Set the window's colour mode to the `ActivityInfo.COLOR_MODE_*` value
+    /// `mode`. Must run on Android's Java main thread, which owns the window's
+    /// attributes.
+    pub(super) fn apply(
+        app: &AndroidApp,
+        mode: i32,
+    ) -> Result<(), flui_platform::PreferenceQueryError> {
+        crate::owner::android::activity::with_activity(app, |env, activity| {
+            let window = env
+                .call_method(
+                    activity,
+                    jni_str!("getWindow"),
+                    jni_sig!("()Landroid/view/Window;"),
+                    &[],
+                )?
+                .l()?;
+            env.call_method(
+                &window,
+                jni_str!("setColorMode"),
+                jni_sig!("(I)V"),
+                &[JValue::Int(mode)],
+            )?;
+            Ok(())
+        })
     }
 }
 

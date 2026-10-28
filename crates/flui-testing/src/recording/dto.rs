@@ -35,8 +35,8 @@ use flui_platform::pointer::{
     ScrollPrecision, ScrollUnit, TangentialPressure, Twist,
 };
 use flui_platform::{
-    Brightness, DragDropEvent, EventTime, GesturePreferences, ImeEvent, Locale, MotionPreference,
-    NativeMouseGeometry, NativeTouchGeometry, PlatformInput, SystemPreferences,
+    Brightness, DragDropEvent, EventTime, FramePresented, GesturePreferences, ImeEvent, Locale,
+    MotionPreference, NativeMouseGeometry, NativeTouchGeometry, PlatformInput, SystemPreferences,
     TextWeightPreference, WheelPreferences, WheelStep, WindowExecutionState, WindowId,
 };
 use flui_runtime::owner::{InputOutcome, WindowObservation};
@@ -296,6 +296,8 @@ enum HostInputDto {
         vsync: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target_present: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        presented: Option<FramePresentedDto>,
     },
     #[serde(rename = "accessibility")]
     Accessibility(ActionRequestDto),
@@ -321,9 +323,14 @@ impl TryFrom<&HostInput> for HostInputDto {
             HostInput::Frame {
                 vsync,
                 target_present,
+                presented,
             } => Self::Frame {
                 vsync: vsync.as_nanos(),
                 target_present: target_present.map(EventTime::as_nanos),
+                presented: presented.map(|presented| FramePresentedDto {
+                    at: presented.at.as_nanos(),
+                    refresh: presented.refresh.map(nanos),
+                }),
             },
             HostInput::Accessibility(request) => Self::Accessibility(request.try_into()?),
             _ => return Err(unmirrored("HostInput")),
@@ -341,13 +348,31 @@ impl TryFrom<HostInputDto> for HostInput {
             HostInputDto::Frame {
                 vsync,
                 target_present,
+                presented,
             } => Self::Frame {
                 vsync: EventTime::from_nanos(vsync),
                 target_present: target_present.map(EventTime::from_nanos),
+                presented: presented.map(|presented| {
+                    let shown = FramePresented::new(EventTime::from_nanos(presented.at));
+                    match presented.refresh {
+                        Some(refresh) => {
+                            shown.with_refresh(std::time::Duration::from_nanos(refresh))
+                        }
+                        None => shown,
+                    }
+                }),
             },
             HostInputDto::Accessibility(request) => Self::Accessibility(request.try_into()?),
         })
     }
+}
+
+/// A frame's report that an earlier frame reached the screen.
+#[derive(Debug, Serialize, Deserialize)]
+struct FramePresentedDto {
+    at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    refresh: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
