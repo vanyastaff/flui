@@ -76,7 +76,7 @@ use std::rc::Rc;
 use std::task::{Poll, Waker};
 use std::time::Duration;
 
-use flui_sdk::animation::{AnimationStatus, ArcCurve, Curve, curves};
+use flui_sdk::animation::{AnimationStatus, Curve, SharedCurve, curves};
 use flui_sdk::foundation::ListenerId;
 use flui_sdk::geometry::Rect;
 use flui_sdk::painting::{Alignment, BorderRadius, BorderRadiusExt, Clip, Color};
@@ -255,7 +255,7 @@ pub struct OpenContainer<T> {
     open_radius: BorderRadius,
     transition: ContainerTransition,
     duration: Duration,
-    curve: ArcCurve,
+    curve: SharedCurve,
     tappable: bool,
     semantic_label: Option<String>,
     on_closed: Option<ClosedCallback<T>>,
@@ -318,7 +318,7 @@ impl<T: Send + Clone + 'static> OpenContainer<T> {
             open_radius: BorderRadius::all(flui_sdk::geometry::Radius::ZERO),
             transition: ContainerTransition::default(),
             duration: DEFAULT_DURATION,
-            curve: ArcCurve::new(curves::FAST_OUT_SLOW_IN),
+            curve: SharedCurve::new(curves::FAST_OUT_SLOW_IN),
             tappable: true,
             semantic_label: None,
             on_closed: None,
@@ -387,7 +387,7 @@ impl<T: Send + Clone + 'static> OpenContainer<T> {
     /// `FAST_OUT_SLOW_IN`.
     #[must_use]
     pub fn curve(mut self, curve: impl Curve + 'static) -> Self {
-        self.curve = ArcCurve::new(curve);
+        self.curve = SharedCurve::new(curve);
         self
     }
 
@@ -426,7 +426,7 @@ struct Look {
     closed_radius: BorderRadius,
     open_radius: BorderRadius,
     transition: ContainerTransition,
-    curve: ArcCurve,
+    curve: SharedCurve,
 }
 
 /// One open page: the source's seat, the rects the morph runs between, and
@@ -932,7 +932,7 @@ impl ViewState<ContainerMorph> for MorphState {
 }
 
 /// The eased progress of `primary`; the exit runs the curve flipped.
-fn eased(primary: &RouteAnimation, curve: &ArcCurve) -> f64 {
+fn eased(primary: &RouteAnimation, curve: &SharedCurve) -> f64 {
     let raw = primary.value();
     if !raw.is_finite() {
         return 0.0;

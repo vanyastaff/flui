@@ -63,7 +63,7 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_animation::{ArcCurve, curves};
+use flui_animation::{SharedCurve, curves};
 use flui_foundation::geometry::Axis;
 use flui_foundation::{Listenable, ListenerId};
 use flui_interaction::PointerKindSet;
@@ -218,7 +218,7 @@ impl PageController {
     /// last/first real page instead of overshooting past it — see
     /// [`next_page`](Self::next_page)/[`previous_page`](Self::previous_page)'s
     /// docs for the resulting end-of-range behavior.
-    pub fn animate_to_page(&self, page: usize, duration: Duration, curve: ArcCurve) {
+    pub fn animate_to_page(&self, page: usize, duration: Duration, curve: SharedCurve) {
         let page_f = page as f64;
         let position = self.scroll.position();
         if position.set_cached_page_while_collapsed(page_f) {
@@ -246,7 +246,7 @@ impl PageController {
     /// [`ScrollController::animate_to`] clamps the resulting pixel target to
     /// `max_scroll_extent`, so the run visibly stops AT the last page instead
     /// of scrolling past it.
-    pub fn next_page(&self, duration: Duration, curve: ArcCurve) {
+    pub fn next_page(&self, duration: Duration, curve: SharedCurve) {
         let Some(page) = self.page() else { return };
         self.animate_to_page((page.round() + 1.0).max(0.0) as usize, duration, curve);
     }
@@ -258,7 +258,7 @@ impl PageController {
     /// [`animate_to_page`](Self::animate_to_page)'s delegated `animate_to`
     /// clamps to `min_scroll_extent` regardless. A no-op before the first
     /// layout.
-    pub fn previous_page(&self, duration: Duration, curve: ArcCurve) {
+    pub fn previous_page(&self, duration: Duration, curve: SharedCurve) {
         let Some(page) = self.page() else { return };
         self.animate_to_page((page.round() - 1.0).max(0.0) as usize, duration, curve);
     }
@@ -344,7 +344,7 @@ impl Action<PageIntent> for PageAction {
             self.controller.jump_to_page(page);
         } else {
             self.controller
-                .animate_to_page(page, TURN, ArcCurve::new(curves::EASE_IN_OUT));
+                .animate_to_page(page, TURN, SharedCurve::new(curves::EASE_IN_OUT));
         }
         ActionOutcome::Performed
     }

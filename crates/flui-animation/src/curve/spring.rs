@@ -17,7 +17,7 @@ use std::time::Duration;
 /// This immutable easing has no clock, run, listener or accumulated frame state.
 /// It fits keyframe segments and authored Hero mappings. For motion that inherits
 /// velocity on interruption, use [`crate::MotionSpec::Spring`] instead.
-/// Independently constructed equivalent curves compare by value in [`super::ArcCurve`].
+/// Independently constructed equivalent curves compare by value in [`super::SharedCurve`].
 ///
 /// ```
 /// use flui_animation::{Curve, SpringCurve, SpringDescription, Tolerance};

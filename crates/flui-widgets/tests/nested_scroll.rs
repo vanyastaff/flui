@@ -1578,7 +1578,7 @@ pub(crate) fn user_input_preempts_programmatic_scroll() {
         controller.animate_to(
             700.0,
             Duration::from_secs(1),
-            flui_animation::ArcCurve::new(flui_animation::curves::LINEAR),
+            flui_animation::SharedCurve::new(flui_animation::curves::LINEAR),
         );
         for _ in 0..12 {
             laid.pump_for(SAMPLE);
@@ -1654,7 +1654,7 @@ pub(crate) fn a_participant_declining_programmatic_scrolls_hears_none_of_them() 
         controller.animate_to(
             400.0,
             Duration::from_millis(200),
-            flui_animation::ArcCurve::new(flui_animation::curves::LINEAR),
+            flui_animation::SharedCurve::new(flui_animation::curves::LINEAR),
         );
         settle(&mut laid);
         assert_eq!(
@@ -3263,7 +3263,7 @@ pub(crate) fn shared_connection_hears_a_sequence_once() {
             controller.animate_to(
                 700.0,
                 Duration::from_secs(2),
-                flui_animation::ArcCurve::new(flui_animation::curves::LINEAR),
+                flui_animation::SharedCurve::new(flui_animation::curves::LINEAR),
             );
         }
         laid.pump_for(Duration::from_millis(100));

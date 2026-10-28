@@ -663,9 +663,9 @@ fn cubic_borrows_the_following_eased_velocity() {
     // Square's incoming slope is zero. Its mirrored curve has incoming
     // slope two, so a two-unit rise in one second starts at four units/s.
     for (curve, velocity) in [
-        (flui_animation::ArcCurve::new(Square), 0.0),
+        (flui_animation::SharedCurve::new(Square), 0.0),
         (
-            flui_animation::ArcCurve::new(flui_animation::Flipped::new(Square)),
+            flui_animation::SharedCurve::new(flui_animation::Flipped::new(Square)),
             4.0,
         ),
     ] {

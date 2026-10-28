@@ -70,7 +70,7 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_animation::{Animatable, Animation, ArcCurve, Curve, curves};
+use flui_animation::{Animatable, Animation, Curve, SharedCurve, curves};
 use flui_foundation::geometry::Rect;
 use flui_foundation::geometry::Size;
 use flui_foundation::{RenderId, ViewKey};
@@ -911,16 +911,16 @@ impl HeroHandle {
     }
 
     /// This hero's forward flight curve.
-    pub(crate) fn curve(&self) -> ArcCurve {
+    pub(crate) fn curve(&self) -> SharedCurve {
         self.inner.configuration.borrow().as_ref().map_or_else(
-            || ArcCurve::new(curves::FAST_OUT_SLOW_IN),
+            || SharedCurve::new(curves::FAST_OUT_SLOW_IN),
             |view| view.curve.clone(),
         )
     }
 
     /// This hero's reverse flight curve, if it set one. `None` means "the
     /// forward curve, flipped".
-    pub(crate) fn reverse_curve(&self) -> Option<ArcCurve> {
+    pub(crate) fn reverse_curve(&self) -> Option<SharedCurve> {
         self.inner
             .configuration
             .borrow()
@@ -1052,8 +1052,8 @@ pub struct Hero {
     rect_factory: Option<RectTweenFactory>,
     shuttle_builder: Option<ShuttleBuilder>,
     placeholder: Option<PlaceholderBuilder>,
-    curve: Terminal<ArcCurve>,
-    reverse_curve: Option<ArcCurve>,
+    curve: Terminal<SharedCurve>,
+    reverse_curve: Option<SharedCurve>,
     transition_on_user_gestures: bool,
 }
 
@@ -1095,7 +1095,7 @@ impl Hero {
             rect_factory: None,
             shuttle_builder: None,
             placeholder: None,
-            curve: Terminal::new(ArcCurve::new(curves::FAST_OUT_SLOW_IN)),
+            curve: Terminal::new(SharedCurve::new(curves::FAST_OUT_SLOW_IN)),
             reverse_curve: None,
             transition_on_user_gestures: false,
         }
@@ -1106,7 +1106,7 @@ impl Hero {
     /// hero's curve, a pop on the **source** hero's.
     #[must_use]
     pub fn curve(mut self, curve: impl Curve + 'static) -> Self {
-        *self.curve = ArcCurve::new(curve);
+        *self.curve = SharedCurve::new(curve);
         self
     }
 
@@ -1114,7 +1114,7 @@ impl Hero {
     /// flipped.
     #[must_use]
     pub fn reverse_curve(mut self, curve: impl Curve + 'static) -> Self {
-        self.reverse_curve = Some(ArcCurve::new(curve));
+        self.reverse_curve = Some(SharedCurve::new(curve));
         self
     }
 

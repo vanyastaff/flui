@@ -931,7 +931,7 @@ the pixel position keeps its sample, velocity and frame origin; only an external
 position write requires synchronization. A target equal to the current position
 short-circuits only at rest. While moving, the driver brakes continuously and
 then settles exactly at that target. Scroll and page controllers accept the same
-`ArcCurve` handle used by `MotionSpec`.
+`SharedCurve` handle used by `MotionSpec`.
 
 `scrollable_retarget_preserves_the_position_velocity` and
 `scrollable_retarget_at_the_current_position_brakes_continuously` compare mounted

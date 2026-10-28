@@ -35,20 +35,20 @@ mod custom_recognizer;
 mod measured {
     use flui_sdk::animation::prelude::{
         Animatable as _, AnimatedValue as _, Animation as _, AnimationController as _,
-        AnimationStatus as _, ArcCurve as _, Curve as _, DrivenController as _, Keyframes as _,
-        Listenable as _, MotionSpec as _, Tween as _, TwoWayConverter as _,
+        AnimationStatus as _, Curve as _, DrivenController as _, Keyframes as _, Listenable as _,
+        MotionSpec as _, SharedCurve as _, Tween as _, TwoWayConverter as _,
     };
     use flui_sdk::animation::{
         Animatable as _, AnimatedValue as _, AnimatedValueView as _, Animation as _,
         AnimationBehavior as _, AnimationController as _, AnimationError as _, AnimationInput as _,
-        AnimationRunFuture as _, AnimationStatus as _, AnimationVector as _, ArcCurve as _,
+        AnimationRunFuture as _, AnimationStatus as _, AnimationVector as _,
         ConstantAnimation as _, Cubic as _, Curve as _, CurvedAnimation as _,
         DrivenController as _, Interval as _, JumpAt as _, Keyframes as _, MotionPolicy as _,
         MotionSpec as _, MotionUpdate as _, PlaybackRate as _, RangeDefect as _, RepeatMode as _,
-        RunCanceled as _, Stagger as _, StaggerOrigin as _, StatusSubscription as _, Steps as _,
-        Tween as _, TwoWayConverter as _, ValueRange as _, Vsync as _, VsyncPublication as _,
-        VsyncRegistration as _, VsyncRegistrationError as _, VsyncRetirement as _,
-        VsyncUpdate as _, curves as _,
+        RunCanceled as _, SharedCurve as _, Stagger as _, StaggerOrigin as _,
+        StatusSubscription as _, Steps as _, Tween as _, TwoWayConverter as _, ValueRange as _,
+        Vsync as _, VsyncPublication as _, VsyncRegistration as _, VsyncRegistrationError as _,
+        VsyncRetirement as _, VsyncUpdate as _, curves as _,
     };
     use flui_sdk::foundation::notifier::Listenable as _;
     use flui_sdk::foundation::observe::{

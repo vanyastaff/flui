@@ -3,7 +3,7 @@
 use std::ops::Add;
 use std::time::Duration;
 
-use flui_animation::curve::{ArcCurve, Curve};
+use flui_animation::curve::{Curve, SharedCurve};
 use flui_animation::{MotionSpec, curves};
 use flui_objects::TranslationFraction;
 use flui_painting::Alignment;
@@ -43,7 +43,7 @@ pub struct Transition {
     enter: Slots,
     exit: Slots,
     duration: Option<Duration>,
-    curve: Option<ArcCurve>,
+    curve: Option<SharedCurve>,
 }
 
 /// One effect per kind.
@@ -166,7 +166,7 @@ impl Transition {
     /// Ease progress along `curve`, in both directions.
     #[must_use]
     pub fn curve(mut self, curve: impl Curve + 'static) -> Self {
-        self.curve = Some(ArcCurve::new(curve));
+        self.curve = Some(SharedCurve::new(curve));
         self
     }
 
@@ -176,7 +176,7 @@ impl Transition {
     }
 
     /// The curve this transition sets, if it sets one.
-    pub(crate) fn explicit_curve(&self) -> Option<&ArcCurve> {
+    pub(crate) fn explicit_curve(&self) -> Option<&SharedCurve> {
         self.curve.as_ref()
     }
 
@@ -196,10 +196,10 @@ impl Transition {
     }
 
     /// The easing of progress.
-    pub(crate) fn run_curve(&self) -> ArcCurve {
+    pub(crate) fn run_curve(&self) -> SharedCurve {
         self.curve
             .clone()
-            .unwrap_or_else(|| ArcCurve::new(curves::EASE_IN_OUT))
+            .unwrap_or_else(|| SharedCurve::new(curves::EASE_IN_OUT))
     }
 
     /// The stages both directions need: the tree keeps one shape across them.

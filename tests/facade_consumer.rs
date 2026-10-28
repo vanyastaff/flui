@@ -215,6 +215,31 @@ fn external_consumers_extend_and_test_through_the_facade() {
     }
 }
 
+#[test]
+fn owner_local_values_fit_every_flip_position() {
+    let Some(root) = checkout_root() else { return };
+    let source = include_str!("fixtures/owner_local_values.rs");
+    for (alias, package, path) in [
+        ("flui", "flui", root.to_path_buf()),
+        ("flui_sdk", "flui-sdk", root.join("crates/flui-sdk")),
+    ] {
+        let mut dependencies = toml::Table::new();
+        dependencies.insert(alias.into(), dependency(package, &path, false));
+        let output = run_consumer(dependencies, None, &rename_facade(source, alias), "test");
+        assert!(
+            output.status.success(),
+            "owner-local values through {package}:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            report.contains("owner_local_values_fit_every_flip_position ... ok"),
+            "{package}: the consumer's row did not run:\n{report}"
+        );
+    }
+}
+
 /// `source` as a consumer that names the facade `alias` writes it.
 ///
 /// Rewrites each `flui::` that starts a path: one not preceded by an

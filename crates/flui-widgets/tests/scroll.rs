@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::common::{LaidOut, lay_out, tight};
-use flui_animation::{ArcCurve, Vsync, curves};
+use flui_animation::{SharedCurve, Vsync, curves};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::view::ScrollDirection;
 use flui_view::{IntoView, SignalWriteExt, ViewExt};
@@ -654,7 +654,7 @@ fn assert_scroll_retarget_preserves_velocity(target: fn(f64) -> f64) {
     controller.animate_to(
         1000.0,
         Duration::from_secs(1),
-        ArcCurve::new(curves::LINEAR),
+        SharedCurve::new(curves::LINEAR),
     );
     laid.pump_for(Duration::from_millis(1));
     laid.pump_for(Duration::from_millis(250));
@@ -668,7 +668,7 @@ fn assert_scroll_retarget_preserves_velocity(target: fn(f64) -> f64) {
     controller.animate_to(
         target,
         Duration::from_secs(1),
-        ArcCurve::new(curves::EASE_IN),
+        SharedCurve::new(curves::EASE_IN),
     );
     assert!((controller.pixels() - seam).abs() < 1e-12);
     assert!(controller.position().is_scrolling());
@@ -700,7 +700,7 @@ pub(crate) fn scrollable_jump_to_during_animate_to_cancels_it_synchronously() {
     controller.animate_to(
         1000.0,
         Duration::from_millis(300),
-        ArcCurve::new(curves::LINEAR),
+        SharedCurve::new(curves::LINEAR),
     );
     // Three pumps of warm-up, one more than a direct `animate_with` fling:
     // `animate_to` queues a command, and pump 1's rebuild services it after
@@ -796,7 +796,7 @@ pub(crate) fn replacing_pending_scroll_motion_delivers_and_recovers_after_user_f
             controller.animate_to(
                 100.0,
                 Duration::from_secs(1),
-                ArcCurve::new(RetiringCurve {
+                SharedCurve::new(RetiringCurve {
                     drops: Arc::clone(&drops),
                     fails: retirement_fails,
                 }),
@@ -825,7 +825,7 @@ pub(crate) fn replacing_pending_scroll_motion_delivers_and_recovers_after_user_f
                     controller.animate_to(
                         200.0,
                         Duration::from_secs(1),
-                        ArcCurve::new(curves::LINEAR),
+                        SharedCurve::new(curves::LINEAR),
                     );
                 }
             }));
@@ -868,7 +868,11 @@ pub(crate) fn replacing_pending_scroll_motion_delivers_and_recovers_after_user_f
                 "mounted consumer keeps accepted command"
             );
             controller.jump_to(75.0);
-            controller.animate_to(280.0, Duration::from_secs(1), ArcCurve::new(curves::LINEAR));
+            controller.animate_to(
+                280.0,
+                Duration::from_secs(1),
+                SharedCurve::new(curves::LINEAR),
+            );
             laid.pump_for(Duration::ZERO);
             laid.pump_for(Duration::from_millis(400));
             assert!(
@@ -894,7 +898,7 @@ pub(crate) fn stopping_scroll_motion_preserves_commands_admitted_by_activity_obs
         controller.animate_to(
             1000.0,
             Duration::from_secs(1),
-            ArcCurve::new(curves::LINEAR),
+            SharedCurve::new(curves::LINEAR),
         );
         laid.pump_for(Duration::ZERO);
         laid.pump_for(Duration::from_millis(200));
@@ -915,7 +919,7 @@ pub(crate) fn stopping_scroll_motion_preserves_commands_admitted_by_activity_obs
                         reentry.animate_to(
                             275.0,
                             Duration::from_secs(1),
-                            ArcCurve::new(curves::LINEAR),
+                            SharedCurve::new(curves::LINEAR),
                         );
                     }
                 }
@@ -965,7 +969,11 @@ pub(crate) fn retiring_scroll_curves_preserves_newer_reentrant_commands() {
             if jumps {
                 controller.jump_to(325.0);
             } else {
-                controller.animate_to(275.0, Duration::from_secs(1), ArcCurve::new(curves::LINEAR));
+                controller.animate_to(
+                    275.0,
+                    Duration::from_secs(1),
+                    SharedCurve::new(curves::LINEAR),
+                );
             }
         }
     }
@@ -987,7 +995,7 @@ pub(crate) fn retiring_scroll_curves_preserves_newer_reentrant_commands() {
                 controller.animate_to(
                     100.0,
                     Duration::from_secs(1),
-                    ArcCurve::new(ReentrantCurve(Arc::clone(&drops))),
+                    SharedCurve::new(ReentrantCurve(Arc::clone(&drops))),
                 );
                 if let Some(laid) = &mut mounted_scene {
                     laid.pump_for(Duration::ZERO);
@@ -1004,7 +1012,7 @@ pub(crate) fn retiring_scroll_curves_preserves_newer_reentrant_commands() {
                     controller.animate_to(
                         200.0,
                         Duration::from_secs(1),
-                        ArcCurve::new(curves::LINEAR),
+                        SharedCurve::new(curves::LINEAR),
                     );
                 }
                 assert_eq!(
@@ -1120,7 +1128,7 @@ pub(crate) fn dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_ti
     scroll.animate_to(
         1000.0,
         Duration::from_millis(300),
-        ArcCurve::new(curves::LINEAR),
+        SharedCurve::new(curves::LINEAR),
     );
     advance_scroll_run(&mut laid);
     assert!(scroll.pixels() > 0.0 && scroll.pixels() < 1000.0);
@@ -1156,7 +1164,7 @@ pub(crate) fn dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_ti
     scroll.animate_to(
         4000.0,
         Duration::from_millis(300),
-        ArcCurve::new(curves::LINEAR),
+        SharedCurve::new(curves::LINEAR),
     );
     advance_scroll_run(&mut laid);
     assert!(
@@ -2468,7 +2476,7 @@ pub(crate) fn a_scrollable_swap_stops_old_motion_and_retires_its_jump_hook() {
     old.animate_to(
         1000.0,
         Duration::from_millis(300),
-        ArcCurve::new(curves::LINEAR),
+        SharedCurve::new(curves::LINEAR),
     );
     advance_scroll_run(&mut laid);
     assert!(old.pixels() > 0.0);
@@ -2484,7 +2492,7 @@ pub(crate) fn a_scrollable_swap_stops_old_motion_and_retires_its_jump_hook() {
     new.animate_to(
         900.0,
         Duration::from_millis(300),
-        ArcCurve::new(curves::LINEAR),
+        SharedCurve::new(curves::LINEAR),
     );
     advance_scroll_run(&mut laid);
     let before = new.pixels();
@@ -2509,7 +2517,7 @@ pub(crate) fn a_same_position_scrollable_rebuild_preserves_motion() {
     scroll.animate_to(
         1000.0,
         Duration::from_millis(300),
-        ArcCurve::new(curves::LINEAR),
+        SharedCurve::new(curves::LINEAR),
     );
     advance_scroll_run(&mut laid);
     let before = scroll.pixels();
@@ -2600,7 +2608,7 @@ pub(crate) fn retiring_one_scrollable_preserves_a_later_owners_jump_hook() {
     scroll.animate_to(
         900.0,
         Duration::from_millis(300),
-        ArcCurve::new(curves::LINEAR),
+        SharedCurve::new(curves::LINEAR),
     );
     advance_scroll_run(&mut second);
     assert!(scroll.pixels() > before, "next command still progresses");
@@ -4819,7 +4827,11 @@ pub(crate) fn a_command_queued_before_mount_is_serviced_outside_build() {
         .add_activity_listener(Rc::new(move || {
             seen.set(Some(signal.set(&writer, 1)));
         }));
-    controller.animate_to(100.0, Duration::from_secs(1), ArcCurve::new(curves::LINEAR));
+    controller.animate_to(
+        100.0,
+        Duration::from_secs(1),
+        SharedCurve::new(curves::LINEAR),
+    );
     assert_eq!(outcome.get(), None, "nothing serves the command yet");
 
     laid.pump_widget(VsyncScope::new(

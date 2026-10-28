@@ -83,7 +83,7 @@ pub trait Curve {
     /// `(−3f(t) + 4f(t ± h) − f(t ± 2h)) / 2h` within a step of either end.
     /// Its error is about `h²·|f'''|`; a non-finite difference reports 0.
     /// [`Linear`], [`Cubic`], [`Interval`], [`Flipped`] and
-    /// [`ArcCurve`] override it exactly.
+    /// [`SharedCurve`] override it exactly.
     ///
     /// Keyframe tracks read it to match a cubic segment's velocity to a
     /// neighbouring curved segment.
@@ -100,7 +100,7 @@ pub trait Curve {
         difference_slope(|t| self.transform(t), t)
     }
 
-    /// The value of a curve this crate defines, which lets [`ArcCurve`]
+    /// The value of a curve this crate defines, which lets [`SharedCurve`]
     /// compare it by value instead of by identity.
     ///
     /// Only this crate's curves and combinators override it; the type it
@@ -147,7 +147,7 @@ fn settled_slope(t: f64) -> Option<f64> {
     }
 }
 
-/// The closed set of curves [`ArcCurve`] compares by value.
+/// The closed set of curves [`SharedCurve`] compares by value.
 ///
 /// A new built-in curve family adds a variant here, with its arms in
 /// `transform` and `slope`, and implements `Curve::builtin` with
@@ -492,7 +492,7 @@ mod split;
 mod steps;
 
 pub use cubic::{Cubic, ThreePointCubic};
-pub use erased::{ArcCurve, Flipped};
+pub use erased::{Flipped, SharedCurve};
 pub use interval::Interval;
 pub use penner::{Bounce, Decelerate, Ease, Elastic};
 pub use split::Split;

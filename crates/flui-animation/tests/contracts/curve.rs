@@ -3,8 +3,8 @@
 //! reference values, and parameter validation however a curve is made.
 
 use flui_animation::{
-    ArcCurve, Bounce, Cubic, Curve, CurveError, CurveParameter, Ease, Elastic, Interval, JumpAt,
-    Linear, Split, Steps, ThreePointCubic, curves,
+    Bounce, Cubic, Curve, CurveError, CurveParameter, Ease, Elastic, Interval, JumpAt, Linear,
+    SharedCurve, Split, Steps, ThreePointCubic, curves,
 };
 use proptest::prelude::*;
 
@@ -17,196 +17,228 @@ enum Shape {
 
 /// Predefined curves, plus constructed instances of the parameterized curves
 /// and combinators. Authored piecewise/spring curves have their own contract table.
-fn catalog() -> Vec<(&'static str, ArcCurve, Shape)> {
+fn catalog() -> Vec<(&'static str, SharedCurve, Shape)> {
     use Shape::{Monotone, Overshoots};
     vec![
-        ("Linear", ArcCurve::new(curves::LINEAR), Monotone),
-        ("EaseIn", ArcCurve::new(curves::EASE_IN), Monotone),
-        ("EaseOut", ArcCurve::new(curves::EASE_OUT), Monotone),
-        ("EaseInOut", ArcCurve::new(curves::EASE_IN_OUT), Monotone),
+        ("Linear", SharedCurve::new(curves::LINEAR), Monotone),
+        ("EaseIn", SharedCurve::new(curves::EASE_IN), Monotone),
+        ("EaseOut", SharedCurve::new(curves::EASE_OUT), Monotone),
+        ("EaseInOut", SharedCurve::new(curves::EASE_IN_OUT), Monotone),
         (
             "FastOutSlowIn",
-            ArcCurve::new(curves::FAST_OUT_SLOW_IN),
+            SharedCurve::new(curves::FAST_OUT_SLOW_IN),
             Monotone,
         ),
         (
             "LinearOutSlowIn",
-            ArcCurve::new(curves::LINEAR_OUT_SLOW_IN),
+            SharedCurve::new(curves::LINEAR_OUT_SLOW_IN),
             Monotone,
         ),
         (
             "EaseInOutCubic",
-            ArcCurve::new(curves::EASE_IN_OUT_CUBIC),
+            SharedCurve::new(curves::EASE_IN_OUT_CUBIC),
             Monotone,
         ),
-        ("EaseInSine", ArcCurve::new(curves::EASE_IN_SINE), Monotone),
+        (
+            "EaseInSine",
+            SharedCurve::new(curves::EASE_IN_SINE),
+            Monotone,
+        ),
         (
             "EaseOutSine",
-            ArcCurve::new(curves::EASE_OUT_SINE),
+            SharedCurve::new(curves::EASE_OUT_SINE),
             Monotone,
         ),
         (
             "EaseInOutSine",
-            ArcCurve::new(curves::EASE_IN_OUT_SINE),
+            SharedCurve::new(curves::EASE_IN_OUT_SINE),
             Monotone,
         ),
-        ("EaseInExpo", ArcCurve::new(curves::EASE_IN_EXPO), Monotone),
+        (
+            "EaseInExpo",
+            SharedCurve::new(curves::EASE_IN_EXPO),
+            Monotone,
+        ),
         (
             "EaseOutExpo",
-            ArcCurve::new(curves::EASE_OUT_EXPO),
+            SharedCurve::new(curves::EASE_OUT_EXPO),
             Monotone,
         ),
         (
             "EaseInOutExpo",
-            ArcCurve::new(curves::EASE_IN_OUT_EXPO),
+            SharedCurve::new(curves::EASE_IN_OUT_EXPO),
             Monotone,
         ),
-        ("EaseInCirc", ArcCurve::new(curves::EASE_IN_CIRC), Monotone),
+        (
+            "EaseInCirc",
+            SharedCurve::new(curves::EASE_IN_CIRC),
+            Monotone,
+        ),
         (
             "EaseOutCirc",
-            ArcCurve::new(curves::EASE_OUT_CIRC),
+            SharedCurve::new(curves::EASE_OUT_CIRC),
             Monotone,
         ),
         (
             "EaseInOutCirc",
-            ArcCurve::new(curves::EASE_IN_OUT_CIRC),
+            SharedCurve::new(curves::EASE_IN_OUT_CIRC),
             Monotone,
         ),
         (
             "EaseInBack",
-            ArcCurve::new(curves::EASE_IN_BACK),
+            SharedCurve::new(curves::EASE_IN_BACK),
             Overshoots,
         ),
         (
             "EaseOutBack",
-            ArcCurve::new(curves::EASE_OUT_BACK),
+            SharedCurve::new(curves::EASE_OUT_BACK),
             Overshoots,
         ),
         (
             "EaseInOutBack",
-            ArcCurve::new(curves::EASE_IN_OUT_BACK),
+            SharedCurve::new(curves::EASE_IN_OUT_BACK),
             Overshoots,
         ),
-        ("ElasticIn", ArcCurve::new(curves::ELASTIC_IN), Overshoots),
-        ("ElasticOut", ArcCurve::new(curves::ELASTIC_OUT), Overshoots),
+        (
+            "ElasticIn",
+            SharedCurve::new(curves::ELASTIC_IN),
+            Overshoots,
+        ),
+        (
+            "ElasticOut",
+            SharedCurve::new(curves::ELASTIC_OUT),
+            Overshoots,
+        ),
         (
             "ElasticInOut",
-            ArcCurve::new(curves::ELASTIC_IN_OUT),
+            SharedCurve::new(curves::ELASTIC_IN_OUT),
             Overshoots,
         ),
-        ("BounceIn", ArcCurve::new(curves::BOUNCE_IN), Overshoots),
-        ("BounceOut", ArcCurve::new(curves::BOUNCE_OUT), Overshoots),
+        ("BounceIn", SharedCurve::new(curves::BOUNCE_IN), Overshoots),
+        (
+            "BounceOut",
+            SharedCurve::new(curves::BOUNCE_OUT),
+            Overshoots,
+        ),
         (
             "BounceInOut",
-            ArcCurve::new(curves::BOUNCE_IN_OUT),
+            SharedCurve::new(curves::BOUNCE_IN_OUT),
             Overshoots,
         ),
-        ("Decelerate", ArcCurve::new(curves::DECELERATE), Monotone),
-        ("Ease", ArcCurve::new(curves::EASE), Monotone),
-        ("EaseInQuad", ArcCurve::new(curves::EASE_IN_QUAD), Monotone),
+        ("Decelerate", SharedCurve::new(curves::DECELERATE), Monotone),
+        ("Ease", SharedCurve::new(curves::EASE), Monotone),
+        (
+            "EaseInQuad",
+            SharedCurve::new(curves::EASE_IN_QUAD),
+            Monotone,
+        ),
         (
             "EaseInCubic",
-            ArcCurve::new(curves::EASE_IN_CUBIC),
+            SharedCurve::new(curves::EASE_IN_CUBIC),
             Monotone,
         ),
         (
             "EaseInQuart",
-            ArcCurve::new(curves::EASE_IN_QUART),
+            SharedCurve::new(curves::EASE_IN_QUART),
             Monotone,
         ),
         (
             "EaseInQuint",
-            ArcCurve::new(curves::EASE_IN_QUINT),
+            SharedCurve::new(curves::EASE_IN_QUINT),
             Monotone,
         ),
         (
             "EaseOutQuad",
-            ArcCurve::new(curves::EASE_OUT_QUAD),
+            SharedCurve::new(curves::EASE_OUT_QUAD),
             Monotone,
         ),
         (
             "EaseOutCubic",
-            ArcCurve::new(curves::EASE_OUT_CUBIC),
+            SharedCurve::new(curves::EASE_OUT_CUBIC),
             Monotone,
         ),
         (
             "EaseOutQuart",
-            ArcCurve::new(curves::EASE_OUT_QUART),
+            SharedCurve::new(curves::EASE_OUT_QUART),
             Monotone,
         ),
         (
             "EaseOutQuint",
-            ArcCurve::new(curves::EASE_OUT_QUINT),
+            SharedCurve::new(curves::EASE_OUT_QUINT),
             Monotone,
         ),
         (
             "EaseInOutQuad",
-            ArcCurve::new(curves::EASE_IN_OUT_QUAD),
+            SharedCurve::new(curves::EASE_IN_OUT_QUAD),
             Monotone,
         ),
         (
             "EaseInOutQuart",
-            ArcCurve::new(curves::EASE_IN_OUT_QUART),
+            SharedCurve::new(curves::EASE_IN_OUT_QUART),
             Monotone,
         ),
         (
             "EaseInOutQuint",
-            ArcCurve::new(curves::EASE_IN_OUT_QUINT),
+            SharedCurve::new(curves::EASE_IN_OUT_QUINT),
             Monotone,
         ),
         (
             "FastLinearToSlowEaseIn",
-            ArcCurve::new(curves::FAST_LINEAR_TO_SLOW_EASE_IN),
+            SharedCurve::new(curves::FAST_LINEAR_TO_SLOW_EASE_IN),
             Monotone,
         ),
         (
             "LinearToEaseOut",
-            ArcCurve::new(curves::LINEAR_TO_EASE_OUT),
+            SharedCurve::new(curves::LINEAR_TO_EASE_OUT),
             Monotone,
         ),
         (
             "EaseInToLinear",
-            ArcCurve::new(curves::EASE_IN_TO_LINEAR),
+            SharedCurve::new(curves::EASE_IN_TO_LINEAR),
             Monotone,
         ),
-        ("SlowMiddle", ArcCurve::new(curves::SLOW_MIDDLE), Monotone),
+        (
+            "SlowMiddle",
+            SharedCurve::new(curves::SLOW_MIDDLE),
+            Monotone,
+        ),
         (
             "EaseInOutCubicEmphasized",
-            ArcCurve::new(curves::EASE_IN_OUT_CUBIC_EMPHASIZED),
+            SharedCurve::new(curves::EASE_IN_OUT_CUBIC_EMPHASIZED),
             Monotone,
         ),
         (
             "FastEaseInToSlowEaseOut",
-            ArcCurve::new(curves::FAST_EASE_IN_TO_SLOW_EASE_OUT),
+            SharedCurve::new(curves::FAST_EASE_IN_TO_SLOW_EASE_OUT),
             Monotone,
         ),
         (
             "Interval(0.2, 0.8, EaseIn)",
-            ArcCurve::new(Interval::new(0.2, 0.8, curves::EASE_IN)),
+            SharedCurve::new(Interval::new(0.2, 0.8, curves::EASE_IN)),
             Monotone,
         ),
         (
             "Interval(0.5, 0.5) step",
-            ArcCurve::new(Interval::linear(0.5, 0.5)),
+            SharedCurve::new(Interval::linear(0.5, 0.5)),
             Monotone,
         ),
-        ("Split(0.4)", ArcCurve::new(Split::new(0.4)), Monotone),
+        ("Split(0.4)", SharedCurve::new(Split::new(0.4)), Monotone),
         (
             "EaseIn.flipped()",
-            ArcCurve::new(curves::EASE_IN.flipped()),
+            SharedCurve::new(curves::EASE_IN.flipped()),
             Monotone,
         ),
         (
             "Elastic(Out, 0.3)",
-            ArcCurve::new(Elastic::new(Ease::Out, 0.3)),
+            SharedCurve::new(Elastic::new(Ease::Out, 0.3)),
             Overshoots,
         ),
         (
             "Cubic(0.05, 0.7, 0.1, 1)",
-            ArcCurve::new(Cubic::new(0.05, 0.7, 0.1, 1.0)),
+            SharedCurve::new(Cubic::new(0.05, 0.7, 0.1, 1.0)),
             Monotone,
         ),
-        ("Bounce(In)", ArcCurve::new(Bounce(Ease::In)), Overshoots),
+        ("Bounce(In)", SharedCurve::new(Bounce(Ease::In)), Overshoots),
     ]
 }
 
@@ -216,7 +248,7 @@ fn grid() -> impl Iterator<Item = f64> {
 }
 
 /// Runs `violates` over the catalog and fails with every offending name.
-fn assert_catalog(property: &str, violates: impl Fn(&ArcCurve, Shape) -> bool) {
+fn assert_catalog(property: &str, violates: impl Fn(&SharedCurve, Shape) -> bool) {
     let offenders: Vec<_> = catalog()
         .into_iter()
         .filter(|(_, curve, shape)| violates(curve, *shape))
@@ -533,92 +565,92 @@ fn elastic_curves_are_continuous_at_endpoints() {
 }
 
 // ---------------------------------------------------------------------------
-// ArcCurve equality
+// SharedCurve equality
 // ---------------------------------------------------------------------------
 
 fn equal_builtin_curves_wrapped_separately_are_equal() {
     assert_eq!(
-        ArcCurve::new(curves::EASE_IN),
-        ArcCurve::new(curves::EASE_IN)
+        SharedCurve::new(curves::EASE_IN),
+        SharedCurve::new(curves::EASE_IN)
     );
     assert_eq!(
-        ArcCurve::new(Cubic::new(0.42, 0.0, 1.0, 1.0)),
-        ArcCurve::new(curves::EASE_IN),
+        SharedCurve::new(Cubic::new(0.42, 0.0, 1.0, 1.0)),
+        SharedCurve::new(curves::EASE_IN),
     );
-    assert_eq!(ArcCurve::new(Linear), ArcCurve::new(curves::LINEAR));
+    assert_eq!(SharedCurve::new(Linear), SharedCurve::new(curves::LINEAR));
     assert_eq!(
-        ArcCurve::new(Elastic::new(Ease::Out, 0.3)),
-        ArcCurve::new(Elastic::new(Ease::Out, 0.3)),
-    );
-    assert_eq!(
-        ArcCurve::new(curves::EASE_IN_OUT_CUBIC_EMPHASIZED),
-        ArcCurve::new(curves::EASE_IN_OUT_CUBIC_EMPHASIZED),
+        SharedCurve::new(Elastic::new(Ease::Out, 0.3)),
+        SharedCurve::new(Elastic::new(Ease::Out, 0.3)),
     );
     assert_eq!(
-        ArcCurve::new(Bounce(Ease::In)),
-        ArcCurve::new(curves::BOUNCE_IN)
+        SharedCurve::new(curves::EASE_IN_OUT_CUBIC_EMPHASIZED),
+        SharedCurve::new(curves::EASE_IN_OUT_CUBIC_EMPHASIZED),
+    );
+    assert_eq!(
+        SharedCurve::new(Bounce(Ease::In)),
+        SharedCurve::new(curves::BOUNCE_IN)
     );
 }
 
 fn different_builtin_curves_are_unequal() {
     assert_ne!(
-        ArcCurve::new(curves::EASE_IN),
-        ArcCurve::new(curves::EASE_OUT)
+        SharedCurve::new(curves::EASE_IN),
+        SharedCurve::new(curves::EASE_OUT)
     );
     assert_ne!(
-        ArcCurve::new(Elastic::new(Ease::Out, 0.3)),
-        ArcCurve::new(Elastic::new(Ease::Out, 0.4)),
+        SharedCurve::new(Elastic::new(Ease::Out, 0.3)),
+        SharedCurve::new(Elastic::new(Ease::Out, 0.4)),
     );
     assert_ne!(
-        ArcCurve::new(Elastic::new(Ease::In, 0.4)),
-        ArcCurve::new(Elastic::new(Ease::Out, 0.4)),
+        SharedCurve::new(Elastic::new(Ease::In, 0.4)),
+        SharedCurve::new(Elastic::new(Ease::Out, 0.4)),
     );
     assert_ne!(
-        ArcCurve::new(curves::LINEAR),
-        ArcCurve::new(curves::DECELERATE)
+        SharedCurve::new(curves::LINEAR),
+        SharedCurve::new(curves::DECELERATE)
     );
 }
 
 fn combinators_of_builtins_compare_by_value() {
     assert_eq!(
-        ArcCurve::new(curves::EASE_IN.flipped()),
-        ArcCurve::new(curves::EASE_IN.flipped()),
+        SharedCurve::new(curves::EASE_IN.flipped()),
+        SharedCurve::new(curves::EASE_IN.flipped()),
     );
     assert_ne!(
-        ArcCurve::new(curves::EASE_IN.flipped()),
-        ArcCurve::new(curves::EASE_IN),
+        SharedCurve::new(curves::EASE_IN.flipped()),
+        SharedCurve::new(curves::EASE_IN),
     );
     assert_eq!(
-        ArcCurve::new(Interval::new(0.2, 0.8, curves::EASE)),
-        ArcCurve::new(Interval::new(0.2, 0.8, curves::EASE)),
+        SharedCurve::new(Interval::new(0.2, 0.8, curves::EASE)),
+        SharedCurve::new(Interval::new(0.2, 0.8, curves::EASE)),
     );
     assert_ne!(
-        ArcCurve::new(Interval::new(0.2, 0.8, curves::EASE)),
-        ArcCurve::new(Interval::new(0.2, 0.9, curves::EASE)),
+        SharedCurve::new(Interval::new(0.2, 0.8, curves::EASE)),
+        SharedCurve::new(Interval::new(0.2, 0.9, curves::EASE)),
     );
     // Re-wrapping an erased built-in keeps its value identity.
     assert_eq!(
-        ArcCurve::new(ArcCurve::new(curves::EASE_IN)),
-        ArcCurve::new(curves::EASE_IN),
+        SharedCurve::new(SharedCurve::new(curves::EASE_IN)),
+        SharedCurve::new(curves::EASE_IN),
     );
     // A split of built-in halves is a value, so an implicit animation rebuilt
     // with an equal split keeps its run instead of restarting it.
     assert_eq!(
-        ArcCurve::new(Split::new(0.4)),
-        ArcCurve::new(Split::new(0.4)),
+        SharedCurve::new(Split::new(0.4)),
+        SharedCurve::new(Split::new(0.4)),
     );
     assert_ne!(
-        ArcCurve::new(Split::new(0.4)),
-        ArcCurve::new(Split::new(0.5)),
+        SharedCurve::new(Split::new(0.4)),
+        SharedCurve::new(Split::new(0.5)),
     );
     assert_ne!(
-        ArcCurve::new(Split::with_curves(0.4, Linear, curves::EASE)),
-        ArcCurve::new(Split::with_curves(0.4, Linear, curves::EASE_IN)),
+        SharedCurve::new(Split::with_curves(0.4, Linear, curves::EASE)),
+        SharedCurve::new(Split::with_curves(0.4, Linear, curves::EASE_IN)),
     );
     // A user half has no value identity, so the split compares by identity.
     assert_ne!(
-        ArcCurve::new(Split::with_curves(0.4, Quadratic, curves::EASE)),
-        ArcCurve::new(Split::with_curves(0.4, Quadratic, curves::EASE)),
+        SharedCurve::new(Split::with_curves(0.4, Quadratic, curves::EASE)),
+        SharedCurve::new(Split::with_curves(0.4, Quadratic, curves::EASE)),
     );
 }
 
@@ -649,9 +681,9 @@ impl Curve for Quadratic {
 }
 
 fn equal_steps_compare_by_value() {
-    let steps = || ArcCurve::new(Steps::new(4, JumpAt::End));
+    let steps = || SharedCurve::new(Steps::new(4, JumpAt::End));
     assert_eq!(steps(), steps());
-    assert_ne!(steps(), ArcCurve::new(Steps::new(4, JumpAt::Start)));
+    assert_ne!(steps(), SharedCurve::new(Steps::new(4, JumpAt::Start)));
 }
 
 /// A step has no finite derivative at a jump: its slope is 0, also once
@@ -660,7 +692,7 @@ fn steps_slope_is_zero_through_erasure() {
     let steps = Steps::new(4, JumpAt::End);
     for t in [0.0, 0.25, 0.3, 1.0] {
         assert_eq!(steps.slope(t), 0.0, "Steps at {t}");
-        assert_eq!(ArcCurve::new(steps).slope(t), 0.0, "erased Steps at {t}");
+        assert_eq!(SharedCurve::new(steps).slope(t), 0.0, "erased Steps at {t}");
     }
     assert!(steps.slope(f64::NAN).is_nan());
 }
@@ -679,33 +711,57 @@ impl Curve for DeclaredSlope {
 }
 
 fn erased_custom_curve_keeps_its_slope() {
-    assert_eq!(ArcCurve::new(DeclaredSlope).slope(0.5), 2.0);
+    assert_eq!(SharedCurve::new(DeclaredSlope).slope(0.5), 2.0);
 }
 
 fn custom_curves_compare_by_identity() {
-    let custom = ArcCurve::new(Quadratic);
+    let custom = SharedCurve::new(Quadratic);
     assert_eq!(custom, custom.clone());
-    assert_ne!(ArcCurve::new(Quadratic), ArcCurve::new(Quadratic));
-    assert_ne!(ArcCurve::new(Quadratic), ArcCurve::new(curves::EASE_IN));
+    assert_ne!(SharedCurve::new(Quadratic), SharedCurve::new(Quadratic));
+    assert_ne!(
+        SharedCurve::new(Quadratic),
+        SharedCurve::new(curves::EASE_IN)
+    );
     // A combinator over a custom curve is opaque too.
     assert_ne!(
-        ArcCurve::new(Quadratic.flipped()),
-        ArcCurve::new(Quadratic.flipped()),
+        SharedCurve::new(Quadratic.flipped()),
+        SharedCurve::new(Quadratic.flipped()),
     );
 }
 
+// The erased handle shares a custom curve through `Rc`, so the curve may hold
+// owner-local state, and the handle stays on its thread.
+static_assertions::assert_not_impl_any!(SharedCurve: Send, Sync);
+
+/// Squares progress and counts its evaluations in owner-local state.
+struct CountingCurve(std::rc::Rc<std::cell::Cell<u32>>);
+
+impl Curve for CountingCurve {
+    fn transform(&self, t: f64) -> f64 {
+        self.0.set(self.0.get() + 1);
+        t * t
+    }
+}
+
+fn erased_custom_curve_holds_owner_local_state() {
+    let evaluations = std::rc::Rc::new(std::cell::Cell::new(0));
+    let curve = SharedCurve::new(CountingCurve(evaluations.clone()));
+    assert_eq!(curve.clone().transform(0.5), 0.25);
+    assert_eq!(evaluations.get(), 1, "the clone evaluates the shared curve");
+}
+
 fn erased_curves_evaluate_like_the_curve() {
-    let pairs: [(ArcCurve, &dyn Curve); 4] = [
-        (ArcCurve::new(curves::EASE_IN), &curves::EASE_IN),
+    let pairs: [(SharedCurve, &dyn Curve); 4] = [
+        (SharedCurve::new(curves::EASE_IN), &curves::EASE_IN),
         (
-            ArcCurve::new(Interval::new(0.2, 0.8, curves::EASE)),
+            SharedCurve::new(Interval::new(0.2, 0.8, curves::EASE)),
             &Interval::new(0.2, 0.8, curves::EASE),
         ),
         (
-            ArcCurve::new(curves::ELASTIC_OUT.flipped()),
+            SharedCurve::new(curves::ELASTIC_OUT.flipped()),
             &curves::ELASTIC_OUT.flipped(),
         ),
-        (ArcCurve::new(Quadratic), &Quadratic),
+        (SharedCurve::new(Quadratic), &Quadratic),
     ];
     for (erased, curve) in pairs {
         for t in grid().step_by(97) {
@@ -715,7 +771,7 @@ fn erased_curves_evaluate_like_the_curve() {
 }
 
 #[test]
-fn arc_curve_compares_builtins_by_value_and_custom_curves_by_identity() {
+fn shared_curve_compares_builtins_by_value_and_custom_curves_by_identity() {
     crate::run_table(&[
         (
             "equal built-in curves wrapped separately are equal",
@@ -749,6 +805,10 @@ fn arc_curve_compares_builtins_by_value_and_custom_curves_by_identity() {
         (
             "erased custom curve keeps its slope",
             erased_custom_curve_keeps_its_slope,
+        ),
+        (
+            "erased custom curve holds owner-local state",
+            erased_custom_curve_holds_owner_local_state,
         ),
     ]);
 }
@@ -886,10 +946,10 @@ fn linear_interval_and_flipped_use_the_chain_rule() {
     assert_close("interval after", interval.slope(0.8), 0.0, 0.0);
     let flipped = square().flipped();
     assert_close("flipped", flipped.slope(0.3), 2.0 * 0.7, 1e-6);
-    assert_close("erased", ArcCurve::new(square()).slope(0.3), 0.6, 1e-6);
+    assert_close("erased", SharedCurve::new(square()).slope(0.3), 0.6, 1e-6);
     assert_close(
         "erased custom",
-        ArcCurve::new(Quadratic).slope(0.3),
+        SharedCurve::new(Quadratic).slope(0.3),
         0.6,
         1e-8,
     );

@@ -123,7 +123,7 @@ mod harness_snapshot;
 
 use std::{any::Any, cell::Cell, collections::HashMap, rc::Rc, sync::Arc, time::Duration};
 
-use flui_animation::curve::ArcCurve;
+use flui_animation::curve::SharedCurve;
 use flui_animation::{
     Animation, AnimationController, MotionClock, MotionSpec, ProxyAnimation, Vsync, curves,
 };
@@ -1078,7 +1078,7 @@ fn fixed_extent_list(item_extent: f64, children: Vec<TreeNode>) -> TreeNode {
 /// A request-strategy grid over `children`, each seeded with the logical
 /// index of its position — the parent data the element tree would have
 /// stamped at adoption.
-fn grid_list(delegate: Arc<dyn SliverGridDelegate>, children: Vec<TreeNode>) -> TreeNode {
+fn grid_list(delegate: impl SliverGridDelegate + 'static, children: Vec<TreeNode>) -> TreeNode {
     let count = children.len();
     let mut node = sliver_node(RenderSliverGrid::new(delegate, count));
     for (index, child) in children.into_iter().enumerate() {
@@ -8005,7 +8005,7 @@ fn harness_render_sliver_grid_hit_test_keeps_pre_panic_band_after_a_poisoned_rel
     // successful pass" this test's assertions must survive back to.
     let mut run = RenderTester::mount(viewport(
         grid_list(
-            Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(2)),
+            SliverGridDelegateWithFixedCrossAxisCount::new(2),
             vec![
                 box_node(RenderColoredBox::red(100.0, 100.0)).label("tile0"),
                 box_node(RenderColoredBox::green(100.0, 100.0)).label("tile1"),
@@ -8039,7 +8039,7 @@ fn harness_render_sliver_grid_hit_test_keeps_pre_panic_band_after_a_poisoned_rel
     // render object's own state is at risk, which is what the rest of this
     // test verifies directly).
     run.update::<RenderSliverGrid>(grid_id, |grid| {
-        let impact = grid.set_grid_delegate(Arc::new(ZeroCrossAxisCountDelegate));
+        let impact = grid.set_grid_delegate(Rc::new(ZeroCrossAxisCountDelegate));
         assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
     });
     let result = run.owner_mut().run_layout();
@@ -8485,8 +8485,7 @@ fn harness_sliver_list_placement_slides_moved_children_into_place() {
 fn harness_sliver_grid_placement_slides_tiles_between_cells() {
     let (clock, driver, motion) = placement_clock();
     let slots = placement_slots(2);
-    let delegate: Arc<dyn SliverGridDelegate> =
-        Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(2));
+    let delegate = SliverGridDelegateWithFixedCrossAxisCount::new(2);
     let mut grid = RenderSliverGrid::new(delegate, 2);
     let _ = grid.set_placement(Some(&Placement::new(
         clock.clone(),
@@ -10377,7 +10376,7 @@ fn animated_size_motion() -> (SizeMotion, Vsync, MotionClock) {
     let registry = Vsync::new();
     let motion = MotionSpec::Curve {
         duration: Duration::from_millis(100),
-        curve: ArcCurve::new(curves::LINEAR),
+        curve: SharedCurve::new(curves::LINEAR),
     };
     (
         SizeMotion::new(motion, Some(&registry)),
@@ -10640,7 +10639,7 @@ fn armed_motion() -> (MotionSpec, Arc<std::sync::atomic::AtomicBool>) {
     let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let motion = MotionSpec::Curve {
         duration: Duration::from_secs(1),
-        curve: ArcCurve::new(ArmedCurve(Arc::clone(&armed))),
+        curve: SharedCurve::new(ArmedCurve(Arc::clone(&armed))),
     };
     (motion, armed)
 }

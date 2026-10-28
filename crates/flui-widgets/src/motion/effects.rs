@@ -3,7 +3,7 @@
 use std::ops::Range;
 use std::time::Duration;
 
-use flui_animation::curve::{ArcCurve, Curve};
+use flui_animation::curve::{Curve, SharedCurve};
 use flui_animation::{MotionSpec, Stagger, curves};
 use flui_objects::{ShimmerBand, TranslationFraction};
 use flui_painting::Alignment;
@@ -47,7 +47,7 @@ pub struct Effects {
     /// The timing the next entry takes.
     delay: Duration,
     duration: Duration,
-    curve: ArcCurve,
+    curve: SharedCurve,
     /// Added to every entry: the stagger of this timeline's index.
     offset: Duration,
 }
@@ -58,7 +58,7 @@ struct Entry {
     effect: Effect,
     start: Duration,
     duration: Duration,
-    curve: ArcCurve,
+    curve: SharedCurve,
 }
 
 impl Default for Effects {
@@ -76,7 +76,7 @@ impl Effects {
             base: Duration::ZERO,
             delay: Duration::ZERO,
             duration: MotionSpec::DEFAULT_DURATION,
-            curve: ArcCurve::new(curves::EASE_IN_OUT),
+            curve: SharedCurve::new(curves::EASE_IN_OUT),
             offset: Duration::ZERO,
         }
     }
@@ -98,7 +98,7 @@ impl Effects {
     /// Ease the following entries along `curve`.
     #[must_use]
     pub fn curve(mut self, curve: impl Curve + 'static) -> Self {
-        self.curve = ArcCurve::new(curve);
+        self.curve = SharedCurve::new(curve);
         self
     }
 

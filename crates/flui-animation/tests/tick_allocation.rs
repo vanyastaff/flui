@@ -19,8 +19,8 @@ use std::hint::black_box;
 use std::time::Duration;
 
 use flui_animation::{
-    AnimatedValue, Animation, AnimationController, ArcCurve, Keyframes, LinearStop, MotionClock,
-    MotionSpec, PiecewiseLinear, ReverseAnimation, SpringCurve, SpringDescription, Tolerance,
+    AnimatedValue, Animation, AnimationController, Keyframes, LinearStop, MotionClock, MotionSpec,
+    PiecewiseLinear, ReverseAnimation, SharedCurve, SpringCurve, SpringDescription, Tolerance,
     TwoWayConverter, Vsync, curves,
 };
 use flui_foundation::Listenable;
@@ -156,7 +156,7 @@ fn a_steady_state_frame_allocates_nothing() {
         EdgeInsets::ZERO,
         MotionSpec::Curve {
             duration: Duration::from_secs(3600),
-            curve: ArcCurve::new(curves::LINEAR),
+            curve: SharedCurve::new(curves::LINEAR),
         },
         Some(&vsync),
     )
@@ -183,7 +183,7 @@ fn a_steady_state_frame_allocates_nothing() {
         ),
         MotionSpec::Curve {
             duration: Duration::from_secs(3600),
-            curve: ArcCurve::new(curves::LINEAR),
+            curve: SharedCurve::new(curves::LINEAR),
         },
         Some(&vsync),
     )

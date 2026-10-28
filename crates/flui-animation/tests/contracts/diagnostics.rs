@@ -1412,7 +1412,7 @@ impl TwoWayConverter for NegativeThreshold {
 fn linear() -> MotionSpec {
     MotionSpec::Curve {
         duration: Duration::from_secs(1),
-        curve: flui_animation::ArcCurve::new(flui_animation::curves::LINEAR),
+        curve: flui_animation::SharedCurve::new(flui_animation::curves::LINEAR),
     }
 }
 

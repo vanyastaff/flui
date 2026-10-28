@@ -113,7 +113,7 @@ impl CustomPainter for MotionPainter {
 
 #[test]
 fn nested_custom_motion_repaints_and_retargets_through_the_facade() {
-    use flui::animation::{AnimatedValue, ArcCurve, Linear, MotionSpec, Vsync};
+    use flui::animation::{AnimatedValue, Linear, MotionSpec, SharedCurve, Vsync};
     use flui::testing::widgets::{LaidOut, lay_out_animated};
     use flui::widgets::{CustomPaint, VsyncScope};
 
@@ -136,7 +136,7 @@ fn nested_custom_motion_repaints_and_retargets_through_the_facade() {
     let vsync = Vsync::new();
     let mut owner = AnimatedValue::new(
         CardMotion(Appearance { position: Offset::ZERO, color: Color::rgb(255, 0, 0) }, 0.0),
-        MotionSpec::Curve { duration: Duration::from_secs(1), curve: ArcCurve::new(Linear) },
+        MotionSpec::Curve { duration: Duration::from_secs(1), curve: SharedCurve::new(Linear) },
         Some(&vsync),
     ).expect("finite custom motion");
     let first = owner.animate_to(CardMotion(

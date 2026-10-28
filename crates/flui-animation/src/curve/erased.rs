@@ -1,4 +1,4 @@
-//! Curve modifiers and erasure: `Flipped`, `ArcCurve` and shared pointers.
+//! Curve modifiers and erasure: `Flipped`, `SharedCurve` and shared pointers.
 
 use std::fmt;
 use std::rc::Rc;
@@ -51,12 +51,12 @@ impl<C: Curve> Curve for Flipped<C> {
 /// concrete type can be stored in widgets and animation controllers,
 /// regardless of which specific curve is used.
 ///
-/// `ArcCurve` implements `Curve + Clone + Debug`, with value
+/// `SharedCurve` implements `Curve + Clone + Debug`, with value
 /// comparison for built-ins and identity comparison for custom curves.
 ///
 /// # Equality
 ///
-/// A curve this crate defines compares **by value**: two `ArcCurve`s wrapping
+/// A curve this crate defines compares **by value**: two `SharedCurve`s wrapping
 /// equal [`Cubic`](super::Cubic)s, [`ThreePointCubic`](super::ThreePointCubic)s, elastic, bounce or linear curves,
 /// or an [`Interval`](super::Interval) or [`Flipped`] of those, are equal however they
 /// were built. A parent that rebuilds every frame with
@@ -69,29 +69,29 @@ impl<C: Curve> Curve for Flipped<C> {
 /// # Examples
 ///
 /// ```
-/// use flui_animation::{ArcCurve, Curve, curves, Elastic};
+/// use flui_animation::{SharedCurve, Curve, curves, Elastic};
 ///
-/// let curve = ArcCurve::new(Elastic::default());
+/// let curve = SharedCurve::new(Elastic::default());
 /// assert_eq!(curve.transform(0.0), 0.0);
 /// assert_eq!(curve.transform(1.0), 1.0);
 ///
 /// // Built-in curves compare by value.
-/// assert_eq!(ArcCurve::new(curves::EASE_IN), ArcCurve::new(curves::EASE_IN));
-/// assert_ne!(ArcCurve::new(curves::EASE_IN), ArcCurve::new(curves::EASE_OUT));
+/// assert_eq!(SharedCurve::new(curves::EASE_IN), SharedCurve::new(curves::EASE_IN));
+/// assert_ne!(SharedCurve::new(curves::EASE_IN), SharedCurve::new(curves::EASE_OUT));
 /// ```
 ///
 /// [`CurvedAnimation`]: crate::CurvedAnimation
 #[derive(Clone)]
-pub struct ArcCurve(Erased);
+pub struct SharedCurve(Erased);
 
-/// What an [`ArcCurve`] holds: a built-in curve's value, or an opaque curve.
+/// What an [`SharedCurve`] holds: a built-in curve's value, or an opaque curve.
 #[derive(Clone)]
 enum Erased {
     Builtin(BuiltinCurve),
     Custom(Rc<dyn Curve>),
 }
 
-impl PartialEq for ArcCurve {
+impl PartialEq for SharedCurve {
     /// Value equality for built-in curves, identity otherwise — see the type
     /// doc.
     fn eq(&self, other: &Self) -> bool {
@@ -105,9 +105,9 @@ impl PartialEq for ArcCurve {
 
 // Built-in curve parameters are validated finite, so value equality is
 // reflexive.
-impl Eq for ArcCurve {}
+impl Eq for SharedCurve {}
 
-impl ArcCurve {
+impl SharedCurve {
     /// Wrap `curve` in a reference-counted erased handle.
     ///
     /// A built-in curve is stored by value (and compares by value); any
@@ -121,7 +121,7 @@ impl ArcCurve {
     }
 }
 
-impl Curve for ArcCurve {
+impl Curve for SharedCurve {
     fn transform(&self, t: f64) -> f64 {
         match &self.0 {
             Erased::Builtin(curve) => curve.transform(t),
@@ -144,18 +144,18 @@ impl Curve for ArcCurve {
     }
 }
 
-impl fmt::Debug for ArcCurve {
+impl fmt::Debug for SharedCurve {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.0 {
-            Erased::Builtin(curve) => f.debug_tuple("ArcCurve").field(curve).finish(),
+            Erased::Builtin(curve) => f.debug_tuple("SharedCurve").field(curve).finish(),
             // `Curve` does not require `Debug`.
-            Erased::Custom(_) => f.debug_struct("ArcCurve").finish_non_exhaustive(),
+            Erased::Custom(_) => f.debug_struct("SharedCurve").finish_non_exhaustive(),
         }
     }
 }
 
 /// Blanket impl so `Arc<dyn Curve>` can itself be used as a
-/// `Curve` where object-safety is all that matters. Use [`ArcCurve`] when a
+/// `Curve` where object-safety is all that matters. Use [`SharedCurve`] when a
 /// stable concrete handle with configuration equality is needed.
 impl<C: Curve + ?Sized> Curve for Arc<C> {
     fn transform(&self, t: f64) -> f64 {

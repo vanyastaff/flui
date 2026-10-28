@@ -28,7 +28,7 @@
 
 use std::time::Duration;
 
-use crate::curve::{ArcCurve, Curve};
+use crate::curve::{Curve, SharedCurve};
 use crate::simulation::{
     Simulation, SimulationError, SimulationParameter, SpringDescription, SpringSimulation,
     Tolerance,
@@ -38,17 +38,17 @@ use crate::simulation::{
 ///
 /// Both modes keep the value and the velocity continuous when the target
 /// changes mid-flight. Equality is by value: two specs are equal when their
-/// durations and curves (by [`ArcCurve`]'s equality) or springs are.
+/// durations and curves (by [`SharedCurve`]'s equality) or springs are.
 ///
 /// # Examples
 ///
 /// ```
-/// use flui_animation::{ArcCurve, curves, MotionSpec, SpringDescription};
+/// use flui_animation::{SharedCurve, curves, MotionSpec, SpringDescription};
 /// use std::time::Duration;
 ///
 /// let eased = MotionSpec::Curve {
 ///     duration: Duration::from_millis(200),
-///     curve: ArcCurve::new(curves::EASE_IN_OUT),
+///     curve: SharedCurve::new(curves::EASE_IN_OUT),
 /// };
 /// let sprung = MotionSpec::Spring(
 ///     SpringDescription::with_damping_ratio(1.0, 100.0, 1.0).unwrap(),
@@ -70,7 +70,7 @@ pub enum MotionSpec {
         /// jumps to its target.
         duration: Duration,
         /// The easing of the segment's progress.
-        curve: ArcCurve,
+        curve: SharedCurve,
     },
     /// A damped spring. A retarget keeps the inherited velocity.
     Spring(SpringDescription),
@@ -84,7 +84,7 @@ impl MotionSpec {
     /// none to keep, so it takes the default easing.
     ///
     /// ```
-    /// use flui_animation::{ArcCurve, MotionSpec, curves};
+    /// use flui_animation::{SharedCurve, MotionSpec, curves};
     /// use std::time::Duration;
     ///
     /// let spec = MotionSpec::default()
@@ -94,7 +94,7 @@ impl MotionSpec {
     ///     spec,
     ///     MotionSpec::Curve {
     ///         duration: Duration::from_millis(500),
-    ///         curve: ArcCurve::new(curves::LINEAR),
+    ///         curve: SharedCurve::new(curves::LINEAR),
     ///     }
     /// );
     /// ```
@@ -102,7 +102,7 @@ impl MotionSpec {
     pub fn with_duration(self, duration: Duration) -> Self {
         let curve = match self {
             Self::Curve { curve, .. } => curve,
-            Self::Spring(_) => ArcCurve::new(crate::curves::EASE_IN_OUT),
+            Self::Spring(_) => SharedCurve::new(crate::curves::EASE_IN_OUT),
         };
         Self::Curve { duration, curve }
     }
@@ -117,7 +117,7 @@ impl MotionSpec {
         };
         Self::Curve {
             duration,
-            curve: ArcCurve::new(curve),
+            curve: SharedCurve::new(curve),
         }
     }
 }
@@ -128,7 +128,7 @@ impl Default for MotionSpec {
     fn default() -> Self {
         Self::Curve {
             duration: Self::DEFAULT_DURATION,
-            curve: ArcCurve::new(crate::curves::EASE_IN_OUT),
+            curve: SharedCurve::new(crate::curves::EASE_IN_OUT),
         }
     }
 }
@@ -214,7 +214,7 @@ fn effective_shortening(requested: f64, full: f64) -> f64 {
 /// The eased fraction of a `duration`-second curve segment travelled after
 /// `elapsed` seconds, or `None` for a segment with no duration. Calls the
 /// user's curve, so owners call it outside their state borrows.
-pub(crate) fn eased_progress(curve: &ArcCurve, elapsed: f64, duration: f64) -> Option<f64> {
+pub(crate) fn eased_progress(curve: &SharedCurve, elapsed: f64, duration: f64) -> Option<f64> {
     (duration > 0.0).then(|| curve.transform((elapsed / duration).clamp(0.0, 1.0)))
 }
 
@@ -268,7 +268,7 @@ pub(crate) struct CurveSegment {
     v0: f64,
     start_slope: f64,
     end_slope: f64,
-    curve: ArcCurve,
+    curve: SharedCurve,
 }
 
 /// The small remaining spring displacement, retired without a final snap.

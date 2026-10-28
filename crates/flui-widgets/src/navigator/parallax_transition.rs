@@ -37,7 +37,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::{
-    Animatable, Animation, ArcCurve, Curve, CurvedAnimation, MotionPolicy, Tween, curves,
+    Animatable, Animation, Curve, CurvedAnimation, MotionPolicy, SharedCurve, Tween, curves,
 };
 use flui_foundation::geometry::Offset;
 use flui_objects::TranslationFraction;
@@ -167,9 +167,9 @@ impl PageTransitionBuilder for ParallaxPageTransition {
             Rc::new(
                 CurvedAnimation::new(
                     Rc::clone(primary),
-                    ArcCurve::new(curves::FAST_EASE_IN_TO_SLOW_EASE_OUT),
+                    SharedCurve::new(curves::FAST_EASE_IN_TO_SLOW_EASE_OUT),
                 )
-                .with_reverse_curve(ArcCurve::new(
+                .with_reverse_curve(SharedCurve::new(
                     curves::FAST_EASE_IN_TO_SLOW_EASE_OUT.flipped(),
                 )),
             )

@@ -1,0 +1,192 @@
+error[E0432]: unresolved import `flui::cupertino`
+ --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:2:11
+  |
+2 | use flui::cupertino::CupertinoTabController;
+  |           ^^^^^^^^^ could not find `cupertino` in `flui`
+  |
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  | #[cfg(feature = "cupertino")]
+  |       --------------------- the item is gated behind the `cupertino` feature
+  | pub use flui_cupertino as cupertino;
+  |                           ^^^^^^^^^
+
+error[E0277]: `Rc<std::cell::Cell<WidgetStates>>` cannot be sent between threads safely
+  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:16:30
+   |
+16 |     require_thread_spawnable(states);
+   |     ------------------------ ^^^^^^ `Rc<std::cell::Cell<WidgetStates>>` cannot be sent between threads safely
+   |     |
+   |     required by a bound introduced by this call
+   |
+   = help: within `WidgetStatesController`, the trait `Send` is not implemented for `Rc<std::cell::Cell<WidgetStates>>`
+note: required because it appears within the type `WidgetStatesController`
+  --> crates/flui-widgets/src/widget_state.rs
+   |
+   | pub struct WidgetStatesController {
+   |            ^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `require_thread_spawnable`
+  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:6:32
+   |
+ 6 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+   |                                ^^^^ required by this bound in `require_thread_spawnable`
+
+error[E0277]: `Rc<notifier_generic::ListenerStorage<()>>` cannot be sent between threads safely
+  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:16:30
+   |
+16 |     require_thread_spawnable(states);
+   |     ------------------------ ^^^^^^ `Rc<notifier_generic::ListenerStorage<()>>` cannot be sent between threads safely
+   |     |
+   |     required by a bound introduced by this call
+   |
+   = help: within `WidgetStatesController`, the trait `Send` is not implemented for `Rc<notifier_generic::ListenerStorage<()>>`
+note: required because it appears within the type `Notifier<()>`
+  --> crates/flui-foundation/src/notifier_generic.rs
+   |
+   | pub struct Notifier<Arg> {
+   |            ^^^^^^^^
+note: required because it appears within the type `ChangeNotifier`
+  --> crates/flui-foundation/src/notifier.rs
+   |
+   | pub struct ChangeNotifier {
+   |            ^^^^^^^^^^^^^^
+note: required because it appears within the type `WidgetStatesController`
+  --> crates/flui-widgets/src/widget_state.rs
+   |
+   | pub struct WidgetStatesController {
+   |            ^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `require_thread_spawnable`
+  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:6:32
+   |
+ 6 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+   |                                ^^^^ required by this bound in `require_thread_spawnable`
+
+error[E0277]: `Rc<std::cell::Cell<usize>>` cannot be sent between threads safely
+  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:16:30
+   |
+16 |     require_thread_spawnable(states);
+   |     ------------------------ ^^^^^^ `Rc<std::cell::Cell<usize>>` cannot be sent between threads safely
+   |     |
+   |     required by a bound introduced by this call
+   |
+   = help: within `WidgetStatesController`, the trait `Send` is not implemented for `Rc<std::cell::Cell<usize>>`
+note: required because it appears within the type `Notifier<()>`
+  --> crates/flui-foundation/src/notifier_generic.rs
+   |
+   | pub struct Notifier<Arg> {
+   |            ^^^^^^^^
+note: required because it appears within the type `ChangeNotifier`
+  --> crates/flui-foundation/src/notifier.rs
+   |
+   | pub struct ChangeNotifier {
+   |            ^^^^^^^^^^^^^^
+note: required because it appears within the type `WidgetStatesController`
+  --> crates/flui-widgets/src/widget_state.rs
+   |
+   | pub struct WidgetStatesController {
+   |            ^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `require_thread_spawnable`
+  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:6:32
+   |
+ 6 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+   |                                ^^^^ required by this bound in `require_thread_spawnable`
+
+error[E0277]: `Rc<std::cell::Cell<bool>>` cannot be sent between threads safely
+  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:16:30
+   |
+16 |     require_thread_spawnable(states);
+   |     ------------------------ ^^^^^^ `Rc<std::cell::Cell<bool>>` cannot be sent between threads safely
+   |     |
+   |     required by a bound introduced by this call
+   |
+   = help: within `WidgetStatesController`, the trait `Send` is not implemented for `Rc<std::cell::Cell<bool>>`
+note: required because it appears within the type `Notifier<()>`
+  --> crates/flui-foundation/src/notifier_generic.rs
+   |
+   | pub struct Notifier<Arg> {
+   |            ^^^^^^^^
+note: required because it appears within the type `ChangeNotifier`
+  --> crates/flui-foundation/src/notifier.rs
+   |
+   | pub struct ChangeNotifier {
+   |            ^^^^^^^^^^^^^^
+note: required because it appears within the type `WidgetStatesController`
+  --> crates/flui-widgets/src/widget_state.rs
+   |
+   | pub struct WidgetStatesController {
+   |            ^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `require_thread_spawnable`
+  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:6:32
+   |
+ 6 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+   |                                ^^^^ required by this bound in `require_thread_spawnable`
+
+error[E0277]: `Rc<(dyn for<'a> std::ops::Fn(&'a WidgetStates) -> u32 + 'static)>` cannot be sent between threads safely
+  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:17:30
+   |
+17 |     require_thread_spawnable(property);
+   |     ------------------------ ^^^^^^^^ `Rc<(dyn for<'a> std::ops::Fn(&'a WidgetStates) -> u32 + 'static)>` cannot be sent between threads safely
+   |     |
+   |     required by a bound introduced by this call
+   |
+   = help: within `WidgetStateProperty<u32>`, the trait `Send` is not implemented for `Rc<(dyn for<'a> std::ops::Fn(&'a WidgetStates) -> u32 + 'static)>`
+note: required because it appears within the type `WidgetStateProperty<u32>`
+  --> crates/flui-widgets/src/widget_state.rs
+   |
+   | pub enum WidgetStateProperty<T> {
+   |          ^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `require_thread_spawnable`
+  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:6:32
+   |
+ 6 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+   |                                ^^^^ required by this bound in `require_thread_spawnable`
+help: use parentheses to call this trait object
+   |
+17 |     require_thread_spawnable(property(/* &WidgetStates */));
+   |                                      +++++++++++++++++++++
+
+error[E0277]: `Rc<(dyn flui::flui_animation::Curve + 'static)>` cannot be sent between threads safely
+  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:18:30
+   |
+18 |     require_thread_spawnable(curve);
+   |     ------------------------ ^^^^^ `Rc<(dyn flui::flui_animation::Curve + 'static)>` cannot be sent between threads safely
+   |     |
+   |     required by a bound introduced by this call
+   |
+   = help: within `SharedCurve`, the trait `Send` is not implemented for `Rc<(dyn flui::flui_animation::Curve + 'static)>`
+note: required because it appears within the type `curve::erased::Erased`
+  --> crates/flui-animation/src/curve/erased.rs
+   |
+   | enum Erased {
+   |      ^^^^^^
+note: required because it appears within the type `SharedCurve`
+  --> crates/flui-animation/src/curve/erased.rs
+   |
+   | pub struct SharedCurve(Erased);
+   |            ^^^^^^^^^^^
+note: required by a bound in `require_thread_spawnable`
+  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:6:32
+   |
+ 6 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+   |                                ^^^^ required by this bound in `require_thread_spawnable`
+
+error[E0277]: `Rc<(dyn std::any::Any + 'static)>` cannot be sent between threads safely
+  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:19:30
+   |
+19 |     require_thread_spawnable(metadata);
+   |     ------------------------ ^^^^^^^^ `Rc<(dyn std::any::Any + 'static)>` cannot be sent between threads safely
+   |     |
+   |     required by a bound introduced by this call
+   |
+   = help: within `HitMetadata`, the trait `Send` is not implemented for `Rc<(dyn std::any::Any + 'static)>`
+note: required because it appears within the type `HitMetadata`
+  --> crates/flui-interaction/src/pointer/hit_test.rs
+   |
+   | pub struct HitMetadata(std::rc::Rc<dyn std::any::Any>);
+   |            ^^^^^^^^^^^
+note: required by a bound in `require_thread_spawnable`
+  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:6:32
+   |
+ 6 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+   |                                ^^^^ required by this bound in `require_thread_spawnable`
