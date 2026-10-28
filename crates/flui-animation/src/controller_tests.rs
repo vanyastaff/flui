@@ -87,9 +87,9 @@ fn exhausted_status_identities_refuse_outside_the_state_borrow() {
     fn row() {
         // A child process isolates the process-wide panic hook.
         thread_local! {
-            #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
+            #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
             static SOURCE: RefCell<Option<AnimationController>> = const { RefCell::new(None) };
-            #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
+            #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
             static HOOK_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
         }
         let c = controller(100);
@@ -130,7 +130,7 @@ fn exhausted_status_identities_refuse_outside_the_state_borrow() {
 fn exhausted_disposed_value_identities_refuse_outside_the_state_borrow() {
     fn row() {
         thread_local! {
-            #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
+            #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
             static SOURCE: RefCell<Option<AnimationController>> = const { RefCell::new(None) };
         }
         struct Capture(AnimationController, Rc<std::cell::Cell<usize>>);

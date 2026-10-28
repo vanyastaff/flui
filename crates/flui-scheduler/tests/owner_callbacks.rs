@@ -111,9 +111,9 @@ fn produced_result_is_retained_after_completion_failure() {
 }
 
 thread_local! {
-    #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
+    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static OWNER_SCHEDULER: RefCell<Option<flui_scheduler::WeakUpdateScheduler>> = const { RefCell::new(None) };
-    #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
+    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static EXECUTING_OWNER: RefCell<Option<Rc<OwnerFrame>>> = const { RefCell::new(None) };
 }
 

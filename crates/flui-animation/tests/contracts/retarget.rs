@@ -771,7 +771,7 @@ fn a_spring_reversal_does_not_sample_the_interrupted_curve() {
 }
 
 thread_local! {
-    #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
+    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static REENTRY: std::cell::RefCell<Option<AnimationController>> =
         const { std::cell::RefCell::new(None) };
 }
