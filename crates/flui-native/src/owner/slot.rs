@@ -347,15 +347,8 @@ impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V
     }
 }
 
-/// How the winit, AppKit and Wayland hosts read their window tables.
-#[cfg(any(
-    all(
-        feature = "winit-backend",
-        any(target_os = "windows", target_os = "macos", target_os = "linux")
-    ),
-    target_os = "macos",
-    all(target_os = "linux", feature = "wayland")
-))]
+/// How the winit, AppKit, Wayland and X11 hosts read their window tables.
+#[cfg(any(winit_host, target_os = "macos", wayland_host, x11_host))]
 impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V> {
     /// A snapshot of the values.
     pub(crate) fn values(&self) -> Vec<V> {
