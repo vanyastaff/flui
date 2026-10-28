@@ -385,10 +385,12 @@ pub(crate) mod mode {
         }
     }
 
-    /// Whether a window with these flags is shown: on screen, or in the Dock. A
-    /// miniaturized window is not `isVisible`, but the user sees it there.
-    pub(crate) const fn is_shown(on_screen: bool, miniaturized: bool) -> bool {
-        on_screen || miniaturized
+    /// Whether a window is shown: on screen and not occluded (covered, on
+    /// another space), or in the Dock. A miniaturized window is neither
+    /// `isVisible` nor visible in its `occlusionState`, but the user sees it
+    /// there.
+    pub(crate) const fn is_shown(on_screen: bool, unoccluded: bool, miniaturized: bool) -> bool {
+        (on_screen && unoccluded) || miniaturized
     }
 
     /// One AppKit request on the way to a mode.
@@ -740,9 +742,21 @@ pub(crate) mod mode {
 
         #[test]
         fn a_miniaturized_window_is_shown() {
-            assert!(is_shown(true, false));
-            assert!(is_shown(false, true));
-            assert!(!is_shown(false, false));
+            // (on screen, unoccluded, miniaturized) → shown
+            for (on_screen, unoccluded, miniaturized, shown) in [
+                (true, true, false, true),
+                (true, false, false, false),
+                (false, true, false, false),
+                (false, true, true, true),
+                // AppKit reports a miniaturized window occluded.
+                (false, false, true, true),
+            ] {
+                assert_eq!(
+                    is_shown(on_screen, unoccluded, miniaturized),
+                    shown,
+                    "on screen {on_screen}, unoccluded {unoccluded}, miniaturized {miniaturized}"
+                );
+            }
         }
 
         #[test]
