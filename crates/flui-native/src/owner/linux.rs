@@ -81,7 +81,16 @@ mod session {
     /// Every Linux host opens through it. A failure is logged: the services
     /// answer nothing.
     pub(crate) fn xdg_open(target: &std::ffi::OsStr) {
-        let _ = spawn_reaped(std::process::Command::new("xdg-open").arg(target));
+        let _ = spawn_reaped(&mut opener(target));
+    }
+
+    /// The opener's command for `target`. The activation token the process
+    /// was launched with is its own first window's, used up once that window
+    /// activates; the handler the opener starts is not handed it.
+    fn opener(target: &std::ffi::OsStr) -> std::process::Command {
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(target).env_remove("XDG_ACTIVATION_TOKEN");
+        command
     }
 
     /// Start `command` and wait for it on a thread of its own; its process
@@ -111,6 +120,19 @@ mod session {
 
     #[cfg(test)]
     mod tests {
+        /// The opener is not handed the launcher's activation token, which
+        /// is this process's first window's.
+        #[test]
+        fn the_opener_is_not_handed_the_launch_token() {
+            let opener = super::opener(std::ffi::OsStr::new("https://example.org"));
+            assert!(
+                opener
+                    .get_envs()
+                    .any(|(name, value)| name == "XDG_ACTIVATION_TOKEN" && value.is_none()),
+                "the variable is removed from the opener's environment"
+            );
+        }
+
         /// A process the desktop's opener started is reaped once it exits: no
         /// zombie is left in the process table.
         #[test]
