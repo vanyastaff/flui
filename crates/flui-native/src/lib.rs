@@ -250,6 +250,10 @@ pub use platform::HostPlatform;
 // Web platform
 #[cfg(target_arch = "wasm32")]
 pub use hosts::WebPlatform;
+// The native X11 host, built on Linux with the `x11` feature (a default one);
+// `current_platform` does not pick it yet.
+#[cfg(all(target_os = "linux", feature = "x11"))]
+pub use hosts::X11Platform;
 // Desktop platforms
 #[cfg(windows)]
 pub use hosts::WindowsPlatform;

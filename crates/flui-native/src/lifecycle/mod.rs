@@ -25,7 +25,10 @@ pub(crate) mod android;
 #[cfg(any(target_os = "macos", test))]
 pub(crate) mod apple;
 pub(crate) mod headless;
-#[cfg(any(all(target_os = "linux", feature = "winit-backend"), test))]
+#[cfg(any(
+    all(target_os = "linux", any(feature = "winit-backend", feature = "x11")),
+    test
+))]
 pub(crate) mod linux;
 pub(crate) mod notice;
 #[cfg(target_arch = "wasm32")]
@@ -39,7 +42,7 @@ pub(crate) mod windows;
     target_os = "android",
     target_os = "macos",
     target_os = "ios",
-    all(target_os = "linux", feature = "winit-backend")
+    all(target_os = "linux", any(feature = "winit-backend", feature = "x11"))
 ))]
 impl<L: crate::owner::notices::LifecycleHooks> crate::host::Lifecycle<L> for L {
     fn release_session_end(owner: &L) {

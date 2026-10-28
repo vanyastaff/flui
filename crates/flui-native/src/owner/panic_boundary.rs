@@ -33,8 +33,7 @@
     target_os = "macos",
     target_os = "ios",
     target_os = "android",
-    all(target_os = "linux", any(feature = "wayland", feature = "x11")),
-    all(target_os = "linux", feature = "winit-backend"),
+    target_os = "linux",
     all(test, not(target_arch = "wasm32"))
 ))]
 pub(crate) const OPAQUE_PANIC_PAYLOAD: &str = "non-string panic payload";
@@ -49,8 +48,7 @@ pub(crate) const OPAQUE_PANIC_PAYLOAD: &str = "non-string panic payload";
     target_os = "macos",
     target_os = "ios",
     target_os = "android",
-    all(target_os = "linux", any(feature = "wayland", feature = "x11")),
-    all(target_os = "linux", feature = "winit-backend"),
+    target_os = "linux",
     all(test, not(target_arch = "wasm32"))
 ))]
 #[must_use]
@@ -64,7 +62,7 @@ pub(crate) fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> &st
     target_os = "macos",
     target_os = "ios",
     target_os = "android",
-    all(target_os = "linux", feature = "winit-backend"),
+    target_os = "linux",
     all(test, not(target_arch = "wasm32"))
 ))]
 pub(crate) enum AfterPanic<A, R> {
@@ -107,7 +105,7 @@ pub(crate) enum AfterPanic<A, R> {
     target_os = "macos",
     target_os = "ios",
     target_os = "android",
-    all(target_os = "linux", feature = "winit-backend"),
+    target_os = "linux",
     all(test, not(target_arch = "wasm32"))
 ))]
 pub(crate) fn os_entry<A, R>(
@@ -139,7 +137,7 @@ where
     target_os = "macos",
     target_os = "ios",
     target_os = "android",
-    all(target_os = "linux", feature = "winit-backend"),
+    target_os = "linux",
     all(test, not(target_arch = "wasm32"))
 ))]
 fn end_process(entry: &'static str, args: Option<&dyn std::fmt::Debug>, why: &'static str) -> ! {
@@ -200,7 +198,7 @@ pub(crate) fn contain_os_entry<R>(entry: &'static str, body: impl FnOnce() -> R)
     target_os = "macos",
     target_os = "ios",
     target_os = "android",
-    all(target_os = "linux", feature = "winit-backend"),
+    target_os = "linux",
     all(test, not(target_arch = "wasm32"))
 ))]
 fn contained<R>(

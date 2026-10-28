@@ -3,9 +3,10 @@
 //!
 //! The model is what two or more platforms share: the published state, its
 //! staleness and the mode decided from a window system's flags ([`state`]),
-//! and the acknowledgement a host waits for before it publishes a window it
-//! attached ([`installation`]); beside it is the window configuration the
-//! Win32 host is built with (`config`). Each platform file
+//! what a desktop host decides about a window before it opens (`plan`, the
+//! winit and X11 hosts'), and the acknowledgement a host waits for before it
+//! publishes a window it attached ([`installation`]); beside it is the window
+//! configuration the Win32 host is built with (`config`). Each platform file
 //! implements the window position of its host's table, and its system chrome
 //! (the `Chrome` position) beside it.
 //!
@@ -16,6 +17,12 @@
 #[cfg(windows)]
 pub(crate) mod config;
 pub(crate) mod installation;
+#[cfg(any(
+    feature = "winit-backend",
+    all(target_os = "linux", feature = "x11"),
+    test
+))]
+pub(crate) mod plan;
 pub(crate) mod state;
 
 #[cfg(target_os = "android")]
@@ -25,10 +32,13 @@ pub(crate) mod apple;
 #[cfg(any(target_os = "android", target_os = "ios", target_os = "macos", test))]
 pub(crate) mod capabilities;
 pub(crate) mod headless;
-#[cfg(any(all(target_os = "linux", feature = "winit-backend"), test))]
+#[cfg(any(
+    all(target_os = "linux", any(feature = "winit-backend", feature = "x11")),
+    test
+))]
 pub(crate) mod linux {
-    //! The live layer of the Linux windows, which the winit host uses until
-    //! the native Wayland and X11 hosts replace it.
+    //! The Linux windows: the native X11 host's, and what the winit host reads
+    //! of an X11 window that winit does not report.
 
     pub(crate) mod x11;
 }

@@ -26,20 +26,20 @@
 //! what they queue sits apart, in its own block. What each source's answers
 //! mean is a pure rule beside it, which every host checks.
 
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
 use std::{
     collections::VecDeque,
     sync::{Arc, Weak},
 };
 
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
 use flui_platform::SystemNotice;
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
 use parking_lot::Mutex;
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
 use tokio::sync::oneshot;
 
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
 use crate::{
     executor::BackgroundExecutor,
     owner::{panic_boundary::contain_owner_callback, signal::OwnerSignal},
@@ -51,11 +51,11 @@ mod pressure;
 /// The most events waiting for the owner. Sleep, lock and shutdown are rare
 /// and pressure is limited to one per window, so a full inbox means the owner
 /// has stopped; the newest event is then the one dropped.
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
 const MAX_PENDING: usize = 256;
 
 /// What a source tells the owner.
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HostEvent {
     /// A notice for the host.
@@ -67,13 +67,13 @@ pub(crate) enum HostEvent {
 }
 
 /// An event with the completion its source may be waiting on.
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
 pub(crate) struct Delivery {
     event: HostEvent,
     done: Option<oneshot::Sender<()>>,
 }
 
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
 impl Delivery {
     /// Run `handle` on the event, then tell the source it was delivered. A
     /// `handle` that panics drops the completion too, which the source takes
@@ -89,13 +89,13 @@ impl Delivery {
 }
 
 /// The events waiting for the owner, and the way to wake it.
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
 struct Inbox {
     queue: Mutex<VecDeque<Delivery>>,
     signal: Weak<OwnerSignal>,
 }
 
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
 impl Inbox {
     /// Queue `event` and wake the owner.
     fn post(&self, event: HostEvent) {
@@ -134,7 +134,7 @@ impl Inbox {
 }
 
 /// The sources of system notices on Linux, running until dropped.
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
 pub(crate) struct HostNoticeSource {
     inbox: Arc<Inbox>,
     logind: tokio::task::JoinHandle<()>,
@@ -142,14 +142,14 @@ pub(crate) struct HostNoticeSource {
     _pressure: Option<pressure::PressureWatcher>,
 }
 
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
 impl std::fmt::Debug for HostNoticeSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HostNoticeSource").finish_non_exhaustive()
     }
 }
 
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
 impl HostNoticeSource {
     /// Start the sources. `signal` is woken when an event is waiting; it is
     /// held weakly.
@@ -173,7 +173,7 @@ impl HostNoticeSource {
     }
 }
 
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]
 impl Drop for HostNoticeSource {
     fn drop(&mut self) {
         self.logind.abort();
@@ -250,7 +250,79 @@ mod winit {
 #[cfg(all(target_os = "linux", feature = "winit-backend"))]
 pub(crate) use winit::WinitNotices;
 
-#[cfg(all(test, target_os = "linux", feature = "winit-backend"))]
+/// The X11 host's loop starts the sources once the application can hear what
+/// they queue, and delivers it on each owner turn.
+#[cfg(all(target_os = "linux", feature = "x11"))]
+mod x11 {
+    use std::sync::Arc;
+
+    use flui_foundation::panic::FirstPanic;
+    use flui_platform::{SessionEndAnswer, SessionEndPhase};
+
+    use super::{HostEvent, HostNoticeSource};
+    use crate::executor::BackgroundExecutor;
+    use crate::owner::linux::x11::{HostNoticeStart, HostNotices, X11Loop};
+    use crate::owner::signal::OwnerSignal;
+
+    /// The Linux sources of system notices as the X11 loop starts them.
+    #[derive(Debug)]
+    pub(crate) struct X11Notices;
+
+    impl HostNoticeStart for X11Notices {
+        fn start(
+            &self,
+            executor: &BackgroundExecutor,
+            signal: &Arc<OwnerSignal>,
+        ) -> Box<dyn HostNotices> {
+            Box::new(HostNoticeSource::start(executor, signal))
+        }
+    }
+
+    /// The source holds a sleep or shutdown until its event has been
+    /// delivered, so each runs to the end here before the next; a panicking
+    /// subscriber keeps neither the rest nor logind waiting, and the first
+    /// panic is raised once all have run.
+    impl HostNotices for HostNoticeSource {
+        fn deliver(&self, platform: &X11Loop) {
+            let mut panics = FirstPanic::new();
+            for delivery in self.take() {
+                panics.contain(|| {
+                    delivery.deliver_with(|event| match event {
+                        HostEvent::Notice(notice) => platform.notice(notice),
+                        // logind cannot hold a shutdown for the user: the
+                        // query's answer is not read, the application hears it
+                        // so it can start saving, then the shutdown.
+                        HostEvent::SessionEnding => {
+                            let mut phases = FirstPanic::new();
+                            let answer =
+                                phases.contain(|| platform.session_end(SessionEndPhase::Query));
+                            if answer == Some(SessionEndAnswer::Block) {
+                                tracing::info!(
+                                    "the application asked to hold the shutdown; logind cannot wait for the user, so it goes on"
+                                );
+                            }
+                            phases.contain(|| platform.session_end(SessionEndPhase::Ending));
+                            phases.resume();
+                        }
+                        HostEvent::SessionEndCancelled => {
+                            platform.session_end(SessionEndPhase::Cancelled);
+                        }
+                    });
+                });
+            }
+            panics.resume();
+        }
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "x11"))]
+pub(crate) use x11::X11Notices;
+
+#[cfg(all(
+    test,
+    target_os = "linux",
+    any(feature = "winit-backend", feature = "x11")
+))]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 

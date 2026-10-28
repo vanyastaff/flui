@@ -21,14 +21,15 @@
 //! Which protocol is read follows the rule winit uses ([`protocol`]), so the
 //! source reads the compositor the windows live on.
 
-// Today only the winit backend reads the source; the native Linux backend that
-// will use it directly does not exist yet, so a build with the protocol
-// features and no winit backend compiles code nothing calls.
+// The winit host reads the whole source (both protocols, and a window's
+// display by native number); the native X11 host reads the X11 half and names
+// a window's display by its rectangle, so a build without the winit host
+// compiles parts nothing calls until the native Wayland host reads the rest.
 #![cfg_attr(
     not(feature = "winit-backend"),
     allow(
         dead_code,
-        reason = "the display source has no user but the winit backend until the native Linux backend exists"
+        reason = "the winit host is the one reader of the whole display source until the native Wayland host exists"
     )
 )]
 

@@ -31,7 +31,6 @@ mod tests;
 // The quiet host the loop's tests run over, and another host's tests name.
 #[cfg(test)]
 pub(crate) mod testing;
-mod wake_deadline;
 mod window_table;
 
 use std::{
@@ -71,6 +70,9 @@ use crate::owner::app_delivery::AppDelivery;
 use crate::owner::call_point::{Field, install};
 use crate::owner::notices::{NoticeChannel, StaleOnWake};
 use crate::owner::panic_boundary::{self, AfterPanic};
+pub(crate) use crate::owner::wake_deadline::FrameCount;
+use crate::owner::wake_deadline::ModalDelivery;
+use crate::owner::wake_deadline::{DeadlineArm, DeadlineDelivery};
 use crate::{
     error::PlatformError, executor::BackgroundExecutor, host, owner::OwnerHooks,
     owner::OwnerPlatform, owner::handlers::OpenWindows, owner::hwnd_affinity::UserDataRefusal,
@@ -80,9 +82,6 @@ use crate::{
 use broadcast::Subscriber;
 use com_apartment::ComApartment;
 use flui_platform::{DisplayId, DisplaySnapshot};
-pub(crate) use wake_deadline::FrameCount;
-use wake_deadline::ModalDelivery;
-use wake_deadline::{DeadlineArm, DeadlineDelivery};
 pub(crate) use window_table::{WindowScale, WindowTable};
 
 /// The name of FLUI's window class, which every window the host opens has.

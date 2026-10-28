@@ -23,11 +23,13 @@
 //! - `hwnd_affinity`: the Win32 rules for which thread may reach a window
 //!   and when its user data is torn down, which the owner control and the
 //!   loop apply (on Windows, and in tests on every host);
-//! - `windows`, `apple`, `android`, `web`, `winit` and [`headless`]: each
-//!   platform's loop, its wakes and what it owns of the thread, each on the
-//!   targets its host runs on (headless everywhere); `redraw_poll`, the redraw
-//!   decision around one native poll, and `modal_pace`, how often a Windows
-//!   modal loop asks for frames, both pure and checked on every host. A loop
+//! - `windows`, `apple`, `android`, `web`, `linux` (`x11`), `winit` and
+//!   [`headless`]: each platform's loop, its wakes and what it owns of the
+//!   thread, each on the targets its host runs on (headless everywhere);
+//!   `redraw_poll`, the redraw decision around one native poll,
+//!   `wake_deadline`, the rule by which a loop that waits with a timeout of its
+//!   own arms the application's wake deadline, and `modal_pace`, how often a
+//!   Windows modal loop asks for frames, each pure and checked on every host. A loop
 //!   that serves several features through one operating-system object
 //!   dispatches through hooks declared beside it, which the host registers. A
 //!   feature's state or object the loop keeps (the displays, the preference
@@ -69,6 +71,12 @@ pub(crate) mod apple;
 pub(crate) mod call_point;
 pub mod handlers;
 pub(crate) mod headless;
+#[cfg(all(target_os = "linux", feature = "x11"))]
+pub(crate) mod linux {
+    //! The Linux loops: the X11 host's, over one connection to the X server.
+
+    pub(crate) mod x11;
+}
 #[cfg(any(test, windows))]
 pub(crate) mod modal_pace;
 pub(crate) mod notices;
@@ -82,12 +90,14 @@ pub(crate) mod panic_boundary;
 pub(crate) mod redraw_poll;
 pub(crate) mod signal;
 pub(crate) mod slot;
+#[cfg(any(windows, all(target_os = "linux", feature = "x11"), test))]
+pub(crate) mod wake_deadline;
 #[cfg(any(
     target_os = "macos",
     target_os = "ios",
     target_os = "android",
     target_arch = "wasm32",
-    all(target_os = "linux", feature = "winit-backend")
+    all(target_os = "linux", any(feature = "winit-backend", feature = "x11"))
 ))]
 pub(crate) mod watch;
 pub(crate) mod window_delivery;
@@ -99,7 +109,7 @@ pub(crate) mod window_delivery;
     target_os = "macos",
     target_os = "ios",
     target_arch = "wasm32",
-    all(target_os = "linux", feature = "winit-backend")
+    all(target_os = "linux", any(feature = "winit-backend", feature = "x11"))
 ))]
 pub(crate) mod sources;
 #[cfg(target_arch = "wasm32")]

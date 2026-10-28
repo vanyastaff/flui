@@ -56,7 +56,7 @@ impl ReportedFacts {
     windows,
     target_os = "macos",
     target_arch = "wasm32",
-    all(target_os = "linux", feature = "winit-backend")
+    all(target_os = "linux", any(feature = "winit-backend", feature = "x11"))
 ))]
 pub(crate) fn not_carried_out(command: &flui_platform::WindowCommand) -> flui_platform::ApplyError {
     flui_platform::ApplyError::failed(format!("this window system does not carry out {command:?}"))
@@ -69,7 +69,7 @@ pub(crate) fn not_carried_out(command: &flui_platform::WindowCommand) -> flui_pl
 #[cfg(any(
     windows,
     target_os = "macos",
-    all(target_os = "linux", feature = "winit-backend"),
+    all(target_os = "linux", any(feature = "winit-backend", feature = "x11")),
     test
 ))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -88,7 +88,7 @@ pub(crate) struct ModeFlags {
 #[cfg(any(
     windows,
     target_os = "macos",
-    all(target_os = "linux", feature = "winit-backend"),
+    all(target_os = "linux", any(feature = "winit-backend", feature = "x11")),
     test
 ))]
 pub(crate) const fn mode_of(flags: ModeFlags) -> flui_platform::WindowMode {
@@ -221,7 +221,7 @@ impl WindowStateCell {
     }
 
     /// The last published snapshot, without reading the OS.
-    #[cfg(windows)]
+    #[cfg(any(windows, all(target_os = "linux", feature = "x11")))]
     pub(crate) fn published(&self) -> WindowState {
         self.last.lock().state.clone()
     }

@@ -9,8 +9,8 @@
 //! `accesskit_unix` brings ~66 crates (zbus, atspi, an async executor). AT-SPI
 //! *is* D-Bus, so there is no lighter path, and the Linux host reads the
 //! Settings portal and logind over D-Bus anyway. The adapter therefore builds
-//! wherever that host does, with `winit-backend`, and has no feature of its
-//! own.
+//! in every Linux build, as the Linux hosts do (the X11 host and the winit
+//! one), and has no feature of its own (ADR-0151 §15).
 //!
 //! # Nothing async reaches the frame path
 //!
@@ -149,6 +149,16 @@ impl crate::host::WindowAccessibility for UnixAccessibility {
     fn detach(&self) {}
 
     fn focus_changed(&self, _: bool) {}
+}
+
+/// Each X11 window announces itself on the AT-SPI bus as it opens.
+#[cfg(feature = "x11")]
+impl crate::host::Accessibility<crate::owner::linux::x11::WindowRef> for UnixAccessibility {
+    fn for_window(
+        _: &crate::owner::linux::x11::WindowRef,
+    ) -> Arc<dyn crate::host::WindowAccessibility> {
+        Arc::new(Self::new())
+    }
 }
 
 /// Each winit window on Linux announces itself on the AT-SPI bus.

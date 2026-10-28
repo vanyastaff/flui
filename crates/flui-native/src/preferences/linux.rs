@@ -99,6 +99,44 @@ mod winit {
 #[cfg(feature = "winit-backend")]
 pub(crate) use winit::WinitSettings;
 
+/// The X11 host's loop starts the portal's watch as it runs, and its windows
+/// follow the portal's colour scheme.
+#[cfg(feature = "x11")]
+mod x11 {
+    use std::sync::Arc;
+
+    use flui_platform::WindowAppearance;
+
+    use super::PreferenceSource;
+    use crate::executor::BackgroundExecutor;
+    use crate::owner::linux::x11::{PortalPreferences, PreferenceStart};
+    use crate::owner::signal::OwnerSignal;
+
+    /// The Settings portal as the X11 loop starts watching it.
+    #[derive(Debug)]
+    pub(crate) struct X11Settings;
+
+    impl PreferenceStart for X11Settings {
+        fn start(
+            &self,
+            executor: &BackgroundExecutor,
+            signal: &Arc<OwnerSignal>,
+        ) -> Arc<dyn PortalPreferences> {
+            PreferenceSource::new(executor, signal)
+        }
+    }
+
+    impl PortalPreferences for PreferenceSource {
+        /// The accepted `color-scheme`; light until the portal says otherwise.
+        fn appearance(&self) -> WindowAppearance {
+            self.observation.lock().appearance
+        }
+    }
+}
+
+#[cfg(feature = "x11")]
+pub(crate) use x11::X11Settings;
+
 impl PreferenceSource {
     /// Start watching the portal on `executor`, waking the owner behind
     /// `signal` when what it accepted changes. Waits a bounded moment for the
