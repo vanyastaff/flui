@@ -441,15 +441,19 @@ their `WriterSource` through `LifecycleContext::writer_source`; render views acq
 `RenderObjectContext::writer_source` while registering owner-local interaction handlers.
 Neither capability is exposed by `build`'s `&dyn BuildContext`. A detached render context
 returns `None`, rather than manufacturing a graph unrelated to a presentation.
-`trybuild_ui::ui_tests` pins E0624 for `WriterSource::new` called from a build
-context, alongside a compiling lifecycle acquisition, so public graph access
-does not silently become writer-minting authority.
+`trybuild_ui::ui_tests` pins E0624 for `WriterSource::new`, alongside a compiling
+lifecycle acquisition, so graph access does not silently become writer-minting
+authority.
 The contexts hand out a source over the graph their element reads through
 (`ElementReads::graph`), so a source writes into its own presentation's graph and refuses another
 graph's handles with `ForeignGraph`. The run-time guard is unchanged and stays authoritative: a
-write a widget opens inside its own `build` is refused with `WrittenDuringBuild`. `Reactive` is
-still a `WriteTarget` so tests, the `signals_rebuilds` bench and `UiCommand::SignalWrite` keep
-compiling; ADR-0086 §8 step 3 removes it with both `reactive()` accessors. An event callback may
+write a widget opens inside its own `build` is refused with `WrittenDuringBuild`. The graph is
+not a `WriteTarget`, and no context hands it out: `BuildContext::graph` takes a crate-private
+token. Host code writes through `BuildOwner::writer_source` (`writer_source_for(slot)` routes a
+cross-thread `UiCommand::SignalWrite` to the presentation that minted the slot), and
+`HeadlessBinding::writer_source` serves tests. Only the `testing` feature reaches the graph
+itself (`BuildOwner::signal_graph`, `BuildContextExt::signal_graph`), for minting test signals
+and inspecting the reader registry; writing still needs a source. An event callback may
 return `()` or a write's `Result`; `EventOutcome::report` logs a refused write on
 `flui::signals` rather than dropping it silently. A `Signal::default()` handle names graph 0,
 which `Reactive::new` never mints, and is refused with `Unbound`.

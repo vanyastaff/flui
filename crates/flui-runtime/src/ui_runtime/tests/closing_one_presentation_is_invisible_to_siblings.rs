@@ -88,7 +88,7 @@ impl StatefulView for CloseObserver {
 impl ViewState<CloseObserver> for CloseObserver {
     fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
         self.capabilities.borrow_mut().replace(CloseCapabilities {
-            graph: ctx.reactive(),
+            graph: ctx.signal_graph(),
             signal: ctx.signal(7),
             writer: ctx.writer_source(),
             rebuild: ctx.rebuild_handle(),
@@ -409,7 +409,7 @@ impl StatefulView for SiblingProbe {
 
 impl ViewState<SiblingProbe> for SiblingProbe {
     fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
-        self.graph.borrow_mut().replace(ctx.reactive());
+        self.graph.borrow_mut().replace(ctx.signal_graph());
     }
     fn build(&self, _view: &SiblingProbe, _ctx: &dyn BuildContext) -> impl IntoView {
         SizedBox::square(10.0)
@@ -1512,9 +1512,11 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
         );
         let held = Rc::clone(&probe);
         assert_eq!(
-            flui_view::SignalWriteExt::update(captured.signal, &captured.graph, move |value| {
-                let _ = &held;
-                *value
+            captured.writer.write(|cx| {
+                flui_view::SignalWriteExt::update(captured.signal, cx, move |value| {
+                    let _ = &held;
+                    *value
+                })
             }),
             Err(flui_view::SignalError::OwnerClosed)
         );

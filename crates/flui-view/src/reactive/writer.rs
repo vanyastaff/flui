@@ -17,10 +17,11 @@
 //! `build` (a callback it invokes there), and the guard refuses that write
 //! with [`SignalError::WrittenDuringBuild`].
 //!
-//! [`Reactive`] is still a write target, so the code that writes through the
-//! graph directly (tests, benches, `flui-app`'s `UiCommand::SignalWrite`)
-//! compiles unchanged. ADR-0086 §8 step 3 removes it together with both
-//! `reactive()` accessors.
+//! The graph itself is not a write target. Host code that writes outside a
+//! widget (a cross-thread `UiCommand::SignalWrite`, a test harness) opens an
+//! [`EventCx`] through the owner's source,
+//! [`BuildOwner::writer_source`](crate::BuildOwner::writer_source), like any
+//! callback.
 //!
 //! [`LifecycleContext::writer_source`]: crate::LifecycleContext::writer_source
 
@@ -237,6 +238,17 @@ impl WriterSource {
     }
 }
 
+#[cfg(any(test, feature = "testing"))]
+impl Reactive {
+    /// A writer source on this graph, for a test that drives a graph it
+    /// created or took from
+    /// [`BuildOwner::signal_graph`](crate::BuildOwner::signal_graph).
+    #[must_use]
+    pub fn writer_source(&self) -> WriterSource {
+        WriterSource::new(self.clone())
+    }
+}
+
 impl fmt::Debug for WriterSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WriterSource")
@@ -248,8 +260,16 @@ impl fmt::Debug for WriterSource {
 /// What a signal write accepts: in application code, the `&mut EventCx<'_>`
 /// an event callback receives.
 ///
-/// Sealed. [`Reactive`] is an implementor only until ADR-0086 §8 step 3
-/// removes it together with both `reactive()` accessors.
+/// Sealed: `EventCx` and the `Writer` it lends are the only implementors.
+/// The graph is not one, so naming it is never a way to write.
+///
+/// ```compile_fail,E0277
+/// use flui_view::{Reactive, SignalWriteExt};
+///
+/// let graph = Reactive::new();
+/// let count = graph.signal(0u32);
+/// let _ = count.set(&graph, 1);
+/// ```
 #[diagnostic::on_unimplemented(
     message = "`{Self}` cannot write a signal",
     label = "not a write context",
@@ -260,13 +280,6 @@ pub trait WriteTarget: sealed::Sealed {
     /// The graph the write lands in. Callable only inside `flui-view`.
     #[doc(hidden)]
     fn graph(&self, token: sealed::Token) -> &Reactive;
-}
-
-impl sealed::Sealed for Reactive {}
-impl WriteTarget for Reactive {
-    fn graph(&self, _: sealed::Token) -> &Reactive {
-        self
-    }
 }
 
 impl sealed::Sealed for Writer {}

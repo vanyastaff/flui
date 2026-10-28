@@ -396,6 +396,130 @@ pub(crate) mod local_history {
         );
         assert_eq!(removed.load(Ordering::SeqCst), 1, "no second on_remove");
     }
+
+    /// What [`PopsInBuild`] acquired in `init_state`.
+    #[derive(Clone)]
+    struct Acquired {
+        count: Signal<u32>,
+        writer: flui_view::WriterSource,
+        local: LocalHistoryHandle,
+    }
+
+    /// A page that reads `count` and, when `pop_now` is armed, pops its
+    /// navigator from inside its own `build`: the flush, and its local-history
+    /// pop, run while an element is building.
+    #[derive(Clone)]
+    struct PopsInBuild {
+        navigator: NavigatorHandle,
+        pop_now: Rc<std::cell::Cell<bool>>,
+        acquired: Rc<std::cell::RefCell<Option<Acquired>>>,
+    }
+
+    impl View for PopsInBuild {
+        fn create_element(&self) -> ElementKind {
+            ElementKind::stateful(self)
+        }
+    }
+
+    impl StatefulView for PopsInBuild {
+        type State = PopsInBuildState;
+
+        fn create_state(&self) -> Self::State {
+            PopsInBuildState {
+                count: Signal::default(),
+                acquired: Rc::clone(&self.acquired),
+            }
+        }
+    }
+
+    struct PopsInBuildState {
+        count: Signal<u32>,
+        acquired: Rc<std::cell::RefCell<Option<Acquired>>>,
+    }
+
+    impl std::fmt::Debug for PopsInBuildState {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("PopsInBuildState").finish_non_exhaustive()
+        }
+    }
+
+    impl ViewState<PopsInBuild> for PopsInBuildState {
+        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+            self.count = ctx.signal(0);
+            let acquired = Acquired {
+                count: self.count,
+                writer: ctx.writer_source(),
+                local: LocalHistoryHandle::maybe_of(ctx).expect("inside a route"),
+            };
+            let previous = self.acquired.borrow_mut().replace(acquired);
+            drop(previous);
+        }
+
+        fn build(&self, view: &PopsInBuild, ctx: &dyn BuildContext) -> impl IntoView {
+            let side = self.count.get(ctx);
+            if view.pop_now.take() {
+                assert!(view.navigator.maybe_pop(), "the entry absorbs the pop");
+            }
+            SizedBox::new(10.0 + f64::from(side), 10.0)
+        }
+    }
+
+    /// A pop applied inside `build` owes the entry's `on_remove`; the callback
+    /// writes a signal through the `WriterSource` it captured. Delivered after
+    /// the frame, the write lands and rebuilds its reader.
+    ///
+    /// Red-check: fire the owed callbacks synchronously in
+    /// `ModalHandle::drain_local_history` — the callback runs inside the
+    /// page's `build`, its write is refused with `WrittenDuringBuild`, and the
+    /// value stays 1.
+    pub(crate) fn local_history_removal_writes_after_the_flush() {
+        let built = Built::default();
+        let (handle, mut harness) = navigator_with(&built);
+        let pop_now = Rc::new(std::cell::Cell::new(false));
+        let acquired = Rc::new(std::cell::RefCell::new(None));
+        let page = PopsInBuild {
+            navigator: handle.clone(),
+            pop_now: Rc::clone(&pop_now),
+            acquired: Rc::clone(&acquired),
+        };
+        let _route_result = handle.push(
+            PageRoute::<i32>::new(move |_ctx, _p, _s| page.clone().into_view().boxed())
+                .transition_duration(Duration::ZERO),
+        );
+        harness.tick();
+        let Acquired {
+            count,
+            writer,
+            local,
+        } = acquired
+            .borrow()
+            .clone()
+            .expect("the page acquired its handles");
+
+        let written = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let removal_writes = Rc::clone(&written);
+        let removal_writer = writer.clone();
+        let _entry = local.add(LocalHistoryEntry::new().on_remove(move || {
+            removal_writes
+                .borrow_mut()
+                .push(removal_writer.write(|cx| count.set(cx, 5)));
+        }));
+
+        // Arm the pop and rebuild the page: its `build` pops the entry.
+        pop_now.set(true);
+        writer
+            .write(|cx| count.set(cx, 1))
+            .expect("a write from the test");
+        harness.tick();
+        assert!(!pop_now.get(), "the page popped inside its build");
+        assert_eq!(handle.route_ids().len(), 2, "the entry absorbed the pop");
+        assert_eq!(
+            *written.borrow(),
+            [Ok(())],
+            "on_remove ran once, after the build, and its write was accepted"
+        );
+        assert_eq!(writer.write(|cx| count.peek(cx, |n| *n)), Ok(5));
+    }
 }
 
 // ============================================================================

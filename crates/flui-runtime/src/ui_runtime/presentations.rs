@@ -427,24 +427,20 @@ impl UiRuntime {
     }
 
     /// The presentation whose `BuildOwner` holds the graph that minted `slot`,
-    /// with a handle to that graph. `None` once that presentation has closed,
-    /// or for a slot minted outside this UI runtime.
+    /// with that owner's writer source. `None` once that presentation has
+    /// closed, or for a slot minted outside this UI runtime.
     ///
     /// Each binding's read lock is released before this returns, so the
     /// caller runs the write with no lock held.
-    pub(super) fn signal_graph_for(
+    pub(super) fn signal_writer_for(
         &self,
         slot: flui_view::SignalSlot,
-    ) -> Option<(&PresentationState, flui_view::Reactive)> {
-        let graph = slot.graph();
+    ) -> Option<(&PresentationState, flui_view::WriterSource)> {
         self.presentations.iter().find_map(|presentation| {
             presentation
                 .widgets()
-                .with_build_owner(|owner| {
-                    let reactive = owner.reactive();
-                    (reactive.id() == graph).then(|| reactive.clone())
-                })
-                .map(|reactive| (presentation, reactive))
+                .with_build_owner(|owner| owner.writer_source_for(slot))
+                .map(|source| (presentation, source))
         })
     }
 

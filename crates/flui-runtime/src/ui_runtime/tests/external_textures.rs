@@ -98,7 +98,7 @@ fn mounted() -> Fixture {
     let ui_runtime = UiRuntime::for_test();
     let graph = ui_runtime
         .presentation_widgets_for_test(ui_runtime.presentation_id())
-        .with_build_owner(|owner| owner.reactive().clone());
+        .with_build_owner(|owner| owner.signal_graph().clone());
     let shown = graph.signal(1_u32);
     let shared = Shared::default();
     ui_runtime
@@ -173,7 +173,11 @@ pub(crate) fn unmounting_the_owner_retires_its_texture() {
         .as_ref()
         .map(TextureRegistration::id)
         .expect("registered");
-    fixture.shown.set(&fixture.graph, 0).expect("write");
+    fixture
+        .graph
+        .writer_source()
+        .write(|cx| fixture.shown.set(cx, 0))
+        .expect("write");
     fixture.ui_runtime.render_frame(&mut sink);
     assert!(fixture.shared.lock().is_none(), "the owner was disposed");
     let registry = fixture

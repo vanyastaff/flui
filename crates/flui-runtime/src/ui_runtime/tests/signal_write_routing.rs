@@ -45,7 +45,7 @@ impl StatelessView for Reader {
 fn graph_of(ui_runtime: &UiRuntime, id: PresentationId) -> Reactive {
     ui_runtime
         .presentation_widgets_for_test(id)
-        .with_build_owner(|owner| owner.reactive().clone())
+        .with_build_owner(|owner| owner.signal_graph().clone())
 }
 
 pub(crate) fn a_write_to_a_secondary_presentations_signal_rebuilds_its_reader() {
@@ -108,6 +108,48 @@ pub(crate) fn a_write_to_a_secondary_presentations_signal_rebuilds_its_reader() 
         (1, 2),
         "the secondary's reader rebuilds; the primary is untouched"
     );
+}
+
+/// The command's `EventCx` is opened by the minting presentation's writer
+/// source: it writes that graph, and it refuses a sibling presentation's
+/// handle as foreign rather than writing it in passing.
+pub(crate) fn cross_thread_signal_write_opens_the_owner_writer_source() {
+    let mut ui_runtime = UiRuntime::for_test();
+    let a = ui_runtime.presentation_id();
+    let b = ui_runtime.install_second_presentation_for_test();
+    let graph_a = graph_of(&ui_runtime, a);
+    let graph_b = graph_of(&ui_runtime, b);
+    let sig_a = graph_a.signal(1u32);
+    let sig_b = graph_b.signal(1u32);
+    let sibling = sig_a.detach();
+
+    let (tx, rx) = mpsc::channel();
+    ui_runtime
+        .command_sender()
+        .send_signal_write(sig_b.detach(), move |own, cx| {
+            let opened_on = flui_view::ReadGraph::graph_id(cx);
+            let own_write = own.set(cx, 7);
+            let sibling_write = sibling.attach().set(cx, 7);
+            tx.send((opened_on, own_write, sibling_write))
+                .expect("test receiver alive");
+        })
+        .expect("send");
+    let report = ui_runtime.drain_commands();
+    assert_eq!(report.invoked, 1);
+
+    let (opened_on, own_write, sibling_write) = rx.try_recv().expect("the write ran");
+    assert_eq!(
+        opened_on,
+        graph_b.id(),
+        "opened on the minting presentation"
+    );
+    assert_eq!(own_write, Ok(()));
+    assert!(
+        matches!(sibling_write, Err(SignalError::ForeignGraph { .. })),
+        "a sibling presentation's handle is foreign to this source, got {sibling_write:?}"
+    );
+    assert_eq!(sig_b.peek(&graph_b, |v| *v), Ok(7));
+    assert_eq!(sig_a.peek(&graph_a, |v| *v), Ok(1));
 }
 
 pub(crate) fn stale_signal_command_disposal_panic_rearms_its_fifo_tail() {
@@ -318,9 +360,11 @@ impl flui_view::View for CrossWindowWriter {
 
 impl StatelessView for CrossWindowWriter {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        self.outcome
-            .borrow_mut()
-            .push(self.target.set(&self.graph, 9));
+        self.outcome.borrow_mut().push(
+            self.graph
+                .writer_source()
+                .write(|cx| self.target.set(cx, 9)),
+        );
         SizedBox::square(1.0)
     }
 }
@@ -359,7 +403,7 @@ pub(crate) fn a_signal_of_one_window_is_not_writable_while_another_window_builds
         "the refused write changed nothing"
     );
     assert_eq!(
-        sig_a.set(&graph_a, 2),
+        graph_a.writer_source().write(|cx| sig_a.set(cx, 2)),
         Ok(()),
         "the refusal ends with the build"
     );

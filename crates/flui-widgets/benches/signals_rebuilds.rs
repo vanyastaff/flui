@@ -303,7 +303,7 @@ impl Scenario {
 }
 
 fn reactive(laid: &mut LaidOut) -> Reactive {
-    laid.with_build_owner_mut(|owner| owner.reactive().clone())
+    laid.with_build_owner_mut(|owner| owner.signal_graph().clone())
 }
 
 fn mount_b<V: View>(make: impl FnOnce(&Reactive) -> V) -> LaidOut {
@@ -341,13 +341,16 @@ fn scenarios() -> Vec<Scenario> {
                 rows: Rc::clone(&rows_for_mount),
             }
         });
-        let r = reactive(&mut laid);
+        let w = reactive(&mut laid).writer_source();
         let row = rows.borrow()[4217];
         out.push(Scenario {
             name: "list 10k: one row changes",
             variant: "B signals",
             laid,
-            change: Box::new(move |_, i| row.set(&r, 100 + (i as u32 % 2)).expect("row alive")),
+            change: Box::new(move |_, i| {
+                w.write(|cx| row.set(cx, 100 + (i as u32 % 2)))
+                    .expect("row alive")
+            }),
         });
     }
 
@@ -387,16 +390,15 @@ fn scenarios() -> Vec<Scenario> {
                 rows: Rc::clone(&rows_for_mount),
             }
         });
-        let r = reactive(&mut laid);
+        let w = reactive(&mut laid).writer_source();
         let count = count_cell.borrow().expect("mounted");
         out.push(Scenario {
             name: "list 10k: append one row",
             variant: "B signals",
             laid,
             change: Box::new(move |_, i| {
-                count
-                    .set(&r, if i % 2 == 0 { LIST_ROWS + 1 } else { LIST_ROWS })
-                    .expect("count alive");
+                let rows = if i % 2 == 0 { LIST_ROWS + 1 } else { LIST_ROWS };
+                w.write(|cx| count.set(cx, rows)).expect("count alive");
             }),
         });
     }
@@ -430,14 +432,15 @@ fn scenarios() -> Vec<Scenario> {
                 fields: Rc::new(fields),
             }
         });
-        let r = reactive(&mut laid);
+        let w = reactive(&mut laid).writer_source();
         let field7 = fields_cell.borrow()[7];
         out.push(Scenario {
             name: "form 20: keystroke in one field",
             variant: "B signals",
             laid,
             change: Box::new(move |_, i| {
-                field7.set(&r, 5 + (i % 2) as u32).expect("field alive");
+                w.write(|cx| field7.set(cx, 5 + (i % 2) as u32))
+                    .expect("field alive");
             }),
         });
     }
@@ -459,13 +462,16 @@ fn scenarios() -> Vec<Scenario> {
             unit_for_mount.replace(Some(unit));
             AppB { unit }
         });
-        let r = reactive(&mut laid);
+        let w = reactive(&mut laid).writer_source();
         let unit = unit_cell.borrow().expect("mounted");
         out.push(Scenario {
             name: "setting read by 3x200 cells",
             variant: "B signals",
             laid,
-            change: Box::new(move |_, i| unit.set(&r, 1 + (i as u32 % 2)).expect("unit alive")),
+            change: Box::new(move |_, i| {
+                w.write(|cx| unit.set(cx, 1 + (i as u32 % 2)))
+                    .expect("unit alive")
+            }),
         });
     }
 

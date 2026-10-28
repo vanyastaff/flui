@@ -51,7 +51,7 @@ impl ViewState<Counter> for CounterState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.count = ctx.signal(0);
         // A handle whose slot is gone, as after its owning element unmounted.
-        let graph = ctx.reactive();
+        let graph = ctx.signal_graph();
         self.released = graph.signal(0);
         graph.release(self.released.slot());
     }
@@ -59,7 +59,7 @@ impl ViewState<Counter> for CounterState {
     fn build(&self, view: &Counter, ctx: &dyn BuildContext) -> impl IntoView {
         view.seen
             .borrow_mut()
-            .get_or_insert_with(|| (self.count, ctx.reactive()));
+            .get_or_insert_with(|| (self.count, ctx.signal_graph()));
         let count = self.count;
         let released = self.released;
         let button = RawButton::new(Text::new("Press"));

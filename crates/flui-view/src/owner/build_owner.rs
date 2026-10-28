@@ -952,7 +952,36 @@ impl BuildOwner {
     /// The UI runtime's reactive graph (ADR-0074): signals and the
     /// reader registry that schedules exactly the elements that read a
     /// written signal.
-    pub fn reactive(&self) -> &crate::reactive::Reactive {
+    pub(crate) fn reactive(&self) -> &crate::reactive::Reactive {
+        &self.reactive
+    }
+
+    /// The write capability of this owner's graph, for host code that writes
+    /// a signal outside any widget: a cross-thread write delivered on the
+    /// owner thread, a test harness. Each [`WriterSource::write`] opens its
+    /// own [`EventCx`](crate::EventCx), and the build guard still refuses a
+    /// write made while an element of this owner is building.
+    ///
+    /// [`WriterSource::write`]: crate::WriterSource::write
+    #[must_use]
+    pub fn writer_source(&self) -> crate::WriterSource {
+        crate::WriterSource::new(self.reactive.clone())
+    }
+
+    /// [`writer_source`](Self::writer_source) when this owner's graph minted
+    /// `slot`, `None` otherwise: how a UI runtime with several presentations
+    /// finds the one a cross-thread write belongs to (ADR-0085 §1).
+    #[must_use]
+    pub fn writer_source_for(&self, slot: crate::SignalSlot) -> Option<crate::WriterSource> {
+        (slot.graph() == self.reactive.id()).then(|| self.writer_source())
+    }
+
+    /// The graph itself, for tests that mint signals outside an element and
+    /// inspect its reader registry. It is not a write target: a write goes
+    /// through [`writer_source`](Self::writer_source).
+    #[cfg(any(test, feature = "testing"))]
+    #[must_use]
+    pub fn signal_graph(&self) -> &crate::reactive::Reactive {
         &self.reactive
     }
 

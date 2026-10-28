@@ -488,7 +488,8 @@ impl NavigatorShared {
                         let modals =
                             modals.get_or_insert_with(|| self.registries.modals.lock().clone());
                         if let Some(modal) = modals.get(&route) {
-                            recovery.run(|| modal.drain_local_history());
+                            let post_frame = self.post_frame.lock().clone();
+                            recovery.run(|| modal.drain_local_history(post_frame.as_ref()));
                         }
                     }
                     // **Load-bearing placement (ADR-0064).** Registered here,

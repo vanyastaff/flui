@@ -52,8 +52,10 @@ flui-platform = { workspace = true }
 raw-window-handle = { workspace = true }
 # Canonical hit-test positions accepted by the production input pipeline.
 # The element tree + build owner this binding drives each frame (`build_scope`
-# drains the external inbox an animation/listenable tick fills).
-flui-view = { path = "../flui-view", version = "=0.2.0-dev" }
+# drains the external inbox an animation/listenable tick fills). `testing`
+# for `BuildContextExt::signal_graph`, which `SignalProbe` mints its released
+# signal through.
+flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["testing"] }
 # The pipeline owner the frame loop lays out / paints / composites (`run_frame`).
 # `testing` for `inspect`, the committed-geometry and layer accessors the
 # widget harness (`widgets`) reads.

@@ -12,8 +12,13 @@
 //! the owed removal; the flush notes the route id in
 //! [`FlushOutcome::local_history_popped`](super::history::FlushOutcome), and
 //! `NavigatorShared::apply` drains [`take_owed`](LocalHistoryRegistry::take_owed)
-//! with no lock held. `entry_handle.remove()` outside a flush fires directly —
-//! the same callback runs in the same lock-free context either way.
+//! with no lock held and hands each owed callback to the navigator's
+//! post-frame queue ([`deliver_on_remove`]). A flush can run inside `build`
+//! (a route command or a page update applied there), where a signal write the
+//! callback makes through its captured `WriterSource` is refused; after the
+//! frame it lands, and each callback runs in its own post-frame entry, so one
+//! that panics does not lose the next. `entry_handle.remove()` is called from
+//! application code outside a flush and fires directly, outside the lock.
 //!
 //! The registry mutex is a **leaf**: mutate under it, release, then fire. The
 //! exactly-once linearization for `remove()` racing `did_pop` is the entry's
@@ -47,6 +52,24 @@ use parking_lot::Mutex;
 /// Fired when its entry leaves the local history — by a pop or an explicit
 /// [`remove`](LocalHistoryEntryHandle::remove).
 pub(crate) type OnRemoveCallback = Rc<dyn Fn()>;
+
+/// Deliver an `on_remove` owed by a pop inside a flush: after the frame, on
+/// `post_frame`. Without a queue (the navigator is unmounted, or its owner
+/// installed none) or once the queue has closed, no frame will come, so it
+/// fires here rather than being lost: the pop already happened.
+pub(crate) fn deliver_on_remove(
+    post_frame: Option<&flui_scheduler::PostFrameHandle>,
+    callback: OnRemoveCallback,
+) {
+    if let Some(post_frame) = post_frame {
+        let deferred = Rc::clone(&callback);
+        if post_frame.schedule(move |_timing| deferred()).is_ok() {
+            return;
+        }
+        tracing::debug!("local-history on_remove: the post-frame queue is closed; firing now");
+    }
+    callback();
+}
 
 /// One live entry, with no app-bar-dismissal flag (no `AppBar`; ADR-0025).
 struct EntryInner {

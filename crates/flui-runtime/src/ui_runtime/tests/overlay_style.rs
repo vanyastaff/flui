@@ -77,7 +77,7 @@ fn styled_runtime() -> Fixture {
     let ui_runtime = UiRuntime::for_test_with_window(Rc::clone(&window));
     let graph = ui_runtime
         .presentation_widgets_for_test(ui_runtime.presentation_id())
-        .with_build_owner(|owner| owner.reactive().clone());
+        .with_build_owner(|owner| owner.signal_graph().clone());
     let scene = graph.signal(0_u32);
     ui_runtime
         .attach_root_widget(&Styled { scene })
@@ -109,14 +109,20 @@ pub(crate) fn each_style_change_is_delivered_once() {
     ui_runtime.render_frame(&mut sink);
     assert_eq!(delivered(&chrome), [Dark]);
     ui_runtime.render_frame(&mut sink);
-    scene.set(&graph, 2).expect("write");
+    graph
+        .writer_source()
+        .write(|cx| scene.set(cx, 2))
+        .expect("write");
     ui_runtime.render_frame(&mut sink);
     assert_eq!(
         delivered(&chrome),
         [Dark],
         "an equal style repaints silently"
     );
-    scene.set(&graph, 1).expect("write");
+    graph
+        .writer_source()
+        .write(|cx| scene.set(cx, 1))
+        .expect("write");
     ui_runtime.render_frame(&mut sink);
     assert_eq!(delivered(&chrome), [Dark, Light]);
 }
@@ -164,7 +170,10 @@ pub(crate) fn a_detached_presentation_resends_its_style() {
     let id = ui_runtime.presentation_id();
     ui_runtime.synchronize_window_snapshot(id, Detached, true, true);
     ui_runtime.synchronize_window_snapshot(id, Running, true, true);
-    scene.set(&graph, 2).expect("write");
+    graph
+        .writer_source()
+        .write(|cx| scene.set(cx, 2))
+        .expect("write");
     ui_runtime.render_frame(&mut sink);
     assert_eq!(
         delivered(&chrome),
@@ -191,7 +200,10 @@ pub(crate) fn a_panicking_chrome_is_retried_on_the_next_frame() {
     assert_eq!(payload.downcast_ref::<&str>(), Some(&"chrome failed"));
     assert_eq!(delivered(&chrome), []);
     // An equal style: only the retry can deliver it.
-    scene.set(&graph, 2).expect("write");
+    graph
+        .writer_source()
+        .write(|cx| scene.set(cx, 2))
+        .expect("write");
     ui_runtime.render_frame(&mut sink);
     assert_eq!(delivered(&chrome), [SystemUiOverlayStyle::Dark]);
 }

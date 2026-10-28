@@ -46,7 +46,7 @@ fn panic_text(payload: &dyn std::any::Any) -> &str {
 fn physical(kind: &str) {
     let events = Arc::new(Mutex::new(Vec::new()));
     let mut owner = BuildOwner::new();
-    let _signal = owner.reactive().signal(Leaf {
+    let _signal = owner.signal_graph().signal(Leaf {
         name: "graph",
         fail: matches!(kind, "graph" | "all"),
         events: events.clone(),
@@ -97,7 +97,7 @@ fn physical(kind: &str) {
         assert_eq!(panic_text(payload.as_ref()), first);
     }
     let next = BuildOwner::new();
-    let _next_signal = next.reactive().signal(Leaf {
+    let _next_signal = next.signal_graph().signal(Leaf {
         name: "next",
         fail: false,
         events: events.clone(),
