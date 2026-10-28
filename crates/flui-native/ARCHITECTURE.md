@@ -3194,6 +3194,62 @@ The bounded Windows subprocess rows `unhandled_system_key_closes_window`,
 owned HWND and dispatch the resulting native system command. These are native
 message-protocol checks, not physical keyboard input or rendered application checks.
 
+### The Wayland seats' dispatch records, and the loop delivers before its windows settle
+
+The Wayland table's input position is its loop, which reaches the seats'
+input through a hook the table fills (`owner::linux::wayland::WaylandInput`,
+implemented by `input::linux::wayland::SeatInput`). The loop offers the hook
+every global it does not bind itself; the input binds `wl_seat` (to version
+9), `zwp_tablet_manager_v2`, `zwp_pointer_gestures_v1` and
+`wp_cursor_shape_manager_v1`, and makes each seat's pointer, keyboard,
+touchscreen, tablet seat, pinch and cursor-shape device as the capabilities
+and managers arrive, in either order. A window joins the input as it opens,
+with its identity, its `wl_surface` and its delivery (`SeatWindow`), before
+the handler hears its capability snapshot, and leaves it as it retires; it
+names the input feature nowhere, and its `set_cursor` goes through the same
+hook.
+
+The dispatch of the seats' objects runs inside the owner's queue borrow and
+only records: each event is copied into a plain wire event
+(`input::linux::wayland::wire`) or a keyboard event, the surface it names
+resolved to its window by proxy identity, never by protocol id. On every
+turn, after the queue is read and before the windows settle, the loop asks
+the input to deliver: the wire events are assembled through one
+`ContactRegistry` (`SeatAssembly`), keys through the compositor's XKB keymap
+(`input::linux::xkb`, libxkbcommon loaded at run time), and each input
+reaches its window's delivery with no cell of the input borrowed, so a
+handler that opens or closes a window, sets a cursor or quits finds the
+input as it was; events a handler's roundtrip records meanwhile are
+delivered in the same turn. A held key repeats on the client, by
+`wl_keyboard.repeat_info`, and the loop's wait is bounded by the next repeat
+(`LoopTurn::input_due`).
+
+What the translation decides is in the module docs of
+`input::linux::wayland`; the parts with a test of their own: a pointer frame
+is one scroll, a wheel's `value120` in detents, fingers phased until their
+stop (`a_wheel_frame_is_one_step_in_detents`,
+`a_finger_scroll_is_phased_until_its_stop`); a leave with a button held
+cancels the press (`a_leave_with_a_button_held_cancels_the_press`); a touch
+frame is one pointer frame (`the_touches_of_a_frame_are_one_pointer_frame`);
+a tablet frame becomes enter, press or move, buttons, lift and leave
+(`a_tablet_frame_is_one_reading_per_change`); a pinch's scale since its
+start becomes each update's own factor
+(`a_pinch_is_one_pan_zoom_about_the_cursor`). The compositor's millisecond
+stamp is read on `CLOCK_MONOTONIC` only within a second of the clock read
+on arrival, and the arrival stamps the event otherwise
+(`a_stamp_off_the_monotonic_clock_takes_the_arrival`): Weston's X11 backend
+stamps on the X server's clock, which the recording below shows.
+
+`tests/wayland_input.rs` drives a real seat: Xvfb, a Weston on its X11
+backend with the kiosk shell, and XTest input, so the window hears what
+Weston's `wl_pointer` and `wl_keyboard` send
+(`a_compositor_seat_reaches_the_window`). With `native-capture` its journal
+replays to exactly what the window heard and is checked in as
+`wayland_weston_mouse_wheel.jsonl`. Touch, tablet tools and pinches have no
+source in a headless compositor: their translation is held by the wire
+tests alone. A compositor without `cursor-shape` (Weston 13) gets no cursor
+from the host, and `set_cursor` says so (`NotYetOnThisHost`).
+
 ### The X11 host reads one libxcb connection on its owner thread, and its windows publish what the server holds
 
 `X11Platform` (`hosts/linux.rs`) is built on one libxcb connection
@@ -3632,7 +3688,7 @@ timing; the shape is then the same on every run.
 
 `native_recording_contracts` in `tests/native_recording/mod.rs` replays one
 recording per backend (`win32_pointer_info_recordings_decode_to_their_host_input`
-and its AppKit, UIKit, Android, winit and web rows, the web's Chrome capture
+and its AppKit, UIKit, Android, winit, Wayland and web rows, the web's Chrome capture
 `web_bidi_recording_decodes_to_its_host_input` among them) against hand-computed
 transcripts, writes each back byte for byte, refuses unknown variants, other
 versions, out-of-range values and undeclared devices, and, with the feature,
@@ -3671,8 +3727,8 @@ the order (`the_first_event_after_open_reaches_the_handler`,
 `capability_change_is_ordered_with_input`,
 `input_raised_from_input_is_delivered_after_it`) and the panic
 (`a_panic_on_the_snapshot_is_resumed`); `window_handler_obligation_table`
-pins each method's obligation on the delivery itself. Presence changes reach a window from the headless device handle and the
-winit backend's registry; the native Win32, AppKit, UIKit, Android and web
+pins each method's obligation on the delivery itself. Presence changes reach a window from the headless device handle, the
+winit backend's registry and the Wayland seats' registry; the native Win32, AppKit, UIKit, Android and web
 backends report their initial table without presence changes yet.
 
 ### Every backend's haptics table is a pure function

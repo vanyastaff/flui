@@ -173,11 +173,11 @@ pub enum PointerWire {
     AxisSource(AxisSource),
     /// The fingers on an axis lifted.
     AxisStop(Axis),
-    /// A wheel's steps in 120ths of a notch.
+    /// A wheel's steps, 120 to a notch.
     AxisValue120 {
         /// Which.
         axis: Axis,
-        /// How many 120ths.
+        /// How far, 120 to a notch.
         value120: i32,
     },
     /// A wheel's whole notches, from a compositor without `value120`.

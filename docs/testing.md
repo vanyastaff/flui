@@ -157,7 +157,11 @@ and needs `openbox` too (`apt install openbox`). On Linux the native Wayland
 host's tests (`wayland_window::`) run in a step of their own against the
 compositor `WAYLAND_DISPLAY` names, and skip themselves without one; CI starts a
 headless Weston (`weston --backend=headless --socket=…`) and sets
-`FLUI_REQUIRE_WAYLAND=1`, which makes a missing compositor a failure.
+`FLUI_REQUIRE_WAYLAND=1`, which makes a missing compositor a failure. The
+`wayland_input` harness, the Wayland host's input from a real seat, starts an
+Xvfb and a Weston on its X11 backend of its own and drives them through XTest;
+it skips itself without `Xvfb` or `weston`, and fails then under
+`FLUI_REQUIRE_WAYLAND`.
 
 xtask does not schedule its commands. On a host shared by several agents and
 checkouts, [heli](https://github.com/vanyastaff/heli) does: every cargo, the

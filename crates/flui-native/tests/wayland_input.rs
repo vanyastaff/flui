@@ -48,8 +48,8 @@ mod cases {
     use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
     use x11rb::connection::Connection as _;
     use x11rb::protocol::xproto::{
-        BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, ConnectionExt as _, InputFocus,
-        KEY_PRESS_EVENT, KEY_RELEASE_EVENT, MOTION_NOTIFY_EVENT, MapState,
+        BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, ConnectionExt as _, InputFocus, KEY_PRESS_EVENT,
+        KEY_RELEASE_EVENT, MOTION_NOTIFY_EVENT, MapState,
     };
     use x11rb::protocol::xtest::ConnectionExt as _;
     use x11rb::rust_connection::RustConnection;
@@ -120,7 +120,8 @@ mod cases {
                 return None;
             }
             let (server, display) = x_server();
-            let runtime = std::env::temp_dir().join(format!("flui-wayland-input-{}", std::process::id()));
+            let runtime =
+                std::env::temp_dir().join(format!("flui-wayland-input-{}", std::process::id()));
             std::fs::create_dir_all(&runtime).expect("a runtime directory");
             std::fs::set_permissions(
                 &runtime,
@@ -148,7 +149,10 @@ mod cases {
             until("Weston's socket", || runtime.join(socket).exists());
             // SAFETY: no thread has started; nothing reads the environment
             // while it is set.
-            #[expect(unsafe_code, reason = "the environment is set before any thread exists")]
+            #[expect(
+                unsafe_code,
+                reason = "the environment is set before any thread exists"
+            )]
             unsafe {
                 std::env::set_var("XDG_RUNTIME_DIR", &runtime);
                 std::env::set_var("WAYLAND_DISPLAY", socket);
@@ -170,7 +174,11 @@ mod cases {
             let root = connection.setup().roots[screen].root;
             let mut found = None;
             until("Weston's output window", || {
-                let tree = connection.query_tree(root).expect("request").reply().expect("reply");
+                let tree = connection
+                    .query_tree(root)
+                    .expect("request")
+                    .reply()
+                    .expect("reply");
                 found = tree.children.iter().copied().find(|window| {
                     let mapped = connection
                         .get_window_attributes(*window)
@@ -181,7 +189,9 @@ mod cases {
                         .get_geometry(*window)
                         .ok()
                         .and_then(|cookie| cookie.reply().ok());
-                    mapped && geometry.is_some_and(|geometry| (geometry.width, geometry.height) == OUTPUT)
+                    mapped
+                        && geometry
+                            .is_some_and(|geometry| (geometry.width, geometry.height) == OUTPUT)
                 });
                 found.is_some()
             });
@@ -283,21 +293,30 @@ mod cases {
     /// step in detents, and a key under the compositor's keymap.
     fn a_compositor_seat_reaches_the_window(session: &Session) {
         #[cfg(all(debug_assertions, feature = "native-capture"))]
-        let recorder = super::native_recording::journal::Recorder::start(
-            super::codec::Backend::Wayland,
-        );
+        let recorder =
+            super::native_recording::journal::Recorder::start(super::codec::Backend::Wayland);
         let platform = WaylandPlatform::new().expect("the harness's Weston answers");
         let handler = RecordingWindowHandler::new();
         let window = platform
-            .open_window(WindowOptions::default().with_title("input"), Rc::clone(&handler) as _)
+            .open_window(
+                WindowOptions::default().with_title("input"),
+                Rc::clone(&handler) as _,
+            )
             .expect("a Wayland window opens");
-        turn_until(&platform, &window, &handler, "the window on the output", |_| {
-            window.state().visible && window.state().focused
-        });
+        turn_until(
+            &platform,
+            &window,
+            &handler,
+            "the window on the output",
+            |_| window.state().visible && window.state().focused,
+        );
 
         let Some(PlatformInput::Capabilities(capabilities)) = handler.inputs().into_iter().next()
         else {
-            panic!("the snapshot is the handler's first input: {:?}", handler.inputs());
+            panic!(
+                "the snapshot is the handler's first input: {:?}",
+                handler.inputs()
+            );
         };
         assert_eq!(capabilities.precise_scroll(), Availability::Native);
 
@@ -358,12 +377,21 @@ mod cases {
             .expect("a press");
         assert_eq!(down.button(), PointerButton::PRIMARY);
         let position = down.sample.position.get();
-        assert_eq!((position.x, position.y), (100.0, 120.0), "where the cursor was put");
+        assert_eq!(
+            (position.x, position.y),
+            (100.0, 120.0),
+            "where the cursor was put"
+        );
         assert!(
-            pointer.iter().position(|event| matches!(event, PointerEvent::Down(_))) > Some(enter),
+            pointer
+                .iter()
+                .position(|event| matches!(event, PointerEvent::Down(_)))
+                > Some(enter),
             "the press follows the enter"
         );
-        assert!(pointer.iter().any(|event| matches!(event, PointerEvent::Up(up) if up.button() == PointerButton::PRIMARY)));
+        assert!(pointer.iter().any(
+            |event| matches!(event, PointerEvent::Up(up) if up.button() == PointerButton::PRIMARY)
+        ));
         let scroll = pointer
             .iter()
             .find_map(|event| match event {
@@ -372,7 +400,11 @@ mod cases {
             })
             .expect("a scroll");
         assert_eq!(scroll.delta.unit(), ScrollUnit::Detents);
-        assert_eq!((scroll.delta.x(), scroll.delta.y()), (0.0, -1.0), "one notch toward earlier content");
+        assert_eq!(
+            (scroll.delta.x(), scroll.delta.y()),
+            (0.0, -1.0),
+            "one notch toward earlier content"
+        );
         assert_eq!(scroll.phase, None, "a wheel has no phases");
 
         let keys: Vec<_> = handler
@@ -384,13 +416,18 @@ mod cases {
             })
             .collect();
         assert_eq!(
-            keys.iter().map(|key| (key.state(), key.key.clone(), key.code)).collect::<Vec<_>>(),
+            keys.iter()
+                .map(|key| (key.state(), key.key.clone(), key.code))
+                .collect::<Vec<_>>(),
             [
                 (KeyState::Down, Key::character("a"), Code::KeyA),
                 (KeyState::Up, Key::character("a"), Code::KeyA),
             ]
         );
-        assert!(!platform.keyboard_layout().is_empty(), "the keymap names its layout");
+        assert!(
+            !platform.keyboard_layout().is_empty(),
+            "the keymap names its layout"
+        );
         // Weston 13 has no `cursor-shape`: the host says so rather than
         // pretend.
         if let Err(error) = window.set_cursor(CursorIcon::Pointer) {
@@ -425,11 +462,19 @@ mod cases {
                 .collect()
         };
         let replayed = pointers(recording.replay());
-        assert_eq!(replayed.as_slice(), heard, "the journal replays to what the window heard");
+        assert_eq!(
+            replayed.as_slice(),
+            heard,
+            "the journal replays to what the window heard"
+        );
         let mut out = Vec::new();
         recording.write(&mut out).expect("a recording writes");
         let read = super::codec::NativeRecording::read(out.as_slice()).expect("it reads back");
-        assert_eq!(pointers(read.replay()), replayed, "the written recording replays alike");
+        assert_eq!(
+            pointers(read.replay()),
+            replayed,
+            "the written recording replays alike"
+        );
         if std::env::var_os("FLUI_NATIVE_RECORDING_BLESS").is_some() {
             let path = concat!(
                 env!("CARGO_MANIFEST_DIR"),

@@ -811,7 +811,9 @@ fn native_clock(shape: ClockShape) -> NativeClock {
                 frequency: NonZeroU64::new(QPC_HZ).expect("nonzero"),
             }),
         ),
-        ClockShape::UptimeSeconds | ClockShape::Tick => NativeClock::new(EPOCH, Duration::ZERO, None),
+        ClockShape::UptimeSeconds | ClockShape::Tick => {
+            NativeClock::new(EPOCH, Duration::ZERO, None)
+        }
         ClockShape::Epoch => NativeClock::epoch_only(),
     }
 }
