@@ -577,9 +577,10 @@ enum LinuxHost {
 /// compositor follows (`display::linux::protocol`), and the hosts the build
 /// carries.
 ///
-/// The winit host is chosen whenever it is built: the native hosts do not
-/// carry input yet, and `flui-app` builds winit on Linux until they do
-/// (ADR-0151 §11). Without it, a Wayland session gets the native Wayland
+/// The winit host is chosen whenever it is built: the native Wayland host
+/// carries pointer and key input but no text input, clipboard or drag and
+/// drop yet, the native X11 host no input at all, and `flui-app` builds winit
+/// on Linux until they do (ADR-0151 §11). Without it, a Wayland session gets the native Wayland
 /// host and an X11 session the native X11 host; a Wayland session that also
 /// names an X server gets the X11 host when only that one is built.
 #[cfg(any(target_os = "linux", test))]
