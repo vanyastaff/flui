@@ -10,7 +10,9 @@ use flui_foundation::geometry::Offset;
 use flui_interaction::GestureDisposition;
 use flui_interaction::PointerId;
 use flui_interaction::events::{PointerKind, make_down_event_for_id, make_up_event_for_id};
-use flui_platform::{GesturePreferences, PlatformInput, SystemPreferences};
+use flui_platform::{
+    EventTime, FramePresented, GesturePreferences, PlatformInput, SystemPreferences,
+};
 use flui_runtime::owner::InputOutcome;
 use flui_runtime::{DecisionRow, HostInput, InputRecord, InputRow};
 use flui_testing::recording::{
@@ -681,6 +683,58 @@ fn a_factory_tap_ends_its_recording_when_the_runtime_goes_away() {
         accepted(&recording.decisions()),
         [(1, "TapArenaMember".to_owned())]
     );
+}
+
+/// One timeline for input, frames and presentation (R11.4): a report that a
+/// frame reached the screen, injected on the headless host, is recorded with
+/// the frame that carried it, and the time from a touch to that frame's
+/// showing is a subtraction of the two recorded stamps, with no conversion.
+#[test]
+fn a_presentation_and_the_input_before_it_are_on_one_timeline() {
+    let event_now = |host: &HeadlessHost| {
+        EventTime::from_nanos(
+            u64::try_from(host.clock().elapsed().as_nanos()).expect("test time fits"),
+        )
+    };
+    let refresh = Duration::from_millis(16);
+    let (bytes, _) = recorded(Privacy::Redact, |host| {
+        let touched = event_now(host);
+        touch(host, 1, true);
+        let _ = host.pump(refresh);
+        // The frame that drew the touch is shown at the refresh after it.
+        host.report_presented(
+            FramePresented::new(touched + Duration::from_millis(24)).with_refresh(refresh),
+        );
+        let _ = host.pump(refresh);
+        touch(host, 1, false);
+        let _ = host.pump(refresh);
+    });
+    let recording = replayable(&bytes).expect("a whole recording");
+    let rows = recording.rows();
+    let touch = pointer_rows(rows)
+        .first()
+        .map(|(_, row)| row.arrival)
+        .expect("the touch was recorded");
+    let presented = rows
+        .iter()
+        .find_map(|row| match row {
+            InputRecord::Input(InputRow {
+                input:
+                    HostInput::Frame {
+                        presented: Some(presented),
+                        ..
+                    },
+                ..
+            }) => Some(*presented),
+            _ => None,
+        })
+        .expect("a frame carried the presentation report");
+    assert_eq!(
+        presented.at.saturating_duration_since(touch),
+        Duration::from_millis(24),
+        "the touch's stamp and the presentation's are on one timeline"
+    );
+    assert_eq!(presented.refresh, Some(refresh));
 }
 
 /// The pointer rows of `rows`, with their positions.

@@ -522,6 +522,17 @@ serde_json = { workspace = true, features = ["float_roundtrip"] }
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test.workspace = true
 
+# A DXGI swap chain on a test window, presented the way a renderer presents,
+# whose frame statistics the window turns into its presentation report
+# (`the_win32_window_conforms`).
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+windows = { workspace = true, features = [
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+] }
+
 # The harnesses that run their cases on the main thread, where winit builds
 # its event loop (`linux_preferences`, `os_extensions`).
 [target.'cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))'.dev-dependencies]

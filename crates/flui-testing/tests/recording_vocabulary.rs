@@ -29,8 +29,8 @@ use flui_platform::pointer::{
     ScrollPrecision, ScrollUnit, TangentialPressure, Twist,
 };
 use flui_platform::{
-    Brightness, DragDropEvent, EventTime, GesturePreferences, ImeEvent, Locale, MotionPreference,
-    NativeMouseGeometry, NativeTouchGeometry, PlatformInput, SystemPreferences,
+    Brightness, DragDropEvent, EventTime, FramePresented, GesturePreferences, ImeEvent, Locale,
+    MotionPreference, NativeMouseGeometry, NativeTouchGeometry, PlatformInput, SystemPreferences,
     TextWeightPreference, WheelPreferences, WheelStep, WindowExecutionState, WindowId,
 };
 use flui_runtime::owner::{InputOutcome, WindowObservation};
@@ -344,6 +344,9 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
         ("HostInput", "Frame") => one(host(HostInput::Frame {
             vsync: at(16_666_667),
             target_present: Some(at(33_333_334)),
+            presented: Some(
+                FramePresented::new(at(9_000_000)).with_refresh(Duration::from_nanos(16_666_667)),
+            ),
         })),
         ("HostInput", "Accessibility") => one(action(Action::Click, None)),
         ("RecordedSurface", "Window") => one(row(
@@ -368,6 +371,7 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
         ("InputOutcome", "Handled") => one(host(HostInput::Frame {
             vsync: at(1),
             target_present: None,
+            presented: None,
         })),
         ("InputOutcome", "Unhandled") => one(row(
             HostInput::Platform(PlatformInput::Keyboard(KeyEvent::new(

@@ -602,6 +602,9 @@ pub struct HeadlessHost {
     /// carries: those of the pump in progress, and any the UI runtime made
     /// between pumps, which the next pump raises before it frames.
     failures: Arc<Mutex<Vec<String>>>,
+    /// The presentation report the next pump's frame requests carry
+    /// ([`Self::report_presented`]).
+    presented: Option<flui_platform::FramePresented>,
 }
 
 impl std::fmt::Debug for HeadlessHost {
@@ -699,7 +702,20 @@ impl HeadlessHost {
             secondary: Vec::new(),
             embedded: Vec::new(),
             failures,
+            presented: None,
         }
+    }
+
+    /// Report that a frame reached the screen, as a host's platform does
+    /// (DXGI statistics, `wp_presentation_time`): the next
+    /// [`pump`](Self::pump)'s frame requests carry it
+    /// ([`FrameRequest::presented`](flui_platform::FrameRequest::presented)),
+    /// and each presentation's frame clock keeps it. Its time is on the
+    /// event timeline input and frames are stamped on: the time since the
+    /// [`clock`](Self::clock) started. A later report before that pump
+    /// replaces it.
+    pub fn report_presented(&mut self, presented: flui_platform::FramePresented) {
+        self.presented = Some(presented);
     }
 
     /// Hand this UI runtime's window to `agent`'s hook, as a runner hands it a
@@ -760,9 +776,12 @@ impl HeadlessHost {
         // window's vsync is the clock's reading, on the event timeline, so a
         // recording sees the frame where its deadlines fire.
         let vsync = self.event_now();
+        let mut request = flui_platform::FrameRequest::new(vsync);
+        if let Some(presented) = self.presented.take() {
+            request = request.with_presented(presented);
+        }
         for presentation in self.presentation_ids() {
-            self.ui_runtime
-                .note_frame_request(presentation, flui_platform::FrameRequest::new(vsync));
+            self.ui_runtime.note_frame_request(presentation, request);
         }
         let mut frame_clock = self.clock.clone();
         let Self {

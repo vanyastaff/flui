@@ -52,6 +52,54 @@ use crate::surface_color::{OutputEncoding, ResolvedSurfaceColor, SurfaceColor};
 use crate::surface_lease::SurfaceLease;
 use crate::window_target::WindowTarget;
 
+/// The frame statistics of the DXGI swap chain behind `surface`, when wgpu
+/// presents it through DX12 and the display has shown a present of it; `None`
+/// on another backend or before anything was shown.
+///
+/// The crate's one production `unsafe`: wgpu reaches its swap chain only
+/// through the hal escape (`Surface::as_hal`), and DXGI's statistics are COM
+/// calls on it.
+#[cfg(windows)]
+#[expect(
+    unsafe_code,
+    reason = "DXGI frame statistics are read from wgpu's swap chain, reachable only through the hal"
+)]
+#[expect(
+    clippy::default_trait_access,
+    reason = "`DXGI_FRAME_STATISTICS` is wgpu-hal's `windows` type, which this crate does not name"
+)]
+fn dxgi_frame_statistics(
+    surface: &wgpu::Surface<'static>,
+) -> Option<flui_platform::DxgiFrameStatistics> {
+    // SAFETY: the DX12 surface is only read through the guard, which is
+    // dropped before this function returns; no wgpu call runs while it is
+    // held, so nothing wgpu does to the surface overlaps the read.
+    let hal = unsafe { surface.as_hal::<wgpu::hal::api::Dx12>() }?;
+    // A counted reference to the swap chain, released at the end of this
+    // function: holding it past the present would keep a swap chain wgpu
+    // replaced alive against its window.
+    let swap_chain = hal.swap_chain()?;
+    drop(hal);
+    let mut statistics = Default::default();
+    // SAFETY: both are reads of the swap chain's counters on the thread that
+    // presents through it, between presents; `statistics` is an initialized
+    // `DXGI_FRAME_STATISTICS` the call fills, and outlives it.
+    let (read, last_present) = unsafe {
+        (
+            swap_chain.GetFrameStatistics(&raw mut statistics),
+            swap_chain.GetLastPresentCount(),
+        )
+    };
+    read.ok()?;
+    Some(flui_platform::DxgiFrameStatistics::new(
+        last_present.ok()?,
+        statistics.PresentCount,
+        statistics.PresentRefreshCount,
+        statistics.SyncRefreshCount,
+        statistics.SyncQPCTime,
+    ))
+}
+
 /// What a frame's presentation became, from the two facts `render_scene`
 /// establishes before it paints anything.
 ///
@@ -1702,6 +1750,19 @@ impl Renderer {
         self.pre_present_hook = hook;
     }
 
+    /// What the swap chain says about the frames it presented before the one
+    /// about to be: DXGI's frame statistics on DX12 — the newest present the
+    /// display showed and the refresh it began on — and nothing on the other
+    /// backends, nor before any present was shown (DXGI then answers an
+    /// error, not statistics).
+    fn swap_chain_statistics(&self) -> flui_platform::SwapChainStatistics {
+        #[cfg(windows)]
+        if let Some(statistics) = self.lease.surface().and_then(dxgi_frame_statistics) {
+            return flui_platform::SwapChainStatistics::Dxgi(statistics);
+        }
+        flui_platform::SwapChainStatistics::None
+    }
+
     /// Set how many frames this window's swapchain holds ahead of the display (ADR-0257).
     ///
     /// Takes effect on the surface now, or when it is next configured while the surface is
@@ -2321,8 +2382,14 @@ impl Renderer {
         // present that follows (see `RasterBackend::set_pre_present_hook`).
         // The trace event is an ordering oracle: every
         // `present_submitted` must be preceded by one of these.
+        // Nothing is read for a hook that is not there.
+        let statistics = if self.pre_present_hook.is_some() {
+            self.swap_chain_statistics()
+        } else {
+            flui_platform::SwapChainStatistics::None
+        };
         if let Some(hook) = self.pre_present_hook.as_mut() {
-            hook();
+            hook(statistics);
             tracing::trace!(
                 target: "flui.gpu",
                 event = "pre_present_notified",

@@ -1481,6 +1481,69 @@ fn idle_tasks_run(target_present: Option<u64>) -> (usize, bool) {
     (ran.get(), clock.asked)
 }
 
+/// How many of two idle tasks, each taking 20 ms of host time, run in a frame whose request names
+/// no present time, delivered after an earlier frame's request carried `report`: a frame shown
+/// 5 ms before the later frame's vsync, at `refresh` where the platform named one.
+fn idle_tasks_after_a_presentation(report: Option<Option<Duration>>) -> (usize, bool) {
+    let host = ManualClock::new();
+    host.advance(Duration::from_secs(1));
+    let mut runtime = manual_frame_runtime(&host);
+    let start = host.now();
+    let earlier = start - Duration::from_millis(16);
+    let mut request = flui_platform::FrameRequest::new(crate::event_at(&host, earlier));
+    if let Some(refresh) = report {
+        let mut shown = flui_platform::FramePresented::new(crate::event_at(
+            &host,
+            start - Duration::from_millis(5),
+        ));
+        if let Some(refresh) = refresh {
+            shown = shown.with_refresh(refresh);
+        }
+        request = request.with_presented(shown);
+    }
+    runtime.note_frame_request(runtime.presentation_id(), request);
+    let _ = runtime.pump(&mut SampledClock(earlier), &mut Sink);
+
+    let ran = Rc::new(Cell::new(0_usize));
+    for _ in 0..2 {
+        let (ran, host) = (Rc::clone(&ran), host.clone());
+        runtime
+            .scheduler()
+            .add_task(flui_scheduler::Priority::Idle, move || {
+                ran.set(ran.get() + 1);
+                host.advance(Duration::from_millis(20));
+            });
+    }
+    let request = flui_platform::FrameRequest::new(crate::event_at(&host, start));
+    runtime.note_frame_request(runtime.presentation_id(), request);
+    let mut clock = ObservedIdleDeadline {
+        sampled: start,
+        asked: false,
+    };
+    let _ = runtime.pump(&mut clock, &mut Sink);
+    (ran.get(), clock.asked)
+}
+
+#[test]
+fn a_presentation_report_bounds_the_idle_work_of_a_later_frame() {
+    assert_eq!(
+        idle_tasks_after_a_presentation(Some(Some(Duration::from_millis(10)))),
+        (1, false),
+        "the frame's idle work ends at the next refresh the earlier report places (5 ms after \
+         the vsync), and the host's own deadline is not asked"
+    );
+    assert_eq!(
+        idle_tasks_after_a_presentation(Some(None)),
+        (2, true),
+        "a report with no refresh interval places no refresh"
+    );
+    assert_eq!(
+        idle_tasks_after_a_presentation(None),
+        (2, true),
+        "without a report the host's deadline stands"
+    );
+}
+
 #[test]
 fn a_target_present_time_bounds_the_idle_work_of_its_frame() {
     assert_eq!(

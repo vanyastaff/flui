@@ -431,10 +431,16 @@ pub(crate) mod support {
     /// What an X11 window honours under `support`.
     pub(crate) fn capabilities(support: WindowManagerSupport) -> WindowCapabilities {
         let device = CapabilityAbsence::NotOnThisDevice;
-        let mut capabilities = WindowCapabilities::ALL.unavailable(
-            &WindowCommand::SetMaterial(WindowMaterial::System),
-            CapabilityAbsence::NotOnThisPlatform,
-        );
+        let mut capabilities = WindowCapabilities::ALL
+            .unavailable(
+                &WindowCommand::SetMaterial(WindowMaterial::System),
+                CapabilityAbsence::NotOnThisPlatform,
+            )
+            // The GPU driver presents through the Present extension on a
+            // connection of its own, and the server reports a present's
+            // completion to that connection alone: no other client learns when
+            // the window's frames reached the screen.
+            .without_presentation_feedback(CapabilityAbsence::NotOnThisPlatform);
         capabilities.frame_rate_hint = Availability::Unavailable;
         if !support.managed {
             capabilities =

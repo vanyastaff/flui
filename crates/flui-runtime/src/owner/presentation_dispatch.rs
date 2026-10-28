@@ -494,12 +494,15 @@ impl PresentationDispatcher {
             HostInput::Frame {
                 vsync,
                 target_present,
+                presented,
             } => {
-                let request = flui_platform::FrameRequest::new(vsync);
-                let request = match target_present {
-                    Some(shown) => request.with_target_present(shown),
-                    None => request,
-                };
+                let mut request = flui_platform::FrameRequest::new(vsync);
+                if let Some(shown) = target_present {
+                    request = request.with_target_present(shown);
+                }
+                if let Some(presented) = presented {
+                    request = request.with_presented(presented);
+                }
                 core.deliver(RuntimeWork::Frame(self.address, request), effects)?
             }
             HostInput::Accessibility(request) => {
