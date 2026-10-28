@@ -314,10 +314,10 @@ fn is_kind(object: ObjcId, class: &AnyClass, _main: MainThreadMarker) -> bool {
 
 /// What the window's content view is, or why it is none of FLUI's.
 fn content_of(window: &MacOSWindow, main: MainThreadMarker) -> Result<Content, MacOSBackdropError> {
-    let view = window.view;
+    let view = window.view_ptr();
     // SAFETY: the wrapper owns a live NSWindow (released only after it is
-    // closed, which the caller ruled out) and its FLUI view, which the view
-    // hierarchy holds; read on the main thread (`main`).
+    // closed, which the caller ruled out) and its FLUI view; read on the main
+    // thread (`main`).
     let (current, superview): (ObjcId, ObjcId) = unsafe {
         (
             msg_send![window.ns_window, contentView],
@@ -402,12 +402,11 @@ enum Holder {
 
 /// Make `backdrop` the window's content view, holding FLUI's view.
 fn embed(window: &MacOSWindow, _main: MainThreadMarker, backdrop: ObjcId, holder: Holder) {
-    let view = window.view;
-    let _pin = retain_flui_view(view);
+    let view = window.view_ptr();
     // SAFETY: `backdrop` is a live view the caller holds a strong reference
     // to until this returns, and the window retains it as its content view;
-    // the FLUI view is retained by `_pin` while it moves; the NSWindow is
-    // live (not closed); all on the main thread (`_main`).
+    // the FLUI view is the wrapper's own, alive while it moves; the NSWindow
+    // is live (not closed); all on the main thread (`_main`).
     unsafe {
         let frame: NSRect = msg_send![view, frame];
         let _: () = msg_send![backdrop, setFrame: frame];
@@ -434,14 +433,14 @@ fn embed(window: &MacOSWindow, _main: MainThreadMarker, backdrop: ObjcId, holder
 /// Make FLUI's view the window's content view again, out of the backdrop
 /// `content` holds it in.
 fn take_away(window: &MacOSWindow, _main: MainThreadMarker, content: Content) {
-    let view = window.view;
+    let view = window.view_ptr();
     if matches!(content, Content::Flui) {
         return;
     }
-    let _pin = retain_flui_view(view);
     // SAFETY: the backdrop view is the window's live content view, holding
-    // the FLUI view, which `_pin` retains while it moves; the window releases
-    // the backdrop view when FLUI's view replaces it; on the main thread.
+    // the FLUI view, which the wrapper owns while it moves; the window
+    // releases the backdrop view when FLUI's view replaces it; on the main
+    // thread.
     unsafe {
         match content {
             Content::Material(_) => {
@@ -455,12 +454,6 @@ fn take_away(window: &MacOSWindow, _main: MainThreadMarker, content: Content) {
         let _: () = msg_send![window.ns_window, setContentView: view];
         let _: BObjC = msg_send![window.ns_window, makeFirstResponder: view];
     }
-}
-
-/// A strong reference to FLUI's view while it moves between superviews.
-fn retain_flui_view(view: ObjcId) -> Retained<AnyObject> {
-    // SAFETY: `view` is the wrapper's FLUI view, alive while the window is.
-    unsafe { Retained::retain(view) }.expect("BUG: an AppKit window's FLUI view is never nil")
 }
 
 fn configure_material(effect: ObjcId, material: MacOSMaterial, _main: MainThreadMarker) {

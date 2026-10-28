@@ -35,6 +35,7 @@ pub use ext::{
 };
 
 use std::cell::OnceCell;
+use std::mem::ManuallyDrop;
 use std::rc::Rc;
 use std::sync::{
     Arc, OnceLock,
@@ -42,6 +43,7 @@ use std::sync::{
 };
 
 use cursor_icon::CursorIcon;
+use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
 use objc2::{MainThreadMarker, msg_send};
 use objc2::{class, sel};
@@ -120,9 +122,10 @@ pub struct MacOSWindow {
     /// Fixed for the window's lifetime and read from here, never from
     /// `-[NSWindow contentView]`: a backdrop material makes an
     /// `NSVisualEffectView` the content view and re-parents this view inside
-    /// it. Not retained by the wrapper: the window's view hierarchy holds it,
-    /// and a path that detaches it retains it across the detach.
-    view: ObjcId,
+    /// it. The wrapper owns it: it outlives every re-parenting, and the
+    /// window's [`Drop`] releases it after detaching what is hooked to it and
+    /// releasing the NSWindow, or keeps it if a detach failed.
+    view: ManuallyDrop<Retained<AnyObject>>,
 
     /// Window state
     state: Mutex<MacOSWindowState>,
@@ -251,11 +254,21 @@ impl std::fmt::Debug for MacOSWindow {
 /// [`WindowReveal::AfterFirstFrame`] and so committed to reporting its first
 /// presented frame. Everything else — the default `AtOpen`, or a hidden
 /// window — has alpha left alone.
+/// `object`'s address, as AppKit messages take it.
+fn objc_address(object: &AnyObject) -> ObjcId {
+    std::ptr::from_ref(object).cast_mut()
+}
+
 fn defers_first_reveal(options: &WindowOptions) -> bool {
     options.visible && options.reveal == WindowReveal::AfterFirstFrame
 }
 
 impl MacOSWindow {
+    /// The window's FLUI view, as the address AppKit messages take.
+    fn view_ptr(&self) -> ObjcId {
+        objc_address(&self.view)
+    }
+
     /// Clear the deferred-first-reveal flag, returning whether it was set:
     /// the one call that decides which caller performs the reveal. The state
     /// lock is released before the caller sends any AppKit message, so it is
@@ -546,21 +559,21 @@ impl MacOSWindow {
             // What the features beside the window make their part of it from.
             let closed = Arc::new(AtomicBool::new(false));
             let this = ContentViewRef {
-                view: content_view,
+                view: objc_address(&content_view),
                 closed: Arc::clone(&closed),
                 owner,
                 owner_is_main,
             };
-            let _: () = msg_send![ns_window, setContentView: content_view];
+            let _: () = msg_send![ns_window, setContentView: &*content_view];
 
             // Made once the content view is installed: the bridge subclasses
             // it for VoiceOver, on the main thread, and the window's teardown
-            // detaches it before releasing the window and with it the view.
+            // detaches it before releasing the window and then the view.
             let facets = windows.positions.for_window(&this);
 
             let window = Rc::new(Self {
                 ns_window,
-                view: content_view,
+                view: ManuallyDrop::new(content_view),
                 state: Mutex::new(MacOSWindowState {
                     bounds: Bounds {
                         origin: Point::new(frame.origin.x, frame.origin.y),
@@ -608,10 +621,10 @@ impl MacOSWindow {
                 .publish_through_owner(&window, Self::read_state);
 
             // Enable mouse tracking for mouse moved events
-            content_view::enable_mouse_tracking(content_view);
+            content_view::enable_mouse_tracking(window.view_ptr());
 
             // Make content view first responder to receive keyboard events
-            let _: Bool = msg_send![ns_window, makeFirstResponder: content_view];
+            let _: Bool = msg_send![ns_window, makeFirstResponder: window.view_ptr()];
 
             // Set window delegate for lifecycle events
             let delegate = create_window_delegate(Rc::downgrade(&window));
@@ -723,66 +736,58 @@ impl MacOSWindow {
         );
         unsafe {
             // SAFETY: per the function's contract, the caller is on the owner
-            // lane (checked by the assertion above) and `ns_window` is live,
-            // so its view hierarchy, which holds `self.view`, is too. The view
-            // is NIL-checked before messaging.
-            let content_view = self.view;
-            if content_view == NIL {
+            // lane (checked by the assertion above) and `ns_window` is live;
+            // the window holds `self.view`.
+            let content_view = self.view_ptr();
+            let _: () = msg_send![content_view, setNeedsDisplay: YES];
+            // AppKit owns the display pass that turns this into a
+            // `drawRect:` — nothing in this backend can observe it, so the
+            // two ends of the pump are instrumented separately: this line
+            // (the request went out) and `view.rs`'s `draw_rect` (AppKit
+            // asked for content). A request with no matching `drawRect:` is
+            // otherwise invisible from here, so when a trace subscriber is
+            // attached, report the AppKit state the display pass is gated
+            // on. The reads are msg_sends, so they are behind the level
+            // check rather than unconditional fields.
+            if tracing::enabled!(tracing::Level::TRACE) {
+                let window_visible: bool = msg_send![self.ns_window, isVisible];
+                let occlusion: usize = msg_send![self.ns_window, occlusionState];
+                let needs_display: bool = msg_send![content_view, needsDisplay];
+                let view_window: ObjcId = msg_send![content_view, window];
+                let is_key: bool = msg_send![self.ns_window, isKeyWindow];
+                let app: ObjcId = msg_send![class!(NSApplication), sharedApplication];
+                let app_active: bool = msg_send![app, isActive];
+                let policy: i64 = msg_send![app, activationPolicy];
+                let window_number: i64 = msg_send![self.ns_window, windowNumber];
+                let on_active_space: bool = msg_send![self.ns_window, isOnActiveSpace];
+                let screen: ObjcId = msg_send![self.ns_window, screen];
+                let alpha: f64 = msg_send![self.ns_window, alphaValue];
+                let level: i64 = msg_send![self.ns_window, level];
+                let view_hidden: bool = msg_send![content_view, isHiddenOrHasHiddenAncestor];
+                let view_frame: NSRect = msg_send![content_view, frame];
+                let backing_scale: f64 = msg_send![self.ns_window, backingScaleFactor];
                 tracing::trace!(
+                    window_visible,
+                    occlusion,
+                    needs_display,
+                    view_in_window = view_window != NIL,
+                    is_key,
+                    app_active,
+                    policy,
+                    window_number,
+                    on_active_space,
+                    has_screen = screen != NIL,
+                    alpha,
+                    level,
+                    view_hidden,
+                    vx = view_frame.origin.x,
+                    vy = view_frame.origin.y,
+                    vw = view_frame.size.width,
+                    vh = view_frame.size.height,
+                    backing_scale,
                     deferred,
-                    "request_redraw: window has no content view; request dropped"
+                    "request_redraw: setNeedsDisplay sent to content view"
                 );
-            } else {
-                let _: () = msg_send![content_view, setNeedsDisplay: YES];
-                // AppKit owns the display pass that turns this into a
-                // `drawRect:` — nothing in this backend can observe it, so the
-                // two ends of the pump are instrumented separately: this line
-                // (the request went out) and `view.rs`'s `draw_rect` (AppKit
-                // asked for content). A request with no matching `drawRect:` is
-                // otherwise invisible from here, so when a trace subscriber is
-                // attached, report the AppKit state the display pass is gated
-                // on. The reads are msg_sends, so they are behind the level
-                // check rather than unconditional fields.
-                if tracing::enabled!(tracing::Level::TRACE) {
-                    let window_visible: bool = msg_send![self.ns_window, isVisible];
-                    let occlusion: usize = msg_send![self.ns_window, occlusionState];
-                    let needs_display: bool = msg_send![content_view, needsDisplay];
-                    let view_window: ObjcId = msg_send![content_view, window];
-                    let is_key: bool = msg_send![self.ns_window, isKeyWindow];
-                    let app: ObjcId = msg_send![class!(NSApplication), sharedApplication];
-                    let app_active: bool = msg_send![app, isActive];
-                    let policy: i64 = msg_send![app, activationPolicy];
-                    let window_number: i64 = msg_send![self.ns_window, windowNumber];
-                    let on_active_space: bool = msg_send![self.ns_window, isOnActiveSpace];
-                    let screen: ObjcId = msg_send![self.ns_window, screen];
-                    let alpha: f64 = msg_send![self.ns_window, alphaValue];
-                    let level: i64 = msg_send![self.ns_window, level];
-                    let view_hidden: bool = msg_send![content_view, isHiddenOrHasHiddenAncestor];
-                    let view_frame: NSRect = msg_send![content_view, frame];
-                    let backing_scale: f64 = msg_send![self.ns_window, backingScaleFactor];
-                    tracing::trace!(
-                        window_visible,
-                        occlusion,
-                        needs_display,
-                        view_in_window = view_window != NIL,
-                        is_key,
-                        app_active,
-                        policy,
-                        window_number,
-                        on_active_space,
-                        has_screen = screen != NIL,
-                        alpha,
-                        level,
-                        view_hidden,
-                        vx = view_frame.origin.x,
-                        vy = view_frame.origin.y,
-                        vw = view_frame.size.width,
-                        vh = view_frame.size.height,
-                        backing_scale,
-                        deferred,
-                        "request_redraw: setNeedsDisplay sent to content view"
-                    );
-                }
             }
         }
     }
@@ -1272,8 +1277,8 @@ impl PlatformWindow for MacOSWindow {
     fn surface_target(&self) -> Arc<dyn SurfaceTarget> {
         Arc::new(MacOSSurface {
             // SAFETY: `self.view` is the window's content view, which the
-            // window's view hierarchy holds while the window lives.
-            view: unsafe { super::MainRetainedView::retain(self.view) },
+            // window holds while it lives.
+            view: unsafe { super::MainRetainedView::retain(self.view_ptr()) },
             closed: Arc::clone(&self.closed),
             retirement: self.delivery.retirement(),
         })
@@ -1531,21 +1536,26 @@ impl Drop for MacOSWindow {
         // `detach()` runs before the release, preserving accesskit's
         // documented precondition (unhook the dynamic subclass while the
         // content view is still alive). A bridge failure must not skip the
-        // native window's balancing release, so each step is a cleanup
-        // boundary of its own.
+        // native window's balancing release, and a view a bridge failed to
+        // come off is kept rather than released (`take_apart`).
         let a11y = Arc::clone(&self.facets.accessibility);
         let text = Arc::clone(&self.facets.text);
-        crate::owner::apple::macos::run_cleanup_guarded(|| a11y.detach());
-        crate::owner::apple::macos::run_cleanup_guarded(|| text.detach());
         let ns_window = self.ns_window;
-        crate::owner::apple::macos::run_cleanup_guarded(|| {
-            // SAFETY: the wrapper owns the `alloc`/`init` +1 of `ns_window`
-            // (`releasedWhenClosed` is off), and this is the one balancing
-            // release, sent on the owner thread.
-            unsafe {
-                let _: () = msg_send![ns_window, release];
-            }
-        });
+        // SAFETY: `Drop` runs once, and nothing reads `self.view` after this.
+        let view = unsafe { ManuallyDrop::take(&mut self.view) };
+        super::teardown::take_apart(
+            view,
+            &mut [&mut || a11y.detach(), &mut || text.detach()],
+            &mut || {
+                // SAFETY: the wrapper owns the `alloc`/`init` +1 of
+                // `ns_window` (`releasedWhenClosed` is off), and this is the
+                // one balancing release, sent on the owner thread.
+                unsafe {
+                    let _: () = msg_send![ns_window, release];
+                }
+            },
+            |step| crate::owner::apple::macos::run_cleanup_guarded(step),
+        );
     }
 }
 
