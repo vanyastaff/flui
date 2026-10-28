@@ -23,9 +23,11 @@
 //! dispatch of its own protocol objects on `WaylandState`.
 
 #[cfg(all(target_os = "linux", feature = "wayland"))]
+pub use event_loop::OutputName;
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(crate) use event_loop::{
-    LiveOutputs, LoopWaker, LoopWindow, OutputFacts, OutputName, WaylandDisplays, WaylandHost,
-    WaylandLoop, WaylandState, WindowSeed, WindowTable,
+    LiveOutputs, LoopWaker, LoopWindow, OutputFacts, WaylandDisplays, WaylandHost, WaylandLoop,
+    WaylandState, WindowSeed, WindowTable,
 };
 
 pub(crate) mod wait {
@@ -376,9 +378,10 @@ mod event_loop {
 
     /// An output by its global's name, which the compositor numbers alike for
     /// every client: what a surface's `enter` names, and what the display
-    /// source keys an output by.
+    /// source keys an output by. Public where it is defined, as the testing
+    /// kit names it, and nameable only through it outside the crate.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-    pub(crate) struct OutputName(u32);
+    pub struct OutputName(u32);
 
     impl OutputName {
         /// The output whose global is `name`.
@@ -396,47 +399,30 @@ mod event_loop {
     /// current on the owner thread: an output removed while a surface was on
     /// it sends that surface no `leave`.
     #[derive(Clone, Default)]
-    pub(crate) struct LiveOutputs(Arc<OwnerCell<Vec<(OutputName, WlOutput)>>>);
+    pub(crate) struct LiveOutputs(Arc<OwnerCell<Vec<OutputName>>>);
 
     impl LiveOutputs {
         /// Whether `output` is still announced; `false` off the owner thread.
         pub(crate) fn contains(&self, output: OutputName) -> bool {
-            self.0
-                .with(|live| live.iter().any(|(held, _)| *held == output))
-                .unwrap_or(false)
-        }
-
-        /// The loop's binding of `output`, while it is announced; `None` off
-        /// the owner thread.
-        #[cfg(any(test, feature = "testing"))]
-        pub(crate) fn proxy(&self, output: OutputName) -> Option<WlOutput> {
-            self.0
-                .with(|live| {
-                    live.iter()
-                        .find(|(held, _)| *held == output)
-                        .map(|(_, proxy)| proxy.clone())
-                })
-                .flatten()
+            self.0.with(|live| live.contains(&output)).unwrap_or(false)
         }
 
         /// Every output announced now; empty off the owner thread.
         #[cfg(any(test, feature = "testing"))]
         pub(crate) fn names(&self) -> Vec<OutputName> {
-            self.0
-                .with(|live| live.iter().map(|(name, _)| *name).collect())
-                .unwrap_or_default()
+            self.0.with(|live| live.clone()).unwrap_or_default()
         }
 
-        fn add(&self, output: OutputName, proxy: &WlOutput) {
+        fn add(&self, output: OutputName) {
             self.0.with(|live| {
-                if !live.iter().any(|(held, _)| *held == output) {
-                    live.push((output, proxy.clone()));
+                if !live.contains(&output) {
+                    live.push(output);
                 }
             });
         }
 
         fn remove(&self, output: OutputName) {
-            self.0.with(|live| live.retain(|(held, _)| *held != output));
+            self.0.with(|live| live.retain(|held| *held != output));
         }
     }
 
@@ -632,7 +618,7 @@ mod event_loop {
                 queue,
                 name,
             );
-            self.live.add(name, &output);
+            self.live.add(name);
             self.outputs.push((name, output));
         }
 
@@ -788,8 +774,8 @@ mod event_loop {
         /// none.
         pub(crate) decoration: Option<ZxdgDecorationManagerV1>,
         /// `wp_fractional_scale_manager_v1`, which tells a surface the scale
-        /// the compositor prefers to the 120th; used only with the viewporter,
-        /// which draws a buffer at a scale that is not whole.
+        /// the compositor prefers to the 120th. Whether the window draws at
+        /// it is `scale::buffer_scale`'s to decide: only through a viewport.
         pub(crate) fractional_scale: Option<WpFractionalScaleManagerV1>,
         /// `zxdg_exporter_v2`, which hands out a handle another client
         /// (a portal's dialog) parents its window to.
@@ -930,17 +916,9 @@ mod event_loop {
             let decoration = globals
                 .bind::<ZxdgDecorationManagerV1, _, _>(&handle, 1..=DECORATION_VERSION, ())
                 .ok();
-            // A fractional scale is drawn through the viewport: without one
-            // the surface takes whole scales only.
-            let fractional_scale = viewporter.as_ref().and_then(|_| {
-                globals
-                    .bind::<WpFractionalScaleManagerV1, _, _>(
-                        &handle,
-                        1..=FRACTIONAL_SCALE_VERSION,
-                        (),
-                    )
-                    .ok()
-            });
+            let fractional_scale = globals
+                .bind::<WpFractionalScaleManagerV1, _, _>(&handle, 1..=FRACTIONAL_SCALE_VERSION, ())
+                .ok();
             let exporter = globals
                 .bind::<ZxdgExporterV2, _, _>(&handle, 1..=EXPORTER_VERSION, ())
                 .ok();
@@ -1132,13 +1110,23 @@ mod event_loop {
         /// The globals of the outputs the compositor announces now, for a
         /// test that moves a window between them.
         #[cfg(any(test, feature = "testing"))]
-        pub(crate) fn outputs(&self) -> Vec<u32> {
-            self.protocol
-                .live
-                .names()
-                .into_iter()
-                .map(OutputName::get)
-                .collect()
+        pub(crate) fn outputs(&self) -> Vec<OutputName> {
+            self.protocol.live.names()
+        }
+
+        /// The loop's binding of `output`, while the compositor announces it;
+        /// `None` off the owner thread.
+        #[cfg(any(test, feature = "testing"))]
+        pub(crate) fn output_proxy(&self, output: OutputName) -> Option<WlOutput> {
+            self.dispatching(|_, state| {
+                state
+                    .outputs
+                    .iter()
+                    .find(|(name, _)| *name == output)
+                    .map(|(_, proxy)| proxy.clone())
+            })
+            .ok()
+            .flatten()
         }
 
         /// Dispatch what the compositor already sent: the windows record it.

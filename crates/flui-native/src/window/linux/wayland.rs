@@ -48,8 +48,9 @@
 //! Where the compositor offers `xdg-decoration`, the window asks it for a
 //! frame as its options and commands say, and has the frame the compositor
 //! answers with. Elsewhere it has none: this host draws no frame of its own
-//! ([`decoration`]). Where it offers `xdg-foreign`, the window is exported as
-//! it opens, and `os::wayland` hands the handle out as a portal's parent.
+//! yet ([`decoration`]). Where it offers `xdg-foreign`, the window is exported
+//! as it opens and keeps its portal parent ([`foreign::PortalParent`]), which
+//! the contract's window reference is to carry to the capability crates.
 //!
 //! # The surface
 //!
@@ -59,8 +60,6 @@
 //! the renderer it owns) let go, and the surface itself goes with the last
 //! target.
 
-#[cfg(all(target_os = "linux", feature = "wayland"))]
-pub use toplevel::{WaylandToplevel, WaylandWindowExt};
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(crate) use toplevel::{WaylandWindow, WaylandWindows};
 
@@ -143,6 +142,13 @@ pub(crate) mod configure {
             self.maximized || self.fullscreen || self.tiled
         }
 
+        /// Whether the window is tiled against an edge and in no mode it
+        /// could ask to leave: its size is the tiling's, and a size the
+        /// client asks for is not taken.
+        pub(crate) const fn tiled_by_compositor(self) -> bool {
+            self.tiled && !self.maximized && !self.fullscreen
+        }
+
         /// The window's mode. A Wayland client never hears that its window
         /// was minimized, so the mode is never `Minimized`.
         pub(crate) const fn mode(self) -> WindowMode {
@@ -191,10 +197,16 @@ pub(crate) mod configure {
     /// closing. Resizability is emulated with equal limits; placement,
     /// hiding, showing and position are not the client's on Wayland;
     /// activation is a protocol this host does not speak yet
-    /// (`xdg-activation`).
+    /// (`xdg-activation`). A window the compositor tiles and neither
+    /// maximized nor made fullscreen (`states`) takes the size the
+    /// compositor gives it: the client's size is no request it honours. A
+    /// compositor that announces no `wm_capabilities` (before version 5;
+    /// sway 1.9) is taken to offer every mode, as the window cannot know
+    /// which it ignores.
     pub(crate) fn capabilities(
         announced: Option<WmCapabilities>,
         decoration: Option<CapabilityAbsence>,
+        states: ToplevelStates,
     ) -> WindowCapabilities {
         let mut capabilities = WindowCapabilities::ALL
             .unavailable(
@@ -213,6 +225,12 @@ pub(crate) mod configure {
             );
         if let Some(absence) = decoration {
             capabilities = capabilities.unavailable(&WindowCommand::SetDecorated(true), absence);
+        }
+        if states.tiled_by_compositor() {
+            capabilities = capabilities.unavailable(
+                &WindowCommand::SetSize(Size::new(1.0, 1.0)),
+                CapabilityAbsence::NotOnThisDevice,
+            );
         }
         capabilities.sets_resizable = Availability::Emulated;
         capabilities.observes_position = Availability::Unavailable;
@@ -518,12 +536,14 @@ pub(crate) mod configure {
         /// host does not carry out yet, is refused with its own reason.
         #[test]
         fn the_capabilities_follow_the_compositor() {
-            let unannounced = capabilities(None, Some(CapabilityAbsence::NotOnThisDevice));
+            let free = ToplevelStates::default();
+            let unannounced = capabilities(None, Some(CapabilityAbsence::NotOnThisDevice), free);
             assert!(unannounced.maximizes.is_available());
             assert!(unannounced.minimizes.is_available());
+            assert!(unannounced.sets_size.is_available());
             assert_eq!(unannounced.sets_resizable, Availability::Emulated);
             assert_eq!(
-                capabilities(None, None).sets_decorated,
+                capabilities(None, None, free).sets_decorated,
                 Availability::Native,
                 "a compositor that draws frames takes the command"
             );
@@ -558,6 +578,7 @@ pub(crate) mod configure {
             let announced = capabilities(
                 Some(WmCapabilities::decode(&array(&[CAN_FULLSCREEN]))),
                 None,
+                free,
             );
             assert!(!announced.maximizes.is_available());
             assert!(!announced.minimizes.is_available());
@@ -570,6 +591,25 @@ pub(crate) mod configure {
                     .map(|unsupported| unsupported.reason),
                 Some(flui_platform::UnsupportedReason::NotOnThisDevice)
             );
+        }
+
+        /// A window the compositor tiles takes the size the tiling gives it,
+        /// so it takes no size command; one tiled and maximized or fullscreen
+        /// takes it, by leaving the mode first.
+        #[test]
+        fn a_tiled_window_takes_no_size() {
+            let tiled = ToplevelStates::decode(&array(&[TILED_LEFT, ACTIVATED]));
+            let refused = WindowCommand::SetSize(Size::new(640.0, 480.0))
+                .admit(&capabilities(None, None, tiled))
+                .expect_err("the tiling holds the size");
+            assert_eq!(
+                refused.unsupported().map(|unsupported| unsupported.reason),
+                Some(flui_platform::UnsupportedReason::NotOnThisDevice)
+            );
+            let maximized = ToplevelStates::decode(&array(&[TILED_LEFT, MAXIMIZED]));
+            assert!(capabilities(None, None, maximized).sets_size.is_available());
+            let floating = ToplevelStates::decode(&array(&[ACTIVATED]));
+            assert!(capabilities(None, None, floating).sets_size.is_available());
         }
 
         /// An extent reaches the protocol rounded and within `int`, and what
@@ -1005,10 +1045,24 @@ pub(crate) mod foreign {
 
     #![forbid(unsafe_code)]
 
-    /// The portal's identifier of a window whose export the compositor
-    /// handed `handle` (XDG Desktop Portal, "Window identifiers").
-    pub(crate) fn portal_parent(handle: &str) -> String {
-        format!("wayland:{handle}")
+    /// A window as an XDG Desktop Portal names the parent of its dialog
+    /// (XDG Desktop Portal, "Window identifiers"): `wayland:<handle>` for a
+    /// Wayland window, from its export's handle.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct PortalParent(String);
+
+    impl PortalParent {
+        /// The parent of a Wayland window whose export the compositor handed
+        /// `handle`.
+        pub(crate) fn wayland(handle: &str) -> Self {
+            Self(format!("wayland:{handle}"))
+        }
+
+        /// The identifier a portal takes.
+        #[cfg(any(test, feature = "testing"))]
+        pub(crate) fn as_str(&self) -> &str {
+            &self.0
+        }
     }
 
     #[cfg(test)]
@@ -1017,7 +1071,10 @@ pub(crate) mod foreign {
         /// with the protocol.
         #[test]
         fn a_portal_names_a_window_by_its_export() {
-            assert_eq!(super::portal_parent("a1b2-c3"), "wayland:a1b2-c3");
+            assert_eq!(
+                super::PortalParent::wayland("a1b2-c3").as_str(),
+                "wayland:a1b2-c3"
+            );
         }
     }
 }
@@ -1067,6 +1124,7 @@ mod toplevel {
         Sizing, ToplevelStates, WmCapabilities, capabilities, clamp, protocol_extent,
     };
     use super::decoration::{Decoration, FrameDrawer};
+    use super::foreign::PortalParent;
     use super::frame::{Pacing, first_live, waiting_on_callback};
     use super::scale::{ScaleTold, buffer_scale};
     use crate::host::{self, WindowFacets, WindowPositions};
@@ -1285,6 +1343,9 @@ mod toplevel {
         live: LiveOutputs,
         applied: RefCell<Applied>,
         closed: Cell<bool>,
+        /// Whether the accessibility bridge was last told the window is the
+        /// active one.
+        bridge_focus: Cell<bool>,
         /// What a test draws the window's frames with.
         #[cfg(any(test, feature = "testing"))]
         shm: Option<wayland_client::protocol::wl_shm::WlShm>,
@@ -1292,8 +1353,11 @@ mod toplevel {
 
     impl std::fmt::Debug for WaylandWindow {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            // The portal parent names the window to other clients, which a
+            // log of it helps match against a portal's.
             f.debug_struct("WaylandWindow")
                 .field("id", &self.id)
+                .field("portal_parent", &self.portal_parent())
                 .finish_non_exhaustive()
         }
     }
@@ -1347,7 +1411,7 @@ mod toplevel {
                 execution: WindowExecutionState::Running,
                 hovered: self.hovered,
                 active: states.activated,
-                capabilities: capabilities(applied.told.wm, decoration.absence()),
+                capabilities: capabilities(applied.told.wm, decoration.absence(), states),
             }
             .onto(state)
         }
@@ -1463,6 +1527,7 @@ mod toplevel {
                 waker,
                 applied: RefCell::new(applied),
                 closed: Cell::new(false),
+                bridge_focus: Cell::new(false),
                 #[cfg(any(test, feature = "testing"))]
                 shm: protocol.shm,
             });
@@ -1531,10 +1596,9 @@ mod toplevel {
             let told = self.record.take();
             let close_requested = told.close_requested;
             let configure = told.configure;
-            let (resized, activated, was_activated) = {
+            let (resized, activated) = {
                 let mut applied = self.applied.borrow_mut();
                 let first = !applied.configured;
-                let was_activated = applied.sizing.states().activated;
                 let resized = configure.is_some_and(|configure| {
                     if let Some(roles) = self.roles.borrow().as_ref() {
                         roles.xdg_surface.ack_configure(configure.serial);
@@ -1553,7 +1617,7 @@ mod toplevel {
                     applied.decoration_answered = true;
                 }
                 applied.told = told;
-                (resized, applied.sizing.states().activated, was_activated)
+                (resized, applied.sizing.states().activated)
             };
             if resized {
                 self.size_surface();
@@ -1574,11 +1638,17 @@ mod toplevel {
             if let Some(table) = self.table.upgrade() {
                 table.activation(self.id, activated);
             }
-            // A screen reader follows the window the compositor activates.
-            if activated != was_activated {
+            self.tell_bridge(activated);
+            close_requested
+        }
+
+        /// Tell the accessibility bridge whether the compositor activates the
+        /// window, when that changed since it was last told: a screen reader
+        /// follows the active window.
+        fn tell_bridge(&self, activated: bool) {
+            if self.bridge_focus.replace(activated) != activated {
                 self.facets.accessibility.focus_changed(activated);
             }
-            close_requested
         }
 
         /// A compositor that maximized the window before it went fullscreen
@@ -2033,50 +2103,26 @@ mod toplevel {
         }
     }
 
-    /// What a Wayland window offers beyond the window contract.
-    ///
-    /// Implemented for every [`HostWindow`] (ADR-0151 §8). A window of another
-    /// host is not a Wayland window: [`wayland`](Self::wayland) answers `None`
-    /// for it, and nothing is asked of it.
-    pub trait WaylandWindowExt {
-        /// This window's Wayland extras, or `None` for a window of another
-        /// host.
-        #[must_use]
-        fn wayland(&self) -> Option<WaylandToplevel<'_>>;
-    }
-
-    impl WaylandWindowExt for dyn HostWindow + '_ {
-        fn wayland(&self) -> Option<WaylandToplevel<'_>> {
-            self.as_any().downcast_ref().map(WaylandToplevel)
-        }
-    }
-
-    /// What a Wayland window offers beyond the window contract.
-    /// [`WaylandWindowExt::wayland`] gives one only for a Wayland window.
-    #[derive(Debug, Clone, Copy)]
-    pub struct WaylandToplevel<'a>(&'a WaylandWindow);
-
-    impl WaylandToplevel<'_> {
+    impl WaylandWindow {
         /// The window as an XDG Desktop Portal names the parent of the dialog
-        /// it shows (`wayland:<handle>`): the handle the compositor gave the
-        /// window's export (`xdg-foreign`), so the dialog stays above the
-        /// window and moves with it.
+        /// it shows: the handle the compositor gave the window's export
+        /// (`xdg-foreign`), so the dialog stays above the window and moves
+        /// with it. The contract's window reference carries it to the
+        /// capability crates.
         ///
         /// `None` where the compositor offers no `zxdg_exporter_v2`, before
         /// it answered the export, and once the window closed, when its
         /// handle names nothing.
-        #[must_use]
-        pub fn portal_parent(&self) -> Option<String> {
-            if self.0.closed.get() {
+        pub(crate) fn portal_parent(&self) -> Option<PortalParent> {
+            if self.closed.get() {
                 return None;
             }
-            self.0
-                .record
+            self.record
                 .protocol
                 .lock()
                 .exported
                 .as_deref()
-                .map(super::foreign::portal_parent)
+                .map(PortalParent::wayland)
         }
     }
 
@@ -2202,7 +2248,7 @@ mod toplevel {
                 told: None,
                 answered: false,
             };
-            capabilities(None, decoration.absence())
+            capabilities(None, decoration.absence(), ToplevelStates::default())
         }
 
         /// A frame the compositor draws lies outside the window's surface,
@@ -2422,7 +2468,7 @@ mod toplevel {
         /// The last `zxdg_toplevel_decoration_v1.configure` mode.
         pub(crate) frame_mode: Option<u32>,
         /// The globals of the outputs the surface entered and has not left.
-        pub(crate) outputs: Vec<u32>,
+        pub(crate) outputs: Vec<OutputName>,
     }
 
     #[cfg(any(test, feature = "testing"))]
@@ -2437,23 +2483,49 @@ mod toplevel {
                 preferred_scale: told.preferred_scale,
                 fractional_scale: told.fractional_scale,
                 frame_mode: told.raw_frame_mode,
-                outputs: told.outputs.iter().map(|output| output.get()).collect(),
+                outputs: told.outputs.clone(),
             }
         }
 
+        /// Whether the accessibility bridge was last told the window is the
+        /// active one.
+        pub(crate) fn bridge_focus(&self) -> bool {
+            self.bridge_focus.get()
+        }
+
+        /// Take the last configure again with `suspended` as given, as though
+        /// the compositor had sent it, and publish what follows. `false` for
+        /// a window not configured yet.
+        pub(crate) fn suspend_as_told(&self, suspended: bool) -> bool {
+            {
+                let mut applied = self.applied.borrow_mut();
+                if !applied.configured {
+                    return false;
+                }
+                let states = ToplevelStates {
+                    suspended,
+                    ..applied.sizing.states()
+                };
+                let constraints = applied.constraints;
+                // Zero on both axes: the window keeps its extents.
+                applied.sizing.configure(0, 0, states, constraints);
+            }
+            self.refresh_state();
+            true
+        }
+
         /// Ask the compositor to show the window fullscreen on the output
-        /// whose global is `output`, which moves it there: a client places
-        /// its window on an output in no other way. `false` for an output
-        /// the loop does not hold, or a closed window.
-        pub(crate) fn fullscreen_on(&self, output: u32) -> bool {
-            let Some(proxy) = self.live.proxy(OutputName::new(output)) else {
-                return false;
-            };
+        /// `output`, which moves it there: a client places its window on an
+        /// output in no other way. `false` for a closed window.
+        pub(crate) fn fullscreen_on(
+            &self,
+            output: &wayland_client::protocol::wl_output::WlOutput,
+        ) -> bool {
             let roles = self.roles.borrow();
             let Some(roles) = roles.as_ref() else {
                 return false;
             };
-            roles.toplevel.set_fullscreen(Some(&proxy));
+            roles.toplevel.set_fullscreen(Some(output));
             true
         }
 

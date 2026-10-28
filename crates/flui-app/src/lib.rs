@@ -61,10 +61,6 @@ pub mod native {
     pub use flui_native::HostWindow;
     #[cfg(target_os = "macos")]
     pub use flui_native::os::macos;
-    // `flui-app` builds `flui-native` with `winit-backend` on Linux, which
-    // brings its `wayland` feature.
-    #[cfg(target_os = "linux")]
-    pub use flui_native::os::wayland;
     #[cfg(windows)]
     pub use flui_native::os::windows;
 

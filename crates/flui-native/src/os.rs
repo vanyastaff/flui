@@ -29,16 +29,6 @@ pub mod windows {
     };
 }
 
-#[cfg(wayland_host)]
-pub mod wayland {
-    //! What a window of the native Wayland host offers beyond the window
-    //! contract: the identifier an XDG Desktop Portal parents its dialog to
-    //! (`xdg-foreign`). [`WaylandWindowExt::wayland`] narrows a window to its
-    //! [`WaylandToplevel`] view.
-
-    pub use crate::window::linux::wayland::{WaylandToplevel, WaylandWindowExt};
-}
-
 #[cfg(target_os = "macos")]
 pub mod macos {
     //! What an AppKit window offers beyond the window contract: tabs, native

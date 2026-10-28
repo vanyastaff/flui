@@ -105,12 +105,34 @@ impl ActionHandler for Action {
     }
 }
 
+/// What the bridge tells the AT-SPI adapter: `accesskit_unix::Adapter`'s
+/// two calls, behind a trait so the bridge's side of each is checked without
+/// a bus.
+trait AtSpiAdapter: Send {
+    /// Hand `update` to the adapter if an assistive technology is attached.
+    fn publish(&mut self, update: TreeUpdate);
+
+    /// Whether the window is the active one.
+    fn window_focused(&mut self, focused: bool);
+}
+
+impl AtSpiAdapter for accesskit_unix::Adapter {
+    fn publish(&mut self, update: TreeUpdate) {
+        // A factory: with nobody listening the update is simply dropped.
+        self.update_if_active(move || update);
+    }
+
+    fn window_focused(&mut self, focused: bool) {
+        self.update_window_focus_state(focused);
+    }
+}
+
 /// AT-SPI accessibility for one window.
 pub struct UnixAccessibility {
     shared: Arc<BridgeShared>,
     /// The adapter needs `&mut` to publish, and the capability is shared behind
     /// an `Arc`, so the mutability lives here rather than in the trait.
-    adapter: Mutex<accesskit_unix::Adapter>,
+    adapter: Mutex<Box<dyn AtSpiAdapter>>,
 }
 
 impl UnixAccessibility {
@@ -121,13 +143,20 @@ impl UnixAccessibility {
     /// activates, which is exactly the state a headless CI machine is in.
     #[must_use]
     pub fn new() -> Self {
-        let shared = Arc::new(BridgeShared::new());
-        let adapter = accesskit_unix::Adapter::new(
-            Activation(Arc::clone(&shared)),
-            Action(Arc::clone(&shared)),
-            Deactivation(Arc::clone(&shared)),
-        );
+        Self::over(|shared| {
+            Box::new(accesskit_unix::Adapter::new(
+                Activation(Arc::clone(shared)),
+                Action(Arc::clone(shared)),
+                Deactivation(Arc::clone(shared)),
+            ))
+        })
+    }
 
+    /// The bridge over the adapter `adapter` makes from the state it shares
+    /// with its handlers.
+    fn over(adapter: impl FnOnce(&Arc<BridgeShared>) -> Box<dyn AtSpiAdapter>) -> Self {
+        let shared = Arc::new(BridgeShared::new());
+        let adapter = adapter(&shared);
         Self {
             shared,
             adapter: Mutex::new(adapter),
@@ -151,7 +180,7 @@ impl crate::host::WindowAccessibility for UnixAccessibility {
     /// to and reads the focus only in the active one. Before an assistive
     /// technology attaches, the adapter keeps it for its first tree.
     fn focus_changed(&self, focused: bool) {
-        self.adapter.lock().update_window_focus_state(focused);
+        self.adapter.lock().window_focused(focused);
     }
 }
 
@@ -186,7 +215,7 @@ impl PlatformAccessibility for UnixAccessibility {
         // something is attached; with nobody listening the closure never runs
         // and the value is simply dropped.
         self.shared.retain_if_self_contained(&update);
-        self.adapter.lock().update_if_active(move || update);
+        self.adapter.lock().publish(update);
     }
 
     fn is_active(&self) -> bool {
@@ -235,6 +264,31 @@ mod tests {
         let (_, node) = initial.nodes.first().expect("one node");
         assert_eq!(node.label(), Some("Submit"));
         assert!(accessibility.is_active());
+    }
+
+    /// What the bridge told its adapter of the window's focus.
+    struct FocusTold(Arc<Mutex<Vec<bool>>>);
+
+    impl AtSpiAdapter for FocusTold {
+        fn publish(&mut self, _: TreeUpdate) {}
+
+        fn window_focused(&mut self, focused: bool) {
+            self.0.lock().push(focused);
+        }
+    }
+
+    /// The window's bridge passes each focus change its window reports to the
+    /// adapter, which tells the screen reader which window is active.
+    #[test]
+    fn the_bridge_tells_the_adapter_the_windows_focus() {
+        use crate::host::WindowAccessibility as _;
+
+        let told = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&told);
+        let bridge = UnixAccessibility::over(move |_| Box::new(FocusTold(log)));
+        bridge.focus_changed(true);
+        bridge.focus_changed(false);
+        assert_eq!(*told.lock(), [true, false]);
     }
 
     /// The listeners are the composition root's code, run inside AccessKit's
