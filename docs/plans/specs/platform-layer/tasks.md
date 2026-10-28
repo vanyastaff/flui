@@ -3762,6 +3762,71 @@ graph LR
   и `--all-features`, clippy четырёх вариантов, Windows clippy рабочего пространства, `checks`,
   nextest `xtask`.
 
+- [x] **LY95** — ветка `platform/activation` от `main` @ `8aee131f6` (LY81). **Wayland**
+  (`window/linux/wayland.rs`, чистый модуль `window/linux/wayland/activation.rs` — механизм
+  одного объекта ОС, токена): цикл привязывает `xdg_activation_v1` (`WaylandProtocol::activation`);
+  `WindowCommand::Activate` создаёт `xdg_activation_token_v1`, называет на нём последний
+  пользовательский ввод (`set_serial` с seat, затем `set_surface`, затем `commit` —
+  `activation::token_requests`; мёртвый seat или поверхность не называются) и отдаёт токен
+  обратно (`activate`) на ближайшем ходу, когда композитор уже показал окно (пришёл
+  frame-колбэк или поверхность вошла в выход), каждый токен один раз и по порядку
+  (`activation::Tokens`). `WindowCapabilities.activates` — `Emulated` при глобале,
+  `NotOnThisDevice` без него (было `NotYetOnThisHost`). Токен запуска `XDG_ACTIVATION_TOKEN`
+  читает цикл один раз и отдаёт первому окну; переменная не снимается (`remove_var` гоняется
+  с потоками, читающими окружение), а `xdg_open` её не передаёт открывателю. **Пересечение с
+  LY79:** последний ввод — узкий интерфейс в `owner/linux/wayland.rs`: `LastInput`
+  (`Arc<OwnerCell<Option<UserInput>>>`, `UserInput { seat, serial, surface }`), который окно
+  читает через `WaylandProtocol::last_input`, а ввод сидений LY79 заполняет
+  (`LastInput::record` на нажатии клавиши, кнопки, касании и входе фокуса клавиатуры). До
+  LY79 `record` не зовётся никем (`#[expect(dead_code)]` с причиной), и токен ввода не
+  называет — композитор просит внимания. **Windows** (`window/windows/window.rs`): передний
+  план просится в одном месте, `request_foreground`; `Activate` при отказе правил мигает
+  кнопкой панели задач до выхода окна вперёд (`FlashWindowEx`, `FLASHW_TRAY | FLASHW_TIMERNOFG`),
+  ничего не форсируется; `Show` просит по тем же правилам без мигания; `activate_window`
+  после первого показа проверяет, что дескриптор ещё его (показ мог закрыть окно).
+  `open_url`, `open_path`, `reveal_path` (`owner/windows.rs`) перед `ShellExecuteW` передают
+  право `AllowSetForegroundWindow(ASFW_ANY)` обработчику, которого запускает или будит
+  оболочка. `Platform::activate` на Windows больше не зовёт `SetForegroundWindow` на окне
+  переднего плана (оно чужое) и ничего не делает. Контракт: документация `WindowCommand::Activate`
+  и `WindowCapabilities::activates` говорит о правилах фокуса. **Решения для владельца:**
+  (1) передача права при втором запуске на Windows не сделана: единственного экземпляра нет
+  (gaps, запись 13; строка «Активация» в «Чего нет в этой серии»), и производителя у такой
+  передачи в серии нет; сделана передача ссылкой (`ASFW_ANY` перед оболочкой) и приём права
+  (`Activate` выходит вперёд, если право передано); (2) снимок Win32 говорит `focused: true` и
+  `active: true` для окна, открытого процессом не на переднем плане: это фокус и активность в
+  очереди его потока, не системный фокус клавиатуры (найдено тестом этой задачи, не
+  исправлено); (3) на Wayland ссылка (`xdg-open`) токен открывателю не передаёт —
+  для передачи нужен свой токен до запуска, это работа `flui-system` (LY59, портал OpenURI с
+  `activation_token`). **Тесты** (откат проверен для каждого):
+  `a_token_names_the_last_input_before_its_commit` и
+  `a_token_names_no_seat_or_surface_that_is_gone` (`commit` первым и без проверки живости —
+  падают), `a_token_is_handed_back_once_the_window_was_shown`,
+  `the_capabilities_follow_the_compositor` (без `Emulated` падает),
+  `an_activation_asks_the_compositor_with_a_token` (Wayland: при глобале `Emulated`, токен
+  пришёл и отдан, окно не забрало фокус у закрывшего его; без глобала — `NotOnThisDevice`; без
+  `Emulated` падает `(Unavailable, Emulated)`, без отдачи токена — `(1, 0)`),
+  `an_activation_takes_the_foreground_only_when_it_is_handed_over` (Windows, два настоящих
+  процесса: второй процесс тестового бинаря — окно, берущее передний план как от щелчка, и
+  слушатель `HSHELL_FLASH`; `Activate` оставляет передний план у него и мигает, после
+  `AllowSetForegroundWindow` для нашего процесса выводит окно вперёд; без `FlashWindowEx`
+  падает — Windows при отказе не мигает сама). **Прогоны** 2026-10-28: Windows 11 (сборка
+  26300) — тест двух процессов: 12 прогонов, 11 прошли (один сбой при параллельных прогонах
+  других агентов, причина не записана);
+  WSL Ubuntu 24.04 — headless sway 1.9: `focus_on_window_activation urgent` и `focus` — sway
+  пометил окно срочным (`urgent`), фокус остался у закрывшего окна (токен без seat и
+  поверхности у sway не активирует); Weston 13: `xdg_activation_v1` нет. **Проверки:** WSL
+  clippy `--all-targets -D warnings` (по умолчанию, `--no-default-features`, `wayland`, `x11`,
+  `winit-backend`, `--all-features`), rustdoc `--document-private-items -D warnings`, nextest
+  под Weston (308/308), `--all-features` под Xvfb без Wayland-тестов, Wayland-тесты
+  `--all-features` под Weston (15/15), тесты активации под sway (6/6); Windows clippy рабочего
+  пространства, nextest `flui-native`, `flui-platform`, `flui-app` (412/413: упал
+  `app_handler_obligation_table` «the wake deadline is asked and kept» под нагрузкой, три
+  повтора прошли), clippy Android `--all-targets`, macOS `--all-targets` и с `winit-backend`
+  (LLVM), `wasm-check`, `doc-strict`, `checks`. **Не запущено:** токен с serial настоящего
+  ввода (нет сидений до LY79; headless-композиторы ввода не дают), GNOME/KDE, передача права
+  ссылкой на Windows (обработчик, уже запущенный, — браузер или Explorer — в тесте не
+  поднимался), `cross-typecheck` (только CI).
+
 ## Отступление от порядка, решённое владельцем
 
 - 2026-10-21: LY22 ждёт свои зависимости (LY24, LY9, text-ime, teardown), хотя ни одна ветка не
