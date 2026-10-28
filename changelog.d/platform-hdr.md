@@ -13,11 +13,18 @@
   the `dynamic-range` and `color-gamut` media queries. X11 answers `NotYetOnThisHost`.
 - The headless platform injects a profile: `DisplaySpec::with_color` and
   `DisplayChange::Color`.
+- `WindowDisplay::color` (and `WindowDisplay::with_color`): a window learns that its display's
+  colour changed, and `Renderer::set_display_color` configures its surface again for it before
+  the next frame; the desktop, Android, iOS and Web runners call it.
+- `OsWindowOptions::android` (`AndroidWindowOptions`, `AndroidColorMode`): the Activity's
+  window asks for a wide-gamut or HDR colour mode (`Window.setColorMode`, API 26 and later). The
+  app sets it from `AppConfig::surface_color` where the application set no Android options.
 
 ### Changed
 
 - `Renderer::with_surface_color` takes the `DisplayColor` of the window's display (`None` where
   the platform reports none). Where there is one, it decides whether an `Hdr` request can be met
-  and bounds the tone mapping by its headroom, ahead of what the surface reports;
+  (a headroom no more than SDR white is SDR) and bounds the tone mapping by its headroom, ahead
+  of what the surface reports, and a display reported in sRGB gets no `WideGamut` surface;
   `ResolvedSurfaceColor::resolve` takes it too. The app hands each renderer the colour of the
   display its window is on.

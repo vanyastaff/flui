@@ -301,8 +301,8 @@ request.
 
 - The engine requests a surface colour capability per window (`AppConfig::surface_color`, [ADR-0256](adr/ADR-0256-surface-colour-is-requested-and-converted-at-presentation.md)) and converts to Display P3, scRGB, extended sRGB or HDR10 at presentation; no run on an HDR or P3 display backs it yet, and no Metal space has run.
 - Every display carries its colour profile (`DisplayInfo::color`: `SurfaceColorSpace` and `Headroom`, or why there is none), read on Windows, macOS, iOS, Android, Wayland and the Web, and a profile change is a new snapshot revision; the engine sets a surface up for the colour of its window's display. Only an SDR Windows monitor has run; no HDR or P3 display, and the Apple, Android and Wayland reads are type-checked only.
-- A renderer takes a changed profile only at its next surface setup (ADR-0256 §6): switching HDR on while the app runs does not reconfigure the surface.
-- X11 reads no colour (`_ICC_PROFILE` is not parsed). Windows has no broadcast for the SDR white level, so a moved slider is read at the next other display event. Android does not listen to `Display.registerHdrSdrRatioChangedListener` and does not set the window's `ColorMode`. The Web reports capability only and no headroom.
+- A profile change reconfigures the window's surface before its next frame (ADR-0256 §6, amended), but no host ran a real change: Windows, macOS and Wayland observe the change type-checked or synthetically only, iOS and Android re-read only on their other display events.
+- X11 reads no colour (`_ICC_PROFILE` is not parsed). Windows has no broadcast for the SDR white level, so a moved slider is read at the next other display event. Android sets the window's `ColorMode` for the requested surface but does not listen to `Display.registerHdrSdrRatioChangedListener`: the listener needs a Java class in `FluiView`, so a moved HDR/SDR ratio is read only at the next configuration change or resume. The Web reports capability only and no headroom.
 - Sources are still sRGB: images with a profile, video and HDR images enter the working space as sRGB values.
 
 ### 25. Sandbox-aware file access is absent
