@@ -13,7 +13,7 @@
 - **Дата:** 2026-10-20
 - **Design:** [design.md](design.md); требования — [requirements.md](requirements.md)
 - **База:** `main` @ `deb9faea2`
-- **Итог:** 82 задачи LY20–LY102 одной упорядоченной серией (идентификатор LY77 не занят). Порядок
+- **Итог:** 83 задачи LY20–LY103 одной упорядоченной серией (идентификатор LY77 не занят). Порядок
   задаёт колонка «Зависит от»; сроков, выпусков и оценок трудозатрат у задач нет, серия идёт до
   последней задачи. LY8/LY9 — работа вне серии, завершена.
 
@@ -94,7 +94,7 @@ graph LR
     LY62; LY63; LY64; LY65; LY66; LY67; LY68; LY69; LY70; LY71; LY72; LY73; LY74; LY75; LY76
   end
   subgraph linux["Нативный Linux"]
-    LY78; LY79; LY80; LY81; LY82; LY83; LY84; LY85; LY86; LY87
+    LY78; LY79; LY80; LY81; LY82; LY83; LY84; LY85; LY86; LY87; LY103
   end
   subgraph quality["Планка качества"]
     LY88; LY89; LY90; LY91; LY92; LY93; LY94; LY95; LY96; LY97; LY98; LY99; LY100; LY101; LY102
@@ -147,6 +147,7 @@ graph LR
   LY28 & LY31 & LY45 & LY46 --> LY78 & LY82
   LY29 & LY78 --> LY79
   LY32 & LY78 --> LY81
+  LY79 & LY81 --> LY103
   LY30 & LY32 & LY50 & LY78 --> LY80
   LY29 & LY82 --> LY83
   LY30 & LY32 & LY50 & LY82 --> LY84
@@ -230,7 +231,7 @@ graph LR
 | **LY56** | **Декларации возможностей → манифесты** (D18, R5.12, R6.2). `flui-cli`: строгая схема `[package.metadata.flui.capability]` с фичами; генератор по `cargo metadata` (транзитивные крейты, включённые фичи) пишет `AndroidManifest` (базу FLUI-владельца и блоки крейтов между маркерами), `Info.plist`, entitlements, `PrivacyInfo.xcprivacy` (объединение по приложению), `appxmanifest`; таблица приложения переопределяет usage-строки и отключает возможность; режим verify перечисляет недостающие ключи в проектах, которыми CLI не владеет; `flui add <capability>` (фича фасада, `cargo add` без фасада, декларации, строка регистрации); `NotDeclared` — ответ провайдера, не отказ ОС. База манифеста Android — шаблон под владением FLUI (содержимое — LY62, LY63). Ключи схемы фиксирует первый крейт с декларацией — `flui-system` (например `<queries>` Android для URL и share); сливается в день LY57 (ADR-0154 п. 12) | LY53 | `crates/flui-cli/src/{build,add,manifest}*`, `crates/flui-cli/templates/platforms/*`, fixture-крейты | `workspace`, `checks` | golden-тесты генератора на fixture-крейтах (включая транзитивный и фичу); тест verify; тест `NotDeclared` | L |
 | **LY57** | **`flui-system`: крейт и Windows** (D18, R5.14). Новый крейт возможностей: маркеры и handle служб (диалоги, URL, файлы, reveal, trash, share, message box, автозапуск, глобальные сочетания, прогресс и значок на панели задач, jump list, пути и сведения об ОС; трей приходит вместе с фичей меню: без модели меню это только значок), `Plugin`, декларации, симулирующий провайдер на LY54, общая conformance-таблица. Провайдеры Windows: файловые диалоги (код `prompt_for_*` и OLE переезжает из хоста), URL, открыть путь, reveal, trash, message box, share (где ОС даёт; иначе `Unsupported` с причиной), автозапуск, глобальные сочетания, прогресс и значок, jump list (`ICustomDestinationList`; хосту не нужен), пути и сведения об ОС; родитель диалога — из `WindowRef`; провайдер не имитирует успех, возможность с деградирующей гарантией сообщает уровень на handle | LY51, LY53, LY54, LY56 | `packages/flui-system/*` (новый), `docs/crates.md`, корневой `Cargo.toml` | `workspace`, `reach`, `globals`, `deps` | conformance-таблица против симулятора в CI; Windows против реальной ОС; `NotDeclared`, `NotOnThisPlatform` | L + W |
 | **LY58** [P] | **`flui-system`: macOS** (D18). Провайдеры на objc2: `NSOpenPanel`/`NSSavePanel`, `NSWorkspace` (URL, открыть путь, reveal), trash через `NSFileManager`, `NSAlert`, `NSSharingServicePicker`, `SMAppService`, глобальные сочетания, прогресс и значок Dock, пути | LY57 | `packages/flui-system/src/macos/*` | `workspace`, `cross-typecheck` | таблица против симулятора; macOS — T | L + T; Dev: macOS |
-| **LY59** [P] | **`flui-system`: Linux** (D18, D19). Порталы через `ashpd`/`zbus`: FileChooser, OpenURI, OpenDirectory (reveal), Trash, GlobalShortcuts, Background (автозапуск); прогресс — сигнал Unity LauncherEntry; message box и share — `Unsupported` с причиной, где портала нет; пути — XDG. Родитель портала из `WindowRef`: `x11:<XID>`; для Wayland — после LY81 | LY57 | `packages/flui-system/src/linux/*` | `workspace`, `reach`, `deps` | таблица против симулятора; портал-заглушка на сессионной шине в CI | L; Dev: Linux |
+| **LY59** [P] | **`flui-system`: Linux** (D18, D19). Порталы через `ashpd`/`zbus`: FileChooser, OpenURI, OpenDirectory (reveal), Trash, GlobalShortcuts, Background (автозапуск); прогресс — сигнал Unity LauncherEntry; message box и share — `Unsupported` с причиной, где портала нет; пути — XDG. Родитель портала из `WindowRef`: `WindowRef` получает `portal_parent()`, его заполняют хосты (Wayland — ручка экспорта `xdg-foreign`, которую окно держит с LY81 как `PortalParent`; X11 — `x11:<XID>`); поправка к ADR-0152 (что несёт `WindowRef`) — в том же PR (решение владельца 2026-10-28: родитель портала — межплатформенное понятие, не OS-расширение) | LY57 | `packages/flui-system/src/linux/*`, `crates/flui-platform/src/capability/*` (`WindowRef`), `crates/flui-native/src/window/linux/*`, `docs/adr/ADR-0152-*` | `workspace`, `reach`, `deps` | таблица против симулятора; портал-заглушка на сессионной шине в CI | L; Dev: Linux |
 | **LY60** [P] | **`flui-system`: Web** (D18). Файловые диалоги (`showOpenFilePicker`, где есть, иначе `<input type=file>` и загрузка), `window.open`, share через `navigator.share`, message box через `<dialog>`; reveal, trash, автозапуск, глобальные сочетания, прогресс, jump list — `Unsupported(NotOnThisPlatform)`; пути — `Unsupported` | LY57 | `packages/flui-system/src/web/*` | `workspace`, `wasm-check` | таблица против симулятора; `wasm-test`; браузерные тесты | L (wasm32); Dev: Web |
 | **LY61** | **`Platform` без сервисов и исполнителя** (D12, R3.8). `open_url`, `reveal_path`, `open_path`, `prompt_for_paths`, `prompt_for_new_path`, `app_path` — удалены (живут в `flui-system`); `background_executor`, `BackgroundExecutor`, `Task`, `TaskLabel`, `PathPromptOptions`, `PlatformExecutor` — удалены, внутренние пользователи (winit, Linux notices, macOS, Windows, headless, Web, Android, iOS) переведены на собственные нити и каналы хоста. Заменяет ADR-0039 §2 | LY55, LY57, LY58, LY59, LY60, LY67, LY73 | `crates/flui-native/src/{platform.rs,executor.rs,task.rs,owner/*,lifecycle/*}` | `workspace`, `reach`, `globals` | существующие наборы; нить `flui-native-bg` исчезает из тестов | L + W + T |
 
@@ -261,7 +262,7 @@ graph LR
 | **LY78** | **Wayland: основа** (D20, R7.1). Соединение, привязки глобалов, цикл событий на owner-потоке с пробуждением (по образцу ADR-0249), окно `xdg-shell`, снимок и команды окна, дисплеи на живом слое Linux (`display/linux/`), таблица `Wayland` в `hosts/linux.rs` (тип на каждую позицию, чего нет — `Absent<F>`) и `HostWindow`, цель поверхности для wgpu (raw-handles), выбор хоста в `current_platform()`. `zbus` и `accesskit_unix` становятся безусловными зависимостями Linux (из `winit-backend` уходят), условие `accessibility::{bridge, linux}` в `accessibility/mod.rs` — `target_os = "linux"` (ADR-0151 §15 с поправкой 2026-10-22) | LY28, LY31, LY45, LY46 | `crates/flui-native/src/{owner,window}/linux/wayland.rs`, `hosts/linux.rs`, `lib.rs`, `accessibility/mod.rs`, `Cargo.toml` (фичи `wayland`, зависимости Linux) | `module-dag`, `globals`, `file-length`, `deps` | conformance окна на безголовом композиторе; правила — на хосте | L; Dev: Linux (Wayland) |
 | **LY79** | **Wayland: ввод** (D20). Клавиатура (xkb, раскладка), указатель, касание, перо (`tablet-v2`), жесты pinch и pan (`pointer-gestures`), форма курсора (`cursor-shape`), сборка через `pointer_assembly` | LY29, LY78 | `crates/flui-native/src/input/linux/wayland.rs` | `module-dag`, `file-length` | `assert_backend_conforms` (ввод); записи нативных трасс Wayland | L; Dev: Linux (Wayland, сенсорный ввод или перо при наличии) |
 | **LY80** | **Wayland: IME, clipboard, drag and drop** (D20, D8). `text-input-v3` и text-store host; провайдер clipboard и primary selection через `wl_data_device`; DnD как цель и источник | LY30, LY32, LY50, LY78 | `crates/flui-native/src/{text,clipboard,drag}/linux/wayland.rs` | `module-dag`, `file-length` | conformance clipboard и DnD | L; Dev: Linux (Wayland) |
-| **LY81** | **Wayland: окно и экран** (D20). Декорации (`xdg-decoration`, запасные клиентские), дробный масштаб, видимость и перекрытие, темп по `frame`-колбэкам, перенос окна между выходами одного масштаба, экспорт `xdg-foreign` для родителя порталов, AT-SPI (живой слой). Темп по `frame`-колбэкам (с отказом от колбэка, который не пришёл), видимость по входу поверхности в выход и `suspended` и AT-SPI сделаны в LY78 | LY32, LY78 | `crates/flui-native/src/{window,display}/linux/*`, `accessibility/linux.rs` | `module-dag`, `file-length` | conformance окна и дисплеев | L; Dev: Linux (Wayland, два выхода) |
+| **LY81** | **Wayland: окно и экран** (D20). Декорации (`xdg-decoration`; запасная клиентская рамка — LY103, решение владельца 2026-10-28), дробный масштаб, видимость и перекрытие, темп по `frame`-колбэкам, перенос окна между выходами одного масштаба, экспорт `xdg-foreign` для родителя порталов, AT-SPI (живой слой). Темп по `frame`-колбэкам (с отказом от колбэка, который не пришёл), видимость по входу поверхности в выход и `suspended` и AT-SPI сделаны в LY78 | LY32, LY78 | `crates/flui-native/src/{window,display}/linux/*`, `accessibility/linux.rs` | `module-dag`, `file-length` | conformance окна и дисплеев | L; Dev: Linux (Wayland, два выхода) |
 | **LY82** [P] | **X11: основа** (D20). Соединение, цикл событий на owner-потоке, окно, EWMH-состояние и команды, дисплеи (RandR, живой слой), таблица `X11` в `hosts/linux.rs` и `HostWindow`, цель поверхности, AT-SPI. Если LY82 сливается раньше LY78, безусловные `zbus` и `accesskit_unix` и условие `target_os = "linux"` в `accessibility/mod.rs` — его (строка LY78) | LY28, LY31, LY45, LY46 | `crates/flui-native/src/{owner,window}/linux/x11.rs`, `hosts/linux.rs`, `Cargo.toml` (фича `x11`) | `module-dag`, `globals`, `file-length`, `deps` | conformance окна на Xvfb с оконным менеджером | L; Dev: Linux (X11) |
 | **LY83** | **X11: ввод** (D20). XInput2 (касание, перо, плавная прокрутка), XKB, указатель, курсор | LY29, LY82 | `crates/flui-native/src/input/linux/x11.rs` | `module-dag`, `file-length` | `assert_backend_conforms` (ввод); записи нативных трасс X11 | L; Dev: Linux (X11) |
 | **LY84** | **X11: IME, clipboard, drag and drop** (D20, D8). XIM/IBus для IME и text-store host; провайдер clipboard и primary (селекции, INCR); XDND как цель и источник | LY30, LY32, LY50, LY82 | `crates/flui-native/src/{text,clipboard,drag}/linux/x11.rs` | `module-dag`, `file-length` | conformance clipboard и DnD | L; Dev: Linux (X11) |
@@ -291,6 +292,7 @@ graph LR
 | **LY100** | **Фича `scripted` и один двойник окна** (D29, R11.14). Сценарный примитив контракта — под `scripted`; `flui-testing` и `flui-app[driver]` включают её; 15 реализаций `PlatformWindow` вне ядра сводятся к `flui_testing::MockWindow`; двойники ядра в корне (`FakeAccessibility`, `FakeTextInput`, `MockWindow`, `HeadlessPlatform` и прочие `Headless*`) уходят за `scripted` — часть R4.10, которую LY36 оставил | LY44, LY50, LY54 | `crates/flui-platform/src/capability/`, `crates/flui-native/src/lib.rs` (двойники в корне), `crates/flui-testing/src/`, `crates/flui-app/Cargo.toml`, тесты `flui-interaction`, `flui-runtime`, `flui-app` | `testing` (ADR-0243), `workspace` | `rg "impl .*PlatformWindow for"` вне ядра и kit — ноль; сценарий диалога через драйвер на headless | L |
 | **LY101** | **Фасад: `flui::services::<name>` за фичами** (D31, R5.15, ADR-0154 п. 8). Фасад `flui` получает по фиче на каждый официальный крейт возможности: сейчас `system` для `flui-system` — фича подключает крейт необязательной зависимостью и реэкспортирует его как `flui::services::system`; каждый следующий крейт возможности добавляет свою фичу тем же образцом в своём PR (`flui = { features = ["location", "bluetooth"] }` даёт `flui::services::location::*`). Крейты остаются отдельными: несовместимое изменение в одном задевает только приложения, включившие его фичу. `flui add <capability>` (команда и декларации — LY56) включает фичу фасада, а не добавляет зависимость на крейт напрямую. Kind-правило `workspace` допускает ребро «фасад → крейт возможности» только необязательное, за фичей, и требует фичу фасада у каждого официального крейта возможности | LY57 | `Cargo.toml` (фичи фасада), `src/lib.rs` (`pub mod services`), `crates/flui-cli/src/add*`, `tests/surface.rs`, `docs/crates.md`, `tools/xtask/src/workspace/*` | `workspace` (+ `--self-test`), `facade-combos`, `feature-matrix`, `doc-strict` | `tests/surface.rs`: `flui::services::system` есть ровно при включённой фиче; `facade-combos` собирает каждую фичу отдельно и все вместе; golden-тест `flui add` на fixture-крейте включает фичу фасада и пишет декларации; самотест: обязательная зависимость фасада на крейт возможности и такая же зависимость другого крейта фреймворка отказывают | L + T |
 | **LY102** | **Контракт по областям** (D26, R2.10). Модули `flui-platform` группируются: `window/` (опции, состояние, команды, возможности, размещение, трейт окна, `SurfaceTarget`, яркость), `input/`, `text/`, `display/`, `preferences/`, `transfer/`, `haptics/`, `capability/`, `menu/` (резерв), `unsupported`, `notice`, `system_chrome`, `storage`, `target_platform`; корневые реэкспорты имён, которыми пользуются фасад и `flui-sdk`, остаются (`flui::platform::WindowOptions` не меняется) | LY100, LY101 | `crates/flui-platform/src/**`, `docs/crates.md` | `workspace`, `doc-strict`, `docs-paths` | `cargo public-api diff`: корневые пути без изменений; workspace собирается | L |
+| **LY103** | **Wayland: клиентская рамка** (D20, D2 «декорации и свой заголовок»). Где композитор рамку не рисует (нет `xdg-decoration`, как у GNOME и Weston, или он оставил её клиенту), окно нативного хоста Wayland рисует свою: заголовок с названием окна, рисуемый через движок (`flui-engine`), кнопки (закрыть, свернуть, развернуть — по `wm_capabilities`), перемещение и изменение размера через `xdg_toplevel.move`/`resize` с serial последнего ввода, системное меню окна (`show_window_menu`), `xdg_surface.set_window_geometry` без тени; снимок говорит `decorated: true`, `SetDecorated` снова доступна; рамка уходит в полноэкранном режиме и у мозаичных краёв (`tiled_*`). Решение владельца 2026-10-28: вынесено из LY81 | LY79, LY81 | `crates/flui-native/src/window/linux/*`, `input/linux/wayland.rs` (serial ввода) | `module-dag`, `file-length` | conformance окна на Weston (рамка клиента) и sway (рамка композитора); тест перемещения и изменения размера по serial | L; Dev: Linux (Wayland: Weston, GNOME) |
 
 ## Ход исполнения
 
@@ -3555,6 +3557,121 @@ graph LR
   Windows — clippy рабочего пространства, nextest `flui-native` 341 из 341, clippy Android и
   macOS, `wasm-check`, `checks`, `doc-strict`, `module-dag`, `file-length`, `globals`,
   `markers`, `testing`.
+- [x] **LY81** — ветка `platform/wayland-window` от `main` @ `c8401e35b`. Из строки в LY78 уже
+  были темп по `frame`-колбэкам, видимость по входу в выход и `suspended`, мост AT-SPI; здесь —
+  остальное. **Глобалы** (`owner/linux/wayland.rs`): `zxdg_decoration_manager_v1`,
+  `wp_fractional_scale_manager_v1` (только при `wp_viewporter`), `zxdg_exporter_v2` в
+  `WaylandProtocol`; `LiveOutputs` держит и прокси выхода (для тестового рычага). **Окно**
+  (`window/linux/wayland.rs`, новые чистые модули): `decoration` — рамка есть, только если
+  композитор ответил `server_side`; без менеджера или когда композитор на просьбу о рамке
+  оставил её клиенту, `SetDecorated` — `NotOnThisDevice` (был `NotYetOnThisHost`); объект
+  декорации создаётся до первого commit и уничтожается раньше toplevel. `scale::buffer_scale` —
+  дробный масштаб (числитель над 120) прежде `preferred_buffer_scale` и масштаба выхода, без
+  viewporter — 1. `frame::Pacing` — перекрытие: окну в `suspended` кадр не доставляется и
+  колбэк не отбрасывается по сроку; запрошенный кадр не теряется и уходит, когда композитор
+  снова показывает окно. `foreign` — экспорт при открытии (ручка приходит с round trip
+  открытия), `os::wayland::{WaylandWindowExt, WaylandToplevel::portal_parent}` отдаёт
+  `wayland:<handle>` до закрытия; экспорт уничтожается первым при отставке. AT-SPI:
+  `UnixAccessibility::focus_changed` передаёт активацию адаптеру (`update_window_focus_state`;
+  окно X11 его уже звало, вызов был пустым), окно Wayland зовёт его на каждой смене `activated`.
+  Фасад: `flui_app::native::wayland`, `flui::native::wayland` (Linux). Корневой `Cargo.toml`:
+  `wayland-protocols` с `staging`. **Решения для владельца:** (1) запасные клиентские
+  декорации — наименьшая честная форма: хост рамку не рисует; где композитор её не рисует,
+  окно без рамки и честно это говорит, а клиентская рамка — заголовок приложения (gaps, запись
+  10), которому нужны `xdg_toplevel.move`/`resize` с serial ввода (LY79); (2) ручка экспорта
+  дойдёт до крейта возможностей только через `WindowRef` (LY50), который по ADR-0152 несёт лишь
+  raw-handles, а ADR-0154 §9 для Linux говорит «ничего» — нужен метод или поле; пока ручка
+  доступна приложению через `os::wayland`. **Тесты** (откат проверен):
+  `a_window_has_the_frame_its_compositor_draws` (с `decorated` по просьбе падает),
+  `a_buffer_is_drawn_at_the_scale_the_compositor_prefers` (без дробного масштаба падает),
+  `an_occluded_window_holds_its_frame_until_it_is_shown` (без `suspended` в `Pacing::due`
+  падает), `a_portal_names_a_window_by_its_export`; `the_capabilities_follow_the_compositor`
+  (причина `SetDecorated` стала `NotOnThisDevice`); `tests/wayland_window.rs`:
+  `a_window_moved_to_another_output_names_its_display` — Weston 13 на бэкенде X11 с
+  `--output-count=2` на своём Xvfb (у headless-бэкенда Weston 13 нет `--output-count`, а
+  вложенный Weston без seat не активирует окно, и desktop-shell не ставит fullscreen на
+  названный выход); окно переносится полноэкранным режимом на другой выход (`testing::wayland::
+  {outputs, fullscreen_on}`), называет его дисплей, обработчик слышит изменение, масштаб тот
+  же, после `Normal` — снова первый дисплей; с пропущенным `leave` падает; при одном выходе
+  пропускается с сообщением (CI — один headless Weston). Weston 13 не предлагает ни
+  `xdg-decoration`, ни `wp_fractional_scale_v1`, ни `xdg-foreign` (проверено по реестру);
+  conformance окна на Weston проходит по ветке без менеджера декораций. **Прогон под sway**
+  (одобрено владельцем: `apt install sway`, sway 1.9, wlroots headless, `WLR_LIBINPUT_NO_DEVICES=1`,
+  `output HEADLESS-1 scale 1.5`, окно «a floating frame» плавающее; в CI не добавлен). Три теста
+  идут на любом композиторе и сверяют ответ протокола, а не расшифровку окна:
+  `a_window_has_the_frame_its_compositor_answers` (режим `zxdg_toplevel_decoration_v1` из
+  `CompositorReport::frame_mode`; под sway плавающее окно получило `SetDecorated(false)` и
+  `(true)`, у мозаичного sway рамку оставил, и команда больше не предлагается; под Weston —
+  ветка без протокола), `a_window_draws_at_the_compositors_fractional_scale` (масштаб 180/120 =
+  1.5, физический размер — логический × 1.5 с округлением), `a_portal_parent_names_the_exported_window`
+  (второй клиент импортирует ручку через `zxdg_importer_v2`, импорт жив, после закрытия окна
+  композитор его отзывает). Откат: `decorated` по просьбе — падает первый, без дробного масштаба
+  — второй (2.0 вместо 1.5), без экспорта — третий. Найдено под sway и исправлено: wlroots не
+  шлёт режим рамки повторно, поэтому configure после просьбы без режима — тоже ответ
+  (`frame_asked`/`frame_answered`); иначе отклонённая просьба мозаичного окна оставалась
+  «предложенной» (с прежним кодом тест падал «an overruled request is no longer offered»), а
+  ещё не отвеченная просьба до ответа стоит (`Decoration::answered`). Фикстура читала масштаб
+  `preferred_buffer_scale` (2) прежде дробного — readback исправлен. Под sway conformance окна
+  падает там, где решает мозаика: `SetSize` мозаичного окна и `SetMode(Maximized)` (sway даёт
+  `xdg_wm_base` v2 без `wm_capabilities`, окно заранее не знает) — **для владельца**: снимать ли
+  `sets_size` у мозаичного окна; тесты темпа при параллельном запуске на одном sway видят кадры
+  от перестройки мозаики (по одному — зелёные). Связь моста с адаптером (`update_window_focus_state`) без
+  шины AT-SPI не проверена тестом. `module-dag` — 331 модуль, 351 ребро, 1 исключение;
+  `globals` — 57. **Проверки:** `cargo fmt`; Windows — clippy рабочего пространства
+  `--all-targets -D warnings`, `module-dag`, `file-length`, `markers`, `testing`, `globals`,
+  `docs-paths`, `checks`, `doc-strict`, `wasm-check`; clippy macOS (LLVM, `--all-features`) и
+  Android `-p flui-native -p flui-app --all-targets`. WSL Ubuntu 24.04: clippy `-p flui-native`
+  с `--all-targets` и без: по умолчанию, `--all-features`, `--no-default-features` с
+  `winit-backend`; `--no-default-features`, `… x11`, `… wayland`, `… testing` без
+  `--all-targets` падали и на `main`; после слияния `main` с vanyastaff/flui#1933 все
+  одиночные сочетания (`--no-default-features`, `x11`, `wayland`, `winit-backend`, `testing`)
+  с `--all-targets` и без — чисто; clippy `flui-app`, `flui --features native`; rustdoc `-D warnings
+  --document-private-items` трёх вариантов; nextest после слияния `main`: по умолчанию под
+  headless Weston — 300 из 300, `--all-features` под xvfb без тестов Wayland — 343 из 343 и тесты
+  Wayland под Weston — 12 из 12, тесты Wayland под двумя выходами — 10 из 10, три теста
+  протоколов под sway — 3 из 3. Не запускалось: композиторы рабочего
+  стола (GNOME, KDE, Hyprland) и sway с устройствами ввода; дробный масштаб на HiDPI-экране;
+  портал с родителем; экранный диктор (Orca); Mac, iPhone, Android-устройство, браузер,
+  `cross-typecheck`.
+  **Решения владельца и ревью (vanyastaff/flui#1934)**, коммитами поверх, слиянием. (1)
+  Клиентская рамка — отдельная задача LY103 после LY79 (строка, граф, gaps запись 10). (2)
+  Родитель портала — межплатформенное понятие: `os::wayland`, `WaylandWindowExt`,
+  `flui_app::native::wayland` и `flui::native::wayland` удалены (ADR-0254 §8 называет модули по
+  ОС, и у них не было вызывающего); окно держит `pub(crate) fn portal_parent() ->
+  Option<PortalParent>` (`foreign::PortalParent`, `wayland:<handle>`), до крейтов возможностей
+  его доведёт `WindowRef` в LY59 (строка дополнена, поправка ADR-0152 — там). (3) AT-SPI: мост
+  говорит с адаптером через `AtSpiAdapter` (два вызова `accesskit_unix::Adapter`);
+  `the_bridge_tells_the_adapter_the_windows_focus` (с пустым `focus_changed` падает: `[]`);
+  окно говорит мосту через `tell_bridge` и помнит сказанное (`bridge_focus`),
+  `the_accessibility_bridge_follows_the_compositors_activation` под sway (активация уходит ко
+  второму окну; без вызова `tell_bridge` падает `Some(false)` вместо `Some(true)`; на Weston без
+  seat идёт только первая половина, тест так и говорит). (4) Перекрытие через окно:
+  `an_occluded_window_is_given_its_frame_once_shown` — ни Weston 13, ни sway 1.9 не шлют
+  `suspended` (xdg-shell v6), поэтому состояние вносит `testing::wayland::suspend` (повтор
+  последнего configure с `suspended`, и каждый следующий configure его несёт, как у композитора
+  v6, — иначе configure от смены активации при параллельных тестах снимал его; инъекция на
+  уровне фикстуры); 2,5 с без кадра при
+  взведённом колбэке, после показа — кадр; без `suspended` в `Pacing` падает (1 кадр вместо 0).
+  (5) `LiveOutputs` снова держит только имена; прокси выхода для рычага берётся у состояния
+  диспетчера (`WaylandLoop::output_proxy`, под `testing`). (6) Тестовый API — на `OutputName`
+  (публичный тип, реэкспорт `testing::wayland::OutputName`), `CompositorReport::outputs` тоже.
+  (7) Одна проверка viewport: менеджер дробного масштаба привязывается всегда, решает
+  `scale::buffer_scale`. (8) `FLUI_REQUIRE_TWO_OUTPUTS=1` превращает пропуск
+  `a_window_moved_to_another_output_names_its_display` в падение — проверка разработчика, CI её
+  не запускает (Weston на X11-бэкенде с `--output-count=2` на своём Xvfb). (9) Мозаика: окно в
+  `tiled_*` без maximized/fullscreen не принимает `SetSize` (`NotOnThisDevice`,
+  `ToplevelStates::tiled_by_compositor`; `a_tiled_window_takes_no_size`, без правила падает);
+  режимы — по `wm_capabilities` (v5), где композитор их шлёт; где нет (sway 1.9 даёт
+  `xdg_wm_base` v2), окно считает все режимы доступными, как раньше. Conformance под sway теперь
+  падает только на `SetMode(Maximized)` (sway его молча игнорирует). Тесты Wayland под sway
+  идут по одному (`--test-threads 1`): окна соседних тестов перестраивают мозаику и дают лишние
+  кадры — свойство среды, не дефект. Прогон (после слияния `main` с vanyastaff/flui#1935):
+  `cargo xtask native-features` — чисто, clippy одиночных сочетаний с `--all-targets` и без —
+  чисто; nextest `flui-native` под Weston (один выход) — 304 из 304, `--all-features` под xvfb —
+  345 из 345 и тесты Wayland — 14 из 14; Weston с двумя выходами и `FLUI_REQUIRE_TWO_OUTPUTS=1`
+  — 12 из 12 три раза подряд; sway по одному — 10 из 12
+  (`the_wayland_window_conforms` на `SetMode(Maximized)` и
+  `a_window_maximized_before_fullscreen_returns_to_normal`: sway не разворачивает).
 - [x] **LY82** — ветка `platform/x11`, начата на вершине LY46 `8138ab489`, перенесена на `main`
   @ `d6e469a2b` после слияния #1927. **Хост.** `X11Platform = HostPlatform<X11>`
   (`hosts/linux.rs`): одно соединение libxcb (`owner::linux::x11::X11Connection`, x11rb
@@ -4065,7 +4182,7 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
 каждой её место в контракте и ядре (D2): пункт закрытого списка, раскладку «каталог фичи с
 файлом на платформу» и таблицу хоста, в которой новая позиция не даёт ни одному хосту её
 пропустить, `WindowHandler` и `AppHandler`, шов и мост к хосту — и не реализует её. Это не
-откладывание содержимого этой спеки: всё, что названо в R1–R11, делают LY20–LY102. Ниже — то, чего R1–R11 не называют. Публичной поверхности под эти функции серия не
+откладывание содержимого этой спеки: всё, что названо в R1–R11, делают LY20–LY103. Ниже — то, чего R1–R11 не называют. Публичной поверхности под эти функции серия не
 вносит (R10.4): модуль `menu`, например, приходит вместе с первой реализацией и потребителем
 (design §5).
 
@@ -4165,7 +4282,7 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
 | R6.6 | LY74–LY76 |
 | R6.7 | LY63 |
 | R6.8 | LY62, LY64, LY66, LY71, LY72 (границы названы в строках задач); раздел «Чего нет в этой серии» |
-| R7.1 | LY78–LY85 |
+| R7.1 | LY78–LY85, LY103 |
 | R7.2 | LY85, LY86 |
 | R7.3 | LY87 |
 | R8.1–R8.5 | LY20, LY21; R8.4 также LY23 (фраза о реэкспорте) |
@@ -4193,4 +4310,4 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
 | R11.13 | LY98 |
 | R11.14 | LY100 |
 
-Каждая задача LY20–LY102, кроме не занятой LY77, названа хотя бы в одной строке.
+Каждая задача LY20–LY103, кроме не занятой LY77, названа хотя бы в одной строке.
