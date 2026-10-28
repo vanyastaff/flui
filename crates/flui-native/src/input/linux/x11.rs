@@ -1058,7 +1058,7 @@ mod live {
                                     horizontal: scroll.scroll_type
                                         == xinput::ScrollType::HORIZONTAL,
                                     increment: fp3232(scroll.increment),
-                                })
+                                });
                             }
                             DeviceClassData::Touch(touch) => {
                                 description.direct_touch = touch.mode == xinput::TouchMode::DIRECT;
