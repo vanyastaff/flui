@@ -978,7 +978,34 @@ trait depends on `flui-platform` instead.
   names. The window (`window::linux::wayland`) sizes its surface
   through `wp_viewport`, so a buffer of any size is valid during a resize and
   each configure takes effect with a commit; its capabilities follow the
-  compositor's `wm_capabilities`. `current_platform` picks the winit host
+  compositor's `wm_capabilities` where it sends them (version 5); one that
+  sends none (sway 1.9) is taken to offer every mode. A window tiled and in
+  no mode takes the tiling's size, so `SetSize` is `NotOnThisDevice` while it
+  is. Its buffer is drawn at the compositor's fractional scale
+  (`wp_fractional_scale_v1`), else the surface's preferred whole scale, else
+  its output's, and at scale 1 without a viewport: `scale::buffer_scale` is
+  the one place that decides. Its frame is the compositor's answer through
+  `xdg-decoration`, never the request; a configure after a request that names
+  no mode answers it with the mode unchanged (wlroots sends no mode twice).
+  Where the compositor offers none, or answered the last request with the
+  other mode (sway frames every tiled window), `SetDecorated` is
+  `NotOnThisDevice`: the host draws no frame of its own yet; a client-side
+  frame, its title bar drawn through the engine and moved and resized
+  through `xdg_toplevel.move`/`resize` with an input serial, is a task of its
+  own after input (`decoration`). A suspended window is
+  occluded: it is given no frame and gives up no frame callback until the
+  compositor shows it again, when the frame asked for meanwhile is delivered
+  (`frame::Pacing`). Where the compositor offers `xdg-foreign` v2 the window is
+  exported as it opens, and the export lives until the window closes. Its
+  portal parent `wayland:<handle>` (`foreign::PortalParent`) is a
+  cross-platform fact (X11 names a window `x11:<XID>`), so it reaches the
+  capability crates through the contract's window reference, not through an
+  OS extension; until that reader exists the handle is kept and read under
+  `testing` only. The window tells its AT-SPI bridge each change of the
+  compositor's activation, which `UnixAccessibility::focus_changed` passes to
+  the adapter (the X11 window already called it); the bridge reaches the
+  adapter through `AtSpiAdapter`, the two calls it makes of
+  `accesskit_unix::Adapter`. `current_platform` picks the winit host
   while it is built (the native hosts carry no input yet) and the native
   Wayland host for a Wayland session otherwise.
 - **Linux host events reach the owner through an inbox, and a machine that
