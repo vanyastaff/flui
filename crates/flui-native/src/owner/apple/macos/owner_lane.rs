@@ -211,6 +211,26 @@ pub(crate) fn exec_async_on_owner(
     });
 }
 
+/// Run `f` on the owner lane after `delay`, fire-and-forget, under the same
+/// boundary and on-lane guard as [`exec_async_on_owner`].
+pub(crate) fn exec_after_on_owner(
+    owner: &'static dispatch::Queue,
+    delay: std::time::Duration,
+    f: impl FnOnce() + Send + 'static,
+) {
+    owner.exec_after(delay, move || {
+        os_entry(
+            "a delayed owner-lane turn",
+            (),
+            AfterPanic::Answer(|()| ()),
+            move || {
+                let _guard = OnOwnerQueueGuard::new(owner);
+                f();
+            },
+        );
+    });
+}
+
 /// Cleanup is best effort if a user destructor panics. Isolate each resource
 /// group so remaining windows and the quit notification still get their turn.
 /// Forget only panic payloads: dropping an arbitrary payload can itself panic
