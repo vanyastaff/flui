@@ -1153,6 +1153,10 @@ mod toplevel {
         callback_armed: Mutex<Option<Instant>>,
         /// The handler granted a close request it was asked after the fact.
         close_granted: AtomicBool,
+        /// A test has every configure carry `suspended`, as a compositor of
+        /// xdg-shell version 6 would (`testing::wayland::suspend`).
+        #[cfg(any(test, feature = "testing"))]
+        suspended_by_test: AtomicBool,
     }
 
     /// What the compositor told the window.
@@ -1217,6 +1221,8 @@ mod toplevel {
                 redraw: AtomicBool::new(false),
                 callback_armed: Mutex::new(None),
                 close_granted: AtomicBool::new(false),
+                #[cfg(any(test, feature = "testing"))]
+                suspended_by_test: AtomicBool::new(false),
             }
         }
 
@@ -2342,6 +2348,12 @@ mod toplevel {
                 } => {
                     let decoded = ToplevelStates::decode(&states);
                     #[cfg(any(test, feature = "testing"))]
+                    let decoded = ToplevelStates {
+                        suspended: decoded.suspended
+                            || record.suspended_by_test.load(Ordering::Acquire),
+                        ..decoded
+                    };
+                    #[cfg(any(test, feature = "testing"))]
                     {
                         told.raw_states = states;
                     }
@@ -2494,9 +2506,13 @@ mod toplevel {
         }
 
         /// Take the last configure again with `suspended` as given, as though
-        /// the compositor had sent it, and publish what follows. `false` for
-        /// a window not configured yet.
+        /// the compositor had sent it, and have every later configure carry
+        /// it too until told otherwise; publish what follows. `false` for a
+        /// window not configured yet.
         pub(crate) fn suspend_as_told(&self, suspended: bool) -> bool {
+            self.record
+                .suspended_by_test
+                .store(suspended, Ordering::Release);
             {
                 let mut applied = self.applied.borrow_mut();
                 if !applied.configured {
