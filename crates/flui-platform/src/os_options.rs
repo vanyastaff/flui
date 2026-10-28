@@ -2,7 +2,7 @@
 //! [`WindowOptions::os_options`](crate::WindowOptions::os_options).
 //!
 //! [`OsWindowOptions`] has one optional value per operating system that has
-//! options of its own, each of that system's type: Windows today. A
+//! options of its own, each of that system's type: Windows and Android today. A
 //! cross-platform application sets every system's options it cares about,
 //! without a `cfg` of its own; each host reads only its own system's value,
 //! and another host (headless, winit, another system's) opens the window
@@ -40,9 +40,19 @@
 pub struct OsWindowOptions {
     /// What a Win32 window is created with; the Win32 host alone reads it.
     pub windows: Option<Win32WindowOptions>,
+    /// What the Android Activity's window is created with; the Android host
+    /// alone reads it.
+    pub android: Option<AndroidWindowOptions>,
 }
 
 impl OsWindowOptions {
+    /// Set what the Android Activity's window is created with.
+    #[must_use]
+    pub fn with_android(mut self, android: AndroidWindowOptions) -> Self {
+        self.android = Some(android);
+        self
+    }
+
     /// Set what a Win32 window is created with.
     #[must_use]
     pub fn with_windows(mut self, windows: Win32WindowOptions) -> Self {
@@ -121,4 +131,41 @@ pub enum WindowsTheme {
     /// The user's app theme (Settings › Personalization › Colors), now and
     /// with each later change of it.
     System,
+}
+
+/// What an Android window is created with beyond the common options.
+///
+/// The default is what the Activity's window gets without them: the
+/// display's default colour mode.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct AndroidWindowOptions {
+    /// The colour mode the window asks the display for
+    /// (`Window.setColorMode`, API 26 and later; earlier systems keep the
+    /// default).
+    pub color_mode: AndroidColorMode,
+}
+
+impl AndroidWindowOptions {
+    /// Set the colour mode the window asks the display for.
+    #[must_use]
+    pub const fn with_color_mode(mut self, color_mode: AndroidColorMode) -> Self {
+        self.color_mode = color_mode;
+        self
+    }
+}
+
+/// The colour mode an Android window asks its display for
+/// (`ActivityInfo.COLOR_MODE_*`): the system composes the window in a wide
+/// gamut or in HDR only when the window asks.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum AndroidColorMode {
+    /// sRGB, the display's default.
+    #[default]
+    Default,
+    /// The display's wide colour gamut, where it has one.
+    WideColorGamut,
+    /// HDR, where the display can show it.
+    Hdr,
 }

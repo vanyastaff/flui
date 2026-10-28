@@ -343,6 +343,7 @@ where
     let renderer = pollster::block_on(Renderer::with_surface_color(
         window.surface_target(),
         config.surface_color,
+        super::host::display_color_of(window.as_ref()),
     ));
     let mut renderer = match renderer {
         Ok(r) => r,
@@ -505,14 +506,18 @@ impl IosFrameDriver {
             physical.height.unsigned_abs(),
         );
     }
-    pub(super) fn wake(&mut self, ui_runtime: &mut crate::app::ui_runtime::UiRuntime) {
+    pub(super) fn wake(
+        &mut self,
+        ui_runtime: &mut crate::app::ui_runtime::UiRuntime,
+        presentation: flui_foundation::PresentationId,
+    ) {
         let lane_frame = &self.lane;
         let worker_reload_frame = &self.worker_reload;
         let device_recovery_backoff = &self.device_recovery_backoff;
         let surface_recreation_retry = &self.surface_recreation_retry;
         // The gate half of the wake runs inside one ui_runtime entry and
         // decides; the pump below enters the ui_runtime itself.
-        let (action, now) = ui_runtime.enter(|ui_runtime| {
+        let (action, now, display_color) = ui_runtime.enter(|ui_runtime| {
             let now = web_time::Instant::now();
             // Development reload: applies a queued rebuild at the frame
             // boundary (the `dlopen` stays owner-thread), exactly as the
@@ -546,7 +551,7 @@ impl IosFrameDriver {
                 FallbackGate::default(),
             );
             if action != WakeAction::Render {
-                return (action, now);
+                return (action, now, None);
             }
 
             // A retry owed by a genuine surface-recreation failure gets
@@ -571,7 +576,13 @@ impl IosFrameDriver {
                 }
                 Some(SurfaceLifecycleOutcome::Released) | None => {}
             }
-            (action, now)
+            (
+                action,
+                now,
+                ui_runtime
+                    .window_display(presentation)
+                    .and_then(|display| display.color),
+            )
         });
 
         match action {
@@ -587,7 +598,12 @@ impl IosFrameDriver {
         }
 
         // The frame: `UiRuntime::pump` at `now`, with device-loss
-        // recovery around it (`pump_with_device_recovery`).
+        // recovery around it (`pump_with_device_recovery`). A changed colour
+        // profile of the window's display sets the surface up again before
+        // this frame paints (ADR-0256 §6).
+        if super::surface_lifecycle::follow_display_color(lane_frame, display_color) {
+            ui_runtime.mark_primary_needs_full_repaint();
+        }
         if pump_with_device_recovery(ui_runtime, lane_frame, device_recovery_backoff, now).is_none()
         {
             tracing::error!("frame skipped: raster lane busy at frame admission");
