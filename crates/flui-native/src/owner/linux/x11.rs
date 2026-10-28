@@ -39,8 +39,10 @@
 //! # What the loop names
 //!
 //! It names no feature (ADR-0151 §10). Its windows are the window feature's,
-//! reached through [`LoopWindows`]; the displays, the preference source and
-//! the host notices are what the table makes through [`X11Host`]. A wake from
+//! reached through [`LoopWindows`]; their input is the input feature's,
+//! reached through [`LoopInput`], which hears every event before the windows
+//! do; the displays, the preference source and the host notices are what the
+//! table makes through [`X11Host`]. A wake from
 //! any thread (the owner signal, a window's redraw requester, an exit-policy
 //! request) rings the [`Doorbell`].
 
@@ -48,7 +50,11 @@ use std::collections::VecDeque;
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+use cursor_icon::CursorIcon;
+use flui_platform::CursorError;
+use flui_platform::input_capabilities::InputCapabilities;
 use std::sync::{Arc, Weak};
 
 use flui_platform::{
@@ -72,6 +78,7 @@ use crate::owner::panic_boundary::contain_owner_callback;
 use crate::owner::signal::OwnerSignal;
 use crate::owner::wake_deadline::WakeDeadline;
 use crate::owner::watch::Watch;
+use crate::owner::window_delivery::WindowDelivery;
 use crate::owner::{DirectOwnerHooks, OwnerHooks, OwnerPlatform};
 use crate::platform::{AppHandler, PathPromptOptions, Platform, PlatformExecutor};
 use crate::task::Task;
@@ -201,6 +208,89 @@ pub(crate) trait X11Host: 'static {
         executor: &BackgroundExecutor,
         signal: &Arc<OwnerSignal>,
     ) -> Arc<dyn LinuxNotices>;
+
+    /// The windows' input on `connection`: the pointers, the keyboard and
+    /// the cursor, made on the thread that builds the loop.
+    fn input(connection: &Arc<X11Connection>) -> Arc<dyn LoopInput>;
+}
+
+/// The input of the X11 loop's windows, the input feature's (ADR-0151 §10):
+/// the loop hands it every event first, and a window tells it as it opens
+/// and closes and sets its cursor through it. Every method but
+/// [`capabilities`](Self::capabilities), [`keyboard_layout`](Self::keyboard_layout)
+/// and [`on_keyboard_layout_change`](Self::on_keyboard_layout_change) runs
+/// on the owner thread, and none runs user code with a lock or borrow of
+/// its own held.
+pub(crate) trait LoopInput: Send + Sync {
+    /// The input capabilities a window opening now has.
+    fn capabilities(&self) -> InputCapabilities;
+
+    /// `target` opened: its input is selected and delivered to it from now
+    /// on.
+    fn window_opened(&self, target: InputTarget);
+
+    /// `window` closed: nothing is delivered to it any more.
+    fn window_closed(&self, window: WindowRef);
+
+    /// An event the server sent; `true` when it was input's alone, `false`
+    /// when the windows hear it too (a focus change the input also follows).
+    fn event(&self, event: &Event) -> bool;
+
+    /// Show `cursor` over `window`.
+    ///
+    /// # Errors
+    /// What [`PlatformWindow::set_cursor`](flui_platform::PlatformWindow::set_cursor)
+    /// reports.
+    fn set_cursor(&self, window: WindowRef, cursor: CursorIcon) -> Result<(), CursorError>;
+
+    /// [`Platform::keyboard_layout`].
+    fn keyboard_layout(&self) -> String;
+
+    /// [`Platform::on_keyboard_layout_change`].
+    fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut() + Send>);
+}
+
+/// What the input delivers to one window by: the window, its delivery and
+/// its scale.
+#[derive(Debug, Clone)]
+pub(crate) struct InputTarget {
+    pub(crate) window: WindowRef,
+    pub(crate) delivery: Arc<WindowDelivery>,
+    pub(crate) scale: WindowScale,
+}
+
+/// A window's scale (device pixels per logical pixel) as the window last
+/// read it, which its input reads positions with.
+#[derive(Debug, Clone)]
+pub(crate) struct WindowScale(Arc<AtomicU64>);
+
+impl WindowScale {
+    /// A window at `scale`.
+    pub(crate) fn new(scale: f64) -> Self {
+        Self(Arc::new(AtomicU64::new(scale.to_bits())))
+    }
+
+    /// The scale now.
+    pub(crate) fn get(&self) -> f64 {
+        f64::from_bits(self.0.load(Ordering::Acquire))
+    }
+
+    /// The window is at `scale` now.
+    pub(crate) fn set(&self, scale: f64) {
+        self.0.store(scale.to_bits(), Ordering::Release);
+    }
+}
+
+/// The input position is the loop's: the input the table made, which keeps
+/// the keyboard's layout.
+impl host::Input<X11Loop> for X11Loop {
+    fn keyboard_layout(owner: &X11Loop) -> String {
+        owner.input.keyboard_layout()
+    }
+
+    fn on_keyboard_layout_change(owner: &X11Loop, callback: Box<dyn FnMut() + Send>) {
+        owner.input.on_keyboard_layout_change(callback);
+    }
 }
 
 /// The displays as the X11 loop keeps them: the snapshot, and the watch that
@@ -265,6 +355,7 @@ pub struct X11Loop {
     notices: Arc<dyn NoticeChannel>,
     displays: Arc<dyn HostDisplays>,
     windows: Arc<dyn LoopWindows>,
+    input: Arc<dyn LoopInput>,
     start_preferences: fn(&BackgroundExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxPreferences>,
     start_host_notices: fn(&BackgroundExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxNotices>,
     background_executor: Arc<BackgroundExecutor>,
@@ -302,6 +393,7 @@ impl X11Loop {
         let app = Arc::new(AppDelivery::new());
         let notices = H::notices(&app);
         let displays = H::displays();
+        let input = H::input(&connection);
         notices.mark_held_stale_on_wake(Arc::downgrade(&displays) as Weak<dyn StaleOnWake>);
         let affinity = flui_foundation::OwnerAffinity::new();
         affinity.bind_current();
@@ -313,6 +405,7 @@ impl X11Loop {
             notices,
             displays,
             windows,
+            input,
             start_preferences: H::preferences,
             start_host_notices: H::host_notices,
             background_executor: Arc::new(BackgroundExecutor::new()),
@@ -336,6 +429,12 @@ impl X11Loop {
     /// The owner signal, whose turns deliver what another thread raised.
     pub(crate) fn signal(&self) -> &Arc<OwnerSignal> {
         &self.signal
+    }
+
+    /// The windows' input, which a window opens and closes its input with
+    /// and sets its cursor through.
+    pub(crate) fn input(&self) -> &Arc<dyn LoopInput> {
+        &self.input
     }
 
     /// The displays, which a window names its display from.
@@ -409,7 +508,26 @@ impl X11Loop {
                 tracing::debug!(?error, "the X server refused a request");
                 continue;
             }
-            self.windows.event(&event);
+            // A handler's panic in what the input delivered still leaves the
+            // windows the event, a focus change they follow too; the panic
+            // is raised again after.
+            let heard =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.input.event(&event)));
+            match heard {
+                Ok(true) => {}
+                Ok(false) => self.windows.event(&event),
+                Err(payload) => {
+                    // The first failure is the one raised.
+                    if let Err(second) =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            self.windows.event(&event);
+                        }))
+                    {
+                        flui_foundation::panic::retain_opaque_payload(second);
+                    }
+                    std::panic::resume_unwind(payload);
+                }
+            }
         }
     }
 
