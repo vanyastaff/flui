@@ -22,7 +22,7 @@ use flui_interaction::events::{
     PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
 };
 use flui_interaction::{
-    GestureBinding, HitTestEntry, HitTestHandle, HitTestProbe, HitTestResult,
+    GestureBinding, HitMetadata, HitTestEntry, HitTestHandle, HitTestProbe, HitTestResult,
     InteractionDispatchError, InteractionDispatchHandle, InteractionLane, LocalPayloadTarget,
     PenTool, PointerEvent, PointerId, PointerInfo,
 };
@@ -294,7 +294,7 @@ impl HitTestProbe for Probe {
     ) -> Result<(), InteractionDispatchError> {
         for (low, high, target) in &*self.spots.borrow() {
             if (*low..*high).contains(&position.dx) {
-                result.add(HitTestEntry::new(RenderId::new(1)).metadata(Arc::new(*target)));
+                result.add(HitTestEntry::new(RenderId::new(1)).metadata(HitMetadata::new(*target)));
             }
         }
         Ok(())
@@ -2649,7 +2649,9 @@ impl HitTestProbe for TiltProbe {
     ) -> Result<(), InteractionDispatchError> {
         result
             .with_paint_transform(self.forward, |result| {
-                result.add(HitTestEntry::new(RenderId::new(1)).metadata(Arc::new(self.target)));
+                result.add(
+                    HitTestEntry::new(RenderId::new(1)).metadata(HitMetadata::new(self.target)),
+                );
             })
             .expect("an invertible tilt");
         Ok(())

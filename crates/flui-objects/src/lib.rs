@@ -82,7 +82,7 @@ pub use shimmer::{ShimmerBand, ShimmerSweep};
 
 // --- flat re-exports (interaction) ---
 pub use interaction::{
-    FocusRingStyle, HitShape, MetaDataPayload, MinTarget, MouseRegionCallback, RenderAbsorbPointer,
+    FocusRingStyle, HitShape, MinTarget, MouseRegionCallback, RenderAbsorbPointer,
     RenderContentShape, RenderHitSlop, RenderIgnorePointer, RenderInputRegion, RenderListener,
     RenderMetaData, RenderMouseRegion, RenderOffstage,
 };

@@ -2,8 +2,8 @@
 //!
 //! The widget over `RenderMetaData`.
 
+use flui_rendering::hit_testing::HitMetadata;
 use std::any::Any;
-use std::sync::Arc;
 
 use flui_objects::RenderMetaData;
 use flui_rendering::hit_testing::HitTestBehavior;
@@ -38,7 +38,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// ```
 #[derive(Clone)]
 pub struct MetaData {
-    payload: Option<Arc<dyn Any + Send + Sync>>,
+    payload: Option<HitMetadata>,
     behavior: HitTestBehavior,
     child: Child,
 }
@@ -65,19 +65,16 @@ impl Default for MetaData {
 impl MetaData {
     /// Attach `payload` to this subtree.
     #[must_use]
-    pub fn new<T>(payload: T) -> Self
-    where
-        T: Any + Send + Sync + 'static,
-    {
+    pub fn new(payload: impl Any) -> Self {
         Self {
-            payload: Some(Arc::new(payload)),
+            payload: Some(HitMetadata::new(payload)),
             ..Self::default()
         }
     }
 
     /// Attach an already-shared payload, so several nodes can carry one value.
     #[must_use]
-    pub fn shared(payload: Arc<dyn Any + Send + Sync>) -> Self {
+    pub fn shared(payload: HitMetadata) -> Self {
         Self {
             payload: Some(payload),
             ..Self::default()
