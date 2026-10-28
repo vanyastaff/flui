@@ -20,7 +20,7 @@ fn installed_capture(
     let installed = Rc::new(RefCell::new(None));
     let completed = Rc::clone(&installed);
     Box::new(platform)
-        .run(Box::new(move |owner| {
+        .run(crate::app::runner::app_handler(move |owner| {
             let owner = Rc::new(owner);
             owner.on_wake(Box::new(refresh_installed_after_wake))?;
             let window = owner

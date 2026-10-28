@@ -22,24 +22,14 @@ use flui_platform::drag::{OsDragEndHook, OsDragProvider, OsDragStart, PlatformDr
 use parking_lot::Mutex;
 
 use crate::host::{self, Host};
-use crate::owner::call_point::{Field, Once, call, install};
+use crate::owner::app_delivery::AppDelivery;
 use crate::owner::slot::OwnerSlot;
 use crate::platform::HostPlatform;
 use crate::{
-    error::PlatformError,
-    host_window::HostWindow,
-    owner::DirectOwnerHooks,
-    owner::OpenWindowError,
-    owner::OwnerHooks,
-    owner::OwnerPlatform,
-    owner::PendingWindow,
-    owner::ProxyTransport,
-    owner::WindowOpen,
-    owner::handlers::{OpenWindows, PlatformHandlers},
-    owner::window_delivery::WindowDelivery,
-    platform::Platform,
-    platform::PlatformExecutor,
-    platform::PlatformReadyCallback,
+    error::PlatformError, host_window::HostWindow, owner::DirectOwnerHooks, owner::OpenWindowError,
+    owner::OwnerHooks, owner::OwnerPlatform, owner::PendingWindow, owner::ProxyTransport,
+    owner::WindowOpen, owner::handlers::OpenWindows, owner::window_delivery::WindowDelivery,
+    platform::AppHandler, platform::Platform, platform::PlatformExecutor,
 };
 use flui_platform::{DisplayId, DisplaySnapshot, WindowHandler, WindowId, WindowOptions};
 
@@ -66,7 +56,7 @@ pub(crate) trait HeadlessHost: 'static {
     fn displays() -> DisplaySnapshot;
 
     /// The channel the system notices a test reports take to the application.
-    fn notices() -> Arc<dyn crate::owner::notices::NoticeChannel>;
+    fn notices(app: &Arc<AppDelivery>) -> Arc<dyn crate::owner::notices::NoticeChannel>;
 
     /// The simulated system's pointer devices, none attached.
     fn devices() -> Box<dyn SimulatedDevices>;
@@ -206,7 +196,11 @@ pub(crate) struct HeadlessState {
     /// ([`HeadlessPlatform::with_os_drag`](crate::HeadlessPlatform::with_os_drag)).
     pub(crate) os_drag_start: Option<OsDragStart>,
     pub(crate) owner_signal: Weak<crate::owner::signal::OwnerSignal>,
-    pub(crate) handlers: PlatformHandlers,
+    /// What the platform delivers to the application's handler, which `run`
+    /// binds.
+    pub(crate) app: Arc<AppDelivery>,
+    /// Called when a test changes the keyboard layout.
+    pub(crate) keyboard_layout_changed: Option<Box<dyn FnMut() + Send>>,
     background_executor: Arc<TestExecutor>,
     pub(crate) clipboard: Arc<InMemoryClipboard>,
     is_running: bool,
@@ -310,6 +304,7 @@ impl HeadlessLoop {
     /// channel and the simulated devices, and whose windows are `windows`, the
     /// window feature's.
     pub(crate) fn new<H: HeadlessHost>(windows: Arc<dyn TrackedWindows>) -> Self {
+        let app = Arc::new(AppDelivery::new());
         let state = HeadlessState {
             drags: Arc::new(Mutex::new(OsDrags {
                 table: H::offers(),
@@ -318,7 +313,9 @@ impl HeadlessLoop {
             })),
             os_drag_start: None,
             owner_signal: Weak::new(),
-            handlers: PlatformHandlers::new(),
+            notices: H::notices(&app),
+            app,
+            keyboard_layout_changed: None,
             background_executor: Arc::new(TestExecutor::new("background")),
             clipboard: Arc::new(InMemoryClipboard::new()),
             is_running: false,
@@ -332,7 +329,6 @@ impl HeadlessLoop {
             input_availability: default_input_availability(),
             devices: H::devices(),
             displays: H::displays(),
-            notices: H::notices(),
             session_end_releases: 0,
             preferences: flui_platform::SystemPreferences::default(),
             preference_failure: None,
@@ -367,48 +363,43 @@ impl HeadlessLoop {
     }
 }
 
-/// Stop the platform and run the application's quit handler, once: it is
-/// retired after its call. The signal, when there is one, closes first.
+/// Stop the platform and tell the application's handler it quits; the
+/// delivery hears the quit once per run. The signal, when there is one,
+/// closes first.
 fn finish_quit(state: &Mutex<HeadlessState>) {
-    let signal = {
+    let (signal, app) = {
         let mut state = state.lock();
         state.is_running = false;
-        state.owner_signal.upgrade()
+        (state.owner_signal.upgrade(), Arc::clone(&state.app))
     };
     if let Some(signal) = signal {
         signal.close();
     }
-    call(
-        &Once(Field::new(state, |state| &mut state.handlers.quit)),
-        |quit| quit(),
-    )
-    .or_resume(());
+    app.quit_requested().or_resume(());
 }
 
-/// Ask the application's exit-policy hook whether the platform may quit now
-/// that no window is tracked, and quit when it may. No hook never quits.
+/// Ask the application's handler whether the platform may quit now that no
+/// window is tracked, and quit when it may. With no handler bound it never
+/// quits.
 ///
-/// The hook runs with the state lock released: it drops removed UI runtime
+/// The handler runs with the state lock released: it drops removed UI runtime
 /// state, whose destructors may call back into this platform (a dispose hook
-/// opening another window, say). Emptiness is checked before the hook and
-/// again before quitting, so a window opened meanwhile — by the hook itself
+/// opening another window, say). Emptiness is checked before the question and
+/// again before quitting, so a window opened meanwhile — by the handler itself
 /// too — keeps the platform running. `true` when it quit.
 pub(crate) fn consult_exit_policy(state: &Mutex<HeadlessState>) -> bool {
-    if !state.lock().windows.is_empty() {
-        return false;
-    }
-    // `false` when vacant, not `true`: headless's own pre-#555 default is "no
-    // hook -> never quit" (matching every headless test/consumer that
-    // predates this mechanism, none of which expects closing a mock window
-    // to spontaneously call `quit`) -- the OPPOSITE of winit's "no hook ->
-    // exit unconditionally" default, which matches real native pre-#555
-    // window-close behavior instead. The two backends' defaults are
-    // deliberately different; this is not a typo.
-    let allowed = call(
-        &Field::new(state, |state| &mut state.handlers.exit_policy),
-        |hook| hook(),
-    )
-    .or_resume(false);
+    let app = {
+        let state = state.lock();
+        if !state.windows.is_empty() {
+            return false;
+        }
+        Arc::clone(&state.app)
+    };
+    // `false` with no handler, not `true`: a headless platform before or
+    // after its run never quits on its own, the opposite of the desktop
+    // hosts, whose loop ends with its last window when nothing says
+    // otherwise.
+    let allowed = app.exit_policy().or_resume(false);
     if !allowed || !state.lock().windows.is_empty() {
         return false;
     }
@@ -471,7 +462,7 @@ impl host::Loop for HeadlessLoop {
     fn run(
         self: Arc<Self>,
         platform: Arc<dyn Platform>,
-        on_ready: PlatformReadyCallback,
+        handler: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError> {
         tracing::info!("Starting headless platform (no event loop)");
 
@@ -516,11 +507,15 @@ impl host::Loop for HeadlessLoop {
             ))
         };
 
-        // In headless mode, just call on_ready and return immediately. A
-        // fallible bootstrap has nowhere else to go on this backend since
-        // there is no loop to keep running with a half-built app --
-        // propagate straight out of `run`.
-        if let Err(error) = on_ready(OwnerPlatform::new(platform, hooks)) {
+        // In headless mode, just run the bootstrap and return immediately. A
+        // failed bootstrap has nowhere else to go on this backend since there
+        // is no loop to keep running with a half-built app -- propagate
+        // straight out of `run`. The handler stays bound for the platform's
+        // life: a test reports to it after `run` returned.
+        let app = Arc::clone(&self.state.lock().app);
+        app.bind(handler, &platform, &hooks);
+        app.resume_through_signal(&signal);
+        if let Err(error) = app.ready(OwnerPlatform::new(platform, hooks)) {
             signal.close();
             return Err(PlatformError::bootstrap(error));
         }
@@ -541,33 +536,11 @@ impl host::Loop for HeadlessLoop {
         finish_quit(&self.state);
     }
 
-    fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
-        install(
-            &Field::new(&*self.state, |state| &mut state.handlers.exit_policy),
-            hook,
-        );
-    }
-
     fn request_exit_policy_reevaluation(&self) {
         // Park only (coalesced): this mock has no event loop, so the
         // owner-thread half runs when the embedder calls
         // `HeadlessExitReevaluation::drive` — see that method's doc.
         self.with_state(|state| state.exit_reevaluation_requested = true);
-    }
-
-    fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
-        install(
-            &Field::new(&*self.state, |state| &mut state.handlers.quit),
-            callback,
-        );
-    }
-
-    fn set_wake_deadline_hook(
-        &self,
-        hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
-    ) {
-        // No idle wait to bound: the test drives every owner turn.
-        drop(hook);
     }
 }
 
@@ -949,7 +922,7 @@ mod tests {
             DisplaySnapshot::empty()
         }
 
-        fn notices() -> Arc<dyn crate::owner::notices::NoticeChannel> {
+        fn notices(_: &Arc<AppDelivery>) -> Arc<dyn crate::owner::notices::NoticeChannel> {
             Arc::new(NoNotices)
         }
 
@@ -1026,55 +999,36 @@ mod tests {
         }
     }
 
+    /// The quit reaches the handler once, outside the state lock, and a quit
+    /// the handler issues from inside it is the same quit.
     #[test]
-    fn explicit_quit_reenters_and_drops_its_callback_outside_the_state_lock() {
-        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-        struct CallbackDrop {
-            platform: std::sync::Weak<HeadlessLoop>,
-            released: Arc<AtomicBool>,
-        }
-        impl Drop for CallbackDrop {
-            fn drop(&mut self) {
-                let platform = self
-                    .platform
-                    .upgrade()
-                    .expect("platform still owned by test");
-                // Record rather than assert in Drop: on RED the callback body
-                // itself panics, so a second panic here would abort the process.
-                self.released
-                    .store(platform.state.try_lock().is_some(), Ordering::SeqCst);
-            }
-        }
+    fn explicit_quit_reenters_and_reaches_the_handler_outside_the_state_lock() {
+        use std::cell::Cell;
+
+        use crate::owner::app_delivery::testing::{AppCall, AppLog, bind};
+
         let platform = Arc::new(HeadlessLoop::new::<EmptyHost>(Arc::new(NoWindows)));
         platform.state.lock().is_running = true;
-        let calls = Arc::new(AtomicUsize::new(0));
-        let released = Arc::new(AtomicBool::new(false));
-        let callback_drop = CallbackDrop {
-            platform: Arc::downgrade(&platform),
-            released: Arc::clone(&released),
-        };
-        let callback_platform = Arc::clone(&platform);
-        let callback_calls = Arc::clone(&calls);
-        platform.on_quit(Box::new(move || {
-            let _ = &callback_drop;
-            assert!(
-                callback_platform.state.try_lock().is_some(),
-                "quit callback must run outside the state lock"
-            );
-            callback_calls.fetch_add(1, Ordering::SeqCst);
-            callback_platform.quit();
-        }));
+        let app = AppLog::new();
+        let delivery = Arc::clone(&platform.state.lock().app);
+        let run = bind(delivery, app.clone());
+        run.delivery.ready(run.owner()).expect("bootstrap");
+        let unlocked = Rc::new(Cell::new(false));
+        let (seen, reentered) = (Rc::clone(&unlocked), Arc::clone(&platform));
+        app.react(move |call, _| {
+            if call == AppCall::Quit {
+                seen.set(reentered.state.try_lock().is_some());
+                reentered.quit();
+            }
+        });
         platform.quit();
         platform.quit();
-        assert_eq!(
-            calls.load(Ordering::SeqCst),
-            1,
-            "the registered callback is consumed before reentry"
-        );
+        assert_eq!(app.calls(), [AppCall::Ready, AppCall::Quit]);
         assert!(
-            released.load(Ordering::SeqCst),
-            "captured callback data drops outside the state lock"
+            unlocked.get(),
+            "the handler heard the quit outside the state lock"
         );
         assert!(!platform.state.lock().is_running);
+        run.delivery.release();
     }
 }

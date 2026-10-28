@@ -144,7 +144,7 @@ fn a_change_with_no_turn_callback_reaches_the_next_one_registered() {
     let saved = Rc::new(RefCell::new(None));
     let installed = Rc::clone(&saved);
     Box::new(platform)
-        .run(Box::new(move |owner| {
+        .run(crate::app::on_ready(move |owner| {
             *installed.borrow_mut() = Some(owner);
             Ok(())
         }))
@@ -260,7 +260,7 @@ fn setting_messages_wake_the_owner_without_a_user_window() {
     let (finished, wait) = mpsc::channel();
     let (watchdog, watchdog_result) = mpsc::channel();
     Box::new(platform)
-        .run(Box::new(move |owner| {
+        .run(crate::app::on_ready(move |owner| {
             owner.preferences().expect("initial native observation");
             let quit = owner.proxy();
             owner

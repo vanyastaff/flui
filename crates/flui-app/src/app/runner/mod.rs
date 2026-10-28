@@ -74,7 +74,10 @@ pub use android::{run_app_android, run_app_android_with_config};
 ))]
 use desktop::run_desktop;
 pub use fonts::{FontRegistrationError, register_font};
-pub(crate) use host::{OwnerHostClearGuard, install_owner_platform, with_owner_platform};
+pub(crate) use host::{
+    AppRoutes, OwnerHostClearGuard, app_handler, install_owner_platform, route_exit_policy,
+    route_quit, with_owner_platform,
+};
 pub(in crate::app) use installed_host::InstalledHost;
 #[cfg(target_os = "ios")]
 pub use ios::{run_app_ios, run_app_ios_with_config};
@@ -489,7 +492,7 @@ mod tests {
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _clear_guard = OwnerHostClearGuard::arm();
             let platform = headless_platform();
-            let _ = platform.run(Box::new(|owner| {
+            let _ = platform.run(crate::app::runner::app_handler(|owner| {
                 install_owner_platform(owner).expect("install owner wake transport");
                 panic!("exercise on_ready panic cleanup");
             }));
@@ -542,7 +545,7 @@ mod tests {
             .with_text_store_host(move || std::rc::Rc::new(FocusLog(Arc::clone(&log))));
         let _clear_guard = OwnerHostClearGuard::arm();
         Box::new(platform)
-            .run(Box::new(|owner| {
+            .run(crate::app::runner::app_handler(|owner| {
                 install_owner_platform(owner).expect("install owner wake transport");
                 let window = with_owner_platform(|owner| {
                     owner.open_routed(flui_platform::WindowOptions::default())

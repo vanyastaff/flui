@@ -34,16 +34,15 @@ use wasm_bindgen::prelude::*;
 use flui_platform::{SessionEndAnswer, SessionEndPhase};
 
 use crate::host::{self, Loop as _};
-use crate::owner::call_point::{Field, Once, call, install};
+use crate::owner::app_delivery::AppDelivery;
 use crate::{
     error::PlatformError, owner::DirectOwnerHooks, owner::OwnerHooks, owner::OwnerPlatform,
-    owner::handlers::PlatformHandlers, owner::signal::OwnerSignal,
-    owner::window_delivery::WindowDelivery, platform::Platform, platform::PlatformExecutor,
-    platform::PlatformReadyCallback,
+    owner::signal::OwnerSignal, owner::window_delivery::WindowDelivery, platform::AppHandler,
+    platform::Platform, platform::PlatformExecutor,
 };
 use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::drag::PlatformDragSource;
-use flui_platform::{Clipboard, DisplayId, DisplaySnapshot, SystemNotice, SystemPreferences};
+use flui_platform::{Clipboard, DisplayId, DisplaySnapshot, SystemPreferences};
 
 use crate::owner::sources::SystemPreferenceSource;
 use crate::owner::watch::Watch;
@@ -358,6 +357,8 @@ type RafClosureSlot = Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>>;
 /// [`WebPlatform`](crate::WebPlatform) is its platform.
 pub struct WebLoop {
     pub(crate) state: Arc<Mutex<WebState>>,
+    /// What the page delivers to the application's handler, which `run` binds.
+    pub(crate) app: Arc<AppDelivery>,
     /// The one HTML drag-and-drop transport every canvas shares, as the table
     /// made it.
     pub(crate) drag: Arc<dyn HostDrag>,
@@ -381,7 +382,6 @@ pub struct WebLoop {
 }
 
 pub(crate) struct WebState {
-    pub(crate) handlers: PlatformHandlers,
     background_executor: Arc<WebExecutor>,
     pub(crate) clipboard: Arc<dyn Clipboard>,
     is_running: bool,
@@ -409,7 +409,6 @@ impl WebLoop {
         console_error_panic_hook::set_once();
 
         let state = WebState {
-            handlers: PlatformHandlers::new(),
             background_executor: Arc::new(WebExecutor::new()),
             clipboard: H::clipboard(),
             is_running: false,
@@ -459,6 +458,7 @@ impl WebLoop {
         let preferences = H::preferences(&signal)?;
         Ok(Self {
             state,
+            app: Arc::new(AppDelivery::new()),
             drag: H::drag(),
             input: H::input(),
             signal,
@@ -477,30 +477,19 @@ impl WebLoop {
         f(&mut self.state.lock())
     }
 
-    /// One of the application's handlers, as a slot of the page state.
-    pub(crate) fn handler<H>(
-        state: &Mutex<WebState>,
-        project: fn(&mut WebState) -> &mut Option<H>,
-    ) -> Field<'_, Mutex<WebState>, H> {
-        Field::new(state, project)
-    }
-
-    /// The page was hidden or shown again: tell the session-end hook, so the
-    /// application saves what must survive.
+    /// The page was hidden or shown again: tell the application's handler, so
+    /// it saves what must survive.
     ///
     /// A page cannot be asked to wait, so the answer is not read. `pagehide`
     /// also precedes a move into the back/forward cache: a page that comes back
     /// reports `Cancelled`, and is hidden again later, which reports `Ending`
     /// again. The browser may stop the page before an asynchronous write
     /// started here finishes; only what the application hands over
-    /// synchronously is certain to be accepted. A hook registered while it
-    /// ran replaces this one.
-    fn report_session_phase(state: &Mutex<WebState>, phase: SessionEndPhase) {
-        call(
-            &Self::handler(state, |state| &mut state.handlers.session_end),
-            |hook| hook(phase),
-        )
-        .or_contain(SessionEndAnswer::Proceed, "the session-end hook");
+    /// synchronously is certain to be accepted.
+    fn report_session_phase(app: &AppDelivery, phase: SessionEndPhase) {
+        let _answer = app
+            .session_end(phase)
+            .or_contain(SessionEndAnswer::Proceed, "the session-end handler");
     }
 
     /// Start the requestAnimationFrame render loop
@@ -567,7 +556,7 @@ impl host::Loop for WebLoop {
     fn run(
         self: Arc<Self>,
         platform: Arc<dyn Platform>,
-        on_ready: PlatformReadyCallback,
+        handler: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError> {
         tracing::info!("Starting web platform");
 
@@ -585,10 +574,10 @@ impl host::Loop for WebLoop {
 
         // The page being hidden is the end of the session: the browser may
         // discard it without another event.
-        let state = Arc::downgrade(&self.state);
+        let app = Arc::downgrade(&self.app);
         *self.page_observers.borrow_mut() = Some(self.page.listen(Box::new(move |phase| {
-            if let Some(state) = state.upgrade() {
-                Self::report_session_phase(&state, phase);
+            if let Some(app) = app.upgrade() {
+                Self::report_session_phase(&app, phase);
             }
         })));
 
@@ -599,10 +588,16 @@ impl host::Loop for WebLoop {
             Arc::clone(&self.signal),
         ));
 
-        // Call on_ready synchronously — browser event loop is already
-        // running. On `Err`, do NOT install the RAF loop over a half-built
-        // page — return the failure instead.
-        on_ready(OwnerPlatform::new(Arc::clone(&platform), hooks))
+        // Run the bootstrap synchronously — the browser's event loop is
+        // already running. On `Err`, do NOT install the RAF loop over a
+        // half-built page — return the failure instead. The page outlives
+        // `run`: the handler stays bound, and the owner capability the
+        // bootstrap keeps holds the platform and hooks the delivery holds
+        // weakly.
+        self.app.bind(handler, &platform, &hooks);
+        self.app.resume_through_signal(&self.signal);
+        self.app
+            .ready(OwnerPlatform::new(Arc::clone(&platform), hooks))
             .inspect_err(|_| self.quit())
             .map_err(PlatformError::bootstrap)?;
 
@@ -623,39 +618,15 @@ impl host::Loop for WebLoop {
         let page_observers = self.page_observers.borrow_mut().take();
         drop(page_observers);
         self.with_state(|state| state.is_running = false);
-        // Shutdown is committed: the quit callback runs once, and its panic
-        // reaches the Rust boundary with its captures retained.
-        call(
-            &Once(Self::handler(&self.state, |state| &mut state.handlers.quit)),
-            |quit| quit(),
-        )
-        .or_resume(());
-    }
-
-    fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
-        install(
-            &Self::handler(&self.state, |state| &mut state.handlers.quit),
-            callback,
-        );
-    }
-
-    fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
-        // The page ends when its tab does; closing the canvas never exits the
-        // loop, so there is no exit to consult the hook about.
-        drop(hook);
+        // Shutdown is committed: the handler hears the quit once, and its
+        // panic reaches the Rust boundary. The handler is let go after.
+        self.app.quit_requested().or_resume(());
+        self.app.release();
     }
 
     fn request_exit_policy_reevaluation(&self) {
-        // With no exit policy hook to consult, there is nothing to re-evaluate.
-    }
-
-    fn set_wake_deadline_hook(
-        &self,
-        hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
-    ) {
-        // The browser's event loop idles the page and the animation-frame loop
-        // drives its frames; there is no idle wait to bound.
-        drop(hook);
+        // The page ends when its tab does: with no exit policy to ask, there
+        // is nothing to re-evaluate.
     }
 }
 
@@ -750,30 +721,9 @@ impl host::Preferences<WebLoop> for WebLoop {
 /// The lifecycle position is the loop's: the page reports the end of its
 /// session (`WebHost::page`) and nothing else.
 impl host::Lifecycle<WebLoop> for WebLoop {
-    fn on_session_end(
-        owner: &WebLoop,
-        callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
-    ) {
-        install(
-            &WebLoop::handler(&owner.state, |state| &mut state.handlers.session_end),
-            callback,
-        );
-    }
-
-    fn on_host_notice(_: &WebLoop, callback: Box<dyn FnMut(SystemNotice) + Send>) {
-        // A page is told of none of sleep, wake, session lock or memory
-        // pressure, so nothing calls the callback.
-        drop(callback);
-    }
-
     fn release_session_end(_: &WebLoop) {
-        // A page cannot be asked to wait, so the hook's answer is never read
-        // and no session end is held open.
-    }
-
-    fn on_reopen(_: &WebLoop, callback: Box<dyn FnMut() + Send>) {
-        // Only AppKit reports a reopen.
-        drop(callback);
+        // A page cannot be asked to wait, so the handler's answer is never
+        // read and no session end is held open.
     }
 
     fn activate(_: &WebLoop, _: bool) {

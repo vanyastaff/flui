@@ -45,30 +45,32 @@ fn display_change_message_invalidates_the_snapshot_and_wakes_the_owner() {
     );
     let counted = Arc::clone(&displays);
     Box::new(platform)
-        .run(Box::new(move |owner| {
-            let quit = owner.proxy();
-            let timeout = quit.clone();
-            let observer = Arc::clone(&counted);
-            owner.on_wake(Box::new(move || {
-                observer.snapshot().expect("sample on the owner turn");
-                turn.store(observer.sample_count(), Ordering::Release);
-                quit.request_quit().expect("observed the wake");
-            }))?;
-            watchdog_tx
-                .send(std::thread::spawn(move || {
-                    if finished
-                        .recv_timeout(std::time::Duration::from_secs(2))
-                        .is_err()
-                    {
-                        let _ = timeout.request_quit();
-                    }
-                }))
-                .expect("watchdog handle");
-            send_for_test(receiver, WM_DISPLAYCHANGE, 32, 0);
-            // SendMessage returned: the handler ran to completion.
-            message.store(counted.sample_count(), Ordering::Release);
-            Ok(())
-        }))
+        .run(crate::owner::app_delivery::testing::on_ready(
+            move |owner| {
+                let quit = owner.proxy();
+                let timeout = quit.clone();
+                let observer = Arc::clone(&counted);
+                owner.on_wake(Box::new(move || {
+                    observer.snapshot().expect("sample on the owner turn");
+                    turn.store(observer.sample_count(), Ordering::Release);
+                    quit.request_quit().expect("observed the wake");
+                }))?;
+                watchdog_tx
+                    .send(std::thread::spawn(move || {
+                        if finished
+                            .recv_timeout(std::time::Duration::from_secs(2))
+                            .is_err()
+                        {
+                            let _ = timeout.request_quit();
+                        }
+                    }))
+                    .expect("watchdog handle");
+                send_for_test(receiver, WM_DISPLAYCHANGE, 32, 0);
+                // SendMessage returned: the handler ran to completion.
+                message.store(counted.sample_count(), Ordering::Release);
+                Ok(())
+            },
+        ))
         .expect("display message loop");
     let _ = finish.send(());
     watchdog_rx

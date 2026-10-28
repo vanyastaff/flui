@@ -43,9 +43,8 @@ use flui_platform::data_transfer::{DataTransferSource, NullDataTransferSource};
 use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
 use flui_platform::{
     ClipboardItem, DeviceId, DisplaySnapshot, HapticFeedback, PlatformHaptics,
-    PlatformSystemChrome, SessionEndAnswer, SessionEndPhase, StorageName, SystemNotice,
-    SystemPreferences, SystemUiOverlayStyle, Unsupported, UnsupportedReason, WindowCapabilities,
-    WindowHandler, WindowId, WindowOptions,
+    PlatformSystemChrome, StorageName, SystemPreferences, SystemUiOverlayStyle, Unsupported,
+    UnsupportedReason, WindowCapabilities, WindowHandler, WindowId, WindowOptions,
 };
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
@@ -54,7 +53,7 @@ use flui_semantics::platform::{
 use crate::error::PlatformError;
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
-use crate::platform::{PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback};
+use crate::platform::{AppHandler, PathPromptOptions, Platform, PlatformExecutor};
 use crate::storage::DataDirs;
 use crate::task::Task;
 use crate::text::TextInput;
@@ -102,9 +101,10 @@ pub trait Host: 'static {
 /// reference to one window ([`Window::Ref`]).
 pub type WindowRefOf<H> = <<H as Host>::Window as Window<<H as Host>::Loop>>::Ref;
 
-/// The owner thread's loop.
+/// The owner thread's loop. It keeps the application's handler for the run in
+/// the owner's delivery (`owner::app_delivery`), which its sources report to.
 pub trait Loop: Send + Sync + Sized + 'static {
-    /// Runs the loop on the calling thread, handing `on_ready` the owner
+    /// Runs the loop on the calling thread, handing `handler` the owner
     /// capability over `platform` once windows can open; see
     /// [`Platform::run`].
     ///
@@ -113,26 +113,14 @@ pub trait Loop: Send + Sync + Sized + 'static {
     fn run(
         self: Arc<Self>,
         platform: Arc<dyn Platform>,
-        on_ready: PlatformReadyCallback,
+        handler: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError>;
 
     /// [`Platform::quit`].
     fn quit(&self);
 
-    /// [`Platform::on_quit`].
-    fn on_quit(&self, callback: Box<dyn FnMut() + Send>);
-
-    /// [`Platform::set_exit_policy_hook`].
-    fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>);
-
     /// [`Platform::request_exit_policy_reevaluation`].
     fn request_exit_policy_reevaluation(&self);
-
-    /// [`Platform::set_wake_deadline_hook`].
-    fn set_wake_deadline_hook(
-        &self,
-        hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
-    );
 }
 
 /// What the host does for the application outside the closed list: the
@@ -394,20 +382,8 @@ pub trait Preferences<O> {
 
 /// The lifecycle position: session end, host notices, reopen and activation.
 pub trait Lifecycle<O> {
-    /// [`Platform::on_session_end`].
-    fn on_session_end(
-        owner: &O,
-        callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
-    );
-
-    /// [`Platform::on_host_notice`].
-    fn on_host_notice(owner: &O, callback: Box<dyn FnMut(SystemNotice) + Send>);
-
     /// [`Platform::release_session_end`].
     fn release_session_end(owner: &O);
-
-    /// [`Platform::on_reopen`].
-    fn on_reopen(owner: &O, callback: Box<dyn FnMut() + Send>);
 
     /// [`Platform::activate`].
     fn activate(owner: &O, ignoring_other_apps: bool);
@@ -625,19 +601,7 @@ impl<O> Preferences<O> for Absent<position::Preferences> {
 }
 
 impl<O> Lifecycle<O> for Absent<position::Lifecycle> {
-    fn on_session_end(_: &O, callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>) {
-        drop(callback);
-    }
-
-    fn on_host_notice(_: &O, callback: Box<dyn FnMut(SystemNotice) + Send>) {
-        drop(callback);
-    }
-
     fn release_session_end(_: &O) {}
-
-    fn on_reopen(_: &O, callback: Box<dyn FnMut() + Send>) {
-        drop(callback);
-    }
 
     fn activate(_: &O, _: bool) {}
 }

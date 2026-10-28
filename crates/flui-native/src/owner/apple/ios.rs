@@ -71,14 +71,14 @@ use parking_lot::Mutex;
 
 use crate::error::PlatformError;
 use crate::host;
-use crate::owner::call_point::{Called, Field, Once, SharedField, call, install, retire};
-use crate::owner::handlers::{PlatformHandlers, SessionEndHook};
+use crate::owner::app_delivery::AppDelivery;
+use crate::owner::call_point::{Called, Field, call, install, retire};
 use crate::owner::notices::{LifecycleHooks, NoticeChannel};
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::owner::sources::SystemPreferenceSource;
 use crate::{
-    owner::DirectOwnerHooks, owner::OwnerHooks, owner::OwnerPlatform, platform::Platform,
-    platform::PlatformExecutor, platform::PlatformReadyCallback,
+    owner::DirectOwnerHooks, owner::OwnerHooks, owner::OwnerPlatform, platform::AppHandler,
+    platform::Platform, platform::PlatformExecutor,
 };
 use flui_platform::{SessionEndAnswer, SessionEndPhase, SystemPreferences, WindowId};
 
@@ -107,7 +107,7 @@ pub(crate) trait IosHost: 'static {
     ) -> Box<dyn UIKitPreferences>;
 
     /// The channel the memory warning takes to the application.
-    fn notices() -> Arc<dyn NoticeChannel>;
+    fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel>;
 
     /// The touches of a window's view made now: the input's part of the
     /// view, which keeps the contacts it admitted.
@@ -383,7 +383,9 @@ struct SceneState {
 ///
 /// [`IOSPlatform`](crate::IOSPlatform) is its platform.
 pub struct IOSLoop {
-    handlers: Arc<Mutex<PlatformHandlers>>,
+    /// What the loop delivers to the application's handler, which the
+    /// bootstrap binds.
+    app: Arc<AppDelivery>,
     /// Makes the window a scene session connects.
     windows: Arc<dyn SceneWindows>,
     running: Arc<AtomicBool>,
@@ -457,8 +459,9 @@ impl IOSLoop {
         }));
         let displays = H::displays(marker);
         let screen_observer = Arc::clone(&displays).observe(&signal);
+        let app = Arc::new(AppDelivery::new());
         Ok(Self {
-            handlers: Arc::new(Mutex::new(PlatformHandlers::new())),
+            app: Arc::clone(&app),
             windows,
             running: Arc::new(AtomicBool::new(true)),
             scenes: NativeOwner::new(
@@ -482,7 +485,7 @@ impl IOSLoop {
             background_executor: Arc::new(IOSExecutor),
             displays,
             _screen_observer: NativeOwner::new(screen_observer, marker),
-            notices: H::notices(),
+            notices: H::notices(&app),
             view_touches: H::view_touches,
         })
     }
@@ -534,14 +537,6 @@ impl IOSLoop {
         }
     }
 
-    /// One of the application's handlers, as a slot of the handler set.
-    pub(crate) fn handler<H>(
-        &self,
-        project: fn(&mut PlatformHandlers) -> &mut Option<H>,
-    ) -> Field<'_, Mutex<PlatformHandlers>, H> {
-        Field::new(&*self.handlers, project)
-    }
-
     /// Retire the scene consumer outside the scene state's borrow.
     fn retire_scene_consumer(&self) {
         let consumer = self.state().borrow_mut().handler.take();
@@ -560,12 +555,10 @@ impl IOSLoop {
     /// must survive. There is no way to ask it to wait, so the answer is not
     /// read.
     fn announce_session_end(&self) {
-        // The session ends once: the hook is retired after this call.
-        let _answer = call(
-            &Once(self.handler(|handlers| &mut handlers.session_end)),
-            |hook| hook(SessionEndPhase::Ending),
-        )
-        .or_contain(SessionEndAnswer::Proceed, "the session-end hook");
+        let _answer = self
+            .app
+            .session_end(SessionEndPhase::Ending)
+            .or_contain(SessionEndAnswer::Proceed, "the session-end handler");
     }
 
     /// UIKit's memory warning means the system is close to terminating the
@@ -577,11 +570,12 @@ impl IOSLoop {
             ));
     }
 
+    /// Tell the application's handler the platform quits, then let it go.
     fn invoke_quit(&self) {
-        call(&Once(self.handler(|handlers| &mut handlers.quit)), |quit| {
-            quit();
-        })
-        .or_contain((), "the quit callback");
+        self.app
+            .quit_requested()
+            .or_contain((), "the application's quit");
+        self.app.release();
     }
 
     fn finish_quit(&self) {
@@ -612,11 +606,7 @@ impl IOSLoop {
         if !self.signal.accepting() {
             return;
         }
-        let next = call(
-            &SharedField::new(&*self.handlers, |handlers| &mut handlers.wake_deadline),
-            |hook| hook(),
-        )
-        .or_resume(None);
+        let next = self.app.wake_deadline().or_resume(None);
         let ticket = {
             let mut current = self.deadline.lock();
             if current.as_ref().map(|(_, deadline)| *deadline) == next {
@@ -681,7 +671,8 @@ impl IOSLoop {
 // adds no process-global.
 thread_local! {
     static DELEGATE_STATE: RefCell<DelegateState> = const { RefCell::new(DelegateState {
-        on_ready: None,
+        handler: None,
+        hooks: None,
         platform: None,
         owner_platform: None,
     }) };
@@ -689,7 +680,10 @@ thread_local! {
 
 struct DelegateState {
     /// Taken exactly once, by `didFinishLaunching`.
-    on_ready: Option<PlatformReadyCallback>,
+    handler: Option<Rc<dyn AppHandler>>,
+    /// The owner hooks of the run, kept for the session: the delivery holds
+    /// them weakly.
+    hooks: Option<Arc<dyn OwnerHooks>>,
     /// Live for the whole session; read by every lifecycle callback.
     platform: Option<Arc<IOSLoop>>,
     /// The platform over `platform` that the owner capability is built on,
@@ -701,7 +695,7 @@ impl host::Loop for IOSLoop {
     fn run(
         self: Arc<Self>,
         platform: Arc<dyn Platform>,
-        on_ready: PlatformReadyCallback,
+        handler: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError> {
         let mtm = MainThreadMarker::new().ok_or_else(|| PlatformError::Init {
             message: "IOSPlatform::run must be called on the main thread".to_string(),
@@ -720,7 +714,7 @@ impl host::Loop for IOSLoop {
             let mut state = state.borrow_mut();
             state.platform = Some(self);
             state.owner_platform = Some(platform);
-            state.on_ready = Some(on_ready);
+            state.handler = Some(handler);
         });
 
         // FORCE the delegate class to register before `UIApplicationMain`
@@ -742,31 +736,8 @@ impl host::Loop for IOSLoop {
         let _ = self.signal.request_quit();
     }
 
-    fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
-        install(&self.handler(|handlers| &mut handlers.quit), callback);
-    }
-
-    fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
-        // UIKit decides when the app exits; there is no exit policy to consult.
-        drop(hook);
-    }
-
     fn request_exit_policy_reevaluation(&self) {
         // With no exit policy there is nothing to consult again.
-    }
-
-    /// iOS has no `ControlFlow::WaitUntil` — like Android, its loop actuates
-    /// deadlines itself. A `CADisplayLink` is the frame source; this stores
-    /// the hook so a future deadline actuation can consult it.
-    fn set_wake_deadline_hook(
-        &self,
-        hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
-    ) {
-        install(
-            &self.handler(|handlers| &mut handlers.wake_deadline),
-            Arc::from(hook),
-        );
-        let _ = self.signal.wake();
     }
 }
 
@@ -850,38 +821,24 @@ impl host::Preferences<IOSLoop> for IOSLoop {
 /// and has no reopen. The lifecycle feature's position reaches the hooks
 /// through this.
 impl LifecycleHooks for IOSLoop {
-    fn notices(&self) -> &dyn NoticeChannel {
-        &*self.notices
-    }
-
-    fn set_session_end_hook(&self, hook: SessionEndHook) {
-        install(&self.handler(|handlers| &mut handlers.session_end), hook);
-    }
-
     fn release_session_end(&self) {
-        // The answer to the session-end hook is not read, so no session end is
-        // held open.
-    }
-
-    fn set_reopen_hook(&self, hook: Box<dyn FnMut() + Send>) {
-        // UIKit has no reopen signal.
-        drop(hook);
+        // The answer to a session end is not read, so no session end is held
+        // open.
     }
 }
 
 /// Run the bootstrap stashed by [`IOSLoop`]'s `run`, on the main thread,
 /// from `didFinishLaunching`. Returns `true` if a bootstrap ran.
 fn run_pending_bootstrap() -> bool {
-    let (platform, owner_platform, on_ready) = DELEGATE_STATE.with(|state| {
+    let (platform, owner_platform, handler) = DELEGATE_STATE.with(|state| {
         let mut state = state.borrow_mut();
         (
             state.platform.clone(),
             state.owner_platform.clone(),
-            state.on_ready.take(),
+            state.handler.take(),
         )
     });
-    let (Some(platform), Some(owner_platform), Some(on_ready)) =
-        (platform, owner_platform, on_ready)
+    let (Some(platform), Some(owner_platform), Some(handler)) = (platform, owner_platform, handler)
     else {
         return false;
     };
@@ -891,14 +848,20 @@ fn run_pending_bootstrap() -> bool {
         Arc::clone(&platform.signal),
     ));
     if !platform.signal.accepting() {
-        crate::owner::panic_boundary::contain_owner_callback(|| drop(on_ready));
+        crate::owner::panic_boundary::contain_owner_callback(|| drop(handler));
         platform.finish_quit();
         return false;
     }
-    // FnOnce consumes its own captures. Catch the entire invocation; a body
-    // panic plus a capture panic during that unwind remains Rust's abort case.
+    // The delivery holds the platform and the hooks weakly: the delegate's
+    // state keeps them for the session, which `UIApplicationMain` never ends.
+    platform.app.bind(handler, &owner_platform, &hooks);
+    platform.app.resume_through_signal(&platform.signal);
+    DELEGATE_STATE.with(|state| state.borrow_mut().hooks = Some(Arc::clone(&hooks)));
+    // The bootstrap's panic is caught here: UIKit's callback cannot unwind.
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        on_ready(OwnerPlatform::new(owner_platform, hooks))
+        platform
+            .app
+            .ready(OwnerPlatform::new(owner_platform, hooks))
     }));
     match outcome {
         Ok(Ok(())) => {}

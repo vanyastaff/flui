@@ -30,7 +30,7 @@ fn is(window: &dyn HostWindow, host: &Rc<dyn HostWindow>) -> bool {
 fn with_window_reaches_the_host_window_of_its_presentation_and_no_other() {
     let _clear = OwnerHostClearGuard::arm();
     Box::new(HeadlessPlatform::new())
-        .run(Box::new(|owner| {
+        .run(crate::app::runner::app_handler(|owner| {
             install_owner_platform(owner)?;
             Ok(())
         }))

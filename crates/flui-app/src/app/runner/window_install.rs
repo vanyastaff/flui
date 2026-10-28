@@ -350,11 +350,7 @@ impl WindowInstall {
         target_arch = "wasm32",
         all(test, not(target_os = "android"), not(target_os = "ios"))
     ))]
-    pub(super) fn submit_web(
-        mut self,
-        driver: FrameDriver,
-        platform: &flui_native::SharedPlatform,
-    ) -> anyhow::Result<()> {
+    pub(super) fn submit_web(mut self, driver: FrameDriver) -> anyhow::Result<()> {
         use super::owner_dispatch::{install_input_wiring, with_owner_callback};
 
         let window = Rc::clone(self.window.native());
@@ -367,7 +363,7 @@ impl WindowInstall {
                     dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(binding, request));
             });
         });
-        self.terminal_callbacks(platform);
+        self.terminal_callbacks();
         // The subscription precedes the seed. Keep redraw ownership published
         // before lifecycle reconciliation can synchronously request a frame.
         self.observe_window();
@@ -393,14 +389,14 @@ impl WindowInstall {
     /// presentation together with its UI runtime, so a second close here would
     /// only be refused by a runtime that no longer exists.
     #[cfg(any(test, target_os = "android", target_arch = "wasm32"))]
-    pub(super) fn terminal_callbacks(&self, platform: &flui_native::SharedPlatform) {
+    pub(super) fn terminal_callbacks(&self) {
         let closed = self.window.cancellation();
         let dispatcher = self.dispatcher();
-        platform.on_quit(Box::new(move || {
+        super::host::route_quit(move || {
             if !closed.swap(true, Ordering::AcqRel) {
                 super::owner_dispatch::close_this_window(dispatcher);
             }
-        }));
+        });
     }
 
     pub(super) fn submit(self) -> Installation {

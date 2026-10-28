@@ -45,7 +45,7 @@ fn desktop(accept: Option<TransferActions>) -> Desktop {
     let saved = Rc::new(RefCell::new(None));
     let installed = Rc::clone(&saved);
     Box::new(platform)
-        .run(Box::new(move |owner| {
+        .run(crate::app::on_ready(move |owner| {
             *installed.borrow_mut() = Some(owner);
             Ok(())
         }))

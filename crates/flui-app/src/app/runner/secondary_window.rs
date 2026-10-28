@@ -1170,10 +1170,9 @@ fn finish_open_secondary_window(
     // `request_ui_runtime_uninstall`, which would tear down the WHOLE shared
     // ui_runtime out from under a still-open sibling window.
     //
-    // No `on_quit` registration here — that is a single platform-level
-    // callback slot the FIRST window's bootstrap already owns
-    // (`Platform::on_quit`/`SharedPlatform::on_quit` replace, never stack);
-    // registering a second one here would silently steal the first window's
+    // No quit route here — that is the run's single route, which the FIRST
+    // window's bootstrap already set (`route_quit` replaces, never stacks);
+    // setting another here would silently steal the first window's
     // Detached-lifecycle notification on process quit instead of adding to
     // it. The loop-owned quit callback visits every installed ui_runtime once,
     // including this window's ui_runtime, after any active dispatch restores it.
@@ -1276,7 +1275,7 @@ mod tests {
     fn installation_case(case: InstallCase) {
         let _clear = super::super::host::OwnerHostClearGuard::arm();
         Box::new(HeadlessPlatform::new())
-            .run(Box::new(move |owner| {
+            .run(crate::app::runner::app_handler(move |owner| {
                 let window = owner.open_routed(flui_platform::WindowOptions::default())
                     .expect("native window");
                 let flui_native::WindowOpen::Ready(window) = window else {
@@ -1527,7 +1526,7 @@ mod tests {
         }
         let _clear = super::super::host::OwnerHostClearGuard::arm();
         Box::new(HeadlessPlatform::new())
-            .run(Box::new(|owner| {
+            .run(crate::app::runner::app_handler(|owner| {
                 super::super::host::install_owner_platform(owner).expect("owner");
                 let closed = Arc::new(AtomicUsize::new(0));
                 let mut requests = Vec::new();
@@ -1625,7 +1624,7 @@ mod tests {
         let calls = Rc::new(Cell::new(0));
         let called = Rc::clone(&calls);
         Box::new(platform)
-            .run(Box::new(move |owner| {
+            .run(crate::app::runner::app_handler(move |owner| {
                 super::super::host::install_owner_platform(owner).expect("owner");
                 for first in [true, false] {
                     let window = with_owner_platform(|owner| {
@@ -1721,7 +1720,7 @@ mod tests {
             Failure::OwnerReplacement,
         ] {
             let _clear = super::super::host::OwnerHostClearGuard::arm();
-            Box::new(HeadlessPlatform::new()).run(Box::new(move |owner| {
+            Box::new(HeadlessPlatform::new()).run(crate::app::runner::app_handler(move |owner| {
                 super::super::host::install_owner_platform(owner).expect("owner");
                 let window = with_owner_platform(|owner| owner.open_routed(flui_platform::WindowOptions::default()))
                     .expect("owner").expect("open").try_ready().expect("headless ready");
@@ -1780,7 +1779,7 @@ mod tests {
         for policy in [WindowPolicy::Isolated, WindowPolicy::Shared] {
             let _clear = super::super::host::OwnerHostClearGuard::arm();
             Box::new(HeadlessPlatform::new())
-                .run(Box::new(move |owner| {
+                .run(crate::app::runner::app_handler(move |owner| {
                     super::super::host::install_owner_platform(owner).expect("owner");
                     let outer = super::super::owner_dispatch::install_platform_ui_runtime(
                         UiRuntime::for_test(),

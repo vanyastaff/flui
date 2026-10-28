@@ -15,8 +15,8 @@ use std::rc::Rc;
 
 pub use flui_foundation::memory::MemoryPressureLevel;
 
-/// A phase of the user's session ending, as the platform reports it to
-/// `Platform::on_session_end`.
+/// A phase of the user's session ending, as the platform reports it to the
+/// application handler (`AppHandler::session_end` in the core host).
 ///
 /// On Windows a session end is a query to every top-level window
 /// (`WM_QUERYENDSESSION`), then its outcome (`WM_ENDSESSION`): either the
@@ -47,8 +47,8 @@ pub enum SessionEndAnswer {
     Block,
 }
 
-/// A system event other than a session end, as the platform reports it to
-/// `Platform::on_host_notice`.
+/// A system event other than a session end, as the platform reports it to the
+/// application handler (`AppHandler::host_notice` in the core host).
 ///
 /// It carries no owner-local handle, so it is `Copy` and crosses threads; the
 /// host turns it into the [`HostNotice`] the application hears.

@@ -3198,6 +3198,113 @@ graph LR
   `native_window_gate_table`, строки `PointerIcons` и `BackgroundBlur` в `os_version_gate_table`.
   Каждый падает при откате своей правки (проверено). На устройствах iOS, Android и macOS пути не
   запускались.
+- [x] **LY45** — ветка `platform/app-handler`, от `main` @ `e93d756f4` (LY44 влит), `main` с
+  vanyastaff/flui#1917 (LY43) влит слиянием. **Ядро.** `AppHandler` (`platform.rs`): `ready(OwnerPlatform)
+  -> Result<(), BootstrapError>`, `quit_requested`, `reopen`, `session_end(phase) -> SessionEndAnswer`,
+  `host_notice`, `exit_policy -> bool`, `wake_deadline -> Option<Instant>`; каждый метод, кроме
+  `ready`, получает `&OwnerPlatform` (ADR-0254 §4), умолчаний нет, трейт не `Send`.
+  `Platform::run(self: Box<Self>, Rc<dyn AppHandler>)`. Удалены `PlatformReadyCallback`,
+  `PlatformHandlers`, `SessionEndHook`, `on_quit`, `on_reopen`, `on_session_end`, `on_host_notice`,
+  `on_open_urls`, `set_exit_policy_hook`, `set_wake_deadline_hook` (у `Platform`, `OwnerPlatform`,
+  `SharedPlatform`, `host::Loop`, `host::Lifecycle`, `LifecycleHooks`), `NoticeChannel::set_hook`,
+  `SharedField` и `Once` точки вызова, учёт идентичности хука в дедлайне Win32 (у прогона один
+  обработчик). `on_keyboard_layout_change` остаётся регистрацией до LY55 (хранится рядом с
+  загрузкой цикла: `HeadlessState::keyboard_layout_changed`, Win32 `AppHooks`).
+  **Доставка** — `owner/app_delivery.rs`, `AppDelivery` у каждого цикла: обработчик в owner-слоте
+  (`bind` при `run`, на потоке владельца), платформа и owner-хуки — слабо (платформа владеет циклом,
+  который владеет доставкой; цикл держит их сильно на время `run`), `OwnerPlatform` чеканится на
+  каждый вызов. Сообщения (выход, reopen, notice) идут одной FIFO: принятое до `bind`, во время
+  `ready` или другого метода, с чужого потока — ждёт и доставляется по порядку на владельце
+  (ход сигнала владельца, `resume_through_signal`, на всех хостах); выход доходит один раз за прогон.
+  Вопросы (конец сеанса, политика выхода, дедлайн) задаются сразу, повторно-входно; сообщение,
+  поднятое во время ответа, ждёт ответа. Без обработчика хост отвечает сам (`Proceed`, свой
+  умолчательный выход, без дедлайна). Паника метода сдерживается, хвост доставляется, первая
+  паника возвращается. `release` в конце прогона: при раскрутке обработчик удерживается навсегда,
+  а не остаётся в таблице потока (иначе его захваты падали бы при выходе потока —
+  `deadline_query_unwind_retains_hostile_captures`). `SystemNotices` строится поверх доставки
+  (`H::notices(&app)`), помечает устаревшее при пробуждении и передаёт. Хосты: Win32 (`RunGuard`
+  сообщает выход и отпускает; хуки объявлены до охраны), winit (связывание в `resumed`), AppKit
+  (`LoopControl` и `WakePump` поверх доставки; reopen сохраняет очередь и забор выхода), UIKit,
+  Android, Web, headless. `HeadlessHostEvents::reopen` — новый ввод для тестов.
+  **`flui-app`.** `app_handler(bootstrap)` (`runner/host.rs`): `ready` — загрузка раннера; конец
+  сеанса и notice — во все UI runtime; выход, reopen, политика выхода и дедлайн — по маршрутам
+  `AppRoutes` (`route_quit`, `route_reopen`, `route_exit_policy`, `route_wake_deadline`), которые
+  ставит загрузка; каждая установка владельца начинает маршруты заново, обработчик отвечает только
+  за свою установку. Регистраций колбэков у раннеров нет. Без маршрута: выход и reopen никуда,
+  выход из цикла запрещён, дедлайна нет; прямой режим ставит `route_exit_policy(|| true)`.
+  **Решение сверх строки (для владельца):** `flui-app` не использует `&OwnerPlatform` из методов —
+  его маршруты читают TLS `APP_RUNTIME`, как раньше хуки.
+  **Тесты** (откат проверен): `app_handler_obligation_table` (`tests/app_handler.rs`; строки
+  `ready`, выход, reopen, конец сеанса с ответом, notice, политика выхода, сообщение до
+  обработчика, паника метода, дедлайн на Win32); `app_delivery_contracts` (юнит, 10 строк);
+  `handler_reentry` — каждый метод `AppHandler` открывает окно, сообщает notice и выходит изнутри
+  вызова, прогон внутри обработчика связывает свой (вместо «замены обработчика»: заменить его
+  API нет); `explicit_quit_reenters_and_reaches_the_handler_outside_the_state_lock`,
+  `winit_exit_policy_runs_outside_the_state_lock`, `a_due_deadline_gets_one_modal_frame_per_generation`,
+  `web_session_end_handler_reenters_the_platform`. Откаты: без очереди до `bind` падают «a report
+  before ready waits for it», «a failed bootstrap keeps the reports» и «a report before the handler
+  is heard after ready»; без доставки хвоста после паники — «a panicking method …» в обеих
+  таблицах; без «выход один раз» — по строке в обеих таблицах и `handler_reentry` (headless-тест
+  выхода виснет); без ожидания ответа на вопрос — «a report raised inside a question …»; с
+  `retire(binding)` вместо выемки обработчика — `deadline_query_unwind_retains_hostile_captures`
+  (abort процесса); с хуками Win32 после охраны — «a failing exit policy keeps the loop» и «the wake
+  deadline is asked and kept». Удалены строки замены хуков (замены нет) и строки очереди
+  `SystemNotices` (очередь теперь в доставке, её строки — в `app_delivery_contracts`).
+  Тесты, вызывавшие `quit()` внутри загрузки и ждавшие хука там же, выполняют сценарий после неё
+  (`after_bootstrap`). `.stderr` `host_table_names_every_position` и
+  `platform_and_host_window_are_sealed` перегенерированы (сдвиг строк).
+  Документы: ARCHITECTURE.md ядра, README ядра, `docs/architecture.md`, `docs/gaps.md` (запись 13),
+  `docs/platform-parity.md` (заметка о диплинках, ячейки без изменений),
+  `changelog.d/platform-app-handler.md`.
+  `module-dag` `flui-native` — 302 модуля, 324 ребра, 1 исключение; `globals` — 57; из
+  `markers.toml` ушла запись маркера `slice` в `platform.rs`.
+  Проверки (Windows): `cargo fmt`; clippy `-D warnings` рабочего пространства `--all-targets`
+  обычный и с `flui-native/winit-backend,flui/native`; nextest `flui-native`, `flui-app`,
+  `flui-platform`, `flui-testing`, `flui-runtime`, `flui-view`, `flui-interaction`, `flui-sdk` —
+  701 из 703 (падают trybuild `owner_thread_token_has_no_default`, как на `main`, и реальное окно
+  `open_real_window` — повтор зелёный), `flui-native` и `flui-app` с `winit-backend` — 365 из 366
+  (тот же trybuild), `flui --features native` — 10; trybuild `flui-native` (`.stderr` двух
+  фикстур); clippy Android `--all-targets` (`flui-native`, `flui-app`), macOS `--all-targets`
+  обычный и с `winit-backend` (clang и llvm-ar LLVM), iOS lib `flui-native` (`DOCS_RS=1`), wasm32
+  lib `flui-native`, `flui-app`, `flui-platform`, `flui-web-demo`; `checks`, `doc-strict`,
+  `wasm-check`, `wasm-test` — 49. WSL Ubuntu 24.04 (`WAYLAND_DISPLAY`, `XDG_SESSION_TYPE`
+  сняты): clippy четырёх крейтов без признаков, с `winit-backend` и `flui-native --all-features`;
+  nextest под xvfb `FLUI_HEADLESS=1`: `flui-native` — 215, с `winit-backend` — 297,
+  `--all-features` — 298, `flui-app` с `winit-backend` — 47; rustdoc `--document-private-items -D
+  warnings` обоих вариантов. Не запускалось: Android-устройство, Mac и iPhone (AppKit reopen и
+  насос дедлайна, UIKit — только типизированы; vanyastaff/flui#1840), браузер (проверить: `pagehide`
+  и `pageshow` доходят до `AppHandler::session_end`, выход отпускает окно), `cross-typecheck`.
+
+  **Исправления после ревью** (#1926). (1) Выход, поднятый внутри метода обработчика, на вебе и
+  Android больше не теряется: `AppDelivery::release`, вызванный во время доставки, ждёт её конца
+  и отпускает обработчик после того, как она доставила очередь (строка «a quit raised as the
+  loop ends inside a method is heard once» в `app_delivery_contracts`, из `host_notice` и из
+  `ready`). (2, 3, 5) `AppRoutes` принадлежат `RunnerHandler` (`Rc<RefCell<AppRoutes>>`);
+  `AppRuntime` хранит только слабые ссылки `run_routes` на маршруты живых запусков, а функции
+  `route_*` пишут в самый внутренний живой. Поколение установки и `try_borrow` ушли: вложенный
+  `run` не стирает маршруты внешнего, проваленная загрузка не отвечает чужими. Таблица
+  `app_handler_routes` в `flui-app` («a nested run leaves the outer run's routes», «a failed
+  bootstrap answers with no other run's routes»). Маршрут выхода рабочего стола и дедлайна
+  по-прежнему сверяют `loop_identity`: главное окно на поток одно. (4) `exit_policy` отвечает
+  `ExitAnswer { End, KeepRunning, HostDecides }`; без маршрута `flui-app` отвечает
+  `HostDecides`, и хост решает как без обработчика (Win32, AppKit, winit — выход, headless —
+  нет); прямой режим — `End`. `ExitAnswer` одобрен владельцем 2026-10-27, поправка ADR-0254 §4
+  записана. Строки «an exit policy left to the host is the host's» и «a run
+  that routes no exit leaves it to the host». (6) R9.7: настройки идут прежним путём ADR-0172
+  через запуск с `AppHandler` — `a_panicking_preference_delivery_does_not_stop_later_changes`,
+  `a_replacement_platform_starts_a_new_preference_owner`,
+  `the_platform_preference_source_reaches_installed_consumers` (`flui-app`, через
+  `app_handler`) и `a_change_with_no_turn_callback_reaches_the_next_one_registered`
+  (`flui-native/tests/preferences.rs`). (7) Один набор: `flui_native::testing::app` (`AppLog`,
+  `AppCall`, `on_ready`, `with_log`, `run_keeping_owner`), `tests/support/app.rs` удалён;
+  Win32 `handlers` → `app_hooks`, проверка выхода получает `&AppDelivery`; документы о
+  реализациях `AppHandler` исправлены (ADR-0151 §9, ADR-0254 §4); ADR-0039 §1 и §6, ADR-0044
+  §7, ADR-0093 отмечены как замещённые ADR-0254 решением 4; статус ADR-0254 — реализован
+  частично. Каждый новый тест падает при откате (проверено: отложенное отпускание; старая
+  маршрутизация из `HEAD` — падают все три строки `app_handler_routes`). macOS: ответ
+  `applicationShouldTerminate:` на выход из сеанса не изменился — `TerminateGate` отвечает
+  `Now` или `Later` после объявления, `Cancel` только обычному выходу
+  (`loop_control.rs` `terminate_requested`, `terminate_gate.rs` `terminate_requested`).
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`

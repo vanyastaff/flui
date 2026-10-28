@@ -135,18 +135,16 @@ fn font_digest(font_bytes: &[u8]) -> FontDigest {
 /// `AttachError` set (`binding.rs`).
 ///
 /// **Live-wired** (issue #555's native-lifecycle follow-up): `AppConfig::
-/// exit_policy` carries this to `run_desktop`'s bootstrap, which installs a
-/// hook (`runner.rs`'s `install_exit_policy_hook`) into
-/// `flui_native::Platform::set_exit_policy_hook`. The winit
-/// backend's `CloseRequested` handling and the headless backend's window
-/// `WindowCommand::Close` and `simulate_close()` both consult that hook — via the shared
-/// `flui_native::PlatformHandlers::exit_policy` slot — instead of
+/// exit_policy` carries this to `run_desktop`'s bootstrap, which routes the
+/// application handler's exit policy to it (`install_exit_policy_hook` in
+/// `runner/host.rs`). The winit backend's `CloseRequested` handling and the
+/// headless backend's window `WindowCommand::Close` and `simulate_close()`
+/// both ask that handler (`flui_native::AppHandler::exit_policy`) instead of
 /// deciding from their own native window count alone; see
 /// `closing_the_last_window_reentrantly_from_inside_a_dispatch_still_exits`
 /// (`owner_dispatch/tests.rs`), which closes the last window through the
-/// real platform hook. Android/web bootstraps do not install this hook
-/// today (their platforms don't override `set_exit_policy_hook` either, so
-/// doing so would be inert) — stated, not silently assumed.
+/// real platform. Android, the web and iOS never ask the exit policy, and
+/// their bootstraps route none — stated, not silently assumed.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ExitPolicy {
@@ -305,6 +303,11 @@ pub(crate) struct AppRuntime {
     /// another UI runtime before it exits (hot-restart does exactly this).
     pub(super) owner_platform: Option<std::rc::Rc<OwnerPlatform>>,
     pub(super) owner_install_generation: u64,
+    /// Where the bootstrap of each run on this thread sets the routes its
+    /// application handler owns, innermost last. The routes live in the
+    /// handler; a run whose handler is gone leaves a dead entry the next
+    /// lookup prunes.
+    pub(crate) run_routes: Vec<std::rc::Weak<std::cell::RefCell<super::runner::AppRoutes>>>,
     #[cfg(all(
         not(target_os = "android"),
         not(target_os = "ios"),
@@ -459,6 +462,7 @@ impl AppRuntime {
             owner_thread: None,
             owner_platform: None,
             owner_install_generation: 0,
+            run_routes: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             pending_window_reservations: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             #[cfg(all(

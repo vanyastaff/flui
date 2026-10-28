@@ -3,11 +3,11 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::rc::Rc;
 
 use flui_native::host::{Absent, Host, Loop, Services, position};
 use flui_native::{
-    PathPromptOptions, Platform, PlatformError, PlatformExecutor, PlatformReadyCallback, Task,
+    AppHandler, PathPromptOptions, Platform, PlatformError, PlatformExecutor, Task,
 };
 
 struct Idle;
@@ -16,20 +16,14 @@ impl Loop for Idle {
     fn run(
         self: Arc<Self>,
         _: Arc<dyn Platform>,
-        _: PlatformReadyCallback,
+        _: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError> {
         Ok(())
     }
 
     fn quit(&self) {}
 
-    fn on_quit(&self, _: Box<dyn FnMut() + Send>) {}
-
-    fn set_exit_policy_hook(&self, _: Box<dyn Fn() -> bool + Send>) {}
-
     fn request_exit_policy_reevaluation(&self) {}
-
-    fn set_wake_deadline_hook(&self, _: Box<dyn Fn() -> Option<Instant> + Send + Sync>) {}
 }
 
 impl Services for Idle {

@@ -491,7 +491,8 @@ The application-level registrations that remain (`on_quit`, `on_reopen`, `on_ses
 framework handed it, there is one slot and one drop order, and nothing is registered late.
 
 `AppHandler` is a trait of the core host (`flui-native`), not of the contract: it names
-`OwnerPlatform`, and only `flui-app` implements it. Its obligations are exactly what `Platform`
+`OwnerPlatform`, so only code that runs a host itself implements it: `flui-app`, and an example or
+a test that drives `flui-native` directly. Its obligations are exactly what `Platform`
 registers today, as required methods with no default body: `ready(OwnerPlatform)` (the bootstrap
 that `PlatformReadyCallback` carried), `quit_requested`, `reopen`, `session_end` (answering with
 `SessionEndAnswer`), `host_notice`, and the two queries the loop asks, `exit_policy` and

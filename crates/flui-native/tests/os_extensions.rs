@@ -91,7 +91,7 @@ mod cases {
             let marked = Rc::clone(&checked);
             let platform: Box<dyn Platform> = Box::new(flui_native::WinitPlatform::new());
             platform
-                .run(Box::new(move |owner| {
+                .run(flui_native::testing::app::on_ready(move |owner| {
                     let window = owner
                         .open_window(
                             hidden(),

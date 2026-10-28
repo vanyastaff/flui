@@ -482,6 +482,8 @@ impl Drop for Probe {
 /// A running platform and the number of owner wakes it has delivered.
 pub(super) struct Running {
     pub(super) owner: Rc<RefCell<Option<OwnerPlatform>>>,
+    /// The application handler the page runs with.
+    pub(super) log: Rc<crate::app::AppLog>,
     wakes: Arc<AtomicUsize>,
 }
 
@@ -491,18 +493,20 @@ impl Running {
         let installed = Rc::clone(&owner);
         let wakes = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&wakes);
+        let log = crate::app::AppLog::new();
+        log.bootstrap(move |capability| {
+            capability
+                .on_wake(Box::new(move || {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                }))
+                .expect("wake hook");
+            installed.replace(Some(capability));
+            Ok(())
+        });
         Box::new(WebPlatform::new().expect("platform"))
-            .run(Box::new(move |capability| {
-                capability
-                    .on_wake(Box::new(move || {
-                        counted.fetch_add(1, Ordering::SeqCst);
-                    }))
-                    .expect("wake hook");
-                installed.replace(Some(capability));
-                Ok(())
-            }))
+            .run(Rc::clone(&log) as Rc<dyn flui_native::AppHandler>)
             .expect("run");
-        Self { owner, wakes }
+        Self { owner, log, wakes }
     }
 
     fn snapshot(&self) -> DisplaySnapshot {

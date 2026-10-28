@@ -1165,35 +1165,46 @@ fn a_resize_outside_a_live_resize_asks_for_one_frame_after_it() {
 }
 
 fn deadlines_are_delivered_while_the_window_is_moved() {
-    let platform = platform();
-    let window = open(&platform, options());
-    settle();
-    platform.set_wake_deadline_hook(Box::new(|| Some(Instant::now())));
-    let frames = count_frames(&window);
-    let address = hwnd_of(&window).0 as isize;
-    let moved = Arc::new(AtomicBool::new(false));
-    let done = Arc::clone(&moved);
-    let ender = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(300));
-        while !done.load(Ordering::SeqCst) {
-            // SAFETY: a post to a window of this process; one that is gone
-            // fails the call.
-            let _ = unsafe {
-                PostMessageW(
-                    Some(HWND(address as *mut _)),
-                    WM_KEYDOWN,
-                    WPARAM(usize::from(VK_ESCAPE.0)),
-                    LPARAM(0x0001_0001),
-                )
-            };
-            std::thread::sleep(Duration::from_millis(50));
-        }
-    });
-    // The keyboard move loop, modal until the escape above ends it.
-    send(&window, WM_SYSCOMMAND, SC_MOVE as usize, 0);
-    moved.store(true, Ordering::SeqCst);
-    ender.join().expect("the ending thread");
-    let during = frames.load(Ordering::SeqCst);
+    // The application's handler asks for a deadline due at every instant;
+    // the move loop, run from the bootstrap, stands in for the platform's.
+    let during = Arc::new(AtomicUsize::new(0));
+    let measured = Arc::clone(&during);
+    Box::new(platform())
+        .run(crate::app::with_log(move |log, owner| {
+            log.answer_deadline_with(|| Some(Instant::now()));
+            let window = Opened::ready(&owner, options());
+            settle();
+            let frames = count_frames(&window);
+            let address = hwnd_of(&window).0 as isize;
+            let moved = Arc::new(AtomicBool::new(false));
+            let done = Arc::clone(&moved);
+            let ender = std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(300));
+                while !done.load(Ordering::SeqCst) {
+                    // SAFETY: a post to a window of this process; one that is
+                    // gone fails the call.
+                    let _ = unsafe {
+                        PostMessageW(
+                            Some(HWND(address as *mut _)),
+                            WM_KEYDOWN,
+                            WPARAM(usize::from(VK_ESCAPE.0)),
+                            LPARAM(0x0001_0001),
+                        )
+                    };
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            });
+            // The keyboard move loop, modal until the escape above ends it.
+            send(&window, WM_SYSCOMMAND, SC_MOVE as usize, 0);
+            moved.store(true, Ordering::SeqCst);
+            ender.join().expect("the ending thread");
+            measured.store(frames.load(Ordering::SeqCst), Ordering::SeqCst);
+            window.close_for_cleanup();
+            owner.proxy().request_quit().expect("the loop takes a quit");
+            Ok(())
+        }))
+        .expect("the Win32 loop");
+    let during = during.load(Ordering::SeqCst);
     assert!(
         during >= 5,
         "{during} frames in the 300 ms the move loop ran"

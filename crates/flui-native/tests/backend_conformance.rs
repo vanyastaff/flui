@@ -861,7 +861,7 @@ impl Headless {
         let saved = std::rc::Rc::new(std::cell::RefCell::new(None));
         let installed = std::rc::Rc::clone(&saved);
         Box::new(HeadlessPlatform::new().with_os_drag(input_availability::DESKTOP_DRAG_START))
-            .run(Box::new(move |owner| {
+            .run(crate::app::on_ready(move |owner| {
                 *installed.borrow_mut() = Some(owner);
                 Ok(())
             }))

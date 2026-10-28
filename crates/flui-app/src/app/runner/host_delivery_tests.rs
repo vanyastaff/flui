@@ -122,7 +122,7 @@ fn runtime_frame_wake_reaches_its_window_after_sibling_installation() {
     let a_seen = Arc::clone(&a_calls);
     let b_seen = Arc::clone(&b_calls);
     Box::new(HeadlessPlatform::new())
-        .run(Box::new(move |owner| {
+        .run(crate::app::runner::app_handler(move |owner| {
             install_owner_platform(owner)?;
             let a_host = with_owner_platform(|owner| {
                 owner.open_routed(flui_platform::WindowOptions::default())
@@ -234,7 +234,7 @@ fn service_factory_replacement_refuses_obsolete_work_and_preserves_the_new_owner
     let seen_spawned = Arc::clone(&spawned);
     let seen_retired = Arc::clone(&retired);
     Box::new(HeadlessPlatform::new())
-        .run(Box::new(move |owner| {
+        .run(crate::app::runner::app_handler(move |owner| {
             install_owner_platform(owner)?;
             APP_RUNTIME.with(|slot| {
                 let mut state = slot.borrow_mut();
@@ -252,7 +252,7 @@ fn service_factory_replacement_refuses_obsolete_work_and_preserves_the_new_owner
                     let previous =
                         APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
                     Box::new(HeadlessPlatform::new())
-                        .run(Box::new(|replacement| {
+                        .run(crate::app::runner::app_handler(|replacement| {
                             install_owner_platform(replacement)?;
                             Ok(())
                         }))

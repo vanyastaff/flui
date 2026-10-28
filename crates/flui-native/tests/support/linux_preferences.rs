@@ -348,7 +348,7 @@ pub mod linux {
         let witness = Arc::clone(&changed);
         let after = after.observation();
         platform
-            .run_event_loop(Box::new(move |owner| {
+            .run_event_loop(crate::app::on_ready(move |owner| {
                 let initial = owner.preferences().expect("initial owner observation");
                 assert!(
                     before.observed(&initial),
@@ -575,7 +575,7 @@ pub mod linux {
             refused: Arc::clone(&refused),
         };
         platform
-            .run_event_loop(Box::new(move |owner| {
+            .run_event_loop(crate::app::on_ready(move |owner| {
                 let initial = owner.preferences().expect("initial owner observation");
                 assert_eq!(
                     initial.motion(),

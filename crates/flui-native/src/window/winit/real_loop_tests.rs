@@ -47,6 +47,53 @@ fn request(options: WindowOptions) -> crate::WindowRequest {
     )
 }
 
+/// What a test does once the loop is ready, on its owner thread, as an
+/// application handler that hears nothing else.
+#[cfg(target_os = "linux")]
+type ReadyStep = Box<dyn FnOnce(&crate::OwnerPlatform) -> Result<(), crate::BootstrapError>>;
+
+#[cfg(target_os = "linux")]
+struct OnReady(std::cell::RefCell<Option<ReadyStep>>);
+
+#[cfg(target_os = "linux")]
+impl OnReady {
+    fn new(
+        step: impl FnOnce(&crate::OwnerPlatform) -> Result<(), crate::BootstrapError> + 'static,
+    ) -> std::rc::Rc<dyn crate::AppHandler> {
+        std::rc::Rc::new(Self(std::cell::RefCell::new(Some(Box::new(step)))))
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl crate::AppHandler for OnReady {
+    fn ready(&self, owner: crate::OwnerPlatform) -> Result<(), crate::BootstrapError> {
+        let step = self.0.borrow_mut().take();
+        step.map_or(Ok(()), |step| step(&owner))
+    }
+
+    fn quit_requested(&self, _: &crate::OwnerPlatform) {}
+
+    fn reopen(&self, _: &crate::OwnerPlatform) {}
+
+    fn session_end(
+        &self,
+        _: &crate::OwnerPlatform,
+        _: flui_platform::SessionEndPhase,
+    ) -> flui_platform::SessionEndAnswer {
+        flui_platform::SessionEndAnswer::Proceed
+    }
+
+    fn host_notice(&self, _: &crate::OwnerPlatform, _: flui_platform::SystemNotice) {}
+
+    fn exit_policy(&self, _: &crate::OwnerPlatform) -> crate::ExitAnswer {
+        crate::ExitAnswer::HostDecides
+    }
+
+    fn wake_deadline(&self, _: &crate::OwnerPlatform) -> Option<web_time::Instant> {
+        None
+    }
+}
+
 fn options(title: impl Into<String>) -> WindowOptions {
     WindowOptions::default()
         .with_title(title)
@@ -495,7 +542,7 @@ fn a_linux_winit_window_hands_out_its_at_spi_bridge() {
     // becomes ready.
     let bridged = Arc::new(AtomicBool::new(false));
     let read = Arc::clone(&bridged);
-    let on_ready: crate::platform::PlatformReadyCallback = Box::new(move |owner| {
+    let on_ready = OnReady::new(move |owner| {
         let window = owner
             .open_window(options("accessibility"), RecordingWindowHandler::new())?
             .try_ready()?;
@@ -561,7 +608,7 @@ mod wayland_window {
         let host_on_owner = Arc::clone(&host);
         let checked = Arc::new(AtomicBool::new(false));
         let done = Arc::clone(&checked);
-        let on_ready: crate::platform::PlatformReadyCallback = Box::new(move |owner| {
+        let on_ready = OnReady::new(move |owner| {
             let outcome = catch_unwind(AssertUnwindSafe(|| {
                 let window = owner
                     .open_window(

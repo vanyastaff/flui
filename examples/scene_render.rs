@@ -320,16 +320,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!("Scene render pipeline active — set FLUI_SCENE_PLUGIN for hot-reload");
     }
 
+    // The handler keeps the window and the renderer alive for the run, and
+    // lets the loop end when the window closes.
     platform
-        .run(Box::new(move |_owner| {
-            tracing::info!("Platform ready");
-            // Keep resources alive via closure capture
-            let _window = &window;
-            let _renderer = &renderer;
-            Ok(())
+        .run(Rc::new(SceneApp {
+            _window: window,
+            _renderer: renderer,
         }))
         .expect("platform event loop exited with an error");
 
     tracing::info!("Application finished");
     Ok(())
+}
+
+/// The example's application handler: it keeps the window and the renderer
+/// for the run and lets the loop end with its last window.
+struct SceneApp {
+    _window: Rc<dyn flui_native::HostWindow>,
+    _renderer: Arc<Mutex<Renderer>>,
+}
+
+impl flui_native::AppHandler for SceneApp {
+    fn ready(&self, _: flui_native::OwnerPlatform) -> Result<(), flui_native::BootstrapError> {
+        tracing::info!("Platform ready");
+        Ok(())
+    }
+
+    fn quit_requested(&self, _: &flui_native::OwnerPlatform) {}
+
+    fn reopen(&self, _: &flui_native::OwnerPlatform) {}
+
+    fn session_end(
+        &self,
+        _: &flui_native::OwnerPlatform,
+        _: flui_platform::SessionEndPhase,
+    ) -> flui_platform::SessionEndAnswer {
+        flui_platform::SessionEndAnswer::Proceed
+    }
+
+    fn host_notice(&self, _: &flui_native::OwnerPlatform, _: flui_platform::SystemNotice) {}
+
+    fn exit_policy(&self, _: &flui_native::OwnerPlatform) -> flui_native::ExitAnswer {
+        flui_native::ExitAnswer::End
+    }
+
+    fn wake_deadline(&self, _: &flui_native::OwnerPlatform) -> Option<std::time::Instant> {
+        None
+    }
 }

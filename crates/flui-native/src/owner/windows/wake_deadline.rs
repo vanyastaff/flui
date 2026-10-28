@@ -1,15 +1,14 @@
 //! The owner's wake deadline as the message loop arms and delivers it.
 
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
-pub(super) type WakeDeadlineHook = dyn Fn() -> Option<web_time::Instant> + Send + Sync;
-
-/// The last deadline the loop delivered. The hook answers with an instant
-/// only, so the same `(hook, instant)` pair is either work no frame has had
-/// a chance to service, which must not spin, or work a frame left or
-/// accepted at the instant it just serviced (a queue of obligations all due
-/// at one instant answers the same pair once per item), which must get its
-/// frame. The frame count is the delivery generation that tells them apart.
+/// The last deadline the loop delivered. The application's handler answers
+/// with an instant only, so the same instant is either work no frame has had
+/// a chance to service, which must not spin, or work a frame left or accepted
+/// at the instant it just serviced (a queue of obligations all due at one
+/// instant answers the same instant once per item), which must get its frame.
+/// The frame count is the delivery generation that tells them apart. A run
+/// has one handler, so the instant alone names the answer.
 pub(super) struct DeadlineDelivery {
     pub(super) arm: DeadlineArm,
     /// The platform's frame count when the delivery was made.
@@ -17,17 +16,12 @@ pub(super) struct DeadlineDelivery {
 }
 
 impl DeadlineDelivery {
-    /// Whether `deadline` from `hook` may be armed after this delivery: a
-    /// different pair always, the same pair whenever a frame callback ran
-    /// since. An answer no frame could have serviced stays delivered, so a
-    /// delivery that reaches no frame never spins the loop.
-    pub(super) fn admits(
-        &self,
-        deadline: web_time::Instant,
-        hook: &Weak<WakeDeadlineHook>,
-        frames: u64,
-    ) -> bool {
-        !self.arm.matches(deadline, hook) || frames != self.frames
+    /// Whether `deadline` may be armed after this delivery: a different
+    /// instant always, the same one whenever a frame callback ran since. An
+    /// answer no frame could have serviced stays delivered, so a delivery that
+    /// reaches no frame never spins the loop.
+    pub(super) fn admits(&self, deadline: web_time::Instant, frames: u64) -> bool {
+        self.arm.deadline != deadline || frames != self.frames
     }
 }
 
@@ -39,28 +33,18 @@ impl DeadlineDelivery {
 pub(super) struct ModalDelivery(std::cell::RefCell<Option<DeadlineDelivery>>);
 
 impl ModalDelivery {
-    /// Whether `deadline` from `hook` is due for delivery after the last one.
-    pub(super) fn admits(
-        &self,
-        deadline: web_time::Instant,
-        hook: &Weak<WakeDeadlineHook>,
-        frames: u64,
-    ) -> bool {
+    /// Whether `deadline` is due for delivery after the last one.
+    pub(super) fn admits(&self, deadline: web_time::Instant, frames: u64) -> bool {
         self.0
             .borrow()
             .as_ref()
-            .is_none_or(|last| last.admits(deadline, hook, frames))
+            .is_none_or(|last| last.admits(deadline, frames))
     }
 
-    /// `deadline` from `hook` was delivered at the frame count `frames`.
-    pub(super) fn record(
-        &self,
-        deadline: web_time::Instant,
-        hook: Weak<WakeDeadlineHook>,
-        frames: u64,
-    ) {
+    /// `deadline` was delivered at the frame count `frames`.
+    pub(super) fn record(&self, deadline: web_time::Instant, frames: u64) {
         *self.0.borrow_mut() = Some(DeadlineDelivery {
-            arm: DeadlineArm { deadline, hook },
+            arm: DeadlineArm { deadline },
             frames,
         });
     }
@@ -92,13 +76,7 @@ impl FrameCount {
     }
 }
 
+/// A deadline the loop waits for.
 pub(super) struct DeadlineArm {
     pub(super) deadline: web_time::Instant,
-    pub(super) hook: Weak<WakeDeadlineHook>,
-}
-
-impl DeadlineArm {
-    fn matches(&self, deadline: web_time::Instant, hook: &Weak<WakeDeadlineHook>) -> bool {
-        self.deadline == deadline && Weak::ptr_eq(&self.hook, hook)
-    }
 }

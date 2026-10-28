@@ -198,7 +198,7 @@ request.
 
 > **Environments:** all · **Who it hurts:** Apps opened from links, files or a second launch · **Parity:** [App lifecycle](platform-parity.md#app-lifecycle)
 
-- `on_open_urls` is never called.
+- No host reports an opened URL or file: the registration that would have heard one is gone, and `opened(urls, files)` joins the application handler with the activation feature.
 - Packaging (app identity) not audited.
 
 ### 14. System preferences missing or never run

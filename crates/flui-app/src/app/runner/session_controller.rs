@@ -366,7 +366,7 @@ mod tests {
         let saved = Rc::new(RefCell::new(None));
         let installed = Rc::clone(&saved);
         Box::new(flui_native::HeadlessPlatform::new())
-            .run(Box::new(move |owner| {
+            .run(crate::app::runner::app_handler(move |owner| {
                 *installed.borrow_mut() = Some(owner);
                 Ok(())
             }))
@@ -467,7 +467,7 @@ mod tests {
             RuntimeTask, dispatch_platform_ui_runtime, install_platform_ui_runtime,
         };
         let _clear = super::super::host::OwnerHostClearGuard::arm();
-        Box::new(flui_native::HeadlessPlatform::new()).run(Box::new(move |owner| {
+        Box::new(flui_native::HeadlessPlatform::new()).run(crate::app::runner::app_handler(move |owner| {
             let window = owner.open_routed(flui_platform::WindowOptions::default())?.try_ready()?;
             let retained_window = Rc::clone(&window);
             let outer = install_platform_ui_runtime(crate::app::ui_runtime::UiRuntime::for_test(), &crate::app::window_test_support::headless_test_window());
@@ -492,7 +492,7 @@ mod tests {
         };
         let _clear = super::super::host::OwnerHostClearGuard::arm();
         Box::new(flui_native::HeadlessPlatform::new())
-            .run(Box::new(move |owner| {
+            .run(crate::app::runner::app_handler(move |owner| {
                 let window = owner
                     .open_routed(flui_platform::WindowOptions::default())?
                     .try_ready()?;

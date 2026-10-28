@@ -6,6 +6,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::rc::Weak;
 
 use wasm_bindgen::prelude::*;
 
@@ -21,9 +22,7 @@ use flui_platform::{
 #[derive(Default)]
 struct ConsoleLog {
     /// The window, to read its snapshot when it changes; set once it opened.
-    /// The handler keeps it for the page: a window is its owner thread's, and
-    /// the page is the owner. It lets go when the window closes.
-    window: RefCell<Option<Rc<dyn HostWindow>>>,
+    window: RefCell<Option<Weak<dyn HostWindow>>>,
     /// The drawable size logged last.
     logged: Cell<Option<WindowMetrics>>,
 }
@@ -78,7 +77,7 @@ impl WindowHandler for ConsoleLog {
     }
 
     fn state_changed(&self) {
-        let window = self.window.borrow().clone();
+        let window = self.window.borrow().as_ref().and_then(Weak::upgrade);
         let Some(window) = window else {
             return;
         };
@@ -107,7 +106,6 @@ impl WindowHandler for ConsoleLog {
 
     fn closed(&self) {
         log("Window closed");
-        let _window = self.window.borrow_mut().take();
     }
 
     // Nothing renders into the canvas's surface.
@@ -136,7 +134,7 @@ pub fn start() {
     let window = platform
         .open_window(options, handler.clone())
         .expect("Failed to create canvas");
-    *handler.window.borrow_mut() = Some(Rc::clone(&window));
+    *handler.window.borrow_mut() = Some(Rc::downgrade(&window));
 
     let opened = window.state();
     handler.logged.set(opened.metrics);
@@ -149,10 +147,55 @@ pub fn start() {
 
     log("FLUI Web Demo ready! Try clicking and typing on the canvas.");
 
-    // On the web `run` returns as soon as its callback has, while the page
-    // keeps running: the window's handler keeps the window until it closes.
-    drop(window);
+    // On the web `run` returns as soon as the bootstrap has, while the page
+    // keeps running. The platform keeps its handler until it quits, so the
+    // handler owns the window: dropping the window retires the canvas, and
+    // with it the window's handler.
     platform
-        .run(Box::new(|_owner| Ok(())))
+        .run(Rc::new(Page {
+            window: RefCell::new(Some(window)),
+            owner: RefCell::new(None),
+        }))
         .expect("platform event loop exited with an error");
+}
+
+/// The page's application handler: it keeps the owner capability and the
+/// canvas window for the page's life, and lets the window go when the page
+/// quits. The page hears no other system event.
+struct Page {
+    window: RefCell<Option<Rc<dyn HostWindow>>>,
+    owner: RefCell<Option<flui_native::OwnerPlatform>>,
+}
+
+impl flui_native::AppHandler for Page {
+    fn ready(&self, owner: flui_native::OwnerPlatform) -> Result<(), flui_native::BootstrapError> {
+        self.owner.replace(Some(owner));
+        Ok(())
+    }
+
+    fn quit_requested(&self, _: &flui_native::OwnerPlatform) {
+        let window = self.window.borrow_mut().take();
+        drop(window);
+    }
+
+    fn reopen(&self, _: &flui_native::OwnerPlatform) {}
+
+    fn session_end(
+        &self,
+        _: &flui_native::OwnerPlatform,
+        _: flui_platform::SessionEndPhase,
+    ) -> flui_platform::SessionEndAnswer {
+        flui_platform::SessionEndAnswer::Proceed
+    }
+
+    fn host_notice(&self, _: &flui_native::OwnerPlatform, _: flui_platform::SystemNotice) {}
+
+    fn exit_policy(&self, _: &flui_native::OwnerPlatform) -> flui_native::ExitAnswer {
+        // The page ends with its tab.
+        flui_native::ExitAnswer::HostDecides
+    }
+
+    fn wake_deadline(&self, _: &flui_native::OwnerPlatform) -> Option<web_time::Instant> {
+        None
+    }
 }

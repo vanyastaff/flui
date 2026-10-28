@@ -57,7 +57,7 @@ use crate::owner::windows::{
     WindowsLoop, window_step,
 };
 #[cfg(windows)]
-use crate::owner::{handlers::PlatformHandlers, window_delivery::WindowDelivery};
+use crate::owner::{window_delivery::WindowDelivery, windows::AppHooks};
 #[cfg(windows)]
 use flui_platform::Modifiers;
 
@@ -90,8 +90,8 @@ impl crate::host::Input<WindowsLoop> for WindowsLoop {
     }
 
     fn on_keyboard_layout_change(owner: &WindowsLoop, callback: Box<dyn FnMut() + Send>) {
-        owner.register_handler("on_keyboard_layout_change", callback, |handlers| {
-            &mut handlers.keyboard_layout_changed
+        owner.register_handler("on_keyboard_layout_change", callback, |hooks| {
+            &mut hooks.keyboard_layout_changed
         });
     }
 }
@@ -153,8 +153,9 @@ struct InputWindow {
     hooks: Weak<[Rc<dyn WindowMessages>]>,
     /// Its callbacks, which its input is dispatched to.
     delivery: Arc<WindowDelivery>,
-    /// The application's handlers: a keyboard layout change reaches theirs.
-    handlers: Rc<RefCell<PlatformHandlers>>,
+    /// What the application gave the loop: a keyboard layout change reaches
+    /// its callback.
+    app_hooks: Rc<RefCell<AppHooks>>,
     /// The system preferences, which give its double-click interval and
     /// rectangle.
     preferences: Rc<dyn OwnerPreferences>,
@@ -197,7 +198,7 @@ impl InputWindow {
             window: window.window(),
             hooks: Rc::downgrade(&window.hooks),
             delivery: Arc::clone(&window.delivery),
-            handlers: Rc::clone(&window.handlers),
+            app_hooks: Rc::clone(&window.app_hooks),
             preferences: Rc::clone(&window.preferences),
             scale: window.scale.clone(),
             registry: RefCell::new(raw::pointer_registry(
@@ -233,12 +234,10 @@ impl InputWindow {
     }
 
     /// Dispatch a keyboard-layout change to the platform-level hook, through
-    /// the call point: no borrow of the handlers is held while it runs.
+    /// the call point: no borrow of the hooks is held while it runs.
     fn dispatch_keyboard_layout_change(&self) {
         call(
-            &Field::new(&*self.handlers, |handlers| {
-                &mut handlers.keyboard_layout_changed
-            }),
+            &Field::new(&*self.app_hooks, |hooks| &mut hooks.keyboard_layout_changed),
             |handler| handler(),
         )
         .or_resume(());

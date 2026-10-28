@@ -35,7 +35,7 @@ fn boot() -> Rig {
     let platform = HeadlessPlatform::new();
     let events = platform.host_events();
     Box::new(platform)
-        .run(Box::new(|owner| {
+        .run(crate::app::runner::app_handler(|owner| {
             install_owner_platform(owner)?;
             Ok(())
         }))

@@ -19,6 +19,7 @@ use crate::owner::android::ndk::SymbolSource;
 use crate::owner::android::{
     ActivityInput, ActivityPreferences, AndroidHost, AndroidLoop, HostDisplays,
 };
+use crate::owner::app_delivery::AppDelivery;
 use crate::owner::notices::NoticeChannel;
 use crate::owner::signal::OwnerSignal;
 use crate::platform::HostPlatform;
@@ -83,8 +84,8 @@ impl AndroidHost for Android {
         Arc::new(AndroidPreferences::new(app, api, signal))
     }
 
-    fn notices() -> Arc<dyn NoticeChannel> {
-        Arc::new(SystemNotices::default())
+    fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {
+        Arc::new(SystemNotices::new(Arc::clone(app)))
     }
 
     /// The lifecycle feature's reading of the Activity's callbacks.

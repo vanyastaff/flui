@@ -2496,6 +2496,7 @@ dependencies = [
  "flui-platform",
  "wasm-bindgen",
  "web-sys",
+ "web-time",
 ]
 
 [[package]]

@@ -60,10 +60,8 @@
 //! use flui_native::current_platform;
 //!
 //! let platform = current_platform()?;
-//! platform.run(Box::new(|owner| {
-//!     println!("Platform ready: {}", owner.shared().name());
-//!     Ok(())
-//! }))?;
+//! // `App` implements `AppHandler`: its `ready` is the bootstrap.
+//! platform.run(Rc::new(App::default()))?;
 //! ```
 //!
 //! ## Testing with Headless Mode
@@ -218,7 +216,7 @@ pub mod storage;
 #[cfg(test)]
 mod table_test;
 pub mod task;
-#[cfg(feature = "testing")]
+#[cfg(any(test, feature = "testing"))]
 pub mod testing;
 // Reachable for the text position's trait, which bounds a host's table; not
 // an embedding API.
@@ -291,7 +289,7 @@ pub use task::{Task, TaskLabel};
 // `flui_platform`, the accessibility capability from `flui_semantics::platform`.
 // Each has this one path (ADR-0151 §9).
 pub use host_window::HostWindow;
-pub use platform::{PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback};
+pub use platform::{AppHandler, ExitAnswer, PathPromptOptions, Platform, PlatformExecutor};
 // The owner-thread capability (ADR-0039 §1): minted only by a backend,
 // handed to `on_ready`, never re-exported with a public minting seam.
 pub use owner::{
@@ -383,10 +381,8 @@ pub use owner::{
 /// let platform = current_platform()?;
 /// println!("Running on: {}", platform.name());
 ///
-/// platform.run(Box::new(|_owner| {
-///     println!("Platform ready!");
-///     Ok(())
-/// }))?;
+/// // `App` implements `AppHandler`: its `ready` is the bootstrap.
+/// platform.run(Rc::new(App::default()))?;
 /// ```
 ///
 /// # Platform-Specific Code
@@ -531,7 +527,8 @@ pub fn headless_platform() -> Box<dyn Platform> {
 /// #[unsafe(no_mangle)]
 /// fn android_main(app: android_activity::AndroidApp) {
 ///     let platform = flui_native::android_platform(app);
-///     let _ = platform.run(Box::new(|_owner| Ok(())));
+///     // `App` implements `AppHandler`: its `ready` is the bootstrap.
+///     let _ = platform.run(Rc::new(App::default()));
 /// }
 /// ```
 #[cfg(target_os = "android")]

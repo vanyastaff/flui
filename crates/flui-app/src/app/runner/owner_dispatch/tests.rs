@@ -225,8 +225,7 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
     ] {
         let _clear = OwnerHostClearGuard::arm();
         flui_native::headless_platform()
-            .run(Box::new(move |owner| {
-                let shared = owner.shared();
+            .run(crate::app::runner::app_handler(move |owner| {
                 install_owner_platform(owner)?;
                 let host = with_owner_platform(|owner| {
                     owner.open_routed(flui_platform::WindowOptions::default())
@@ -270,7 +269,7 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
                 let installation = prepare_platform_ui_runtime(runtime, Rc::clone(&window));
                 let dispatcher = installation.dispatcher();
                 installation
-                    .submit_web(test_resize_driver(|_| {}), &shared)
+                    .submit_web(test_resize_driver(|_| {}))
                     .expect("publish initialization");
                 assert_eq!(
                     observe_runtime(dispatcher, |runtime| runtime.scheduler().lifecycle_state()),
@@ -534,8 +533,12 @@ fn explicit_platform_quit_detaches_every_installed_ui_runtime() {
     let platform = flui_native::HeadlessPlatform::new();
     let reevaluation = platform.exit_reevaluation();
     let platform: Box<dyn flui_native::Platform> = Box::new(platform);
+    let installed = Rc::new(RefCell::new(Vec::new()));
+    let kept = Rc::clone(&installed);
+    // The quit the re-evaluation decides is a report: the handler hears it
+    // once the bootstrap returned.
     platform
-        .run(Box::new(move |owner| {
+        .run(crate::app::runner::app_handler(move |owner| {
             let shared = owner.shared();
             install_owner_platform(owner).expect("install owner wake transport");
             let primary = install_test_ui_runtime();
@@ -551,23 +554,24 @@ fn explicit_platform_quit_detaches_every_installed_ui_runtime() {
                     .expect("resume ui_runtime");
             }
             super::super::host::install_platform_quit_hook();
-            shared.set_exit_policy_hook(Box::new(|| true));
+            super::super::host::route_exit_policy(|| true);
             shared.request_exit_policy_reevaluation();
-            assert!(reevaluation.drive(), "registered on_quit callback ran");
-            for dispatcher in [primary, secondary] {
-                observe_runtime(dispatcher, |ui_runtime| {
-                    assert_eq!(
-                        ui_runtime.scheduler().lifecycle_state(),
-                        AppLifecycleState::Detached,
-                        "every ui_runtime must detach through the installed quit callback"
-                    );
-                    assert!(!ui_runtime.scheduler().frames_enabled());
-                });
-            }
-            teardown_platform_ui_runtime();
+            assert!(reevaluation.drive(), "the exit policy allowed the quit");
+            kept.borrow_mut().extend([primary, secondary]);
             Ok(())
         }))
         .expect("headless run");
+    for dispatcher in installed.take() {
+        observe_runtime(dispatcher, |ui_runtime| {
+            assert_eq!(
+                ui_runtime.scheduler().lifecycle_state(),
+                AppLifecycleState::Detached,
+                "every ui_runtime must detach through the routed quit"
+            );
+            assert!(!ui_runtime.scheduler().frames_enabled());
+        });
+    }
+    teardown_platform_ui_runtime();
 }
 
 /// Installing a UI runtime resolves the loop-scoped execution services
@@ -1038,7 +1042,7 @@ fn install_ui_runtime_a_with_driver(
     let platform = flui_native::headless_platform();
     let dispatcher_a_slot: Rc<Cell<Option<PresentationDispatcher>>> = Rc::new(Cell::new(None));
     let dispatcher_a_slot_for_on_ready = Rc::clone(&dispatcher_a_slot);
-    let ready = platform.run(Box::new(move |owner| {
+    let ready = platform.run(crate::app::runner::app_handler(move |owner| {
         install_owner_platform(owner).expect("install owner wake transport");
         let window_a: Rc<dyn PlatformWindow> =
             with_owner_platform(|owner| owner.open_routed(flui_platform::WindowOptions::default()))
@@ -1173,7 +1177,7 @@ fn first_build_text_sizing(runtime: &mut crate::app::ui_runtime::UiRuntime) -> T
 fn deferred_native_reads_preserve_accepted_preferences() {
     let _clear = OwnerHostClearGuard::arm();
     flui_native::headless_platform()
-        .run(Box::new(|owner| {
+        .run(crate::app::runner::app_handler(|owner| {
             install_owner_platform(owner)?;
             super::super::host::refresh_preferences_with(|_| {
                 Ok(flui_platform::SystemPreferences::default()
@@ -1226,7 +1230,7 @@ fn preferences_wake_each_isolated_window() {
     let outputs = Rc::new(RefCell::new(Vec::new()));
     let installed = Rc::clone(&outputs);
     Box::new(HeadlessPlatform::new())
-        .run(Box::new(move |owner| {
+        .run(crate::app::runner::app_handler(move |owner| {
             install_owner_platform(owner)?;
             for id in [101, 102] {
                 let window = crate::app::window_test_support::TestWindow::new().with_id(id);
@@ -1402,7 +1406,7 @@ impl SourceDrivenReader {
         let (output, mounted_log, bootstrap_source) =
             (Rc::clone(&mounted), Rc::clone(&log), source.clone());
         Box::new(platform)
-            .run(Box::new(move |owner| {
+            .run(crate::app::runner::app_handler(move |owner| {
                 output.replace(Some(bootstrap(owner, &bootstrap_source, &mounted_log)?));
                 Ok(())
             }))
@@ -1746,7 +1750,7 @@ fn a_frame_turn_applies_queued_window_commands_after_its_frame() {
     let installed = Rc::new(RefCell::new(None));
     let output = Rc::clone(&installed);
     Box::new(platform)
-        .run(Box::new(move |owner| {
+        .run(crate::app::runner::app_handler(move |owner| {
             install_owner_platform(owner)?;
             let runtime = super::super::host::build_ui_runtime(Rc::clone(&native), 1.0)?;
             let address = flui_foundation::PresentationAddress {
@@ -1836,7 +1840,7 @@ fn platform_brightness_follows_the_window_appearance() {
     let installed = Rc::new(RefCell::new(None));
     let output = Rc::clone(&installed);
     Box::new(HeadlessPlatform::new())
-        .run(Box::new(move |owner| {
+        .run(crate::app::runner::app_handler(move |owner| {
             install_owner_platform(owner)?;
             let runtime = super::super::host::build_ui_runtime(Rc::clone(&window), 1.0)?;
             runtime.attach_root_widget_with_size(&Reader(reader), 800.0, 600.0)?;
@@ -1891,12 +1895,12 @@ fn obsolete_native_observation_cannot_update_a_replacement_host() {
         for read_fails in [false, true] {
             let _clear = OwnerHostClearGuard::arm();
             flui_native::headless_platform()
-                .run(Box::new(move |owner| {
+                .run(crate::app::runner::app_handler(move |owner| {
                     install_owner_platform(owner)?;
                     let result = super::super::host::refresh_preferences_with(|_| {
                         if replace_platform {
                             flui_native::headless_platform()
-                                .run(Box::new(|owner| {
+                                .run(crate::app::runner::app_handler(|owner| {
                                     install_owner_platform(owner)?;
                                     Ok(())
                                 }))
@@ -1953,7 +1957,7 @@ fn windows_bootstrap_accepts_preferences_before_the_first_window() {
 
     let _clear = OwnerHostClearGuard::arm();
     Box::new(flui_native::WindowsPlatform::new().expect("native platform"))
-        .run(Box::new(|owner| {
+        .run(crate::app::runner::app_handler(|owner| {
             let expected = owner
                 .preferences()?
                 .text_scale()
@@ -1980,7 +1984,7 @@ fn windows_bootstrap_accepts_preferences_before_the_first_window() {
 fn bootstrap_keeps_the_host_that_seeded_the_first_build() {
     let _clear = OwnerHostClearGuard::arm();
     flui_native::headless_platform()
-        .run(Box::new(|owner| {
+        .run(crate::app::runner::app_handler(|owner| {
             install_owner_platform(owner)?;
             let host = APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
             host.logical().update_preferences(
@@ -2022,7 +2026,7 @@ fn a_replacement_platform_starts_a_new_preference_owner() {
     let previous = Rc::new(RefCell::new(None));
     let captured = Rc::clone(&previous);
     flui_native::headless_platform()
-        .run(Box::new(move |owner| {
+        .run(crate::app::runner::app_handler(move |owner| {
             install_owner_platform(owner)?;
             let host = APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
             host.logical().update_preferences(
@@ -2035,7 +2039,7 @@ fn a_replacement_platform_starts_a_new_preference_owner() {
         .expect("first native owner");
     let _second_clear = OwnerHostClearGuard::arm();
     flui_native::headless_platform()
-        .run(Box::new(move |owner| {
+        .run(crate::app::runner::app_handler(move |owner| {
             install_owner_platform(owner)?;
             let previous = previous.borrow_mut().take().expect("first host retained");
             assert!(
@@ -2098,7 +2102,7 @@ fn platform_replacement_contains_reentrant_retirement() {
         let retired = Arc::new(AtomicUsize::new(0));
         let first_retired = Arc::clone(&retired);
         flui_native::headless_platform()
-            .run(Box::new(move |owner| {
+            .run(crate::app::runner::app_handler(move |owner| {
                 install_owner_platform(owner)?;
                 let hook = RetiredProducer {
                     retired: Arc::clone(&first_retired),
@@ -2125,7 +2129,7 @@ fn platform_replacement_contains_reentrant_retirement() {
             .expect("first owner");
         let _second_clear = OwnerHostClearGuard::arm();
         flui_native::headless_platform()
-            .run(Box::new(move |owner| {
+            .run(crate::app::runner::app_handler(move |owner| {
                 let result = catch_unwind(AssertUnwindSafe(|| install_owner_platform(owner)));
                 if wake_fails || clipboard_fails {
                     let failure = result.expect_err("retirement failure escapes after cleanup");
@@ -2453,15 +2457,13 @@ fn install_ui_runtime_a_with_exit_policy_quit_counter_and_reevaluation() -> (
     let quit_calls_for_on_ready = Arc::clone(&quit_calls);
     let installed_slot: Rc<RefCell<Option<Installed>>> = Rc::new(RefCell::new(None));
     let installed_slot_for_on_ready = Rc::clone(&installed_slot);
-    let ready = platform.run(Box::new(move |owner| {
+    let ready = platform.run(crate::app::runner::app_handler(move |owner| {
         install_owner_platform(owner).expect("install owner wake transport");
         install_exit_policy_hook(ExitPolicy::OnLastWindowClosed);
 
         let quit_calls_for_handler = Arc::clone(&quit_calls_for_on_ready);
-        with_owner_platform(|owner| {
-            owner.shared().on_quit(Box::new(move || {
-                quit_calls_for_handler.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            }));
+        super::super::host::route_quit(move || {
+            quit_calls_for_handler.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         });
 
         let window_a: Rc<dyn PlatformWindow> =

@@ -14,6 +14,7 @@ use flui_platform::MotionPreference;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::wasm_bindgen_test;
 
+use flui_native::testing::app;
 #[path = "wasm32/display.rs"]
 mod display;
 #[path = "wasm32/page_store.rs"]
@@ -202,7 +203,7 @@ async fn browser_motion_observations_wake_replace_and_retire_their_owner() {
     let wakes = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&wakes);
     Box::new(platform)
-        .run(Box::new(move |capability| {
+        .run(crate::app::on_ready(move |capability| {
             let proxy = capability.proxy();
             capability
                 .on_wake(Box::new(move || {
@@ -368,7 +369,7 @@ async fn browser_contrast_and_languages_reach_their_owner() {
     let wakes = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&wakes);
     Box::new(WebPlatform::new().expect("browser source"))
-        .run(Box::new(move |capability| {
+        .run(crate::app::on_ready(move |capability| {
             capability
                 .on_wake(Box::new(move || {
                     observed.fetch_add(1, Ordering::SeqCst);
@@ -446,7 +447,7 @@ fn counter_owner() -> (flui_native::OwnerPlatform, Arc<AtomicUsize>) {
     let wakes = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&wakes);
     Box::new(WebPlatform::new().expect("successor source"))
-        .run(Box::new(move |owner| {
+        .run(crate::app::on_ready(move |owner| {
             owner
                 .on_wake(Box::new(move || {
                     observed.fetch_add(1, Ordering::SeqCst);
