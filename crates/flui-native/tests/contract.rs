@@ -329,6 +329,10 @@ mod native_windows {
             "cross_thread_sent_keydown_takes_no_queued_character",
             cross_thread_sent_keydown_takes_no_queued_character,
         ),
+        (
+            "a_key_the_input_method_took_is_not_delivered",
+            a_key_the_input_method_took_is_not_delivered,
+        ),
         ("dead_key_is_reported_as_dead", dead_key_is_reported_as_dead),
         (
             "system_dead_key_is_reported_as_dead",
@@ -1736,6 +1740,78 @@ mod native_windows {
             ["b", "é"],
             "the sent keydown, delivered inside the outer drain, reports its own \
              key and the outer keystroke keeps its translated character"
+        );
+        window.close_now();
+    }
+
+    // A key the input method took arrives as `VK_PROCESSKEY`: its result
+    // reaches the field through the input method, so the key itself is no
+    // key, and neither is its release, whether that comes under
+    // `VK_PROCESSKEY` or its own virtual key. The key typed after it is
+    // delivered as usual.
+    #[expect(unsafe_code, reason = "owned Win32 keyboard dispatch")]
+    fn a_key_the_input_method_took_is_not_delivered() {
+        const VK_PROCESSKEY: usize = 0xE5;
+        const RELEASE: isize = (1 << 30) | (1 << 31);
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        let hwnd = hwnd_of(&window);
+        let keys = Arc::new(Mutex::new(Vec::<String>::new()));
+        let observed = Arc::clone(&keys);
+        window.handler.react_to_input(move |event| {
+            if let Some(keyboard) = event.as_keyboard() {
+                observed.lock().expect("keys").push(format!(
+                    "{:?} {:?} {:?}",
+                    keyboard.state(),
+                    keyboard.key,
+                    keyboard.code
+                ));
+            }
+            DispatchEventResult::resolved(true, false)
+        });
+        let _plain = ThreadKeyboardState::with_keys(&[
+            (VK_SHIFT, false),
+            (VK_CONTROL, false),
+            (VK_MENU, false),
+        ]);
+        // K taken, released under its own key; L taken, released under
+        // `VK_PROCESSKEY`; then A as the application's own key.
+        let k = 1 | (0x25 << 16);
+        let l = 1 | (0x26 << 16);
+        let a = 1 | (0x1e << 16);
+        let queued = [
+            (WM_KEYDOWN, VK_PROCESSKEY, k),
+            (WM_KEYUP, 0x4B, k | RELEASE),
+            (WM_KEYDOWN, VK_PROCESSKEY, l),
+            (WM_KEYUP, VK_PROCESSKEY, l | RELEASE),
+            (WM_KEYDOWN, 0x41, a),
+            (WM_CHAR, usize::from(b'a'), a),
+            (WM_KEYUP, 0x41, a | RELEASE),
+        ];
+        for (message, wparam, lparam) in queued {
+            // SAFETY: integer key data for the fixture's own HWND on this
+            // thread's queue.
+            unsafe { PostMessageW(Some(hwnd), message, WPARAM(wparam), LPARAM(lparam)) }
+                .expect("queue a key message");
+        }
+        // Dispatched without `TranslateMessage`: the characters are the
+        // ones queued above, whatever the machine's layout.
+        for _ in 0..64 {
+            let mut message = MSG::default();
+            // SAFETY: only the fixture's owner-thread HWND is selected.
+            if !unsafe { PeekMessageW(&raw mut message, Some(hwnd), 0, 0, PM_REMOVE) }.as_bool() {
+                break;
+            }
+            // SAFETY: dispatch the message this thread's queue returned.
+            unsafe { DispatchMessageW(&raw const message) };
+        }
+        assert_eq!(
+            *keys.lock().expect("keys"),
+            [
+                r#"Down Character(KeyText("a")) KeyA"#,
+                r#"Up Character(KeyText("a")) KeyA"#
+            ],
+            "only the application's own key is delivered"
         );
         window.close_now();
     }

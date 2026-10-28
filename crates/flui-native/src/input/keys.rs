@@ -101,6 +101,7 @@ mod vk {
     pub const OEM_6: u16 = 0xDD;
     pub const OEM_7: u16 = 0xDE;
     pub const OEM_102: u16 = 0xE2;
+    pub const PROCESSKEY: u16 = 0xE5;
 }
 
 /// One mouse button as Win32 names it.
@@ -547,6 +548,20 @@ pub fn location_for_code(code: Code) -> Location {
         .map_or(Location::Standard, |row| row.location)
 }
 
+/// Whether a key message whose virtual key is `vk_code` reports a key an
+/// input method already took (`VK_PROCESSKEY`).
+///
+/// Such a key is not the application's: the input method turned it into
+/// composition, whose result reaches the field through the input method's
+/// own route (TSF's text store, or the `WM_CHAR`s a legacy input method
+/// posts for its result). Reported as a key as well, it would be a second
+/// producer for one press (ADR-0069), so it produces no key at all, neither
+/// a character nor a named key, and its release none either.
+pub fn taken_by_input_method(vk_code: u16) -> bool {
+    let _ = (vk_code, vk::PROCESSKEY);
+    false
+}
+
 /// Decode a keydown's `WM_CHAR` burst (the UTF-16 code units of every
 /// `WM_CHAR` `TranslateMessage` queued for it, in order) into typeable text.
 ///
@@ -974,5 +989,28 @@ mod mapping {
             location_for_code(Code::Unidentified),
             CHARACTER_WITHOUT_A_KEY
         );
+    }
+}
+
+#[cfg(test)]
+mod input_method {
+    use super::taken_by_input_method;
+
+    #[test]
+    fn a_processkey_keydown_produces_no_key() {
+        let rows: [(&str, u16, bool); 6] = [
+            ("VK_PROCESSKEY", 0xE5, true),
+            ("VK_PACKET, a character SendInput typed", 0xE7, false),
+            ("the A key", 0x41, false),
+            ("Space, which converts a composition", 0x20, false),
+            ("VK_ICO_00, just before", 0xE4, false),
+            ("VK_ICO_CLEAR, just after", 0xE6, false),
+        ];
+        let failed: Vec<&str> = rows
+            .iter()
+            .filter(|(_, vk, taken)| taken_by_input_method(*vk) != *taken)
+            .map(|(name, ..)| *name)
+            .collect();
+        assert!(failed.is_empty(), "failing rows: {failed:?}");
     }
 }
