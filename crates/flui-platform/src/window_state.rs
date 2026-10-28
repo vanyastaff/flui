@@ -408,6 +408,12 @@ impl WindowState {
 /// says. The same holds for the input regions, whose capability lives in the
 /// input capabilities.
 ///
+/// The one report a window makes outside its snapshot,
+/// [`reports_presentation`](Self::reports_presentation), does keep its reason
+/// here: no verb answers for it, so
+/// [`presentation_feedback`](Self::presentation_feedback) is where a caller
+/// learns why frames come without [`FrameRequest::presented`](crate::FrameRequest::presented).
+///
 /// The capabilities in a published snapshot also carry their
 /// [`revision`](Self::revision): the snapshot revision at which what the
 /// window honours last changed. An [`AdmittedCommand`] is bound to it, so a
@@ -460,9 +466,18 @@ pub struct WindowCapabilities {
     /// [`WindowCommand::SetMaterial`]: the window system draws every
     /// [`WindowMaterial`](crate::WindowMaterial) behind the window.
     pub material: Availability,
+    /// [`FrameRequest::presented`](crate::FrameRequest::presented): the window
+    /// reports when the frames presented into its surface reached the screen,
+    /// on the event timeline. Set it `Unavailable` with
+    /// [`without_presentation_feedback`](Self::without_presentation_feedback),
+    /// which records why; set by hand, the reason is the platform's.
+    pub reports_presentation: Availability,
     /// Why each command's capability is `Unavailable`, indexed by [`Slot`];
     /// read only while it is.
     absences: [CapabilityAbsence; Slot::COUNT],
+    /// Why [`reports_presentation`](Self::reports_presentation) is
+    /// `Unavailable`; read only while it is.
+    presentation_absence: CapabilityAbsence,
     /// The window whose snapshot publishes these capabilities; `None` for
     /// capabilities built by hand. Kept by [`WindowState::successor`].
     owner: Option<CapabilitiesOwner>,
@@ -491,7 +506,9 @@ impl CapabilitiesOwner {
 
 impl PartialEq for WindowCapabilities {
     fn eq(&self, other: &Self) -> bool {
-        self.honoured() == other.honoured() && self.absences_in_force() == other.absences_in_force()
+        self.honoured() == other.honoured()
+            && self.absences_in_force() == other.absences_in_force()
+            && self.presentation_absence_in_force() == other.presentation_absence_in_force()
     }
 }
 
@@ -501,6 +518,7 @@ impl std::hash::Hash for WindowCapabilities {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.honoured().hash(state);
         self.absences_in_force().hash(state);
+        self.presentation_absence_in_force().hash(state);
     }
 }
 
@@ -566,7 +584,7 @@ const NOT_ON_THIS_PLATFORM: [CapabilityAbsence; Slot::COUNT] =
 impl WindowCapabilities {
     /// Every field but the revision, for equality and hashing. Destructured,
     /// so a field the type gains does not compile until it is listed here.
-    const fn honoured(&self) -> [Availability; 18] {
+    const fn honoured(&self) -> [Availability; 19] {
         let Self {
             sets_title,
             sets_position,
@@ -586,7 +604,9 @@ impl WindowCapabilities {
             places_at_open,
             frame_rate_hint,
             material,
+            reports_presentation,
             absences: _,
+            presentation_absence: _,
             owner: _,
             revision: _,
         } = *self;
@@ -609,6 +629,7 @@ impl WindowCapabilities {
             places_at_open,
             frame_rate_hint,
             material,
+            reports_presentation,
         ]
     }
 }
@@ -634,7 +655,9 @@ impl WindowCapabilities {
         places_at_open: Availability::Unavailable,
         frame_rate_hint: Availability::Unavailable,
         material: Availability::Unavailable,
+        reports_presentation: Availability::Unavailable,
         absences: NOT_ON_THIS_PLATFORM,
+        presentation_absence: CapabilityAbsence::NotOnThisPlatform,
         owner: None,
         revision: WindowRevision::ZERO,
     };
@@ -660,7 +683,9 @@ impl WindowCapabilities {
         places_at_open: Availability::Native,
         frame_rate_hint: Availability::Native,
         material: Availability::Native,
+        reports_presentation: Availability::Native,
         absences: NOT_ON_THIS_PLATFORM,
+        presentation_absence: CapabilityAbsence::NotOnThisPlatform,
         owner: None,
         revision: WindowRevision::ZERO,
     };
@@ -757,6 +782,51 @@ impl WindowCapabilities {
                 None => CapabilityAbsence::NotOnThisPlatform,
             },
             None => CapabilityAbsence::NotOnThisPlatform,
+        }
+    }
+
+    /// These capabilities with [`reports_presentation`](Self::reports_presentation)
+    /// `Unavailable` because of `absence`, which
+    /// [`presentation_feedback`](Self::presentation_feedback) then answers.
+    ///
+    /// ```
+    /// use flui_platform::{CapabilityAbsence, UnsupportedReason, WindowCapabilities};
+    ///
+    /// let capabilities = WindowCapabilities::ALL
+    ///     .without_presentation_feedback(CapabilityAbsence::NotYetOnThisHost);
+    /// assert_eq!(
+    ///     capabilities.presentation_feedback().map_err(|absent| absent.reason),
+    ///     Err(UnsupportedReason::NotYetOnThisHost)
+    /// );
+    /// ```
+    #[must_use]
+    pub const fn without_presentation_feedback(mut self, absence: CapabilityAbsence) -> Self {
+        self.reports_presentation = Availability::Unavailable;
+        self.presentation_absence = absence;
+        self
+    }
+
+    /// How the window reports that its frames reached the screen
+    /// ([`FrameRequest::presented`](crate::FrameRequest::presented)), or why it
+    /// does not.
+    ///
+    /// # Errors
+    /// [`Unsupported`] while [`reports_presentation`](Self::reports_presentation)
+    /// is `Unavailable`, with the absence
+    /// [`without_presentation_feedback`](Self::without_presentation_feedback)
+    /// recorded, or the platform's for a field set by hand.
+    pub const fn presentation_feedback(&self) -> Result<Availability, Unsupported> {
+        match self.presentation_absence_in_force() {
+            Some(absence) => Err(Unsupported::new(absence.reason())),
+            None => Ok(self.reports_presentation),
+        }
+    }
+
+    /// The presentation report's absence, while it is `Unavailable`.
+    const fn presentation_absence_in_force(&self) -> Option<CapabilityAbsence> {
+        match self.reports_presentation {
+            Availability::Unavailable => Some(self.presentation_absence),
+            Availability::Native | Availability::Emulated => None,
         }
     }
 

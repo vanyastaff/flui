@@ -1002,7 +1002,7 @@ impl HasDisplayHandle for MacOSSurface {
 impl SurfaceTarget for MacOSSurface {
     /// AppKit has no frame callback to arm before a present: the display pass
     /// paces this window's frames. It returns at once.
-    fn pre_present_notify(&self) {}
+    fn pre_present_notify(&self, _: flui_platform::SwapChainStatistics) {}
 }
 
 /// How many owner-lane turns a deferred redraw request may take before it is

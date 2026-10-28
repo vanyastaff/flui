@@ -336,7 +336,7 @@ wayland-client = { workspace = true, optional = true }
 wayland-protocols = { workspace = true, optional = true, features = ["staging"] }
 wayland-backend = { workspace = true, optional = true }
 # `time`: the monotonic clock the X server and a Wayland compositor stamp
-# their input on.
+# their input on, and the clock a compositor stamps presentation times on.
 rustix = { workspace = true, optional = true, features = ["time"] }
 # The cursor theme the Wayland host draws a cursor from where the compositor
 # has no `cursor-shape`. winit loads the same crate, so the tree gains none.
@@ -564,6 +564,17 @@ serde_json = { workspace = true, features = ["float_roundtrip"] }
 # Browser API fixtures mutate JS globals and therefore have their own process.
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test.workspace = true
+
+# A DXGI swap chain on a test window, presented the way a renderer presents,
+# whose frame statistics the window turns into its presentation report
+# (`the_win32_window_conforms`).
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+windows = { workspace = true, features = [
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+] }
 
 # The harnesses that run their cases on the main thread, where winit builds
 # its event loop (`linux_preferences`, `os_extensions`).

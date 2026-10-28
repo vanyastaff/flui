@@ -55,11 +55,7 @@ pub(crate) mod winit;
 /// Nanoseconds since the process event epoch.
 #[inline]
 pub fn event_timestamp_ns() -> u64 {
-    // EventTime is nanoseconds; every producer shares this epoch.
-    #[expect(clippy::cast_possible_truncation)] // ~584 years of nanoseconds fit u64
-    {
-        flui_foundation::event_epoch().elapsed().as_nanos() as u64
-    }
+    flui_platform::EventTime::now().as_nanos()
 }
 
 /// Create a `PointerInfo` for the primary mouse pointer.

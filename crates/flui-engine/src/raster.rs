@@ -19,9 +19,11 @@ use flui_layer::Scene;
 
 use crate::error::EngineError;
 
-/// The hook a [`RasterBackend`] runs immediately before every present —
+/// The hook a [`RasterBackend`] runs immediately before every present, with
+/// what the backend read from its swap chain about the frames it presented
+/// before (DXGI frame statistics on the DX12 backend) —
 /// see [`RasterBackend::set_pre_present_hook`].
-pub type PrePresentHook = Box<dyn FnMut() + Send>;
+pub type PrePresentHook = Box<dyn FnMut(flui_platform::SwapChainStatistics) + Send>;
 
 /// What a [`RasterBackend::render_scene`] call did with the frame it was
 /// handed.
@@ -176,6 +178,12 @@ pub trait RasterBackend: Send {
     /// callback requested with no commit behind it would leave winit
     /// withholding every later `RedrawRequested` (its Wayland event loop
     /// waits for the callback that commit would have produced).
+    ///
+    /// The hook receives what the backend read from its swap chain about
+    /// earlier frames reaching the screen, for a platform that reports it
+    /// there: the wgpu backend reads DXGI frame statistics on DX12 and
+    /// passes [`SwapChainStatistics::None`](flui_platform::SwapChainStatistics::None)
+    /// elsewhere, and reads nothing while no hook is installed.
     ///
     /// Runs on whichever thread presents — the owner thread on the inline
     /// lane. A threaded lane would run it on the raster thread; ADR-0045

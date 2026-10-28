@@ -857,6 +857,15 @@ impl UiRuntime {
         let recording = self.begin_recorded_input();
         if let Some(presentation) = self.presentations.get(presentation_id) {
             presentation.frame_request.set(Some(request));
+            // The platform's report of an earlier frame shown: the
+            // presentation's frame clock keeps the newest, on its own clock.
+            if let Some(presented) = request.presented
+                && let Some(at) = self.instant_of(presented.at)
+            {
+                presentation
+                    .clock()
+                    .record_presentation(at, presented.refresh);
+            }
         }
         if recording {
             self.record_applied(
@@ -864,6 +873,7 @@ impl UiRuntime {
                 crate::HostInput::Frame {
                     vsync: request.vsync,
                     target_present: request.target_present,
+                    presented: request.presented,
                 },
                 crate::owner::InputOutcome::Handled,
             );

@@ -3,7 +3,10 @@
 //! the loop's [`AppDelivery`](super::app_delivery::AppDelivery), a window's
 //! through its [`WindowDelivery`](super::window_delivery::WindowDelivery).
 
-use flui_platform::FrameRequest;
+use std::sync::Arc;
+
+use flui_platform::{EventTime, FramePresented, FrameRequest};
+use parking_lot::Mutex;
 
 /// The windows a loop holds through its hook, as one object: the window
 /// feature's. Each loop's hook extends it with what that loop asks of them.
@@ -35,9 +38,7 @@ pub fn frame_request_timed(
     age: std::time::Duration,
     until_present: Option<std::time::Duration>,
 ) -> FrameRequest {
-    #[expect(clippy::cast_possible_truncation)] // ~584 years of nanoseconds fit u64
-    let now = flui_foundation::event_epoch().elapsed().as_nanos() as u64;
-    frame_request_at(now, age, until_present)
+    frame_request_at(EventTime::now().as_nanos(), age, until_present)
 }
 
 fn frame_request_at(
@@ -57,6 +58,91 @@ fn frame_request_at(
     }
 }
 
+/// The event-clock time of a stamp the platform took on its own monotonic clock, given a reading
+/// of that clock taken now (`platform_now`): the stamp lies as far before or after this reading of
+/// the event clock as it lies from `platform_now`, so no epoch has to be aligned. A stamp further
+/// back than the timeline's start is its start.
+#[cfg(any(windows, wayland_host))]
+#[must_use]
+pub(crate) fn rebased(platform_now: std::time::Duration, stamp: std::time::Duration) -> EventTime {
+    rebased_at(EventTime::now().as_nanos(), platform_now, stamp)
+}
+
+/// The event-clock time `age` before this reading of it, for a platform stamp whose distance from
+/// a reading of the platform's clock is known; the timeline's start for an age longer than it.
+#[cfg(windows)]
+#[must_use]
+pub(crate) fn aged(age: std::time::Duration) -> EventTime {
+    rebased(age, std::time::Duration::ZERO)
+}
+
+#[cfg(any(windows, wayland_host, test))]
+fn rebased_at(
+    event_now: u64,
+    platform_now: std::time::Duration,
+    stamp: std::time::Duration,
+) -> EventTime {
+    let nanos = |d: std::time::Duration| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX);
+    // One of the two is zero: the stamp lies before the reading or after it.
+    let (before, after) = (
+        platform_now.saturating_sub(stamp),
+        stamp.saturating_sub(platform_now),
+    );
+    EventTime::from_nanos(
+        event_now
+            .saturating_sub(nanos(before))
+            .saturating_add(nanos(after)),
+    )
+}
+
+/// What a window's platform reported about frames that reached the screen, kept until a frame
+/// request of the window carries it (`FrameRequest::presented`).
+///
+/// Any thread reports: the presenting thread (a swap chain's statistics), the platform's own
+/// callback thread (Metal's presented handler) or the owner (a compositor's event). The newest
+/// report wins; a report no later than one kept or already carried is a repeat or out of order,
+/// and is dropped, so the times a window's requests carry never run backwards. A report of a time
+/// still ahead when a request is delivered (a platform that names when a frame is due on screen)
+/// waits for a later request: a request never carries a presentation that has not happened.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PresentationReports(Arc<Mutex<Reported>>);
+
+#[derive(Debug, Default)]
+struct Reported {
+    /// The newest report no request has carried yet.
+    pending: Option<FramePresented>,
+    /// The time of the newest report a request carried.
+    carried: Option<EventTime>,
+}
+
+impl PresentationReports {
+    /// The platform showed a frame.
+    pub(crate) fn report(&self, presented: FramePresented) {
+        let mut reported = self.0.lock();
+        let newest = reported
+            .pending
+            .map(|pending| pending.at)
+            .max(reported.carried);
+        if newest.is_none_or(|newest| presented.at > newest) {
+            reported.pending = Some(presented);
+        }
+    }
+
+    /// `request`, delivered when the event clock reads `now`, carrying the newest report no
+    /// request carried yet, if that report is not later than `now`.
+    pub(crate) fn carried_by(&self, request: FrameRequest, now: EventTime) -> FrameRequest {
+        let mut reported = self.0.lock();
+        match reported.pending {
+            Some(presented) if presented.at <= now => {
+                reported.pending = None;
+                reported.carried = Some(presented.at);
+                request.with_presented(presented)
+            }
+            Some(_) | None => request,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -70,6 +156,54 @@ mod tests {
     use crate::owner::signal::OwnerSignal;
 
     use super::*;
+
+    /// A platform stamp lands as far from the event reading as it lies from the platform's own
+    /// reading, on either side, and never before the timeline's start.
+    #[test]
+    fn a_platform_stamp_is_rebased_by_its_distance_from_the_reading() {
+        let ms = std::time::Duration::from_millis;
+        let at = |platform_now, stamp| rebased_at(50_000_000, platform_now, stamp).as_nanos();
+        assert_eq!(at(ms(900), ms(880)), 30_000_000, "20 ms before");
+        assert_eq!(at(ms(900), ms(905)), 55_000_000, "5 ms after");
+        assert_eq!(at(ms(900), ms(900)), 50_000_000);
+        assert_eq!(at(ms(900), ms(0)), 0, "before the timeline's start");
+        assert_eq!(
+            rebased_at(u64::MAX - 1, ms(0), ms(1)).as_nanos(),
+            u64::MAX,
+            "past the timeline's end"
+        );
+    }
+
+    /// The newest report reaches the first request delivered at or after it, once; a repeat,
+    /// an older report and one still ahead of the delivery do not.
+    #[test]
+    fn a_presentation_report_rides_the_first_request_at_or_after_it() {
+        let at = EventTime::from_nanos;
+        let shown = |nanos| FramePresented::new(at(nanos));
+        let carried = |reports: &PresentationReports, now| {
+            reports
+                .carried_by(FrameRequest::new(at(1)), at(now))
+                .presented
+                .map(|presented| presented.at.as_nanos())
+        };
+
+        let reports = PresentationReports::default();
+        assert_eq!(carried(&reports, 10), None, "nothing reported");
+
+        reports.report(shown(20));
+        reports.report(shown(30));
+        reports.report(shown(25));
+        assert_eq!(carried(&reports, 29), None, "the newest is still ahead");
+        assert_eq!(carried(&reports, 30), Some(30), "the newest report");
+        assert_eq!(carried(&reports, 40), None, "carried once");
+
+        reports.report(shown(30));
+        reports.report(shown(28));
+        assert_eq!(carried(&reports, 50), None, "a repeat and an older report");
+
+        reports.report(shown(45));
+        assert_eq!(carried(&reports, 50), Some(45));
+    }
 
     /// A platform's frame stamp, given as an age, lands that long before the reading, and an age
     /// longer than the timeline is its start.

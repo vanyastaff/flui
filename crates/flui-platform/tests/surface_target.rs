@@ -31,5 +31,5 @@ fn a_window_with_no_native_surface_hands_out_no_handle() {
         target.display_handle(),
         Err(HandleError::Unavailable)
     ));
-    target.pre_present_notify();
+    target.pre_present_notify(flui_platform::SwapChainStatistics::None);
 }
