@@ -884,7 +884,7 @@ pub(crate) mod scale {
     //! With `wp_viewporter` the surface's destination is its logical size and
     //! the buffer any size, so the buffer is drawn at the scale the compositor
     //! prefers: a fractional one where it offers `wp_fractional_scale_v1`
-    //! (`preferred_scale`, in 120ths), else the whole one `wl_surface`
+    //! (`preferred_scale`, as a numerator over 120), else the whole one `wl_surface`
     //! version 6 prefers, else that of the output the surface entered.
     //! Without the viewporter the buffer is the surface's size: scale 1, and
     //! the compositor scales it.
@@ -894,7 +894,7 @@ pub(crate) mod scale {
     /// What the compositor said of the scale a surface is drawn at.
     #[derive(Debug, Clone, Copy, Default, PartialEq)]
     pub(crate) struct ScaleTold {
-        /// `wp_fractional_scale_v1.preferred_scale`, in 120ths.
+        /// `wp_fractional_scale_v1.preferred_scale`, as a numerator over 120.
         pub(crate) fractional: Option<u32>,
         /// `wl_surface.preferred_buffer_scale`.
         pub(crate) preferred: Option<i32>,
@@ -902,9 +902,9 @@ pub(crate) mod scale {
         pub(crate) output: Option<f64>,
     }
 
-    /// A fractional scale as the protocol carries it, in 120ths; `None` for
+    /// A fractional scale as the protocol carries it, as a numerator over 120; `None` for
     /// zero, which is no scale.
-    fn from_120ths(numerator: u32) -> Option<f64> {
+    fn over_120(numerator: u32) -> Option<f64> {
         (numerator > 0).then(|| f64::from(numerator) / 120.0)
     }
 
@@ -914,7 +914,7 @@ pub(crate) mod scale {
             return 1.0;
         }
         told.fractional
-            .and_then(from_120ths)
+            .and_then(over_120)
             .or_else(|| told.preferred.filter(|scale| *scale > 0).map(f64::from))
             .or(told.output)
             .filter(|scale| scale.is_finite() && *scale > 0.0)
@@ -968,7 +968,12 @@ pub(crate) mod scale {
                     told(Some(180), Some(2), Some(2.0)),
                     1.0,
                 ),
-                ("120ths exactly", true, told(Some(150), None, None), 1.25),
+                (
+                    "a numerator over 120",
+                    true,
+                    told(Some(150), None, None),
+                    1.25,
+                ),
             ] {
                 assert_eq!(buffer_scale(viewported, told), expected, "{case}");
             }
@@ -1100,7 +1105,7 @@ mod toplevel {
         outputs: Vec<OutputName>,
         /// The buffer scale the compositor prefers for the surface.
         preferred_scale: Option<i32>,
-        /// The fractional scale the compositor prefers, in 120ths.
+        /// The fractional scale the compositor prefers, as a numerator over 120.
         fractional_scale: Option<u32>,
         /// Who draws the frame, as the compositor last said.
         frame: Option<FrameDrawer>,

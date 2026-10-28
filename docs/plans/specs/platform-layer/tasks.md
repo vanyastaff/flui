@@ -3438,6 +3438,62 @@ graph LR
   `checks`, `doc-strict`, `wasm-check`. WSL: clippy трёх вариантов (в том числе `-p flui-native
   --all-targets --features winit-backend` и `--all-features`), rustdoc; xvfb nextest 306 из 306
   и 353 из 353; без xvfb — 661 из 662 (прежний случай X-сервера WSLg).
+- [x] **LY81** — ветка `platform/wayland-window` от `main` @ `c8401e35b`. Из строки в LY78 уже
+  были темп по `frame`-колбэкам, видимость по входу в выход и `suspended`, мост AT-SPI; здесь —
+  остальное. **Глобалы** (`owner/linux/wayland.rs`): `zxdg_decoration_manager_v1`,
+  `wp_fractional_scale_manager_v1` (только при `wp_viewporter`), `zxdg_exporter_v2` в
+  `WaylandProtocol`; `LiveOutputs` держит и прокси выхода (для тестового рычага). **Окно**
+  (`window/linux/wayland.rs`, новые чистые модули): `decoration` — рамка есть, только если
+  композитор ответил `server_side`; без менеджера или когда композитор на просьбу о рамке
+  оставил её клиенту, `SetDecorated` — `NotOnThisDevice` (был `NotYetOnThisHost`); объект
+  декорации создаётся до первого commit и уничтожается раньше toplevel. `scale::buffer_scale` —
+  дробный масштаб (числитель над 120) прежде `preferred_buffer_scale` и масштаба выхода, без
+  viewporter — 1. `frame::Pacing` — перекрытие: окну в `suspended` кадр не доставляется и
+  колбэк не отбрасывается по сроку; запрошенный кадр не теряется и уходит, когда композитор
+  снова показывает окно. `foreign` — экспорт при открытии (ручка приходит с round trip
+  открытия), `os::wayland::{WaylandWindowExt, WaylandToplevel::portal_parent}` отдаёт
+  `wayland:<handle>` до закрытия; экспорт уничтожается первым при отставке. AT-SPI:
+  `UnixAccessibility::focus_changed` передаёт активацию адаптеру (`update_window_focus_state`;
+  окно X11 его уже звало, вызов был пустым), окно Wayland зовёт его на каждой смене `activated`.
+  Фасад: `flui_app::native::wayland`, `flui::native::wayland` (Linux). Корневой `Cargo.toml`:
+  `wayland-protocols` с `staging`. **Решения для владельца:** (1) запасные клиентские
+  декорации — наименьшая честная форма: хост рамку не рисует; где композитор её не рисует,
+  окно без рамки и честно это говорит, а клиентская рамка — заголовок приложения (gaps, запись
+  10), которому нужны `xdg_toplevel.move`/`resize` с serial ввода (LY79); (2) ручка экспорта
+  дойдёт до крейта возможностей только через `WindowRef` (LY50), который по ADR-0152 несёт лишь
+  raw-handles, а ADR-0154 §9 для Linux говорит «ничего» — нужен метод или поле; пока ручка
+  доступна приложению через `os::wayland`. **Тесты** (откат проверен):
+  `a_window_has_the_frame_its_compositor_draws` (с `decorated` по просьбе падает),
+  `a_buffer_is_drawn_at_the_scale_the_compositor_prefers` (без дробного масштаба падает),
+  `an_occluded_window_holds_its_frame_until_it_is_shown` (без `suspended` в `Pacing::due`
+  падает), `a_portal_names_a_window_by_its_export`; `the_capabilities_follow_the_compositor`
+  (причина `SetDecorated` стала `NotOnThisDevice`); `tests/wayland_window.rs`:
+  `a_window_moved_to_another_output_names_its_display` — Weston 13 на бэкенде X11 с
+  `--output-count=2` на своём Xvfb (у headless-бэкенда Weston 13 нет `--output-count`, а
+  вложенный Weston без seat не активирует окно, и desktop-shell не ставит fullscreen на
+  названный выход); окно переносится полноэкранным режимом на другой выход (`testing::wayland::
+  {outputs, fullscreen_on}`), называет его дисплей, обработчик слышит изменение, масштаб тот
+  же, после `Normal` — снова первый дисплей; с пропущенным `leave` падает; при одном выходе
+  пропускается с сообщением (CI — один headless Weston). Weston 13 не предлагает ни
+  `xdg-decoration`, ни `wp_fractional_scale_v1`, ни `xdg-foreign` (проверено по реестру):
+  эти три пути исполнены только чистыми таблицами; conformance окна на Weston проходит по
+  ветке без менеджера декораций. Связь моста с адаптером (`update_window_focus_state`) без
+  шины AT-SPI не проверена тестом. `module-dag` — 331 модуль, 351 ребро, 1 исключение;
+  `globals` — 57. **Проверки:** `cargo fmt`; Windows — clippy рабочего пространства
+  `--all-targets -D warnings`, `module-dag`, `file-length`, `markers`, `testing`, `globals`,
+  `docs-paths`, `checks`, `doc-strict`, `wasm-check`; clippy macOS (LLVM, `--all-features`) и
+  Android `-p flui-native -p flui-app --all-targets`. WSL Ubuntu 24.04: clippy `-p flui-native`
+  с `--all-targets` и без: по умолчанию, `--all-features`, `--no-default-features` с
+  `winit-backend`; `--no-default-features`, `… x11`, `… wayland`, `… testing` без
+  `--all-targets` падают и на `main` (мёртвый код `accessibility::bridge`, `panic_boundary`,
+  `window::state`, `OwnerMap` под одним `x11`; правка — vanyastaff/flui#1933), новых ошибок
+  нет; clippy `flui-app`, `flui --features native`; rustdoc `-D warnings
+  --document-private-items` трёх вариантов; nextest по умолчанию под headless Weston — 297 из
+  297, `--all-features` под xvfb без тестов Wayland и тесты Wayland под Weston, тесты Wayland
+  под двумя выходами — 7 из 7. Не запускалось: композиторы рабочего стола (GNOME, KDE, Sway,
+  Hyprland) — ни один из трёх протоколов не исполнен вживую; дробный масштаб на HiDPI;
+  портал с родителем; экранный диктор (Orca); Mac, iPhone, Android-устройство, браузер,
+  `cross-typecheck`.
 - [x] **LY82** — ветка `platform/x11`, начата на вершине LY46 `8138ab489`, перенесена на `main`
   @ `d6e469a2b` после слияния #1927. **Хост.** `X11Platform = HostPlatform<X11>`
   (`hosts/linux.rs`): одно соединение libxcb (`owner::linux::x11::X11Connection`, x11rb

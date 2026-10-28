@@ -978,7 +978,22 @@ trait depends on `flui-platform` instead.
   names. The window (`window::linux::wayland`) sizes its surface
   through `wp_viewport`, so a buffer of any size is valid during a resize and
   each configure takes effect with a commit; its capabilities follow the
-  compositor's `wm_capabilities`. `current_platform` picks the winit host
+  compositor's `wm_capabilities`. Its buffer is drawn at the compositor's
+  fractional scale (`wp_fractional_scale_v1`, which the loop binds only with
+  the viewporter), else the surface's preferred whole scale, else its output's
+  (`scale::buffer_scale`). Its frame is the compositor's answer through
+  `xdg-decoration`, never the request; where the compositor offers none, or
+  leaves the frame to the client, the window has none and `SetDecorated` is
+  `NotOnThisDevice`: the host draws no frame of its own, a client-side frame
+  being the application's title bar (`decoration`). A suspended window is
+  occluded: it is given no frame and gives up no frame callback until the
+  compositor shows it again, when the frame asked for meanwhile is delivered
+  (`frame::Pacing`). Where the compositor offers `xdg-foreign` v2 the window is
+  exported as it opens, and `os::wayland::WaylandWindowExt` hands out the
+  portal parent `wayland:<handle>` until it closes. The window tells its
+  AT-SPI bridge each change of the compositor's activation, which
+  `UnixAccessibility::focus_changed` passes to the adapter (the X11 window
+  already called it). `current_platform` picks the winit host
   while it is built (the native hosts carry no input yet) and the native
   Wayland host for a Wayland session otherwise.
 - **Linux host events reach the owner through an inbox, and a machine that
