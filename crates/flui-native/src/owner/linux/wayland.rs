@@ -25,6 +25,8 @@
 //! each to settle after every read, and the window feature implements the
 //! dispatch of its own protocol objects on `WaylandState`.
 
+#[cfg(all(target_os = "linux", feature = "wayland"))]
+pub use event_loop::OutputName;
 #[cfg(all(
     target_os = "linux",
     feature = "wayland",
@@ -32,11 +34,9 @@
 ))]
 pub(crate) use event_loop::ShownCursor;
 #[cfg(all(target_os = "linux", feature = "wayland"))]
-pub use event_loop::OutputName;
-#[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(crate) use event_loop::{
-    LiveOutputs, LoopWaker, LoopWindow, OutputFacts, SeatWindow, WaylandDisplays, WaylandHost, WaylandInput, WaylandLoop,
-    WaylandState, WindowSeed, WindowTable,
+    LiveOutputs, LoopWaker, LoopWindow, OutputFacts, SeatWindow, WaylandDisplays, WaylandHost,
+    WaylandInput, WaylandLoop, WaylandState, WindowSeed, WindowTable,
 };
 
 pub(crate) mod wait {
