@@ -296,7 +296,8 @@ text-input paths its platform requires.
     implements ([rust-windowing/winit@1893565716 winit-uikit/src/view.rs:333-353](https://github.com/rust-windowing/winit/blob/1893565716/winit-uikit/src/view.rs#L333-L353)). Enabling
     `objc2-ui-kit`'s `UITextInput`, `UITextInputTraits` and `UITextInteraction` features is part of
     the change. Whether a full `UITextInput` conformance (about thirty methods, a tokenizer, an input
-    delegate) composes through `define_class!` is **unproven** (Confirmation).
+    delegate) composes through `define_class!` was unproven when this was decided; it composed
+    Japanese and Chinese on the iOS Simulator (Confirmation).
 
 12. **Accessibility is `accesskit_ios::Adapter`**, the low-level one, forwarded from `FluiView`'s
     `isAccessibilityElement`, `accessibilityElements` and `accessibilityHitTest:`. All its methods run
@@ -439,7 +440,7 @@ text-input paths its platform requires.
 
 ### Confirmation
 
-Nothing in this ADR has run. The repository's evidence for it is the Android device run of
+Little of this ADR has run: the `UITextInput` claim below ran on the iOS Simulator. The repository's other evidence for it is the Android device run of
 ADR-0247 (a Galaxy S21, Android 15, a manual run), which covered the
 in-memory loader this ADR retires, so the same run repeats with the dex in the APK. The claims below
 are open, with the run that settles each:
@@ -451,7 +452,8 @@ are open, with the run that settles each:
 | A warm deep link, an activity result and a permission result reach the owner, including one that arrives before `android_main` | A device, with the location pilot as the first consumer |
 | TalkBack's hover events reach the native queue and are consumed through `Adapter::on_hover_event`; `accesskit_android`'s minimum API; the `viewIdResourceName` mapping for ADR-0240 identifiers | A device with TalkBack, on Android 6 and 15 |
 | `windowSoftInputMode`: `adjustResize` against `adjustNothing` with a self-rendered surface and the IME animation | A device: count `WindowResized` events during a keyboard animation |
-| `UITextInput` through `define_class!` composes CJK text; `accesskit_ios::Adapter` builds and runs beside objc2 0.6 | An iOS Simulator run with a Japanese or Chinese keyboard, and a VoiceOver pass |
+| `UITextInput` through `define_class!` composes CJK text | Ran 2026-10-28 on the iOS 27.1 Simulator (an M1 host, the on-screen keyboard tapped by XCUITest and by hand): the Japanese Romaji keyboard composed `にほんご` and committed `日本語`, and the nine-key Pinyin keyboard composed `ni hao` and committed `你好`, each into an `EditableText`. Open: a device |
+| `accesskit_ios::Adapter` builds and runs beside objc2 0.6 | An iOS Simulator run, and a VoiceOver pass |
 | iOS Safari zooms on the textarea today; the 16 px floor stops it | iPhone Safari |
 | The ARIA DOM, the lazy placeholder, the single-entry history and the textarea's `enterkeyhint` and autofill behaviour | Chrome, Firefox and Safari, desktop and mobile, with a screen reader |
 
@@ -502,8 +504,8 @@ before any native is bound. The support claim for a platform is the run.
   (decision 9).
 - Bad, because a packager other than `flui-cli` must add the dex and the manifest itself, and apps
   scaffolded earlier hold a manifest the CLI no longer writes from a template.
-- Bad, because nothing in it has run: a full `UITextInput` conformance through `define_class!` is
-  unproven, and `accesskit_ios` is on objc2 0.5 beside FLUI's 0.6, a build-size cost (see
+- Bad, because little of it has run: a full `UITextInput` conformance through `define_class!` has
+  composed CJK text on the Simulator only, and `accesskit_ios` is on objc2 0.5 beside FLUI's 0.6, a build-size cost (see
   Confirmation).
 
 ### 2. Android: stay on `hasCode="false"` and use the deprecated framework `Fragment` for results
