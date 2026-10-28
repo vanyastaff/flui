@@ -9,7 +9,7 @@
 //! request to its semantics owner. No `flui-interaction` signature names this
 //! type.
 
-use flui_platform::{EventTime, PlatformInput};
+use flui_platform::{EventTime, FramePresented, PlatformInput};
 
 use crate::owner::WindowObservation;
 
@@ -27,6 +27,7 @@ use crate::owner::WindowObservation;
 /// let frame = HostInput::Frame {
 ///     vsync: EventTime::from_nanos(16_666_667),
 ///     target_present: None,
+///     presented: None,
 /// };
 /// assert!(matches!(frame, HostInput::Frame { .. }));
 /// ```
@@ -46,6 +47,11 @@ pub enum HostInput {
         /// When the platform says the frame will be shown, if it says (ADR-0257): idle work
         /// runs only until then.
         target_present: Option<EventTime>,
+        /// The platform's report that an earlier frame reached the screen, on the same timeline
+        /// as the input before it: the presentation's frame clock keeps the newest, and a frame
+        /// whose request names no `target_present` bounds its idle work by the next refresh
+        /// the report places.
+        presented: Option<FramePresented>,
     },
     /// An assistive-technology action request, resolved by the
     /// presentation's semantics owner.

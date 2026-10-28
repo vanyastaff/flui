@@ -296,8 +296,16 @@ shared handle is a wgpu ref-count.
 | `TexturePool` | inventory + mpsc return channel | Single-mutator by construction; `Send` only (the receiver is `!Sync`) |
 | `RasterOwner` mailbox | `parking_lot::Mutex` + condvar + two atomics + bounded crossbeam channels | The one module with its own memory model; its orderings are argued in `InFlightAccounting`'s doc |
 
-**Unsafe.** There is no hand-written production `unsafe` in the crate:
-`#![cfg_attr(not(test), deny(unsafe_code))]` in `lib.rs`. Surfaces come from
+**Unsafe.** `#![cfg_attr(not(test), deny(unsafe_code))]` in `lib.rs`, and one
+production exception with its own `expect`: `renderer::dxgi_frame_statistics`
+(Windows only), which reads DXGI frame statistics from wgpu's DX12 swap chain
+before each present, for the window's presentation report. wgpu hands the swap
+chain out only through `Surface::as_hal`, whose precondition is that the
+resource it exposes is not destroyed unless its guard is the last reference
+and the GPU is done with it; the function destroys nothing, takes a counted
+reference to the swap chain (`swap_chain()`), drops the guard before calling
+`GetFrameStatistics` on it, and runs on the presenting thread between
+presents, so no wgpu call on the surface overlaps it. Surfaces come from
 wgpu's safe `create_surface` over an owned `WindowTarget`
 ([ADR-0063](../../docs/adr/ADR-0063-the-renderer-owns-its-surface-target.md)),
 and there is no manual `Send`/`Sync` impl. `deny` rather than `forbid` because

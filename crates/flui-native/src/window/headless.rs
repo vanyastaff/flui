@@ -486,7 +486,7 @@ impl raw_window_handle::HasDisplayHandle for HeadlessSurface {
 }
 
 impl flui_platform::SurfaceTarget for HeadlessSurface {
-    fn pre_present_notify(&self) {
+    fn pre_present_notify(&self, _: flui_platform::SwapChainStatistics) {
         self.presents
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
@@ -896,6 +896,25 @@ impl MockWindow {
     #[must_use]
     pub fn pre_present_notifies(&self) -> u64 {
         self.presents.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Simulate the window system reporting that a frame of this window
+    /// reached the screen at `presented.at`, as a compositor's presentation
+    /// event does: the window's next frame request at or after that time
+    /// carries it ([`FrameRequest::presented`](flui_platform::FrameRequest::presented)).
+    /// A headless window has no screen, so this is the only report it makes;
+    /// a report no later than one already made is dropped, as on a real
+    /// host. A closed window ignores it, as does one whose capabilities say
+    /// its window system reports no presentation
+    /// ([`WindowCapabilities::reports_presentation`]).
+    pub fn simulate_presented(&self, presented: flui_platform::FramePresented) {
+        {
+            let state = self.state.lock();
+            if state.closed || !state.capabilities.reports_presentation.is_available() {
+                return;
+            }
+        }
+        self.delivery.presentation_reports().report(presented);
     }
 
     /// Every input-region set this window handed its simulated OS, in device pixels and

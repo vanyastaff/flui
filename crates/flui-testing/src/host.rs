@@ -87,6 +87,9 @@ pub struct HeadlessWindow {
     input_regions: Mutex<SentInputRegions>,
     haptics: Arc<flui_platform::haptics::FakeHaptics>,
     os_drags: Arc<HeadlessOsDrags>,
+    /// Whether the simulated platform reports when frames reached the screen
+    /// ([`HeadlessWindow::with_presentation_reports`]).
+    reports_presentation: bool,
 }
 
 impl std::fmt::Debug for HeadlessWindow {
@@ -156,6 +159,7 @@ impl HeadlessWindow {
             input_regions: Mutex::default(),
             haptics: Arc::new(flui_platform::haptics::FakeHaptics::new()),
             os_drags: Arc::new(HeadlessOsDrags::default()),
+            reports_presentation: false,
         }
     }
 
@@ -194,6 +198,16 @@ impl HeadlessWindow {
     #[must_use]
     pub fn with_text_store_host(mut self) -> Self {
         self.text_store_host = true;
+        self
+    }
+
+    /// Play a platform that reports when frames reached the screen: the
+    /// window's capabilities say so, and [`HeadlessHost::report_presented`]
+    /// reaches its frame requests. Without it the window reports none, as its
+    /// capabilities say.
+    #[must_use]
+    pub fn with_presentation_reports(mut self) -> Self {
+        self.reports_presentation = true;
         self
     }
 
@@ -330,6 +344,11 @@ impl PlatformWindow for HeadlessWindow {
                     )
                     .ok(),
                 );
+        if self.reports_presentation {
+            let mut capabilities = flui_platform::WindowCapabilities::NONE;
+            capabilities.reports_presentation = flui_platform::Availability::Native;
+            state = state.with_capabilities(capabilities);
+        }
         state.revision = *self.revision.lock();
         state
     }
@@ -602,6 +621,9 @@ pub struct HeadlessHost {
     /// carries: those of the pump in progress, and any the UI runtime made
     /// between pumps, which the next pump raises before it frames.
     failures: Arc<Mutex<Vec<String>>>,
+    /// The presentation report the next pump's frame requests carry
+    /// ([`Self::report_presented`]).
+    presented: Option<flui_platform::FramePresented>,
 }
 
 impl std::fmt::Debug for HeadlessHost {
@@ -699,6 +721,24 @@ impl HeadlessHost {
             secondary: Vec::new(),
             embedded: Vec::new(),
             failures,
+            presented: None,
+        }
+    }
+
+    /// Report that a frame reached the screen, as a host's platform does
+    /// (DXGI statistics, `wp_presentation_time`): the next
+    /// [`pump`](Self::pump)'s frame requests carry it
+    /// ([`FrameRequest::presented`](flui_platform::FrameRequest::presented)),
+    /// and each presentation's frame clock keeps it. Its time is on the
+    /// event timeline input and frames are stamped on: the time since the
+    /// [`clock`](Self::clock) started. A later report before that pump
+    /// replaces it. A primary window whose capabilities say it reports no
+    /// presentation (made without
+    /// [`HeadlessWindow::with_presentation_reports`]) ignores it, as a host
+    /// whose platform reports none does.
+    pub fn report_presented(&mut self, presented: flui_platform::FramePresented) {
+        if self.window.reports_presentation {
+            self.presented = Some(presented);
         }
     }
 
@@ -760,9 +800,12 @@ impl HeadlessHost {
         // window's vsync is the clock's reading, on the event timeline, so a
         // recording sees the frame where its deadlines fire.
         let vsync = self.event_now();
+        let mut request = flui_platform::FrameRequest::new(vsync);
+        if let Some(presented) = self.presented.take() {
+            request = request.with_presented(presented);
+        }
         for presentation in self.presentation_ids() {
-            self.ui_runtime
-                .note_frame_request(presentation, flui_platform::FrameRequest::new(vsync));
+            self.ui_runtime.note_frame_request(presentation, request);
         }
         let mut frame_clock = self.clock.clone();
         let Self {

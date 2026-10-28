@@ -710,7 +710,7 @@ impl flui_platform::SurfaceTarget for WinitSurface {
     /// On Wayland this arms the surface's frame callback, so the next
     /// `request_redraw` waits for the compositor; winit makes it nothing
     /// elsewhere.
-    fn pre_present_notify(&self) {
+    fn pre_present_notify(&self, _: flui_platform::SwapChainStatistics) {
         if !self.retirement.is_retired() {
             self.window.pre_present_notify();
         }

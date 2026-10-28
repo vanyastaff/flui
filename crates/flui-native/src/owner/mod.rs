@@ -63,6 +63,8 @@
 //! host in this crate can hand `ready` the capability it needs; `Platform`
 //! is sealed to say so in its type (ADR-0151 §5).
 
+#[cfg(any(target_os = "ios", test))]
+pub(crate) mod accessibility_slot;
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android;
 pub(crate) mod app_delivery;

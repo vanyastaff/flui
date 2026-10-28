@@ -897,7 +897,7 @@ fn every_role_is_kept_and_named_through_the_consumer() {
 /// fails [`the_matrix_was_checked_against_the_locked_accesskit`] until the
 /// rows are re-read against the new release and these move with it.
 const MATRIX_CHECKED_AGAINST: [(&str, &str); 2] =
-    [("accesskit", "0.25.1"), ("accesskit_consumer", "0.39.1")];
+    [("accesskit", "0.25.2"), ("accesskit_consumer", "0.39.2")];
 
 /// The versions of `package` the workspace's `Cargo.lock` holds.
 pub(crate) fn locked_versions(package: &str) -> Vec<String> {
