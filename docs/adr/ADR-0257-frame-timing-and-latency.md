@@ -6,7 +6,9 @@
   `DwmGetCompositionTimingInfo` (type-checked for `x86_64-pc-windows-msvc`, not run). Every other
   backend fills the vsync with its own reading of the event clock when the request is admitted,
   and fills no `target_present`. A platform's row in `docs/platform-parity.md` moves only after a
-  run on that platform shows the rebased stamp is right (Confirmation).
+  run on that platform shows the rebased stamp is right (Confirmation). Amended (2026-10-28):
+  a frame request also carries the platform's report that earlier frames reached the screen, and
+  §3's idle bound falls back to the refresh grid a recent report places (see the amendment).
 - **Date:** 2026-10-26
 - **Supersedes:** [ADR-0236](ADR-0236-display-snapshot-and-refresh-period.md) decision 8 only: the
   frame tick may be the frame's vsync instant, a sampled time. It is still not shifted to the
@@ -137,3 +139,37 @@ and `Mailbox` needs a pacer FLUI does not have.
 Revisit when a backend reports a platform timestamp: the rebase it uses (the browser's time origin,
 `CACurrentMediaTime`, `CLOCK_MONOTONIC` for Choreographer) is its own decision, run on that
 platform, and `target_present` is then filled where the platform names it (`targetTimestamp`).
+
+## Amendment (2026-10-28): the request carries presentation feedback
+
+The quality bar (ADR-0151 §16) asks that presentation feedback reach the frame clock on the one
+event timeline. It joins the request rather than a handler method of its own: the frame clock reads
+it where it plans the frame, and the recording carries it with the frame that delivered it.
+
+1. **`FrameRequest::presented: Option<FramePresented { at: EventTime, refresh: Option<Duration> }>`**
+   is the newest earlier frame of the window that the platform reported shown since the window's
+   last request: when the display started showing it, and the refresh interval then (a zero
+   interval, a variable rate, is none). It is a report, never a prediction; a time the platform
+   names in advance stays `target_present`. A report no later than one already carried is dropped,
+   and one still ahead of the request's delivery waits, so a window's reports never run backwards.
+   `HostInput::Frame` carries it, and so does a recording.
+2. **Whether a window reports is a capability,** `WindowCapabilities::reports_presentation`, with
+   its reason kept beside it (`presentation_feedback() -> Result<Availability, Unsupported>`): no
+   verb answers for it, as a verb answers for the frame-rate hint.
+3. **Where only the presenter can read it, the presenter hands it to the surface target**
+   (`SurfaceTarget::pre_present_notify(SwapChainStatistics)`): DXGI's frame statistics belong to
+   the swap chain the renderer owns, so the renderer reads them before each present and the host
+   rebases them (`Dxgi`, or `DxgiDisjoint` when they broke off). A compositor protocol the host
+   speaks itself (`wp_presentation`) needs nothing from the presenter.
+4. **§3 is amended:** a frame whose request names no `target_present` bounds its idle work by the
+   next refresh on the grid the presentation's newest report starts, while that report is at most
+   eight refreshes old; otherwise the host's deadline applies, as before. A live report trails the
+   frame that reads it by the frames in flight (three to four refreshes, measured on Windows), so
+   eight is still a display presenting this window; an older one belongs to a window that was idle,
+   and the display may have changed its rate since. The frame tick stays the vsync instant
+   (decision 2).
+
+Confirmation: `a_presentation_report_bounds_the_idle_work_of_a_later_frame` (flui-runtime, the
+bound and the stale report), `a_presentation_and_the_input_before_it_are_on_one_timeline`
+(flui-testing), the conformance row `presentation_is_reported_exactly_when_claimed`, run on Win32
+with DXGI statistics and on Weston with `wp_presentation`.
