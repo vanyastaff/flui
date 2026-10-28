@@ -10,6 +10,11 @@
 //! `CGDirectDisplayID` of its current connection. A screen with no
 //! `NSScreenNumber`, or no UUID, is left out of the snapshot.
 //!
+//! A screen's colour is the gamut it can show (`canRepresentDisplayGamut:`)
+//! and, from macOS 10.15, the extended-dynamic-range headroom it can reach
+//! (`maximumPotentialExtendedDynamicRangeColorComponentValue`), which a
+//! `CAMetalLayer` with extended range is drawn up to.
+//!
 //! `display_snapshot` runs on every owner wake, so the last sample is kept and
 //! read again only after an event marked it stale: the screen-parameters
 //! notification, or a window learning its display or scale changed.
@@ -31,7 +36,7 @@ use core_foundation::{
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_app_kit::{NSApplicationDidChangeScreenParametersNotification, NSScreen};
+use objc2_app_kit::{NSApplicationDidChangeScreenParametersNotification, NSDisplayGamut, NSScreen};
 use objc2_foundation::{
     NSArray, NSDictionary, NSNotification, NSNotificationCenter, NSNumber, NSObjectProtocol,
     NSString,
@@ -40,7 +45,9 @@ use objc2_foundation::{
 use flui_platform::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot, RefreshPeriod};
 
 use super::screen::device_bounds_of_screen;
-use super::screen::{macos_display_key, macos_display_persistent_key};
+use super::screen::{
+    MacosPotentialHeadroom, macos_display_key, macos_display_persistent_key, screen_color,
+};
 use crate::display::source::DisplaySource;
 use crate::error::PlatformError;
 use crate::owner::apple::macos::bounds_of;
@@ -183,6 +190,14 @@ impl MacosDisplays {
             }
             display.refresh_period = refresh_rate_of_screen(&screen)
                 .and_then(|hertz| RefreshPeriod::from_hz(hertz).ok());
+            let potential = self
+                .version
+                .since::<MacosPotentialHeadroom>()
+                .map(|_| screen.maximumPotentialExtendedDynamicRangeColorComponentValue());
+            display = display.with_color(Ok(screen_color(
+                screen.canRepresentDisplayGamut(NSDisplayGamut::P3),
+                potential,
+            )));
             displays.push(display);
         }
         displays
