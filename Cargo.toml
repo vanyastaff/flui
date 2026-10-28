@@ -359,10 +359,11 @@ winit = "0.30.12"
 # winit's. The X11 and Wayland client versions are the ones winit already pulls
 # into the lock, so the tree gains no second copy. `x11rb` runs on its pure-Rust
 # connection (no libxcb) and needs RandR only; `wayland-protocols` carries
-# `zxdg_output_v1`, which lives under `unstable`.
+# `zxdg_output_v1`, `xdg-decoration` and `xdg-foreign` under `unstable`, and
+# `wp_fractional_scale_v1` under `staging`.
 x11rb = { version = "0.13", default-features = false, features = ["randr"] }
 wayland-client = "0.31"
-wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
+wayland-protocols = { version = "0.32", features = ["client", "unstable", "staging"] }
 # The native Wayland host's connection runs on libwayland-client, loaded at run
 # time (`dlopen`): a wgpu surface needs the `wl_display` and `wl_surface`
 # pointers, which only the system library has, and the GPU driver reads events
