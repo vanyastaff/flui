@@ -133,6 +133,33 @@ pub const fn winit(session: WinitSession) -> InputCapabilities {
     }
 }
 
+/// The protocols beside `wl_seat` a Wayland compositor offers for input.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct WaylandInputGlobals {
+    /// `zwp_tablet_manager_v2`: pens and other tablet tools.
+    pub tablet: bool,
+    /// `zwp_pointer_gestures_v1`: a touchpad's pinch.
+    pub pointer_gestures: bool,
+}
+
+/// The native Wayland backend with the compositor's `globals`: a touchpad's
+/// two-finger scrolling arrives as `wl_pointer` axis frames from a finger
+/// source with a stop at the lift, delivered as phased precise scrolling;
+/// pens arrive through `tablet-v2` and a touchpad's pinch through
+/// `pointer-gestures`, where the compositor has them. No system gesture can
+/// be excluded, and no drag leaves the window yet (`wl_data_device`).
+#[must_use]
+pub const fn wayland(globals: WaylandInputGlobals) -> InputCapabilities {
+    let mut builder = InputCapabilities::builder().precise_scroll(Native);
+    if globals.tablet {
+        builder = builder.pen(Native);
+    }
+    if globals.pointer_gestures {
+        builder = builder.trackpad_gestures(Native);
+    }
+    builder.build()
+}
+
 /// When an OS drag session can start on Win32, AppKit, Android and winit: the
 /// drag runs in its window and escalates when the pointer leaves it
 /// (ADR-0211 §2). Win32 starts them through OLE and Android through

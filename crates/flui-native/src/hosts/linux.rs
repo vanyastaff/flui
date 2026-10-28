@@ -3,9 +3,10 @@
 //! Both fill the window, displays, accessibility, preference, lifecycle and
 //! storage positions, and keep the session's sources (the Settings portal,
 //! logind, the kernel's memory pressure) in the same shape
-//! (`owner::linux`). Input, text input, the clipboard and drag and drop are
-//! `Absent` until each host speaks their protocols; a desktop has no haptics
-//! and no system bars.
+//! (`owner::linux`). Wayland's loop answers the input position with its
+//! seats' input; X11's input, and both hosts' text input, clipboard and drag
+//! and drop, are `Absent` until each host speaks their protocols; a desktop
+//! has no haptics and no system bars.
 
 use std::sync::Arc;
 
@@ -57,7 +58,8 @@ mod wayland {
     };
     use crate::display::linux::protocol::Environment;
     use crate::display::linux::wayland::WaylandDisplaySource;
-    use crate::owner::linux::wayland::{WaylandDisplays, WaylandHost, WaylandLoop};
+    use crate::input::linux::wayland::SeatInput;
+    use crate::owner::linux::wayland::{WaylandDisplays, WaylandHost, WaylandInput, WaylandLoop};
     use crate::window::linux::wayland::{WaylandWindow, WaylandWindows};
 
     /// The Wayland host's table.
@@ -70,7 +72,7 @@ mod wayland {
         type Loop = WaylandLoop;
         type Window = WaylandWindow;
         type Displays = WaylandLoop;
-        type Input = Absent<position::Input>;
+        type Input = WaylandLoop;
         type Text = Absent<position::Text>;
         type Accessibility = UnixAccessibility;
         type Clipboard = Absent<position::Clipboard>;
@@ -87,6 +89,12 @@ mod wayland {
     impl WaylandHost for Wayland {
         fn displays() -> Arc<dyn WaylandDisplays> {
             Arc::new(WaylandDisplaySource::new())
+        }
+
+        /// The keyboards, pointers, touchscreens, tablet tools and touchpad
+        /// pinches of every seat, with the cursor each window shows.
+        fn input() -> Arc<dyn WaylandInput> {
+            Arc::new(SeatInput::new())
         }
 
         fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {

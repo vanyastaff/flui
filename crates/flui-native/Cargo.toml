@@ -319,9 +319,16 @@ x11rb = { workspace = true, optional = true, features = ["allow-unsafe-code", "d
 # the descriptor primitives both Linux hosts wait on, behind the `wayland` and
 # `x11` features (`desktop` and `winit-backend` enable both).
 wayland-client = { workspace = true, optional = true }
-wayland-protocols = { workspace = true, optional = true }
+# `staging` for `cursor-shape`, which the Wayland host's input speaks beside
+# the unstable `tablet` and `pointer-gestures`.
+wayland-protocols = { workspace = true, optional = true, features = ["staging"] }
 wayland-backend = { workspace = true, optional = true }
-rustix = { workspace = true, optional = true }
+# `time` reads `CLOCK_MONOTONIC`, the clock a compositor stamps input on.
+rustix = { workspace = true, optional = true, features = ["time"] }
+# The keyboard's layout and keys on the native Wayland host, loaded at run
+# time like libwayland and libxcb. winit loads the same crate, so the tree
+# gains no crate.
+xkbcommon-dl = { version = "0.4", optional = true }
 accesskit_unix = { version = "0.24" }
 zbus = { workspace = true }
 futures-util = { workspace = true }
@@ -448,7 +455,13 @@ desktop = ["wayland", "x11"]
 # the native X11 host (`hosts::linux`), and both read the outputs and their
 # refresh rates from the server for the display source (`display::linux`). On
 # other targets the features exist and add nothing.
-wayland = ["dep:wayland-client", "dep:wayland-protocols", "dep:wayland-backend", "dep:rustix"]
+wayland = [
+    "dep:wayland-client",
+    "dep:wayland-protocols",
+    "dep:wayland-backend",
+    "dep:rustix",
+    "dep:xkbcommon-dl",
+]
 
 # winit fallback backend — the Linux host `current_platform` picks while it is
 # built, until the native Wayland and X11 hosts are complete (ADR-0151 §11);

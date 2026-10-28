@@ -16,16 +16,19 @@
 //!
 //! The loop names no feature. What it keeps of one, it keeps through a hook
 //! declared here that the host's table fills (`WaylandHost`): the displays,
-//! the Settings portal's preferences, the notice channel and the sources of
-//! logind's and the kernel's notices. Its windows are the window feature's
+//! the seats' input, the Settings portal's preferences, the notice channel
+//! and the sources of logind's and the kernel's notices. The input binds the
+//! globals it speaks as the compositor announces them, records what its
+//! objects report, and delivers it to the windows on each turn before they
+//! settle (`WaylandInput`). Its windows are the window feature's
 //! (`window::linux::wayland`): the loop holds them as `LoopWindow`s and asks
 //! each to settle after every read, and the window feature implements the
 //! dispatch of its own protocol objects on `WaylandState`.
 
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(crate) use event_loop::{
-    LiveOutputs, LoopWaker, LoopWindow, OutputFacts, OutputName, WaylandDisplays, WaylandHost,
-    WaylandLoop, WaylandState, WindowSeed, WindowTable,
+    LiveOutputs, LoopWaker, LoopWindow, OutputFacts, OutputName, SeatWindow, WaylandDisplays,
+    WaylandHost, WaylandInput, WaylandLoop, WaylandState, WindowSeed, WindowTable,
 };
 
 pub(crate) mod wait {
@@ -57,6 +60,9 @@ pub(crate) mod wait {
         /// The earliest instant a window gives up on a frame callback that
         /// never came, with a frame asked for behind it.
         pub(crate) frame_wait: Option<Instant>,
+        /// When the input next delivers something no event brings: a held
+        /// key's repeat.
+        pub(crate) input_due: Option<Instant>,
         /// The earliest instant the application's handler asked to be woken
         /// at.
         pub(crate) wake_deadline: Option<Instant>,
@@ -127,10 +133,14 @@ pub(crate) mod wait {
                 Some(Duration::ZERO)
             }
         });
-        [deadline, turn.frame_wait.map(until)]
-            .into_iter()
-            .flatten()
-            .min()
+        [
+            deadline,
+            turn.frame_wait.map(until),
+            turn.input_due.map(until),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     #[cfg(test)]
@@ -149,12 +159,21 @@ pub(crate) mod wait {
             let turn = |frame_due, wake_deadline, offered| LoopTurn {
                 frame_due,
                 frame_wait: None,
+                input_due: None,
                 wake_deadline,
                 offered,
             };
             let waiting = |frame_wait, wake_deadline| LoopTurn {
                 frame_due: false,
                 frame_wait,
+                input_due: None,
+                wake_deadline,
+                offered: None,
+            };
+            let repeating = |input_due, wake_deadline| LoopTurn {
+                frame_due: false,
+                frame_wait: None,
+                input_due,
                 wake_deadline,
                 offered: None,
             };
@@ -209,6 +228,21 @@ pub(crate) mod wait {
                     "the earlier of a lost callback and a deadline",
                     waiting(Some(now + ms(700)), Some(now + ms(100))),
                     Some(ms(100)),
+                ),
+                (
+                    "a held key repeats",
+                    repeating(Some(now + ms(33)), None),
+                    Some(ms(33)),
+                ),
+                (
+                    "a repeat that came due",
+                    repeating(behind, None),
+                    Some(Duration::ZERO),
+                ),
+                (
+                    "the earlier of a repeat and a deadline",
+                    repeating(Some(now + ms(33)), Some(now + ms(500))),
+                    Some(ms(33)),
                 ),
             ] {
                 assert_eq!(poll_timeout(turn, now), expected, "{case}");
@@ -272,8 +306,10 @@ mod event_loop {
     use std::thread::ThreadId;
     use std::time::Duration;
 
+    use cursor_icon::CursorIcon;
     use flui_platform::{
-        DisplayId, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice, WindowId,
+        CursorError, DisplayId, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice,
+        WindowId,
     };
     use parking_lot::Mutex;
     use rustix::event::{EventfdFlags, PollFd, PollFlags, Timespec, eventfd, poll};
@@ -283,6 +319,7 @@ mod event_loop {
     use wayland_client::protocol::wl_compositor::WlCompositor;
     use wayland_client::protocol::wl_output::{self, WlOutput};
     use wayland_client::protocol::wl_registry::{self, WlRegistry};
+    use wayland_client::protocol::wl_surface::WlSurface;
     use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
     use wayland_protocols::wp::viewporter::client::wp_viewporter::{self, WpViewporter};
     use wayland_protocols::xdg::shell::client::xdg_wm_base::{self, XdgWmBase};
@@ -299,6 +336,7 @@ mod event_loop {
     use crate::owner::signal::OwnerSignal;
     use crate::owner::slot::{OwnerCell, OwnerMap};
     use crate::owner::watch::Watch;
+    use crate::owner::window_delivery::WindowDelivery;
     use crate::owner::{DirectOwnerHooks, OpenWindowError, OwnerHooks, OwnerPlatform};
     use crate::platform::{AppHandler, Platform, PlatformExecutor};
 
@@ -322,6 +360,10 @@ mod event_loop {
         /// The displays: the compositor's outputs, read on a connection of
         /// their own.
         fn displays() -> Arc<dyn WaylandDisplays>;
+
+        /// The seats' input, made on the owner thread, which alone reaches
+        /// it.
+        fn input() -> Arc<dyn WaylandInput>;
 
         /// The channel the loop's system notices take to the application.
         fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel>;
@@ -359,6 +401,70 @@ mod event_loop {
         /// Keep the outputs current, waking the owner behind `signal` when
         /// they change, until the watch is dropped.
         fn observe(self: Arc<Self>, signal: &Arc<OwnerSignal>) -> Watch;
+    }
+
+    /// A window as the seats' input reaches it, from its open to its close:
+    /// its identity, the surface the compositor names it by, and the delivery
+    /// its input goes through.
+    pub(crate) struct SeatWindow {
+        /// The window's identity.
+        pub(crate) id: WindowId,
+        /// Its `wl_surface`.
+        pub(crate) surface: WlSurface,
+        /// What its input is delivered through.
+        pub(crate) delivery: Arc<WindowDelivery>,
+    }
+
+    /// What the loop and its windows ask of the seats' input: the input
+    /// feature's (`input::linux::wayland`), which the table registers.
+    ///
+    /// Reached on the owner thread. The dispatch of the input's objects
+    /// records what they report and runs no handler; [`Self::deliver`] runs
+    /// the handlers, with no lock of the loop held.
+    pub(crate) trait WaylandInput: Send + Sync {
+        /// The compositor announced global `name`: bind it if the input
+        /// speaks its interface.
+        fn global(
+            &self,
+            registry: &WlRegistry,
+            name: u32,
+            interface: &str,
+            version: u32,
+            queue: &QueueHandle<WaylandState>,
+        );
+
+        /// The compositor removed global `name`.
+        fn global_removed(&self, name: u32);
+
+        /// Deliver to the windows what the seats reported since the last
+        /// turn, and a held key's repeat that came due.
+        fn deliver(&self);
+
+        /// When the input next delivers something no event brings.
+        fn next_due(&self) -> Option<Instant>;
+
+        /// A window opened: its input starts.
+        fn attach(&self, window: SeatWindow);
+
+        /// The window `id` closed: what it held open ends, and nothing more
+        /// reaches it.
+        fn detach(&self, id: WindowId);
+
+        /// Show `cursor` while the pointer is over the window `id`.
+        ///
+        /// # Errors
+        /// [`CursorError::Unsupported`] when the compositor takes no cursor
+        /// shape from the host.
+        fn set_cursor(&self, id: WindowId, cursor: CursorIcon) -> Result<(), CursorError>;
+
+        /// The active keyboard layout's name; empty before a keymap came.
+        fn keyboard_layout(&self) -> String;
+
+        /// Call `callback` on the owner thread each time the layout changes.
+        fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut() + Send>);
+
+        /// The loop ends: let go of the windows and the callbacks.
+        fn release(&self);
     }
 
     /// An output by its global's name, which the compositor numbers alike for
@@ -576,6 +682,8 @@ mod event_loop {
         outputs: Vec<(OutputName, WlOutput)>,
         /// The same outputs, as the windows read them.
         live: LiveOutputs,
+        /// The seats' input, offered every global the loop does not bind.
+        input: Arc<dyn WaylandInput>,
     }
 
     impl WaylandState {
@@ -631,7 +739,17 @@ mod event_loop {
                 } if interface == WlOutput::interface().name => {
                     state.bind_output(registry, name, version, queue);
                 }
-                wl_registry::Event::GlobalRemove { name } => state.remove_output(name),
+                wl_registry::Event::Global {
+                    name,
+                    interface,
+                    version,
+                } => state
+                    .input
+                    .global(registry, name, &interface, version, queue),
+                wl_registry::Event::GlobalRemove { name } => {
+                    state.remove_output(name);
+                    state.input.global_removed(name);
+                }
                 _ => {}
             }
         }
@@ -736,6 +854,9 @@ mod event_loop {
         /// The channel a wake from sleep marks the window's state stale
         /// through.
         pub(crate) notices: Arc<dyn NoticeChannel>,
+        /// The seats' input, which the window joins as it opens and leaves
+        /// as it closes, and which shows its cursor.
+        pub(crate) input: Arc<dyn WaylandInput>,
     }
 
     /// The owner's event queue and what it dispatches into, kept together:
@@ -768,6 +889,7 @@ mod event_loop {
         /// runs its loop.
         owner_thread: ThreadId,
         displays: Arc<dyn WaylandDisplays>,
+        input: Arc<dyn WaylandInput>,
         notices: Arc<dyn NoticeChannel>,
         portal: PortalSlot,
         start_preferences: fn(&BackgroundExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxPreferences>,
@@ -846,18 +968,23 @@ mod event_loop {
                 .bind::<wayland_client::protocol::wl_shm::WlShm, _, _>(&handle, 1..=1, ())
                 .ok();
             let live = LiveOutputs::default();
+            let input = H::input();
             let mut state = WaylandState {
                 outputs: Vec::new(),
                 live: live.clone(),
+                input: Arc::clone(&input),
             };
-            let outputs = globals.contents().with_list(|list| {
+            let announced = globals.contents().with_list(|list| {
                 list.iter()
-                    .filter(|global| global.interface == WlOutput::interface().name)
-                    .map(|global| (global.name, global.version))
+                    .map(|global| (global.name, global.interface.clone(), global.version))
                     .collect::<Vec<_>>()
             });
-            for (name, version) in outputs {
-                state.bind_output(globals.registry(), name, version, &handle);
+            for (name, interface, version) in announced {
+                if interface == WlOutput::interface().name {
+                    state.bind_output(globals.registry(), name, version, &handle);
+                } else {
+                    input.global(globals.registry(), name, &interface, version, &handle);
+                }
             }
             let waker = Arc::new(
                 LoopWaker::new().map_err(|error| init("the loop's wake descriptor", &error))?,
@@ -896,6 +1023,7 @@ mod event_loop {
                 windows: Arc::new(WindowTable::new()),
                 owner_thread: std::thread::current().id(),
                 displays: H::displays(),
+                input,
                 portal: PortalSlot::default(),
                 start_preferences: H::preferences,
                 start_host_notices: H::host_notices,
@@ -942,6 +1070,7 @@ mod event_loop {
                 signal: Arc::clone(&self.signal),
                 waker: Arc::downgrade(&self.waker),
                 notices: Arc::clone(&self.notices),
+                input: Arc::clone(&self.input),
             })
         }
 
@@ -1027,8 +1156,11 @@ mod event_loop {
         /// loop is to end.
         fn turn(&self, limit: Option<Duration>) -> Result<bool, PlatformError> {
             self.dispatch_pending()?;
-            // Each window carries out what was recorded, with no lock of the
-            // loop held: its handler may open, close or quit.
+            // The input the seats reported reaches the windows before they
+            // settle, so a frame they deliver follows the input it shows.
+            // Neither holds a lock of the loop: a handler may open, close or
+            // quit.
+            self.input.deliver();
             for window in self.windows.values() {
                 window.settle();
             }
@@ -1065,6 +1197,7 @@ mod event_loop {
                 LoopTurn {
                     frame_due,
                     frame_wait,
+                    input_due: self.input.next_due(),
                     wake_deadline: deadline,
                     offered: self.offered.with(|offered| *offered).flatten(),
                 },
@@ -1209,6 +1342,7 @@ mod event_loop {
             for window in self.windows.values() {
                 window.release();
             }
+            self.input.release();
             let quit = self.app.quit_requested();
             self.app.release();
             quit.or_resume(());
@@ -1348,6 +1482,18 @@ mod event_loop {
     impl host::Displays<WaylandLoop> for WaylandLoop {
         fn snapshot(owner: &WaylandLoop) -> Result<DisplaySnapshot, PlatformError> {
             owner.displays.snapshot()
+        }
+    }
+
+    /// The input position is the loop's: the seats' input the table
+    /// registered, whose keymap names the layout.
+    impl host::Input<WaylandLoop> for WaylandLoop {
+        fn keyboard_layout(owner: &WaylandLoop) -> String {
+            owner.input.keyboard_layout()
+        }
+
+        fn on_keyboard_layout_change(owner: &WaylandLoop, callback: Box<dyn FnMut() + Send>) {
+            owner.input.on_keyboard_layout_change(callback);
         }
     }
 
