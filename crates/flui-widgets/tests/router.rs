@@ -1496,13 +1496,16 @@ pub(crate) fn from_stack_opens_without_a_transition() {
         AppRoute::Note { id: 5 },
         AppRoute::Tag { name: "x".into() },
     ];
+    let probe = Probe::default();
     let built = Rc::new(RefCell::new(Vec::<AppRoute>::new()));
     let entrances = Rc::new(RefCell::new(Vec::<f64>::new()));
     let pages = {
         let built = Rc::clone(&built);
+        let probe = probe.clone();
         move |route: &AppRoute, _cx: &dyn BuildContext| {
             built.borrow_mut().push(route.clone());
-            text(route.to_path().to_string())
+            let label = route.to_path().to_string();
+            page(&probe, move || text(label.clone()))
         }
     };
     let transitions = {
@@ -1519,7 +1522,7 @@ pub(crate) fn from_stack_opens_without_a_transition() {
         .expect("a non-empty stack")
         .transitions(transitions);
     let vsync = Vsync::new();
-    let laid = lay_out_animated(
+    let mut laid = lay_out_animated(
         VsyncScope::new(vsync.clone(), router),
         tight(400.0, 400.0),
         vsync,
@@ -1529,18 +1532,35 @@ pub(crate) fn from_stack_opens_without_a_transition() {
         laid_out_text(&laid, "/tag/x"),
         "the top is laid out on the first frame"
     );
-    let entrances = entrances.borrow();
-    assert!(!entrances.is_empty(), "the pages were built");
-    assert!(
-        entrances.iter().all(|value| *value == 1.0),
-        "no restored page runs an entrance: {entrances:?}"
-    );
+    {
+        let entrances = entrances.borrow();
+        assert!(!entrances.is_empty(), "the pages were built");
+        assert!(
+            entrances.iter().all(|value| *value == 1.0),
+            "no restored page runs an entrance: {entrances:?}"
+        );
+    }
     for route in &stack {
         assert!(
             built.borrow().contains(route),
             "the first frame builds {route:?}"
         );
     }
+
+    // The same recording sees the entrance of a page pushed afterwards, two
+    // frames into its 300 ms transition.
+    entrances.borrow_mut().clear();
+    probe
+        .handle()
+        .push(AppRoute::Note { id: 9 })
+        .expect("mounted router");
+    laid.pump_for(FRAME);
+    laid.pump_for(FRAME);
+    assert!(
+        entrances.borrow().iter().any(|value| *value < 1.0),
+        "a pushed page runs its entrance: {:?}",
+        entrances.borrow()
+    );
 }
 
 /// `stack()` lists pages only: a popup above the top page is not a route.
