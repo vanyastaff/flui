@@ -321,7 +321,8 @@ x11rb = { workspace = true, optional = true, features = ["allow-unsafe-code", "d
 wayland-client = { workspace = true, optional = true }
 wayland-protocols = { workspace = true, optional = true }
 wayland-backend = { workspace = true, optional = true }
-rustix = { workspace = true, optional = true }
+# `time`: the clock a compositor stamps presentation times on.
+rustix = { workspace = true, optional = true, features = ["time"] }
 accesskit_unix = { version = "0.24" }
 zbus = { workspace = true }
 futures-util = { workspace = true }

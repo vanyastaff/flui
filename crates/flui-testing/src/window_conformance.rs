@@ -26,6 +26,13 @@
 //!   regions, which a window takes outside the command queue because they are
 //!   sent every frame, answer `Unsupported` exactly when their capability is
 //!   `Unavailable` (ADR-0254 §3). The material is a command like the others.
+//! - **Presentation is reported exactly when claimed.** A window whose
+//!   capabilities say it reports when its frames reached the screen carries
+//!   the report on its first frame request after frames were shown, stamped
+//!   between the first present and the request's arrival; one that says it
+//!   does not names a lasting reason and carries none. A fixture that cannot
+//!   present ([`WindowFixture::present_and_request_frame`]) checks the reason
+//!   only.
 //! - **A closed window refuses.** Every admitted command after the window
 //!   closed — through [`WindowCommand::Close`] where the window takes it, else
 //!   the way the window system closes it — is [`Closed`](ApplyError::Closed).
@@ -501,7 +508,7 @@ fn per_frame_verbs_report_unsupported_exactly_when_unavailable(
     finish(broken)
 }
 
-/// `presentation_is_reported_exactly_when_claimed` (R11.5): a window whose
+/// `presentation_is_reported_exactly_when_claimed`: a window whose
 /// capabilities say it reports when its frames reached the screen carries a
 /// report on the first frame request after frames were shown, stamped on the
 /// event timeline between the first present and the time the request arrived;

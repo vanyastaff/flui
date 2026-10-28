@@ -1755,6 +1755,13 @@ impl Renderer {
     /// display showed and the refresh it began on — and nothing on the other
     /// backends, nor before any present was shown (DXGI then answers an
     /// error, not statistics).
+    #[cfg_attr(
+        not(windows),
+        expect(
+            clippy::unused_self,
+            reason = "only the DX12 swap chain reports statistics"
+        )
+    )]
     fn swap_chain_statistics(&self) -> flui_platform::SwapChainStatistics {
         #[cfg(windows)]
         if let Some(statistics) = self.lease.surface().and_then(dxgi_frame_statistics) {

@@ -7,7 +7,8 @@
 //!   the compositor sends means for the window (its states, the size it
 //!   takes, what the compositor lets it do); [`frame`], when it delivers a
 //!   frame; [`decoration`], who draws its frame; [`scale`], the scale its
-//!   buffer is drawn at; `foreign`, how a portal names it (read by tests until the window reference carries it);
+//!   buffer is drawn at; [`presented`], when the compositor showed a commit;
+//!   `foreign`, how a portal names it (read by tests until the window reference carries it);
 //! - `toplevel`: `WaylandWindow`, the `PlatformWindow` over the protocol
 //!   objects, and the dispatch of those objects on the owner's queue
 //!   (`owner::linux::wayland::WaylandState`).
@@ -1039,6 +1040,93 @@ pub(crate) mod scale {
     }
 }
 
+pub(crate) mod presented {
+    //! When the compositor showed a window's commit, as
+    //! `wp_presentation_feedback.presented` carries it: a time on the clock
+    //! `wp_presentation.clock_id` named, and the output's refresh interval.
+    //! The window asks for one feedback per commit it presents (its surface
+    //! target's `pre_present_notify`) and reports each shown commit on the
+    //! event timeline; a discarded commit reports nothing.
+
+    #![forbid(unsafe_code)]
+
+    use std::time::Duration;
+
+    use flui_platform::{CapabilityAbsence, WindowCapabilities};
+
+    /// The time a `presented` event carries, from its three words: the
+    /// seconds split into high and low halves, and the nanoseconds.
+    /// Nanoseconds of a second or more are not a time and give `None`.
+    pub(crate) fn shown_at(tv_sec_hi: u32, tv_sec_lo: u32, tv_nsec: u32) -> Option<Duration> {
+        if tv_nsec >= 1_000_000_000 {
+            return None;
+        }
+        let seconds = (u64::from(tv_sec_hi) << 32) | u64::from(tv_sec_lo);
+        Some(Duration::new(seconds, tv_nsec))
+    }
+
+    /// The refresh interval a `presented` event carries, in nanoseconds;
+    /// zero says the compositor knows no fixed one (a variable rate), which
+    /// is none.
+    pub(crate) fn refresh(nanos: u32) -> Option<Duration> {
+        (nanos > 0).then(|| Duration::from_nanos(u64::from(nanos)))
+    }
+
+    /// `capabilities` with the presentation report the compositor makes:
+    /// where it offers no `wp_presentation`, a window learns nothing of when
+    /// its frames are shown.
+    pub(crate) const fn reported(
+        capabilities: WindowCapabilities,
+        offered: bool,
+    ) -> WindowCapabilities {
+        if offered {
+            capabilities
+        } else {
+            capabilities.without_presentation_feedback(CapabilityAbsence::NotOnThisDevice)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use flui_platform::{Availability, UnsupportedReason};
+
+        use super::*;
+
+        /// A `presented` event's words make the time it names; nanoseconds
+        /// past a second do not.
+        #[test]
+        fn a_presented_event_names_its_time_and_refresh() {
+            assert_eq!(
+                shown_at(0, 12, 500_000_000),
+                Some(Duration::from_millis(12_500))
+            );
+            assert_eq!(
+                shown_at(1, 0, 0),
+                Some(Duration::from_secs(1 << 32)),
+                "the high word holds the upper seconds"
+            );
+            assert_eq!(shown_at(0, 1, 1_000_000_000), None);
+            assert_eq!(refresh(16_666_666), Some(Duration::from_nanos(16_666_666)));
+            assert_eq!(refresh(0), None, "a variable rate");
+        }
+
+        /// A compositor without `wp_presentation` leaves a window without the
+        /// report, for want of the device's compositor, not the platform.
+        #[test]
+        fn the_report_follows_the_compositor() {
+            let offered = reported(WindowCapabilities::ALL, true);
+            assert_eq!(offered.presentation_feedback(), Ok(Availability::Native));
+            let missing = reported(WindowCapabilities::ALL, false);
+            assert_eq!(
+                missing
+                    .presentation_feedback()
+                    .map_err(|absent| absent.reason),
+                Err(UnsupportedReason::NotOnThisDevice)
+            );
+        }
+    }
+}
+
 // Read by tests alone until the contract's window reference carries the
 // portal parent to the capability crates; that reader drops this `cfg`.
 #[cfg(any(test, feature = "testing"))]
@@ -1113,6 +1201,9 @@ mod toplevel {
     use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1::{
         self, WpFractionalScaleV1,
     };
+    use wayland_protocols::wp::presentation_time::client::wp_presentation_feedback::{
+        self, WpPresentationFeedback,
+    };
     use wayland_protocols::wp::viewporter::client::wp_viewport::{self, WpViewport};
     use wayland_protocols::xdg::decoration::zv1::client::zxdg_toplevel_decoration_v1::{
         self, ZxdgToplevelDecorationV1,
@@ -1130,14 +1221,16 @@ mod toplevel {
     #[cfg(any(test, feature = "testing"))]
     use super::foreign::PortalParent;
     use super::frame::{Pacing, first_live, waiting_on_callback};
+    use super::presented;
     use super::scale::{ScaleTold, buffer_scale};
     use crate::host::{self, WindowFacets, WindowPositions};
     use crate::host_window::{CoreHostWindow, HostWindow, OwnerThreadToken};
     use crate::owner::OpenWindowError;
+    use crate::owner::handlers::{PresentationReports, rebased};
     use crate::owner::linux::PortalSlot;
     use crate::owner::linux::wayland::{
-        LiveOutputs, LoopWaker, LoopWindow, OutputName, WaylandDisplays, WaylandLoop, WaylandState,
-        WindowSeed, WindowTable,
+        LiveOutputs, LoopWaker, LoopWindow, OutputName, PresentationTime, WaylandDisplays,
+        WaylandLoop, WaylandState, WindowSeed, WindowTable,
     };
     use crate::owner::window_delivery::{Publication, Retirement, WindowDelivery};
     use crate::text::WindowTextInput;
@@ -1352,6 +1445,10 @@ mod toplevel {
         viewported: bool,
         /// The compositor offers to draw the window's frame.
         offers_decorations: bool,
+        /// `wp_presentation`, through which the window's surface target asks
+        /// when each commit is shown; `None` where the compositor tells
+        /// nothing.
+        presentation: Option<PresentationTime>,
         live: LiveOutputs,
         applied: RefCell<Applied>,
         closed: Cell<bool>,
@@ -1380,6 +1477,7 @@ mod toplevel {
         hovered: bool,
         viewported: bool,
         offers_decorations: bool,
+        reports_presentation: bool,
         closed: bool,
     }
 
@@ -1420,7 +1518,10 @@ mod toplevel {
                 execution: WindowExecutionState::Running,
                 hovered: self.hovered,
                 active: states.activated,
-                capabilities: capabilities(applied.told.wm, decoration.absence(), states),
+                capabilities: presented::reported(
+                    capabilities(applied.told.wm, decoration.absence(), states),
+                    self.reports_presentation,
+                ),
             }
             .onto(state)
         }
@@ -1529,6 +1630,7 @@ mod toplevel {
                 queue,
                 viewported: protocol.viewporter.is_some(),
                 offers_decorations: protocol.decoration.is_some(),
+                presentation: protocol.presentation,
                 live: protocol.live,
                 displays,
                 portal,
@@ -1572,6 +1674,7 @@ mod toplevel {
                 hovered: self.delivery.hovered(),
                 viewported: self.viewported,
                 offers_decorations: self.offers_decorations,
+                reports_presentation: self.presentation.is_some(),
                 closed: self.closed.get(),
             }
             .state()
@@ -1839,6 +1942,18 @@ mod toplevel {
         queue: QueueHandle<WaylandState>,
         record: Arc<ToplevelRecord>,
         retirement: Retirement,
+        /// Where each commit's presentation is asked for and reported;
+        /// `None` where the compositor tells nothing.
+        presentation: Option<PresentedTo>,
+    }
+
+    /// What a surface's presentation feedback reports to: the clock its
+    /// times are on, and the window's reports, which its next frame request
+    /// carries. The user data of each `wp_presentation_feedback`.
+    #[derive(Clone)]
+    pub(crate) struct PresentedTo {
+        time: PresentationTime,
+        reports: PresentationReports,
     }
 
     impl HasWindowHandle for WaylandSurface {
@@ -1886,10 +2001,19 @@ mod toplevel {
         /// makes: the next frame the window delivers waits until the
         /// compositor has shown this one, or the grace after which a present
         /// that never committed is given up (`frame::CALLBACK_GRACE`). Returns
-        /// at once; one callback is out at a time.
-        fn pre_present_notify(&self) {
+        /// at once; one callback is out at a time. Where the compositor offers
+        /// `wp_presentation`, every present also asks when its commit is
+        /// shown ([`presented`]).
+        fn pre_present_notify(&self, _: flui_platform::SwapChainStatistics) {
             if self.retirement.is_retired() {
                 return;
+            }
+            if let Some(presented) = &self.presentation {
+                let _feedback = presented.time.manager.feedback(
+                    &self.surface.0,
+                    &self.queue,
+                    presented.clone(),
+                );
             }
             let now = Instant::now();
             {
@@ -1958,6 +2082,10 @@ mod toplevel {
                 queue: self.queue.clone(),
                 record: Arc::clone(&self.record),
                 retirement: self.delivery.retirement(),
+                presentation: self.presentation.clone().map(|time| PresentedTo {
+                    time,
+                    reports: self.delivery.presentation_reports(),
+                }),
             })
         }
 
@@ -2259,7 +2387,10 @@ mod toplevel {
                 told: None,
                 answered: false,
             };
-            capabilities(None, decoration.absence(), ToplevelStates::default())
+            presented::reported(
+                capabilities(None, decoration.absence(), ToplevelStates::default()),
+                owner.offers_presentation(),
+            )
         }
 
         /// A frame the compositor draws lies outside the window's surface,
@@ -2388,6 +2519,44 @@ mod toplevel {
             if let wl_callback::Event::Done { .. } = event {
                 *record.callback_armed.lock() = None;
             }
+        }
+    }
+
+    impl Dispatch<WpPresentationFeedback, PresentedTo> for WaylandState {
+        /// A commit was shown: its time, on the compositor's presentation
+        /// clock, is rebased onto the event clock by its distance from a
+        /// reading of that clock, and reported with the output's refresh. A
+        /// discarded commit (another replaced it before a refresh) reports
+        /// nothing; the compositor destroys the feedback after either.
+        fn event(
+            _: &mut Self,
+            _: &WpPresentationFeedback,
+            event: wp_presentation_feedback::Event,
+            presented_to: &PresentedTo,
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            let wp_presentation_feedback::Event::Presented {
+                tv_sec_hi,
+                tv_sec_lo,
+                tv_nsec,
+                refresh,
+                ..
+            } = event
+            else {
+                return;
+            };
+            let (Some(shown), Some(now)) = (
+                presented::shown_at(tv_sec_hi, tv_sec_lo, tv_nsec),
+                presented_to.time.clock.now(),
+            ) else {
+                return;
+            };
+            let mut report = flui_platform::FramePresented::new(rebased(now, shown));
+            if let Some(refresh) = presented::refresh(refresh) {
+                report = report.with_refresh(refresh);
+            }
+            presented_to.reports.report(report);
         }
     }
 

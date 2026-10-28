@@ -65,6 +65,7 @@ fn frame_request_at(
 /// of that clock taken now (`platform_now`): the stamp lies as far before or after this reading of
 /// the event clock as it lies from `platform_now`, so no epoch has to be aligned. A stamp further
 /// back than the timeline's start is its start.
+#[cfg(any(windows, wayland_host, test))]
 #[must_use]
 pub(crate) fn rebased(platform_now: Duration, stamp: Duration) -> EventTime {
     rebased_at(event_now().as_nanos(), platform_now, stamp)
@@ -79,6 +80,7 @@ pub(crate) fn event_now() -> EventTime {
 
 /// The event-clock time `age` before this reading of it, for a platform stamp whose distance from
 /// a reading of the platform's clock is known; the timeline's start for an age longer than it.
+#[cfg(windows)]
 #[must_use]
 pub(crate) fn aged(age: Duration) -> EventTime {
     rebased(age, Duration::ZERO)

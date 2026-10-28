@@ -53,8 +53,11 @@ fn no_refresh_is_named_without_an_interval_or_past_the_horizon() {
     let later = start + REFRESH;
     clock.record_presentation(PresentationReport::new(later).with_refresh(REFRESH));
     let last_on_grid = later + REFRESH * PRESENTATION_GRID_HORIZON;
+    let just_before = last_on_grid
+        .checked_sub(Duration::from_nanos(1))
+        .expect("after the start");
     assert_eq!(
-        clock.next_presentation_after(last_on_grid - Duration::from_nanos(1)),
+        clock.next_presentation_after(just_before),
         Some(last_on_grid)
     );
     assert_eq!(

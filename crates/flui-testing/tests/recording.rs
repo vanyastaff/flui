@@ -685,7 +685,7 @@ fn a_factory_tap_ends_its_recording_when_the_runtime_goes_away() {
     );
 }
 
-/// One timeline for input, frames and presentation (R11.4): a report that a
+/// One timeline for input, frames and presentation: a report that a
 /// frame reached the screen, injected on the headless host, is recorded with
 /// the frame that carried it, and the time from a touch to that frame's
 /// showing is a subtraction of the two recorded stamps, with no conversion.

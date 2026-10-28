@@ -79,7 +79,9 @@ impl WaylandFixture {
             .count();
         if asked > self.drawn.get() {
             self.drawn.set(asked);
-            self.window.surface_target().pre_present_notify();
+            self.window
+                .surface_target()
+                .pre_present_notify(flui_platform::SwapChainStatistics::None);
             let _ = present(self.window.as_ref());
         }
     }
@@ -187,6 +189,35 @@ impl WindowFixture for WaylandFixture {
 
     fn has_native_surface(&self) -> bool {
         true
+    }
+
+    /// A frame drawn as the renderer would and the next asked for, turning
+    /// the loop until a frame request carries the compositor's report of the
+    /// first, or two seconds pass: `presented` follows the compositor's
+    /// repaint, and the window's next frame request carries it.
+    fn present_and_request_frame(&mut self) -> Option<flui_platform::FrameRequest> {
+        self.window
+            .surface_target()
+            .pre_present_notify(flui_platform::SwapChainStatistics::None);
+        let _ = present(self.window.as_ref());
+        self.handler.take_calls();
+        // The requests taken here are answered here, not drawn by `settle`.
+        self.drawn.set(0);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut last = None;
+        while Instant::now() < deadline {
+            self.window.request_redraw();
+            run_for(&self.platform, Duration::from_millis(20)).expect("the loop turns");
+            for call in self.handler.take_calls() {
+                if let HandlerCall::FrameRequested(request) = call {
+                    if request.presented.is_some() {
+                        return Some(request);
+                    }
+                    last = Some(request);
+                }
+            }
+        }
+        last
     }
 }
 
@@ -344,7 +375,10 @@ fn an_occluded_window_is_given_its_frame_once_shown() {
     );
     // A present armed its callback and the compositor, not showing the
     // window, never answers it; a frame is asked for behind it.
-    fixture.window.surface_target().pre_present_notify();
+    fixture
+        .window
+        .surface_target()
+        .pre_present_notify(flui_platform::SwapChainStatistics::None);
     fixture.window.request_redraw();
     run_for(&fixture.platform, Duration::from_millis(2500)).expect("the loop turns");
     assert_eq!(
@@ -396,7 +430,9 @@ fn the_accessibility_bridge_follows_the_compositors_activation() {
         .expect("a second window opens");
     for _ in 0..10 {
         run_for(&fixture.platform, Duration::from_millis(50)).expect("the loop turns");
-        second.surface_target().pre_present_notify();
+        second
+            .surface_target()
+            .pre_present_notify(flui_platform::SwapChainStatistics::None);
         let _ = present(second.as_ref());
         if activated(second.as_ref()) && !activated(first) {
             break;
@@ -468,7 +504,10 @@ fn a_frame_callback_no_commit_carried_is_given_up() {
     let fixture = WaylandFixture::open(platform, "a skipped present");
     fixture.handler.take_calls();
     // The raster side armed the callback and then presented nothing.
-    fixture.window.surface_target().pre_present_notify();
+    fixture
+        .window
+        .surface_target()
+        .pre_present_notify(flui_platform::SwapChainStatistics::None);
     fixture.window.request_redraw();
     run_for(&fixture.platform, Duration::from_millis(300)).expect("the loop turns");
     assert_eq!(
