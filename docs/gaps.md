@@ -74,8 +74,9 @@ request.
 > **Environments:** iOS, Android, Web; desktop · **Who it hurts:** Blind and low-vision users; anyone who must meet accessibility law · **Parity:** [Accessibility](platform-parity.md#accessibility)
 
 - Desktop is always on but untested with a screen reader.
-- AccessKit has iOS and Android adapters but none for the Web (it needs a parallel ARIA DOM).
-- When they are wired, the semantics identifier (ADR-0240) must reach Android's `viewIdResourceName`, iOS's `accessibilityIdentifier` and a `data-flui-id` DOM attribute, as it reaches `AutomationId`, `AXIdentifier` and AT-SPI's id through `author_id` on the desktop.
+- **Runs on iOS:** every UIKit window answers UIAccessibility through `accesskit_ios`'s low-level adapter, and the semantics identifier reaches `accessibilityIdentifier`; on the iOS Simulator an XCUITest client read the tree, found a button by its identifier and pressed it (2026-10-28). No VoiceOver session ran, and no AccessKit action was sent.
+- AccessKit has an Android adapter, not yet wired, and none for the Web (it needs a parallel ARIA DOM).
+- When they are wired, the semantics identifier (ADR-0240) must reach Android's `viewIdResourceName` and a `data-flui-id` DOM attribute, as it reaches `AutomationId`, `AXIdentifier`, AT-SPI's id and iOS's `accessibilityIdentifier` through `author_id`.
 - The runs read one control, not a Narrator, VoiceOver or Orca session.
 - No locked adapter routes custom actions or `ShowContextMenu`, so gesture alternatives (ADR-0216) keep a control on every path.
 
