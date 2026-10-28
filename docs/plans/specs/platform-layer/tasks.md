@@ -4333,7 +4333,7 @@ graph LR
   средствами удалённого управления не удалось), действие AccessKit (нажатие XCUITest — касание, а
   не `accessibilityActivate`), объявления.
 
-- [x] **LY91** — ветка `platform/present-feedback` от `main` @ `8aee131f6`. **Форма (для владельца).**
+- [ ] **LY91** (не закрыта: iOS ждёт прогона на устройстве, см. ниже) — ветка `platform/present-feedback` от `main` @ `8aee131f6`. **Форма (для владельца).**
   Обратная связь едет в запросе кадра: `FrameRequest::presented: Option<FramePresented { at:
   EventTime, refresh: Option<Duration> }>` — самый новый показанный кадр окна с прошлого запроса,
   на шкале ввода; никогда не прогноз (ожидаемый показ — `target_present`). Есть ли она у окна —
@@ -4433,7 +4433,8 @@ graph LR
   нажатий, интервалы кратны 9,999 мс, обработчик через 0,34–0,49 мс после показа; Main Thread
   Checker — 0. UIKit — остаётся `NotYetOnThisHost`: с `CAMetalLayer` корневым слоем вида (и своим,
   и простым) симулятор iOS не показал ничего, без него показывает; на симуляторе у drawable нет
-  `addPresentedHandler:`. Остаток — в gaps (запись 23). Проверки после
+  `addPresentedHandler:`. iOS ждёт прогона на устройстве; до него строка открыта, остаток — в gaps
+  (запись 23). Проверки после
   исправлений и слияния LY95: Windows clippy рабочего пространства, nextest семи крейтов — 680 из 680; clippy
   macOS, Android, iOS lib; `checks`, `doc-strict`, `wasm-check`, гейты; WSL clippy шести
   вариантов и крейтов, xvfb 397 из 397, Weston 38 из 38, rustdoc, `api-closure` (4 пакета чисто).
