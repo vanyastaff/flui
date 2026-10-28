@@ -928,6 +928,14 @@ required-features = ["native"]
 name = "thread_boundary_ui"
 path = "tests/thread_boundary_ui.rs"
 
+# The acceptance application in a window, for native runs through flui-driver.
+# Its tree is `tests/fixtures/acceptance_app/app.rs`, which uses the Material
+# catalog; `tests/facade_consumer.rs` runs its headless rows.
+[[example]]
+name = "acceptance_app"
+path = "examples/acceptance_app.rs"
+required-features = ["material"]
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Build Profiles
 # ═══════════════════════════════════════════════════════════════════════════════

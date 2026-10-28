@@ -89,8 +89,12 @@ fn run_consumer(
     source: &str,
     command: &str,
 ) -> Output {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let project = consumer_project(dependencies, dev_dependencies, source);
+    run_project(&project, command)
+}
+
+fn run_project(project: &tempfile::TempDir, command: &str) -> Output {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     // Never reuse the outer Cargo target: its build lock remains held during
     // integration tests. Both cases share this separate cache, serialized by Cargo.
     Command::new(env!("CARGO"))
@@ -212,6 +216,61 @@ fn external_consumers_extend_and_test_through_the_facade() {
                 "{alias}: missing executed acceptance case {case}:\n{report}"
             );
         }
+    }
+}
+
+/// The acceptance application, `tests/fixtures/acceptance_app/`, runs its rows
+/// as a crate that depends on the facade alone, with `material` for the
+/// application and `testing` for its rows.
+#[test]
+fn acceptance_app_runs_through_the_facade() {
+    let Some(root) = checkout_root() else { return };
+    let with_features = |features: &[&str]| {
+        let mut framework = dependency("flui", root, false);
+        framework
+            .as_table_mut()
+            .expect("framework dependency table")
+            .insert(
+                "features".into(),
+                toml::Value::Array(features.iter().map(|&feature| feature.into()).collect()),
+            );
+        let mut table = toml::Table::new();
+        table.insert("flui".into(), framework);
+        table
+    };
+    let project = consumer_project(
+        with_features(&["material"]),
+        Some(with_features(&["material", "testing"])),
+        "",
+    );
+    let fixture = root.join("tests/fixtures/acceptance_app");
+    for entry in std::fs::read_dir(&fixture).expect("read the acceptance application") {
+        let path = entry.expect("acceptance application entry").path();
+        std::fs::copy(
+            &path,
+            project
+                .path()
+                .join("src")
+                .join(path.file_name().expect("a file name")),
+        )
+        .expect("copy the acceptance application into the consumer");
+    }
+    let output = run_project(&project, "test");
+    let report = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "acceptance application:\n{report}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for row in [
+        "acceptance_app_walks_home_note_settings_and_back",
+        "acceptance_app_saves_an_edited_title",
+        "acceptance_app_retries_a_failed_load",
+    ] {
+        assert!(
+            report.contains(&format!("{row} ... ok")),
+            "missing executed acceptance row {row}:\n{report}"
+        );
     }
 }
 
