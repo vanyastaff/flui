@@ -40,7 +40,7 @@ impl crate::host::Text<ViewRef> for IosTextSizing {
     fn for_window(window: &ViewRef) -> Arc<dyn crate::text::TextInput> {
         let responder = responder::TextInputView::new(window.marker, window.delivery.clone());
         window.view.addSubview(&responder);
-        Arc::new(ViewTextSizing {
+        Arc::new(WindowText {
             view: NativeOwner::new(window.view.clone(), window.marker),
             keyboard: Arc::new(Keyboard {
                 responder: NativeOwner::new(responder, window.marker),
@@ -72,20 +72,21 @@ impl Keyboard {
 
 impl flui_platform::PlatformTextInput for Keyboard {
     /// The focused field takes the keyboard (the responder becomes first
-    /// responder) or gives it back, ending a composition uncommitted.
+    /// responder) or gives it back. Either way the document starts empty and
+    /// a composition in progress ends uncommitted: what a previous field
+    /// composed never carries into this one, even with no `false` between
+    /// the two.
     fn set_ime_allowed(&self, allowed: bool) {
         let Some(responder) = self.responder() else {
             return;
         };
+        responder.reset();
         if allowed {
             if !responder.isFirstResponder() {
                 responder.becomeFirstResponder();
             }
-        } else {
-            responder.reset();
-            if responder.isFirstResponder() {
-                responder.resignFirstResponder();
-            }
+        } else if responder.isFirstResponder() {
+            responder.resignFirstResponder();
         }
     }
 
@@ -102,7 +103,7 @@ impl flui_platform::PlatformTextInput for Keyboard {
 /// One window's text: its keyboard, and its text size, with the view it is
 /// read from, the capture it handed out last, and the authority that capture
 /// stays current under.
-struct ViewTextSizing {
+struct WindowText {
     view: NativeOwner<Retained<UIView>>,
     keyboard: Arc<Keyboard>,
     captured: NativeOwner<RefCell<Option<crate::CapturedTextSizing>>>,
@@ -114,7 +115,7 @@ struct ViewTextSizing {
     signal: std::sync::Weak<OwnerSignal>,
 }
 
-impl crate::text::TextInput for ViewTextSizing {
+impl crate::text::TextInput for WindowText {
     fn window_text_input(&self) -> Option<crate::text::WindowTextInput> {
         Some(crate::text::WindowTextInput::Ime(
             Arc::clone(&self.keyboard) as _,
