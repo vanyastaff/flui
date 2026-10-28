@@ -180,6 +180,24 @@ impl UiRuntime {
         });
     }
 
+    /// Commit the composition of presentation `id`'s focused field, keeping
+    /// its text: the step an accepted close takes before its close guard and
+    /// save run, so the guard's check for unsaved changes and the saved draft
+    /// see the preedit as text (ADR-0142 item 4). A pull platform's host ends
+    /// its composition; elsewhere, or when the host abandons it, the
+    /// presentation commits in place. Nothing happens for a presentation that
+    /// is gone or has no composition.
+    ///
+    /// # Panics
+    ///
+    /// Resumes the first failure of the owner code the commit reaches (the
+    /// field's `on_changed`, the host), as
+    /// [`TextInputOwner::complete_composition`](flui_interaction::TextInputOwner::complete_composition)
+    /// does.
+    pub fn commit_composition_for_close(&self, id: PresentationId) {
+        let _ = id;
+    }
+
     /// Attach the host's control of presentation `id`'s window: from now on its
     /// elements reach it through `LifecycleContext::window`. Call before the
     /// root widget is attached, so `init_state` finds it. `false` when no
@@ -903,6 +921,60 @@ mod tests {
         );
     }
 
+    /// An accepted close commits the composition of the closing
+    /// presentation's focused field, keeping its text, before the close guard
+    /// and the save see the field (ADR-0142 item 4); asked again, or for a
+    /// presentation that is gone, it commits nothing.
+    ///
+    /// Red-check: drop the commit from `commit_composition_for_close` — the
+    /// store is still composing.
+    fn an_accepted_close_commits_the_preedit_before_the_guard() {
+        use flui_platform::text_store::{
+            Composition, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore,
+            Utf16Offset, Utf16Range,
+        };
+
+        let text_input: std::sync::Arc<dyn flui_platform::PlatformTextInput> =
+            std::sync::Arc::new(flui_native::FakeTextInput::new());
+        let mut ui_runtime = UiRuntime::for_test_with_text_input(Some(text_input));
+        let id = ui_runtime.presentation_id();
+        let gone = ui_runtime.install_second_presentation_for_test();
+        assert!(ui_runtime.close_presentation_entered(gone));
+        let store = InMemoryTextStore::new("ab");
+        let erased: Rc<dyn TextStore> = store.clone(); // the presentation holds the field's store through the erased contract.
+        let _token = ui_runtime
+            .text_input_handle()
+            .attach(flui_interaction::TextInputClient::new(Rc::clone(&erased)))
+            .expect("headless presentation supports text input");
+        let composing = Composition {
+            range: Utf16Range::new(Utf16Offset::new(2), Utf16Offset::new(4)).expect("ordered"),
+            hides_caret: false,
+        };
+        assert_eq!(
+            erased.request_lock(
+                LockGrant::read_write(move |session| {
+                    session.insert_at_selection("東京").expect("in range");
+                    session.set_composition(Some(composing)).expect("in range");
+                }),
+                LockTiming::Sync,
+            ),
+            Ok(LockOutcome::Granted)
+        );
+        assert_eq!(store.composition(), Some(composing), "precondition");
+
+        ui_runtime.commit_composition_for_close(gone);
+        assert_eq!(
+            store.composition(),
+            Some(composing),
+            "a presentation that is gone commits nothing"
+        );
+        ui_runtime.commit_composition_for_close(id);
+        assert_eq!(store.composition(), None, "the composition is committed");
+        assert_eq!(store.text(), "ab東京", "keeping its text");
+        ui_runtime.commit_composition_for_close(id);
+        assert_eq!(store.text(), "ab東京", "a second request changes nothing");
+    }
+
     #[test]
     fn presentation_lifecycle_matrix() {
         crate::table_test::run_table(
@@ -917,6 +989,10 @@ mod tests {
                     "window_execution_suspension_cancels_real_pointer_before_public_notification",
                     window_execution_suspension_cancels_real_pointer_before_public_notification
                         as fn(),
+                ),
+                (
+                    "an_accepted_close_commits_the_preedit_before_the_guard",
+                    an_accepted_close_commits_the_preedit_before_the_guard as fn(),
                 ),
             ],
         );
