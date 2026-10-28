@@ -795,6 +795,13 @@ fn router_and_widgets_app() {
             ("router::router_go_preserves_its_commit_after_an_observer_panic", crate::router::router_go_preserves_its_commit_after_an_observer_panic),
             ("router::removing_a_router_value_retires_it_after_releasing_the_stack_borrow", crate::router::removing_a_router_value_retires_it_after_releasing_the_stack_borrow),
             ("router::empty_stack_is_refused", crate::router::empty_stack_is_refused),
+            ("router::from_stack_restores_back_order", crate::router::from_stack_restores_back_order),
+            ("router::stack_reads_every_committed_edit", crate::router::stack_reads_every_committed_edit),
+            ("router::from_stack_opens_without_a_transition", crate::router::from_stack_opens_without_a_transition),
+            ("router::stack_leaves_out_popups", crate::router::stack_leaves_out_popups),
+            ("router::debug_prints_the_whole_stack", crate::router::debug_prints_the_whole_stack),
+            ("router::a_route_clone_may_drive_its_router", crate::router::a_route_clone_may_drive_its_router),
+            ("router::a_route_eq_may_drive_its_router_during_go", crate::router::a_route_eq_may_drive_its_router_during_go),
             ("widgets_app::builder_only_app_receives_no_routing_and_supplies_the_subtree", crate::widgets_app::builder_only_app_receives_no_routing_and_supplies_the_subtree),
             ("widgets_app::home_is_seeded_once_as_the_root_route", crate::widgets_app::home_is_seeded_once_as_the_root_route),
             ("widgets_app::observers_attach_at_mount_and_see_the_home_route", crate::widgets_app::observers_attach_at_mount_and_see_the_home_route),
@@ -803,22 +810,6 @@ fn router_and_widgets_app() {
             ("widgets_app_router::widgets_app_router_navigates_by_handle_and_the_url_follows", crate::widgets_app_router::widgets_app_router_navigates_by_handle_and_the_url_follows),
         ],
     );
-}
-
-/// A router reopened on a saved stack keeps its Back order. Joins
-/// `router_and_widgets_app` once `Router::from_stack` places the whole stack.
-#[test]
-#[ignore = "contract: Router::from_stack places every saved route"]
-fn from_stack_restores_back_order() {
-    crate::router::from_stack_restores_back_order();
-}
-
-/// `RouterHandle::stack` reads the whole stack. Joins
-/// `router_and_widgets_app` once it does.
-#[test]
-#[ignore = "contract: RouterHandle::stack reads every page on the stack"]
-fn stack_reads_every_committed_edit() {
-    crate::router::stack_reads_every_committed_edit();
 }
 
 /// An adopted page-transition builder may reach its navigator; each row runs
