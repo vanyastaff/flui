@@ -60,6 +60,10 @@ mod cases {
             a_surface_target_keeps_its_view_and_releases_it_on_main,
         ),
         (
+            "a_closed_window_frees_its_view",
+            a_closed_window_frees_its_view,
+        ),
+        (
             "each_display_is_named_as_appkit_names_its_screen",
             each_display_is_named_as_appkit_names_its_screen,
         ),
@@ -349,6 +353,42 @@ mod cases {
             count(&view),
             held - 1,
             "the main queue gave back the target's reference"
+        );
+    }
+
+    /// A window that closed and dropped, with no surface target left, takes
+    /// its FLUI view with it once AppKit has run a turn.
+    #[expect(unsafe_code, reason = "the view behind the window's raw handle")]
+    fn a_closed_window_frees_its_view() {
+        use objc2::rc::{Weak, autoreleasepool};
+        use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+
+        let (view, window) = autoreleasepool(|_| {
+            let fixture = open("a closed window frees its view");
+            let target = fixture.window.surface_target();
+            let handle = target.window_handle().expect("an open window's handle");
+            let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+                panic!("an AppKit window hands out an AppKit handle");
+            };
+            // SAFETY: the handle names the window's FLUI view, which the
+            // open window holds; retained on the main thread the cases run
+            // on, only to make the weak reference.
+            let view = unsafe { Retained::retain(handle.ns_view.as_ptr().cast::<NSView>()) }
+                .expect("the handle names a view");
+            let views = (
+                Weak::from_retained(&view),
+                Weak::from_retained(&fixture.ns_window),
+            );
+            drop(target);
+            // Dropping the fixture closes the window and drops it.
+            drop(fixture);
+            views
+        });
+        autoreleasepool(|_| appkit::run_for(Duration::from_millis(500)));
+        assert!(window.load().is_none(), "the closed NSWindow was freed");
+        assert!(
+            view.load().is_none(),
+            "the closed window's FLUI view outlived it"
         );
     }
 
