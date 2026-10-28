@@ -1150,6 +1150,27 @@ trait depends on `flui-platform` instead.
   itself at its `done`). The display watch, on its own connection, reads at
   most the outputs the loop binds. No `wl_data_device` is bound yet, so no
   data offer arrives.
+- **Work per peer event is bounded.** What a compositor's or an X server's
+  event costs is a constant, or linear in that event's own bytes; never in
+  data the peer sent before (a keymap's size, a list's length), so a burst of
+  small events cannot cost a burst of large reads. Where an event needs such
+  data, it is read once when the data arrives and looked up after, or read at
+  most twice a loop turn. The handlers:
+  - a Wayland group change names its layout from the names read once from the
+    keymap's text when the keymap was taken (`KeymapSource::Compositor`'s
+    `layouts`); a keymap is read and compiled once per seat per delivery, its
+    file at most 8 MiB (`a_layout_switch_reads_no_keymap`);
+  - an X11 hierarchy or device change and an XKB keyboard or map change read
+    the device list or the keymap at their turn's first notice and once more
+    at its end (`RereadPerTurn`, `a_turn_of_notices_reads_the_server_at_most_twice`);
+    a notice in between removes only what it names itself; an XKB state change
+    names the layout from the names read with the keymap;
+  - the scans an event makes run over the bounded collections above: held keys
+    (128), a device's touches (32) and a touch frame's steps (256), a tablet
+    frame's buttons (32), the seats (16), outputs (64), the X11 devices (128)
+    and valuators (36), and the registry's contacts and devices, which those
+    bound; a window lookup scans the application's own windows;
+  - an X11 event's valuator mask is read in the event's own length.
 
 ---
 

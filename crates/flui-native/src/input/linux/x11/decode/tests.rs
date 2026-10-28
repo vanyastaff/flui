@@ -6,8 +6,8 @@ use flui_platform::pointer::{
 };
 
 use super::{
-    Axis, AxisLabel, DeviceDescription, DeviceRole, ScrollAxis, X11Pointers, XiAction, XiEvent,
-    XiMaster, XiSlave, XiTime, button, role, valuators,
+    Axis, AxisLabel, DeviceDescription, DeviceRole, RereadPerTurn, ScrollAxis, X11Pointers,
+    XiAction, XiEvent, XiMaster, XiSlave, XiTime, button, role, valuators,
 };
 use crate::input::assembly::{NativeCancel, NativeClock, NativeSurface};
 
@@ -686,6 +686,19 @@ fn a_valuator_mask_past_its_numbers_is_skipped() {
     mask[2048] = 1;
     assert_eq!(valuators(&mask, &[1.0, 2.0]), [(0, 1.0)]);
     assert_eq!(valuators(&[0b11], &[1.0]), [(0, 1.0)]);
+}
+
+#[test]
+/// A server sending notice after notice in one turn has its state read at
+/// most twice: at the first notice and at the turn's end; the next turn reads
+/// at its first notice again.
+fn a_turn_of_notices_reads_the_server_at_most_twice() {
+    let reads = RereadPerTurn::default();
+    let mut made = (0..10_000).filter(|_| reads.ask()).count();
+    made += usize::from(reads.end_turn());
+    assert_eq!(made, 2, "reads made in a turn");
+    assert!(reads.ask(), "the next turn's first notice reads at once");
+    assert!(!reads.end_turn(), "a turn of one notice reads once");
 }
 
 #[test]

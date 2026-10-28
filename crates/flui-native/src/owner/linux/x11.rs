@@ -248,6 +248,10 @@ pub(crate) trait LoopInput: Send + Sync {
 
     /// [`Platform::on_keyboard_layout_change`].
     fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut() + Send>);
+
+    /// The turn's events are handed over: what the server's notices asked
+    /// to read again and was put off is read now.
+    fn end_turn(&self);
 }
 
 /// What the input delivers to one window by: the window, its delivery and
@@ -494,7 +498,10 @@ impl X11Loop {
                 Some(event) => event,
                 None => match self.connection.xcb().poll_for_event() {
                     Ok(Some(event)) => event,
-                    Ok(None) => return Ok(()),
+                    Ok(None) => {
+                        self.input.end_turn();
+                        return Ok(());
+                    }
                     Err(error) => {
                         return Err(PlatformError::EventLoop {
                             message: format!("the X server connection failed: {error}"),

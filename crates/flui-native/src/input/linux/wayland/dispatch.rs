@@ -440,14 +440,7 @@ impl SeatInput {
             last_input,
         });
         shared.delivering.with(|delivering| {
-            *delivering = Some(Delivering {
-                assembly: SeatAssembly::new(clock),
-                keymaps: Vec::new(),
-                keyboards: Keyboards::default(),
-                layout: String::new(),
-                layout_changed: false,
-                capabilities: availability::wayland(WaylandInputGlobals::default()),
-            });
+            *delivering = Some(Delivering::new(clock));
         });
         Self { shared }
     }
@@ -666,6 +659,18 @@ enum Target {
 }
 
 impl Delivering {
+    /// Nothing delivered yet, readings stamped on `clock`.
+    fn new(clock: NativeClock) -> Self {
+        Self {
+            assembly: SeatAssembly::new(clock),
+            keymaps: Vec::new(),
+            keyboards: Keyboards::default(),
+            layout: String::new(),
+            layout_changed: false,
+            capabilities: availability::wayland(WaylandInputGlobals::default()),
+        }
+    }
+
     fn keymap(&self, seat: SeatKey) -> Option<&SeatKeymap> {
         self.keymaps
             .iter()
@@ -708,6 +713,12 @@ impl Delivering {
                 self.keyboards.stop(seat);
                 // A new keymap for a keyboard that has one is read into it:
                 // the keys it holds stay held, and compose starts over.
+                // Said once, when the keymap is taken, rather than at each
+                // group change.
+                if source.layout_name(0).is_none() {
+                    let head = source.head(400);
+                    tracing::info!(?seat, %head, "the compositor's keymap names no layout");
+                }
                 let read = match self.keymap_mut(seat) {
                     Some(held) => {
                         let read = held.keyboard.reload(&source);
@@ -844,13 +855,8 @@ impl Delivering {
         let layout = self
             .keymap(seat)
             .and_then(|keymap| keymap.source.layout_name(keymap.keyboard.layout()))
+            .map(str::to_owned)
             .unwrap_or_default();
-        if layout.is_empty()
-            && let Some(keymap) = self.keymap(seat)
-        {
-            let head = keymap.source.head(400);
-            tracing::info!(?seat, %head, "the compositor's keymap names no layout");
-        }
         if layout != self.layout {
             self.layout = layout;
             self.layout_changed = true;
@@ -2362,7 +2368,8 @@ impl Dispatch<WpCursorShapeDeviceV1, ()> for WaylandState {
 mod tests {
     use std::os::fd::OwnedFd;
 
-    use super::{SeatKey, Wire, queue, read_keymap};
+    use super::{Delivering, NativeClock, SeatKey, Wire, arrival, queue, read_keymap};
+    use crate::input::linux::xkb::GROUP_NAME_READS;
 
     /// The descriptors the process holds open.
     fn open_descriptors() -> usize {
@@ -2410,5 +2417,69 @@ mod tests {
         };
         let source = read_keymap(fd, size).expect("the queued keymap reads");
         assert!(format!("{source:?}").contains("xkb_keymap"), "{source:?}");
+    }
+
+    /// A keymap of two named layouts, padded with a comment to nearly the
+    /// largest a host reads.
+    fn wide_keymap() -> Vec<u8> {
+        let mut text = String::from(
+            "xkb_keymap {\n\
+             xkb_keycodes \"flui\" { minimum = 8; maximum = 255; <AE01> = 10; };\n\
+             xkb_types \"flui\" { type \"ONE_LEVEL\" { modifiers = none; \
+             level_name[Level1] = \"Any\"; }; };\n\
+             xkb_compatibility \"flui\" { };\n\
+             xkb_symbols \"flui\" {\n\
+             name[Group1] = \"First\"; name[Group2] = \"Second\";\n\
+             key <AE01> { type = \"ONE_LEVEL\", symbols[Group1] = [ 1 ], \
+             symbols[Group2] = [ 2 ] };\n\
+             };\n};\n// ",
+        );
+        let padding = crate::input::linux::xkb::KEYMAP_LIMIT - text.len() - 2;
+        text.extend(std::iter::repeat_n('x', padding));
+        text.push('\n');
+        let mut bytes = text.into_bytes();
+        bytes.push(0);
+        bytes
+    }
+
+    /// A compositor switching layouts without end has each switch named by a
+    /// lookup: an 8 MiB keymap's layouts are read once, however many group
+    /// changes follow.
+    #[test]
+    fn a_layout_switch_reads_no_keymap() {
+        if xkbcommon_dl::xkbcommon_option().is_none() {
+            eprintln!("skipped: libxkbcommon is not installed");
+            return;
+        }
+        let bytes = wide_keymap();
+        let path = std::env::temp_dir().join(format!("flui-wide-keymap-{}", std::process::id()));
+        std::fs::write(&path, &bytes).expect("the keymap is written");
+        let fd = OwnedFd::from(std::fs::File::open(&path).expect("the keymap opens"));
+        std::fs::remove_file(&path).expect("the keymap is removed");
+        GROUP_NAME_READS.with(|reads| reads.set(0));
+        let mut delivering = Delivering::new(NativeClock::epoch_only());
+        let seat = SeatKey(1);
+        let size = u32::try_from(bytes.len()).expect("within the limit");
+        let _ = delivering.keyboard_wire(Wire::Keymap { seat, fd, size });
+        assert_eq!(delivering.layout, "First");
+        for change in 0..10_000_u32 {
+            let _ = delivering.keyboard_wire(Wire::Modifiers {
+                seat,
+                depressed: 0,
+                latched: 0,
+                locked: 0,
+                group: change % 2,
+                time: arrival(None),
+            });
+        }
+        assert_eq!(
+            delivering.layout, "Second",
+            "the last change names its layout"
+        );
+        assert_eq!(
+            GROUP_NAME_READS.with(std::cell::Cell::get),
+            1,
+            "keymap texts read for names"
+        );
     }
 }

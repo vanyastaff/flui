@@ -1080,6 +1080,39 @@ pub mod decode {
         }
     }
 
+    /// A read of the server's state that one of its notices asks for (the
+    /// device list after a hierarchy change, the keymap after a keyboard
+    /// change), made at most twice a loop turn however many notices the
+    /// server sends: the first notice of a turn reads at once, so its own
+    /// later events find what it changed, and the rest are answered by one
+    /// read when the turn's events are done.
+    #[derive(Debug, Default)]
+    pub struct RereadPerTurn {
+        read: std::sync::atomic::AtomicBool,
+        stale: std::sync::atomic::AtomicBool,
+    }
+
+    impl RereadPerTurn {
+        /// A notice asks for the read: `true` when it is to be made now.
+        pub fn ask(&self) -> bool {
+            use std::sync::atomic::Ordering;
+            if self.read.swap(true, Ordering::AcqRel) {
+                self.stale.store(true, Ordering::Release);
+                false
+            } else {
+                true
+            }
+        }
+
+        /// The turn's events are done: `true` when a later notice still
+        /// asks for the read.
+        pub fn end_turn(&self) -> bool {
+            use std::sync::atomic::Ordering;
+            self.read.store(false, Ordering::Release);
+            self.stale.swap(false, Ordering::AcqRel)
+        }
+    }
+
     /// The valuators an event's mask names, in order, paired with its values:
     /// the number of each set bit. A bit past the numbers a valuator has (16
     /// bits) and a value the mask names but the event lacks are left out.
@@ -1134,8 +1167,8 @@ mod live {
     };
 
     use super::decode::{
-        Axis, AxisLabel, DeviceChanges, DeviceDescription, ScrollAxis, X11Pointers, XiAction,
-        XiEvent, XiMaster, XiSlave, XiTime, valuators,
+        Axis, AxisLabel, DeviceChanges, DeviceDescription, RereadPerTurn, ScrollAxis, X11Pointers,
+        XiAction, XiEvent, XiMaster, XiSlave, XiTime, valuators,
     };
     use crate::input::assembly::{NativeCancel, NativeClock, NativeSurface};
     use crate::input::availability;
@@ -1216,6 +1249,10 @@ mod live {
         /// The name of the layout the keyboard is in.
         layout: Mutex<String>,
         layout_listeners: Mutex<Vec<Box<dyn FnMut() + Send>>>,
+        /// The device list, read again after a hierarchy or device change.
+        device_reads: RereadPerTurn,
+        /// The keymap, read again after the keyboard changed.
+        keymap_reads: RereadPerTurn,
     }
 
     impl std::fmt::Debug for X11Input {
@@ -1450,6 +1487,8 @@ mod live {
                 state: OwnerSlot::new(),
                 layout: Mutex::new(layout),
                 layout_listeners: Mutex::new(Vec::new()),
+                device_reads: RereadPerTurn::default(),
+                keymap_reads: RereadPerTurn::default(),
             });
             let state = State {
                 pointers: X11Pointers::new(clock),
@@ -1575,7 +1614,9 @@ mod live {
             removed_slaves: &[XiSlave],
             removed_masters: &[XiMaster],
         ) -> Vec<(Arc<WindowDelivery>, Delivery)> {
-            let devices = self.devices();
+            // The list is read at most twice a turn; a notice past that
+            // removes what it names, and the turn's end reads the list.
+            let devices = self.device_reads.ask().then(|| self.devices());
             let time = EventTime::from_nanos(event_timestamp_ns());
             let capabilities = self.capabilities_now();
             self.with_state(|state| {
@@ -1583,7 +1624,9 @@ mod live {
                     state
                         .pointers
                         .removed(removed_slaves, removed_masters, time);
-                changes.extend(state.pointers.devices(&devices, time));
+                if let Some(devices) = &devices {
+                    changes.extend(state.pointers.devices(devices, time));
+                }
                 let present = capabilities.with_present(state.pointers.present());
                 let mut out = Vec::new();
                 for (surface, input) in changes {
@@ -1716,6 +1759,15 @@ mod live {
                 )
             })
             .unwrap_or(false)
+        }
+
+        /// Read the keymap again and tell the listeners if the layout's name
+        /// moved.
+        fn reread_keymap(&self) {
+            self.keymap_changed();
+            if self.read_layout() {
+                self.layout_changed();
+            }
         }
 
         /// The server's keymap changed: read it again, with its layouts'
@@ -1963,9 +2015,9 @@ mod live {
                     Vec::new()
                 }
                 Event::XkbNewKeyboardNotify(_) | Event::XkbMapNotify(_) => {
-                    self.keymap_changed();
-                    if self.read_layout() {
-                        self.layout_changed();
+                    // Read at most twice a turn: the rest at the turn's end.
+                    if self.keymap_reads.ask() {
+                        self.reread_keymap();
                     }
                     Vec::new()
                 }
@@ -2045,6 +2097,18 @@ mod live {
 
         fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut() + Send>) {
             self.layout_listeners.lock().push(callback);
+        }
+
+        fn end_turn(&self) {
+            if self.device_reads.end_turn() {
+                deliver(self.read_devices(&[], &[]));
+                // That read is this turn's last; the next turn's first
+                // notice reads at once again.
+                let _ = self.device_reads.end_turn();
+            }
+            if self.keymap_reads.end_turn() {
+                self.reread_keymap();
+            }
         }
     }
 
