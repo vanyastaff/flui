@@ -3761,6 +3761,33 @@ graph LR
   с не тем размером, и цикл падает. Проверки: WSL под Weston nextest `flui-native` по умолчанию
   и `--all-features`, clippy четырёх вариантов, Windows clippy рабочего пространства, `checks`,
   nextest `xtask`.
+- [x] **LY70** — доступность iOS. **Код.** `accessibility/apple/ios.rs`: `IosAccessibility` держит
+  низкоуровневый `accesskit_ios::Adapter` в `NativeOwner` (вызовы только с главного потока, он же
+  поток владельца), с обработчиками активации, деактивации (UIKit, в отличие от NSAccessibility,
+  сообщает о выключении VoiceOver) и действий поверх общего `BridgeShared`; каждый обработчик —
+  вызов `os_entry`. `FluiView` — собственный класс FLUI, поэтому подклассы не подменяются:
+  `isAccessibilityElement`, `accessibilityElements` и `accessibilityHitTest:` переадресуются
+  адаптеру через `ViewAccessibility` (ячейка в ivars вида, её же несёт `ViewRef`, мост заполняет её
+  при открытии окна); пока ячейка пуста, отвечает `UIView`. `didMoveToWindow` зовёт
+  `view_did_appear`. Окно отцепляет мост при закрытии (`detach` забирает адаптер). Две версии objc2
+  встречаются только через сырые указатели: вид входит как `*mut c_void`, элементы и попадание
+  возвращаются autoreleased-указателями, точка — двумя координатами. Таблица iOS называет
+  `IosAccessibility` вместо `Absent<Accessibility>`. Зависимость `accesskit_ios` 0.2.2 поднимает
+  `accesskit` до 0.25.2 и `accesskit_consumer` до 0.39.2; пересчёт lock-файла сдвинул крейты с
+  широким диапазоном `windows-sys` к 0.61.2 (новых пакетов, кроме `accesskit_ios`, нет).
+  Идентификатор ADR-0240 доходит до `author_id` (правило проверяется на Linux,
+  `crates/flui-semantics/tests/identifier.rs`), а `accesskit_ios` отдаёт `author_id` как
+  `accessibilityIdentifier`. **Прогон** (2026-10-28, MacBook Air M1, macOS 27.0, Simulator iPhone
+  Duo / iOS 27.1): проба `flui create` со счётчиком, у `RawButton` — `identifier("increment")`;
+  XCUITest-клиент прочитал дерево `StaticText 'Count 0'` и `Button identifier: 'increment', label:
+  'Increment'`, рамка `{{159.5, 334.0}, {62.9, 16.8}}`, нажал кнопку дважды через её рамку
+  доступности и прочитал `Count 2` (снимок экрана симулятора показывает то же). С таблицей iOS,
+  возвращённой к `Absent<Accessibility>`, тот же
+  клиент видит только пустые контейнеры, и проверка падает. Не проверено: сеанс VoiceOver
+  (Accessibility Inspector запускается, но выбрать в нём цель-симулятор
+  средствами удалённого управления не удалось), действие AccessKit (нажатие XCUITest — касание,
+  а не `accessibilityActivate`), объявления. Проверки: clippy `-D warnings` для
+  `aarch64-apple-ios` (native, app) и macOS, `panic-boundary`.
 
 ## Отступление от порядка, решённое владельцем
 
