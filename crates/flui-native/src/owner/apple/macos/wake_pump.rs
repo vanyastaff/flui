@@ -303,7 +303,7 @@ impl Drop for StopUnlessFinished<'_> {
     }
 }
 
-/// Type-erased weak handle a window stores (see `MacOSWindow::install_wake_pump`).
+/// Weak handle a window's redraw requester stores (see `MacOSWindow::install_wake_pump`).
 pub(crate) type WeakWakePump = Weak<WakePump>;
 
 /// What a consult says the pump should do next.

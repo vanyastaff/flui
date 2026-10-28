@@ -649,7 +649,7 @@ mod tests {
                 .expect("window")
         };
         let (first, second) = (open("flui haptics a"), open("flui haptics b"));
-        let win32 = |window: &Arc<dyn crate::host_window::HostWindow>| {
+        let win32 = |window: &std::rc::Rc<dyn crate::host_window::HostWindow>| {
             let window = window
                 .as_any()
                 .downcast_ref::<WindowsWindow>()

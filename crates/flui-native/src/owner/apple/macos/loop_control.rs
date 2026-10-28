@@ -376,7 +376,7 @@ impl LoopControl {
             self.quit();
             return;
         }
-        if !self.windows.lock().is_empty() {
+        if !self.windows.is_empty() {
             return;
         }
         // The handler may open a window, request another turn, or quit: it is
@@ -390,7 +390,7 @@ impl LoopControl {
                 return;
             }
         };
-        if allowed && self.state.lock().phase == Phase::Running && self.windows.lock().is_empty() {
+        if allowed && self.state.lock().phase == Phase::Running && self.windows.is_empty() {
             self.quit();
         }
     }
@@ -425,7 +425,7 @@ impl LoopControl {
         }
         self.owner_signal.close();
         // No queued cleanup: these resources must be released while main is alive.
-        let windows: Vec<_> = self.windows.lock().values().cloned().collect();
+        let windows = self.windows.values();
         for window in &windows {
             cleanup_step(|| window.delivery().clear());
         }
@@ -440,7 +440,12 @@ impl LoopControl {
                 }
             });
         }
-        let remaining = std::mem::take(&mut *self.windows.lock());
+        let remaining: Vec<_> = self
+            .windows
+            .keys()
+            .into_iter()
+            .filter_map(|key| self.windows.remove(&key))
+            .collect();
         cleanup_step(|| drop(remaining));
         cleanup_step(|| drop(windows));
         self.app
@@ -619,14 +624,16 @@ impl Drop for LoopOwnership {
 mod tests {
     use super::*;
     use crate::owner::app_delivery::testing::{AppCall, AppLog, bind};
-    use std::collections::HashMap;
 
     /// An explicit quit fences a reopen already accepted: the handler never
     /// hears it, and no window is admitted after.
     #[test]
     fn reopen_explicit_quit_fences_delivery_and_window_admission() {
         let app = Arc::new(AppDelivery::new());
-        let control = LoopControl::new(Arc::new(Mutex::new(HashMap::new())), Arc::clone(&app));
+        let control = LoopControl::new(
+            Arc::new(crate::owner::slot::OwnerMap::new()),
+            Arc::clone(&app),
+        );
         let handler = AppLog::new();
         let _run = bind(app, handler.clone());
         control.request_reopen();

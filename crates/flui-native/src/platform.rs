@@ -250,7 +250,7 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
         &self,
         options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
-    ) -> Result<Arc<dyn HostWindow>, OpenWindowError>;
+    ) -> Result<Rc<dyn HostWindow>, OpenWindowError>;
 
     /// Get the currently active (focused) window ID
     fn active_window(&self) -> Option<WindowId>;
@@ -575,7 +575,7 @@ impl<H: Host> Platform for HostPlatform<H> {
         &self,
         options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
-    ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
+    ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
         let window = H::Window::open(&self.owner, &self.window_shared, options, handler)?;
         // Every lock the open took is released: the handler hears its
         // window's capabilities now, before anything later.

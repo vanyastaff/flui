@@ -645,7 +645,7 @@ mod native_windows {
         let hwnd = hwnd_of(&window);
         let rescaled = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&rescaled);
-        let weak = Arc::downgrade(&window);
+        let weak = Rc::downgrade(&window);
         let scale = std::cell::Cell::new(
             window
                 .state()
@@ -699,7 +699,7 @@ mod native_windows {
         let hwnd = hwnd_of(&window);
         let moved = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&moved);
-        let weak = Arc::downgrade(&window);
+        let weak = Rc::downgrade(&window);
         let display = std::cell::Cell::new(window.state().display);
         window.handler.react_to_state_change(move || {
             let Some(window) = weak.upgrade() else {
@@ -879,7 +879,7 @@ mod native_windows {
         .expect("create actual shown Win32 window")
     }
 
-    struct ClosePointerTarget(Arc<dyn HostWindow>);
+    struct ClosePointerTarget(Rc<dyn HostWindow>);
 
     impl Drop for ClosePointerTarget {
         fn drop(&mut self) {
@@ -896,7 +896,7 @@ mod native_windows {
             GetForegroundWindow, HWND_TOPMOST, SetForegroundWindow,
         };
         let window = open_shown(platform);
-        let close = ClosePointerTarget(Arc::clone(&window));
+        let close = ClosePointerTarget(Rc::clone(&window));
         // SAFETY: the fixture's exact live owner-thread HWND. It is destroyed
         // by the RAII owner on success, early refusal, or assertion unwind;
         // no pre-existing host window's z-order or style is changed.
@@ -962,7 +962,7 @@ mod native_windows {
                     .expect("native owner wake registration");
                 let callback_state = Arc::clone(&state);
                 let callback_proxy = owner.proxy();
-                let weak = Arc::downgrade(&window);
+                let weak = Rc::downgrade(&window);
                 window.handler.react_to_frame(move |_| {
                     let count = {
                         let mut state = callback_state.lock().expect("readmission state");
@@ -1166,7 +1166,7 @@ mod native_windows {
         drop(failure);
         let platform = WindowsPlatform::new().expect("independent native owner after failed query");
         let window = open(&platform, true);
-        let weak = Arc::downgrade(&window);
+        let weak = Rc::downgrade(&window);
         window.close_now();
         drop(window);
         assert!(
@@ -1287,9 +1287,9 @@ mod native_windows {
                             .with_visible(true)
                             .with_size(Size::new(160.0, 120.0)),
                     );
-                    windows.push(Arc::clone(&window));
+                    windows.push(Rc::clone(&window));
                     if index == 0 {
-                        first = Some(Arc::downgrade(&window));
+                        first = Some(Rc::downgrade(&window));
                         let closed = Arc::clone(&first_closed);
                         window.handler.react_to_close(move || {
                             closed.fetch_add(1, Ordering::SeqCst);
@@ -1301,7 +1301,7 @@ mod native_windows {
                     let callback_proxy = proxy.clone();
                     let callback_early = Arc::clone(&early);
                     let callback_armed = Arc::clone(&armed);
-                    let weak = Arc::downgrade(&window);
+                    let weak = Rc::downgrade(&window);
                     window.handler.react_to_frame(move |_| {
                         let now = web_time::Instant::now();
                         let count = {
@@ -1329,7 +1329,13 @@ mod native_windows {
                         }
                     });
                 }
-                let first = first.expect("first native window");
+                // The hook is `Send`, the window is not: the hook reaches the
+                // first window through the owner thread it runs on.
+                thread_local! {
+                    static FIRST: RefCell<Option<std::rc::Weak<dyn HostWindow>>> =
+                        const { RefCell::new(None) };
+                }
+                FIRST.set(Some(first.expect("first native window")));
                 for window in &windows {
                     let hwnd = hwnd_of(window);
                     // SAFETY: the live wrapper owns this HWND on its creating
@@ -1344,7 +1350,11 @@ mod native_windows {
                 log.answer_deadline_with(move || {
                     let first_query = queried.fetch_add(1, Ordering::SeqCst) == 0;
                     if mode == "close" && first_query {
-                        first.upgrade().expect("live first window").close_now();
+                        FIRST
+                            .take()
+                            .and_then(|first| first.upgrade())
+                            .expect("the hook runs on the owner thread, with the first window live")
+                            .close_now();
                         hook_deadlines.lock().expect("deadline state")[0] = None;
                     }
                     hook_deadlines
@@ -1479,7 +1489,7 @@ mod native_windows {
     fn system_keyboard_close(mode: &'static str) {
         let platform = Arc::new(WindowsPlatform::new().expect("native Windows platform"));
         let window = open_shown(&platform);
-        let original_weak = Arc::downgrade(&window);
+        let original_weak = Rc::downgrade(&window);
         let replacement = Rc::new(RefCell::new(None::<Opened>));
         let replacement_closes = Arc::new(AtomicUsize::new(0));
         let hwnd = hwnd_of(&window);
@@ -1499,7 +1509,7 @@ mod native_windows {
         }
         if mode != "unhandled" {
             let input_observations = Arc::clone(&input_count);
-            let weak = Arc::downgrade(&window);
+            let weak = Rc::downgrade(&window);
             let raw_hwnd = hwnd.0 as isize;
             let callback_platform = Arc::downgrade(&platform);
             let callback_replacement = Rc::clone(&replacement);
@@ -1589,7 +1599,8 @@ mod native_windows {
         let replacement = replacement.borrow_mut().take();
         if let Some(replacement) = replacement {
             assert!(
-                flui_platform::PlatformWindow::window_handle(replacement.as_ref()).is_ok(),
+                raw_window_handle::HasWindowHandle::window_handle(&*replacement.surface_target())
+                    .is_ok(),
                 "replacement remains natively live"
             );
             replacement.close_now();
@@ -1618,7 +1629,7 @@ mod native_windows {
             "{mode}: closed window retained by registry"
         );
         let next = open(&platform, true);
-        let next_weak = Arc::downgrade(&next);
+        let next_weak = Rc::downgrade(&next);
         next.close_now();
         drop(next);
         assert!(
@@ -2320,7 +2331,7 @@ mod native_windows {
     fn native_close_retires_final_registry_owner() {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open(&platform, true);
-        let weak = Arc::downgrade(&window);
+        let weak = Rc::downgrade(&window);
         let hwnd = hwnd_of(&window);
         drop(window);
         assert!(
@@ -2339,7 +2350,7 @@ mod native_windows {
             "native close retained the final registry owner"
         );
         let next = open(&platform, true);
-        let next_weak = Arc::downgrade(&next);
+        let next_weak = Rc::downgrade(&next);
         next.close_now();
         drop(next);
         assert!(
@@ -2356,7 +2367,7 @@ mod native_windows {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open(&platform, true);
         let hwnd = hwnd_of(&window);
-        let weak = Arc::downgrade(&window);
+        let weak = Rc::downgrade(&window);
         let observations = Arc::new(Mutex::new(Vec::new()));
         let callback_observations = Arc::clone(&observations);
         window.handler.react_to_state_change(move || {
@@ -2458,7 +2469,7 @@ mod native_windows {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         for _ in 0..2 {
             let window = open(&platform, true);
-            let weak = Arc::downgrade(&window);
+            let weak = Rc::downgrade(&window);
             window.close_now();
             drop(window);
             assert!(
@@ -2586,7 +2597,7 @@ mod native_windows {
                 traced_before_release: replacement_release.clone(),
             }),
         };
-        let weak = Arc::downgrade(&window);
+        let weak = Rc::downgrade(&window);
         window.handler.react_to_state_change(move || {
             let _owned = (&surface, &install);
             if let Some(window) = weak.upgrade() {
@@ -2633,15 +2644,15 @@ mod native_windows {
     fn close_callback_releases_external_owner() {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open(&platform, true);
-        let weak = Arc::downgrade(&window);
-        let owner = Arc::new(Mutex::new(Some(Arc::clone(&window))));
-        let callback_owner = Arc::clone(&owner);
+        let weak = Rc::downgrade(&window);
+        let owner = Rc::new(RefCell::new(Some(Rc::clone(&window))));
+        let callback_owner = Rc::clone(&owner);
         window.handler.react_to_close(move || {
-            drop(callback_owner.lock().expect("owner slot").take());
+            drop(callback_owner.borrow_mut().take());
         });
         drop(window);
         weak.upgrade().expect("tracked window").close_now();
-        assert!(owner.lock().expect("owner slot").is_none());
+        assert!(owner.borrow().is_none());
         assert!(
             weak.upgrade().is_none(),
             "callback-released window remains tracked"
@@ -2745,7 +2756,7 @@ mod native_windows {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open(&platform, false);
         let hwnd = hwnd_of(&window);
-        let weak = Arc::downgrade(&window);
+        let weak = Rc::downgrade(&window);
         let observations = Arc::new(Mutex::new(Vec::new()));
         let callback_observations = Arc::clone(&observations);
         window.handler.react_to_state_change(move || {
@@ -2824,7 +2835,7 @@ mod native_windows {
     fn resize_callback_observes_current_client_bounds() {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open(&platform, true);
-        let weak = Arc::downgrade(&window);
+        let weak = Rc::downgrade(&window);
         let observations = Arc::new(Mutex::new(Vec::new()));
         let callback_observations = Arc::clone(&observations);
         window.handler.react_to_state_change(move || {
@@ -2886,7 +2897,7 @@ mod native_windows {
     const MK_RBUTTON: usize = 0x0002;
     const MK_SHIFT: usize = 0x0004;
 
-    fn hwnd_of(window: &Arc<dyn HostWindow>) -> HWND {
+    fn hwnd_of(window: &Rc<dyn HostWindow>) -> HWND {
         crate::win32_handle(window.as_ref())
     }
 
@@ -4421,7 +4432,7 @@ mod native_windows {
         }
         let hovers = Arc::new(Mutex::new(Vec::new()));
         let observed = Arc::clone(&hovers);
-        let weak = Arc::downgrade(&window);
+        let weak = Rc::downgrade(&window);
         let hovered = std::cell::Cell::new(window.state().hovered);
         window.handler.react_to_state_change(move || {
             let Some(window) = weak.upgrade() else {
@@ -5021,7 +5032,7 @@ mod native_windows {
             .expect("Win32 message loop");
     }
 
-    fn open_owned(owner: &OwnerPlatform) -> Arc<dyn HostWindow> {
+    fn open_owned(owner: &OwnerPlatform) -> Rc<dyn HostWindow> {
         owner
             .open_window(
                 WindowOptions::default()
@@ -5040,7 +5051,7 @@ mod native_windows {
         unsafe_code,
         reason = "posting a native close to an owned Win32 window"
     )]
-    fn post_close(window: &Arc<dyn HostWindow>) {
+    fn post_close(window: &Rc<dyn HostWindow>) {
         let hwnd = hwnd_of(window);
         // SAFETY: the platform still tracks this live HWND; WM_CLOSE carries
         // no message data and the post dereferences no caller memory.
@@ -5250,8 +5261,9 @@ mod native_appkit {
         let platform = flui_native::current_platform().expect("AppKit platform");
         let window = crate::Opened::on(&*platform, WindowOptions::default().with_visible(false))
             .expect("AppKit window");
+        let target = window.surface_target();
         let RawWindowHandle::AppKit(handle) =
-            window.window_handle().expect("live window handle").as_raw()
+            target.window_handle().expect("live window handle").as_raw()
         else {
             panic!("an AppKit window handle");
         };

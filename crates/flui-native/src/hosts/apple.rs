@@ -55,8 +55,6 @@ use crate::text::apple::macos::{MacOSTextInput, TextView};
 use crate::window::apple::ios::{IOSSystemChrome, IOSWindow, IOSWindows};
 #[cfg(target_os = "macos")]
 use crate::window::apple::macos::{MacOSWindow, MacOSWindows};
-#[cfg(target_os = "macos")]
-use crate::window::config::WindowConfiguration;
 
 /// The Apple host's table.
 #[derive(Debug)]
@@ -228,11 +226,8 @@ impl HostPlatform<Apple> {
     /// Create a new macOS platform.
     pub fn new() -> Result<Self, PlatformError> {
         // The loop keeps the open windows itself; what they share is the
-        // configuration they open with.
-        Self::try_from_parts(
-            |positions| MacOSWindows::new(WindowConfiguration::default(), positions),
-            |_| MacOSLoop::new::<Apple>(),
-        )
+        // table's window-level positions.
+        Self::try_from_parts(MacOSWindows::new, |_| MacOSLoop::new::<Apple>())
     }
 }
 

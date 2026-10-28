@@ -261,6 +261,16 @@ impl PlatformWindow for HeadlessWindow {
 
     fn request_redraw(&self) {}
 
+    /// Nothing to ask: the host runs a frame when its test pumps one.
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        Arc::new(|| {})
+    }
+
+    /// No native window: [`flui_platform::testing::NoNativeSurface`].
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        Arc::new(flui_platform::testing::NoNativeSurface)
+    }
+
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
         self.text_input
             .as_ref()
@@ -580,7 +590,7 @@ pub struct HeadlessHost {
     ui_runtime: UiRuntime,
     clock: ManualClock,
     sink: HeadlessSink,
-    window: Arc<HeadlessWindow>,
+    window: Rc<HeadlessWindow>,
     accessibility: Arc<HeadlessAccessibility>,
     clipboard: Arc<InMemoryClipboard>,
     /// The windows opened beside the primary one, in opening order.
@@ -630,7 +640,7 @@ impl HeadlessHost {
         let surface = (window.size.width as u32, window.size.height as u32);
         let text_store_host = window.text_store_host.then(RecordingTextStoreHost::new);
         let gesture_preset = window.gesture_preset.clone();
-        let window = Arc::new(window);
+        let window = Rc::new(window);
         let accessibility = Arc::new(HeadlessAccessibility::default());
         let clipboard = Arc::new(InMemoryClipboard::new());
         let clock = ManualClock::new();
@@ -656,7 +666,7 @@ impl HeadlessHost {
         }
         let ui_runtime = UiRuntime::new(
             PresentationWindow::new(
-                Arc::clone(&window) as Arc<dyn PlatformWindow>,
+                Rc::clone(&window) as Rc<dyn PlatformWindow>,
                 Some(Arc::clone(&accessibility) as Arc<dyn PlatformAccessibility>),
             )
             .with_text_store_host(
@@ -1013,11 +1023,11 @@ impl HeadlessHost {
         window.id = WindowId(next);
         let text_store_host = window.text_store_host.then(RecordingTextStoreHost::new);
         let gesture_preset = window.gesture_preset.clone();
-        let window = Arc::new(window);
+        let window = Rc::new(window);
         let accessibility = Arc::new(HeadlessAccessibility::default());
         let presentation = self.ui_runtime.assemble_presentation(
             PresentationWindow::new(
-                Arc::clone(&window) as Arc<dyn PlatformWindow>,
+                Rc::clone(&window) as Rc<dyn PlatformWindow>,
                 Some(Arc::clone(&accessibility) as Arc<dyn PlatformAccessibility>),
             )
             .with_text_store_host(
@@ -1564,7 +1574,7 @@ pub struct HeadlessWindowId(PresentationId);
 /// The host's control of a [`HeadlessWindow`], behind the `WindowHandle` its
 /// widgets reach through `LifecycleContext::window`, as a runner installs one
 /// for each window it opens. The double honours no window command.
-struct HeadlessWindowControl(Arc<HeadlessWindow>);
+struct HeadlessWindowControl(Rc<HeadlessWindow>);
 
 impl flui_platform::WindowControl for HeadlessWindowControl {
     fn state(&self) -> flui_platform::WindowState {
@@ -1589,9 +1599,9 @@ impl flui_platform::WindowControl for HeadlessWindowControl {
 fn install_window_control(
     ui_runtime: &UiRuntime,
     presentation: PresentationId,
-    window: &Arc<HeadlessWindow>,
+    window: &Rc<HeadlessWindow>,
 ) {
-    let source = flui_view::__runtime::WindowSource::new(HeadlessWindowControl(Arc::clone(window)));
+    let source = flui_view::__runtime::WindowSource::new(HeadlessWindowControl(Rc::clone(window)));
     assert!(
         ui_runtime.install_window(presentation, source),
         "BUG: the window's presentation was just installed"
@@ -1602,7 +1612,7 @@ fn install_window_control(
 struct SecondaryWindow {
     text_store_host: Option<Rc<RecordingTextStoreHost>>,
     id: PresentationId,
-    window: Arc<HeadlessWindow>,
+    window: Rc<HeadlessWindow>,
     accessibility: Arc<HeadlessAccessibility>,
 }
 

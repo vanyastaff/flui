@@ -184,9 +184,10 @@ type-checks.
 **Second change (accepted on merge, verification pending).** `PlatformWindow` moves without `as_winit` (nothing calls it) and
 without `accessibility()`, which becomes a method of a backend-side extension trait in
 `flui-native` that the runner uses: `HostWindow: PlatformWindow`. `Platform::open_window`,
-`WindowOpen::Ready`/`try_ready` and `PendingWindow` return `Arc<dyn HostWindow>`, which upcasts
-to `Arc<dyn PlatformWindow>`, and `dyn HostWindow` repeats the raw-handle impls so an
-`open_window` result stays a renderer target. The runner reads the bridge once, when it turns an
+`WindowOpen::Ready`/`try_ready` and `PendingWindow` return the window as a `dyn HostWindow`,
+which upcasts to `dyn PlatformWindow` (an owner-local `Rc` since ADR-0254 §5, whose
+`surface_target()` is the renderer target; the window no longer repeats the raw-handle impls).
+The runner reads the bridge once, when it turns an
 open result into a UI runtime, and hands the UI runtime the window with its bridge beside it; production
 code has no implicit conversion from a bare window, so dropping the bridge takes an explicit
 `None` rather than a `.into()`. The
@@ -216,8 +217,9 @@ ADR-0081 land.
 Every callback registered through `Platform` or `PlatformWindow` is delivered on the owner
 thread, so the contract states that and drops the bound: `Box<dyn FnMut(..)>` instead of
 `Box<dyn FnMut(..) + Send>`. `PlatformExecutor::spawn` (`platform.rs:419`) keeps `Send`: it
-really crosses threads. The traits themselves stay `Send + Sync`; handles such as
-`Arc<dyn PlatformWindow>` still reach the raster thread (ADR-0063).
+really crosses threads. The traits themselves stayed `Send + Sync` here; ADR-0254 §5 later
+made the window owner-local, and what reaches the raster thread is the `Send + Sync` surface
+target it hands out (ADR-0063).
 
 A trait signature cannot differ per backend, so the order is:
 
@@ -347,7 +349,7 @@ by the `flui_platform` crate doctest, which implements `PlatformTextInput` and
 - the doctests on `PlatformWindow`: one implements it with no `flui-native` in scope, and its
   `compile_fail` twin, identical but for an `accessibility` method, is rejected with E0407;
 - `flui-native`'s `host_window` tests (a headless `open_window` result keeps its bridge and
-  upcasts to the same window; `Arc<dyn HostWindow>` is a raw-handle source).
+  upcasts to the same window; its surface target is a raw-handle source).
 
 A backend change is checked by `cargo xtask cross-typecheck` for Win32, AppKit, Android and iOS.
 For the second change only Win32 and AppKit (`aarch64-apple-darwin`, with `a11y`) and the Linux

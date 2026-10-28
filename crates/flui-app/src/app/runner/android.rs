@@ -187,17 +187,17 @@ where
                 }
             };
         routes.adopt(host.id());
-        let presentation_window = super::presentation_window(Arc::clone(&host))
+        let presentation_window = super::presentation_window(std::rc::Rc::clone(&host))
             .with_pointer_resampling(config.pointer_resampling);
-        let window = Arc::clone(presentation_window.window());
+        let window = std::rc::Rc::clone(presentation_window.window());
 
         // 2. Create GPU renderer (Vulkan backend on Android). `Renderer::new`
-        // takes ownership of a `WindowTarget` (issue #1043) — `Arc::clone`
-        // gives it its own strong ref rather than a borrow of `window`.
+        // takes ownership of a `WindowTarget`: the window's
+        // surface target, never the window (ADR-0254 §5).
         let geometry = super::window_install::SurfaceGeometry::of(window.as_ref());
         let phys_size = geometry.physical;
         let renderer = pollster::block_on(Renderer::with_surface_color(
-            Arc::clone(&window),
+            window.surface_target(),
             config.surface_color,
         ));
         let mut renderer = match renderer {
@@ -267,7 +267,7 @@ where
             .as_ref()
             .and_then(|agent| agent.vend(&ui_runtime, ui_runtime.presentation_id()));
         let textures = ui_runtime.texture_registry(ui_runtime.presentation_id());
-        let mut installation = prepare_platform_ui_runtime(ui_runtime, Arc::clone(&window));
+        let mut installation = prepare_platform_ui_runtime(ui_runtime, std::rc::Rc::clone(&window));
         installation.text_sizing(native_sizing);
         installation.dev_agent(config.dev_agent.clone().zip(agent_window));
         let owner_dispatch = installation.dispatcher();

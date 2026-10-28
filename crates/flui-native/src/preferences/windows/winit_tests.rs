@@ -51,7 +51,8 @@ fn make_unactivated_offscreen(window: &dyn HostWindow) -> anyhow::Result<()> {
             SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos, ShowWindow,
         },
     };
-    let RawWindowHandle::Win32(handle) = window.window_handle()?.as_raw() else {
+    let surface = window.surface_target();
+    let RawWindowHandle::Win32(handle) = surface.window_handle()?.as_raw() else {
         panic!("Windows event loop must create a Win32 window");
     };
     let hwnd = HWND(handle.hwnd.get() as *mut std::ffi::c_void);
@@ -280,7 +281,7 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
         let window = owner
             .open_window(options("winit-wheel-policy"), handler.clone())?
             .try_ready()?;
-        let redraw_window = window.clone();
+        let redraw_window = window.redraw_requester();
         owner.on_wake(Box::new(move || match wake_platform.preferences() {
             Err(crate::PlatformError::PreferencesDeferred) => {
                 let _ = wake_deferred.lock().get_or_insert(*wake_frames.lock());
@@ -314,7 +315,8 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
             }
             Err(error) => panic!("unexpected owner preference result: {error}"),
         }))?;
-        let RawWindowHandle::Win32(handle) = window.window_handle()?.as_raw() else {
+        let surface = window.surface_target();
+        let RawWindowHandle::Win32(handle) = surface.window_handle()?.as_raw() else {
             panic!("Windows event loop must create a Win32 window");
         };
         let hwnd = HWND(handle.hwnd.get() as *mut std::ffi::c_void);
@@ -546,7 +548,7 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
         let window = owner
             .open_window(options("cold-winit-preferences"), handler.clone())?
             .try_ready()?;
-        let redraw_window = window.clone();
+        let redraw_window = window.redraw_requester();
         owner.on_wake(Box::new(move || match wake_platform.preferences() {
             Err(crate::PlatformError::PreferencesDeferred) => {}
             Ok(snapshot) => {

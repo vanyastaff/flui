@@ -26,7 +26,7 @@ fn main() {
 
 #[cfg(target_os = "macos")]
 mod cases {
-    use std::sync::Arc;
+    use std::rc::Rc;
     use std::time::{Duration, Instant};
 
     use flui_foundation::geometry::{Size, WindowMetrics};
@@ -37,6 +37,7 @@ mod cases {
     };
     use flui_testing::window_commands::AdmitAndApply as _;
     use flui_testing::window_conformance::{self, Readback, WindowFixture};
+    use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
     use objc2::MainThreadMarker;
     use objc2::rc::Retained;
     use objc2_app_kit::{
@@ -49,6 +50,10 @@ mod cases {
         (
             "a_window_zoomed_before_full_screen_returns_to_normal",
             a_window_zoomed_before_full_screen_returns_to_normal,
+        ),
+        (
+            "a_redraw_from_another_thread_is_queued_without_waiting",
+            a_redraw_from_another_thread_is_queued_without_waiting,
         ),
         (
             "each_display_is_named_as_appkit_names_its_screen",
@@ -94,9 +99,10 @@ mod cases {
         reason = "the FLUI view behind an open AppKit window's raw window handle"
     )]
     fn ns_window_of(window: &dyn HostWindow) -> Retained<NSWindow> {
-        use raw_window_handle::RawWindowHandle;
+        use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
 
-        let handle = window.window_handle().expect("a live AppKit window");
+        let target = window.surface_target();
+        let handle = target.window_handle().expect("a live AppKit window");
         let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
             panic!("an AppKit window hands out an AppKit handle");
         };
@@ -114,13 +120,14 @@ mod cases {
     struct AppKitFixture {
         app: Retained<NSApplication>,
         _platform: MacOSPlatform,
-        window: Arc<dyn HostWindow>,
+        window: Rc<dyn HostWindow>,
         ns_window: Retained<NSWindow>,
+        handler: Rc<RecordingWindowHandler>,
     }
 
     impl WindowFixture for AppKitFixture {
-        fn window(&self) -> Arc<dyn PlatformWindow> {
-            Arc::clone(&self.window) as Arc<dyn PlatformWindow>
+        fn window(&self) -> Rc<dyn PlatformWindow> {
+            Rc::clone(&self.window) as Rc<dyn PlatformWindow>
         }
 
         fn readback(&self) -> Readback {
@@ -184,6 +191,12 @@ mod cases {
         fn input_regions(&self) -> Availability {
             flui_native::input::availability::macos().input_regions()
         }
+
+        /// The checks run on the main thread, where an AppKit window's target
+        /// hands out its view.
+        fn has_native_surface(&self) -> bool {
+            true
+        }
     }
 
     impl Drop for AppKitFixture {
@@ -215,10 +228,11 @@ mod cases {
         let mtm = MainThreadMarker::new().expect("the cases run on the main thread");
         let app = launched(mtm);
         let platform = MacOSPlatform::new().expect("the AppKit platform");
+        let handler = RecordingWindowHandler::new();
         let window = platform
             .open_window(
                 WindowOptions::default().with_title(title),
-                flui_testing::window_handler::RecordingWindowHandler::new(),
+                Rc::clone(&handler) as _,
             )
             .expect("an AppKit window opens");
         let ns_window = ns_window_of(window.as_ref());
@@ -227,6 +241,7 @@ mod cases {
             _platform: platform,
             window,
             ns_window,
+            handler,
         };
         fixture.settle();
         fixture
@@ -235,6 +250,43 @@ mod cases {
     fn the_appkit_window_conforms() {
         let mut fixture = open("window conformance");
         window_conformance::assert_conforms(&mut fixture);
+    }
+
+    /// A redraw asked for on another thread is queued for the main thread,
+    /// not waited for: the asking thread is done while the main thread is
+    /// still joined on it, and the frame arrives once AppKit runs again.
+    fn a_redraw_from_another_thread_is_queued_without_waiting() {
+        let fixture = open("redraw from another thread");
+        let frames = |handler: &RecordingWindowHandler| {
+            handler
+                .take_calls()
+                .iter()
+                .filter(|call| matches!(call, HandlerCall::FrameRequested(_)))
+                .count()
+        };
+
+        fixture.handler.take_calls();
+        appkit::run_for(Duration::from_millis(500));
+        assert_eq!(
+            frames(&fixture.handler),
+            0,
+            "a settled window asks for no frame of its own"
+        );
+
+        let requester = fixture.window.redraw_requester();
+        std::thread::spawn(move || requester.request_redraw())
+            .join()
+            .expect("the asking thread");
+        assert_eq!(
+            frames(&fixture.handler),
+            0,
+            "no frame runs before the main thread runs AppKit"
+        );
+        appkit::run_for(Duration::from_millis(500));
+        assert!(
+            frames(&fixture.handler) >= 1,
+            "the redraw asked for on another thread produced no frame request"
+        );
     }
 
     /// AppKit keeps a window's zoom under full screen and puts it back only

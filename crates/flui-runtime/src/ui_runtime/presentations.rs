@@ -10,8 +10,6 @@ use flui_view::__runtime::GlobalKeyRegistryComposite;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 #[cfg(any(test, feature = "testing"))]
 use std::rc::Rc;
-#[cfg(test)]
-use std::sync::Arc;
 
 impl UiRuntime {
     pub(crate) fn presentation_ids(&self) -> impl Iterator<Item = PresentationId> + '_ {
@@ -309,8 +307,8 @@ impl UiRuntime {
     /// forest membership, never registry routing, can still use it.
     #[cfg(test)]
     pub(crate) fn install_second_presentation_for_test(&mut self) -> PresentationId {
-        let window: Arc<dyn flui_platform::PlatformWindow> =
-            Arc::new(crate::testing::TestWindow::new().focused(false));
+        let window: Rc<dyn flui_platform::PlatformWindow> =
+            Rc::new(crate::testing::TestWindow::new().focused(false));
         let presentation = self.assemble_presentation(window);
         self.install_presentation(presentation)
     }

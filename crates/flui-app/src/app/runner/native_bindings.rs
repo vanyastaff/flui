@@ -1,6 +1,6 @@
 //! Installed native ownership retained independently of the app's TLS slot.
 
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+use std::{cell::RefCell, rc::Rc};
 
 use flui_foundation::PresentationAddress;
 use flui_runtime::ui_runtime::UiRuntime;
@@ -25,7 +25,7 @@ struct NativeState {
             flui_foundation::geometry::WindowMetrics,
         )>,
     >,
-    close_requests: Arc<CloseRequestRouter>,
+    close_requests: Rc<CloseRequestRouter>,
     retirement: NativeRetirement,
 }
 
@@ -137,7 +137,7 @@ impl NativeBindings {
             windows: RefCell::new(WindowRegistry::new()),
             drivers: RefCell::new(FrameDrivers::new(retirement.clone())),
             pending_resizes: RefCell::new(Vec::new()),
-            close_requests: Arc::new(CloseRequestRouter::new()),
+            close_requests: Rc::new(CloseRequestRouter::new()),
             retirement,
         }))
     }
@@ -146,8 +146,8 @@ impl NativeBindings {
         self.0.retirement.clone()
     }
 
-    pub(in crate::app) fn close_requests(&self) -> Arc<CloseRequestRouter> {
-        Arc::clone(&self.0.close_requests)
+    pub(in crate::app) fn close_requests(&self) -> Rc<CloseRequestRouter> {
+        Rc::clone(&self.0.close_requests)
     }
 
     pub(in crate::app) fn contains_address(&self, address: PresentationAddress) -> bool {

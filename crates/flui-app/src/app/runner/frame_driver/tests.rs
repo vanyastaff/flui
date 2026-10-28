@@ -80,7 +80,7 @@ fn a_reentrant_rendered_install_publishes_runtime_and_driver_together() {
             let window = crate::app::window_test_support::headless_test_window();
             let mut prepared = super::super::owner_dispatch::prepare_ui_runtime_alongside(
                 runtime,
-                Arc::clone(&window),
+                Rc::clone(&window),
             );
             let dispatcher = prepared.dispatcher();
             let frame = prepared
@@ -280,12 +280,12 @@ fn native_terminal_callbacks_refuse_late_publication() {
     for quit in [false, true] {
         let _clear = OwnerHostClearGuard::arm();
         after_bootstrap(move |owner| {
-            let window: Arc<dyn PlatformWindow> = owner
+            let window: Rc<dyn PlatformWindow> = owner
                 .open_routed(flui_platform::WindowOptions::default())?
                 .try_ready()?;
             let runtime = UiRuntime::for_test();
             runtime.attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0))?;
-            let mut installation = prepare_replacement_ui_runtime(runtime, Arc::clone(&window));
+            let mut installation = prepare_replacement_ui_runtime(runtime, Rc::clone(&window));
             let dispatcher = installation.dispatcher();
             installation.terminal_callbacks();
             let scenes = Arc::new(AtomicUsize::new(0));
@@ -339,11 +339,11 @@ fn a_prepared_single_window_rejects_close_and_quit_before_publication() {
     for quit in [false, true] {
         let _clear = OwnerHostClearGuard::arm();
         after_bootstrap(move |owner| {
-            let window: Arc<dyn PlatformWindow> = owner
+            let window: Rc<dyn PlatformWindow> = owner
                 .open_routed(flui_platform::WindowOptions::default())?
                 .try_ready()?;
             let mut prepared =
-                prepare_replacement_ui_runtime(UiRuntime::for_test(), Arc::clone(&window));
+                prepare_replacement_ui_runtime(UiRuntime::for_test(), Rc::clone(&window));
             prepared.terminal_callbacks();
             let frame = prepared.frame_driver(FrameDriver::Test(TestFrameDriver {
                 installed: None,
@@ -388,12 +388,12 @@ fn a_quit_after_the_native_close_dispatches_no_second_close() {
     for native_close in [true, false] {
         let _clear = OwnerHostClearGuard::arm();
         after_bootstrap(move |owner| {
-            let window: Arc<dyn PlatformWindow> = owner
+            let window: Rc<dyn PlatformWindow> = owner
                 .open_routed(flui_platform::WindowOptions::default())?
                 .try_ready()?;
             let runtime = UiRuntime::for_test();
             runtime.attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0))?;
-            let installation = prepare_replacement_ui_runtime(runtime, Arc::clone(&window));
+            let installation = prepare_replacement_ui_runtime(runtime, Rc::clone(&window));
             installation.terminal_callbacks();
             installation
                 .submit()
@@ -1201,7 +1201,7 @@ fn unfinished_installation_closes_its_native_window() {
         let closing = Arc::clone(&closed);
         let installation = super::super::owner_dispatch::prepare_ui_runtime_alongside(
             UiRuntime::for_test(),
-            Arc::clone(&window),
+            Rc::clone(&window),
         );
         installation.on_close(move || {
             dispatch_platform_ui_runtime(
@@ -1265,7 +1265,9 @@ fn agent_notification_follows_live_native_initialization() {
     struct Agent {
         opened: Arc<AtomicUsize>,
         live: Arc<AtomicUsize>,
-        close: Option<Arc<dyn PlatformWindow>>,
+        /// The window to close from the agent's hook, which is `Send`: the
+        /// headless window's own type is, where `dyn PlatformWindow` is not.
+        close: Option<flui_native::MockWindow>,
     }
     impl DevAgentHook for Agent {
         fn attach(&mut self) -> bool {
@@ -1291,13 +1293,19 @@ fn agent_notification_follows_live_native_initialization() {
         DuringInstall::CloseFromAgent,
     ] {
         let _clear = OwnerHostClearGuard::arm();
-        let window = crate::app::window_test_support::headless_test_window();
+        let host = crate::app::window_test_support::headless_test_host_window();
+        let mock = host
+            .as_any()
+            .downcast_ref::<flui_native::MockWindow>()
+            .expect("a headless window")
+            .clone();
+        let window: Rc<dyn PlatformWindow> = host;
         let opened = Arc::new(AtomicUsize::new(0));
         let live = Arc::new(AtomicUsize::new(0));
         let agent = crate::app::dev_agent::DevAgent::new(Agent {
             opened: Arc::clone(&opened),
             live: Arc::clone(&live),
-            close: matches!(case, DuringInstall::CloseFromAgent).then(|| Arc::clone(&window)),
+            close: matches!(case, DuringInstall::CloseFromAgent).then(|| mock.clone()),
         });
         let _attachment = agent.attach().expect("attach development agent");
         let runtime = UiRuntime::for_test();
@@ -1307,9 +1315,9 @@ fn agent_notification_follows_live_native_initialization() {
         let agent_window = agent
             .vend(&runtime, runtime.presentation_id())
             .expect("vend mounted presentation");
-        let mut installation = prepare_replacement_ui_runtime(runtime, Arc::clone(&window));
+        let mut installation = prepare_replacement_ui_runtime(runtime, Rc::clone(&window));
         installation.dev_agent(Some((agent, agent_window)));
-        let native = Arc::clone(&window);
+        let native = Rc::clone(&window);
         installation
             .frame_driver(FrameDriver::Test(TestFrameDriver {
                 sink: ScriptedSink::always_presents(),

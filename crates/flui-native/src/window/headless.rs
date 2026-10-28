@@ -97,6 +97,10 @@ fn next_headless_window_id() -> WindowId {
 /// inside the crate.
 pub struct HeadlessWindows {
     tracked: Mutex<Tracked>,
+    /// The windows deferred opens built, kept on the owner thread until they
+    /// close, as a native host keeps the windows it opened: what the opener
+    /// gets is their identity, and a weak reference on the owner.
+    deferred: crate::owner::slot::OwnerMap<WindowId, Rc<dyn HostWindow>>,
     /// What every window hands out of the window-level positions.
     positions: WindowPositions<()>,
 }
@@ -133,6 +137,7 @@ impl HeadlessWindows {
     /// No window yet; each one opened hands out `positions`.
     pub(crate) fn new(positions: WindowPositions<()>) -> Self {
         Self {
+            deferred: crate::owner::slot::OwnerMap::new(),
             tracked: Mutex::new(Tracked {
                 windows: Vec::new(),
                 active: None,
@@ -146,11 +151,15 @@ impl HeadlessWindows {
 
     /// Stops tracking window `id`; another becomes active if it was.
     fn forget(&self, id: WindowId) {
-        let mut tracked = self.tracked.lock();
-        tracked.windows.retain(|window| window.id != id);
-        if tracked.active == Some(id) {
-            tracked.active = tracked.windows.first().map(|window| window.id);
+        {
+            let mut tracked = self.tracked.lock();
+            tracked.windows.retain(|window| window.id != id);
+            if tracked.active == Some(id) {
+                tracked.active = tracked.windows.first().map(|window| window.id);
+            }
         }
+        // Let go of a deferred open's window outside the lock.
+        drop(self.deferred.remove(&id));
     }
 }
 
@@ -172,7 +181,7 @@ impl TrackedWindows for HeadlessWindows {
         platform: Weak<Mutex<HeadlessState>>,
         options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
-    ) -> Arc<dyn HostWindow> {
+    ) -> Rc<dyn HostWindow> {
         let window_id = next_headless_window_id();
         let display = state.window_display();
         let (capabilities, limits) = {
@@ -204,7 +213,7 @@ impl TrackedWindows for HeadlessWindows {
         if let Some(signal) = state.owner_signal.upgrade() {
             window.delivery.resume_through_signal(&signal);
             let delivery = Arc::downgrade(&window.delivery);
-            window.owner_redraw = Some(OwnerRedraw {
+            window.redraw.owner = Some(OwnerRedraw {
                 signal: Arc::downgrade(&signal),
                 wake: crate::owner::signal::OwnerSignal::window_wake(&signal, move || {
                     if let Some(delivery) = delivery.upgrade() {
@@ -221,7 +230,18 @@ impl TrackedWindows for HeadlessWindows {
             tracked.active = Some(window_id);
         }
 
-        Arc::new(window) as Arc<dyn HostWindow>
+        Rc::new(window) as Rc<dyn HostWindow>
+    }
+
+    /// The deferred open's window stays with the host until it closes.
+    fn keep_deferred(&self, window: &Rc<dyn HostWindow>) {
+        if self
+            .deferred
+            .insert(window.id(), Rc::clone(window))
+            .is_err()
+        {
+            tracing::error!("a deferred window was resolved off the owner thread");
+        }
     }
 
     fn deliveries_of_all(&self) -> Vec<Arc<WindowDelivery>> {
@@ -290,7 +310,7 @@ impl host::Window<HeadlessLoop> for MockWindow {
         windows: &Arc<HeadlessWindows>,
         options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
-    ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
+    ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
         tracing::info!(?options, "Creating mock window");
 
         let platform_state = Arc::downgrade(&owner.state);
@@ -367,7 +387,7 @@ pub struct HeadlessWindowSystem {
 ///
 /// There is no public constructor: obtain one by opening a window on a
 /// [`HeadlessPlatform`](crate::HeadlessPlatform) and downcasting the returned
-/// `Arc<dyn PlatformWindow>` via its `as_any()` to `&MockWindow`.
+/// `Rc<dyn PlatformWindow>` via its `as_any()` to `&MockWindow`.
 #[derive(Clone)]
 pub struct MockWindow {
     id: WindowId,
@@ -398,7 +418,10 @@ pub struct MockWindow {
     drag: Option<Arc<dyn flui_platform::drag::PlatformDragSource>>,
     /// Carries a frame request made off the owner thread to the owner's next
     /// turn; `None` for a window opened with no owner signal.
-    owner_redraw: Option<OwnerRedraw>,
+    redraw: HeadlessRedraw,
+    /// How many frames were presented into the window's surface: each one
+    /// calls its target's `pre_present_notify` first.
+    presents: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// How a [`MockWindow`] asks its owner for a frame from another thread: the
@@ -408,6 +431,65 @@ pub struct MockWindow {
 struct OwnerRedraw {
     signal: Weak<crate::owner::signal::OwnerSignal>,
     wake: crate::owner::signal::WindowWake,
+}
+
+/// How a [`MockWindow`] is asked for a frame, from any thread: on the owner
+/// its handler's `frame_requested` runs now; from another thread the request
+/// waits for the owner's next turn.
+#[derive(Clone)]
+struct HeadlessRedraw {
+    delivery: Weak<WindowDelivery>,
+    /// Set once the window closed: a request after it wakes no owner turn.
+    retirement: crate::owner::window_delivery::Retirement,
+    /// `None` for a window opened with no owner signal.
+    owner: Option<OwnerRedraw>,
+}
+
+impl flui_platform::RedrawRequester for HeadlessRedraw {
+    fn request_redraw(&self) {
+        if self.retirement.is_retired() {
+            return;
+        }
+        if let Some(redraw) = &self.owner
+            && let Some(signal) = redraw.signal.upgrade()
+            && signal.owner() != thread::current().id()
+        {
+            (redraw.wake)();
+            return;
+        }
+        if let Some(delivery) = self.delivery.upgrade() {
+            delivery.dispatch_request_frame();
+        }
+    }
+}
+
+/// A headless window's surface target: there is no native window, so it
+/// answers `Unavailable` always; it counts the frames presented into it.
+struct HeadlessSurface {
+    presents: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl raw_window_handle::HasWindowHandle for HeadlessSurface {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        Err(raw_window_handle::HandleError::Unavailable)
+    }
+}
+
+impl raw_window_handle::HasDisplayHandle for HeadlessSurface {
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        Err(raw_window_handle::HandleError::Unavailable)
+    }
+}
+
+impl flui_platform::SurfaceTarget for HeadlessSurface {
+    fn pre_present_notify(&self) {
+        self.presents
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 impl std::fmt::Debug for MockWindow {
@@ -465,10 +547,6 @@ struct MockWindowHost {
 
 /// Mutable state for headless MockWindow
 struct MockWindowState {
-    /// How many times [`PlatformWindow::pre_present_notify`] was called —
-    /// the oracle for "the frame pump arms the compositor frame callback
-    /// once per presented frame, before the present".
-    pre_present_notifies: u64,
     /// Every [`PlatformWindow::set_frame_rate_hint`] the window took, in order.
     frame_rate_hints: Vec<flui_platform::FrameRateHint>,
     /// Every [`WindowCommand::SetMaterial`] the window applied, in order.
@@ -671,7 +749,6 @@ impl MockWindow {
             limits,
         } = host;
         let mut model = MockWindowState {
-            pre_present_notifies: 0,
             frame_rate_hints: Vec::new(),
             materials: Vec::new(),
             title: options.title.clone(),
@@ -716,6 +793,8 @@ impl MockWindow {
             delivery: Arc::downgrade(&delivery),
         });
         delivery.publish_through(Arc::downgrade(&source), SnapshotSource::read);
+        let redraw_delivery = Arc::downgrade(&delivery);
+        let redraw_retirement = delivery.retirement();
         Self {
             id,
             state,
@@ -729,7 +808,12 @@ impl MockWindow {
             platform_state,
             windows,
             drag: None,
-            owner_redraw: None,
+            redraw: HeadlessRedraw {
+                delivery: redraw_delivery,
+                retirement: redraw_retirement,
+                owner: None,
+            },
+            presents: Arc::default(),
         }
     }
 
@@ -807,11 +891,11 @@ impl MockWindow {
     }
 
     /// How many times the frame pump has called
-    /// [`PlatformWindow::pre_present_notify`] on this window — one per
+    /// [`SurfaceTarget::pre_present_notify`](flui_platform::SurfaceTarget::pre_present_notify) on this window's surface target — one per
     /// presented frame, before the present, is the contract.
     #[must_use]
     pub fn pre_present_notifies(&self) -> u64 {
-        self.state.lock().pre_present_notifies
+        self.presents.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Every input-region set this window handed its simulated OS, in device pixels and
@@ -1026,20 +1110,19 @@ impl PlatformWindow for MockWindow {
     }
 
     fn request_redraw(&self) {
-        // Any thread may ask, but the frame callback is owner code: a request
-        // from another thread waits for the owner's next turn.
-        if let Some(redraw) = &self.owner_redraw
-            && let Some(signal) = redraw.signal.upgrade()
-            && signal.owner() != thread::current().id()
-        {
-            (redraw.wake)();
-            return;
-        }
-        self.delivery.dispatch_request_frame();
+        flui_platform::RedrawRequester::request_redraw(&self.redraw);
     }
 
-    fn pre_present_notify(&self) {
-        self.state.lock().pre_present_notifies += 1;
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        Arc::new(self.redraw.clone())
+    }
+
+    /// No native window exists: the target answers `Unavailable` always and
+    /// counts the frames presented into it ([`Self::pre_present_notifies`]).
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        Arc::new(HeadlessSurface {
+            presents: Arc::clone(&self.presents),
+        })
     }
 
     // ==================== State and commands (ADR-0237) ====================

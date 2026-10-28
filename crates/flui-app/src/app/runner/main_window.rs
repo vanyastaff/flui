@@ -37,7 +37,7 @@ use std::{
 type Installer = Box<
     dyn FnMut(
         &AppHandle,
-        Arc<dyn HostWindow>,
+        Rc<dyn HostWindow>,
         flui_scheduler::AppLifecycleState,
     ) -> Result<RenderedMain, AppWindowError>,
 >;
@@ -203,7 +203,7 @@ impl MainController {
             if let Poll::Ready(result) = result {
                 self.pending = None;
                 if !completion.claim() {
-                    if let Ok(window) = result {
+                    if let Ok(window) = result.and_then(super::opened_window) {
                         contain(|| {
                             super::discard_window(
                                 window.as_ref(),
@@ -214,7 +214,7 @@ impl MainController {
                     self.fail(completion.failure().unwrap_or(AppWindowError::Cancelled));
                     return;
                 }
-                match result {
+                match result.and_then(super::opened_window) {
                     Ok(window) => self.install(window),
                     Err(error) => self.fail(AppWindowError::Native {
                         source: Arc::new(error),
@@ -280,7 +280,10 @@ impl MainController {
                     super::discard_window(window.as_ref(), "a main window nobody waits for");
                 }),
                 Some(Ok(WindowOpen::Pending(mut pending))) => {
-                    if let Some(Ok(window)) = pending.try_take() {
+                    if let Some(Ok(window)) = pending
+                        .try_take()
+                        .map(|taken| taken.and_then(super::opened_window))
+                    {
                         contain(|| {
                             super::discard_window(
                                 window.as_ref(),
@@ -318,7 +321,7 @@ impl MainController {
             None => self.fail(AppWindowError::Cancelled),
         }
     }
-    fn install(&mut self, window: Arc<dyn HostWindow>) {
+    fn install(&mut self, window: Rc<dyn HostWindow>) {
         if let Some(routes) = self.routes.take() {
             routes.adopt(window.id());
         }
@@ -336,7 +339,7 @@ impl MainController {
                 .as_mut()
                 .expect("BUG: live controller owns installer"))(
                 &self.ingress.handle(),
-                Arc::clone(&window),
+                Rc::clone(&window),
                 host,
             )
         }));
@@ -430,7 +433,10 @@ impl MainController {
             contain(|| drop(installing));
         }
         if let Some(mut pending) = self.pending.take() {
-            if let Some(Ok(window)) = pending.try_take() {
+            if let Some(Ok(window)) = pending
+                .try_take()
+                .map(|taken| taken.and_then(super::opened_window))
+            {
                 contain(|| {
                     super::discard_window(window.as_ref(), "a main window nobody waits for");
                 });
@@ -907,9 +913,9 @@ mod tests {
                             runtime
                                 .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 30.0))
                                 .expect("mount root");
-                            let window: Arc<dyn flui_platform::PlatformWindow> = window;
+                            let window: Rc<dyn flui_platform::PlatformWindow> = window;
                             let mut prepared =
-                                prepare_ui_runtime_alongside(runtime, Arc::clone(&window));
+                                prepare_ui_runtime_alongside(runtime, Rc::clone(&window));
                             let address = prepared.dispatcher().address;
                             prepared
                                 .frame_driver(FrameDriver::Test(TestFrameDriver {

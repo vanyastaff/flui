@@ -15,7 +15,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::{Rc, Weak as RcWeak};
-use std::sync::{Arc, Weak};
 
 use flui_foundation::PresentationAddress;
 use flui_foundation::panic::FirstPanic;
@@ -39,10 +38,10 @@ enum Queued {
 
 /// A window's queued work and the way back to the window.
 pub(crate) struct WindowQueue {
-    window: Weak<dyn PlatformWindow>,
+    window: std::rc::Weak<dyn PlatformWindow>,
     pending: RefCell<VecDeque<Queued>>,
     address: PresentationAddress,
-    router: Arc<CloseRequestRouter>,
+    router: Rc<CloseRequestRouter>,
     /// Asks the owner for a turn; `false` when it cannot be woken.
     wake: Rc<dyn Fn() -> bool>,
 }
@@ -235,7 +234,7 @@ impl WindowCommandQueues {
     pub(crate) fn window_for(
         &self,
         address: PresentationAddress,
-    ) -> Option<Arc<dyn PlatformWindow>> {
+    ) -> Option<Rc<dyn PlatformWindow>> {
         self.queues.borrow().iter().find_map(|(queue, handle)| {
             let queue = queue.upgrade()?;
             // A closed window keeps its queue until it is dropped; it is not
@@ -319,14 +318,14 @@ impl WindowControl for HostWindowControl {
 /// The window control for the presentation at `address`, registered with
 /// `queues` so its commands are applied each owner turn.
 pub(crate) fn window_source(
-    window: &Arc<dyn PlatformWindow>,
+    window: &Rc<dyn PlatformWindow>,
     address: PresentationAddress,
     queues: &WindowCommandQueues,
     wake: Rc<dyn Fn() -> bool>,
-    router: Arc<CloseRequestRouter>,
+    router: Rc<CloseRequestRouter>,
 ) -> WindowSource {
     let queue = Rc::new(WindowQueue {
-        window: Arc::downgrade(window),
+        window: Rc::downgrade(window),
         pending: RefCell::new(VecDeque::new()),
         address,
         router,

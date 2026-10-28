@@ -30,10 +30,11 @@ Two shipped defects sat behind the same assumption:
 
 - **Android.** `MainEvent::Pause` does not touch the window; the `ANativeWindow` pointer is cleared
   only by `AppCmd::TermWindow`, applied after the `TerminateWindow` callback returns.
-  `window_handle()` re-queries `native_window()` on every call — what holds a stale handle is the
-  `wgpu::Surface` built once from it. The fix is releasing the surface at the right moment.
-- **Win32.** The handle `window_handle()` hands out is tied to the `Arc<WindowsWindow>`, not to
-  the HWND, which `close()` destroys synchronously.
+  The window's `window_handle()` (now its surface target's) re-queried `native_window()` on every
+  call — what held a stale handle was the `wgpu::Surface` built once from it. The fix is releasing
+  the surface at the right moment.
+- **Win32.** The handle the window's `window_handle()` handed out was tied to the
+  `Arc<WindowsWindow>`, not to the HWND, which `close()` destroys synchronously.
 
 The unsafe path was not load-bearing: wgpu's safe
 `create_surface(SurfaceTarget::DisplayAndWindow(Box<dyn _>))` queries both handles itself and keeps
@@ -74,12 +75,14 @@ borrowed-safe `create_surface(&W)` that #1043 names, sound only by GPUI's owners
    *(Superseded-by ADR-0254 §4 and §5 in part: see the header.)*
    - winit: inherits winit's contract — the `Arc<winit::Window>` the surface holds *is* the native
      lifetime.
-   - Win32: `window_handle()` consults the `hwnd_affinity::teardown_route` identity probe
-     (`AlreadyGone`/`StaleHandle` → `Unavailable`). `WM_DESTROY` clears the window's callback slots
-     after `on_close`, while the HWND is still valid.
-   - AppKit: `setReleasedWhenClosed:NO` (the +1 is released once, in `Drop`), a `closed` flag set
-     from `windowWillClose:` before callbacks are cleared, `window_handle()` → `Unavailable` when
-     closed.
+   - Win32: the surface target's `window_handle()` answers `Unavailable` once the window's
+     delivery is retired, and otherwise consults the `hwnd_affinity::teardown_route` identity
+     probe (`AlreadyGone`/`StaleHandle` → `Unavailable`). `WM_DESTROY` retires the window's
+     delivery after `on_close`, while the HWND is still valid.
+   - AppKit: `setReleasedWhenClosed:NO` (the +1 is released once, in `Drop`); the surface target
+     keeps its own retained reference to the view, released on the main thread, and its
+     `window_handle()` answers `Unavailable` once `windowWillClose:` has retired the window's
+     delivery, and on any thread but the main one.
    - `WindowCallbacks::clear()` latches: a callback that returns to its slot after the clear is
      dropped instead of restored. That closes the #919 frame-closure → lane → renderer →
      surface → window cycle structurally on every backend with a clear site — android, macos,

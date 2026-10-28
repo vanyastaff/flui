@@ -24,7 +24,7 @@ use objc2_app_kit::{
 use objc2_foundation::NSRect;
 
 use super::ext::AppKitWindow;
-use super::{BObjC, MacOSWindow, NIL, ObjcId, route_on_owner};
+use super::{BObjC, MacOSWindow, NIL, ObjcId};
 
 impl MacOSWindow {
     /// `WindowCommand::SetMaterial` on an AppKit window: `System` is
@@ -269,14 +269,12 @@ impl AppKitWindow<'_> {
         if !window.owner_is_main {
             return Err(MacOSBackdropError::NotOnTheMainLane);
         }
-        route_on_owner(window.owner, window.owner_is_main, move || {
-            let main = MainThreadMarker::new()
-                .expect("BUG: a main-lane owner runs its routed work on the main thread");
-            if window.closed.load(Ordering::Acquire) {
-                return Err(MacOSBackdropError::CLOSED);
-            }
-            install(window, main, backdrop)
-        })
+        let main = MainThreadMarker::new()
+            .expect("BUG: a main-lane window lives on the main thread, where it is used");
+        if window.closed.load(Ordering::Acquire) {
+            return Err(MacOSBackdropError::CLOSED);
+        }
+        install(window, main, backdrop)
     }
 
     /// Take the backdrop away: FLUI's view is the window's content view again.
@@ -290,16 +288,14 @@ impl AppKitWindow<'_> {
         if !window.owner_is_main {
             return Err(MacOSBackdropError::NotOnTheMainLane);
         }
-        route_on_owner(window.owner, window.owner_is_main, move || {
-            let main = MainThreadMarker::new()
-                .expect("BUG: a main-lane owner runs its routed work on the main thread");
-            if window.closed.load(Ordering::Acquire) {
-                return Err(MacOSBackdropError::CLOSED);
-            }
-            let content = content_of(window, main)?;
-            take_away(window, main, content);
-            Ok(())
-        })
+        let main = MainThreadMarker::new()
+            .expect("BUG: a main-lane window lives on the main thread, where it is used");
+        if window.closed.load(Ordering::Acquire) {
+            return Err(MacOSBackdropError::CLOSED);
+        }
+        let content = content_of(window, main)?;
+        take_away(window, main, content);
+        Ok(())
     }
 }
 

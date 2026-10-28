@@ -2,6 +2,7 @@
 //! thread, whichever thread asks: `PlatformWindow::request_redraw` is called
 //! from async wakers, and the callback is owner code.
 
+use std::rc::Rc;
 use std::sync::Arc;
 use std::thread::{self, ThreadId};
 
@@ -32,7 +33,7 @@ fn session() -> Session {
 
 impl Session {
     /// A window, and the threads its handler's `frame_requested` ran on.
-    fn open(&self) -> (Arc<dyn HostWindow>, Arc<Mutex<Vec<ThreadId>>>) {
+    fn open(&self) -> (Rc<dyn HostWindow>, Arc<Mutex<Vec<ThreadId>>>) {
         let handler = RecordingWindowHandler::new();
         let log = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&log);
@@ -51,7 +52,7 @@ fn a_redraw_requested_off_the_owner_runs_in_the_owners_next_turn() {
     let session = session();
     let (window, frames) = session.open();
 
-    let requester = Arc::clone(&window);
+    let requester = window.redraw_requester();
     thread::spawn(move || {
         requester.request_redraw();
         requester.request_redraw();

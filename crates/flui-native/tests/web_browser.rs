@@ -330,7 +330,7 @@ async fn wait(millis: u32) {
 /// and answers with `answer`; closed when dropped, so the next test can own
 /// the canvas.
 struct CanvasWindow {
-    window: Arc<dyn HostWindow>,
+    window: Rc<dyn HostWindow>,
     handler: Rc<RecordingWindowHandler>,
     platform: WebPlatform,
     seen: Rc<RefCell<Vec<PlatformInput>>>,
@@ -511,7 +511,7 @@ async fn a_redraw_waits_for_the_next_animation_frame() {
     const ANIMATION: usize = 100;
     let canvas = HostedCanvas::open();
     let frames = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let (counted, window) = (Arc::clone(&frames), Arc::clone(&canvas.window));
+    let (counted, window) = (Arc::clone(&frames), std::rc::Rc::clone(&canvas.window));
     canvas.handler.react_to_frame(move |_| {
         if counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < ANIMATION {
             window.request_redraw();
@@ -855,7 +855,7 @@ fn the_context_menu_is_answered_as_its_secondary_press() {
 #[wasm_bindgen_test]
 fn a_hidden_page_ends_its_presses_before_a_visibility_callback_closes_it() {
     let window = CanvasWindow::open();
-    let closing = Arc::downgrade(&window.window);
+    let closing = std::rc::Rc::downgrade(&window.window);
     window.handler.react_to_state_change(move || {
         if let Some(window) = closing.upgrade()
             && !window.state().visible
@@ -1142,7 +1142,7 @@ fn dragstart_runs_a_waiting_session_and_refuses_otherwise() {
 /// focus it reported.
 struct HostedCanvas {
     owner: flui_native::OwnerPlatform,
-    window: Arc<dyn HostWindow>,
+    window: Rc<dyn HostWindow>,
     handler: Rc<RecordingWindowHandler>,
     host: Rc<dyn TextStoreHost>,
     keys: Rc<RefCell<Vec<KeyEvent>>>,
@@ -1176,7 +1176,7 @@ impl HostedCanvas {
                     .ok_or("the web window serves text stores")?;
                 let active = Arc::new(std::sync::Mutex::new(Vec::new()));
                 let seen = Arc::clone(&active);
-                let observed = Arc::downgrade(&window);
+                let observed = std::rc::Rc::downgrade(&window);
                 let last = Cell::new(window.state().focused);
                 handler.react_to_state_change(move || {
                     let Some(window) = observed.upgrade() else {

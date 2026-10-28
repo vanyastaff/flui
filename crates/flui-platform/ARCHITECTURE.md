@@ -22,7 +22,10 @@ this one path (ADR-0151 §9).
   rational rates converted in `u128` (`refresh_value_classification_table`). A snapshot
   never substitutes 60 Hz; that is a consumer's policy (ADR-0236).
 - **Flat root.** Every public item is re-exported at the crate root; the
-  modules are private except six whose types keep their module path:
+  modules are private except seven whose types keep their module path:
+  `testing`, what a test double's window is written with (`NoNativeSurface`, and the
+  `window_takes_no_frame_verbs!` macro it defines, exported at the root as every
+  `macro_export` is), which production code has no use for;
   `os_options`, one operating system's window creation options, which are not
   everyone's vocabulary; `haptics`, the second haptic tier with its requests and outcomes, which
   the facade and `flui-sdk` re-export only under `unstable-input` (ADR-0210 §9)
@@ -54,8 +57,8 @@ this one path (ADR-0151 §9).
 - **`PlatformWindow` has no `accessibility()` and no `as_winit`.** The
   accessibility bridge speaks AccessKit, so `flui-native`'s
   `HostWindow: PlatformWindow` carries it host-side: `open_window` returns an
-  `Arc<dyn HostWindow>`, and the runner reads the bridge once before handing
-  the UI runtime an `Arc<dyn PlatformWindow>`. A `compile_fail` doctest on the
+  `Rc<dyn HostWindow>`, and the runner reads the bridge once before handing
+  the UI runtime an `Rc<dyn PlatformWindow>`. A `compile_fail` doctest on the
   trait, paired with a twin that compiles, pins that the method is gone.
 - **A window fact has one source: the `WindowState` snapshot (ADR-0254 §1).**
   `PlatformWindow` has no getter and no per-fact callback beside `state()`
@@ -142,11 +145,23 @@ this one path (ADR-0151 §9).
   both. A verb answers its reason itself: nothing admits it against the
   capabilities, so the capabilities keep no second copy of it. A test double whose window system takes neither writes them with
   `window_takes_no_frame_verbs!`.
-- **The raw-handle impls live with the trait.** `HasWindowHandle` and
-  `HasDisplayHandle` for `dyn PlatformWindow` are here because the orphan rule
-  puts them next to the trait; `flui-native` repeats them for
-  `dyn HostWindow`, so an `open_window` result is a renderer target before its
-  upcast. `raw-window-handle` appears only through those traits and their
+- **The window stays on its owner thread; other threads get a target and a
+  requester (ADR-0254 §5).** `PlatformWindow` is neither `Send` nor `Sync`, so
+  no window, nor any `Rc`, `Arc` or borrow of one, crosses a thread
+  (`a_platform_window_cannot_cross_a_thread`, a compile-fail fixture, and
+  `assert_not_impl_any!` in `tests/surface_target.rs`). The thread that
+  presents frames takes `surface_target()`: a `SurfaceTarget`
+  (`HasWindowHandle + HasDisplayHandle + Send + Sync + 'static`) that answers
+  `HandleError::Unavailable` once the window is gone, does not keep the
+  window open (it may keep the native object its surface draws into alive,
+  as wgpu needs), and has the required `pre_present_notify` the raster side
+  calls before each present. The Apple targets hand out their view on the
+  main thread only, where AppKit and UIKit make a surface, and Android's on
+  its looper thread. A thread that wants a frame asks
+  `redraw_requester()`, a `RedrawRequester`; any `Fn() + Send + Sync` closure
+  is one, which is what a test double hands out. `testing::NoNativeSurface` is the
+  target of a window with no native surface. `raw-window-handle` appears only
+  through the two handle traits and their
   `WindowHandle`/`DisplayHandle`/`HandleError` (ADR-0089).
 
 ## Mapping decisions

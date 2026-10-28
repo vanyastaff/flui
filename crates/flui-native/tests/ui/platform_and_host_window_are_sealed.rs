@@ -42,8 +42,8 @@ impl Platform for OutsidePlatform {
         &self,
         _: WindowOptions,
         _: Rc<dyn WindowHandler>,
-    ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
-        Ok(Arc::new(OutsideWindow))
+    ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
+        Ok(Rc::new(OutsideWindow))
     }
 
     fn active_window(&self) -> Option<WindowId> {
@@ -168,6 +168,13 @@ impl PlatformWindow for OutsideWindow {
         None
     }
 
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        Arc::new(|| {})
+    }
+
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        Arc::new(flui_platform::testing::NoNativeSurface)
+    }
 }
 
 impl HostWindow for OutsideWindow {

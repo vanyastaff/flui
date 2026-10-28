@@ -11,10 +11,7 @@ use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 use flui_foundation::{ClaimHandle, ClaimSlot, claim_slot};
 use parking_lot::Mutex;
 
-use crate::{
-    host_window::HostWindow,
-    owner::{OpenWindowError, WindowRequest},
-};
+use crate::owner::{OpenWindowError, WindowRequest};
 use flui_platform::WindowId;
 
 pub(super) const CONTROL_CAPACITY: usize = 256;
@@ -25,7 +22,7 @@ type WakeOwner = Arc<dyn Fn() + Send + Sync>;
 /// failure — exactly `OwnerPlatform`/`PlatformProxy`'s `PendingWindow`
 /// payload (ADR-0039 §3). The owner resolves `WindowId -> Arc<dyn
 /// HostWindow>` before delivering, so no caller needs a second lookup.
-pub(super) type OpenWindowResult = Result<Arc<dyn HostWindow>, OpenWindowError>;
+pub(super) type OpenWindowResult = Result<crate::owner::OpenedWindow, OpenWindowError>;
 
 pub(super) enum ControlCommand {
     OpenWindow {
@@ -259,7 +256,7 @@ impl ControlSender {
     }
 
     /// Asks the owner to run the close teardown for `window_id` — the
-    /// programmatic [`WindowCommand::Close`](flui_platform::WindowCommand::Close) route (issue #919). The owner
+    /// programmatic [`WindowCommand::Close`](flui_platform::WindowCommand::Close) route. The owner
     /// answers on its next turn with the SAME teardown a compositor close
     /// takes after its should-close veto (per-window close callback, map
     /// removal, cursor/drag cleanup, callback clear, exit-policy consult),
@@ -273,7 +270,7 @@ impl ControlSender {
     /// coalesces (one teardown). A request after admission closed is
     /// dropped: the loop has already stopped, so no owner turn will ever
     /// run the teardown — that window's `WindowHandler::closed` does not fire, its
-    /// callbacks clear when the embedder's last `Arc` drops
+    /// handler is let go of when the application's last handle on the window drops
     /// (`WinitWindow::drop`), and the loop's own quit callback is the
     /// embedder's signal that everything is over. The owner drains closes
     /// posted BEFORE a quit ahead of the exit itself, so this is only ever
@@ -380,6 +377,7 @@ impl Drop for ControlReceiver {
 #[cfg(test)]
 mod tests {
     use std::{
+        rc::Rc,
         sync::{
             Arc,
             atomic::{AtomicUsize, Ordering},
@@ -396,8 +394,9 @@ mod tests {
     use flui_platform::{WindowHandler, WindowOptions};
     use flui_testing::window_handler::RecordingWindowHandler;
 
-    use crate::owner::WindowRequest;
+    use crate::host_window::HostWindow;
     use crate::owner::window_delivery::WindowDelivery;
+    use crate::owner::{OpenedWindow, WindowRequest};
 
     assert_impl_all!(super::ControlSender: Clone, Send, Sync);
     assert_not_impl_any!(super::ControlReceiver: Send, Sync);
@@ -411,7 +410,7 @@ mod tests {
         )
     }
 
-    /// A tiny stand-in window so tests can build an `Arc<dyn HostWindow>`
+    /// A tiny stand-in window so tests can build an `Rc<dyn HostWindow>`
     /// reply payload without depending on a real winit window.
     struct StubWindow(WindowDelivery);
 
@@ -457,6 +456,12 @@ mod tests {
         }
 
         fn request_redraw(&self) {}
+        fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+            Arc::new(|| {})
+        }
+        fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+            Arc::new(flui_platform::testing::NoNativeSurface)
+        }
         fn set_cursor(
             &self,
             _cursor: cursor_icon::CursorIcon,
@@ -506,7 +511,14 @@ mod tests {
             let handle = sender
                 .request_open_window(options("cross-thread"))
                 .expect("owner lane accepts request");
-            handle.wait()
+            let outcome = handle.wait();
+            if let ClaimOutcome::Delivered(Ok(opened)) = &outcome {
+                assert!(
+                    matches!(opened.window(), crate::OpenedWindowReach::OtherThread),
+                    "a worker reaches the opened window's identity, never the window"
+                );
+            }
+            outcome
         });
 
         wake_rx
@@ -516,18 +528,28 @@ mod tests {
         assert_eq!(thread::current().id(), owner_thread);
         let ControlCommand::OpenWindow { reply, .. } =
             receiver.try_recv().expect("owner receives request");
+        let stub: Rc<dyn HostWindow> = Rc::new(StubWindow::new());
         assert!(
-            reply.deliver(Ok(Arc::new(StubWindow::new()))).is_ok(),
+            reply.deliver(Ok(OpenedWindow::new(&stub))).is_ok(),
             "slot is still Pending"
         );
-        let window = match worker.join().expect("worker exits") {
+        let opened = match worker.join().expect("worker exits") {
             ClaimOutcome::Delivered(result) => result.expect("window opens"),
             ClaimOutcome::AlreadyClaimed => {
                 panic!("this handle is never polled by another caller before wait")
             }
             ClaimOutcome::OwnerGone => panic!("the owner never disconnects in this test"),
         };
+        assert_eq!(opened.id(), stub.id());
+        let crate::OpenedWindowReach::Open(window) = opened.window() else {
+            panic!("the owner reaches the opened window");
+        };
         assert!(window.state().visible);
+        drop((window, stub));
+        assert!(
+            matches!(opened.window(), crate::OpenedWindowReach::Closed),
+            "a window that is gone is closed, on the owner"
+        );
     }
 
     /// The owner lane: a cross-thread request is processed on the owner, and

@@ -4,7 +4,7 @@
 //! `owner_dispatch.rs` through `#[path]` because the host it exercises is
 //! private to the runner.
 
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_foundation::PresentationAddress;
 use flui_native::{HeadlessPlatform, HostWindow, Platform as _};
@@ -19,8 +19,8 @@ use super::*;
 use crate::native::with_window;
 
 /// Whether `window` is `host`'s allocation.
-fn is(window: &dyn HostWindow, host: &Arc<dyn HostWindow>) -> bool {
-    std::ptr::addr_eq(std::ptr::from_ref(window), Arc::as_ptr(host))
+fn is(window: &dyn HostWindow, host: &Rc<dyn HostWindow>) -> bool {
+    std::ptr::addr_eq(std::ptr::from_ref(window), Rc::as_ptr(host))
 }
 
 /// `with_window` reaches the host window the presentation at its address is
@@ -40,8 +40,8 @@ fn with_window_reaches_the_host_window_of_its_presentation_and_no_other() {
             .expect("an installed owner")
             .and_then(flui_native::WindowOpen::try_ready)
             .expect("headless windows are ready");
-    let window: Arc<dyn PlatformWindow> = Arc::clone(&host) as Arc<dyn PlatformWindow>;
-    let runtime = build_ui_runtime(presentation_window(Arc::clone(&host)), 1.0).expect("runtime");
+    let window: Rc<dyn PlatformWindow> = Rc::clone(&host) as Rc<dyn PlatformWindow>;
+    let runtime = build_ui_runtime(presentation_window(Rc::clone(&host)), 1.0).expect("runtime");
     let dispatcher = install_ui_runtime_alongside(runtime, &window).expect("installed");
     let address = dispatcher.address;
 

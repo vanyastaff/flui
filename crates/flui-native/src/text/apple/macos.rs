@@ -300,25 +300,24 @@ pub struct MacOSTextInput {
     /// The view is not retained: the capability borrows the window it was
     /// made for, as every other per-window capability on this backend does,
     /// and the view lives as long as that window. `closed`, the same liveness
-    /// gate `HasWindowHandle::window_handle` consults, is what keeps a late
-    /// call safe: a capability clone retained past its window's close is a
-    /// no-op rather than a message to an NSWindow AppKit has already been told
-    /// to tear down.
+    /// gate the window's surface target consults, is what keeps a late call
+    /// safe: a capability retained past its window's close or drop is a no-op
+    /// rather than a message to a view AppKit has torn down.
     window: ContentViewRef,
 }
 
-// SAFETY: the same argument as `MacOSWindow`'s own `unsafe impl Send`/`Sync`:
-// the view is a raw AppKit pointer that is only ever messaged from inside
-// `exec_on_owner`, which runs the body on the window's owner lane; the
-// remaining fields are `Arc`/`&'static`/`bool`. The residual — a capability
-// clone outliving its window — is why `closed` is consulted in both bodies: the
-// window's close is what makes further AppKit contact meaningless, and a
-// capability whose window was dropped *without* closing retains the same
-// window-clone contract every other capability in this backend has (the
-// window's own `Drop` tail owns the release).
+// SAFETY: the capability holds the window's content-view address, the
+// window's `closed` flag and its owner lane (a `&'static` queue and a `bool`).
+// The view is messaged only inside `exec_on_owner`, which runs the body on the
+// owner lane, and only after `closed` reads unset there. The window sets
+// `closed` on that same thread, in `windowWillClose:` and in its `Drop` before
+// it releases the NSWindow whose hierarchy holds the view, so no release of
+// the view can fall between the check and the message, and a capability that
+// outlives its window reaches nothing.
 unsafe impl Send for MacOSTextInput {}
-// SAFETY: see `Send` above; there is no interior mutability here at all — every
-// mutation happens to the view's text input from inside the routed body.
+// SAFETY: see `Send` above; a shared reference reads the flag and copies the
+// address and the lane, and every mutation happens to the view's text input
+// inside the routed body.
 unsafe impl Sync for MacOSTextInput {}
 
 /// A window's IME capability is made for it as it opens; the content view's
@@ -400,8 +399,8 @@ impl crate::text::TextInput for std::sync::Arc<MacOSTextInput> {
 }
 
 impl std::fmt::Debug for MacOSTextInput {
-    // Hand-written for the same reason `MacOSWindow`'s is: the NSView pointer
-    // and the dispatch lane have no useful Debug form.
+    // Hand-written: the NSView pointer and the dispatch lane have no useful
+    // Debug form.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MacOSTextInput")
             .field("view", &self.window.view.addr())

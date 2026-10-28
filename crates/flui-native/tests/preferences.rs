@@ -92,7 +92,8 @@ fn windows_reads_preferences_before_a_user_window_exists() {
             WindowsAndMessaging::{SM_CXDOUBLECLK, SM_CXDRAG, SM_CYDOUBLECLK, SM_CYDRAG},
         },
     };
-    let RawWindowHandle::Win32(handle) = window.window_handle().expect("live handle").as_raw()
+    let surface = window.surface_target();
+    let RawWindowHandle::Win32(handle) = surface.window_handle().expect("live handle").as_raw()
     else {
         panic!("native Win32 handle")
     };
@@ -117,16 +118,6 @@ fn windows_reads_preferences_before_a_user_window_exists() {
     assert_eq!(projected.mouse_double_click_area(), Some(area));
     assert_eq!(projected.mouse_drag_tolerance(), Some(drag));
     assert!(projected.touch_slop().is_none());
-    let refused = std::thread::scope(|scope| {
-        scope
-            .spawn(|| window.gesture_geometry())
-            .join()
-            .expect("foreign query returned")
-    });
-    assert_eq!(
-        refused,
-        Err(flui_platform::PreferenceQueryError::WrongThread)
-    );
     window.close_now();
     assert_eq!(
         window.gesture_geometry(),

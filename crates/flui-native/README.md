@@ -42,8 +42,8 @@ error.rs         PlatformError, BootstrapError
 ```
 
 No public path names an OS type (ADR-0151 §8): each host's window is the
-`Arc<dyn HostWindow>` the platform opens, a raw window or display handle comes
-from `raw-window-handle`, and what one OS offers beyond the window contract is
+`Rc<dyn HostWindow>` the platform opens, a raw window or display handle comes
+from its `SurfaceTarget` through `raw-window-handle`, and what one OS offers beyond the window contract is
 an extension of `HostWindow` (`WindowsWindowExt`, `MacOSWindowExt`) that
 answers `None` for another host's window. The Android host starts over the
 Activity `android_main` is handed, through `android_platform(app)`.

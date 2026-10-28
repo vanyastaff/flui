@@ -195,7 +195,7 @@ pub trait Window<O> {
         shared: &Arc<Self::Shared>,
         options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
-    ) -> Result<Arc<dyn HostWindow>, OpenWindowError>;
+    ) -> Result<Rc<dyn HostWindow>, OpenWindowError>;
 
     /// [`Platform::active_window`].
     fn active(owner: &O, shared: &Self::Shared) -> Option<WindowId>;
@@ -470,7 +470,7 @@ impl<O> Window<O> for Absent<position::Window> {
         _: &Arc<()>,
         _: WindowOptions,
         _: Rc<dyn WindowHandler>,
-    ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
+    ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
         Err(NOT_ON_THIS_PLATFORM.into())
     }
 

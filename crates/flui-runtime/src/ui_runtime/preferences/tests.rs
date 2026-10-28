@@ -28,7 +28,7 @@ fn invoke(slot: &'static std::thread::LocalKey<Callback>) {
 }
 
 struct Window {
-    inner: Arc<dyn PlatformWindow>,
+    inner: Rc<dyn PlatformWindow>,
     answer: Mutex<Result<Option<GestureGeometry>, PreferenceQueryError>>,
     panic_query: AtomicBool,
 }
@@ -38,6 +38,12 @@ impl PlatformWindow for Window {
     }
     fn request_redraw(&self) {
         self.inner.request_redraw();
+    }
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        self.inner.redraw_requester()
+    }
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        self.inner.surface_target()
     }
     fn set_cursor(
         &self,
@@ -136,7 +142,7 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
         )
     };
     for (in_query, panics) in [(true, false), (true, true), (false, false), (false, true)] {
-        let window = Arc::new(Window {
+        let window = Rc::new(Window {
             inner: flui_native::headless_platform()
                 .open_window(
                     flui_platform::WindowOptions::default(),
@@ -177,7 +183,7 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
             )
             .expect("root");
         let replacement = Rc::clone(&runtime);
-        let next_window = Arc::clone(&window);
+        let next_window = Rc::clone(&window);
         let next_clock = clock.clone();
         let callback = Box::new(move || {
             *next_window.answer.lock().expect("replacement") = Ok(geometry(2.0));
@@ -309,7 +315,7 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
 }
 
 struct HapticWindow {
-    inner: Arc<dyn PlatformWindow>,
+    inner: Rc<dyn PlatformWindow>,
     haptics: Arc<flui_platform::haptics::FakeHaptics>,
 }
 impl PlatformWindow for HapticWindow {
@@ -318,6 +324,12 @@ impl PlatformWindow for HapticWindow {
     }
     fn request_redraw(&self) {
         self.inner.request_redraw();
+    }
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        self.inner.redraw_requester()
+    }
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        self.inner.surface_target()
     }
     fn set_cursor(
         &self,
@@ -369,7 +381,7 @@ pub(crate) fn haptics_preference_suppresses_both_tiers() {
         FakeHaptics, HapticOutcome, HapticPattern, HapticRequest, HapticTiming,
     };
     let haptics = Arc::new(FakeHaptics::new());
-    let window = Arc::new(HapticWindow {
+    let window = Rc::new(HapticWindow {
         inner: flui_native::headless_platform()
             .open_window(
                 flui_platform::WindowOptions::default(),
@@ -464,7 +476,7 @@ pub(crate) fn frame_aligned_haptics_play_only_with_a_presented_frame() {
         SubmitVerdict::NoPresent,
     ] {
         let haptics = Arc::new(FakeHaptics::new());
-        let window = Arc::new(HapticWindow {
+        let window = Rc::new(HapticWindow {
             inner: flui_native::headless_platform()
                 .open_window(
                     flui_platform::WindowOptions::default(),

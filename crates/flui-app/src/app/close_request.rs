@@ -85,7 +85,7 @@
 //!   synchronously inside the command, so a test that asserts right after the
 //!   call pins the double, not the winit contract.
 
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 use std::thread::ThreadId;
 
 use flui_foundation::PresentationAddress;
@@ -290,7 +290,7 @@ struct PresentationCloseEntry {
     /// resources — and, through the callbacks it owns, its GPU surface —
     /// alive past the teardown ordering issue #713's Wayland crash
     /// established.
-    window: Weak<dyn PlatformWindow>,
+    window: std::rc::Weak<dyn PlatformWindow>,
     handler: Option<CloseRequestHandler>,
     /// The thread that registered this entry. Every `PlatformWindow`
     /// callback must be invoked on the thread that registered it (see the
@@ -337,12 +337,12 @@ impl PreparedCloseRequest {
     ))]
     pub(crate) fn new(
         address: PresentationAddress,
-        window: &Arc<dyn PlatformWindow>,
+        window: &std::rc::Rc<dyn PlatformWindow>,
         handler: Option<CloseRequestHandler>,
     ) -> Self {
         Self(PresentationCloseEntry {
             address,
-            window: Arc::downgrade(window),
+            window: std::rc::Rc::downgrade(window),
             handler,
             owner_thread: std::thread::current().id(),
         })
@@ -535,6 +535,7 @@ impl CloseRequestRouter {
 
 #[cfg(test)]
 mod tests {
+    use std::rc::Rc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use flui_foundation::{PresentationId, UiRuntimeId};
@@ -549,14 +550,14 @@ mod tests {
         }
     }
 
-    fn window(id: u64) -> Arc<dyn PlatformWindow> {
-        Arc::new(TestWindow::new().with_id(id)) as Arc<dyn PlatformWindow>
+    fn window(id: u64) -> Rc<dyn PlatformWindow> {
+        Rc::new(TestWindow::new().with_id(id)) as Rc<dyn PlatformWindow>
     }
 
     fn register(
         router: &CloseRequestRouter,
         address: PresentationAddress,
-        window: &Arc<dyn PlatformWindow>,
+        window: &Rc<dyn PlatformWindow>,
         handler: Option<CloseRequestHandler>,
     ) {
         let prepared = PreparedCloseRequest::new(address, window, handler);
@@ -748,19 +749,31 @@ mod tests {
         );
     }
 
+    thread_local! {
+        /// The router a [`RegisterOnDrop`] registers on: a handler is `Send`,
+        /// the router, which holds windows, is not.
+        #[allow(
+            clippy::missing_const_for_thread_local,
+            reason = "the initializer is `const`; clippy for the Android target reports it anyway"
+        )]
+        static ROUTER: std::cell::RefCell<std::rc::Weak<CloseRequestRouter>> =
+            const { std::cell::RefCell::new(std::rc::Weak::new()) };
+    }
+
     struct RegisterOnDrop {
-        router: Weak<CloseRequestRouter>,
-        window: Arc<dyn PlatformWindow>,
+        window_id: u64,
         address: PresentationAddress,
     }
 
     impl Drop for RegisterOnDrop {
         fn drop(&mut self) {
-            let router = self.router.upgrade().expect("router still owned");
+            let router = ROUTER
+                .with_borrow(std::rc::Weak::upgrade)
+                .expect("router still owned");
             register(
                 &router,
                 self.address,
-                &self.window,
+                &window(self.window_id),
                 Some(CloseRequestHandler::new(|_| CloseResponse::KeepOpen)),
             );
         }
@@ -768,12 +781,12 @@ mod tests {
 
     fn retiring_a_handler_preserves_its_reentrant_registration() {
         for whole_runtime in [false, true] {
-            let router = Arc::new(CloseRequestRouter::new());
+            let router = Rc::new(CloseRequestRouter::new());
             let old = address(1, 1);
             let next = address(2, 2);
+            ROUTER.set(Rc::downgrade(&router));
             let capture = RegisterOnDrop {
-                router: Arc::downgrade(&router),
-                window: window(2),
+                window_id: 2,
                 address: next,
             };
             register(

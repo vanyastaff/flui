@@ -61,7 +61,7 @@ pub(crate) struct Entry {
     pub(crate) reach: DragReach,
     pub(crate) source: PresentationId,
     pub(crate) pointer: Option<flui_platform::pointer::PointerInfo>,
-    pub(crate) window: Option<std::sync::Weak<dyn PlatformWindow>>,
+    pub(crate) window: Option<std::rc::Weak<dyn PlatformWindow>>,
     pub(crate) hit_test: Option<HitTestHandle>,
     pub(crate) capture: Option<PointerCapture>,
     pub(crate) observer: Option<Rc<dyn DragObserver>>,

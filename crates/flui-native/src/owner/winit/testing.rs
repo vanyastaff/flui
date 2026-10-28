@@ -15,6 +15,7 @@
 use std::{
     collections::HashMap,
     marker::PhantomData,
+    rc::Rc,
     sync::Arc,
     thread,
     time::{Duration, Instant},
@@ -35,7 +36,7 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::WindowId as WinitWindowId;
 
 #[cfg(target_os = "linux")]
-pub(crate) use window_scenario::run_window_scenario;
+pub(crate) use window_scenario::{ScenarioWindow, run_window_scenario};
 
 use super::control::{ControlReceiver, ControlSender, control_lane};
 use super::{
@@ -52,7 +53,6 @@ use crate::owner::notices::{NoticeChannel, StaleOnWake};
 use crate::owner::signal::OwnerSignal;
 use crate::owner::sources::SystemPreferenceSource;
 use crate::platform::{AppHandler, HostPlatform, Platform};
-use std::rc::Rc;
 
 /// Builds a real `EventLoop` for a test running on an ordinary test
 /// thread, not the process's actual main thread. winit refuses this by
@@ -364,7 +364,7 @@ impl LoopWindows for NoWindows {
         _: &ActiveEventLoop,
         _: WindowSeed<'_>,
         _: WindowOptions,
-    ) -> Result<Arc<dyn LoopWindow>, OpenWindowError> {
+    ) -> Result<Rc<dyn LoopWindow>, OpenWindowError> {
         Err(Self::refusal())
     }
 
@@ -383,8 +383,8 @@ impl host::Window<WinitLoop> for NoWindows {
         _: &WinitLoop,
         _: &Arc<NoWindows>,
         _: WindowOptions,
-        _: std::rc::Rc<dyn flui_platform::WindowHandler>,
-    ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
+        _: Rc<dyn flui_platform::WindowHandler>,
+    ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
         Err(Self::refusal())
     }
 
@@ -652,18 +652,76 @@ impl FileDrops for NoFileDrops {
 mod window_scenario {
     use std::{
         panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
+        rc::Rc,
         sync::Arc,
         thread,
+        time::Duration,
     };
 
     use flui_foundation::ClaimOutcome;
+    use flui_platform::{CommandRefusal, WindowCommand, WindowState};
     use winit::event_loop::EventLoop;
 
     use super::{install_control_lane, install_test_owner_signal, wait_for_running};
-    use crate::WindowRequest;
     use crate::host_window::HostWindow;
+    use crate::owner::signal::OwnerSignal;
     use crate::owner::winit::{WinitApp, WinitLoop};
     use crate::platform::Platform;
+    use crate::{OpenedWindow, WindowRequest};
+
+    /// The window a scenario drives from its worker thread. A window is its
+    /// owner thread's (ADR-0254 §5), so each call runs there, in an owner
+    /// turn, and the worker waits for its answer; a panic of the call is
+    /// raised on the worker.
+    pub(crate) struct ScenarioWindow {
+        opened: Arc<OpenedWindow>,
+        signal: Arc<OwnerSignal>,
+    }
+
+    impl ScenarioWindow {
+        /// Run `call` with the window on the owner thread and hand back what
+        /// it answered.
+        pub(crate) fn with<R: Send + 'static>(
+            &self,
+            call: impl FnOnce(&Rc<dyn HostWindow>) -> R + Send + 'static,
+        ) -> R {
+            let (answer, answered) = std::sync::mpsc::sync_channel(1);
+            let opened = Arc::clone(&self.opened);
+            let call = parking_lot::Mutex::new(Some(call));
+            let turn = OwnerSignal::window_wake(&self.signal, move || {
+                let Some(call) = call.lock().take() else {
+                    return;
+                };
+                let crate::OpenedWindowReach::Open(window) = opened.window() else {
+                    panic!("the scenario's window is open, on its owner thread");
+                };
+                let _ = answer.send(catch_unwind(AssertUnwindSafe(|| call(&window))));
+            });
+            turn();
+            match answered
+                .recv_timeout(Duration::from_secs(10))
+                .expect("the owner ran the scenario's call")
+            {
+                Ok(answer) => answer,
+                Err(payload) => resume_unwind(payload),
+            }
+        }
+
+        /// The window's snapshot, read on the owner thread.
+        pub(crate) fn state(&self) -> WindowState {
+            self.with(|window| window.state())
+        }
+
+        /// Admit `command` and apply it on the owner thread.
+        pub(crate) fn admit_and_apply(&self, command: WindowCommand) -> Result<(), CommandRefusal> {
+            self.with(move |window| command.admit_and_apply(&**window))
+        }
+
+        /// The first frame was presented: the window reveals itself.
+        pub(crate) fn reveal_after_first_frame(&self) {
+            self.with(|window| window.reveal_after_first_frame());
+        }
+    }
 
     /// Run `event_loop` for `platform`, the loop of `owner_platform`, open a
     /// window for `opening` once the loop runs, and run `scenario` against
@@ -674,7 +732,7 @@ mod window_scenario {
         owner_platform: Arc<dyn Platform>,
         event_loop: EventLoop<()>,
         opening: WindowRequest,
-        scenario: impl FnOnce(Arc<dyn HostWindow>) + Send + 'static,
+        scenario: impl FnOnce(ScenarioWindow) + Send + 'static,
     ) {
         install_test_owner_signal(&platform, &event_loop);
         let (control, lane) = install_control_lane(&platform, &event_loop);
@@ -684,7 +742,7 @@ mod window_scenario {
         let worker = thread::spawn(move || {
             let outcome = catch_unwind(AssertUnwindSafe(|| {
                 wait_for_running(&platform_for_worker);
-                let window = match control_for_worker
+                let opened = match control_for_worker
                     .request_open_window(opening)
                     .expect("lane accepts the request")
                     .wait()
@@ -692,7 +750,15 @@ mod window_scenario {
                     ClaimOutcome::Delivered(result) => result.expect("window creation succeeds"),
                     _ => panic!("the window request is delivered"),
                 };
-                scenario(window);
+                let signal = platform_for_worker
+                    .owner_signal
+                    .lock()
+                    .clone()
+                    .expect("the test installed the owner signal");
+                scenario(ScenarioWindow {
+                    opened: Arc::new(opened),
+                    signal,
+                });
             }));
             control_for_worker.request_quit();
             if let Err(payload) = outcome {

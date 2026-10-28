@@ -1728,8 +1728,8 @@ fn native_fling_profile_controls_real_scroll_inertia() {
     };
     let owner = OwnerHost::new();
     let clock = ManualClock::new();
-    let window = Arc::new(GeometryWindow {
-        inner: Arc::clone(crate::owner_publication::window().window()),
+    let window = Rc::new(GeometryWindow {
+        inner: Rc::clone(crate::owner_publication::window().window()),
         answer: Mutex::new(Ok(profile(50.0, 300.0))),
         calls: AtomicUsize::new(0),
         query_time: Mutex::new(None),
@@ -1881,8 +1881,8 @@ fn late_geometry_recovery_is_isolated_per_presentation() {
     let clock = ManualClock::new();
     let mut recipients = Vec::new();
     for ratio in [1.0, 2.0] {
-        let window = Arc::new(GeometryWindow {
-            inner: Arc::clone(crate::owner_publication::window().window()),
+        let window = Rc::new(GeometryWindow {
+            inner: Rc::clone(crate::owner_publication::window().window()),
             answer: Mutex::new(Err(PreferenceQueryError::Unsupported(
                 flui_platform::Unsupported::new(flui_platform::UnsupportedReason::Unavailable),
             ))),
@@ -2044,7 +2044,7 @@ fn late_geometry_recovery_is_isolated_per_presentation() {
 }
 
 struct GeometryWindow {
-    inner: std::sync::Arc<dyn flui_platform::PlatformWindow>,
+    inner: Rc<dyn flui_platform::PlatformWindow>,
     answer: std::sync::Mutex<
         Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError>,
     >,
@@ -2089,8 +2089,8 @@ fn gesture_values_follow_the_presentation_display() {
     };
     let owner = OwnerHost::new();
     let clock = ManualClock::new();
-    let window = Arc::new(GeometryWindow {
-        inner: Arc::clone(crate::owner_publication::window().window()),
+    let window = Rc::new(GeometryWindow {
+        inner: Rc::clone(crate::owner_publication::window().window()),
         answer: Mutex::new(geometry(1.0, 2.0)),
         calls: AtomicUsize::new(0),
         query_time: Mutex::new(None),
@@ -2222,6 +2222,12 @@ impl flui_platform::PlatformWindow for GeometryWindow {
     fn request_redraw(&self) {
         self.inner.request_redraw();
     }
+    fn redraw_requester(&self) -> std::sync::Arc<dyn flui_platform::RedrawRequester> {
+        self.inner.redraw_requester()
+    }
+    fn surface_target(&self) -> std::sync::Arc<dyn flui_platform::SurfaceTarget> {
+        self.inner.surface_target()
+    }
     fn set_cursor(
         &self,
         cursor: flui_platform::CursorIcon,
@@ -2292,7 +2298,7 @@ impl flui_platform::PlatformWindow for GeometryWindow {
 /// A window whose input-region backend, or display query, fails once on
 /// request.
 struct RegionWindow {
-    inner: std::sync::Arc<dyn flui_platform::PlatformWindow>,
+    inner: Rc<dyn flui_platform::PlatformWindow>,
     /// How many regions each call handed the backend.
     sent: std::sync::Mutex<Vec<usize>>,
     panic_next: std::sync::atomic::AtomicBool,
@@ -2306,6 +2312,12 @@ impl flui_platform::PlatformWindow for RegionWindow {
     }
     fn request_redraw(&self) {
         self.inner.request_redraw();
+    }
+    fn redraw_requester(&self) -> std::sync::Arc<dyn flui_platform::RedrawRequester> {
+        self.inner.redraw_requester()
+    }
+    fn surface_target(&self) -> std::sync::Arc<dyn flui_platform::SurfaceTarget> {
+        self.inner.surface_target()
     }
     fn set_cursor(
         &self,
@@ -2406,8 +2418,8 @@ fn a_failed_move_keeps_its_regions_subscribers_and_row() {
     use flui_runtime::{HostInput, InputRecord};
     use std::sync::{Arc, Mutex, atomic::AtomicBool};
 
-    let window = Arc::new(RegionWindow {
-        inner: Arc::clone(crate::owner_publication::window().window()),
+    let window = Rc::new(RegionWindow {
+        inner: Rc::clone(crate::owner_publication::window().window()),
         sent: Mutex::new(Vec::new()),
         panic_next: AtomicBool::new(false),
         panic_display: AtomicBool::new(false),
@@ -2556,8 +2568,8 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
     };
     let owner = OwnerHost::new();
     let clock = ManualClock::new();
-    let window = Arc::new(GeometryWindow {
-        inner: Arc::clone(crate::owner_publication::window().window()),
+    let window = Rc::new(GeometryWindow {
+        inner: Rc::clone(crate::owner_publication::window().window()),
         answer: std::sync::Mutex::new(Ok(Some(
             GestureGeometry::new(DevicePixelRatio::new(1.0).expect("ratio"))
                 .with_touch_slop(Distance::new(2.0).expect("distance")),
@@ -3011,7 +3023,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         let calls_before = window.calls.load(Ordering::Relaxed);
         let polls = Rc::new(Cell::new(0));
         let observed_polls = Rc::clone(&polls);
-        let observed_window = Arc::clone(&window);
+        let observed_window = Rc::clone(&window);
         let task = driver.spawn_local(Box::pin(std::future::poll_fn(move |cx| {
             assert_eq!(
                 observed_window.calls.load(Ordering::Relaxed),

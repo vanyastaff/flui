@@ -619,7 +619,7 @@ pub mod linux {
                         "the first window must observe the portal's dark scheme"
                     );
                     let proxy = owner.proxy();
-                    let observed = Arc::downgrade(&window);
+                    let observed = std::rc::Rc::downgrade(&window);
                     let seen = Arc::clone(&scheme_witness);
                     handler.react_to_state_change(move || {
                         if observed.upgrade().is_some_and(|window| {

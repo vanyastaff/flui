@@ -9,7 +9,7 @@
 //!
 //! # Raw window handle
 //!
-//! `window_handle()` hands wgpu the content `UIView` through
+//! The window's surface target (`IOSSurface`) hands wgpu the content `UIView` through
 //! `raw_window_handle::UiKitWindowHandle`; `wgpu-hal`'s Metal backend derives
 //! a `CAMetalLayer` from it (`raw_window_metal::Layer::from_ui_view`), so no
 //! layer is created here — the same shape macOS uses with `NSView`.
@@ -56,7 +56,7 @@ use crate::owner::apple::ios::{
 };
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::owner::signal::OwnerSignal;
-use crate::owner::window_delivery::WindowDelivery;
+use crate::owner::window_delivery::{Retirement, WindowDelivery};
 use crate::platform::HostPlatform;
 use crate::text::TextInput;
 use crate::window::capabilities::{pointer_absence, scene_capabilities};
@@ -69,7 +69,8 @@ use flui_platform::{
     WindowGeometry, WindowState,
 };
 use flui_platform::{
-    CursorError, PlatformWindow, SurfaceChange, WindowExecutionState, WindowId, WindowOptions,
+    CursorError, PlatformWindow, RedrawRequester, SurfaceChange, SurfaceTarget,
+    WindowExecutionState, WindowId, WindowOptions,
 };
 use status_bar::FluiViewController;
 pub(crate) use status_bar::IOSSystemChrome;
@@ -696,8 +697,12 @@ pub struct IOSWindow {
     /// controller of each attachment.
     status_bar: Arc<status_bar::StatusBar>,
     delivery: Arc<WindowDelivery>,
-    closed: AtomicBool,
-    lifecycle: parking_lot::Mutex<IOSLifecycle>,
+    /// Set once the window closes for good, and by its [`Drop`] before the
+    /// view is released; shared with its surface targets.
+    closed: Arc<AtomicBool>,
+    /// Shared with the window's surface targets, which hand out no handle
+    /// while the window is detached from a scene.
+    lifecycle: Arc<parking_lot::Mutex<IOSLifecycle>>,
     metrics: Arc<parking_lot::Mutex<WindowMetrics>>,
     /// Shared with the view, which samples it on the main thread.
     dark: Arc<AtomicBool>,
@@ -789,15 +794,15 @@ impl IOSWindow {
                 WindowGeometry::new(None, Size::new(0.0, 0.0)),
                 Size::new(0.0, 0.0),
             )),
-            closed: AtomicBool::new(false),
-            lifecycle: parking_lot::Mutex::new(IOSLifecycle {
+            closed: Arc::new(AtomicBool::new(false)),
+            lifecycle: Arc::new(parking_lot::Mutex::new(IOSLifecycle {
                 execution: WindowExecutionState::Detached,
                 focused: false,
                 visible: false,
                 generation: 0,
                 pending: VecDeque::new(),
                 dispatching: false,
-            }),
+            })),
         }
     }
 }
@@ -1171,8 +1176,8 @@ impl SceneWindows for IOSWindows {
         displays: Arc<dyn HostDisplays>,
         touches: Box<dyn ViewTouches>,
         handler: Rc<dyn flui_platform::WindowHandler>,
-    ) -> Arc<dyn SceneWindow> {
-        let window = Arc::new(IOSWindow::new(
+    ) -> Rc<dyn SceneWindow> {
+        let window = Rc::new(IOSWindow::new(
             marker,
             id,
             signal,
@@ -1183,7 +1188,7 @@ impl SceneWindows for IOSWindows {
         ));
         window
             .delivery
-            .publish_through(Arc::downgrade(&window), IOSWindow::read_state);
+            .publish_through_owner(&window, IOSWindow::read_state);
         // The loop holds no borrow while it makes the window.
         window.delivery.deliver_capability_snapshot();
         window
@@ -1199,7 +1204,7 @@ impl host::Window<IOSLoop> for IOSWindow {
         _: &Arc<IOSWindows>,
         _options: WindowOptions,
         _handler: Rc<dyn flui_platform::WindowHandler>,
-    ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
+    ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
         Err(OpenWindowError::Unavailable { message: "UIKit scene connection supplies the window through on_scene_event; arbitrary open_window is unsupported".into() })
     }
 
@@ -1283,9 +1288,33 @@ impl PlatformWindow for IOSWindow {
     /// The `needs_redraw` flag the caller set before reaching here is what the
     /// next tick's `wake_action` reads, so the request is not lost — it is
     /// deferred to the display's own cadence, which is the pacing contract
-    /// this backend has.
+    /// this backend has. The window's `IOSRedraw` is the same request from
+    /// any thread.
     fn request_redraw(&self) {
-        tracing::trace!("request_redraw: demand recorded; the CADisplayLink delivers the frame");
+        IOSRedraw.request_redraw();
+    }
+
+    fn redraw_requester(&self) -> Arc<dyn RedrawRequester> {
+        Arc::new(IOSRedraw)
+    }
+
+    fn surface_target(&self) -> Arc<dyn SurfaceTarget> {
+        let marker = MainThreadMarker::new()
+            .expect("BUG: a UIKit window lives on the main thread, where it is used");
+        Arc::new(IOSSurface {
+            // SAFETY: the pointer is the window's live `FluiView`, which it
+            // holds as a `Retained`.
+            view: unsafe {
+                super::MainRetainedView::retain(
+                    Retained::as_ptr(&self.native.get(marker).view)
+                        .cast_mut()
+                        .cast(),
+                )
+            },
+            closed: Arc::clone(&self.closed),
+            lifecycle: Arc::clone(&self.lifecycle),
+            retirement: self.delivery.retirement(),
+        })
     }
 
     fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
@@ -1405,37 +1434,91 @@ impl PlatformWindow for IOSWindow {
         }
         published.state
     }
+}
 
+impl Drop for IOSWindow {
+    /// The surface targets outlive the window: they hand out nothing from
+    /// here on, before the view the window holds is released.
+    fn drop(&mut self) {
+        self.closed.store(true, Ordering::SeqCst);
+    }
+}
+
+/// A UIKit window's redraw requester (ADR-0254 §5).
+///
+/// A demand signal only, like `IOSWindow`'s `request_redraw`: the
+/// `needs_redraw` flag its caller set is what the view's `CADisplayLink` reads
+/// on its next tick (ADR-0071 §5), so a request from any thread records
+/// nothing more here, holds no window and reaches none.
+#[derive(Debug, Clone, Copy)]
+struct IOSRedraw;
+
+impl RedrawRequester for IOSRedraw {
+    fn request_redraw(&self) {
+        tracing::trace!("request_redraw: demand recorded; the CADisplayLink delivers the frame");
+    }
+}
+
+/// A UIKit window's surface target (ADR-0254 §5): the window's content
+/// `UIView`, as a `UiKitWindowHandle`, on the main thread, while the window is
+/// attached to a scene and has not closed.
+///
+/// It keeps the view alive for as long as it lives
+/// ([`MainRetainedView`](super::MainRetainedView)), so a Metal surface made
+/// from the handle never outlives the view.
+struct IOSSurface {
+    /// The window's `FluiView`.
+    view: super::MainRetainedView,
+    /// The window's closed flag.
+    closed: Arc<AtomicBool>,
+    /// The window's lifecycle: a detached window hands out no handle.
+    lifecycle: Arc<parking_lot::Mutex<IOSLifecycle>>,
+    /// Whether the window's native retirement has started.
+    retirement: Retirement,
+}
+
+impl IOSSurface {
+    /// Whether the window has no surface to hand out: closed, retired, or
+    /// detached from its scene.
+    fn is_unavailable(&self) -> bool {
+        self.closed.load(Ordering::SeqCst)
+            || self.retirement.is_retired()
+            || self.lifecycle.lock().execution == WindowExecutionState::Detached
+    }
+}
+
+impl raw_window_handle::HasWindowHandle for IOSSurface {
     fn window_handle(
         &self,
     ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
-        // Refuse once closed, so a retained `Arc<dyn PlatformWindow>` cannot
-        // hand out a handle to a detached window (the macOS backend's
-        // `closed` flag exists for the same reason).
-        if self.closed.load(Ordering::SeqCst) {
+        let main = MainThreadMarker::new().ok_or(raw_window_handle::HandleError::Unavailable)?;
+        if self.is_unavailable() {
             return Err(raw_window_handle::HandleError::Unavailable);
         }
-        let marker = MainThreadMarker::new().ok_or(raw_window_handle::HandleError::Unavailable)?;
-        if self.execution_now() == WindowExecutionState::Detached {
-            return Err(raw_window_handle::HandleError::Unavailable);
-        }
-        let view_ptr = Retained::as_ptr(&self.native.get(marker).view);
-        let handle = raw_window_handle::UiKitWindowHandle::new(
-            std::ptr::NonNull::new(view_ptr as *mut std::ffi::c_void)
-                .ok_or(raw_window_handle::HandleError::Unavailable)?,
-        );
-        // SAFETY: the `UIView` is retained by `self.view`, which outlives the
-        // returned handle's borrow of `self`.
+        let view = self
+            .view
+            .view(main)
+            .ok_or(raw_window_handle::HandleError::Unavailable)?;
+        let handle = raw_window_handle::UiKitWindowHandle::new(view);
+        // SAFETY: the target holds a +1 reference to the view
+        // (`MainRetainedView`), released no sooner than the target drops, so
+        // the view outlives every handle borrowed from the target and every
+        // surface made while the target lives.
         Ok(unsafe {
             raw_window_handle::WindowHandle::borrow_raw(raw_window_handle::RawWindowHandle::UiKit(
                 handle,
             ))
         })
     }
+}
 
+impl raw_window_handle::HasDisplayHandle for IOSSurface {
     fn display_handle(
         &self,
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        if MainThreadMarker::new().is_none() || self.is_unavailable() {
+            return Err(raw_window_handle::HandleError::Unavailable);
+        }
         let handle = raw_window_handle::UiKitDisplayHandle::new();
         // SAFETY: the UIKit display handle carries no pointer.
         Ok(unsafe {
@@ -1444,6 +1527,12 @@ impl PlatformWindow for IOSWindow {
             )
         })
     }
+}
+
+impl SurfaceTarget for IOSSurface {
+    /// UIKit has no frame callback to arm before a present: the view's
+    /// `CADisplayLink` paces the frames. It returns at once.
+    fn pre_present_notify(&self) {}
 }
 
 /// Owner-thread session notification. A connection carries explicit completion
@@ -1457,7 +1546,7 @@ pub enum IOSSceneEvent {
         /// Origin of this native connection.
         attachment: IOSSceneAttachmentId,
         /// Stable logical window, also retained across reconnects.
-        window: Arc<dyn HostWindow>,
+        window: Rc<dyn HostWindow>,
         /// Whether this session already installed its application tree.
         reconnect: bool,
         /// Complete only after logical state and native drivers are installed.
@@ -1550,7 +1639,7 @@ impl SceneConsumer for EventConsumer {
         &mut self,
         session: IOSSceneSessionId,
         attachment: IOSSceneAttachmentId,
-        window: Arc<dyn HostWindow>,
+        window: Rc<dyn HostWindow>,
         reconnect: bool,
         wake: PlatformProxy,
     ) -> Result<Box<dyn SceneInstallation>, BootstrapError> {

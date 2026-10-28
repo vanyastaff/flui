@@ -111,50 +111,6 @@ pub struct WindowsWindow {
     delivery: Arc<WindowDelivery>,
 }
 
-// SAFETY, per field: `state` is an `Arc<Mutex<..>>` with its own
-// synchronization; `windows` is an `Arc` of a set behind its own lock;
-// `haptics` and `drag_source` are `Send + Sync` themselves;
-// `identity` is a plain integer; `delivery` is `Send + Sync` and keeps the
-// window's handler in an owner-thread slot, so a foreign thread can neither
-// run nor drop it. The non-`Sync`/non-`Send` members are `hwnd: HWND` and
-// `context: *const WindowContext`, both bare addresses that this type never
-// dereferences through these fields (`context` is an identity token for
-// value comparison only — see its field doc) — sending or sharing an
-// address itself aliases nothing, so `Send` and `Sync` are sound for the
-// struct.
-//
-// The HWND behind that address is thread-AFFINE, not "thread-safe by
-// design": its message queue belongs to the thread that created it, Win32
-// dispatches `window_proc` (including the `WM_DESTROY` arm that retires the
-// `WindowContext` stored in `GWLP_USERDATA`) on that thread, and
-// `DestroyWindow` refuses to run anywhere else. That obligation is
-// DISCHARGED — not merely documented — by routing every affine touch on
-// this type through two gates in `platform.rs`:
-//
-// - every dereference of the `GWLP_USERDATA` context goes through
-//   `with_window_context`, which refuses (safe fallback, traced) unless the
-//   calling thread is the window's owning thread and the window is live, of
-//   our class, with a non-null slot — on the owning thread the deref cannot
-//   race the free: the only retiring path (`WM_DESTROY`) is dispatched on
-//   that same thread, and the borrow-ledger (`ContextGuard`/`ContextLedger`)
-//   defers the actual free past every live borrow, including across
-//   reentrant dispatch;
-// - every teardown (`close()`, the last wrapper `Drop`) goes through
-//   `teardown_route`, which verifies the handle still names THIS wrapper's
-//   window (class + context identity, guarding against OS handle
-//   recycling), calls `DestroyWindow` only on the owning thread, and
-//   otherwise posts `WM_CLOSE` to the owner's queue (`PostMessageW`, the
-//   documented cross-thread mechanism).
-//
-// The decision rules are pure and Linux-tested (`owner::hwnd_affinity`);
-// the remaining Win32 calls on `&self` (`ShowWindow`, `SetWindowPos`,
-// `SetWindowTextW`, DWM attributes, ...) are documented by Win32 as legal
-// cross-thread and dereference nothing.
-unsafe impl Send for WindowsWindow {}
-// SAFETY: see `Send` above — shared access adds nothing beyond the same
-// gated paths.
-unsafe impl Sync for WindowsWindow {}
-
 impl std::fmt::Debug for WindowsWindow {
     // Hand-written: the window's handler has no meaningful
     // Debug representation.
@@ -226,7 +182,7 @@ impl WindowsWindow {
         shares: crate::owner::windows::control::OwnerShares,
         apartment: Option<Rc<crate::owner::windows::com_apartment::ComApartment>>,
         drag: Arc<dyn crate::owner::windows::HostDrag>,
-    ) -> Result<Arc<Self>, OpenWindowError> {
+    ) -> Result<Rc<Self>, OpenWindowError> {
         let crate::owner::windows::control::OwnerShares {
             app_hooks,
             frames,
@@ -366,7 +322,7 @@ impl WindowsWindow {
         drag: Arc<dyn crate::owner::windows::HostDrag>,
         window_hooks: crate::owner::windows::WindowHooks,
         preferences: Rc<dyn crate::owner::windows::control::OwnerPreferences>,
-    ) -> Result<Arc<Self>, OpenWindowError> {
+    ) -> Result<Rc<Self>, OpenWindowError> {
         let (width, height) = (requested.width, requested.height);
         // SAFETY: `hwnd` is the valid handle `create_native` just returned
         // on this thread. `SetClassLongPtrW` and `apply_windows_features`
@@ -553,7 +509,7 @@ impl WindowsWindow {
             let this = super::proc::WindowRef::new(hwnd, identity);
             let positions = windows.positions;
 
-            let window = Arc::new(Self {
+            let window = Rc::new(Self {
                 hwnd,
                 state,
                 identity,
@@ -729,6 +685,16 @@ impl WindowsWindow {
     /// Get the native HWND handle
     pub(crate) fn hwnd(&self) -> HWND {
         self.hwnd
+    }
+
+    /// What other threads hold of this window: its surface and its redraw
+    /// requests.
+    fn surface(&self) -> Win32Surface {
+        Win32Surface {
+            hwnd: self.hwnd.0 as isize,
+            context: self.context as isize,
+            retirement: self.delivery.retirement(),
+        }
     }
 
     /// Whether the build the platform runs on draws a system backdrop: the
@@ -1367,11 +1333,17 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn request_redraw(&self) {
-        // A handle the OS has reused for another window is not this one.
-        if !handle_available(super::proc::teardown_route(self.hwnd, self.context)) {
-            return;
-        }
-        Self::redraw_native(self.hwnd);
+        // Retired, destroyed, or a handle the OS reused for another window:
+        // not this window, which asks for nothing.
+        flui_platform::RedrawRequester::request_redraw(&self.surface());
+    }
+
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        Arc::new(self.surface())
+    }
+
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        Arc::new(self.surface())
     }
 
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
@@ -1490,18 +1462,6 @@ impl PlatformWindow for WindowsWindow {
         _regions: &[flui_platform::input_regions::InputRegion],
     ) -> Result<(), Unsupported> {
         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
-    }
-
-    fn window_handle(
-        &self,
-    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
-        HasWindowHandle::window_handle(self)
-    }
-
-    fn display_handle(
-        &self,
-    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
-        HasDisplayHandle::display_handle(self)
     }
 }
 
@@ -1661,94 +1621,101 @@ fn handle_available(route: crate::owner::hwnd_affinity::TeardownRoute) -> bool {
     )
 }
 
-// Implement raw-window-handle for wgpu integration
-impl HasWindowHandle for WindowsWindow {
+/// A Win32 window's surface target and redraw requester (ADR-0254 §5): what
+/// the thread presenting its frames and any thread that wants a frame hold
+/// of the window.
+///
+/// It holds the window's handle and the address of its context as plain
+/// integers, never dereferenced, and the window's [`Retirement`], so it is
+/// `Send + Sync` with no `unsafe impl` and keeps nothing of the window alive.
+/// The window is there while its retirement has not started (`WM_DESTROY`
+/// starts it) and the identity probe still finds this window behind the
+/// handle: a destroyed handle, or one the OS recycled for another window,
+/// is not this window.
+///
+/// [`Retirement`]: crate::owner::window_delivery::Retirement
+#[derive(Debug)]
+pub(crate) struct Win32Surface {
+    /// The window handle, only probed, wrapped and posted to.
+    hwnd: isize,
+    /// The address of the window's context, compared by the probe against
+    /// what the handle's `GWLP_USERDATA` holds now.
+    context: isize,
+    retirement: crate::owner::window_delivery::Retirement,
+}
+
+impl Win32Surface {
+    fn hwnd(&self) -> HWND {
+        HWND(self.hwnd as *mut std::ffi::c_void)
+    }
+
+    /// Whether the window this surface was made for is still there.
+    fn is_live(&self) -> bool {
+        !self.retirement.is_retired()
+            && handle_available(super::proc::teardown_route(
+                self.hwnd(),
+                self.context as *const super::proc::WindowContext,
+            ))
+    }
+}
+
+impl HasWindowHandle for Win32Surface {
     fn window_handle(
         &self,
     ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
         use std::num::NonZeroIsize;
 
-        // Refuse a destroyed or recycled `HWND` up front — the same
-        // identity probe `close()` uses to route teardown, reused here so a
-        // caller that re-queries this method (issue #1043's recovery path,
-        // which holds an `Arc<dyn PlatformWindow>` rather than a saved
-        // handle) never receives a handle whose pointee no longer exists.
-        if !handle_available(super::proc::teardown_route(self.hwnd, self.context)) {
+        if !self.is_live() {
             return Err(raw_window_handle::HandleError::Unavailable);
         }
-
-        let hwnd_value = self.hwnd.0 as isize;
         let mut handle = Win32WindowHandle::new(
-            NonZeroIsize::new(hwnd_value).ok_or(raw_window_handle::HandleError::Unavailable)?,
+            NonZeroIsize::new(self.hwnd).ok_or(raw_window_handle::HandleError::Unavailable)?,
         );
-
         // SAFETY: `GetModuleHandleW(None)` queries the current process
-        // image, no pointer arguments — always sound.
-        unsafe {
-            let hinstance =
-                GetModuleHandleW(None).map_err(|_| raw_window_handle::HandleError::Unavailable)?;
-            let hinstance_value = hinstance.0 as isize;
-            handle.hinstance = NonZeroIsize::new(hinstance_value);
-        }
-
-        // SAFETY: `raw_window_handle::WindowHandle::borrow_raw`'s contract
-        // requires the wrapped handle to stay valid for the returned
-        // `WindowHandle`'s lifetime, which this function ties only to
-        // `&self` — i.e. to the `Arc<WindowsWindow>` staying alive — not to
-        // the underlying native HWND staying valid for that whole span.
-        //
-        // What the `handle_available` check above closes: a caller that
-        // re-acquires a handle from a retained `Arc<dyn PlatformWindow>`
-        // (issue #1043's recovery path) never receives one for a window
-        // that is already destroyed or whose `HWND` value the OS already
-        // recycled for someone else's window — those routes are refused
-        // before `Win32WindowHandle::new` runs. And `WM_DESTROY` now calls
-        // `WindowDelivery::clear()` (see `platform.rs`), which breaks the
-        // frame-callback → renderer → surface → `Arc<WindowsWindow>` cycle
-        // that used to orphan the whole chain forever after a native close
-        // — a surface is no longer pinned alive past the window it was
-        // created from.
-        //
-        // What stays open: the identity probe is a point-in-time check.
-        // `close()` on the owning thread (`TeardownRoute::DestroyDirect`)
-        // calls `DestroyWindow` synchronously, and Win32 dispatches
-        // `WM_DESTROY` — with it, `callbacks.clear()` — before that call
-        // returns. If that `close()` is itself invoked from inside a
-        // callback currently out of its slot in `WindowDelivery` for its
-        // call (the restore hazard #919 identified), a surface built
-        // from a handle this method returned earlier in the same call chain
-        // can still be alive while `DestroyWindow` runs beneath it — rwh's
-        // own contract puts the burden of not outliving the native window
-        // on the caller holding the handle, not on this method. That is a
-        // logic-level ordering gap this comment records, not a memory-safety
-        // one: `WindowHandle::borrow_raw`'s own doc
-        // (raw-window-handle-0.6.2/src/borrowed.rs) states its non-null
-        // guarantee "only applies to *pointers*, and not any window ID
-        // types in the handle", explaining that "it is possible for safe
-        // code in the same process to delete the window" — `hwnd` here is
-        // exactly such an ID (`Win32WindowHandle::hwnd: NonZeroIsize`, not a
-        // pointer type), so a caller is required to handle `HandleError` on
-        // every subsequent use rather than assume a handle it already holds
-        // stays good.
+        // image, no pointer arguments.
+        let hinstance = unsafe { GetModuleHandleW(None) }
+            .map_err(|_| raw_window_handle::HandleError::Unavailable)?;
+        handle.hinstance = NonZeroIsize::new(hinstance.0 as isize);
+        // SAFETY: the handle names a window this target was made for, live
+        // when `is_live` probed it just above. An `HWND` is an identifier, not
+        // a pointer (`borrow_raw`'s guarantee covers only pointers): a window
+        // destroyed after the probe makes later calls with it fail, and the
+        // window's handler hears `surface_changed(Release)` before its
+        // `WM_DESTROY` runs.
         Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(RawWindowHandle::Win32(handle)) })
     }
 }
 
-impl HasDisplayHandle for WindowsWindow {
+impl HasDisplayHandle for Win32Surface {
     fn display_handle(
         &self,
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
-        // wgpu 29.x fix: For multi-monitor support, ensure we return a valid display handle.
-        // WindowsDisplayHandle::new() creates a valid default for Windows Display enumeration.
-        // This helps wgpu locate the correct adapter/surface for the window's monitor.
-        let handle = WindowsDisplayHandle::new();
-        // SAFETY: `WindowsDisplayHandle` carries no fields (Windows has no
-        // per-display native handle in this API) — there is nothing for
-        // `borrow_raw` to invalidate; the call only exists to satisfy the
-        // `raw-window-handle` trait's `unsafe fn` signature.
+        if !self.is_live() {
+            return Err(raw_window_handle::HandleError::Unavailable);
+        }
+        // SAFETY: `WindowsDisplayHandle` carries no fields: there is nothing
+        // for `borrow_raw` to keep valid.
         Ok(unsafe {
-            raw_window_handle::DisplayHandle::borrow_raw(RawDisplayHandle::Windows(handle))
+            raw_window_handle::DisplayHandle::borrow_raw(RawDisplayHandle::Windows(
+                WindowsDisplayHandle::new(),
+            ))
         })
+    }
+}
+
+impl flui_platform::SurfaceTarget for Win32Surface {
+    /// Win32 has no frame callback to arm before a present: it returns at
+    /// once.
+    fn pre_present_notify(&self) {}
+}
+
+impl flui_platform::RedrawRequester for Win32Surface {
+    /// `InvalidateRect` and `PostMessageW` take a window handle from any
+    /// thread, so the request goes to the window system directly.
+    fn request_redraw(&self) {
+        if self.is_live() {
+            WindowsWindow::redraw_native(self.hwnd());
+        }
     }
 }
 

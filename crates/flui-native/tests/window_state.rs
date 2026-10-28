@@ -7,6 +7,7 @@
 
 use flui_platform::CommandRefusal;
 use flui_testing::window_commands::AdmitAndApply as _;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::Opened;
@@ -29,7 +30,7 @@ fn open(platform: &HeadlessPlatform) -> Opened {
     Opened::on(platform, WindowOptions::default()).expect("a headless window opens")
 }
 
-fn mock(window: &Arc<dyn HostWindow>) -> &MockWindow {
+fn mock(window: &Rc<dyn HostWindow>) -> &MockWindow {
     window
         .as_any()
         .downcast_ref::<MockWindow>()
@@ -46,7 +47,7 @@ fn count_changes(window: &Opened) -> Arc<AtomicUsize> {
     changes
 }
 
-fn applied(window: &Arc<dyn HostWindow>, command: WindowCommand) -> (WindowState, WindowState) {
+fn applied(window: &Rc<dyn HostWindow>, command: WindowCommand) -> (WindowState, WindowState) {
     let before = window.state();
     window
         .admit_and_apply(command.clone())
@@ -452,7 +453,7 @@ fn opening_options_are_reflected_in_the_first_snapshot() {
         .with_position(Some(Point::new(50.0, 60.0)))
         .with_mode(WindowMode::Maximized)
         .with_normal_geometry(Some(normal));
-    let window: Arc<dyn HostWindow> = platform
+    let window: Rc<dyn HostWindow> = platform
         .open_window(
             options,
             flui_testing::window_handler::RecordingWindowHandler::new(),
@@ -468,7 +469,7 @@ fn opening_options_are_reflected_in_the_first_snapshot() {
 /// from here on.
 fn listen(window: &Opened) -> Arc<std::sync::Mutex<Vec<WindowState>>> {
     let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let state = Arc::downgrade(&window.window);
+    let state = Rc::downgrade(&window.window);
     let log = Arc::clone(&heard);
     window.handler.react_to_state_change(move || {
         if let Some(window) = state.upgrade() {

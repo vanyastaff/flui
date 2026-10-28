@@ -292,7 +292,7 @@ impl OwnerPlatform {
     ///
     /// [`PlatformWindow::text_input`]: flui_platform::PlatformWindow::text_input
     #[must_use]
-    pub fn text_store_host(&self, window: &Arc<dyn HostWindow>) -> Option<Rc<dyn TextStoreHost>> {
+    pub fn text_store_host(&self, window: &Rc<dyn HostWindow>) -> Option<Rc<dyn TextStoreHost>> {
         window.text_store_host(OwnerThreadToken::new())
     }
 }
@@ -483,7 +483,7 @@ assert_impl_all!(SharedPlatform: Send, Sync, Clone);
 pub enum WindowOpen {
     /// Created synchronously. Always the case inside `on_ready`, and on
     /// backends whose owner thread may create directly outside callbacks.
-    Ready(Arc<dyn HostWindow>),
+    Ready(Rc<dyn HostWindow>),
     /// Enqueued on the owner lane; resolves at the loop's next drain
     /// anchor.
     Pending(PendingWindow),
@@ -506,7 +506,7 @@ impl WindowOpen {
     /// # Errors
     /// [`OpenWindowError::NotReady`] if this call is deferred (never the
     /// case inside `on_ready`).
-    pub fn try_ready(self) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
+    pub fn try_ready(self) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
         match self {
             Self::Ready(window) => Ok(window),
             Self::Pending(pending) => Err(OpenWindowError::NotReady(pending)),
@@ -789,6 +789,78 @@ pub enum ProxySendError<T: fmt::Debug> {
 // PendingWindow
 // ============================================================================
 
+/// A window a deferred open built (ADR-0254 §4): its identity, which any
+/// thread may hold, and the window itself, which only the owner thread
+/// reaches.
+///
+/// The window is not `Send`, so a thread that is not the owner never holds
+/// it: what it gets is the [`WindowId`]. The owner's host keeps the window
+/// tracked until it closes; this holds it weakly, so a value dropped on
+/// another thread keeps no window alive.
+pub struct OpenedWindow {
+    id: WindowId,
+    window: slot::OwnerWeak<dyn HostWindow>,
+}
+
+impl OpenedWindow {
+    /// The opened window, which `window` names on the owner thread. Built
+    /// there.
+    pub(crate) fn new(window: &Rc<dyn HostWindow>) -> Self {
+        Self {
+            id: window.id(),
+            window: slot::OwnerWeak::new(window),
+        }
+    }
+
+    /// The window's identity.
+    #[must_use]
+    pub fn id(&self) -> WindowId {
+        self.id
+    }
+
+    /// The window, on the owner thread while it is still open.
+    #[must_use]
+    pub fn window(&self) -> OpenedWindowReach {
+        if !self.window.is_owner_thread() {
+            return OpenedWindowReach::OtherThread;
+        }
+        self.window
+            .upgrade()
+            .map_or(OpenedWindowReach::Closed, OpenedWindowReach::Open)
+    }
+}
+
+/// What [`OpenedWindow::window`] reaches.
+pub enum OpenedWindowReach {
+    /// The window, which is open: the caller is on its owner thread.
+    Open(Rc<dyn HostWindow>),
+    /// The window closed after it was opened.
+    Closed,
+    /// The caller is not the window's owner thread, which alone reaches it:
+    /// what another thread has of the window is its identity.
+    OtherThread,
+}
+
+impl fmt::Debug for OpenedWindowReach {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Open(window) => f.debug_tuple("Open").field(&window.id()).finish(),
+            Self::Closed => f.write_str("Closed"),
+            Self::OtherThread => f.write_str("OtherThread"),
+        }
+    }
+}
+
+impl fmt::Debug for OpenedWindow {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OpenedWindow")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
+assert_impl_all!(OpenedWindow: Send, Sync);
+
 /// A deferred window-open request in flight on the owner lane.
 ///
 /// Dropping a `PendingWindow` disclaims the request: the owner skips
@@ -798,7 +870,7 @@ pub enum ProxySendError<T: fmt::Debug> {
 #[must_use = "dropping a PendingWindow disclaims the request; the owner \
               skips or unwinds the window"]
 pub struct PendingWindow {
-    handle: ClaimHandle<Result<Arc<dyn HostWindow>, OpenWindowError>>,
+    handle: ClaimHandle<Result<OpenedWindow, OpenWindowError>>,
     owner_thread: ThreadId,
 }
 
@@ -819,7 +891,7 @@ impl PendingWindow {
     // headless-only default) makes this constructor genuinely unused.
     #[cfg_attr(not(feature = "winit-backend"), allow(dead_code))]
     pub(crate) fn new(
-        handle: ClaimHandle<Result<Arc<dyn HostWindow>, OpenWindowError>>,
+        handle: ClaimHandle<Result<OpenedWindow, OpenWindowError>>,
         owner_thread: ThreadId,
     ) -> Self {
         Self {
@@ -828,7 +900,9 @@ impl PendingWindow {
         }
     }
 
-    /// Blocking wait — worker threads only. On the owner thread this
+    /// Blocking wait — worker threads only — for the identity of the opened
+    /// window; the window itself stays on the owner (ADR-0254 §4). On the
+    /// owner thread this
     /// returns [`WaitError::WouldBlockOwner`] instead of deadlocking on the
     /// lane the caller itself drains.
     ///
@@ -838,12 +912,14 @@ impl PendingWindow {
     /// already claimed the result — `try_take` takes `&mut self`, so
     /// nothing stops a caller from following a successful `try_take` with a
     /// `wait` on the same handle; there is nothing left to wait for.
-    pub fn wait(self) -> Result<Arc<dyn HostWindow>, WaitError> {
+    pub fn wait(self) -> Result<WindowId, WaitError> {
         if self.owner_thread == std::thread::current().id() {
             return Err(WaitError::WouldBlockOwner(self));
         }
         match self.handle.wait() {
-            ClaimOutcome::Delivered(result) => result.map_err(WaitError::Open),
+            ClaimOutcome::Delivered(result) => {
+                result.map(|opened| opened.id()).map_err(WaitError::Open)
+            }
             ClaimOutcome::AlreadyClaimed => Err(WaitError::AlreadyClaimed),
             ClaimOutcome::OwnerGone => Err(WaitError::Open(OpenWindowError::OwnerGone {
                 rejected: None,
@@ -854,13 +930,13 @@ impl PendingWindow {
     /// Non-blocking poll; safe on any thread.
     #[must_use = "discarding Some(_) strands whatever the owner delivered \
                   (a live window, or the typed error explaining why not)"]
-    pub fn try_take(&mut self) -> Option<Result<Arc<dyn HostWindow>, OpenWindowError>> {
+    pub fn try_take(&mut self) -> Option<Result<OpenedWindow, OpenWindowError>> {
         self.handle.try_take()
     }
 }
 
 impl std::future::Future for PendingWindow {
-    type Output = Result<Arc<dyn HostWindow>, OpenWindowError>;
+    type Output = Result<OpenedWindow, OpenWindowError>;
 
     /// Non-blocking poll — safe on any thread, including the owner (unlike
     /// [`wait`](Self::wait), which refuses there because it would block on

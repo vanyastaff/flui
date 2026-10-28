@@ -36,6 +36,9 @@ mod window_command_validate;
 #[path = "unsupported.rs"]
 mod unsupported;
 
+#[path = "surface_target.rs"]
+mod surface_target;
+
 #[path = "transfer_request.rs"]
 mod transfer_request;
 

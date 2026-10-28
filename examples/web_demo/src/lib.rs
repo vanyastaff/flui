@@ -6,7 +6,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::{Arc, Weak};
+use std::rc::Weak;
 
 use wasm_bindgen::prelude::*;
 
@@ -134,7 +134,7 @@ pub fn start() {
     let window = platform
         .open_window(options, handler.clone())
         .expect("Failed to create canvas");
-    *handler.window.borrow_mut() = Some(Arc::downgrade(&window));
+    *handler.window.borrow_mut() = Some(Rc::downgrade(&window));
 
     let opened = window.state();
     handler.logged.set(opened.metrics);
@@ -163,7 +163,7 @@ pub fn start() {
 /// canvas window for the page's life, and lets the window go when the page
 /// quits. The page hears no other system event.
 struct Page {
-    window: RefCell<Option<Arc<dyn HostWindow>>>,
+    window: RefCell<Option<Rc<dyn HostWindow>>>,
     owner: RefCell<Option<flui_native::OwnerPlatform>>,
 }
 

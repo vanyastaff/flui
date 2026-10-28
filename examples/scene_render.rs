@@ -229,9 +229,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         opened.map_or(1.0, |metrics| metrics.scale().get())
     );
 
-    // `Renderer::new` takes ownership of a `WindowTarget` (issue #1043) —
-    // `Arc::clone` gives it its own strong ref rather than a borrow.
-    let mut renderer = pollster::block_on(Renderer::new(Arc::clone(&window)))
+    // `Renderer::new` takes ownership of a `WindowTarget`: the
+    // window's surface target, never the window (ADR-0254 §5).
+    let mut renderer = pollster::block_on(Renderer::new(window.surface_target()))
         .expect("Failed to create GPU renderer");
 
     let phys = physical_size(window.as_ref());
@@ -247,7 +247,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Register frame callback — build scene and render each frame
     let renderer_frame = Arc::clone(&renderer);
-    let window_for_frame = Arc::downgrade(&window);
+    let window_for_frame = Rc::downgrade(&window);
     let hot_reload_frame = hot_reload.clone();
     *handler.frame.borrow_mut() = Some(Box::new(move || {
         let Some(window_for_frame) = window_for_frame.upgrade() else {
@@ -294,7 +294,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Resize the surface when the snapshot carries a new drawable size.
     let renderer_resize = Arc::clone(&renderer);
-    let observed = Arc::downgrade(&window);
+    let observed = Rc::downgrade(&window);
     let mut sized = phys;
     *handler.resized.borrow_mut() = Some(Box::new(move || {
         let Some(window) = observed.upgrade() else {
@@ -336,7 +336,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// The example's application handler: it keeps the window and the renderer
 /// for the run and lets the loop end with its last window.
 struct SceneApp {
-    _window: Arc<dyn flui_native::HostWindow>,
+    _window: Rc<dyn flui_native::HostWindow>,
     _renderer: Arc<Mutex<Renderer>>,
 }
 

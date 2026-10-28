@@ -64,17 +64,17 @@ struct Fixture {
     chrome: Arc<RecordingChrome>,
     scene: Signal<u32>,
     graph: Reactive,
-    window: Arc<dyn flui_platform::PlatformWindow>,
+    window: Rc<dyn flui_platform::PlatformWindow>,
 }
 
 fn styled_runtime() -> Fixture {
     let chrome = Arc::new(RecordingChrome::default());
-    let window: Arc<dyn flui_platform::PlatformWindow> = Arc::new(
+    let window: Rc<dyn flui_platform::PlatformWindow> = Rc::new(
         crate::testing::TestWindow::new()
             .focused(true)
             .with_system_chrome(Arc::clone(&chrome) as Arc<dyn PlatformSystemChrome>),
     );
-    let ui_runtime = UiRuntime::for_test_with_window(Arc::clone(&window));
+    let ui_runtime = UiRuntime::for_test_with_window(Rc::clone(&window));
     let graph = ui_runtime
         .presentation_widgets_for_test(ui_runtime.presentation_id())
         .with_build_owner(|owner| owner.reactive().clone());

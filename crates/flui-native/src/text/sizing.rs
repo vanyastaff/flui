@@ -24,7 +24,7 @@ use crate::owner::OwnerPlatform;
 /// Refuses unavailable native contexts and failed capture/query admission.
 pub fn capture_text_sizing(
     _owner: &OwnerPlatform,
-    window: &Arc<dyn HostWindow>,
+    window: &Rc<dyn HostWindow>,
 ) -> Result<TextSizingCaptureState, TextSizingCaptureError> {
     window.capture_text_sizing(OwnerThreadToken::new())
 }

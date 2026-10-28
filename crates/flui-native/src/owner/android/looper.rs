@@ -171,7 +171,7 @@ impl std::fmt::Debug for ActivityRef {
 /// the loop holds without naming it (ADR-0151 §10). The looper hands it what
 /// the Activity reports — a native window that comes or goes, a resize, a
 /// configuration change, the Java view's events — and asks it for a frame.
-pub(crate) trait ActivityWindow: crate::host_window::HostWindow {
+pub(crate) trait ActivityWindow: crate::host_window::HostWindow + Send + Sync {
     /// The window's identity, which what features keep of it is keyed by.
     fn activity_id(&self) -> ActivityWindowId;
 

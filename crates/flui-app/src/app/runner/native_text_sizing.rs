@@ -3,7 +3,6 @@
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
-    sync::Arc,
     time::Duration,
 };
 
@@ -50,7 +49,7 @@ type CaptureSampler =
 
 pub(super) struct NativeTextSizing {
     address: PresentationAddress,
-    window: Arc<dyn HostWindow>,
+    window: Rc<dyn HostWindow>,
     owner: Rc<OwnerPlatform>,
     live: Cell<bool>,
     state: RefCell<State>,
@@ -66,7 +65,7 @@ impl NativeTextSizing {
     ))]
     pub(super) fn prepare(
         address: PresentationAddress,
-        window: Arc<dyn HostWindow>,
+        window: Rc<dyn HostWindow>,
         owner: Rc<OwnerPlatform>,
     ) -> Rc<Self> {
         let (_, admission) = TextSizing::captured();

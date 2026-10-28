@@ -448,6 +448,10 @@ pub(crate) trait LoopWindow: HostWindow {
 
     /// The window closed: it refuses commands from now on.
     fn mark_closed(&self);
+
+    /// What the window delivers to its handler, as other threads reach it:
+    /// what they raise waits for an owner turn.
+    fn shared_delivery(&self) -> &Arc<crate::owner::window_delivery::WindowDelivery>;
 }
 
 /// What the loop hands the window feature to build a window with.
@@ -484,7 +488,7 @@ pub(crate) trait LoopWindows: Send + Sync {
         event_loop: &ActiveEventLoop,
         seed: WindowSeed<'_>,
         options: WindowOptions,
-    ) -> Result<Arc<dyn LoopWindow>, OpenWindowError>;
+    ) -> Result<Rc<dyn LoopWindow>, OpenWindowError>;
 
     /// The X11 ids of the windows whose state the window manager changed
     /// without a winit event since the last call, which the loop reads again;
@@ -541,7 +545,7 @@ pub(crate) struct WinitLoopState {
     window_id_map: HashMap<WinitWindowId, WindowId>,
 
     /// Map of platform window IDs to the windows the window feature opened
-    pub(crate) windows: HashMap<WindowId, Arc<dyn LoopWindow>>,
+    pub(crate) windows: crate::owner::slot::OwnerMap<WindowId, Rc<dyn LoopWindow>>,
 
     /// Active window ID
     pub(crate) active_window: Option<WindowId>,
@@ -581,7 +585,7 @@ impl WinitLoopState {
             clipboard,
             data_transfer,
             window_id_map: HashMap::new(),
-            windows: HashMap::new(),
+            windows: crate::owner::slot::OwnerMap::new(),
             active_window: None,
             next_window_id: 1,
             run_state: WinitRunState::New {
@@ -605,10 +609,14 @@ impl WinitLoopState {
         &mut self,
         winit_id: WinitWindowId,
         platform_id: WindowId,
-        window: Arc<dyn LoopWindow>,
+        window: Rc<dyn LoopWindow>,
     ) {
         self.window_id_map.insert(winit_id, platform_id);
-        self.windows.insert(platform_id, window);
+        let _replaced = self
+            .windows
+            .insert(platform_id, window)
+            .ok()
+            .expect("BUG: a window is registered on the owner thread that opened it");
 
         if self.active_window.is_none() {
             self.active_window = Some(platform_id);
@@ -692,8 +700,8 @@ impl WinitLoop {
             state
                 .windows
                 .values()
+                .into_iter()
                 .filter(|window| window.x11_id().is_some_and(|id| changed.contains(&id)))
-                .cloned()
                 .collect()
         });
         for window in windows {
@@ -887,19 +895,12 @@ impl WinitLoop {
             // The initial snapshot reflects the devices already seen.
             let capabilities = state.input.opening(event_loop);
             window.delivery().set_input_capabilities(capabilities);
-            state.register_window(window.inner().id(), id, Arc::clone(&window));
+            state.register_window(window.inner().id(), id, Rc::clone(&window));
         });
         if let Some(signal) = self.owner_signal.lock().as_ref() {
-            // A command applied from another thread publishes there: what it
-            // raises waits for an owner turn.
-            let resumed = Arc::downgrade(&window);
-            window
-                .delivery()
-                .resume_through(OwnerSignal::window_wake(signal, move || {
-                    if let Some(window) = resumed.upgrade() {
-                        window.delivery().deliver_queued();
-                    }
-                }));
+            // What another thread raises for the window (the window manager's
+            // view of an X11 window) waits for an owner turn.
+            window.shared_delivery().resume_through_signal(signal);
         }
         window.finish_opening();
         // A monitor attached since the last sample is first seen here.
@@ -914,14 +915,11 @@ impl WinitLoop {
     }
 
     /// Look up a previously-created window by [`WindowId`] and return the
-    /// exact stored allocation as a [`HostWindow`]. Named `window_by_id`
-    /// (not `window_handle`) to avoid colliding with the unrelated
-    /// [`PlatformWindow::window_handle`](flui_platform::PlatformWindow::window_handle)
-    /// raw GPU-handle accessor.
+    /// exact stored allocation as a [`HostWindow`].
     pub(crate) fn window_by_id(
         &self,
         window_id: WindowId,
-    ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
+    ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
         self.with_state(|state| {
             state
                 .windows
@@ -929,7 +927,7 @@ impl WinitLoop {
                 .ok_or_else(|| OpenWindowError::Backend {
                     message: "Window not found in state".to_string(),
                 })
-                .map(|window| Arc::clone(window) as Arc<dyn HostWindow>)
+                .map(|window| window as Rc<dyn HostWindow>)
         })
     }
 
@@ -1188,12 +1186,12 @@ enum NativeDispatch {
 fn presence_dispatch(
     state: &WinitLoopState,
     present: flui_platform::input_capabilities::PointerKindSet,
-) -> Vec<(Arc<dyn LoopWindow>, NativeDispatch)> {
-    let mut windows: Vec<_> = state.windows.iter().collect();
+) -> Vec<(Rc<dyn LoopWindow>, NativeDispatch)> {
+    let mut windows = state.windows.entries();
     windows.sort_by_key(|(id, _)| id.0);
     windows
         .into_iter()
-        .map(|(_, window)| (Arc::clone(window), NativeDispatch::Present(present)))
+        .map(|(_, window)| (window, NativeDispatch::Present(present)))
         .collect()
 }
 
@@ -1202,7 +1200,7 @@ fn presence_dispatch(
 fn native_batch(
     state: &mut WinitLoopState,
     inputs: Vec<(WindowId, flui_platform::PlatformInput)>,
-) -> Vec<(Arc<dyn LoopWindow>, NativeDispatch)> {
+) -> Vec<(Rc<dyn LoopWindow>, NativeDispatch)> {
     let mut batch = state
         .input
         .presence_change()
@@ -1212,12 +1210,12 @@ fn native_batch(
         state
             .windows
             .get(&window)
-            .map(|window| (Arc::clone(window), NativeDispatch::Input(input)))
+            .map(|window| (window, NativeDispatch::Input(input)))
     }));
     batch
 }
 
-fn dispatch_native_inputs(inputs: Vec<(Arc<dyn LoopWindow>, NativeDispatch)>) {
+fn dispatch_native_inputs(inputs: Vec<(Rc<dyn LoopWindow>, NativeDispatch)>) {
     let mut first = None;
     for (window, input) in inputs {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match input {
@@ -1432,7 +1430,7 @@ impl ApplicationHandler for WinitApp {
             self.flush_native_pointer();
         }
         let inputs = self.platform.with_state(|state| {
-            let mut windows: Vec<_> = state.windows.keys().copied().collect();
+            let mut windows = state.windows.keys();
             windows.sort_by_key(|window| window.0);
             let inputs = state.input.device_event(device_id, &event, &windows);
             let mut batch: Vec<_> = inputs
@@ -1441,7 +1439,6 @@ impl ApplicationHandler for WinitApp {
                     state
                         .windows
                         .get(&window)
-                        .cloned()
                         .map(|window| (window, NativeDispatch::Input(input)))
                 })
                 .collect();
@@ -1462,7 +1459,7 @@ impl ApplicationHandler for WinitApp {
     ) {
         let (platform_id, window) = self.platform.with_state(|state| {
             let pid = state.get_platform_window_id(window_id);
-            let win = pid.and_then(|id| state.windows.get(&id).cloned());
+            let win = pid.and_then(|id| state.windows.get(&id));
             (pid, win)
         });
 
@@ -1509,10 +1506,10 @@ impl ApplicationHandler for WinitApp {
             });
             match event {
                 WinitWindowEvent::CursorEntered { .. } => {
-                    batch.push((Arc::clone(&window), NativeDispatch::Hover(true)));
+                    batch.push((Rc::clone(&window), NativeDispatch::Hover(true)));
                 }
                 WinitWindowEvent::CursorLeft { .. } => {
-                    batch.push((Arc::clone(&window), NativeDispatch::Hover(false)));
+                    batch.push((Rc::clone(&window), NativeDispatch::Hover(false)));
                 }
                 _ => {}
             }
@@ -1529,7 +1526,7 @@ impl ApplicationHandler for WinitApp {
                 dispatch_native_inputs(
                     inputs
                         .into_iter()
-                        .map(|input| (Arc::clone(window), NativeDispatch::Input(input)))
+                        .map(|input| (Rc::clone(window), NativeDispatch::Input(input)))
                         .collect(),
                 );
             }
@@ -1542,7 +1539,7 @@ impl ApplicationHandler for WinitApp {
                 // Ask the window's handler; asked behind a running method, the
                 // window is kept for now and closed by command if granted.
                 if window.as_ref().is_some_and(|win| {
-                    let later = Arc::downgrade(win);
+                    let later = crate::owner::slot::OwnerWeak::new(win);
                     win.delivery().dispatch_close_request(move || {
                         if let Some(window) = later.upgrade() {
                             crate::owner::window_delivery::close_by_command(&*window);
@@ -1840,8 +1837,8 @@ impl WinitApp {
             state
                 .windows
                 .values()
+                .into_iter()
                 .filter(|window| moves_unannounced(wayland, window.awaiting_display()))
-                .cloned()
                 .collect()
         });
         for window in unannounced {
@@ -1860,7 +1857,7 @@ impl WinitApp {
     pub(crate) fn sync_window_display(
         &self,
         event_loop: &ActiveEventLoop,
-        window: &Arc<dyn LoopWindow>,
+        window: &Rc<dyn LoopWindow>,
         forced: bool,
     ) {
         if forced {
@@ -1895,7 +1892,7 @@ impl WinitApp {
     fn handle_drag_drop_path(
         &self,
         platform_id: WindowId,
-        window: Option<&Arc<dyn LoopWindow>>,
+        window: Option<&Rc<dyn LoopWindow>>,
         path: PathBuf,
         kind: DragPath,
     ) {
@@ -1944,13 +1941,13 @@ impl WinitApp {
 
         // Snapshot window handles and cursor positions first; the platform
         // lock is released before scale-factor reads and dispatch.
-        let mut snapshots: Vec<(WindowId, Arc<dyn LoopWindow>, Option<_>)> = Vec::new();
+        let mut snapshots: Vec<(WindowId, Rc<dyn LoopWindow>, Option<_>)> = Vec::new();
         self.platform.with_state(|state| {
             for window_id in &windows {
                 if let Some(win) = state.windows.get(window_id) {
                     snapshots.push((
                         *window_id,
-                        Arc::clone(win),
+                        win,
                         state.cursor_positions.get(window_id).copied(),
                     ));
                 }
@@ -1958,7 +1955,7 @@ impl WinitApp {
         });
 
         let mut positions = HashMap::new();
-        let mut handles: HashMap<WindowId, Arc<dyn LoopWindow>> = HashMap::new();
+        let mut handles: HashMap<WindowId, Rc<dyn LoopWindow>> = HashMap::new();
         for (window_id, win, cursor) in snapshots {
             if let Some(cursor) = cursor {
                 positions.insert(
@@ -2035,7 +2032,7 @@ impl WinitApp {
                                 .platform
                                 .window_by_id(window_id)
                                 .expect("BUG: just-created window must be registered");
-                            match guard.complete(Ok(window)) {
+                            match guard.complete(Ok(crate::owner::OpenedWindow::new(&window))) {
                                 Some(reply) => self.in_flight_replies.push((window_id, reply)),
                                 None => {
                                     // The requester abandoned in the race
@@ -2219,7 +2216,7 @@ impl WinitApp {
                 let window = self.platform.with_state(|state| {
                     state
                         .get_platform_window_id(winit_id)
-                        .and_then(|id| state.windows.get(&id).cloned())
+                        .and_then(|id| state.windows.get(&id))
                 });
                 let Some(window) = window else {
                     return;
@@ -2298,7 +2295,7 @@ impl WinitApp {
         &mut self,
         event_loop: &ActiveEventLoop,
         platform_id: WindowId,
-        window: Option<&Arc<dyn LoopWindow>>,
+        window: Option<&Rc<dyn LoopWindow>>,
     ) {
         if let Some(win) = window {
             win.mark_closed();
@@ -2345,7 +2342,7 @@ impl WinitApp {
         for window_id in self.control.take_close_requests() {
             let window = self
                 .platform
-                .with_state(|state| state.windows.get(&window_id).cloned());
+                .with_state(|state| state.windows.get(&window_id));
             let Some(window) = window else {
                 tracing::debug!(
                     ?window_id,
@@ -2425,9 +2422,7 @@ impl WinitApp {
     /// idempotent-terminal, so a window already closed through the normal
     /// path (its slots already empty) is a no-op here.
     fn release_open_window_callbacks(&mut self) {
-        let windows = self
-            .platform
-            .with_state(|state| state.windows.values().cloned().collect::<Vec<_>>());
+        let windows = self.platform.with_state(|state| state.windows.values());
         for window in windows {
             window.mark_closed();
             window.delivery().clear();

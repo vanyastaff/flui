@@ -3,6 +3,7 @@
 //! pass the first and name the check that catches every fault. Checks that
 //! cannot fail prove nothing.
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_native::{HeadlessPlatform, HostWindow, MockWindow, Platform};
@@ -20,7 +21,7 @@ use flui_testing::window_conformance::{self, Readback, WindowFixture};
 /// it stays open when told to close ([`Fault::IgnoresClose`]), or it
 /// publishes a snapshot without the facts the window system reports
 /// ([`Fault::SnapshotWithoutFacts`]).
-struct Faulty(Arc<dyn PlatformWindow>, Fault);
+struct Faulty(Rc<dyn PlatformWindow>, Fault);
 
 impl PlatformWindow for Faulty {
     fn id(&self) -> WindowId {
@@ -28,6 +29,15 @@ impl PlatformWindow for Faulty {
     }
     fn request_redraw(&self) {
         self.0.request_redraw();
+    }
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        self.0.redraw_requester()
+    }
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        match self.1 {
+            Fault::PresentNotifyBlocks => Arc::new(BlockingSurface),
+            _ => self.0.surface_target(),
+        }
     }
     fn state(&self) -> WindowState {
         let mut state = self.0.state();
@@ -94,12 +104,37 @@ impl PlatformWindow for Faulty {
     }
 }
 
+/// A surface target whose `pre_present_notify` does not return in time.
+struct BlockingSurface;
+
+impl raw_window_handle::HasWindowHandle for BlockingSurface {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        Err(raw_window_handle::HandleError::Unavailable)
+    }
+}
+
+impl raw_window_handle::HasDisplayHandle for BlockingSurface {
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        Err(raw_window_handle::HandleError::Unavailable)
+    }
+}
+
+impl flui_platform::SurfaceTarget for BlockingSurface {
+    fn pre_present_notify(&self) {
+        std::thread::sleep(std::time::Duration::from_secs(3));
+    }
+}
+
 /// A headless window under `capabilities`, with `fault` applied to how the
 /// fixture settles or closes it.
 struct Fixture {
-    window: Arc<dyn PlatformWindow>,
+    window: Rc<dyn PlatformWindow>,
     /// The headless window itself, whose model is the window system.
-    model: Arc<dyn HostWindow>,
+    model: Rc<dyn HostWindow>,
     fault: Option<Fault>,
 }
 
@@ -128,6 +163,11 @@ enum Fault {
     /// The window's verbs take everything, whatever its capabilities say: the
     /// inert default every verb had before it answered `Unsupported`.
     VerbsIgnoreTheirCapabilities,
+    /// The window's surface target blocks its `pre_present_notify`.
+    PresentNotifyBlocks,
+    /// The fixture says the window has a native surface its target never
+    /// hands out.
+    SurfaceWithheld,
 }
 
 impl Fixture {
@@ -152,15 +192,16 @@ impl Fixture {
                 flui_testing::window_handler::RecordingWindowHandler::new(),
             )
             .expect("a headless window opens");
-        let window: Arc<dyn PlatformWindow> = match fault {
+        let window: Rc<dyn PlatformWindow> = match fault {
             Some(
                 fault @ (Fault::ClaimsWhatItCannot
                 | Fault::SnapshotWithoutFacts
                 | Fault::IgnoresClose
                 | Fault::IgnoresTheToken
-                | Fault::VerbsIgnoreTheirCapabilities),
-            ) => Arc::new(Faulty(Arc::clone(&model) as _, fault)),
-            _ => Arc::clone(&model) as _,
+                | Fault::VerbsIgnoreTheirCapabilities
+                | Fault::PresentNotifyBlocks),
+            ) => Rc::new(Faulty(Rc::clone(&model) as _, fault)),
+            _ => Rc::clone(&model) as _,
         };
         Self {
             window,
@@ -171,8 +212,8 @@ impl Fixture {
 }
 
 impl WindowFixture for Fixture {
-    fn window(&self) -> Arc<dyn PlatformWindow> {
-        Arc::clone(&self.window)
+    fn window(&self) -> Rc<dyn PlatformWindow> {
+        Rc::clone(&self.window)
     }
 
     /// The headless host's model: what its window system says, read apart
@@ -232,6 +273,11 @@ impl WindowFixture for Fixture {
 
     fn input_regions(&self) -> Availability {
         self.mock().window_system().input_regions
+    }
+
+    /// A headless window has no native surface.
+    fn has_native_surface(&self) -> bool {
+        matches!(self.fault, Some(Fault::SurfaceWithheld))
     }
 }
 
@@ -335,6 +381,15 @@ fn a_window_that_ignores_the_token_is_caught() {
     );
 }
 
+fn a_surface_target_that_blocks_or_withholds_is_caught() {
+    for fault in [Fault::PresentNotifyBlocks, Fault::SurfaceWithheld] {
+        assert_eq!(
+            caught(fault),
+            ["a_surface_target_is_send_sync_and_unavailable_after_close"]
+        );
+    }
+}
+
 fn a_snapshot_without_the_windows_facts_is_caught() {
     let checks = caught(Fault::SnapshotWithoutFacts);
     assert_eq!(checks, ["the_snapshot_agrees_with_the_window_system"]);
@@ -368,6 +423,10 @@ fn window_conformance_checks() {
             (
                 "a_window_that_ignores_the_token_is_caught",
                 a_window_that_ignores_the_token_is_caught as fn(),
+            ),
+            (
+                "a_surface_target_that_blocks_or_withholds_is_caught",
+                a_surface_target_that_blocks_or_withholds_is_caught as fn(),
             ),
             (
                 "a_window_whose_verbs_ignore_their_capabilities_is_caught",
