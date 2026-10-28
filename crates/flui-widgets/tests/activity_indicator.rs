@@ -584,7 +584,7 @@ fn indicator_callback_requests_removal(source: usize) {
         })
         .collect::<Vec<_>>();
     let requested = Rc::new(Cell::new(false));
-    let writer = reactive.writer_source();
+    let writer = laid.with_build_owner_mut(|owner| owner.writer_source());
     let callback = animations[source].1.add_listener(Rc::new({
         let requested = requested.clone();
         move || {

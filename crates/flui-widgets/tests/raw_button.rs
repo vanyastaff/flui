@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use flui_testing::{Action, ActionRequest, NodeId, TreeId};
 use flui_view::prelude::*;
-use flui_view::{Reactive, SignalError};
+use flui_view::{SignalError, WriterSource};
 use flui_widgets::{Column, RawButton, Text, column};
 
 use crate::common::{LaidOut, lay_out, loose};
@@ -21,9 +21,9 @@ enum Press {
     Released,
 }
 
-/// The count signal and its graph, handed out by `init_state` so the test can
+/// The count signal and its writer source, handed out by `init_state` so the test can
 /// read the value without a frame.
-type Seen = Rc<RefCell<Option<(Signal<u32>, Reactive)>>>;
+type Seen = Rc<RefCell<Option<(Signal<u32>, WriterSource)>>>;
 
 /// A counter: the count as text, and a button labelled `Press` whose press
 /// the test chooses.
@@ -37,6 +37,7 @@ struct Counter {
 struct CounterState {
     count: Signal<u32>,
     released: Signal<u32>,
+    writer: Option<WriterSource>,
 }
 
 impl StatefulView for Counter {
@@ -50,16 +51,17 @@ impl StatefulView for Counter {
 impl ViewState<Counter> for CounterState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.count = ctx.signal(0);
-        // A handle whose slot is gone, as after its owning element unmounted.
-        let graph = ctx.signal_graph();
-        self.released = graph.signal(0);
-        graph.release(self.released.slot());
+        // A handle kept past its slot: released on a graph no presentation owns.
+        let gone = flui_view::Reactive::new();
+        self.released = gone.signal(0);
+        gone.release(self.released.slot());
+        self.writer = Some(ctx.writer_source());
     }
 
     fn build(&self, view: &Counter, ctx: &dyn BuildContext) -> impl IntoView {
         view.seen
             .borrow_mut()
-            .get_or_insert_with(|| (self.count, ctx.signal_graph()));
+            .get_or_insert_with(|| (self.count, self.writer.clone().expect("init_state ran")));
         let count = self.count;
         let released = self.released;
         let button = RawButton::new(Text::new("Press"));
@@ -96,8 +98,8 @@ fn press(app: &mut LaidOut) {
 
 fn value(seen: &Seen) -> Result<u32, SignalError> {
     let seen = seen.borrow();
-    let (sig, graph) = seen.as_ref().expect("the counter built");
-    sig.peek(graph, |v| *v)
+    let (sig, writer) = seen.as_ref().expect("the counter built");
+    writer.write(|cx| sig.peek(cx, |v| *v))
 }
 
 /// The node of the button: the one labelled with the button's text.

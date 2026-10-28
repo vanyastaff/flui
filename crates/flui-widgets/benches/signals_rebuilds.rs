@@ -341,7 +341,7 @@ fn scenarios() -> Vec<Scenario> {
                 rows: Rc::clone(&rows_for_mount),
             }
         });
-        let w = reactive(&mut laid).writer_source();
+        let w = laid.with_build_owner_mut(|owner| owner.writer_source());
         let row = rows.borrow()[4217];
         out.push(Scenario {
             name: "list 10k: one row changes",
@@ -390,7 +390,7 @@ fn scenarios() -> Vec<Scenario> {
                 rows: Rc::clone(&rows_for_mount),
             }
         });
-        let w = reactive(&mut laid).writer_source();
+        let w = laid.with_build_owner_mut(|owner| owner.writer_source());
         let count = count_cell.borrow().expect("mounted");
         out.push(Scenario {
             name: "list 10k: append one row",
@@ -432,7 +432,7 @@ fn scenarios() -> Vec<Scenario> {
                 fields: Rc::new(fields),
             }
         });
-        let w = reactive(&mut laid).writer_source();
+        let w = laid.with_build_owner_mut(|owner| owner.writer_source());
         let field7 = fields_cell.borrow()[7];
         out.push(Scenario {
             name: "form 20: keystroke in one field",
@@ -462,7 +462,7 @@ fn scenarios() -> Vec<Scenario> {
             unit_for_mount.replace(Some(unit));
             AppB { unit }
         });
-        let w = reactive(&mut laid).writer_source();
+        let w = laid.with_build_owner_mut(|owner| owner.writer_source());
         let unit = unit_cell.borrow().expect("mounted");
         out.push(Scenario {
             name: "setting read by 3x200 cells",

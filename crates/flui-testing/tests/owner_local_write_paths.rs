@@ -5,11 +5,12 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use flui_view::{Reactive, SignalWriteExt};
+use flui_view::{BuildOwner, SignalWriteExt};
 
 pub(crate) fn nested_writer_source_inside_an_event_cx() {
-    let graph = Reactive::new();
-    let source = graph.writer_source();
+    let owner = BuildOwner::new();
+    let graph = owner.signal_graph();
+    let source = owner.writer_source();
     let a = graph.signal(0u32);
     let b = graph.signal(0u32);
 
@@ -28,13 +29,14 @@ pub(crate) fn nested_writer_source_inside_an_event_cx() {
         (Ok(1), Ok(2)),
         "each write is visible to the next read, across the nesting"
     );
-    assert_eq!(a.peek(&graph, |n| *n), Ok(1));
-    assert_eq!(b.peek(&graph, |n| *n), Ok(2));
+    assert_eq!(a.peek(graph, |n| *n), Ok(1));
+    assert_eq!(b.peek(graph, |n| *n), Ok(2));
 }
 
 pub(crate) fn nested_write_panics_inside_an_event_cx() {
-    let graph = Reactive::new();
-    let source = graph.writer_source();
+    let owner = BuildOwner::new();
+    let graph = owner.signal_graph();
+    let source = owner.writer_source();
     let a = graph.signal(0u32);
     let b = graph.signal(0u32);
 
@@ -55,12 +57,12 @@ pub(crate) fn nested_write_panics_inside_an_event_cx() {
         "the nested panic is the outer callback's first panic"
     );
     assert_eq!(
-        a.peek(&graph, |n| *n),
+        a.peek(graph, |n| *n),
         Ok(1),
         "the outer write stays applied"
     );
     assert_eq!(
-        b.peek(&graph, |n| *n),
+        b.peek(graph, |n| *n),
         Ok(2),
         "the nested write stays applied"
     );

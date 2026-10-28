@@ -922,16 +922,21 @@ impl ModalHandle {
     /// `changed_internal_state` now, and each `on_remove` after the frame, on
     /// `post_frame` (ADR-0086 §6). A flush can run inside `build`, where a
     /// write the callback makes through its captured `WriterSource` is
-    /// refused; after the frame it lands. Called by `NavigatorShared::apply`
-    /// with **no lock held** (ADR-0025).
-    pub(crate) fn drain_local_history(&self, post_frame: Option<&flui_scheduler::PostFrameHandle>) {
+    /// refused; after the frame it lands. The edge goes first because it is
+    /// the flush's own consequence: the rebuild it requests joins the frame
+    /// the pop happened in, while the callbacks wait for that frame to end.
+    /// Called by `NavigatorShared::apply` with **no lock held** (ADR-0025);
+    /// each step is contained in `recovery` on its own.
+    pub(crate) fn drain_local_history(
+        &self,
+        post_frame: Option<&flui_scheduler::PostFrameHandle>,
+        recovery: &mut flui_foundation::panic::PanicRecovery,
+    ) {
         let (callbacks, emptied) = self.inner.local_history.take_owed();
         if emptied {
-            changed_internal_state(&self.inner);
+            recovery.run(|| changed_internal_state(&self.inner));
         }
-        for callback in callbacks {
-            super::local_history::deliver_on_remove(post_frame, callback);
-        }
+        super::local_history::deliver_on_remove(post_frame, callbacks, recovery);
     }
 
     /// Force the route offstage (or back), whole: the early return on an

@@ -531,6 +531,27 @@ pub enum OwnerFrameError {
     AlreadyOwned,
 }
 
+/// A value [`PostFrameHandle::schedule_or_return`] could not queue: the
+/// owning UI runtime is gone or retired.
+#[must_use = "a returned value is an obligation: meet it or drop it"]
+pub enum PostFrameRejection<T> {
+    /// The queue closed with no failure in custody: the value is the
+    /// caller's again, never run.
+    Returned(T),
+    /// The owner closed with a caught failure in custody, or the thread is
+    /// unwinding: the value is retained, neither run nor dropped.
+    Retained,
+}
+
+impl<T> std::fmt::Debug for PostFrameRejection<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Returned(_) => f.write_str("PostFrameRejection::Returned(..)"),
+            Self::Retained => f.write_str("PostFrameRejection::Retained"),
+        }
+    }
+}
+
 /// Why an owner-local post-frame callback could not be registered, or an
 /// owner frame's queue could not be drained.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -889,34 +910,78 @@ impl PostFrameHandle {
         &self,
         callback: impl FnOnce(&FrameTiming) + 'static,
     ) -> Result<(), PostFrameScheduleError> {
-        let Some(lane) = self.lane.upgrade() else {
-            let mut recovery = flui_foundation::panic::PanicRecovery::new();
-            recovery.retire(callback);
-            recovery.finish();
-            return Err(PostFrameScheduleError::Closed);
-        };
-        if lane.closed.get() {
-            crate::scheduler::execution::retire_with_execution_custody(
-                &lane.execution_failure,
-                callback,
-            );
-            return Err(PostFrameScheduleError::Closed);
-        }
-        let Some(scheduler) = self.scheduler.upgrade() else {
-            crate::scheduler::execution::retire_with_execution_custody(
-                &lane.execution_failure,
-                callback,
-            );
-            return Err(PostFrameScheduleError::Closed);
-        };
-        let mut successor_scope = None;
-        let target = if let Some(scope) = &self.scope {
-            let Some(scope) = scope.upgrade().filter(|scope| !scope.closed.get()) else {
+        match self.admit(callback, |callback| Box::new(callback)) {
+            Ok(()) => Ok(()),
+            Err((callback, Some(lane))) => {
                 crate::scheduler::execution::retire_with_execution_custody(
                     &lane.execution_failure,
                     callback,
                 );
-                return Err(PostFrameScheduleError::Closed);
+                Err(PostFrameScheduleError::Closed)
+            }
+            Err((callback, None)) => {
+                let mut recovery = flui_foundation::panic::PanicRecovery::new();
+                recovery.retire(callback);
+                recovery.finish();
+                Err(PostFrameScheduleError::Closed)
+            }
+        }
+    }
+
+    /// [`schedule`](Self::schedule) for an obligation that must not vanish
+    /// with a closed queue: `run(value, timing)` runs after the next eligible
+    /// completion, and a closed queue hands `value` back unrun so the caller
+    /// can meet it another way. `run` is a plain function, so the refusal has
+    /// no captures of its own to dispose. When the owner closed with a caught
+    /// failure in custody (or the thread is unwinding), `value` is retained,
+    /// neither returned, run nor dropped, as `schedule` retains a refused
+    /// envelope (ADR-0182).
+    ///
+    /// # Errors
+    ///
+    /// [`PostFrameRejection`] when the owning UI runtime is gone or retired.
+    pub fn schedule_or_return<T: 'static>(
+        &self,
+        value: T,
+        run: fn(T, &FrameTiming),
+    ) -> Result<(), PostFrameRejection<T>> {
+        match self.admit(value, |value| Box::new(move |timing| run(value, timing))) {
+            Ok(()) => Ok(()),
+            Err((value, Some(lane)))
+                if crate::scheduler::execution::execution_failure_held(&lane.execution_failure) =>
+            {
+                std::mem::forget(value);
+                Err(PostFrameRejection::Retained)
+            }
+            Err((value, _)) => Err(PostFrameRejection::Returned(value)),
+        }
+    }
+
+    /// Queue `into_entry(value)`, or hand `value` back, unwrapped, with the
+    /// closed lane whose failure custody decides its fate (`None`: the lane
+    /// itself is gone).
+    #[expect(
+        clippy::type_complexity,
+        reason = "the refusal pairs the value with the custody that decides its fate"
+    )]
+    fn admit<T>(
+        &self,
+        value: T,
+        into_entry: impl FnOnce(T) -> OwnerPostFrameCallback,
+    ) -> Result<(), (T, Option<Rc<PostFrameQueue>>)> {
+        let Some(lane) = self.lane.upgrade() else {
+            return Err((value, None));
+        };
+        if lane.closed.get() {
+            return Err((value, Some(lane)));
+        }
+        let Some(scheduler) = self.scheduler.upgrade() else {
+            return Err((value, Some(lane)));
+        };
+        let mut successor_scope = None;
+        let target = if let Some(scope) = &self.scope {
+            let Some(scope) = scope.upgrade().filter(|scope| !scope.closed.get()) else {
+                return Err((value, Some(lane)));
             };
             let epoch = if scope.phase.get() == SegmentPhase::Running {
                 scope.current.borrow().clone()
@@ -931,10 +996,11 @@ impl PostFrameHandle {
         } else {
             CallbackTarget::RuntimeFrame
         };
+        let callback = into_entry(value);
         scheduler.with_post_frame_registration(|id| {
             lane.queue.borrow_mut().push(PostFrameEntry {
                 id,
-                callback: Box::new(callback),
+                callback,
                 target,
             });
             if let Some(scope) = &successor_scope {

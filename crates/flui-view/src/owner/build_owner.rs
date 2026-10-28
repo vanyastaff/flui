@@ -976,9 +976,12 @@ impl BuildOwner {
         (slot.graph() == self.reactive.id()).then(|| self.writer_source())
     }
 
-    /// The graph itself, for tests that mint signals outside an element and
-    /// inspect its reader registry. It is not a write target: a write goes
-    /// through [`writer_source`](Self::writer_source).
+    /// The graph itself, for tests that mint signals outside an element (with
+    /// an explicit element owner where the test needs one) and inspect its
+    /// reader registry. It writes nothing: the graph is not a write target and
+    /// cannot mint a `WriterSource`, so a write still goes through
+    /// [`writer_source`](Self::writer_source). No build context reaches a
+    /// `BuildOwner`, so `build` reaches neither.
     #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn signal_graph(&self) -> &crate::reactive::Reactive {

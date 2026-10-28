@@ -718,15 +718,6 @@ pub trait BuildContextExt: BuildContext {
             .signal_owned_by(self.element_id(), value)
     }
 
-    /// The `BuildOwner`'s graph, for a test that mints a signal no element
-    /// owns or inspects the reader registry. It is not a write target: a
-    /// write goes through [`LifecycleContext::writer_source`].
-    #[cfg(any(test, feature = "testing"))]
-    #[must_use]
-    fn signal_graph(&self) -> crate::reactive::Reactive {
-        self.graph(sealed::CrateToken::new()).clone()
-    }
-
     /// [`depend_on`](Self::depend_on) at **field** granularity (issue #1090):
     /// read through `f` as usual, but depend only on the fields in `mask` —
     /// the `FIELD_*` constants a `#[derive(InheritedData)]` data type emits.

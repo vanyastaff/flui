@@ -7,7 +7,7 @@ use std::sync::atomic::AtomicU32;
 
 use flui_layer::TextureRegistration;
 use flui_painting::paint::{Image, TextureId};
-use flui_view::{Reactive, Signal};
+use flui_view::Signal;
 use flui_widgets::Texture;
 use parking_lot::Mutex;
 
@@ -90,7 +90,7 @@ struct Fixture {
     ui_runtime: UiRuntime,
     shared: Shared,
     shown: Signal<u32>,
-    graph: Reactive,
+    writer: flui_view::WriterSource,
     submits: Arc<AtomicU32>,
 }
 
@@ -100,6 +100,9 @@ fn mounted() -> Fixture {
         .presentation_widgets_for_test(ui_runtime.presentation_id())
         .with_build_owner(|owner| owner.signal_graph().clone());
     let shown = graph.signal(1_u32);
+    let writer = ui_runtime
+        .presentation_widgets_for_test(ui_runtime.presentation_id())
+        .with_build_owner(|owner| owner.writer_source());
     let shared = Shared::default();
     ui_runtime
         .attach_root_widget(&Toggle {
@@ -113,7 +116,7 @@ fn mounted() -> Fixture {
         ui_runtime,
         shared,
         shown,
-        graph,
+        writer,
         submits: Arc::new(AtomicU32::new(0)),
     }
 }
@@ -174,8 +177,7 @@ pub(crate) fn unmounting_the_owner_retires_its_texture() {
         .map(TextureRegistration::id)
         .expect("registered");
     fixture
-        .graph
-        .writer_source()
+        .writer
         .write(|cx| fixture.shown.set(cx, 0))
         .expect("write");
     fixture.ui_runtime.render_frame(&mut sink);

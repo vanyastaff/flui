@@ -742,6 +742,8 @@ fn navigator_and_overlay() {
             ("back_gesture::mounted_back_swipe_settle_uses_the_admitted_fling_bound", crate::back_gesture::mounted_back_swipe_settle_uses_the_admitted_fling_bound),
             ("navigator::local_history::an_entry_pops_before_the_route_and_observers_stay_silent", crate::navigator::local_history::an_entry_pops_before_the_route_and_observers_stay_silent as fn()),
             ("navigator::local_history::local_history_removal_writes_after_the_flush", crate::navigator::local_history::local_history_removal_writes_after_the_flush),
+            ("navigator::local_history::a_panicking_removal_does_not_lose_the_next", crate::navigator::local_history::a_panicking_removal_does_not_lose_the_next),
+            ("navigator::local_history::an_unmounted_navigators_owed_removal_is_severed", crate::navigator::local_history::an_unmounted_navigators_owed_removal_is_severed),
             ("navigator::navigator_pop_removes_top_route_and_completes_result", crate::navigator::navigator_pop_removes_top_route_and_completes_result),
             ("navigator::navigator_push_builds_new_route_and_rearranges_overlay", crate::navigator::navigator_push_builds_new_route_and_rearranges_overlay),
             ("navigator::pop_scope_vetoes_maybe_pop_but_not_programmatic_pop", crate::navigator::pop_scope_vetoes_maybe_pop_but_not_programmatic_pop),

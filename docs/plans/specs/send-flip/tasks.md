@@ -75,7 +75,7 @@ T3 и T10 не делят файлов и идут параллельно. T9 ж
 
 | ID | Задача | Зависит от | Крейты и файлы | Гейты | Тесты | Где |
 |---|---|---|---|---|---|---|
-| **T3** [P] | **Путь записи, остаток** (design (c), строки 34, 41). `UiCommand::SignalWrite` сегодня несёт `Box<dyn FnMut(&Reactive) + Send>`; станет `FnOnce(&mut EventCx) + Send` и откроет `WriterSource` presentation, выпустившей слот. Удалить `impl WriteTarget for Reactive`, `BuildContext::reactive`, публичный `BuildOwner::reactive`, `HeadlessBinding::reactive`; 41 вызов `.reactive()` (тесты, `signal_probe.rs`, бенч `signals_rebuilds.rs`) → `writer_source().write(..)` или `peek`. `LocalHistoryEntry::on_remove` из сборки — в post-frame, после сброса. Вложенный `WriterSource::write` внутри живого `EventCx` открывает свой writer и не транзакционен (ADR-0086 §5 по поправке) | — | `crates/flui-view/src/{reactive/writer.rs,context/{build_context,element_build_context}.rs,owner/build_owner.rs}`, `crates/flui-runtime/src/ui_runtime/commands.rs`, `crates/flui-testing/src/{lib.rs,widgets/signal_probe.rs}`, `crates/flui-widgets/src/navigator/{local_history,modal_route}.rs`, `crates/flui-widgets/benches/signals_rebuilds.rs`, `crates/flui-view/tests/ui/`, `changelog.d/` | clippy и nextest: `-p flui-view -p flui-runtime -p flui-testing -p flui-widgets` и зависимые; `cargo test -p flui-testing --doc`; trybuild `flui-view` локально; `testing` | R7: `local_history_removal_writes_after_the_flush`, `cross_thread_signal_write_opens_the_owner_writer_source` (таблица `owner_local_write_paths` во `flui-testing`); R8: trybuild `signal_write_through_build_context` дополнен `ctx.reactive()`, `compile_fail`-doctest `HeadlessBinding::reactive`; R12: `nested_writer_source_inside_an_event_cx`; R11: `nested_write_panics_inside_an_event_cx`. Откат: `on_remove` синхронно в сборке → первая строка теряет запись; `SignalWrite` через первую presentation → вторая видит запись не в том графе | L |
+| **T3** [P] | **Путь записи, остаток** (design (c), строки 34, 41). `UiCommand::SignalWrite` сегодня несёт `Box<dyn FnMut(&Reactive) + Send>`; станет `FnMut(&mut EventCx) + Send` — удерживаемый envelope, вызываемый не больше одного раза (ADR-0086, ревизия 2026-09-28: после паники захваты удерживаются, `FnOnce` уничтожил бы их во время раскрутки), — и откроет `WriterSource` presentation, выпустившей слот. Удалить `impl WriteTarget for Reactive`, `BuildContext::reactive`, публичный `BuildOwner::reactive`, `HeadlessBinding::reactive`; 41 вызов `.reactive()` (тесты, `signal_probe.rs`, бенч `signals_rebuilds.rs`) → `writer_source().write(..)` или `peek`. `LocalHistoryEntry::on_remove` из сборки — в post-frame, после сброса. Вложенный `WriterSource::write` внутри живого `EventCx` открывает свой writer и не транзакционен (ADR-0086 §5 по поправке) | — | `crates/flui-view/src/{reactive/writer.rs,context/{build_context,element_build_context}.rs,owner/build_owner.rs}`, `crates/flui-runtime/src/ui_runtime/commands.rs`, `crates/flui-testing/src/{lib.rs,widgets/signal_probe.rs}`, `crates/flui-widgets/src/navigator/{local_history,modal_route}.rs`, `crates/flui-widgets/benches/signals_rebuilds.rs`, `crates/flui-view/tests/ui/`, `changelog.d/` | clippy и nextest: `-p flui-view -p flui-runtime -p flui-testing -p flui-widgets` и зависимые; `cargo test -p flui-testing --doc`; trybuild `flui-view` локально; `testing` | R7: `local_history_removal_writes_after_the_flush`, `cross_thread_signal_write_opens_the_owner_writer_source` (таблица `owner_local_write_paths` во `flui-testing`); R8: trybuild `signal_write_through_build_context` дополнен `ctx.reactive()`, `compile_fail`-doctest `HeadlessBinding::reactive`; R12: `nested_writer_source_inside_an_event_cx`; R11: `nested_write_panics_inside_an_event_cx`. Откат: `on_remove` синхронно в сборке → первая строка теряет запись; `SignalWrite` через первую presentation → вторая видит запись не в том графе | L |
 | **T10** [P] | **Остаток flip** (строки 7, 15, 21, 26, 28–30, 36–40; ослабления 22, 39). Позиции, которые ещё `Send`: `LifecycleStateCallback` (`flui-scheduler/src/frame.rs`); семь alias'ов `callbacks.rs` (удаляются, строка 15); `SemanticsActionHandler` (`flui-semantics/src/action.rs`) → `Rc`; `ScrollPhysics: Send + Sync` → `Debug`; `PhysicalClipShape`, `PhysicalClipSource` (`flui-objects/src/proxy/physical_model.rs`); `metadata()` → `HitMetadata` в `render_object.rs`, `render_box.rs` (два), `render_sliver.rs` (два), `HitTestEntry::metadata` (`flui-interaction/src/pointer/hit_test.rs`), alias `MetaDataPayload` удалён; `impl Curve + Send + Sync` → `impl Curve + 'static` в `implicitly_animated.rs`, `motion/{effects,switcher,transition}.rs`, `navigator/hero.rs` (два), `keyframes.rs`, `retarget.rs`, `curve/erased.rs`, `flui-material/src/open_container.rs`; `Arc`-внутренности → `Rc`: `CupertinoTabController` (`Arc<AtomicUsize>`), `PageView` (`page_view.rs`), `WidgetStatesController` и `WidgetStateProperty::Resolver` (`widget_state.rs`); конструкторы `CustomPaint::{painter, foreground_painter}`, `Flow::new`, `CustomSingleChildLayout::new`, `CustomMultiChildLayout::new`, `RenderSliverGrid::new` принимают `impl Trait + 'static` (хранение — приватный `Rc<dyn …>`). `ImageProvider` и `WidgetsLocalizations` остаются `Send` (решение владельца). Call sites в `packages/**`, `examples/**`, шаблонах `flui create` | — | `crates/flui-{scheduler,foundation,semantics,rendering,interaction,objects,animation,widgets}/src/**` (без `flui-widgets/src/text/controller.rs`), `packages/{flui-material,flui-cupertino}/src/**`, `examples/**`, `crates/flui-cli/src/templates`, `changelog.d/` | clippy и nextest по всем затронутым крейтам и зависимым; `cargo test -p flui-objects --test render_object_harness`; `cargo heli xtask wasm-check`; `cargo heli xtask cross-typecheck`; facade-combos | R2: `owner_local_values_fit_every_flip_position` — consumer через `flui` и через `flui-sdk`, `Rc<Cell<_>>`-реализатор или замыкание на каждую позицию (в `tests/facade_consumer.rs`); `RENDER_OBJECT_TYPES` не меняется; `cli_create::generated_*` зелёные | L + T |
 | **T11** | **Контроллеры отказывают в мутации во время `build`** (R8b, строка «поведенческие изменения»). `TabController`, `CupertinoTabController`, `ScrollController`, `AnimationController` отказывают мутатору, вызванному из `build`, с `warn!` с именем контроллера; `AnimationError::MutatedDuringBuild`. `StateCell` уже отказывает в записи во время `build` (`state_cell.rs`); контроллеры отказывают так же (ADR-0086 §7) | T10 (`CupertinoTabController` на `Rc`) | `crates/flui-animation/src/{controller.rs,error.rs}`, `crates/flui-widgets/src/scroll/scroll_controller.rs`, `packages/flui-material/src/tab_controller.rs`, `packages/flui-cupertino/src/tab_scaffold.rs`, `changelog.d/` | clippy и nextest: `-p flui-animation -p flui-widgets -p flui-material -p flui-cupertino` | R8b: `controller_mutation_during_build_is_refused` (четыре строки: `flui-widgets/tests/scroll.rs`, `flui-material/tests/tabs.rs`, `flui-cupertino/tests/tab_scaffold.rs`, `flui-animation/tests/contracts/`); R7: `tab_controller_listener_writes_from_an_event_callback`. Откат: мутатор в `build` меняет значение → строка R8b; `TabController` уведомляет под borrow → R7 падает с `BorrowError` | L |
 | **T9** | **`TextEditingController` owner-local.** `inner: Arc<Mutex<ControllerInner>>` (`text/controller.rs`) → `Rc<RefCell>`; `with_inner_silent` зовёт замыкание под замком — переделка с выносом состояния до вызова, не механика | text-ime T5 | `crates/flui-widgets/src/text/controller.rs`, `changelog.d/` | clippy и nextest: `-p flui-widgets -p flui-material` | `text_store_kit::assert_conforms` и модуль `text_store` в `editable_text.rs` без изменений; новая строка: `on_changed`, читающий контроллер, не получает `BorrowError` (откат — замыкание под borrow) | L |
@@ -109,26 +109,49 @@ T3 и T10 не делят файлов и идут параллельно. T9 ж
 - [x] T1 — #1496
 - [x] T6a — #1523, #1539
 - [x] T6b — #1523 (ADR-0178)
-- [ ] T3 — путь записи, остаток. Ветка `send-flip/write-path`, PR открыт, ждёт CI и слияния.
+- [ ] T3 — путь записи, остаток. Ветка `send-flip/write-path`, PR #1956, ждёт CI и слияния.
   - Сделано: `impl WriteTarget for Reactive` удалён; `BuildContext::reactive` заменён скрытым
     `graph(CrateToken)`; `BuildOwner::reactive` стал `pub(crate)`, добавлены
     `BuildOwner::writer_source` и `writer_source_for(slot)`; `HeadlessBinding::reactive` →
-    `writer_source` (с `compile_fail`-doctest на `reactive()`). Граф для тестов — только под
-    фичей `testing` (`BuildOwner::signal_graph`, `BuildContextExt::signal_graph`,
-    `Reactive::writer_source`). 41 вызов `.reactive()` переведён на `writer_source().write(..)`.
-    `UiCommand::SignalWrite` открывает `EventCx` через `WriterSource` presentation, выпустившей
-    слот. `on_remove`, задолженный pop'ом внутри сброса навигатора, уходит в post-frame очередь.
-  - Отклонение от строки задачи: `SignalWrite` несёт `FnMut(&mut EventCx) + Send`, а не
-    `FnOnce` — ADR-0086 (ревизия 2026-09-28) требует удерживать envelope после паники; `FnOnce`
-    уничтожал бы захваты во время раскрутки.
-  - Тесты: `navigator::local_history::local_history_removal_writes_after_the_flush`
-    (`flui-widgets/tests/navigator.rs`; откат — синхронный `on_remove` — даёт
-    `WrittenDuringBuild`), `signal_write_routing::cross_thread_signal_write_opens_the_owner_writer_source`
-    (в `flui-runtime`: `send_signal_write` — `pub(crate)`, из `flui-testing` недоступен; откат —
-    источник первой presentation — даёт чужой граф), таблица `owner_local_write_paths` во
-    `flui-testing` (`nested_writer_source_inside_an_event_cx`, `nested_write_panics_inside_an_event_cx`),
-    trybuild `signal_write_through_build_context` + `ctx.reactive()`, новая
-    `signal_write_through_the_graph`.
+    `writer_source` (с `compile_fail`-doctest на `reactive()`). 41 вызов `.reactive()`
+    переведён: запись — через `BuildOwner::writer_source`, `HeadlessBinding::writer_source` или
+    `LifecycleContext::writer_source` в `init_state`. `UiCommand::SignalWrite` открывает
+    `EventCx` через `WriterSource` presentation, выпустившей слот.
+  - Граф для тестов: под фичей `testing` остаётся только `BuildOwner::signal_graph` — чеканка
+    сигналов вне элемента (в том числе `signal_owned_by` с явным элементом) и чтение реестра
+    читателей. Писать через граф нельзя, `WriterSource` из него не получить, а до `BuildOwner`
+    из `build` не дотянуться. Строго read-only доступа не хватает: тестам `signal_reads.rs` и
+    фикстурам `flui-runtime` нужна чеканка вне элемента, а пути через `init_state` у неё нет.
+    `flui-testing` больше не включает `flui-view/testing` в обычной зависимости; `SignalProbe`
+    берёт отпущенный сигнал с собственного, выброшенного графа.
+  - `on_remove`, задолженный pop'ом внутри сброса навигатора: смонтированный навигатор кладёт
+    каждый в свою post-frame запись (`PostFrameHandle::schedule_or_return`); очередь, закрытая
+    без сбоя, возвращает его, и он выполняется сразу, отдельно под `PanicRecovery`; очередь,
+    закрытая со сбоем в custody, удерживает его невыполненным (ADR-0182); у размонтированного
+    навигатора очереди нет — обратный вызов отсекается вместе с ним, как у снятого маршрута
+    (ADR-0025). Ребро `changed_internal_state` теперь идёт раньше `on_remove`: оно — следствие
+    самого сброса и попадает в тот же кадр, а обратные вызовы ждут его конца.
+  - Отклонение от прежней строки задачи: `SignalWrite` несёт `FnMut(&mut EventCx) + Send`, а
+    не `FnOnce` (ADR-0086, ревизия 2026-09-28); строка T3 и design исправлены.
+  - Тесты и откат:
+    - `navigator::local_history::local_history_removal_writes_after_the_flush` — откат
+      (синхронный `on_remove`) даёт `WrittenDuringBuild`;
+    - `navigator::local_history::a_panicking_removal_does_not_lose_the_next` — две задолженные
+      записи, первая паникует, вторая выполняется, следующая операция работает;
+    - `navigator::local_history::an_unmounted_navigators_owed_removal_is_severed` — откат
+      (вызов без очереди) выполняет `on_remove` внутри чужого `build`;
+    - `owner_retirement_custody`: `active retired post-frame rejection is not returned`,
+      `healthy closed post-frame rejection returns the callback` (`flui-scheduler`);
+    - `signal_write_routing::cross_thread_signal_write_opens_the_owner_writer_source` — откат
+      (источник первой presentation) видит чужой граф. Остаётся в `flui-runtime`:
+      `send_signal_write` — `pub(crate)` и ещё не выдан наружу, из `tests/` через публичный
+      API недостижим;
+    - `signal_write_routing::a_panicking_signal_write_keeps_its_envelope` — envelope после
+      паники удержан, следующая запись проходит;
+    - таблица `owner_local_write_paths` во `flui-testing`: `nested_writer_source_inside_an_event_cx`,
+      `nested_write_panics_inside_an_event_cx`;
+    - trybuild `flui-view` (`signal_write_through_build_context` + `ctx.reactive()`, новая
+      `signal_write_through_the_graph`) прогнан локально, `.stderr` пересняты.
 - [ ] T10 — остаток flip
 - [ ] T11 — отказ мутации контроллеров во время `build`
 - [ ] T9 — `TextEditingController`

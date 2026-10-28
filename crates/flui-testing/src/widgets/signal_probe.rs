@@ -29,9 +29,10 @@ use flui_view::{BoxedView, SignalError};
 pub struct ProbeSignals {
     /// A live signal, read by the probe in every `build`.
     pub count: Signal<u32>,
-    /// A signal whose slot is already released, as after its owning element
-    /// unmounted: every write to it is refused with
-    /// [`SignalError::Released`], which a callback reports.
+    /// A handle kept past its slot: minted on a graph of its own, released,
+    /// and that graph dropped. Every write to it is refused (with
+    /// [`SignalError::ForeignGraph`], since no presentation owns its graph),
+    /// which a callback reports.
     pub released: Signal<u32>,
 }
 
@@ -158,9 +159,9 @@ impl StatefulView for ProbeRoot {
 impl ViewState<ProbeRoot> for ProbeRootState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.count = ctx.signal(0);
-        let graph = ctx.signal_graph();
-        self.released = graph.signal(0);
-        graph.release(self.released.slot());
+        let gone = flui_view::Reactive::new();
+        self.released = gone.signal(0);
+        gone.release(self.released.slot());
         self.writer = Some(ctx.writer_source());
     }
 

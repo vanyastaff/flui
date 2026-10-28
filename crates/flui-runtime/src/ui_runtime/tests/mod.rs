@@ -400,6 +400,7 @@ fn wake_debt_and_signal_write_matrix() {
         &[
             ("signal_write_routing::a_write_to_a_secondary_presentations_signal_rebuilds_its_reader", signal_write_routing::a_write_to_a_secondary_presentations_signal_rebuilds_its_reader as fn()),
             ("signal_write_routing::cross_thread_signal_write_opens_the_owner_writer_source", signal_write_routing::cross_thread_signal_write_opens_the_owner_writer_source as fn()),
+            ("signal_write_routing::a_panicking_signal_write_keeps_its_envelope", signal_write_routing::a_panicking_signal_write_keeps_its_envelope as fn()),
             ("signal_write_routing::a_signal_of_one_window_is_not_writable_while_another_window_builds", signal_write_routing::a_signal_of_one_window_is_not_writable_while_another_window_builds as fn()),
             ("signal_write_routing::stale_signal_command_disposal_panic_rearms_its_fifo_tail", signal_write_routing::stale_signal_command_disposal_panic_rearms_its_fifo_tail as fn()),
             ("signal_write_routing::a_failed_signal_write_rearm_retries_at_the_next_owner_boundary", signal_write_routing::a_failed_signal_write_rearm_retries_at_the_next_owner_boundary as fn()),

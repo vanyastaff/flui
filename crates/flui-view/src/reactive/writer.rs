@@ -238,17 +238,6 @@ impl WriterSource {
     }
 }
 
-#[cfg(any(test, feature = "testing"))]
-impl Reactive {
-    /// A writer source on this graph, for a test that drives a graph it
-    /// created or took from
-    /// [`BuildOwner::signal_graph`](crate::BuildOwner::signal_graph).
-    #[must_use]
-    pub fn writer_source(&self) -> WriterSource {
-        WriterSource::new(self.clone())
-    }
-}
-
 impl fmt::Debug for WriterSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WriterSource")

@@ -405,13 +405,13 @@ pub(crate) mod local_history {
         local: LocalHistoryHandle,
     }
 
-    /// A page that reads `count` and, when `pop_now` is armed, pops its
-    /// navigator from inside its own `build`: the flush, and its local-history
-    /// pop, run while an element is building.
+    /// A page that reads `count` and, while `pops` is above zero, pops its
+    /// navigator that many times from inside its own `build`: each flush, and
+    /// its local-history pop, run while an element is building.
     #[derive(Clone)]
     struct PopsInBuild {
         navigator: NavigatorHandle,
-        pop_now: Rc<std::cell::Cell<bool>>,
+        pops: Rc<std::cell::Cell<u32>>,
         acquired: Rc<std::cell::RefCell<Option<Acquired>>>,
     }
 
@@ -457,8 +457,8 @@ pub(crate) mod local_history {
 
         fn build(&self, view: &PopsInBuild, ctx: &dyn BuildContext) -> impl IntoView {
             let side = self.count.get(ctx);
-            if view.pop_now.take() {
-                assert!(view.navigator.maybe_pop(), "the entry absorbs the pop");
+            for _ in 0..view.pops.take() {
+                assert!(view.navigator.maybe_pop(), "an entry absorbs the pop");
             }
             SizedBox::new(10.0 + f64::from(side), 10.0)
         }
@@ -475,43 +475,23 @@ pub(crate) mod local_history {
     pub(crate) fn local_history_removal_writes_after_the_flush() {
         let built = Built::default();
         let (handle, mut harness) = navigator_with(&built);
-        let pop_now = Rc::new(std::cell::Cell::new(false));
-        let acquired = Rc::new(std::cell::RefCell::new(None));
-        let page = PopsInBuild {
-            navigator: handle.clone(),
-            pop_now: Rc::clone(&pop_now),
-            acquired: Rc::clone(&acquired),
-        };
-        let _route_result = handle.push(
-            PageRoute::<i32>::new(move |_ctx, _p, _s| page.clone().into_view().boxed())
-                .transition_duration(Duration::ZERO),
-        );
-        harness.tick();
+        let (pops, acquired) = push_page_that_pops(&handle, &mut harness);
         let Acquired {
             count,
             writer,
             local,
-        } = acquired
-            .borrow()
-            .clone()
-            .expect("the page acquired its handles");
+        } = acquired;
 
-        let written = Rc::new(std::cell::RefCell::new(Vec::new()));
-        let removal_writes = Rc::clone(&written);
-        let removal_writer = writer.clone();
-        let _entry = local.add(LocalHistoryEntry::new().on_remove(move || {
-            removal_writes
-                .borrow_mut()
-                .push(removal_writer.write(|cx| count.set(cx, 5)));
-        }));
+        let written = Writes::default();
+        let _entry = local.add(writing_entry(&written, &writer, count, 5));
 
         // Arm the pop and rebuild the page: its `build` pops the entry.
-        pop_now.set(true);
+        pops.set(1);
         writer
             .write(|cx| count.set(cx, 1))
             .expect("a write from the test");
         harness.tick();
-        assert!(!pop_now.get(), "the page popped inside its build");
+        assert_eq!(pops.get(), 0, "the page popped inside its build");
         assert_eq!(handle.route_ids().len(), 2, "the entry absorbed the pop");
         assert_eq!(
             *written.borrow(),
@@ -519,6 +499,200 @@ pub(crate) mod local_history {
             "on_remove ran once, after the build, and its write was accepted"
         );
         assert_eq!(writer.write(|cx| count.peek(cx, |n| *n)), Ok(5));
+    }
+
+    /// Every write an `on_remove` made, in order.
+    type Writes = Rc<std::cell::RefCell<Vec<Result<(), flui_view::SignalError>>>>;
+
+    /// An entry whose `on_remove` writes `value` through `writer` and records
+    /// the outcome.
+    fn writing_entry(
+        written: &Writes,
+        writer: &flui_view::WriterSource,
+        count: Signal<u32>,
+        value: u32,
+    ) -> LocalHistoryEntry {
+        let written = Rc::clone(written);
+        let writer = writer.clone();
+        LocalHistoryEntry::new().on_remove(move || {
+            written
+                .borrow_mut()
+                .push(writer.write(|cx| count.set(cx, value)));
+        })
+    }
+
+    /// Push a [`PopsInBuild`] page and settle it; returns its pop counter and
+    /// what it acquired.
+    fn push_page_that_pops(
+        handle: &NavigatorHandle,
+        harness: &mut Harness,
+    ) -> (Rc<std::cell::Cell<u32>>, Acquired) {
+        let pops = Rc::new(std::cell::Cell::new(0));
+        let acquired = Rc::new(std::cell::RefCell::new(None));
+        let page = PopsInBuild {
+            navigator: handle.clone(),
+            pops: Rc::clone(&pops),
+            acquired: Rc::clone(&acquired),
+        };
+        let _route_result = handle.push(
+            PageRoute::<i32>::new(move |_ctx, _p, _s| page.clone().into_view().boxed())
+                .transition_duration(Duration::ZERO),
+        );
+        harness.tick();
+        let acquired = acquired
+            .borrow()
+            .clone()
+            .expect("the page acquired its handles");
+        (pops, acquired)
+    }
+
+    /// Two removals owed in one frame, the first of which panics: each is its
+    /// own post-frame entry, so the second is kept and runs on the next frame,
+    /// its write lands, and the navigator and the queue serve the next removal
+    /// normally.
+    ///
+    /// Red-check: queue both owed callbacks as one post-frame closure — the
+    /// second is lost with the first panic. (Each `maybe_pop` here is its own
+    /// flush; `local_history::tests` covers two callbacks owed by one drain.)
+    pub(crate) fn a_panicking_removal_does_not_lose_the_next() {
+        let built = Built::default();
+        let (handle, mut harness) = navigator_with(&built);
+        let (pops, acquired) = push_page_that_pops(&handle, &mut harness);
+        let Acquired {
+            count,
+            writer,
+            local,
+        } = acquired;
+
+        // The most recent entry pops first: the panicking one.
+        let written = Writes::default();
+        let _writes = local.add(writing_entry(&written, &writer, count, 5));
+        let _panics =
+            local.add(LocalHistoryEntry::new().on_remove(|| panic!("first on_remove failure")));
+
+        pops.set(2);
+        writer
+            .write(|cx| count.set(cx, 1))
+            .expect("a write from the test");
+        let frame = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| harness.tick()));
+        if let Err(payload) = frame {
+            assert_eq!(
+                flui_foundation::panic::payload_text(payload.as_ref()),
+                Some("first on_remove failure"),
+                "the first panic is the one reported"
+            );
+        }
+        assert_eq!(pops.get(), 0, "both pops ran inside the build");
+        // The post-frame drain stops at the panic and keeps the uninvoked
+        // tail, in order, for the next frame.
+        harness.tick();
+        assert_eq!(
+            *written.borrow(),
+            [Ok(())],
+            "the removal after the panicking one still ran, and its write landed"
+        );
+        assert_eq!(writer.write(|cx| count.peek(cx, |n| *n)), Ok(5));
+
+        // The next operation after containment.
+        let _next = local.add(writing_entry(&written, &writer, count, 7));
+        assert!(handle.maybe_pop(), "the new entry absorbs the pop");
+        harness.tick();
+        assert_eq!(*written.borrow(), [Ok(()), Ok(())]);
+        assert_eq!(writer.write(|cx| count.peek(cx, |n| *n)), Ok(7));
+        assert_eq!(
+            handle.route_ids().len(),
+            2,
+            "the entries absorbed every pop"
+        );
+    }
+
+    /// The root for [`an_unmounted_navigators_owed_removal_is_severed`]: the
+    /// navigator, or in its place a widget that pops it from its own `build`.
+    #[derive(Clone)]
+    struct Stage {
+        navigator: NavigatorHandle,
+        mounted: bool,
+        pop_in_build: Rc<std::cell::Cell<bool>>,
+    }
+
+    impl View for Stage {
+        fn create_element(&self) -> ElementKind {
+            ElementKind::stateless(self)
+        }
+    }
+
+    impl StatelessView for Stage {
+        fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+            if self.mounted {
+                return Navigator::new(self.navigator.clone()).into_view().boxed();
+            }
+            if self.pop_in_build.take() {
+                let _ = self.navigator.pop();
+            }
+            SizedBox::new(1.0, 1.0).into_view().boxed()
+        }
+    }
+
+    /// A navigator that has unmounted has no post-frame queue. A pop through
+    /// a handle that outlives it, made inside another element's `build`,
+    /// owes an `on_remove` it can no longer deliver after a frame: the
+    /// callback is severed with the navigator, like a disposed route's, and
+    /// is never run inside that `build`.
+    ///
+    /// Red-check: fire the owed callback when there is no queue — it runs
+    /// inside `Stage::build`, and its write is refused (the page's signal is
+    /// already released with the unmounted page).
+    pub(crate) fn an_unmounted_navigators_owed_removal_is_severed() {
+        struct Dropped(Rc<std::cell::Cell<u32>>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+
+        let built = Built::default();
+        let handle = NavigatorHandle::new();
+        handle.seed_initial(page(&built, "/"));
+        let pop_in_build = Rc::new(std::cell::Cell::new(false));
+        let stage = |mounted| Stage {
+            navigator: handle.clone(),
+            mounted,
+            pop_in_build: Rc::clone(&pop_in_build),
+        };
+        let mut harness = mount(stage(true));
+        let (_pops, acquired) = push_page_that_pops(&handle, &mut harness);
+        let Acquired {
+            count,
+            writer,
+            local,
+        } = acquired;
+
+        let written = Writes::default();
+        let drops = Rc::new(std::cell::Cell::new(0));
+        let capture = Dropped(Rc::clone(&drops));
+        let removal_writes = Rc::clone(&written);
+        let removal_writer = writer.clone();
+        let _entry = local.add(LocalHistoryEntry::new().on_remove(move || {
+            let _ = &capture;
+            removal_writes
+                .borrow_mut()
+                .push(removal_writer.write(|cx| count.set(cx, 5)));
+        }));
+
+        harness.swap_root(stage(false));
+        harness.tick();
+        assert!(!handle.is_mounted(), "the navigator unmounted");
+
+        pop_in_build.set(true);
+        harness.swap_root(stage(false));
+        harness.tick();
+        assert!(!pop_in_build.get(), "the stage popped inside its build");
+        assert!(
+            written.borrow().is_empty(),
+            "a severed on_remove never runs, in a build or after it: {:?}",
+            written.borrow()
+        );
+        assert_eq!(drops.get(), 1, "its captures are dropped once");
     }
 }
 

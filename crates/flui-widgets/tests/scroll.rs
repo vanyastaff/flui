@@ -4813,7 +4813,7 @@ pub(crate) fn a_command_queued_before_mount_is_serviced_outside_build() {
         .expect("ordered extents");
     let outcome = Rc::new(Cell::new(None));
     let seen = Rc::clone(&outcome);
-    let writer = reactive.writer_source();
+    let writer = laid.with_build_owner_mut(|owner| owner.writer_source());
     let _listener = controller
         .position()
         .add_activity_listener(Rc::new(move || {
