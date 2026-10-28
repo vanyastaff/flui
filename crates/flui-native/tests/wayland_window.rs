@@ -14,11 +14,13 @@ use std::time::{Duration, Instant};
 use flui_foundation::geometry::{Size, WindowMetrics};
 use flui_native::testing::app::{self, AppCall};
 use flui_native::testing::wayland::{
-    bridge_focus, compositor_report, fullscreen_on, outputs, portal_parent, present, run_for,
-    suspend,
+    bridge_focus, compositor_report, fullscreen_on, offers_activation, outputs, portal_parent,
+    present, run_for, suspend,
 };
 use flui_native::{ExitAnswer, HostWindow, Platform as _, WaylandPlatform};
-use flui_platform::{Availability, PlatformWindow, WindowCommand, WindowOptions};
+use flui_platform::{
+    Availability, PlatformWindow, UnsupportedReason, WindowCommand, WindowOptions,
+};
 use flui_testing::window_commands::AdmitAndApply as _;
 use flui_testing::window_conformance::{self, Readback, WindowFixture};
 use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
@@ -422,6 +424,85 @@ fn the_accessibility_bridge_follows_the_compositors_activation() {
     );
     second.close_for_cleanup();
     eprintln!("{case}: the activation moved, and both bridges heard it");
+}
+
+/// `WindowCommand::Activate` asks the compositor for an activation token and
+/// hands it back once it comes: the window does not focus itself, the
+/// compositor decides from the token. A token that names no user input asks
+/// for attention: a window covered by a second one stays behind it (sway
+/// marks it urgent). Where the compositor takes no activation request
+/// (Weston 13 has no `xdg_activation_v1`), the command is refused at
+/// admission as the device's; where it activates no window (no seat), the
+/// covering half is not run, and the test says so.
+#[test]
+fn an_activation_asks_the_compositor_with_a_token() {
+    let case = "an_activation_asks_the_compositor_with_a_token";
+    let Some(platform) = platform(case) else {
+        return;
+    };
+    let mut fixture = WaylandFixture::open(platform, "activated on request");
+    let capabilities = fixture.window.state().capabilities;
+    let activates = capabilities.activates;
+    if !offers_activation(&fixture.platform) {
+        let refused = WindowCommand::Activate
+            .admit(&capabilities)
+            .expect_err("a compositor without xdg-activation takes no activation");
+        assert_eq!(
+            refused.unsupported().map(|unsupported| unsupported.reason),
+            Some(UnsupportedReason::NotOnThisDevice),
+            "refused as this compositor's"
+        );
+        eprintln!("{case}: the compositor offers no xdg-activation; the request was not run");
+        return;
+    }
+    assert_eq!(
+        activates,
+        Availability::Emulated,
+        "the compositor decides what an activation does"
+    );
+    let activated = |window: &dyn HostWindow| {
+        compositor_report(window)
+            .expect("a Wayland window")
+            .states
+            .contains(&ACTIVATED)
+    };
+    let cover = fixture
+        .platform
+        .open_window(
+            WindowOptions::default().with_title("covering"),
+            RecordingWindowHandler::new() as _,
+        )
+        .expect("a second window opens");
+    for _ in 0..10 {
+        run_for(&fixture.platform, Duration::from_millis(50)).expect("the loop turns");
+        cover.surface_target().pre_present_notify();
+        let _ = present(cover.as_ref());
+    }
+    fixture.settle();
+    let covered = !activated(fixture.window.as_ref());
+    fixture
+        .window
+        .admit_and_apply(WindowCommand::Activate)
+        .unwrap_or_else(|refusal| panic!("Activate was refused: {refusal:?}"));
+    fixture.settle();
+    let report = compositor_report(fixture.window.as_ref()).expect("a Wayland window");
+    assert_eq!(
+        (report.activation_tokens, report.activations),
+        (1, 1),
+        "the compositor answered the token request the command made, and the window handed \
+         the token back"
+    );
+    let came_forward = activated(fixture.window.as_ref());
+    if covered {
+        // The token names no user input (the test gives none), so the
+        // compositor is asked for the user's attention, never the focus.
+        assert!(
+            !came_forward,
+            "an activation with no user input behind it took the focus from the window in front"
+        );
+    }
+    cover.close_for_cleanup();
+    eprintln!("{case}: covered {covered}, activated after the request {came_forward}");
 }
 
 fn frames(handler: &RecordingWindowHandler) -> usize {

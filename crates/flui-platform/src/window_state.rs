@@ -441,7 +441,9 @@ pub struct WindowCapabilities {
     /// [`WindowCommand::Show`].
     pub shows: Availability,
     /// [`WindowCommand::Activate`]: bring the window to the front and request
-    /// focus.
+    /// focus, under the window system's focus rules. `Emulated` where the
+    /// window can only ask and the window system decides from what the
+    /// request carries (a Wayland activation token).
     pub activates: Availability,
     /// [`WindowCommand::Close`]: destroy the window. A window whose platform
     /// owns its lifetime (an Android activity) cannot close itself.
@@ -826,7 +828,11 @@ pub enum WindowCommand {
     Show,
     /// Hide the window.
     Hide,
-    /// Bring the window to the front and request focus.
+    /// Bring the window to the front with the focus, as the window system's
+    /// focus rules allow: where they refuse (another application has the
+    /// user's input and handed this one no right to the foreground), the
+    /// window asks for the user's attention instead and never takes the
+    /// focus.
     Activate,
     /// Close and destroy the window: a decision already made, which asks no
     /// should-close veto (ADR-0123). Asking whether the window may close is

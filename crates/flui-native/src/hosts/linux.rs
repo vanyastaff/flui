@@ -59,7 +59,9 @@ mod wayland {
     use crate::display::linux::protocol::Environment;
     use crate::display::linux::wayland::WaylandDisplaySource;
     use crate::input::linux::wayland::SeatInput;
-    use crate::owner::linux::wayland::{WaylandDisplays, WaylandHost, WaylandInput, WaylandLoop};
+    use crate::owner::linux::wayland::{
+        LastInput, WaylandDisplays, WaylandHost, WaylandInput, WaylandLoop,
+    };
     use crate::window::linux::wayland::{WaylandWindow, WaylandWindows};
 
     /// The Wayland host's table.
@@ -93,8 +95,8 @@ mod wayland {
 
         /// The keyboards, pointers, touchscreens, tablet tools and touchpad
         /// pinches of every seat, with the cursor each window shows.
-        fn input() -> Arc<dyn WaylandInput> {
-            Arc::new(SeatInput::new())
+        fn input(last_input: LastInput) -> Arc<dyn WaylandInput> {
+            Arc::new(SeatInput::new(last_input))
         }
 
         fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {

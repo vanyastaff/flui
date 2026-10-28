@@ -39,7 +39,7 @@ mod cases {
     use std::time::{Duration, Instant};
 
     use cursor_icon::CursorIcon;
-    use flui_native::testing::wayland::{cursor_report, present, run_for};
+    use flui_native::testing::wayland::{cursor_report, last_input_serial, present, run_for};
     use flui_native::{HostWindow, Platform as _, WaylandPlatform};
     use flui_platform::keyboard::{Code, Key, KeyState};
     use flui_platform::pointer::{PointerButton, PointerEvent, PointerKind, ScrollUnit};
@@ -340,8 +340,21 @@ mod cases {
                 .iter()
                 .any(|event| matches!(event, PointerEvent::Move(_)))
         });
+        // The keyboard entering the window is the first input an activation
+        // token may name; each click and key names a later serial.
+        let focused = last_input_serial(&platform).expect("the keyboard entered the window");
         fake(BUTTON_PRESS_EVENT, 1, None);
         fake(BUTTON_RELEASE_EVENT, 1, None);
+        turn_until(&platform, &window, &handler, "the click", |_| {
+            pointer_events(&handler)
+                .iter()
+                .any(|event| matches!(event, PointerEvent::Up(_)))
+        });
+        let clicked = last_input_serial(&platform).expect("the click is input");
+        assert!(
+            clicked > focused,
+            "the click's serial {clicked} after {focused}"
+        );
         // Button 4 is the wheel turned away from the user: toward earlier
         // content.
         fake(BUTTON_PRESS_EVENT, 4, None);
@@ -368,6 +381,11 @@ mod cases {
                 matches!(call, HandlerCall::Input(PlatformInput::Keyboard(key)) if key.state() == KeyState::Up)
             })
         });
+        let keyed = last_input_serial(&platform).expect("the key is input");
+        assert!(
+            keyed > clicked,
+            "the key's serial {keyed} after the click's {clicked}"
+        );
 
         let pointer = pointer_events(&handler);
         let enter = pointer

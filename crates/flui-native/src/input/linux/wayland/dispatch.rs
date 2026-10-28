@@ -81,7 +81,8 @@ use crate::input::event_timestamp_ns;
 use crate::input::linux::xkb::{EVDEV_OFFSET, Keyboard, KeymapSource, keymap_length};
 #[cfg(any(test, feature = "testing"))]
 use crate::owner::linux::wayland::ShownCursor;
-use crate::owner::linux::wayland::{SeatWindow, WaylandInput, WaylandState};
+use crate::owner::linux::wayland::activation::UserInput;
+use crate::owner::linux::wayland::{LastInput, SeatWindow, WaylandInput, WaylandState};
 use crate::owner::panic_boundary::contain_owner_callback;
 use crate::owner::slot::OwnerCell;
 use crate::owner::window_delivery::WindowDelivery;
@@ -178,6 +179,9 @@ struct PointerObjects {
     cursor_surface: Option<WlSurface>,
     /// The window surface it is over and the serial of its enter.
     focus: Option<(NativeSurface, u32)>,
+    /// That surface, as the protocol names it: what a button names on an
+    /// activation token.
+    focus_surface: Option<WlSurface>,
 }
 
 /// One seat's objects.
@@ -187,6 +191,9 @@ struct SeatObjects {
     seat: WlSeat,
     pointer: Option<PointerObjects>,
     keyboard: Option<WlKeyboard>,
+    /// The surface its keyboard is in: what a key names on an activation
+    /// token.
+    keyboard_focus: Option<WlSurface>,
     touch: Option<(WlTouch, NativeDevice)>,
     tablet: Option<ZwpTabletSeatV2>,
     /// The tablet tools the tablet seat announced and has not removed.
@@ -263,9 +270,56 @@ struct Shared {
     /// The cursor last shown, for a test.
     #[cfg(any(test, feature = "testing"))]
     shown: OwnerCell<Option<ShownCursor>>,
+    /// The last user input, which a window's activation token names.
+    last_input: LastInput,
 }
 
 impl Shared {
+    /// `seat` reports a user input, `serial`, that went to `surface`: what
+    /// the next activation token names. Called by a dispatch with no cell of
+    /// the input borrowed.
+    fn record_input(&self, seat: SeatKey, serial: u32, surface: WlSurface) {
+        let seat = self
+            .objects
+            .with(|objects| {
+                objects
+                    .seats
+                    .iter()
+                    .find(|held| held.key == seat)
+                    .map(|held| held.seat.clone())
+            })
+            .flatten();
+        if let Some(seat) = seat {
+            self.last_input.record(UserInput {
+                seat,
+                serial,
+                surface,
+            });
+        }
+    }
+
+    /// `seat`'s keyboard entered `surface`, a window's, or left (`None`).
+    fn set_keyboard_focus(&self, seat: SeatKey, surface: Option<WlSurface>) {
+        self.objects.with(|objects| {
+            if let Some(held) = objects.seats.iter_mut().find(|held| held.key == seat) {
+                held.keyboard_focus = surface;
+            }
+        });
+    }
+
+    /// The window surface `seat`'s keyboard is in.
+    fn keyboard_focus(&self, seat: SeatKey) -> Option<WlSurface> {
+        self.objects
+            .with(|objects| {
+                objects
+                    .seats
+                    .iter()
+                    .find(|held| held.key == seat)
+                    .and_then(|held| held.keyboard_focus.clone())
+            })
+            .flatten()
+    }
+
     /// A seat key no seat had.
     fn seat_key(&self) -> SeatKey {
         SeatKey(self.seat_keys.fetch_add(1, Ordering::Relaxed) + 1)
@@ -317,8 +371,9 @@ pub(crate) struct SeatInput {
 }
 
 impl SeatInput {
-    /// The input of a loop on the calling thread, with no global bound yet.
-    pub(crate) fn new() -> Self {
+    /// The input of a loop on the calling thread, with no global bound yet,
+    /// recording each user input in `last_input`.
+    pub(crate) fn new(last_input: LastInput) -> Self {
         let clock = NativeClock::new(
             EventTime::from_nanos(event_timestamp_ns()),
             monotonic(),
@@ -335,6 +390,7 @@ impl SeatInput {
             themes: OwnerCell::new(),
             #[cfg(any(test, feature = "testing"))]
             shown: OwnerCell::new(),
+            last_input,
         });
         shared.delivering.with(|delivering| {
             *delivering = Some(Delivering {
@@ -379,6 +435,7 @@ impl SeatInput {
                 seat,
                 pointer: None,
                 keyboard: None,
+                keyboard_focus: None,
                 touch: None,
                 tablet,
                 tools: Vec::new(),
@@ -1348,6 +1405,7 @@ pub(crate) struct SeatData {
 pub(crate) struct PointerData {
     shared: Weak<Shared>,
     device: NativeDevice,
+    seat: SeatKey,
 }
 
 /// A keyboard's user data.
@@ -1360,6 +1418,7 @@ pub(crate) struct KeyboardData {
 pub(crate) struct TouchData {
     shared: Weak<Shared>,
     device: NativeDevice,
+    seat: SeatKey,
 }
 
 /// A pinch's user data.
@@ -1440,6 +1499,7 @@ impl Dispatch<WlSeat, SeatData> for WaylandState {
                         PointerData {
                             shared: Arc::downgrade(&shared),
                             device,
+                            seat: key,
                         },
                     );
                     let mut objects = PointerObjects {
@@ -1451,6 +1511,7 @@ impl Dispatch<WlSeat, SeatData> for WaylandState {
                         pinch: None,
                         cursor_surface: None,
                         focus: None,
+                        focus_surface: None,
                     };
                     objects.pinch = gestures
                         .as_ref()
@@ -1490,6 +1551,7 @@ impl Dispatch<WlSeat, SeatData> for WaylandState {
                             TouchData {
                                 shared: Arc::downgrade(&shared),
                                 device,
+                                seat: key,
                             },
                         ),
                         device,
@@ -1568,6 +1630,7 @@ impl Dispatch<WlPointer, PointerData> for WaylandState {
                     {
                         if held.pointer == *pointer {
                             held.focus = Some((key, serial));
+                            held.focus_surface = Some(surface.clone());
                         }
                     }
                     show_cursor(&shared, objects, key, cursor, scale);
@@ -1590,6 +1653,7 @@ impl Dispatch<WlPointer, PointerData> for WaylandState {
                         .find(|held| held.pointer == *pointer)
                     {
                         held.focus = None;
+                        held.focus_surface = None;
                     }
                 });
                 (arrival(None), PointerWire::Leave)
@@ -1606,17 +1670,36 @@ impl Dispatch<WlPointer, PointerData> for WaylandState {
                 },
             ),
             wl_pointer::Event::Button {
+                serial,
                 time,
                 button,
                 state,
-                ..
-            } => (
-                arrival(Some(time)),
-                PointerWire::Button {
-                    code: button,
-                    pressed: state == WEnum::Value(wl_pointer::ButtonState::Pressed),
-                },
-            ),
+            } => {
+                let pressed = state == WEnum::Value(wl_pointer::ButtonState::Pressed);
+                if pressed {
+                    let surface = shared
+                        .objects
+                        .with(|objects| {
+                            objects
+                                .seats
+                                .iter()
+                                .filter_map(|seat| seat.pointer.as_ref())
+                                .find(|held| held.pointer == *pointer)
+                                .and_then(|held| held.focus_surface.clone())
+                        })
+                        .flatten();
+                    if let Some(surface) = surface {
+                        shared.record_input(data.seat, serial, surface);
+                    }
+                }
+                (
+                    arrival(Some(time)),
+                    PointerWire::Button {
+                        code: button,
+                        pressed,
+                    },
+                )
+            }
             wl_pointer::Event::Axis {
                 time,
                 axis: which,
@@ -1727,19 +1810,39 @@ impl Dispatch<WlKeyboard, KeyboardData> for WaylandState {
                     }
                 }
             }
-            wl_keyboard::Event::Enter { surface, .. } => Wire::KeyFocus {
-                seat,
-                focus: shared.surface_of(&surface),
-            },
-            wl_keyboard::Event::Leave { .. } => Wire::KeyFocus { seat, focus: None },
+            wl_keyboard::Event::Enter {
+                serial, surface, ..
+            } => {
+                let focus = shared.surface_of(&surface);
+                let entered = focus.map(|_| surface);
+                shared.set_keyboard_focus(seat, entered.clone());
+                // The keyboard entering a window is input a token may name.
+                if let Some(surface) = entered {
+                    shared.record_input(seat, serial, surface);
+                }
+                Wire::KeyFocus { seat, focus }
+            }
+            wl_keyboard::Event::Leave { .. } => {
+                shared.set_keyboard_focus(seat, None);
+                Wire::KeyFocus { seat, focus: None }
+            }
             wl_keyboard::Event::Key {
-                time, key, state, ..
-            } => Wire::Key {
-                seat,
-                time: arrival(Some(time)),
-                code: key,
-                pressed: state == WEnum::Value(wl_keyboard::KeyState::Pressed),
-            },
+                serial,
+                time,
+                key,
+                state,
+            } => {
+                let pressed = state == WEnum::Value(wl_keyboard::KeyState::Pressed);
+                if pressed && let Some(surface) = shared.keyboard_focus(seat) {
+                    shared.record_input(seat, serial, surface);
+                }
+                Wire::Key {
+                    seat,
+                    time: arrival(Some(time)),
+                    code: key,
+                    pressed,
+                }
+            }
             wl_keyboard::Event::Modifiers {
                 mods_depressed,
                 mods_latched,
@@ -1789,17 +1892,26 @@ impl Dispatch<WlTouch, TouchData> for WaylandState {
         };
         let (time, wire) = match event {
             wl_touch::Event::Down {
+                serial,
                 time,
                 surface,
                 id,
                 x,
                 y,
-                ..
             } => {
-                let Some(surface) = shared.surface_of(&surface) else {
+                let Some(key) = shared.surface_of(&surface) else {
                     return;
                 };
-                (arrival(Some(time)), TouchWire::Down { surface, id, x, y })
+                shared.record_input(data.seat, serial, surface);
+                (
+                    arrival(Some(time)),
+                    TouchWire::Down {
+                        surface: key,
+                        id,
+                        x,
+                        y,
+                    },
+                )
             }
             wl_touch::Event::Up { time, id, .. } => (arrival(Some(time)), TouchWire::Up { id }),
             wl_touch::Event::Motion { time, id, x, y } => {

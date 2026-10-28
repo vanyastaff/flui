@@ -161,7 +161,13 @@ headless Weston (`weston --backend=headless --socket=…`) and sets
 `wayland_input` harness, the Wayland host's input from a real seat, starts an
 Xvfb and a Weston on its X11 backend of its own and drives them through XTest;
 it skips itself without `Xvfb` or `weston`, and fails then under
-`FLUI_REQUIRE_WAYLAND`.
+`FLUI_REQUIRE_WAYLAND`. Weston
+13 has no `xdg_activation_v1`, so there
+`an_activation_asks_the_compositor_with_a_token` checks only the refusal; the
+token's whole path (asked, answered, handed back, the window left behind its
+cover) runs only against a sway started by hand. On Windows the Win32 window
+tests and the contract's share the desktop's foreground and run one at a time
+(test group `desktop-foreground`).
 
 xtask does not schedule its commands. On a host shared by several agents and
 checkouts, [heli](https://github.com/vanyastaff/heli) does: every cargo, the
