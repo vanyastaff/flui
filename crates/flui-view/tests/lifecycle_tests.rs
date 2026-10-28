@@ -242,9 +242,7 @@ fn due_signals(signals: &Signals) -> usize {
 /// A close refused by holds becomes due once, when the last hold goes: the
 /// owner is signalled once and its settle carries it out once, without the
 /// handler being asked again.
-#[test]
-#[ignore = "contract: a released hold makes the recorded close due once"]
-fn releasing_the_last_hold_queues_one_close() {
+pub(crate) fn releasing_the_last_hold_queues_one_close() {
     let (source, signals) = desktop_close_guard(true);
     let guard = source.guard();
     let saving = guard.hold();
@@ -272,9 +270,7 @@ fn releasing_the_last_hold_queues_one_close() {
 
 /// A repeated request for the same reason records nothing more: resolving
 /// the one record leaves none.
-#[test]
-#[ignore = "contract: a repeated request records one close"]
-fn a_repeated_request_records_one_close() {
+pub(crate) fn a_repeated_request_records_one_close() {
     let (source, _signals) = desktop_close_guard(true);
     let guard = source.guard();
     let _saving = guard.hold();
@@ -296,9 +292,7 @@ fn a_repeated_request_records_one_close() {
 /// What each kind of hold refuses, reason by reason: a hold lets the session
 /// end through, a decision refuses every reason the platform lets the
 /// application refuse.
-#[test]
-#[ignore = "contract: a hold refuses user and program closes, a decision every vetoable one"]
-fn a_hold_and_a_decision_refuse_by_reason() {
+pub(crate) fn a_hold_and_a_decision_refuse_by_reason() {
     fn refusals(take: fn(&CloseGuard) -> CloseHold) -> Vec<(CloseReason, bool)> {
         EVERY_REASON
             .iter()
@@ -333,9 +327,7 @@ fn a_hold_and_a_decision_refuse_by_reason() {
 /// A close recorded under a decision is carried out once the decision hold
 /// is released, as a retry that succeeded releases it; resolved with
 /// `stay_open` it is not, and the resolved record is stale afterwards.
-#[test]
-#[ignore = "contract: the recorded close runs when the last hold goes, unless kept open"]
-fn a_recorded_close_runs_when_the_last_hold_goes_unless_kept_open() {
+pub(crate) fn a_recorded_close_runs_when_the_last_hold_goes_unless_kept_open() {
     let (retried, _signals) = desktop_close_guard(true);
     let decision = retried.guard().require_decision();
     let _ = retried.refuses(CloseReason::User);
@@ -368,9 +360,7 @@ fn a_recorded_close_runs_when_the_last_hold_goes_unless_kept_open() {
 
 /// A cancelled log-off withdraws its own recorded close and nothing else:
 /// the user's close, recorded earlier, still waits for a decision.
-#[test]
-#[ignore = "contract: a withdrawn session end leaves the user's close recorded"]
-fn a_cancelled_logoff_withdraws_only_the_session_entry() {
+pub(crate) fn a_cancelled_logoff_withdraws_only_the_session_entry() {
     let (source, signals) = desktop_close_guard(true);
     let guard = source.guard();
     let _unsaved = guard.require_decision();
@@ -393,9 +383,7 @@ fn a_cancelled_logoff_withdraws_only_the_session_entry() {
 
 /// A due close whose signal could not reach the owner is not lost: the
 /// owner's next settle still finds it.
-#[test]
-#[ignore = "contract: an undelivered signal keeps the due close"]
-fn an_undelivered_signal_keeps_the_due_close() {
+pub(crate) fn an_undelivered_signal_keeps_the_due_close() {
     let (source, signals) = desktop_close_guard(false);
     let saving = source.guard().hold();
     let _ = source.refuses(CloseReason::User);
@@ -439,7 +427,7 @@ fn wake_on_the_owner_turn(wakers: Vec<Waker>) {
 
 /// A future taken before a close is recorded wakes neither in `refuses` nor
 /// in `settle`, and once when the owner wakes what `settle` returned.
-fn a_change_recorded_under_a_hold_wakes_on_the_owner_turn() {
+pub(crate) fn a_change_recorded_under_a_hold_wakes_on_the_owner_turn() {
     let (source, signals) = desktop_close_guard(true);
     let guard = source.guard();
     let _saving = guard.hold();
@@ -475,7 +463,7 @@ fn a_change_recorded_under_a_hold_wakes_on_the_owner_turn() {
 /// A future taken after a close was recorded, across the release of the
 /// last hold: the release wakes nothing, settle returns the due close with
 /// the waker, and the waker wakes once the owner wakes it.
-fn a_change_taken_across_the_release_wakes_on_the_owner_turn() {
+pub(crate) fn a_change_taken_across_the_release_wakes_on_the_owner_turn() {
     let (source, _signals) = desktop_close_guard(true);
     let guard = source.guard();
     let saving = guard.hold();
@@ -503,31 +491,9 @@ fn a_change_taken_across_the_release_wakes_on_the_owner_turn() {
     assert_eq!(after_settle, 0, "settle wakes nothing itself");
 }
 
-/// A change wakes `changed()` on the owner's turn, never inside the change
-/// and never inside `settle`.
-#[test]
-#[ignore = "contract: a close change wakes waiters on the owner's turn"]
-fn a_close_change_wakes_on_the_owner_turn() {
-    crate::run_table(
-        "a_close_change_wakes_on_the_owner_turn",
-        &[
-            (
-                "a_change_recorded_under_a_hold_wakes_on_the_owner_turn",
-                a_change_recorded_under_a_hold_wakes_on_the_owner_turn as fn(),
-            ),
-            (
-                "a_change_taken_across_the_release_wakes_on_the_owner_turn",
-                a_change_taken_across_the_release_wakes_on_the_owner_turn as fn(),
-            ),
-        ],
-    );
-}
-
 /// Discarding a recorded close makes it due: the owner is signalled, its
 /// settle returns the reason, and the record is gone.
-#[test]
-#[ignore = "contract: discarding a recorded close makes it due"]
-fn discarding_a_recorded_close_makes_it_due() {
+pub(crate) fn discarding_a_recorded_close_makes_it_due() {
     let (source, signals) = desktop_close_guard(true);
     let guard = source.guard();
     let _unsaved = guard.require_decision();
@@ -543,4 +509,27 @@ fn discarding_a_recorded_close_makes_it_due() {
         "settle returns the discarded close for the owner to carry out"
     );
     assert!(guard.pending().is_none(), "the record is gone");
+}
+
+/// A resolution through an older record of a reason never touches a newer
+/// record of the same reason: the user's second close, recorded after the
+/// first was kept open, stays recorded.
+pub(crate) fn an_older_resolution_leaves_a_newer_record() {
+    let (source, _signals) = desktop_close_guard(true);
+    let guard = source.guard();
+    let _unsaved = guard.require_decision();
+    let _ = source.refuses(CloseReason::User);
+    let kept = guard.pending();
+    let older = guard.pending();
+    let _ = kept.map(PendingClose::stay_open);
+
+    let _ = source.refuses(CloseReason::User);
+    let resolved = older.map(PendingClose::stay_open);
+
+    assert_eq!(resolved, Some(Err(StaleClose)), "the older record is stale");
+    assert_eq!(
+        guard.pending().map(|pending| pending.reason()),
+        Some(CloseReason::User),
+        "the newer record stays"
+    );
 }

@@ -2885,9 +2885,21 @@ impl Drop for BuildOwner {
     /// dropped owner can legitimately outlive its own finalize sweep (e.g. a
     /// test harness dropping a `BuildOwner` without ever unmounting its
     /// tree).
+    ///
+    /// Then ends the installed tree observer's stream with `detached()`,
+    /// once: an observer already cleared or replaced was told then. It is
+    /// called through its own `Arc`, with nothing of this owner borrowed,
+    /// and the slot keeps the observer until the fields drop, so its
+    /// destructor runs in field order as before. During an unwind it is not
+    /// called: the slot's own drop retains it instead.
     fn drop(&mut self) {
         if let Some(scope) = &self.global_key_scope {
             scope.reclaim_owner(self.owner_tag);
+        }
+        if !std::thread::panicking()
+            && let Some(observer) = self.tree_observer.as_ref()
+        {
+            notify_detached(Arc::clone(observer));
         }
     }
 }

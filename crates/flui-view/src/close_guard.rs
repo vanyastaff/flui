@@ -29,8 +29,7 @@
 //! anything where it happens; it signals the owner, and waiters wake on the
 //! owner's turn.
 //!
-//! Not yet wired: no presentation hands a guard to its widgets yet, holds do
-//! not refuse a close, and nothing is ever recorded as pending.
+//! Not yet wired: no host hands a guard to its presentations' widgets yet.
 
 use std::cell::RefCell;
 use std::fmt;
@@ -39,7 +38,7 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
-use crate::owner_notify::OwnerNotify;
+use crate::owner_notify::{LifecycleEvent, OwnerNotify};
 
 /// Why a presentation is being closed.
 ///
@@ -57,6 +56,23 @@ pub enum CloseReason {
     SessionEnd,
 }
 
+/// Which of the two kinds of hold a [`CloseHold`] is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HoldKind {
+    /// From [`CloseGuard::hold`]: work that finishes by itself.
+    Work,
+    /// From [`CloseGuard::require_decision`]: a state only the user resolves.
+    Decision,
+}
+
+/// One recorded close.
+#[derive(Clone, Copy, Debug)]
+struct Record {
+    reason: CloseReason,
+    /// Which recording of `reason` this is; never reused.
+    epoch: u64,
+}
+
 /// One presentation's close state, shared by its guard, holds, pending
 /// closes and change futures.
 ///
@@ -68,8 +84,75 @@ struct GuardState {
     /// The reasons the presentation's platform lets the application refuse.
     vetoable: Vec<CloseReason>,
     /// How a transition signals the owner.
-    #[expect(dead_code, reason = "signalled once the guard records closes")]
     notify: OwnerNotify,
+    /// Live holds from [`CloseGuard::hold`].
+    work_holds: usize,
+    /// Live holds from [`CloseGuard::require_decision`].
+    decision_holds: usize,
+    /// The recorded closes, earliest first, at most one per reason.
+    records: Vec<Record>,
+    /// The epoch the next record gets.
+    next_epoch: u64,
+    /// The close due to be carried out, until the owner settles it.
+    due: Option<CloseReason>,
+    /// How many changes to the recorded closes were committed.
+    changes: u64,
+    /// How many of them the owner has settled: waiters taken before this
+    /// count are resolved.
+    settled: u64,
+    /// The wakers of pending [`CloseChanged`] futures, each with the change
+    /// count it was taken at.
+    waiters: Vec<(u64, Waker)>,
+}
+
+impl GuardState {
+    /// Whether a live hold refuses a close for `reason`.
+    fn held_against(&self, reason: CloseReason) -> bool {
+        match reason {
+            CloseReason::User | CloseReason::Program => {
+                self.work_holds > 0 || self.decision_holds > 0
+            }
+            CloseReason::SessionEnd => self.decision_holds > 0,
+        }
+    }
+
+    fn position(&self, reason: CloseReason, epoch: u64) -> Option<usize> {
+        self.records
+            .iter()
+            .position(|record| record.reason == reason && record.epoch == epoch)
+    }
+
+    fn changed(&mut self) {
+        self.changes = self
+            .changes
+            .checked_add(1)
+            .expect("BUG: a close guard counted 2^64 changes");
+    }
+
+    /// Make the presentation's close due as `reason`: every record is
+    /// consumed, since one close carries them all out. A close already due
+    /// and not yet settled stays the one carried out.
+    fn make_due(&mut self, reason: CloseReason) {
+        self.records.clear();
+        self.due.get_or_insert(reason);
+        self.changed();
+    }
+}
+
+/// Commit a transition to `state`, then signal the owner with the event it
+/// returns, after the borrow is released. A signal the owner cannot receive
+/// loses nothing: the transition stays committed for the next settle.
+fn transition(
+    state: &RefCell<GuardState>,
+    commit: impl FnOnce(&mut GuardState) -> Option<LifecycleEvent>,
+) {
+    let signal = {
+        let mut state = state.borrow_mut();
+        commit(&mut state).map(|event| (event, state.notify.clone()))
+    };
+    if let Some((event, notify)) = signal {
+        let _undelivered = notify.notify(event);
+    }
 }
 
 /// A presentation's capability to hold its close while work finishes.
@@ -96,9 +179,7 @@ impl CloseGuard {
     /// [`PendingClose`] and carried out when the last hold is released.
     /// [`CloseReason::SessionEnd`] is not held.
     pub fn hold(&self) -> CloseHold {
-        CloseHold {
-            _state: Rc::clone(&self.state),
-        }
+        self.take(HoldKind::Work)
     }
 
     /// Hold the close until the user decides: every reason the platform lets
@@ -106,8 +187,23 @@ impl CloseGuard {
     /// this hold, as a retry that succeeded does, carries the recorded close
     /// out unless it was resolved with [`PendingClose::stay_open`].
     pub fn require_decision(&self) -> CloseHold {
+        self.take(HoldKind::Decision)
+    }
+
+    fn take(&self, kind: HoldKind) -> CloseHold {
+        {
+            let mut state = self.state.borrow_mut();
+            let count = match kind {
+                HoldKind::Work => &mut state.work_holds,
+                HoldKind::Decision => &mut state.decision_holds,
+            };
+            *count = count
+                .checked_add(1)
+                .expect("BUG: more close holds than addressable memory");
+        }
         CloseHold {
-            _state: Rc::clone(&self.state),
+            state: Rc::clone(&self.state),
+            kind,
         }
     }
 
@@ -116,7 +212,12 @@ impl CloseGuard {
     /// repeated request for the same reason records nothing more.
     #[must_use]
     pub fn pending(&self) -> Option<PendingClose> {
-        None
+        let record = *self.state.borrow().records.first()?;
+        Some(PendingClose {
+            reason: record.reason,
+            epoch: record.epoch,
+            state: Rc::clone(&self.state),
+        })
     }
 
     /// A future that resolves at the first change to what
@@ -128,8 +229,10 @@ impl CloseGuard {
     /// between the two then still resolves it. Read in the other order, a
     /// change after the read and before the future was taken is missed.
     pub fn changed(&self) -> CloseChanged {
+        let taken_at = self.state.borrow().changes;
         CloseChanged {
-            _state: Rc::clone(&self.state),
+            state: Rc::clone(&self.state),
+            taken_at,
         }
     }
 
@@ -153,12 +256,37 @@ impl CloseGuard {
 /// recorded.
 #[must_use = "the hold is released as soon as it is dropped"]
 pub struct CloseHold {
-    _state: Rc<RefCell<GuardState>>,
+    state: Rc<RefCell<GuardState>>,
+    kind: HoldKind,
 }
 
 impl fmt::Debug for CloseHold {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CloseHold").finish_non_exhaustive()
+        f.debug_struct("CloseHold")
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for CloseHold {
+    fn drop(&mut self) {
+        let kind = self.kind;
+        transition(&self.state, |state| {
+            // Taking a hold counted it, so the count is at least one.
+            match kind {
+                HoldKind::Work => state.work_holds -= 1,
+                HoldKind::Decision => state.decision_holds -= 1,
+            }
+            let held = state.work_holds > 0 || state.decision_holds > 0;
+            let first = state.records.first().map(|record| record.reason);
+            match (held, first) {
+                (false, Some(reason)) => {
+                    state.make_due(reason);
+                    Some(LifecycleEvent::CloseDue)
+                }
+                _ => None,
+            }
+        });
     }
 }
 
@@ -170,9 +298,8 @@ impl fmt::Debug for CloseHold {
 pub struct PendingClose {
     reason: CloseReason,
     /// Which recording of `reason` this is.
-    #[expect(dead_code, reason = "compared once the guard records closes")]
     epoch: u64,
-    _state: Rc<RefCell<GuardState>>,
+    state: Rc<RefCell<GuardState>>,
 }
 
 impl fmt::Debug for PendingClose {
@@ -203,13 +330,17 @@ impl PendingClose {
     /// On success the close becomes due: the owner is signalled
     /// ([`LifecycleEvent::CloseDue`](crate::__runtime::LifecycleEvent::CloseDue)),
     /// its next [`CloseGuardSource::settle`] returns this reason, and the
-    /// owner carries the close out.
+    /// owner carries the close out. Closes recorded for other reasons are
+    /// carried out with it.
     ///
     /// # Errors
     ///
     /// [`StaleClose`] when this recording is gone; nothing is closed.
     pub fn discard_and_close(self) -> Result<(), StaleClose> {
-        Err(StaleClose)
+        self.resolve(|state, _| {
+            state.make_due(self.reason);
+            LifecycleEvent::CloseDue
+        })
     }
 
     /// Withdraw this recorded close and keep the presentation open; releasing
@@ -220,7 +351,27 @@ impl PendingClose {
     ///
     /// [`StaleClose`] when this recording is gone.
     pub fn stay_open(self) -> Result<(), StaleClose> {
-        Err(StaleClose)
+        self.resolve(|state, index| {
+            state.records.remove(index);
+            state.changed();
+            LifecycleEvent::CloseChanged
+        })
+    }
+
+    /// Apply `resolve` to this recording, if it is still recorded. The epoch
+    /// decides, not the reason: a resolution of an older recording never
+    /// touches a newer one of the same reason.
+    fn resolve(
+        &self,
+        resolve: impl FnOnce(&mut GuardState, usize) -> LifecycleEvent,
+    ) -> Result<(), StaleClose> {
+        let mut outcome = Err(StaleClose);
+        transition(&self.state, |state| {
+            let index = state.position(self.reason, self.epoch)?;
+            outcome = Ok(());
+            Some(resolve(state, index))
+        });
+        outcome
     }
 }
 
@@ -228,7 +379,9 @@ impl PendingClose {
 /// [`CloseGuard::changed`]. Owner-thread only.
 #[must_use = "a future does nothing unless polled"]
 pub struct CloseChanged {
-    _state: Rc<RefCell<GuardState>>,
+    state: Rc<RefCell<GuardState>>,
+    /// The guard's change count when the future was taken.
+    taken_at: u64,
 }
 
 impl fmt::Debug for CloseChanged {
@@ -240,8 +393,19 @@ impl fmt::Debug for CloseChanged {
 impl Future for CloseChanged {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<()> {
-        // Nothing records or withdraws a close yet, so no change can come.
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        let mut state = self.state.borrow_mut();
+        if state.settled > self.taken_at {
+            return Poll::Ready(());
+        }
+        let waker = cx.waker();
+        if !state
+            .waiters
+            .iter()
+            .any(|(taken_at, known)| *taken_at == self.taken_at && known.will_wake(waker))
+        {
+            state.waiters.push((self.taken_at, waker.clone()));
+        }
         Poll::Pending
     }
 }
@@ -249,8 +413,6 @@ impl Future for CloseChanged {
 /// The presentation's side of a [`CloseGuard`]: the host asks it whether a
 /// close may proceed, withdraws a close the platform cancelled, settles it
 /// on the owner's turn, and hands the guard to the presentation's widgets.
-///
-/// Not yet wired: no close is refused, so nothing is recorded or comes due.
 pub struct CloseGuardSource {
     state: Rc<RefCell<GuardState>>,
 }
@@ -274,6 +436,14 @@ impl CloseGuardSource {
             state: Rc::new(RefCell::new(GuardState {
                 vetoable: vetoable.to_vec(),
                 notify,
+                work_holds: 0,
+                decision_holds: 0,
+                records: Vec::new(),
+                next_epoch: 0,
+                due: None,
+                changes: 0,
+                settled: 0,
+                waiters: Vec::new(),
             })),
         }
     }
@@ -289,18 +459,43 @@ impl CloseGuardSource {
     /// Whether a hold refuses a close for `reason`. When one does, the close
     /// is recorded as a [`PendingClose`] for `reason` (once; a repeated
     /// request records nothing more) and nothing is torn down; otherwise the
-    /// caller carries the close out.
+    /// caller carries the close out. A reason the platform does not let the
+    /// application refuse is never refused.
     #[must_use]
     pub fn refuses(&self, reason: CloseReason) -> bool {
-        let _ = reason;
-        false
+        let mut refused = false;
+        transition(&self.state, |state| {
+            if !state.vetoable.contains(&reason) || !state.held_against(reason) {
+                return None;
+            }
+            refused = true;
+            if state.records.iter().any(|record| record.reason == reason) {
+                return None;
+            }
+            let epoch = state.next_epoch;
+            state.next_epoch = epoch
+                .checked_add(1)
+                .expect("BUG: a close guard recorded 2^64 closes");
+            state.records.push(Record { reason, epoch });
+            state.changed();
+            Some(LifecycleEvent::CloseChanged)
+        });
+        refused
     }
 
     /// Withdraw the close recorded for `reason`, if one is: the platform
     /// cancelled it, as when a log-off is cancelled. Closes recorded for
     /// other reasons stay recorded.
     pub fn withdraw(&self, reason: CloseReason) {
-        let _ = reason;
+        transition(&self.state, |state| {
+            let index = state
+                .records
+                .iter()
+                .position(|record| record.reason == reason)?;
+            state.records.remove(index);
+            state.changed();
+            Some(LifecycleEvent::CloseChanged)
+        });
     }
 
     /// Settle the guard on the owner's turn: take the recorded close that is
@@ -314,9 +509,17 @@ impl CloseGuardSource {
     /// that panics therefore loses neither the due close, which the owner
     /// already holds, nor the wakers after it.
     pub fn settle(&self) -> SettledClose {
+        let mut state = self.state.borrow_mut();
+        let close = state.due.take();
+        state.settled = state.changes;
+        let settled = state.settled;
+        let (wake, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut state.waiters)
+            .into_iter()
+            .partition(|(taken_at, _)| *taken_at < settled);
+        state.waiters = waiting;
         SettledClose {
-            close: None,
-            wake: Vec::new(),
+            close,
+            wake: wake.into_iter().map(|(_, waker)| waker).collect(),
         }
     }
 }

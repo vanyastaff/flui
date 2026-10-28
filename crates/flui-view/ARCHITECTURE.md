@@ -915,3 +915,36 @@ operation proceed.
 **Pinned by:** the `static_children_retirement`, `child_payload_recovery` and
 `lifecycle_hook_payload_retirement` rows of
 `lifecycle_panic_containment_matrix`.
+
+### Close guard and flush registry settle on the owner's turn
+
+A presentation's `CloseGuard` is one owner-thread state shared by its holds,
+pending closes and change futures. A refused close is recorded once per
+`CloseReason`, each recording with its own epoch, so a `PendingClose` resolved
+late never removes a newer recording of the same reason. Releasing the last hold
+makes one close due and consumes every recording; `discard_and_close` does the
+same past the holds. Every transition commits and drops its `RefCell` borrow
+before it signals `OwnerNotify`, and nothing wakes inside the transition: the
+owner's `settle` returns the due close and the wakers, and the owner wakes them
+inside its own containment boundary. A signal the owner cannot receive loses
+nothing, since the next settle finds the transition.
+
+The `FlushRegistry` keeps at most one write in flight per name and the latest
+owed bytes behind it. A write is a future that asks the storage on its first
+poll, so a write the IO pool refuses or drops never reached the storage, and
+its drop keeps the bytes owed. A failed write keeps its bytes with the failure
+until newer bytes replace them or `flush_within` writes them. An edit based on a
+version is rebased onto the last confirmed write when the same publisher made
+it, and refused with `StorageError::Conflict` when another publisher did. The
+registry's lock is never held while the storage, the pool or `OwnerNotify` runs.
+
+`LifecycleSource::claim_close_delivery` latches: one token per presentation,
+which records `Completed`, or `Interrupted` when dropped unfinished; neither is
+claimed again. `BuildOwner::drop` ends an installed tree observer's stream with
+`detached()` once, outside any borrow of the owner, and skips it while the
+thread unwinds.
+
+**Pinned by:** `close_guard_matrix`, `flush_registry_matrix` (in-crate),
+`lifecycle_subscription_matrix` (in-crate) and
+`dropping_an_owner_with_an_observer_detaches_it_once` in
+`element_lifecycle_and_dependency_matrix`.
