@@ -22,8 +22,10 @@
 //! objects report, and delivers it to the windows on each turn before they
 //! settle (`WaylandInput`). The last user input the seats report, which an
 //! activation token names, is kept here too (`LastInput`): the input feature
-//! records it, the window feature reads it. Its windows are the window
-//! feature's
+//! records it, the window feature reads it. A window's own frame reaches the
+//! input the same way (`FramePointer`): the window feature draws it, the
+//! input tells it what the pointer does over its surfaces. Its windows are
+//! the window feature's
 //! (`window::linux::wayland`): the loop holds them as `LoopWindow`s and asks
 //! each to settle after every read, and the window feature implements the
 //! dispatch of its own protocol objects on `WaylandState`.
@@ -38,9 +40,9 @@ pub use event_loop::OutputName;
 pub(crate) use event_loop::ShownCursor;
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(crate) use event_loop::{
-    LastInput, LiveOutputs, LoopWaker, LoopWindow, MAX_OUTPUTS, OutputFacts, PresentationTime,
-    SeatWindow, WaylandDisplays, WaylandHost, WaylandInput, WaylandLoop, WaylandState, WindowSeed,
-    WindowTable,
+    FramePointer, LastInput, LiveOutputs, LoopWaker, LoopWindow, MAX_OUTPUTS, OutputFacts,
+    PresentationTime, SeatWindow, WaylandDisplays, WaylandHost, WaylandInput, WaylandLoop,
+    WaylandState, WindowSeed, WindowTable,
 };
 
 pub(crate) mod activation {
@@ -411,6 +413,8 @@ mod event_loop {
     use wayland_client::protocol::wl_output::{self, WlOutput};
     use wayland_client::protocol::wl_registry::{self, WlRegistry};
     use wayland_client::protocol::wl_seat::WlSeat;
+    use wayland_client::protocol::wl_shm::{self, WlShm};
+    use wayland_client::protocol::wl_subcompositor::{self, WlSubcompositor};
     use wayland_client::protocol::wl_surface::WlSurface;
     use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
     use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_manager_v1::{
@@ -536,6 +540,34 @@ mod event_loop {
         /// Its device pixels per logical pixel now, which a theme cursor
         /// over it is drawn at.
         pub(crate) scale: Arc<dyn Fn() -> f64 + Send + Sync>,
+        /// The frame it draws itself where the compositor draws none, which
+        /// the pointer over the frame's surfaces reaches instead of the
+        /// window's input.
+        pub(crate) frame: Arc<dyn FramePointer>,
+    }
+
+    /// A window's own frame as the seats' input reaches it: the window
+    /// feature's, which draws it. The input asks it whether a surface is the
+    /// frame's and tells it what the pointer does there; the frame records
+    /// it, and the window carries it out as it settles. Called by a dispatch
+    /// on the owner thread, with no cell of the input borrowed; it runs no
+    /// handler and calls back into nothing.
+    pub(crate) trait FramePointer: Send + Sync {
+        /// Whether `surface` is one of the frame's.
+        fn holds(&self, surface: &WlSurface) -> bool;
+
+        /// The pointer is at (`x`, `y`), surface-local, on `surface`, one of
+        /// the frame's: the cursor it shows there.
+        fn moved(&self, surface: &WlSurface, x: f64, y: f64) -> CursorIcon;
+
+        /// The pointer left the frame's surfaces.
+        fn left(&self);
+
+        /// Button `code` (evdev) of `seat`'s pointer went down or up over the
+        /// frame at `time` (the compositor's milliseconds), as the event
+        /// numbered `serial`: a move, a resize or a window menu it starts
+        /// names that seat and serial.
+        fn button(&self, seat: &WlSeat, serial: u32, time: u32, code: u32, pressed: bool);
     }
 
     /// The cursor the input last showed, for a test.
@@ -1023,6 +1055,33 @@ mod event_loop {
         }
     }
 
+    impl Dispatch<WlShm, ()> for WaylandState {
+        fn event(
+            _: &mut Self,
+            _: &WlShm,
+            _: wl_shm::Event,
+            (): &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            // The formats it announces: ARGB8888, which a window's own frame
+            // is drawn in, is every compositor's.
+        }
+    }
+
+    impl Dispatch<WlSubcompositor, ()> for WaylandState {
+        fn event(
+            _: &mut Self,
+            _: &WlSubcompositor,
+            _: wl_subcompositor::Event,
+            (): &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            // The subcompositor has no events.
+        }
+    }
+
     impl Dispatch<ZxdgDecorationManagerV1, ()> for WaylandState {
         fn event(
             _: &mut Self,
@@ -1107,6 +1166,13 @@ mod event_loop {
         /// `wp_viewporter`, which sizes a surface apart from its buffer;
         /// `None` where the compositor has none.
         pub(crate) viewporter: Option<WpViewporter>,
+        /// `wl_subcompositor`, which places a window's own frame around its
+        /// content; `None` where the compositor has none.
+        pub(crate) subcompositor: Option<WlSubcompositor>,
+        /// `wl_shm`, the shared memory a window's own frame is drawn in (and
+        /// a test's frames, `testing::wayland::present`); `None` where the
+        /// compositor has none.
+        pub(crate) shm: Option<WlShm>,
         /// `zxdg_decoration_manager_v1`, through which a window asks the
         /// compositor to draw its frame; `None` where the compositor draws
         /// none.
@@ -1129,10 +1195,6 @@ mod event_loop {
         pub(crate) last_input: LastInput,
         /// The outputs the compositor announces now.
         pub(crate) live: LiveOutputs,
-        /// `wl_shm`, which a test draws a window's frames with in place of a
-        /// renderer (`testing::wayland::present`).
-        #[cfg(any(test, feature = "testing"))]
-        pub(crate) shm: Option<wayland_client::protocol::wl_shm::WlShm>,
     }
 
     /// What a window opens with, which the loop hands the window feature
@@ -1158,6 +1220,9 @@ mod event_loop {
         /// The seats' input, which the window joins as it opens and leaves
         /// as it closes, and which shows its cursor.
         pub(crate) input: Arc<dyn WaylandInput>,
+        /// The loop's background work, on which a window's own frame has
+        /// the host's fonts read once.
+        pub(crate) executor: Arc<BackgroundExecutor>,
     }
 
     /// The owner's event queue and what it dispatches into, kept together:
@@ -1283,10 +1348,10 @@ mod event_loop {
             let activation = globals
                 .bind::<XdgActivationV1, _, _>(&handle, 1..=ACTIVATION_VERSION, ())
                 .ok();
-            #[cfg(any(test, feature = "testing"))]
-            let shm = globals
-                .bind::<wayland_client::protocol::wl_shm::WlShm, _, _>(&handle, 1..=1, ())
+            let subcompositor = globals
+                .bind::<WlSubcompositor, _, _>(&handle, 1..=1, ())
                 .ok();
+            let shm = globals.bind::<WlShm, _, _>(&handle, 1..=1, ()).ok();
             let live = LiveOutputs::default();
             let last_input = LastInput::default();
             let input = H::input(last_input.clone());
@@ -1327,6 +1392,8 @@ mod event_loop {
                     compositor,
                     wm_base,
                     viewporter,
+                    subcompositor,
+                    shm,
                     decoration,
                     fractional_scale,
                     exporter,
@@ -1334,8 +1401,6 @@ mod event_loop {
                     activation,
                     last_input,
                     live,
-                    #[cfg(any(test, feature = "testing"))]
-                    shm,
                 },
                 connection,
                 dispatcher: {
@@ -1403,6 +1468,7 @@ mod event_loop {
                 waker: Arc::downgrade(&self.waker),
                 notices: Arc::clone(&self.notices),
                 input: Arc::clone(&self.input),
+                executor: Arc::clone(&self.executor),
             })
         }
 
@@ -1479,6 +1545,12 @@ mod event_loop {
         /// (`xdg-decoration`).
         pub(crate) fn offers_decorations(&self) -> bool {
             self.protocol.decoration.is_some()
+        }
+
+        /// Whether a window can draw a frame of its own: the compositor
+        /// offers subsurfaces and shared memory.
+        pub(crate) fn offers_frame_surfaces(&self) -> bool {
+            self.protocol.subcompositor.is_some() && self.protocol.shm.is_some()
         }
 
         /// Whether the compositor tells a surface when its commits are shown

@@ -339,11 +339,16 @@ wayland-client = { workspace = true, optional = true }
 wayland-protocols = { workspace = true, optional = true, features = ["staging"] }
 wayland-backend = { workspace = true, optional = true }
 # `time`: the monotonic clock the X server and a Wayland compositor stamp
-# their input on, and the clock a compositor stamps presentation times on.
-rustix = { workspace = true, optional = true, features = ["time"] }
+# their input on, and the clock a compositor stamps presentation times on;
+# `fs`: the memory file a Wayland window's own frame is drawn into.
+rustix = { workspace = true, optional = true, features = ["time", "fs"] }
 # The cursor theme the Wayland host draws a cursor from where the compositor
 # has no `cursor-shape`. winit loads the same crate, so the tree gains none.
 wayland-cursor = { version = "0.31", optional = true }
+# The title a Wayland window draws in its own frame, shaped and rasterized
+# by the text stack the renderer draws text with (Parley, swash) over the
+# bundled and the host's fonts. `flui-app` links it already.
+flui-painting = { path = "../flui-painting", version = "=0.2.0-dev", optional = true }
 accesskit_unix = { version = "0.24" }
 zbus = { workspace = true }
 futures-util = { workspace = true }
@@ -492,6 +497,7 @@ wayland = [
     "dep:rustix",
     "dep:xkbcommon-dl",
     "dep:wayland-cursor",
+    "dep:flui-painting",
 ]
 
 # winit fallback backend — the Linux host `current_platform` picks while it is
@@ -548,6 +554,9 @@ cfg_aliases = { workspace = true }
 flui-testing = { path = "../flui-testing" }
 # `text::apple::composition`'s rules, which run on every host.
 icu_segmenter.workspace = true
+# The Wayland window's own frame (`window::linux::wayland::client_frame`),
+# whose title and pixels are checked on every host.
+flui-painting = { path = "../flui-painting" }
 # The host's own test support, the `testing` module. Checkout-only test edge:
 # versionless, so Cargo drops it from the published manifest.
 flui-native = { path = ".", features = ["testing"] }
@@ -627,6 +636,15 @@ required-features = ["x11"]
 [[test]]
 name = "wayland_input"
 path = "tests/wayland_input.rs"
+harness = false
+required-features = ["wayland"]
+
+# The native Wayland host's own window frame under a compositor that draws
+# none (Weston's desktop shell), read back from the X server it runs on and
+# driven through XTest: its own harness, for the same reason.
+[[test]]
+name = "wayland_frame"
+path = "tests/wayland_frame.rs"
 harness = false
 required-features = ["wayland"]
 

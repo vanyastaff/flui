@@ -82,7 +82,9 @@ use crate::input::linux::xkb::{EVDEV_OFFSET, Keyboard, KeymapSource, keymap_leng
 #[cfg(any(test, feature = "testing"))]
 use crate::owner::linux::wayland::ShownCursor;
 use crate::owner::linux::wayland::activation::UserInput;
-use crate::owner::linux::wayland::{LastInput, SeatWindow, WaylandInput, WaylandState};
+use crate::owner::linux::wayland::{
+    FramePointer, LastInput, SeatWindow, WaylandInput, WaylandState,
+};
 use crate::owner::panic_boundary::contain_owner_callback;
 use crate::owner::slot::OwnerCell;
 use crate::owner::window_delivery::WindowDelivery;
@@ -189,13 +191,19 @@ fn queue(wires: &mut Vec<Wire>, wire: Wire) {
     wires.push(wire);
 }
 
+/// A window's device pixels per logical pixel, read when a theme cursor
+/// over it is drawn.
+type WindowScale = Arc<dyn Fn() -> f64 + Send + Sync>;
+
 /// A window the input delivers to.
 struct Attached {
     id: WindowId,
     surface: WlSurface,
     delivery: Arc<WindowDelivery>,
     cursor: CursorIcon,
-    scale: Arc<dyn Fn() -> f64 + Send + Sync>,
+    scale: WindowScale,
+    /// The frame it draws itself, whose surfaces the pointer's events go to.
+    frame: Arc<dyn FramePointer>,
 }
 
 /// A pointer's objects.
@@ -211,6 +219,26 @@ struct PointerObjects {
     /// That surface, as the protocol names it: what a button names on an
     /// activation token.
     focus_surface: Option<WlSurface>,
+    /// The window frame it is over instead, which its events go to.
+    frame_focus: Option<FrameFocus>,
+}
+
+/// A pointer over a surface of a window's own frame.
+#[derive(Clone)]
+struct FrameFocus {
+    /// The frame.
+    frame: Arc<dyn FramePointer>,
+    /// The frame's surface the pointer entered.
+    surface: WlSurface,
+    /// The window's own surface, which a button names on an activation
+    /// token.
+    window: WlSurface,
+    /// The serial of its enter, which a cursor is set with.
+    serial: u32,
+    /// The cursor last shown there.
+    cursor: CursorIcon,
+    /// The window's scale, which a theme cursor is drawn at.
+    scale: WindowScale,
 }
 
 /// One seat's objects.
@@ -383,6 +411,28 @@ impl Shared {
     /// A device label no object had.
     fn label(&self) -> NativeDevice {
         NativeDevice(self.labels.fetch_add(1, Ordering::Relaxed) + 1)
+    }
+
+    /// The frame `surface` is a surface of, with its window's own surface
+    /// and scale, when it is one of a window's frame.
+    fn frame_of(
+        &self,
+        surface: &WlSurface,
+    ) -> Option<(Arc<dyn FramePointer>, WlSurface, WindowScale)> {
+        self.windows
+            .with(|windows| {
+                windows
+                    .iter()
+                    .find(|window| window.frame.holds(surface))
+                    .map(|window| {
+                        (
+                            Arc::clone(&window.frame),
+                            window.surface.clone(),
+                            Arc::clone(&window.scale),
+                        )
+                    })
+            })
+            .flatten()
     }
 
     /// The window surface `surface` is, when it is a window's.
@@ -1050,6 +1100,7 @@ impl WaylandInput for SeatInput {
                 delivery: window.delivery,
                 cursor: CursorIcon::Default,
                 scale: window.scale,
+                frame: window.frame,
             });
         });
     }
@@ -1075,6 +1126,14 @@ impl WaylandInput for SeatInput {
             {
                 if pointer.focus.is_some_and(|(focus, _)| focus == surface) {
                     pointer.focus = None;
+                }
+                if let Some(removed) = &removed
+                    && pointer
+                        .frame_focus
+                        .as_ref()
+                        .is_some_and(|focus| Arc::ptr_eq(&focus.frame, &removed.frame))
+                {
+                    pointer.frame_focus = None;
                 }
             }
         });
@@ -1235,38 +1294,209 @@ fn show_cursor(
         if focus != surface {
             continue;
         }
-        match (&pointer.shape, shapes, &source) {
-            (Some(shape), Some(version), _) => {
-                let value = cursor::shape(cursor, version);
-                if let Ok(shape_value) = wp_cursor_shape_device_v1::Shape::try_from(value) {
-                    shape.set_shape(serial, shape_value);
-                    #[cfg(any(test, feature = "testing"))]
-                    shared.shown.with(|shown| {
-                        *shown = Some(ShownCursor {
-                            name: value.to_string(),
-                            scale: 0,
-                        });
-                    });
-                }
-            }
-            (_, _, Some(source)) => {
-                if let Some(drawn) =
-                    draw_theme_cursor(shared, source, pointer, serial, cursor, scale)
-                {
-                    #[cfg(any(test, feature = "testing"))]
-                    shared.shown.with(|shown| {
-                        *shown = Some(ShownCursor {
-                            name: drawn.0.to_owned(),
-                            scale: drawn.1,
-                        });
-                    });
-                    #[cfg(not(any(test, feature = "testing")))]
-                    let _ = drawn;
-                }
-            }
-            _ => {}
-        }
+        show_pointer_cursor(
+            shared,
+            shapes,
+            source.as_ref(),
+            pointer,
+            serial,
+            cursor,
+            scale,
+        );
     }
+}
+
+/// Show `cursor` on `pointer` since its enter `serial`: by its
+/// `cursor-shape` value where the compositor (`shapes`, its version) has
+/// `cursor-shape`, else as the cursor theme `source` draws it at `scale`.
+fn show_pointer_cursor(
+    shared: &Shared,
+    shapes: Option<u32>,
+    source: Option<&CursorSource>,
+    pointer: &mut PointerObjects,
+    serial: u32,
+    cursor: CursorIcon,
+    scale: f64,
+) {
+    match (&pointer.shape, shapes, source) {
+        (Some(shape), Some(version), _) => {
+            let value = cursor::shape(cursor, version);
+            if let Ok(shape_value) = wp_cursor_shape_device_v1::Shape::try_from(value) {
+                shape.set_shape(serial, shape_value);
+                #[cfg(any(test, feature = "testing"))]
+                shared.shown.with(|shown| {
+                    *shown = Some(ShownCursor {
+                        name: value.to_string(),
+                        scale: 0,
+                    });
+                });
+            }
+        }
+        (_, _, Some(source)) => {
+            if let Some(drawn) = draw_theme_cursor(shared, source, pointer, serial, cursor, scale) {
+                #[cfg(any(test, feature = "testing"))]
+                shared.shown.with(|shown| {
+                    *shown = Some(ShownCursor {
+                        name: drawn.0.to_owned(),
+                        scale: drawn.1,
+                    });
+                });
+                #[cfg(not(any(test, feature = "testing")))]
+                let _ = drawn;
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Show `cursor` on `pointer`, which is over a window's own frame since the
+/// enter `serial`, drawn at `scale`.
+fn show_frame_cursor(
+    shared: &Shared,
+    objects: &mut Objects,
+    pointer: &WlPointer,
+    serial: u32,
+    cursor: CursorIcon,
+    scale: f64,
+) {
+    let shapes = objects
+        .shapes
+        .as_ref()
+        .map(|(_, manager)| manager.version());
+    let source = objects.cursor_source.clone();
+    if let Some(held) = objects
+        .seats
+        .iter_mut()
+        .filter_map(|seat| seat.pointer.as_mut())
+        .find(|held| held.pointer == *pointer)
+    {
+        show_pointer_cursor(shared, shapes, source.as_ref(), held, serial, cursor, scale);
+    }
+}
+
+/// What `pointer`'s `event` does over a window's own frame: an enter on one
+/// of a frame's surfaces makes the frame the pointer's focus, and while it is
+/// every event goes to the frame and none to a window's input. `false` for an
+/// event that is not the frame's. Calls the frame with no cell of the input
+/// borrowed.
+fn frame_event(
+    shared: &Shared,
+    pointer: &WlPointer,
+    data: &PointerData,
+    event: &wl_pointer::Event,
+) -> bool {
+    if let wl_pointer::Event::Enter {
+        serial,
+        surface,
+        surface_x,
+        surface_y,
+    } = event
+    {
+        let Some((frame, window, scale)) = shared.frame_of(surface) else {
+            return false;
+        };
+        let cursor = frame.moved(surface, *surface_x, *surface_y);
+        let shown = scale();
+        shared.objects.with(|objects| {
+            if let Some(held) = objects
+                .seats
+                .iter_mut()
+                .filter_map(|seat| seat.pointer.as_mut())
+                .find(|held| held.pointer == *pointer)
+            {
+                held.focus = None;
+                held.focus_surface = None;
+                held.frame_focus = Some(FrameFocus {
+                    frame,
+                    surface: surface.clone(),
+                    window,
+                    serial: *serial,
+                    cursor,
+                    scale,
+                });
+            }
+            show_frame_cursor(shared, objects, pointer, *serial, cursor, shown);
+        });
+        return true;
+    }
+    let focus = shared
+        .objects
+        .with(|objects| {
+            objects
+                .seats
+                .iter()
+                .filter_map(|seat| seat.pointer.as_ref())
+                .find(|held| held.pointer == *pointer)
+                .and_then(|held| held.frame_focus.clone())
+        })
+        .flatten();
+    let Some(focus) = focus else {
+        return false;
+    };
+    match event {
+        wl_pointer::Event::Motion {
+            surface_x,
+            surface_y,
+            ..
+        } => {
+            let cursor = focus.frame.moved(&focus.surface, *surface_x, *surface_y);
+            if cursor != focus.cursor {
+                let scale = (focus.scale)();
+                shared.objects.with(|objects| {
+                    if let Some(held) = objects
+                        .seats
+                        .iter_mut()
+                        .filter_map(|seat| seat.pointer.as_mut())
+                        .find(|held| held.pointer == *pointer)
+                        && let Some(frame_focus) = held.frame_focus.as_mut()
+                    {
+                        frame_focus.cursor = cursor;
+                    }
+                    show_frame_cursor(shared, objects, pointer, focus.serial, cursor, scale);
+                });
+            }
+        }
+        wl_pointer::Event::Button {
+            serial,
+            time,
+            button,
+            state,
+        } => {
+            let pressed = *state == WEnum::Value(wl_pointer::ButtonState::Pressed);
+            if pressed {
+                shared.record_input(data.seat, *serial, focus.window.clone());
+            }
+            let seat = shared
+                .objects
+                .with(|objects| {
+                    objects
+                        .seats
+                        .iter()
+                        .find(|held| held.key == data.seat)
+                        .map(|held| held.seat.clone())
+                })
+                .flatten();
+            if let Some(seat) = seat {
+                focus.frame.button(&seat, *serial, *time, *button, pressed);
+            }
+        }
+        wl_pointer::Event::Leave { .. } => {
+            focus.frame.left();
+            shared.objects.with(|objects| {
+                if let Some(held) = objects
+                    .seats
+                    .iter_mut()
+                    .filter_map(|seat| seat.pointer.as_mut())
+                    .find(|held| held.pointer == *pointer)
+                {
+                    held.frame_focus = None;
+                }
+            });
+        }
+        // A scroll or a frame over the frame reaches no window.
+        _ => {}
+    }
+    true
 }
 
 /// What a theme cursor is drawn from: the connection, `wl_shm` and
@@ -1594,6 +1824,7 @@ impl Dispatch<WlSeat, SeatData> for WaylandState {
                         cursor_surface: None,
                         focus: None,
                         focus_surface: None,
+                        frame_focus: None,
                     };
                     objects.pinch = gestures
                         .as_ref()
@@ -1679,6 +1910,10 @@ impl Dispatch<WlPointer, PointerData> for WaylandState {
         let Some(shared) = data.shared.upgrade() else {
             return;
         };
+        // Over a window's own frame the pointer is the frame's.
+        if frame_event(&shared, pointer, data, &event) {
+            return;
+        }
         let axis = |axis: WEnum<wl_pointer::Axis>| match axis {
             WEnum::Value(wl_pointer::Axis::HorizontalScroll) => Some(Axis::Horizontal),
             WEnum::Value(wl_pointer::Axis::VerticalScroll) => Some(Axis::Vertical),

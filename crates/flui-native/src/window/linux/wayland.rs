@@ -6,7 +6,8 @@
 //! - the pure ones, checked on every host: [`configure`], what a configure
 //!   the compositor sends means for the window (its states, the size it
 //!   takes, what the compositor lets it do); [`frame`], when it delivers a
-//!   frame; [`decoration`], who draws its frame; [`scale`], the scale its
+//!   frame; [`decoration`], who draws its frame; [`client_frame`], the frame
+//!   it draws itself where the compositor draws none; [`scale`], the scale its
 //!   buffer is drawn at; [`presented`], when the compositor showed a commit;
 //!   `foreign`, how a portal names it (read by tests until the window reference carries it);
 //!   [`activation`], the token it asks to be activated with;
@@ -51,8 +52,12 @@
 //!
 //! Where the compositor offers `xdg-decoration`, the window asks it for a
 //! frame as its options and commands say, and has the frame the compositor
-//! answers with. Elsewhere it has none: this host draws no frame of its own
-//! yet ([`decoration`]). Where it offers `xdg-foreign`, the window is exported
+//! answers with. Where the compositor offers none (Weston, GNOME), or answers
+//! that the frame is the client's, a window that wants a frame draws its own
+//! on subsurfaces around its content: a title bar with its title and buttons,
+//! and margins its edges are resized from ([`client_frame`]). Its geometry is
+//! then the title bar and the content, its outer size includes the title bar,
+//! and the size a configure gives loses the title bar to the content. Where it offers `xdg-foreign`, the window is exported
 //! as it opens, so a portal can parent its dialog to it; the handle reaches
 //! the capability crates with the contract's window reference, and only tests
 //! read it until then (`foreign`).
@@ -69,6 +74,7 @@
 pub(crate) use toplevel::{WaylandWindow, WaylandWindows};
 
 pub(crate) mod activation;
+pub(crate) mod client_frame;
 
 pub(crate) mod configure {
     //! What a configure from the compositor means for a Wayland window: the
@@ -89,10 +95,13 @@ pub(crate) mod configure {
     const RESIZING: u32 = 3;
     const ACTIVATED: u32 = 4;
     const TILED_LEFT: u32 = 5;
+    const TILED_RIGHT: u32 = 6;
+    const TILED_TOP: u32 = 7;
     const TILED_BOTTOM: u32 = 8;
     const SUSPENDED: u32 = 9;
 
     /// `xdg_toplevel.wm_capabilities` values.
+    const CAN_WINDOW_MENU: u32 = 1;
     const CAN_MAXIMIZE: u32 = 2;
     const CAN_FULLSCREEN: u32 = 3;
     const CAN_MINIMIZE: u32 = 4;
@@ -118,10 +127,36 @@ pub(crate) mod configure {
         pub(crate) resizing: bool,
         /// The window has the compositor's activation: its keyboard focus.
         pub(crate) activated: bool,
-        /// The window is tiled against an edge of its output.
-        pub(crate) tiled: bool,
+        /// The edges of its output, or of other windows, the window is tiled
+        /// against.
+        pub(crate) tiled: TiledEdges,
         /// The compositor does not show the window (version 6).
         pub(crate) suspended: bool,
+    }
+
+    /// The edges a toplevel is tiled against (`tiled_left` and the others,
+    /// version 2): the compositor keeps the window's frame from them.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub(crate) struct TiledEdges {
+        pub(crate) left: bool,
+        pub(crate) right: bool,
+        pub(crate) top: bool,
+        pub(crate) bottom: bool,
+    }
+
+    impl TiledEdges {
+        /// No edge is tiled.
+        pub(crate) const NONE: Self = Self {
+            left: false,
+            right: false,
+            top: false,
+            bottom: false,
+        };
+
+        /// Whether any edge is tiled.
+        pub(crate) const fn any(self) -> bool {
+            self.left || self.right || self.top || self.bottom
+        }
     }
 
     impl ToplevelStates {
@@ -135,7 +170,10 @@ pub(crate) mod configure {
                     FULLSCREEN => states.fullscreen = true,
                     RESIZING => states.resizing = true,
                     ACTIVATED => states.activated = true,
-                    TILED_LEFT..=TILED_BOTTOM => states.tiled = true,
+                    TILED_LEFT => states.tiled.left = true,
+                    TILED_RIGHT => states.tiled.right = true,
+                    TILED_TOP => states.tiled.top = true,
+                    TILED_BOTTOM => states.tiled.bottom = true,
                     SUSPENDED => states.suspended = true,
                     _ => {}
                 }
@@ -146,14 +184,14 @@ pub(crate) mod configure {
         /// Whether the compositor sizes the window itself: a maximized,
         /// fullscreen or tiled window takes the size it is given.
         pub(crate) const fn sized_by_compositor(self) -> bool {
-            self.maximized || self.fullscreen || self.tiled
+            self.maximized || self.fullscreen || self.tiled.any()
         }
 
         /// Whether the window is tiled against an edge and in no mode it
         /// could ask to leave: its size is the tiling's, and a size the
         /// client asks for is not taken.
         pub(crate) const fn tiled_by_compositor(self) -> bool {
-            self.tiled && !self.maximized && !self.fullscreen
+            self.tiled.any() && !self.maximized && !self.fullscreen
         }
 
         /// The window's mode. A Wayland client never hears that its window
@@ -173,6 +211,8 @@ pub(crate) mod configure {
     /// (version 5).
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
     pub(crate) struct WmCapabilities {
+        /// The compositor shows a window menu on request.
+        pub(crate) window_menu: bool,
         /// The compositor maximizes a window on request.
         pub(crate) maximize: bool,
         /// The compositor makes a window fullscreen on request.
@@ -187,6 +227,7 @@ pub(crate) mod configure {
             let mut capabilities = Self::default();
             for capability in values(raw) {
                 match capability {
+                    CAN_WINDOW_MENU => capabilities.window_menu = true,
                     CAN_MAXIMIZE => capabilities.maximize = true,
                     CAN_FULLSCREEN => capabilities.fullscreen = true,
                     CAN_MINIMIZE => capabilities.minimize = true,
@@ -344,7 +385,7 @@ pub(crate) mod configure {
                     fullscreen: false,
                     resizing: false,
                     activated: false,
-                    tiled: false,
+                    tiled: TiledEdges::NONE,
                     suspended: false,
                 },
             }
@@ -447,13 +488,25 @@ pub(crate) mod configure {
         fn a_configure_names_the_toplevel_states() {
             let states = ToplevelStates::decode(&array(&[ACTIVATED, MAXIMIZED, 77]));
             assert!(states.activated && states.maximized);
-            assert!(!states.fullscreen && !states.tiled && !states.suspended);
+            assert!(!states.fullscreen && !states.tiled.any() && !states.suspended);
             assert_eq!(states.mode(), WindowMode::Maximized);
             let both = ToplevelStates::decode(&array(&[MAXIMIZED, FULLSCREEN]));
             assert_eq!(both.mode(), WindowMode::Fullscreen);
             let tiled = ToplevelStates::decode(&array(&[TILED_BOTTOM, SUSPENDED]));
-            assert!(tiled.tiled && tiled.suspended && tiled.sized_by_compositor());
+            assert!(tiled.tiled.any() && tiled.suspended && tiled.sized_by_compositor());
             assert_eq!(tiled.mode(), WindowMode::Normal);
+            // Each edge is its own: the frame leaves the tiled ones alone.
+            let edges = ToplevelStates::decode(&array(&[TILED_LEFT, TILED_RIGHT, TILED_TOP]));
+            assert_eq!(
+                edges.tiled,
+                TiledEdges {
+                    left: true,
+                    right: true,
+                    top: true,
+                    bottom: false,
+                }
+            );
+            assert!(WmCapabilities::decode(&array(&[CAN_WINDOW_MENU])).window_menu);
             // A torn array keeps its whole values.
             let mut torn = array(&[ACTIVATED]);
             torn.push(1);
@@ -821,17 +874,15 @@ pub(crate) mod frame {
 }
 
 pub(crate) mod decoration {
-    //! Who draws a Wayland window's frame (`xdg-decoration`).
+    //! Who draws a Wayland window's frame: the compositor (`xdg-decoration`),
+    //! the window itself ([`client_frame`](super::client_frame)), or nobody.
     //!
     //! A compositor that offers `zxdg_decoration_manager_v1` draws a frame for
     //! a window that asks, outside its surface; it may also decline and leave
     //! the frame to the client. A compositor that offers none (Weston, GNOME)
-    //! draws none, and leaves the frame to the client.
-    //!
-    //! The frame a client draws is the application's own title bar, drawn by
-    //! its interface like the rest of its content. This host draws none: a
-    //! window it opens where the compositor draws no frame has none, and says
-    //! so (`decorated: false`, its frame not turned on or off by a command).
+    //! draws none, and leaves the frame to the client. Where the frame is the
+    //! client's and the window wants one, the window draws its own; where it
+    //! wants none, it has none.
 
     #![forbid(unsafe_code)]
 
@@ -862,13 +913,27 @@ pub(crate) mod decoration {
         }
     }
 
+    /// Who draws the window's frame now.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum Drawn {
+        /// The compositor, outside the window's surface.
+        Compositor,
+        /// The window, on surfaces of its own around its content.
+        Client,
+        /// Nobody: the window wants none, or the compositor has not said yet.
+        Nobody,
+    }
+
     /// A window's frame as the client asked for it and the compositor
     /// answered.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(crate) struct Decoration {
         /// The compositor offers `xdg-decoration`.
         pub(crate) offered: bool,
-        /// The client last asked the compositor to draw the frame.
+        /// The window can draw a frame of its own: the compositor offers the
+        /// subsurfaces and the shared memory it is drawn with.
+        pub(crate) draws_own: bool,
+        /// The client last asked for a frame.
         pub(crate) requested: bool,
         /// What the compositor last said; `None` before it said.
         pub(crate) told: Option<FrameDrawer>,
@@ -877,22 +942,42 @@ pub(crate) mod decoration {
     }
 
     impl Decoration {
-        /// Whether the window has a frame: the compositor said it draws one.
+        /// Who draws the frame: the compositor once it said it does; the
+        /// window where the frame is left to it and it wants one, which a
+        /// compositor without `xdg-decoration` does from the start; nobody
+        /// while a compositor that offers frames has not answered yet.
+        pub(crate) const fn drawn(self) -> Drawn {
+            match self.told {
+                Some(FrameDrawer::Compositor) => Drawn::Compositor,
+                Some(FrameDrawer::Client) if self.requested && self.draws_own => Drawn::Client,
+                None if !self.offered && self.requested && self.draws_own => Drawn::Client,
+                _ => Drawn::Nobody,
+            }
+        }
+
+        /// Whether the window has a frame, whoever draws it.
         pub(crate) const fn decorated(self) -> bool {
-            matches!(self.told, Some(FrameDrawer::Compositor))
+            !matches!(self.drawn(), Drawn::Nobody)
         }
 
         /// Why the window's frame cannot be turned on and off, or `None`
-        /// where it can: a compositor that offers no frames draws none, and
-        /// one that answered the window's last request with the other mode
-        /// decides the frame itself (sway draws one around every tiled
-        /// window). Until it answers, the request stands.
+        /// where it can. A compositor that answered a request for no frame
+        /// with one of its own decides the frame itself (sway draws one
+        /// around every tiled window). A window that cannot draw its own
+        /// frame has none where the compositor draws none, and one the
+        /// compositor answered with the other mode is overruled either way.
+        /// Until the compositor answers, the request stands.
         pub(crate) const fn absence(self) -> Option<CapabilityAbsence> {
-            let overruled = match (self.answered, self.told) {
-                (true, Some(drawer)) => matches!(drawer, FrameDrawer::Compositor) != self.requested,
-                _ => false,
+            let (answered_with, decided) = match (self.answered, self.told) {
+                (true, Some(drawer)) => (Some(drawer), true),
+                _ => (None, false),
             };
-            if !self.offered || overruled {
+            let overruled = if self.draws_own {
+                decided && matches!(answered_with, Some(FrameDrawer::Compositor)) && !self.requested
+            } else {
+                decided && matches!(answered_with, Some(FrameDrawer::Compositor)) != self.requested
+            };
+            if overruled || (!self.offered && !self.draws_own) {
                 Some(CapabilityAbsence::NotOnThisDevice)
             } else {
                 None
@@ -904,63 +989,79 @@ pub(crate) mod decoration {
     mod tests {
         use super::*;
 
-        /// The frame is the compositor's answer, never the client's request,
-        /// and a compositor that draws no frame takes no command for it.
+        /// The frame is the compositor's answer where it draws one and the
+        /// window's own where the frame is left to it, and only a compositor
+        /// that insists on drawing it takes the command away.
         #[test]
-        fn a_window_has_the_frame_its_compositor_draws() {
+        fn a_window_has_the_frame_its_compositor_leaves_it() {
+            use Drawn::{Client as Own, Compositor as Theirs, Nobody};
             use FrameDrawer::{Client, Compositor};
             let overruled = Some(CapabilityAbsence::NotOnThisDevice);
-            let drawn = |requested, told, answered| Decoration {
-                offered: true,
+            let decoration = |offered, requested, told, answered| Decoration {
+                offered,
+                draws_own: true,
                 requested,
                 told,
                 answered,
             };
-            for (case, decoration, decorated, absence) in [
+            for (case, decoration, drawn, absence) in [
                 (
-                    "no xdg-decoration",
-                    Decoration {
-                        offered: false,
-                        requested: true,
-                        told: None,
-                        answered: false,
-                    },
-                    false,
-                    overruled,
+                    "no xdg-decoration: the window's own",
+                    decoration(false, true, None, false),
+                    Own,
+                    None,
+                ),
+                (
+                    "no xdg-decoration, none wanted",
+                    decoration(false, false, None, false),
+                    Nobody,
+                    None,
                 ),
                 (
                     "asked, not answered yet",
-                    drawn(true, None, false),
-                    false,
+                    decoration(true, true, None, false),
+                    Nobody,
                     None,
                 ),
                 (
                     "asked and drawn",
-                    drawn(true, Some(Compositor), true),
-                    true,
+                    decoration(true, true, Some(Compositor), true),
+                    Theirs,
                     None,
                 ),
                 (
-                    "asked, left to the client",
-                    drawn(true, Some(Client), true),
-                    false,
-                    overruled,
+                    "asked, left to the client: the window's own",
+                    decoration(true, true, Some(Client), true),
+                    Own,
+                    None,
                 ),
-                ("turned off", drawn(false, Some(Client), true), false, None),
+                (
+                    "turned off",
+                    decoration(true, false, Some(Client), true),
+                    Nobody,
+                    None,
+                ),
                 (
                     "turned off, drawn regardless",
-                    drawn(false, Some(Compositor), true),
-                    true,
+                    decoration(true, false, Some(Compositor), true),
+                    Theirs,
                     overruled,
                 ),
                 (
                     "turned off, the old frame until the answer",
-                    drawn(false, Some(Compositor), false),
-                    true,
+                    decoration(true, false, Some(Compositor), false),
+                    Theirs,
+                    None,
+                ),
+                (
+                    "turned on again, the window's own until the answer",
+                    decoration(true, true, Some(Client), false),
+                    Own,
                     None,
                 ),
             ] {
-                assert_eq!(decoration.decorated(), decorated, "{case}");
+                assert_eq!(decoration.drawn(), drawn, "{case}");
+                assert_eq!(decoration.decorated(), drawn != Nobody, "{case}");
                 assert_eq!(decoration.absence(), absence, "{case}");
             }
             assert_eq!(
@@ -972,6 +1073,29 @@ pub(crate) mod decoration {
                 Some(FrameDrawer::Client)
             );
             assert_eq!(FrameDrawer::from_mode(9), None);
+        }
+
+        /// A window that cannot draw a frame of its own (no subsurfaces or
+        /// shared memory) has only the compositor's, and says so.
+        #[test]
+        fn a_window_that_draws_no_frame_has_the_compositors() {
+            let none = |offered, requested, told, answered| Decoration {
+                offered,
+                draws_own: false,
+                requested,
+                told,
+                answered,
+            };
+            let overruled = Some(CapabilityAbsence::NotOnThisDevice);
+            let bare = none(false, true, None, false);
+            assert_eq!(bare.drawn(), Drawn::Nobody);
+            assert_eq!(bare.absence(), overruled);
+            let left = none(true, true, Some(FrameDrawer::Client), true);
+            assert_eq!(left.drawn(), Drawn::Nobody);
+            assert_eq!(left.absence(), overruled);
+            let drawn = none(true, true, Some(FrameDrawer::Compositor), true);
+            assert_eq!(drawn.drawn(), Drawn::Compositor);
+            assert_eq!(drawn.absence(), None);
         }
     }
 }
@@ -1249,15 +1373,18 @@ mod toplevel {
     use web_time::Instant;
 
     use super::activation::{TokenRequest, Tokens, token_requests};
+    use super::client_frame::surfaces::{ClientFrame, FrameGlobals, FrameRecord, TitleFonts};
+    use super::client_frame::{self, Action, Frame, Look, Offers};
     use super::configure::{
         Activation, Sizing, ToplevelStates, WmCapabilities, capabilities, clamp, protocol_extent,
     };
-    use super::decoration::{Decoration, FrameDrawer};
+    use super::decoration::{Decoration, Drawn, FrameDrawer};
     #[cfg(any(test, feature = "testing"))]
     use super::foreign::PortalParent;
     use super::frame::{Pacing, first_live, waiting_on_callback};
     use super::presented;
     use super::scale::{ScaleTold, buffer_scale};
+    use crate::executor::BackgroundExecutor;
     use crate::host::{self, WindowFacets, WindowPositions};
     use crate::host_window::{CoreHostWindow, HostWindow, OwnerThreadToken};
     use crate::owner::OpenWindowError;
@@ -1265,8 +1392,9 @@ mod toplevel {
     use crate::owner::linux::PortalSlot;
     use crate::owner::linux::wayland::activation::ActivationToken;
     use crate::owner::linux::wayland::{
-        LastInput, LiveOutputs, LoopWaker, LoopWindow, OutputName, PresentationTime, SeatWindow,
-        WaylandDisplays, WaylandInput, WaylandLoop, WaylandState, WindowSeed, WindowTable,
+        LastInput, LiveOutputs, LoopWaker, LoopWindow, OutputFacts, OutputName, PresentationTime,
+        SeatWindow, WaylandDisplays, WaylandInput, WaylandLoop, WaylandState, WindowSeed,
+        WindowTable,
     };
     use crate::owner::window_delivery::{Publication, Retirement, WindowDelivery};
     use crate::text::WindowTextInput;
@@ -1456,22 +1584,40 @@ mod toplevel {
         /// The window asked for normal mode out of fullscreen, and leaves a
         /// maximized mode the compositor puts it back in.
         leaving_maximized: bool,
-        /// The window last asked the compositor to draw its frame.
+        /// The window last asked for a frame.
         decoration_requested: bool,
         /// The compositor answered that request.
         decoration_answered: bool,
+        /// The title bar's height the size limits were last sent with.
+        limits_header: f64,
+        /// The window geometry last sent, once the window drew a frame of its
+        /// own: from then on it is kept current.
+        geometry: Option<client_frame::Rect>,
         told: Told,
     }
 
     impl Applied {
-        /// The window's frame as asked for and answered.
-        const fn decoration(&self, offered: bool) -> Decoration {
+        /// The window's frame as asked for and answered; `draws_own` where
+        /// the window can draw a frame of its own.
+        const fn decoration(&self, offered: bool, draws_own: bool) -> Decoration {
             Decoration {
                 offered,
+                draws_own,
                 requested: self.decoration_requested,
                 told: self.told.frame,
                 answered: self.decoration_answered,
             }
+        }
+
+        /// The frame the window draws itself with `states` and its content
+        /// now; `None` where it draws none.
+        fn own_frame(&self, decoration: Decoration, states: ToplevelStates) -> Option<Frame> {
+            (decoration.drawn() == Drawn::Client).then_some(Frame {
+                content: self.sizing.content(),
+                states,
+                resizable: self.resizable,
+                offers: Offers::from(self.told.wm),
+            })
         }
     }
 
@@ -1495,6 +1641,19 @@ mod toplevel {
         viewported: bool,
         /// The compositor offers to draw the window's frame.
         offers_decorations: bool,
+        /// What the window draws a frame of its own with; `None` where the
+        /// compositor offers no subsurfaces or shared memory.
+        frame_globals: Option<FrameGlobals>,
+        /// The frame the window draws itself, made the first time it draws
+        /// one.
+        client_frame: RefCell<Option<ClientFrame>>,
+        /// What the pointer does over that frame, which the seats' input
+        /// records.
+        frame_record: Arc<FrameRecord>,
+        /// The fonts its title is drawn with, shared by the host's windows.
+        title_fonts: TitleFonts,
+        /// The loop's background work, which reads the host's fonts.
+        executor: Arc<BackgroundExecutor>,
         /// `wp_presentation`, through which the window's surface target asks
         /// when each commit is shown; `None` where the compositor tells
         /// nothing.
@@ -1534,13 +1693,15 @@ mod toplevel {
         hovered: bool,
         viewported: bool,
         offers_decorations: bool,
+        draws_own: bool,
         reports_presentation: bool,
         activation: Activation,
         closed: bool,
     }
 
     impl Sample<'_> {
-        fn state(&self) -> WindowState {
+        /// The output the window is on, and the scale its buffer is drawn at.
+        fn output_and_scale(&self) -> (Option<OutputFacts>, f64) {
             let applied = self.applied;
             let entered = first_live(&applied.told.outputs, |output| self.live.contains(output));
             let output = entered.and_then(|output| self.displays.output(output));
@@ -1552,10 +1713,23 @@ mod toplevel {
                     output: output.map(|output| output.scale),
                 },
             );
-            let decoration = applied.decoration(self.offers_decorations);
+            (output, scale)
+        }
+
+        fn state(&self) -> WindowState {
+            let applied = self.applied;
+            let entered = first_live(&applied.told.outputs, |output| self.live.contains(output));
+            let (output, scale) = self.output_and_scale();
+            let decoration = applied.decoration(self.offers_decorations, self.draws_own);
             let content = applied.sizing.content();
             let states = applied.sizing.states();
-            let state = WindowState::new(WindowGeometry::new(None, content), content)
+            // The outer size is the window's geometry: the content, and the
+            // title bar of a frame it draws itself.
+            let header = applied
+                .own_frame(decoration, states)
+                .map_or(0.0, |frame| frame.header());
+            let outer = Size::new(content.width, content.height + header);
+            let state = WindowState::new(WindowGeometry::new(None, outer), content)
                 .with_mode(states.mode())
                 // Shown is what the compositor says: a surface it maps (a
                 // configured window with a frame) enters an output, and one it
@@ -1609,9 +1783,20 @@ mod toplevel {
                 waker,
                 notices,
                 input,
+                executor,
             } = owner.seed()?;
             let record = Arc::new(ToplevelRecord::new());
             let queue = protocol.queue.clone();
+            let frame_globals = match (&protocol.subcompositor, &protocol.shm) {
+                (Some(subcompositor), Some(shm)) => Some(FrameGlobals {
+                    compositor: protocol.compositor.clone(),
+                    subcompositor: subcompositor.clone(),
+                    shm: shm.clone(),
+                    viewporter: protocol.viewporter.clone(),
+                    queue: queue.clone(),
+                }),
+                _ => None,
+            };
             let surface = protocol
                 .compositor
                 .create_surface(&queue, Arc::clone(&record));
@@ -1660,14 +1845,8 @@ mod toplevel {
                 fractional_scale,
                 exported,
             };
-            send_limits(&roles.toplevel, size, constraints, options.resizable);
-            if let Some(viewport) = &roles.viewport {
-                set_destination(viewport, size);
-            }
-            // The first commit carries no buffer: the compositor answers it
-            // with the first configure, which the window waits for.
-            surface.commit();
-            let surface = Arc::new(SurfaceHandle(surface));
+            // A compositor that offers no frames leaves the frame to the
+            // window from the start: its limits carry the title bar already.
             let applied = Applied {
                 title: options.title.clone(),
                 sizing: Sizing::new(size),
@@ -1677,8 +1856,36 @@ mod toplevel {
                 leaving_maximized: false,
                 decoration_requested: options.decorated,
                 decoration_answered: false,
+                limits_header: 0.0,
+                geometry: None,
                 told: Told::default(),
             };
+            let applied = Applied {
+                limits_header: applied
+                    .own_frame(
+                        applied.decoration(protocol.decoration.is_some(), frame_globals.is_some()),
+                        ToplevelStates {
+                            fullscreen: options.mode == WindowMode::Fullscreen,
+                            ..ToplevelStates::default()
+                        },
+                    )
+                    .map_or(0.0, |frame| frame.header()),
+                ..applied
+            };
+            send_limits(
+                &roles.toplevel,
+                size,
+                constraints,
+                options.resizable,
+                applied.limits_header,
+            );
+            if let Some(viewport) = &roles.viewport {
+                set_destination(viewport, size);
+            }
+            // The first commit carries no buffer: the compositor answers it
+            // with the first configure, which the window waits for.
+            surface.commit();
+            let surface = Arc::new(SurfaceHandle(surface));
             let window = Rc::new(Self {
                 id,
                 facets: windows.positions.for_window(&SurfaceRef(())),
@@ -1694,6 +1901,11 @@ mod toplevel {
                 queue,
                 viewported: protocol.viewporter.is_some(),
                 offers_decorations: protocol.decoration.is_some(),
+                frame_globals,
+                client_frame: RefCell::new(None),
+                frame_record: Arc::new(FrameRecord::default()),
+                title_fonts: windows.title_fonts.clone(),
+                executor,
                 presentation: protocol.presentation,
                 activation: protocol.activation,
                 last_input: protocol.last_input,
@@ -1723,6 +1935,7 @@ mod toplevel {
                         .and_then(|state| state.published().metrics)
                         .map_or(1.0, |metrics| metrics.scale().get())
                 }),
+                frame: Arc::clone(&window.frame_record) as _,
             });
             // From here a failure retires the window like any other close.
             if let Err(error) = owner.roundtrip() {
@@ -1765,6 +1978,7 @@ mod toplevel {
                 hovered: self.delivery.hovered(),
                 viewported: self.viewported,
                 offers_decorations: self.offers_decorations,
+                draws_own: self.frame_globals.is_some(),
                 reports_presentation: self.presentation.is_some(),
                 activation: if self.activation.is_some() {
                     Activation::Offered
@@ -1774,6 +1988,162 @@ mod toplevel {
                 closed: self.closed.get(),
             }
             .state()
+        }
+
+        /// The frame as asked for and answered now.
+        fn decoration(&self, applied: &Applied) -> Decoration {
+            applied.decoration(self.offers_decorations, self.frame_globals.is_some())
+        }
+
+        /// The scale the window's buffers are drawn at now.
+        fn buffer_scale(&self, applied: &Applied) -> f64 {
+            Sample {
+                applied,
+                displays: self.displays.as_ref(),
+                portal: &self.portal,
+                live: &self.live,
+                hovered: false,
+                viewported: self.viewported,
+                offers_decorations: self.offers_decorations,
+                draws_own: self.frame_globals.is_some(),
+                reports_presentation: false,
+                activation: Activation::Missing,
+                closed: false,
+            }
+            .output_and_scale()
+            .1
+        }
+
+        /// Show the frame the window draws itself as it stands now: made the
+        /// first time one is drawn, laid out for the content, the states and
+        /// what the compositor offers, and drawn again where it changed; and
+        /// the window geometry and the size limits that follow from it. Where
+        /// the window draws none, a frame it drew is hidden. Returns whether
+        /// the content surface needs a commit to show it. No handler runs.
+        fn sync_frame(&self) -> bool {
+            let Some(globals) = &self.frame_globals else {
+                return false;
+            };
+            if self.closed.get() {
+                return false;
+            }
+            let (frame, scale, title, resizable) = {
+                let applied = self.applied.borrow();
+                let frame = applied.own_frame(self.decoration(&applied), applied.sizing.states());
+                (
+                    frame,
+                    self.buffer_scale(&applied),
+                    applied.title.clone(),
+                    applied.resizable,
+                )
+            };
+            let mut committed = false;
+            {
+                let mut client_frame = self.client_frame.borrow_mut();
+                if client_frame.is_none() && frame.is_some() {
+                    let fonts = self.title_fonts.get(&self.executor, &self.waker);
+                    *client_frame = Some(ClientFrame::new(
+                        &self.surface.0,
+                        globals.clone(),
+                        Arc::clone(&self.frame_record),
+                        &fonts,
+                    ));
+                }
+                if let Some(client_frame) = client_frame.as_mut() {
+                    let look = Look {
+                        dark: matches!(
+                            self.portal.appearance(),
+                            flui_platform::WindowAppearance::Dark
+                                | flui_platform::WindowAppearance::VibrantDark
+                        ),
+                        active: frame.is_some_and(|frame| frame.states.activated),
+                    };
+                    committed = client_frame.update(frame, scale, look, &title);
+                }
+            }
+            // The geometry, once the window drew a frame, is kept current:
+            // the compositor holds the last one sent.
+            let geometry = frame.map(|frame| frame.geometry()).or_else(|| {
+                let applied = self.applied.borrow();
+                applied.geometry.map(|_| {
+                    let content = applied.sizing.content();
+                    client_frame::Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: content.width,
+                        height: content.height,
+                    }
+                })
+            });
+            let header = frame.map_or(0.0, |frame| frame.header());
+            let (geometry_changed, limits_changed) = {
+                let mut applied = self.applied.borrow_mut();
+                let geometry_changed = geometry.is_some() && applied.geometry != geometry;
+                if geometry_changed {
+                    applied.geometry = geometry;
+                }
+                let limits_changed = applied.limits_header != header;
+                applied.limits_header = header;
+                (geometry_changed, limits_changed)
+            };
+            if let (true, Some(geometry), Some(roles)) =
+                (geometry_changed, geometry, self.roles.borrow().as_ref())
+            {
+                roles.xdg_surface.set_window_geometry(
+                    client_frame::rounded(geometry.x),
+                    client_frame::rounded(geometry.y),
+                    protocol_extent(geometry.width).max(1),
+                    protocol_extent(geometry.height).max(1),
+                );
+            }
+            if limits_changed {
+                let applied = self.applied.borrow();
+                if let Some(roles) = self.roles.borrow().as_ref() {
+                    send_limits(
+                        &roles.toplevel,
+                        applied.sizing.content(),
+                        applied.constraints,
+                        resizable,
+                        header,
+                    );
+                }
+            }
+            committed || geometry_changed || limits_changed
+        }
+
+        /// Carry out what the pointer asked of the window's own frame: a
+        /// move, a resize or the window menu with the seat and serial of the
+        /// press that asked, a mode, or a close its handler is asked about.
+        /// Runs the handler (for a close) with nothing borrowed.
+        fn carry_out_frame(&self) {
+            let Some(asked) = self.frame_record.take_asked() else {
+                return;
+            };
+            if asked.action == Action::Close {
+                #[cfg(any(test, feature = "testing"))]
+                self.frame_record.carried(asked.action, asked.serial);
+                self.ask_close();
+                return;
+            }
+            let roles = self.roles.borrow();
+            let Some(toplevel) = roles.as_ref().map(|roles| &roles.toplevel) else {
+                return;
+            };
+            match asked.action {
+                Action::Move => toplevel._move(&asked.seat, asked.serial),
+                Action::Resize(edge) => {
+                    if let Ok(edge) = xdg_toplevel::ResizeEdge::try_from(edge.protocol()) {
+                        toplevel.resize(&asked.seat, asked.serial, edge);
+                    }
+                }
+                Action::Menu { x, y } => toplevel.show_window_menu(&asked.seat, asked.serial, x, y),
+                Action::Minimize => toplevel.set_minimized(),
+                Action::Maximize => toplevel.set_maximized(),
+                Action::Restore => toplevel.unset_maximized(),
+                Action::Close => {}
+            }
+            #[cfg(any(test, feature = "testing"))]
+            self.frame_record.carried(asked.action, asked.serial);
         }
 
         /// Read the window again for its state publisher, announcing
@@ -1807,24 +2177,30 @@ mod toplevel {
             let (resized, activated) = {
                 let mut applied = self.applied.borrow_mut();
                 let first = !applied.configured;
+                if told.frame_answered {
+                    applied.decoration_answered = true;
+                }
+                applied.told = told;
+                let decoration = self.decoration(&applied);
                 let resized = configure.is_some_and(|configure| {
                     if let Some(roles) = self.roles.borrow().as_ref() {
                         roles.xdg_surface.ack_configure(configure.serial);
                     }
                     applied.configured = true;
                     let constraints = applied.constraints;
-                    let resized = applied.sizing.configure(
-                        configure.width,
-                        configure.height,
-                        configure.states,
-                        constraints,
-                    );
+                    // The configure sizes the window geometry: a title bar
+                    // the window draws itself comes off the content's height.
+                    let (width, height) = applied
+                        .own_frame(decoration, configure.states)
+                        .map_or((configure.width, configure.height), |frame| {
+                            frame.content_of(configure.width, configure.height)
+                        });
+                    let resized =
+                        applied
+                            .sizing
+                            .configure(width, height, configure.states, constraints);
                     resized || first
                 });
-                if told.frame_answered {
-                    applied.decoration_answered = true;
-                }
-                applied.told = told;
                 (resized, applied.sizing.states().activated)
             };
             if resized {
@@ -1832,13 +2208,18 @@ mod toplevel {
                 // A configured or resized window needs a frame at its size.
                 self.record.redraw.store(true, Ordering::Release);
             }
-            if configure.is_some() && self.viewported {
+            let frame_changed = self.sync_frame();
+            if (configure.is_some() || frame_changed) && self.viewported {
                 // The acknowledged configure takes effect with a commit. The
                 // viewport already gives the surface the configured size, so
                 // the commit is valid with the last buffer, and the
                 // compositor's next configure is measured from this one, not
-                // from whatever the window last drew.
+                // from whatever the window last drew. The frame's pieces,
+                // synchronized with it, show with the same commit.
                 self.surface.0.commit();
+            } else if frame_changed {
+                // Without a viewport the content's next buffer shows them.
+                self.record.redraw.store(true, Ordering::Release);
             }
             if let Some(configure) = configure {
                 self.leave_restored_maximized(configure.states);
@@ -1948,6 +2329,18 @@ mod toplevel {
             }
         }
 
+        /// Show what a command changed of the frame the window draws itself
+        /// (its title, its buttons, whether there is one) with a commit.
+        fn show_frame_change(&self) {
+            if self.sync_frame() {
+                if self.viewported {
+                    self.surface.0.commit();
+                } else {
+                    self.record.redraw.store(true, Ordering::Release);
+                }
+            }
+        }
+
         /// Send the window's size limits, which a commit applies.
         fn send_limits(&self) {
             let applied = self.applied.borrow();
@@ -1957,6 +2350,7 @@ mod toplevel {
                     applied.sizing.content(),
                     applied.constraints,
                     applied.resizable,
+                    applied.limits_header,
                 );
             }
             self.surface.0.commit();
@@ -2012,10 +2406,13 @@ mod toplevel {
             self.retire();
         }
 
-        /// Leave the seats' input, let go of the handler, then destroy the
-        /// role objects.
+        /// Leave the seats' input, take down the frame the window drew, let
+        /// go of the handler, then destroy the role objects.
         fn retire(&self) {
             self.input.detach(self.id);
+            if let Some(client_frame) = self.client_frame.borrow_mut().take() {
+                client_frame.destroy();
+            }
             let roles = self.roles.borrow_mut().take();
             self.delivery.clear_then(move || {
                 if let Some(roles) = roles {
@@ -2026,16 +2423,27 @@ mod toplevel {
     }
 
     /// The size limits `toplevel` is held to: `constraints`, or `size` both
-    /// ways for a window that is not resizable.
+    /// ways for a window that is not resizable, each the content's plus the
+    /// `header` of a title bar the window draws itself, as the limits bound
+    /// the window geometry.
     fn send_limits(
         toplevel: &XdgToplevel,
         size: Size<f64>,
         constraints: SizeConstraints,
         resizable: bool,
+        header: f64,
     ) {
         let extent = |size: Option<Size<f64>>| {
             size.map_or((0, 0), |size| {
-                (protocol_extent(size.width), protocol_extent(size.height))
+                let height = protocol_extent(size.height);
+                (
+                    protocol_extent(size.width),
+                    if height > 0 {
+                        height.saturating_add(client_frame::rounded(header))
+                    } else {
+                        height
+                    },
+                )
             })
         };
         let (min, max) = if resizable {
@@ -2069,6 +2477,9 @@ mod toplevel {
             // The handler may own the renderer whose swapchain draws to the
             // surface: it lets go first, while the role objects still exist.
             self.delivery.clear();
+            if let Some(client_frame) = self.client_frame.get_mut().take() {
+                client_frame.destroy();
+            }
             if let Some(roles) = self.roles.get_mut().take() {
                 roles.destroy();
             }
@@ -2257,6 +2668,7 @@ mod toplevel {
                         roles.toplevel.set_title(title.clone());
                     }
                     self.applied.borrow_mut().title = title;
+                    self.show_frame_change();
                 }
                 WindowCommand::SetSize(size) => {
                     let leave = {
@@ -2284,28 +2696,33 @@ mod toplevel {
                 WindowCommand::SetResizable(resizable) => {
                     self.applied.borrow_mut().resizable = resizable;
                     self.send_limits();
+                    self.show_frame_change();
                 }
-                // Admitted only where the compositor offers frames; its
-                // configure says whether it draws one.
+                // Where the compositor offers frames its configure says
+                // whether it draws one; a frame it leaves to the window, and
+                // every frame where it offers none, the window draws itself.
                 WindowCommand::SetDecorated(decorated) => {
                     let roles = self.roles.borrow();
-                    let Some(decoration) =
+                    if let Some(decoration) =
                         roles.as_ref().and_then(|roles| roles.decoration.as_ref())
-                    else {
-                        return Err(not_carried_out(&WindowCommand::SetDecorated(decorated)));
-                    };
-                    decoration.set_mode(frame_mode(decorated));
-                    drop(roles);
-                    // What the compositor said before this request answers
-                    // the one before it.
                     {
-                        let mut told = self.record.protocol.lock();
-                        told.frame_answered = false;
-                        told.frame_asked = true;
+                        decoration.set_mode(frame_mode(decorated));
+                        drop(roles);
+                        // What the compositor said before this request
+                        // answers the one before it.
+                        {
+                            let mut told = self.record.protocol.lock();
+                            told.frame_answered = false;
+                            told.frame_asked = true;
+                        }
+                        self.applied.borrow_mut().decoration_answered = false;
+                    } else if self.frame_globals.is_none() {
+                        return Err(not_carried_out(&WindowCommand::SetDecorated(decorated)));
+                    } else {
+                        drop(roles);
                     }
-                    let mut applied = self.applied.borrow_mut();
-                    applied.decoration_requested = decorated;
-                    applied.decoration_answered = false;
+                    self.applied.borrow_mut().decoration_requested = decorated;
+                    self.show_frame_change();
                 }
                 WindowCommand::SetMode(WindowMode::Normal) => self.leave_compositor_modes(),
                 WindowCommand::SetMode(mode) => {
@@ -2449,6 +2866,9 @@ mod toplevel {
             if close_requested {
                 self.ask_close();
             }
+            if !self.closed.get() {
+                self.carry_out_frame();
+            }
             if self.record.close_granted.swap(false, Ordering::AcqRel) {
                 self.close();
             }
@@ -2490,6 +2910,8 @@ mod toplevel {
     /// crate.
     pub struct WaylandWindows {
         positions: WindowPositions<SurfaceRef>,
+        /// The fonts the windows draw their own titles with.
+        title_fonts: TitleFonts,
     }
 
     impl std::fmt::Debug for WaylandWindows {
@@ -2502,7 +2924,10 @@ mod toplevel {
         /// What the Wayland host's windows open with: each hands out
         /// `positions`.
         pub(crate) fn new(positions: WindowPositions<SurfaceRef>) -> Self {
-            Self { positions }
+            Self {
+                positions,
+                title_fonts: TitleFonts::default(),
+            }
         }
     }
 
@@ -2528,6 +2953,7 @@ mod toplevel {
         fn capabilities(owner: &WaylandLoop, _: &WaylandWindows) -> WindowCapabilities {
             let decoration = Decoration {
                 offered: owner.offers_decorations(),
+                draws_own: owner.offers_frame_surfaces(),
                 requested: true,
                 told: None,
                 answered: false,
@@ -2547,10 +2973,16 @@ mod toplevel {
             )
         }
 
-        /// A frame the compositor draws lies outside the window's surface,
-        /// and this host draws none of its own: the content is the window.
-        fn frame_inset(_: &WaylandLoop, _: &WaylandWindows, _: f64) -> Size<f64> {
-            Size::new(0.0, 0.0)
+        /// A frame the compositor draws lies outside the window's geometry;
+        /// where it offers none, a window draws its own title bar above its
+        /// content. Where it offers frames, its answer comes with the
+        /// window, so the inset is the frame it is asked for: none.
+        fn frame_inset(owner: &WaylandLoop, _: &WaylandWindows, _: f64) -> Size<f64> {
+            if !owner.offers_decorations() && owner.offers_frame_surfaces() {
+                Size::new(0.0, client_frame::HEADER)
+            } else {
+                Size::new(0.0, 0.0)
+            }
         }
     }
 
@@ -2843,6 +3275,19 @@ mod toplevel {
         pub(crate) activations: u32,
     }
 
+    /// The frame a window draws itself, as it last sent it, for a test.
+    #[cfg(any(test, feature = "testing"))]
+    #[derive(Debug, Clone)]
+    pub(crate) struct ClientFrameSaid {
+        /// The window geometry last sent; `None` before the window drew a
+        /// frame.
+        pub(crate) geometry: Option<client_frame::Rect>,
+        /// Each piece shown, with its rectangle relative to the content.
+        pub(crate) pieces: Vec<(client_frame::Piece, client_frame::Rect)>,
+        /// The moves, resizes and menus carried out, with their serials.
+        pub(crate) carried: Vec<(Action, u32)>,
+    }
+
     #[cfg(any(test, feature = "testing"))]
     impl WaylandWindow {
         /// What the compositor sent the window so far.
@@ -2859,6 +3304,23 @@ mod toplevel {
                 outputs: told.outputs.clone(),
                 activation_tokens,
                 activations,
+            }
+        }
+
+        /// The frame the window draws itself: the window geometry it sent
+        /// last, each piece shown with its rectangle relative to the content,
+        /// and the moves, resizes and menus it carried out with the serial
+        /// each named.
+        pub(crate) fn client_frame_said(&self) -> ClientFrameSaid {
+            ClientFrameSaid {
+                geometry: self.applied.borrow().geometry,
+                pieces: self
+                    .client_frame
+                    .borrow()
+                    .as_ref()
+                    .map(ClientFrame::shown)
+                    .unwrap_or_default(),
+                carried: self.frame_record.carried_out(),
             }
         }
 
@@ -2953,34 +3415,6 @@ mod toplevel {
             surface.damage_buffer(0, 0, width, height);
             surface.commit();
             true
-        }
-    }
-
-    #[cfg(any(test, feature = "testing"))]
-    impl Dispatch<wayland_client::protocol::wl_shm::WlShm, ()> for WaylandState {
-        fn event(
-            _: &mut Self,
-            _: &wayland_client::protocol::wl_shm::WlShm,
-            _: wayland_client::protocol::wl_shm::Event,
-            (): &(),
-            _: &Connection,
-            _: &QueueHandle<Self>,
-        ) {
-            // The formats it announces: ARGB8888 is every compositor's.
-        }
-    }
-
-    #[cfg(any(test, feature = "testing"))]
-    impl Dispatch<wayland_client::protocol::wl_shm_pool::WlShmPool, ()> for WaylandState {
-        fn event(
-            _: &mut Self,
-            _: &wayland_client::protocol::wl_shm_pool::WlShmPool,
-            _: wayland_client::protocol::wl_shm_pool::Event,
-            (): &(),
-            _: &Connection,
-            _: &QueueHandle<Self>,
-        ) {
-            // A pool has no events.
         }
     }
 
