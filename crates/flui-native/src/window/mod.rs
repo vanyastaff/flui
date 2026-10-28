@@ -25,11 +25,13 @@ pub(crate) mod apple;
 #[cfg(any(target_os = "android", target_os = "ios", target_os = "macos", test))]
 pub(crate) mod capabilities;
 pub(crate) mod headless;
-#[cfg(any(all(target_os = "linux", feature = "winit-backend"), test))]
+#[cfg(any(all(target_os = "linux", feature = "wayland"), test))]
 pub(crate) mod linux {
-    //! The live layer of the Linux windows, which the winit host uses until
-    //! the native Wayland and X11 hosts replace it.
+    //! The Linux windows: the native Wayland host's (`wayland`), and the X11
+    //! window manager's view the winit host reads (`x11`).
 
+    pub(crate) mod wayland;
+    #[cfg(any(all(target_os = "linux", feature = "winit-backend"), test))]
     pub(crate) mod x11;
 }
 #[cfg(target_arch = "wasm32")]

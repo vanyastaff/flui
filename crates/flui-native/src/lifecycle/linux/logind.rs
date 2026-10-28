@@ -10,47 +10,47 @@
 //! when the connection is made, dropped once the owner has delivered the
 //! notice that the machine is going down, and taken again when it is back.
 
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 use std::{sync::Arc, time::Duration};
 
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 use flui_platform::SystemNotice;
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 use futures_util::StreamExt;
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 use zbus::{
     Proxy,
     zvariant::{OwnedFd, OwnedObjectPath},
 };
 
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 use super::{HostEvent, Inbox};
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 use signals::{
     InhibitorAction, LogindEvent, LogindFilter, MANAGER_INTERFACE, SESSION_INTERFACE,
     SessionLookup, decode_signal, locked_hint_event, session_lookups,
 };
 
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 const DESTINATION: &str = "org.freedesktop.login1";
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 const MANAGER_PATH: &str = "/org/freedesktop/login1";
 
 /// How long to wait for the system bus.
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 /// How long to wait before trying the bus again after it failed or went away.
 /// A machine with no logind (a container, WSL without systemd) pays one failed
 /// connect per interval.
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 const RETRY: Duration = Duration::from_secs(10);
 /// How long to hold the machine for the owner. logind's own limit is
 /// `InhibitDelayMaxSec`, 5 s unless configured; this stays inside it.
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 const DELIVERY_BUDGET: Duration = Duration::from_secs(4);
 
 /// Listen to logind until the task is aborted, reconnecting when the bus goes.
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(super) async fn watch(inbox: Arc<Inbox>) {
     let mut reported = false;
     loop {
@@ -66,7 +66,7 @@ pub(super) async fn watch(inbox: Arc<Inbox>) {
     }
 }
 
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 async fn watch_connection(inbox: &Inbox) -> zbus::Result<()> {
     let connection = tokio::time::timeout(CONNECT_TIMEOUT, async {
         zbus::connection::Builder::system()?.build().await
@@ -77,7 +77,7 @@ async fn watch_connection(inbox: &Inbox) -> zbus::Result<()> {
 }
 
 /// Listen on `connection` until it ends.
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 async fn serve(
     inbox: &Inbox,
     connection: &zbus::Connection,
@@ -146,13 +146,13 @@ async fn serve(
     }
 }
 
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 fn closed() -> zbus::Error {
     zbus::Error::Failure("the logind signal stream ended".into())
 }
 
 /// What the owner is told for a logind event.
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 fn host_event(event: LogindEvent) -> HostEvent {
     match event {
         LogindEvent::Sleep => HostEvent::Notice(SystemNotice::Sleep),
@@ -166,7 +166,7 @@ fn host_event(event: LogindEvent) -> HostEvent {
 
 /// Ask logind to delay sleep and shutdown for this process, `None` when it
 /// refuses (the machine then does not wait for the application).
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 async fn take_inhibitor(manager: &Proxy<'_>) -> Option<OwnedFd> {
     match manager
         .call::<_, _, OwnedFd>(
@@ -189,7 +189,7 @@ async fn take_inhibitor(manager: &Proxy<'_>) -> Option<OwnedFd> {
 }
 
 /// The signals and lock state of this process's session.
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 struct SessionWatch {
     locks: zbus::proxy::SignalStream<'static>,
     unlocks: zbus::proxy::SignalStream<'static>,
@@ -197,7 +197,7 @@ struct SessionWatch {
     locked: bool,
 }
 
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 impl SessionWatch {
     /// Find the session and subscribe; `None` when there is none to watch,
     /// which turns off lock notices and nothing else.
@@ -228,7 +228,7 @@ impl SessionWatch {
 }
 
 /// The next lock event of the session, never ready without one.
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 async fn next_session_event(
     session: &mut Option<SessionWatch>,
 ) -> zbus::Result<Option<LogindEvent>> {
@@ -252,7 +252,7 @@ async fn next_session_event(
 }
 
 /// This process's session, asked for the ways the rule lists in order.
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 async fn find_session(manager: &Proxy<'_>) -> Option<OwnedObjectPath> {
     let xdg_session_id = std::env::var("XDG_SESSION_ID").ok();
     for lookup in session_lookups(xdg_session_id.as_deref()) {
@@ -284,7 +284,7 @@ async fn find_session(manager: &Proxy<'_>) -> Option<OwnedObjectPath> {
     None
 }
 
-#[cfg(all(test, target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(test, target_os = "linux", feature = "wayland"))]
 mod tests {
     use super::*;
 
@@ -314,7 +314,7 @@ mod tests {
     }
 }
 
-#[cfg(all(test, target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(test, target_os = "linux", feature = "wayland"))]
 mod bus_tests;
 
 #[cfg(any(target_os = "linux", test))]

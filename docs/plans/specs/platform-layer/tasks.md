@@ -261,7 +261,7 @@ graph LR
 | **LY78** | **Wayland: основа** (D20, R7.1). Соединение, привязки глобалов, цикл событий на owner-потоке с пробуждением (по образцу ADR-0249), окно `xdg-shell`, снимок и команды окна, дисплеи на живом слое Linux (`display/linux/`), таблица `Wayland` в `hosts/linux.rs` (тип на каждую позицию, чего нет — `Absent<F>`) и `HostWindow`, цель поверхности для wgpu (raw-handles), выбор хоста в `current_platform()`. `zbus` и `accesskit_unix` становятся безусловными зависимостями Linux (из `winit-backend` уходят), условие `accessibility::{bridge, linux}` в `accessibility/mod.rs` — `target_os = "linux"` (ADR-0151 §15 с поправкой 2026-10-22) | LY28, LY31, LY45, LY46 | `crates/flui-native/src/{owner,window}/linux/wayland.rs`, `hosts/linux.rs`, `lib.rs`, `accessibility/mod.rs`, `Cargo.toml` (фичи `wayland`, зависимости Linux) | `module-dag`, `globals`, `file-length`, `deps` | conformance окна на безголовом композиторе; правила — на хосте | L; Dev: Linux (Wayland) |
 | **LY79** | **Wayland: ввод** (D20). Клавиатура (xkb, раскладка), указатель, касание, перо (`tablet-v2`), жесты pinch и pan (`pointer-gestures`), форма курсора (`cursor-shape`), сборка через `pointer_assembly` | LY29, LY78 | `crates/flui-native/src/input/linux/wayland.rs` | `module-dag`, `file-length` | `assert_backend_conforms` (ввод); записи нативных трасс Wayland | L; Dev: Linux (Wayland, сенсорный ввод или перо при наличии) |
 | **LY80** | **Wayland: IME, clipboard, drag and drop** (D20, D8). `text-input-v3` и text-store host; провайдер clipboard и primary selection через `wl_data_device`; DnD как цель и источник | LY30, LY32, LY50, LY78 | `crates/flui-native/src/{text,clipboard,drag}/linux/wayland.rs` | `module-dag`, `file-length` | conformance clipboard и DnD | L; Dev: Linux (Wayland) |
-| **LY81** | **Wayland: окно и экран** (D20). Декорации (`xdg-decoration`, запасные клиентские), дробный масштаб, видимость и перекрытие, темп по `frame`-колбэкам, перенос окна между выходами одного масштаба, экспорт `xdg-foreign` для родителя порталов, AT-SPI (живой слой) | LY32, LY78 | `crates/flui-native/src/{window,display}/linux/*`, `accessibility/linux.rs` | `module-dag`, `file-length` | conformance окна и дисплеев | L; Dev: Linux (Wayland, два выхода) |
+| **LY81** | **Wayland: окно и экран** (D20). Декорации (`xdg-decoration`, запасные клиентские), дробный масштаб, видимость и перекрытие, темп по `frame`-колбэкам, перенос окна между выходами одного масштаба, экспорт `xdg-foreign` для родителя порталов, AT-SPI (живой слой). Темп по `frame`-колбэкам (с отказом от колбэка, который не пришёл), видимость по входу поверхности в выход и `suspended` и AT-SPI сделаны в LY78 | LY32, LY78 | `crates/flui-native/src/{window,display}/linux/*`, `accessibility/linux.rs` | `module-dag`, `file-length` | conformance окна и дисплеев | L; Dev: Linux (Wayland, два выхода) |
 | **LY82** [P] | **X11: основа** (D20). Соединение, цикл событий на owner-потоке, окно, EWMH-состояние и команды, дисплеи (RandR, живой слой), таблица `X11` в `hosts/linux.rs` и `HostWindow`, цель поверхности, AT-SPI. Если LY82 сливается раньше LY78, безусловные `zbus` и `accesskit_unix` и условие `target_os = "linux"` в `accessibility/mod.rs` — его (строка LY78) | LY28, LY31, LY45, LY46 | `crates/flui-native/src/{owner,window}/linux/x11.rs`, `hosts/linux.rs`, `Cargo.toml` (фича `x11`) | `module-dag`, `globals`, `file-length`, `deps` | conformance окна на Xvfb с оконным менеджером | L; Dev: Linux (X11) |
 | **LY83** | **X11: ввод** (D20). XInput2 (касание, перо, плавная прокрутка), XKB, указатель, курсор | LY29, LY82 | `crates/flui-native/src/input/linux/x11.rs` | `module-dag`, `file-length` | `assert_backend_conforms` (ввод); записи нативных трасс X11 | L; Dev: Linux (X11) |
 | **LY84** | **X11: IME, clipboard, drag and drop** (D20, D8). XIM/IBus для IME и text-store host; провайдер clipboard и primary (селекции, INCR); XDND как цель и источник | LY30, LY32, LY50, LY82 | `crates/flui-native/src/{text,clipboard,drag}/linux/x11.rs` | `module-dag`, `file-length` | conformance clipboard и DnD | L; Dev: Linux (X11) |
@@ -3438,6 +3438,104 @@ graph LR
   `checks`, `doc-strict`, `wasm-check`. WSL: clippy трёх вариантов (в том числе `-p flui-native
   --all-targets --features winit-backend` и `--all-features`), rustdoc; xvfb nextest 306 из 306
   и 353 из 353; без xvfb — 661 из 662 (прежний случай X-сервера WSLg).
+
+- [x] **LY78** — ветка `platform/wayland`, начата на вершине LY46 `8138ab489`, после слияния
+  vanyastaff/flui#1927 перенесена на `main` @ `d6e469a2b`. **Хост.** `hosts/linux.rs` — таблица
+  `Wayland`: `Loop`, `Displays`, `Preferences`, `Lifecycle` — `WaylandLoop`; `Window` —
+  `WaylandWindow`; `Accessibility` — `UnixAccessibility`; `Storage` — `UserDataDirs`; `Input`, `Text`,
+  `Clipboard`, `Drag`, `Haptics`, `Chrome` — `Absent` (ввод, IME, clipboard и DnD — LY79, LY80).
+  `WaylandPlatform::new() -> Result<_, PlatformError>`, публично `flui_native::WaylandPlatform`.
+  **Цикл** (`owner/linux/wayland.rs`): соединение `wayland-client` на libwayland (`wayland-backend`
+  с `client_system` и `dlopen`: указатели `wl_display`/`wl_surface` для wgpu и чтение того же
+  дисплея драйвером со своего потока), глобалы `wl_compositor` (до v6), `xdg_wm_base` (до v6),
+  `wp_viewporter`, все `wl_output` (только чтобы `enter` называл выход); владелец спит в `poll` на
+  сокете (`prepare_read`) и `eventfd`, который пишут сигнал владельца и запросчик перерисовки,
+  своего таймера нет. Ход: отдать события (диспетчеризация объектов окна только записывает), каждому
+  окну `settle` без локов цикла (ack configure и commit, снимок, вопрос закрытия, кадр), ход сигнала,
+  политика выхода при закрытии последнего окна (`HostDecides` — выход). Чистый модуль `wait`
+  (правило ADR-0249): дедлайн, наступивший один раз, превращается в запросы кадров, предложенный
+  повторно ожидание не ограничивает. Хуки цикла заполняет таблица: `WaylandDisplays`
+  (`display::linux::wayland::WaylandDisplaySource` над `LinuxDisplays`, выход по глобалу → дисплей и
+  масштаб), `WaylandPreferences` (портал `PreferenceSource`, схема цветов для окон),
+  `WaylandNotices` (logind и pressure — `HostNoticeSource`), канал notice. `run` — на потоке,
+  создавшем платформу (там `OwnerMap` окон), один раз. **Окно** (`window/linux/wayland.rs`): чистый
+  `configure` (состояния и `wm_capabilities` из массивов протокола, правило размера `Sizing`,
+  возможности, `protocol_extent`) и `toplevel`: `xdg_toplevel` на `wl_surface`, размер через
+  `wp_viewport` (буфер любого размера валиден при ресайзе, масштаб — `preferred_buffer_scale` v6,
+  иначе масштаб выхода), снимок из подтверждённых configure, команды: заголовок, размер, ограничения,
+  изменяемость (эмуляция `min == max`), режимы, закрытие; позиция, скрытие/показ, материал —
+  `NotOnThisPlatform`, рамка и активация — `NotYetOnThisHost`; возможности следуют
+  `wm_capabilities` (нет — `NotOnThisDevice`). Видимость — то, что сказал композитор: поверхность
+  вошла в выход и не `suspended`. Цель поверхности держит `Arc` хэндла `wl_surface` (уничтожается
+  последним держателем) и клон соединения; `pre_present_notify` взводит frame callback, следующий
+  кадр ждёт `done`. **Общие правки** (пересекаются с LY82): `zbus`, `accesskit_unix`, `futures-util`
+  — безусловные Linux-зависимости; `accessibility::{bridge, linux}` — `target_os = "linux"`,
+  `UnixAccessibility` — позиция доступности для любой ссылки на окно; `desktop = ["wayland"]`;
+  источники `preferences::linux`, `lifecycle::linux` — под `wayland` (его включает и
+  `winit-backend`); `hosts/linux.rs`, `display/linux/wayland.rs`, `Cargo.toml`.
+  **Выбор хоста** в `current_platform()`: во время работы, winit, пока он собран (`flui-app` на
+  Linux), иначе Wayland для сессии Wayland, иначе ошибка с причиной (`choose_linux_host`).
+  **Решения сверх строки (для владельца):** (1) winit выбирается первым, пока собран: у нативного
+  хоста нет ввода; (2) окно, открытое с `visible: false`, на Wayland не скрыть — оно невидимо до
+  первого кадра; (3) после ack configure окно делает commit сразу (viewport уже дал поверхности
+  размер): без этого Weston меряет следующий configure от неподтверждённого состояния; (4) Weston
+  возвращает развёрнутость при выходе из fullscreen — окно, идущее в `Normal`, снимает её после
+  configure без fullscreen; (5) `testing::wayland` (`run_for`, `present`, `compositor_report`) и
+  `wl_shm` под `testing` — тест рисует пустые кадры вместо рендерера; (6) `frame-callback`-темп
+  сделан здесь (строка LY81 его называет). **Тесты** (откат проверен для каждого):
+  `an_idle_wayland_loop_blocks_until_it_is_woken`, `a_due_deadline_is_offered_once`
+  (`owner::linux::wayland::wait`), `a_configure_names_the_toplevel_states`,
+  `a_window_takes_the_size_its_configure_gives`, `the_capabilities_follow_the_compositor`,
+  `an_extent_reaches_the_protocol_within_its_range` (`window::linux::wayland::configure`),
+  `the_linux_host_follows_the_session` (корень); `tests/wayland_window.rs` против Weston:
+  `the_wayland_window_conforms` (conformance окна; без commit после ack падает
+  «after SetMode(Normal), the mode is Fullscreen»), `a_redraw_from_another_thread_reaches_the_window`
+  (без пробуждения запросчиком — 0 кадров), `a_wayland_run_ends_with_its_last_window` (без
+  удержания хуков прогона политика выхода не спрашивается — 0), `a_due_deadline_no_frame_serves_leaves_the_loop_idle`
+  (без правила предложенного дедлайна — 542 365 вопросов за полсекунды),
+  `a_window_maximized_before_fullscreen_returns_to_normal`. Тесты пропускаются, где
+  `WAYLAND_DISPLAY` не называет композитор (CI). `contract::test_window_lifecycle_contract` без
+  `FLUI_HEADLESS` под Weston теперь открывает нативное окно Wayland и проходит. `module-dag` — 316
+  модулей, 343 ребра, 1 исключение (без изменений); `globals` — 57 (статиков не добавлено).
+  Проверки: Windows — `cargo fmt`, clippy рабочего пространства `--all-targets -D warnings`,
+  `checks`, `doc-strict`, `deps` (deny, shear); WSL Ubuntu 24.04 — clippy `flui-native --all-targets`
+  без признаков, по умолчанию (`wayland`), с `winit-backend` и `--all-features`; rustdoc
+  `-D warnings --document-private-items` обычный и с `winit-backend`; nextest под Weston 13.0
+  (`--backend=headless`, desktop-shell, свой сокет, не WSLg) по умолчанию — 251 из 251, с
+  `winit-backend` под xvfb — 310 (7 пропущены) и тесты Wayland 7 из 7, `--all-features` — 311 и 7,
+  `flui-app` — 48. Не запускалось: композиторы рабочего стола (GNOME, KDE, Hyprland), wgpu на
+  поверхности нативного хоста (цель проверена через `raw-window-handle` и conformance), Mac, iPhone,
+  Android, браузер, `cross-typecheck`. Из строки LY81 здесь сделаны темп по `frame`-колбэкам и
+  видимость по входу поверхности в выход и `suspended` (строка LY81 это отмечает).
+  **Исправления после ревью (vanyastaff/flui#1930)**, коммитами поверх, слиянием. (1) Цикл не
+  засыпает с записанными, но не применёнными событиями: `wait` возвращается, если
+  `dispatch_pending` что-то отдал (`wait::before_poll`, `Apply`), и следующий ход их применяет.
+  (2) Неполный flush: после `WouldBlock` `poll` ждёт и `OUT`, следующий ход дописывает
+  (`BeforePoll::Poll { writable }`). (3) Пропущенный present: колбэк, взведённый
+  `pre_present_notify` без commit, после `frame::CALLBACK_GRACE` (1 с) отбрасывается, кадр
+  доставляется; цикл просыпается к этому сроку (`LoopTurn::frame_wait`). (4) CI: шаг `test`
+  ставит `weston`, запускает `weston --backend=headless --socket=flui-weston` и задаёт
+  `FLUI_REQUIRE_WAYLAND=1` (без композитора тест падает, а не пропускается); `cargo xtask test`
+  гоняет тесты Wayland отдельным шагом, а Xvfb-набор — с пустым `WAYLAND_DISPLAY` (winit берёт
+  X11). (5) Readback conformance читает сырой массив состояний `xdg_toplevel`, число configure и
+  вошедшие выходы (`testing::wayland::CompositorReport`), а не расшифровку окна. (6)
+  `SurfaceRef` без поля. Мелкое: `xdg-open` пожинается на своём потоке, общий код с winit
+  (`owner::linux::xdg_open`); `open_url` идёт через него, диалоги файлов отвечают `Unsupported
+  { NotYetOnThisHost }`; выход — `OutputName`, выход, удалённый без `leave`, отбрасывается
+  (`LiveOutputs`, `frame::first_live`); очередь событий, предложенный дедлайн и активное окно —
+  `OwnerCell` (повторный вход падает громко); configure с одной нулевой осью держит свою
+  протяжённость по ней; хост и источник дисплеев подключаются по одному правилу — сокету
+  `WAYLAND_DISPLAY` (`WAYLAND_SOCKET` сессию Wayland больше не делает). Тесты (откат проверен для
+  каждого): `the_loop_sleeps_only_with_nothing_to_apply_or_send` (и без `Apply`, и без
+  `writable`), `a_lost_frame_callback_holds_the_window_for_its_grace_only`,
+  `a_frame_callback_no_commit_carried_is_given_up` (Weston), `a_configure_axis_left_to_the_window_keeps_its_extent`,
+  `a_removed_output_names_no_display`, `an_opener_that_exited_leaves_no_zombie`,
+  `the_protocol_is_the_session_a_connection_can_reach` и `the_linux_host_follows_the_session` (с
+  `WAYLAND_SOCKET` в правиле падают оба); тест плана xtask `native_host_suites_only_build_their_packages`.
+  Сломанная расшифровка `maximized` теперь не проходит conformance: композитор отвергает commit
+  с не тем размером, и цикл падает. Проверки: WSL под Weston nextest `flui-native` по умолчанию
+  и `--all-features`, clippy четырёх вариантов, Windows clippy рабочего пространства, `checks`,
+  nextest `xtask`.
 
 ## Отступление от порядка, решённое владельцем
 

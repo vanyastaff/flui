@@ -1,15 +1,17 @@
 //! What a Linux display protocol hands the snapshot, and the step that gives
 //! each output its id.
 //!
-//! Both protocol models ([`wayland_model`](super::wayland_model),
-//! [`x11_model`](super::x11_model)) end in a list of [`OutputView`]s; this
+//! Both protocol models (`wayland_model`, `x11_model`, each built with its
+//! feature) end in a list of [`OutputView`]s; this
 //! module turns that list into [`DisplayInfo`]s. An output the protocol keys
 //! gets the id of its key; an output it cannot key gets one fresh id that stays
 //! its own while the native object it stands for exists.
 
 use std::collections::HashMap;
 
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::Bounds;
+#[cfg(any(feature = "x11", test))]
+use flui_foundation::geometry::{Point, Size};
 use flui_platform::{DisplayId, DisplayInfo, DisplayKey, RefreshPeriod};
 
 /// How an output is told apart from the others.
@@ -121,6 +123,7 @@ pub(crate) fn display_of_native_number(natives: &[NativeIds], native: u32) -> Op
 
 /// The overlap of two rectangles, `None` when they share no area. Computed in
 /// 64 bits, so rectangles at the edge of the `i32` range do not overflow.
+#[cfg(any(feature = "x11", test))]
 pub(crate) fn intersection(a: Bounds<i32>, b: Bounds<i32>) -> Option<Bounds<i32>> {
     let edge = |origin: i32, extent: i32| i64::from(origin) + i64::from(extent);
     let left = i64::from(a.origin.x.max(b.origin.x));

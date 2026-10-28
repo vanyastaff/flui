@@ -56,7 +56,7 @@ impl ReportedFacts {
     windows,
     target_os = "macos",
     target_arch = "wasm32",
-    all(target_os = "linux", feature = "winit-backend")
+    all(target_os = "linux", feature = "wayland")
 ))]
 pub(crate) fn not_carried_out(command: &flui_platform::WindowCommand) -> flui_platform::ApplyError {
     flui_platform::ApplyError::failed(format!("this window system does not carry out {command:?}"))

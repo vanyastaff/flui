@@ -1,15 +1,19 @@
-//! Which display protocol a process speaks, chosen the way winit chooses it.
+//! Which display protocol a process speaks, and the one rule every Linux
+//! connection to a compositor follows.
 //!
-//! winit 0.30 takes Wayland when `WAYLAND_DISPLAY` or `WAYLAND_SOCKET` is set
-//! and not empty, X11 when `DISPLAY` is set and not empty, and Wayland first
-//! because an X server is usually present under a Wayland session too (WSLg
-//! offers both and winit takes Wayland). The display source must read the
-//! compositor the windows live on, so it repeats that rule, and the winit
-//! backend then checks it against the protocol of the display winit actually
-//! opened.
+//! A session is Wayland when `WAYLAND_DISPLAY` names a socket (a path, or a
+//! name inside `XDG_RUNTIME_DIR`), X11 when `DISPLAY` is set and not empty,
+//! and Wayland first, because an X server is usually present under a Wayland
+//! session too (WSLg offers both). The native Wayland host and the display
+//! source both connect to that socket, so the windows and the outputs are the
+//! same compositor's. `WAYLAND_SOCKET`, one descriptor already connected,
+//! names no socket a second connection could reach, so it is not followed:
+//! winit takes it, and the winit backend checks this choice against the
+//! protocol of the display winit actually opened.
 
 use std::path::PathBuf;
 
+#[cfg(any(feature = "winit-backend", test))]
 use raw_window_handle::RawDisplayHandle;
 
 /// A display server protocol.
@@ -20,17 +24,18 @@ pub(crate) enum Protocol {
 }
 
 impl Protocol {
-    /// The protocol this process speaks, read from its own environment.
-    #[cfg(target_os = "linux")]
+    /// The protocol this process speaks, read from its own environment: the
+    /// winit host's guess before winit opened its display.
+    #[cfg(all(target_os = "linux", feature = "winit-backend"))]
     pub(crate) fn current() -> Option<Self> {
         Self::from_environment(&Environment::current())
     }
 
-    /// The protocol winit picks from the environment variables, or `None` when
-    /// none of them is set (a headless session).
+    /// The protocol of the session the environment names, or `None` when it
+    /// names no display server (a headless session).
     pub(crate) fn from_environment(environment: &Environment) -> Option<Self> {
         let set = |value: &Option<String>| value.as_deref().is_some_and(|text| !text.is_empty());
-        if set(&environment.wayland_display) || set(&environment.wayland_socket) {
+        if environment.wayland_socket_path().is_some() {
             Some(Self::Wayland)
         } else if set(&environment.display) {
             Some(Self::X11)
@@ -39,7 +44,9 @@ impl Protocol {
         }
     }
 
-    /// The protocol of the display a window system handle belongs to.
+    /// The protocol of the display a window system handle belongs to: the
+    /// winit host checks the display winit opened against the environment's.
+    #[cfg(any(feature = "winit-backend", test))]
     pub(crate) fn of_display(handle: RawDisplayHandle) -> Option<Self> {
         match handle {
             RawDisplayHandle::Wayland(_) => Some(Self::Wayland),
@@ -113,8 +120,11 @@ mod tests {
         }
     }
 
+    /// A session is Wayland when a socket is named that every connection can
+    /// reach, and an inherited descriptor (`WAYLAND_SOCKET`) is none: the
+    /// native host, the display source and this choice agree.
     #[test]
-    fn the_protocol_is_the_one_winit_picks() {
+    fn the_protocol_is_the_session_a_connection_can_reach() {
         // Wayland first, even with an X server present (WSLg).
         assert_eq!(
             Protocol::from_environment(&environment("wayland-0", "", ":0")),
@@ -122,8 +132,12 @@ mod tests {
         );
         assert_eq!(
             Protocol::from_environment(&environment("", "7", ":0")),
-            Some(Protocol::Wayland)
+            Some(Protocol::X11)
         );
+        assert_eq!(Protocol::from_environment(&environment("", "7", "")), None);
+        let mut no_runtime_dir = environment("wayland-0", "", "");
+        no_runtime_dir.runtime_dir = None;
+        assert_eq!(Protocol::from_environment(&no_runtime_dir), None);
         // Empty variables count as unset.
         assert_eq!(
             Protocol::from_environment(&environment("", "", ":0")),

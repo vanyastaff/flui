@@ -439,15 +439,13 @@ trait depends on `flui-platform` instead.
 
   Accessibility has no Cargo feature (ADR-0151 §15, as amended).
   `accesskit_windows` and `accesskit_macos` are unconditional dependencies of
-  their OS, and every Win32 and AppKit window builds its adapter. The Linux
-  adapter comes with the Linux host: while that host is winit, `accesskit_unix`
-  rides `winit-backend` beside the `zbus` the host needs for the Settings
-  portal and logind (`flui-app` turns `winit-backend` on for every Linux
-  build), and `accessibility::{bridge, linux}` compile under
-  `all(target_os = "linux", feature = "winit-backend")`, written once, in
-  `accessibility/mod.rs`. The native Wayland and X11 host makes
-  `accesskit_unix` and `zbus` unconditional Linux dependencies and that gate
-  `target_os = "linux"`.
+  their OS, and every Win32 and AppKit window builds its adapter. On Linux
+  `accesskit_unix` and `zbus` are unconditional dependencies, as the native
+  Wayland host brought them, and `accessibility::{bridge, linux}` compile under
+  `target_os = "linux"`. `UnixAccessibility` is the accessibility position of
+  every Linux table for any window reference (it needs nothing of the window),
+  so the Wayland and winit windows announce themselves on the AT-SPI bus
+  alike.
 
   The table's positions make the accessibility adapter and the actuator a
   window hands out (`host::Accessibility::for_window`,
@@ -817,8 +815,9 @@ trait depends on `flui-platform` instead.
   stays open for test doubles.
 - **The winit fallback is a desktop backend.** Its module, public re-exports
   and `arboard` clipboard dependency are available only on Windows, macOS and
-  Linux under `winit-backend`. The `desktop` compatibility selector enables no
-  dependency; native desktop backends are selected by target OS. Enabling every feature on Android or iOS keeps the native backend;
+  Linux under `winit-backend`. The `desktop` selector enables `wayland`, the
+  native Wayland host, which adds nothing off Linux; the other native desktop
+  backends are selected by target OS. Enabling every feature on Android or iOS keeps the native backend;
   it does not enable desktop clipboard code. The required-target and
   all-features `cargo xtask cross-typecheck` configurations compile this
   boundary, including the selected packages' tests, examples and benches.
@@ -843,8 +842,10 @@ trait depends on `flui-platform` instead.
     holds the `Arc<winit::Window>`, the Apple targets a retained reference
     to the content view (`MainRetainedView`, taken and released on the main
     thread, a drop elsewhere posts the release there), Android's a counted
-    `NativeWindow`. Its `pre_present_notify` arms the Wayland frame callback
-    on winit and returns at once elsewhere. Only the web target and
+    `NativeWindow`, the Wayland target an `Arc` of the window's `wl_surface`
+    (destroyed when the last holder drops) and a clone of the connection. Its
+    `pre_present_notify` arms the Wayland frame callback on winit and on the
+    native Wayland host, and returns at once elsewhere. Only the web target and
     `MainRetainedView` carry an `unsafe impl Send`/`Sync`, whose SAFETY
     names the invariant;
   - its `RedrawRequester` (`redraw_requester()`), how a waker, a signal
@@ -946,6 +947,30 @@ trait depends on `flui-platform` instead.
   `MacOSSurface`, which hands out the content view's pointer while the window
   is open and never messages it (raw-window-metal checks that the Metal layer
   is made on the main thread).
+- **The native Wayland host waits on two descriptors and nothing else**
+  (`owner::linux::wayland`, the rule of ADR-0249). The owner thread blocks in
+  `poll` on the compositor's socket (libwayland's `prepare_read`, so a GPU
+  driver reading the same display on its own thread is never starved) and an
+  `eventfd` every other producer writes: the owner signal and a redraw asked
+  for on another thread. A turn dispatches what the compositor sent (the
+  dispatch of a window's objects only records), then lets each window settle
+  with no lock of the loop held (acknowledge a configure and commit it, publish
+  the snapshot, ask about a close, deliver a frame that is due), then drives
+  the owner turn and asks the exit policy when the last window closed. A wake
+  deadline that came due is offered to the windows as frame requests once
+  (`wait::offer_now`); one already offered never bounds the wait again, so a
+  window that declines its frames, or one the compositor does not draw, leaves
+  the loop idle. A turn whose dispatch recorded events ends before it would
+  block, so they are applied first, and a flush the socket cut short makes the
+  wait watch the socket for writing (`wait::before_poll`). A frame callback a
+  skipped present never committed is given up after `frame::CALLBACK_GRACE`.
+  The host and the display source connect to the one socket `WAYLAND_DISPLAY`
+  names. The window (`window::linux::wayland`) sizes its surface
+  through `wp_viewport`, so a buffer of any size is valid during a resize and
+  each configure takes effect with a commit; its capabilities follow the
+  compositor's `wm_capabilities`. `current_platform` picks the winit host
+  while it is built (the native hosts carry no input yet) and the native
+  Wayland host for a Wayland session otherwise.
 - **Linux host events reach the owner through an inbox, and a machine that
   waits for the application waits for delivery, not for receipt.** Two sources
   run beside the owner and never run application code: an async logind task
