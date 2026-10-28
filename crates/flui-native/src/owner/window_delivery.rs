@@ -368,13 +368,19 @@ impl WindowDelivery {
     /// (ADR-0254 §5): the window is reached, and read, there alone; a
     /// publication raised elsewhere publishes nothing, and the owner's next
     /// read publishes what changed.
-    #[cfg_attr(
-        any(all(windows, not(feature = "winit-backend")), target_os = "android"),
-        expect(
-            dead_code,
-            reason = "the Win32 window publishes through its window procedure, and the Android window, which the looper shares, through `publish_through`"
-        )
-    )]
+    ///
+    /// The winit, AppKit, UIKit and web windows publish this way; the Win32
+    /// window publishes through its window procedure, and the Android window,
+    /// which its looper shares, through [`Self::publish_through`].
+    #[cfg(any(
+        all(
+            feature = "winit-backend",
+            any(target_os = "windows", target_os = "macos", target_os = "linux")
+        ),
+        target_os = "macos",
+        target_os = "ios",
+        target_arch = "wasm32"
+    ))]
     pub(crate) fn publish_through_owner<W: 'static>(
         &self,
         window: &Rc<W>,

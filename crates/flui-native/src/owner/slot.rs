@@ -9,7 +9,8 @@
 //!
 //! A slot dropped on its owner drops its value there, unless the drop is part
 //! of an unwind, which retains the value instead. A slot dropped elsewhere
-//! cannot, so its value stays in the owner's table until that thread exits.
+//! cannot, so its value stays in the owner's table, which leaks rather than
+//! drops what it still holds when the thread exits.
 
 use std::any::Any;
 use std::cell::RefCell;
@@ -20,7 +21,40 @@ use std::thread::{self, ThreadId};
 
 thread_local! {
     /// The values of every live slot this thread owns, by slot key.
-    static OWNER_VALUES: RefCell<HashMap<u64, Box<dyn Any>>> = RefCell::new(HashMap::new());
+    static OWNER_VALUES: RefCell<OwnerValues> = RefCell::new(OwnerValues::default());
+}
+
+/// The table behind [`OWNER_VALUES`].
+///
+/// A value still in it when its thread exits is leaked, not dropped: its
+/// destructor is host code (a window's teardown) that may reach thread-locals
+/// already destroyed, and a panic there aborts the process. A slot dropped on
+/// its owner takes its value out first, so only what a slot dropped on another
+/// thread, or never dropped (a window in a reference cycle until it closes),
+/// left behind is leaked, as it would have been without the table.
+#[derive(Default)]
+struct OwnerValues(HashMap<u64, Box<dyn Any>>);
+
+impl std::ops::Deref for OwnerValues {
+    type Target = HashMap<u64, Box<dyn Any>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for OwnerValues {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for OwnerValues {
+    fn drop(&mut self) {
+        for (_, value) in self.0.drain() {
+            std::mem::forget(value);
+        }
+    }
 }
 
 /// The last slot key issued; `u64::MAX` once exhausted.
@@ -250,28 +284,21 @@ impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V
     pub(crate) fn remove(&self, key: &K) -> Option<V> {
         self.cell.with(|map| map.remove(key)).flatten()
     }
+}
 
+/// How the winit host reads its window table.
+#[cfg(all(
+    feature = "winit-backend",
+    any(target_os = "windows", target_os = "macos", target_os = "linux")
+))]
+impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V> {
     /// A clone of the value under `key`.
-    #[cfg_attr(
-        not(feature = "winit-backend"),
-        expect(
-            dead_code,
-            reason = "only the winit host reads its window table this way"
-        )
-    )]
     pub(crate) fn get(&self, key: &K) -> Option<V> {
         self.cell.with(|map| map.get(key).cloned()).flatten()
     }
 
     /// A snapshot of the keys and values: what is done with them next may
     /// open or close windows.
-    #[cfg_attr(
-        not(feature = "winit-backend"),
-        expect(
-            dead_code,
-            reason = "only the winit host reads its window table this way"
-        )
-    )]
     pub(crate) fn entries(&self) -> Vec<(K, V)> {
         self.cell
             .with(|map| {
@@ -281,15 +308,18 @@ impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V
             })
             .unwrap_or_default()
     }
+}
 
+/// How the winit and AppKit hosts read their window tables.
+#[cfg(any(
+    all(
+        feature = "winit-backend",
+        any(target_os = "windows", target_os = "macos", target_os = "linux")
+    ),
+    target_os = "macos"
+))]
+impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V> {
     /// A snapshot of the values.
-    #[cfg_attr(
-        not(any(feature = "winit-backend", target_os = "macos")),
-        expect(
-            dead_code,
-            reason = "only the winit and AppKit hosts read their window tables"
-        )
-    )]
     pub(crate) fn values(&self) -> Vec<V> {
         self.cell
             .with(|map| map.values().cloned().collect())
@@ -297,13 +327,6 @@ impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V
     }
 
     /// A snapshot of the keys.
-    #[cfg_attr(
-        not(any(feature = "winit-backend", target_os = "macos")),
-        expect(
-            dead_code,
-            reason = "only the winit and AppKit hosts read their window tables"
-        )
-    )]
     pub(crate) fn keys(&self) -> Vec<K> {
         self.cell
             .with(|map| map.keys().copied().collect())
@@ -312,13 +335,6 @@ impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V
 
     /// Whether the map holds nothing; `true` off the owner thread, which holds
     /// nothing.
-    #[cfg_attr(
-        not(any(feature = "winit-backend", target_os = "macos")),
-        expect(
-            dead_code,
-            reason = "only the winit and AppKit hosts read their window tables"
-        )
-    )]
     pub(crate) fn is_empty(&self) -> bool {
         self.cell.with(|map| map.is_empty()).unwrap_or(true)
     }

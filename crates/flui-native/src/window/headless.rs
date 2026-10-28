@@ -439,12 +439,17 @@ struct OwnerRedraw {
 #[derive(Clone)]
 struct HeadlessRedraw {
     delivery: Weak<WindowDelivery>,
+    /// Set once the window closed: a request after it wakes no owner turn.
+    retirement: crate::owner::window_delivery::Retirement,
     /// `None` for a window opened with no owner signal.
     owner: Option<OwnerRedraw>,
 }
 
 impl flui_platform::RedrawRequester for HeadlessRedraw {
     fn request_redraw(&self) {
+        if self.retirement.is_retired() {
+            return;
+        }
         if let Some(redraw) = &self.owner
             && let Some(signal) = redraw.signal.upgrade()
             && signal.owner() != thread::current().id()
@@ -789,6 +794,7 @@ impl MockWindow {
         });
         delivery.publish_through(Arc::downgrade(&source), SnapshotSource::read);
         let redraw_delivery = Arc::downgrade(&delivery);
+        let redraw_retirement = delivery.retirement();
         Self {
             id,
             state,
@@ -804,6 +810,7 @@ impl MockWindow {
             drag: None,
             redraw: HeadlessRedraw {
                 delivery: redraw_delivery,
+                retirement: redraw_retirement,
                 owner: None,
             },
             presents: Arc::default(),
