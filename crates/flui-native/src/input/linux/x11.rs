@@ -1400,7 +1400,10 @@ mod live {
         fn window_opened(&self, target: InputTarget) {
             let xid = target.window.xid;
             self.select(xid);
-            self.with_state(|state| state.windows.insert(xid, target));
+            let replaced = self.with_state(|state| state.windows.insert(xid, target));
+            // A stale entry of the X id goes outside the borrow: it holds a
+            // delivery, and with it a handler.
+            drop(replaced);
         }
 
         fn window_closed(&self, window: WindowRef) {
