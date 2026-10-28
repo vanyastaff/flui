@@ -349,7 +349,7 @@ fn scenarios() -> Vec<Scenario> {
             laid,
             change: Box::new(move |_, i| {
                 w.write(|cx| row.set(cx, 100 + (i as u32 % 2)))
-                    .expect("row alive")
+                    .expect("row alive");
             }),
         });
     }
@@ -470,7 +470,7 @@ fn scenarios() -> Vec<Scenario> {
             laid,
             change: Box::new(move |_, i| {
                 w.write(|cx| unit.set(cx, 1 + (i as u32 % 2)))
-                    .expect("unit alive")
+                    .expect("unit alive");
             }),
         });
     }
