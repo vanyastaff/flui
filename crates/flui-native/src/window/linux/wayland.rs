@@ -3,9 +3,11 @@
 //!
 //! Two halves:
 //!
-//! - [`configure`], the pure one: what a configure the compositor sends means
-//!   for the window (its states, the size it takes, what the compositor lets
-//!   it do), checked on every host;
+//! - the pure ones, checked on every host: [`configure`], what a configure
+//!   the compositor sends means for the window (its states, the size it
+//!   takes, what the compositor lets it do); [`frame`], when it delivers a
+//!   frame; [`decoration`], who draws its frame; [`scale`], the scale its
+//!   buffer is drawn at; [`foreign`], how a portal names it;
 //! - `toplevel`: `WaylandWindow`, the `PlatformWindow` over the protocol
 //!   objects, and the dispatch of those objects on the owner's queue
 //!   (`owner::linux::wayland::WaylandState`).
@@ -27,10 +29,27 @@
 //!
 //! The window's size is logical. Where the compositor offers `wp_viewporter`,
 //! the surface's destination is the logical size and the buffer is drawn at
-//! the scale the compositor prefers for the surface (`wl_surface` version 6),
-//! else at the scale of the output the surface entered. Any buffer size is
-//! then valid while a resize is under way. Without the viewporter the buffer
-//! is drawn at scale 1 and the compositor scales it.
+//! the scale the compositor prefers for the surface: a fractional one
+//! (`wp_fractional_scale_v1`), else a whole one (`wl_surface` version 6),
+//! else that of the output the surface entered ([`scale`]). Any buffer size
+//! is then valid while a resize is under way. Without the viewporter the
+//! buffer is drawn at scale 1 and the compositor scales it.
+//!
+//! # Outputs and occlusion
+//!
+//! The window is on the first output its surface entered that it has not
+//! left, so a window the compositor moves to another output names that
+//! output's display, whatever its scale. A window the compositor suspends
+//! (covered, on a hidden workspace, its outputs off) is not shown and is
+//! given no frame until it is shown again ([`frame`]).
+//!
+//! # The frame and the portals
+//!
+//! Where the compositor offers `xdg-decoration`, the window asks it for a
+//! frame as its options and commands say, and has the frame the compositor
+//! answers with. Elsewhere it has none: this host draws no frame of its own
+//! ([`decoration`]). Where it offers `xdg-foreign`, the window is exported as
+//! it opens, and `os::wayland` hands the handle out as a portal's parent.
 //!
 //! # The surface
 //!
@@ -40,6 +59,8 @@
 //! the renderer it owns) let go, and the surface itself goes with the last
 //! target.
 
+#[cfg(all(target_os = "linux", feature = "wayland"))]
+pub use toplevel::{WaylandToplevel, WaylandWindowExt};
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(crate) use toplevel::{WaylandWindow, WaylandWindows};
 
@@ -164,13 +185,17 @@ pub(crate) mod configure {
     }
 
     /// What a Wayland window honours, given what its compositor announced
-    /// (`None` before version 5, or before it said): the title, the size and
-    /// its limits, the modes the compositor offers, and closing. Resizability
-    /// is emulated with equal limits; placement, hiding, showing and position
-    /// are not the client's on Wayland; decorations and activation are
-    /// protocols this host does not speak yet (`xdg-decoration`,
-    /// `xdg-activation`).
-    pub(crate) fn capabilities(announced: Option<WmCapabilities>) -> WindowCapabilities {
+    /// (`None` before version 5, or before it said) and why it cannot have
+    /// its frame turned on and off (`decoration`, `None` where it can): the
+    /// title, the size and its limits, the modes the compositor offers, and
+    /// closing. Resizability is emulated with equal limits; placement,
+    /// hiding, showing and position are not the client's on Wayland;
+    /// activation is a protocol this host does not speak yet
+    /// (`xdg-activation`).
+    pub(crate) fn capabilities(
+        announced: Option<WmCapabilities>,
+        decoration: Option<CapabilityAbsence>,
+    ) -> WindowCapabilities {
         let mut capabilities = WindowCapabilities::ALL
             .unavailable(
                 &WindowCommand::SetPosition(flui_foundation::geometry::Point::new(0.0, 0.0)),
@@ -183,13 +208,12 @@ pub(crate) mod configure {
                 CapabilityAbsence::NotOnThisPlatform,
             )
             .unavailable(
-                &WindowCommand::SetDecorated(true),
-                CapabilityAbsence::NotYetOnThisHost,
-            )
-            .unavailable(
                 &WindowCommand::Activate,
                 CapabilityAbsence::NotYetOnThisHost,
             );
+        if let Some(absence) = decoration {
+            capabilities = capabilities.unavailable(&WindowCommand::SetDecorated(true), absence);
+        }
         capabilities.sets_resizable = Availability::Emulated;
         capabilities.observes_position = Availability::Unavailable;
         capabilities.observes_minimized = Availability::Unavailable;
@@ -494,10 +518,15 @@ pub(crate) mod configure {
         /// host does not carry out yet, is refused with its own reason.
         #[test]
         fn the_capabilities_follow_the_compositor() {
-            let unannounced = capabilities(None);
+            let unannounced = capabilities(None, Some(CapabilityAbsence::NotOnThisDevice));
             assert!(unannounced.maximizes.is_available());
             assert!(unannounced.minimizes.is_available());
             assert_eq!(unannounced.sets_resizable, Availability::Emulated);
+            assert_eq!(
+                capabilities(None, None).sets_decorated,
+                Availability::Native,
+                "a compositor that draws frames takes the command"
+            );
             for (command, reason) in [
                 (
                     WindowCommand::SetPosition(flui_foundation::geometry::Point::new(1.0, 1.0)),
@@ -509,7 +538,7 @@ pub(crate) mod configure {
                 ),
                 (
                     WindowCommand::SetDecorated(false),
-                    flui_platform::UnsupportedReason::NotYetOnThisHost,
+                    flui_platform::UnsupportedReason::NotOnThisDevice,
                 ),
                 (
                     WindowCommand::Activate,
@@ -526,7 +555,10 @@ pub(crate) mod configure {
                     "{command:?}"
                 );
             }
-            let announced = capabilities(Some(WmCapabilities::decode(&array(&[CAN_FULLSCREEN]))));
+            let announced = capabilities(
+                Some(WmCapabilities::decode(&array(&[CAN_FULLSCREEN]))),
+                None,
+            );
             assert!(!announced.maximizes.is_available());
             assert!(!announced.minimizes.is_available());
             assert!(announced.enters_fullscreen.is_available());
@@ -565,6 +597,11 @@ pub(crate) mod frame {
     //! callback never comes: after [`CALLBACK_GRACE`] the window stops waiting
     //! for it. A window the compositor does not draw sends no `done` either;
     //! it is then asked for a frame at most once per grace.
+    //!
+    //! A window the compositor says it does not show (`suspended`: covered by
+    //! other windows, on a hidden workspace, its outputs off) is occluded: it
+    //! is given no frame, and no grace runs out for it. The frame asked for
+    //! is kept, and delivered once the compositor shows the window again.
 
     #![forbid(unsafe_code)]
 
@@ -580,10 +617,36 @@ pub(crate) mod frame {
         armed.is_some_and(|armed| now < armed + CALLBACK_GRACE)
     }
 
-    /// When a window with a frame asked for gives up a callback armed at
-    /// `armed`; `None` with nothing armed or nothing asked for.
-    pub(crate) fn gives_up_at(armed: Option<Instant>, asked: bool) -> Option<Instant> {
-        armed.filter(|_| asked).map(|armed| armed + CALLBACK_GRACE)
+    /// What decides whether a window delivers a frame.
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct Pacing {
+        /// A frame was asked for.
+        pub(crate) asked: bool,
+        /// The compositor configured the window.
+        pub(crate) configured: bool,
+        /// The compositor does not show the window.
+        pub(crate) suspended: bool,
+        /// When the frame callback that is out was armed.
+        pub(crate) armed: Option<Instant>,
+    }
+
+    impl Pacing {
+        /// Whether the window delivers its frame now.
+        pub(crate) fn due(self, now: Instant) -> bool {
+            self.asked
+                && self.configured
+                && !self.suspended
+                && !waiting_on_callback(self.armed, now)
+        }
+
+        /// When the window gives up the callback that holds its frame back;
+        /// `None` with nothing armed, nothing asked for, or while the window
+        /// is not shown, whose frame waits for the compositor instead.
+        pub(crate) fn gives_up_at(self) -> Option<Instant> {
+            self.armed
+                .filter(|_| self.asked && !self.suspended)
+                .map(|armed| armed + CALLBACK_GRACE)
+        }
     }
 
     /// The first output in `entered` (the order a surface entered them) the
@@ -611,9 +674,58 @@ pub(crate) mod frame {
                 !waiting_on_callback(now.checked_sub(CALLBACK_GRACE), now),
                 "given up at the grace"
             );
-            assert_eq!(gives_up_at(Some(now), true), Some(now + CALLBACK_GRACE));
-            assert_eq!(gives_up_at(Some(now), false), None, "no frame asked for");
-            assert_eq!(gives_up_at(None, true), None);
+            let pacing = |asked, armed| Pacing {
+                asked,
+                configured: true,
+                suspended: false,
+                armed,
+            };
+            assert_eq!(
+                pacing(true, Some(now)).gives_up_at(),
+                Some(now + CALLBACK_GRACE)
+            );
+            assert_eq!(
+                pacing(false, Some(now)).gives_up_at(),
+                None,
+                "no frame asked for"
+            );
+            assert_eq!(pacing(true, None).gives_up_at(), None);
+            assert!(pacing(true, None).due(now));
+            assert!(!pacing(true, Some(now)).due(now), "the callback holds it");
+            assert!(pacing(true, now.checked_sub(CALLBACK_GRACE)).due(now));
+            assert!(!pacing(false, None).due(now), "nothing asked for");
+            let unconfigured = Pacing {
+                configured: false,
+                ..pacing(true, None)
+            };
+            assert!(!unconfigured.due(now));
+        }
+
+        /// An occluded window (the compositor suspended it) is given no frame
+        /// and gives up no callback, however long it waits; the frame asked
+        /// for is delivered once the compositor shows the window again.
+        #[test]
+        fn an_occluded_window_holds_its_frame_until_it_is_shown() {
+            let now = Instant::now();
+            let long_ago = now.checked_sub(CALLBACK_GRACE * 5);
+            let occluded = Pacing {
+                asked: true,
+                configured: true,
+                suspended: true,
+                armed: long_ago,
+            };
+            assert!(!occluded.due(now), "past the grace, still occluded");
+            assert_eq!(occluded.gives_up_at(), None, "no wake for a grace");
+            let unarmed = Pacing {
+                armed: None,
+                ..occluded
+            };
+            assert!(!unarmed.due(now), "nothing armed, still occluded");
+            let shown = Pacing {
+                suspended: false,
+                ..occluded
+            };
+            assert!(shown.due(now), "shown again: the kept frame goes out");
         }
 
         /// A surface is on the first output it entered that still exists.
@@ -623,6 +735,267 @@ pub(crate) mod frame {
             assert_eq!(first_live(&[7, 9], live), Some(9));
             assert_eq!(first_live(&[7], live), None);
             assert_eq!(first_live::<u32>(&[], live), None);
+        }
+    }
+}
+
+pub(crate) mod decoration {
+    //! Who draws a Wayland window's frame (`xdg-decoration`).
+    //!
+    //! A compositor that offers `zxdg_decoration_manager_v1` draws a frame for
+    //! a window that asks, outside its surface; it may also decline and leave
+    //! the frame to the client. A compositor that offers none (Weston, GNOME)
+    //! draws none, and leaves the frame to the client.
+    //!
+    //! The frame a client draws is the application's own title bar, drawn by
+    //! its interface like the rest of its content. This host draws none: a
+    //! window it opens where the compositor draws no frame has none, and says
+    //! so (`decorated: false`, its frame not turned on or off by a command).
+
+    #![forbid(unsafe_code)]
+
+    use flui_platform::CapabilityAbsence;
+
+    /// `zxdg_toplevel_decoration_v1.mode` values.
+    const CLIENT_SIDE: u32 = 1;
+    const SERVER_SIDE: u32 = 2;
+
+    /// Who draws the frame, as the compositor last said.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum FrameDrawer {
+        /// The compositor draws it.
+        Compositor,
+        /// The client draws it, or none.
+        Client,
+    }
+
+    impl FrameDrawer {
+        /// The drawer a configure's `mode` names; `None` for a mode of a
+        /// newer protocol.
+        pub(crate) const fn from_mode(mode: u32) -> Option<Self> {
+            match mode {
+                SERVER_SIDE => Some(Self::Compositor),
+                CLIENT_SIDE => Some(Self::Client),
+                _ => None,
+            }
+        }
+    }
+
+    /// A window's frame as the client asked for it and the compositor
+    /// answered.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) struct Decoration {
+        /// The compositor offers `xdg-decoration`.
+        pub(crate) offered: bool,
+        /// The client last asked the compositor to draw the frame.
+        pub(crate) requested: bool,
+        /// What the compositor last said; `None` before it said.
+        pub(crate) told: Option<FrameDrawer>,
+    }
+
+    impl Decoration {
+        /// Whether the window has a frame: the compositor said it draws one.
+        pub(crate) const fn decorated(self) -> bool {
+            matches!(self.told, Some(FrameDrawer::Compositor))
+        }
+
+        /// Why the window's frame cannot be turned on and off, or `None`
+        /// where it can: a compositor that offers no frames, or one that
+        /// answered a request for its frame by leaving it to the client,
+        /// draws none whatever the window asks.
+        pub(crate) const fn absence(self) -> Option<CapabilityAbsence> {
+            if !self.offered || (self.requested && matches!(self.told, Some(FrameDrawer::Client))) {
+                Some(CapabilityAbsence::NotOnThisDevice)
+            } else {
+                None
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// The frame is the compositor's answer, never the client's request,
+        /// and a compositor that draws no frame takes no command for it.
+        #[test]
+        fn a_window_has_the_frame_its_compositor_draws() {
+            let drawn = |requested, told| Decoration {
+                offered: true,
+                requested,
+                told,
+            };
+            for (case, decoration, decorated, absence) in [
+                (
+                    "no xdg-decoration",
+                    Decoration {
+                        offered: false,
+                        requested: true,
+                        told: None,
+                    },
+                    false,
+                    Some(CapabilityAbsence::NotOnThisDevice),
+                ),
+                ("asked, not answered yet", drawn(true, None), false, None),
+                (
+                    "asked and drawn",
+                    drawn(true, Some(FrameDrawer::Compositor)),
+                    true,
+                    None,
+                ),
+                (
+                    "asked, left to the client",
+                    drawn(true, Some(FrameDrawer::Client)),
+                    false,
+                    Some(CapabilityAbsence::NotOnThisDevice),
+                ),
+                (
+                    "turned off",
+                    drawn(false, Some(FrameDrawer::Client)),
+                    false,
+                    None,
+                ),
+                (
+                    "turned off, drawn regardless",
+                    drawn(false, Some(FrameDrawer::Compositor)),
+                    true,
+                    None,
+                ),
+            ] {
+                assert_eq!(decoration.decorated(), decorated, "{case}");
+                assert_eq!(decoration.absence(), absence, "{case}");
+            }
+            assert_eq!(
+                FrameDrawer::from_mode(SERVER_SIDE),
+                Some(FrameDrawer::Compositor)
+            );
+            assert_eq!(
+                FrameDrawer::from_mode(CLIENT_SIDE),
+                Some(FrameDrawer::Client)
+            );
+            assert_eq!(FrameDrawer::from_mode(9), None);
+        }
+    }
+}
+
+pub(crate) mod scale {
+    //! The scale a Wayland window's buffer is drawn at.
+    //!
+    //! With `wp_viewporter` the surface's destination is its logical size and
+    //! the buffer any size, so the buffer is drawn at the scale the compositor
+    //! prefers: a fractional one where it offers `wp_fractional_scale_v1`
+    //! (`preferred_scale`, in 120ths), else the whole one `wl_surface`
+    //! version 6 prefers, else that of the output the surface entered.
+    //! Without the viewporter the buffer is the surface's size: scale 1, and
+    //! the compositor scales it.
+
+    #![forbid(unsafe_code)]
+
+    /// What the compositor said of the scale a surface is drawn at.
+    #[derive(Debug, Clone, Copy, Default, PartialEq)]
+    pub(crate) struct ScaleTold {
+        /// `wp_fractional_scale_v1.preferred_scale`, in 120ths.
+        pub(crate) fractional: Option<u32>,
+        /// `wl_surface.preferred_buffer_scale`.
+        pub(crate) preferred: Option<i32>,
+        /// The scale of the output the surface is on.
+        pub(crate) output: Option<f64>,
+    }
+
+    /// A fractional scale as the protocol carries it, in 120ths; `None` for
+    /// zero, which is no scale.
+    fn from_120ths(numerator: u32) -> Option<f64> {
+        (numerator > 0).then(|| f64::from(numerator) / 120.0)
+    }
+
+    /// The scale the window's buffer is drawn at, finite and positive.
+    pub(crate) fn buffer_scale(viewported: bool, told: ScaleTold) -> f64 {
+        if !viewported {
+            return 1.0;
+        }
+        told.fractional
+            .and_then(from_120ths)
+            .or_else(|| told.preferred.filter(|scale| *scale > 0).map(f64::from))
+            .or(told.output)
+            .filter(|scale| scale.is_finite() && *scale > 0.0)
+            .unwrap_or(1.0)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// The fractional scale wins over the whole ones, and each falls back
+        /// to the next where the compositor said nothing usable.
+        #[test]
+        fn a_buffer_is_drawn_at_the_scale_the_compositor_prefers() {
+            let told = |fractional, preferred, output| ScaleTold {
+                fractional,
+                preferred,
+                output,
+            };
+            for (case, viewported, told, expected) in [
+                ("nothing said", true, told(None, None, None), 1.0),
+                (
+                    "a fractional scale",
+                    true,
+                    told(Some(180), Some(2), Some(2.0)),
+                    1.5,
+                ),
+                (
+                    "a whole preferred scale",
+                    true,
+                    told(None, Some(2), Some(1.0)),
+                    2.0,
+                ),
+                ("the output's", true, told(None, None, Some(3.0)), 3.0),
+                ("a zero fraction", true, told(Some(0), Some(2), None), 2.0),
+                (
+                    "a zero preferred scale",
+                    true,
+                    told(None, Some(0), Some(1.25)),
+                    1.25,
+                ),
+                (
+                    "a broken output scale",
+                    true,
+                    told(None, None, Some(f64::NAN)),
+                    1.0,
+                ),
+                (
+                    "no viewporter",
+                    false,
+                    told(Some(180), Some(2), Some(2.0)),
+                    1.0,
+                ),
+                ("120ths exactly", true, told(Some(150), None, None), 1.25),
+            ] {
+                assert_eq!(buffer_scale(viewported, told), expected, "{case}");
+            }
+        }
+    }
+}
+
+pub(crate) mod foreign {
+    //! A Wayland window as another client names it (`xdg-foreign`): the
+    //! handle the compositor gives the window's export, which a portal takes
+    //! as the parent of the dialog it shows.
+
+    #![forbid(unsafe_code)]
+
+    /// The portal's identifier of a window whose export the compositor
+    /// handed `handle` (XDG Desktop Portal, "Window identifiers").
+    pub(crate) fn portal_parent(handle: &str) -> String {
+        format!("wayland:{handle}")
+    }
+
+    #[cfg(test)]
+    mod tests {
+        /// A portal names a Wayland parent by its export's handle, prefixed
+        /// with the protocol.
+        #[test]
+        fn a_portal_names_a_window_by_its_export() {
+            assert_eq!(super::portal_parent("a1b2-c3"), "wayland:a1b2-c3");
         }
     }
 }
@@ -651,10 +1024,18 @@ mod toplevel {
         DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
         RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle, WindowHandle,
     };
+    use wayland_client::WEnum;
     use wayland_client::protocol::wl_callback::{self, WlCallback};
     use wayland_client::protocol::wl_surface::{self, WlSurface};
     use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
+    use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1::{
+        self, WpFractionalScaleV1,
+    };
     use wayland_protocols::wp::viewporter::client::wp_viewport::{self, WpViewport};
+    use wayland_protocols::xdg::decoration::zv1::client::zxdg_toplevel_decoration_v1::{
+        self, ZxdgToplevelDecorationV1,
+    };
+    use wayland_protocols::xdg::foreign::zv2::client::zxdg_exported_v2::{self, ZxdgExportedV2};
     use wayland_protocols::xdg::shell::client::xdg_surface::{self, XdgSurface};
     use wayland_protocols::xdg::shell::client::xdg_toplevel::{self, XdgToplevel};
 
@@ -663,7 +1044,9 @@ mod toplevel {
     use super::configure::{
         Sizing, ToplevelStates, WmCapabilities, capabilities, clamp, protocol_extent,
     };
-    use super::frame::{first_live, gives_up_at, waiting_on_callback};
+    use super::decoration::{Decoration, FrameDrawer};
+    use super::frame::{Pacing, first_live, waiting_on_callback};
+    use super::scale::{ScaleTold, buffer_scale};
     use crate::host::{self, WindowFacets, WindowPositions};
     use crate::host_window::{CoreHostWindow, HostWindow, OwnerThreadToken};
     use crate::owner::OpenWindowError;
@@ -717,6 +1100,12 @@ mod toplevel {
         outputs: Vec<OutputName>,
         /// The buffer scale the compositor prefers for the surface.
         preferred_scale: Option<i32>,
+        /// The fractional scale the compositor prefers, in 120ths.
+        fractional_scale: Option<u32>,
+        /// Who draws the frame, as the compositor last said.
+        frame: Option<FrameDrawer>,
+        /// The handle of the window's export (`xdg-foreign`).
+        exported: Option<String>,
         /// What the compositor lets the toplevel do.
         wm: Option<WmCapabilities>,
     }
@@ -766,10 +1155,28 @@ mod toplevel {
         xdg_surface: XdgSurface,
         toplevel: XdgToplevel,
         viewport: Option<WpViewport>,
+        /// The frame's negotiation, where the compositor offers one.
+        decoration: Option<ZxdgToplevelDecorationV1>,
+        /// The fractional scale's reports, where the compositor gives them.
+        fractional_scale: Option<WpFractionalScaleV1>,
+        /// The export another client names the window by.
+        exported: Option<ZxdgExportedV2>,
     }
 
     impl Roles {
+        /// Destroy every object, the decoration before its toplevel (the
+        /// protocol's order) and the export first, so the handle names no
+        /// window once its role is gone.
         fn destroy(self) {
+            if let Some(exported) = self.exported {
+                exported.destroy();
+            }
+            if let Some(decoration) = self.decoration {
+                decoration.destroy();
+            }
+            if let Some(fractional_scale) = self.fractional_scale {
+                fractional_scale.destroy();
+            }
             if let Some(viewport) = self.viewport {
                 viewport.destroy();
             }
@@ -802,7 +1209,20 @@ mod toplevel {
         /// The window asked for normal mode out of fullscreen, and leaves a
         /// maximized mode the compositor puts it back in.
         leaving_maximized: bool,
+        /// The window last asked the compositor to draw its frame.
+        decoration_requested: bool,
         told: Told,
+    }
+
+    impl Applied {
+        /// The window's frame as asked for and answered.
+        const fn decoration(&self, offered: bool) -> Decoration {
+            Decoration {
+                offered,
+                requested: self.decoration_requested,
+                told: self.told.frame,
+            }
+        }
     }
 
     /// The Wayland window: an `xdg_toplevel` the owner thread holds. See the
@@ -823,6 +1243,8 @@ mod toplevel {
         table: Weak<WindowTable>,
         waker: Weak<LoopWaker>,
         viewported: bool,
+        /// The compositor offers to draw the window's frame.
+        offers_decorations: bool,
         live: LiveOutputs,
         applied: RefCell<Applied>,
         closed: Cell<bool>,
@@ -847,6 +1269,7 @@ mod toplevel {
         live: &'a LiveOutputs,
         hovered: bool,
         viewported: bool,
+        offers_decorations: bool,
         closed: bool,
     }
 
@@ -855,19 +1278,15 @@ mod toplevel {
             let applied = self.applied;
             let entered = first_live(&applied.told.outputs, |output| self.live.contains(output));
             let output = entered.and_then(|output| self.displays.output(output));
-            // The viewport lets the buffer be drawn at any scale; without it
-            // the buffer is the surface's size.
-            let scale = if self.viewported {
-                applied
-                    .told
-                    .preferred_scale
-                    .filter(|scale| *scale > 0)
-                    .map(f64::from)
-                    .or_else(|| output.map(|output| output.scale))
-                    .unwrap_or(1.0)
-            } else {
-                1.0
-            };
+            let scale = buffer_scale(
+                self.viewported,
+                ScaleTold {
+                    fractional: applied.told.fractional_scale,
+                    preferred: applied.told.preferred_scale,
+                    output: output.map(|output| output.scale),
+                },
+            );
+            let decoration = applied.decoration(self.offers_decorations);
             let content = applied.sizing.content();
             let states = applied.sizing.states();
             let state = WindowState::new(WindowGeometry::new(None, content), content)
@@ -882,9 +1301,7 @@ mod toplevel {
                 .with_title(Some(applied.title.clone()))
                 .with_constraints(applied.constraints)
                 .with_resizable(applied.resizable)
-                // The compositor draws no frame for the window until the
-                // host speaks `xdg-decoration`.
-                .with_decorated(false)
+                .with_decorated(decoration.decorated())
                 .with_display(output.map(|output| output.display));
             ReportedFacts {
                 metrics: WindowMetrics::from_logical(content, scale).ok(),
@@ -893,7 +1310,7 @@ mod toplevel {
                 execution: WindowExecutionState::Running,
                 hovered: self.hovered,
                 active: states.activated,
-                capabilities: capabilities(applied.told.wm),
+                capabilities: capabilities(applied.told.wm, decoration.absence()),
             }
             .onto(state)
         }
@@ -932,6 +1349,24 @@ mod toplevel {
                 .viewporter
                 .as_ref()
                 .map(|viewporter| viewporter.get_viewport(&surface, &queue, ()));
+            // Asked before the first commit, so the first configure says who
+            // draws the frame.
+            let decoration = protocol.decoration.as_ref().map(|manager| {
+                let decoration =
+                    manager.get_toplevel_decoration(&toplevel, &queue, Arc::clone(&record));
+                decoration.set_mode(frame_mode(options.decorated));
+                decoration
+            });
+            let fractional_scale = protocol
+                .fractional_scale
+                .as_ref()
+                .map(|manager| manager.get_fractional_scale(&surface, &queue, Arc::clone(&record)));
+            // The handle comes with the round trip below, so a portal can
+            // name the window as soon as it opened.
+            let exported = protocol
+                .exporter
+                .as_ref()
+                .map(|exporter| exporter.export_toplevel(&surface, &queue, Arc::clone(&record)));
             toplevel.set_title(options.title.clone());
             let constraints = SizeConstraints::new(options.min_size, options.max_size);
             let size = clamp(options.size, constraints);
@@ -946,6 +1381,9 @@ mod toplevel {
                 xdg_surface,
                 toplevel,
                 viewport,
+                decoration,
+                fractional_scale,
+                exported,
             };
             send_limits(&roles.toplevel, size, constraints, options.resizable);
             if let Some(viewport) = &roles.viewport {
@@ -962,6 +1400,7 @@ mod toplevel {
                 resizable: options.resizable,
                 configured: false,
                 leaving_maximized: false,
+                decoration_requested: options.decorated,
                 told: Told::default(),
             };
             let window = Rc::new(Self {
@@ -978,6 +1417,7 @@ mod toplevel {
                 connection: protocol.connection,
                 queue,
                 viewported: protocol.viewporter.is_some(),
+                offers_decorations: protocol.decoration.is_some(),
                 live: protocol.live,
                 displays,
                 portal,
@@ -1019,6 +1459,7 @@ mod toplevel {
                 live: &self.live,
                 hovered: self.delivery.hovered(),
                 viewported: self.viewported,
+                offers_decorations: self.offers_decorations,
                 closed: self.closed.get(),
             }
             .state()
@@ -1052,9 +1493,10 @@ mod toplevel {
             let told = self.record.take();
             let close_requested = told.close_requested;
             let configure = told.configure;
-            let (resized, activated) = {
+            let (resized, activated, was_activated) = {
                 let mut applied = self.applied.borrow_mut();
                 let first = !applied.configured;
+                let was_activated = applied.sizing.states().activated;
                 let resized = configure.is_some_and(|configure| {
                     if let Some(roles) = self.roles.borrow().as_ref() {
                         roles.xdg_surface.ack_configure(configure.serial);
@@ -1070,7 +1512,7 @@ mod toplevel {
                     resized || first
                 });
                 applied.told = told;
-                (resized, applied.sizing.states().activated)
+                (resized, applied.sizing.states().activated, was_activated)
             };
             if resized {
                 self.size_surface();
@@ -1091,6 +1533,10 @@ mod toplevel {
             if let Some(table) = self.table.upgrade() {
                 table.activation(self.id, activated);
             }
+            // A screen reader follows the window the compositor activates.
+            if activated != was_activated {
+                self.facets.accessibility.focus_changed(activated);
+            }
             close_requested
         }
 
@@ -1109,6 +1555,17 @@ mod toplevel {
                 && let Some(roles) = self.roles.borrow().as_ref()
             {
                 roles.toplevel.unset_maximized();
+            }
+        }
+
+        /// What decides whether the window delivers its frame now.
+        fn pacing(&self) -> Pacing {
+            let applied = self.applied.borrow();
+            Pacing {
+                asked: self.record.redraw.load(Ordering::Acquire),
+                configured: applied.configured,
+                suspended: applied.sizing.states().suspended,
+                armed: *self.record.callback_armed.lock(),
             }
         }
 
@@ -1220,6 +1677,15 @@ mod toplevel {
         };
         toplevel.set_min_size(min.0, min.1);
         toplevel.set_max_size(max.0, max.1);
+    }
+
+    /// The frame mode a window asks the compositor for.
+    const fn frame_mode(decorated: bool) -> zxdg_toplevel_decoration_v1::Mode {
+        if decorated {
+            zxdg_toplevel_decoration_v1::Mode::ServerSide
+        } else {
+            zxdg_toplevel_decoration_v1::Mode::ClientSide
+        }
     }
 
     /// `viewport`'s destination: `size`, at least a pixel each way.
@@ -1426,6 +1892,19 @@ mod toplevel {
                     self.applied.borrow_mut().resizable = resizable;
                     self.send_limits();
                 }
+                // Admitted only where the compositor offers frames; its
+                // configure says whether it draws one.
+                WindowCommand::SetDecorated(decorated) => {
+                    let roles = self.roles.borrow();
+                    let Some(decoration) =
+                        roles.as_ref().and_then(|roles| roles.decoration.as_ref())
+                    else {
+                        return Err(not_carried_out(&WindowCommand::SetDecorated(decorated)));
+                    };
+                    decoration.set_mode(frame_mode(decorated));
+                    drop(roles);
+                    self.applied.borrow_mut().decoration_requested = decorated;
+                }
                 WindowCommand::SetMode(WindowMode::Normal) => self.leave_compositor_modes(),
                 WindowCommand::SetMode(mode) => {
                     let fullscreen = {
@@ -1504,6 +1983,53 @@ mod toplevel {
         }
     }
 
+    /// What a Wayland window offers beyond the window contract.
+    ///
+    /// Implemented for every [`HostWindow`] (ADR-0151 §8). A window of another
+    /// host is not a Wayland window: [`wayland`](Self::wayland) answers `None`
+    /// for it, and nothing is asked of it.
+    pub trait WaylandWindowExt {
+        /// This window's Wayland extras, or `None` for a window of another
+        /// host.
+        #[must_use]
+        fn wayland(&self) -> Option<WaylandToplevel<'_>>;
+    }
+
+    impl WaylandWindowExt for dyn HostWindow + '_ {
+        fn wayland(&self) -> Option<WaylandToplevel<'_>> {
+            self.as_any().downcast_ref().map(WaylandToplevel)
+        }
+    }
+
+    /// What a Wayland window offers beyond the window contract.
+    /// [`WaylandWindowExt::wayland`] gives one only for a Wayland window.
+    #[derive(Debug, Clone, Copy)]
+    pub struct WaylandToplevel<'a>(&'a WaylandWindow);
+
+    impl WaylandToplevel<'_> {
+        /// The window as an XDG Desktop Portal names the parent of the dialog
+        /// it shows (`wayland:<handle>`): the handle the compositor gave the
+        /// window's export (`xdg-foreign`), so the dialog stays above the
+        /// window and moves with it.
+        ///
+        /// `None` where the compositor offers no `zxdg_exporter_v2`, before
+        /// it answered the export, and once the window closed, when its
+        /// handle names nothing.
+        #[must_use]
+        pub fn portal_parent(&self) -> Option<String> {
+            if self.0.closed.get() {
+                return None;
+            }
+            self.0
+                .record
+                .protocol
+                .lock()
+                .exported
+                .as_deref()
+                .map(super::foreign::portal_parent)
+        }
+    }
+
     impl CoreHostWindow for WaylandWindow {
         fn window_delivery(&self) -> &WindowDelivery {
             &self.delivery
@@ -1556,20 +2082,14 @@ mod toplevel {
         }
 
         fn frame_due(&self) -> bool {
-            !self.closed.get()
-                && self.applied.borrow().configured
-                && self.record.redraw.load(Ordering::Acquire)
-                && !waiting_on_callback(*self.record.callback_armed.lock(), Instant::now())
+            !self.closed.get() && self.pacing().due(Instant::now())
         }
 
         fn frame_wait(&self) -> Option<Instant> {
             if self.closed.get() {
                 return None;
             }
-            gives_up_at(
-                *self.record.callback_armed.lock(),
-                self.record.redraw.load(Ordering::Acquire),
-            )
+            self.pacing().gives_up_at()
         }
 
         fn request_frame(&self) {
@@ -1625,12 +2145,17 @@ mod toplevel {
         }
 
         /// What a window has before its compositor said what it offers.
-        fn capabilities(_: &WaylandLoop, _: &WaylandWindows) -> WindowCapabilities {
-            capabilities(None)
+        fn capabilities(owner: &WaylandLoop, _: &WaylandWindows) -> WindowCapabilities {
+            let decoration = Decoration {
+                offered: owner.offers_decorations(),
+                requested: true,
+                told: None,
+            };
+            capabilities(None, decoration.absence())
         }
 
-        /// The compositor draws no frame around a window until the host
-        /// speaks `xdg-decoration`.
+        /// A frame the compositor draws lies outside the window's surface,
+        /// and this host draws none of its own: the content is the window.
         fn frame_inset(_: &WaylandLoop, _: &WaylandWindows, _: f64) -> Size<f64> {
             Size::new(0.0, 0.0)
         }
@@ -1747,6 +2272,59 @@ mod toplevel {
         }
     }
 
+    impl Dispatch<ZxdgToplevelDecorationV1, Arc<ToplevelRecord>> for WaylandState {
+        fn event(
+            _: &mut Self,
+            _: &ZxdgToplevelDecorationV1,
+            event: zxdg_toplevel_decoration_v1::Event,
+            record: &Arc<ToplevelRecord>,
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            // Part of the configure the next `xdg_surface.configure` closes;
+            // the snapshot reads it once the window settles.
+            if let zxdg_toplevel_decoration_v1::Event::Configure { mode } = event {
+                let mode = match mode {
+                    WEnum::Value(mode) => u32::from(mode),
+                    WEnum::Unknown(mode) => mode,
+                };
+                if let Some(drawer) = FrameDrawer::from_mode(mode) {
+                    record.protocol.lock().frame = Some(drawer);
+                }
+            }
+        }
+    }
+
+    impl Dispatch<WpFractionalScaleV1, Arc<ToplevelRecord>> for WaylandState {
+        fn event(
+            _: &mut Self,
+            _: &WpFractionalScaleV1,
+            event: wp_fractional_scale_v1::Event,
+            record: &Arc<ToplevelRecord>,
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if let wp_fractional_scale_v1::Event::PreferredScale { scale } = event {
+                record.protocol.lock().fractional_scale = Some(scale);
+            }
+        }
+    }
+
+    impl Dispatch<ZxdgExportedV2, Arc<ToplevelRecord>> for WaylandState {
+        fn event(
+            _: &mut Self,
+            _: &ZxdgExportedV2,
+            event: zxdg_exported_v2::Event,
+            record: &Arc<ToplevelRecord>,
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if let zxdg_exported_v2::Event::Handle { handle } = event {
+                record.protocol.lock().exported = Some(handle);
+            }
+        }
+    }
+
     impl Dispatch<WpViewport, ()> for WaylandState {
         fn event(
             _: &mut Self,
@@ -1791,6 +2369,22 @@ mod toplevel {
                 preferred_scale: told.preferred_scale,
                 outputs: told.outputs.iter().map(|output| output.get()).collect(),
             }
+        }
+
+        /// Ask the compositor to show the window fullscreen on the output
+        /// whose global is `output`, which moves it there: a client places
+        /// its window on an output in no other way. `false` for an output
+        /// the loop does not hold, or a closed window.
+        pub(crate) fn fullscreen_on(&self, output: u32) -> bool {
+            let Some(proxy) = self.live.proxy(OutputName::new(output)) else {
+                return false;
+            };
+            let roles = self.roles.borrow();
+            let Some(roles) = roles.as_ref() else {
+                return false;
+            };
+            roles.toplevel.set_fullscreen(Some(&proxy));
+            true
         }
 
         /// Draw one blank frame at the window's metrics and commit it, the

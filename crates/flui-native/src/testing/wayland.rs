@@ -24,6 +24,26 @@ pub fn run_for<H: Host<Loop = WaylandLoop>>(
     platform.owner().turn_for(span)
 }
 
+/// The globals of the outputs the compositor of `platform`, a
+/// `WaylandPlatform`, announces now, as [`CompositorReport::outputs`] names
+/// them. Call it on the thread that made the platform; elsewhere it is empty.
+#[must_use]
+pub fn outputs<H: Host<Loop = WaylandLoop>>(platform: &HostPlatform<H>) -> Vec<u32> {
+    platform.owner().outputs()
+}
+
+/// Ask the compositor to show `window` fullscreen on the output whose global
+/// is `output`, which moves the window there: a Wayland client has no other
+/// way to place its window on an output. `false` for a window of another
+/// host, a closed one, or an output the compositor does not announce.
+#[must_use]
+pub fn fullscreen_on(window: &dyn HostWindow, output: u32) -> bool {
+    window
+        .as_any()
+        .downcast_ref::<WaylandWindow>()
+        .is_some_and(|window| window.fullscreen_on(output))
+}
+
 /// Draw one blank frame on `window` at its metrics and commit it, as a
 /// renderer presents one: a compositor shows a window, and holds it to the
 /// state it acknowledged, only once it has a buffer. Call the window's

@@ -284,7 +284,14 @@ mod event_loop {
     use wayland_client::protocol::wl_output::{self, WlOutput};
     use wayland_client::protocol::wl_registry::{self, WlRegistry};
     use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
+    use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_manager_v1::{
+        self, WpFractionalScaleManagerV1,
+    };
     use wayland_protocols::wp::viewporter::client::wp_viewporter::{self, WpViewporter};
+    use wayland_protocols::xdg::decoration::zv1::client::zxdg_decoration_manager_v1::{
+        self, ZxdgDecorationManagerV1,
+    };
+    use wayland_protocols::xdg::foreign::zv2::client::zxdg_exporter_v2::{self, ZxdgExporterV2};
     use wayland_protocols::xdg::shell::client::xdg_wm_base::{self, XdgWmBase};
     use web_time::Instant;
 
@@ -313,6 +320,12 @@ mod event_loop {
     const OUTPUT_VERSION: u32 = 4;
     /// `wp_viewporter` has one version.
     const VIEWPORTER_VERSION: u32 = 1;
+    /// `zxdg_decoration_manager_v1` has one version.
+    const DECORATION_VERSION: u32 = 1;
+    /// `wp_fractional_scale_manager_v1` has one version.
+    const FRACTIONAL_SCALE_VERSION: u32 = 1;
+    /// `zxdg_exporter_v2` has one version.
+    const EXPORTER_VERSION: u32 = 1;
 
     /// What the host's table fills for the loop (ADR-0151 §10): the
     /// displays, the preference source, the notice channel and the sources
@@ -383,24 +396,47 @@ mod event_loop {
     /// current on the owner thread: an output removed while a surface was on
     /// it sends that surface no `leave`.
     #[derive(Clone, Default)]
-    pub(crate) struct LiveOutputs(Arc<OwnerCell<Vec<OutputName>>>);
+    pub(crate) struct LiveOutputs(Arc<OwnerCell<Vec<(OutputName, WlOutput)>>>);
 
     impl LiveOutputs {
         /// Whether `output` is still announced; `false` off the owner thread.
         pub(crate) fn contains(&self, output: OutputName) -> bool {
-            self.0.with(|live| live.contains(&output)).unwrap_or(false)
+            self.0
+                .with(|live| live.iter().any(|(held, _)| *held == output))
+                .unwrap_or(false)
         }
 
-        fn add(&self, output: OutputName) {
+        /// The loop's binding of `output`, while it is announced; `None` off
+        /// the owner thread.
+        #[cfg(any(test, feature = "testing"))]
+        pub(crate) fn proxy(&self, output: OutputName) -> Option<WlOutput> {
+            self.0
+                .with(|live| {
+                    live.iter()
+                        .find(|(held, _)| *held == output)
+                        .map(|(_, proxy)| proxy.clone())
+                })
+                .flatten()
+        }
+
+        /// Every output announced now; empty off the owner thread.
+        #[cfg(any(test, feature = "testing"))]
+        pub(crate) fn names(&self) -> Vec<OutputName> {
+            self.0
+                .with(|live| live.iter().map(|(name, _)| *name).collect())
+                .unwrap_or_default()
+        }
+
+        fn add(&self, output: OutputName, proxy: &WlOutput) {
             self.0.with(|live| {
-                if !live.contains(&output) {
-                    live.push(output);
+                if !live.iter().any(|(held, _)| *held == output) {
+                    live.push((output, proxy.clone()));
                 }
             });
         }
 
         fn remove(&self, output: OutputName) {
-            self.0.with(|live| live.retain(|held| *held != output));
+            self.0.with(|live| live.retain(|(held, _)| *held != output));
         }
     }
 
@@ -596,8 +632,8 @@ mod event_loop {
                 queue,
                 name,
             );
+            self.live.add(name, &output);
             self.outputs.push((name, output));
-            self.live.add(name);
         }
 
         fn remove_output(&mut self, name: u32) {
@@ -677,6 +713,45 @@ mod event_loop {
         }
     }
 
+    impl Dispatch<ZxdgDecorationManagerV1, ()> for WaylandState {
+        fn event(
+            _: &mut Self,
+            _: &ZxdgDecorationManagerV1,
+            _: zxdg_decoration_manager_v1::Event,
+            (): &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            // The manager has no events.
+        }
+    }
+
+    impl Dispatch<WpFractionalScaleManagerV1, ()> for WaylandState {
+        fn event(
+            _: &mut Self,
+            _: &WpFractionalScaleManagerV1,
+            _: wp_fractional_scale_manager_v1::Event,
+            (): &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            // The manager has no events.
+        }
+    }
+
+    impl Dispatch<ZxdgExporterV2, ()> for WaylandState {
+        fn event(
+            _: &mut Self,
+            _: &ZxdgExporterV2,
+            _: zxdg_exporter_v2::Event,
+            (): &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            // The exporter has no events.
+        }
+    }
+
     impl Dispatch<XdgWmBase, ()> for WaylandState {
         fn event(
             _: &mut Self,
@@ -708,6 +783,17 @@ mod event_loop {
         /// `wp_viewporter`, which sizes a surface apart from its buffer;
         /// `None` where the compositor has none.
         pub(crate) viewporter: Option<WpViewporter>,
+        /// `zxdg_decoration_manager_v1`, through which a window asks the
+        /// compositor to draw its frame; `None` where the compositor draws
+        /// none.
+        pub(crate) decoration: Option<ZxdgDecorationManagerV1>,
+        /// `wp_fractional_scale_manager_v1`, which tells a surface the scale
+        /// the compositor prefers to the 120th; used only with the viewporter,
+        /// which draws a buffer at a scale that is not whole.
+        pub(crate) fractional_scale: Option<WpFractionalScaleManagerV1>,
+        /// `zxdg_exporter_v2`, which hands out a handle another client
+        /// (a portal's dialog) parents its window to.
+        pub(crate) exporter: Option<ZxdgExporterV2>,
         /// The outputs the compositor announces now.
         pub(crate) live: LiveOutputs,
         /// `wl_shm`, which a test draws a window's frames with in place of a
@@ -841,6 +927,23 @@ mod event_loop {
             let viewporter = globals
                 .bind::<WpViewporter, _, _>(&handle, 1..=VIEWPORTER_VERSION, ())
                 .ok();
+            let decoration = globals
+                .bind::<ZxdgDecorationManagerV1, _, _>(&handle, 1..=DECORATION_VERSION, ())
+                .ok();
+            // A fractional scale is drawn through the viewport: without one
+            // the surface takes whole scales only.
+            let fractional_scale = viewporter.as_ref().and_then(|_| {
+                globals
+                    .bind::<WpFractionalScaleManagerV1, _, _>(
+                        &handle,
+                        1..=FRACTIONAL_SCALE_VERSION,
+                        (),
+                    )
+                    .ok()
+            });
+            let exporter = globals
+                .bind::<ZxdgExporterV2, _, _>(&handle, 1..=EXPORTER_VERSION, ())
+                .ok();
             #[cfg(any(test, feature = "testing"))]
             let shm = globals
                 .bind::<wayland_client::protocol::wl_shm::WlShm, _, _>(&handle, 1..=1, ())
@@ -879,6 +982,9 @@ mod event_loop {
                     compositor,
                     wm_base,
                     viewporter,
+                    decoration,
+                    fractional_scale,
+                    exporter,
                     live,
                     #[cfg(any(test, feature = "testing"))]
                     shm,
@@ -1001,6 +1107,12 @@ mod event_loop {
             self.windows.active()
         }
 
+        /// Whether the compositor offers to draw a window's frame
+        /// (`xdg-decoration`).
+        pub(crate) fn offers_decorations(&self) -> bool {
+            self.protocol.decoration.is_some()
+        }
+
         /// Run turns for `span` on the owner thread, for a test that drives
         /// the loop's windows without running it.
         ///
@@ -1015,6 +1127,18 @@ mod event_loop {
                     return Ok(());
                 }
             }
+        }
+
+        /// The globals of the outputs the compositor announces now, for a
+        /// test that moves a window between them.
+        #[cfg(any(test, feature = "testing"))]
+        pub(crate) fn outputs(&self) -> Vec<u32> {
+            self.protocol
+                .live
+                .names()
+                .into_iter()
+                .map(OutputName::get)
+                .collect()
         }
 
         /// Dispatch what the compositor already sent: the windows record it.

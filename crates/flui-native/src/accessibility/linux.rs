@@ -143,11 +143,16 @@ impl Default for UnixAccessibility {
 
 /// The adapter announces the window on the bus, not on the window: it leaves
 /// the bus when its last handle drops, and nothing of the window needs undoing.
-/// The bridge tells the bus nothing of the window's focus.
 impl crate::host::WindowAccessibility for UnixAccessibility {
     fn detach(&self) {}
 
-    fn focus_changed(&self, _: bool) {}
+    /// Tell the bus whether the window is the one the window manager or
+    /// compositor activated: a screen reader announces the window it moves
+    /// to and reads the focus only in the active one. Before an assistive
+    /// technology attaches, the adapter keeps it for its first tree.
+    fn focus_changed(&self, focused: bool) {
+        self.adapter.lock().update_window_focus_state(focused);
+    }
 }
 
 /// Each window of a Linux host announces itself on the AT-SPI bus. The

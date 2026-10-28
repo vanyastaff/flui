@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use flui_foundation::geometry::{Size, WindowMetrics};
 use flui_native::testing::app::{self, AppCall};
-use flui_native::testing::wayland::{compositor_report, present, run_for};
+use flui_native::testing::wayland::{compositor_report, fullscreen_on, outputs, present, run_for};
 use flui_native::{ExitAnswer, HostWindow, Platform as _, WaylandPlatform};
 use flui_platform::{Availability, PlatformWindow, WindowCommand, WindowOptions};
 use flui_testing::window_commands::AdmitAndApply as _;
@@ -224,6 +224,83 @@ fn a_window_maximized_before_fullscreen_returns_to_normal() {
     assert!(
         !report.states.contains(&1) && !report.states.contains(&2),
         "the compositor still sizes the window: {report:?}"
+    );
+}
+
+/// A window the compositor moves to another output of the same scale names
+/// that output's display, its handler hears the change, and its scale stays;
+/// moved back, it names the first display again. A client has no other way to
+/// put its window on an output than fullscreen on it, so that is how the test
+/// moves it. Needs a compositor with two outputs and a seat: Weston on its X11
+/// backend with `--output-count=2` (desktop-shell places a fullscreen window on
+/// the output it names only when it activates it, which needs a seat); with
+/// one output, it says it was skipped.
+#[test]
+fn a_window_moved_to_another_output_names_its_display() {
+    use flui_platform::WindowMode::Normal;
+
+    let case = "a_window_moved_to_another_output_names_its_display";
+    let Some(platform) = platform(case) else {
+        return;
+    };
+    let announced = outputs(&platform);
+    if announced.len() < 2 {
+        eprintln!("{case}: skipped, the compositor announces one output");
+        return;
+    }
+    let mut fixture = WaylandFixture::open(platform, "moved between outputs");
+    let on_output = |fixture: &WaylandFixture| {
+        compositor_report(fixture.window.as_ref())
+            .expect("a Wayland window")
+            .outputs
+    };
+    let entered = on_output(&fixture);
+    let [first_output] = entered[..] else {
+        panic!("the window opens on one output: {entered:?}");
+    };
+    let before = fixture.window.state();
+    let first = before.display.expect("the window names its display");
+    let other = announced
+        .iter()
+        .copied()
+        .find(|output| *output != first_output)
+        .expect("a second output");
+
+    fixture.handler.take_calls();
+    assert!(fullscreen_on(fixture.window.as_ref(), other));
+    fixture.settle();
+    assert_eq!(on_output(&fixture), vec![other], "the compositor moved it");
+    let moved = fixture.window.state();
+    let second = moved.display.expect("the moved window names its display");
+    assert_ne!(second, first, "the window names the output it moved to");
+    let displays = fixture
+        .platform
+        .display_snapshot()
+        .expect("the displays are read");
+    assert!(
+        displays.displays().iter().any(|info| info.id == second),
+        "{second:?} is a display of the snapshot: {displays:?}"
+    );
+    assert_eq!(
+        moved.metrics.map(WindowMetrics::scale),
+        before.metrics.map(WindowMetrics::scale),
+        "both outputs have one scale"
+    );
+    assert!(
+        fixture.handler.count(&HandlerCall::StateChanged) > 0,
+        "the handler hears the move"
+    );
+
+    fixture
+        .window
+        .admit_and_apply(WindowCommand::SetMode(Normal))
+        .expect("the window leaves fullscreen");
+    fixture.settle();
+    assert_eq!(
+        fixture.window.state().display,
+        Some(first),
+        "back on the first output: {:?}",
+        on_output(&fixture)
     );
 }
 

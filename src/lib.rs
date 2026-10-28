@@ -93,8 +93,8 @@ await its returned request or poll `try_result` to obtain the window result."
 //! to the operating system's assistive technology through AccessKit.
 //!
 //! `native` publishes the escape hatch, `flui::native`: what one operating
-//! system's windows offer beyond the window contract, in `flui::native::windows`
-//! and `flui::native::macos`. It is Evolving rather than Stable (ADR-0089 §5),
+//! system's windows offer beyond the window contract, in `flui::native::windows`,
+//! `flui::native::macos` and `flui::native::wayland`. It is Evolving rather than Stable (ADR-0089 §5),
 //! so it is off by default and absent without the feature:
 //!
 #![cfg_attr(not(feature = "native"), doc = "```compile_fail,E0432")]
@@ -219,6 +219,8 @@ pub use flui_material as material;
 pub mod native {
     #[cfg(target_os = "macos")]
     pub use flui_app::native::macos;
+    #[cfg(target_os = "linux")]
+    pub use flui_app::native::wayland;
     #[cfg(windows)]
     pub use flui_app::native::windows;
     pub use flui_app::native::{HostWindow, with_window};
