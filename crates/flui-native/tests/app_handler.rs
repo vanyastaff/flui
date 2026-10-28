@@ -159,10 +159,25 @@ fn a_panicking_method_keeps_the_first_panic() {
 #[cfg(target_os = "windows")]
 fn the_wake_deadline_is_asked_and_kept() {
     let log = AppLog::new();
-    let due = web_time::Instant::now() + std::time::Duration::from_millis(30);
-    log.answer_deadline(Some(due));
+    // The deadline is 30 ms after the first question, not after the test
+    // starts: on a loaded host, making the platform and starting its loop
+    // takes longer than that, and a deadline already due when first asked
+    // quits the loop on that one question.
+    let due = Rc::new(std::cell::OnceCell::new());
+    let answer = Rc::clone(&due);
+    log.answer_deadline_with(move || {
+        Some(
+            *answer.get_or_init(|| web_time::Instant::now() + std::time::Duration::from_millis(30)),
+        )
+    });
+    // The reaction runs before the answer, so the first question finds no
+    // deadline yet and never quits.
     log.react(move |call, owner| {
-        if call == AppCall::WakeDeadline && web_time::Instant::now() >= due {
+        if call == AppCall::WakeDeadline
+            && due
+                .get()
+                .is_some_and(|due| web_time::Instant::now() >= *due)
+        {
             let _ = owner.proxy().request_quit();
         }
     });
