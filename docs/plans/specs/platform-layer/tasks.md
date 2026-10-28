@@ -3924,7 +3924,7 @@ graph LR
   для записи этого прогона нужны строки клавиатуры и IME (marked text, выделение, commit, unmark,
   replace) и воспроизведение в модель респондера.
 
-- [x] **LY91** — ветка `platform/present-feedback` от `main` @ `8aee131f6`. **Форма (для владельца).**
+- [ ] **LY91** (не закрыта: остаётся Apple, см. ниже) — ветка `platform/present-feedback` от `main` @ `8aee131f6`. **Форма (для владельца).**
   Обратная связь едет в запросе кадра: `FrameRequest::presented: Option<FramePresented { at:
   EventTime, refresh: Option<Duration> }>` — самый новый показанный кадр окна с прошлого запроса,
   на шкале ввода; никогда не прогноз (ожидаемый показ — `target_present`). Есть ли она у окна —
@@ -3991,6 +3991,34 @@ graph LR
   X11 под winit сравнивали с `ALL`) — исправлены; там же падают тесты реального цикла winit и
   `linux_preferences`, которым нужен дисплей, под xvfb они зелёные.
   Не запускалось: Mac, iPhone (#1840; список в PR), Android-устройство, браузер, `cross-typecheck`.
+  **Решения координатора и исправления после ревью (vanyastaff/flui#1943)**, коммитами поверх,
+  слиянием `main` @ `817fb6bbd` (LY68). Форма обратной связи принята и записана поправкой ADR-0257
+  (`FrameRequest::presented`, `reports_presentation`, `SwapChainStatistics`, п. 3 — граница
+  idle по сетке свежего отчёта). Исправлено: (1) повторное чтение DXGI больше не новый отчёт —
+  `frame_timing::PresentTracker` отбрасывает чтение с тем же `PresentCount` или
+  `SyncRefreshCount` (`a_repeated_read_is_reported_once`, без правила падает); (2)
+  `DXGI_ERROR_FRAME_STATISTICS_DISJOINT` → `SwapChainStatistics::DxgiDisjoint`, трекер забывает
+  прошлое обновление (`a_disjoint_read_measures_no_period_across_it`, без сброса падает); (3)
+  `SAFETY:` движка называет предусловие `Surface::as_hal` и почему оно выполняется; (4)
+  ARCHITECTURE движка называет это единственное место; (5) мёртвые `pub` убраны:
+  `FrameClock::last_presentation` и `PresentationReport` (часы берут момент и интервал,
+  один тип `FramePresented` и одна проверка нулевого интервала, Wayland тоже),
+  `PRESENTATION_GRID_HORIZON` — `pub(crate)`, у `DxgiFrameStatistics` остались
+  `present_count`, `sync_refresh_count`, `sync_qpc_time` (все читает хост); (6) фикстуры Win32
+  и Wayland показывают кадры в своём новом окне, проверка вернулась на прежнее место, ожидание
+  `a_window_that_claims_what_it_cannot_do_is_caught` — прежнее; под Weston проверка после
+  сворачивающих проверок проходит (раньше там `Discarded`); (7) `HeadlessHost::report_presented`
+  следует возможности окна (`HeadlessWindow::with_presentation_reports`,
+  `a_window_that_reports_no_presentation_carries_none`, без проверки падает). Граница сетки — 8
+  обновлений (живой отчёт отстаёт на 3–4, измерено на Windows); `a_presentation_report_bounds_the_idle_work_of_a_later_frame`
+  получил случай устаревшего отчёта (с горизонтом 240 падает, как и таблица `presentation_feedback`).
+  `EventTime::now` — одно чтение часов событий. Android — `NotYetOnThisHost`, пути в gaps
+  (запись 23). **Apple — остаток LY91, в сессию Mac после слияния:** свой `CAMetalLayer` хоста
+  (`makeBackingLayer` с переносом display pass в `updateLayer` на AppKit, `layerClass` на UIKit),
+  `nextDrawable` которого вешает `addPresentedHandler:` на выданный drawable. Проверки после
+  исправлений: Windows clippy рабочего пространства, nextest семи крейтов — 674 из 674; clippy
+  macOS, Android, iOS lib; `checks`, `doc-strict`, `wasm-check`, гейты; WSL clippy шести
+  вариантов и крейтов, xvfb 390 из 390, Weston 31 из 31, rustdoc, `api-closure`.
 
 ## Отступление от порядка, решённое владельцем
 

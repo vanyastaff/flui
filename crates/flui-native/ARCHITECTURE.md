@@ -861,7 +861,10 @@ trait depends on `flui-platform` instead.
     window rebases from the compositor's clock (`clock_id`) onto the event
     clock, and the Win32 target rebases the DXGI frame statistics the renderer
     read (`SwapChainStatistics::Dxgi`) from the performance counter, measuring
-    the refresh period between two reads. Either reports into the window's
+    the refresh period between two reports (`frame_timing::PresentTracker`:
+    a read naming the present or refresh already reported is no report, and
+    `SwapChainStatistics::DxgiDisjoint` forgets the last refresh). Either
+    reports into the window's
     `handlers::PresentationReports`, which the `WindowDelivery` keeps and
     `dispatch_frame` empties into the next frame request
     (`FrameRequest::presented`): the newest report wins, a report no later
