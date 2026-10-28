@@ -109,7 +109,26 @@ T3 и T10 не делят файлов и идут параллельно. T9 ж
 - [x] T1 — #1496
 - [x] T6a — #1523, #1539
 - [x] T6b — #1523 (ADR-0178)
-- [ ] T3 — путь записи, остаток
+- [ ] T3 — путь записи, остаток. Ветка `send-flip/write-path`, PR открыт, ждёт CI и слияния.
+  - Сделано: `impl WriteTarget for Reactive` удалён; `BuildContext::reactive` заменён скрытым
+    `graph(CrateToken)`; `BuildOwner::reactive` стал `pub(crate)`, добавлены
+    `BuildOwner::writer_source` и `writer_source_for(slot)`; `HeadlessBinding::reactive` →
+    `writer_source` (с `compile_fail`-doctest на `reactive()`). Граф для тестов — только под
+    фичей `testing` (`BuildOwner::signal_graph`, `BuildContextExt::signal_graph`,
+    `Reactive::writer_source`). 41 вызов `.reactive()` переведён на `writer_source().write(..)`.
+    `UiCommand::SignalWrite` открывает `EventCx` через `WriterSource` presentation, выпустившей
+    слот. `on_remove`, задолженный pop'ом внутри сброса навигатора, уходит в post-frame очередь.
+  - Отклонение от строки задачи: `SignalWrite` несёт `FnMut(&mut EventCx) + Send`, а не
+    `FnOnce` — ADR-0086 (ревизия 2026-09-28) требует удерживать envelope после паники; `FnOnce`
+    уничтожал бы захваты во время раскрутки.
+  - Тесты: `navigator::local_history::local_history_removal_writes_after_the_flush`
+    (`flui-widgets/tests/navigator.rs`; откат — синхронный `on_remove` — даёт
+    `WrittenDuringBuild`), `signal_write_routing::cross_thread_signal_write_opens_the_owner_writer_source`
+    (в `flui-runtime`: `send_signal_write` — `pub(crate)`, из `flui-testing` недоступен; откат —
+    источник первой presentation — даёт чужой граф), таблица `owner_local_write_paths` во
+    `flui-testing` (`nested_writer_source_inside_an_event_cx`, `nested_write_panics_inside_an_event_cx`),
+    trybuild `signal_write_through_build_context` + `ctx.reactive()`, новая
+    `signal_write_through_the_graph`.
 - [ ] T10 — остаток flip
 - [ ] T11 — отказ мутации контроллеров во время `build`
 - [ ] T9 — `TextEditingController`
