@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use super::path::{RouteParseError, RoutePath};
 use super::routable::Routable;
-use super::router::{RouterEntry, RouterRetiredValues, RouterShared};
+use super::router::{RouterEntry, RouterRetiredValues, RouterShared, clone_routes};
 use crate::navigator::RouteId;
 
 /// An owned, cloneable capability to drive the nearest
@@ -229,10 +229,10 @@ impl<R: Routable> RouterHandle<R> {
     /// an application saves to reopen with
     /// [`Router::from_stack`](super::Router::from_stack).
     ///
-    /// Not yet the whole stack: it holds the top route alone.
+    /// Popups are not on it: they belong to the page beneath them.
     #[must_use]
     pub fn stack(&self) -> Vec<R> {
-        vec![self.current()]
+        clone_routes(self.shared.stack.borrow().iter().map(|entry| &entry.route))
     }
 
     /// Whether a [`pop`](Self::pop) would remove a page: more than one page is

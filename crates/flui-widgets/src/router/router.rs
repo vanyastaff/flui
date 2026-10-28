@@ -88,7 +88,7 @@ impl<R: Routable> Drop for Router<R> {
 impl<R: Routable> Clone for Router<R> {
     fn clone(&self) -> Self {
         Self {
-            initial: clone_routes(&self.initial),
+            initial: clone_routes(self.initial.iter()),
             page: Terminal::new(Rc::clone(&self.page)),
             transitions: self.transitions.clone(),
             transition_duration: self.transition_duration,
@@ -96,7 +96,11 @@ impl<R: Routable> Clone for Router<R> {
     }
 }
 
-fn clone_routes<R: Clone>(routes: &[R]) -> Vec<R> {
+/// Clones of `routes`, in order. A clone that panics retires the clones
+/// already made instead of unwind-dropping them.
+pub(super) fn clone_routes<'a, R: Clone + 'a>(
+    routes: impl ExactSizeIterator<Item = &'a R>,
+) -> Vec<R> {
     let mut cloned = RetiredValues(Vec::with_capacity(routes.len()));
     for route in routes {
         cloned.0.push(route.clone());
@@ -153,7 +157,8 @@ impl<R: Routable> Router<R> {
     /// [`RouterHandle::stack`] read when the application last ran, so Back
     /// leads through the same pages it did then.
     ///
-    /// Not yet the whole stack: the router opens on the top route alone.
+    /// Every route becomes a page, bottom to top, without a transition; the
+    /// top is the location the router opens at.
     ///
     /// # Errors
     ///
@@ -163,11 +168,11 @@ impl<R: Routable> Router<R> {
         page: impl Fn(&R, &dyn BuildContext) -> BoxedView + 'static,
     ) -> Result<Self, RouterError> {
         let page: Terminal<PageBuilder<R>> = Terminal::new(Rc::new(page));
-        let mut stack = RetiredValues(stack);
-        let top = stack.0.pop().ok_or(RouterError::EmptyStack)?;
-        drop(stack);
+        if stack.is_empty() {
+            return Err(RouterError::EmptyStack);
+        }
         Ok(Self {
-            initial: vec![top],
+            initial: stack,
             page,
             transitions: None,
             transition_duration: None,
@@ -254,7 +259,7 @@ impl<R: Routable> StatefulView for Router<R> {
         RouterState {
             shared: Terminal::new(shared),
             observer: Terminal::new(observer),
-            initial: clone_routes(&self.initial),
+            initial: clone_routes(self.initial.iter()),
         }
     }
 }
