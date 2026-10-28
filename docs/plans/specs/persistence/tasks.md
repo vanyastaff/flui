@@ -59,7 +59,7 @@ graph LR
   `acceptance_app_walks_home_note_settings_and_back`, `acceptance_app_saves_an_edited_title`,
   `acceptance_app_retries_a_failed_load`; пускач `examples/acceptance_app.rs` (`-- note-build`,
   `save-pressed`, `note-dispose`). Откат `pop`, записи заголовка и `wrapping_add` роняет каждую
-  из трёх строк. Хранилище — `lay_out_with_storage` (до LY52).
+  из трёх строк. Хранилище — `lay_out_with_storage` (до LY52) (#1952).
 
 ## Сделано в части
 
