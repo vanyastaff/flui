@@ -167,11 +167,14 @@ trait depends on `flui-platform` instead.
   `owner::panic_boundary` the containment a panic meets before it reaches the
   operating system (`os_entry`, the one boundary of every OS entry, below),
   `owner::call_point` the one point where the
-  platform calls a handler, `owner::handlers` the application's handler set
-  and a window's callbacks, `owner::notices` the trait a loop pushes system
-  notices through (`NoticeChannel`, which the lifecycle feature implements; a
-  wake marks the display and window caches that registered `StaleOnWake`
-  first) and the lifecycle hooks a loop keeps (`LifecycleHooks`),
+  platform calls a handler, `owner::app_delivery` what a loop delivers to the
+  application's handler, `owner::window_delivery` what a window delivers to
+  its own, `owner::handlers` what a loop asks of the windows it holds,
+  `owner::notices` the trait a loop pushes system notices through
+  (`NoticeChannel`, which the lifecycle feature implements over the loop's
+  delivery; a wake marks the display and window caches that registered
+  `StaleOnWake` first) and the release of a held session end a loop answers
+  (`LifecycleHooks`),
   `owner::sources` what a loop keeps of a feature's source
   (`SystemPreferenceSource`), and `owner::watch` an observation a feature
   started for a loop. `owner` is a `base` of
@@ -335,7 +338,7 @@ trait depends on `flui-platform` instead.
     `DefWindowProc` move and size loops deliver through a `ModalFrames` of
     their own, at the owner's modal pace (`owner::modal_pace`). Tests:
     `ole_drag_and_drop_on_real_windows`,
-    `a_replaced_wake_hook_gets_its_modal_frame`,
+    `a_due_deadline_gets_one_modal_frame_per_generation`,
     `every_owner_hook_hears_the_window_go_after_one_panics`.
 
   On Android the table implements `owner::android::AndroidHost`, which makes
@@ -559,9 +562,8 @@ trait depends on `flui-platform` instead.
     `owner::notices::LifecycleHooks`, and one generic impl in
     `lifecycle/mod.rs` makes them the position; the Windows and web loops
     answer their own. winit on Windows and macOS hears no session end or
-    notice, so its lifecycle is `Absent<Lifecycle>`, and each registration is
-    dropped as it is made
-    (`winit_lifecycle_registrations_drop_their_captures_without_a_source`).
+    notice, so its lifecycle is `Absent<Lifecycle>`: its application handler
+    is never asked about either.
   - What the Activity's callbacks mean is the lifecycle feature's
     (`lifecycle::android`, with the trim level it reads), behind the looper's
     `ActivityCallbacks` hook; the looper keeps their vocabulary
@@ -701,28 +703,57 @@ trait depends on `flui-platform` instead.
   `web::pinch`, `web::wheel`) are `pub(crate)` and tested beside them.
 - **The platform calls a handler at one point, with no lock or borrow held
   (ADR-0151 §10).** `owner::call_point::call` takes the handler out of its
-  `HandlerSlot` (a field of a host's state mutex or `RefCell`, a window's
-  `Mutex<Option<_>>`, the input callback's owner slot) under the slot's own
-  lock or borrow, releases it, runs the handler in a panic boundary and puts it
-  back unless one was installed meanwhile: the newer one stays and the one that
-  ran is retired once the lock is released. A slot can refuse the handler back
-  (a window that cleared, a loop that stopped accepting work), and a one-shot
-  call (`Once`: the quit handler) retires it. `install` replaces a handler and
-  `retire` drops any other user-owned value the same way, so a capture's
-  destructor may call the platform. A handler's panic is the call's `Failure`:
-  the caller resumes it where a Rust frame waits (headless, winit, a window's
-  FIFO) or contains it where the operating system called (Win32's exit policy
-  and session end, AppKit, UIKit); a handler displaced during a failed call is
-  retained, never dropped into a second failure (ADR-0127 §2). A shared hook
-  (the wake deadline, an `Arc`) is called as a clone and stays installed while
-  it runs. `PlatformHandlers` and `WindowDelivery` call only through it, and
-  so does the system-notice channel. Tests: `owner::call_point::tests`; the
-  public-API tables in `tests/handler_reentry.rs` (headless, Win32 and winit,
-  each case on a worker thread so that a regression fails as a deadlock instead
-  of hanging), `winit_handlers_run_outside_the_state_lock`,
-  `native_host_events`' `a_hook_that_replaced_itself_and_failed_is_retained`
-  and `web_session_end_hook_reenters_the_platform`. Android and the Apple hosts
+  `HandlerSlot` (the application's or a window's handler in an owner slot, a
+  field of a host's state mutex or `RefCell` for the callbacks a host still
+  keeps) under the slot's own lock or borrow, releases it, runs the handler in
+  a panic boundary and puts it back unless one was installed meanwhile: the
+  newer one stays and the one that ran is retired once the lock is released. A
+  slot can refuse the handler back (a window that cleared, a loop that stopped
+  accepting work). The application's and a window's handler are `Rc`s called
+  as a clone, so they stay installed while a method runs and may be called
+  again from inside it. `install` replaces a handler and `retire` drops any
+  other user-owned value the same way, so a capture's destructor may call the
+  platform. A handler's panic is the call's `Failure`: the caller resumes it
+  where a Rust frame waits (headless, winit, a window's FIFO) or contains it
+  where the operating system called (Win32's exit policy and session end,
+  AppKit, UIKit); a handler displaced during a failed call is retained, never
+  dropped into a second failure (ADR-0127 §2). `AppDelivery` and
+  `WindowDelivery` call only through it. Tests: `owner::call_point::tests`;
+  the public-API tables in `tests/handler_reentry.rs` (headless, Win32 and
+  winit, each case on a worker thread so that a regression fails as a deadlock
+  instead of hanging), `winit_exit_policy_runs_outside_the_state_lock` and
+  `web_session_end_handler_reenters_the_platform`. Android and the Apple hosts
   run the same call point and are type-checked only.
+- **The application's handler is passed to `run` (ADR-0254 §4).**
+  `AppHandler` (in `platform.rs`) has one method per obligation and no
+  default: `ready(OwnerPlatform)`, `quit_requested`, `reopen`, `session_end`,
+  `host_notice`, `exit_policy` and `wake_deadline`, each borrowing the owner
+  capability. Every loop keeps one `owner::app_delivery::AppDelivery`, which
+  its sources report to from construction on: `run` binds the handler on the
+  owner thread in an owner slot, with the platform and the owner hooks held
+  weakly (the platform owns the loop that owns the delivery), and each call
+  mints the capability it borrows. A report (quit, reopen, notice) goes
+  through one FIFO: accepted before the handler is bound, while `ready` or
+  another method runs, or on another thread, it waits and is delivered in
+  order on the owner thread (an owner turn of the loop's signal for a report
+  from another thread); the quit is heard once per run. A question (session
+  end, exit policy, wake deadline) is asked at once, re-entrantly if need be,
+  and a report it raises is delivered right after its answer; with no handler
+  bound the host answers it itself (proceed, its own exit default, no
+  deadline), and so it does for an exit the handler leaves to it
+  (`ExitAnswer::HostDecides`). A panicking method is contained, the tail behind
+  it still delivered, the first panic returned. The loop releases the handler
+  when its run ends; a release made while a delivery runs (the web page and the
+  Android Activity end from inside a method) waits for that delivery, so the
+  quit it queued is heard first. One released while an unwind is under way is
+  retained, never left in the owner thread's table to be dropped when the
+  thread exits. The handlers tests run a platform with are
+  `testing::app` (the `testing` feature). The
+  lifecycle position keeps only the release of a held session end and the
+  activation; the keyboard layout callback stays a registration until nothing
+  above the host reads it. Tests: `owner::app_delivery::tests::app_delivery_contracts`,
+  `tests/app_handler.rs::app_handler_obligation_table` and the application
+  rows of `tests/handler_reentry.rs`.
 - **The OS enters the crate through one boundary (ADR-0151 §16).** An entry is
   code the operating system calls, or a library from inside its own entry: a
   function with a foreign ABI (a window procedure, an enumeration callback, a
@@ -1565,7 +1596,7 @@ OS getters or external-setting notifications.
 Linux winit owners use one Settings portal connection on the existing background
 executor. Setting and service-owner subscriptions precede the initial read;
 the accepted snapshot is committed before waking the owner. Initial bootstrap
-waits at most 500ms before `on_ready`; unavailable or stalled observations stay
+waits at most 500ms before the bootstrap (`AppHandler::ready`); unavailable or stalled observations stay
 unknown and can recover later. No D-Bus call runs in the frame path. Successful
 unsigned `org.freedesktop.appearance/reduced-motion` values map 1 to Reduce and
 other values to NoPreference. A missing key permits the GNOME
@@ -1716,34 +1747,34 @@ not wait on this private event; fallback delivery resumes when FLUI regains its 
 
 ### Native Win32 delivers admitted idle deadlines through live window paints
 
-The owner loop keeps admitted deadline delivery separate from the next hook
-query. When due, it invalidates each still-current window before a new query can
-abandon a late deadline. A finite message wait rounds upwards, reserves the
-infinite timeout sentinel, and drains input and quit messages without parking
-again after readiness. Hook replacement is checked by allocation identity;
-observing no deadline permits later admission of the same absolute instant.
-The count of the frames the handlers produced at delivery is the delivery
-generation: the same instant from the same hook re-arms after every frame
+The owner loop keeps admitted deadline delivery separate from the next question
+to the application's handler. When due, it invalidates each still-current
+window before a new question can abandon a late deadline. A finite message wait
+rounds upwards, reserves the infinite timeout sentinel, and drains input and
+quit messages without parking again after readiness. A run has one handler, so
+the instant alone names an answer; observing no deadline permits later
+admission of the same absolute instant. The count of the frames the handlers
+produced at delivery is the delivery generation: the same instant re-arms
+after every frame
 produced since its delivery (`FrameOutcome::Produced`, or a `frame_requested`
 that panicked), and never when none was. A frame request no handler runs a
 frame for (no window, a window that has let go of its handler, or a handler
 that answers `FrameOutcome::Declined`, visible or hidden) is not counted, so
 a delivery that reaches no frame cannot spin.
-Queries and outgoing capture retirement run outside handler borrows. Incoming
-unwind retains the queried hook before hostile captures can replace the first
-failure; healthy aggregate destruction retains its ordinary Rust limitations.
+Questions run outside every borrow. A handler whose answer unwinds out of the
+loop is retained, never dropped into the unwind, so hostile captures cannot
+replace the first failure.
 
 The bounded native rows `deadline_rearms_independent_windows_without_input`,
-`deadline_hook_replacement_rearms_without_input`,
 `deadline_query_can_close_an_independent_window`,
 `deadline_none_allows_same_instant_readmission`,
 `deadline_queued_three_times_at_one_instant_gets_three_frames`,
 `deadline_no_frame_can_service_does_not_spin`,
 `deadline_window_declining_its_frames_does_not_spin`,
 `deadline_hidden_window_declining_its_frames_does_not_spin`, and
-`deadline_query_unwind_retains_replaced_hostile_captures` belong to
+`deadline_query_unwind_retains_hostile_captures` belong to
 `test_window_lifecycle_contract`. They exercise the native wait and paint
-producer, cancellation, replacement, independent windows and recovery. They do
+producer, cancellation, independent windows and recovery. They do
 not establish GPU presentation, UIA timing or other platform backends.
 
 ### Windows identity admission precedes native window acquisition
@@ -1805,10 +1836,10 @@ one for Win32 makes that safe without changing a signature.
 
 - **Storage.** A window's handler lives in its `WindowDelivery`, an
   owner-thread slot the window shares with its `WindowContext`; it is set
-  when the window opens, never registered later; the platform-level handlers (`on_quit`,
-  `on_keyboard_layout_change`) live as `Rc<RefCell<PlatformHandlers>>` in the
-  `OwnerControlContext` of the owner message window, shared by every window
-  context; the owner-turn callback lives in that context's `OwnerTurnSlot`.
+  when the window opens, never registered later; what the application gave the
+  loop (its handler's `AppDelivery` and the keyboard layout callback) lives as
+  `Rc<RefCell<AppHooks>>` in the `OwnerControlContext` of the owner message
+  window, shared by every window context; the owner-turn callback lives in that context's `OwnerTurnSlot`.
   Both contexts sit behind `GWLP_USERDATA`, are reached only through the
   owner-thread gates (`with_window_context_checked`, `OwnerControl::shares`),
   and are freed by `WM_DESTROY` / `WM_NCDESTROY` on the owner thread. A
@@ -1827,10 +1858,11 @@ one for Win32 makes that safe without changing a signature.
   out of its slot, run with no borrow held, and put back only if the slot is
   still empty. A handler registered while it ran — including by itself — wins,
   the rule `OwnerSignal::drive` already follows.
-- **Quit order.** The run's teardown keeps a handle to the handler set while
-  the owner context exists, destroys the owner window, runs the quit callback
-  once (its panic contained), then retires the handler set: the other handlers
-  drop contained, or stay alive when the teardown runs during an unwind.
+- **Quit order.** The run's teardown destroys the owner window, tells the
+  application's handler it quits (once, its panic contained), then releases
+  the handler: it drops contained, or stays alive when the teardown runs
+  during an unwind. The owner hooks the delivery holds weakly are declared
+  before the teardown guard, so they outlive it.
 
 The other backends still store `Send` callbacks behind locks until their own
 steps.
@@ -1873,7 +1905,8 @@ The owned application delegate implements
 [`applicationShouldHandleReopen:hasVisibleWindows:`](https://developer.apple.com/documentation/appkit/nsapplicationdelegate/applicationshouldhandlereopen(_:hasvisiblewindows:)).
 It always returns false: FLUI owns window policy and does not ask AppKit to create
 an untitled document. Both visible-window flag values deliver the same existing
-`on_reopen` signal. Apple's flag counts miniaturized windows as visible; it is
+reopen, which the application's handler hears (`AppHandler::reopen`). Apple's flag
+counts miniaturized windows as visible; it is
 not a substitute for presentation visibility or frame eligibility.
 
 The Objective-C method only records a signal and schedules weak loop control.
@@ -1900,23 +1933,20 @@ bundle and required callback and normal return in the original PID. That run
 covered the platform signal, not a rendered resident application or a framework
 root-window creation API. It needs a macOS host with an active GUI session.
 
-### Headless explicit quit consumes its callback outside platform state
+### Headless explicit quit reaches the handler outside platform state
 
 `HeadlessLoop::quit` uses the same discipline as its window close and
-exit-policy re-evaluation paths: it marks the loop stopped, then calls the
-current quit callback once through the call point (`Once`), which takes it out
-under the state lock and invokes and drops it after the lock is released. Recursive or repeated quit does not re-invoke that
-registration. This is consumption of the existing callback slot, not a new
-process-wide latch; registering a later callback still replaces the slot.
-Callback panics propagate to the Rust caller after releasing state, and the
-consumed callback is not restored. Tests exercise the actual `Platform::quit`
-seam with a reentrant getter/quit, a captured-data drop sentinel, and an original
-panic payload. Their first nonblocking lock assertion makes a regression fail
-immediately instead of hanging while trying to re-enter the same mutex.
+exit-policy re-evaluation paths: it marks the loop stopped, then reports the
+quit to the application's handler with the state lock released. The delivery
+hears the quit once per run, so a recursive or repeated quit does not reach
+the handler again. A handler's panic propagates to the Rust caller after the
+state is released. `explicit_quit_reenters_and_reaches_the_handler_outside_the_state_lock`
+re-enters the quit from inside the handler and checks the lock was free; its
+nonblocking lock read makes a regression fail instead of hanging.
 
 ### Standalone AppKit stops its loop and returns through Rust cleanup
 
-The existing `Platform` exit-policy hook remains the boundary: `flui-app`
+The application handler's exit policy remains the boundary: `flui-app`
 owns UI runtime/service policy; `flui-native` owns window bookkeeping and native
 loop actuation. AppKit now implements both policy installation and coalesced,
 any-thread re-evaluation. Close callbacks finish before the deferred owner turn
@@ -1991,15 +2021,15 @@ built.
 
 The notice sources (`NSWorkspace` sleep and wake, the distributed screen lock
 notifications, the memory-pressure dispatch source) start in `run`, after the
-application has installed its hooks, and only forward to `SystemNotices`; a wake
+application's bootstrap, and only forward to `SystemNotices`; a wake
 marks the displays and every window's state stale first. The distributed centre
 is asked to deliver while the application is inactive, and is put back when the
 sources drop. The memory-pressure source's handler holds the source and
 `Drop` cancels it, which ends that cycle.
 
 A session end is two events. `NSWorkspaceWillPowerOffNotification` asks the
-session-end hook and `TerminateGate` remembers the answer; the terminate request
-that follows is answered `NSTerminateNow` (after the hook hears `Ending`), or
+application's handler and `TerminateGate` remembers the answer; the terminate request
+that follows is answered `NSTerminateNow` (after the handler hears `Ending`), or
 `NSTerminateLater` while the application holds the session end, with the reply
 sent when it releases its blocks or after four seconds. The release reaches the
 gate as a task of its own on the main queue, never from the stack that dropped
@@ -2007,22 +2037,22 @@ the block. AppKit says nothing when the user calls a log out off, so an
 announcement no terminate request follows within ten seconds is reported
 `Cancelled`; a Cmd-Q inside those ten seconds is taken for the session end,
 which the live checks record. A terminate request with no announcement is an
-ordinary quit. The quit callback is not run for a session end: the process ends
-with the session, and the application was told what to save.
+ordinary quit. The application's quit is not reported for a session end: the
+process ends with the session, and the application was told what to save.
 
 ### Win32 decides the exit policy on an owner-window turn
 
 A `WM_DESTROY` that leaves the platform tracking no top-level window does not
-consult the exit-policy hook itself: it posts one coalesced message to the
-owner message-only window, and `request_exit_policy_reevaluation` posts the
-same message from any thread (refused once the owner window is closed). The
-owner procedure then checks that no window is tracked and no quit is under way,
-calls the hook through the call point with no borrow of the handler set held,
-restores it unless a newer hook replaced it, and checks the window count again,
-since the hook may have opened a replacement window. A hook that panics is
-contained as a veto, and a hook it displaced is retained. An allowed exit ends the loop the way
-`quit` does. No hook allows the exit, as on winit. Deferring the decision keeps
-the hook, which re-enters the embedder, out of a `WM_DESTROY` nested inside
+ask the exit policy itself: it posts one coalesced message to the owner
+message-only window, and `request_exit_policy_reevaluation` posts the same
+message from any thread (refused once the owner window is closed). The owner
+procedure then checks that no window is tracked and no quit is under way, asks
+the application's handler through the call point with no borrow held, and
+checks the window count again, since the handler may have opened a replacement
+window. A handler that panics is contained as a veto. An allowed exit ends the
+loop the way `quit` does. A run with no handler bound allows the exit, as on
+winit. Deferring the decision keeps the handler, which re-enters the embedder,
+out of a `WM_DESTROY` nested inside
 embedder code that closed the window. The native rows in `tests/contract.rs`
 (`closing_the_last_window_ends_the_loop`,
 `exit_policy_veto_holds_until_a_reevaluation_allows_exit`,
@@ -2770,7 +2800,7 @@ bounded fallback (one second from that outcome, not from install, so a slow
 cold frame still inside its render arms nothing) after which the window is
 revealed regardless — a surface that never presents yields a window the user
 can see and close rather than a process with no window. The fallback deadline
-joins the desktop wake-deadline hook and the frame closure's dirty predicate
+joins the desktop wake-deadline route and the frame closure's dirty predicate
 like every other wake-deadline source there.
 
 The winit backend reveals at open, unchanged: whether a hidden X11 or Win32
@@ -2851,10 +2881,9 @@ move and wheel events.
 
 Platform window-event handlers are called through the call point outside the
 state mutex and restored unless the callback installed a replacement. Setter
-retirement also occurs outside the mutex. Quit commits stopped state and consumes
-its callback in a one-shot call, so reentry cannot invoke the same quit callback
-again. A failed displaced callback is retained rather than destroyed while
-propagating its first failure.
+retirement also occurs outside the mutex. Quit commits stopped state and
+reports the quit to the application's handler, which hears it once, so reentry
+cannot report it again; the handler is released after.
 Source inspection and type checking do not prove browser execution
 or arbitrary aggregate destructor containment.
 
@@ -3995,10 +4024,8 @@ host listens is not announced later. The session ends once per start-to-stop
 cycle, by whichever of `Stop` and `SaveState` comes first (the order differs
 below and above API 28; a Back that finishes the Activity never saves state),
 so the notice repeats on every trip to the background and asks for saving. The
-session-end hook is called through the call point: out of its slot while it
-runs, and put back even when it panics.
+application's handler is asked through the call point, and stays bound when it
+panics.
 
-**Verified by:** `android_lifecycle_mapping*` and the call point's
-`a_panicking_handler_keeps_its_place_and_its_payload` and
-`a_handler_installed_during_a_call_replaces_the_one_that_ran` on the host; the
-`MainEvent` match and the JNI read run only on a device.
+**Verified by:** `android_lifecycle_mapping*` and `app_delivery_contracts` on
+the host; the `MainEvent` match and the JNI read run only on a device.

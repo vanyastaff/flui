@@ -787,19 +787,15 @@ impl MockWindow {
     }
 
     /// Removes this window from the platform's own tracking and, only once
-    /// every window this platform knows about is gone, consults the
-    /// exit-policy hook (see
-    /// [`crate::owner::handlers::PlatformHandlers::exit_policy`]) exactly as
-    /// the winit backend's `CloseRequested` handling does. A caller that never
-    /// installed a hook sees no behavior change: this is a no-op unless
-    /// [`crate::Platform::set_exit_policy_hook`] was called first, matching
-    /// every other headless test/consumer that predates this mechanism.
+    /// every window this platform knows about is gone, asks the application's
+    /// handler ([`crate::AppHandler::exit_policy`]) exactly as the winit
+    /// backend's `CloseRequested` handling does; with no handler bound the
+    /// platform keeps running.
     ///
-    /// Every application handler (the hook and `on_quit`) runs through the
-    /// call point with the state lock released (ADR-0039): the hook's body
-    /// (`flui-app`'s `AppRuntime::should_exit`) drops removed UI runtime
-    /// state, whose destructors may call back into this platform (a dispose
-    /// hook opening another window, say).
+    /// The handler is asked, and told of the quit, with the state lock
+    /// released (ADR-0039): its body (`flui-app`'s `AppRuntime::should_exit`)
+    /// drops removed UI runtime state, whose destructors may call back into
+    /// this platform (a dispose hook opening another window, say).
     fn notify_closed(&self) {
         let Some(platform_state) = self.platform_state.upgrade() else {
             return;

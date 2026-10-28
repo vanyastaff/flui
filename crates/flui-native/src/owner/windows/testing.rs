@@ -28,6 +28,7 @@ use super::{
     WindowRef, WindowTexts, WindowsHost,
 };
 use crate::error::PlatformError;
+use crate::owner::app_delivery::AppDelivery;
 use crate::owner::handlers::OpenWindows;
 use crate::owner::notices::testing::NoNotices;
 use crate::owner::notices::{NoticeChannel, StaleOnWake};
@@ -67,7 +68,7 @@ impl<C: ClassHooks> WindowsHost for QuietHost<C> {
         Ok(Rc::new(NoPreferences))
     }
 
-    fn notices() -> Arc<dyn NoticeChannel> {
+    fn notices(_: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {
         Arc::new(NoNotices)
     }
 

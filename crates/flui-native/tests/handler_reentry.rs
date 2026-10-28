@@ -1,9 +1,9 @@
 //! The platform calls the application's and a window's handlers with none of
-//! its locks or borrows held, on every host: a handler may install another,
-//! quit or open a window from inside its call; a replaced handler's captures,
-//! whose destructor calls the platform, are dropped after the platform let go
-//! of its state; and a handler's panic stays the first failure, its displaced
-//! captures retained rather than dropped into a second one.
+//! its locks or borrows held, on every host: a handler may quit, open a window
+//! or report to the platform from inside its call; a window's handler, whose
+//! captures call the platform when dropped, is dropped after the platform let
+//! go of its state; and a handler's panic stays the first failure, with what
+//! was accepted behind it still delivered.
 //!
 //! A case that regresses deadlocks rather than fails, so each one runs on a
 //! worker thread and is reported after [`TIMEOUT`]: the worker stays parked
@@ -14,18 +14,19 @@ use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::rc::{Rc, Weak as RcWeak};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{RecvTimeoutError, channel};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use flui_native::{HeadlessPlatform, HostWindow, Platform};
+use flui_native::{HeadlessPlatform, HostWindow, OwnerPlatform, Platform};
 use flui_platform::{
     CloseDecision, DispatchEventResult, SessionEndAnswer, SessionEndPhase, SystemNotice,
     WindowCommand, WindowOptions,
 };
-use parking_lot::Mutex;
+
+use crate::app::{AppCall, AppLog, run_keeping_owner};
 
 /// How long a case may take before it counts as deadlocked.
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -52,15 +53,11 @@ fn within(case: &'static str, body: impl FnOnce() + Send + 'static) {
 
 /// Runs its action when dropped: a capture whose destructor calls back into
 /// the platform, as a UI runtime's state does.
-struct OnDrop(Option<Box<dyn FnOnce() + Send + Sync>>);
+struct OnDrop(Option<Box<dyn FnOnce()>>);
 
 impl OnDrop {
-    fn new(action: impl FnOnce() + Send + Sync + 'static) -> Self {
+    fn new(action: impl FnOnce() + 'static) -> Self {
         Self(Some(Box::new(action)))
-    }
-
-    fn inert() -> Self {
-        Self(None)
     }
 }
 
@@ -72,88 +69,90 @@ impl Drop for OnDrop {
     }
 }
 
-/// Records whether the capture it sits in was dropped.
-struct Witness(Arc<AtomicBool>);
-
-impl Drop for Witness {
-    fn drop(&mut self) {
-        self.0.store(true, Ordering::SeqCst);
-    }
-}
-
 fn payload_text(payload: &(dyn Any + Send)) -> Option<&str> {
     flui_foundation::panic::payload_text(payload)
 }
 
-// --- application handlers -------------------------------------------------
+/// What a re-entering handler reaches: a platform before it runs, or the
+/// owner capability of one that runs.
+trait Reach {
+    /// Open a window delivering to `handler`.
+    fn open(
+        &self,
+        options: WindowOptions,
+        handler: Rc<RecordingWindowHandler>,
+    ) -> Arc<dyn HostWindow>;
 
-/// Installs an application handler of one kind, its closure holding `capture`.
-type InstallHandler = fn(&dyn Platform, OnDrop);
+    /// Quit the platform.
+    fn quit(&self);
 
-/// Every application handler a platform takes.
-const APPLICATION_HANDLERS: &[(&str, InstallHandler)] = &[
-    ("on_quit", |platform, capture| {
-        platform.on_quit(Box::new(move || {
-            let _ = &capture;
-        }));
-    }),
-    ("set_exit_policy_hook", |platform, capture| {
-        platform.set_exit_policy_hook(Box::new(move || {
-            let _ = &capture;
-            false
-        }));
-    }),
-    ("set_wake_deadline_hook", |platform, capture| {
-        platform.set_wake_deadline_hook(Box::new(move || {
-            let _ = &capture;
-            None
-        }));
-    }),
-    ("on_session_end", |platform, capture| {
-        platform.on_session_end(Box::new(move |_| {
-            let _ = &capture;
-            SessionEndAnswer::Proceed
-        }));
-    }),
-    ("on_keyboard_layout_change", |platform, capture| {
-        platform.on_keyboard_layout_change(Box::new(move || {
-            let _ = &capture;
-        }));
-    }),
-    ("on_reopen", |platform, capture| {
-        platform.on_reopen(Box::new(move || {
-            let _ = &capture;
-        }));
-    }),
-    ("on_host_notice", |platform, capture| {
-        platform.on_host_notice(Box::new(move |_| {
-            let _ = &capture;
-        }));
-    }),
-];
+    /// A call that takes the platform's state.
+    fn touch(&self);
+}
 
-/// For each kind of application handler: a handler whose captures call the
-/// platform when dropped is replaced, and its destructor reaches the platform.
-fn replaced_application_handlers_reach_the_platform(platform: &Arc<dyn Platform>) {
-    for &(name, install) in APPLICATION_HANDLERS {
-        let reached = Arc::new(AtomicBool::new(false));
-        let observed = Arc::clone(&reached);
-        let weak: Weak<dyn Platform> = Arc::downgrade(platform);
-        install(
-            platform.as_ref(),
-            OnDrop::new(move || {
-                if let Some(platform) = weak.upgrade() {
-                    let _ = platform.active_window();
-                    observed.store(true, Ordering::SeqCst);
-                }
-            }),
-        );
-        install(platform.as_ref(), OnDrop::inert());
-        assert!(
-            reached.load(Ordering::SeqCst),
-            "{name}: the replaced handler's destructor did not reach the platform"
-        );
+impl Reach for Arc<dyn Platform> {
+    fn open(
+        &self,
+        options: WindowOptions,
+        handler: Rc<RecordingWindowHandler>,
+    ) -> Arc<dyn HostWindow> {
+        self.open_window(options, handler).expect("a window opens")
     }
+
+    fn quit(&self) {
+        Platform::quit(&**self);
+    }
+
+    fn touch(&self) {
+        let _ = self.active_window();
+    }
+}
+
+impl Reach for OwnerPlatform {
+    fn open(
+        &self,
+        options: WindowOptions,
+        handler: Rc<RecordingWindowHandler>,
+    ) -> Arc<dyn HostWindow> {
+        self.open_window(options, handler)
+            .expect("a window opens")
+            .try_ready()
+            .expect("the window opens at once")
+    }
+
+    fn quit(&self) {
+        OwnerPlatform::quit(self);
+    }
+
+    fn touch(&self) {
+        let _ = self.active_window();
+    }
+}
+
+/// The keyboard layout callback, the one application-level registration left:
+/// a replaced callback whose captures call the platform when dropped reaches
+/// the platform from its destructor.
+fn a_replaced_keyboard_layout_callback_reaches_the_platform(platform: &Arc<dyn Platform>) {
+    /// Reaches the platform when dropped.
+    struct CallsBack(Weak<dyn Platform>, Arc<AtomicBool>);
+    impl Drop for CallsBack {
+        fn drop(&mut self) {
+            if let Some(platform) = self.0.upgrade() {
+                let _ = platform.active_window();
+                self.1.store(true, Ordering::SeqCst);
+            }
+        }
+    }
+    let reached = Arc::new(AtomicBool::new(false));
+    let capture = CallsBack(Arc::downgrade(platform), Arc::clone(&reached));
+    platform.on_keyboard_layout_change(Box::new(move || {
+        let _ = &capture;
+    }));
+    platform.on_keyboard_layout_change(Box::new(|| {}));
+    assert!(
+        reached.load(Ordering::SeqCst),
+        "the replaced callback's destructor did not reach the platform"
+    );
 }
 
 // --- window handlers ------------------------------------------------------
@@ -162,7 +161,7 @@ fn replaced_application_handlers_reach_the_platform(platform: &Arc<dyn Platform>
 /// window, changes its own and quits, each reaching the platform while the
 /// method runs.
 struct Reentry {
-    platform: Weak<dyn Platform>,
+    platform: RcWeak<dyn Reach>,
     window: RefCell<Weak<dyn HostWindow>>,
     options: fn() -> WindowOptions,
     /// The windows opened from inside a method, kept open by the test.
@@ -172,9 +171,9 @@ struct Reentry {
 }
 
 impl Reentry {
-    fn new(platform: &Arc<dyn Platform>, options: fn() -> WindowOptions) -> Rc<Self> {
+    fn new(platform: &Rc<dyn Reach>, options: fn() -> WindowOptions) -> Rc<Self> {
         Rc::new(Self {
-            platform: Arc::downgrade(platform),
+            platform: Rc::downgrade(platform),
             window: RefCell::new(Weak::<flui_native::MockWindow>::new()),
             options,
             opened: RefCell::new(Vec::new()),
@@ -188,9 +187,7 @@ impl Reentry {
             return;
         }
         let platform = self.platform.upgrade().expect("the platform");
-        let window = platform
-            .open_window((self.options)(), RecordingWindowHandler::new())
-            .expect("a window opens from inside a handler method");
+        let window = platform.open((self.options)(), RecordingWindowHandler::new());
         self.opened.borrow_mut().push(window);
         let own = self.window.borrow().upgrade();
         if let Some(own) = own {
@@ -241,11 +238,11 @@ type Trigger = dyn Fn(&Arc<dyn HostWindow>, &dyn Fn() -> bool) -> bool;
 
 /// Opens a window delivering to a handler whose `method` re-enters, makes the
 /// window call that method with `trigger`, and checks every re-entry reached
-/// the platform: a window was opened and, where the host reports its quit to
-/// `quits`, the platform quit.
+/// the platform: a window was opened and, where the application's handler
+/// hears the quit (`quits`), the platform quit.
 fn a_handler_method_reenters(
-    platform: &Arc<dyn Platform>,
-    quits: Option<&AtomicUsize>,
+    platform: &Rc<dyn Reach>,
+    quits: Option<&dyn Fn() -> usize>,
     options: fn() -> WindowOptions,
     method: Method,
     trigger: &Trigger,
@@ -253,11 +250,9 @@ fn a_handler_method_reenters(
     let reentry = Reentry::new(platform, options);
     let handler = RecordingWindowHandler::new();
     reentry.install(&handler, method);
-    let window = platform
-        .open_window(options(), handler)
-        .expect("a window opens");
+    let window = platform.open(options(), handler);
     *reentry.window.borrow_mut() = Arc::downgrade(&window);
-    let before = quits.map(|quits| quits.load(Ordering::SeqCst));
+    let before = quits.map(|quits| quits());
     let probe = Rc::clone(&reentry);
     assert!(
         trigger(&window, &move || probe.done.get()),
@@ -270,9 +265,9 @@ fn a_handler_method_reenters(
     );
     if let (Some(quits), Some(before)) = (quits, before) {
         assert_eq!(
-            quits.load(Ordering::SeqCst),
+            quits(),
             before + 1,
-            "{method:?}: the quit reached the platform"
+            "{method:?}: the quit reached the application's handler"
         );
     }
     for opened in reentry.opened.take() {
@@ -285,29 +280,27 @@ fn a_handler_method_reenters(
 /// whose destructor calls the platform, are dropped with none of the
 /// platform's locks held.
 fn a_handler_dropped_at_close_reaches_the_platform(
-    platform: &Arc<dyn Platform>,
+    platform: &Rc<dyn Reach>,
     options: fn() -> WindowOptions,
     settle: &dyn Fn(&dyn Fn() -> bool) -> bool,
 ) {
-    let reached = Arc::new(AtomicBool::new(false));
-    let observed = Arc::clone(&reached);
-    let weak = Arc::downgrade(platform);
+    let reached = Rc::new(Cell::new(false));
+    let observed = Rc::clone(&reached);
+    let weak = Rc::downgrade(platform);
     let calls_back = OnDrop::new(move || {
         if let Some(platform) = weak.upgrade() {
-            let _ = platform.active_window();
-            observed.store(true, Ordering::SeqCst);
+            platform.touch();
+            observed.set(true);
         }
     });
     let handler = RecordingWindowHandler::new();
     handler.react_to_frame(move |_| {
         let _ = &calls_back;
     });
-    let window = platform
-        .open_window(options(), handler)
-        .expect("a window opens");
+    let window = platform.open(options(), handler);
     window.close_now();
     assert!(
-        settle(&|| reached.load(Ordering::SeqCst)),
+        settle(&|| reached.get()),
         "the handler's destructor did not reach the platform"
     );
 }
@@ -320,7 +313,7 @@ type Raise = dyn Fn(&Arc<dyn HostWindow>);
 /// asked inside `input`: the window stays open until `input` returns, then
 /// the handler is asked once, and its `Close` closes the window.
 fn a_close_request_raised_inside_input_waits_for_it(
-    platform: &Arc<dyn Platform>,
+    platform: &Rc<dyn Reach>,
     options: fn() -> WindowOptions,
     send_input: &Raise,
     raise_close: Rc<Raise>,
@@ -358,9 +351,7 @@ fn a_close_request_raised_inside_input_waits_for_it(
         let closed = Rc::clone(&closed);
         handler.react_to_close(move || closed.set(true));
     }
-    let window = platform
-        .open_window(options(), handler.clone())
-        .expect("a window opens");
+    let window = platform.open(options(), handler.clone());
     *own.borrow_mut() = Arc::downgrade(&window);
     send_input(&window);
     assert!(
@@ -377,31 +368,25 @@ fn a_close_request_raised_inside_input_waits_for_it(
 
 // --- headless -------------------------------------------------------------
 
-fn headless() -> Arc<HeadlessPlatform> {
-    Arc::new(HeadlessPlatform::new())
+/// A running headless platform, its handler's log and its owner capability.
+fn running_headless() -> (Rc<AppLog>, Rc<OwnerPlatform>) {
+    let log = AppLog::new();
+    let owner = run_keeping_owner(Box::new(HeadlessPlatform::new()), &log);
+    (log, Rc::new(owner))
+}
+
+fn mock(window: &Arc<dyn HostWindow>) -> flui_native::MockWindow {
+    window
+        .as_any()
+        .downcast_ref::<flui_native::MockWindow>()
+        .expect("a headless window")
+        .clone()
 }
 
 /// Each method of a window's handler opens a window, changes its own and
 /// quits from inside its call, on the headless host, which calls every one.
 fn headless_handler_methods_reenter() {
     within("headless window handler", || {
-        // A quit is heard once per platform: each method gets its own.
-        let platform = || {
-            let headless = headless();
-            let quits = Arc::new(AtomicUsize::new(0));
-            let counted = Arc::clone(&quits);
-            headless.on_quit(Box::new(move || {
-                counted.fetch_add(1, Ordering::SeqCst);
-            }));
-            (headless as Arc<dyn Platform>, quits)
-        };
-        let mock = |window: &Arc<dyn HostWindow>| {
-            window
-                .as_any()
-                .downcast_ref::<flui_native::MockWindow>()
-                .expect("a headless window")
-                .clone()
-        };
         let rows: [(Method, Box<Trigger>); 6] = [
             (
                 Method::Input,
@@ -446,18 +431,20 @@ fn headless_handler_methods_reenter() {
             ),
         ];
         for (method, trigger) in &rows {
-            let (platform, quits) = platform();
+            // A quit is heard once per run: each method gets its own.
+            let (log, owner) = running_headless();
+            let quits = move || log.count(AppCall::Quit);
             a_handler_method_reenters(
-                &platform,
+                &(owner as Rc<dyn Reach>),
                 Some(&quits),
                 WindowOptions::default,
                 *method,
                 trigger,
             );
         }
-        let (platform, _) = platform();
+        let (_log, owner) = running_headless();
         a_handler_dropped_at_close_reaches_the_platform(
-            &platform,
+            &(owner as Rc<dyn Reach>),
             WindowOptions::default,
             &|done| done(),
         );
@@ -467,16 +454,9 @@ fn headless_handler_methods_reenter() {
 /// A close request simulated from inside `input` on the headless window.
 fn headless_close_request_inside_input_waits_for_it() {
     within("headless close request inside input", || {
-        let platform: Arc<dyn Platform> = headless();
-        let mock = |window: &Arc<dyn HostWindow>| {
-            window
-                .as_any()
-                .downcast_ref::<flui_native::MockWindow>()
-                .expect("a headless window")
-                .clone()
-        };
+        let (_log, owner) = running_headless();
         a_close_request_raised_inside_input_waits_for_it(
-            &platform,
+            &(owner as Rc<dyn Reach>),
             WindowOptions::default,
             &move |window| {
                 mock(window).inject_event(flui_platform::PlatformInput::Ime(
@@ -494,172 +474,207 @@ fn headless_close_request_inside_input_waits_for_it() {
     });
 }
 
-/// A session-end hook that installs its successor from inside its call, its
-/// captures calling the platform when dropped.
-fn headless_session_end_hook_replaces_itself() {
-    within("headless session-end hook", || {
-        let platform = headless();
-        let reached = Arc::new(AtomicBool::new(false));
-        let observed = Arc::clone(&reached);
-        let weak = Arc::downgrade(&platform);
-        let calls_back = OnDrop::new(move || {
-            if let Some(platform) = weak.upgrade() {
-                let _ = platform.active_window();
-                observed.store(true, Ordering::SeqCst);
+/// Makes the platform call one method of the application's handler.
+type AppTrigger = fn(&flui_native::HeadlessHostEvents, &OwnerPlatform);
+
+/// Each method of the application's handler the headless host calls opens a
+/// window, reports a notice and quits from inside its call: the window opens
+/// at once, and the notice and the quit, which are reports, are heard after
+/// the method returns.
+fn headless_app_handler_methods_reenter() {
+    within("headless application handler", || {
+        let rows: [(AppCall, AppTrigger); 5] = [
+            (AppCall::Quit, |_, owner| owner.quit()),
+            (AppCall::Reopen, |events, _| events.reopen()),
+            (AppCall::SessionEnd(SessionEndPhase::Query), |events, _| {
+                assert_eq!(
+                    events.session_end(SessionEndPhase::Query),
+                    SessionEndAnswer::Proceed
+                );
+            }),
+            (AppCall::Notice(SystemNotice::Sleep), |events, _| {
+                events.notice(SystemNotice::Sleep);
+            }),
+            (AppCall::ExitPolicy, |_, owner| {
+                owner
+                    .open_window(WindowOptions::default(), RecordingWindowHandler::new())
+                    .expect("a window")
+                    .try_ready()
+                    .expect("at once")
+                    .close_now();
+            }),
+        ];
+        for (method, trigger) in rows {
+            let platform = HeadlessPlatform::new();
+            let events = platform.host_events();
+            let log = AppLog::new();
+            let owner = Rc::new(run_keeping_owner(Box::new(platform), &log));
+            let opened = Rc::new(RefCell::new(Vec::new()));
+            let (inner_events, kept, done) = (
+                events.clone(),
+                Rc::clone(&opened),
+                Rc::new(Cell::new(false)),
+            );
+            log.react(move |call, owner| {
+                if call != method || done.replace(true) {
+                    return;
+                }
+                // A platform that is quitting opens no window: the quit's own
+                // method finds it so.
+                let window = owner
+                    .open_window(WindowOptions::default(), RecordingWindowHandler::new())
+                    .map(|open| open.try_ready().expect("at once"));
+                kept.borrow_mut().push(window.is_ok());
+                inner_events.notice(SystemNotice::SessionLocked);
+                owner.quit();
+            });
+            trigger(&events, &owner);
+
+            assert_eq!(
+                *opened.borrow(),
+                [method != AppCall::Quit],
+                "{method:?}: the window opened from inside the method, unless it quits"
+            );
+            let calls = log.calls();
+            let at = calls
+                .iter()
+                .position(|call| *call == method)
+                .expect("the method ran");
+            let after = &calls[at + 1..];
+            assert!(
+                after.contains(&AppCall::Notice(SystemNotice::SessionLocked)),
+                "{method:?}: the notice reported inside it was heard after it: {calls:?}"
+            );
+            assert_eq!(log.count(AppCall::Quit), 1, "{method:?}: one quit");
+        }
+    });
+}
+
+/// A method that reports, then panics: its caller gets the panic, the report
+/// it made is still heard, and the next call is answered.
+fn headless_failing_method_keeps_the_first_failure() {
+    within("headless failing application handler", || {
+        let platform = HeadlessPlatform::new();
+        let events = platform.host_events();
+        let log = AppLog::new();
+        log.answer_session_end(SessionEndAnswer::Block);
+        let _owner = run_keeping_owner(Box::new(platform), &log);
+        let (inner, first) = (events.clone(), Cell::new(true));
+        log.react(move |call, _| {
+            if call == AppCall::SessionEnd(SessionEndPhase::Query) && first.replace(false) {
+                inner.notice(SystemNotice::Sleep);
+                panic!("first failure");
             }
         });
-        let weak = Arc::downgrade(&platform);
-        platform.on_session_end(Box::new(move |_| {
-            let _ = &calls_back;
-            let platform = weak.upgrade().expect("the platform");
-            platform.on_session_end(Box::new(|_| SessionEndAnswer::Block));
-            platform.quit();
-            SessionEndAnswer::Proceed
-        }));
-
-        assert_eq!(
-            platform.simulate_session_end(SessionEndPhase::Query),
-            SessionEndAnswer::Proceed
-        );
-        assert!(
-            reached.load(Ordering::SeqCst),
-            "the replaced hook's destructor reached the platform"
-        );
-        assert_eq!(
-            platform.simulate_session_end(SessionEndPhase::Query),
-            SessionEndAnswer::Block,
-            "the successor answers the next phase"
-        );
-    });
-}
-
-/// A system-notice hook that installs its successor from inside its call, its
-/// captures reporting another notice when dropped: that notice is heard after
-/// the one being delivered, by the successor.
-fn headless_notice_hook_replaces_itself() {
-    within("headless system-notice hook", || {
-        let platform = headless();
-        let reached = Arc::new(AtomicBool::new(false));
-        let observed = Arc::clone(&reached);
-        let weak = Arc::downgrade(&platform);
-        let calls_back = OnDrop::new(move || {
-            if let Some(platform) = weak.upgrade() {
-                platform.simulate_host_notice(SystemNotice::SessionLocked);
-                observed.store(true, Ordering::SeqCst);
-            }
-        });
-        let successor = Arc::new(Mutex::new(Vec::new()));
-        let (weak, heard) = (Arc::downgrade(&platform), Arc::clone(&successor));
-        platform.on_host_notice(Box::new(move |_| {
-            let _ = &calls_back;
-            let heard = Arc::clone(&heard);
-            weak.upgrade()
-                .expect("the platform")
-                .on_host_notice(Box::new(move |notice| heard.lock().push(notice)));
-        }));
-
-        platform.simulate_host_notice(SystemNotice::Sleep);
-        assert!(
-            reached.load(Ordering::SeqCst),
-            "the replaced hook's destructor reached the platform"
-        );
-        platform.simulate_host_notice(SystemNotice::Wake);
-        assert_eq!(
-            *successor.lock(),
-            [SystemNotice::SessionLocked, SystemNotice::Wake]
-        );
-    });
-}
-
-fn headless_replaced_application_handlers_reach_the_platform() {
-    within("headless application handlers", || {
-        let platform: Arc<dyn Platform> = headless();
-        replaced_application_handlers_reach_the_platform(&platform);
-    });
-}
-
-/// A session-end hook that installs its successor and then panics: the
-/// caller gets that panic, the hook's captures are retained rather than
-/// dropped after the failure, and the successor answers the next phase.
-fn headless_failing_hook_keeps_the_first_failure() {
-    within("headless failing session-end hook", || {
-        let platform = headless();
-        let dropped = Arc::new(AtomicBool::new(false));
-        let witness = Witness(Arc::clone(&dropped));
-        let weak = Arc::downgrade(&platform);
-        platform.on_session_end(Box::new(move |_| {
-            let _ = &witness;
-            weak.upgrade()
-                .expect("the platform")
-                .on_session_end(Box::new(|_| SessionEndAnswer::Block));
-            panic!("first failure");
-        }));
 
         let failure = catch_unwind(AssertUnwindSafe(|| {
-            platform.simulate_session_end(SessionEndPhase::Query)
+            events.session_end(SessionEndPhase::Query)
         }))
-        .expect_err("the hook's panic reaches the caller");
+        .expect_err("the method's panic reaches the caller");
         assert_eq!(payload_text(failure.as_ref()), Some("first failure"));
-        assert!(
-            !dropped.load(Ordering::SeqCst),
-            "the failed hook's captures are retained, not dropped"
+        assert_eq!(
+            events.session_end(SessionEndPhase::Query),
+            SessionEndAnswer::Block,
+            "the handler answers the next phase"
         );
         assert_eq!(
-            platform.simulate_session_end(SessionEndPhase::Query),
-            SessionEndAnswer::Block
+            log.count(AppCall::Notice(SystemNotice::Sleep)),
+            1,
+            "the report made before the panic was heard"
         );
     });
 }
 
-/// The exit-policy hook, asked when the last window closes, opens a window and
+/// The exit policy, asked when the last window closes, opens a window and
 /// allows the exit: the window it opened keeps the platform running.
-fn headless_exit_policy_hook_that_opens_a_window_keeps_the_platform() {
-    within("headless exit-policy hook", || {
-        let platform = headless();
-        let quits = Arc::new(AtomicUsize::new(0));
-        let counted = Arc::clone(&quits);
-        platform.on_quit(Box::new(move || {
-            counted.fetch_add(1, Ordering::SeqCst);
-        }));
-        let opened = Arc::new(Mutex::new(None));
-        let (weak, kept) = (Arc::downgrade(&platform), Arc::clone(&opened));
-        let first = AtomicBool::new(true);
-        platform.set_exit_policy_hook(Box::new(move || {
-            if first.swap(false, Ordering::SeqCst) {
-                let window = weak
-                    .upgrade()
-                    .expect("the platform")
-                    .open_window(
-                        WindowOptions::default(),
-                        flui_testing::window_handler::RecordingWindowHandler::new(),
-                    )
-                    .expect("a window opens from inside the hook");
-                *kept.lock() = Some(window);
+fn headless_exit_policy_that_opens_a_window_keeps_the_platform() {
+    within("headless exit policy", || {
+        let (log, owner) = running_headless();
+        log.answer_exit(true);
+        let opened = Rc::new(RefCell::new(None));
+        let (kept, first) = (Rc::clone(&opened), Cell::new(true));
+        log.react(move |call, owner| {
+            if call == AppCall::ExitPolicy && first.replace(false) {
+                let window = owner
+                    .open_window(WindowOptions::default(), RecordingWindowHandler::new())
+                    .expect("a window opens from inside the exit policy")
+                    .try_ready()
+                    .expect("at once");
+                *kept.borrow_mut() = Some(window);
             }
-            true
-        }));
+        });
 
-        let window = platform
-            .open_window(
-                WindowOptions::default(),
-                flui_testing::window_handler::RecordingWindowHandler::new(),
-            )
-            .expect("a window");
-        window.close_now();
+        owner
+            .open_window(WindowOptions::default(), RecordingWindowHandler::new())
+            .expect("a window")
+            .try_ready()
+            .expect("at once")
+            .close_now();
 
-        assert!(opened.lock().is_some(), "the hook ran and opened a window");
+        assert!(opened.borrow().is_some(), "the handler opened a window");
         assert_eq!(
-            quits.load(Ordering::SeqCst),
+            log.count(AppCall::Quit),
             0,
-            "the window the hook opened keeps the platform running"
+            "the window the handler opened keeps the platform running"
         );
-        let window = opened.lock().take().expect("the hook's window");
+        let window = opened.borrow_mut().take().expect("the handler's window");
         window.close_now();
         assert_eq!(
-            quits.load(Ordering::SeqCst),
+            log.count(AppCall::Quit),
             1,
             "closing it, with no window left, quits"
         );
+    });
+}
+
+/// A platform run from inside another's handler binds a handler of its own:
+/// each platform's reports reach its own handler, once.
+fn headless_a_run_inside_a_handler_binds_its_own() {
+    within("headless nested run", || {
+        let outer_platform = HeadlessPlatform::new();
+        let outer_events = outer_platform.host_events();
+        let inner_platform = HeadlessPlatform::new();
+        let inner_events = inner_platform.host_events();
+        let (outer, inner) = (AppLog::new(), AppLog::new());
+        // Each platform lives as long as the owner capability its bootstrap
+        // kept.
+        let owners = Rc::new(RefCell::new(Vec::new()));
+        let kept = Rc::clone(&owners);
+        inner.bootstrap(move |owner| {
+            kept.borrow_mut().push(owner);
+            Ok(())
+        });
+        let (nested, kept) = (Rc::clone(&inner), Rc::clone(&owners));
+        let inner_platform = RefCell::new(Some(inner_platform));
+        outer.bootstrap(move |owner| {
+            kept.borrow_mut().push(owner);
+            let platform = inner_platform.take().expect("one nested run");
+            Box::new(platform)
+                .run(nested as Rc<dyn flui_native::AppHandler>)
+                .map_err(Into::into)
+        });
+        Box::new(outer_platform)
+            .run(Rc::clone(&outer) as Rc<dyn flui_native::AppHandler>)
+            .expect("the outer run");
+        assert_eq!(owners.borrow().len(), 2, "both platforms ran");
+
+        outer_events.notice(SystemNotice::Sleep);
+        inner_events.notice(SystemNotice::Wake);
+        assert_eq!(
+            outer.calls(),
+            [AppCall::Ready, AppCall::Notice(SystemNotice::Sleep)]
+        );
+        assert_eq!(
+            inner.calls(),
+            [AppCall::Ready, AppCall::Notice(SystemNotice::Wake)]
+        );
+    });
+}
+
+fn headless_replaced_keyboard_layout_callback_reaches_the_platform() {
+    within("headless keyboard layout callback", || {
+        let platform: Arc<dyn Platform> = Arc::new(HeadlessPlatform::new());
+        a_replaced_keyboard_layout_callback_reaches_the_platform(&platform);
     });
 }
 
@@ -677,24 +692,24 @@ fn handlers_run_outside_every_lock_of_the_headless_platform() {
                 headless_close_request_inside_input_waits_for_it,
             ),
             (
-                "a session-end hook replaces itself",
-                headless_session_end_hook_replaces_itself,
+                "every application handler method opens a window, reports and quits",
+                headless_app_handler_methods_reenter,
             ),
             (
-                "a system-notice hook replaces itself",
-                headless_notice_hook_replaces_itself,
+                "a failing method keeps the first failure",
+                headless_failing_method_keeps_the_first_failure,
             ),
             (
-                "replaced application handlers reach the platform",
-                headless_replaced_application_handlers_reach_the_platform,
+                "an exit policy that opens a window keeps the platform",
+                headless_exit_policy_that_opens_a_window_keeps_the_platform,
             ),
             (
-                "a failing hook keeps the first failure",
-                headless_failing_hook_keeps_the_first_failure,
+                "a run inside a handler binds its own",
+                headless_a_run_inside_a_handler_binds_its_own,
             ),
             (
-                "an exit-policy hook that opens a window keeps the platform",
-                headless_exit_policy_hook_that_opens_a_window_keeps_the_platform,
+                "a replaced keyboard layout callback reaches the platform",
+                headless_replaced_keyboard_layout_callback_reaches_the_platform,
             ),
         ],
     );
@@ -702,64 +717,18 @@ fn handlers_run_outside_every_lock_of_the_headless_platform() {
 
 // --- winit ----------------------------------------------------------------
 
-/// The winit platform's registrations, before its loop runs: a replaced
-/// handler's destructor reaches the platform.
+/// The winit platform's keyboard layout callback, before its loop runs: a
+/// replaced callback's destructor reaches the platform.
 #[cfg(all(
     feature = "winit-backend",
     any(target_os = "windows", target_os = "linux")
 ))]
 #[test]
 fn replaced_winit_handlers_reach_the_platform() {
-    within("winit application handlers", || {
+    within("winit keyboard layout callback", || {
         let platform: Arc<dyn Platform> = Arc::new(flui_native::WinitPlatform::new());
-        replaced_application_handlers_reach_the_platform(&platform);
+        a_replaced_keyboard_layout_callback_reaches_the_platform(&platform);
     });
-}
-
-/// Where winit reports no lifecycle (Windows, and macOS alike) the host's
-/// lifecycle position is absent: each registration is dropped as it is made,
-/// captures and all, instead of kept for a call that never comes.
-#[cfg(all(feature = "winit-backend", target_os = "windows"))]
-#[test]
-fn winit_lifecycle_registrations_drop_their_captures_without_a_source() {
-    /// Records that it was dropped.
-    struct Capture(Arc<AtomicBool>);
-
-    impl Drop for Capture {
-        fn drop(&mut self) {
-            self.0.store(true, Ordering::SeqCst);
-        }
-    }
-
-    fn capture() -> (Arc<AtomicBool>, Capture) {
-        let dropped = Arc::new(AtomicBool::new(false));
-        (Arc::clone(&dropped), Capture(dropped))
-    }
-
-    let platform = flui_native::WinitPlatform::new();
-    let (session_end, held) = capture();
-    platform.on_session_end(Box::new(move |_| {
-        let _ = &held;
-        SessionEndAnswer::Proceed
-    }));
-    let (notice, held) = capture();
-    platform.on_host_notice(Box::new(move |_| {
-        let _ = &held;
-    }));
-    let (reopen, held) = capture();
-    platform.on_reopen(Box::new(move || {
-        let _ = &held;
-    }));
-    for (registration, dropped) in [
-        ("session end", session_end),
-        ("host notice", notice),
-        ("reopen", reopen),
-    ] {
-        assert!(
-            dropped.load(Ordering::SeqCst),
-            "the {registration} registration was dropped at registration"
-        );
-    }
 }
 
 // --- Win32 ----------------------------------------------------------------
@@ -771,12 +740,12 @@ mod win32 {
         reason = "pumps the owner thread's own Win32 message queue"
     )]
 
+    use std::cell::Cell;
     use std::rc::Rc;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
-    use flui_native::{Platform, WindowsPlatform};
+    use flui_native::{AppHandler, Platform, WindowsPlatform};
     use flui_platform::{WindowCommand, WindowOptions};
     use flui_testing::window_commands::AdmitAndApply as _;
     use windows::Win32::Foundation::{LPARAM, WPARAM};
@@ -786,13 +755,16 @@ mod win32 {
     };
 
     use super::{
-        Method, Trigger, Witness, a_close_request_raised_inside_input_waits_for_it,
+        Method, Reach, Trigger, a_close_request_raised_inside_input_waits_for_it,
         a_handler_dropped_at_close_reaches_the_platform, a_handler_method_reenters,
-        replaced_application_handlers_reach_the_platform, within,
+        a_replaced_keyboard_layout_callback_reaches_the_platform, within,
     };
+    use crate::app::{AppCall, AppLog};
 
-    fn platform() -> Arc<WindowsPlatform> {
-        Arc::new(WindowsPlatform::new().expect("native Windows platform"))
+    fn platform() -> Rc<dyn Reach> {
+        let platform: Arc<dyn Platform> =
+            Arc::new(WindowsPlatform::new().expect("native Windows platform"));
+        Rc::new(platform)
     }
 
     fn hidden() -> WindowOptions {
@@ -832,8 +804,6 @@ mod win32 {
     /// posted `WM_QUIT` the pump consumes.
     fn handler_methods_reenter() {
         within("Win32 window handler", || {
-            // A quit stops the platform taking windows: each method gets its own.
-            let platform = || -> Arc<dyn Platform> { platform() };
             let rows: [(Method, Box<Trigger>); 5] = [
                 (
                     Method::Input,
@@ -893,6 +863,7 @@ mod win32 {
                     }),
                 ),
             ];
+            // A quit stops the platform taking windows: each method gets its own.
             for (method, trigger) in &rows {
                 a_handler_method_reenters(&platform(), None, hidden, *method, trigger);
             }
@@ -908,9 +879,8 @@ mod win32 {
     /// grants destroys the window by the posted close.
     fn close_request_inside_input_waits_for_it() {
         within("Win32 close request inside input", || {
-            let platform: Arc<dyn Platform> = platform();
             a_close_request_raised_inside_input_waits_for_it(
-                &platform,
+                &platform(),
                 hidden,
                 &|window| {
                     let hwnd = crate::win32_handle(window.as_ref());
@@ -945,59 +915,47 @@ mod win32 {
         });
     }
 
-    fn replaced_application_handlers() {
-        within("Win32 application handlers", || {
-            let platform: Arc<dyn Platform> = platform();
-            replaced_application_handlers_reach_the_platform(&platform);
+    fn replaced_keyboard_layout_callback() {
+        within("Win32 keyboard layout callback", || {
+            let platform: Arc<dyn Platform> =
+                Arc::new(WindowsPlatform::new().expect("native Windows platform"));
+            a_replaced_keyboard_layout_callback_reaches_the_platform(&platform);
         });
     }
 
-    /// An exit-policy hook that installs its successor and then panics inside
-    /// the window procedure: the panic is contained as a veto, the hook's
-    /// captures are retained rather than dropped after the failure, and the
-    /// successor decides the next request.
-    fn failing_exit_policy_keeps_the_first_failure() {
-        within("Win32 failing exit-policy hook", || {
-            let platform = platform();
-            let ran = Arc::new(AtomicBool::new(false));
-            let dropped = Arc::new(AtomicBool::new(false));
-            let successor_calls = Arc::new(AtomicUsize::new(0));
-            let witness = Witness(Arc::clone(&dropped));
-            let (weak, failed, successor) = (
-                Arc::downgrade(&platform),
-                Arc::clone(&ran),
-                Arc::clone(&successor_calls),
-            );
-            platform.set_exit_policy_hook(Box::new(move || {
-                let _ = &witness;
-                failed.store(true, Ordering::SeqCst);
-                let successor = Arc::clone(&successor);
-                weak.upgrade()
-                    .expect("the platform")
-                    .set_exit_policy_hook(Box::new(move || {
-                        successor.fetch_add(1, Ordering::SeqCst);
-                        false
-                    }));
-                panic!("first failure");
-            }));
-
-            platform.request_exit_policy_reevaluation();
-            assert!(pump_until(|| ran.load(Ordering::SeqCst)), "the hook ran");
-            assert!(
-                !dropped.load(Ordering::SeqCst),
-                "the failed hook's captures are retained, not dropped"
-            );
-            platform.request_exit_policy_reevaluation();
-            assert!(
-                pump_until(|| successor_calls.load(Ordering::SeqCst) == 1),
-                "the successor decides the next request"
-            );
+    /// An exit policy that asks to be asked again and then panics inside the
+    /// window procedure: the panic is contained as a veto, the loop carries
+    /// on, the handler decides the next request, and hears the quit once.
+    fn failing_exit_policy_keeps_the_loop() {
+        within("Win32 failing exit policy", || {
+            let platform = WindowsPlatform::new().expect("native Windows platform");
+            let log = AppLog::new();
+            log.bootstrap(|owner| {
+                owner.shared().request_exit_policy_reevaluation();
+                Ok(())
+            });
+            let first = Cell::new(true);
+            log.react(move |call, owner| {
+                if call != AppCall::ExitPolicy {
+                    return;
+                }
+                if first.replace(false) {
+                    owner.shared().request_exit_policy_reevaluation();
+                    panic!("first failure");
+                }
+                owner.proxy().request_quit().expect("the loop takes a quit");
+            });
+            Box::new(platform)
+                .run(Rc::clone(&log) as Rc<dyn AppHandler>)
+                .expect("the loop carries on past the contained panic");
+            assert_eq!(log.count(AppCall::ExitPolicy), 2, "asked again");
+            assert_eq!(log.count(AppCall::Quit), 1, "the quit, once");
         });
     }
 
-    /// A handler whose captures panic when dropped is still installed when the
-    /// loop ends: the teardown retires it with its panic contained, and `run`
-    /// returns.
+    /// A callback whose captures panic when dropped is still installed when
+    /// the loop ends: the teardown retires it with its panic contained, and
+    /// `run` returns.
     fn a_handler_dropped_at_teardown_is_contained() {
         within("Win32 teardown", || {
             struct PanicsOnDrop;
@@ -1008,7 +966,7 @@ mod win32 {
             }
             let platform = WindowsPlatform::new().expect("native Windows platform");
             let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                Box::new(platform).run(Box::new(|owner| {
+                Box::new(platform).run(crate::app::on_ready(|owner| {
                     let capture = PanicsOnDrop;
                     owner.shared().on_keyboard_layout_change(Box::new(move || {
                         let _ = &capture;
@@ -1039,12 +997,12 @@ mod win32 {
                     close_request_inside_input_waits_for_it,
                 ),
                 (
-                    "replaced application handlers reach the platform",
-                    replaced_application_handlers,
+                    "a replaced keyboard layout callback reaches the platform",
+                    replaced_keyboard_layout_callback,
                 ),
                 (
-                    "a failing exit-policy hook keeps the first failure",
-                    failing_exit_policy_keeps_the_first_failure,
+                    "a failing exit policy keeps the loop",
+                    failing_exit_policy_keeps_the_loop,
                 ),
                 (
                     "a handler dropped at teardown is contained",

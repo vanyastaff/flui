@@ -21,6 +21,10 @@
 mod absent;
 #[path = "android_exit_path.rs"]
 mod android_exit_path;
+use flui_native::testing::app;
+#[path = "app_handler.rs"]
+#[cfg(not(target_arch = "wasm32"))]
+mod app_handler;
 #[path = "backend_conformance.rs"]
 mod backend_conformance;
 #[path = "contract.rs"]

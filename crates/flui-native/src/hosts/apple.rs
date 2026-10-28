@@ -26,6 +26,7 @@ use crate::input::apple::macos::ViewInputs;
 #[cfg(target_os = "macos")]
 use crate::lifecycle::apple::macos::SystemNoticeSources;
 use crate::lifecycle::notice::SystemNotices;
+use crate::owner::app_delivery::AppDelivery;
 #[cfg(target_os = "ios")]
 use crate::owner::apple::IOSLoop;
 #[cfg(target_os = "macos")]
@@ -147,7 +148,8 @@ impl Host for Apple {
 /// use flui_native::{MacOSPlatform, Platform};
 ///
 /// let platform = MacOSPlatform::new()?;
-/// Box::new(platform).run(Box::new(|_owner| Ok(())))?;
+/// // `App` implements `AppHandler`: its `ready` is the bootstrap.
+/// Box::new(platform).run(Rc::new(App::default()))?;
 /// ```
 #[cfg(target_os = "macos")]
 pub type MacOSPlatform = HostPlatform<Apple>;
@@ -178,8 +180,8 @@ impl MacosHost for Apple {
         Box::new(AppKitPreferences::new(signal))
     }
 
-    fn notices() -> Arc<dyn NoticeChannel> {
-        Arc::new(SystemNotices::default())
+    fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {
+        Arc::new(SystemNotices::new(Arc::clone(app)))
     }
 
     fn notice_sources(
@@ -212,8 +214,8 @@ impl IosHost for Apple {
         Box::new(IOSPreferences::new(signal, marker))
     }
 
-    fn notices() -> Arc<dyn NoticeChannel> {
-        Arc::new(SystemNotices::default())
+    fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {
+        Arc::new(SystemNotices::new(Arc::clone(app)))
     }
 
     fn view_touches() -> Box<dyn ViewTouches> {

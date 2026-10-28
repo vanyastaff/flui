@@ -7,18 +7,17 @@
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Instant;
 
 use flui_foundation::geometry::Size;
 use flui_native::storage::DataDirs;
 use flui_native::{
-    HostWindow, OpenWindowError, PathPromptOptions, Platform, PlatformError, PlatformExecutor,
-    PlatformReadyCallback, Task,
+    AppHandler, HostWindow, OpenWindowError, PathPromptOptions, Platform, PlatformError,
+    PlatformExecutor, Task,
 };
 use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::{
     Clipboard, ClipboardItem, CursorError, CursorIcon, DisplaySnapshot, PlatformWindow,
-    SessionEndAnswer, SessionEndPhase, StorageName, SystemNotice, SystemPreferences,
+    StorageName, SystemPreferences,
     AdmittedCommand, ApplyError, WindowCapabilities, WindowGeometry, WindowId,
     WindowHandler, WindowOptions, WindowState,
 };
@@ -31,17 +30,13 @@ impl Platform for OutsidePlatform {
         unreachable!("the impl never compiles")
     }
 
-    fn run(self: Box<Self>, _: PlatformReadyCallback) -> Result<(), PlatformError> {
+    fn run(self: Box<Self>, _: Rc<dyn AppHandler>) -> Result<(), PlatformError> {
         Ok(())
     }
 
     fn quit(&self) {}
 
-    fn set_exit_policy_hook(&self, _: Box<dyn Fn() -> bool + Send>) {}
-
     fn request_exit_policy_reevaluation(&self) {}
-
-    fn set_wake_deadline_hook(&self, _: Box<dyn Fn() -> Option<Instant> + Send + Sync>) {}
 
     fn open_window(
         &self,
@@ -106,12 +101,6 @@ impl Platform for OutsidePlatform {
 
     fn on_keyboard_layout_change(&self, _: Box<dyn FnMut() + Send>) {}
 
-    fn on_quit(&self, _: Box<dyn FnMut() + Send>) {}
-
-    fn on_session_end(&self, _: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>) {}
-
-    fn on_host_notice(&self, _: Box<dyn FnMut(SystemNotice) + Send>) {}
-
     fn release_session_end(&self) {}
 
     fn window_capabilities(&self) -> WindowCapabilities {
@@ -121,10 +110,6 @@ impl Platform for OutsidePlatform {
     fn window_frame_inset(&self, _: f64) -> Size<f64> {
         Size::default()
     }
-
-    fn on_reopen(&self, _: Box<dyn FnMut() + Send>) {}
-
-    fn on_open_urls(&self, _: Box<dyn FnMut(Vec<String>) + Send>) {}
 
     fn name(&self) -> &'static str {
         "outside"

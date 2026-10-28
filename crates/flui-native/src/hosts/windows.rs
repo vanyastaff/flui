@@ -14,6 +14,7 @@ use crate::host::{Absent, Host, position};
 use crate::input::windows::InputWindows;
 use crate::lifecycle::notice::SystemNotices;
 use crate::lifecycle::windows::{HostEvents, SessionWindows};
+use crate::owner::app_delivery::AppDelivery;
 use crate::owner::notices::NoticeChannel;
 use crate::owner::windows::broadcast::Subscriber;
 use crate::owner::windows::control::{OwnerLifecycle, OwnerObjects, OwnerPreferences, OwnerSeeds};
@@ -80,13 +81,13 @@ impl WindowsHost for Windows {
         Ok(Rc::new(PreferenceSource::new(owner.signal)?))
     }
 
-    fn notices() -> Arc<dyn NoticeChannel> {
-        Arc::new(SystemNotices::default())
+    fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {
+        Arc::new(SystemNotices::new(Arc::clone(app)))
     }
 
     fn lifecycle(owner: &OwnerSeeds<'_>) -> Rc<dyn OwnerLifecycle> {
         Rc::new(HostEvents::new(
-            Rc::clone(owner.handlers),
+            Arc::clone(owner.app),
             Arc::clone(owner.notices),
         ))
     }

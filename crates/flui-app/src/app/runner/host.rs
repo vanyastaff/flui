@@ -565,12 +565,6 @@ pub(crate) fn install_owner_platform(
         not(target_arch = "wasm32")
     ))]
     super::main_window::shutdown_main_window();
-    // System notices (ADR-0237): the platform reports them on the owner thread,
-    // and every UI runtime's subscribers receive them from there.
-    owner.on_host_notice(Box::new(|notice| {
-        super::owner_dispatch::deliver_host_notice(&notice.into());
-    }));
-    owner.on_session_end(Box::new(answer_session_end));
     // The platform clipboard (ADR-0038 §9) is installed with the owner, so
     // every ui_runtime a runner builds afterwards finds it (`runtime_clipboard`).
     let clipboard = owner.shared().clipboard();
@@ -640,22 +634,190 @@ pub(crate) fn install_owner_platform(
     Ok(())
 }
 
-/// Installs the exit-policy hook this thread's `AppRuntime` consults instead
+// ============================================================================
+// The application handler of a run (ADR-0254 §4)
+// ============================================================================
+
+/// What a runner's bootstrap runs with: the owner capability, by value.
+type Bootstrap =
+    Box<dyn FnOnce(flui_native::OwnerPlatform) -> Result<(), flui_native::BootstrapError>>;
+
+/// Where the application handler of a run sends what the platform tells and
+/// asks it beyond its bootstrap, set by the runner as its bootstrap installs
+/// what each one reaches (the main window, the UI runtimes' wake deadlines, a
+/// mobile runner's own drivers). The handler owns its routes, so a run never
+/// answers with what another set: a platform run from inside a handler, as a
+/// test does, routes to its own handler and leaves the outer run's routes as
+/// they were.
+///
+/// A route the runner never sets answers as a run that cares about it not: a
+/// quit or a reopen reaches nothing, the exit is left to the host, as with no
+/// handler bound ([`ExitAnswer::HostDecides`](flui_native::ExitAnswer)), and
+/// no deadline is asked for.
+#[derive(Default)]
+pub(crate) struct AppRoutes {
+    quit: Option<Rc<dyn Fn()>>,
+    reopen: Option<Rc<dyn Fn()>>,
+    exit_policy: Option<Rc<dyn Fn() -> bool>>,
+    wake_deadline: Option<Rc<dyn Fn() -> Option<web_time::Instant>>>,
+}
+
+/// Replace one route of the innermost run on this thread whose handler is
+/// alive; the one it displaces goes outside every borrow. With no run, there
+/// is no handler to answer through, and the route is let go.
+fn set_route<T: ?Sized>(project: fn(&mut AppRoutes) -> &mut Option<Rc<T>>, route: Rc<T>) {
+    let routes = APP_RUNTIME.with(|slot| {
+        let runs = &mut slot.borrow_mut().run_routes;
+        runs.retain(|routes| routes.strong_count() > 0);
+        runs.last().and_then(std::rc::Weak::upgrade)
+    });
+    let Some(routes) = routes else {
+        tracing::debug!("a route set outside any run has no handler to answer through");
+        return;
+    };
+    let displaced = project(&mut routes.borrow_mut()).replace(route);
+    drop(displaced);
+}
+
+/// Send the platform's quit to `route`.
+pub(crate) fn route_quit(route: impl Fn() + 'static) {
+    set_route(|routes| &mut routes.quit, Rc::new(route) as Rc<dyn Fn()>);
+}
+
+/// Send the user's reopen (AppKit's Dock click) to `route`.
+#[cfg_attr(
+    any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
+    expect(dead_code, reason = "only the desktop main window reopens")
+)]
+pub(super) fn route_reopen(route: impl Fn() + 'static) {
+    set_route(|routes| &mut routes.reopen, Rc::new(route) as Rc<dyn Fn()>);
+}
+
+/// Answer the platform's exit question with `route`.
+pub(crate) fn route_exit_policy(route: impl Fn() -> bool + 'static) {
+    set_route(
+        |routes| &mut routes.exit_policy,
+        Rc::new(route) as Rc<dyn Fn() -> bool>,
+    );
+}
+
+/// Answer the platform's wake-deadline question with `route`.
+#[cfg_attr(
+    all(target_arch = "wasm32", not(test)),
+    expect(dead_code, reason = "the web host has no idle wait to bound")
+)]
+pub(super) fn route_wake_deadline(route: impl Fn() -> Option<web_time::Instant> + 'static) {
+    set_route(
+        |routes| &mut routes.wake_deadline,
+        Rc::new(route) as Rc<dyn Fn() -> Option<web_time::Instant>>,
+    );
+}
+
+/// The application handler `flui-app` runs a platform with: `ready` runs the
+/// runner's bootstrap, a session end and a host notice reach every UI runtime
+/// on the thread, and the rest goes to the routes the bootstrap set
+/// ([`AppRoutes`]).
+///
+/// The handler owns its routes; its bootstrap, and the run's code after it,
+/// set them through the `route_*` functions, which reach the innermost run on
+/// the thread whose handler is alive. A run from inside a handler (as a test
+/// does) gets its own routes and leaves the outer run's as they were; a
+/// bootstrap that fails before setting one answers with none of another
+/// run's.
+struct RunnerHandler {
+    bootstrap: std::cell::RefCell<Option<Bootstrap>>,
+    routes: Rc<std::cell::RefCell<AppRoutes>>,
+}
+
+/// The application handler a runner passes to `Platform::run`, with
+/// `bootstrap` as its `ready`.
+pub(crate) fn app_handler(
+    bootstrap: impl FnOnce(flui_native::OwnerPlatform) -> Result<(), flui_native::BootstrapError>
+    + 'static,
+) -> Rc<dyn flui_native::AppHandler> {
+    Rc::new(RunnerHandler {
+        bootstrap: std::cell::RefCell::new(Some(Box::new(bootstrap))),
+        routes: Rc::default(),
+    })
+}
+
+impl RunnerHandler {
+    /// The route `pick` names. Setting a route borrows the routes only to
+    /// swap it in, and this only to clone it, so neither ever finds them
+    /// borrowed.
+    fn route<T: ?Sized>(&self, pick: impl FnOnce(&AppRoutes) -> Option<Rc<T>>) -> Option<Rc<T>> {
+        pick(&self.routes.borrow())
+    }
+}
+
+impl flui_native::AppHandler for RunnerHandler {
+    fn ready(&self, owner: flui_native::OwnerPlatform) -> Result<(), flui_native::BootstrapError> {
+        let bootstrap = self
+            .bootstrap
+            .borrow_mut()
+            .take()
+            .expect("BUG: a platform runs its bootstrap once");
+        // From here the `route_*` functions reach this run's routes.
+        APP_RUNTIME.with(|slot| {
+            slot.borrow_mut()
+                .run_routes
+                .push(Rc::downgrade(&self.routes));
+        });
+        bootstrap(owner)
+    }
+
+    fn quit_requested(&self, _: &flui_native::OwnerPlatform) {
+        if let Some(quit) = self.route(|routes| routes.quit.clone()) {
+            quit();
+        }
+    }
+
+    fn reopen(&self, _: &flui_native::OwnerPlatform) {
+        if let Some(reopen) = self.route(|routes| routes.reopen.clone()) {
+            reopen();
+        }
+    }
+
+    fn session_end(
+        &self,
+        _: &flui_native::OwnerPlatform,
+        phase: flui_platform::SessionEndPhase,
+    ) -> flui_platform::SessionEndAnswer {
+        answer_session_end(phase)
+    }
+
+    fn host_notice(&self, _: &flui_native::OwnerPlatform, notice: flui_platform::SystemNotice) {
+        // System notices (ADR-0237): every UI runtime's subscribers receive
+        // them from the owner thread.
+        super::owner_dispatch::deliver_host_notice(&notice.into());
+    }
+
+    fn exit_policy(&self, _: &flui_native::OwnerPlatform) -> flui_native::ExitAnswer {
+        match self.route(|routes| routes.exit_policy.clone()) {
+            Some(exit) if exit() => flui_native::ExitAnswer::End,
+            Some(_) => flui_native::ExitAnswer::KeepRunning,
+            None => flui_native::ExitAnswer::HostDecides,
+        }
+    }
+
+    fn wake_deadline(&self, _: &flui_native::OwnerPlatform) -> Option<web_time::Instant> {
+        self.route(|routes| routes.wake_deadline.clone())
+            .and_then(|deadline| deadline())
+    }
+}
+
+/// Routes the platform's exit question to this thread's `AppRuntime`, instead
 /// of letting a platform backend decide, alone, whether "every window this
 /// backend tracks just closed" means "exit" — the live-loop wiring `issue
 /// #555`'s `ExitPolicy`/`AppRuntime::should_exit` names as its own
 /// deliberately-deferred follow-up (see `ExitPolicy`'s own doc). Call once,
 /// immediately after [`install_owner_platform`], from every backend that
-/// wants this: today, that is `run_desktop` only — Android/web bootstraps
-/// never call this (their platforms don't override
-/// [`flui_native::Platform::set_exit_policy_hook`] either, so it
-/// would be inert there anyway; wiring the hook itself into those backends
-/// is unrelated to whether flui-app installs it).
+/// wants this: today, that is `run_desktop` only — Android, the web and iOS
+/// never ask the exit policy.
 ///
-/// The hook itself re-enters `APP_RUNTIME` only when the PLATFORM calls it
-/// later (a window closing) — never synchronously from this function, which
-/// only registers it — so this does not violate `with_owner_platform`'s "no
-/// host re-entry" rule.
+/// The route re-enters `APP_RUNTIME` only when the platform asks (a window
+/// closing) — never synchronously from this function — so this does not
+/// violate `with_owner_platform`'s "no host re-entry" rule.
 #[cfg_attr(
     not(any(
         test,
@@ -679,42 +841,39 @@ pub(crate) fn install_owner_platform(
     )
 )]
 pub(super) fn install_exit_policy_hook(policy: ExitPolicy) {
-    let shared = with_owner_platform(|owner| {
-        owner.shared().set_exit_policy_hook(Box::new(move || {
-            // Retirement completes in the installed host before requesting this
-            // policy check. Pending publications also veto automatic exit.
-            let should_exit = APP_RUNTIME.with(|slot| slot.borrow_mut().should_exit(policy));
-            #[cfg(all(
-                not(target_os = "android"),
-                not(target_os = "ios"),
-                not(target_arch = "wasm32")
-            ))]
-            if should_exit {
-                let ingress = APP_RUNTIME.with(|slot| slot.borrow().main_ingress.clone());
-                if let Some(ingress) = ingress {
-                    return ingress.try_auto_quit();
-                }
+    route_exit_policy(move || {
+        // Retirement completes in the installed host before requesting this
+        // policy check. Pending publications also veto automatic exit.
+        let should_exit = APP_RUNTIME.with(|slot| slot.borrow_mut().should_exit(policy));
+        #[cfg(all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        ))]
+        if should_exit {
+            let ingress = APP_RUNTIME.with(|slot| slot.borrow().main_ingress.clone());
+            if let Some(ingress) = ingress {
+                return ingress.try_auto_quit();
             }
-            should_exit
-        }));
-        owner.shared()
+        }
+        should_exit
     });
+    let shared = with_owner_platform(flui_native::OwnerPlatform::shared);
 
-    // The hook above is otherwise only consulted when a window closes, so
-    // a veto owed to a running keep-alive service (issue #558) would be
+    // The exit policy is otherwise only asked when a window closes, so a
+    // veto owed to a running keep-alive service (issue #558) would be
     // PERMANENT once the last window is gone — nothing left to close,
     // nothing to re-ask, and the process would linger forever. Close that
     // loop: when a keep-alive service reports its exit (on whatever worker
     // thread it ran on), request the platform's coalesced, owner-thread
-    // re-consultation of the same hook. Spurious fires are harmless by
-    // contract (windows still open, or the hook still vetoing, are
+    // re-consultation of the same route. Spurious fires are harmless by
+    // contract (windows still open, or the route still vetoing, are
     // no-ops), and backends without the mechanism default it to inert.
     // Registered outside the `with_owner_platform` borrow: the notifier
     // installation touches `APP_RUNTIME`, which must never run while the
-    // owner-platform host is checked out. `None` (no owner platform on
-    // this thread) means the hook install above was a no-op too — nothing
-    // to wire. Not compiled on wasm32, where the lifecycle layer (and so
-    // the notifier seam) does not exist.
+    // owner-platform host is checked out. `None` (no owner platform on this
+    // thread) leaves nothing to wire. Not compiled on wasm32, where the
+    // lifecycle layer (and so the notifier seam) does not exist.
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(shared) = shared {
         APP_RUNTIME.with(|slot| {
@@ -728,7 +887,8 @@ pub(super) fn install_exit_policy_hook(policy: ExitPolicy) {
     drop(shared);
 }
 
-/// Install the desktop platform's one quit notification callback.
+/// Route the desktop platform's quit to the main window and the quit
+/// notification.
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -736,40 +896,26 @@ pub(super) fn install_exit_policy_hook(policy: ExitPolicy) {
 ))]
 pub(super) fn install_platform_quit_hook() {
     let loop_identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
-    let owner_thread = std::thread::current().id();
-    with_owner_platform(|owner| {
-        owner.shared().on_quit(Box::new(move || {
-            assert_eq!(
-                std::thread::current().id(),
-                owner_thread,
-                "BUG: platform quit must run on its owner"
-            );
-            if !APP_RUNTIME.with(|slot| Arc::ptr_eq(&slot.borrow().loop_identity, &loop_identity)) {
-                return;
-            }
-            super::main_window::shutdown_main_window();
-            tracing::info!("Platform quit");
-            super::owner_dispatch::request_quit_notification();
-        }));
+    route_quit(move || {
+        if !APP_RUNTIME.with(|slot| Arc::ptr_eq(&slot.borrow().loop_identity, &loop_identity)) {
+            return;
+        }
+        super::main_window::shutdown_main_window();
+        tracing::info!("Platform quit");
+        super::owner_dispatch::request_quit_notification();
     });
 }
 
-/// Installs the wall-clock-wake hook this thread's platform
-/// backend consults, once per idle iteration, for the earliest instant it
-/// should wake at instead of blocking forever — see
-/// [`flui_native::Platform::set_wake_deadline_hook`]'s doc for the
-/// full contract. Installed once with the desktop owner platform.
-/// `AppRuntime::next_wake` folds every live runtime and presentation's
-/// deadlines. A window install never replaces this hook; closing a window
-/// withdraws only its contribution. Android and web use their own drivers.
+/// Routes the platform's wake-deadline question, asked once per idle
+/// iteration, to this thread's runtimes: `AppRuntime::next_wake` folds every
+/// live runtime and presentation's deadlines. Installed once with the desktop
+/// owner platform; a window install never replaces it, and closing a window
+/// withdraws only its contribution. Android and iOS route their own drivers;
+/// the web has no idle wait.
 ///
-/// The hook itself re-enters `APP_RUNTIME` only when the PLATFORM calls it
-/// later (`about_to_wait`) — never synchronously from this function, which
-/// only registers it — so this does not violate `with_owner_platform`'s "no
-/// host re-entry" rule. Read-only (`AppRuntime::next_wake` takes `&self`),
-/// unlike `install_exit_policy_hook`'s `&mut self` — no deferred-mutation
-/// drain needed here, since computing a wake deadline never touches the
-/// UI runtime registry itself.
+/// The route re-enters `APP_RUNTIME` only when the platform asks
+/// (`about_to_wait`) — never synchronously from this function — and only
+/// reads it (`AppRuntime::next_wake` takes `&self`).
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -777,17 +923,15 @@ pub(super) fn install_platform_quit_hook() {
 ))]
 pub(super) fn install_wake_deadline_hook() {
     let identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
-    with_owner_platform(|owner| {
-        owner.shared().set_wake_deadline_hook(Box::new(move || {
-            APP_RUNTIME.with(|slot| {
-                let state = slot.borrow();
-                if Arc::ptr_eq(&state.loop_identity, &identity) {
-                    state.next_wake()
-                } else {
-                    None
-                }
-            })
-        }));
+    route_wake_deadline(move || {
+        APP_RUNTIME.with(|slot| {
+            let state = slot.borrow();
+            if Arc::ptr_eq(&state.loop_identity, &identity) {
+                state.next_wake()
+            } else {
+                None
+            }
+        })
     });
 }
 
@@ -879,7 +1023,7 @@ pub(super) fn desktop_secondary_wake_deadline(
 /// ```compile_fail,E0599
 /// use flui_native::headless_platform;
 ///
-/// let _ = headless_platform().run(Box::new(|owner| {
+/// let _ = headless_platform().run(crate::app::runner::app_handler(|owner| {
 ///     let shared = owner.shared();
 ///     let _ = shared.open_window(Default::default());
 ///     Ok(())
@@ -889,7 +1033,7 @@ pub(super) fn desktop_secondary_wake_deadline(
 /// ```no_run
 /// use flui_native::headless_platform;
 ///
-/// let _ = headless_platform().run(Box::new(|owner| {
+/// let _ = headless_platform().run(crate::app::runner::app_handler(|owner| {
 ///     let shared = owner.shared();
 ///     let _ = owner.open_window(Default::default());
 ///     Ok(())
@@ -999,3 +1143,7 @@ impl Drop for OwnerHostClearGuard {
         drop(storage);
     }
 }
+
+#[cfg(test)]
+#[path = "app_handler_tests.rs"]
+mod app_handler_tests;

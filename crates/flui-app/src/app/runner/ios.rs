@@ -245,14 +245,11 @@ where
         return;
     }
     let _owner_host_clear_guard = OwnerHostClearGuard::arm();
-    let result = Box::new(platform).run(Box::new(move |owner| {
+    let result = Box::new(platform).run(crate::app::runner::app_handler(move |owner| {
         install_owner_platform(owner)?;
-        with_owner_platform(|owner| {
-            owner.on_wake(Box::new(drive_owner))?;
-            owner.shared().on_quit(Box::new(stop_process));
-            Ok::<_, flui_native::WakeRegistrationError>(())
-        })
-        .expect("BUG: owner installed above")?;
+        with_owner_platform(|owner| owner.on_wake(Box::new(drive_owner)))
+            .expect("BUG: owner installed above")?;
+        super::host::route_quit(stop_process);
         APP_RUNTIME.with(|slot| {
             let mut runtime = slot.borrow_mut();
             runtime.ios_running = true;
@@ -303,10 +300,6 @@ where
     use flui_engine::Renderer;
     use parking_lot::Mutex;
 
-    fn owner_platform_installed<R>(f: impl FnOnce(&flui_native::OwnerPlatform) -> R) -> R {
-        with_owner_platform(f).expect("BUG: bootstrap_ios runs only after install_owner_platform")
-    }
-
     let presentation_window = super::presentation_window(Arc::clone(&host))
         .with_pointer_resampling(config.pointer_resampling);
     let window = Arc::clone(presentation_window.window());
@@ -329,18 +322,18 @@ where
     // 0c. Wire the wall-clock-wake hook to runtime/native-service deadlines and
     // both recovery backoffs. CADisplayLink drives visible frames; owner wakes
     // also keep native service and recovery deliverable between those frames.
-    owner_platform_installed(|owner| {
+    {
         let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
         let surface_recreation_retry = Arc::clone(&surface_recreation_retry);
-        owner.shared().set_wake_deadline_hook(Box::new(move || {
+        super::host::route_wake_deadline(move || {
             let device = device_recovery_backoff.next_attempt_at();
             let surface = surface_recreation_retry.next_attempt_at();
             super::host::merge_wake_deadlines(
                 APP_RUNTIME.with(|slot| slot.borrow().next_wake()),
                 super::host::merge_wake_deadlines(device, surface),
             )
-        }));
-    });
+        });
+    }
 
     // 2. Create the GPU renderer (Metal on iOS). `Renderer::new` takes its own
     // strong `Arc` of the window as the surface target (issue #1043).

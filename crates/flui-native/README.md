@@ -21,12 +21,14 @@ consumed by path (not published to crates.io).
 ## Surfaces
 
 ```text
-platform.rs      Platform, PlatformExecutor, and HostPlatform<H>, its one implementation
+platform.rs      Platform, AppHandler, PlatformExecutor, and HostPlatform<H>, its one
+                 implementation
 host_window.rs   HostWindow: a PlatformWindow plus its accessibility bridge
 host.rs, hosts/  a host's table of positions, one table per host
 owner/           OwnerPlatform, SharedPlatform, PlatformProxy; the owner-turn
                  signal, the owner-thread slot, the panic boundary, the
-                 PlatformHandlers registry, each window's delivery to its
+                 delivery to the application's handler (AppDelivery), each
+                 window's delivery to its
                  handler (WindowDelivery), and each
                  platform's loop
 version/         the OS version floors and the gates above them (ADR-0244)

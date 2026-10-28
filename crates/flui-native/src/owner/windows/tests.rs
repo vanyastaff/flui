@@ -16,8 +16,8 @@ use super::broadcast::Subscriber;
 use super::control::{OwnerControl, OwnerMessages, OwnerPost, OwnerWindow};
 use super::testing::{ClassHooks, NoDisplays, NoPreferences, NoWindows, QuietHost};
 use super::{
-    CreatedWindow, WindowGone, WindowHooks, WindowIdentity, WindowMessages, WindowsHost,
-    WindowsLoop, dispatch_window_message, window_created,
+    CreatedWindow, WindowGone, WindowHooks, WindowIdentity, WindowMessages, WindowsLoop,
+    dispatch_window_message, window_created,
 };
 use crate::error::PlatformError;
 
@@ -179,7 +179,9 @@ fn created(hwnd: HWND) -> CreatedWindow {
             flui_testing::window_handler::RecordingWindowHandler::new(),
             flui_platform::input_capabilities::InputCapabilities::UNAVAILABLE,
         )),
-        handlers: Rc::new(RefCell::new(crate::owner::handlers::PlatformHandlers::new())),
+        app_hooks: Rc::new(RefCell::new(super::AppHooks::new(Arc::new(
+            crate::owner::app_delivery::AppDelivery::new(),
+        )))),
         preferences: Rc::new(NoPreferences),
         hooks: test_hooks(),
         apartment: None,
@@ -442,7 +444,8 @@ fn every_owner_hook_hears_the_window_go_after_one_panics() {
             }),
         ],
         Arc::new(NoDisplays),
-        TestHost::notices(),
+        Arc::new(crate::owner::notices::testing::NoNotices),
+        Arc::new(crate::owner::app_delivery::AppDelivery::new()),
     )
     .expect("the owner control");
     HEARD.with(|heard| heard.borrow_mut().clear());

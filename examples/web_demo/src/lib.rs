@@ -147,17 +147,55 @@ pub fn start() {
 
     log("FLUI Web Demo ready! Try clicking and typing on the canvas.");
 
+    // On the web `run` returns as soon as the bootstrap has, while the page
+    // keeps running. The platform keeps its handler until it quits, so the
+    // handler owns the window: dropping the window retires the canvas, and
+    // with it the window's handler.
     platform
-        .run(Box::new(move |owner| {
-            // On the web `run` returns as soon as this callback has, while the
-            // page keeps running. The platform keeps its quit handler until it
-            // quits, so the handler owns the window: dropping the window
-            // retires the canvas, and with it the window's handler.
-            let mut window = Some(window);
-            owner
-                .shared()
-                .on_quit(Box::new(move || drop(window.take())));
-            Ok(())
+        .run(Rc::new(Page {
+            window: RefCell::new(Some(window)),
+            owner: RefCell::new(None),
         }))
         .expect("platform event loop exited with an error");
+}
+
+/// The page's application handler: it keeps the owner capability and the
+/// canvas window for the page's life, and lets the window go when the page
+/// quits. The page hears no other system event.
+struct Page {
+    window: RefCell<Option<Arc<dyn HostWindow>>>,
+    owner: RefCell<Option<flui_native::OwnerPlatform>>,
+}
+
+impl flui_native::AppHandler for Page {
+    fn ready(&self, owner: flui_native::OwnerPlatform) -> Result<(), flui_native::BootstrapError> {
+        self.owner.replace(Some(owner));
+        Ok(())
+    }
+
+    fn quit_requested(&self, _: &flui_native::OwnerPlatform) {
+        let window = self.window.borrow_mut().take();
+        drop(window);
+    }
+
+    fn reopen(&self, _: &flui_native::OwnerPlatform) {}
+
+    fn session_end(
+        &self,
+        _: &flui_native::OwnerPlatform,
+        _: flui_platform::SessionEndPhase,
+    ) -> flui_platform::SessionEndAnswer {
+        flui_platform::SessionEndAnswer::Proceed
+    }
+
+    fn host_notice(&self, _: &flui_native::OwnerPlatform, _: flui_platform::SystemNotice) {}
+
+    fn exit_policy(&self, _: &flui_native::OwnerPlatform) -> flui_native::ExitAnswer {
+        // The page ends with its tab.
+        flui_native::ExitAnswer::HostDecides
+    }
+
+    fn wake_deadline(&self, _: &flui_native::OwnerPlatform) -> Option<web_time::Instant> {
+        None
+    }
 }

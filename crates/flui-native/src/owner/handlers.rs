@@ -1,120 +1,9 @@
-//! The application's handlers, [`PlatformHandlers`] (quit, reopen, the
-//! session ending, …), and what a loop asks of the windows it holds. A
-//! window's own handler is reached through its
-//! [`WindowDelivery`](super::window_delivery::WindowDelivery).
-//!
-//! Every handler is called through the call point (`call_point::call`), which
-//! holds no lock or borrow while it runs, and every replaced one is retired
-//! outside the locks (`call_point::install`).
+//! What a loop asks of the windows it holds, and the frame requests a host
+//! stamps on the event clock. The application's handler is reached through
+//! the loop's [`AppDelivery`](super::app_delivery::AppDelivery), a window's
+//! through its [`WindowDelivery`](super::window_delivery::WindowDelivery).
 
-use std::sync::Arc;
-
-use flui_platform::{FrameRequest, SessionEndAnswer, SessionEndPhase};
-
-/// The callback a platform asks at each phase of the user's session ending.
-pub type SessionEndHook = Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>;
-
-/// The application's handlers: what the platform calls on its own events
-/// (quit, the session ending, …).
-///
-/// A host keeps this set behind its own lock or `RefCell` and reaches each
-/// field as a `call_point::Field` slot: a handler is called
-/// through the call point with that lock released, and one being replaced is
-/// dropped after it.
-///
-/// # Thread Safety
-///
-/// All callbacks are `Send` but not `Sync`, as they're typically invoked from
-/// the main thread only.
-#[non_exhaustive]
-pub struct PlatformHandlers {
-    /// Called when the application should quit
-    pub quit: Option<Box<dyn FnMut() + Send>>,
-
-    /// Called when the application is reopened (macOS dock click)
-    pub reopen: Option<Box<dyn FnMut() + Send>>,
-
-    /// Called when URLs are opened (e.g., from file manager, browser)
-    pub open_urls: Option<Box<dyn FnMut(Vec<String>) + Send>>,
-
-    /// Called when keyboard layout changes
-    pub keyboard_layout_changed: Option<Box<dyn FnMut() + Send>>,
-
-    /// Asked at each phase of the user's session ending; its answer to
-    /// [`SessionEndPhase::Query`] decides whether the platform asks the user
-    /// to wait.
-    pub session_end: Option<SessionEndHook>,
-
-    /// Consulted when this platform's own window bookkeeping believes every
-    /// window it tracks has just closed, before it decides whether to end
-    /// the run loop (winit) or mark itself not-running (headless).
-    ///
-    /// `true` allows the exit; `false` vetoes it (e.g. because the embedder
-    /// has an "open another window" request queued outside this platform's
-    /// own window map — issue #555's `AppRuntime::should_exit`
-    /// drain-before-decide rule). A backend that never consults it is
-    /// unaffected by this field at all. With none set, winit, Win32 and
-    /// AppKit allow the exit (the pre-#555 unconditional "last window closed
-    /// -> exit" default), and headless never quits, so an embedder that never
-    /// registers a hook sees no behavior change.
-    pub exit_policy: Option<Box<dyn Fn() -> bool + Send>>,
-
-    /// Consulted once per idle event-loop iteration for the earliest
-    /// wall-clock instant the loop should wake at (issue #556's wall-clock
-    /// wake seam) — `None` (unset, or the hook itself answers `None`) keeps
-    /// the unconditional `ControlFlow::Wait` behavior exactly as before this
-    /// field existed. A backend that never reads this field at all is
-    /// unaffected by it.
-    ///
-    /// `Arc`, not `Box`: the hook itself re-enters `flui-app` (it walks
-    /// every hosted UI runtime and takes gesture-arena locks) and may be
-    /// asked again from inside that walk, so the call point calls a clone
-    /// (`call_point::SharedField`) with the lock
-    /// released (ADR-0038 §5) and the hook stays installed while it runs.
-    pub wake_deadline: Option<Arc<dyn Fn() -> Option<web_time::Instant> + Send + Sync>>,
-}
-
-impl PlatformHandlers {
-    /// Create new empty handler registry
-    pub fn new() -> Self {
-        Self {
-            quit: None,
-            reopen: None,
-            open_urls: None,
-            keyboard_layout_changed: None,
-            session_end: None,
-            exit_policy: None,
-            wake_deadline: None,
-        }
-    }
-}
-
-impl Default for PlatformHandlers {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl std::fmt::Debug for PlatformHandlers {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PlatformHandlers")
-            .field("quit", &self.quit.is_some())
-            .field("reopen", &self.reopen.is_some())
-            .field("open_urls", &self.open_urls.is_some())
-            .field(
-                "keyboard_layout_changed",
-                &self.keyboard_layout_changed.is_some(),
-            )
-            .field("session_end", &self.session_end.is_some())
-            .field("exit_policy", &self.exit_policy.is_some())
-            .field("wake_deadline", &self.wake_deadline.is_some())
-            .finish()
-    }
-}
-
-// ============================================================================
-// Windows a loop holds
-// ============================================================================
+use flui_platform::FrameRequest;
 
 /// The windows a loop holds through its hook, as one object: the window
 /// feature's. Each loop's hook extends it with what that loop asks of them.
@@ -171,6 +60,7 @@ fn frame_request_at(
 #[cfg(test)]
 mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use parking_lot::Mutex;
@@ -226,11 +116,26 @@ mod tests {
             }
         }
         // A teardown that runs a one-shot callback from a destructor, as the
-        // Win32 run guard runs the quit callback.
+        // Win32 run guard tells the application it quits: the callback is
+        // taken for good, so a failed call retains it rather than putting it
+        // back for the guard's own drop.
+        struct OneShot<'a>(&'a Mutex<Option<Box<dyn FnMut() + Send>>>);
+        impl crate::owner::call_point::HandlerSlot for OneShot<'_> {
+            type Handler = Box<dyn FnMut() + Send>;
+            fn take(&self) -> Option<Self::Handler> {
+                self.0.lock().take()
+            }
+            fn restore(&self, handler: Self::Handler) -> Option<Self::Handler> {
+                Some(handler)
+            }
+            fn replace(&self, handler: Self::Handler) -> Option<Self::Handler> {
+                self.0.lock().replace(handler)
+            }
+        }
         struct Guard(Mutex<Option<Box<dyn FnMut() + Send>>>);
         impl Drop for Guard {
             fn drop(&mut self) {
-                call(&crate::owner::call_point::Once(&self.0), |callback| {
+                call(&OneShot(&self.0), |callback| {
                     callback();
                 })
                 .or_contain((), "the guarded callback");

@@ -115,7 +115,7 @@ use flui_foundation::geometry::Point;
 use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::input_capabilities::{InputCapabilities, PointerKindSet};
 
-use crate::owner::call_point::{Field, Once, SharedField, call, install};
+use crate::owner::app_delivery::AppDelivery;
 use crate::owner::notices::{NoticeChannel, StaleOnWake};
 use crate::owner::signal::OwnerSignal;
 #[cfg(target_os = "macos")]
@@ -126,8 +126,7 @@ use crate::{
     error::BootstrapError, error::PlatformError, executor::BackgroundExecutor, host, host::Host,
     host_window::HostWindow, owner::OpenWindowError, owner::OwnerHooks, owner::OwnerPlatform,
     owner::PendingWindow, owner::ProxySendError, owner::ProxyTransport, owner::WindowOpen,
-    owner::handlers::PlatformHandlers, platform::HostPlatform, platform::Platform,
-    platform::PlatformExecutor, platform::PlatformReadyCallback,
+    platform::AppHandler, platform::HostPlatform, platform::Platform, platform::PlatformExecutor,
 };
 use control::{
     ControlCommand, ControlReceiver, ControlSendError, ControlSender, OpenWindowResult,
@@ -160,7 +159,7 @@ pub(crate) trait WinitHost: 'static {
     fn displays() -> Arc<dyn HostDisplays>;
 
     /// The channel the host's system notices take to the application.
-    fn notices() -> Arc<dyn NoticeChannel>;
+    fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel>;
 
     /// The system's preferences, which winit does not report.
     fn preferences() -> Box<dyn PreferenceStart>;
@@ -387,6 +386,10 @@ pub struct WinitLoop {
     /// hears of it.
     pub(crate) notices: Arc<dyn NoticeChannel>,
 
+    /// What the loop delivers to the application's handler, which `run`
+    /// binds as the loop resumes.
+    pub(crate) app: Arc<AppDelivery>,
+
     /// Starts the system preference source as the loop resumes, as the table
     /// made it ([`WinitHost::preferences`]).
     preference_start: Box<dyn PreferenceStart>,
@@ -521,8 +524,6 @@ pub(crate) struct WinitLoopState {
     /// ([`WinitHost::input`]); its identities and phases are committed before
     /// dispatch.
     input: Box<dyn LoopInput>,
-    /// Callback handlers
-    pub(crate) handlers: PlatformHandlers,
 
     /// Background executor
     pub(crate) background_executor: Arc<BackgroundExecutor>,
@@ -576,7 +577,6 @@ impl WinitLoopState {
             preferences: PreferenceObservation::Deferred,
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             preferences: None,
-            handlers: PlatformHandlers::new(),
             background_executor: Arc::new(BackgroundExecutor::new()),
             clipboard,
             data_transfer,
@@ -625,11 +625,13 @@ impl WinitLoop {
     /// sources, the clipboard and the drag-and-drop transport `H` makes, whose
     /// windows `windows` opens.
     pub(crate) fn new<H: WinitHost>(windows: Arc<dyn LoopWindows>) -> Self {
+        let app = Arc::new(AppDelivery::new());
         let platform = Self {
             owner_signal: Mutex::new(None),
             displays: H::displays(),
             windows,
-            notices: H::notices(),
+            notices: H::notices(&app),
+            app,
             #[cfg(test)]
             turn_read_hook_for_test: Mutex::new(None),
             preference_start: H::preferences(),
@@ -713,7 +715,7 @@ impl WinitLoop {
     pub(crate) fn run_event_loop(
         self: Arc<Self>,
         platform: Arc<dyn Platform>,
-        on_ready: PlatformReadyCallback,
+        handler: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError> {
         tracing::info!("Creating winit event loop");
 
@@ -756,7 +758,8 @@ impl WinitLoop {
             host_notices: None,
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             display_watch: None,
-            on_ready: Some(on_ready),
+            handler: Some(handler),
+            owner_hooks: None,
             control: receiver,
             quit_notified: false,
             in_flight_replies: Vec::new(),
@@ -777,6 +780,8 @@ impl WinitLoop {
         // simple — `finish_shutdown` does not touch this field.
         let bootstrap_error = app.bootstrap_error.take();
         app.finish_shutdown();
+        // The loop is over: the handler goes, outside every lock.
+        self.app.release();
 
         combine_shutdown_result(bootstrap_error, result)
     }
@@ -928,37 +933,20 @@ impl WinitLoop {
         })
     }
 
-    /// One of the application's handlers, as a slot of the platform state.
-    pub(crate) fn handler<H>(
-        &self,
-        project: fn(&mut WinitLoopState) -> &mut Option<H>,
-    ) -> Field<'_, Mutex<WinitLoopState>, H> {
-        Field::new(&*self.state, project)
-    }
-
-    /// Ask the exit-policy hook whether the loop may end, outside the state
-    /// lock (ADR-0039): the hook's own body (`flui-app`'s
-    /// `AppRuntime::should_exit`) drops removed UI runtime state, whose
-    /// destructors (a dispose hook opening another window, say) may call back
-    /// into this platform. `true` (allow the exit) when no hook is installed
-    /// — the pre-#555 unconditional default.
+    /// Ask the application's handler whether the loop may end, outside the
+    /// state lock (ADR-0039): its body (`flui-app`'s `AppRuntime::should_exit`)
+    /// drops removed UI runtime state, whose destructors (a dispose hook
+    /// opening another window, say) may call back into this platform. `true`
+    /// (allow the exit) when no handler is bound.
     fn exit_policy_allows_exit(&self) -> bool {
-        call(
-            &self.handler(|state| &mut state.handlers.exit_policy),
-            |hook| hook(),
-        )
-        .or_resume(true)
+        self.app.exit_policy().or_resume(true)
     }
 
-    /// The wall-clock instant the wake-deadline hook asks to be woken at,
-    /// asked through the call point outside the state lock: the hook walks
+    /// The wall-clock instant the application's handler asks to be woken at,
+    /// asked through the call point outside the state lock: the handler walks
     /// every hosted UI runtime and takes gesture-arena locks (ADR-0038 §5).
     fn wake_deadline(&self) -> Option<web_time::Instant> {
-        call(
-            &SharedField::new(&*self.state, |state| &mut state.handlers.wake_deadline),
-            |hook| hook(),
-        )
-        .or_resume(None)
+        self.app.wake_deadline().or_resume(None)
     }
 
     /// The owner control lane, while a loop is starting or running; `None`
@@ -1141,7 +1129,11 @@ pub(crate) struct WinitApp {
     pub(crate) platform: Arc<WinitLoop>,
     /// The platform over `platform` that `on_ready`'s owner capability wraps.
     owner_platform: Arc<dyn Platform>,
-    on_ready: Option<PlatformReadyCallback>,
+    /// The application's handler, until the loop resumes and binds it.
+    handler: Option<Rc<dyn AppHandler>>,
+    /// The owner hooks of the run, held here for its length: the loop's
+    /// delivery holds them weakly.
+    owner_hooks: Option<Arc<dyn OwnerHooks>>,
     control: ControlReceiver,
     quit_notified: bool,
     /// Claim slots whose delivery already landed (`Ok`), kept alive past
@@ -1362,22 +1354,29 @@ impl ApplicationHandler for WinitApp {
             return;
         }
 
-        // Call on_ready callback once. `ACTIVE_EVENT_LOOP` is published for
-        // this exact nested call so `open_window` can create windows
-        // directly instead of deadlocking on the cross-thread lane (see the
-        // module-level doc). Mint the owner-thread capability (ADR-0039)
-        // fresh for this call: `!Send + !Sync`, so it cannot outlive this
-        // stack frame except by `on_ready` stashing it itself (e.g.
-        // `flui-app`'s `OWNER_PLATFORM_HOST` TLS slot).
-        if let Some(on_ready) = self.on_ready.take() {
-            tracing::info!("Calling on_ready callback");
+        // Bind the application's handler and run its bootstrap once.
+        // `ACTIVE_EVENT_LOOP` is published for this exact nested call so
+        // `open_window` can create windows directly instead of deadlocking on
+        // the cross-thread lane (see the module-level doc). Mint the
+        // owner-thread capability (ADR-0039) for this call: `!Send + !Sync`,
+        // so it cannot outlive this stack frame except by the bootstrap
+        // keeping it itself (e.g. `flui-app`'s `OWNER_PLATFORM_HOST` TLS slot).
+        if let Some(handler) = self.handler.take() {
+            tracing::info!("Running the application's bootstrap");
             let owner_thread = thread::current().id();
             let hooks: Arc<dyn OwnerHooks> = Arc::new(WinitOwnerHooks {
                 platform: Arc::clone(&self.platform),
                 owner_thread,
             });
+            let app = Arc::clone(&self.platform.app);
+            app.bind(handler, &self.owner_platform, &hooks);
+            let signal = self.platform.owner_signal.lock().clone();
+            if let Some(signal) = signal {
+                app.resume_through_signal(&signal);
+            }
+            self.owner_hooks = Some(Arc::clone(&hooks));
             let owner = OwnerPlatform::new(Arc::clone(&self.owner_platform), hooks);
-            if let Err(error) = with_active_event_loop(event_loop, || on_ready(owner)) {
+            if let Err(error) = with_active_event_loop(event_loop, || app.ready(owner)) {
                 // A fallible bootstrap (window creation, GPU init,
                 // root-widget attach) failed with no return path back to
                 // `Platform::run`'s caller except through this stash and an
@@ -2477,11 +2476,7 @@ impl WinitApp {
         }
         self.quit_notified = true;
 
-        call(
-            &Once(self.platform.handler(|state| &mut state.handlers.quit)),
-            |quit| quit(),
-        )
-        .or_resume(());
+        self.platform.app.quit_requested().or_resume(());
     }
 }
 
@@ -2497,7 +2492,7 @@ impl host::Loop for WinitLoop {
     fn run(
         self: Arc<Self>,
         platform: Arc<dyn Platform>,
-        on_ready: PlatformReadyCallback,
+        handler: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError> {
         tracing::info!("Starting winit event loop via Platform::run()");
         // Generic wording, not "Winit event loop error": the propagated
@@ -2506,10 +2501,9 @@ impl host::Loop for WinitLoop {
         // error from `event_loop.run_app`, or both combined -- see
         // `run_event_loop`'s `combine_shutdown_result`. This is the sole
         // `error`-level log for whichever of those it turns out to be.
-        self.run_event_loop(platform, on_ready)
-            .inspect_err(|error| {
-                tracing::error!("winit Platform::run exited with an error: {:?}", error);
-            })
+        self.run_event_loop(platform, handler).inspect_err(|error| {
+            tracing::error!("winit Platform::run exited with an error: {:?}", error);
+        })
     }
 
     fn quit(&self) {
@@ -2535,14 +2529,6 @@ impl host::Loop for WinitLoop {
         }
     }
 
-    fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
-        install(&self.handler(|state| &mut state.handlers.quit), callback);
-    }
-
-    fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
-        install(&self.handler(|state| &mut state.handlers.exit_policy), hook);
-    }
-
     fn request_exit_policy_reevaluation(&self) {
         // Same run-state walk as `quit` above, minus the `New` arm: before
         // the loop starts there is no hook installed and no service
@@ -2551,22 +2537,6 @@ impl host::Loop for WinitLoop {
         if let Some(control) = self.control_sender() {
             control.request_exit_reevaluation();
         }
-    }
-
-    fn set_wake_deadline_hook(
-        &self,
-        hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
-    ) {
-        // `Arc::from(Box<dyn Trait>)` is a real, sanctioned std conversion,
-        // not a smuggled second allocation strategy: the caller-facing API
-        // stays `Box`-based (matching `set_exit_policy_hook`'s exact
-        // ergonomics), and this is the one place that converts to the shared
-        // storage `about_to_wait` calls a clone of (see `PlatformHandlers::
-        // wake_deadline`'s own doc for why).
-        install(
-            &self.handler(|state| &mut state.handlers.wake_deadline),
-            Arc::from(hook),
-        );
     }
 }
 
@@ -2682,9 +2652,9 @@ impl<H: Host<Loop = WinitLoop>> HostPlatform<H> {
     /// failure (including a second `run` on the same platform).
     pub fn run_event_loop(
         self: Arc<Self>,
-        on_ready: PlatformReadyCallback,
+        handler: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError> {
-        self.shared_owner().run_event_loop(self, on_ready)
+        self.shared_owner().run_event_loop(self, handler)
     }
 }
 
@@ -2892,106 +2862,46 @@ mod tests {
         },
     };
 
-    use super::testing::{QuietTable, quiet_platform};
+    use super::testing::quiet_platform;
     use super::{SelfCloseRoute, WinitApp, WinitRunState};
     use crate::owner::winit::control::control_lane;
-    use crate::platform::{HostPlatform, Platform};
     use flui_platform::WindowOptions;
 
-    /// Runs its action when dropped: a capture whose destructor calls back
-    /// into the platform.
-    struct OnDrop(Option<Box<dyn FnOnce() + Send>>);
-
-    impl Drop for OnDrop {
-        fn drop(&mut self) {
-            if let Some(action) = self.0.take() {
-                action();
-            }
-        }
-    }
-
-    /// The exit-policy hook runs with the state lock released: one that
-    /// installs its successor from inside its call, its captures asking the
-    /// platform for its active window when dropped, is retired after the call
-    /// and reaches the platform; one that installs its successor and panics
-    /// hands that panic to the loop, its captures retained. A regression
-    /// deadlocks, so the cases run on a worker thread.
+    /// The application's exit policy is asked with the state lock released,
+    /// its answer decides, and its panic reaches the loop.
     #[test]
-    fn winit_handlers_run_outside_the_state_lock() {
-        use std::sync::atomic::AtomicBool;
+    fn winit_exit_policy_runs_outside_the_state_lock() {
+        use std::cell::Cell;
+        use std::rc::Rc;
 
-        fn calls_back(
-            platform: &Arc<HostPlatform<QuietTable>>,
-            reached: &Arc<AtomicBool>,
-        ) -> OnDrop {
-            let (weak, reached) = (Arc::downgrade(platform), Arc::clone(reached));
-            OnDrop(Some(Box::new(move || {
-                if let Some(platform) = weak.upgrade() {
-                    let _ = platform.active_window();
-                    reached.store(true, Ordering::SeqCst);
-                }
-            })))
-        }
+        use crate::owner::app_delivery::testing::{AppCall, AppLog, bind};
 
-        let (done, finished) = std::sync::mpsc::channel();
-        let worker = std::thread::spawn(move || {
-            let host = Arc::new(quiet_platform());
-            let platform = host.shared_owner();
-
-            // An exit-policy hook replaces itself.
-            let reached = Arc::new(AtomicBool::new(false));
-            let capture = calls_back(&host, &reached);
-            let weak = Arc::downgrade(&host);
-            host.set_exit_policy_hook(Box::new(move || {
-                let _ = &capture;
-                weak.upgrade()
-                    .expect("the platform")
-                    .set_exit_policy_hook(Box::new(|| false));
-                true
-            }));
-            assert!(platform.exit_policy_allows_exit());
-            assert!(reached.load(Ordering::SeqCst), "the hook was retired");
-            assert!(!platform.exit_policy_allows_exit(), "the successor decides");
-
-            // An exit-policy hook replaces itself and panics.
-            let dropped = Arc::new(AtomicBool::new(false));
-            let witness = {
-                let dropped = Arc::clone(&dropped);
-                OnDrop(Some(Box::new(move || {
-                    dropped.store(true, Ordering::SeqCst);
-                })))
-            };
-            let weak = Arc::downgrade(&host);
-            host.set_exit_policy_hook(Box::new(move || {
-                let _ = &witness;
-                weak.upgrade()
-                    .expect("the platform")
-                    .set_exit_policy_hook(Box::new(|| false));
-                panic!("first failure");
-            }));
-            let failure = catch_unwind(AssertUnwindSafe(|| {
-                platform.exit_policy_allows_exit();
-            }))
-            .expect_err("the hook's panic reaches the loop");
-            assert_eq!(
-                flui_foundation::panic::payload_text(failure.as_ref()),
-                Some("first failure")
-            );
-            assert!(
-                !dropped.load(Ordering::SeqCst),
-                "the failed hook's captures are retained, not dropped"
-            );
-            let _ = done.send(());
+        let host = Arc::new(quiet_platform());
+        let platform = host.shared_owner();
+        let app = AppLog::new();
+        app.answer_exit(true);
+        let _run = bind(Arc::clone(&platform.app), app.clone());
+        let unlocked = Rc::new(Cell::new(false));
+        let (seen, probe) = (Rc::clone(&unlocked), Arc::clone(&platform));
+        app.react(move |call, _| {
+            if call == AppCall::ExitPolicy {
+                seen.set(probe.state.try_lock().is_some());
+            }
         });
-        match finished.recv_timeout(std::time::Duration::from_secs(10)) {
-            Ok(()) => worker.join().expect("the cases finished"),
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                std::panic::resume_unwind(worker.join().expect_err("a case panicked"));
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                panic!("deadlocked: a handler ran, or was dropped, under the state lock")
-            }
-        }
+        assert!(platform.exit_policy_allows_exit());
+        assert!(unlocked.get(), "the handler was asked under the state lock");
+        app.answer_exit(false);
+        assert!(!platform.exit_policy_allows_exit(), "the handler decides");
+
+        app.react(|call, _| {
+            assert!(call != AppCall::ExitPolicy, "first failure");
+        });
+        let failure = catch_unwind(AssertUnwindSafe(|| platform.exit_policy_allows_exit()))
+            .expect_err("the handler's panic reaches the loop");
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.as_ref()),
+            Some("first failure")
+        );
     }
 
     // ========================================================================
@@ -3029,14 +2939,20 @@ mod tests {
         let callback_count = Arc::new(AtomicUsize::new(0));
         let callback_count_for_handler = Arc::clone(&callback_count);
         let platform_for_handler = Arc::clone(&platform);
-        host.on_quit(Box::new(move || {
+        let app = crate::owner::app_delivery::testing::AppLog::new();
+        let _run =
+            crate::owner::app_delivery::testing::bind(Arc::clone(&platform.app), app.clone());
+        app.react(move |call, _| {
+            if call != crate::owner::app_delivery::testing::AppCall::Quit {
+                return;
+            }
             callback_count_for_handler.fetch_add(1, Ordering::Relaxed);
             assert!(
                 platform_for_handler
                     .with_state(|state| matches!(&state.run_state, WinitRunState::Stopped))
             );
             panic!("exercise panicking quit callback cleanup");
-        }));
+        });
         let mut app = WinitApp {
             platform: Arc::clone(&platform),
             owner_platform: host,
@@ -3050,7 +2966,8 @@ mod tests {
             host_notices: None,
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             display_watch: None,
-            on_ready: None,
+            handler: None,
+            owner_hooks: None,
             control: receiver,
             quit_notified: false,
             in_flight_replies: Vec::new(),
@@ -3155,7 +3072,8 @@ mod tests {
             owner_platform: host,
             preference_source: None,
             broadcasts: None,
-            on_ready: None,
+            handler: None,
+            owner_hooks: None,
             control: receiver,
             quit_notified: false,
             in_flight_replies: Vec::new(),

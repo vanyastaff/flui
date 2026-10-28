@@ -13,6 +13,7 @@ use crate::host::Host;
 use crate::input::headless::{AttachedDevices, HeadlessInputDevices};
 use crate::lifecycle::headless::HeadlessHostEvents;
 use crate::lifecycle::notice::SystemNotices;
+use crate::owner::app_delivery::AppDelivery;
 use crate::owner::headless::{
     HeadlessHost, HeadlessLoop, HeadlessState, SimulatedDevices, SimulatedOffers,
 };
@@ -51,8 +52,8 @@ impl HeadlessHost for Headless {
         laid_out(vec![DisplaySpec::default()])
     }
 
-    fn notices() -> Arc<dyn NoticeChannel> {
-        Arc::new(SystemNotices::default())
+    fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {
+        Arc::new(SystemNotices::new(Arc::clone(app)))
     }
 
     fn devices() -> Box<dyn SimulatedDevices> {

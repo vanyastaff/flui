@@ -303,11 +303,10 @@ pub fn run_direct(
             },
         );
 
-        owner_platform_installed(|owner| {
-            owner.shared().on_quit(Box::new(|| {
-                tracing::info!("Platform quit");
-            }));
-        });
+        // Direct mode hosts no runtime to keep the loop alive: its last
+        // window closing ends it, and the quit is only logged.
+        crate::app::runner::route_quit(|| tracing::info!("Platform quit"));
+        crate::app::runner::route_exit_policy(|| true);
 
         // 8. Request initial redraw
         window.request_redraw();
@@ -319,7 +318,7 @@ pub fn run_direct(
     // Owner-host clear guard armed BEFORE `run(...)`, not inside `on_ready`
     // (ADR-0039 §6/§7) — see `run_desktop`'s matching comment.
     let _owner_host_clear_guard = crate::app::runner::OwnerHostClearGuard::arm();
-    platform.run(Box::new(move |owner| {
+    platform.run(crate::app::runner::app_handler(move |owner| {
         crate::app::runner::install_owner_platform(owner)?;
         bootstrap_direct(config, render_fn)?;
         tracing::info!("FLUI direct render mode ready");

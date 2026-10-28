@@ -153,11 +153,11 @@ where
         // The existing owner wake carries runtime deadlines as well as device
         // and surface recovery and the background pace. Geometry refresh is
         // owner work even while a hidden presentation cannot produce frames.
-        owner_platform_installed(|owner| {
+        {
             let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
             let surface_recreation_retry = Arc::clone(&surface_recreation_retry);
             let background_pace = Arc::clone(&background_pace);
-            owner.shared().set_wake_deadline_hook(Box::new(move || {
+            super::host::route_wake_deadline(move || {
                 [
                     APP_RUNTIME.with(|slot| slot.borrow().next_wake()),
                     device_recovery_backoff.next_attempt_at(),
@@ -167,8 +167,8 @@ where
                 .into_iter()
                 .flatten()
                 .min()
-            }));
-        });
+            });
+        }
 
         // 1. Open window (wraps the existing ANativeWindow). `Ready` is
         // guaranteed inside `on_ready` (ADR-0039 §1).
@@ -342,9 +342,7 @@ where
         // before lifecycle observers run.
 
         // Native close and quit both revoke this binding before observers run.
-        owner_platform_installed(|owner| {
-            installation.terminal_callbacks(&owner.shared());
-        });
+        installation.terminal_callbacks();
 
         // 8b. Surface availability (issue #1146): the release that has to
         // happen before the native window behind the surface dies, and the
@@ -491,7 +489,7 @@ where
     // Owner-host clear guard armed BEFORE `run(...)`, not inside `on_ready`
     // (ADR-0039 §6) — see `run_desktop`'s matching comment.
     let _owner_host_clear_guard = OwnerHostClearGuard::arm();
-    let result = platform.run(Box::new(move |owner| {
+    let result = platform.run(crate::app::runner::app_handler(move |owner| {
         install_owner_platform(owner)?;
         with_owner_platform(|owner| owner.on_wake(Box::new(super::host::drive_native_text_sizing)))
             .expect("BUG: Android owner was just installed")?;
@@ -578,7 +576,7 @@ impl AndroidFrameDriver {
 
             let has_pending = ui_runtime.has_pending_work();
             // See the desktop closure's matching comment: a wake-
-            // deadline source (here, `set_wake_deadline_hook` forces
+            // deadline source (here, the routed wake deadline forces
             // a dispatch once due — `flui-native`'s
             // `owner/android/looper.rs`'s own `run` loop) that is
             // absent from `dirty` reaches `WakeAction::Skip` and

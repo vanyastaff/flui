@@ -419,7 +419,7 @@ mod tests {
         let saved = Rc::new(RefCell::new(None));
         let returned = Rc::clone(&saved);
         Box::new(HeadlessPlatform::new())
-            .run(Box::new(move |owner| {
+            .run(crate::app::runner::app_handler(move |owner| {
                 returned.replace(Some(owner));
                 Ok(())
             }))

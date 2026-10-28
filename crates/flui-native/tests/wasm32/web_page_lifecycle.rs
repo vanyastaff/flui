@@ -10,14 +10,13 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use flui_native::{HostWindow, WindowOpen};
-use flui_platform::{
-    SessionEndAnswer, SessionEndPhase, WindowCapabilities, WindowExecutionState, WindowMode,
-};
+use flui_platform::{SessionEndPhase, WindowCapabilities, WindowExecutionState, WindowMode};
 use flui_platform::{SurfaceChange, WindowOptions};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::wasm_bindgen_test;
 
 use super::display::{Probe, Running, install_probe, settle};
+use crate::app::AppCall;
 
 #[wasm_bindgen(inline_js = r#"
 let held = [];
@@ -185,41 +184,37 @@ async fn web_freeze_and_resume_set_the_execution_state() {
     settle().await;
 }
 
+/// The session-end phases the page's handler heard, in order.
+fn phases(running: &Running) -> Vec<SessionEndPhase> {
+    running
+        .log
+        .calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            AppCall::SessionEnd(phase) => Some(phase),
+            _ => None,
+        })
+        .collect()
+}
+
 #[wasm_bindgen_test]
 async fn web_pagehide_reports_the_session_ending() {
     let (_probe, running, _window) = page().await;
-    let (seen, log) = recorder();
-    running
-        .owner
-        .borrow()
-        .as_ref()
-        .expect("owner")
-        .on_session_end(Box::new(move |phase| {
-            log.lock().expect("recorded values").push(phase);
-            SessionEndAnswer::Proceed
-        }));
 
     fire_window("pagehide", false);
-    assert_eq!(
-        *seen.lock().expect("recorded values"),
-        [SessionEndPhase::Ending]
-    );
+    assert_eq!(phases(&running), [SessionEndPhase::Ending]);
     // A page the browser cached comes back: the ending is undone. A first
     // load raises `pageshow` too, and says nothing.
     fire_window("pageshow", false);
-    assert_eq!(
-        seen.lock().expect("recorded values").len(),
-        1,
-        "a first load ends nothing"
-    );
+    assert_eq!(phases(&running).len(), 1, "a first load ends nothing");
     fire_window("pageshow", true);
     assert_eq!(
-        *seen.lock().expect("recorded values"),
+        phases(&running),
         [SessionEndPhase::Ending, SessionEndPhase::Cancelled]
     );
     // And it can be hidden again.
     fire_window("pagehide", false);
-    assert_eq!(seen.lock().expect("recorded values").len(), 3);
+    assert_eq!(phases(&running).len(), 3);
 
     running.quit();
     settle().await;
@@ -231,82 +226,28 @@ async fn web_pagehide_reports_the_session_ending() {
     assert_eq!(window_listeners("pageshow"), 0);
 }
 
+/// The handler asks the page to quit from inside a session end: the quit
+/// waits for the owner's turn, so the phase that follows is still heard, and
+/// the handler hears the quit once.
 #[wasm_bindgen_test]
-async fn web_pagehide_is_not_replayed_to_a_later_hook() {
+async fn web_session_end_handler_reenters_the_platform() {
     let (_probe, running, _window) = page().await;
-    assert_eq!(window_listeners("pagehide"), 1);
-    fire_window("pagehide", false);
-    let (seen, log) = recorder();
-    running
-        .owner
-        .borrow()
-        .as_ref()
-        .expect("owner")
-        .on_session_end(Box::new(move |phase| {
-            log.lock().expect("recorded values").push(phase);
-            SessionEndAnswer::Proceed
-        }));
-    assert!(
-        seen.lock().expect("recorded values").is_empty(),
-        "a notice is one-off"
-    );
-    running.quit();
-    settle().await;
-}
-
-/// Runs its action when dropped: a capture whose destructor calls the
-/// platform.
-struct OnDrop(Option<Box<dyn FnOnce() + Send>>);
-
-impl Drop for OnDrop {
-    fn drop(&mut self) {
-        if let Some(action) = self.0.take() {
-            action();
+    let proxy = running.owner.borrow().as_ref().expect("owner").proxy();
+    let asked = Cell::new(false);
+    running.log.react(move |call, _| {
+        if matches!(call, AppCall::SessionEnd(_)) && !asked.replace(true) {
+            proxy.request_quit().expect("quit");
         }
-    }
-}
-
-/// A session-end hook installs its successor and asks the page to quit from
-/// inside its call; its captures, which call the platform when dropped, are
-/// dropped after the call, and the successor hears the next phase.
-#[wasm_bindgen_test]
-async fn web_session_end_hook_reenters_the_platform() {
-    let (_probe, running, _window) = page().await;
-    let (shared, proxy) = {
-        let owner = running.owner.borrow();
-        let owner = owner.as_ref().expect("owner");
-        (owner.shared(), owner.proxy())
-    };
-    let reached = Arc::new(Mutex::new(false));
-    let (dropping, observed) = (shared.clone(), Arc::clone(&reached));
-    let calls_back = OnDrop(Some(Box::new(move || {
-        dropping.on_quit(Box::new(|| {}));
-        *observed.lock().expect("recorded values") = true;
-    })));
-    let (seen, log) = recorder();
-    let installing = shared.clone();
-    shared.on_session_end(Box::new(move |_| {
-        let _ = &calls_back;
-        let log = Arc::clone(&log);
-        installing.on_session_end(Box::new(move |phase| {
-            log.lock().expect("recorded values").push(phase);
-            SessionEndAnswer::Proceed
-        }));
-        proxy.request_quit().expect("quit");
-        SessionEndAnswer::Proceed
-    }));
+    });
 
     fire_window("pagehide", false);
-    assert!(
-        *reached.lock().expect("recorded values"),
-        "the replaced hook's destructor reached the platform"
-    );
     fire_window("pageshow", true);
     assert_eq!(
-        *seen.lock().expect("recorded values"),
-        [SessionEndPhase::Cancelled]
+        phases(&running),
+        [SessionEndPhase::Ending, SessionEndPhase::Cancelled]
     );
     settle().await;
+    assert_eq!(running.log.count(AppCall::Quit), 1, "the quit, once");
 }
 
 #[wasm_bindgen_test]

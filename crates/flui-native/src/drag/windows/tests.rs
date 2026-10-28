@@ -1005,7 +1005,11 @@ fn a_second_window_repaints_while_the_modal_loop_rests() {
             released.store(true, Ordering::Release);
         }
     });
-    platform.set_wake_deadline_hook(Box::new(|| Some(web_time::Instant::now())));
+    // The platform is not run: its delivery is bound to a handler that asks
+    // for a deadline due at every instant, as a running application's would.
+    let app = crate::owner::app_delivery::testing::AppLog::new();
+    app.answer_deadline(Some(web_time::Instant::now()));
+    let _run = crate::owner::app_delivery::testing::bind(Arc::clone(&platform.owner().app), app);
     let _ = pump_until(|| false, Duration::from_millis(50));
     let before = frames.load(Ordering::Relaxed);
     release.store(false, Ordering::Release);

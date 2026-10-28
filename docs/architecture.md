@@ -138,7 +138,10 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     fn background_executor(&self) -> Arc<dyn PlatformExecutor>;
 
     // Lifecycle
-    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> Result<(), PlatformError>;
+    // The handler hears and answers what the platform has for the application:
+    // its bootstrap, the quit, a reopen, a session end, a notice, the exit
+    // policy and the wake deadline.
+    fn run(self: Box<Self>, handler: Rc<dyn AppHandler>) -> Result<(), PlatformError>;
     fn quit(&self);
 
     // Windows + displays
@@ -154,13 +157,13 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     // Input
     fn clipboard(&self) -> Arc<dyn Clipboard>;
 
-    // Callbacks + metadata
-    fn on_quit(&self, callback: Box<dyn FnMut() + Send>);
+    // Metadata
     fn name(&self) -> &'static str;
-    // ... plus file pickers, app activation, exit policy, preferences and data dirs
+    // ... plus file pickers, app activation, exit re-evaluation, preferences and data dirs
 }
 
-// PlatformReadyCallback = Box<dyn FnOnce(OwnerPlatform) -> Result<(), BootstrapError>>
+// AppHandler, the core host's trait, implemented by flui-app and by code that drives a host directly: ready(OwnerPlatform),
+// quit_requested, reopen, session_end, host_notice, exit_policy (an ExitAnswer), wake_deadline (ADR-0254 §4).
 let platform = current_platform()?; // Result<Box<dyn Platform>, PlatformError>
 ```
 

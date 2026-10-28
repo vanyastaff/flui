@@ -46,11 +46,13 @@ use crate::error::PlatformError;
 use crate::host::{self, Absent, Host, position};
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
+use crate::owner::app_delivery::AppDelivery;
 use crate::owner::notices::testing::NoNotices;
 use crate::owner::notices::{NoticeChannel, StaleOnWake};
 use crate::owner::signal::OwnerSignal;
 use crate::owner::sources::SystemPreferenceSource;
-use crate::platform::{HostPlatform, Platform, PlatformReadyCallback};
+use crate::platform::{AppHandler, HostPlatform, Platform};
+use std::rc::Rc;
 
 /// Builds a real `EventLoop` for a test running on an ordinary test
 /// thread, not the process's actual main thread. winit refuses this by
@@ -208,7 +210,7 @@ impl WinitApp {
         platform: Arc<WinitLoop>,
         owner_platform: Arc<dyn Platform>,
         LaneReceiver(control): LaneReceiver,
-        on_ready: Option<PlatformReadyCallback>,
+        handler: Option<Rc<dyn AppHandler>>,
     ) -> Self {
         Self {
             #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
@@ -223,7 +225,8 @@ impl WinitApp {
             display_watch: None,
             platform,
             owner_platform,
-            on_ready,
+            handler,
+            owner_hooks: None,
             control,
             quit_notified: false,
             in_flight_replies: Vec::new(),
@@ -276,7 +279,7 @@ impl<D: HostDisplays + Default + 'static> WinitHost for QuietHost<D> {
         Arc::new(D::default())
     }
 
-    fn notices() -> Arc<dyn NoticeChannel> {
+    fn notices(_: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {
         Arc::new(NoNotices)
     }
 
