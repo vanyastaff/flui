@@ -810,6 +810,11 @@ pub struct EditableTextState {
     /// The current [`EditableText::on_changed`] callback, read at edit time
     /// through a shared cell for the reason `on_submitted` is.
     on_changed: Rc<RefCell<Option<TextChanged>>>,
+    /// Whether an edit is reported through `on_changed`: cleared when
+    /// dispose begins, so an edit the input method makes while the field
+    /// lets go of it reaches no owner (ADR-0142 item 4). The callback itself
+    /// stays in its cell, retired by whichever holder outlives the field.
+    reports_edits: Rc<Cell<bool>>,
     /// The presentation's clipboard, acquired in `init_state`. `None` only
     /// on a bare owner; the clipboard actions are then disabled.
     clipboard: Option<ClipboardHandle>,
@@ -879,6 +884,7 @@ impl StatefulView for EditableText {
             writer: None,
             on_submitted: Rc::new(RefCell::new(self.on_submitted.clone())),
             on_changed: Rc::new(RefCell::new(self.on_changed.clone())),
+            reports_edits: Rc::new(Cell::new(true)),
             clipboard: None,
             selection_drag: Rc::new(Cell::new(None)),
             obscure: Rc::new(Cell::new(self.obscure_text)),
@@ -1156,6 +1162,7 @@ impl EditableTextState {
         EditObserver {
             controller: Rc::clone(&self.controller),
             on_changed: Rc::clone(&self.on_changed),
+            reports: Rc::clone(&self.reports_edits),
             writer: self.writer(),
         }
     }
@@ -1366,6 +1373,8 @@ impl Action<SelectAllTextIntent> for SelectAllTextAction {
 pub(super) struct EditObserver {
     controller: Rc<RefCell<TextEditingController>>,
     on_changed: Rc<RefCell<Option<TextChanged>>>,
+    /// The field's [`EditableTextState::reports_edits`].
+    reports: Rc<Cell<bool>>,
     writer: WriterSource,
 }
 
@@ -1399,9 +1408,12 @@ impl EditObserver {
 
     /// The `on_changed` an edit accepted now is owed to: a snapshot of the
     /// installed callback, which [`Self::deliver`] calls though the field
-    /// removed or replaced it meanwhile. `None` when none is installed: the
-    /// edit then owes nothing.
+    /// removed or replaced it meanwhile. `None` when none is installed or the
+    /// field's dispose has begun: the edit then owes nothing.
     pub(super) fn accept(&self) -> Option<TextChanged> {
+        if !self.reports.get() {
+            return None;
+        }
         self.on_changed.borrow().clone()
     }
 
@@ -2054,9 +2066,8 @@ impl ViewState<EditableText> for EditableTextState {
         // first failure is resumed once dispose is complete.
         let mut calls = OwnerCalls::new();
         // No edit from here on reaches the owner: the field is going away
-        // (ADR-0142 item 4). The callback's last handle retires in scope.
-        let on_changed = self.on_changed.borrow_mut().take();
-        calls.retire(on_changed);
+        // (ADR-0142 item 4).
+        self.reports_edits.set(false);
         // This field's own rebuild listener goes first: the commit below
         // must not schedule a build of a subtree that is being unmounted.
         if let Some(id) = self.controller_listener_id.take() {
