@@ -103,6 +103,8 @@ pub(crate) fn connect(
 
 /// Which of the two descriptors is ready.
 pub(super) struct Readiness {
+    /// Read by the Wayland session; the X11 one drains its queue each turn.
+    #[cfg(feature = "wayland")]
     pub connection: bool,
     pub stop: bool,
 }
@@ -127,14 +129,13 @@ pub(super) fn wait_readable(
         }
     }
     // A hang-up or an error on the connection is reported by the next read.
-    let connection_ready = fds[0]
-        .revents()
-        .intersects(PollFlags::IN | PollFlags::HUP | PollFlags::ERR);
-    let stop_ready = fds[1]
-        .revents()
-        .intersects(PollFlags::IN | PollFlags::HUP | PollFlags::ERR);
+    let ready = |fd: &PollFd<'_>| {
+        fd.revents()
+            .intersects(PollFlags::IN | PollFlags::HUP | PollFlags::ERR)
+    };
     Ok(Readiness {
-        connection: connection_ready,
-        stop: stop_ready,
+        #[cfg(feature = "wayland")]
+        connection: ready(&fds[0]),
+        stop: ready(&fds[1]),
     })
 }

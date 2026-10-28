@@ -1017,29 +1017,30 @@ pub(super) fn desktop_secondary_wake_deadline(
 /// through [`OwnerPlatform::shared`](flui_native::OwnerPlatform::shared),
 /// which returns `SharedPlatform` — a type whose method list IS the fence
 /// (no owner-affine method, e.g. `open_window`, is ever added to it; see
-/// its own rustdoc). The failing and passing examples share a bootstrap
-/// callback and differ only in the window-opening receiver: the shared
-/// residual has no `open_window`, while the owner capability does. The
-/// examples compile in the doctest suite; the valid callback is not run.
+/// its own rustdoc). The failing and passing examples differ only in the
+/// window-opening receiver: the shared residual has no `open_window`, while
+/// the owner capability does.
 ///
 /// ```compile_fail,E0599
-/// use flui_native::headless_platform;
+/// use std::rc::Rc;
 ///
-/// let _ = headless_platform().run(crate::app::runner::app_handler(|owner| {
-///     let shared = owner.shared();
-///     let _ = shared.open_window(Default::default());
-///     Ok(())
-/// }));
+/// use flui_native::OwnerPlatform;
+/// use flui_platform::{WindowHandler, WindowOptions};
+///
+/// fn open(owner: &OwnerPlatform, options: WindowOptions, handler: Rc<dyn WindowHandler>) {
+///     let _ = owner.shared().open_window(options, handler);
+/// }
 /// ```
 ///
-/// ```no_run
-/// use flui_native::headless_platform;
+/// ```
+/// use std::rc::Rc;
 ///
-/// let _ = headless_platform().run(crate::app::runner::app_handler(|owner| {
-///     let shared = owner.shared();
-///     let _ = owner.open_window(Default::default());
-///     Ok(())
-/// }));
+/// use flui_native::OwnerPlatform;
+/// use flui_platform::{WindowHandler, WindowOptions};
+///
+/// fn open(owner: &OwnerPlatform, options: WindowOptions, handler: Rc<dyn WindowHandler>) {
+///     let _ = owner.open_window(options, handler);
+/// }
 /// ```
 ///
 /// # Native re-entry
