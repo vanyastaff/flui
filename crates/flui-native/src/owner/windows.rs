@@ -1401,6 +1401,7 @@ impl host::Services for WindowsLoop {
     fn open_url(&self, url: &str) {
         use windows::Win32::UI::Shell::ShellExecuteW;
         let wide_url: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
+        hand_over_foreground();
         // SAFETY: `wide_url` is explicitly NUL-terminated
         // (`.chain(std::iter::once(0))`), matching what `PCWSTR` requires,
         // and stays alive for the duration of this call (it is not dropped
@@ -1424,6 +1425,7 @@ impl host::Services for WindowsLoop {
         let arg = format!("/select,{path_str}");
         let wide_arg: Vec<u16> = arg.encode_utf16().chain(std::iter::once(0)).collect();
         let explorer: Vec<u16> = "explorer\0".encode_utf16().collect();
+        hand_over_foreground();
         // SAFETY: see `open_url` above — both `wide_arg` and `explorer` are
         // explicitly NUL-terminated and kept alive across the call.
         unsafe {
@@ -1445,6 +1447,7 @@ impl host::Services for WindowsLoop {
             .encode_utf16()
             .chain(std::iter::once(0))
             .collect();
+        hand_over_foreground();
         // SAFETY: see `open_url` above — `wide_path` is explicitly
         // NUL-terminated and kept alive across the call.
         unsafe {
@@ -1678,24 +1681,27 @@ impl host::Lifecycle<WindowsLoop> for WindowsLoop {
         }
     }
 
-    fn activate(_: &WindowsLoop, _ignoring_other_apps: bool) {
-        use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, SetForegroundWindow};
+    /// Windows has no application to bring forward, only its windows: a
+    /// window comes forward through `WindowCommand::Activate`, under the
+    /// foreground rules. Nothing here touches the foreground, least of all
+    /// another application's window.
+    fn activate(_: &WindowsLoop, _ignoring_other_apps: bool) {}
+}
 
-        // SAFETY: `GetForegroundWindow`/`SetForegroundWindow` take no
-        // pointer arguments — `hwnd` is an opaque value, never dereferenced.
-        unsafe {
-            // Bring the foreground window to front
-            let hwnd = GetForegroundWindow();
-            if !hwnd.is_invalid()
-                && let Err(error) = SetForegroundWindow(hwnd).ok()
-            {
-                tracing::warn!(
-                    ?hwnd,
-                    ?error,
-                    "SetForegroundWindow failed in Platform::activate"
-                );
-            }
-        }
+/// Let the process a link or file is handed to come to the foreground.
+///
+/// The shell often hands it to an application already running (a browser,
+/// Explorer), which Windows lets come forward only if the process the user
+/// works with allows it; this process allows any (`ASFW_ANY`), as the request
+/// is the user's. The right lasts until the user's next input. Where this
+/// process holds no foreground right itself, Windows refuses the call, and
+/// nothing is handed over that was not this process's to hand.
+fn hand_over_foreground() {
+    use windows::Win32::UI::WindowsAndMessaging::{ASFW_ANY, AllowSetForegroundWindow};
+
+    // SAFETY: `AllowSetForegroundWindow` takes a process identifier by value.
+    if let Err(error) = unsafe { AllowSetForegroundWindow(ASFW_ANY) } {
+        tracing::debug!(%error, "the foreground was not this process's to hand over");
     }
 }
 

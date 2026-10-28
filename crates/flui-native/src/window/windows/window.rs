@@ -1528,25 +1528,29 @@ impl WindowsWindow {
                 .unwrap_or(Err(ApplyError::Closed))
             },
             || {
-                // SAFETY: the adapter rechecked wrapper identity after ShowWindow,
-                // on the same owner thread, before this callback-capable call.
-                // Foreground policy may deny the request without failing show.
-                unsafe {
-                    let _ = SetForegroundWindow(self.hwnd);
-                }
+                // The adapter rechecked wrapper identity after ShowWindow, on
+                // the same owner thread, before this callback-capable call.
+                // A show the foreground rules refuse is still a show: it asks
+                // for no attention.
+                let _ = request_foreground(self.hwnd);
             },
         )
     }
 
+    /// Bring the window to the foreground where Windows' foreground rules let
+    /// this process, and ask for the user's attention where they do not: the
+    /// window never takes the focus from the application the user works
+    /// with.
     fn activate_window(&self) {
         // Activating a window that was never shown shows it.
         self.show_first();
-        // SAFETY: `SetForegroundWindow` takes `self.hwnd` by value, no
-        // pointer arguments.
-        unsafe {
-            if let Err(error) = SetForegroundWindow(self.hwnd).ok() {
-                tracing::warn!(hwnd = ?self.hwnd, ?error, "SetForegroundWindow failed");
-            }
+        // The show can have run user callbacks that closed this window and
+        // opened another on the same handle.
+        if !self.owns_handle() {
+            return;
+        }
+        if request_foreground(self.hwnd) == Foreground::Refused {
+            ask_attention(self.hwnd);
         }
     }
 
@@ -1619,6 +1623,56 @@ fn handle_available(route: crate::owner::hwnd_affinity::TeardownRoute) -> bool {
         route,
         TeardownRoute::DestroyDirect | TeardownRoute::PostClose
     )
+}
+
+/// What Windows answered a request for the foreground.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Foreground {
+    /// The window is in the foreground.
+    Granted,
+    /// The foreground stays where it is.
+    Refused,
+}
+
+/// Ask Windows to bring `hwnd` to the foreground. Windows grants it only to
+/// the process the user works with: the one in the foreground, one it
+/// started, the one that received the last input, or one the foreground
+/// process handed the right to (`AllowSetForegroundWindow`, which a second
+/// launch calls before it hands its arguments to the running instance).
+/// Every other request is refused and the foreground stays where it is.
+/// This is the only place a window asks for the foreground: nothing forces
+/// it past those rules (no attached input queue, no injected keystroke).
+fn request_foreground(hwnd: HWND) -> Foreground {
+    // SAFETY: `SetForegroundWindow` takes the window's handle by value and
+    // reads nothing through it; a handle that no longer names a window is
+    // refused, not dereferenced.
+    if unsafe { SetForegroundWindow(hwnd) }.as_bool() {
+        Foreground::Granted
+    } else {
+        Foreground::Refused
+    }
+}
+
+/// Ask for the user's attention to `hwnd`, which the foreground rules kept
+/// in the background: its taskbar button flashes until the window comes to
+/// the foreground.
+fn ask_attention(hwnd: HWND) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        FLASHW_TIMERNOFG, FLASHW_TRAY, FLASHWINFO, FlashWindowEx,
+    };
+
+    let flash = FLASHWINFO {
+        cbSize: u32::try_from(std::mem::size_of::<FLASHWINFO>())
+            .expect("BUG: FLASHWINFO is a few bytes"),
+        hwnd,
+        dwFlags: FLASHW_TRAY | FLASHW_TIMERNOFG,
+        uCount: 0,
+        dwTimeout: 0,
+    };
+    // SAFETY: `flash` is a stack local of the size its `cbSize` names, read
+    // through the typed pointer for the duration of the call. The return
+    // value is the window's caption state before the call, not a failure.
+    let _ = unsafe { FlashWindowEx(&raw const flash) };
 }
 
 /// A Win32 window's surface target and redraw requester (ADR-0254 §5): what

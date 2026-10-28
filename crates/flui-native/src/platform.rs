@@ -310,10 +310,11 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
 
     /// Activate the application (bring to front)
     ///
-    /// On Windows: brings the active window to the foreground.
-    /// The other hosts do nothing: AppKit activates the application once, as
-    /// its loop starts, and winit, the web, Android and iOS have no way to
-    /// bring the whole application forward.
+    /// Only AppKit activates the application, once, as its loop starts. The
+    /// other hosts do nothing: Windows brings a window forward, not an
+    /// application, through `WindowCommand::Activate` and its foreground
+    /// rules; winit, the web, Android and iOS have no way to bring the whole
+    /// application forward.
     fn activate(&self, ignoring_other_apps: bool);
 
     // ==================== Clipboard (US3 Enhanced) ====================
