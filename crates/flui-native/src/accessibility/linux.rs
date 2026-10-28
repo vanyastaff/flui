@@ -30,14 +30,15 @@
 //! tree yet. That is not a failure: AccessKit treats it as "not ready", and the
 //! next [`publish`](PlatformAccessibility::publish) delivers the tree once
 //! assembly has produced one.
+//!
+//! [`ActivationHandler::request_initial_tree`]: accesskit::ActivationHandler::request_initial_tree
 
 use std::sync::Arc;
 
-use accesskit::{ActionHandler, ActionRequest, ActivationHandler, DeactivationHandler, TreeUpdate};
+use accesskit::TreeUpdate;
 use parking_lot::Mutex;
 
-use crate::accessibility::bridge::BridgeShared;
-use crate::owner::panic_boundary::{AfterPanic, os_entry};
+use crate::accessibility::bridge::{Action, Activation, BridgeShared, Deactivation};
 use flui_semantics::{
     platform::AccessibilityActionListener, platform::AccessibilityActivationListener,
     platform::PlatformAccessibility,
@@ -49,61 +50,6 @@ use flui_semantics::{
 // everything they touch has to be reachable from both sides — and the
 // retention/dispatch rules are common to every OS adapter, so they are
 // written and unit-tested once there rather than re-derived per OS.
-
-struct Activation(Arc<BridgeShared>);
-
-// Each handler runs the composition root's listener on the adapter's thread,
-// inside AccessKit's own AT-SPI entry: a panic in it is contained there and
-// answers as if no listener ran.
-
-impl ActivationHandler for Activation {
-    fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
-        os_entry(
-            "AccessKit's activation",
-            (),
-            AfterPanic::Answer(|()| None),
-            || {
-                // Order matters: mark active and tell the composition root *before*
-                // reading `latest`. The listener typically enables semantics, and on a
-                // cold start that is what will produce the first tree at all — reading
-                // first would answer `None` even when a synchronous listener could
-                // have supplied one.
-                self.0.notify_activation(true);
-                self.0.retained()
-            },
-        )
-    }
-}
-
-struct Deactivation(Arc<BridgeShared>);
-
-impl DeactivationHandler for Deactivation {
-    fn deactivate_accessibility(&mut self) {
-        os_entry(
-            "AccessKit's deactivation",
-            (),
-            AfterPanic::Answer(|()| ()),
-            || {
-                self.0.notify_activation(false);
-            },
-        );
-    }
-}
-
-struct Action(Arc<BridgeShared>);
-
-impl ActionHandler for Action {
-    fn do_action(&mut self, request: ActionRequest) {
-        os_entry(
-            "an AccessKit action",
-            (),
-            AfterPanic::Answer(|()| ()),
-            || {
-                self.0.notify_action(request);
-            },
-        );
-    }
-}
 
 /// What the bridge tells the AT-SPI adapter: `accesskit_unix::Adapter`'s
 /// two calls, behind a trait so the bridge's side of each is checked without
@@ -233,7 +179,10 @@ impl PlatformAccessibility for UnixAccessibility {
 
 #[cfg(test)]
 mod tests {
-    use accesskit::{Node, NodeId, Role, TreeId, TreeInfo};
+    use accesskit::{
+        ActionHandler, ActionRequest, ActivationHandler, DeactivationHandler, Node, NodeId, Role,
+        TreeId, TreeInfo,
+    };
 
     use super::*;
 

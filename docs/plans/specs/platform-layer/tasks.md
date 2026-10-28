@@ -4137,6 +4137,41 @@ graph LR
   CJK-начертания). Словарь нативных записей (`tests/native_recording`) знает только указатели:
   для записи этого прогона нужны строки клавиатуры и IME (marked text, выделение, commit, unmark,
   replace) и воспроизведение в модель респондера.
+- [ ] **LY70** — доступность iOS; не закрыта: прогон VoiceOver на устройстве ждёт владельца
+  (список в vanyastaff/flui#1736 вместе с действием AccessKit и объявлениями). **Код.**
+  `accessibility/apple/ios.rs`: `IosAccessibility` держит низкоуровневый `accesskit_ios::Adapter` в
+  `AdapterCell` под `NativeOwner` (вызовы только с главного потока, он же поток владельца), с
+  обработчиками активации, деактивации (UIKit, в отличие от NSAccessibility, сообщает о выключении
+  VoiceOver) и действий — общими для всех мостов (`accessibility::bridge::{Activation, Action,
+  Deactivation}`, каждый — вызов `os_entry`). `FluiView` — собственный класс FLUI, поэтому подклассы
+  не подменяются: `isAccessibilityElement`, `accessibilityElements` и `accessibilityHitTest:`
+  переадресуются мосту через `owner::accessibility_slot::{AccessibilitySlot, ViewAccessibility}`
+  (ячейка в ivars вида, её же несёт `ViewRef`, мост заполняет её один раз при открытии окна,
+  повторное заполнение — ошибка `BUG`); пока ячейка пуста, отвечает `UIView`. `didMoveToWindow`
+  зовёт `did_move_to_window`, точка попадания — `ViewPoint`. Окно отцепляет мост при закрытии;
+  `AdapterCell::detach` во время переадресованного вызова откладывается до выхода из самого
+  внешнего. `publish` не с главного потока — `debug_assert!` (недостижимо: владелец iOS — главный
+  поток). `BridgeShared::notify_activation` откатывает флаг, если слушатель паникует (общий код,
+  то же исправление для macOS, Windows и Linux). Две версии objc2 встречаются только через сырые
+  указатели. Таблица iOS называет `IosAccessibility` вместо `Absent<Accessibility>`. Зависимость
+  `accesskit_ios` 0.2.2 поднимает `accesskit` до 0.25.2 и `accesskit_consumer` до 0.39.2 (в
+  lock-файле меняются только они и новый пакет); строки матрицы покрытия перечитаны против 0.25.2
+  и 0.39.2 (изменение релизов — маскирование значения `PasswordInput` в consumer — строк не
+  задевает), `MATRIX_CHECKED_AGAINST` поднят. Идентификатор ADR-0240 доходит до `author_id`
+  (правило проверяется на Linux, `crates/flui-semantics/tests/identifier.rs`), а `accesskit_ios`
+  отдаёт `author_id` как `accessibilityIdentifier`. Тесты на Linux:
+  `an_activation_whose_listener_panicked_leaves_the_bridge_inactive`,
+  `a_view_reaches_the_bridge_its_window_filled`, `a_second_bridge_for_one_window_is_a_bug`,
+  `a_detached_cell_answers_nothing`, `a_detach_during_a_call_takes_effect_when_the_call_returns`;
+  откат каждого правила роняет свой тест. **Прогон** (2026-10-28, MacBook Air M1, macOS 27.0,
+  Simulator iPhone Duo / iOS 27.1): проба `flui create` со счётчиком, у `RawButton` —
+  `identifier("increment")`; XCUITest-клиент прочитал дерево `StaticText 'Count 0'` и `Button
+  identifier: 'increment', label: 'Increment'`, нажал кнопку дважды через её рамку доступности и
+  прочитал `Count 2` (снимок экрана симулятора показывает то же). С таблицей iOS, возвращённой к
+  `Absent<Accessibility>`, тот же клиент видит только пустые контейнеры, и проверка падает. Не
+  проверено: сеанс VoiceOver (Accessibility Inspector запускается, но выбрать в нём цель-симулятор
+  средствами удалённого управления не удалось), действие AccessKit (нажатие XCUITest — касание, а
+  не `accessibilityActivate`), объявления.
 
 ## Отступление от порядка, решённое владельцем
 
