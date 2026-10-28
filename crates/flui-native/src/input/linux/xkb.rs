@@ -514,7 +514,7 @@ pub mod keys {
                 ("KEY_ESC", 1, Code::Escape),
                 ("KEY_A", 30, Code::KeyA),
                 ("KEY_KPDOT", 83, Code::NumpadDecimal),
-                ("KEY_102ND", 86, Code::IntlBackslash),
+                ("the key beside the left Shift", 86, Code::IntlBackslash),
                 ("KEY_F12", 88, Code::F12),
                 ("KEY_RIGHTALT", 100, Code::AltRight),
                 ("KEY_LEFTMETA", 125, Code::MetaLeft),

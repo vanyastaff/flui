@@ -1213,7 +1213,7 @@ impl BackendUnderTest for X11Decoder {
                         .map(|(_, input)| input),
                 ),
                 X11Reading::Event(event) => {
-                    inputs.extend(self.pointers.event(NativeSurface(1), 1.0, &event).inputs)
+                    inputs.extend(self.pointers.event(NativeSurface(1), 1.0, &event).inputs);
                 }
                 X11Reading::FocusOut(time) => inputs.extend(self.pointers.cancel_surface(
                     NativeSurface(1),

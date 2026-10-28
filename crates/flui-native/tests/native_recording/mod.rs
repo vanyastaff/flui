@@ -846,10 +846,6 @@ fn native_recording_contracts() {
 pub(crate) fn contracts() -> Vec<(&'static str, fn())> {
     let cases: Vec<(&str, fn())> = vec![
         (
-            "browser_sessions_hold_against_their_goldens",
-            browser_sessions_hold_against_their_goldens,
-        ),
-        (
             "pulled_device_recordings_replay_to_what_they_delivered",
             pulled_device_recordings_replay_to_what_they_delivered,
         ),
@@ -907,7 +903,15 @@ pub(crate) fn contracts() -> Vec<(&'static str, fn())> {
         ),
     ];
     #[cfg(all(debug_assertions, feature = "native-capture"))]
-    let cases = [cases, capture::CASES.to_vec()].concat();
+    let cases = [
+        cases,
+        vec![(
+            "browser_sessions_hold_against_their_goldens",
+            browser_sessions_hold_against_their_goldens as fn(),
+        )],
+        capture::CASES.to_vec(),
+    ]
+    .concat();
     cases
 }
 
