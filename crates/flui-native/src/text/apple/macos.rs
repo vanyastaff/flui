@@ -42,6 +42,7 @@
 use std::cell::RefCell;
 
 use flui_foundation::geometry::Bounds;
+use flui_platform::text_store::utf16::{self, Utf16Offset};
 use flui_platform::{ImeEvent, PlatformInput, PlatformTextInput};
 
 use crate::owner::apple::macos::content_view::{ContentView, ViewText, with_content_view};
@@ -110,56 +111,6 @@ impl TextInputState {
 }
 
 // ============================================================================
-// UTF-16 → UTF-8 range conversion
-// ============================================================================
-
-/// The number of UTF-16 units in `text` — the length an `NSRange` covering all
-/// of it carries.
-fn utf16_len(text: &str) -> usize {
-    text.encode_utf16().count()
-}
-
-/// The byte offset in `text` that UTF-16 unit index `units` lands on, or
-/// `None` when that index is past the end or splits a surrogate pair.
-fn byte_offset_of_utf16_boundary(text: &str, units: usize) -> Option<usize> {
-    if units == 0 {
-        return Some(0);
-    }
-    let mut counted = 0;
-    for (byte_offset, ch) in text.char_indices() {
-        counted += ch.len_utf16();
-        if counted >= units {
-            // `>=`, not `==`: a multi-unit character (a surrogate pair) can
-            // carry the count past the target, and an index inside one is not
-            // a char boundary — no byte offset expresses it.
-            return (counted == units).then_some(byte_offset + ch.len_utf8());
-        }
-    }
-    None
-}
-
-/// Map an `NSString` UTF-16 `NSRange` onto byte offsets within the UTF-8
-/// encoding of the same text.
-///
-/// AppKit speaks UTF-16 (`NSRange`, `NSTextInputClient`'s `selectedRange`),
-/// `flui_platform::ImeEvent` speaks bytes, and the two diverge at the first
-/// non-BMP or multi-byte character. Returns `None` when the range runs past the
-/// end of `text` or either end falls inside a surrogate pair — a range no byte
-/// offset can express, and one the caller must not round to a nearby boundary
-/// (a guessed caret is worse than none: the client hides it).
-pub(crate) fn utf16_range_to_byte_range(
-    text: &str,
-    location: usize,
-    length: usize,
-) -> Option<(usize, usize)> {
-    let end = location.checked_add(length)?;
-    Some((
-        byte_offset_of_utf16_boundary(text, location)?,
-        byte_offset_of_utf16_boundary(text, end)?,
-    ))
-}
-
-// ============================================================================
 // TextView — one content view's text input
 // ============================================================================
 
@@ -200,11 +151,13 @@ impl ViewText for TextView {
     /// range AppKit gives here that is meaningful to a view with no document:
     /// the marked range this view reports is the whole composition.
     fn compose(&self, view: &ContentView<'_>, text: String, selected: (usize, usize)) {
-        let cursor = utf16_range_to_byte_range(&text, selected.0, selected.1);
+        let cursor = selected.0.checked_add(selected.1).and_then(|end| {
+            super::ime_cursor(&text, Utf16Offset::new(selected.0), Utf16Offset::new(end))
+        });
         {
             let mut state = self.state.borrow_mut();
             state.marked_text.clone_from(&text);
-            state.marked_range = (0, utf16_len(&text));
+            state.marked_range = (0, utf16::utf16_len(&text).get());
             state.selected_range = selected;
         }
         tracing::trace!("IME composition updated ({} bytes marked)", text.len());
@@ -406,19 +359,5 @@ impl std::fmt::Debug for MacOSTextInput {
             .field("view", &self.window.view.addr())
             .field("closed", &self.is_closed())
             .finish_non_exhaustive()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{utf16_len, utf16_range_to_byte_range};
-
-    #[test]
-    fn multibyte_text_diverges_from_utf16_offsets() {
-        // "héllo": five UTF-16 units but six bytes — `é` is one unit, two bytes.
-        assert_eq!(utf16_len("héllo"), 5);
-        assert_eq!(utf16_range_to_byte_range("héllo", 2, 0), Some((3, 3)));
-        assert_eq!(utf16_range_to_byte_range("héllo", 1, 2), Some((1, 4)));
-        assert_eq!(utf16_range_to_byte_range("héllo", 5, 0), Some((6, 6)));
     }
 }
