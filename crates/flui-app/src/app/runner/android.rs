@@ -532,14 +532,18 @@ impl AndroidFrameDriver {
             physical.height.unsigned_abs(),
         );
     }
-    pub(super) fn wake(&mut self, ui_runtime: &mut crate::app::ui_runtime::UiRuntime) {
+    pub(super) fn wake(
+        &mut self,
+        ui_runtime: &mut crate::app::ui_runtime::UiRuntime,
+        presentation: flui_foundation::PresentationId,
+    ) {
         let lane_frame = &self.lane;
         let hot_reload_frame = &self.hot_reload;
         let device_recovery_backoff = &self.device_recovery_backoff;
         let surface_recreation_retry = &self.surface_recreation_retry;
         // The gate half of the wake runs inside one ui_runtime entry
         // and decides; the pump below enters the ui_runtime itself.
-        let (action, now) = ui_runtime.enter(|ui_runtime| {
+        let (action, now, display_color) = ui_runtime.enter(|ui_runtime| {
             let now = web_time::Instant::now();
             // Owner-inbox drain: commands and worker results commit HERE,
             // at the frame boundary while the scheduler phase is Idle —
@@ -636,7 +640,13 @@ impl AndroidFrameDriver {
                 }
                 Some(SurfaceLifecycleOutcome::Released) | None => {}
             }
-            (action, now)
+            (
+                action,
+                now,
+                ui_runtime
+                    .window_display(presentation)
+                    .and_then(|display| display.color),
+            )
         });
 
         if action != WakeAction::PumpBackground {
@@ -691,6 +701,12 @@ impl AndroidFrameDriver {
         // the hook's deadline and forces a
         // dispatch once the deadline is due (`flui-native`'s
         // `owner/android/looper.rs`).
+        //
+        // A changed colour profile of the window's display sets the surface
+        // up again before this frame paints (ADR-0256 §6).
+        if super::surface_lifecycle::follow_display_color(lane_frame, display_color) {
+            ui_runtime.mark_primary_needs_full_repaint();
+        }
         if pump_with_device_recovery(ui_runtime, lane_frame, device_recovery_backoff, now).is_none()
         {
             tracing::error!("frame skipped: raster lane busy at frame admission");

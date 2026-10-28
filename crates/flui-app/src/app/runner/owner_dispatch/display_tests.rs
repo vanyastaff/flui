@@ -534,6 +534,11 @@ fn a_surface_is_set_up_for_the_colour_of_its_window_s_display() {
         "the profile change was not accepted"
     );
     assert_eq!(
+        left.display().and_then(|display| display.color),
+        Some(hdr),
+        "the window's presentation was not told its display changed colour"
+    );
+    assert_eq!(
         colour_of(&right),
         None,
         "a display without a colour leaves the surface's own report"

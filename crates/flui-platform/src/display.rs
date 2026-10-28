@@ -475,9 +475,6 @@ pub struct SurfaceColorSpace {
 }
 
 impl SurfaceColorSpace {
-    /// Standard range in sRGB.
-    pub const SRGB: Self = Self::new(ColorGamut::Srgb, DynamicRange::Standard);
-
     /// The colour space of `gamut` and `dynamic_range`.
     #[must_use]
     pub const fn new(gamut: ColorGamut, dynamic_range: DynamicRange) -> Self {
@@ -670,6 +667,7 @@ impl DisplaySnapshot {
         Some(WindowDisplay {
             id: display.id,
             refresh_period: display.refresh_period,
+            color: display.color.ok(),
         })
     }
 }
@@ -687,9 +685,13 @@ pub enum FrameRateHint {
     High,
 }
 
-/// The part of a display a window pacing itself needs: which display it is on
-/// and that display's refresh period. The scale factor is not here; it reaches
-/// the window through its own metrics observation.
+/// The part of a display a window paces and presents by: which display it is
+/// on, that display's refresh period and its colour profile. The scale factor
+/// is not here; it reaches the window through its own metrics observation.
+///
+/// A window whose display changes colour (HDR switched on, the window moved to
+/// an SDR monitor) receives a different value, which is how its surface learns
+/// to be set up again (ADR-0256 §6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct WindowDisplay {
@@ -697,13 +699,27 @@ pub struct WindowDisplay {
     pub id: DisplayId,
     /// That display's refresh period; `None` when unknown.
     pub refresh_period: Option<RefreshPeriod>,
+    /// That display's colour profile; `None` where the platform reports none
+    /// ([`DisplayInfo::color`] says why).
+    pub color: Option<DisplayColor>,
 }
 
 impl WindowDisplay {
-    /// A window display.
+    /// A window display of unreported colour.
     #[must_use]
     pub const fn new(id: DisplayId, refresh_period: Option<RefreshPeriod>) -> Self {
-        Self { id, refresh_period }
+        Self {
+            id,
+            refresh_period,
+            color: None,
+        }
+    }
+
+    /// The same display with the colour profile `color`.
+    #[must_use]
+    pub const fn with_color(mut self, color: Option<DisplayColor>) -> Self {
+        self.color = color;
+        self
     }
 }
 

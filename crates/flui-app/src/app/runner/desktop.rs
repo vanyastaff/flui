@@ -460,7 +460,7 @@ impl DesktopFrameDriver {
         let reveal_window = &self.reveal_window;
         // The gate half of the wake runs inside one ui_runtime entry and
         // decides; the pump below enters the ui_runtime itself.
-        let (action, now) = ui_runtime.enter(|ui_runtime| {
+        let (action, now, display_color) = ui_runtime.enter(|ui_runtime| {
             worker_reload_frame.poll_and_apply(ui_runtime);
 
             let scheduler = ui_runtime.scheduler();
@@ -535,7 +535,13 @@ impl DesktopFrameDriver {
                 scheduler.is_frame_scheduled(),
                 fallback_gate,
             );
-            (action, now)
+            (
+                action,
+                now,
+                ui_runtime
+                    .window_display(presentation)
+                    .and_then(|display| display.color),
+            )
         });
 
         match action {
@@ -559,6 +565,12 @@ impl DesktopFrameDriver {
         // the frame (the frame runs anyway, see
         // `pump_with_device_recovery`'s doc for why), and AFTER when
         // the wgpu device-lost callback fired mid-frame.
+        // The display the window is on, as the host last delivered it: a
+        // changed colour profile (HDR switched, a move to another monitor)
+        // sets the surface up again before this frame paints (ADR-0256 §6).
+        if super::surface_lifecycle::follow_display_color(lane_frame, display_color) {
+            ui_runtime.mark_primary_needs_full_repaint();
+        }
         let outcome = if let Some(outcome) =
             pump_with_device_recovery(ui_runtime, lane_frame, device_recovery_backoff, now)
         {

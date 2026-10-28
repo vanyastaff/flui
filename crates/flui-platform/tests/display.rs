@@ -413,7 +413,13 @@ fn display_colour_queries_answer_unsupported_with_the_reason() {
     let sdr = unread
         .clone()
         .with_color(Ok(DisplayColor::standard(ColorGamut::Srgb)));
-    assert_eq!(sdr.color_space(), Ok(SurfaceColorSpace::SRGB));
+    assert_eq!(
+        sdr.color_space(),
+        Ok(SurfaceColorSpace::new(
+            ColorGamut::Srgb,
+            DynamicRange::Standard
+        ))
+    );
     assert_eq!(sdr.headroom(), Ok(Headroom::SDR));
 
     let absent = unread.with_color(Err(CapabilityAbsence::NotOnThisDevice));

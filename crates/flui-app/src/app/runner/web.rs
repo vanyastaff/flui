@@ -311,6 +311,19 @@ impl WebFrameDriver {
                 return;
             };
 
+            // A changed colour of the page's screen sets the canvas surface up
+            // again before this frame paints (ADR-0256 §6).
+            let display = ui_runtime
+                .window_display(ui_runtime.presentation_id())
+                .and_then(|display| display.color);
+            match r.set_display_color(display) {
+                Ok(true) => ui_runtime.mark_primary_needs_full_repaint(),
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "the surface could not be set up for its display's colour");
+                }
+            }
+
             let textures = ui_runtime.texture_registry(ui_runtime.presentation_id());
             let mut sink = DirectSink::new(r).with_textures(textures);
             let _ = ui_runtime.pump(&mut SampledClock(now), &mut sink);
