@@ -54,7 +54,7 @@ use super::protocol::{Environment, Protocol};
 use super::session::{DisplayError, Session, Step, wait_readable};
 use super::source::LinuxDisplays;
 use super::view::OutputView;
-use super::wayland_model::{ColorEvent, OutputEvent, WaylandOutputs};
+use super::wayland_model::{ColorEvent, OutputEvent, TransferRange, WaylandOutputs};
 use crate::error::PlatformError;
 use crate::owner::linux::wayland::{OutputFacts, OutputName, WaylandDisplays};
 use crate::owner::notices::StaleOnWake;
@@ -482,19 +482,15 @@ impl Dispatch<WpImageDescriptionInfoV1, Described> for State {
                 _ => None,
             }),
             Event::Primaries { r_x, .. } => ColorEvent::Primaries { red_x: r_x },
-            Event::TfNamed { tf } => ColorEvent::Transfer {
-                high_range: matches!(
-                    tf,
-                    WEnum::Value(
-                        TransferFunction::St2084Pq
-                            | TransferFunction::Hlg
-                            | TransferFunction::ExtLinear
-                            | TransferFunction::ExtSrgb
-                    )
-                ),
-            },
+            Event::TfNamed { tf } => ColorEvent::Transfer(match tf {
+                WEnum::Value(TransferFunction::St2084Pq) => TransferRange::Pq,
+                WEnum::Value(
+                    TransferFunction::Hlg | TransferFunction::ExtLinear | TransferFunction::ExtSrgb,
+                ) => TransferRange::Extended,
+                _ => TransferRange::Standard,
+            }),
             // A pure power curve ends at white.
-            Event::TfPower { .. } => ColorEvent::Transfer { high_range: false },
+            Event::TfPower { .. } => ColorEvent::Transfer(TransferRange::Standard),
             Event::Luminances {
                 max_lum,
                 reference_lum,

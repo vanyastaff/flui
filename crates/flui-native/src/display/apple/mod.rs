@@ -24,7 +24,7 @@ pub(crate) mod screen {
     //! by the number of the object a ledger retains; and the colour a screen
     //! shows surfaces in.
 
-    use flui_platform::{ColorGamut, DisplayColor, Headroom};
+    use flui_platform::{DisplayColor, Headroom};
 
     /// The key of a macOS screen, from the `NSScreenNumber` of its
     /// `deviceDescription` and a lookup of the display UUID for a
@@ -118,11 +118,7 @@ pub(crate) mod screen {
     /// of it, is standard range: no extended range is published from a value
     /// that does not describe one.
     pub(crate) fn screen_color(p3: bool, potential: Option<f64>) -> DisplayColor {
-        let gamut = if p3 {
-            ColorGamut::DisplayP3
-        } else {
-            ColorGamut::Srgb
-        };
+        let gamut = crate::display::source::p3_or_srgb(p3);
         // A finite `f64` beyond `f32` becomes infinite here, which `new` refuses.
         match potential.and_then(|value| Headroom::new(value as f32).ok()) {
             Some(headroom) if headroom > Headroom::SDR => DisplayColor::high(gamut, Ok(headroom)),

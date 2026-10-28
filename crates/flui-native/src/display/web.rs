@@ -1352,7 +1352,6 @@ pub(crate) mod source {
             Ok(displays)
         }
 
-        /// The one screen `window.screen` describes.
         /// The colour of the screen the page is on, by its media queries; absent
         /// on a browser without `matchMedia`.
         fn page_color(&self, window: &web_sys::Window) -> Result<DisplayColor, CapabilityAbsence> {
@@ -1369,6 +1368,7 @@ pub(crate) mod source {
             }))
         }
 
+        /// The one screen `window.screen` describes.
         fn single_screen(
             &self,
             state: &mut State,

@@ -76,6 +76,18 @@ pub(crate) enum OutputEvent {
     Done,
 }
 
+/// What an image description's transfer function says of the range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TransferRange {
+    /// A curve that ends at SDR white (sRGB, gamma, BT.1886, a power curve).
+    Standard,
+    /// SMPTE ST 2084 (PQ): absolute luminance up to the curve's own ceiling.
+    Pq,
+    /// Another curve that carries values above white (HLG, extended linear,
+    /// extended sRGB).
+    Extended,
+}
+
 /// One event of an output's image description (`wp_image_description_info_v1`
 /// of `wp_color_management_output_v1`), in the terms the model needs. The
 /// adapter maps the protocol's events onto these.
@@ -86,10 +98,10 @@ pub(crate) enum ColorEvent {
     NamedPrimaries(Option<ColorGamut>),
     /// `primaries`: the red primary's x chromaticity, times 1 000 000.
     Primaries { red_x: i32 },
-    /// `tf_named` or `tf_power`: whether the transfer function carries values
-    /// above SDR white (PQ, HLG, the extended ones).
-    Transfer { high_range: bool },
-    /// `luminances`: the maximum and the reference white, in cd/m².
+    /// `tf_named` or `tf_power`.
+    Transfer(TransferRange),
+    /// `luminances`: the primary volume's maximum and the reference white, in
+    /// cd/m².
     Luminances { max: u32, reference: u32 },
     /// `target_luminance`: the maximum the output is driven to, in cd/m².
     TargetLuminance { max: u32 },
@@ -102,7 +114,7 @@ pub(crate) enum ColorEvent {
 struct ColorDescription {
     named: Option<ColorGamut>,
     red_x: Option<i32>,
-    high_range: Option<bool>,
+    transfer: Option<TransferRange>,
     max: Option<u32>,
     reference: Option<u32>,
     target_max: Option<u32>,
@@ -119,9 +131,11 @@ const P3_RED_X: i32 = 670_000;
 /// The gamut is the named primaries' where the model classes them, otherwise
 /// the one the red chromaticity reaches. A description without primaries or a
 /// transfer function is one this host does not read. A high-range output's
-/// headroom is its target peak (or, without one, its maximum) over the
-/// reference white, absent when either is missing or they give no finite
-/// multiple.
+/// headroom is its target peak over the reference white. Without a target
+/// peak, an extended curve's primary-volume maximum stands in; a PQ output's
+/// does not, because for PQ that maximum is the curve's ceiling (10 000 cd/m²),
+/// not what the output shows, and the headroom is then absent. It is absent
+/// too when the reference white is missing or the two give no finite multiple.
 fn color_of(description: &ColorDescription) -> Result<DisplayColor, CapabilityAbsence> {
     let gamut = description
         .named
@@ -133,15 +147,15 @@ fn color_of(description: &ColorDescription) -> Result<DisplayColor, CapabilityAb
             })
         })
         .ok_or(CapabilityAbsence::NotYetOnThisHost)?;
-    if !description
-        .high_range
+    let peak = match description
+        .transfer
         .ok_or(CapabilityAbsence::NotYetOnThisHost)?
     {
-        return Ok(DisplayColor::standard(gamut));
-    }
-    let headroom = description
-        .target_max
-        .or(description.max)
+        TransferRange::Standard => return Ok(DisplayColor::standard(gamut)),
+        TransferRange::Pq => description.target_max,
+        TransferRange::Extended => description.target_max.or(description.max),
+    };
+    let headroom = peak
         .zip(description.reference)
         .ok_or(CapabilityAbsence::NotOnThisDevice)
         .and_then(|(peak, reference)| {
@@ -250,7 +264,7 @@ impl WaylandOutputs {
         match event {
             ColorEvent::NamedPrimaries(gamut) => pending.named = gamut,
             ColorEvent::Primaries { red_x } => pending.red_x = Some(red_x),
-            ColorEvent::Transfer { high_range } => pending.high_range = Some(high_range),
+            ColorEvent::Transfer(range) => pending.transfer = Some(range),
             ColorEvent::Luminances { max, reference } => {
                 pending.max = Some(max);
                 pending.reference = Some(reference);
@@ -849,14 +863,15 @@ mod tests {
     const SDR_SRGB: [ColorEvent; 3] = [
         ColorEvent::NamedPrimaries(Some(ColorGamut::Srgb)),
         ColorEvent::Primaries { red_x: 640_000 },
-        ColorEvent::Transfer { high_range: false },
+        ColorEvent::Transfer(TransferRange::Standard),
     ];
 
-    /// An HDR10 output: PQ in BT.2020, 203 cd/m² white, a 1000 cd/m² target.
+    /// An HDR10 output: PQ in BT.2020, 203 cd/m² white, the curve's 10 000
+    /// cd/m² ceiling as the primary volume's maximum, and a 1015 cd/m² target.
     const HDR10: [ColorEvent; 5] = [
         ColorEvent::NamedPrimaries(Some(ColorGamut::Rec2020)),
         ColorEvent::Primaries { red_x: 708_000 },
-        ColorEvent::Transfer { high_range: true },
+        ColorEvent::Transfer(TransferRange::Pq),
         ColorEvent::Luminances {
             max: 10_000,
             reference: 203,
@@ -889,15 +904,52 @@ mod tests {
             colour_of(&[
                 ColorEvent::NamedPrimaries(None),
                 ColorEvent::Primaries { red_x: 680_000 },
-                ColorEvent::Transfer { high_range: false },
+                ColorEvent::Transfer(TransferRange::Standard),
             ]),
             Ok(DisplayColor::standard(ColorGamut::DisplayP3)),
             "an unclassed named set falls to the chromaticities"
         );
         assert_eq!(
+            colour_of(&HDR10[..4]),
+            Ok(DisplayColor::high(
+                ColorGamut::Rec2020,
+                Err(CapabilityAbsence::NotOnThisDevice)
+            )),
+            "PQ without a target peak has no headroom: the 10 000 cd/m² maximum is the \
+             curve's ceiling, not the output's"
+        );
+        assert_eq!(
             colour_of(&[
                 ColorEvent::Primaries { red_x: 708_000 },
-                ColorEvent::Transfer { high_range: true },
+                ColorEvent::Transfer(TransferRange::Extended),
+                ColorEvent::Luminances {
+                    max: 812,
+                    reference: 203,
+                },
+            ]),
+            Ok(DisplayColor::high(
+                ColorGamut::Rec2020,
+                Ok(Headroom::new(4.0).expect("headroom"))
+            )),
+            "an extended curve without a target peak takes its maximum"
+        );
+        assert_eq!(
+            colour_of(&[
+                ColorEvent::Primaries { red_x: 708_000 },
+                ColorEvent::Transfer(TransferRange::Pq),
+                ColorEvent::Luminances {
+                    max: 10_000,
+                    reference: 203,
+                },
+                ColorEvent::TargetLuminance { max: 150 },
+            ]),
+            Ok(DisplayColor::high(ColorGamut::Rec2020, Ok(Headroom::SDR))),
+            "a target peak below the reference white is no headroom"
+        );
+        assert_eq!(
+            colour_of(&[
+                ColorEvent::Primaries { red_x: 708_000 },
+                ColorEvent::Transfer(TransferRange::Extended),
                 ColorEvent::Luminances {
                     max: 1000,
                     reference: 0,
@@ -910,7 +962,7 @@ mod tests {
             "a zero reference white gives no headroom, not an infinite one"
         );
         assert_eq!(
-            colour_of(&[ColorEvent::Transfer { high_range: false }]),
+            colour_of(&[ColorEvent::Transfer(TransferRange::Standard)]),
             Err(CapabilityAbsence::NotYetOnThisHost),
             "an ICC-only description is not read"
         );

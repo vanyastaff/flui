@@ -105,13 +105,39 @@ pub(crate) mod sample {
     /// standard range.
     pub(crate) const DXGI_WIDE_SDR: i32 = 17;
 
+    /// The output colour spaces Windows composes in, as this host reads them.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum OutputColorSpace {
+        /// sRGB in standard range: HDR off.
+        Srgb,
+        /// HDR10, PQ in BT.2020: HDR on.
+        Hdr10,
+        /// BT.2020 in standard range.
+        WideGamutSdr,
+        /// A `DXGI_COLOR_SPACE_TYPE` this host does not read (a studio-range
+        /// or YCbCr space).
+        Unread,
+    }
+
+    impl OutputColorSpace {
+        /// The space of `DXGI_OUTPUT_DESC1::ColorSpace`.
+        pub(crate) fn from_dxgi(color_space: i32) -> Self {
+            match color_space {
+                DXGI_SRGB => Self::Srgb,
+                DXGI_HDR10 => Self::Hdr10,
+                DXGI_WIDE_SDR => Self::WideGamutSdr,
+                _ => Self::Unread,
+            }
+        }
+    }
+
     /// What Windows reports about the colour of one output:
     /// `DXGI_OUTPUT_DESC1`'s colour space and peak, and the SDR white level of
     /// its display target.
     #[derive(Debug, Clone, Copy, PartialEq)]
     pub(crate) struct OutputColor {
-        /// `DXGI_OUTPUT_DESC1::ColorSpace`, a `DXGI_COLOR_SPACE_TYPE`.
-        pub(crate) color_space: i32,
+        /// `DXGI_OUTPUT_DESC1::ColorSpace`.
+        pub(crate) color_space: OutputColorSpace,
         /// `DXGI_OUTPUT_DESC1::MaxLuminance`, in nits; zero where the display
         /// reports none.
         pub(crate) max_luminance: f32,
@@ -133,9 +159,9 @@ pub(crate) mod sample {
     ) -> Result<DisplayColor, CapabilityAbsence> {
         let output = output.ok_or(CapabilityAbsence::NotOnThisDevice)?;
         match output.color_space {
-            DXGI_SRGB => Ok(DisplayColor::standard(ColorGamut::Srgb)),
-            DXGI_WIDE_SDR => Ok(DisplayColor::standard(ColorGamut::Rec2020)),
-            DXGI_HDR10 => {
+            OutputColorSpace::Srgb => Ok(DisplayColor::standard(ColorGamut::Srgb)),
+            OutputColorSpace::WideGamutSdr => Ok(DisplayColor::standard(ColorGamut::Rec2020)),
+            OutputColorSpace::Hdr10 => {
                 let headroom = output
                     .sdr_white_level
                     .ok_or(CapabilityAbsence::NotOnThisDevice)
@@ -148,7 +174,7 @@ pub(crate) mod sample {
                     });
                 Ok(DisplayColor::high(ColorGamut::Rec2020, headroom))
             }
-            _ => Err(CapabilityAbsence::NotYetOnThisHost),
+            OutputColorSpace::Unread => Err(CapabilityAbsence::NotYetOnThisHost),
         }
     }
 
@@ -162,13 +188,14 @@ pub(crate) mod sample {
         };
 
         use super::{
-            DXGI_HDR10, DXGI_SRGB, DXGI_WIDE_SDR, OutputColor, QdcVirtualModeAware, SampledMonitor,
-            WindowsBuild, display_color, display_period, resolve_display,
+            DXGI_HDR10, DXGI_SRGB, DXGI_WIDE_SDR, OutputColor, OutputColorSpace,
+            QdcVirtualModeAware, SampledMonitor, WindowsBuild, display_color, display_period,
+            resolve_display,
         };
 
         fn output(color_space: i32, max_luminance: f32, level: Option<u32>) -> OutputColor {
             OutputColor {
-                color_space,
+                color_space: OutputColorSpace::from_dxgi(color_space),
                 max_luminance,
                 sdr_white_level: level,
             }
@@ -192,6 +219,12 @@ pub(crate) mod sample {
                     ColorGamut::Rec2020,
                     Ok(Headroom::new(4.0).expect("headroom"))
                 ))
+            );
+            // HDR on, a 400-nit panel, the SDR brightness set to 480 nits
+            // (level 6000): the panel shows nothing above white.
+            assert_eq!(
+                display_color(Some(output(DXGI_HDR10, 400.0, Some(6000)))),
+                Ok(DisplayColor::high(ColorGamut::Rec2020, Ok(Headroom::SDR)))
             );
             assert_eq!(
                 display_color(None),
@@ -473,8 +506,8 @@ pub(crate) mod source {
     use windows::core::{BOOL, Interface, PCWSTR};
 
     use super::sample::{
-        DXGI_HDR10, DXGI_SRGB, DXGI_WIDE_SDR, OutputColor, QdcVirtualModeAware, SampledMonitor,
-        display_color, display_period, resolve_display,
+        DXGI_HDR10, DXGI_SRGB, DXGI_WIDE_SDR, OutputColor, OutputColorSpace, QdcVirtualModeAware,
+        SampledMonitor, display_color, display_period, resolve_display,
     };
     use crate::display::source::DisplaySource;
     use crate::error::PlatformError;
@@ -679,7 +712,7 @@ pub(crate) mod source {
                     .iter()
                     .find(|color| color.monitor == monitor.handle)
                     .map(|color| OutputColor {
-                        color_space: color.color_space,
+                        color_space: OutputColorSpace::from_dxgi(color.color_space),
                         max_luminance: color.max_luminance,
                         sdr_white_level: path.and_then(sdr_white_level),
                     });

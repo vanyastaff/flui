@@ -20,8 +20,8 @@ pub(crate) mod sample {
 
     use flui_foundation::geometry::{Bounds, Point, Size};
     use flui_platform::{
-        Availability, CapabilityAbsence, ColorGamut, DisplayColor, DisplayId, DisplayInfo,
-        FrameRateHint, Headroom, RefreshPeriod,
+        Availability, CapabilityAbsence, DisplayColor, DisplayId, DisplayInfo, FrameRateHint,
+        Headroom, RefreshPeriod,
     };
 
     use crate::owner::android::ndk::{NdkFn, SetFrameRate, SymbolSource};
@@ -46,9 +46,10 @@ pub(crate) mod sample {
         pub(crate) refresh_hz: f32,
         /// The highest rate among `getSupportedModes`.
         pub(crate) max_refresh_hz: Option<f32>,
-        /// What the display reports of its colour; `None` below API 26, which
-        /// has no such report.
-        pub(crate) color: Option<ColorReport>,
+        /// What the display reports of its colour, or why it reports none:
+        /// below API 26 there is no such report, and a display whose report
+        /// fails loses its colour alone, never the sample.
+        pub(crate) color: Result<ColorReport, CapabilityAbsence>,
     }
 
     /// `Display.isWideColorGamut` and `Display.isHdr` (API 26).
@@ -84,20 +85,16 @@ pub(crate) mod sample {
 
     /// The colour of an Android display from what it reports.
     ///
-    /// A display that reports no colour (below API 26) is a device without the
-    /// report. A wide-gamut display shows Display P3, Android's wide colour
-    /// space. An HDR display is high range; its headroom is the highest HDR/SDR
-    /// ratio when that is a finite multiple over white, and absent otherwise
-    /// (below API 35, or a ratio that is not one).
+    /// A display without a report answers why. A wide-gamut display shows
+    /// Display P3, Android's wide colour space. An HDR display is high range;
+    /// its headroom is the highest HDR/SDR ratio when that is a finite multiple
+    /// over white, and absent otherwise (below API 35, or a ratio that is not
+    /// one).
     pub(crate) fn display_color(
-        report: Option<ColorReport>,
+        report: Result<ColorReport, CapabilityAbsence>,
     ) -> Result<DisplayColor, CapabilityAbsence> {
-        let report = report.ok_or(CapabilityAbsence::NotOnThisDevice)?;
-        let gamut = if report.wide_gamut {
-            ColorGamut::DisplayP3
-        } else {
-            ColorGamut::Srgb
-        };
+        let report = report?;
+        let gamut = crate::display::source::p3_or_srgb(report.wide_gamut);
         if !report.hdr {
             return Ok(DisplayColor::standard(gamut));
         }
@@ -230,7 +227,7 @@ pub(crate) mod sample {
 
     #[cfg(test)]
     mod tests {
-        use flui_platform::{DisplayKey, DisplayRegistry};
+        use flui_platform::{ColorGamut, DisplayKey, DisplayRegistry};
 
         use super::*;
 
@@ -245,7 +242,7 @@ pub(crate) mod sample {
                 density_dpi: 420,
                 refresh_hz: 120.0,
                 max_refresh_hz: Some(120.0),
-                color: None,
+                color: Err(CapabilityAbsence::NotOnThisDevice),
             };
             let info = healthy.info(id).expect("a healthy display");
             assert_eq!(info.scale_factor, 2.625, "420 dpi is 2.625 logical pixels");
@@ -289,6 +286,34 @@ pub(crate) mod sample {
             }
         }
 
+        /// A display whose colour report failed is still described: only its
+        /// colour is absent, with the reason.
+        fn a_display_whose_colour_report_failed_keeps_its_other_facts() {
+            let registry = DisplayRegistry::new();
+            let id = registry.mint(&DisplayKey::AndroidId(2)).expect("id");
+            let failed = RawDisplay {
+                display_id: 2,
+                name: "External".into(),
+                width: 1920,
+                height: 1080,
+                density_dpi: 160,
+                refresh_hz: 60.0,
+                max_refresh_hz: Some(60.0),
+                color: Err(CapabilityAbsence::NotOnThisDevice),
+            };
+            let info = failed.info(id).expect("the display is still listed");
+            assert_eq!(info.bounds.size, Size::new(1920, 1080));
+            assert_eq!(info.color, Err(CapabilityAbsence::NotOnThisDevice));
+            let reported = RawDisplay {
+                color: Ok(report(true, false, None)),
+                ..failed
+            };
+            assert_eq!(
+                reported.info(id).map(|info| info.color),
+                Some(Ok(DisplayColor::standard(ColorGamut::DisplayP3)))
+            );
+        }
+
         /// The colour reports' gates: none before the API level that has them.
         fn android_colour_gate_table() {
             for (level, color, highest) in [
@@ -314,21 +339,21 @@ pub(crate) mod sample {
         /// Each colour report a `Display` gives, to the display colour it means.
         fn android_colour_reports_map_to_the_display_colour() {
             assert_eq!(
-                display_color(None),
+                display_color(Err(CapabilityAbsence::NotOnThisDevice)),
                 Err(CapabilityAbsence::NotOnThisDevice),
                 "below API 26"
             );
             assert_eq!(
-                display_color(Some(report(false, false, None))),
+                display_color(Ok(report(false, false, None))),
                 Ok(DisplayColor::standard(ColorGamut::Srgb))
             );
             assert_eq!(
-                display_color(Some(report(true, false, Some(4.0)))),
+                display_color(Ok(report(true, false, Some(4.0)))),
                 Ok(DisplayColor::standard(ColorGamut::DisplayP3)),
                 "a ratio without HDR is no high range"
             );
             assert_eq!(
-                display_color(Some(report(true, true, Some(4.92)))),
+                display_color(Ok(report(true, true, Some(4.92)))),
                 Ok(DisplayColor::high(
                     ColorGamut::DisplayP3,
                     Ok(Headroom::new(4.92).expect("headroom"))
@@ -342,7 +367,7 @@ pub(crate) mod sample {
                 Some(0.0),
             ] {
                 assert_eq!(
-                    display_color(Some(report(true, true, ratio))),
+                    display_color(Ok(report(true, true, ratio))),
                     Ok(DisplayColor::high(
                         ColorGamut::DisplayP3,
                         Err(CapabilityAbsence::NotOnThisDevice)
@@ -403,6 +428,10 @@ pub(crate) mod sample {
                         "android_colour_gate_table",
                         android_colour_gate_table as fn(),
                     ),
+                    (
+                        "a_display_whose_colour_report_failed_keeps_its_other_facts",
+                        a_display_whose_colour_report_failed_keeps_its_other_facts as fn(),
+                    ),
                 ],
             );
         }
@@ -451,7 +480,7 @@ pub(crate) mod source {
 
     use android_activity::AndroidApp;
     use android_activity::ndk::native_window::NativeWindow;
-    use flui_platform::{DisplayId, DisplayKey, DisplaySnapshot, FrameRateHint};
+    use flui_platform::{CapabilityAbsence, DisplayId, DisplayKey, DisplaySnapshot, FrameRateHint};
     use jni::{
         Env, JValue, jni_sig, jni_str,
         objects::{JObject, JObjectArray, JString},
@@ -1019,19 +1048,37 @@ pub(crate) mod source {
             density_dpi,
             refresh_hz,
             max_refresh_hz: max_refresh_hz(rates),
-            color: read_color(env, display, api)?,
+            color: read_color(env, display, api),
         })
     }
 
     /// What `display` reports of its colour, on the APIs that have each report.
+    /// What `display` reports of its colour, on the APIs that have each report.
+    ///
+    /// A report that fails (an exception from the display, a JNI error) is
+    /// this display's colour gone, not the sample: the exception is cleared
+    /// and the display answers `NotOnThisDevice`, while every other display
+    /// and this one's geometry still reach the snapshot.
     fn read_color(
         env: &mut Env<'_>,
         display: &JObject<'_>,
         api: AndroidApi,
-    ) -> jni::errors::Result<Option<ColorReport>> {
+    ) -> Result<ColorReport, CapabilityAbsence> {
         if api.since::<DisplayColorReport>().is_none() {
-            return Ok(None);
+            return Err(CapabilityAbsence::NotOnThisDevice);
         }
+        query_color(env, display, api).map_err(|error| {
+            env.exception_clear();
+            tracing::warn!(%error, "Android: a display's colour report failed");
+            CapabilityAbsence::NotOnThisDevice
+        })
+    }
+
+    fn query_color(
+        env: &mut Env<'_>,
+        display: &JObject<'_>,
+        api: AndroidApi,
+    ) -> jni::errors::Result<ColorReport> {
         let wide_gamut = env
             .call_method(display, jni_str!("isWideColorGamut"), jni_sig!("()Z"), &[])?
             .z()?;
@@ -1051,10 +1098,10 @@ pub(crate) mod source {
         } else {
             None
         };
-        Ok(Some(ColorReport {
+        Ok(ColorReport {
             wide_gamut,
             hdr,
             highest_hdr_sdr_ratio,
-        }))
+        })
     }
 }

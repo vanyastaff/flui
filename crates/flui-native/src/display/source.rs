@@ -13,6 +13,17 @@ use parking_lot::Mutex;
 
 use crate::error::PlatformError;
 
+/// The gamut of a display whose platform reports only whether it shows the
+/// wide gamut, which on Apple and Android is Display P3.
+#[cfg(any(target_os = "android", target_os = "ios", target_os = "macos", test))]
+pub(crate) fn p3_or_srgb(wide: bool) -> flui_platform::ColorGamut {
+    if wide {
+        flui_platform::ColorGamut::DisplayP3
+    } else {
+        flui_platform::ColorGamut::Srgb
+    }
+}
+
 /// Whether `value` lies more than `band` (a fraction of `reference`) away from
 /// `reference`: the one band rule of the measured refresh period, which the
 /// browser's estimate also judges its frames' agreement and stability by.
@@ -517,7 +528,7 @@ mod mapping {
             density_dpi: 420,
             refresh_hz: hertz as f32,
             max_refresh_hz: None,
-            color: None,
+            color: Err(flui_platform::CapabilityAbsence::NotOnThisDevice),
         };
         display
             .info(id)
