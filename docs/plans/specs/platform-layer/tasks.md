@@ -3935,7 +3935,8 @@ graph LR
   `file-length`, `markers`, `testing`, `docs-paths`, `workspace`, `reach`,
   `recording-vocabulary`; `api-closure` (WSL, nightly) — 4 пакета чисто. WSL Ubuntu 24.04: clippy
   `flui-native` шести вариантов, `flui-app`, `flui-engine`, `flui --features native` — чисто;
-  nextest `--all-features` под xvfb без тестов Wayland — 351 из 351, тесты Wayland под Weston — 31
+  nextest `--all-features` под xvfb без тестов Wayland — 351 из 351 (после слияния `main` @
+  `f11b154c6` — 373 из 373), тесты Wayland под Weston — 31
   из 31; rustdoc `-D warnings --document-private-items` четырёх вариантов. Прогон без X-сервера
   (`FLUI_HEADLESS=1`, `DISPLAY` снят) нашёл две устаревшие проверки возможностей (`plan`, тесты
   X11 под winit сравнивали с `ALL`) — исправлены; там же падают тесты реального цикла winit и
