@@ -133,7 +133,16 @@ graph LR
 - [x] T6 — #1497, #1774, #1805, #1821
 - [ ] T3 — runtime: долг якоря, gate, pointer-down вне поля
 - [ ] T4 — остаток: `VK_PROCESSKEY`, ACP на Linux CI
-- [ ] T5 — остаток: unmount и хук закрытия
+- [x] T5 — остаток: unmount и хук закрытия; #1958. `dispose` снимает composing range на месте
+  (`end_composition`), если поле держит клиента, и перестаёт сообщать правки в `on_changed`;
+  хук — `UiRuntime::commit_composition_for_close` (вызов из доставки закрытия — teardown T13);
+  сброс формы пишет начальное значение поверх preedit. Строки:
+  `a_conversion_queued_for_an_unmounted_field_is_dropped`,
+  `unmounting_a_composing_field_commits_the_preedit_once` (pull/push × фокус/после blur, повторный
+  unmount), `an_accepted_close_commits_the_preedit_before_the_guard`,
+  `a_reset_mid_composition_removes_the_preedit` (в `crates/flui-widgets/tests/form.rs`, рядом с
+  остальными строками композиции формы). Красные по assert на `df3d56dd6`, зелёные после;
+  проверено на Windows 2026-10-28
 - [ ] T9 — остаток: реконверсия
 - [ ] T11 — строки IME на приложении приёмки
 - [ ] T10 — нативное доказательство (после flui-driver FD11)
