@@ -1120,6 +1120,19 @@ trait depends on `flui-platform` instead.
   and tablet-tool caps sit where a global or a tool is bound, which only a
   compositor reaches.
 
+  Every object a Wayland compositor can make the client hold is one of three
+  kinds. **Destroyed on arrival:** a `zwp_tablet_v2` and a `zwp_tablet_pad_v2`
+  (FLUI reads neither), and a pad's group, ring or strip the moment an event
+  of its own or its parent's reaches it. **Capped:** outputs (64), seats (16),
+  tablet tools per seat (16), and one of each manager the input binds (`wl_shm`,
+  `wl_compositor`, the tablet, gestures and cursor-shape managers; a second
+  announcement is not bound); the loop's own globals are bound once, from the
+  list at start. **Tied to a request of ours:** a seat's pointer, keyboard and
+  touch, a pointer's pinch and cursor-shape device, a window's surfaces and
+  frame callbacks, an activation token (destroyed at its `done`), a
+  presentation feedback (ended by its own `presented` or `discarded`). No
+  `wl_data_device` is bound yet, so no data offer arrives.
+
 ---
 
 ## Mapping decisions

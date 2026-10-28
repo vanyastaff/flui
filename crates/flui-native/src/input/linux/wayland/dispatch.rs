@@ -241,6 +241,24 @@ struct Objects {
 }
 
 impl Objects {
+    /// Whether a global of `interface`, of which the input binds one, is
+    /// bound already.
+    fn holds(&self, interface: &str) -> bool {
+        if interface == WlShm::interface().name {
+            self.shm.is_some()
+        } else if interface == WlCompositor::interface().name {
+            self.compositor.is_some()
+        } else if interface == ZwpTabletManagerV2::interface().name {
+            self.tablet.is_some()
+        } else if interface == ZwpPointerGesturesV1::interface().name {
+            self.gestures.is_some()
+        } else if interface == WpCursorShapeManagerV1::interface().name {
+            self.shapes.is_some()
+        } else {
+            false
+        }
+    }
+
     /// Draw theme cursors once `wl_shm` and `wl_compositor` are both bound.
     fn settle_cursor_source(&mut self) {
         self.cursor_source = match (&self.shm, &self.compositor, &self.connection) {
@@ -843,6 +861,20 @@ impl WaylandInput for SeatInput {
                 objects.connection = Some((Connection::from_backend(backend), queue.clone()));
             }
         });
+        // One of each manager is bound: another announcement of one already
+        // held would bind an object nothing destroys.
+        if self
+            .shared
+            .objects
+            .with(|objects| objects.holds(interface))
+            .unwrap_or_default()
+        {
+            tracing::debug!(
+                interface,
+                "a second Wayland global of one kind was not bound"
+            );
+            return;
+        }
         if interface == WlShm::interface().name {
             let shm = registry.bind::<WlShm, CursorShm, WaylandState>(name, 1, queue, CursorShm);
             self.shared.objects.with(|objects| {
@@ -2035,6 +2067,21 @@ impl Dispatch<ZwpTabletSeatV2, SeatData> for WaylandState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        // FLUI reads neither a tablet (its tools carry the input) nor a pad
+        // (its buttons, rings and strips stay the compositor's shortcuts):
+        // each goes as it comes, so a compositor adding them without end
+        // leaves nothing live.
+        match &event {
+            zwp_tablet_seat_v2::Event::TabletAdded { id } => {
+                id.destroy();
+                return;
+            }
+            zwp_tablet_seat_v2::Event::PadAdded { id } => {
+                id.destroy();
+                return;
+            }
+            _ => {}
+        }
         if let zwp_tablet_seat_v2::Event::ToolAdded { id } = event
             && let Some(shared) = data.shared.upgrade()
             && let Some(tool) = id.data::<ToolData>()
@@ -2169,18 +2216,20 @@ impl Dispatch<ZwpTabletV2, ()> for WaylandState {
     fn event(
         _: &mut Self,
         tablet: &ZwpTabletV2,
-        event: zwp_tablet_v2::Event,
+        _: zwp_tablet_v2::Event,
         (): &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        // The tablet itself names its hardware; its tools carry the input.
-        if let zwp_tablet_v2::Event::Removed = event {
-            tablet.destroy();
-        }
+        // Destroyed as it was added: should an event still reach it,
+        // destroying it again sends nothing.
+        tablet.destroy();
     }
 }
 
+// A pad is destroyed as it is added; a group, ring or strip the compositor
+// made for it before that goes the moment any event of its own, or of its
+// parent, reaches it.
 impl Dispatch<ZwpTabletPadV2, ()> for WaylandState {
     fn event(
         _: &mut Self,
@@ -2190,11 +2239,10 @@ impl Dispatch<ZwpTabletPadV2, ()> for WaylandState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        // A pad's buttons, rings and strips are the compositor's shortcuts
-        // until FLUI reads them.
-        if let zwp_tablet_pad_v2::Event::Removed = event {
-            pad.destroy();
+        if let zwp_tablet_pad_v2::Event::Group { pad_group } = event {
+            pad_group.destroy();
         }
+        pad.destroy();
     }
 
     event_created_child!(WaylandState, ZwpTabletPadV2, [
@@ -2205,12 +2253,18 @@ impl Dispatch<ZwpTabletPadV2, ()> for WaylandState {
 impl Dispatch<ZwpTabletPadGroupV2, ()> for WaylandState {
     fn event(
         _: &mut Self,
-        _: &ZwpTabletPadGroupV2,
-        _: zwp_tablet_pad_group_v2::Event,
+        group: &ZwpTabletPadGroupV2,
+        event: zwp_tablet_pad_group_v2::Event,
         (): &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        match event {
+            zwp_tablet_pad_group_v2::Event::Ring { ring } => ring.destroy(),
+            zwp_tablet_pad_group_v2::Event::Strip { strip } => strip.destroy(),
+            _ => {}
+        }
+        group.destroy();
     }
 
     event_created_child!(WaylandState, ZwpTabletPadGroupV2, [
@@ -2222,24 +2276,26 @@ impl Dispatch<ZwpTabletPadGroupV2, ()> for WaylandState {
 impl Dispatch<ZwpTabletPadRingV2, ()> for WaylandState {
     fn event(
         _: &mut Self,
-        _: &ZwpTabletPadRingV2,
+        ring: &ZwpTabletPadRingV2,
         _: zwp_tablet_pad_ring_v2::Event,
         (): &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        ring.destroy();
     }
 }
 
 impl Dispatch<ZwpTabletPadStripV2, ()> for WaylandState {
     fn event(
         _: &mut Self,
-        _: &ZwpTabletPadStripV2,
+        strip: &ZwpTabletPadStripV2,
         _: zwp_tablet_pad_strip_v2::Event,
         (): &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        strip.destroy();
     }
 }
 
