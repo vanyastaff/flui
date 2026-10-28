@@ -7,6 +7,7 @@ use std::time::Duration;
 
 thread_local! {
     // Send wake hooks recover the test's owner only on its original thread.
+    #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static WAKE_OWNER: std::cell::RefCell<std::rc::Weak<OwnerFrame>> =
         const { std::cell::RefCell::new(std::rc::Weak::new()) };
 }
@@ -499,6 +500,7 @@ fn reentrant_hook_replacement_delivers_the_current_hook_after_failure() {
 
 thread_local! {
     /// The driver a hook replaces itself through, on the owner thread.
+    #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static OWNER_DRIVER: std::cell::RefCell<Option<AsyncDriver>> =
         const { std::cell::RefCell::new(None) };
 }

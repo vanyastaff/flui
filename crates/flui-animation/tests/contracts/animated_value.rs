@@ -399,6 +399,7 @@ fn an_equivalent_motion_target_still_publishes_its_exact_value() {
 
 fn immediate_motion_does_not_reconstruct_the_displaced_sample() {
     thread_local! {
+        #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
         static REFUSE_RECONSTRUCTION: Cell<bool> = const { Cell::new(false) };
     }
     #[derive(Clone)]
@@ -1044,6 +1045,7 @@ fn owner_retirement_joins_every_delivery_channel() {
     }
 
     thread_local! {
+        #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
         static OWNER: RefCell<Option<AnimatedValue<Target>>> = const { RefCell::new(None) };
     }
     fn release_owner() {

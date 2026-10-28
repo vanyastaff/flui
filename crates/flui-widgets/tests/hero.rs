@@ -30,9 +30,13 @@ mod registry_reentry {
     use std::rc::Rc;
 
     thread_local! {
+        #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
         static REGISTRY: RefCell<Option<HeroRegistry>> = const { RefCell::new(None) };
+        #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
         static CALLBACK: Cell<Option<&'static str>> = const { Cell::new(None) };
+        #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
         static READS: Cell<usize> = const { Cell::new(0) };
+        #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
         static MANAGER: RefCell<Option<Rc<FlightManager>>> = const { RefCell::new(None) };
     }
 

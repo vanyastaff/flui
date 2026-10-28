@@ -108,6 +108,7 @@ impl DataTransferSource for RecordingSource {
 }
 
 thread_local! {
+    #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static STARTED: RefCell<Vec<OsDragRequest>> = const { RefCell::new(Vec::new()) };
 }
 

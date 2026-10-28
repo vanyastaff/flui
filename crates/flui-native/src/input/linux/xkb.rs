@@ -429,6 +429,7 @@ mod meaning {
     #[cfg(test)]
     thread_local! {
         /// How many keymap texts this thread read layout names from.
+        #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
         pub(crate) static GROUP_NAME_READS: std::cell::Cell<usize> =
             const { std::cell::Cell::new(0) };
     }

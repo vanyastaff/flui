@@ -22,6 +22,7 @@ thread_local! {
     /// spawned), and a process-wide count would charge those to the
     /// measurement. Constant-initialised with no destructor, so reading it
     /// from the allocator never allocates.
+    #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
 }
 

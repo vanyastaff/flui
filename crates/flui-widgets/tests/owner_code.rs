@@ -3111,6 +3111,7 @@ fn attach_replacing_a_client_whose_platform_enable_panicked() {
 
 thread_local! {
     /// The store a close's cleanup edits, following the closing owner's gate.
+    #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static CLEANUP_STORE: RefCell<Option<Rc<InMemoryTextStore>>> = const { RefCell::new(None) };
 }
 
@@ -3222,6 +3223,7 @@ fn attach_and_detach_whose_diagnostics_panic() {
 
 thread_local! {
     /// The owner a platform closes from inside its own call.
+    #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static CLOSING_OWNER: RefCell<Option<Weak<TextInputOwner>>> = const { RefCell::new(None) };
 }
 
