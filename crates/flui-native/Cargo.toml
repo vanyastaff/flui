@@ -305,21 +305,21 @@ console_error_panic_hook = "0.1"
 
 # D-Bus on Linux: the Settings portal (`preferences::linux`), logind
 # (`lifecycle::linux`) and AT-SPI, the accessibility bridge
-# (`accessibility::linux`, through `accesskit_unix`). The Linux host, the winit
-# one today, brings `zbus` and the AT-SPI adapter with it (`winit-backend`), so
-# every Linux window is accessible with no feature of its own; both become
-# unconditional Linux dependencies with the native Wayland and X11 host
-# (ADR-0151 §15).
+# (`accessibility::linux`, through `accesskit_unix`). Every Linux host reads
+# them, so they are unconditional Linux dependencies and every Linux window is
+# accessible with no feature of its own (ADR-0151 §15).
 [target.'cfg(target_os = "linux")'.dependencies]
-# The display source's protocol clients and descriptor primitives, behind the
-# `wayland` and `x11` features (`winit-backend` enables both on Linux).
+# The protocol clients and descriptor primitives of the native Wayland host and
+# of the display source, behind the `wayland` and `x11` features (`desktop`
+# enables `wayland`, `winit-backend` both).
 x11rb = { workspace = true, optional = true }
 wayland-client = { workspace = true, optional = true }
 wayland-protocols = { workspace = true, optional = true }
+wayland-backend = { workspace = true, optional = true }
 rustix = { workspace = true, optional = true }
-accesskit_unix = { version = "0.24", optional = true }
-zbus = { workspace = true, optional = true }
-futures-util = { workspace = true, optional = true }
+accesskit_unix = { version = "0.24" }
+zbus = { workspace = true }
+futures-util = { workspace = true }
 tokio = { workspace = true, features = ["macros"] }
 
 # iOS native backend (UIKit + Metal). `objc2` is the maintained Objective-C
@@ -434,19 +434,15 @@ version = "0.27.1"
 [features]
 default = ["desktop"]
 
-# Compatibility selector for the native desktop backends, selected by target OS.
-# The optional winit fallback belongs to `winit-backend` alone.
-desktop = []
+# The native desktop hosts, selected by target OS: on Linux the Wayland host
+# (`wayland`); Windows and macOS need no feature. The optional winit fallback
+# belongs to `winit-backend` alone.
+desktop = ["wayland"]
 
-# winit fallback backend — primary on Linux until native Wayland/X11 lands
-# (roadmap Cross.P); optional on Windows/macOS.
+# winit fallback backend — the Linux host `current_platform` picks while it is
+# built, until the native Wayland and X11 hosts are complete (ADR-0151 §11);
+# optional on Windows/macOS.
 winit-backend = [
-    # The Settings portal and logind this host reads on Linux
-    # (`preferences::linux`, `lifecycle::linux`), and the AT-SPI adapter its
-    # Linux windows hand out (`accessibility::linux`).
-    "dep:zbus",
-    "dep:accesskit_unix",
-    "dep:futures-util",
     "dep:winit",
     "dep:arboard",
     "dep:crossbeam-channel",
@@ -467,10 +463,16 @@ winit-backend = [
 # for downstream `Cargo.toml`s, mirroring `desktop`.
 web = []
 
-# Linux display server protocols: each connects to its compositor to read the
-# outputs and their refresh rates (`display::linux`). On other
-# targets the features exist and add nothing.
-wayland = ["dep:wayland-client", "dep:wayland-protocols", "dep:rustix"]
+# Linux display server protocols. `wayland` is the native Wayland host
+# (`hosts::linux`), and both read the outputs and their refresh rates from the
+# compositor for the display source (`display::linux`). On other targets the
+# features exist and add nothing.
+wayland = [
+    "dep:wayland-client",
+    "dep:wayland-protocols",
+    "dep:wayland-backend",
+    "dep:rustix",
+]
 x11 = ["dep:x11rb", "dep:rustix"]
 
 # Debug builds only: `input::assembly::capture` journals every

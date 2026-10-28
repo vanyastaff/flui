@@ -11,7 +11,7 @@
 //! trigger, leaves the level without a source: it is logged once and the
 //! other level, if it has one, runs on.
 
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 use std::{
     fs::{File, OpenOptions},
     io::Write,
@@ -20,30 +20,30 @@ use std::{
     thread::JoinHandle,
 };
 
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 use flui_platform::SystemNotice;
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 use rustix::{
     event::{EventfdFlags, PollFd, PollFlags, eventfd, poll},
     io::Errno,
 };
 
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 use super::{HostEvent, Inbox};
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 use triggers::{Stall, Trigger, level_of, triggers_for};
 
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 const PRESSURE_FILE: &str = "/proc/pressure/memory";
 
 /// The thread that waits for pressure. Dropping it stops the thread.
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(super) struct PressureWatcher {
     stop: Arc<OwnedFd>,
     thread: Option<JoinHandle<()>>,
 }
 
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 impl PressureWatcher {
     /// Set the triggers and start waiting; `None` when no trigger could be set
     /// or the thread could not start.
@@ -85,7 +85,7 @@ impl PressureWatcher {
     }
 }
 
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 impl Drop for PressureWatcher {
     fn drop(&mut self) {
         // The eventfd stays readable once written, so the thread sees it
@@ -106,7 +106,7 @@ impl Drop for PressureWatcher {
 /// Open the pressure file and set the first trigger for `stall` the kernel
 /// accepts. Each trigger needs a file of its own: the kernel allows one per
 /// descriptor.
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 fn set_trigger(stall: Stall) -> Option<(Trigger, File)> {
     for trigger in triggers_for(stall) {
         let mut file = match OpenOptions::new()
@@ -137,7 +137,7 @@ fn set_trigger(stall: Stall) -> Option<(Trigger, File)> {
     None
 }
 
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 fn run<F: AsFd>(mut triggers: Vec<(Trigger, F)>, stop: &OwnedFd, inbox: &Inbox) {
     loop {
         let mut fds = Vec::with_capacity(triggers.len() + 1);
@@ -191,7 +191,7 @@ fn run<F: AsFd>(mut triggers: Vec<(Trigger, F)>, stop: &OwnedFd, inbox: &Inbox) 
     }
 }
 
-#[cfg(all(test, target_os = "linux", feature = "winit-backend"))]
+#[cfg(all(test, target_os = "linux", feature = "wayland"))]
 mod tests {
     use flui_foundation::memory::MemoryPressureLevel;
 

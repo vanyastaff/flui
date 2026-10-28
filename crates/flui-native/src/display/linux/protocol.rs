@@ -10,6 +10,7 @@
 
 use std::path::PathBuf;
 
+#[cfg(any(feature = "winit-backend", test))]
 use raw_window_handle::RawDisplayHandle;
 
 /// A display server protocol.
@@ -39,7 +40,9 @@ impl Protocol {
         }
     }
 
-    /// The protocol of the display a window system handle belongs to.
+    /// The protocol of the display a window system handle belongs to: the
+    /// winit host checks the display winit opened against the environment's.
+    #[cfg(any(feature = "winit-backend", test))]
     pub(crate) fn of_display(handle: RawDisplayHandle) -> Option<Self> {
         match handle {
             RawDisplayHandle::Wayland(_) => Some(Self::Wayland),

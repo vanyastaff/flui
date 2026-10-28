@@ -379,7 +379,8 @@ impl WindowDelivery {
         ),
         target_os = "macos",
         target_os = "ios",
-        target_arch = "wasm32"
+        target_arch = "wasm32",
+        all(target_os = "linux", feature = "wayland")
     ))]
     pub(crate) fn publish_through_owner<W: 'static>(
         &self,
@@ -459,7 +460,11 @@ impl WindowDelivery {
     /// returns and the queued clear runs, not when this call returns. A backend
     /// uses it to order a notice after the release of what the handler owns
     /// (a renderer and its surface).
-    #[cfg(any(windows, all(test, not(target_arch = "wasm32"))))]
+    #[cfg(any(
+        windows,
+        all(target_os = "linux", feature = "wayland"),
+        all(test, not(target_arch = "wasm32"))
+    ))]
     pub(crate) fn clear_then(&self, on_retired: impl FnOnce() + Send + 'static) {
         self.clear_with(Some(Box::new(on_retired)));
     }

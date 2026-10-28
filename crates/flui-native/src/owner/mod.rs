@@ -69,6 +69,12 @@ pub(crate) mod apple;
 pub(crate) mod call_point;
 pub mod handlers;
 pub(crate) mod headless;
+#[cfg(any(all(target_os = "linux", feature = "wayland"), test))]
+pub(crate) mod linux {
+    //! The Linux hosts' loops: Wayland's, over the compositor's connection.
+
+    pub(crate) mod wayland;
+}
 #[cfg(any(test, windows))]
 pub(crate) mod modal_pace;
 pub(crate) mod notices;
@@ -87,7 +93,7 @@ pub(crate) mod slot;
     target_os = "ios",
     target_os = "android",
     target_arch = "wasm32",
-    all(target_os = "linux", feature = "winit-backend")
+    all(target_os = "linux", feature = "wayland")
 ))]
 pub(crate) mod watch;
 pub(crate) mod window_delivery;
@@ -99,7 +105,7 @@ pub(crate) mod window_delivery;
     target_os = "macos",
     target_os = "ios",
     target_arch = "wasm32",
-    all(target_os = "linux", feature = "winit-backend")
+    all(target_os = "linux", feature = "wayland")
 ))]
 pub(crate) mod sources;
 #[cfg(target_arch = "wasm32")]

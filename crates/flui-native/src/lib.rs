@@ -251,6 +251,8 @@ pub use platform::HostPlatform;
 #[cfg(target_arch = "wasm32")]
 pub use hosts::WebPlatform;
 // Desktop platforms
+#[cfg(all(target_os = "linux", feature = "wayland"))]
+pub use hosts::WaylandPlatform;
 #[cfg(windows)]
 pub use hosts::WindowsPlatform;
 // winit fallback backend — primary on Linux until native Wayland/X11 lands
@@ -422,22 +424,14 @@ pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {
 
     #[cfg(all(target_os = "linux", not(any(windows, target_os = "macos"))))]
     {
-        // The winit fallback host is the Linux path until the native Wayland
-        // and X11 host replaces it (ADR-0151 section 11). It is opt-in via
-        // `winit-backend` because it pulls in `arboard` (clipboard); `flui-app`
-        // enables it for Linux builds.
-        #[cfg(feature = "winit-backend")]
-        {
-            Ok(Box::new(WinitPlatform::new()))
-        }
-
-        #[cfg(not(feature = "winit-backend"))]
-        {
-            Err(PlatformError::Init {
-                message: "no Linux windowing backend enabled — flui-app enables `winit-backend` \
-                          on Linux"
-                    .to_string(),
-            })
+        let built = LinuxHosts {
+            wayland: cfg!(feature = "wayland"),
+            winit: cfg!(feature = "winit-backend"),
+        };
+        match choose_linux_host(display::linux::protocol::Protocol::current(), built) {
+            Ok(LinuxHost::Winit) => start_winit(),
+            Ok(LinuxHost::Wayland) => start_wayland(),
+            Err(message) => Err(PlatformError::Init { message }),
         }
     }
 
@@ -495,6 +489,136 @@ pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {
             message: "Unsupported platform - no platform implementation available for this target"
                 .to_string(),
         })
+    }
+}
+
+/// The winit host, as [`current_platform`] starts it on Linux.
+#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+fn start_winit() -> Result<Box<dyn Platform>, PlatformError> {
+    Ok(Box::new(WinitPlatform::new()))
+}
+
+/// A build without the winit host never chooses it.
+#[cfg(all(target_os = "linux", not(feature = "winit-backend")))]
+fn start_winit() -> Result<Box<dyn Platform>, PlatformError> {
+    Err(PlatformError::Init {
+        message: "the winit host is not built".to_owned(),
+    })
+}
+
+/// The native Wayland host, as [`current_platform`] starts it.
+#[cfg(all(target_os = "linux", feature = "wayland"))]
+fn start_wayland() -> Result<Box<dyn Platform>, PlatformError> {
+    Ok(Box::new(WaylandPlatform::new()?))
+}
+
+/// A build without the Wayland host never chooses it.
+#[cfg(all(target_os = "linux", not(feature = "wayland")))]
+fn start_wayland() -> Result<Box<dyn Platform>, PlatformError> {
+    Err(PlatformError::Init {
+        message: "the Wayland host is not built".to_owned(),
+    })
+}
+
+/// The Linux hosts a build carries.
+#[cfg(any(target_os = "linux", test))]
+#[derive(Debug, Clone, Copy)]
+struct LinuxHosts {
+    /// The native Wayland host (`wayland`).
+    wayland: bool,
+    /// The winit host (`winit-backend`).
+    winit: bool,
+}
+
+/// A Linux host [`current_platform`] can start.
+#[cfg(any(target_os = "linux", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LinuxHost {
+    /// The native Wayland host.
+    Wayland,
+    /// The winit host.
+    Winit,
+}
+
+/// The host [`current_platform`] starts on Linux, chosen at run time from the
+/// session's protocol (`session`, as winit reads the environment) and the hosts
+/// the build carries.
+///
+/// The winit host is chosen whenever it is built: the native hosts do not
+/// carry input yet, and `flui-app` builds winit on Linux until they do
+/// (ADR-0151 §11). Without it, a Wayland session gets the native Wayland
+/// host; an X11 session has no native host yet.
+#[cfg(any(target_os = "linux", test))]
+fn choose_linux_host(
+    session: Option<display::linux::protocol::Protocol>,
+    built: LinuxHosts,
+) -> Result<LinuxHost, String> {
+    use display::linux::protocol::Protocol;
+
+    if built.winit {
+        return Ok(LinuxHost::Winit);
+    }
+    match session {
+        Some(Protocol::Wayland) if built.wayland => Ok(LinuxHost::Wayland),
+        Some(Protocol::Wayland) => Err(
+            "the session is Wayland and the Wayland host is not built: enable the `wayland` \
+             feature (part of `desktop`)"
+                .to_owned(),
+        ),
+        Some(Protocol::X11) => Err(
+            "the session is X11, which has no native host yet: enable `winit-backend` or run under \
+             a Wayland compositor"
+                .to_owned(),
+        ),
+        None => Err(
+            "neither WAYLAND_DISPLAY nor DISPLAY is set: there is no display server to open \
+             windows on (FLUI_HEADLESS=1 selects the headless host)"
+                .to_owned(),
+        ),
+    }
+}
+
+#[cfg(test)]
+mod linux_host_tests {
+    use super::{LinuxHost, LinuxHosts, choose_linux_host};
+    use crate::display::linux::protocol::Protocol;
+
+    /// The Linux host is chosen at run time from the session: winit while it
+    /// is built, the native Wayland host for a Wayland session otherwise, and
+    /// an error that says what is missing where neither fits.
+    #[test]
+    fn the_linux_host_follows_the_session() {
+        let native = LinuxHosts {
+            wayland: true,
+            winit: false,
+        };
+        let both = LinuxHosts {
+            wayland: true,
+            winit: true,
+        };
+        let none = LinuxHosts {
+            wayland: false,
+            winit: false,
+        };
+        assert_eq!(
+            choose_linux_host(Some(Protocol::Wayland), native),
+            Ok(LinuxHost::Wayland)
+        );
+        assert_eq!(
+            choose_linux_host(Some(Protocol::Wayland), both),
+            Ok(LinuxHost::Winit)
+        );
+        assert_eq!(choose_linux_host(None, both), Ok(LinuxHost::Winit));
+        for (session, built) in [
+            (Some(Protocol::X11), native),
+            (None, native),
+            (Some(Protocol::Wayland), none),
+        ] {
+            assert!(
+                choose_linux_host(session, built).is_err(),
+                "{session:?} with {built:?}"
+            );
+        }
     }
 }
 

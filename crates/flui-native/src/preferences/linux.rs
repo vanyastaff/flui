@@ -1,7 +1,7 @@
 //! The Linux host's system preferences: the Settings portal
 //! (`org.freedesktop.portal.Settings`) on the session bus, observed for one
-//! incarnation of the owner's loop. Every Linux host reads it; today that is
-//! the winit host.
+//! incarnation of the owner's loop. Every Linux host reads it: the Wayland
+//! host and the winit host.
 //!
 //! D-Bus runs on the existing background executor. The owner only reads an
 //! immutable accepted snapshot; no portal request runs in build/layout/paint.
@@ -98,6 +98,15 @@ mod winit {
 
 #[cfg(feature = "winit-backend")]
 pub(crate) use winit::WinitSettings;
+
+/// The Wayland loop starts the portal's watch as it runs, and every Wayland
+/// window follows the portal's colour scheme.
+impl crate::owner::linux::wayland::WaylandPreferences for PreferenceSource {
+    /// The accepted `color-scheme`; light until the portal says otherwise.
+    fn appearance(&self) -> WindowAppearance {
+        self.observation.lock().appearance
+    }
+}
 
 impl PreferenceSource {
     /// Start watching the portal on `executor`, waking the owner behind
