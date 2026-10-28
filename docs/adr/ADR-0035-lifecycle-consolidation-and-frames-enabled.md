@@ -3,6 +3,10 @@
 - **Status:** Accepted
 - **Date:** 2026-07-18
 - **Related:** ADR-0027 (UI runtime ownership), ADR-0058 (pacing; the backgrounded pump)
+- **Superseded-by (on acceptance):**
+  [ADR-0258](ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md) §1–§2, for §5's sentence
+  "the first panic resumes after restoration and notification" only: a quit observer's panic is
+  contained and reported, and resumes only when it is terminal. The rest of §5 stands.
 
 ## Context
 

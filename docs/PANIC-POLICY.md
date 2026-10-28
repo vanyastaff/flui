@@ -65,6 +65,39 @@ thread-shared `Arc` clone is retained. The full
 rule and its costs are in
 [ADR-0127](adr/ADR-0127-exceptional-path-retention.md).
 
+## Callback panics and exit codes
+
+A panic in application code is contained where the framework can still go
+on, and ends the process only when nothing is left to continue. The rule is
+[ADR-0258](adr/ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md),
+proposed and not implemented: today a caught callback panic is reported and
+then resumed, and on Win32, AppKit and UIKit it reaches the OS entry's
+boundary, which aborts.
+
+| Path | Outcome |
+|---|---|
+| Ordinary close of the last window, including a flush that misses its deadline with the file still whole | exit 0 |
+| `build` | the subtree becomes an `ErrorView`; the process runs on |
+| An input handler, post-frame callback, lifecycle observer, command, or close-request handler | one `CallbackPanic` report; the UI runtime and the process run on |
+| Layout or paint | one `frame_failure` report per failure; the frame is retried with backoff |
+| Closing a UI runtime that is not the last | one `CallbackPanic` report; what was not yet destroyed is retained |
+| `dispose` or a `Drop` while the last window closes, or at loop exit | the flush registry is written, services and pools stop, then exit 101 with the panic's text |
+| A panic that reaches an OS entry (`os_entry`) | pending the owner's decision (ADR-0258 §4); today an abort on Win32, AppKit and UIKit |
+| A `BUG:` invariant | a framework defect: contained like any panic on the paths above, with `internal_invariant` set in its report; at an OS entry it ends the process |
+| A value whose own fields panic twice in their drop glue | abort, a documented limit (ADR-0127) |
+
+The first failure is the one reported and resumed; later ones are logged and
+their payloads retained. A terminal failure waits in the host's terminal
+slot until the exit order has written what the application persisted; it is
+then resumed with `resume_unwind`, which does not run the panic hook again.
+
+A persisted document's codec (`Document::encode`, `Document::decode`) runs
+under its own containment: a panic in `encode` publishes nothing and leaves
+the value in memory and the file on disk untouched; the document's status
+becomes `Failed` with `PersistError::Panicked { during: CodecStep }`, and the
+next `set` works. The first failure stays in the status until the next
+success. Its payload is retained per ADR-0127.
+
 ## Enforcement
 
 `[workspace.lints.clippy]` sets `unwrap_used = "warn"`, and the clippy CI job

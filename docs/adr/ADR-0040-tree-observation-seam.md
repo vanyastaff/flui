@@ -11,6 +11,10 @@
   still holds (the kind rule forbids any core crate naming devtools, so no in-framework consumer
   can form a cycle), and the compile cost is already paid (every app that links devtools builds
   the tree stack through the facade).
+- **Superseded-by (on acceptance):** [ADR-0261](ADR-0261-dropping-an-owner-ends-its-observation.md)
+  §1, for §3's "Teardown honesty" sentences on a `BuildOwner` dropped without
+  `clear_tree_observer` only: the owner's drop calls `detached()` once. The negative consequence and
+  the follow-up about a teardown hook go with them; the rest of §3 stands.
 
 *`flui-foundation` declares a narrow `TreeObserver` trait plus typed event structs; `BuildOwner`
 holds one per-UI runtime `Option<Arc<dyn TreeObserver>>` slot; emissions fire from the tree's true
