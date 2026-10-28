@@ -15,12 +15,17 @@
 //! The adapters have no feature: every window of a host that has one hands it
 //! out, and each compiles wherever a host of its operating system does
 //! (ADR-0151 §15): on Linux, with any of the Wayland, X11 and winit hosts.
-//! Android, iOS and the Web have none yet: their tables name
+//! Android and the Web have none yet: their tables name
 //! `Absent<Accessibility>`.
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) mod apple;
-#[cfg(any(target_os = "windows", target_os = "macos", linux_host))]
+#[cfg(any(
+    target_os = "windows",
+    target_os = "macos",
+    target_os = "ios",
+    linux_host
+))]
 mod bridge;
 pub(crate) mod headless;
 #[cfg(linux_host)]

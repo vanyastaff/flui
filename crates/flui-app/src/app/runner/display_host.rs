@@ -15,7 +15,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use flui_platform::PlatformWindow;
-use flui_platform::{DisplaySnapshot, FrameRateHint};
+use flui_platform::{DisplayColor, DisplaySnapshot, FrameRateHint};
 use flui_runtime::frame_rate_demand::FrameRateDemand;
 use flui_runtime::owner::DisplayUpdate;
 
@@ -136,6 +136,13 @@ impl DisplayHost {
             .retain(|followed| followed.dispatcher.address != address);
     }
 
+    /// The colour profile of the display `window` is on, by the accepted
+    /// snapshot: what the window's surface is configured for (ADR-0256).
+    /// `None` before the first sample, and as [`color_on`] answers.
+    pub(super) fn color_of(&self, window: &dyn PlatformWindow) -> Option<DisplayColor> {
+        color_on(&self.snapshot()?, window)
+    }
+
     /// What `window` is on according to the accepted snapshot; unknown before
     /// the first sample, for a window naming no display, and for one the
     /// snapshot does not hold.
@@ -164,6 +171,19 @@ impl DisplayHost {
             .map(|(dispatcher, window)| (dispatcher, self.derive(window.as_ref())))
             .collect()
     }
+}
+
+/// The colour `snapshot` gives the display `window` is on: `None` for a window
+/// naming no display or one the snapshot does not hold, and where the platform
+/// reports no colour for the display (the renderer then reads what the surface
+/// reports).
+pub(in crate::app) fn color_on(
+    snapshot: &DisplaySnapshot,
+    window: &dyn PlatformWindow,
+) -> Option<DisplayColor> {
+    // The window answers before the snapshot is searched: it is platform code.
+    let id = window.state().display?;
+    snapshot.get(id)?.color.ok()
 }
 
 /// Ask `window` for the rate `demand` names. A window whose capabilities

@@ -7,9 +7,10 @@
 //!   the compositor sends means for the window (its states, the size it
 //!   takes, what the compositor lets it do); [`frame`], when it delivers a
 //!   frame; [`decoration`], who draws its frame; [`scale`], the scale its
-//!   buffer is drawn at; `foreign`, how a portal names it (read by tests until the window reference carries it);
+//!   buffer is drawn at; [`presented`], when the compositor showed a commit;
+//!   `foreign`, how a portal names it (read by tests until the window reference carries it);
 //!   [`activation`], the token it asks to be activated with;
-//! - `toplevel`:`WaylandWindow`, the `PlatformWindow` over the protocol
+//! - `toplevel`: `WaylandWindow`, the `PlatformWindow` over the protocol
 //!   objects, and the dispatch of those objects on the owner's queue
 //!   (`owner::linux::wayland::WaylandState`).
 //!
@@ -1078,6 +1079,84 @@ pub(crate) mod scale {
     }
 }
 
+pub(crate) mod presented {
+    //! When the compositor showed a window's commit, as
+    //! `wp_presentation_feedback.presented` carries it: a time on the clock
+    //! `wp_presentation.clock_id` named, and the output's refresh interval.
+    //! The window asks for one feedback per commit it presents (its surface
+    //! target's `pre_present_notify`) and reports each shown commit on the
+    //! event timeline; a discarded commit reports nothing.
+
+    #![forbid(unsafe_code)]
+
+    use std::time::Duration;
+
+    use flui_platform::{CapabilityAbsence, WindowCapabilities};
+
+    /// The time a `presented` event carries, from its three words: the
+    /// seconds split into high and low halves, and the nanoseconds.
+    /// Nanoseconds of a second or more are not a time and give `None`.
+    pub(crate) fn shown_at(tv_sec_hi: u32, tv_sec_lo: u32, tv_nsec: u32) -> Option<Duration> {
+        if tv_nsec >= 1_000_000_000 {
+            return None;
+        }
+        let seconds = (u64::from(tv_sec_hi) << 32) | u64::from(tv_sec_lo);
+        Some(Duration::new(seconds, tv_nsec))
+    }
+
+    /// `capabilities` with the presentation report the compositor makes:
+    /// where it offers no `wp_presentation`, a window learns nothing of when
+    /// its frames are shown.
+    pub(crate) const fn reported(
+        capabilities: WindowCapabilities,
+        offered: bool,
+    ) -> WindowCapabilities {
+        if offered {
+            capabilities
+        } else {
+            capabilities.without_presentation_feedback(CapabilityAbsence::NotOnThisDevice)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use flui_platform::{Availability, UnsupportedReason};
+
+        use super::*;
+
+        /// A `presented` event's words make the time it names; nanoseconds
+        /// past a second do not.
+        #[test]
+        fn a_presented_event_names_its_time() {
+            assert_eq!(
+                shown_at(0, 12, 500_000_000),
+                Some(Duration::from_millis(12_500))
+            );
+            assert_eq!(
+                shown_at(1, 0, 0),
+                Some(Duration::from_secs(1 << 32)),
+                "the high word holds the upper seconds"
+            );
+            assert_eq!(shown_at(0, 1, 1_000_000_000), None);
+        }
+
+        /// A compositor without `wp_presentation` leaves a window without the
+        /// report, for want of the device's compositor, not the platform.
+        #[test]
+        fn the_report_follows_the_compositor() {
+            let offered = reported(WindowCapabilities::ALL, true);
+            assert_eq!(offered.presentation_feedback(), Ok(Availability::Native));
+            let missing = reported(WindowCapabilities::ALL, false);
+            assert_eq!(
+                missing
+                    .presentation_feedback()
+                    .map_err(|absent| absent.reason),
+                Err(UnsupportedReason::NotOnThisDevice)
+            );
+        }
+    }
+}
+
 // Read by tests alone until the contract's window reference carries the
 // portal parent to the capability crates; that reader drops this `cfg`.
 #[cfg(any(test, feature = "testing"))]
@@ -1152,6 +1231,9 @@ mod toplevel {
     use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1::{
         self, WpFractionalScaleV1,
     };
+    use wayland_protocols::wp::presentation_time::client::wp_presentation_feedback::{
+        self, WpPresentationFeedback,
+    };
     use wayland_protocols::wp::viewporter::client::wp_viewport::{self, WpViewport};
     use wayland_protocols::xdg::activation::v1::client::xdg_activation_token_v1::{
         self, XdgActivationTokenV1,
@@ -1174,15 +1256,17 @@ mod toplevel {
     #[cfg(any(test, feature = "testing"))]
     use super::foreign::PortalParent;
     use super::frame::{Pacing, first_live, waiting_on_callback};
+    use super::presented;
     use super::scale::{ScaleTold, buffer_scale};
     use crate::host::{self, WindowFacets, WindowPositions};
     use crate::host_window::{CoreHostWindow, HostWindow, OwnerThreadToken};
     use crate::owner::OpenWindowError;
+    use crate::owner::handlers::{PresentationReports, rebased};
     use crate::owner::linux::PortalSlot;
     use crate::owner::linux::wayland::activation::ActivationToken;
     use crate::owner::linux::wayland::{
-        LastInput, LiveOutputs, LoopWaker, LoopWindow, OutputName, WaylandDisplays, WaylandLoop,
-        WaylandState, WindowSeed, WindowTable,
+        LastInput, LiveOutputs, LoopWaker, LoopWindow, OutputName, PresentationTime, SeatWindow,
+        WaylandDisplays, WaylandInput, WaylandLoop, WaylandState, WindowSeed, WindowTable,
     };
     use crate::owner::window_delivery::{Publication, Retirement, WindowDelivery};
     use crate::text::WindowTextInput;
@@ -1411,12 +1495,18 @@ mod toplevel {
         viewported: bool,
         /// The compositor offers to draw the window's frame.
         offers_decorations: bool,
+        /// `wp_presentation`, through which the window's surface target asks
+        /// when each commit is shown; `None` where the compositor tells
+        /// nothing.
+        presentation: Option<PresentationTime>,
         /// What the window asks the compositor to activate it through; `None`
         /// where it takes no activation request.
         activation: Option<XdgActivationV1>,
         /// The last user input, which an activation token names.
         last_input: LastInput,
         live: LiveOutputs,
+        /// The seats' input, which the window joined as it opened.
+        input: Arc<dyn WaylandInput>,
         applied: RefCell<Applied>,
         closed: Cell<bool>,
         /// Whether the accessibility bridge was last told the window is the
@@ -1444,6 +1534,7 @@ mod toplevel {
         hovered: bool,
         viewported: bool,
         offers_decorations: bool,
+        reports_presentation: bool,
         activation: Activation,
         closed: bool,
     }
@@ -1485,11 +1576,14 @@ mod toplevel {
                 execution: WindowExecutionState::Running,
                 hovered: self.hovered,
                 active: states.activated,
-                capabilities: capabilities(
-                    applied.told.wm,
-                    decoration.absence(),
-                    states,
-                    self.activation,
+                capabilities: presented::reported(
+                    capabilities(
+                        applied.told.wm,
+                        decoration.absence(),
+                        states,
+                        self.activation,
+                    ),
+                    self.reports_presentation,
                 ),
             }
             .onto(state)
@@ -1515,6 +1609,7 @@ mod toplevel {
                 waker,
                 notices,
                 frames,
+                input,
             } = owner.seed()?;
             let record = Arc::new(ToplevelRecord::new());
             let queue = protocol.queue.clone();
@@ -1604,6 +1699,7 @@ mod toplevel {
                 queue,
                 viewported: protocol.viewporter.is_some(),
                 offers_decorations: protocol.decoration.is_some(),
+                presentation: protocol.presentation,
                 activation: protocol.activation,
                 last_input: protocol.last_input,
                 live: protocol.live,
@@ -1611,11 +1707,27 @@ mod toplevel {
                 portal,
                 table,
                 waker,
+                input,
                 applied: RefCell::new(applied),
                 closed: Cell::new(false),
                 bridge_focus: Cell::new(false),
                 #[cfg(any(test, feature = "testing"))]
                 shm: protocol.shm,
+            });
+            // The input gives the window its capabilities before the handler
+            // hears its snapshot, and its input from the compositor's first
+            // event.
+            let state = Arc::downgrade(&window.state);
+            window.input.attach(SeatWindow {
+                id,
+                surface: window.surface.0.clone(),
+                delivery: Arc::clone(&window.delivery),
+                scale: Arc::new(move || {
+                    state
+                        .upgrade()
+                        .and_then(|state| state.published().metrics)
+                        .map_or(1.0, |metrics| metrics.scale().get())
+                }),
             });
             // From here a failure retires the window like any other close.
             if let Err(error) = owner.roundtrip() {
@@ -1658,6 +1770,7 @@ mod toplevel {
                 hovered: self.delivery.hovered(),
                 viewported: self.viewported,
                 offers_decorations: self.offers_decorations,
+                reports_presentation: self.presentation.is_some(),
                 activation: if self.activation.is_some() {
                     Activation::Offered
                 } else {
@@ -1904,8 +2017,10 @@ mod toplevel {
             self.retire();
         }
 
-        /// Let go of the handler, then destroy the role objects.
+        /// Leave the seats' input, let go of the handler, then destroy the
+        /// role objects.
         fn retire(&self) {
+            self.input.detach(self.id);
             let roles = self.roles.borrow_mut().take();
             self.delivery.clear_then(move || {
                 if let Some(roles) = roles {
@@ -1977,6 +2092,18 @@ mod toplevel {
         queue: QueueHandle<WaylandState>,
         record: Arc<ToplevelRecord>,
         retirement: Retirement,
+        /// Where each commit's presentation is asked for and reported;
+        /// `None` where the compositor tells nothing.
+        presentation: Option<PresentedTo>,
+    }
+
+    /// What a surface's presentation feedback reports to: the clock its
+    /// times are on, and the window's reports, which its next frame request
+    /// carries. The user data of each `wp_presentation_feedback`.
+    #[derive(Clone)]
+    pub(crate) struct PresentedTo {
+        time: PresentationTime,
+        reports: PresentationReports,
     }
 
     impl HasWindowHandle for WaylandSurface {
@@ -2024,10 +2151,19 @@ mod toplevel {
         /// makes: the next frame the window delivers waits until the
         /// compositor has shown this one, or the grace after which a present
         /// that never committed is given up (`frame::CALLBACK_GRACE`). Returns
-        /// at once; one callback is out at a time.
-        fn pre_present_notify(&self) {
+        /// at once; one callback is out at a time. Where the compositor offers
+        /// `wp_presentation`, every present also asks when its commit is
+        /// shown ([`presented`]).
+        fn pre_present_notify(&self, _: flui_platform::SwapChainStatistics) {
             if self.retirement.is_retired() {
                 return;
+            }
+            if let Some(presented) = &self.presentation {
+                let _feedback = presented.time.manager.feedback(
+                    &self.surface.0,
+                    &self.queue,
+                    presented.clone(),
+                );
             }
             let now = Instant::now();
             {
@@ -2096,6 +2232,10 @@ mod toplevel {
                 queue: self.queue.clone(),
                 record: Arc::clone(&self.record),
                 retirement: self.delivery.retirement(),
+                presentation: self.presentation.clone().map(|time| PresentedTo {
+                    time,
+                    reports: self.delivery.presentation_reports(),
+                }),
             })
         }
 
@@ -2206,12 +2346,10 @@ mod toplevel {
             Ok(())
         }
 
-        /// The cursor is the input feature's, which this host does not carry
-        /// yet (`cursor-shape`).
-        fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
-            Err(CursorError::Unsupported(Unsupported::new(
-                UnsupportedReason::NotYetOnThisHost,
-            )))
+        /// The cursor is the seats' input's, which shows it through
+        /// `cursor-shape` while the pointer is over the window.
+        fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
+            self.input.set_cursor(self.id, cursor)
         }
 
         /// A Wayland compositor takes no refresh-rate request.
@@ -2399,15 +2537,18 @@ mod toplevel {
                 told: None,
                 answered: false,
             };
-            capabilities(
-                None,
-                decoration.absence(),
-                ToplevelStates::default(),
-                if owner.offers_activation() {
-                    Activation::Offered
-                } else {
-                    Activation::Missing
-                },
+            presented::reported(
+                capabilities(
+                    None,
+                    decoration.absence(),
+                    ToplevelStates::default(),
+                    if owner.offers_activation() {
+                        Activation::Offered
+                    } else {
+                        Activation::Missing
+                    },
+                ),
+                owner.offers_presentation(),
             )
         }
 
@@ -2561,6 +2702,43 @@ mod toplevel {
                 record.tokens.lock().grant(ActivationToken::new(granted));
                 token.destroy();
             }
+        }
+    }
+
+    impl Dispatch<WpPresentationFeedback, PresentedTo> for WaylandState {
+        /// A commit was shown: its time, on the compositor's presentation
+        /// clock, is rebased onto the event clock by its distance from a
+        /// reading of that clock, and reported with the output's refresh. A
+        /// discarded commit (another replaced it before a refresh) reports
+        /// nothing; the compositor destroys the feedback after either.
+        fn event(
+            _: &mut Self,
+            _: &WpPresentationFeedback,
+            event: wp_presentation_feedback::Event,
+            presented_to: &PresentedTo,
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            let wp_presentation_feedback::Event::Presented {
+                tv_sec_hi,
+                tv_sec_lo,
+                tv_nsec,
+                refresh,
+                ..
+            } = event
+            else {
+                return;
+            };
+            let (Some(shown), Some(now)) = (
+                presented::shown_at(tv_sec_hi, tv_sec_lo, tv_nsec),
+                presented_to.time.clock.now(),
+            ) else {
+                return;
+            };
+            // A zero refresh, a variable rate, is none (`FramePresented::with_refresh`).
+            let report = flui_platform::FramePresented::new(rebased(now, shown))
+                .with_refresh(std::time::Duration::from_nanos(u64::from(refresh)));
+            presented_to.reports.report(report);
         }
     }
 

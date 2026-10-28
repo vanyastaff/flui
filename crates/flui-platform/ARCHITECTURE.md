@@ -21,6 +21,14 @@ this one path (ADR-0151 §9).
   is 1 ms to 1 s and every constructor refuses what does not describe a cadence, with
   rational rates converted in `u128` (`refresh_value_classification_table`). A snapshot
   never substitutes 60 Hz; that is a consumer's policy (ADR-0236).
+- **A headroom is finite and at least white; an absent colour says why.** A display's
+  colour profile is `DisplayInfo::color`: a `DisplayColor` (`SurfaceColorSpace` and
+  `Headroom`) or the `CapabilityAbsence` the platform gives, which `color_space()` and
+  `headroom()` answer as `Unsupported`. `Headroom` refuses a NaN, an infinity, a value
+  below 1 and a luminance ratio that overflows; `DisplayColor::standard` fixes the
+  headroom of a standard-range display at 1 (`display_colour_table`). A profile change
+  is a display change: a new revision of the same monotone snapshot, so an older sample
+  never replaces a newer profile.
 - **Flat root.** Every public item is re-exported at the crate root; the
   modules are private except seven whose types keep their module path:
   `testing`, what a test double's window is written with (`NoNativeSurface`, and the
@@ -163,6 +171,21 @@ this one path (ADR-0151 §9).
   target of a window with no native surface. `raw-window-handle` appears only
   through the two handle traits and their
   `WindowHandle`/`DisplayHandle`/`HandleError` (ADR-0089).
+- **A frame request carries when earlier frames reached the screen, on the
+  event timeline.** `FrameRequest::presented` is a `FramePresented { at,
+  refresh }`: the instant the display started showing the newest earlier
+  frame the platform reported since the window's last request, an `EventTime`
+  like every input stamp, so input-to-photon time is a subtraction; never a
+  prediction (a platform that names when a frame is due fills
+  `target_present`). Whether a window reports at all is a capability,
+  `WindowCapabilities::reports_presentation`, and
+  `presentation_feedback()` answers why not as `Unsupported`; no verb answers
+  for it, so the capabilities keep its reason. Where the platform reports
+  presentation only to whoever holds the swap chain (DXGI), the presenter
+  hands the surface target what it read before each present
+  (`pre_present_notify(SwapChainStatistics)`, `DxgiFrameStatistics` in the
+  platform's own units), and the host rebases it; a presenter that reads
+  nothing passes `SwapChainStatistics::None`.
 
 ## Mapping decisions
 

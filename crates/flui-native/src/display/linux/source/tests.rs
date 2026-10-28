@@ -88,6 +88,7 @@ fn view(output: u32) -> OutputView {
         refresh_period: None,
         is_primary: false,
         persistent_key: None,
+        color: Err(flui_platform::CapabilityAbsence::NotYetOnThisHost),
     }
 }
 

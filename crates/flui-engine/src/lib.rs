@@ -5,9 +5,11 @@
 // are not the reason. It is an `expect`, not an `allow`: if the last such
 // type gains `Debug`, the attribute must go with it.
 #![expect(missing_debug_implementations)]
-// No hand-written production `unsafe` in this crate: surfaces come from wgpu's safe
+// No hand-written production `unsafe` in this crate but one: surfaces come from wgpu's safe
 // `create_surface` over an owned `WindowTarget` (ADR-0063), and every GPU
-// handle is a wgpu value type. `deny` rather than `forbid` because
+// handle is a wgpu value type. The exception is the read of DXGI frame
+// statistics (`renderer::dxgi_frame_statistics`), whose swap chain wgpu hands
+// out only through its hal escape; it carries its own `expect`. `deny` rather than `forbid` because
 // wgsl_bindgen's generated wrappers (`*/generated.rs`) declare an
 // `unsafe fn from_raw` this crate never calls and `allow` it locally.
 // `fake_window_target` uses test-only raw-handle borrows for synthetic window

@@ -52,6 +52,18 @@ mod cases {
             a_window_zoomed_before_full_screen_returns_to_normal,
         ),
         (
+            "a_window_sent_to_normal_takes_a_fixed_size_in_the_same_turn",
+            a_window_sent_to_normal_takes_a_fixed_size_in_the_same_turn,
+        ),
+        (
+            "a_window_heading_out_of_full_screen_cannot_be_fixed_in_size",
+            a_window_heading_out_of_full_screen_cannot_be_fixed_in_size,
+        ),
+        (
+            "a_newer_mode_drops_a_fixed_size_held_for_normal",
+            a_newer_mode_drops_a_fixed_size_held_for_normal,
+        ),
+        (
             "a_redraw_from_another_thread_is_queued_without_waiting",
             a_redraw_from_another_thread_is_queued_without_waiting,
         ),
@@ -66,6 +78,10 @@ mod cases {
         (
             "each_display_is_named_as_appkit_names_its_screen",
             each_display_is_named_as_appkit_names_its_screen,
+        ),
+        (
+            "each_display_reports_the_colour_appkit_reports",
+            each_display_reports_the_colour_appkit_reports,
         ),
     ];
 
@@ -87,6 +103,57 @@ mod cases {
             .map(|display| display.name.as_str())
             .collect();
         assert_eq!(published, names, "the snapshot's display names");
+    }
+
+    /// The snapshot gives each display the colour its screen reports: Display
+    /// P3 where AppKit says the screen can show it, and high range at the
+    /// screen's potential headroom where that is over white. The values are
+    /// printed, so a run records what this machine's screens report.
+    fn each_display_reports_the_colour_appkit_reports() {
+        use flui_platform::{ColorGamut, DisplayColor, Headroom};
+        use objc2_app_kit::{NSDisplayGamut, NSScreen};
+
+        let mtm = MainThreadMarker::new().expect("the cases run on the main thread");
+        let platform = MacOSPlatform::new().expect("the AppKit platform");
+        let snapshot = platform.display_snapshot().expect("a display snapshot");
+        let screens = NSScreen::screens(mtm);
+        assert_eq!(
+            snapshot.displays().len(),
+            screens.len(),
+            "one display a screen"
+        );
+        for (display, screen) in snapshot.displays().iter().zip(screens.iter()) {
+            let p3 = screen.canRepresentDisplayGamut(NSDisplayGamut::P3);
+            let potential = screen.maximumPotentialExtendedDynamicRangeColorComponentValue();
+            let current = screen.maximumExtendedDynamicRangeColorComponentValue();
+            println!(
+                "{}: p3 {p3}, potential EDR {potential}, current EDR {current}, published {:?}",
+                display.name, display.color
+            );
+            let gamut = if p3 {
+                ColorGamut::DisplayP3
+            } else {
+                ColorGamut::Srgb
+            };
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "a screen's headroom is a small multiple of white"
+            )]
+            let expected = if potential > 1.0 {
+                DisplayColor::high(
+                    gamut,
+                    Ok(Headroom::try_new(potential as f32).expect("a finite headroom over white")),
+                )
+            } else {
+                DisplayColor::standard(gamut)
+            };
+            assert_eq!(
+                display.color,
+                Ok(expected),
+                "{}: the published colour",
+                display.name
+            );
+        }
     }
 
     /// The application as `MacOSPlatform::run` makes it before its loop: a
@@ -390,6 +457,118 @@ mod cases {
             view.load().is_none(),
             "the closed window's FLUI view outlived it"
         );
+    }
+
+    /// A window told to go back to normal from another mode and then to stop
+    /// being resizable, in one turn, does both: the second command is
+    /// admitted against the mode the first takes the window to, though
+    /// AppKit's transition may still be animating, and the window ends
+    /// normal, at its size before, and fixed in size. A fixed-size window
+    /// reads as zoomed whatever its frame, so the frame is the witness. A
+    /// window zoomed under full screen comes back zoomed, so its un-zoom
+    /// comes before the fixed size.
+    fn a_window_sent_to_normal_takes_a_fixed_size_in_the_same_turn() {
+        use flui_platform::WindowMode::{Fullscreen, Maximized, Minimized, Normal};
+
+        for from in [
+            &[Maximized][..],
+            &[Fullscreen],
+            &[Minimized],
+            &[Maximized, Fullscreen],
+        ] {
+            let mut fixture = open("normal and fixed in one turn");
+            let normal = fixture.ns_window.frame();
+            for &mode in from {
+                fixture
+                    .window
+                    .admit_and_apply(WindowCommand::SetMode(mode))
+                    .unwrap_or_else(|refusal| panic!("SetMode({mode:?}) was refused: {refusal:?}"));
+                fixture.settle();
+                assert_eq!(fixture.window.state().mode, mode);
+            }
+
+            fixture
+                .window
+                .admit_and_apply(WindowCommand::SetMode(Normal))
+                .unwrap_or_else(|refusal| panic!("SetMode(Normal) from {from:?}: {refusal:?}"));
+            fixture
+                .window
+                .admit_and_apply(WindowCommand::SetResizable(false))
+                .unwrap_or_else(|refusal| {
+                    panic!("SetResizable(false) after SetMode(Normal) from {from:?}: {refusal:?}")
+                });
+            fixture.settle();
+
+            let state = fixture.window.state();
+            assert_eq!(state.mode, Normal, "from {from:?}: the window ends normal");
+            assert!(
+                !state.resizable,
+                "from {from:?}: the window ends fixed in size"
+            );
+            assert_eq!(
+                fixture.ns_window.frame().size,
+                normal.size,
+                "from {from:?}: the window is back to its size before"
+            );
+        }
+    }
+
+    /// A window sent into full screen and back in one turn is still in full
+    /// screen until the exit animates, and a full-screen window cannot be
+    /// restyled: a fixed size is refused at admission, not left to fail.
+    fn a_window_heading_out_of_full_screen_cannot_be_fixed_in_size() {
+        use flui_platform::WindowMode::{Fullscreen, Normal};
+
+        let mut fixture = open("out of full screen and fixed");
+        for mode in [Fullscreen, Normal] {
+            fixture
+                .window
+                .admit_and_apply(WindowCommand::SetMode(mode))
+                .unwrap_or_else(|refusal| panic!("SetMode({mode:?}) was refused: {refusal:?}"));
+        }
+        let refusal = fixture
+            .window
+            .admit_and_apply(WindowCommand::SetResizable(false))
+            .expect_err("a window still in full screen took a fixed size");
+        assert!(
+            refusal.unsupported().is_some(),
+            "a fixed size is refused by the window's capabilities: {refusal:?}"
+        );
+        fixture.settle();
+
+        let state = fixture.window.state();
+        assert_eq!(state.mode, Normal, "the window ends normal");
+        assert!(state.resizable, "the window stays resizable");
+    }
+
+    /// A fixed size held for the step to normal mode is dropped by a newer
+    /// mode command: the window ends in that mode, still resizable.
+    fn a_newer_mode_drops_a_fixed_size_held_for_normal() {
+        use flui_platform::WindowMode::{Maximized, Minimized, Normal};
+
+        let mut fixture = open("held fixed size dropped");
+        fixture
+            .window
+            .admit_and_apply(WindowCommand::SetMode(Minimized))
+            .unwrap_or_else(|refusal| panic!("SetMode(Minimized) was refused: {refusal:?}"));
+        fixture.settle();
+        assert_eq!(fixture.window.state().mode, Minimized);
+
+        for command in [
+            WindowCommand::SetMode(Normal),
+            WindowCommand::SetResizable(false),
+            WindowCommand::SetMode(Maximized),
+        ] {
+            fixture
+                .window
+                .admit_and_apply(command.clone())
+                .unwrap_or_else(|refusal| panic!("{command:?} was refused: {refusal:?}"));
+        }
+        fixture.settle();
+
+        let state = fixture.window.state();
+        assert_eq!(state.mode, Maximized, "the newest mode wins");
+        assert!(state.resizable, "the held fixed size was dropped");
     }
 
     /// AppKit keeps a window's zoom under full screen and puts it back only

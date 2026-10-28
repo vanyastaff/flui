@@ -38,54 +38,15 @@
 
 use std::sync::Arc;
 
-use accesskit::{ActionHandler, ActionRequest, ActivationHandler, TreeUpdate};
+use accesskit::TreeUpdate;
 use accesskit_macos::SubclassingAdapter;
 use parking_lot::Mutex;
 
-use crate::accessibility::bridge::BridgeShared;
-use crate::owner::panic_boundary::{AfterPanic, os_entry};
+use crate::accessibility::bridge::{Action, Activation, BridgeShared};
 use flui_semantics::{
     platform::AccessibilityActionListener, platform::AccessibilityActivationListener,
     platform::PlatformAccessibility,
 };
-
-struct Activation(Arc<BridgeShared>);
-
-// Each handler runs the composition root's listener inside AccessKit's
-// NSAccessibility methods, which AppKit calls through `extern "C-unwind"`: a
-// panic in it is contained here and answers as if no listener ran.
-
-impl ActivationHandler for Activation {
-    fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
-        os_entry(
-            "AccessKit's activation",
-            (),
-            AfterPanic::Answer(|()| None),
-            || {
-                // Order matters: mark active and tell the composition root *before*
-                // reading the retained tree — see the Windows twin for the cold-start
-                // rationale.
-                self.0.notify_activation(true);
-                self.0.retained()
-            },
-        )
-    }
-}
-
-struct Action(Arc<BridgeShared>);
-
-impl ActionHandler for Action {
-    fn do_action(&mut self, request: ActionRequest) {
-        os_entry(
-            "an AccessKit action",
-            (),
-            AfterPanic::Answer(|()| ()),
-            || {
-                self.0.notify_action(request);
-            },
-        );
-    }
-}
 
 /// NSAccessibility for one window.
 pub struct MacosAccessibility {

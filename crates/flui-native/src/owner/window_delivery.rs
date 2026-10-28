@@ -28,7 +28,7 @@ use flui_platform::{
 };
 
 use super::call_point::{Called, Failure, HandlerSlot, call, retire};
-use super::handlers::frame_request_now;
+use super::handlers::{PresentationReports, frame_request_now};
 use super::panic_boundary::contain_owner_callback;
 use super::signal::WindowWake;
 use super::slot::OwnerSlot;
@@ -279,6 +279,9 @@ pub struct WindowDelivery {
     /// The window's native retirement has started: an immediate delivery
     /// cannot overtake a clear queued in the FIFO.
     retiring: Retirement,
+    /// What the window's platform reported about frames that reached the
+    /// screen, which the window's next frame request carries.
+    presented: PresentationReports,
 }
 
 impl WindowDelivery {
@@ -326,6 +329,7 @@ impl WindowDelivery {
             hovered: AtomicBool::new(false),
             closed: AtomicBool::new(false),
             retiring: Retirement::default(),
+            presented: PresentationReports::default(),
         }
     }
 
@@ -758,9 +762,20 @@ impl WindowDelivery {
         self.dispatch_frame(frame_request_now());
     }
 
-    /// Deliver a frame request with what the platform reported for the frame.
+    /// Deliver a frame request with what the platform reported for the frame,
+    /// carrying the newest presentation the platform reported since the
+    /// window's last request.
     pub(crate) fn dispatch_frame(&self, request: FrameRequest) {
+        let request = self
+            .presented
+            .carried_by(request, flui_platform::EventTime::now());
         self.drain(Delivery::Frame(request));
+    }
+
+    /// Where the window's platform reports that its frames reached the
+    /// screen, from any thread: the next frame request carries the newest.
+    pub(crate) fn presentation_reports(&self) -> PresentationReports {
+        self.presented.clone()
     }
 
     /// Deliver a state change: a new snapshot was published.

@@ -61,7 +61,9 @@ use crate::window::apple::geometry::{
         cocoa_frame, cocoa_frame_keeping_top, cocoa_top_left_point, constraints_of_content_limits,
         content_limits_of_constraints, globalize, top_left_of_frame,
     },
-    mode::{ModeSequence, ModeStep, WindowFlags, capabilities_of, is_shown},
+    mode::{
+        ANIMATION_LIMIT, FixedSize, ModeSequence, ModeStep, WindowFlags, capabilities_of, is_shown,
+    },
 };
 use crate::window::capabilities::{appkit_window_capabilities, frame_rate_absence};
 use parking_lot::Mutex;
@@ -1000,7 +1002,7 @@ impl HasDisplayHandle for MacOSSurface {
 impl SurfaceTarget for MacOSSurface {
     /// AppKit has no frame callback to arm before a present: the display pass
     /// paces this window's frames. It returns at once.
-    fn pre_present_notify(&self) {}
+    fn pre_present_notify(&self, _: flui_platform::SwapChainStatistics) {}
 }
 
 /// How many owner-lane turns a deferred redraw request may take before it is
@@ -1585,13 +1587,14 @@ impl MacOSWindow {
 
     /// The window as AppKit reports it now.
     fn sample_state(&self) -> WindowState {
-        let (display, normal, scale, occlusion_visible) = {
+        let (display, normal, scale, occlusion_visible, heading) = {
             let state = self.state.lock();
             (
                 state.display,
                 state.normal,
                 state.scale_factor,
                 state.occlusion_visible,
+                state.sequence.heading(std::time::Instant::now()),
             )
         };
         let hovered = self.delivery.hovered();
@@ -1668,6 +1671,7 @@ impl MacOSWindow {
                 active: focused,
                 capabilities: capabilities_of(
                     flags,
+                    heading,
                     appkit_window_capabilities(self.owner_is_main),
                 ),
             }
@@ -1797,13 +1801,23 @@ impl MacOSWindow {
             // normal and cannot be un-zoomed by the user, so it is restyled
             // only from the mode it can be asked to return to.
             let flags = self.read_flags();
-            if bit == NSWindowStyleMask::Resizable
-                && !on
-                && mode_of(flags.mode_flags()) != WindowMode::Normal
-            {
-                return Err(ApplyError::failed(
-                    "a window is made fixed-size only in normal mode".into(),
-                ));
+            if bit == NSWindowStyleMask::Resizable {
+                let decision = {
+                    let mut state = self.state.lock();
+                    let sequence = &mut state.sequence;
+                    if on {
+                        sequence.make_resizable();
+                        FixedSize::Apply
+                    } else {
+                        sequence.fix_size(std::time::Instant::now(), flags)
+                    }
+                };
+                match decision {
+                    FixedSize::Apply => {}
+                    // Carried out once the step ends (`handle_transition_ended`).
+                    FixedSize::Held => return Ok(()),
+                    FixedSize::Refused(why) => return Err(ApplyError::failed(why.into())),
+                }
             }
             let wanted = if on { mask | bit } else { mask - bit };
             if wanted == mask {
@@ -1843,6 +1857,28 @@ impl MacOSWindow {
     /// state when its `windowDid…` notification arrives. The newest command
     /// wins, and it also replaces the mode a hidden window was to enter when
     /// first shown.
+    /// What a commanded step says of where the window is heading lasts at
+    /// most `ANIMATION_LIMIT`: a step whose end never arrives gives up then,
+    /// with the commands held for it, and the window is read again, so a
+    /// capability that depended on it moves with the published revision and
+    /// a command admitted under the old one is superseded, not failed.
+    fn read_again_when_the_step_gives_up(&self) {
+        let window = Arc::clone(&self.redraw().window);
+        crate::owner::apple::macos::exec_after_on_owner(self.owner, ANIMATION_LIMIT, move || {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
+            let gave_up = window
+                .state
+                .lock()
+                .sequence
+                .expire(std::time::Instant::now());
+            if gave_up {
+                window.publish_state();
+            }
+        });
+    }
+
     fn change_mode(&self, mode: WindowMode) -> Result<(), ApplyError> {
         // SAFETY: see the note above these bodies.
         let flags = unsafe { self.read_flags() };
@@ -1851,11 +1887,15 @@ impl MacOSWindow {
                 "AppKit does not zoom or full-screen a window that cannot be resized".into(),
             ));
         }
-        let steps = self
-            .state
-            .lock()
-            .sequence
-            .command(std::time::Instant::now(), flags, mode);
+        let now = std::time::Instant::now();
+        let (steps, heading) = {
+            let mut state = self.state.lock();
+            let steps = state.sequence.command(now, flags, mode);
+            (steps, state.sequence.heading(now))
+        };
+        if heading.is_some() {
+            self.read_again_when_the_step_gives_up();
+        }
         if !steps.is_empty() {
             self.record_normal();
         }

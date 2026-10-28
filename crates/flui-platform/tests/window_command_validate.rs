@@ -646,6 +646,47 @@ fn window_command_validate() {
                 an_absence_left_in_an_available_slot_is_no_difference,
             ),
             ("no_absence_is_retryable", no_absence_is_retryable),
+            (
+                "the_presentation_report_answers_why_it_is_missing",
+                the_presentation_report_answers_why_it_is_missing,
+            ),
         ],
     );
+}
+
+/// A window that reports no presentation says why, the reason is part of what
+/// it honours, and one left behind once it reports again is no difference.
+fn the_presentation_report_answers_why_it_is_missing() {
+    assert_eq!(
+        WindowCapabilities::ALL.presentation_feedback(),
+        Ok(Availability::Native)
+    );
+    assert_eq!(
+        WindowCapabilities::NONE
+            .presentation_feedback()
+            .map_err(|absent| absent.reason),
+        Err(UnsupportedReason::NotOnThisPlatform),
+        "set by hand, the platform's"
+    );
+    let host =
+        WindowCapabilities::ALL.without_presentation_feedback(CapabilityAbsence::NotYetOnThisHost);
+    assert_eq!(
+        host.presentation_feedback(),
+        Err(Unsupported::new(UnsupportedReason::NotYetOnThisHost))
+    );
+    assert_ne!(
+        host,
+        WindowCapabilities::ALL.without_presentation_feedback(CapabilityAbsence::NotOnThisDevice),
+        "the absence is part of what the window honours"
+    );
+    let shown = flui_platform::FramePresented::new(flui_platform::EventTime::from_nanos(1));
+    assert_eq!(
+        shown.with_refresh(std::time::Duration::ZERO).refresh,
+        None,
+        "a zero refresh, a variable rate, is no interval"
+    );
+    let mut restored = host;
+    restored.reports_presentation = Availability::Native;
+    assert_eq!(restored, WindowCapabilities::ALL);
+    assert_eq!(hash_of(&restored), hash_of(&WindowCapabilities::ALL));
 }

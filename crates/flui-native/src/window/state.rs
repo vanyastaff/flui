@@ -206,7 +206,7 @@ impl WindowStateCell {
     }
 
     /// The last published snapshot, without reading the OS.
-    #[cfg(any(windows, all(target_os = "linux", feature = "x11")))]
+    #[cfg(any(windows, x11_host, wayland_host))]
     pub(crate) fn published(&self) -> WindowState {
         self.last.lock().state.clone()
     }

@@ -16,21 +16,31 @@
 //!
 //! The loop names no feature. What it keeps of one, it keeps through a hook
 //! declared here that the host's table fills (`WaylandHost`): the displays,
-//! the Settings portal's preferences, the notice channel and the sources of
-//! logind's and the kernel's notices. The last user input the seats report,
-//! which an activation token names, is kept here too (`LastInput`): the
-//! input feature records it, the window feature reads it. Its windows are the
-//! window feature's
+//! the seats' input, the Settings portal's preferences, the notice channel
+//! and the sources of logind's and the kernel's notices. The input binds the
+//! globals it speaks as the compositor announces them, records what its
+//! objects report, and delivers it to the windows on each turn before they
+//! settle (`WaylandInput`). The last user input the seats report, which an
+//! activation token names, is kept here too (`LastInput`): the input feature
+//! records it, the window feature reads it. Its windows are the window
+//! feature's
 //! (`window::linux::wayland`): the loop holds them as `LoopWindow`s and asks
 //! each to settle after every read, and the window feature implements the
 //! dispatch of its own protocol objects on `WaylandState`.
 
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub use event_loop::OutputName;
+#[cfg(all(
+    target_os = "linux",
+    feature = "wayland",
+    any(test, feature = "testing")
+))]
+pub(crate) use event_loop::ShownCursor;
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(crate) use event_loop::{
-    LastInput, LiveOutputs, LoopWaker, LoopWindow, OutputFacts, WaylandDisplays, WaylandHost,
-    WaylandLoop, WaylandState, WindowSeed, WindowTable,
+    LastInput, LiveOutputs, LoopWaker, LoopWindow, MAX_OUTPUTS, OutputFacts, PresentationTime,
+    SeatWindow, WaylandDisplays, WaylandHost, WaylandInput, WaylandLoop, WaylandState, WindowSeed,
+    WindowTable,
 };
 
 pub(crate) mod activation {
@@ -143,6 +153,9 @@ pub(crate) mod wait {
         /// The earliest instant a window gives up on a frame callback that
         /// never came, with a frame asked for behind it.
         pub(crate) frame_wait: Option<Instant>,
+        /// When the input next delivers something no event brings: a held
+        /// key's repeat.
+        pub(crate) input_due: Option<Instant>,
         /// The wake deadline armed: one the application's handler asked for
         /// and the last delivery does not hold back. One already due is
         /// delivered on the next turn.
@@ -191,7 +204,7 @@ pub(crate) mod wait {
         if turn.frame_due {
             return Some(Duration::ZERO);
         }
-        [turn.wake_deadline, turn.frame_wait]
+        [turn.wake_deadline, turn.frame_wait, turn.input_due]
             .into_iter()
             .flatten()
             .min()
@@ -214,6 +227,13 @@ pub(crate) mod wait {
             let turn = |frame_due, frame_wait, wake_deadline| LoopTurn {
                 frame_due,
                 frame_wait,
+                input_due: None,
+                wake_deadline,
+            };
+            let repeating = |input_due, wake_deadline| LoopTurn {
+                frame_due: false,
+                frame_wait: None,
+                input_due,
                 wake_deadline,
             };
             for (case, turn, expected) in [
@@ -252,6 +272,21 @@ pub(crate) mod wait {
                     "the earlier of a lost callback and a deadline",
                     turn(false, Some(now + ms(700)), Some(now + ms(100))),
                     Some(ms(100)),
+                ),
+                (
+                    "a held key repeats",
+                    repeating(Some(now + ms(33)), None),
+                    Some(ms(33)),
+                ),
+                (
+                    "a repeat that came due",
+                    repeating(behind, None),
+                    Some(Duration::ZERO),
+                ),
+                (
+                    "the earlier of a repeat and a deadline",
+                    repeating(Some(now + ms(33)), Some(now + ms(500))),
+                    Some(ms(33)),
                 ),
             ] {
                 assert_eq!(poll_timeout(turn, now), expected, "{case}");
@@ -300,8 +335,10 @@ mod event_loop {
     use std::thread::ThreadId;
     use std::time::Duration;
 
+    use cursor_icon::CursorIcon;
     use flui_platform::{
-        DisplayId, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice, WindowId,
+        CursorError, DisplayId, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice,
+        WindowId,
     };
     use parking_lot::Mutex;
     use rustix::event::{EventfdFlags, PollFd, PollFlags, Timespec, eventfd, poll};
@@ -317,6 +354,7 @@ mod event_loop {
     use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_manager_v1::{
         self, WpFractionalScaleManagerV1,
     };
+    use wayland_protocols::wp::presentation_time::client::wp_presentation::{self, WpPresentation};
     use wayland_protocols::wp::viewporter::client::wp_viewporter::{self, WpViewporter};
     use wayland_protocols::xdg::activation::v1::client::xdg_activation_v1::{
         self, XdgActivationV1,
@@ -341,6 +379,7 @@ mod event_loop {
     use crate::owner::slot::{OwnerCell, OwnerMap};
     use crate::owner::wake_deadline::{FrameCount, WakeDeadline};
     use crate::owner::watch::Watch;
+    use crate::owner::window_delivery::WindowDelivery;
     use crate::owner::{DirectOwnerHooks, OpenWindowError, OwnerHooks, OwnerPlatform};
     use crate::platform::{AppHandler, Platform, PlatformExecutor};
 
@@ -353,6 +392,10 @@ mod event_loop {
     /// The newest `wl_output`; the loop binds every output only so that a
     /// surface's `enter` and `leave` name one.
     const OUTPUT_VERSION: u32 = 4;
+    /// The outputs the loop binds. A desk has a few screens and a video wall
+    /// a few dozen; a compositor announcing outputs without end is not bound
+    /// past this, and a surface on one of those names no display.
+    pub(crate) const MAX_OUTPUTS: usize = 64;
     /// `wp_viewporter` has one version.
     const VIEWPORTER_VERSION: u32 = 1;
     /// `zxdg_decoration_manager_v1` has one version.
@@ -361,6 +404,9 @@ mod event_loop {
     const FRACTIONAL_SCALE_VERSION: u32 = 1;
     /// `zxdg_exporter_v2` has one version.
     const EXPORTER_VERSION: u32 = 1;
+    /// `wp_presentation` version 1; version 2 only lets a compositor round
+    /// its `refresh`.
+    const PRESENTATION_VERSION: u32 = 1;
     /// `xdg_activation_v1` has one version.
     const ACTIVATION_VERSION: u32 = 1;
 
@@ -372,6 +418,11 @@ mod event_loop {
         /// The displays: the compositor's outputs, read on a connection of
         /// their own.
         fn displays() -> Arc<dyn WaylandDisplays>;
+
+        /// The seats' input, made on the owner thread, which alone reaches
+        /// it, recording each user input it reports in `last_input`, which
+        /// the windows' activation tokens name.
+        fn input(last_input: LastInput) -> Arc<dyn WaylandInput>;
 
         /// The channel the loop's system notices take to the application.
         fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel>;
@@ -411,6 +462,88 @@ mod event_loop {
         fn observe(self: Arc<Self>, signal: &Arc<OwnerSignal>) -> Watch;
     }
 
+    /// A window as the seats' input reaches it, from its open to its close:
+    /// its identity, the surface the compositor names it by, and the delivery
+    /// its input goes through.
+    pub(crate) struct SeatWindow {
+        /// The window's identity.
+        pub(crate) id: WindowId,
+        /// Its `wl_surface`.
+        pub(crate) surface: WlSurface,
+        /// What its input is delivered through.
+        pub(crate) delivery: Arc<WindowDelivery>,
+        /// Its device pixels per logical pixel now, which a theme cursor
+        /// over it is drawn at.
+        pub(crate) scale: Arc<dyn Fn() -> f64 + Send + Sync>,
+    }
+
+    /// The cursor the input last showed, for a test.
+    #[cfg(any(test, feature = "testing"))]
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct ShownCursor {
+        /// The name it was found by: a `cursor-shape` value's number, or the
+        /// theme cursor's name.
+        pub(crate) name: String,
+        /// The buffer scale a theme cursor was drawn at; `0` for a shape.
+        pub(crate) scale: i32,
+    }
+
+    /// What the loop and its windows ask of the seats' input: the input
+    /// feature's (`input::linux::wayland`), which the table registers.
+    ///
+    /// Reached on the owner thread. The dispatch of the input's objects
+    /// records what they report and runs no handler; [`Self::deliver`] runs
+    /// the handlers, with no lock of the loop held.
+    pub(crate) trait WaylandInput: Send + Sync {
+        /// The compositor announced global `name`: bind it if the input
+        /// speaks its interface.
+        fn global(
+            &self,
+            registry: &WlRegistry,
+            name: u32,
+            interface: &str,
+            version: u32,
+            queue: &QueueHandle<WaylandState>,
+        );
+
+        /// The compositor removed global `name`.
+        fn global_removed(&self, name: u32);
+
+        /// Deliver to the windows what the seats reported since the last
+        /// turn, and a held key's repeat that came due.
+        fn deliver(&self);
+
+        /// When the input next delivers something no event brings.
+        fn next_due(&self) -> Option<Instant>;
+
+        /// A window opened: its input starts.
+        fn attach(&self, window: SeatWindow);
+
+        /// The window `id` closed: what it held open ends, and nothing more
+        /// reaches it.
+        fn detach(&self, id: WindowId);
+
+        /// Show `cursor` while the pointer is over the window `id`.
+        ///
+        /// # Errors
+        /// [`CursorError::Unsupported`] when the compositor takes no cursor
+        /// shape from the host.
+        fn set_cursor(&self, id: WindowId, cursor: CursorIcon) -> Result<(), CursorError>;
+
+        /// The active keyboard layout's name; empty before a keymap came.
+        fn keyboard_layout(&self) -> String;
+
+        /// Call `callback` on the owner thread each time the layout changes.
+        fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut() + Send>);
+
+        /// The loop ends: let go of the windows and the callbacks.
+        fn release(&self);
+
+        /// The cursor the input last showed, for a test.
+        #[cfg(any(test, feature = "testing"))]
+        fn shown_cursor(&self) -> Option<ShownCursor>;
+    }
+
     /// An output by its global's name, which the compositor numbers alike for
     /// every client: what a surface's `enter` names, and what the display
     /// source keys an output by. Public where it is defined, as the testing
@@ -427,6 +560,52 @@ mod event_loop {
         /// The global's name.
         pub(crate) const fn get(self) -> u32 {
             self.0
+        }
+    }
+
+    /// `wp_presentation`, through which a surface asks when each commit is
+    /// shown, and the clock the compositor stamps those times on.
+    #[derive(Clone)]
+    pub(crate) struct PresentationTime {
+        /// The global, which makes a feedback object per commit.
+        pub(crate) manager: WpPresentation,
+        /// The clock its `presented` events are stamped on.
+        pub(crate) clock: PresentationClock,
+    }
+
+    /// The clock a compositor stamps presentation times on, as its
+    /// `wp_presentation.clock_id` named it (`CLOCK_MONOTONIC` on every
+    /// compositor known); unknown until it has.
+    #[derive(Clone, Debug, Default)]
+    pub(crate) struct PresentationClock(Arc<std::sync::OnceLock<u32>>);
+
+    impl PresentationClock {
+        /// The clock's reading now, from its epoch; `None` before the
+        /// compositor named it, or for a clock this process cannot read.
+        pub(crate) fn now(&self) -> Option<Duration> {
+            let id = i32::try_from(*self.0.get()?).ok()?;
+            let clock = rustix::time::ClockId::try_from(id).ok()?;
+            let now = rustix::time::clock_gettime(clock);
+            Some(Duration::new(
+                u64::try_from(now.tv_sec).ok()?,
+                u32::try_from(now.tv_nsec).ok()?,
+            ))
+        }
+    }
+
+    impl Dispatch<WpPresentation, PresentationClock> for WaylandState {
+        fn event(
+            _: &mut Self,
+            _: &WpPresentation,
+            event: wp_presentation::Event,
+            clock: &PresentationClock,
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            // Sent once, right after the bind.
+            if let wp_presentation::Event::ClockId { clk_id } = event {
+                let _ = clock.0.set(clk_id);
+            }
         }
     }
 
@@ -472,12 +651,8 @@ mod event_loop {
     pub(crate) struct LastInput(Arc<OwnerCell<Option<SeatInput>>>);
 
     impl LastInput {
-        /// The seats report `input`, which is now the last.
-        ///
-        /// Only a test records yet: the host binds no seat, so no input event
-        /// reaches the loop. The seats' input becomes its caller, and drops
-        /// this `cfg`, once the host binds them.
-        #[cfg(test)]
+        /// The seats report `input`, which is now the last: a key, a button
+        /// or a touch going down, or the keyboard entering a surface.
         pub(crate) fn record(&self, input: SeatInput) {
             self.0.with(|last| *last = Some(input));
         }
@@ -670,6 +845,8 @@ mod event_loop {
         outputs: Vec<(OutputName, WlOutput)>,
         /// The same outputs, as the windows read them.
         live: LiveOutputs,
+        /// The seats' input, offered every global the loop does not bind.
+        input: Arc<dyn WaylandInput>,
     }
 
     impl WaylandState {
@@ -682,6 +859,10 @@ mod event_loop {
         ) {
             let name = OutputName::new(name);
             if self.outputs.iter().any(|(bound, _)| *bound == name) {
+                return;
+            }
+            if self.outputs.len() >= MAX_OUTPUTS {
+                tracing::debug!(?name, "a Wayland output past {MAX_OUTPUTS} was not bound");
                 return;
             }
             let output = registry.bind::<WlOutput, OutputName, Self>(
@@ -725,7 +906,17 @@ mod event_loop {
                 } if interface == WlOutput::interface().name => {
                     state.bind_output(registry, name, version, queue);
                 }
-                wl_registry::Event::GlobalRemove { name } => state.remove_output(name),
+                wl_registry::Event::Global {
+                    name,
+                    interface,
+                    version,
+                } => state
+                    .input
+                    .global(registry, name, &interface, version, queue),
+                wl_registry::Event::GlobalRemove { name } => {
+                    state.remove_output(name);
+                    state.input.global_removed(name);
+                }
                 _ => {}
             }
         }
@@ -866,6 +1057,9 @@ mod event_loop {
         /// `zxdg_exporter_v2`, which hands out a handle another client
         /// (a portal's dialog) parents its window to.
         pub(crate) exporter: Option<ZxdgExporterV2>,
+        /// `wp_presentation`, which tells a surface when its commits are
+        /// shown; `None` where the compositor tells nothing.
+        pub(crate) presentation: Option<PresentationTime>,
         /// `xdg_activation_v1`, through which a window asks the compositor to
         /// activate it; `None` where the compositor takes no such request.
         pub(crate) activation: Option<XdgActivationV1>,
@@ -903,6 +1097,9 @@ mod event_loop {
         /// The loop's frame count, which the window's handler counts into
         /// each frame it produces.
         pub(crate) frames: Arc<AtomicU64>,
+        /// The seats' input, which the window joins as it opens and leaves
+        /// as it closes, and which shows its cursor.
+        pub(crate) input: Arc<dyn WaylandInput>,
     }
 
     /// The owner's event queue and what it dispatches into, kept together:
@@ -935,6 +1132,7 @@ mod event_loop {
         /// runs its loop.
         owner_thread: ThreadId,
         displays: Arc<dyn WaylandDisplays>,
+        input: Arc<dyn WaylandInput>,
         notices: Arc<dyn NoticeChannel>,
         portal: PortalSlot,
         start_preferences: fn(&BackgroundExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxPreferences>,
@@ -1020,6 +1218,13 @@ mod event_loop {
             let exporter = globals
                 .bind::<ZxdgExporterV2, _, _>(&handle, 1..=EXPORTER_VERSION, ())
                 .ok();
+            let presentation = {
+                let clock = PresentationClock::default();
+                globals
+                    .bind::<WpPresentation, _, _>(&handle, 1..=PRESENTATION_VERSION, clock.clone())
+                    .ok()
+                    .map(|manager| PresentationTime { manager, clock })
+            };
             let activation = globals
                 .bind::<XdgActivationV1, _, _>(&handle, 1..=ACTIVATION_VERSION, ())
                 .ok();
@@ -1028,18 +1233,24 @@ mod event_loop {
                 .bind::<wayland_client::protocol::wl_shm::WlShm, _, _>(&handle, 1..=1, ())
                 .ok();
             let live = LiveOutputs::default();
+            let last_input = LastInput::default();
+            let input = H::input(last_input.clone());
             let mut state = WaylandState {
                 outputs: Vec::new(),
                 live: live.clone(),
+                input: Arc::clone(&input),
             };
-            let outputs = globals.contents().with_list(|list| {
+            let announced = globals.contents().with_list(|list| {
                 list.iter()
-                    .filter(|global| global.interface == WlOutput::interface().name)
-                    .map(|global| (global.name, global.version))
+                    .map(|global| (global.name, global.interface.clone(), global.version))
                     .collect::<Vec<_>>()
             });
-            for (name, version) in outputs {
-                state.bind_output(globals.registry(), name, version, &handle);
+            for (name, interface, version) in announced {
+                if interface == WlOutput::interface().name {
+                    state.bind_output(globals.registry(), name, version, &handle);
+                } else {
+                    input.global(globals.registry(), name, &interface, version, &handle);
+                }
             }
             let waker = Arc::new(
                 LoopWaker::new().map_err(|error| init("the loop's wake descriptor", &error))?,
@@ -1064,8 +1275,9 @@ mod event_loop {
                     decoration,
                     fractional_scale,
                     exporter,
+                    presentation,
                     activation,
-                    last_input: LastInput::default(),
+                    last_input,
                     live,
                     #[cfg(any(test, feature = "testing"))]
                     shm,
@@ -1088,6 +1300,7 @@ mod event_loop {
                 )))),
                 owner_thread: std::thread::current().id(),
                 displays: H::displays(),
+                input,
                 portal: PortalSlot::default(),
                 start_preferences: H::preferences,
                 start_host_notices: H::host_notices,
@@ -1136,6 +1349,7 @@ mod event_loop {
                 waker: Arc::downgrade(&self.waker),
                 notices: Arc::clone(&self.notices),
                 frames: self.frames.counter(),
+                input: Arc::clone(&self.input),
             })
         }
 
@@ -1196,12 +1410,29 @@ mod event_loop {
             self.windows.active()
         }
 
+        /// The serial of the last user input the seats reported, which an
+        /// activation token names, for a test.
+        #[cfg(any(test, feature = "testing"))]
+        pub(crate) fn last_input_serial(&self) -> Option<u32> {
+            self.protocol.last_input.latest().map(|input| input.serial)
+        }
+
+        /// The cursor the seats' input last showed, for a test.
+        #[cfg(any(test, feature = "testing"))]
+        pub(crate) fn shown_cursor(&self) -> Option<ShownCursor> {
+            self.input.shown_cursor()
+        }
         /// Whether the compositor offers to draw a window's frame
         /// (`xdg-decoration`).
         pub(crate) fn offers_decorations(&self) -> bool {
             self.protocol.decoration.is_some()
         }
 
+        /// Whether the compositor tells a surface when its commits are shown
+        /// (`wp_presentation`).
+        pub(crate) fn offers_presentation(&self) -> bool {
+            self.protocol.presentation.is_some()
+        }
         /// Whether the compositor takes activation requests
         /// (`xdg-activation`).
         pub(crate) fn offers_activation(&self) -> bool {
@@ -1256,8 +1487,11 @@ mod event_loop {
         /// loop is to end.
         fn turn(&self, limit: Option<Duration>) -> Result<bool, PlatformError> {
             self.dispatch_pending()?;
-            // Each window carries out what was recorded, with no lock of the
-            // loop held: its handler may open, close or quit.
+            // The input the seats reported reaches the windows before they
+            // settle, so a frame they deliver follows the input it shows.
+            // Neither holds a lock of the loop: a handler may open, close or
+            // quit.
+            self.input.deliver();
             for window in self.windows.values() {
                 window.settle();
             }
@@ -1293,6 +1527,7 @@ mod event_loop {
                     frame_due,
                     frame_wait,
                     wake_deadline,
+                    input_due: self.input.next_due(),
                 },
                 now,
             );
@@ -1435,6 +1670,7 @@ mod event_loop {
             for window in self.windows.values() {
                 window.release();
             }
+            self.input.release();
             let quit = self.app.quit_requested();
             self.app.release();
             quit.or_resume(());
@@ -1574,6 +1810,18 @@ mod event_loop {
     impl host::Displays<WaylandLoop> for WaylandLoop {
         fn snapshot(owner: &WaylandLoop) -> Result<DisplaySnapshot, PlatformError> {
             owner.displays.snapshot()
+        }
+    }
+
+    /// The input position is the loop's: the seats' input the table
+    /// registered, whose keymap names the layout.
+    impl host::Input<WaylandLoop> for WaylandLoop {
+        fn keyboard_layout(owner: &WaylandLoop) -> String {
+            owner.input.keyboard_layout()
+        }
+
+        fn on_keyboard_layout_change(owner: &WaylandLoop, callback: Box<dyn FnMut() + Send>) {
+            owner.input.on_keyboard_layout_change(callback);
         }
     }
 

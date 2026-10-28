@@ -32,6 +32,19 @@
 //! (`None`): [`RefreshPeriod`] cannot hold it. The snapshot never substitutes
 //! 60 Hz; that fallback is a consumer's policy. Where a platform has no native
 //! source and estimates the period, it says so in its own documentation.
+//!
+//! # Colour
+//!
+//! [`DisplayInfo::color`] is the display's colour profile: the
+//! [`SurfaceColorSpace`] the operating system shows surfaces on it in (gamut
+//! and dynamic range) and its [`Headroom`] over SDR white. A display that
+//! enters or leaves HDR, or whose headroom or gamut moves, is a new snapshot
+//! revision in which that display's colour differs: the profile change is a
+//! display change like a mode switch, ordered by the same revision, so a later
+//! sample never loses to an earlier one. Where the operating system does not
+//! say, the colour is the [`CapabilityAbsence`] that says why, and
+//! [`DisplayInfo::color_space`] and [`DisplayInfo::headroom`] answer it as
+//! [`Unsupported`]. A headroom is finite and at least `1.0` by construction.
 
 use std::collections::HashMap;
 use std::num::NonZeroU64;
@@ -41,6 +54,8 @@ use std::time::Duration;
 use flui_foundation::UniqueKey;
 use flui_foundation::geometry::Bounds;
 use parking_lot::Mutex;
+
+use crate::unsupported::{CapabilityAbsence, Unsupported};
 
 /// A display's identity within one platform instance.
 ///
@@ -324,11 +339,19 @@ pub struct DisplayInfo {
     /// identity compared only for equality, never a label, and unlike
     /// [`DisplayId`] it means the same thing in another run.
     pub persistent_key: Option<String>,
+    /// The colour space surfaces on this display are shown in and its headroom
+    /// over SDR white, or why the platform does not say. A change to it is a
+    /// change of the display's colour profile, published as a new revision
+    /// like any other display change. Read it through
+    /// [`color_space`](Self::color_space) and [`headroom`](Self::headroom).
+    pub color: Result<DisplayColor, CapabilityAbsence>,
 }
 
 impl DisplayInfo {
-    /// A display with its bounds as usable area, an unknown refresh period and
-    /// not primary. Refine it with the `with_*` methods.
+    /// A display with its bounds as usable area, an unknown refresh period, not
+    /// primary, and a colour the host has not read
+    /// ([`CapabilityAbsence::NotYetOnThisHost`]). Refine it with the `with_*`
+    /// methods.
     #[must_use]
     pub fn new(
         id: DisplayId,
@@ -345,7 +368,40 @@ impl DisplayInfo {
             refresh_period: None,
             is_primary: false,
             persistent_key: None,
+            color: Err(CapabilityAbsence::NotYetOnThisHost),
         }
+    }
+
+    /// Record the display's colour as the operating system reports it, or why
+    /// it reports none.
+    #[must_use]
+    pub fn with_color(mut self, color: Result<DisplayColor, CapabilityAbsence>) -> Self {
+        self.color = color;
+        self
+    }
+
+    /// The colour space surfaces on this display are shown in.
+    ///
+    /// # Errors
+    /// [`Unsupported`] with the reason the platform gives no colour for this
+    /// display: [`NotOnThisPlatform`](crate::UnsupportedReason::NotOnThisPlatform),
+    /// [`NotOnThisDevice`](crate::UnsupportedReason::NotOnThisDevice) or
+    /// [`NotYetOnThisHost`](crate::UnsupportedReason::NotYetOnThisHost).
+    pub fn color_space(&self) -> Result<SurfaceColorSpace, Unsupported> {
+        self.color
+            .map(|color| color.color_space)
+            .map_err(Unsupported::from)
+    }
+
+    /// How far above SDR white the display can drive a surface now.
+    ///
+    /// # Errors
+    /// [`Unsupported`] with the reason when the platform gives no colour for
+    /// this display, or gives one in a high-range mode without its headroom.
+    pub fn headroom(&self) -> Result<Headroom, Unsupported> {
+        self.color
+            .and_then(|color| color.headroom)
+            .map_err(Unsupported::from)
     }
 
     /// Record the key that names this display across restarts.
@@ -375,6 +431,151 @@ impl DisplayInfo {
     pub fn with_refresh_period(mut self, period: Duration) -> Self {
         self.refresh_period = RefreshPeriod::try_from(period).ok();
         self
+    }
+}
+
+/// The primaries a display shows surfaces in: the gamut its operating system
+/// composes the display's windows in, not the panel's measured primaries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ColorGamut {
+    /// The sRGB and BT.709 primaries.
+    Srgb,
+    /// The Display P3 primaries.
+    DisplayP3,
+    /// The BT.2020 primaries, the gamut of an HDR10 signal.
+    Rec2020,
+}
+
+/// Whether a display shows values above SDR white brighter than white.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DynamicRange {
+    /// SDR white is the brightest value a surface can show.
+    Standard,
+    /// The display is in a mode that shows values above SDR white brighter:
+    /// Windows with HDR on, an Apple screen with extended dynamic range, an
+    /// Android display that reports HDR, a Wayland output with an HDR transfer
+    /// function, a browser that matches `(dynamic-range: high)`.
+    High,
+}
+
+/// The colour space a display shows window surfaces in: its gamut and its
+/// dynamic range, as the operating system reports them for that display now.
+///
+/// A renderer chooses its surface configuration with it (ADR-0256): an
+/// extended-range surface only on a display with [`DynamicRange::High`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct SurfaceColorSpace {
+    /// The primaries.
+    pub gamut: ColorGamut,
+    /// The dynamic range.
+    pub dynamic_range: DynamicRange,
+}
+
+impl SurfaceColorSpace {
+    /// The colour space of `gamut` and `dynamic_range`.
+    #[must_use]
+    pub const fn new(gamut: ColorGamut, dynamic_range: DynamicRange) -> Self {
+        Self {
+            gamut,
+            dynamic_range,
+        }
+    }
+}
+
+/// A headroom that is not a finite multiple of at least `1.0`, or luminances
+/// that do not give one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("display headroom must be a finite multiple of SDR white, at least 1")]
+pub struct InvalidHeadroom;
+
+/// How far above SDR white a display can drive a surface, as a multiple of SDR
+/// white: `1.0` is no headroom, `4.0` a peak four times as bright as white.
+///
+/// Every constructor refuses what is not finite and at least `1.0`, so a
+/// consumer that tone-maps with it never meets a NaN, an infinity or a peak
+/// below white.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct Headroom(f32);
+
+impl Headroom {
+    /// No headroom: the peak is SDR white.
+    pub const SDR: Self = Self(1.0);
+
+    /// A headroom of `multiple` times SDR white, as Apple's extended dynamic
+    /// range and Android's HDR/SDR ratio report it.
+    ///
+    /// # Errors
+    /// [`InvalidHeadroom`] for a value that is not finite or is below `1.0`.
+    pub fn try_new(multiple: f32) -> Result<Self, InvalidHeadroom> {
+        if multiple.is_finite() && multiple >= 1.0 {
+            Ok(Self(multiple))
+        } else {
+            Err(InvalidHeadroom)
+        }
+    }
+
+    /// The headroom of a display whose peak luminance is `peak_nits` while SDR
+    /// white is shown at `sdr_white_nits`, as Windows reports both. A peak at
+    /// or below white is no headroom ([`Self::SDR`]): the SDR brightness
+    /// setting can put white above the peak the panel reports.
+    ///
+    /// # Errors
+    /// [`InvalidHeadroom`] when either luminance is not finite or not positive,
+    /// or their ratio is not finite.
+    pub fn from_luminance(peak_nits: f32, sdr_white_nits: f32) -> Result<Self, InvalidHeadroom> {
+        let positive = |nits: f32| nits.is_finite() && nits > 0.0;
+        if !positive(peak_nits) || !positive(sdr_white_nits) {
+            return Err(InvalidHeadroom);
+        }
+        Self::try_new((peak_nits / sdr_white_nits).max(1.0))
+    }
+
+    /// The multiple of SDR white.
+    #[must_use]
+    pub const fn get(self) -> f32 {
+        self.0
+    }
+}
+
+/// A [`Headroom`] holds no NaN, so its equality is total.
+impl Eq for Headroom {}
+
+/// A display's colour profile in the contract's terms: the colour space it
+/// shows surfaces in, and how far above SDR white it can go.
+///
+/// Built through [`standard`](Self::standard) and [`high`](Self::high), so a
+/// standard-range display always has [`Headroom::SDR`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DisplayColor {
+    /// The colour space surfaces are shown in.
+    pub color_space: SurfaceColorSpace,
+    /// The headroom now, or why there is none to read: a high-range display
+    /// whose operating system does not report its peak.
+    pub headroom: Result<Headroom, CapabilityAbsence>,
+}
+
+impl DisplayColor {
+    /// A standard-range display in `gamut`, with no headroom.
+    #[must_use]
+    pub const fn standard(gamut: ColorGamut) -> Self {
+        Self {
+            color_space: SurfaceColorSpace::new(gamut, DynamicRange::Standard),
+            headroom: Ok(Headroom::SDR),
+        }
+    }
+
+    /// A high-range display in `gamut`, with the headroom its operating system
+    /// reports, or why it reports none.
+    #[must_use]
+    pub const fn high(gamut: ColorGamut, headroom: Result<Headroom, CapabilityAbsence>) -> Self {
+        Self {
+            color_space: SurfaceColorSpace::new(gamut, DynamicRange::High),
+            headroom,
+        }
     }
 }
 
@@ -466,6 +667,7 @@ impl DisplaySnapshot {
         Some(WindowDisplay {
             id: display.id,
             refresh_period: display.refresh_period,
+            color: display.color.ok(),
         })
     }
 }
@@ -483,9 +685,13 @@ pub enum FrameRateHint {
     High,
 }
 
-/// The part of a display a window pacing itself needs: which display it is on
-/// and that display's refresh period. The scale factor is not here; it reaches
-/// the window through its own metrics observation.
+/// The part of a display a window paces and presents by: which display it is
+/// on, that display's refresh period and its colour profile. The scale factor
+/// is not here; it reaches the window through its own metrics observation.
+///
+/// A window whose display changes colour (HDR switched on, the window moved to
+/// an SDR monitor) receives a different value, which is how its surface learns
+/// to be set up again (ADR-0256 §6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct WindowDisplay {
@@ -493,13 +699,27 @@ pub struct WindowDisplay {
     pub id: DisplayId,
     /// That display's refresh period; `None` when unknown.
     pub refresh_period: Option<RefreshPeriod>,
+    /// That display's colour profile; `None` where the platform reports none
+    /// ([`DisplayInfo::color`] says why).
+    pub color: Option<DisplayColor>,
 }
 
 impl WindowDisplay {
-    /// A window display.
+    /// A window display of unreported colour.
     #[must_use]
     pub const fn new(id: DisplayId, refresh_period: Option<RefreshPeriod>) -> Self {
-        Self { id, refresh_period }
+        Self {
+            id,
+            refresh_period,
+            color: None,
+        }
+    }
+
+    /// The same display with the colour profile `color`.
+    #[must_use]
+    pub const fn with_color(mut self, color: Option<DisplayColor>) -> Self {
+        self.color = color;
+        self
     }
 }
 

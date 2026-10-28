@@ -16,9 +16,9 @@
 //! The platform files are `windows` (the window class's input hook with each
 //! window's input, the messages' decoding in `raw` and the precision touchpad
 //! in `direct_manipulation`), `apple`, `android`, `web`, `linux` (what the
-//! Wayland and X11 hosts share, the XKB keyboard, beside the X11 host's
-//! XInput 2), `winit` and `headless`. A platform file's pure half is a module inside it, compiled and
-//! tested on every host.
+//! Wayland and X11 hosts share, the XKB keyboard, beside the Wayland seats
+//! and the X11 host's XInput 2), `winit` and `headless`. A platform file's
+//! pure half is a module inside it, compiled and tested on every host.
 //!
 //! The model and the pure halves the backend conformance table and the native
 //! recordings in `tests/` decode with are public and hidden from the
@@ -55,11 +55,7 @@ pub(crate) mod winit;
 /// Nanoseconds since the process event epoch.
 #[inline]
 pub fn event_timestamp_ns() -> u64 {
-    // EventTime is nanoseconds; every producer shares this epoch.
-    #[expect(clippy::cast_possible_truncation)] // ~584 years of nanoseconds fit u64
-    {
-        flui_foundation::event_epoch().elapsed().as_nanos() as u64
-    }
+    flui_platform::EventTime::now().as_nanos()
 }
 
 /// Create a `PointerInfo` for the primary mouse pointer.

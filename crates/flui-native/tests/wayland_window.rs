@@ -81,7 +81,9 @@ impl WaylandFixture {
             .count();
         if asked > self.drawn.get() {
             self.drawn.set(asked);
-            self.window.surface_target().pre_present_notify();
+            self.window
+                .surface_target()
+                .pre_present_notify(flui_platform::SwapChainStatistics::None);
             let _ = present(self.window.as_ref());
         }
     }
@@ -190,6 +192,62 @@ impl WindowFixture for WaylandFixture {
     fn has_native_surface(&self) -> bool {
         true
     }
+
+    /// A frame drawn as the renderer would into a window of its own (the
+    /// compositor shows no frame of a window an earlier check minimized, and
+    /// Wayland cannot bring it back), then the next asked for, turning the
+    /// loop until a frame request carries the compositor's report of the
+    /// first, or two seconds pass: `presented` follows the compositor's
+    /// repaint, and the window's next frame request carries it.
+    fn present_and_request_frame(&mut self) -> Option<flui_platform::FrameRequest> {
+        let handler = RecordingWindowHandler::new();
+        let window = self
+            .platform
+            .open_window(
+                WindowOptions::default().with_title("presenting"),
+                Rc::clone(&handler) as _,
+            )
+            .expect("a Wayland window opens");
+        run_for(&self.platform, Duration::from_millis(200)).expect("the loop turns");
+        // A report of a frame shown before this one may still wait for a
+        // request: the one wanted is this frame's.
+        let presented_since = flui_platform::EventTime::now();
+        window
+            .surface_target()
+            .pre_present_notify(flui_platform::SwapChainStatistics::None);
+        let _ = present(window.as_ref());
+        handler.take_calls();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut last = None;
+        while Instant::now() < deadline
+            && last.is_none_or(|request: flui_platform::FrameRequest| {
+                request
+                    .presented
+                    .is_none_or(|presented| presented.at < presented_since)
+            })
+        {
+            window.request_redraw();
+            run_for(&self.platform, Duration::from_millis(20)).expect("the loop turns");
+            for call in handler.take_calls() {
+                if let HandlerCall::FrameRequested(request) = call {
+                    last = Some(request);
+                    if request
+                        .presented
+                        .is_some_and(|presented| presented.at >= presented_since)
+                    {
+                        eprintln!(
+                            "the frame request after a shown frame: vsync {:?}, presented {:?}",
+                            request.vsync, request.presented
+                        );
+                        break;
+                    }
+                }
+            }
+        }
+        window.close_for_cleanup();
+        run_for(&self.platform, Duration::from_millis(100)).expect("the loop turns");
+        last
+    }
 }
 
 impl Drop for WaylandFixture {
@@ -197,6 +255,13 @@ impl Drop for WaylandFixture {
         self.window.close_for_cleanup();
         self.settle();
     }
+}
+
+/// The input conformance table on a real Wayland window's capability
+/// snapshot (`backend_conformance::wayland_window_conforms`).
+#[test]
+fn the_wayland_window_input_conforms() {
+    super::backend_conformance::wayland_window_conforms();
 }
 
 #[test]
@@ -346,7 +411,10 @@ fn an_occluded_window_is_given_its_frame_once_shown() {
     );
     // A present armed its callback and the compositor, not showing the
     // window, never answers it; a frame is asked for behind it.
-    fixture.window.surface_target().pre_present_notify();
+    fixture
+        .window
+        .surface_target()
+        .pre_present_notify(flui_platform::SwapChainStatistics::None);
     fixture.window.request_redraw();
     run_for(&fixture.platform, Duration::from_millis(2500)).expect("the loop turns");
     assert_eq!(
@@ -398,7 +466,9 @@ fn the_accessibility_bridge_follows_the_compositors_activation() {
         .expect("a second window opens");
     for _ in 0..10 {
         run_for(&fixture.platform, Duration::from_millis(50)).expect("the loop turns");
-        second.surface_target().pre_present_notify();
+        second
+            .surface_target()
+            .pre_present_notify(flui_platform::SwapChainStatistics::None);
         let _ = present(second.as_ref());
         if activated(second.as_ref()) && !activated(first) {
             break;
@@ -468,7 +538,9 @@ fn an_activation_asks_the_compositor_with_a_token() {
         .expect("a second window opens");
     for _ in 0..10 {
         run_for(&fixture.platform, Duration::from_millis(50)).expect("the loop turns");
-        cover.surface_target().pre_present_notify();
+        cover
+            .surface_target()
+            .pre_present_notify(flui_platform::SwapChainStatistics::None);
         let _ = present(cover.as_ref());
     }
     fixture.settle();
@@ -549,7 +621,10 @@ fn a_frame_callback_no_commit_carried_is_given_up() {
     let fixture = WaylandFixture::open(platform, "a skipped present");
     fixture.handler.take_calls();
     // The raster side armed the callback and then presented nothing.
-    fixture.window.surface_target().pre_present_notify();
+    fixture
+        .window
+        .surface_target()
+        .pre_present_notify(flui_platform::SwapChainStatistics::None);
     fixture.window.request_redraw();
     run_for(&fixture.platform, Duration::from_millis(300)).expect("the loop turns");
     assert_eq!(

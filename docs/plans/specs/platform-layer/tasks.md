@@ -41,9 +41,11 @@
 7. Изменение поддержки платформы обновляет `docs/platform-parity.md` и `docs/gaps.md` в том же PR;
    ✅ — только после прогона на этой ОС.
 8. Файлы активной ветки не трогаются до её слияния или без согласия владельца. Сейчас их держат:
-   send-flip (ядро) — `flui-scheduler`, `flui-runtime/src/{realm_services,presentation}.rs`,
-   `ui_realm/*`, `flui-view/src/owner/*`; text-ime и teardown — `text_store/*`, Win32
-   `text_services`, Win32 `platform.rs`; persistence — доставка `Storage`; LY8/LY9 — предпочтения.
+   send-flip — `flui-view/src/{owner,context}/*`, `flui-runtime/src/ui_runtime/commands.rs`,
+   `flui-widgets/src/text/controller.rs` и остаток flip по крейтам (её T10); text-ime и
+   teardown — `text_store/*`, Win32 `text/windows/tsf/*`,
+   `flui-runtime/src/ui_runtime/presentation_lifecycle.rs`; persistence — `flui-view/src/persist/*`
+   и `flui-app/src/app/storage_host.rs` (P4, P5, P6 — после LY52); LY8/LY9 — предпочтения.
    Это зависимости по порядку и записаны в колонке «Зависит от», а не окна по датам.
 9. **Где:** **L** — Linux CI; **W** — Windows нативно (локальный запуск, вывод в PR); **T** — только
    cross-typecheck или `wasm32` без запуска (так и пишется в PR); **Dev: <ОС>** — прогон на
@@ -72,10 +74,10 @@
 ```mermaid
 graph LR
   PRE["Предпосылки: design, ADR-0151…0154, 0254, 0255"]
-  SF["send-flip (ядро)"]
-  TI["text-ime, teardown"]
+  SF["send-flip T7 (закрытие flip)"]
+  TI["text-ime T3, T4, T5; teardown T13"]
   SP8["ADR-0172: LY8, LY9"]
-  PS["persistence"]
+  PS["persistence P4, P5, P6"]
   DR["спека flui-driver"]
 
   subgraph rename["Переименование"]
@@ -104,7 +106,7 @@ graph LR
   SF --> LY50
   TI --> LY47 & LY48
   SP8 --> LY22 & LY33 & LY45
-  PS --> LY52
+  LY52 --> PS
   DR --> LY99
 
   LY21 --> LY22 & LY23 & LY24 & LY39 & LY47 & LY48 & LY53
@@ -214,17 +216,17 @@ graph LR
 | **LY44** | **`WindowHandler` при открытии** (D4, R3.3). `open_window(options, Rc<dyn WindowHandler>)`; обязательства: ввод с результатом доставки (`DispatchEventResult`, включая отложенные формы), изменение состояния, запрос кадра, запрос закрытия с решением, закрыто, смена поверхности; каждый метод получает доказательство owner-потока. Отложенное открытие (`PlatformProxy::open_window`) несёт `Send`-фабрику, собирающую обработчик на owner. Удалить `WindowCallbacks`, `impl_window_callback_setters!`, 14 `on_*` с инертными умолчаниями, очередь раннего ввода и снимок «ещё не зарегистрировано» (ADR-0213 §3), защёлку `WindowCallbacks::clear()` (ADR-0063 §5). Хосты держат обработчик в слоте и вызывают его через точку LY26; `flui-app` не регистрирует колбэки. `WindowOptions::input_latency`, которую сегодня никто выше хоста не задаёт, проводится из конфигурации окна приложения (это её потребитель; D10, R3.10), Web и Android читают значение | LY41 | `crates/flui-platform/src/platform_window.rs`, `crates/flui-native/src/{owner/*,window/*}`, `crates/flui-app/src/app/**`, тестовые двойники | `workspace`, `reach`, `globals`, `markers` | conformance: первое событие после `open_window` доходит; повторный вход из каждого метода (как в LY26); вето закрытия; отложенный ввод сохраняет `DEFERRED` | L + W + T; Dev: Android |
 | **LY45** | **`AppHandler` при `run`** (D12, R3.4). `run(handler)`: `AppHandler` — трейт ядра (`flui-native`), его реализует только `flui-app`; обязательства без умолчаний: `ready(OwnerPlatform)` (bootstrap, который нёс `PlatformReadyCallback`), `quit_requested`, `reopen`, `session_end` (`SessionEndAnswer`), `host_notice`, `exit_policy`, `wake_deadline`; `on_preferences_changed` нет; принятое событие не теряется при замене или отсутствии обработчика; `PlatformHandlers` удалён. `on_open_urls` и `on_keyboard_layout_change` регистрациями не заменяются: обязательство `opened(urls, files)` добавится к трейту вместе с фичей активации (инертной реализации сейчас нет, правило 4 design), а `keyboard_layout` и его событие становятся `pub(crate)` ядра (LY55). Доставка предпочтений сохраняет правила ADR-0172 (R9.7) | LY44, LY8 | `crates/flui-native/src/{platform.rs,owner/*,lifecycle/*,preferences/*}`, `crates/flui-app/src/app/runner/host.rs` | `workspace`, `reach`, `globals` | headless: каждое событие доходит один раз; замена обработчика в вызове; отсутствие обработчика не теряет принятое | L + W + T |
 | **LY46** | **`!Send` окно и `SurfaceTarget`** (D4, R3.5). `PlatformWindow` теряет `Send + Sync`; поток растеризации получает `SurfaceTarget: HasWindowHandle + HasDisplayHandle + Send + Sync + 'static`, отвечающий `HandleError::Unavailable` после закрытия, с обязательным `pre_present_notify` (поток растеризации зовёт его перед каждым present; на Wayland он взводит frame callback); `unsafe impl Send` хоста остаётся только на нём, а `SAFETY` называет инвариант (что держит цель и как проверяется жизнь окна), не операцию (macOS); правила `Unavailable` по хостам из ADR-0063 п. 5 (Win32 — проба идентичности, AppKit — флаг закрытия, Android — только для завершённого окна, headless — всегда) переезжают на цель. `PendingWindow::wait()` отдаёт рабочему потоку идентификатор, а не `Arc<dyn HostWindow>`. Рассказ в документации `request_redraw` (около 50 строк) превращается в ошибку компиляции; `thread_local!` в `flui-app/src/app/runner/host.rs` теряет свою причину и удаляется, если другой не найдено. Заменяет ADR-0063 в части `Send + Sync` окна | LY44 | `crates/flui-platform/src/platform_window.rs`, `crates/flui-native/src/{owner/*,window/*}`, `crates/flui-engine`, `crates/flui-rendering`, `crates/flui-app/src/app/runner/*`, реализации `PlatformWindow` (семь хостов и 15 вне ядра, ADR-0254) | `workspace`, `reach`, `globals` | `static_assertions::assert_not_impl_any!`; trybuild; `SurfaceTarget` после закрытия; Win32: `state_changed` синхронно в OS-колбэке живого resize | L + W + T |
-| **LY47** [P] | **Машинерия text store — к потребителю** (D7, R2.4). `LockArbiter`, `CompositionLedger`, `EditGeneration`, `byte_range`, `committed_text` (около 1,6 тыс. строк политики) → `flui-interaction::text_input`; `flui-sdk` реэкспортирует их авторам текстовых виджетов. В контракте остаются трейты, значения, `CommitGate`, `OwnerCalls`, `commit_composition_in_place`, `project_ime_event`. `lock.rs` делится по потребителю. Заменяет закрепление ADR-0142 | LY21, text-ime и teardown | `crates/flui-platform/src/text_store/*`, `crates/flui-interaction/src/text_input/*`, `crates/flui-widgets/src/text/*`, `crates/flui-sdk/src/lib.rs`, `tests/lock_gate.rs` | `workspace`, `reach`, `deps` | тесты арбитра и журнала переезжают во `flui-interaction`; строка `tests/surface.rs` | L + T |
-| **LY48** [P] | **Тестовые двойники — из контракта** (D9, R2.2). `InMemoryTextStore` (736 строк) → `flui-testing` (комплект `text_store_kit`); `FakeHaptics` делится на две роли, как `InMemoryClipboard` (D9): headless-приёмник в ядре (`pub(crate)`; headless-хост не может зависеть от `flui-testing`) и сценарный двойник во `flui-testing`. `InMemoryClipboard` делится в LY50 | LY21, text-ime и teardown | `crates/flui-platform/src/{text_store/in_memory.rs,haptics/fake.rs}`, `crates/flui-testing/src/*`, `crates/flui-native/src/haptics/headless.rs` | `workspace`, `testing`, `reach` | `text_store_kit::assert_conforms`; существующие тесты; Win32 `text_services/{probe,tests}.rs` — W | L + W |
+| **LY47** [P] | **Машинерия text store — к потребителю** (D7, R2.4). `LockArbiter`, `CompositionLedger`, `EditGeneration`, `byte_range`, `committed_text` (около 1,6 тыс. строк политики) → `flui-interaction::text_input`; `flui-sdk` реэкспортирует их авторам текстовых виджетов. В контракте остаются трейты, значения, `CommitGate`, `OwnerCalls`, `commit_composition_in_place`, `project_ime_event`. `lock.rs` делится по потребителю. Заменяет закрепление ADR-0142 | LY21; text-ime T3, T4, T5; teardown T13 | `crates/flui-platform/src/text_store/*`, `crates/flui-interaction/src/text_input/*`, `crates/flui-widgets/src/text/*`, `crates/flui-sdk/src/lib.rs`, `tests/lock_gate.rs` | `workspace`, `reach`, `deps` | тесты арбитра и журнала переезжают во `flui-interaction`; строка `tests/surface.rs` | L + T |
+| **LY48** [P] | **Тестовые двойники — из контракта** (D9, R2.2). `InMemoryTextStore` (736 строк) → `flui-testing` (комплект `text_store_kit`); `FakeHaptics` делится на две роли, как `InMemoryClipboard` (D9): headless-приёмник в ядре (`pub(crate)`; headless-хост не может зависеть от `flui-testing`) и сценарный двойник во `flui-testing`. `InMemoryClipboard` делится в LY50 | LY21; text-ime T4, T5; teardown T13 | `crates/flui-platform/src/{text_store/in_memory.rs,haptics/fake.rs}`, `crates/flui-testing/src/*`, `crates/flui-native/src/haptics/headless.rs` | `workspace`, `testing`, `reach` | `text_store_kit::assert_conforms`; существующие тесты; Win32 `text_services/{probe,tests}.rs` — W | L + W |
 | **LY49** | **Только для хоста — в ядро** (D10, R2.2). Таблицы предложений `OfferTable`, `OfferRecord`, `TransferCompleter`, `TransferUri`, `TransferImage` (вариант без потребителя выше хоста удаляется вместе с типом) → модель `drag/` (`offers.rs`); `device_to_logical`, `logical_to_device`, `offset_from_coords`, `delta_offset_from_coords`, `DeviceInputRegion`, `ProjectedInputRegions` → модель `input/` (`regions.rs`); удалить `KeyText`. В контракте остаются `PlatformInput`, `DispatchEventResult`, `DragDropEvent`, `InputRegion`, `InputRegionKind` и словарь data transfer | LY34, LY41 | `crates/flui-platform/src/{data_transfer.rs,input.rs,input_regions.rs,keyboard/*}`, `crates/flui-native/src/{input,drag}/*` | `workspace`, `reach`, `key-vocabulary`, `recording-vocabulary` | существующие drag-тесты (headless, OLE, HTML, Android); таблица ввода | L + W + T |
 
 ### Шов и крейты возможностей
 
 | ID | Задача | Зависит от | Крейты и файлы | Гейты | Тесты | Где |
 |---|---|---|---|---|---|---|
-| **LY50** | **Шов возможностей с первым потребителем — clipboard** (D8, D17, ADR-0152, R5.1–R5.5, R5.7, R5.9). Контракт, модуль `capability`: `Capability` (маркер, `Handle: Clone + 'static`, `NAME`), `CapabilityProvider<C>` (dyn-compatible), `ProviderContext` (`owner()` — `Send`-poster на owner-поток; `window()` — `Option<WindowRef>`), `WindowRef` (id, raw-handles, масштаб), `Completion<T>`, `CapabilityRegistrar` (им `flui-app` регистрирует встроенные провайдеры). `flui-runtime`: реестр per-realm (параметр конструктора realm, `BuildOwner`, `capability_erased`, `LifecycleContextExt`), конфликт и повтор `NAME` → `AppRunError::CapabilityConflict` до первого окна. `ClipboardHandle` во `flui-interaction` (owner-local, на `Completion`); `EditableText` копирует и вставляет через него. OS-объекты clipboard живут в ядре (owner-local, чтение через колбэк), провайдеры шва собирает `flui-app` поверх них: маркер лежит во `flui-interaction`, выше ядра, и ядро провайдеров не держит. Объекты: Windows, macOS, iOS (`UIPasteboard`), Android (`ClipboardManager` через JNI вместо внутрипроцессной заглушки), Web (асинхронный `navigator.clipboard`), winit (arboard), headless (в памяти, `pub(crate)`). Удалить `Clipboard`, `ClipboardItem`, `InMemoryClipboard`, `Platform::{clipboard,write_to_clipboard,read_from_clipboard}`, `clipboard_handle`, `test_clipboard()` в runtime; во `flui-testing` — сценарный провайдер clipboard на минимальном сценарном примитиве фичи `testing` контракта (упорядоченные ответы на запросы, разрешение на границе хода владельца; полный примитив — LY54). `Unsupported::of::<C>` с именем возможности добавляется здесь. AGENTS.md «Extending FLUI», `docs/extending.md` (строка «Platform capability») и `design/architecture.md` получают описание шва. Типы разрешений приходят с первым потребителем (LY64). Заменяет ADR-0039 §5 (`Clipboard` остаётся `Send + Sync`). Сливается в один день с LY51: шов не попадает на `main` без потребителя (ADR-0152 п. 4) | LY38, LY46, LY47, send-flip (ядро) | `crates/flui-platform/src/{capability.rs,clipboard.rs}`, `crates/flui-runtime/src/{capability/*,realm_services.rs,presentation.rs}`, `crates/flui-view/src/{owner/*,element/behavior.rs,context/*}`, `crates/flui-widgets/src/text/editable_text.rs`, `crates/flui-interaction/src/clipboard.rs`, `crates/flui-app/src/app/runner/host.rs`, `crates/flui-app/src/app/capability_providers*` (встроенные провайдеры), `crates/flui-native/src/clipboard/*`, `crates/flui-testing` | `workspace`, `reach`, `globals`, `testing` | ADR-0152 §4: копирование и вставка в headless; пустой реестр отвечает `NotRegistered`, не паникой; `NotOnThisPlatform` от провайдера доходит до виджета без изменений; две возможности с одним `NAME` отказывают до окна; результат, доставленный ОС не на owner-потоке, доходит до виджета на границе хода владельца через poster; trybuild E0599 (`BuildContext`), E0277 (`ClipboardHandle: Send` и `Completion<T>: Send`), E0639 (литерал `Unsupported`); dyn-пин; Windows — W | L + W + T; Dev: Android, Web (браузер) |
+| **LY50** | **Шов возможностей с первым потребителем — clipboard** (D8, D17, ADR-0152, R5.1–R5.5, R5.7, R5.9). Контракт, модуль `capability`: `Capability` (маркер, `Handle: Clone + 'static`, `NAME`), `CapabilityProvider<C>` (dyn-compatible), `ProviderContext` (`owner()` — `Send`-poster на owner-поток; `window()` — `Option<WindowRef>`), `WindowRef` (id, raw-handles, масштаб), `Completion<T>`, `CapabilityRegistrar` (им `flui-app` регистрирует встроенные провайдеры). `flui-runtime`: реестр per-realm (параметр конструктора realm, `BuildOwner`, `capability_erased`, `LifecycleContextExt`), конфликт и повтор `NAME` → `AppRunError::CapabilityConflict` до первого окна. `ClipboardHandle` во `flui-interaction` (owner-local, на `Completion`); `EditableText` копирует и вставляет через него. OS-объекты clipboard живут в ядре (owner-local, чтение через колбэк), провайдеры шва собирает `flui-app` поверх них: маркер лежит во `flui-interaction`, выше ядра, и ядро провайдеров не держит. Объекты: Windows, macOS, iOS (`UIPasteboard`), Android (`ClipboardManager` через JNI вместо внутрипроцессной заглушки), Web (асинхронный `navigator.clipboard`), winit (arboard), headless (в памяти, `pub(crate)`). Удалить `Clipboard`, `ClipboardItem`, `InMemoryClipboard`, `Platform::{clipboard,write_to_clipboard,read_from_clipboard}`, `clipboard_handle`, `test_clipboard()` в runtime; во `flui-testing` — сценарный провайдер clipboard на минимальном сценарном примитиве фичи `testing` контракта (упорядоченные ответы на запросы, разрешение на границе хода владельца; полный примитив — LY54). `Unsupported::of::<C>` с именем возможности добавляется здесь. AGENTS.md «Extending FLUI», `docs/extending.md` (строка «Platform capability») и `design/architecture.md` получают описание шва. Типы разрешений приходят с первым потребителем (LY64). Заменяет ADR-0039 §5 (`Clipboard` остаётся `Send + Sync`). Сливается в один день с LY51: шов не попадает на `main` без потребителя (ADR-0152 п. 4) | LY38, LY46, LY47; send-flip T7 (закрытие: весь остаток flip слит) | `crates/flui-platform/src/{capability.rs,clipboard.rs}`, `crates/flui-runtime/src/{capability/*,realm_services.rs,presentation.rs}`, `crates/flui-view/src/{owner/*,element/behavior.rs,context/*}`, `crates/flui-widgets/src/text/editable_text.rs`, `crates/flui-interaction/src/clipboard.rs`, `crates/flui-app/src/app/runner/host.rs`, `crates/flui-app/src/app/capability_providers*` (встроенные провайдеры), `crates/flui-native/src/clipboard/*`, `crates/flui-testing` | `workspace`, `reach`, `globals`, `testing` | ADR-0152 §4: копирование и вставка в headless; пустой реестр отвечает `NotRegistered`, не паникой; `NotOnThisPlatform` от провайдера доходит до виджета без изменений; две возможности с одним `NAME` отказывают до окна; результат, доставленный ОС не на owner-потоке, доходит до виджета на границе хода владельца через poster; trybuild E0599 (`BuildContext`), E0277 (`ClipboardHandle: Send` и `Completion<T>: Send`), E0639 (литерал `Unsupported`); dyn-пин; Windows — W | L + W + T; Dev: Android, Web (браузер) |
 | **LY51** | **`Plugin` и регистрация приложением** (D17, R5.8). `Plugin` и `CapabilityRegistrar` в контракте; `Application::plugin` и `Application::capability`; `AppRunError::CapabilityConflict`; реэкспорт в `flui-sdk` и строка в `tests/surface.rs`; два fixture-пакета вне зависимостей фреймворка: на `flui-sdk` + контракте и лист-крейт только на контракте. Сливается в один день с LY50 (посадка шва, ADR-0152 п. 4); потребитель в production — `flui-system` (LY57), PR называет его | LY50 | `crates/flui-platform/src/capability.rs`, `crates/flui-app/src/app/application.rs`, `crates/flui-sdk/src/lib.rs`, `tests/fixtures/*` | `workspace`, `reach` (fixture не видит хост) | два плагина на одну возможность и повтор `NAME` отказывают `Application::run` до окна; оба fixture регистрируют и получают свою возможность | L |
-| **LY52** | **Storage через шов** (D8, R5.9). Трейт `Storage` остаётся в контракте; встроенный провайдер без окна поверх `FileStore` (и IndexedDB на wasm32); `HostStorage` из `flui-app/src/app/storage_host.rs` становится провайдером; headless `MemoryStorage` во `flui-testing`; `LifecycleContext::storage` удалён (заменяет пункт ADR-0133 о методе) | LY50, persistence | `crates/flui-view/src/persist/*`, `crates/flui-app/src/app/storage_host.rs`, `crates/flui-native/src/storage/*`, `crates/flui-testing/src/storage.rs` | `workspace`, `reach` | сохранение и загрузка без окна; `NotRegistered`; существующие persist-тесты | L + T |
+| **LY52** | **Storage через шов** (D8, R5.9). Трейт `Storage` остаётся в контракте; встроенный провайдер без окна поверх `FileStore` (и IndexedDB на wasm32); `HostStorage` из `flui-app/src/app/storage_host.rs` становится провайдером; headless `MemoryStorage` во `flui-testing`; `LifecycleContext::storage` удалён (заменяет пункт ADR-0133 о методе) | LY50; persistence P1, P2 и сделанная часть P6 (слиты). Обратное ребро: persistence P4, P5 и остаток P6 строятся на LY52 и ждут его | `crates/flui-view/src/persist/*`, `crates/flui-app/src/app/storage_host.rs`, `crates/flui-native/src/storage/*`, `crates/flui-testing/src/storage.rs` | `workspace`, `reach` | сохранение и загрузка без окна; `NotRegistered`; существующие persist-тесты; `placement_recorder.rs` (#1899) читает и пишет через провайдер | L + T |
 | **LY53** [P] | **Класс `capability` в гейтах** (ADR-0154, R5.10, R5.11). kind-правила `cargo xtask workspace`: крейт возможности зависит от контракта (и `flui-sdk`, если несёт виджеты), не зависит от других крейтов возможностей, ни один крейт фреймворка не зависит от него, кроме необязательной фичи фасада (LY101); reach-таблица; запрет `build.rs`, запускающего `javac`/`swiftc`/`d8`; версия крейта — с поездом, пока версия контракта с поездом (ADR-0153, ADR-0154 п. 1). Сливается в день LY57: правило приходит в PR первого крейта (ADR-0154 п. 12) | LY21 | `tools/xtask/src/workspace/*`, корневой `Cargo.toml` (легенда tier-kind) | `workspace` (+ `--self-test`) | самотест: посаженное нарушение на каждое правило | L |
 | **LY54** | **Сценарный примитив** (ADR-0154, R5.13). Расширяет минимальный примитив из LY50. В фиче `scripted` контракта (крейт возможности не может зависеть от `flui-testing`): упорядоченный скрипт ответов на запросы, переключатели службы, отзывы разрешений, внедрённые ошибки, потоки событий в виртуальном времени; всё разрешается на границе хода владельца. `flui-testing`: «поставить провайдер для `C`» без ручной сборки runtime; сценарный провайдер clipboard из LY50 переводится на полный примитив (13+ тестов runtime и 2 теста app, которые держал `InMemoryClipboard`) | LY50 | `crates/flui-platform/src/capability/*`, `crates/flui-testing/src/capability.rs`, `crates/flui-runtime` (тесты), `crates/flui-app` (тесты) | `testing`, `workspace` | сценарий «запрос 1 → отказ, запрос 2 → разрешено, через 3 с отзыв» на виртуальном времени; примитив не доступен без фичи | L |
 | **LY55** | **Контракт без `tracing` и `parking_lot`; `Platform` без мёртвых методов** (D10, D12, R2.2, R3.8). `tracing`: остатки в `text_store/projection.rs` и `text_store/host.rs` — логирует вызывающий, причина в возвращаемом значении; `parking_lot`: `DisplayRegistry` на `std::sync::Mutex` (отравление — по `docs/PANIC-POLICY.md`); убрать устаревший комментарий манифеста; `reach-forbid` += `tracing`, `parking_lot`. `Platform`: удалить `active_window`, `compositor_name`; `keyboard_layout` и его событие, которых выше хоста никто не читает, — `pub(crate)` ядра (их используют раскладка клавиш и TSF), публичными их сделает фича меню, когда появится потребитель (подписи сочетаний) | LY47, LY48, LY49, LY50 | `crates/flui-platform/{Cargo.toml,src/display.rs,src/text_store/*}`, `crates/flui-native/src/platform.rs`, файлы платформ | `workspace`, `reach`, `deps` | существующие display-тесты; публичная поверхность контракта по гейту API-замыкания | L + T |
@@ -3440,6 +3442,164 @@ graph LR
   `checks`, `doc-strict`, `wasm-check`. WSL: clippy трёх вариантов (в том числе `-p flui-native
   --all-targets --features winit-backend` и `--all-features`), rustdoc; xvfb nextest 306 из 306
   и 353 из 353; без xvfb — 661 из 662 (прежний случай X-сервера WSLg).
+- [x] **LY79** — ветка `platform/wayland-input`, начата на `main` @ `c8401e35b`, `main` @
+  `ee5480c57` (#1933) влит слиянием. **Позиция ввода** таблицы `Wayland` — `WaylandLoop`; цикл
+  держит ввод через хук `owner::linux::wayland::WaylandInput`, который заполняет таблица
+  (`WaylandHost::input` → `input::linux::wayland::SeatInput`). Цикл предлагает хуку каждый глобал,
+  которого не связывает сам (и при запуске, и в `wl_registry.global`/`global_remove`); ввод
+  связывает `wl_seat` (до v9), `zwp_tablet_manager_v2` (v1, без dial), `zwp_pointer_gestures_v1`
+  (v1) и `wp_cursor_shape_manager_v1` (v1) и делает устройства сидения по его capabilities и
+  менеджерам в любом порядке. Окно входит во ввод при открытии (`SeatWindow`: `WindowId`,
+  `wl_surface`, `Arc<WindowDelivery>`) до снимка возможностей и выходит при отставке
+  (`retire`); `set_cursor` идёт через тот же хук; окно не называет фичу ввода. **Запись и
+  доставка.** Диспетчеризация объектов сидения идёт внутри заимствования очереди и только
+  записывает: событие копируется в проводное (`input::linux::wayland::wire`, чистое) или в
+  событие клавиатуры, поверхность находится по идентичности прокси, не по номеру протокола.
+  Каждый ход после чтения очереди и до `settle` окон цикл зовёт `deliver`: проводные события
+  собираются одним `ContactRegistry` (`SeatAssembly`), клавиши — keymap композитора
+  (`input::linux::xkb`, libxkbcommon через `xkbcommon-dl`, загрузка во время работы), каждое
+  событие уходит в доставку окна без занятой ячейки (`OwnerCell`) ввода; события, записанные
+  roundtrip-ом обработчика, доставляются в тот же ход. Повтор клавиши — на клиенте
+  (`repeat::KeyRepeat` по `repeat_info`), ожидание цикла ограничено следующим повтором
+  (`LoopTurn::input_due`). Раскладка — `name[GroupN]` текста keymap для действующей группы,
+  колбэки раскладки зовутся вне ячеек. Возможности окна — `availability::wayland` по глобалам
+  плюс присутствие из реестра; изменение присутствия доходит до каждого окна.
+  **Решения сверх строки (для владельца):** (1) метка времени композитора читается на
+  `CLOCK_MONOTONIC` (`NativeTime::TickMillis`), только если лежит в пределах секунды от
+  монотонных часов при приходе, иначе событие получает время прихода — X11-бэкенд Weston
+  ставит время X-сервера (видно в записи); (2) координаты — логические поверхности, масштаб
+  чтения 1; (3) уход указателя с зажатой кнопкой отменяет нажатие (`CaptureLost`), открытый
+  пальцевый скролл — `Cancelled`; (4) `pan` строки — это `wl_pointer.axis` от `finger` с фазами
+  до `axis_stop`; инерции Wayland не присылает, строка conformance про momentum держится общей
+  грамматикой; swipe и hold — композитора, не транслируются; (5) pinch: масштаб «с начала»
+  становится множителем каждого обновления, поворот — радианы по часовой, `dx/dy` сдвигают
+  фокус от курсора; (6) инструменты планшета: `mouse`/`lens` — мышь, `eraser` — ластик пера,
+  остальное — перо; `BTN_STYLUS`/`BTN_STYLUS2` — вторичная и вспомогательная кнопки; кнопки
+  pad не читаются; (7) без `cursor-shape` (Weston 13) `set_cursor` отвечает `Unsupported
+  { NotYetOnThisHost }`, запасного курсора из темы нет; (8) `xkbcommon-dl` 0.4 не даёт
+  `xkb_keymap_layout_get_name`, отсюда имя из текста keymap; (9) `input::linux::xkb` — модуль
+  группы `linux`, его чистые таблицы (evdev → `Code`, keysym → `NamedKey`, модификаторы,
+  имя группы) годятся и для X11 (LY83). **Общие правки:** `owner/linux/wayland.rs` (хук,
+  `LoopTurn::input_due`, `host::Input` для `WaylandLoop`), `window/linux/wayland.rs` (attach,
+  detach, `set_cursor`), `hosts/linux.rs` (позиция и `WaylandHost::input`), `input/mod.rs`
+  (`pub mod linux`), `input/availability.rs` (`wayland`), `lib.rs` (комментарий выбора хоста),
+  `Cargo.toml` (`xkbcommon-dl` в `wayland`, `staging` у `wayland-protocols`, `time` у
+  `rustix`, dev-зависимость `x11rb` с `xtest`, цель `wayland_input`), тестовый кодек записей
+  (`Backend::Wayland`, `notched` у шага скролла), `record` переехал из `journal.rs` в
+  `capture.rs`. `current_platform` не тронут: у Wayland-хоста нет текста (IME), clipboard,
+  drag and drop (LY80), декораций и дробного масштаба (LY81), у X11-хоста нет ввода (LY83) —
+  winit остаётся первым, **решение для владельца**. **Тесты** (откат проверен для каждого):
+  `a_mouse_is_one_pointer_from_enter_to_leave`, `a_leave_with_a_button_held_cancels_the_press`
+  (без отмены падает), `a_wheel_frame_is_one_step_in_detents` (без `value120` падает),
+  `a_finger_scroll_is_phased_until_its_stop` (без `axis_stop` падает),
+  `the_touches_of_a_frame_are_one_pointer_frame` (без `framed` падает),
+  `a_tablet_frame_is_one_reading_per_change`, `a_pinch_is_one_pan_zoom_about_the_cursor` (с
+  накопленным масштабом как множителем падает), `a_device_that_goes_ends_its_contacts`,
+  `a_closed_windows_contacts_end_unheard`, `a_stamp_off_the_monotonic_clock_takes_the_arrival`
+  (без порога падает), `a_button_code_is_its_owned_button` (`input::linux::wayland::wire`);
+  `a_held_key_repeats_after_its_delay_at_its_rate` (без догона падает),
+  `a_cursor_shows_as_its_protocol_shape`; `an_evdev_code_names_its_physical_key`,
+  `a_keysym_names_its_key_or_types_its_text`, `the_named_xkb_modifiers_are_the_modifiers_held`,
+  `a_layout_is_named_by_its_group` (`input::linux::xkb`); строки повтора в
+  `an_idle_wayland_loop_blocks_until_it_is_woken` (без `input_due` падает).
+  `tests/wayland_input.rs` — свой harness: Xvfb, Weston на X11-бэкенде с kiosk-shell, ввод XTest;
+  `a_compositor_seat_reaches_the_window`: снимок первым, вход курсора, движение, клик в
+  поставленной точке, щелчок колеса — один шаг `Detents (0, -1)` без фаз, клавиша `a` (`KeyA`)
+  по keymap Weston, имя раскладки непустое (без `set_input_capabilities` в attach падает на
+  снимке; без фокуса клавиатуры — по таймауту клавиши). С `native-capture` журнал реестра
+  воспроизводится ровно в то, что слышало окно, пишется и читается обратно; запись
+  `wayland_weston_mouse_wheel.jsonl` (снята этим прогоном) воспроизводит
+  `wayland_recordings_decode_to_their_host_input`. Conformance: профиль `wayland` (метка через
+  правило диспетчера, keysym XKB, без актуатора: `haptics` профиля стал `Option`) и `wayland
+  window` — снимок настоящего окна под композитором; таблица сломанных бэкендов — строки wrap
+  и клавиши меню на профиле Wayland. Касание, перо и pinch в безголовом композиторе не
+  производятся: их держат только тесты трансляции; курсорные формы не запускались (в Weston 13
+  нет `cursor-shape`). **Документы:** ARCHITECTURE.md (раздел о записи и доставке сидений),
+  `docs/platform-parity.md` (заметки, ячейки Wayland остаются за winit), `docs/gaps.md` (записи
+  5 и метки времени), `docs/testing.md`, `changelog.d/platform-wayland-input.md`.
+  Проверки: `cargo fmt`; Windows — clippy рабочего пространства `--all-targets -D warnings`,
+  nextest `flui-native` 333 из 333 (OLE drag на реальных окнах прошёл на повторе), clippy
+  Android `--all-targets` и macOS `--all-targets` (через LLVM) с `testing,winit-backend`,
+  `wasm-check`, `checks`, `doc-strict`, `module-dag` (337 модулей, 355 рёбер, 1 исключение),
+  `file-length`, `globals` (57), `markers`, `testing`. WSL Ubuntu 24.04: clippy `-p flui-native
+  -D warnings` с `--all-targets` и без для по умолчанию, `--no-default-features`, `… x11`,
+  `… wayland`, `… winit-backend`, `… testing`, `--all-features` — чисто; rustdoc `-D warnings
+  --document-private-items` по умолчанию и с `winit-backend`; nextest под xvfb (`FLUI_HEADLESS=1`,
+  `dbus-run-session`) `--all-features` 365 из 365, по умолчанию 310 из 310; под безголовым Weston
+  13 (`FLUI_REQUIRE_WAYLAND=1`) тесты Wayland, conformance, записи и `wayland_input` — 13 из 13.
+  Не запускалось: композиторы рабочего стола (GNOME, KDE, Hyprland), сенсорный экран, перо,
+  тачпад (pinch, пальцевый скролл), `cursor-shape`, смена раскладки на живой сессии, Mac, iPhone,
+  Android, браузер, `cross-typecheck`.
+  **Исправления после ревью (vanyastaff/flui#1937)**, коммитами поверх, слиянием. (1) Клавиатура
+  каждого сидения своя: проводные события клавиатуры несут типизированный `SeatKey`, keymap,
+  окно и повтор — у каждого сидения (`keyboards::Keyboards`); (2) сборка знает сидение каждого
+  устройства (`DeviceAdded { seat }`), удалённое сидение (`SeatRemoved`) убирает все свои
+  устройства, инструменты планшета тоже, с отменой открытых последовательностей; (3)
+  модификаторы уходят вместе с клавиатурой (`KeyboardLeft`); (4) повтор не начинается без окна
+  у клавиатуры; (5) keymap больше 8 МиБ отвергается, NUL снимается в одном месте
+  (`keymap_text`); (6) кнопки кадра планшета — `SmallVec`, ни одна не теряется; вид инструмента —
+  `OwnerCell`; `group_name` пропускает объявление без кавычек; клавиши штампуются
+  `SeatAssembly::stamp`; удалены `WireTime::with_stamp`, `SeatAssembly::{contacts, modifiers}`;
+  (7) отменённый pinch отменяет и поворот — дефекта не было: `PanZoomAccumulator::apply` по
+  `Cancelled` любого компонента снимает весь жест, тест `a_cancelled_pinch_ends_whole` это
+  держит и с откатом проходит; (8) без `cursor-shape` курсор берётся из темы (`wayland-cursor`,
+  `XCURSOR_THEME`/`XCURSOR_SIZE`) на своей поверхности указателя, масштаб окна округляется вверх
+  (`cursor::theme_scale`), `testing::wayland::cursor_report`. CI: conformance настоящего окна
+  перенесена в `wayland_window::the_wayland_window_input_conforms` (набор с композитором; в
+  наборе Xvfb `WAYLAND_DISPLAY` пуст при `FLUI_REQUIRE_WAYLAND=1`); `wayland_input` не требует
+  имени раскладки и пишет начало keymap, если имени нет. `WindowStateCell::published` открыт
+  для `wayland_host`. Тесты (откат проверен): `each_seat_keeps_its_own_keyboard`,
+  `a_key_with_no_window_does_not_repeat`, `a_keymap_is_read_within_its_limit`,
+  `a_removed_seat_ends_its_pens`, `modifiers_leave_with_the_keyboard`,
+  `every_button_of_a_tablet_frame_is_delivered`, `a_theme_cursor_is_drawn_at_the_window_scale`,
+  строка `group_name` без кавычек, `a_compositor_seat_reaches_the_window` (без темы курсора
+  падает «a cursor was shown»). Проверки: WSL — `cargo xtask native-features`, clippy семи
+  вариантов признаков с `--all-targets` и без, rustdoc; наборы как в CI: Xvfb (`FLUI_HEADLESS=1`,
+  `WAYLAND_DISPLAY=''`, `FLUI_REQUIRE_WAYLAND=1`) 366 из 366, Wayland под Weston 7 из 7;
+  Windows — clippy рабочего пространства, nextest `flui-native` 341 из 341, clippy Android и
+  macOS, `wasm-check`, `checks`, `doc-strict`, `module-dag`, `file-length`, `globals`,
+  `markers`, `testing`.
+  **Слияния с LY81 (#1934) и LY83 (#1936)**, слиянием, не rebase. Клавиатура Wayland читается
+  через общий модуль LY83 `input::linux::xkb` (`Keyboard`: keymap, состояние, compose, нажатые
+  клавиши); свой дубль (`Keymap`) удалён. Новый вариант `KeymapSource::Compositor { text }` —
+  keymap из fd композитора: `keymap_length` (не больше `KEYMAP_LIMIT`, 8 МиБ) и `keymap_text`
+  (единственное место, где снимается NUL) перенесены в чистую часть `xkb`; новая keymap того же
+  сидения читается в его `Keyboard` (`reload`), при уходе клавиатуры из окна держимые клавиши
+  отпускаются в нём (`Keyboard::leave`), compose сбрасывается. Имя раскладки — имя группы XKB в
+  тексте keymap (`KeymapSource::layout_name`); если имени нет, в лог идёт начало keymap.
+  `KeymapSource::x11_device` заменил разбор варианта в `x11.rs` (две строки). Тест
+  `a_compositor_keymap_composes_dead_keys` (keymap US intl., скомпилированная libxkbcommon и
+  отданная как текст композитора): dead acute и `e` дают `é`, раскладка названа «English (US,
+  intl., with dead keys)»; без compose для keymap композитора и без имени группы падает.
+  Проверки: `cargo xtask native-features`, WSL clippy семи вариантов с `--all-targets` и без,
+  rustdoc; наборы как в CI: Xvfb 391 из 391, Wayland под Weston 13 из 13; `wayland_input` —
+  раскладка «English (US)», курсор из темы.
+  **Слияние с LY95 (#1940).** `LastInput::record` получил настоящих вызывающих и потерял
+  `cfg(test)`: ввод сидений записывает нажатие клавиши, кнопки, касание и вход клавиатуры в
+  окно (сидение, serial, поверхность); `WaylandHost::input` получает `LastInput`, который цикл
+  кладёт и в протокол окон. `testing::wayland::last_input_serial`; в `wayland_input` serial входа
+  клавиатуры, клика и клавиши растут (без записи кнопки, клавиши или входа клавиатуры падает).
+  Касание в Weston не производится — его запись не запускалась; токен на sway не запускался (в
+  Weston 13 нет `xdg_activation_v1`). Repeat: частота не выше 1000 в секунду, интервал не
+  короче 1 мс (`a_compositor_rate_cannot_spin_the_loop`, находка Codex); тест compose читает
+  собственную keymap, не системную. Касания ограничены (находка Codex): реестр держит не больше
+  `MAX_TOUCHES` = 32 касаний на устройство, следующее нажатие отклоняется (`Exhausted`) — это
+  закрывает и путь X11, где касание идёт по touch id в реестр
+  (`a_device_holds_a_bounded_number_of_touches`); сенсор Wayland отклоняет `down` сверх 32, а
+  незакрытый кадр отдаёт частями после 256 шагов (`a_touchscreen_holds_a_bounded_number_of_touches`);
+  оба теста падают без ограничения. Сидение держит не больше 16 инструментов планшета, лишний
+  уничтожается. Правило «всё, что наполняет пир, ограничено» (ARCHITECTURE.md): клавиатура xkb
+  держит не больше 128 клавиш и отклоняет код вне keymap (`a_keyboard_holds_a_bounded_number_of_keys`,
+  Wayland и X11); кадр планшета отдаётся частями после 32 кнопок
+  (`a_tablet_frame_gathers_a_bounded_number_of_buttons`); в очереди одна keymap на сидение
+  (`a_seat_queues_one_keymap`); X11 знает не больше 128 устройств и 36 валюаторов на каждое
+  (`the_devices_and_valuators_known_are_bounded`); каждый тест падает без своего ограничения.
+  Сидений не больше 16, выходов не больше 64 — проверено только чтением, их привязку достигает
+  лишь композитор. Планшеты и пэды уничтожаются при появлении, менеджер привязывается один раз;
+  keymap стоит в очереди как fd композитора, более новая закрывает прежнюю непрочитанной, читается
+  одна при доставке (1000 keymap держат один открытый fd). Наблюдатель дисплеев (LY92) читает не
+  больше 64 выходов и держит по одному описанию цвета с его информацией на выход; не запускалось
+  — в Weston 13 нет ни `tablet-v2`, ни управления цветом.
 - [x] **LY83** — ветка `platform/x11-input` от `main` @ `c8401e35b`, слито `main` @ `ee5480c57`
   (#1933). **Позиция ввода** таблицы `X11` — цикл (`type Input = X11Loop`): таблица делает
   `input::linux::x11::X11Input` (`X11Host::input`), цикл держит его через хук
@@ -3874,6 +4034,124 @@ graph LR
   с не тем размером, и цикл падает. Проверки: WSL под Weston nextest `flui-native` по умолчанию
   и `--all-features`, clippy четырёх вариантов, Windows clippy рабочего пространства, `checks`,
   nextest `xtask`.
+- [x] **LY92** — ветка `platform/hdr`, от `main` @ `c666bacfc` (#1935). **Контракт.** У
+  `DisplayInfo` новое поле `color: Result<DisplayColor, CapabilityAbsence>` (по умолчанию
+  `NotYetOnThisHost`), `with_color` и запросы `color_space()`/`headroom()`, отвечающие
+  `Unsupported` с причиной. `DisplayColor { color_space: SurfaceColorSpace, headroom:
+  Result<Headroom, CapabilityAbsence> }` строится только через `standard(gamut)` (запас ровно
+  1) и `high(gamut, headroom)`; `SurfaceColorSpace { gamut: ColorGamut, dynamic_range:
+  DynamicRange }` (`Srgb`/`DisplayP3`/`Rec2020`, `Standard`/`High`, все `non_exhaustive`);
+  `Headroom` — конечное кратное белого не меньше 1 (`new`, `from_luminance` с отказом при
+  переполнении отношения, `SDR`). Событие смены профиля — новая ревизия снимка дисплеев с иным
+  `color`: тот же монотонный порядок, что у смены режима. **Источники.** Windows:
+  `IDXGIOutput6::GetDesc1` (свежая фабрика на выборку, сопоставление по `HMONITOR`) и
+  `DISPLAYCONFIG_SDR_WHITE_LEVEL` цели; HDR10 — `High` в BT.2020 с запасом «пик / белый SDR»,
+  без пика или уровня белого — `NotOnThisDevice`, неизвестное пространство —
+  `NotYetOnThisHost`; константы DXGI чистой половины сверены `const`-проверкой. macOS:
+  `canRepresentDisplayGamut:` и `maximumPotentialExtendedDynamicRangeColorComponentValue`
+  (шлюз 10.15); iOS: `displayGamut` коллекции признаков и `potentialEDRHeadroom` (шлюз 16).
+  Android: `isWideColorGamut`, `isHdr` (шлюз API 26) и `getHighestHdrSdrRatio` (API 35),
+  цвет в строке журнала дисплея. Wayland: `wp_color_management_v1` (фича `staging`
+  `wayland-protocols`, версия 2): описание изображения каждого выхода, `get_information`,
+  повторно на `image_description_changed`; модель нумерует описания и принимает `done` только
+  новейшего; без протокола — `NotOnThisDevice`. X11 — `NotYetOnThisHost` (`_ICC_PROFILE` не
+  читается). Web: `matchMedia` по `(dynamic-range: high)` и `(color-gamut: p3|rec2020)`,
+  слушатели `change` помечают снимок устаревшим; запас — `NotOnThisPlatform`, цвет прочих
+  экранов списка — `NotOnThisPlatform`. Headless: `DisplaySpec::with_color` (по умолчанию SDR
+  sRGB) и `DisplayChange::Color`. **Движок.** `flui-engine` зависит от `flui-platform` (R → C,
+  разрешено); `Renderer::with_surface_color(target, color, display: Option<DisplayColor>)`,
+  `ResolvedSurfaceColor::resolve(.., display, hdr, ..)`: при цвете платформы диапазон и запас
+  берутся из него (запас платформы, затем поверхности, затем 4,0), без него — из
+  `DisplayHdrInfo` wgpu, как раньше; пересоздание и восстановление поверхности решают по тому
+  же отчёту (`ColorRequest`). `flui-app` даёт каждому рендереру цвет дисплея окна из
+  принятого снимка хоста (`display_color_of`; режим `direct` — из выборки).
+  **Решения сверх строки (для владельца):** (1) запас Apple — потенциальный, не текущий:
+  текущий равен 1, пока слой не попросил расширенный диапазон, и HDR не выбирался бы никогда;
+  (2) цвет платформы важнее отчёта wgpu, а охват на решение `WideGamut` не влияет — ADR-0256 §2
+  называет только `DisplayHdrInfo`, текст ADR не менялся; (3) живая перенастройка поверхности
+  при смене профиля не сделана: ADR-0256 §6 («не наблюдается, до следующего пересоздания»)
+  остаётся в силе, снять его — новое решение; (4) `ColorMode` окна Android не выставляется и
+  слушатель `registerHdrSdrRatioChangedListener` (нужен Java в `FluiView`) не подписан.
+  **Тесты** (откат проверен для каждого, скрипт подставляет откат, гоняет тест и
+  восстанавливает файл): `display_colour_table` (`flui-platform`; без `is_finite` в
+  `Headroom::try_new` падает), `a_profile_change_reaches_the_snapshot_as_a_new_revision` в
+  `headless_displays_contract` (без применения `DisplayChange::Color` падает),
+  `dxgi_colour_reports_map_to_the_display_colour` и
+  `an_hdr_output_without_a_usable_peak_has_no_headroom` в `os_display_classification` (без
+  ветки HDR10 падает), `the_platform_colour_decides_the_display_state_over_the_surface_report`
+  (`flui-engine`; без цвета платформы падает),
+  `a_surface_is_set_up_for_the_colour_of_its_window_s_display` в `display_delivery_contract`
+  (`flui-app`; `color_on` без цвета падает), `wayland_image_descriptions_map_to_the_display_colour`
+  и `a_newer_image_description_wins_over_an_older_one` в `wayland_output_model` (без сверки
+  номера описания падает), `android_colour_reports_map_to_the_display_colour` и
+  `android_colour_gate_table` в `android_display_table` (без фильтра запаса над белым падает),
+  `apple_screen_reports_map_to_the_display_colour` и `potential_headroom_gate_table` (без
+  условия «над белым» падает), `browser_colour_queries_map_to_the_display_colour` (без ветки
+  `rec2020` падает), wasm `web_colour_follows_the_media_queries` (Node, контролируемая граница
+  браузера), Windows `windows_displays_report_their_colour` (живой Win32-источник).
+  **Прогон на Windows** (2026-10-28, Windows 11, один монитор 3440×1440 без HDR, RTX 3070 Ti):
+  источник прочёл SDR sRGB с запасом 1, как `dxdiag` (`DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709`,
+  270 нит, «HDR Not Supported»); живую смену профиля показать не на чем, системные настройки
+  не менялись. Проверки (Windows): `cargo fmt`; clippy рабочего пространства `--all-targets`
+  обычный и с `flui-native/winit-backend,flui/native`; nextest `flui-platform`,
+  `flui-native`, `flui-app` — 408 из 409 (`open_real_window` падает только рядом с другими
+  тестами реальных окон, один — зелёный), с `winit-backend` — 403 из 403; `flui-engine
+  --features testing` в один поток — 94 из 94; clippy Android `--all-targets`, macOS
+  `--all-targets` (LLVM-окружение), iOS lib (`DOCS_RS=1`), wasm32 lib; `wasm-check`,
+  `wasm-test` — 51; `native-features`, `checks` (в том числе `workspace`, `reach`,
+  `module-dag`, `globals`, `file-length`, `markers`, `testing`, `docs-paths`), `doc-strict`.
+  WSL Ubuntu 24.04: clippy `flui-native` пяти вариантов признаков, `flui-app`, `flui-engine`,
+  `flui-platform`, `flui --features native` — чисто; nextest под xvfb `--all-features` — 342 из
+  342; без дисплея — 410 из 438, падают только тесты, которым нужен X- или Wayland-сервер
+  (winit, окна X11, предпочтения Linux); гейт API-замыкания под nightly со std всех шести
+  целей — 4 пакета чисты. Не запускалось: Mac и iPhone (vanyastaff/flui#1840; список в PR),
+  Android-устройство, браузер, композитор с `wp_color_management_v1`, `cross-typecheck` (CI).
+  **Исправления после ревью (#1942).** Слиты `main` @ `f11b154c6` (#1936) и `817fb6bbd` (#1939).
+  Решения координатора записаны поправкой ADR-0256 (§2, §5, §6). Дефекты: (1) рендерер держит
+  новейший отчёт дисплея отдельно от того, по которому настроена поверхность
+  (`Renderer::set_display_color`, `next_color_request`): пересоздание и восстановление решают по
+  новейшему, держимая поверхность перенастраивается; `WindowDisplay` несёт `color`, смена профиля
+  доходит до презентации, и раннеры desktop, Android, iOS (`follow_display_color` перед кадром)
+  и Web передают цвет рендереру; (2) высокий диапазон с запасом не выше белого — SDR (Windows с
+  яркостью SDR выше пика панели, Wayland с целевым пиком ниже опорного белого); (3) Wayland: для
+  PQ запас только от `target_luminance`, `max` первичного объёма (потолок кривой 10 000 кд/м²)
+  берётся лишь для расширенных кривых; (4) Android: исключение в отчёте цвета одного дисплея
+  снимает только его цвет (`Err(NotOnThisDevice)`), выборка остаётся; (5) doc-комментарий
+  `single_screen` в `display/web.rs` вернулся к своей функции. Решения: охват решает `WideGamut`
+  (sRGB-дисплей — `Srgb8`); `SurfaceColorSpace::SRGB` удалён (читателя не было); `ColorMode`
+  Android: `OsWindowOptions::android` (`AndroidWindowOptions`, `AndroidColorMode`), `flui-app`
+  ставит его из `AppConfig::surface_color`, окно Activity зовёт `Window.setColorMode` на главном
+  потоке Java с API 26 (`WindowColorMode`). Мелкое: `ResolvedSurfaceColor` держит
+  `ColorRequest`; `p3_or_srgb` — один помощник для Apple и Android; цветовое пространство
+  Windows — перечисление `OutputColorSpace`. **Не покрыто:** слушатель
+  `Display.registerHdrSdrRatioChangedListener` (нужен Java-класс в `FluiView`): сдвиг HDR/SDR на
+  Android читается только при смене конфигурации и возобновлении — записано в `docs/gaps.md`.
+  Тесты (откат проверен для каждого bash-скриптом: строковая подстановка, тест, `git checkout`
+  файла): `a_high_range_display_without_headroom_over_white_gets_no_hdr`,
+  `wide_gamut_follows_the_display_gamut`, `a_recreation_after_the_display_changes_resolves_its_new_range`
+  (`flui-engine`, GPU), `a_display_colour_change_reaches_the_renderer_before_the_frame`
+  (`surface_lifecycle_matrix`), `display_delivery_contract` (цвет в `WindowDisplay`),
+  `wayland_output_model` (PQ без цели), `os_display_classification` (яркость выше пика),
+  `an_activity_asks_for_the_colour_mode_of_its_surface`,
+  `the_android_colour_mode_follows_the_requested_surface_colour`;
+  `a_display_whose_colour_report_failed_keeps_its_other_facts` проверяет чистую часть, путь JNI
+  только типизирован. Проверки: Windows clippy рабочего пространства (обычный и с
+  `winit-backend,flui/native`), nextest `flui-platform`, `flui-native`, `flui-app` — 447 из 447,
+  `flui-engine --features testing` в один поток — 96 из 96; clippy `flui-app` и `flui-native`
+  на Android `--all-targets`, macOS `--all-targets`, iOS lib (`flui-app` с LLVM и пустым
+  `SDKROOT`), wasm32 lib; `wasm-check`, `wasm-test` — 51, `native-features`, `checks`. WSL:
+  clippy девяти вариантов, xvfb `--all-features` — 477 из 477, Weston 13 — 32 из 32.
+  **После сессии Mac.** На arm64 macOS `flui-native` не собирался: E0080 «a gate at or below the
+  floor» — шлюз `MacosPotentialHeadroom` (10.15) ниже пола arm64 (11.0). Теперь на `aarch64`
+  отчёт читается напрямую, шлюз и его строка в таблице — только вне `aarch64` (пол x86_64 —
+  10.13). `Headroom::new` переименован в `Headroom::try_new` (фаллибельный конструктор).
+  **Почему кросс-clippy на Windows не поймал:** проверка пола — `const { assert!(..) }` внутри
+  обобщённой `version::gate::since::<F>()`; она вычисляется при мономорфизации, то есть только
+  при кодогенерации. `cargo clippy`/`check` её не делают, поэтому clippy под
+  `--target aarch64-apple-darwin` зелёный, а `cargo heli build -p flui-native --lib --target
+  aarch64-apple-darwin` (с теми же LLVM-переменными) падает с E0080 — проверено на коде до
+  исправления; тестовая сборка на Windows-хосте берёт пол x86_64. Шлюз Apple проверять кросс-
+  **сборкой** lib под `aarch64-apple-darwin`, не только clippy.
 
 - [x] **LY95** — ветка `platform/activation` от `main` @ `8aee131f6` (LY81). **Wayland**
   (`window/linux/wayland.rs`, чистый модуль `window/linux/wayland/activation.rs` — механизм
@@ -4019,6 +4297,140 @@ graph LR
   CJK-начертания). Словарь нативных записей (`tests/native_recording`) знает только указатели:
   для записи этого прогона нужны строки клавиатуры и IME (marked text, выделение, commit, unmark,
   replace) и воспроизведение в модель респондера.
+- [ ] **LY70** — доступность iOS; не закрыта: прогон VoiceOver на устройстве ждёт владельца
+  (список в vanyastaff/flui#1736 вместе с действием AccessKit и объявлениями). **Код.**
+  `accessibility/apple/ios.rs`: `IosAccessibility` держит низкоуровневый `accesskit_ios::Adapter` в
+  `AdapterCell` под `NativeOwner` (вызовы только с главного потока, он же поток владельца), с
+  обработчиками активации, деактивации (UIKit, в отличие от NSAccessibility, сообщает о выключении
+  VoiceOver) и действий — общими для всех мостов (`accessibility::bridge::{Activation, Action,
+  Deactivation}`, каждый — вызов `os_entry`). `FluiView` — собственный класс FLUI, поэтому подклассы
+  не подменяются: `isAccessibilityElement`, `accessibilityElements` и `accessibilityHitTest:`
+  переадресуются мосту через `owner::accessibility_slot::{AccessibilitySlot, ViewAccessibility}`
+  (ячейка в ivars вида, её же несёт `ViewRef`, мост заполняет её один раз при открытии окна,
+  повторное заполнение — ошибка `BUG`); пока ячейка пуста, отвечает `UIView`. `didMoveToWindow`
+  зовёт `did_move_to_window`, точка попадания — `ViewPoint`. Окно отцепляет мост при закрытии;
+  `AdapterCell::detach` во время переадресованного вызова откладывается до выхода из самого
+  внешнего. `publish` не с главного потока — `debug_assert!` (недостижимо: владелец iOS — главный
+  поток). `BridgeShared::notify_activation` откатывает флаг, если слушатель паникует (общий код,
+  то же исправление для macOS, Windows и Linux). Две версии objc2 встречаются только через сырые
+  указатели. Таблица iOS называет `IosAccessibility` вместо `Absent<Accessibility>`. Зависимость
+  `accesskit_ios` 0.2.2 поднимает `accesskit` до 0.25.2 и `accesskit_consumer` до 0.39.2 (в
+  lock-файле меняются только они и новый пакет); строки матрицы покрытия перечитаны против 0.25.2
+  и 0.39.2 (изменение релизов — маскирование значения `PasswordInput` в consumer — строк не
+  задевает), `MATRIX_CHECKED_AGAINST` поднят. Идентификатор ADR-0240 доходит до `author_id`
+  (правило проверяется на Linux, `crates/flui-semantics/tests/identifier.rs`), а `accesskit_ios`
+  отдаёт `author_id` как `accessibilityIdentifier`. Тесты на Linux:
+  `an_activation_whose_listener_panicked_leaves_the_bridge_inactive`,
+  `a_view_reaches_the_bridge_its_window_filled`, `a_second_bridge_for_one_window_is_a_bug`,
+  `a_detached_cell_answers_nothing`, `a_detach_during_a_call_takes_effect_when_the_call_returns`;
+  откат каждого правила роняет свой тест. **Прогон** (2026-10-28, MacBook Air M1, macOS 27.0,
+  Simulator iPhone Duo / iOS 27.1): проба `flui create` со счётчиком, у `RawButton` —
+  `identifier("increment")`; XCUITest-клиент прочитал дерево `StaticText 'Count 0'` и `Button
+  identifier: 'increment', label: 'Increment'`, нажал кнопку дважды через её рамку доступности и
+  прочитал `Count 2` (снимок экрана симулятора показывает то же). С таблицей iOS, возвращённой к
+  `Absent<Accessibility>`, тот же клиент видит только пустые контейнеры, и проверка падает. Не
+  проверено: сеанс VoiceOver (Accessibility Inspector запускается, но выбрать в нём цель-симулятор
+  средствами удалённого управления не удалось), действие AccessKit (нажатие XCUITest — касание, а
+  не `accessibilityActivate`), объявления.
+
+- [ ] **LY91** (не закрыта: остаётся Apple, см. ниже) — ветка `platform/present-feedback` от `main` @ `8aee131f6`. **Форма (для владельца).**
+  Обратная связь едет в запросе кадра: `FrameRequest::presented: Option<FramePresented { at:
+  EventTime, refresh: Option<Duration> }>` — самый новый показанный кадр окна с прошлого запроса,
+  на шкале ввода; никогда не прогноз (ожидаемый показ — `target_present`). Есть ли она у окна —
+  возможность `WindowCapabilities::reports_presentation`, причина отсутствия хранится в
+  возможностях (`without_presentation_feedback`, `presentation_feedback() -> Result<Availability,
+  Unsupported>`): у неё нет глагола, который ответил бы сам. Где ОС отдаёт показ только держателю
+  swap chain (DXGI), презентер передаёт прочитанное цели поверхности:
+  `SurfaceTarget::pre_present_notify(SwapChainStatistics)` (`None | Dxgi(DxgiFrameStatistics)`), хост
+  перебазирует. Ядро: `owner::handlers::PresentationReports` в `WindowDelivery` (любой поток
+  сообщает; новее побеждает; не позже уже сохранённого/отданного — отбрасывается; ещё не наступивший
+  ждёт), `dispatch_frame` кладёт его в запрос. **Источники.** Win32 — `flui-engine` читает
+  `GetFrameStatistics`/`GetLastPresentCount` DX12 swap chain через `wgpu::hal` перед каждым present
+  (единственный production `unsafe` движка, с `expect`), `Win32Surface` перебазирует `SyncQPCTime`
+  по счётчику и меряет период двумя чтениями (`frame_timing::shown_present`). Wayland — глобал
+  `wp_presentation` (часы из `clock_id`, `rustix` `time`), feedback на каждый commit,
+  `presented` → `rebased`; без глобала — `NotOnThisDevice`. Headless — `MockWindow::simulate_presented`,
+  `HeadlessHost::report_presented`. Web, X11 — `NotOnThisPlatform`; winit — `NotYetOnThisHost`.
+  **Решение для владельца:** AppKit, UIKit, Android — `NotYetOnThisHost`
+  (`window::capabilities::PRESENTATION`): `addPresentedHandler` нужен drawable, который wgpu 30 держит
+  у себя (путь — свой `CAMetalLayer` хоста: `makeBackingLayer` с переносом display pass из
+  `drawRect:` в `updateLayer` на AppKit, `layerClass` на UIKit; без прогона на Mac не делал); у
+  Android время показа — у Vulkan swap chain (`VK_GOOGLE_display_timing`, wgpu не читает), а frame
+  timelines называют ожидаемый показ, то есть `target_present`, и требуют кадров от
+  `AChoreographer_postVsyncCallback`. **Frame clock.** `FrameClock::record_presentation`,
+  `last_presentation`, `next_presentation_after` (`PresentationReport`, горизонт сетки
+  `PRESENTATION_GRID_HORIZON` = 240 обновлений); `note_frame_request` записывает отчёт в часы
+  презентации, `pump` ограничивает idle-работу: `target_present`, иначе следующее обновление по
+  сетке отчёта, иначе дедлайн хоста — **решение для владельца** (ADR-0257 п. 3 говорил «иначе
+  хоста»). Тик кадра по-прежнему vsync. `HostInput::Frame` получил `presented`, запись и DTO его
+  несут. Conformance: `presentation_is_reported_exactly_when_claimed` идёт первой (окно ещё в
+  исходном виде: Weston отбрасывает commit свёрнутого окна, Wayland не разворачивает),
+  `WindowFixture::present_and_request_frame`; фикстуры Win32 (своя flip-model DXGI swap chain на
+  D3D11), Wayland, headless. **Тесты** (откат проверен для каждого):
+  `a_presentation_report_rides_the_first_request_at_or_after_it`,
+  `a_platform_stamp_is_rebased_by_its_distance_from_the_reading`,
+  `a_shown_present_is_aged_and_two_reads_measure_the_period`,
+  `statistics_that_name_no_shown_present_place_none`, таблица `presentation_feedback`
+  (`flui-scheduler`, три случая), `a_presentation_report_bounds_the_idle_work_of_a_later_frame`
+  (и без записи в часы, и без использования в `pump`), `a_presentation_and_the_input_before_it_are_on_one_timeline`,
+  строка `HostInput::Frame` в `recording_vocabulary`,
+  `a_window_whose_presentation_reports_disagree_with_its_capabilities_is_caught`,
+  `the_headless_window_conforms_under_every_capability_set` (без инъекции падает),
+  `the_win32_window_conforms`, `the_wayland_window_conforms`,
+  `a_presented_event_names_its_time_and_refresh`, `the_report_follows_the_compositor`,
+  `native_capability_absences`, `the_presentation_report_answers_why_it_is_missing`. Ожидание
+  `a_window_that_claims_what_it_cannot_do_is_caught` стало парой первых проверок (порядок).
+  **Прогоны.** Windows 11, RTX 3070 Ti, 100 Гц: `counter` с индикатором — 477 показанных present за
+  ≈4,8 с, 474 из 476 соседних отчётов через одно обновление, показан present на 3 позади нового,
+  466 из 476 измеренных периодов в пределах 10 мкс от 10 мс; conformance с DXGI — отчёт с периодом
+  10,01 мс. Weston 13 headless (WSL): показ за 0,8 мс до следующего запроса, обновление
+  16,666666 мс; тесты Wayland 31 из 31. **Проверки:** `cargo fmt`; Windows — clippy рабочего
+  пространства `--all-targets -D warnings`; nextest `flui-platform`, `flui-scheduler`,
+  `flui-runtime`, `flui-testing`, `flui-app`, `flui-interaction`, `flui-view` — 437 из 437,
+  `flui-native`, `flui-engine` — 391 из 391; clippy macOS `--all-targets` (LLVM) обычный и с
+  `testing,winit-backend`, Android `--all-targets`, iOS lib `flui-native`; `checks`, `doc-strict`,
+  `wasm-check`, `module-dag` (+`--self-test`, 1 исключение), `globals` (+`--self-test`, 57),
+  `file-length`, `markers`, `testing`, `docs-paths`, `workspace`, `reach`,
+  `recording-vocabulary`; `api-closure` (WSL, nightly) — 4 пакета чисто. WSL Ubuntu 24.04: clippy
+  `flui-native` шести вариантов, `flui-app`, `flui-engine`, `flui --features native` — чисто;
+  nextest `--all-features` под xvfb без тестов Wayland — 351 из 351 (после слияния `main` @
+  `f11b154c6` — 373 из 373), тесты Wayland под Weston — 31
+  из 31; rustdoc `-D warnings --document-private-items` четырёх вариантов. Прогон без X-сервера
+  (`FLUI_HEADLESS=1`, `DISPLAY` снят) нашёл две устаревшие проверки возможностей (`plan`, тесты
+  X11 под winit сравнивали с `ALL`) — исправлены; там же падают тесты реального цикла winit и
+  `linux_preferences`, которым нужен дисплей, под xvfb они зелёные.
+  Не запускалось: Mac, iPhone (#1840; список в PR), Android-устройство, браузер, `cross-typecheck`.
+  **Решения координатора и исправления после ревью (vanyastaff/flui#1943)**, коммитами поверх,
+  слиянием `main` @ `817fb6bbd` (LY68) и @ `680fda761` (LY95: активация; вызовы `capabilities` Wayland
+  несут и активацию, и отчёт о показе, тест активации передаёт статистику презентера; DXGI-тест
+  Win32 уже в группе `desktop-foreground`). Форма обратной связи принята и записана поправкой ADR-0257
+  (`FrameRequest::presented`, `reports_presentation`, `SwapChainStatistics`, п. 3 — граница
+  idle по сетке свежего отчёта). Исправлено: (1) повторное чтение DXGI больше не новый отчёт —
+  `frame_timing::PresentTracker` отбрасывает чтение с тем же `PresentCount` или
+  `SyncRefreshCount` (`a_repeated_read_is_reported_once`, без правила падает); (2)
+  `DXGI_ERROR_FRAME_STATISTICS_DISJOINT` → `SwapChainStatistics::DxgiDisjoint`, трекер забывает
+  прошлое обновление (`a_disjoint_read_measures_no_period_across_it`, без сброса падает); (3)
+  `SAFETY:` движка называет предусловие `Surface::as_hal` и почему оно выполняется; (4)
+  ARCHITECTURE движка называет это единственное место; (5) мёртвые `pub` убраны:
+  `FrameClock::last_presentation` и `PresentationReport` (часы берут момент и интервал,
+  один тип `FramePresented` и одна проверка нулевого интервала, Wayland тоже),
+  `PRESENTATION_GRID_HORIZON` — `pub(crate)`, у `DxgiFrameStatistics` остались
+  `present_count`, `sync_refresh_count`, `sync_qpc_time` (все читает хост); (6) фикстуры Win32
+  и Wayland показывают кадры в своём новом окне, проверка вернулась на прежнее место, ожидание
+  `a_window_that_claims_what_it_cannot_do_is_caught` — прежнее; под Weston проверка после
+  сворачивающих проверок проходит (раньше там `Discarded`); (7) `HeadlessHost::report_presented`
+  следует возможности окна (`HeadlessWindow::with_presentation_reports`,
+  `a_window_that_reports_no_presentation_carries_none`, без проверки падает). Граница сетки — 8
+  обновлений (живой отчёт отстаёт на 3–4, измерено на Windows); `a_presentation_report_bounds_the_idle_work_of_a_later_frame`
+  получил случай устаревшего отчёта (с горизонтом 240 падает, как и таблица `presentation_feedback`).
+  `EventTime::now` — одно чтение часов событий. Android — `NotYetOnThisHost`, пути в gaps
+  (запись 23). **Apple — остаток LY91, в сессию Mac после слияния:** свой `CAMetalLayer` хоста
+  (`makeBackingLayer` с переносом display pass в `updateLayer` на AppKit, `layerClass` на UIKit),
+  `nextDrawable` которого вешает `addPresentedHandler:` на выданный drawable. Проверки после
+  исправлений и слияния LY95: Windows clippy рабочего пространства, nextest семи крейтов — 680 из 680; clippy
+  macOS, Android, iOS lib; `checks`, `doc-strict`, `wasm-check`, гейты; WSL clippy шести
+  вариантов и крейтов, xvfb 397 из 397, Weston 38 из 38, rustdoc, `api-closure` (4 пакета чисто).
+  `cross-typecheck` (гейт строки) — в CI этого PR.
 
 ## Отступление от порядка, решённое владельцем
 
@@ -4027,6 +4439,10 @@ graph LR
 - 2026-10-21, позже: LY8/LY9 доводятся до приёмки, затем LY22. Зависимость LY22 от text-ime и
   teardown снята: это черновики от 2026-10-05, их файлы не держит ни одна ветка, а сами спеки
   пишутся заново на новом устройстве ядра. У LY47 и LY48 она остаётся.
+- 2026-10-28: сначала доводятся send-flip, text-ime, teardown и persistence (их `tasks.md`
+  переписаны); LY47, LY48 и LY50 ждут задач этих спек, названных в «Зависит от». Исключение —
+  persistence P4, P5 и остаток P6: они строятся прямо на шве возможностей, поэтому порядок —
+  LY50, затем LY52 (шов и провайдер `Storage`), затем они. LY52 от них не зависит.
 
 ## Работа вне серии: LY8 и LY9
 
