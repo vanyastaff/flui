@@ -112,6 +112,9 @@ windows = { workspace = true, features = [
     "Win32_UI_Shell",
     "Win32_Graphics_Gdi",
     "Win32_Devices_Display",
+    # A display's colour: `IDXGIOutput6::GetDesc1` (colour space and peak).
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Dwm",
     "Win32_System_LibraryLoader",
     "Win32_System_Registry",

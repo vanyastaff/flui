@@ -17,6 +17,9 @@
 //! too (`HostDisplays::move_window`), which forgets what its link measured
 //! on the screen it left.
 //!
+//! A screen's colour is its trait collection's display gamut and, from
+//! iOS 16, its potential extended-dynamic-range headroom.
+//!
 //! `display_snapshot` runs on every owner wake, so the last sample is kept and
 //! read again only after an event marked it stale: a screen or scene
 //! notification, a window changing screen, or a new link period.
@@ -41,9 +44,9 @@ use objc2::runtime::ProtocolObject;
 use objc2::{MainThreadMarker, Message};
 use objc2_foundation::{NSNotification, NSNotificationCenter, NSObjectProtocol, NSRect};
 use objc2_ui_kit::{
-    UIDevice, UISceneDidDisconnectNotification, UISceneWillConnectNotification, UIScreen,
-    UIScreenDidConnectNotification, UIScreenDidDisconnectNotification,
-    UIScreenModeDidChangeNotification, UIUserInterfaceIdiom,
+    UIDevice, UIDisplayGamut, UISceneDidDisconnectNotification, UISceneWillConnectNotification,
+    UIScreen, UIScreenDidConnectNotification, UIScreenDidDisconnectNotification,
+    UIScreenModeDidChangeNotification, UITraitEnvironment, UIUserInterfaceIdiom,
 };
 use parking_lot::Mutex;
 
@@ -56,7 +59,7 @@ use super::link_rate::{
     FrameRatePreference, FrameRateRange, FrameRateRangeProperty, LinkPeriod, ScreenPeriods,
     frame_rate_preference,
 };
-use super::screen::{SameObject, ScreenLedger, change_screen};
+use super::screen::{IosPotentialHeadroom, SameObject, ScreenLedger, change_screen, screen_color};
 use crate::display::source::DisplaySource;
 use crate::error::PlatformError;
 use crate::owner::apple::ios::{NativeOwner, ScreenIdentity, ScreenNumber};
@@ -139,6 +142,14 @@ impl IosDisplays {
             // CONTENT, not for the display itself.
             let mut display = DisplayInfo::new(id, name, bounds, scale).with_primary(index == 0);
             display.refresh_period = self.link_periods.lock().period_of(number);
+            // SAFETY: `displayGamut` is read on the main thread, which
+            // `marker` proves, as UIKit's trait collections require.
+            let p3 = unsafe { screen.traitCollection().displayGamut() } == UIDisplayGamut::P3;
+            let potential = self
+                .version
+                .since::<IosPotentialHeadroom>()
+                .map(|_| screen.potentialEDRHeadroom());
+            display = display.with_color(Ok(screen_color(p3, potential)));
             displays.push(display);
         }
         ledger.release_unlisted(&live);
