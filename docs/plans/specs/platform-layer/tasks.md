@@ -3946,6 +3946,41 @@ graph LR
   (winit, окна X11, предпочтения Linux); гейт API-замыкания под nightly со std всех шести
   целей — 4 пакета чисты. Не запускалось: Mac и iPhone (vanyastaff/flui#1840; список в PR),
   Android-устройство, браузер, композитор с `wp_color_management_v1`, `cross-typecheck` (CI).
+  **Исправления после ревью (#1942).** Слиты `main` @ `f11b154c6` (#1936) и `817fb6bbd` (#1939).
+  Решения координатора записаны поправкой ADR-0256 (§2, §5, §6). Дефекты: (1) рендерер держит
+  новейший отчёт дисплея отдельно от того, по которому настроена поверхность
+  (`Renderer::set_display_color`, `next_color_request`): пересоздание и восстановление решают по
+  новейшему, держимая поверхность перенастраивается; `WindowDisplay` несёт `color`, смена профиля
+  доходит до презентации, и раннеры desktop, Android, iOS (`follow_display_color` перед кадром)
+  и Web передают цвет рендереру; (2) высокий диапазон с запасом не выше белого — SDR (Windows с
+  яркостью SDR выше пика панели, Wayland с целевым пиком ниже опорного белого); (3) Wayland: для
+  PQ запас только от `target_luminance`, `max` первичного объёма (потолок кривой 10 000 кд/м²)
+  берётся лишь для расширенных кривых; (4) Android: исключение в отчёте цвета одного дисплея
+  снимает только его цвет (`Err(NotOnThisDevice)`), выборка остаётся; (5) doc-комментарий
+  `single_screen` в `display/web.rs` вернулся к своей функции. Решения: охват решает `WideGamut`
+  (sRGB-дисплей — `Srgb8`); `SurfaceColorSpace::SRGB` удалён (читателя не было); `ColorMode`
+  Android: `OsWindowOptions::android` (`AndroidWindowOptions`, `AndroidColorMode`), `flui-app`
+  ставит его из `AppConfig::surface_color`, окно Activity зовёт `Window.setColorMode` на главном
+  потоке Java с API 26 (`WindowColorMode`). Мелкое: `ResolvedSurfaceColor` держит
+  `ColorRequest`; `p3_or_srgb` — один помощник для Apple и Android; цветовое пространство
+  Windows — перечисление `OutputColorSpace`. **Не покрыто:** слушатель
+  `Display.registerHdrSdrRatioChangedListener` (нужен Java-класс в `FluiView`): сдвиг HDR/SDR на
+  Android читается только при смене конфигурации и возобновлении — записано в `docs/gaps.md`.
+  Тесты (откат проверен для каждого bash-скриптом: строковая подстановка, тест, `git checkout`
+  файла): `a_high_range_display_without_headroom_over_white_gets_no_hdr`,
+  `wide_gamut_follows_the_display_gamut`, `a_recreation_after_the_display_changes_resolves_its_new_range`
+  (`flui-engine`, GPU), `a_display_colour_change_reaches_the_renderer_before_the_frame`
+  (`surface_lifecycle_matrix`), `display_delivery_contract` (цвет в `WindowDisplay`),
+  `wayland_output_model` (PQ без цели), `os_display_classification` (яркость выше пика),
+  `an_activity_asks_for_the_colour_mode_of_its_surface`,
+  `the_android_colour_mode_follows_the_requested_surface_colour`;
+  `a_display_whose_colour_report_failed_keeps_its_other_facts` проверяет чистую часть, путь JNI
+  только типизирован. Проверки: Windows clippy рабочего пространства (обычный и с
+  `winit-backend,flui/native`), nextest `flui-platform`, `flui-native`, `flui-app` — 447 из 447,
+  `flui-engine --features testing` в один поток — 96 из 96; clippy `flui-app` и `flui-native`
+  на Android `--all-targets`, macOS `--all-targets`, iOS lib (`flui-app` с LLVM и пустым
+  `SDKROOT`), wasm32 lib; `wasm-check`, `wasm-test` — 51, `native-features`, `checks`. WSL:
+  clippy девяти вариантов, xvfb `--all-features` — 477 из 477, Weston 13 — 32 из 32.
 - [x] **LY68** — доказательство сложилось, ADR-0255
   не меняется. **Код.** `text/apple/composition.rs` — чистая модель документа клавиатуры (UTF-16, как
   считает UIKit): marked-диапазон, выделение, правки `setMarkedText`/`insertText`/`unmarkText`/
