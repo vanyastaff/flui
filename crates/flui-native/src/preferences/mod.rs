@@ -20,7 +20,7 @@
 
 #[cfg(any(
     target_arch = "wasm32",
-    all(target_os = "linux", feature = "wayland"),
+    linux_host,
     target_os = "macos",
     target_os = "ios",
     target_os = "android",
@@ -35,7 +35,7 @@ pub(crate) mod android;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) mod apple;
 pub(crate) mod headless;
-#[cfg(all(target_os = "linux", feature = "wayland"))]
+#[cfg(linux_host)]
 pub(crate) mod linux;
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) mod web;

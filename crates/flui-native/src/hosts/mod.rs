@@ -13,7 +13,7 @@ pub(crate) mod android;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) mod apple;
 pub(crate) mod headless;
-#[cfg(all(target_os = "linux", feature = "wayland"))]
+#[cfg(any(wayland_host, x11_host))]
 pub(crate) mod linux;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web;
@@ -30,8 +30,10 @@ pub use apple::IOSPlatform;
 #[cfg(target_os = "macos")]
 pub use apple::MacOSPlatform;
 pub use headless::HeadlessPlatform;
-#[cfg(all(target_os = "linux", feature = "wayland"))]
+#[cfg(wayland_host)]
 pub use linux::WaylandPlatform;
+#[cfg(x11_host)]
+pub use linux::X11Platform;
 #[cfg(target_arch = "wasm32")]
 pub use web::WebPlatform;
 #[cfg(windows)]

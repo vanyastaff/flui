@@ -9,7 +9,7 @@
 //! - `windows`: UI Automation (`accesskit_windows`);
 //! - `apple`: NSAccessibility on macOS (`accesskit_macos`);
 //! - `linux`: AT-SPI (`accesskit_unix`), which every Linux host's windows
-//!   hand out (the Wayland host's and the winit host's);
+//!   hand out (the Wayland, X11 and winit hosts');
 //! - `headless`: `FakeAccessibility`, which counts what was published while active.
 //!
 //! The adapters have no feature: every window of a host that has one hands it

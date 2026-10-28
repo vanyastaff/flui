@@ -369,14 +369,15 @@ impl WindowDelivery {
     /// publication raised elsewhere publishes nothing, and the owner's next
     /// read publishes what changed.
     ///
-    /// The winit, AppKit, UIKit and web windows publish this way; the Win32
-    /// window publishes through its window procedure, and the Android window,
-    /// which its looper shares, through [`Self::publish_through`].
+    /// The winit, X11, AppKit, UIKit and web windows publish this way; the
+    /// Win32 window publishes through its window procedure, and the Android
+    /// window, which its looper shares, through [`Self::publish_through`].
     #[cfg(any(
         all(
             feature = "winit-backend",
             any(target_os = "windows", target_os = "macos", target_os = "linux")
         ),
+        all(target_os = "linux", feature = "x11"),
         target_os = "macos",
         target_os = "ios",
         target_arch = "wasm32",
@@ -462,7 +463,8 @@ impl WindowDelivery {
     /// (a renderer and its surface).
     #[cfg(any(
         windows,
-        all(target_os = "linux", feature = "wayland"),
+        wayland_host,
+        x11_host,
         all(test, not(target_arch = "wasm32"))
     ))]
     pub(crate) fn clear_then(&self, on_retired: impl FnOnce() + Send + 'static) {

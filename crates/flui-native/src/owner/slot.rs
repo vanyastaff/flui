@@ -320,10 +320,13 @@ impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V
     }
 }
 
-/// How the winit host reads its window table.
-#[cfg(all(
-    feature = "winit-backend",
-    any(target_os = "windows", target_os = "macos", target_os = "linux")
+/// How the winit and X11 hosts read their window tables.
+#[cfg(any(
+    all(
+        feature = "winit-backend",
+        any(target_os = "windows", target_os = "macos", target_os = "linux")
+    ),
+    all(target_os = "linux", feature = "x11")
 ))]
 impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V> {
     /// A clone of the value under `key`.
@@ -362,13 +365,8 @@ impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V
     }
 
     /// A snapshot of the keys.
-    #[cfg(any(
-        all(
-            feature = "winit-backend",
-            any(target_os = "windows", target_os = "macos", target_os = "linux")
-        ),
-        target_os = "macos"
-    ))]
+    // The X11 host walks its table by entries.
+    #[cfg(any(winit_host, target_os = "macos"))]
     pub(crate) fn keys(&self) -> Vec<K> {
         self.cell
             .with(|map| map.keys().copied().collect())

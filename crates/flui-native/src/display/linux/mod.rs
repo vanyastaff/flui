@@ -1,9 +1,9 @@
 //! The Linux display source: the outputs of a Wayland compositor or an X
 //! server, their refresh rates, and a notice when they change.
 //!
-//! The displays of the native Wayland host (`wayland::WaylandDisplaySource`)
-//! and of the winit host on Linux. It connects to the compositor on a
-//! connection of its own, apart from any window system's, and reads two kinds
+//! The displays of the native Wayland host (`wayland::WaylandDisplaySource`),
+//! of the native X11 host and of the winit host on Linux. It connects to the
+//! compositor on a connection of its own, apart from any window system's, and reads two kinds
 //! of state:
 //!
 //! - **Wayland**: `wl_output` (version 2 to 4) with `zxdg_output_v1` for the
@@ -21,16 +21,6 @@
 //!
 //! Which protocol is read follows the rule winit uses ([`protocol`]), so the
 //! source reads the compositor the windows live on.
-
-// The Wayland host and the winit host read the source; a build with only the
-// `x11` feature has no host to read it until the native X11 host exists.
-#![cfg_attr(
-    not(feature = "wayland"),
-    allow(
-        dead_code,
-        reason = "with `x11` alone no host reads the display source until the native X11 host exists"
-    )
-)]
 
 #[cfg(any(
     all(target_os = "linux", any(feature = "wayland", feature = "x11")),

@@ -24,9 +24,8 @@
 
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(crate) use event_loop::{
-    LiveOutputs, LoopWaker, LoopWindow, OutputFacts, OutputName, PortalSlot, WaylandDisplays,
-    WaylandHost, WaylandLoop, WaylandNotices, WaylandPreferences, WaylandState, WindowSeed,
-    WindowTable,
+    LiveOutputs, LoopWaker, LoopWindow, OutputFacts, OutputName, WaylandDisplays, WaylandHost,
+    WaylandLoop, WaylandState, WindowSeed, WindowTable,
 };
 
 pub(crate) mod wait {
@@ -274,8 +273,7 @@ mod event_loop {
     use std::time::Duration;
 
     use flui_platform::{
-        DisplayId, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice,
-        WindowAppearance, WindowId,
+        DisplayId, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice, WindowId,
     };
     use parking_lot::Mutex;
     use rustix::event::{EventfdFlags, PollFd, PollFlags, Timespec, eventfd, poll};
@@ -295,11 +293,11 @@ mod event_loop {
     use crate::executor::BackgroundExecutor;
     use crate::host;
     use crate::owner::app_delivery::AppDelivery;
+    use crate::owner::linux::{LinuxNotices, LinuxPreferences, PortalSlot, SessionLoop, xdg_open};
     use crate::owner::notices::{LifecycleHooks, NoticeChannel, StaleOnWake};
     use crate::owner::panic_boundary::contain_owner_callback;
     use crate::owner::signal::OwnerSignal;
     use crate::owner::slot::{OwnerCell, OwnerMap};
-    use crate::owner::sources::SystemPreferenceSource;
     use crate::owner::watch::Watch;
     use crate::owner::{DirectOwnerHooks, OpenWindowError, OwnerHooks, OwnerPlatform};
     use crate::platform::{AppHandler, Platform, PlatformExecutor};
@@ -333,7 +331,7 @@ mod event_loop {
         fn preferences(
             executor: &BackgroundExecutor,
             signal: &Arc<OwnerSignal>,
-        ) -> Arc<dyn WaylandPreferences>;
+        ) -> Arc<dyn LinuxPreferences>;
 
         /// The sources of the host's system notices (logind, the kernel's
         /// memory pressure), started once the owner can deliver what they
@@ -341,7 +339,7 @@ mod event_loop {
         fn host_notices(
             executor: &BackgroundExecutor,
             signal: &Arc<OwnerSignal>,
-        ) -> Arc<dyn WaylandNotices>;
+        ) -> Arc<dyn LinuxNotices>;
     }
 
     /// The compositor's outputs as the loop and its windows reach them.
@@ -413,43 +411,6 @@ mod event_loop {
         pub(crate) display: DisplayId,
         /// Its device pixels per logical pixel.
         pub(crate) scale: f64,
-    }
-
-    /// The Settings portal's preferences as the loop keeps them: the
-    /// snapshot, and the colour scheme every window follows.
-    pub(crate) trait WaylandPreferences: SystemPreferenceSource + Send + Sync {
-        /// The colour scheme the portal reports.
-        fn appearance(&self) -> WindowAppearance;
-    }
-
-    /// The sources of the host's system notices the loop keeps.
-    pub(crate) trait WaylandNotices: Send + Sync {
-        /// Deliver what the sources queued since the loop's last turn,
-        /// oldest first, through `owner`'s notice channel and its
-        /// application delivery.
-        fn deliver(&self, owner: &WaylandLoop);
-    }
-
-    /// The portal's source as a window reaches it: weakly, through the loop,
-    /// which starts it as it runs and stops it as it ends.
-    #[derive(Clone, Default)]
-    pub(crate) struct PortalSlot(Arc<Mutex<Option<Weak<dyn WaylandPreferences>>>>);
-
-    impl PortalSlot {
-        /// The colour scheme the portal reports; light while it is not
-        /// running.
-        pub(crate) fn appearance(&self) -> WindowAppearance {
-            self.source()
-                .map_or(WindowAppearance::Light, |source| source.appearance())
-        }
-
-        fn source(&self) -> Option<Arc<dyn WaylandPreferences>> {
-            self.0.lock().as_ref().and_then(Weak::upgrade)
-        }
-
-        fn set(&self, source: Option<&Arc<dyn WaylandPreferences>>) {
-            *self.0.lock() = source.map(Arc::downgrade);
-        }
     }
 
     /// What the loop asks of a window it holds: the window feature's
@@ -787,8 +748,8 @@ mod event_loop {
     /// What the loop starts as it runs and stops as it ends.
     #[derive(Default)]
     struct Sources {
-        preferences: Option<Arc<dyn WaylandPreferences>>,
-        host_notices: Option<Arc<dyn WaylandNotices>>,
+        preferences: Option<Arc<dyn LinuxPreferences>>,
+        host_notices: Option<Arc<dyn LinuxNotices>>,
     }
 
     /// The Wayland host's loop: the connection to the compositor and what the
@@ -809,9 +770,8 @@ mod event_loop {
         displays: Arc<dyn WaylandDisplays>,
         notices: Arc<dyn NoticeChannel>,
         portal: PortalSlot,
-        start_preferences:
-            fn(&BackgroundExecutor, &Arc<OwnerSignal>) -> Arc<dyn WaylandPreferences>,
-        start_host_notices: fn(&BackgroundExecutor, &Arc<OwnerSignal>) -> Arc<dyn WaylandNotices>,
+        start_preferences: fn(&BackgroundExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxPreferences>,
+        start_host_notices: fn(&BackgroundExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxNotices>,
         /// The sources the loop keeps while it runs.
         sources: Mutex<Sources>,
         /// The display watch, which the owner thread starts and stops.
@@ -1039,19 +999,6 @@ mod event_loop {
         /// The window the compositor last activated.
         pub(crate) fn active_window(&self) -> Option<WindowId> {
             self.windows.active()
-        }
-
-        /// The application's handler about a phase of the session ending;
-        /// with none bound the session goes on.
-        pub(crate) fn session_end(&self, phase: SessionEndPhase) -> SessionEndAnswer {
-            self.app
-                .session_end(phase)
-                .or_resume(SessionEndAnswer::Proceed)
-        }
-
-        /// A system notice for the application, through the notice channel.
-        pub(crate) fn notice(&self, notice: SystemNotice) {
-            self.notices.dispatch(notice);
         }
 
         /// Run turns for `span` on the owner thread, for a test that drives
@@ -1356,20 +1303,20 @@ mod event_loop {
         }
 
         fn open_url(&self, url: &str) {
-            crate::owner::linux::xdg_open(url.as_ref());
+            xdg_open(url.as_ref());
         }
 
         fn reveal_path(&self, path: &Path) {
             // The extension, not the path: the name is the user's data.
             tracing::info!(extension = ?path.extension(), "revealing a path");
             if let Some(parent) = path.parent() {
-                crate::owner::linux::xdg_open(parent.as_os_str());
+                xdg_open(parent.as_os_str());
             }
         }
 
         fn open_path(&self, path: &Path) {
             tracing::info!(extension = ?path.extension(), "opening a path");
-            crate::owner::linux::xdg_open(path.as_os_str());
+            xdg_open(path.as_os_str());
         }
 
         /// The file chooser portal is the system capability crate's
@@ -1419,6 +1366,18 @@ mod event_loop {
                 .source()
                 .ok_or(PlatformError::PreferencesDeferred)?
                 .sample()
+        }
+    }
+
+    impl SessionLoop for WaylandLoop {
+        fn notice(&self, notice: SystemNotice) {
+            self.notices.dispatch(notice);
+        }
+
+        fn session_end(&self, phase: SessionEndPhase) -> SessionEndAnswer {
+            self.app
+                .session_end(phase)
+                .or_resume(SessionEndAnswer::Proceed)
         }
     }
 

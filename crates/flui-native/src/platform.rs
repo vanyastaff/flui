@@ -506,7 +506,8 @@ impl<H: Host> HostPlatform<H> {
         target_os = "macos",
         target_os = "ios",
         target_arch = "wasm32",
-        all(target_os = "linux", feature = "wayland")
+        wayland_host,
+        x11_host
     ))]
     pub(crate) fn try_from_parts<E>(
         window_shared: impl FnOnce(WindowPositions<WindowRefOf<H>>) -> WindowShared<H>,

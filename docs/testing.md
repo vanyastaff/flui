@@ -151,7 +151,9 @@ The first three are `cargo xtask gate`, the non-test half. Locally, `checks`
 skips typos, taplo or lychee with a message when they are not installed; CI
 passes `--strict`, which makes a missing one a failure. The flui-native step
 of `test` needs `xvfb-run` on Linux (`apt install xvfb`), runs without it on
-Windows, and is skipped with a message on macOS. On Linux the native Wayland
+Windows, and is skipped with a message on macOS. Its `x11_window` harness, the
+native X11 host's window conformance, starts an Xvfb and an openbox of its own
+and needs `openbox` too (`apt install openbox`). On Linux the native Wayland
 host's tests (`wayland_window::`) run in a step of their own against the
 compositor `WAYLAND_DISPLAY` names, and skip themselves without one; CI starts a
 headless Weston (`weston --backend=headless --socket=…`) and sets

@@ -1,102 +1,252 @@
-//! The native Linux hosts' tables: Wayland's.
+//! The native Linux hosts' tables: Wayland's and X11's (ADR-0151 §10, §11).
+//!
+//! Both fill the window, displays, accessibility, preference, lifecycle and
+//! storage positions, and keep the session's sources (the Settings portal,
+//! logind, the kernel's memory pressure) in the same shape
+//! (`owner::linux`). Input, text input, the clipboard and drag and drop are
+//! `Absent` until each host speaks their protocols; a desktop has no haptics
+//! and no system bars.
 
 use std::sync::Arc;
 
 use crate::accessibility::linux::UnixAccessibility;
-use crate::display::linux::protocol::Environment;
-use crate::display::linux::wayland::WaylandDisplaySource;
 use crate::error::PlatformError;
 use crate::executor::BackgroundExecutor;
 use crate::host::{Absent, Host, position};
 use crate::lifecycle::linux::HostNoticeSource;
 use crate::lifecycle::notice::SystemNotices;
 use crate::owner::app_delivery::AppDelivery;
-use crate::owner::linux::wayland::{
-    WaylandDisplays, WaylandHost, WaylandLoop, WaylandNotices, WaylandPreferences,
-};
+use crate::owner::linux::{LinuxNotices, LinuxPreferences};
 use crate::owner::notices::NoticeChannel;
 use crate::owner::signal::OwnerSignal;
 use crate::platform::HostPlatform;
 use crate::preferences::linux::PreferenceSource;
 use crate::storage::UserDataDirs;
-use crate::window::linux::wayland::{WaylandWindow, WaylandWindows};
 
-/// The Wayland host's table.
-///
-/// What the host carries yet: windows and their state and commands, the
-/// displays, the preferences, the lifecycle, accessibility and data
-/// directories. Input, text input, the clipboard and drag and drop are
-/// `Absent` until the host speaks their protocols.
-#[derive(Debug)]
-pub struct Wayland;
+#[cfg(wayland_host)]
+pub use wayland::WaylandPlatform;
+#[cfg(x11_host)]
+pub use x11::X11Platform;
 
-impl Host for Wayland {
-    const NAME: &'static str = "Wayland";
-
-    type Loop = WaylandLoop;
-    type Window = WaylandWindow;
-    type Displays = WaylandLoop;
-    type Input = Absent<position::Input>;
-    type Text = Absent<position::Text>;
-    type Accessibility = UnixAccessibility;
-    type Clipboard = Absent<position::Clipboard>;
-    type Drag = Absent<position::Drag>;
-    // A desktop compositor has no haptic hardware to drive.
-    type Haptics = Absent<position::Haptics>;
-    type Preferences = WaylandLoop;
-    type Lifecycle = WaylandLoop;
-    // A desktop window styles no system bars.
-    type Chrome = Absent<position::Chrome>;
-    type Storage = UserDataDirs;
+/// The channel both hosts' notices take to the application.
+fn system_notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {
+    Arc::new(SystemNotices::new(Arc::clone(app)))
 }
 
-impl WaylandHost for Wayland {
-    fn displays() -> Arc<dyn WaylandDisplays> {
-        Arc::new(WaylandDisplaySource::new())
+/// The Settings portal on the session bus, for both hosts.
+fn portal(executor: &BackgroundExecutor, signal: &Arc<OwnerSignal>) -> Arc<dyn LinuxPreferences> {
+    PreferenceSource::new(executor, signal)
+}
+
+/// logind on the system bus and the kernel's memory pressure, for both hosts.
+fn session_notices(
+    executor: &BackgroundExecutor,
+    signal: &Arc<OwnerSignal>,
+) -> Arc<dyn LinuxNotices> {
+    Arc::new(HostNoticeSource::start(executor, signal))
+}
+
+#[cfg(wayland_host)]
+mod wayland {
+    use std::sync::Arc;
+
+    use super::{
+        Absent, AppDelivery, BackgroundExecutor, Host, HostPlatform, LinuxNotices,
+        LinuxPreferences, NoticeChannel, OwnerSignal, PlatformError, UnixAccessibility,
+        UserDataDirs, position,
+    };
+    use crate::display::linux::protocol::Environment;
+    use crate::display::linux::wayland::WaylandDisplaySource;
+    use crate::owner::linux::wayland::{WaylandDisplays, WaylandHost, WaylandLoop};
+    use crate::window::linux::wayland::{WaylandWindow, WaylandWindows};
+
+    /// The Wayland host's table.
+    #[derive(Debug)]
+    pub struct Wayland;
+
+    impl Host for Wayland {
+        const NAME: &'static str = "Wayland";
+
+        type Loop = WaylandLoop;
+        type Window = WaylandWindow;
+        type Displays = WaylandLoop;
+        type Input = Absent<position::Input>;
+        type Text = Absent<position::Text>;
+        type Accessibility = UnixAccessibility;
+        type Clipboard = Absent<position::Clipboard>;
+        type Drag = Absent<position::Drag>;
+        // A desktop compositor has no haptic hardware to drive.
+        type Haptics = Absent<position::Haptics>;
+        type Preferences = WaylandLoop;
+        type Lifecycle = WaylandLoop;
+        // A desktop window styles no system bars.
+        type Chrome = Absent<position::Chrome>;
+        type Storage = UserDataDirs;
     }
 
-    fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {
-        Arc::new(SystemNotices::new(Arc::clone(app)))
+    impl WaylandHost for Wayland {
+        fn displays() -> Arc<dyn WaylandDisplays> {
+            Arc::new(WaylandDisplaySource::new())
+        }
+
+        fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {
+            super::system_notices(app)
+        }
+
+        fn preferences(
+            executor: &BackgroundExecutor,
+            signal: &Arc<OwnerSignal>,
+        ) -> Arc<dyn LinuxPreferences> {
+            super::portal(executor, signal)
+        }
+
+        fn host_notices(
+            executor: &BackgroundExecutor,
+            signal: &Arc<OwnerSignal>,
+        ) -> Arc<dyn LinuxNotices> {
+            super::session_notices(executor, signal)
+        }
     }
 
-    fn preferences(
-        executor: &BackgroundExecutor,
-        signal: &Arc<OwnerSignal>,
-    ) -> Arc<dyn WaylandPreferences> {
-        PreferenceSource::new(executor, signal)
-    }
+    /// The native Wayland platform: windows on the compositor `WAYLAND_DISPLAY`
+    /// names, over libwayland.
+    pub type WaylandPlatform = HostPlatform<Wayland>;
 
-    fn host_notices(
-        executor: &BackgroundExecutor,
-        signal: &Arc<OwnerSignal>,
-    ) -> Arc<dyn WaylandNotices> {
-        Arc::new(HostNoticeSource::start(executor, signal))
+    impl HostPlatform<Wayland> {
+        /// Connect to the compositor whose socket `WAYLAND_DISPLAY` names, the
+        /// one the display source reads too. The calling thread owns the
+        /// platform: it opens the windows and runs the loop.
+        ///
+        /// # Errors
+        /// [`PlatformError::Init`] when `WAYLAND_DISPLAY` names no socket, no
+        /// compositor answers on it, libwayland cannot be loaded, or the
+        /// compositor lacks the globals a window needs.
+        pub fn new() -> Result<Self, PlatformError> {
+            let socket = Environment::current()
+                .wayland_socket_path()
+                .ok_or_else(|| PlatformError::Init {
+                    message: "Wayland: WAYLAND_DISPLAY names no socket (a bare name needs \
+                              XDG_RUNTIME_DIR)"
+                        .to_owned(),
+                })?;
+            Self::try_from_parts(WaylandWindows::new, |_| {
+                WaylandLoop::new::<Wayland>(&socket)
+            })
+        }
     }
 }
 
-/// The native Wayland platform: windows on the compositor `WAYLAND_DISPLAY`
-/// names, over libwayland.
-pub type WaylandPlatform = HostPlatform<Wayland>;
+#[cfg(x11_host)]
+mod x11 {
+    use std::sync::Arc;
 
-impl HostPlatform<Wayland> {
-    /// Connect to the compositor whose socket `WAYLAND_DISPLAY` names, the
-    /// one the display source reads too. The calling thread owns the
-    /// platform: it opens the windows and runs the loop.
+    use super::{
+        Absent, AppDelivery, BackgroundExecutor, Host, HostPlatform, LinuxNotices,
+        LinuxPreferences, NoticeChannel, OwnerSignal, PlatformError, UnixAccessibility,
+        UserDataDirs, position,
+    };
+    use crate::display::linux::source::LinuxDisplays;
+    use crate::owner::linux::x11::{HostDisplays, X11Connection, X11Host, X11Loop};
+    use crate::window::linux::x11::{WindowAtoms, X11Window, X11Windows};
+
+    /// The X11 host's table.
+    #[derive(Debug)]
+    pub struct X11;
+
+    impl Host for X11 {
+        const NAME: &'static str = "X11";
+
+        type Loop = X11Loop;
+        type Window = X11Window;
+        type Displays = X11Loop;
+        type Input = Absent<position::Input>;
+        type Text = Absent<position::Text>;
+        type Accessibility = UnixAccessibility;
+        type Clipboard = Absent<position::Clipboard>;
+        type Drag = Absent<position::Drag>;
+        // A desktop has no haptic hardware to drive.
+        type Haptics = Absent<position::Haptics>;
+        type Preferences = X11Loop;
+        type Lifecycle = X11Loop;
+        // A desktop window styles no system bars.
+        type Chrome = Absent<position::Chrome>;
+        type Storage = UserDataDirs;
+    }
+
+    impl X11Host for X11 {
+        /// The X server's outputs, through RandR on a connection of their own.
+        fn displays() -> Arc<dyn HostDisplays> {
+            LinuxDisplays::new()
+        }
+
+        fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {
+            super::system_notices(app)
+        }
+
+        fn preferences(
+            executor: &BackgroundExecutor,
+            signal: &Arc<OwnerSignal>,
+        ) -> Arc<dyn LinuxPreferences> {
+            super::portal(executor, signal)
+        }
+
+        fn host_notices(
+            executor: &BackgroundExecutor,
+            signal: &Arc<OwnerSignal>,
+        ) -> Arc<dyn LinuxNotices> {
+            super::session_notices(executor, signal)
+        }
+    }
+
+    /// The native X11 platform: windows on one connection to the X server
+    /// named by `DISPLAY`, read by a loop on the thread that builds it, with
+    /// the server's displays, the AT-SPI bridge, the Settings portal and the
+    /// host's notices.
     ///
-    /// # Errors
-    /// [`PlatformError::Init`] when `WAYLAND_DISPLAY` names no socket, no
-    /// compositor answers on it, libwayland cannot be loaded, or the
-    /// compositor lacks the globals a window needs.
-    pub fn new() -> Result<Self, PlatformError> {
-        let socket = Environment::current()
-            .wayland_socket_path()
-            .ok_or_else(|| PlatformError::Init {
-                message: "Wayland: WAYLAND_DISPLAY names no socket (a bare name needs \
-                          XDG_RUNTIME_DIR)"
-                    .to_owned(),
-            })?;
-        Self::try_from_parts(WaylandWindows::new, |_| {
-            WaylandLoop::new::<Wayland>(&socket)
-        })
+    /// Built and run on one thread, which owns its windows. `current_platform`
+    /// picks it in an X11 session when the winit host is not built.
+    pub type X11Platform = HostPlatform<X11>;
+
+    impl HostPlatform<X11> {
+        /// Connect to the X server and build the platform on the calling
+        /// thread.
+        ///
+        /// # Errors
+        /// [`PlatformError::Init`] when libxcb cannot be loaded, no X server
+        /// answers, or the loop's wake descriptor cannot be made.
+        pub fn new() -> Result<Self, PlatformError> {
+            let connection = X11Connection::connect()?;
+            let atoms = WindowAtoms::intern(&connection)?;
+            let windows = Arc::clone(&connection);
+            Self::try_from_parts(
+                |positions| X11Windows::new(positions, windows, atoms),
+                |windows| X11Loop::new::<X11>(connection, Arc::clone(windows) as _),
+            )
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::any::TypeId;
+
+    use crate::accessibility::linux::UnixAccessibility;
+    use crate::host::Host;
+
+    /// Every native Linux window hands out the AT-SPI bridge, with no feature
+    /// of its own (ADR-0151 §15): each table names the adapter, not `Absent`,
+    /// so a window a screen reader cannot see does not compile into a host.
+    #[test]
+    fn linux_windows_hand_out_the_at_spi_bridge() {
+        #[cfg(wayland_host)]
+        assert_eq!(
+            TypeId::of::<<super::wayland::Wayland as Host>::Accessibility>(),
+            TypeId::of::<UnixAccessibility>()
+        );
+        #[cfg(x11_host)]
+        assert_eq!(
+            TypeId::of::<<super::x11::X11 as Host>::Accessibility>(),
+            TypeId::of::<UnixAccessibility>()
+        );
     }
 }

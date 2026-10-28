@@ -33,7 +33,7 @@ pub(crate) fn from_language_tags(
 /// no locale at all. Otherwise `LANGUAGE`'s colon-separated list is the
 /// priority order, and the messages locale stands in when that list names
 /// nothing usable. Each name reads as [`posix_language_tag`] reads it.
-#[cfg(any(all(target_os = "linux", feature = "wayland"), test))]
+#[cfg(any(linux_host, test))]
 pub(crate) fn from_posix_environment(var: impl Fn(&str) -> Option<String>) -> Option<Vec<Locale>> {
     let messages = ["LC_ALL", "LC_MESSAGES", "LANG"]
         .into_iter()
@@ -51,7 +51,7 @@ pub(crate) fn from_posix_environment(var: impl Fn(&str) -> Option<String>) -> Op
 /// The charset names no locale. Of the modifiers, a script one (`@latin`,
 /// `@cyrillic`, `@devanagari`) does and becomes the tag's script, as in
 /// `sr_RS@latin`, `sr-Latn-RS`; the others (`@euro`) are dropped.
-#[cfg(any(all(target_os = "linux", feature = "wayland"), test))]
+#[cfg(any(linux_host, test))]
 fn posix_language_tag(value: &str) -> String {
     let (name, modifier) = value
         .split_once('@')

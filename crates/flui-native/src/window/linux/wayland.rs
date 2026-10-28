@@ -667,9 +667,10 @@ mod toplevel {
     use crate::host::{self, WindowFacets, WindowPositions};
     use crate::host_window::{CoreHostWindow, HostWindow, OwnerThreadToken};
     use crate::owner::OpenWindowError;
+    use crate::owner::linux::PortalSlot;
     use crate::owner::linux::wayland::{
-        LiveOutputs, LoopWaker, LoopWindow, OutputName, PortalSlot, WaylandDisplays, WaylandLoop,
-        WaylandState, WindowSeed, WindowTable,
+        LiveOutputs, LoopWaker, LoopWindow, OutputName, WaylandDisplays, WaylandLoop, WaylandState,
+        WindowSeed, WindowTable,
     };
     use crate::owner::window_delivery::{Publication, Retirement, WindowDelivery};
     use crate::text::WindowTextInput;

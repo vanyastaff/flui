@@ -409,6 +409,10 @@ color = "0.3.3"
 # bytemuck: zero-copy Pod/Zeroable derives used by flui-engine.
 bytemuck = { version = "1.24", features = ["derive"] }
 
+# cfg_aliases: flui-native's build.rs names its compound `cfg` conditions once.
+# The version winit and wgpu already pull into the lock.
+cfg_aliases = "0.2"
+
 # === Engine build-script dependencies ===
 # wgsl_bindgen: WGSL → Rust binding codegen, used in flui-engine's build.rs only.
 # Pins naga ^30 (same as wgpu 30) and naga_oil ^0.23 (same as workspace); the
