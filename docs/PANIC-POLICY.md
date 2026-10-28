@@ -70,20 +70,29 @@ rule and its costs are in
 A panic in application code is contained where the framework can still go
 on, and ends the process only when nothing is left to continue. The rule is
 [ADR-0258](adr/ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md),
-proposed and not implemented: today a caught callback panic is reported and
-then resumed, and on Win32, AppKit and UIKit it reaches the OS entry's
+accepted and not yet implemented: today a caught callback panic is reported
+and then resumed, and on Win32, AppKit and UIKit it reaches the OS entry's
 boundary, which aborts.
+
+The boundary for application code is `flui-app`'s owner dispatch, not the OS
+entry. Every application operation runs under its own catch there, so no
+application panic reaches `os_entry`. A panic that does reach an OS entry is
+a defect of FLUI itself, a panic in the native host's code or a handler of
+`flui-app` that let one out, and the entry keeps the answer it has for any
+panic: a failure the OS understands, or, at the Win32 window procedure and
+the AppKit and UIKit entries that have none, the end of the process
+(ADR-0151 §16).
 
 | Path | Outcome |
 |---|---|
-| Ordinary close of the last window, including a flush that misses its deadline with the file still whole | exit 0 |
+| Ordinary close of the last window, including a flush that misses its deadline with the file still whole | exit 0, within `EXIT_BUDGET` (6 s) of the framework's exit work |
 | `build` | the subtree becomes an `ErrorView`; the process runs on |
 | An input handler, post-frame callback, lifecycle observer, command, or close-request handler | one `CallbackPanic` report; the UI runtime and the process run on |
-| Layout or paint | one `frame_failure` report per failure; the frame is retried with backoff |
+| Layout or paint | one `frame_failure` report per failure; the frame is retried with backoff, at most one attempt per `FAILURE_RETRY_CAP` (1 s) once the streak is long |
 | Closing a UI runtime that is not the last | one `CallbackPanic` report; what was not yet destroyed is retained |
 | `dispose` or a `Drop` while the last window closes, or at loop exit | the flush registry is written, services and pools stop, then exit 101 with the panic's text |
-| A panic that reaches an OS entry (`os_entry`) | pending the owner's decision (ADR-0258 §4); today an abort on Win32, AppKit and UIKit |
-| A `BUG:` invariant | a framework defect: contained like any panic on the paths above, with `internal_invariant` set in its report; at an OS entry it ends the process |
+| A `BUG:` invariant inside an application operation | contained like any panic on the paths above, with `internal_invariant` set in its report |
+| A panic that reaches an OS entry (`os_entry`): a framework defect, never application code | the entry's answer to the OS; at the Win32 window procedure, the cloak hook and the AppKit and UIKit entries without one, an abort without the exit flush |
 | A value whose own fields panic twice in their drop glue | abort, a documented limit (ADR-0127) |
 
 The first failure is the one reported and resumed; later ones are logged and
@@ -92,11 +101,16 @@ slot until the exit order has written what the application persisted; it is
 then resumed with `resume_unwind`, which does not run the panic hook again.
 
 A persisted document's codec (`Document::encode`, `Document::decode`) runs
-under its own containment: a panic in `encode` publishes nothing and leaves
-the value in memory and the file on disk untouched; the document's status
-becomes `Failed` with `PersistError::Panicked { during: CodecStep }`, and the
-next `set` works. The first failure stays in the status until the next
-success. Its payload is retained per ADR-0127.
+under its own containment
+([ADR-0262](adr/ADR-0262-persisted-documents-over-a-byte-storage-capability.md)
+§4): a panic in `encode` publishes nothing and leaves the value in memory and
+the file on disk untouched; the document's status becomes `Failed` with
+`PersistError::Panicked { during: CodecStep::Encode, message }`, and the next
+`set` works. A panic in `decode` leaves the file untouched and the document
+not loaded, and `load` may run again. The first failure stays in the status
+until the next success. Its payload is retained per ADR-0127. A codec panic
+is reported in the document's status, never as a `CallbackPanic`, and never
+ends the process.
 
 ## Enforcement
 

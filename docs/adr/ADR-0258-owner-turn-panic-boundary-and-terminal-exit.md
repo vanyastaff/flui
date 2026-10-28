@@ -1,11 +1,10 @@
 # ADR-0258: A user-code panic is contained at the owner turn, and only a terminal failure ends the process, after the flush
 
-- **Status:** Proposed. §4 (what an OS entry does with a panic), §6's retry bound and §7's exit
-  budget are pending the owner's decision; their options are laid out and none is chosen. Not
-  implemented: today a caught panic is reported and then resumed, and on Win32 it reaches the
-  window procedure's boundary, which aborts.
+- **Status:** Accepted (2026-10-28). Not implemented: today a caught panic is reported and then
+  resumed, and on Win32 it reaches the window procedure's boundary, which aborts; the exit order
+  has no flush step and no shared deadline, and the frame retry has no backoff.
 - **Date:** 2026-10-28
-- **Supersedes (on acceptance):** [ADR-0035](ADR-0035-lifecycle-consolidation-and-frames-enabled.md)
+- **Supersedes:** [ADR-0035](ADR-0035-lifecycle-consolidation-and-frames-enabled.md)
   §5, its sentence "the first panic resumes after restoration and notification" only (a quit
   observer's panic is contained by §1 here and resumes only when §2 classifies it terminal); and the
   statement of `crates/flui-runtime/ARCHITECTURE.md` that a callback panic "still leaves the
@@ -22,6 +21,16 @@
   writes), [ADR-0260](ADR-0260-session-end-flushes-before-it-tears-down.md) (the session-end exit),
   [ADR-0097](ADR-0097-no-process-global-state-gate.md) (the terminal slot is host state, not a
   `static`)
+- **Sources:** `rust-windowing/winit@0c7372808c59c0d46ae777959e65e773381dc9e9`
+  `winit-win32/src/event_loop/runner.rs` (`catch_unwind`, `panic_error`) and
+  `winit-win32/src/event_loop.rs` (`dispatch_peeked_messages`); the Rust Reference, *Panic*,
+  "Unwinding across FFI boundaries" (<https://doc.rust-lang.org/reference/panic.html>); Qt 6,
+  *Exception Safety* (<https://doc.qt.io/qt-6/exceptionsafety.html>); Flutter, *Handling errors in
+  Flutter* (<https://docs.flutter.dev/testing/errors>); Kubernetes, *Pod Lifecycle*, "Termination of
+  Pods" (<https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/>);
+  `chromium/chromium@b57678612bff5bf5c88c18146bdf5878292e6384`
+  `content/browser/renderer_host/debug_urls.cc` and
+  `chrome/android/javatests/src/org/chromium/chrome/test/crash/IntentionalCrashTest.java`
 
 ## Context and problem statement
 
@@ -120,11 +129,12 @@ terminal failure):
 
 1. the main window shuts down;
 2. each remaining UI runtime is destroyed, and the queued turns run, each under its own catch;
-3. **the flush registry is written**: `FlushHost::flush_within(now + SERVICE_SHUTDOWN_DEADLINE)`,
-   which waits for the write in flight and writes the latest unconfirmed bytes of every name
-   (ADR-0259 §5). It runs whether or not the slot is occupied;
-4. services are cancelled and joined against what is left of the same deadline;
-5. the execution pools join with their grace;
+3. the exit deadline is taken (§7), and **the flush registry is written**:
+   `FlushHost::flush_within(exit.services())`, which waits for the write in flight and writes the
+   latest unconfirmed bytes of every name (ADR-0259 §5). It runs whether or not the slot is
+   occupied;
+4. services are cancelled and joined against what is left of the same `exit.services()`;
+5. the execution pools join against what is left of `exit.end()`;
 6. the clipboard and the redraw window are released;
 7. the code: a terminal payload in the slot resumes (`std::panic::resume_unwind`), so the process
    exits with 101 and the standard hook's text; an `AppRunError` returns `Err`; otherwise `Ok`.
@@ -138,17 +148,68 @@ checked by clippy only. A user `panic::set_hook` that re-enters a UI runtime run
 boundary and is not covered. A value whose own fields panic twice in their drop glue aborts before
 any container regains control (ADR-0127).
 
-### §4. What an OS entry does with a panic — pending owner decision
+### §4. An OS entry keeps its answer; 101 is the outcome of what `flui-app` catches
 
-**Proposed — pending owner decision.** §1 and §2 keep every application panic away from an OS
-entry: they are caught in `flui-app` before the call point. What reaches `os_entry` is a panic in
-FLUI's own host code, or one a missing boundary let through. The question is whether such a panic,
-when it is not a `BUG:` invariant, may still end the process with 101 after the flush, or ends it
-where it is, as `os_entry` does today on Win32, AppKit and UIKit (`AfterPanic::Abort`). The options
-are 4a, 4b and 4c under "Pros and cons of the options for §4" below.
+Chosen option for §4: 4b. `os_entry` and `AfterPanic` stay as they are (ADR-0151 §16): an entry
+answers the OS after a panic, and the Win32 window procedure, the cloak hook and the AppKit and
+UIKit entries that have no safe answer end the process. Application code reaches the platform only
+through `flui-app`'s `AppHandler` and `WindowHandler` and the callbacks `flui-app` installs, and
+every one of them runs the application's work under §1 and §2, so it returns to the call point
+normally after an application panic: it never takes the call point's `or_resume` path, and no
+application panic reaches an OS entry.
 
-The answer decides which rows of the exit-code matrix (`user_panic_exit_code_matrix`) expect 101
-and which expect an abort, and what the native run of the window-procedure path asserts.
+```rust
+// flui-native, unchanged
+pub(crate) enum AfterPanic<A, R> {
+    Answer(fn(A) -> R),
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "ios"))]
+    Abort,
+}
+// flui-app: every handler method contains the application work it starts
+impl flui_native::AppHandler for RunnerHandler { // and `WindowHandler for WindowRoutes`
+    fn session_end(&mut self, phase: SessionEndPhase) -> SessionEndAnswer {
+        // §1: contained per operation; §2: terminal → host slot, quit; never resumes
+    }
+    // … each method the same
+}
+```
+
+What still reaches an OS entry is a defect of FLUI itself: a panic in the native host's own code,
+or a handler method of `flui-app` that let a panic out. Both are framework defects whatever their
+text, so the boundary does not read `BUG:` there: every panic at an entry gets the entry's answer,
+or ends the process where the entry has none.
+
+Why the abort stays for a host defect, instead of a parked payload and 101 (4a):
+
+- **What a flush would add is small.** The flush registry writes each publish as it arrives (one
+  write in flight per name, ADR-0259 §5), and a write is a temporary file renamed over the target,
+  so an abort leaves the previous or the new whole file. Parking a host panic to flush at exit
+  saves at most the last publish still in flight, and only for framework defects.
+- **The cleanup would run over the state that panicked.** §3's steps 1 and 2 destroy windows and UI
+  runtimes, which re-enters the window procedure and the native host whose state the panic left
+  torn. Qt supports recovering from an exception in its event machinery only to exit the loop and
+  clean up, and calls GUI work after it unsafe (*Exception Safety*); a FLUI exit order is GUI work.
+- **It would be a second exit mechanism.** A park form of `AfterPanic`, a parked state in the Win32
+  and AppKit owners that answers `DefWindowProcW` and posts the quit, and a payload resumed out of
+  `Platform::run`, all for a class §1 and §2 already empty of application panics. winit parks a
+  panic in its Win32 runner and resumes it after the dispatch (`runner.rs`, `catch_unwind`;
+  `event_loop.rs`, `dispatch_peeked_messages`) because winit's callbacks are the application's;
+  in FLUI that role is `flui-app`'s, and §2's host slot is the park.
+- **Fail fast keeps the evidence.** An abort leaves the OS crash report (Windows Error Reporting,
+  the macOS crash reporter) with the process as the defect left it; the panic text is already in
+  the log, written by `os_entry` before it ends the process. Chromium crashes the browser process
+  on a browser defect and tests that path by crashing the real process
+  (`debug_urls.cc`, `IntentionalCrashTest`); Flutter contains framework-level errors in callbacks
+  and reports them (*Handling errors in Flutter*), as §1 does, and leaves engine-level defects to
+  the engine.
+- **An unwind cannot leave an `extern "system"` or `extern "C"` frame:** since Rust 1.81 it aborts
+  (the Rust Reference, *Panic*). An answer or an abort is all an entry can do without the park.
+
+The exit-code matrix therefore has no abort row reachable from application code: a row per
+handler method proves that an application panic returns to the call point
+(`an_application_panic_never_leaves_a_handler`), and the native run proves it through the real
+window procedure. A host defect aborting is a documented outcome of a framework bug, not a row a
+user can reach.
 
 ### §5. A destructor does not resume a panic while user values live
 
@@ -163,28 +224,87 @@ unwind already in progress is retained (ADR-0127 §2), never run.
 
 After a frame is dropped (`FailureDisposition::FrameDropped`), the presentation keeps a streak
 `k: u32` (`saturating_add`) and schedules its next attempt at `T · 2^e` after the failure, where `T`
-is the presentation's frame interval and `e = min(k − 1, 6)` for `k ≥ 1`, capped at one second. The
-exponent is clamped before the shift, so the shift cannot overflow, and the `Duration`
-multiplication is `checked_mul`, saturating to the cap. A healthy frame resets the streak.
+is the presentation's frame interval and `e = min(k − 1, 10)` for `k ≥ 1`, capped at
+`FAILURE_RETRY_CAP` (one second). The exponent is clamped before the shift, so the shift cannot
+overflow, and the `Duration` multiplication is `checked_mul`, saturating to the cap. The clamp is
+10, not lower, so that the cap is what bounds the interval at every frame interval down to one
+millisecond (`2^10 · 1 ms > 1 s`): with a clamp of 6, a 120 Hz presentation would settle at
+533 ms and a 240 Hz one at 267 ms, and the steady rate would depend on the display. A healthy frame
+resets the streak.
+
+```rust
+// flui-runtime
+pub const FAILURE_RETRY_CAP: Duration = Duration::from_secs(1);
+const FAILURE_RETRY_MAX_EXPONENT: u32 = 10;
+fn failure_retry_delay(frame_interval: Duration, streak: NonZeroU32) -> Duration {
+    let exponent = (streak.get() - 1).min(FAILURE_RETRY_MAX_EXPONENT);
+    frame_interval
+        .checked_mul(1 << exponent)
+        .map_or(FAILURE_RETRY_CAP, |delay| delay.min(FAILURE_RETRY_CAP))
+}
+```
 
 The attempt is an entry in the presentation's deadline queue, which `UiRuntime::next_wake` already
 reads, so the host's wake deadline carries it without new wiring, and a pump woken at the deadline
 makes the attempt. Only a discrete user action, a key press or a pointer button, makes an attempt
 early, once per window per interval; a signal write, a ticker, pointer motion and the failed paint's
-own writes only confirm the deadline. In the steady state that is about one attempt a second, and
-each failure is still one `frame_failure` report.
+own writes only confirm the deadline. In the steady state that is one attempt per
+`FAILURE_RETRY_CAP`, and each failure is still one `frame_failure` report.
 
-**Proposed — pending owner decision:** the bound a test holds this to, and how it is measured on
-the virtual clock. The options are 6a, 6b and 6c under "Pros and cons of the options for §6"
-below.
+**What a test holds it to (option 6d, the properties against the named cap).** The headless host's
+virtual clock records the instant of each `frame_failure` report of a paint that always panics, with
+no input; the rows run at frame intervals of 1/60, 1/120 and 1/240 s. The test asserts the
+properties the requirement names, not the instants the formula yields:
 
-### §7. The exit budget — pending owner decision
+- **backoff:** each interval between reports is at least `T` and at least the one before it;
+- **bounded rate:** once an interval reaches `FAILURE_RETRY_CAP`, every later one lies in
+  `[FAILURE_RETRY_CAP, FAILURE_RETRY_CAP + T)`, so the steady rate is at most one attempt per cap;
+- **liveness:** over the ten caps that follow, at least nine reports arrive without input.
 
-**Proposed — pending owner decision.** The exit order of §3 is bounded by its constants today:
-`SERVICE_SHUTDOWN_DEADLINE` (5 s, shared by the flush and the services) and
-`EXECUTION_SHUTDOWN_GRACE` (5 s for each of the two pools, joined one after the other), 15 s in all.
-Whether the contract names that bound, and where it lives, is open; the options are 7a, 7b and 7c
-under "Pros and cons of the options for §7" below.
+The rows read `FAILURE_RETRY_CAP` and `T` rather than a count such as "8 to 12 in ten seconds", so a
+change of the cap or of the doubling keeps them, while a hot loop, a retry that stops, or a rate
+that depends on the display fails them. The exact instants are not asserted: they restate the
+formula, and a test that restates the code passes with the code's own mistake. The clamp is pinned
+apart, by `a_failure_streak_past_thirty_three_keeps_the_one_second_cap`, which drives the streak
+past the width of the shift.
+
+### §7. One exit deadline bounds the framework's work at exit
+
+The framework's part of the exit order, steps 3 to 6 of §3, runs against one deadline taken when
+step 3 starts:
+
+```rust
+// flui-app, runner
+pub(crate) const EXIT_BUDGET: Duration = Duration::from_secs(6);
+pub(crate) const SERVICE_SHUTDOWN_DEADLINE: Duration = Duration::from_secs(5); // within EXIT_BUDGET
+struct ExitDeadline { services: Instant, end: Instant }
+impl ExitDeadline {
+    fn start(now: Instant) -> Self; // services = now + SERVICE_SHUTDOWN_DEADLINE, end = now + EXIT_BUDGET
+    fn services(&self) -> Instant;  // the flush, then the services
+    fn end(&self) -> Instant;       // the pools and the native release
+}
+// flui-runtime: the pools join against an instant, not a grace each
+impl ExecutionServices { pub fn shutdown(&self, deadline: Instant); }
+```
+
+The flush and the services keep the five seconds they have today, and the pools join each against
+what is left of `end`, so they get at least one second and every second the services did not use.
+`EXECUTION_SHUTDOWN_GRACE` is deleted: a grace per pool, joined one after the other, made the bound
+the sum of the steps (15 s), and any new step would have added to it unseen.
+
+Steps 1 and 2 run application code (destructors, `on_quit`), which cannot be interrupted, so the
+deadline starts after them, as the session-end budget starts at the framework's own work
+(ADR-0260). The bound is the framework's: an application destructor that blocks delays the exit by
+its own time.
+
+A pool job cut at the deadline loses nothing the application can still read: the UI runtimes are
+gone, the services have finished or were abandoned, and the pools cancel their root token first,
+so a future stops at its next await point regardless of the grace. Only a compute closure that runs
+past the deadline is abandoned mid-run, and the process ends under it as it does today past 5 s.
+
+This is the shape a shared shutdown budget takes elsewhere: Kubernetes gives a pod one termination
+grace period that its `preStop` hook and its `SIGTERM` handling share, and kills what is left when
+it ends (*Pod Lifecycle*, "Termination of Pods").
 
 ### Consequences
 
@@ -198,8 +318,14 @@ under "Pros and cons of the options for §7" below.
   callback's external effects is the application's responsibility, as it is today.
 - Bad, because terminal failures are held in a slot until the exit order runs: a hang in a service
   that ignores cancellation delays the exit code by the service deadline.
-- Neutral, because `BUG:` invariants keep their meaning: a framework defect still ends the process
-  where §4 says, and `CallbackPanic` carries `internal_invariant` so a handler can tell them apart.
+- Bad, because a defect in the native host's own code, at an entry with no answer, still aborts
+  without the exit flush: what was published but not yet renamed into place is lost, and the code
+  is the OS's abort code, not 101 (§4).
+- Bad, because the pools get at least one second at exit instead of five each: a compute closure
+  that runs longer is abandoned sooner (§7).
+- Neutral, because `BUG:` invariants keep their meaning: a framework defect inside an owner
+  operation is contained like any panic, with `internal_invariant` set in its `CallbackPanic` so a
+  handler can tell them apart, and one that reaches an OS entry ends the process there (§4).
 
 ### Confirmation
 
@@ -214,18 +340,33 @@ was flushed before the panic resumed is what tells the fix from the old code, no
   `dispose_panic_on_last_window_close_resumes_after_flush`,
   `capture_drop_panic_keeps_the_first_failure_and_still_flushes`,
   `a_write_past_the_deadline_leaves_a_whole_file_and_exits_ok`, and `user_panic_exit_code_matrix`,
-  one row per path, its expectation for the window-procedure path set by §4.
+  one row per path of PANIC-POLICY's table; no row expects an abort.
+- §4: `an_application_panic_never_leaves_a_handler` (`flui-app`, headless): one row per method of
+  `flui-app`'s `AppHandler` and `WindowHandler`, each driven through the headless platform with an
+  application operation that panics; the row fails when the panic unwinds out of the platform's
+  call (the call point's `or_resume`), which on Win32, AppKit and UIKit is the abort. The native
+  run below covers the same paths through the real window procedure. `cargo xtask panic-boundary`
+  keeps every OS entry behind `os_entry` (ADR-0151 §16).
 - §5: `user_drop_panic_inside_an_unwind_is_retained` (a child: `dispose` panics and a future's
   `Drop` panics during the same unwind, without an abort).
-- §6: `a_repeating_paint_panic_backs_off_but_keeps_retrying`,
-  `a_single_paint_panic_redraws_without_input`, `a_pointer_move_does_not_bypass_the_backoff`,
+- §6: `a_repeating_paint_panic_backs_off_but_keeps_retrying` (the three properties, one row per
+  frame interval: 1/60, 1/120 and 1/240 s), `a_single_paint_panic_redraws_without_input`,
+  `a_pointer_move_does_not_bypass_the_backoff`,
   `a_failure_streak_past_thirty_three_keeps_the_one_second_cap`, and
   `the_runner_sleeps_until_the_failure_retry_deadline`.
+- §7: `a_hung_service_and_compute_job_end_within_the_exit_budget` (`flui-app`, headless runner): a
+  service that ignores cancellation and a compute closure that never returns; the loop returns
+  within `EXIT_BUDGET` plus one second of slack, measured on the wall clock (the pools join on real
+  threads). The old code, 5 s plus 5 s per pool, fails it.
 - The native exit codes are confirmed by a dated run of the acceptance app through flui-driver's
-  `os` lane: a panic in a Save handler leaves the process running, a panic in `dispose` on the last
-  window close exits 101. How the panic is injected into a native process is pending the owner's
-  decision; its options are under "Pros and cons of the options for injecting a panic into a
-  native run" below.
+  `os` lane, which reads the exit code of the process it launched (`gone { kind: process, exit }`):
+  Alt+F4 exits 0 within `EXIT_BUDGET`; a panic in a Save handler leaves the process running and
+  the next input works; a panic in `dispose` on the last window close exits 101, never
+  `0xC0000409`. The panic comes from a fixture binary, the example `acceptance_app_faults`, which
+  builds the acceptance app with the fault named by its argument (`save-panic`, `dispose-panic`)
+  through the same constructor seam the headless rows use; the launcher the other native runs use,
+  the example `acceptance_app`, has no fault switch. The lane launches the fixture with the
+  argument and drives it with OS input, so the panic travels the real window procedure.
 
 ## Pros and cons of the options
 
@@ -265,24 +406,32 @@ answers `DefWindowProcW` from then on and posts the quit; `Platform::run` hands 
 the loop ends, and §3's exit order resumes it. A `BUG:` payload still aborts.
 
 - Good, because every non-`BUG:` panic, wherever caught, ends with the flush and 101.
-- Bad, because the loop goes on pumping messages, if only to the default procedure, over host state
-  the panic may have left torn, which is what the abort in `os_entry` prevents.
-- Bad, because it adds a third `AfterPanic` form, a payload channel out of `Platform::run` and a
-  `BUG:` test in the host, for panics that §1 and §2 already keep out of the entry when the
-  application caused them.
+- Bad, because the exit order then destroys windows and UI runtimes over the host state the panic
+  left torn, re-entering the window procedure it parked.
+- Bad, because it adds a park form of `AfterPanic`, a parked state in the Win32 and AppKit owners
+  and a payload resumed out of `Platform::run`: a second exit mechanism beside §2's host slot, for
+  panics that §1 and §2 already keep out of the entry when the application caused them.
+- Bad, because telling a `BUG:` payload from another is arbitrary at the entry: a `RefCell` borrow
+  error or an index out of range in host code is as much a framework defect as a `BUG:` expect,
+  and would get the flush the other does not.
+- Bad, because what the flush adds is the last publish still in flight: the registry writes each
+  publish as it comes, and a rename leaves a whole file either way.
 
-#### 4b. OS entries keep aborting; 101 is the outcome of what `flui-app` catches
+#### 4b. OS entries keep their answer or abort; 101 is the outcome of what `flui-app` catches (chosen)
 
 `os_entry` stays as it is. Every application panic is caught by §1 or §2 before the call point and
 never reaches an entry, so application failures give the outcomes of §3. A panic that does reach an
 entry is a host defect, or a missing boundary in `flui-app`, and ends the process there.
 
-- Good, because the host keeps one rule at its boundary, and pumps nothing over torn state.
-- Good, because no new host surface is needed.
-- Bad, because a non-`BUG:` panic in FLUI's own host code aborts without the flush: the exit-code
-  matrix has an abort row that a user can still reach through a framework defect.
-- Bad, because a boundary missing in `flui-app` shows up as an abort rather than as 101; the matrix
-  must have a row per OS-entry path to catch it.
+- Good, because the host keeps one rule at its boundary, and runs nothing over torn state.
+- Good, because no new host surface is needed: the boundary and its gate stand as they are.
+- Good, because the abort leaves the OS crash report of a framework defect, with the panic text
+  already logged by `os_entry`.
+- Bad, because a panic in FLUI's own host code, at an entry with no answer, aborts without the exit
+  flush.
+- Bad, because a boundary missing in `flui-app` shows up as an abort rather than as 101; a row per
+  handler method (`an_application_panic_never_leaves_a_handler`) catches it on the headless host,
+  where the same escape unwinds out of the platform's call.
 
 #### 4c. A terminal failure flushes and then ends the process where it is caught
 
@@ -298,7 +447,7 @@ inline and the process calls `std::process::exit(101)` there.
 ### Pros and cons of the options for §6
 
 The schedule is deterministic on the headless host's virtual clock, so a test can drive it without
-real time. What it asserts is open.
+real time.
 
 #### 6a. A corridor of attempts over a window
 
@@ -308,6 +457,8 @@ ten: at least 8 and at most 12.
 - Good, because the lower bound proves the loop wakes without input, and the upper one that it does
   not spin.
 - Bad, because the numbers depend on `T` and the cap, and change when either does.
+- Bad, because a count at one frame interval passes a rate that depends on the display, which the
+  earlier clamp of 6 produced at 120 and 240 Hz.
 
 #### 6b. An upper bound only (N attempts a second)
 
@@ -320,7 +471,19 @@ Assert the instants of the first attempts (`T`, `2T`, `4T`, …) and that the in
 second past the exponent's clamp.
 
 - Good, because it pins the formula itself, overflow clamp included.
+- Bad, because the test restates the code: a mistake in the formula is copied into the expectation.
 - Bad, because any change of policy rewrites the test, even one that keeps both properties.
+
+#### 6d. The properties against the named cap, at several frame intervals (chosen)
+
+Backoff (intervals non-decreasing, at least `T`), bounded rate (once at the cap, every interval in
+`[cap, cap + T)`) and liveness (at least nine reports in ten caps without input), read against
+`FAILURE_RETRY_CAP` and `T`, at 60, 120 and 240 Hz.
+
+- Good, because one table holds both halves of the requirement, no hot loop and no stall.
+- Good, because a change of the cap or of the doubling keeps the test, and a rate that depends on
+  the display fails it.
+- Bad, because the cap becomes a public constant of `flui-runtime`, read by the tests.
 
 ### Pros and cons of the options for §7
 
@@ -329,17 +492,20 @@ second past the exponent's clamp.
 The contract states the exit is bounded by `SERVICE_SHUTDOWN_DEADLINE` plus the pools' grace, 15 s
 today, and the native run asserts that bound.
 
-- Good, because there is one source of truth: the constants the code uses.
-- Bad, because 15 s is long for a user who closed a window, and nothing makes it shorter.
+- Good, because the constants the code uses are the only source.
+- Bad, because the bound is a sum: each new step with a grace of its own adds to it unseen.
+- Bad, because 15 s is long for a process whose last window has closed: a relaunch of a
+  single-instance application, an installer or an update waits on it.
 
-#### 7b. A named exit budget the exit order shares
+#### 7b. One exit deadline the exit order shares (chosen)
 
-One constant (for example `SERVICE_SHUTDOWN_DEADLINE` plus one second) bounds the whole exit; each
-step takes what the previous left.
+`EXIT_BUDGET`, six seconds, bounds steps 3 to 6; the flush and the services keep their five, and
+the pools take what is left.
 
-- Good, because the bound is short and stated once, and a test can read the constant.
-- Bad, because the pools then join with less than their grace when services are slow, and a
-  compute job is abandoned sooner.
+- Good, because the bound is stated once, holds by construction, and a test can read it.
+- Good, because the flush keeps the time it has today.
+- Bad, because the pools join with less than their former grace when services are slow, and a
+  compute closure that runs past the deadline is abandoned sooner.
 
 #### 7c. No bound in the contract
 
@@ -354,16 +520,22 @@ The tests assert only that the loop returns `Ok` and the process exits 0.
 
 - Good, because one binary serves every row.
 - Bad, because a fault switch read from the environment sits in the path of a binary that is also
-  run normally, and reading it is process-global.
+  run normally, and an environment is inherited: a variable left in a shell reaches every later
+  run of the launcher, the persistence and text-input runs with it.
 
-#### A separate fixture binary built with the fault seam
+#### A separate fixture binary built with the fault seam (chosen)
 
-The acceptance app takes its faults as a constructor argument; a fixture binary builds it with the
-fault set, and the `os` lane launches that binary.
+The acceptance app takes its faults as a constructor argument; a fixture binary,
+the example `acceptance_app_faults`, reads the fault from its own argument in `main` and builds the
+app with it, and the `os` lane launches that binary with the argument.
 
-- Good, because the shipped launcher has no fault switch, and the seam is the same one the headless
-  rows use.
-- Bad, because it is one more binary to build and keep in step with the launcher.
+- Good, because the launcher of the other native runs has no fault switch, and the seam is the
+  same one the headless rows use.
+- Good, because an argument belongs to one launch; nothing is inherited.
+- Good, because the panic is triggered by OS input on the real control, so it travels the window
+  procedure as a user's would, as Chromium's crash tests drive the real browser process to its
+  crash (`IntentionalCrashTest`).
+- Bad, because it is one more example to build; it shares the app's module and adds only a `main`.
 
 #### A driver action that injects the fault
 
@@ -371,11 +543,16 @@ flui-driver's agent, which every debug app hosts (ADR-0239), gains an action tha
 the next Save or `dispose`.
 
 - Good, because no extra binary and no environment switch: only debug builds have the agent.
-- Bad, because it adds a fault verb to the driver protocol (ADR-0238) for one test family.
+- Bad, because it adds a fault verb to the driver protocol (ADR-0238) for one test family, and the
+  agent would have to know the application's fault seam.
 
 ## More information
 
 The requirements behind this record: a callback panic keeps the process, a teardown panic exits
-101 after the flush, and no abort is reachable from application code. Revisit §4 if a host gains an OS entry whose default answer is known to be
-safe after any panic; revisit §6 when a presentation's frame interval is not fixed (a variable
-refresh rate), since `T` is read from it.
+101 after the flush, and no abort is reachable from application code.
+
+Revisit §4 if a host gains an OS entry whose default answer is known to be safe after any panic,
+or if the flush registry stops writing each publish as it comes (a host defect would then lose more
+than the write in flight). Revisit §6 when a presentation's frame interval is not fixed (a variable
+refresh rate), since `T` is read from it. Revisit §7's numbers after a dated native run measures
+the exit on a slow disk.

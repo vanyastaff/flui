@@ -11,7 +11,7 @@
   still holds (the kind rule forbids any core crate naming devtools, so no in-framework consumer
   can form a cycle), and the compile cost is already paid (every app that links devtools builds
   the tree stack through the facade).
-- **Superseded-by (on acceptance):** [ADR-0261](ADR-0261-dropping-an-owner-ends-its-observation.md)
+- **Superseded-by:** [ADR-0261](ADR-0261-dropping-an-owner-ends-its-observation.md)
   §1, for §3's "Teardown honesty" sentences on a `BuildOwner` dropped without
   `clear_tree_observer` only: the owner's drop calls `detached()` once. The negative consequence and
   the follow-up about a teardown hook go with them; the rest of §3 stands.

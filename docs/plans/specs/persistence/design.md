@@ -398,8 +398,8 @@ In-src `storage::tests::file_store_interruption_matrix`: обрыв после t
 ## ADR
 
 Нужен: новые контракты `flui-platform-api`, `flui-view`, `flui-app`, `flui-widgets` и facade.
-**ADR (номер назначит оркестратор) «Persistence: byte storage capability, flush registry and
-versioned documents».** Решение:
+**ADR-0262 (`Proposed`; было «Persistence: byte storage capability, flush registry and
+versioned documents»).** Решение:
 
 1. `flui-platform-api::Storage` — асинхронное чтение и синхронно принимаемая публикация байтов;
    через границу IO идут только байты и версии. Данные пишутся с CAS под короткой

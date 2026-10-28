@@ -1,11 +1,10 @@
 # ADR-0261: Dropping a build owner ends its tree observation
 
-- **Status:** Proposed. §1 is not implemented: `BuildOwner`'s `Drop` reclaims its key claims only
-  (`crates/flui-view/src/owner/build_owner.rs`). §2, how teardown tests prove that a closed UI
-  runtime released what it owned, is pending the owner's decision; its options are laid out and
-  none is chosen.
+- **Status:** Accepted (2026-10-28). Not implemented: `BuildOwner`'s `Drop` reclaims its key claims
+  only (`crates/flui-view/src/owner/build_owner.rs`), and `flui-testing` has no `DropLedger`; the
+  tests that count drops today each keep a probe of their own.
 - **Date:** 2026-10-28
-- **Supersedes (on acceptance):** [ADR-0040](ADR-0040-tree-observation-seam.md) §3, the "Teardown
+- **Supersedes:** [ADR-0040](ADR-0040-tree-observation-seam.md) §3, the "Teardown
   honesty" item's sentences "A `BuildOwner` dropped without `clear_tree_observer` emits no
   `detached()` — embedders that install must clear (install/clear symmetry)", and the matching
   negative consequence and follow-up ("A UI runtime-teardown hook that guarantees
@@ -16,7 +15,14 @@
   that holds a failure retains ownership),
   [ADR-0258](ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md) §5 (a destructor does not
   resume while user values live), [ADR-0097](ADR-0097-no-process-global-state-gate.md) (a counter
-  in the framework would be a `static`)
+  in the framework would be a `static`), [ADR-0243](ADR-0243-one-testing-kit-per-layer.md) (a
+  double two test files need lives in the kit)
+- **Sources:** LeakCanary, *How LeakCanary works*
+  (<https://square.github.io/leakcanary/fundamentals-how-leakcanary-works/>);
+  `flutter/flutter@97cd226ec5ee4c4075b8516ea294152dba1fbfcc`
+  `packages/flutter/lib/src/foundation/memory_allocations.dart`;
+  `chromium/chromium@b57678612bff5bf5c88c18146bdf5878292e6384`
+  `content/web_test/browser/leak_detector.h`
 
 ## Context and problem statement
 
@@ -50,8 +56,8 @@ For §1:
 2. A teardown hook in the UI runtime that calls `clear_tree_observer` before dropping the owner.
 3. Keep the embedder's obligation.
 
-For §2 (pending): debug counters in the framework, ownership sentinels in the acceptance app, or the
-`TreeObserver` itself; see "Pros and cons of the options for §2" below.
+For §2: 2a, debug counters in the framework; 2b, ownership sentinels planted by the test's
+application from one ledger in the testing kit; 2c, the `TreeObserver` itself.
 
 ## Decision
 
@@ -73,14 +79,60 @@ by a close that holds a failure (ADR-0123), the observer's `Arc` is retained, no
 called (ADR-0127 §2–3). Such a stream ends without `detached()`, as it does today for an observer
 that panicked.
 
-### §2. How a teardown test proves the release — pending owner decision
+### §2. A teardown test proves the release with sentinels from one ledger in the testing kit
 
-**Proposed — pending owner decision.** A closed UI runtime must release every element, render
-object, animation controller, ticker, text and scroll controller it created, and its routes, overlay
-entries and hero flights, and a test must say "created equals released". Which mechanism counts is
-open: framework debug counters, ownership sentinels the acceptance app plants, or the observer
-stream. Whichever is chosen, the typed refusals of stale handles after a UI runtime is dropped
-(`OwnerGone`, `Closed`) are kept as the second proof that the UI runtime itself is gone.
+Chosen option for §2: 2b. A closed UI runtime must release every element, render object,
+animation controller, ticker, text and scroll controller it created, and its routes, overlay
+entries and hero flights, and a test must say "created equals released". The test's application
+plants a sentinel in each value it hands the framework, and the sentinel's `Drop` is what counts:
+
+```rust
+// flui-testing; flui::testing::DropLedger
+#[derive(Clone, Default)]
+pub struct DropLedger { /* Arc<{ planted: AtomicUsize, dropped: AtomicUsize }> */ }
+impl DropLedger {
+    pub fn plant(&self) -> DropSentinel; // planted += 1
+    pub fn planted(&self) -> usize;
+    pub fn live(&self) -> usize;         // planted − dropped
+}
+#[must_use]
+pub struct DropSentinel { /* the ledger */ } // Send + Sync; Drop: dropped += 1, once
+```
+
+One ledger per kind of value (states, controllers' listeners, route pages, futures), so a failure
+names the kind by the ledger that kept a live sentinel, not by a label. A sentinel goes where the
+value's owner drops it: a field of a `ViewState`, a capture of a controller's listener or of a
+route's page builder, a capture of a `FutureBuilder` future. A framework value that leaks keeps
+what it captured, and with it the sentinel; a slab node outlives its runtime only through `forget`
+or a leaked runtime, and both leave the sentinel alive. The typed refusals of stale handles after a
+UI runtime is dropped (`OwnerGone`, `Closed`) stay the second proof that the UI runtime itself is
+gone.
+
+The ledger is one type in the kit, not a copy per test: the tests that count drops today keep six
+hand-written probes (`DropProbe` in `flui-widgets` and `flui-animation`, `DropCounter`, `DropFlag`),
+and a double two test files need moves into the kit (ADR-0243 D4). Those in crates that reach the
+kit move to it when they are next touched; a crate below `flui-testing` keeps its own.
+
+Why sentinels, and not counters or the observer:
+
+- **A sentinel proves the destructor ran.** LeakCanary watches objects the framework has
+  destroyed through weak references and reports the ones still reachable after a collection (*How
+  LeakCanary works*); a sentinel is that watch where values are freed by ownership, not by a
+  collector, so the check needs no wait and no collection.
+- **Counters need a process-global registry.** Flutter's leak tracking rests on framework objects
+  dispatching creation and disposal events to a shared instance (`memory_allocations.dart`), and
+  Chromium's web-test leak detector compares DOM object counts between two pages
+  (`leak_detector.h`). Both count what the framework announces from a process-wide place; in FLUI
+  that is a `static` with an ADR-0097 grant, and a decrement counts a call, not a destructor. They
+  earn their keep where objects are collected and opaque to the test, which a slab freed by its
+  owner is not.
+- **The observer sees unmounts,** and an unmount is not a destructor (ADR-0040); render objects,
+  controllers and futures are not in its stream.
+
+What the sentinels cannot see, a framework-internal cycle that holds no application value, is
+bounded: every route, overlay entry, hero flight, controller and future the requirement names holds
+an application value (a page builder, a listener, a view, a future), and a leaked tree or runtime
+holds the states planted in it.
 
 ### Consequences
 
@@ -90,6 +142,9 @@ stream. Whichever is chosen, the typed refusals of stale handles after a UI runt
 - Bad, because the drop of a `BuildOwner` now runs user code, contained, where it ran none.
 - Neutral, because a stream that ends on an exceptional path still ends silently, by the retention
   rule every container follows.
+- Good, because a release test proves destructors ran, with one kit type and no `static`.
+- Bad, because a release test sees only what its application planted: a framework-internal cycle
+  that holds no application value passes it.
 
 ### Confirmation
 
@@ -97,8 +152,11 @@ stream. Whichever is chosen, the typed refusals of stale handles after a UI runt
   observer calls `detached()` once; after `clear_tree_observer` the drop calls nothing; no event
   follows `detached()`.
 - `stale_handles_refuse_after_realm_drop`, one row per handle type.
-- §2's release rows (`acceptance_app_close_releases_every_owner_after_navigation`,
-  `last_window_close_releases_the_realm_through_the_runner`) are named once the mechanism is chosen.
+- §2: `acceptance_app_close_releases_every_owner_after_navigation` (the acceptance app through the
+  facade: Home, Note, Settings and back, then close; every ledger's `live()` is 0, and was above 0
+  before the close) and `last_window_close_releases_the_realm_through_the_runner` (`flui-app`'s
+  headless runner, a tree with sentinels closed by its last window); `drop_ledger_counts_each_sentinel_once`
+  (`flui-testing`): a sentinel dropped once counts once, a `mem::forget` leaves it live.
 
 ## Pros and cons of the options
 
@@ -131,14 +189,16 @@ Live-node counts per kind (elements, render objects, controllers, tickers), visi
 - Bad, because a process-wide count is a `static` that needs its ADR-0097 entry and a new testing
   surface; a per-runtime count needs a runtime to hang on, which a dropped runtime no longer is.
 
-#### 2b. Ownership sentinels in the acceptance app
+#### 2b. Ownership sentinels from one ledger in the testing kit (chosen)
 
-The app plants a guard in each value it hands the framework (a capture, a controller's listener, a
-route's page); a guard reports its own `Drop` to a ledger the test reads.
+The test's application plants a guard in each value it hands the framework (a capture, a
+controller's listener, a route's page); a guard reports its own `Drop` to a ledger the test reads.
+The ledger is `flui_testing::DropLedger`, so the acceptance app and the runner's tests share it.
 
 - Good, because it proves the destructor ran. A slab node outlives its runtime only through
   `forget` or a leaked runtime, and both leave the sentinel alive.
-- Good, because it needs no framework surface.
+- Good, because it needs no framework surface beyond the kit, and no `static`.
+- Good, because it replaces the probes the tests already copy.
 - Bad, because it sees only what the app can plant into: a framework-internal cycle that holds no
   application value is invisible.
 
@@ -154,4 +214,4 @@ Count mounts and unmounts through the observer, and require them equal at `detac
 ## More information
 
 Revisit §2's choice if the framework gains a per-runtime arena that can answer its own live count
-without a `static`.
+without a `static`, or if a leak is found that holds no application value.
