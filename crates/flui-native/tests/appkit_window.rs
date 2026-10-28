@@ -113,12 +113,12 @@ mod cases {
         app
     }
 
-    /// The AppKit window behind an open FLUI window's raw handle.
+    /// The FLUI view an open FLUI window's raw handle names.
     #[expect(
         unsafe_code,
         reason = "the FLUI view behind an open AppKit window's raw window handle"
     )]
-    fn ns_window_of(window: &dyn HostWindow) -> Retained<NSWindow> {
+    fn ns_view_of(window: &dyn HostWindow) -> Retained<NSView> {
         use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
 
         let target = window.surface_target();
@@ -129,9 +129,15 @@ mod cases {
         // SAFETY: an AppKit window's handle names its FLUI view, which the
         // open window's view hierarchy keeps alive; retaining it gives this
         // test its own reference on the main thread the cases run on.
-        let view = unsafe { Retained::retain(handle.ns_view.as_ptr().cast::<NSView>()) }
-            .expect("the handle names a view");
-        view.window().expect("the FLUI view is in its window")
+        unsafe { Retained::retain(handle.ns_view.as_ptr().cast::<NSView>()) }
+            .expect("the handle names a view")
+    }
+
+    /// The AppKit window behind an open FLUI window's raw handle.
+    fn ns_window_of(window: &dyn HostWindow) -> Retained<NSWindow> {
+        ns_view_of(window)
+            .window()
+            .expect("the FLUI view is in its window")
     }
 
     /// An AppKit window for the conformance checks. Dropping it closes the
@@ -216,6 +222,59 @@ mod cases {
         /// hands out its view.
         fn has_native_surface(&self) -> bool {
             true
+        }
+
+        /// Drawables presented into the window's own layer the way wgpu's
+        /// Metal backend presents them: each from the layer's `nextDrawable`,
+        /// by a command buffer's `presentDrawable:`. Metal reports a shown
+        /// drawable on a thread of its own, so the frames go out over a few
+        /// refreshes before the window asks for its next frame.
+        #[expect(unsafe_code, reason = "the backing layer of the window's FLUI view")]
+        fn present_and_request_frame(&mut self) -> Option<flui_platform::FrameRequest> {
+            use objc2::runtime::{AnyObject, ProtocolObject};
+            use objc2_metal::{
+                MTLCommandBuffer as _, MTLCommandQueue as _, MTLCreateSystemDefaultDevice,
+                MTLDevice as _, MTLDrawable, MTLPixelFormat,
+            };
+            use objc2_quartz_core::CAMetalLayer;
+
+            let view = ns_view_of(self.window.as_ref());
+            // SAFETY: `layer` answers the live view's backing layer.
+            let layer: Option<Retained<AnyObject>> = unsafe { objc2::msg_send![&*view, layer] };
+            let layer = layer
+                .expect("the FLUI view is layer-backed")
+                .downcast::<CAMetalLayer>()
+                .expect("the FLUI view's layer is a CAMetalLayer");
+            let device = MTLCreateSystemDefaultDevice().expect("a Metal device");
+            layer.setDevice(Some(&device));
+            layer.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
+            let queue = device.newCommandQueue().expect("a Metal command queue");
+            for _ in 0..10 {
+                let drawable = layer.nextDrawable().expect("a drawable");
+                let buffer = queue.commandBuffer().expect("a Metal command buffer");
+                buffer.presentDrawable(ProtocolObject::<dyn MTLDrawable>::from_ref(&*drawable));
+                buffer.commit();
+                appkit::run_for(Duration::from_millis(20));
+            }
+            self.handler.take_calls();
+            self.window.request_redraw();
+            self.settle();
+            let request = self
+                .handler
+                .take_calls()
+                .into_iter()
+                .rev()
+                .find_map(|call| match call {
+                    HandlerCall::FrameRequested(request) => Some(request),
+                    _ => None,
+                });
+            if let Some(request) = request {
+                eprintln!(
+                    "the next frame request: vsync {:?}, presented {:?}",
+                    request.vsync, request.presented
+                );
+            }
+            request
         }
     }
 

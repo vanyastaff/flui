@@ -8,18 +8,20 @@
 //! `NotOnThisDevice` below it, and `NotYetOnThisHost` from it on while the
 //! host does not drive it.
 //!
-//! None of the three reports when its frames reached the screen yet
-//! ([`PRESENTATION`]): the platforms do, through the frame they present, which
-//! the renderer and not the host holds.
+//! The AppKit window reports when its frames reached the screen: its view is
+//! backed by a `CAMetalLayer` whose drawables tell
+//! (`owner::apple::metal_layer`), from macOS 10.15.4, below the floor. The
+//! UIKit and Activity windows do not yet ([`PRESENTATION`]).
 
-/// Why an AppKit, UIKit or Activity window reports no presentation, though its
-/// platform tells when a frame reached the screen. On Apple platforms that is
-/// the drawable's `addPresentedHandler`, and wgpu presents a drawable it keeps
-/// to itself; the host would have to own the view's `CAMetalLayer` and hand
-/// out the drawables it makes. On Android the presenting swap chain's
-/// `VK_GOOGLE_display_timing` is wgpu's to read and it reads none; the
-/// choreographer's frame timelines name when a frame is due on screen, which
-/// is not that it was.
+/// Why a UIKit or Activity window reports no presentation, though its
+/// platform tells when a frame reached the screen. On iOS that is the
+/// drawable's `addPresentedHandler`, which the view's own `CAMetalLayer`
+/// would hand out as the AppKit view's does; with such a layer as the view's
+/// layer the iOS Simulator showed nothing at all. On Android the presenting
+/// swap chain's `VK_GOOGLE_display_timing` is wgpu's to read and it reads
+/// none; the choreographer's frame timelines name when a frame is due on
+/// screen, which is not that it was.
+#[cfg(any(target_os = "ios", target_os = "android", test))]
 pub(crate) const PRESENTATION: CapabilityAbsence = CapabilityAbsence::NotYetOnThisHost;
 
 #[cfg(any(target_os = "ios", target_os = "android", test))]
@@ -90,7 +92,8 @@ pub(crate) fn pointer_absence(version: AppleVersion, shows_a_pointer: bool) -> C
 #[cfg(any(target_os = "macos", test))]
 pub(crate) const fn appkit_window_capabilities(owner_is_main: bool) -> WindowCapabilities {
     use flui_platform::Availability::Native;
-    let mut capabilities = WindowCapabilities::NONE.without_presentation_feedback(PRESENTATION);
+    let mut capabilities = WindowCapabilities::NONE;
+    capabilities.reports_presentation = Native;
     capabilities.sets_title = Native;
     capabilities.sets_position = Native;
     capabilities.sets_size = Native;
@@ -310,7 +313,7 @@ mod tests {
             (
                 "AppKit presentation report",
                 presentation(&appkit_window_capabilities(true)),
-                Some(NotYetOnThisHost),
+                None,
             ),
             (
                 "Activity presentation report",

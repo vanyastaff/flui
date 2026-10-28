@@ -118,7 +118,7 @@ pub struct MacOSWindow {
     ns_window: ObjcId,
 
     /// This window's `FLUIContentView` (NSView*): the view that receives
-    /// input, IME and appearance changes, draws on `drawRect:`, carries the
+    /// input, IME and appearance changes, draws on `updateLayer`, carries the
     /// accessibility bridge, and is the `ns_view` of the raw window handle.
     ///
     /// Fixed for the window's lifetime and read from here, never from
@@ -344,6 +344,13 @@ impl MacOSWindow {
             let screen: ObjcId = msg_send![self.ns_window, screen];
             display_of_screen(displays.as_ref(), screen)
         };
+        // The layer's reports carry the refresh of the display the window is
+        // on, from the snapshot: what the display source reads off the mode.
+        let refresh = id
+            .zip(objc2::MainThreadMarker::new())
+            .and_then(|(id, mtm)| displays.snapshot(mtm).ok()?.get(id)?.refresh_period)
+            .map(flui_platform::RefreshPeriod::get);
+        content_view::set_layer_refresh(&self.view, refresh);
         let mut state = self.state.lock();
         let changed = state.display != id;
         state.display = id;
@@ -691,7 +698,7 @@ impl MacOSWindow {
 ///
 /// AppKit discards a `setNeedsDisplay:` issued while it is displaying the view,
 /// and the frame a display pass runs asks for its next frame from exactly there
-/// (`drawRect:` → frame request → scheduler wake): that one request is dropped
+/// (`updateLayer` → frame request → scheduler wake): that one request is dropped
 /// and the pump stops for good — no frame, no wake, no frame. See
 /// `display_pass` for the measurement behind that. The same call one turn
 /// of the owner lane later is honoured instead, because the pass has unwound by
@@ -743,10 +750,10 @@ impl MacOSWindow {
             let content_view = self.view_ptr();
             let _: () = msg_send![content_view, setNeedsDisplay: YES];
             // AppKit owns the display pass that turns this into a
-            // `drawRect:` — nothing in this backend can observe it, so the
+            // call of `updateLayer` — nothing in this backend can observe it, so the
             // two ends of the pump are instrumented separately: this line
-            // (the request went out) and `view.rs`'s `draw_rect` (AppKit
-            // asked for content). A request with no matching `drawRect:` is
+            // (the request went out) and the content view's `update_layer` (AppKit
+            // asked for content). A request with no matching `updateLayer` is
             // otherwise invisible from here, so when a trace subscriber is
             // attached, report the AppKit state the display pass is gated
             // on. The reads are msg_sends, so they are behind the level

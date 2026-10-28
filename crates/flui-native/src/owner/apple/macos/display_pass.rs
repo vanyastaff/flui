@@ -22,7 +22,8 @@
 //!
 //! This module is the condition that decision is made on, kept apart from both
 //! ends so it can be tested without a window: [`DisplayPassGuard`] is entered
-//! by the view's `drawRect:` for the duration of the frame it dispatches, and
+//! by the view's `updateLayer` (once its `drawRect:`; the table was measured
+//! there) for the duration of the frame it dispatches, and
 //! consulted by the window's `request_redraw` to choose between setting the
 //! flag in place and deferring it.
 //!
@@ -50,7 +51,7 @@
 use std::cell::Cell;
 
 thread_local! {
-    /// True while this thread is inside a `drawRect:`-driven display pass.
+    /// True while this thread is inside a view's display pass.
     static IN_DISPLAY_PASS: Cell<bool> = const { Cell::new(false) };
 }
 
