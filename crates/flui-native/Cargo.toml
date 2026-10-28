@@ -322,8 +322,7 @@ x11rb = { workspace = true, optional = true, features = ["allow-unsafe-code", "d
 # the descriptor primitives both Linux hosts wait on, behind the `wayland` and
 # `x11` features (`desktop` and `winit-backend` enable both).
 wayland-client = { workspace = true, optional = true }
-# `staging` for `wp_color_management_v1`, an output's colour.
-wayland-protocols = { workspace = true, optional = true, features = ["staging"] }
+wayland-protocols = { workspace = true, optional = true }
 wayland-backend = { workspace = true, optional = true }
 rustix = { workspace = true, optional = true }
 accesskit_unix = { version = "0.24" }
