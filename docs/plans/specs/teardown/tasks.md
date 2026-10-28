@@ -135,7 +135,7 @@ graph LR
 - [x] T3 — #1493
 - [x] T5 — платформенная серия: #1926 (LY45), #1872 (LY90), #1853 (LY26)
 - [ ] T2 — ADR и PANIC-POLICY (решение владельца: 101 против LY90)
-- [ ] T4 — `flui-view`: guard, реестр, `detached()`
+- [x] T4 — `flui-view`: guard, реестр, `detached()` — #1953; 12 контрактных тестов — строки `close_guard_matrix`, `flush_registry_matrix`, `lifecycle_subscription_matrix`; R3, persistence R20, R28
 - [ ] T7 — строки навигации
 - [ ] T8 — остаток: откат и проводка (решение владельца: вопрос 4)
 - [ ] T9 — граница хода в `flui-app`
