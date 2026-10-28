@@ -246,7 +246,7 @@ graph LR
 | **LY66** [P] | **Android: insets и inset клавиатуры** (D14, R6.4). `setOnApplyWindowInsetsListener` и `WindowInsetsAnimation.Callback` (API 30) вместо опроса `getRootWindowInsets` (сегодня `safe_area.rs`, после LY28 — в `window/android.rs`), каждое изменение постится на owner; уровень API выше нижней границы — гейт `Since<F>` (ADR-0244 п. 4). Safe area и inset клавиатуры доходят через снимок окна до `MediaQuery` (padding и view insets — потребитель); поле inset клавиатуры вносит эта задача, iOS и Web пишут то же поле (LY72, LY74). Регистрация «назад» (`OnBackInvokedCallback`) в серию не входит: производитель бита «можно ли вернуться» — навигатор, вне серии, а регистрация хоста без производителя — неподключённая поверхность (см. «Чего нет в этой серии») | LY62, LY41 | `crates/flui-native/android/java/*`, `crates/flui-native/src/window/android.rs`, `crates/flui-platform/src/window_state.rs`, `crates/flui-runtime` (`MediaQuery`) | `android-dex`, `workspace`, `cross-typecheck` | юнит-тесты на правилах insets; счётчик `WindowResized` при анимации клавиатуры | L + T; Dev: Android |
 | **LY67** | **`flui-system`: Android** (D18). Выбор файла через `launch_for_result` (`ACTION_OPEN_DOCUMENT`, `ACTION_CREATE_DOCUMENT`), URL (`ACTION_VIEW`), share (`ACTION_SEND`), message box (`AlertDialog` на главном потоке Java), пути; reveal, trash, автозапуск, глобальные сочетания, прогресс, jump list — `Unsupported` | LY57, LY64 | `packages/flui-system/src/android/*` | `workspace`, `cross-typecheck` | таблица против симулятора; Android — T | L + T; Dev: Android |
 | **LY68** | **iOS: доказательство `UITextInput`** (D15, R6.5). Минимальный невидимый responder-view на `define_class!` с `UITextInput` (около тридцати методов, токенизатор, input delegate), составление текста через CJK-клавиатуру (японская, китайская) на Simulator; результат и вывод прогона — в PR. Если не складывается, меняется ADR-0255, а не задача | LY30, LY46 | `crates/flui-native/src/text/apple/ios.rs` (спайк), `crates/flui-native/Cargo.toml` (признаки `objc2-ui-kit`) | `cross-typecheck` | прогон составления текста с CJK на Simulator | T; Dev: iOS (Simulator) |
-| **LY69** | **iOS: ввод текста** (D15). `UITextInput` и `UITextInteraction` в отдельном невидимом responder-view, backed тем же text-store host, что на других ОС; соответствие `TextInputPurpose` клавиатуре; кандидат-панель CJK; размещение каретки | LY68 | `crates/flui-native/src/text/apple/ios.rs` | `cross-typecheck`, `module-dag` | правила соответствия — на Linux; составление текста — Simulator | T; Dev: iOS |
+| **LY69** | **iOS: ввод текста** (D15). `UITextInput` и `UITextInteraction` в отдельном невидимом responder-view, backed тем же text-store host, что на других ОС; соответствие `TextInputPurpose` клавиатуре; кандидат-панель CJK; размещение каретки; на смену заглушкам LY68 — `firstRectForRange:`/`caretRectForPosition:` по диапазону (сейчас область каретки поля), `selectionRectsForRange:` (сейчас пусто), правки вдали от каретки (сейчас только документ); CJK-начертание в шрифтовой подмене iOS | LY68 | `crates/flui-native/src/text/apple/ios.rs` | `cross-typecheck`, `module-dag` | правила соответствия — на Linux; составление текста — Simulator | T; Dev: iOS |
 | **LY70** [P] | **iOS: доступность** (D15). `accesskit_ios::Adapter` (низкоуровневый), вызовы с главного потока; идентификатор ADR-0240 → `accessibilityIdentifier`; две версии objc2 в графе допустимы (пути через сырые указатели) | LY32, LY46 | `crates/flui-native/src/accessibility/apple/ios.rs` | `cross-typecheck`, `deps` | правила узлов на Linux; VoiceOver — прогон | T; Dev: iOS (VoiceOver) |
 | **LY71** [P] | **iOS: Info.plist** (D15, ADR-0255 п. 14). Генерируемый `Info.plist` получает ключи, у которых в серии есть потребитель: `UIApplicationSupportsIndirectInputEvents` (указатель на iPad) и ориентации iPad (геометрия окна); URL-типы и usage-строки пишет генератор LY56 из деклараций крейтов, когда они есть. Колбэки сцены для URL, user activity и shortcut в серию не входят: их потребитель — фича активации (см. «Чего нет в этой серии») | LY29, LY56 | `crates/flui-cli/src/build/ios_package.rs`, `crates/flui-cli/templates/platforms/ios/*` | `workspace`, `checks` | golden Info.plist | L; Dev: iOS (iPad Simulator: указатель и ориентации) |
 | **LY72** [P] | **iOS: клавиатура** (D15). Уведомления клавиатуры (граница iOS 13; `UIKeyboardLayoutGuide` от iOS 15 — уточнение за гейтом `Since<F>`, ADR-0244 п. 4) публикуют inset клавиатуры в снимке окна, откуда его читает `MediaQuery` (view insets). Краевой свайп «назад» в серию не входит (см. «Чего нет в этой серии») | LY28, LY66 | `crates/flui-native/src/window/apple/ios.rs` | `cross-typecheck` | правила анимации и inset — на Linux | T; Dev: iOS |
@@ -3946,6 +3946,55 @@ graph LR
   (winit, окна X11, предпочтения Linux); гейт API-замыкания под nightly со std всех шести
   целей — 4 пакета чисты. Не запускалось: Mac и iPhone (vanyastaff/flui#1840; список в PR),
   Android-устройство, браузер, композитор с `wp_color_management_v1`, `cross-typecheck` (CI).
+- [x] **LY68** — доказательство сложилось, ADR-0255
+  не меняется. **Код.** `text/apple/composition.rs` — чистая модель документа клавиатуры (UTF-16, как
+  считает UIKit): marked-диапазон, выделение, правки `setMarkedText`/`insertText`/`unmarkText`/
+  `deleteBackward`/сброс, каждая отвечает тем, что сообщить полю (`Preedit`, `Commit`, удаление
+  перед кареткой); правила гоняются на любом хосте. `text/apple/ios/responder.rs` — невидимый
+  `FluiTextInputView` на `define_class!` (`UIKeyInput` + `UITextInput`: 32 метода протоколов, токенизатор
+  `UITextInputStringTokenizer`, слабый input delegate), свои `FluiTextPosition`/`FluiTextRange`;
+  каждый метод — один вызов `os_entry` (`panic-boundary` зелёный). Правки уходят окну как
+  `ImeEvent::Preedit`/`Commit` и `Backspace`, как у AppKit, после чего просится кадр; документ не
+  заимствован, пока работает код поля. Окно iOS отдаёт `WindowTextInput::Ime`: фокус поля
+  (`set_ime_allowed(true)`) делает responder первым, потеря фокуса сбрасывает композицию без
+  фиксации и отдаёт клавиатуру; `ViewRef` несёт `delivery` окна. `unmarkText` фиксирует
+  композицию как есть (семантика UIKit), а не отменяет, как `unmarkText` AppKit. Признаки
+  `objc2-ui-kit`: `UITextInput`, `UITextInputTraits`, `NSText`. **Прогон** (2026-10-28, MacBook Air
+  M1, macOS 27.0, Simulator iPhone Duo / iOS 27.1, без Simulator.app): проба `flui create` с
+  `EditableText`, экранная клавиатура нажималась XCUITest-раннером, собранным вручную
+  (`XCTRunner.app` с плоскими фреймворками и `.xctestrun`; `_Testing_CoreTransferable` исключён —
+  его идентификатор бандла совпадает с `_Testing_CoreGraphics`, установка падает
+  `DuplicateIdentifier`). После «Next keyboard» XCUITest не нажимает клавиши новой раскладки,
+  поэтому языки шли отдельными прогонами с одной клавиатурой в списке устройства. Японская
+  (Romaji): `n → に → にh → にほ → にほn → にほんg → にほんご`, пробел — `日本語`, `改行` —
+  `unmarkText` → `Commit("日本語")`, поле: `text="日本語" composing=None`. Китайская (девятиклавишная
+  пиньинь): `m → n → ng → ni → nig → ni h → ni ha → ni ham → ni hao` (разделитель U+2006), кандидат
+  `你好` → `Commit("你好")`, поле: `text="你好" composing=None`. Полная QWERTY-пиньинь в XCUITest
+  не нажимается (клавиши не hittable). Не проверено: размещение кандидатов на экране (скриншоты
+  этого устройства чёрные), скрытие клавиатуры, устройство. Тесты (`composition::tests`, 8):
+  мутация `unmark` в отмену роняет `unmarking_commits_the_composition_as_it_reads`. Проверки:
+  clippy `-D warnings` для `aarch64-apple-ios` (native, app) и macOS, `panic-boundary`.
+  **После ревью.** Модель считает смещения `Utf16Offset`/`Utf16Range` контракта, перевод в байты
+  для `ImeEvent` — один `text::apple::ime_cursor` поверх `flui_platform::text_store::utf16` для
+  AppKit и UIKit (локальные хелперы macOS удалены). Поле может держать текст до фокуса, которого
+  документ не видит, поэтому: `hasText` всегда «да», удаление при пустом известном тексте уходит
+  полю как Backspace; `replaceRange:withText:` у каретки — `Edit::Replace` (Backspace на каждую
+  графему удалённого, `icu_segmenter`, затем commit), диапазон вдали от каретки меняет только
+  документ (композиция сдвигается, а не заменяется); удаление перед композицией уходит полю как
+  Backspace; `set_ime_allowed(true)` всегда начинает с пустого документа; соседний символ не
+  разрывает суррогатную пару; перевод правки в объявления (`Edit::announcements`) — чистая
+  функция. `ViewTextSizing` → `WindowText`. Токенизатор держит view слабо: `_textInput` в
+  weak-раскладке класса, retainCount view до и после создания одинаков (28/28) — цикла нет.
+  Тесты `composition::tests` (14) и `text::apple::tests::an_ime_cursor_is_counted_in_bytes`;
+  шесть мутаций (удаление в начале, замена у каретки, удаление перед композицией, замена во время
+  композиции, суррогатные пары, Backspace на символ вместо графемы) роняют каждая свой тест.
+  Второй прогон (развёрнутый iPhone Duo, клавиши нажимались руками через инструмент симулятора,
+  экран снят): `にほんご` → кандидат `日本語` → `Commit("日本語")`, поле `text="日本語"`, Backspace →
+  `Replace { deleted: "語" }` → поле `text="日本"`; кандидаты показывает строка над клавиатурой, а
+  поле рисует кану и кандзи квадратами отсутствующего глифа (у шрифтовой подмены на iOS нет
+  CJK-начертания). Словарь нативных записей (`tests/native_recording`) знает только указатели:
+  для записи этого прогона нужны строки клавиатуры и IME (marked text, выделение, commit, unmark,
+  replace) и воспроизведение в модель респондера.
 
 ## Отступление от порядка, решённое владельцем
 
