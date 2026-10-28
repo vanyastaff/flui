@@ -43,7 +43,11 @@ use flui_platform::text_store::InMemoryTextStore;
 /// the owner hears only of committed-text changes, after the session's lock
 /// is released, a composition may start over a selection, and a grant that
 /// panics leaves no composition without what it stands for.
-pub const KIT_VERSION: u32 = 2;
+///
+/// Version 3 adds hit-testing's two independent choices: rounding to the
+/// nearer edge inside a character's box, and the nearest position for a
+/// point outside every box (TSF's `GXFPF_ROUND_NEAREST` and `GXFPF_NEAREST`).
+pub const KIT_VERSION: u32 = 3;
 
 /// A text field under test, as the kit drives it.
 pub trait TextStoreFixture {

@@ -401,7 +401,8 @@ trait depends on `flui-platform` instead.
   keeps each window's field by `owner::android::ActivityWindowId`, and the
   Web's text input lives in the canvas window's owner-thread slot. Beside it,
   one file per platform with its pure half a module inside it:
-  `windows/mod.rs` (the pure `geometry`, the `Tsf` class hook) with `tsf/`,
+  `windows/mod.rs` (the pure `geometry` and `acp`, TSF's `ITextStoreACP`
+  answers over the field's store, and the `Tsf` class hook) with `tsf/`,
   `apple/{macos, ios}.rs`, `android.rs` (the pure `ime`, `input`, `sizing`),
   `web.rs` (the pure `ime`, `input`), `winit.rs` and `headless.rs`. `cargo
   xtask module-dag` lists each feature directory in `features`: a platform
