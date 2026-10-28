@@ -305,21 +305,26 @@ console_error_panic_hook = "0.1"
 
 # D-Bus on Linux: the Settings portal (`preferences::linux`), logind
 # (`lifecycle::linux`) and AT-SPI, the accessibility bridge
-# (`accessibility::linux`, through `accesskit_unix`). The Linux host, the winit
-# one today, brings `zbus` and the AT-SPI adapter with it (`winit-backend`), so
-# every Linux window is accessible with no feature of its own; both become
-# unconditional Linux dependencies with the native Wayland and X11 host
-# (ADR-0151 §15).
+# (`accessibility::linux`, through `accesskit_unix`). Every Linux host reads
+# them, so they are unconditional Linux dependencies and every Linux window is
+# accessible with no feature of its own (ADR-0151 §15).
 [target.'cfg(target_os = "linux")'.dependencies]
-# The display source's protocol clients and descriptor primitives, behind the
-# `wayland` and `x11` features (`winit-backend` enables both on Linux).
-x11rb = { workspace = true, optional = true }
+# The X server's client, behind the `x11` feature: the native X11 host's
+# connection on libxcb (`allow-unsafe-code` and `dl-libxcb`, so a surface can be
+# made from it and libxcb is loaded at run time rather than linked), and the
+# display source's pure-Rust connection for RandR. winit enables the same
+# features, so the tree gains no crate.
+x11rb = { workspace = true, optional = true, features = ["allow-unsafe-code", "dl-libxcb"] }
+# The native Wayland host's protocol clients, also the display source's, and
+# the descriptor primitives both Linux hosts wait on, behind the `wayland` and
+# `x11` features (`desktop` and `winit-backend` enable both).
 wayland-client = { workspace = true, optional = true }
 wayland-protocols = { workspace = true, optional = true }
+wayland-backend = { workspace = true, optional = true }
 rustix = { workspace = true, optional = true }
-accesskit_unix = { version = "0.24", optional = true }
-zbus = { workspace = true, optional = true }
-futures-util = { workspace = true, optional = true }
+accesskit_unix = { version = "0.24" }
+zbus = { workspace = true }
+futures-util = { workspace = true }
 tokio = { workspace = true, features = ["macros"] }
 
 # iOS native backend (UIKit + Metal). `objc2` is the maintained Objective-C
@@ -434,19 +439,21 @@ version = "0.27.1"
 [features]
 default = ["desktop"]
 
-# Compatibility selector for the native desktop backends, selected by target OS.
+# The native desktop hosts, selected by target OS: on Linux the Wayland and
+# X11 hosts, of which the session picks one; Windows and macOS need no feature.
 # The optional winit fallback belongs to `winit-backend` alone.
-desktop = []
+desktop = ["wayland", "x11"]
 
-# winit fallback backend — primary on Linux until native Wayland/X11 lands
-# (roadmap Cross.P); optional on Windows/macOS.
+# Linux display server protocols. `wayland` is the native Wayland host and `x11`
+# the native X11 host (`hosts::linux`), and both read the outputs and their
+# refresh rates from the server for the display source (`display::linux`). On
+# other targets the features exist and add nothing.
+wayland = ["dep:wayland-client", "dep:wayland-protocols", "dep:wayland-backend", "dep:rustix"]
+
+# winit fallback backend — the Linux host `current_platform` picks while it is
+# built, until the native Wayland and X11 hosts are complete (ADR-0151 §11);
+# optional on Windows/macOS.
 winit-backend = [
-    # The Settings portal and logind this host reads on Linux
-    # (`preferences::linux`, `lifecycle::linux`), and the AT-SPI adapter its
-    # Linux windows hand out (`accessibility::linux`).
-    "dep:zbus",
-    "dep:accesskit_unix",
-    "dep:futures-util",
     "dep:winit",
     "dep:arboard",
     "dep:crossbeam-channel",
@@ -466,11 +473,6 @@ winit-backend = [
 # disabling it changes nothing observable. Kept as a forward-compatible name
 # for downstream `Cargo.toml`s, mirroring `desktop`.
 web = []
-
-# Linux display server protocols: each connects to its compositor to read the
-# outputs and their refresh rates (`display::linux`). On other
-# targets the features exist and add nothing.
-wayland = ["dep:wayland-client", "dep:wayland-protocols", "dep:rustix"]
 x11 = ["dep:x11rb", "dep:rustix"]
 
 # Debug builds only: `input::assembly::capture` journals every
@@ -490,6 +492,10 @@ testing = []
 # mixing local lint keys with `workspace = true`.
 [lints]
 workspace = true
+
+[build-dependencies]
+# Names the compound `cfg` conditions once (`build.rs`), such as `linux_host`.
+cfg_aliases = { workspace = true }
 
 [dev-dependencies]
 # `assert_backend_conforms` (ADR-0215 §7) over the shared decoders and the
@@ -542,6 +548,15 @@ harness = false
 name = "appkit_window"
 path = "tests/appkit_window.rs"
 harness = false
+
+# The native X11 host's window against the window conformance checks, and its
+# loop: its own harness, because it starts an X server and a window manager of
+# its own before anything connects.
+[[test]]
+name = "x11_window"
+path = "tests/x11_window.rs"
+harness = false
+required-features = ["x11"]
 
 [[test]]
 name = "wasm32"

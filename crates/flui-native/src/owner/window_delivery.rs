@@ -369,17 +369,19 @@ impl WindowDelivery {
     /// publication raised elsewhere publishes nothing, and the owner's next
     /// read publishes what changed.
     ///
-    /// The winit, AppKit, UIKit and web windows publish this way; the Win32
-    /// window publishes through its window procedure, and the Android window,
-    /// which its looper shares, through [`Self::publish_through`].
+    /// The winit, X11, AppKit, UIKit and web windows publish this way; the
+    /// Win32 window publishes through its window procedure, and the Android
+    /// window, which its looper shares, through [`Self::publish_through`].
     #[cfg(any(
         all(
             feature = "winit-backend",
             any(target_os = "windows", target_os = "macos", target_os = "linux")
         ),
+        all(target_os = "linux", feature = "x11"),
         target_os = "macos",
         target_os = "ios",
-        target_arch = "wasm32"
+        target_arch = "wasm32",
+        all(target_os = "linux", feature = "wayland")
     ))]
     pub(crate) fn publish_through_owner<W: 'static>(
         &self,
@@ -459,7 +461,12 @@ impl WindowDelivery {
     /// returns and the queued clear runs, not when this call returns. A backend
     /// uses it to order a notice after the release of what the handler owns
     /// (a renderer and its surface).
-    #[cfg(any(windows, all(test, not(target_arch = "wasm32"))))]
+    #[cfg(any(
+        windows,
+        wayland_host,
+        x11_host,
+        all(test, not(target_arch = "wasm32"))
+    ))]
     pub(crate) fn clear_then(&self, on_retired: impl FnOnce() + Send + 'static) {
         self.clear_with(Some(Box::new(on_retired)));
     }

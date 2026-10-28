@@ -38,6 +38,30 @@ fn error(error: impl std::fmt::Display) -> DisplayError {
     DisplayError::connection(PROTOCOL, error)
 }
 
+/// The native X11 host's displays: the source reads the X server the host's
+/// windows are on, on a connection of its own, and wakes the owner when the
+/// outputs change.
+impl crate::owner::linux::x11::HostDisplays for super::source::LinuxDisplays {
+    fn snapshot(&self) -> Result<flui_platform::DisplaySnapshot, crate::PlatformError> {
+        super::source::LinuxDisplays::snapshot(self)
+    }
+
+    /// A source whose thread cannot start answers every snapshot with why,
+    /// and is not tried again: no wake comes that would make it succeed.
+    fn observe(
+        self: std::sync::Arc<Self>,
+        signal: &std::sync::Arc<crate::owner::signal::OwnerSignal>,
+    ) -> crate::owner::watch::Watch {
+        match self.watch(super::protocol::Protocol::X11, signal) {
+            Ok(watcher) => crate::owner::watch::Watch::new(watcher),
+            Err(error) => {
+                tracing::warn!(%error, "the X11 display source could not start");
+                crate::owner::watch::Watch::new(())
+            }
+        }
+    }
+}
+
 /// The atoms whose changes can change the displays.
 struct Atoms {
     work_area: xproto::Atom,

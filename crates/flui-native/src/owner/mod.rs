@@ -23,11 +23,13 @@
 //! - `hwnd_affinity`: the Win32 rules for which thread may reach a window
 //!   and when its user data is torn down, which the owner control and the
 //!   loop apply (on Windows, and in tests on every host);
-//! - `windows`, `apple`, `android`, `web`, `winit` and [`headless`]: each
-//!   platform's loop, its wakes and what it owns of the thread, each on the
-//!   targets its host runs on (headless everywhere); `redraw_poll`, the redraw
-//!   decision around one native poll, and `modal_pace`, how often a Windows
-//!   modal loop asks for frames, both pure and checked on every host. A loop
+//! - `windows`, `apple`, `android`, `web`, `linux` (Wayland and X11), `winit`
+//!   and [`headless`]: each platform's loop, its wakes and what it owns of the
+//!   thread, each on the targets its host runs on (headless everywhere);
+//!   `redraw_poll`, the redraw decision around one native poll,
+//!   `wake_deadline`, the rule by which a loop that waits with a timeout of its
+//!   own arms the application's wake deadline, and `modal_pace`, how often a
+//!   Windows modal loop asks for frames, each pure and checked on every host. A loop
 //!   that serves several features through one operating-system object
 //!   dispatches through hooks declared beside it, which the host registers. A
 //!   feature's state or object the loop keeps (the displays, the preference
@@ -69,6 +71,8 @@ pub(crate) mod apple;
 pub(crate) mod call_point;
 pub mod handlers;
 pub(crate) mod headless;
+#[cfg(any(wayland_host, x11_host, test))]
+pub(crate) mod linux;
 #[cfg(any(test, windows))]
 pub(crate) mod modal_pace;
 pub(crate) mod notices;
@@ -82,24 +86,26 @@ pub(crate) mod panic_boundary;
 pub(crate) mod redraw_poll;
 pub(crate) mod signal;
 pub(crate) mod slot;
+#[cfg(any(windows, x11_host, test))]
+pub(crate) mod wake_deadline;
 #[cfg(any(
     target_os = "macos",
     target_os = "ios",
     target_os = "android",
     target_arch = "wasm32",
-    all(target_os = "linux", feature = "winit-backend")
+    linux_host
 ))]
 pub(crate) mod watch;
 pub(crate) mod window_delivery;
 // Every native host keeps a source; the headless host keeps none, so a Linux
-// build without the winit host has no loop to keep one.
+// build without a Linux host has no loop to keep one.
 #[cfg(any(
     windows,
     target_os = "android",
     target_os = "macos",
     target_os = "ios",
     target_arch = "wasm32",
-    all(target_os = "linux", feature = "winit-backend")
+    linux_host
 ))]
 pub(crate) mod sources;
 #[cfg(target_arch = "wasm32")]

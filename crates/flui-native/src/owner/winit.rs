@@ -2572,11 +2572,8 @@ impl host::Services for WinitLoop {
         }
 
         #[cfg(target_os = "linux")]
-        {
-            // Try xdg-open with parent directory
-            if let Some(parent) = path.parent() {
-                let _ = std::process::Command::new("xdg-open").arg(parent).spawn();
-            }
+        if let Some(parent) = path.parent() {
+            super::linux::xdg_open(parent.as_os_str());
         }
     }
 
@@ -2602,9 +2599,7 @@ impl host::Services for WinitLoop {
         }
 
         #[cfg(target_os = "linux")]
-        {
-            let _ = std::process::Command::new("xdg-open").arg(path).spawn();
-        }
+        super::linux::xdg_open(path.as_os_str());
     }
 
     // The winit host opens no URL, shows no file prompt and reports no

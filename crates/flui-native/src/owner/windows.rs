@@ -31,7 +31,6 @@ mod tests;
 // The quiet host the loop's tests run over, and another host's tests name.
 #[cfg(test)]
 pub(crate) mod testing;
-mod wake_deadline;
 mod window_table;
 
 use std::{
@@ -71,6 +70,9 @@ use crate::owner::app_delivery::AppDelivery;
 use crate::owner::call_point::{Field, install};
 use crate::owner::notices::{NoticeChannel, StaleOnWake};
 use crate::owner::panic_boundary::{self, AfterPanic};
+pub(crate) use crate::owner::wake_deadline::FrameCount;
+use crate::owner::wake_deadline::ModalDelivery;
+use crate::owner::wake_deadline::WakeDeadline;
 use crate::{
     error::PlatformError, executor::BackgroundExecutor, host, owner::OwnerHooks,
     owner::OwnerPlatform, owner::handlers::OpenWindows, owner::hwnd_affinity::UserDataRefusal,
@@ -80,9 +82,6 @@ use crate::{
 use broadcast::Subscriber;
 use com_apartment::ComApartment;
 use flui_platform::{DisplayId, DisplaySnapshot};
-pub(crate) use wake_deadline::FrameCount;
-use wake_deadline::ModalDelivery;
-use wake_deadline::{DeadlineArm, DeadlineDelivery};
 pub(crate) use window_table::{WindowScale, WindowTable};
 
 /// The name of FLUI's window class, which every window the host opens has.
@@ -1146,8 +1145,7 @@ impl WindowsLoop {
     fn run_message_loop(&self) -> Result<(), PlatformError> {
         tracing::info!("Starting Windows message loop");
 
-        let mut armed: Option<DeadlineArm> = None;
-        let mut delivered: Option<DeadlineDelivery> = None;
+        let mut deadline = WakeDeadline::default();
         // Shared with every window this platform opens; without an owner
         // there are no windows, so the count never moves.
         let shares = self.owner_control.shares("run message loop").ok();
@@ -1182,21 +1180,14 @@ impl WindowsLoop {
                 }
                 // An admitted due wake is delivery debt. Actuate it before
                 // querying user code, which may abandon a late deadline.
-                if armed
-                    .as_ref()
-                    .is_some_and(|arm| arm.deadline <= web_time::Instant::now())
+                // A platform that quit asks for no frame: the deadline was the
+                // run's handler's, and the run is ending (its next answer is
+                // none, which forgets the delivery).
+                if deadline.take_due(web_time::Instant::now(), frame_count())
+                    && self.owner_control.signal.accepting()
+                    && self.app.is_bound_here()
                 {
-                    let arm = armed.take().expect("BUG: a due deadline is armed");
-                    // A platform that quit asks for no frame: the deadline
-                    // was the run's handler's, and the run is ending.
-                    if self.owner_control.signal.accepting() && self.app.is_bound_here() {
-                        let before = frame_count();
-                        self.windows.redraw_for_deadline();
-                        delivered = Some(DeadlineDelivery {
-                            arm,
-                            frames: before,
-                        });
-                    }
+                    self.windows.redraw_for_deadline();
                 }
 
                 // Drain native input/paint/quit before another idle query.
@@ -1213,24 +1204,9 @@ impl WindowsLoop {
 
                 // The handler is asked with no borrow of `msg` and no lock
                 // held: it may close windows or quit before it answers.
-                armed = match self.query_wake_deadline() {
-                    Some(deadline)
-                        if delivered
-                            .as_ref()
-                            .is_none_or(|last| last.admits(deadline, frame_count())) =>
-                    {
-                        Some(DeadlineArm { deadline })
-                    }
-                    Some(_) => None,
-                    None => {
-                        delivered = None;
-                        None
-                    }
-                };
+                let armed = deadline.arm(self.query_wake_deadline(), frame_count());
 
                 let next_deadline = armed
-                    .as_ref()
-                    .map(|arm| arm.deadline)
                     .into_iter()
                     .chain(
                         preferences

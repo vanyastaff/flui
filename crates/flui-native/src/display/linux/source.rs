@@ -327,7 +327,9 @@ pub(crate) struct DisplayWatcher {
 impl DisplayWatcher {
     /// Whether the thread has ended on its own: the connection failed or the
     /// session panicked. The source then answers with that error until a new
-    /// watcher starts.
+    /// watcher starts. The winit host replaces such a watcher on its next
+    /// event.
+    #[cfg(any(feature = "winit-backend", test))]
     pub(crate) fn finished(&self) -> bool {
         self.thread.as_ref().is_none_or(JoinHandle::is_finished)
     }
