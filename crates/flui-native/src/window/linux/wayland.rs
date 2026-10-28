@@ -57,9 +57,11 @@
 //! on subsurfaces around its content: a title bar with its title and buttons,
 //! and margins its edges are resized from ([`client_frame`]). Its geometry is
 //! then the title bar and the content, its outer size includes the title bar,
-//! and the size a configure gives loses the title bar to the content. Where it offers `xdg-foreign`, the window is exported
-//! as it opens, so a portal can parent its dialog to it; the handle reaches
-//! the capability crates with the contract's window reference, and only tests
+//! and the size a configure gives loses the title bar to the content.
+//!
+//! Where the compositor offers `xdg-foreign`, the window is exported as it
+//! opens, so a portal can parent its dialog to it; the handle reaches the
+//! capability crates with the contract's window reference, and only tests
 //! read it until then (`foreign`).
 //!
 //! # The surface

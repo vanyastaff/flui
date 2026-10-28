@@ -4431,6 +4431,83 @@ graph LR
   macOS, Android, iOS lib; `checks`, `doc-strict`, `wasm-check`, гейты; WSL clippy шести
   вариантов и крейтов, xvfb 397 из 397, Weston 38 из 38, rustdoc, `api-closure` (4 пакета чисто).
   `cross-typecheck` (гейт строки) — в CI этого PR.
+- [x] **LY103** — ветка `platform/wayland-client-frame` от `main` @ `af8405142` (LY79, LY81).
+  **Кто рисует рамку (решение задачи, для владельца).** Строка просит заголовок «через движок».
+  Хост этого не может: `flui-native` — слой 3, `flui-engine` — слой 4 (`xtask workspace`
+  отказывает), устройство и raster-поток движка принадлежат корню композиции (ADR-0091), а свой
+  `wgpu::Instance` в хосте — дефект из ревью; поверхность содержимого принадлежит рендереру
+  (ADR-0063). Рисовать рамку из `flui-app` движком значит разнести одну обязанность хоста на хост,
+  корень композиции и raster-полосу: второй swapchain на окно и порядок commit между потоками ради
+  полосы в 37 пикселей. Исследованы: libdecor и `FallbackFrame` SCTK, `sctk-adwaita` winit
+  (рамка на subsurface, программная отрисовка), GTK4 (`GtkHeaderBar` в содержимом, `gdk_toplevel_begin_move`
+  с serial события) и Chromium Ozone (рамка — views в той же поверхности, геометрия без тени,
+  `xdg_toplevel.move` с serial последнего нажатия). Рамка в содержимом у GTK и Chromium — это
+  заголовок самого приложения, то есть свой заголовок контракта (gaps, запись 10), а не рамка,
+  которую обещает `decorated: true`. Выбрано: окно хоста рисует рамку само на subsurface’ах
+  (как libdecor/`sctk-adwaita`), в памяти `wl_shm` на потоке-владельце, а заголовок формирует и
+  растеризует тот же текстовый стек, что и рендерер (`flui-painting`: Parley, swash) — «через
+  движок» в той части, где это возможно без нарушения слоёв. Решение записано в ARCHITECTURE.md
+  («A Wayland window draws its own frame on subsurfaces, not through the engine»).
+  **Форма.** `window/linux/wayland/client_frame.rs` (дочерний файл: механизм одного объекта ОС и
+  лимит 3 000 строк у `wayland.rs`): чистая часть — `Frame` (содержимое, состояния, `resizable`,
+  `Offers` из `wm_capabilities`; без объявления — всё), `Piece` (заголовок и четыре поля),
+  `Part`/`Edge`/`Button`, `PointerOnFrame` (нажатие на заголовок — `Action::Move`, двойное в
+  пределах 400 мс — `Maximize`/`Restore`, на поле — `Resize(edge)`, кнопка — по отпусканию над
+  ней, вторичная — `Menu` в координатах поверхности содержимого), `paint_header` (фон,
+  скруглённые верхние углы плавающего окна, линия снизу, диски кнопок с иконками, заголовок по
+  центру; светлый и тёмный по порталу, активный и нет), `title::TitleText`; живая часть
+  `surfaces` — `ClientFrame` (пять subsurface’ов в режиме sync, каждая часть перерисовывается,
+  только когда изменилось то, что она показывает; буфер уничтожается по `release`),
+  `FrameRecord` (то, что указатель сделал над рамкой; одно ожидающее действие, позднее нажатие
+  его заменяет), `TitleFonts` (коллекция на хост: встроенные шрифты сразу, шрифты хоста —
+  фоновым сканом, который будит цикл). Геометрия окна — заголовок и содержимое
+  (`set_window_geometry(0, −37, w, h + 37)`), поля снаружи; высота из configure теряет
+  заголовок (`Frame::content_of`), лимиты его получают (`send_limits(…, header)`); внешний
+  размер снимка включает заголовок. Рамка уходит в полноэкранном режиме, поля — у
+  развёрнутого окна, у окна без изменения размера и у каждого края `tiled_*`
+  (`ToplevelStates::tiled` стал `TiledEdges`). `decoration::Decoration` получил `draws_own`,
+  `Drawn::{Compositor, Client, Nobody}`; `SetDecorated` снова доступна (недоступна только там,
+  где композитор рисует рамку вопреки просьбе — мозаичный sway); `frame_inset` — 37 на
+  композиторе без `xdg-decoration`. Ввод: `owner::linux::wayland::FramePointer`,
+  `SeatWindow::frame`; указатель над поверхностью рамки принадлежит рамке, ни одно его
+  событие не доходит до ввода окна; нажатие записывается как последний ввод (токены
+  активации). Глобалы `wl_subcompositor` и `wl_shm` теперь в производственной сборке
+  (`WaylandProtocol`), `WindowSeed::executor`. Кит: `testing::wayland::{client_frame_report,
+  ClientFrameReport, Rectangle}`. Харнесс Weston на X11 вынесен в `tests/support/weston_x11.rs`
+  (его берут `wayland_input` и новый `wayland_frame`).
+  **Тесты** (откат проверен): чистые на любом хосте — `a_frame_lies_around_its_content`,
+  `the_frame_goes_away_in_fullscreen_and_at_tiled_edges`,
+  `a_title_bar_shows_the_buttons_its_compositor_offers`, `a_point_on_the_frame_names_its_part`,
+  `the_pointer_on_a_frame_asks_for_what_it_pressed`,
+  `a_title_bar_is_drawn_with_its_buttons_and_title`,
+  `a_frame_past_the_largest_extent_is_not_drawn`, `a_title_is_shaped_and_rasterized`,
+  `a_window_has_the_frame_its_compositor_leaves_it` и
+  `a_window_that_draws_no_frame_has_the_compositors` (decoration). Против композитора:
+  `tests/wayland_window.rs::a_window_has_the_frame_its_compositor_leaves_it` (заменил
+  `…_answers`) — под Weston окно рисует свою рамку ровно когда `decorated`, геометрия —
+  заголовок и содержимое, после `SetDecorated(false)` рамки нет, после `(true)` — снова; под
+  sway плавающее окно получило рамку композитора и своей не нарисовало, `SetDecorated(false)`
+  исполнен, мозаичное — переопределено. `tests/wayland_frame.rs` (Weston 13 desktop-shell на
+  X11 под Xvfb, XTest, снимок экрана через `GetImage`):
+  `a_window_draws_its_own_frame_where_the_compositor_draws_none` (полоса шириной в
+  содержимое и высотой 37 на экране, чернила заголовка, три диска кнопок; выключенная —
+  исчезает, включённая — возвращается), `a_press_on_the_frame_moves_and_resizes_with_its_serial`
+  (перетаскивание заголовка сдвинуло окно ровно на (80, 50), угол — увеличил содержимое на
+  (60, 40); запросы несли serial нажатия), `the_frame_buttons_maximize_and_close_the_window`
+  (развернуть: остался только заголовок, высота configure = содержимое + 37; закрыть: обработчик
+  спрошен, окно закрыто). Откаты: окно не рисует свою рамку — падают все три `wayland_frame` и
+  тест рамки под Weston; своя рамка и там, где рисует композитор — тест рамки под sway («the
+  compositor draws the frame, and the window draws none»); `move` с serial 0 — окно не
+  сдвинулось ((247, 141) вместо (327, 191)); `resize` с serial 0 — размер не изменился; высота
+  configure без вычета заголовка — Weston рвёт соединение (`Protocol error 4 on xdg_wm_base`).
+  **Проверки:** `cargo fmt`; Windows — clippy рабочего пространства `--all-targets -D warnings`, `checks` (вместе с `module-dag`, `file-length`, `markers`, `testing`, `globals`, `docs-paths`), `wasm-check`, `doc-strict`, nextest чистых тестов (17 из 17); clippy Android (`-p flui-native -p flui-app --all-targets`) и macOS (LLVM, `--all-targets --all-features`). WSL Ubuntu 24.04: clippy `-p flui-native` с `--all-targets` и без — по умолчанию, `--no-default-features`, `wayland`, `x11`, `winit-backend`, `--all-features`; clippy `flui-app`, `flui --features native`; rustdoc `-D warnings --document-private-items` трёх вариантов; nextest как в CI под Xvfb (`--all-features` без `wayland_window` и trybuild) — 454 из 454 (с `wayland_frame` и `wayland_input`), `wayland_window` под headless Weston — 14 из 14, три теста протоколов под headless sway 1.9 — 3 из 3; по умолчанию под Weston — 413 из 414: `compiler_guards` (trybuild) не уложился в 20 минут на /mnt/d, в PR CI он не идёт.
+  **Не запускалось:** GNOME и другие композиторы рабочего стола (рамка проверена только под
+  Weston 13, у которого нет меню окна и мозаики; меню окна и `tiled_*` проверены только
+  чистыми тестами); дробный масштаб рамки (Weston без `wp_fractional_scale_v1`, sway рисует свою
+  рамку); перетаскивание касанием и пером (рамка отвечает только указателю); тени нет. Шрифты
+  заголовка — свой скан хоста, а не коллекция приложения: когда `flui-app` выберет нативный
+  хост, ему передавать свою (записано в gaps, запись 10). Mac, iPhone, Android-устройство,
+  браузер не затронуты; `cross-typecheck` — в CI.
 
 ## Отступление от порядка, решённое владельцем
 

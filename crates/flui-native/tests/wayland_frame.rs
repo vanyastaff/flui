@@ -25,7 +25,9 @@ mod cases {
     use std::time::{Duration, Instant};
 
     use flui_foundation::geometry::Size;
-    use flui_native::testing::wayland::{client_frame_report, last_input_serial, present, run_for};
+    use flui_native::testing::wayland::{
+        client_frame_report, compositor_report, last_input_serial, present, run_for,
+    };
     use flui_native::{HostWindow, Platform as _, WaylandPlatform};
     use flui_platform::{WindowCommand, WindowMode, WindowOptions};
     use flui_testing::window_commands::AdmitAndApply as _;
@@ -481,6 +483,16 @@ mod cases {
             content.width,
             f64::from(OUTPUT.0),
             "maximized to the output's width"
+        );
+        // The compositor sizes the window geometry: the title bar and the
+        // content below it.
+        let configured = compositor_report(opened.window.as_ref())
+            .expect("a Wayland window")
+            .size;
+        assert_eq!(
+            f64::from(configured.1),
+            content.height + f64::from(HEADER),
+            "the configured height {configured:?} holds the title bar and the content {content:?}"
         );
 
         let maximized_width = content.width as i32;
