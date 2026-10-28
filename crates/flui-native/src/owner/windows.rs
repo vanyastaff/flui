@@ -1399,64 +1399,18 @@ impl host::Services for WindowsLoop {
     }
 
     fn open_url(&self, url: &str) {
-        use windows::Win32::UI::Shell::ShellExecuteW;
-        let wide_url: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
-        // SAFETY: `wide_url` is explicitly NUL-terminated
-        // (`.chain(std::iter::once(0))`), matching what `PCWSTR` requires,
-        // and stays alive for the duration of this call (it is not dropped
-        // or reallocated between `.as_ptr()` and the call).
-        unsafe {
-            ShellExecuteW(
-                None,
-                w!("open"),
-                PCWSTR(wide_url.as_ptr()),
-                None,
-                None,
-                SW_SHOWNORMAL,
-            );
-        }
+        shell_open(std::ffi::OsStr::new(url), None);
     }
 
     fn reveal_path(&self, path: &std::path::Path) {
-        use windows::Win32::UI::Shell::ShellExecuteW;
-        // Use "explorer /select,<path>" to reveal in Explorer
-        let path_str = path.to_string_lossy();
-        let arg = format!("/select,{path_str}");
-        let wide_arg: Vec<u16> = arg.encode_utf16().chain(std::iter::once(0)).collect();
-        let explorer: Vec<u16> = "explorer\0".encode_utf16().collect();
-        // SAFETY: see `open_url` above — both `wide_arg` and `explorer` are
-        // explicitly NUL-terminated and kept alive across the call.
-        unsafe {
-            ShellExecuteW(
-                None,
-                w!("open"),
-                PCWSTR(explorer.as_ptr()),
-                PCWSTR(wide_arg.as_ptr()),
-                None,
-                SW_SHOWNORMAL,
-            );
-        }
+        // "explorer /select,<path>" reveals the path in Explorer.
+        let mut select = std::ffi::OsString::from("/select,");
+        select.push(path.as_os_str());
+        shell_open(std::ffi::OsStr::new("explorer"), Some(&select));
     }
 
     fn open_path(&self, path: &std::path::Path) {
-        use windows::Win32::UI::Shell::ShellExecuteW;
-        let wide_path: Vec<u16> = path
-            .to_string_lossy()
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect();
-        // SAFETY: see `open_url` above — `wide_path` is explicitly
-        // NUL-terminated and kept alive across the call.
-        unsafe {
-            ShellExecuteW(
-                None,
-                w!("open"),
-                PCWSTR(wide_path.as_ptr()),
-                None,
-                None,
-                SW_SHOWNORMAL,
-            );
-        }
+        shell_open(path.as_os_str(), None);
     }
 
     fn prompt_for_paths(
@@ -1678,25 +1632,79 @@ impl host::Lifecycle<WindowsLoop> for WindowsLoop {
         }
     }
 
-    fn activate(_: &WindowsLoop, _ignoring_other_apps: bool) {
-        use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, SetForegroundWindow};
+    /// Windows has no application to bring forward, only its windows: a
+    /// window comes forward through `WindowCommand::Activate`, under the
+    /// foreground rules. Nothing here touches the foreground, least of all
+    /// another application's window.
+    fn activate(_: &WindowsLoop, _ignoring_other_apps: bool) {}
+}
 
-        // SAFETY: `GetForegroundWindow`/`SetForegroundWindow` take no
-        // pointer arguments — `hwnd` is an opaque value, never dereferenced.
+/// Hand `file` (a URL, a path or a program) with `parameters` to the shell's
+/// `open`, and let the handler it starts come to the foreground.
+///
+/// The right goes to the one process the shell names as the handler it
+/// started ([`foreground_recipient`]), never to any process: where the shell
+/// started none (it handed the request to a handler already running, such as
+/// a browser or Explorer) or failed, nothing is handed over, and a running
+/// handler comes forward under the OS's own rules. Where this process holds
+/// no foreground right itself, Windows refuses the hand-over, and nothing
+/// that was not this process's to hand is given.
+fn shell_open(file: &std::ffi::OsStr, parameters: Option<&std::ffi::OsStr>) {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::GetProcessId;
+    use windows::Win32::UI::Shell::{SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW};
+    use windows::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow;
+
+    let wide = |text: &std::ffi::OsStr| -> Vec<u16> {
+        text.encode_wide().chain(std::iter::once(0)).collect()
+    };
+    let file = wide(file);
+    let parameters = parameters.map(wide);
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: u32::try_from(std::mem::size_of::<SHELLEXECUTEINFOW>())
+            .expect("BUG: SHELLEXECUTEINFOW is a few hundred bytes"),
+        fMask: SEE_MASK_NOCLOSEPROCESS,
+        lpVerb: w!("open"),
+        lpFile: PCWSTR(file.as_ptr()),
+        lpParameters: parameters
+            .as_ref()
+            .map_or(PCWSTR::null(), |parameters| PCWSTR(parameters.as_ptr())),
+        nShow: SW_SHOWNORMAL.0,
+        ..Default::default()
+    };
+    // SAFETY: `info` is a live, initialised `SHELLEXECUTEINFOW` whose
+    // `cbSize` matches its type; its strings are NUL-terminated buffers that
+    // outlive the call, and the shell writes only `hInstApp` and `hProcess`.
+    let opened = unsafe { ShellExecuteExW(&raw mut info) };
+    if let Err(error) = &opened {
+        tracing::warn!(%error, "the shell did not open the target");
+    }
+    let process = info.hProcess;
+    let handler = (!process.is_invalid()).then(|| {
+        // SAFETY: `process` is the handle the shell returned for the handler
+        // it started, owned by this function and closed once only.
         unsafe {
-            // Bring the foreground window to front
-            let hwnd = GetForegroundWindow();
-            if !hwnd.is_invalid()
-                && let Err(error) = SetForegroundWindow(hwnd).ok()
-            {
-                tracing::warn!(
-                    ?hwnd,
-                    ?error,
-                    "SetForegroundWindow failed in Platform::activate"
-                );
-            }
+            let id = GetProcessId(process);
+            let _ = CloseHandle(process);
+            id
+        }
+    });
+    if let Some(id) = foreground_recipient(opened.is_ok(), handler.filter(|id| *id != 0)) {
+        // SAFETY: the call takes a process identifier by value and changes
+        // only which process may set the foreground next.
+        if let Err(error) = unsafe { AllowSetForegroundWindow(id) } {
+            tracing::debug!(%error, "the foreground was not this process's to hand over");
         }
     }
+}
+
+/// The process the foreground right goes to after a shell call: the handler
+/// the shell started, named by its process id, and only when the call
+/// succeeded. A handler the shell did not start (one already running) is
+/// given nothing: the type has no "any process" to name.
+fn foreground_recipient(opened: bool, handler: Option<u32>) -> Option<u32> {
+    handler.filter(|_| opened)
 }
 
 impl Drop for WindowsLoop {
@@ -1724,5 +1732,28 @@ impl Drop for WindowsLoop {
 
         // COM is left by the `apartment` field, after this body, or later by
         // the last window's text services if any still live.
+    }
+}
+
+#[cfg(test)]
+mod foreground_handover_tests {
+    use super::foreground_recipient;
+
+    /// The right goes to the handler the shell started, by its id; to no
+    /// process when the shell started none or failed.
+    #[test]
+    fn the_foreground_goes_only_to_the_handler_the_shell_started() {
+        assert_eq!(foreground_recipient(true, Some(4242)), Some(4242));
+        assert_eq!(
+            foreground_recipient(true, None),
+            None,
+            "a handler already running"
+        );
+        assert_eq!(
+            foreground_recipient(false, Some(4242)),
+            None,
+            "the shell failed"
+        );
+        assert_eq!(foreground_recipient(false, None), None);
     }
 }

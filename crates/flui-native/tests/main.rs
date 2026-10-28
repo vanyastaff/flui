@@ -63,6 +63,9 @@ mod window_callback_unwind;
 mod window_installation;
 #[path = "window_state.rs"]
 mod window_state;
+#[path = "windows_foreground.rs"]
+#[cfg(target_os = "windows")]
+mod windows_foreground;
 #[path = "windows_host_events.rs"]
 #[cfg(target_os = "windows")]
 mod windows_host_events;
