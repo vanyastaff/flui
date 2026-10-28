@@ -284,7 +284,7 @@ graph LR
 | **LY92** | **HDR, широкий охват, профиль дисплея** (D25, R11.6). Контракт получает `SurfaceColorSpace`, запрос headroom и событие смены профиля дисплея (в снимке дисплеев); поверхность `flui-engine` читает их при настройке. Источники по возможностям ОС: Windows — цветовое пространство DXGI, macOS — `CAMetalLayer` с EDR, Android — HDR-возможности дисплея и `ColorMode`, Wayland — протокол управления цветом, Web — `matchMedia` по `dynamic-range` и `color-gamut`; где ОС не даёт — `Unsupported` | LY41, LY46 | `crates/flui-platform/src/display*`, `crates/flui-native/src/display/*`, `crates/flui-engine/src/*` (настройка поверхности) | `workspace`, `reach`, гейт API-замыкания, `cross-typecheck` | headless-инъекция смены профиля; conformance; `Unsupported` с причиной | L + W + T; Dev: Windows (HDR-монитор), macOS, Android |
 | **LY93** | **Файловый доступ с учётом песочницы** (D25, R11.7). Выбор файла возвращает доступ, которым процесс сможет пользоваться и после перезапуска: security-scoped bookmarks (macOS, iOS), URI Storage Access Framework (Android), портал документов (Flatpak), пути с учётом AppContainer и MSIX (Windows); `data_dirs` знает контейнер. Слой не отдаёт путь, который процесс не может открыть | LY57, LY58, LY59, LY67, LY73 | `packages/flui-system/*`, `crates/flui-native/src/storage/*` | `workspace`, `reach` | таблица `flui-system` на симулируемой песочнице: путь вне песочницы не отдаётся; доступ переживает перезапуск | L + T; Dev: Flatpak, macOS в песочнице, Android |
 | **LY94** | **Защищённый ввод и скрытые записи буфера** (D25, R11.8). Назначение поля «пароль» включает `EnableSecureEventInput` (macOS), `isSecureTextEntry` (iOS), `IME_FLAG_NO_PERSONALIZED_LEARNING` (Android); `ClipboardHandle` получает способ записать скрытую запись: Windows — `ExcludeClipboardContentFromMonitorProcessing` и `CanIncludeInClipboardHistory`, macOS — `org.nspasteboard.ConcealedType`, Android — `ClipDescription.EXTRA_IS_SENSITIVE`; `EditableText` со скрытым вводом пользуется ими | LY30, LY32, LY50, LY69 | `crates/flui-interaction/src/clipboard.rs`, `crates/flui-widgets/src/text/editable_text.rs`, `crates/flui-native/src/{text,clipboard}/*` | `workspace`, `reach`, `cross-typecheck` | таблицы «назначение поля → флаги ОС» на хосте; скрытая запись в headless-провайдере; копирование из скрытого поля не пишет обычную запись | L + T; Dev: macOS, iOS, Android, Windows |
-| **LY95** [P] | **Активация по правилам ОС** (D25, R11.9). Wayland — `xdg-activation`: токен берётся из последнего пользовательского ввода, `WindowCommand::Activate` без токена просит внимание, а не крадёт фокус (`Emulated` в `WindowCapabilities.activates`); Windows — право на передний план передаётся явно при активации второго запуска или ссылкой, без слепого `SetForegroundWindow` | LY28, LY81 | `crates/flui-native/src/window/{windows,linux}/*` | `workspace`, `cross-typecheck` | тест соответствия токена и порядка команд; Windows — окно не отбирает фокус у другого приложения | L + W; Dev: Linux (Wayland) |
+| **LY95** [P] | **Активация по правилам ОС** (D25, R11.9). Wayland — `xdg-activation`: токен берётся из последнего пользовательского ввода, `WindowCommand::Activate` без токена просит внимание, а не крадёт фокус (`Emulated` в `WindowCapabilities.activates`); Windows — право на передний план передаётся явно при активации второго запуска или ссылкой, без слепого `SetForegroundWindow`. Решение владельца 2026-10-28: передача права вторым запуском уходит в спеку «Активация» вместе с единственным экземпляром (gaps, запись 13); здесь — ссылкой и приём права | LY28, LY81 | `crates/flui-native/src/window/{windows,linux}/*` | `workspace`, `cross-typecheck` | тест соответствия токена и порядка команд; Windows — окно не отбирает фокус у другого приложения | L + W; Dev: Linux (Wayland) |
 | **LY96** | **Conformance с настоящей ассистивной технологией** (D25, R11.10). Сценарии `os`-lane драйвера (ADR-0238) читают приложение через Narrator (Windows), VoiceOver (macOS, iOS), Orca (Linux, AT-SPI) и TalkBack (Android): имя и роль кнопки, переключатель, поле ввода, список, действие; результат записывается в `docs/platform-parity.md` | LY65, LY70, LY76, LY85, LY88 | `crates/flui-driver/*` (lane `os`), `docs/platform-parity.md` | `docs-paths` | сценарий conformance на каждой ОС; запись прогона | Dev: Windows, macOS, iOS, Linux, Android |
 | **LY97** | **Записи нативного ввода: IME, lifecycle, предпочтения, дисплеи** (D25, R11.11). `native_recording` и `recording_vocabulary` расширяются на композицию IME, lifecycle (состояние окна, host notices), предпочтения и дисплеи; `--record` `os`-lane драйвера пишет их на Windows, macOS, Android и Web; headless воспроизводит детерминированно | LY41, LY44, LY45 | `crates/flui-native/tests/native_recording/*`, `crates/flui-testing/src/*`, `tools/xtask/src/recording_vocabulary.rs`, `crates/flui-driver/*` | `recording-vocabulary`, `workspace` | replay-тест на каждый вид записи на headless; `assert_backend_conforms` по ним | L + W; Dev: macOS, Android |
 | **LY98** | **Журнал нативного ввода в ядро** (D28, R11.13). `tests/native_recording/{codec,mod}.rs` → `src/owner/journal/`; схема записи (заголовок `flui_native_recording`, версия, семейства событий) объявляется во `flui-protocol`; фича `native-capture` сливается с `driver`; golden-записи в `tests/` читаются через `flui-protocol`; `record.start{native}` драйвера пишет этим кодеком | LY26, LY34 | `crates/flui-native/src/owner/journal/*`, `crates/flui-protocol/src/`, `crates/flui-native/Cargo.toml` | `workspace`, `reach`, `globals` | golden-записи без правок; запись во время работы на headless; `flui-driver` читает запись без ребра к ядру | L |
@@ -3772,30 +3772,35 @@ graph LR
   frame-колбэк или поверхность вошла в выход), каждый токен один раз и по порядку
   (`activation::Tokens`). `WindowCapabilities.activates` — `Emulated` при глобале,
   `NotOnThisDevice` без него (было `NotYetOnThisHost`). Токен запуска `XDG_ACTIVATION_TOKEN`
-  читает цикл один раз и отдаёт первому окну; переменная не снимается (`remove_var` гоняется
-  с потоками, читающими окружение), а `xdg_open` её не передаёт открывателю. **Пересечение с
-  LY79:** последний ввод — узкий интерфейс в `owner/linux/wayland.rs`: `LastInput`
-  (`Arc<OwnerCell<Option<UserInput>>>`, `UserInput { seat, serial, surface }`), который окно
-  читает через `WaylandProtocol::last_input`, а ввод сидений LY79 заполняет
-  (`LastInput::record` на нажатии клавиши, кнопки, касании и входе фокуса клавиатуры). До
-  LY79 `record` не зовётся никем (`#[expect(dead_code)]` с причиной), и токен ввода не
-  называет — композитор просит внимания. **Windows** (`window/windows/window.rs`): передний
+  читает цикл один раз, и его получает первое окно, которое таблица окон приняла
+  (`WindowTable::register`); переменная не снимается (`remove_var` гоняется с потоками,
+  читающими окружение), а `xdg_open` её не передаёт открывателю. **Зависимость от LY79:**
+  токен из последнего ввода ждёт LY79. Последний ввод — узкий интерфейс в
+  `owner/linux/wayland.rs`: `LastInput` (`Arc<OwnerCell<Option<UserInput<WlSeat, WlSurface>>>>`),
+  который окно читает через `WaylandProtocol::last_input`, а ввод сидений LY79 заполняет
+  (`LastInput::record` на нажатии клавиши, кнопки, касании и входе фокуса клавиатуры). На
+  `main` Wayland-цикл сидений не привязывает и ввода не получает, так что настоящего вызова
+  нет: `record` под `#[cfg(test)]` с комментарием, пока его не заберёт LY79; токен ввода не
+  называет — композитор просит внимания. Ввод X11 (LY83) не годится: на X11 токен не нужен. **Windows** (`window/windows/window.rs`): передний
   план просится в одном месте, `request_foreground`; `Activate` при отказе правил мигает
   кнопкой панели задач до выхода окна вперёд (`FlashWindowEx`, `FLASHW_TRAY | FLASHW_TIMERNOFG`),
   ничего не форсируется; `Show` просит по тем же правилам без мигания; `activate_window`
   после первого показа проверяет, что дескриптор ещё его (показ мог закрыть окно).
-  `open_url`, `open_path`, `reveal_path` (`owner/windows.rs`) перед `ShellExecuteW` передают
-  право `AllowSetForegroundWindow(ASFW_ANY)` обработчику, которого запускает или будит
-  оболочка. `Platform::activate` на Windows больше не зовёт `SetForegroundWindow` на окне
+  `open_url`, `open_path`, `reveal_path` (`owner/windows.rs`) идут через `ShellExecuteExW` с
+  `SEE_MASK_NOCLOSEPROCESS` и передают право `AllowSetForegroundWindow(pid)` только процессу
+  обработчика, который запустила оболочка (`foreground_recipient`); без PID (обработчик уже
+  запущен) или при сбое оболочки не передаётся ничего, `ASFW_ANY` нет. `Platform::activate` на Windows больше не зовёт `SetForegroundWindow` на окне
   переднего плана (оно чужое) и ничего не делает. Контракт: документация `WindowCommand::Activate`
   и `WindowCapabilities::activates` говорит о правилах фокуса. **Решения для владельца:**
-  (1) передача права при втором запуске на Windows не сделана: единственного экземпляра нет
-  (gaps, запись 13; строка «Активация» в «Чего нет в этой серии»), и производителя у такой
-  передачи в серии нет; сделана передача ссылкой (`ASFW_ANY` перед оболочкой) и приём права
-  (`Activate` выходит вперёд, если право передано); (2) снимок Win32 говорит `focused: true` и
-  `active: true` для окна, открытого процессом не на переднем плане: это фокус и активность в
-  очереди его потока, не системный фокус клавиатуры (найдено тестом этой задачи, не
-  исправлено); (3) на Wayland ссылка (`xdg-open`) токен открывателю не передаёт —
+  (1) передача права вторым запуском **переходит в спеку «Активация» вместе с единственным
+  экземпляром** (решение владельца 2026-10-28; gaps, запись 13; строка «Активация» в «Чего
+  нет в этой серии»); здесь сделаны передача ссылкой (PID запущенного обработчика) и приём
+  права (`Activate` выходит вперёд, если право передано); (2) снимок Win32 говорит
+  `focused: true` и `active: true` для окна процесса не на переднем плане: это фокус и
+  активность очереди его потока. Попытка через `WM_ACTIVATEAPP` не годится — Windows шлёт
+  его и на активацию в собственном потоке фонового процесса (видно в прогоне с двумя
+  процессами); нужны события переднего плана (`EVENT_SYSTEM_FOREGROUND`) в каждое окно —
+  записано в gaps (запись 29), не исправлено; (3) на Wayland ссылка (`xdg-open`) токен открывателю не передаёт —
   для передачи нужен свой токен до запуска, это работа `flui-system` (LY59, портал OpenURI с
   `activation_token`). **Тесты** (откат проверен для каждого):
   `a_token_names_the_last_input_before_its_commit` и
@@ -3826,6 +3831,29 @@ graph LR
   ввода (нет сидений до LY79; headless-композиторы ввода не дают), GNOME/KDE, передача права
   ссылкой на Windows (обработчик, уже запущенный, — браузер или Explorer — в тесте не
   поднимался), `cross-typecheck` (только CI).
+
+  **После ревью #1940.** `LastInput::record` — под `#[cfg(test)]` вместо `#[expect(dead_code)]`
+  (задание `test-trybuild` на `main` собирает зависимости с `-A dead_code`, и неисполненное
+  ожидание ломало сборку); тест `the_last_input_is_the_one_recorded_last` на инертных прокси.
+  Токен запуска теряется, если открытие окна упало: теперь его отдаёт
+  `WindowTable::register` первому принятому окну (`the_launch_token_goes_to_the_first_window_held`;
+  с взятием токена до вставки падает). Запахи кода: один тип `UserInput<Seat, Surface>`
+  (в `owner::linux::wayland::activation`) вместо двух, `ActivationToken` вместо `String`,
+  `Activation::{Offered, Missing}` вместо голого `bool` в `capabilities`, счётчики токенов для
+  тестов — в записи окна под `testing`, не в `Tokens`. Чистые тесты: `a_launch_token_is_the_variables_text`,
+  `the_opener_is_not_handed_the_launch_token` (без `env_remove` падает). Windows: `ASFW_ANY`
+  нет — право только PID запущенного оболочкой обработчика (`ShellExecuteExW`,
+  `the_foreground_goes_only_to_the_handler_the_shell_started`; тип не может назвать «любой
+  процесс»; против настоящего обработчика не запускалось). `Platform::activate` проверен в
+  тесте двух процессов (передний план остаётся у другого приложения); этот кусок проходит и со
+  старым кодом: старый вызов `SetForegroundWindow` на чужом окне ничего не менял, он был
+  бессмысленным, а не вредным. Документация `Platform::activate` говорит, что вызов на всех
+  хостах намеренно пуст, о правилах ОС и о том, что AppKit активирует приложение один раз при
+  старте цикла. Нестабильность теста двух процессов: группа nextest `desktop-foreground`
+  (`max-threads = 1`) для тестов Win32 из `platform_it` (`windows_*`, `contract::`); прогоны
+  чужих окон больше не отнимают передний план. `SAFETY:` в новых местах называют инвариант.
+  CI покрывает только отказ на Wayland (у Weston нет `xdg_activation`), полный путь — sway
+  вручную (gaps, `docs/testing.md`).
 
 ## Отступление от порядка, решённое владельцем
 
