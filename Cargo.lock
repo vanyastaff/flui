@@ -2202,6 +2202,7 @@ dependencies = [
  "futures-util",
  "icu_normalizer",
  "icu_properties",
+ "icu_segmenter",
  "jni",
  "js-sys",
  "keyboard-types",

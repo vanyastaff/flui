@@ -821,6 +821,7 @@ impl IOSWindow {
             signal,
             chrome: Arc::new(IOSSystemChrome(Arc::clone(&status_bar))),
             accessibility: view.ivars().accessibility.clone(),
+            delivery: Arc::downgrade(&delivery),
         };
         let facets = positions.for_window(&this);
         let _ = view.ivars().text.set(Arc::clone(&facets.text));
