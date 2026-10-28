@@ -896,7 +896,7 @@ mod tests {
             colour_of(&HDR10),
             Ok(DisplayColor::high(
                 ColorGamut::Rec2020,
-                Ok(Headroom::new(5.0).expect("headroom"))
+                Ok(Headroom::try_new(5.0).expect("headroom"))
             )),
             "1015 over 203 cd/m²"
         );
@@ -929,7 +929,7 @@ mod tests {
             ]),
             Ok(DisplayColor::high(
                 ColorGamut::Rec2020,
-                Ok(Headroom::new(4.0).expect("headroom"))
+                Ok(Headroom::try_new(4.0).expect("headroom"))
             )),
             "an extended curve without a target peak takes its maximum"
         );

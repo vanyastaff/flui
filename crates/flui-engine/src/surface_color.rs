@@ -643,7 +643,7 @@ mod tests {
         // The platform reports an extended-range display with 2.5 times white
         // while the surface reports no headroom yet (Apple before a layer
         // asks for extended range): the platform decides, with its headroom.
-        let platform_headroom = Headroom::new(2.5).expect("headroom");
+        let platform_headroom = Headroom::try_new(2.5).expect("headroom");
         let hdr = resolve_on(
             DisplayColor::high(ColorGamut::DisplayP3, Ok(platform_headroom)),
             &offered,

@@ -3165,7 +3165,7 @@ mod tests {
 
         let hdr_monitor = DisplayColor::high(
             ColorGamut::Rec2020,
-            Ok(Headroom::new(4.0).expect("headroom")),
+            Ok(Headroom::try_new(4.0).expect("headroom")),
         );
         let sdr_monitor = DisplayColor::standard(ColorGamut::Srgb);
         let caps = wgpu::SurfaceCapabilities {

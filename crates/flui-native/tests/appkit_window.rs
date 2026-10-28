@@ -130,7 +130,7 @@ mod cases {
             let expected = if potential > 1.0 {
                 DisplayColor::high(
                     gamut,
-                    Ok(Headroom::new(potential as f32).expect("a finite headroom over white")),
+                    Ok(Headroom::try_new(potential as f32).expect("a finite headroom over white")),
                 )
             } else {
                 DisplayColor::standard(gamut)

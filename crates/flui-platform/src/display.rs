@@ -509,7 +509,7 @@ impl Headroom {
     ///
     /// # Errors
     /// [`InvalidHeadroom`] for a value that is not finite or is below `1.0`.
-    pub fn new(multiple: f32) -> Result<Self, InvalidHeadroom> {
+    pub fn try_new(multiple: f32) -> Result<Self, InvalidHeadroom> {
         if multiple.is_finite() && multiple >= 1.0 {
             Ok(Self(multiple))
         } else {
@@ -530,7 +530,7 @@ impl Headroom {
         if !positive(peak_nits) || !positive(sdr_white_nits) {
             return Err(InvalidHeadroom);
         }
-        Self::new((peak_nits / sdr_white_nits).max(1.0))
+        Self::try_new((peak_nits / sdr_white_nits).max(1.0))
     }
 
     /// The multiple of SDR white.

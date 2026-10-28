@@ -190,8 +190,8 @@ impl MacosDisplays {
             }
             display.refresh_period = refresh_rate_of_screen(&screen)
                 .and_then(|hertz| RefreshPeriod::from_hz(hertz).ok());
-            // The arm64 floor (11.0) always has the report; x86_64's (10.13)
-            // may not.
+            // Every arm64 Mac runs macOS 11 or later, which has the report;
+            // x86_64 reaches back to 10.13 and asks the gate.
             #[cfg(target_arch = "aarch64")]
             let potential = Some(screen.maximumPotentialExtendedDynamicRangeColorComponentValue());
             #[cfg(not(target_arch = "aarch64"))]
