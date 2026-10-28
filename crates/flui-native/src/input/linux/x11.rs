@@ -460,69 +460,123 @@ pub mod decode {
                 .collect();
             let mut out = self.removed(&gone_slaves, &gone_masters, time);
             for device in devices {
-                if device.master {
-                    let master = XiMaster(device.id);
-                    if self.masters.contains_key(&master) || self.is_full() {
-                        continue;
-                    }
-                    let label = self.mint();
-                    self.masters.insert(
-                        master,
-                        Master {
-                            label,
-                            gestures: None,
-                            current: None,
-                            pinch: None,
-                        },
-                    );
-                    if let Some(change) = self.contacts.add_device(label, PointerKind::Mouse, time)
-                    {
-                        out.push((
-                            None,
-                            PlatformInput::Pointer(PointerEvent::DeviceAdded(change)),
-                        ));
-                    }
-                    continue;
+                self.admit(device, time, &mut out);
+            }
+            out
+        }
+
+        /// A hierarchy change: `removed_slaves` and `removed_masters` go, and
+        /// each of `added` (added, enabled or attached) is described by
+        /// `query`, which asks the server for that one device; `None` when it
+        /// lists no enabled pointer by that id. One query per device the
+        /// change names, so its cost is the change's own size.
+        pub fn hierarchy(
+            &mut self,
+            removed_slaves: &[XiSlave],
+            removed_masters: &[XiMaster],
+            added: &[u16],
+            mut query: impl FnMut(u16) -> Option<DeviceDescription>,
+            time: EventTime,
+        ) -> DeviceChanges {
+            let mut out = self.removed(removed_slaves, removed_masters, time);
+            for id in added {
+                if let Some(device) = query(*id) {
+                    out.extend(self.described(&device, time));
                 }
-                if !device.pointer {
-                    continue;
+            }
+            out
+        }
+
+        /// The server describes `device` now: a new one is announced, a known
+        /// one takes its classes, and one known in another role, or no longer
+        /// a pointer, is removed first.
+        pub fn described(&mut self, device: &DeviceDescription, time: EventTime) -> DeviceChanges {
+            let slave = XiSlave(device.id);
+            let mut out = Vec::new();
+            if self
+                .devices
+                .get(&slave)
+                .is_some_and(|known| !device.pointer || role(device) != known.role)
+            {
+                out.extend(self.removed(&[slave], &[], time));
+            }
+            self.admit(device, time, &mut out);
+            out
+        }
+
+        /// A device's classes changed (`XIDeviceChanged`): a known slave reads
+        /// its valuators and scroll valuators from what the event carries,
+        /// and its scrolling starts over.
+        pub fn classes_changed(&mut self, slave: XiSlave, axes: &[Axis], scrolls: &[ScrollAxis]) {
+            if let Some(known) = self.devices.get_mut(&slave) {
+                known.axes = first_valuators(axes);
+                known.scrolls = first_valuators(scrolls);
+                self.reset_scrolling(slave);
+            }
+        }
+
+        /// Know `device`, as the server describes it, announcing it if new.
+        fn admit(&mut self, device: &DeviceDescription, time: EventTime, out: &mut DeviceChanges) {
+            if device.master {
+                let master = XiMaster(device.id);
+                if self.masters.contains_key(&master) || self.is_full() {
+                    return;
                 }
-                let slave = XiSlave(device.id);
-                if let Some(known) = self.devices.get_mut(&slave) {
-                    // The same device: its classes may have changed.
-                    known.axes = first_valuators(&device.axes);
-                    known.scrolls = first_valuators(&device.scrolls);
-                    continue;
-                }
-                if self.is_full() {
-                    continue;
-                }
-                let role = role(device);
-                let kind = match role {
-                    DeviceRole::Cursor => None,
-                    DeviceRole::Touchscreen => Some(PointerKind::Touch),
-                    DeviceRole::Pen(tool) => Some(PointerKind::Pen { tool }),
-                };
-                let label = kind.map(|_| self.mint());
-                if let (Some(label), Some(kind)) = (label, kind)
-                    && let Some(change) = self.contacts.add_device(label, kind, time)
-                {
+                let label = self.mint();
+                self.masters.insert(
+                    master,
+                    Master {
+                        label,
+                        gestures: None,
+                        current: None,
+                        pinch: None,
+                    },
+                );
+                if let Some(change) = self.contacts.add_device(label, PointerKind::Mouse, time) {
                     out.push((
                         None,
                         PlatformInput::Pointer(PointerEvent::DeviceAdded(change)),
                     ));
                 }
-                self.devices.insert(
-                    slave,
-                    Known {
-                        role,
-                        label,
-                        axes: first_valuators(&device.axes),
-                        scrolls: first_valuators(&device.scrolls),
-                    },
-                );
+                return;
             }
-            out
+            if !device.pointer {
+                return;
+            }
+            let slave = XiSlave(device.id);
+            if let Some(known) = self.devices.get_mut(&slave) {
+                // The same device: its classes may have changed.
+                known.axes = first_valuators(&device.axes);
+                known.scrolls = first_valuators(&device.scrolls);
+                return;
+            }
+            if self.is_full() {
+                return;
+            }
+            let role = role(device);
+            let kind = match role {
+                DeviceRole::Cursor => None,
+                DeviceRole::Touchscreen => Some(PointerKind::Touch),
+                DeviceRole::Pen(tool) => Some(PointerKind::Pen { tool }),
+            };
+            let label = kind.map(|_| self.mint());
+            if let (Some(label), Some(kind)) = (label, kind)
+                && let Some(change) = self.contacts.add_device(label, kind, time)
+            {
+                out.push((
+                    None,
+                    PlatformInput::Pointer(PointerEvent::DeviceAdded(change)),
+                ));
+            }
+            self.devices.insert(
+                slave,
+                Known {
+                    role,
+                    label,
+                    axes: first_valuators(&device.axes),
+                    scrolls: first_valuators(&device.scrolls),
+                },
+            );
         }
 
         /// Whether it knows [`MAX_DEVICES`] devices, and takes no more.
@@ -1472,9 +1526,7 @@ mod live {
                 if let Err(error) = watched {
                     tracing::debug!(%error, "the X11 device hierarchy goes unheard");
                 }
-                // The devices present before any window opens: their
-                // announcements reach no window, only the presence.
-                drop(input.read_devices(&[], &[]));
+                input.read_devices();
             }
             input
         }
@@ -1515,12 +1567,14 @@ mod live {
             Some(f(&mut state))
         }
 
-        /// The devices the server lists now, as the pure decoder reads them.
-        fn devices(&self) -> Vec<DeviceDescription> {
+        /// The devices the server lists for `device` (one id, or
+        /// `Device::ALL`), as the pure decoder reads them: the enabled ones
+        /// and the master pointers.
+        fn query(&self, device: impl Into<xinput::DeviceId>) -> Vec<DeviceDescription> {
             let Some(reply) = self
                 .connection
                 .xcb()
-                .xinput_xi_query_device(xinput::Device::ALL)
+                .xinput_xi_query_device(device)
                 .ok()
                 .and_then(|cookie| cookie.reply().ok())
             else {
@@ -1540,50 +1594,81 @@ mod live {
                         axes: Vec::new(),
                         scrolls: Vec::new(),
                     };
-                    for class in info.classes {
-                        match class.data {
-                            DeviceClassData::Valuator(valuator) => description.axes.push(Axis {
-                                number: valuator.number,
-                                label: self.labels.label(valuator.label),
-                                min: fp3232(valuator.min),
-                                max: fp3232(valuator.max),
-                            }),
-                            DeviceClassData::Scroll(scroll) => {
-                                description.scrolls.push(ScrollAxis {
-                                    number: scroll.number,
-                                    horizontal: scroll.scroll_type
-                                        == xinput::ScrollType::HORIZONTAL,
-                                    increment: fp3232(scroll.increment),
-                                });
-                            }
-                            DeviceClassData::Touch(touch) => {
-                                description.direct_touch = touch.mode == xinput::TouchMode::DIRECT;
-                            }
-                            _ => {}
-                        }
-                    }
+                    self.read_classes(&info.classes, &mut description);
                     description
                 })
                 .collect()
         }
 
-        /// The hierarchy changed: the devices it reports removed go first,
-        /// then the list is read again; what changed goes to every window,
-        /// with the kinds present.
-        fn read_devices(
+        /// Read `classes` (of a query's answer, or an `XIDeviceChanged`) into
+        /// `description`.
+        fn read_classes(
             &self,
-            removed_slaves: &[XiSlave],
-            removed_masters: &[XiMaster],
+            classes: &[xinput::DeviceClass],
+            description: &mut DeviceDescription,
+        ) {
+            for class in classes {
+                match &class.data {
+                    DeviceClassData::Valuator(valuator) => description.axes.push(Axis {
+                        number: valuator.number,
+                        label: self.labels.label(valuator.label),
+                        min: fp3232(valuator.min),
+                        max: fp3232(valuator.max),
+                    }),
+                    DeviceClassData::Scroll(scroll) => {
+                        description.scrolls.push(ScrollAxis {
+                            number: scroll.number,
+                            horizontal: scroll.scroll_type == xinput::ScrollType::HORIZONTAL,
+                            increment: fp3232(scroll.increment),
+                        });
+                    }
+                    DeviceClassData::Touch(touch) => {
+                        description.direct_touch = touch.mode == xinput::TouchMode::DIRECT;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        /// The devices present before any window opens, from one listing of
+        /// them all: their announcements reach no window, only the presence.
+        fn read_devices(&self) {
+            let devices = self.query(xinput::Device::ALL);
+            drop(self.device_changes(|pointers, time| pointers.devices(&devices, time)));
+        }
+
+        /// A hierarchy change: what it removes goes, and each device it adds,
+        /// enables or attaches is asked of the server by its own id (as GTK's
+        /// `handle_hierarchy_changed` and winit's `xinput2_hierarchy_changed`
+        /// do), so a change costs one query per device it names, and a
+        /// device's events after it in the same batch find it known.
+        fn hierarchy(
+            &self,
+            change: &xinput::HierarchyEvent,
         ) -> Vec<(Arc<WindowDelivery>, Delivery)> {
-            let devices = self.devices();
+            let (slaves, masters) = removed_devices(change);
+            let added = added_devices(change);
+            self.device_changes(|pointers, time| {
+                pointers.hierarchy(
+                    &slaves,
+                    &masters,
+                    &added,
+                    |id| self.query(id).into_iter().find(|device| device.id == id),
+                    time,
+                )
+            })
+        }
+
+        /// What `change` makes of the devices goes to every window, with the
+        /// kinds present.
+        fn device_changes(
+            &self,
+            change: impl FnOnce(&mut X11Pointers, EventTime) -> DeviceChanges,
+        ) -> Vec<(Arc<WindowDelivery>, Delivery)> {
             let time = EventTime::from_nanos(event_timestamp_ns());
             let capabilities = self.capabilities_now();
             self.with_state(|state| {
-                let mut changes: DeviceChanges =
-                    state
-                        .pointers
-                        .removed(removed_slaves, removed_masters, time);
-                changes.extend(state.pointers.devices(&devices, time));
+                let changes = change(&mut state.pointers, time);
                 let present = capabilities.with_present(state.pointers.present());
                 let mut out = Vec::new();
                 for (surface, input) in changes {
@@ -1716,6 +1801,15 @@ mod live {
                 )
             })
             .unwrap_or(false)
+        }
+
+        /// Read the keymap again and tell the listeners if the layout's name
+        /// moved.
+        fn reread_keymap(&self) {
+            self.keymap_changed();
+            if self.read_layout() {
+                self.layout_changed();
+            }
         }
 
         /// The server's keymap changed: read it again, with its layouts'
@@ -1873,6 +1967,39 @@ mod live {
         }
     }
 
+    /// The devices a hierarchy change reports added, enabled or attached,
+    /// and not removed or disabled by it: each is asked of the server.
+    fn added_devices(event: &xinput::HierarchyEvent) -> Vec<u16> {
+        let has = |info: &xinput::HierarchyInfo, flags: &[xinput::HierarchyMask]| {
+            flags
+                .iter()
+                .any(|flag| u32::from(info.flags) & u32::from(*flag) != 0)
+        };
+        event
+            .infos
+            .iter()
+            .filter(|info| {
+                has(
+                    info,
+                    &[
+                        xinput::HierarchyMask::MASTER_ADDED,
+                        xinput::HierarchyMask::SLAVE_ADDED,
+                        xinput::HierarchyMask::DEVICE_ENABLED,
+                        xinput::HierarchyMask::SLAVE_ATTACHED,
+                    ],
+                ) && !has(
+                    info,
+                    &[
+                        xinput::HierarchyMask::MASTER_REMOVED,
+                        xinput::HierarchyMask::SLAVE_REMOVED,
+                        xinput::HierarchyMask::DEVICE_DISABLED,
+                    ],
+                )
+            })
+            .map(|info| info.deviceid)
+            .collect()
+    }
+
     /// The devices a hierarchy change reports removed or disabled.
     fn removed_devices(event: &xinput::HierarchyEvent) -> (Vec<XiSlave>, Vec<XiMaster>) {
         let gone = |info: &&xinput::HierarchyInfo, flag: xinput::HierarchyMask| {
@@ -1942,19 +2069,33 @@ mod live {
             let deliveries = match event {
                 Event::XinputKeyPress(key) => self.key_event(key, KeyState::Down),
                 Event::XinputKeyRelease(key) => self.key_event(key, KeyState::Up),
-                Event::XinputHierarchy(change) => {
-                    let (slaves, masters) = removed_devices(change);
-                    self.read_devices(&slaves, &masters)
-                }
+                Event::XinputHierarchy(change) => self.hierarchy(change),
                 Event::XinputDeviceChanged(changed) => {
+                    // The classes the event carries are the device's now, as
+                    // GTK's `handle_device_changed` reads them: no query.
+                    let mut classes = DeviceDescription {
+                        id: changed.deviceid,
+                        master: false,
+                        pointer: true,
+                        name: String::new(),
+                        direct_touch: false,
+                        axes: Vec::new(),
+                        scrolls: Vec::new(),
+                    };
+                    if changed.reason == xinput::ChangeReason::DEVICE_CHANGE {
+                        self.read_classes(&changed.classes, &mut classes);
+                    }
                     self.with_state(|state| {
                         state.pointers.reset_scrolling(XiSlave(changed.sourceid));
+                        if changed.reason == xinput::ChangeReason::DEVICE_CHANGE {
+                            state.pointers.classes_changed(
+                                XiSlave(changed.deviceid),
+                                &classes.axes,
+                                &classes.scrolls,
+                            );
+                        }
                     });
-                    if changed.reason == xinput::ChangeReason::DEVICE_CHANGE {
-                        self.read_devices(&[], &[])
-                    } else {
-                        Vec::new()
-                    }
+                    Vec::new()
                 }
                 Event::XkbStateNotify(state) => {
                     if self.keyboard_state(state) && self.read_layout() {
@@ -1963,10 +2104,9 @@ mod live {
                     Vec::new()
                 }
                 Event::XkbNewKeyboardNotify(_) | Event::XkbMapNotify(_) => {
-                    self.keymap_changed();
-                    if self.read_layout() {
-                        self.layout_changed();
-                    }
+                    // An X keymap is bounded by the protocol (key codes 8 to
+                    // 255, four groups), so reading it again is bounded work.
+                    self.reread_keymap();
                     Vec::new()
                 }
                 Event::FocusOut(focus) => {

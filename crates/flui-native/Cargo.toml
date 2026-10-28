@@ -218,6 +218,21 @@ dispatch2.workspace = true
 # reads the mode rate the same way. Pinned to the version `cocoa` 0.27 already
 # pulls in, so no second copy of the crate enters the tree.
 core-graphics = { workspace = true }
+# The view's backing layer (`owner::apple::metal_layer`): a `CAMetalLayer`
+# whose drawables report when they reached the screen. Both the versions
+# `wgpu-hal` 30 already pins.
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
+    "CABase",
+    "CALayer",
+    "CAMetalLayer",
+    "objc2-core-foundation",
+    "objc2-metal",
+] }
+objc2-metal = { version = "0.3.2", default-features = false, features = [
+    "MTLDrawable",
+    "block2",
+    "objc2-core-foundation",
+] }
 # Grand Central Dispatch: the owner lane (AppKit main queue, or a test serial
 # queue) every NSPasteboard operation is routed through. Zero-dep crate;
 # 0.2.0 is already pinned in Cargo.lock transitively via objc2-foundation.
@@ -688,6 +703,23 @@ all-features = true
 # Exercise the exact asynchronous UIKit error block on an Apple host.
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 block2.workspace = true
+# The AppKit conformance fixture presents Metal drawables into its window's
+# layer, as wgpu does, to see the layer report them.
+objc2-metal = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "MTLDevice",
+    "MTLCommandQueue",
+    "MTLCommandBuffer",
+    "MTLDrawable",
+    "MTLPixelFormat",
+] }
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "CALayer",
+    "CAMetalLayer",
+    "objc2-core-foundation",
+    "objc2-metal",
+] }
 
 # Layer 3, not the substrate's 2: its `flui-semantics` edge (the
 # `PlatformAccessibility` trait, ADR-0082 §2) points at layer 3. Only
@@ -710,7 +742,7 @@ globals = [
     { item = "window::state::NEXT_CAPABILITIES_OWNER", grant = "ADR-0097", class = "counter", reason = "capabilities owners, one per window cell, advanced by a checked `fetch_update` so exhaustion refuses instead of reissuing an owner" },
     { item = "window::headless::NEXT_HEADLESS_WINDOW_ID", grant = "ADR-0097", class = "counter", reason = "headless window IDs, advanced by `try_update` so exhaustion is an error" },
     { item = "owner::apple::ios::DELEGATE_STATE", grant = "ADR-0097", class = "trampoline", reason = "UIKit delegate methods reach the platform through it; they carry no user-data pointer" },
-    { item = "owner::apple::macos::display_pass::IN_DISPLAY_PASS", grant = "ADR-0097", class = "process", reason = "marks AppKit's `drawRect:` display pass on the main thread, which the process has once" },
+    { item = "owner::apple::macos::display_pass::IN_DISPLAY_PASS", grant = "ADR-0097", class = "process", reason = "marks AppKit's display pass (the view's `updateLayer`) on the main thread, which the process has once" },
     { item = "owner::apple::macos::owner_lane::ON_OWNER_QUEUE", grant = "ADR-0097", class = "process", reason = "marks a block running on the owner GCD queue, which the process has once" },
     { item = "owner::apple::macos::owner_lane::owner_queue::Q", grant = "ADR-0097", class = "process", reason = "the owner GCD queue, created once per process" },
     { item = "owner::apple::macos::content_view::view_class::INIT", grant = "ADR-0097", class = "process", reason = "registers the Objective-C view class, which the runtime holds once per process" },

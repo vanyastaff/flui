@@ -14,9 +14,10 @@
 //! (`interpretKeyEvents:`) while the text input composes, to the input
 //! otherwise, and a key the input method declines (`doCommandBySelector:`)
 //! back to the input; a release that lands inside an open composition reaches
-//! neither. Its `drawRect:` asks the window for a frame inside a display pass
+//! neither. Its `updateLayer` asks the window for a frame inside a display pass
 //! ([`display_pass`](super::display_pass)), and it reports its hover and its
-//! appearance through the window's callbacks.
+//! appearance through the window's callbacks. Its backing layer is a
+//! `FluiMetalLayer`, which reports when its frames reached the screen.
 //!
 //! The class is built with objc2's imperative `ClassBuilder` rather than the
 //! declarative `define_class!` macro: its ivar holds a boxed context of Rust
@@ -41,6 +42,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSArray, NSNotFound, NSPoint, NSRange, NSRect, NSSize, NSUInteger};
 
+use crate::owner::apple::metal_layer::{FluiMetalLayer, feedback_of};
 use crate::owner::panic_boundary::{AfterPanic, contain_owner_callback, os_entry};
 use crate::owner::window_delivery::WindowDelivery;
 
@@ -188,6 +190,9 @@ pub(crate) fn create(
     }
     .expect("BUG: initWithFrame: answers the view it was sent to");
 
+    let reports = delivery
+        .upgrade()
+        .map(|delivery| delivery.presentation_reports());
     let context = Box::into_raw(Box::new(ViewContext {
         delivery,
         input: (hooks.input)(),
@@ -207,7 +212,36 @@ pub(crate) fn create(
         let slot: *mut *mut std::ffi::c_void = ivar.load_ptr(&view);
         *slot = context;
     }
+    // Layer-backed from the start, so the view's `FluiMetalLayer` is there
+    // before a renderer builds a surface on the view, and it reports to this
+    // window.
+    // SAFETY: `view` is a live NSView on the main thread it was made on;
+    // `layer` answers its backing layer, made by `makeBackingLayer` above.
+    // A view that makes its own backing layer is not redrawn unless it says
+    // when: on `setNeedsDisplay:` and through a live resize
+    // (`NSViewLayerContentsRedrawDuringViewResize`), as a `drawRect:` view is.
+    let layer: Option<Retained<AnyObject>> = unsafe {
+        let _: () = msg_send![&*view, setWantsLayer: true];
+        let _: () = msg_send![
+            &*view,
+            setLayerContentsRedrawPolicy: objc2_app_kit::NSViewLayerContentsRedrawPolicy::DuringViewResize
+        ];
+        msg_send![&*view, layer]
+    };
+    if let (Some(feedback), Some(reports)) = (layer.as_deref().and_then(feedback_of), reports) {
+        feedback.report_to(reports);
+    }
     view
+}
+
+/// Tell the layer of `view`, a FLUIContentView, the refresh interval of the
+/// display its window is on; `None` when variable or unknown.
+pub(crate) fn set_layer_refresh(view: &AnyObject, refresh: Option<std::time::Duration>) {
+    // SAFETY: `view` is a live NSView; `layer` answers its backing layer.
+    let layer: Option<Retained<AnyObject>> = unsafe { msg_send![view, layer] };
+    if let Some(feedback) = layer.as_deref().and_then(feedback_of) {
+        feedback.set_refresh(refresh);
+    }
 }
 
 /// The light/dark half of `object`'s effective appearance: the system theme,
@@ -399,38 +433,43 @@ extern "C-unwind" fn mouse_exited(this: &AnyObject, sel: Sel, event: *mut AnyObj
 // Drawing and appearance
 // ============================================================================
 
-/// `drawRect:` — AppKit asks for content: the window's frame request.
-///
-/// `request_redraw()` marks the view dirty via `setNeedsDisplay:`; AppKit then
-/// calls this method on the next display pass, which is where the per-window
-/// `WindowHandler::frame_requested` contract fires (the macOS analogue of the Win32
-/// window's `WM_PAINT`). The frame runs inside this callback, so a redraw the
-/// frame asks for is asked for while AppKit is displaying this view — the one
-/// moment a `setNeedsDisplay:` is discarded; the display pass marks this
-/// thread for the duration, so the window defers only that case.
-extern "C-unwind" fn draw_rect(this: &AnyObject, _sel: Sel, dirty_rect: NSRect) {
-    os_entry("drawRect:", (), AfterPanic::Answer(|()| ()), || {
-        // SAFETY: `this` is a live FLUIContentView; the super `drawRect:`
-        // message is the documented NSView handling of the dirty region.
-        unsafe {
-            let _display_pass = super::display_pass::DisplayPassGuard::enter();
-            let delivery = with_this(this, |view| view.context.delivery.upgrade()).flatten();
-            if let Some(delivery) = delivery {
-                tracing::trace!("FLUIContentView drawRect: dispatching frame request");
-                delivery.dispatch_request_frame();
-            } else {
-                // The window's callbacks are gone (torn down, or the view
-                // outlived its window). AppKit still owns this display pass, so
-                // the super call below runs either way — but a missing callback
-                // here is why a frame that AppKit asked for produced no frame
-                // request, which is otherwise indistinguishable from AppKit
-                // never asking at all.
-                tracing::trace!(
-                    "FLUIContentView drawRect: no live delivery; frame request dropped"
-                );
-            }
+/// `makeBackingLayer` — the layer AppKit backs the view with: a
+/// [`FluiMetalLayer`], which wgpu draws into directly (it takes a view's root
+/// layer that is a `CAMetalLayer`) and whose drawables report when they
+/// reached the screen.
+extern "C-unwind" fn make_backing_layer(_this: &AnyObject, _sel: Sel) -> *mut AnyObject {
+    os_entry("makeBackingLayer", (), AfterPanic::Abort, || {
+        Retained::autorelease_return(FluiMetalLayer::new()).cast()
+    })
+}
 
-            let _: () = msg_send![super(this, NSViewClass::class()), drawRect: dirty_rect];
+/// `updateLayer` — AppKit asks for content: the window's frame request.
+///
+/// The view draws by updating its layer (`wantsUpdateLayer`), never through
+/// `drawRect:`: the bitmap AppKit would give a `drawRect:` view would cover
+/// the Metal drawable after every display pass. `request_redraw()` marks the
+/// view dirty via `setNeedsDisplay:`; AppKit then calls this method on the
+/// next display pass, which is where the per-window
+/// `WindowHandler::frame_requested` contract fires (the macOS analogue of the
+/// Win32 window's `WM_PAINT`). The frame runs inside this callback, so a
+/// redraw the frame asks for is asked for while AppKit is displaying this
+/// view — the one moment a `setNeedsDisplay:` is discarded; the display pass
+/// marks this thread for the duration, so the window defers only that case.
+extern "C-unwind" fn update_layer(this: &AnyObject, _sel: Sel) {
+    os_entry("updateLayer", (), AfterPanic::Answer(|()| ()), || {
+        let _display_pass = super::display_pass::DisplayPassGuard::enter();
+        // SAFETY: `this` is a live FLUIContentView, the receiver of one of its
+        // own methods.
+        let delivery = unsafe { with_this(this, |view| view.context.delivery.upgrade()) }.flatten();
+        if let Some(delivery) = delivery {
+            tracing::trace!("FLUIContentView updateLayer: dispatching frame request");
+            delivery.dispatch_request_frame();
+        } else {
+            // The window's callbacks are gone (torn down, or the view outlived
+            // its window): why a frame that AppKit asked for produced no frame
+            // request, which is otherwise indistinguishable from AppKit never
+            // asking at all.
+            tracing::trace!("FLUIContentView updateLayer: no live delivery; frame request dropped");
         }
     });
 }
@@ -925,8 +964,16 @@ fn view_class() -> &'static AnyClass {
             );
 
             builder.add_method(
-                sel!(drawRect:),
-                draw_rect as extern "C-unwind" fn(_, _, NSRect),
+                sel!(wantsUpdateLayer),
+                yes as extern "C-unwind" fn(_, _) -> Bool,
+            );
+            builder.add_method(
+                sel!(makeBackingLayer),
+                make_backing_layer as extern "C-unwind" fn(_, _) -> *mut AnyObject,
+            );
+            builder.add_method(
+                sel!(updateLayer),
+                update_layer as extern "C-unwind" fn(_, _),
             );
             builder.add_method(sel!(dealloc), dealloc as extern "C-unwind" fn(_, _));
             builder.add_method(

@@ -1784,6 +1784,7 @@ mod toplevel {
                 signal,
                 waker,
                 notices,
+                frames,
                 input,
                 executor,
             } = owner.seed()?;
@@ -1891,7 +1892,11 @@ mod toplevel {
             let window = Rc::new(Self {
                 id,
                 facets: windows.positions.for_window(&SurfaceRef(())),
-                delivery: Arc::new(WindowDelivery::new(handler, InputCapabilities::UNAVAILABLE)),
+                delivery: Arc::new(WindowDelivery::counting_frames(
+                    handler,
+                    InputCapabilities::UNAVAILABLE,
+                    frames,
+                )),
                 state: Arc::new(WindowStateCell::new(WindowState::new(
                     WindowGeometry::new(None, size),
                     size,

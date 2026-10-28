@@ -125,8 +125,8 @@ pub(crate) mod activation {
 }
 
 pub(crate) mod wait {
-    //! How long one turn of the Wayland loop may block in `poll`, and when a
-    //! wake deadline is offered to the windows (ADR-0249's rule on this host).
+    //! How long one turn of the Wayland loop may block in `poll` (ADR-0249's
+    //! rule on this host).
     //!
     //! Every producer of work wakes the loop: the compositor's socket, the
     //! owner signal and a redraw asked for on another thread write what `poll`
@@ -134,10 +134,12 @@ pub(crate) mod wait {
     //! deliver now, or the application's handler named a wake deadline.
     //!
     //! A deadline that came due is served by a frame: the loop asks every
-    //! window for one, once. A deadline it already offered waits for a frame
-    //! that serves it (a frame callback, a configure) and then for the
-    //! handler to name another; asking again would turn a window that declines
-    //! its frames, or one the compositor does not draw, into a busy loop.
+    //! window for one, once, and arms the same instant again only after a
+    //! frame ran ([`WakeDeadline`](crate::owner::wake_deadline::WakeDeadline),
+    //! the rule the X11 and Win32 loops follow). Asking again with no frame
+    //! since would turn a window that declines its frames, or one the
+    //! compositor does not draw, into a busy loop. Only the deadline armed
+    //! bounds the wait.
 
     #![forbid(unsafe_code)]
 
@@ -156,11 +158,10 @@ pub(crate) mod wait {
         /// When the input next delivers something no event brings: a held
         /// key's repeat.
         pub(crate) input_due: Option<Instant>,
-        /// The earliest instant the application's handler asked to be woken
-        /// at.
+        /// The wake deadline armed: one the application's handler asked for
+        /// and the last delivery does not hold back. One already due is
+        /// delivered on the next turn.
         pub(crate) wake_deadline: Option<Instant>,
-        /// The deadline already offered to the windows.
-        pub(crate) offered: Option<Instant>,
     }
 
     /// How the last flush of the connection went.
@@ -199,41 +200,17 @@ pub(crate) mod wait {
         }
     }
 
-    /// Whether the loop asks its windows for a frame for `deadline` now: it
-    /// is due and was not offered yet.
-    pub(crate) fn offer_now(
-        deadline: Option<Instant>,
-        offered: Option<Instant>,
-        now: Instant,
-    ) -> bool {
-        deadline.is_some_and(|deadline| deadline <= now && Some(deadline) != offered)
-    }
-
     /// How long `poll` may block; `None` blocks until something wakes the
     /// loop.
     pub(crate) fn poll_timeout(turn: LoopTurn, now: Instant) -> Option<Duration> {
         if turn.frame_due {
             return Some(Duration::ZERO);
         }
-        let until = |instant: Instant| instant.saturating_duration_since(now);
-        let deadline = turn.wake_deadline.and_then(|deadline| {
-            if deadline > now {
-                Some(until(deadline))
-            } else if Some(deadline) == turn.offered {
-                // Offered and waiting for a frame that serves it.
-                None
-            } else {
-                Some(Duration::ZERO)
-            }
-        });
-        [
-            deadline,
-            turn.frame_wait.map(until),
-            turn.input_due.map(until),
-        ]
-        .into_iter()
-        .flatten()
-        .min()
+        [turn.wake_deadline, turn.frame_wait, turn.input_due]
+            .into_iter()
+            .flatten()
+            .min()
+            .map(|instant| instant.saturating_duration_since(now))
     }
 
     #[cfg(test)]
@@ -241,34 +218,25 @@ pub(crate) mod wait {
         use super::*;
 
         /// An idle Wayland loop blocks until it is woken: no timer of its own,
-        /// a deadline ahead bounds the wait, a deadline that came due is
-        /// offered once, and one already offered never turns the wait into a
-        /// busy loop.
+        /// a deadline ahead bounds the wait, an armed deadline that came due
+        /// ends it at once so the next turn delivers it, and a frame waiting
+        /// on a callback that may be lost bounds it too.
         #[test]
         fn an_idle_wayland_loop_blocks_until_it_is_woken() {
             let now = Instant::now();
             let ms = Duration::from_millis;
             let behind = now.checked_sub(ms(40));
-            let turn = |frame_due, wake_deadline, offered| LoopTurn {
+            let turn = |frame_due, frame_wait, wake_deadline| LoopTurn {
                 frame_due,
-                frame_wait: None,
-                input_due: None,
-                wake_deadline,
-                offered,
-            };
-            let waiting = |frame_wait, wake_deadline| LoopTurn {
-                frame_due: false,
                 frame_wait,
                 input_due: None,
                 wake_deadline,
-                offered: None,
             };
             let repeating = |input_due, wake_deadline| LoopTurn {
                 frame_due: false,
                 frame_wait: None,
                 input_due,
                 wake_deadline,
-                offered: None,
             };
             for (case, turn, expected) in [
                 ("idle", turn(false, None, None), None),
@@ -278,48 +246,33 @@ pub(crate) mod wait {
                     Some(Duration::ZERO),
                 ),
                 (
-                    "a frame to deliver with an offered deadline",
-                    turn(true, behind, behind),
+                    "a frame to deliver before a deadline ahead",
+                    turn(true, None, Some(now + ms(250))),
                     Some(Duration::ZERO),
                 ),
                 (
                     "a deadline ahead",
-                    turn(false, Some(now + ms(250)), None),
-                    Some(ms(250)),
-                ),
-                (
-                    "a deadline ahead, an earlier one offered",
-                    turn(false, Some(now + ms(250)), behind),
+                    turn(false, None, Some(now + ms(250))),
                     Some(ms(250)),
                 ),
                 (
                     "a deadline that came due",
-                    turn(false, behind, None),
+                    turn(false, None, behind),
                     Some(Duration::ZERO),
                 ),
                 (
                     "a deadline exactly due",
-                    turn(false, Some(now), None),
-                    Some(Duration::ZERO),
-                ),
-                (
-                    "a due deadline already offered",
-                    turn(false, behind, behind),
-                    None,
-                ),
-                (
-                    "a due deadline other than the one offered",
-                    turn(false, behind, Some(now + ms(5))),
+                    turn(false, None, Some(now)),
                     Some(Duration::ZERO),
                 ),
                 (
                     "a frame waits on a callback that may be lost",
-                    waiting(Some(now + ms(700)), None),
+                    turn(false, Some(now + ms(700)), None),
                     Some(ms(700)),
                 ),
                 (
                     "the earlier of a lost callback and a deadline",
-                    waiting(Some(now + ms(700)), Some(now + ms(100))),
+                    turn(false, Some(now + ms(700)), Some(now + ms(100))),
                     Some(ms(100)),
                 ),
                 (
@@ -371,21 +324,6 @@ pub(crate) mod wait {
                 assert_eq!(before_poll(dispatched, flush), expected, "{case}");
             }
         }
-
-        /// A deadline is offered to the windows once, when it is due, and a
-        /// new deadline is offered again.
-        #[test]
-        fn a_due_deadline_is_offered_once() {
-            let now = Instant::now();
-            let behind = now.checked_sub(Duration::from_millis(10));
-            let ahead = Some(now + Duration::from_millis(10));
-            assert!(offer_now(behind, None, now), "due and not offered");
-            assert!(!offer_now(behind, behind, now), "offered already");
-            assert!(!offer_now(ahead, None, now), "not due");
-            assert!(!offer_now(None, None, now), "no deadline");
-            let later = Some(now);
-            assert!(offer_now(later, behind, now), "a new deadline");
-        }
     }
 }
 
@@ -433,7 +371,7 @@ mod event_loop {
     use web_time::Instant;
 
     use super::activation::{ActivationToken, LAUNCH_TOKEN_VARIABLE, UserInput, launch_token};
-    use super::wait::{BeforePoll, Flush, LoopTurn, before_poll, offer_now, poll_timeout};
+    use super::wait::{BeforePoll, Flush, LoopTurn, before_poll, poll_timeout};
     use crate::error::PlatformError;
     use crate::executor::BackgroundExecutor;
     use crate::host;
@@ -443,6 +381,7 @@ mod event_loop {
     use crate::owner::panic_boundary::contain_owner_callback;
     use crate::owner::signal::OwnerSignal;
     use crate::owner::slot::{OwnerCell, OwnerMap};
+    use crate::owner::wake_deadline::{FrameCount, WakeDeadline};
     use crate::owner::watch::Watch;
     use crate::owner::window_delivery::WindowDelivery;
     use crate::owner::{DirectOwnerHooks, OpenWindowError, OwnerHooks, OwnerPlatform};
@@ -1217,6 +1156,9 @@ mod event_loop {
         /// The channel a wake from sleep marks the window's state stale
         /// through.
         pub(crate) notices: Arc<dyn NoticeChannel>,
+        /// The loop's frame count, which the window's handler counts into
+        /// each frame it produces.
+        pub(crate) frames: Arc<AtomicU64>,
         /// The seats' input, which the window joins as it opens and leaves
         /// as it closes, and which shows its cursor.
         pub(crate) input: Arc<dyn WaylandInput>,
@@ -1265,8 +1207,11 @@ mod event_loop {
         /// The display watch, which the owner thread starts and stops.
         display_watch: OwnerCell<Option<Watch>>,
         executor: Arc<BackgroundExecutor>,
-        /// The wake deadline already offered to the windows.
-        offered: OwnerCell<Option<Instant>>,
+        /// The wake deadline armed and the last one delivered.
+        deadline: OwnerCell<WakeDeadline>,
+        /// How many frames the windows' handlers produced, which tells the
+        /// deadline a delivery a frame served from one that reached nothing.
+        frames: FrameCount,
         /// The exit policy is asked again on the next turn.
         reevaluate: AtomicBool,
         /// The loop ran once; a platform runs once.
@@ -1427,7 +1372,8 @@ mod event_loop {
                 sources: Mutex::new(Sources::default()),
                 display_watch: OwnerCell::new(),
                 executor: Arc::new(BackgroundExecutor::new()),
-                offered: OwnerCell::new(),
+                deadline: OwnerCell::new(),
+                frames: FrameCount::default(),
                 reevaluate: AtomicBool::new(false),
                 ran: AtomicBool::new(false),
             })
@@ -1467,6 +1413,7 @@ mod event_loop {
                 signal: Arc::clone(&self.signal),
                 waker: Arc::downgrade(&self.waker),
                 notices: Arc::clone(&self.notices),
+                frames: self.frames.counter(),
                 input: Arc::clone(&self.input),
                 executor: Arc::clone(&self.executor),
             })
@@ -1626,19 +1573,12 @@ mod event_loop {
                 return Ok(true);
             }
             let now = Instant::now();
-            let deadline = self.app.wake_deadline().or_resume(None);
             let windows = self.windows.values();
-            let offer = self
-                .offered
-                .with(|offered| {
-                    let offer = offer_now(deadline, *offered, now);
-                    if offer {
-                        *offered = deadline;
-                    }
-                    offer
-                })
+            let due = self
+                .deadline
+                .with(|deadline| deadline.take_due(now, self.frames.get()))
                 .unwrap_or(false);
-            if offer {
+            if due {
                 for window in &windows {
                     window.request_frame();
                 }
@@ -1649,13 +1589,23 @@ mod event_loop {
                 .filter_map(|window| window.frame_wait())
                 .min();
             drop(windows);
+            // A loop that stopped accepting work asks for no deadline, as the
+            // X11 and Win32 loops do.
+            let answer = if self.signal.accepting() {
+                self.app.wake_deadline().or_resume(None)
+            } else {
+                None
+            };
+            let wake_deadline = self
+                .deadline
+                .with(|deadline| deadline.arm(answer, self.frames.get()))
+                .flatten();
             let timeout = poll_timeout(
                 LoopTurn {
                     frame_due,
                     frame_wait,
                     input_due: self.input.next_due(),
-                    wake_deadline: deadline,
-                    offered: self.offered.with(|offered| *offered).flatten(),
+                    wake_deadline,
                 },
                 now,
             );
