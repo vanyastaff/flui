@@ -1080,6 +1080,25 @@ trait depends on `flui-platform` instead.
   and `frame_rate_range_gate_table` the display link's
   (`display::apple::link_rate`), through `version::gate::testing::row`, and
   `virtual_mode_gate_table` the display query's (`display::windows::sample`).
+- **Every collection the peer fills is bounded.** A Wayland compositor and an
+  X server are peers, not trusted parts of the process: what one of their
+  events adds and only another of their events removes has a fixed cap, named
+  as a constant with why its number was chosen, and the event past it is
+  refused, delivered as a partial frame, or replaces what it supersedes —
+  whichever is true to it — never held without end. The caps: open touches per
+  device (`MAX_TOUCHES`, in the shared registry, so X11 and every backend too),
+  a Wayland touch frame's steps and a tablet frame's button changes (delivered
+  in parts), tablet tools per seat, seats, outputs, the keys a keyboard holds
+  (in the shared `xkb::Keyboard`, which also refuses a key code outside its
+  keymap), one queued keymap per seat, and the X11 devices and valuators a
+  query lists. A pointer frame's axes are fixed fields and bounded by their
+  type. The Wayland seats' queue of recorded events holds what one read of the
+  socket dispatched, since the loop delivers it before it reads again, and a
+  newer keymap replaces a queued one rather than queueing 8 MiB more. Each cap
+  in the pure translation has a test that feeds 10 000 distinct events without
+  the one that clears them and fails with the cap removed; the seat, output
+  and tablet-tool caps sit where a global or a tool is bound, which only a
+  compositor reaches.
 
 ---
 

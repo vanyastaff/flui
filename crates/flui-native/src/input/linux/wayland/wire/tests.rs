@@ -843,3 +843,28 @@ fn a_touchscreen_holds_a_bounded_number_of_touches() {
     assert_eq!(count("down p"), MAX_TOUCHES, "{lines:?}");
     assert_eq!(count("cancel p"), MAX_TOUCHES, "{lines:?}");
 }
+
+#[test]
+/// A compositor that sends tablet buttons in a frame it never closes has the
+/// frame delivered in parts: what it gathers stays bounded.
+fn a_tablet_frame_gathers_a_bounded_number_of_buttons() {
+    let mut assembly = seated();
+    let mut events = vec![
+        eraser(ToolWire::ProximityIn { surface: WINDOW }),
+        eraser(ToolWire::Motion { x: 4.0, y: 4.0 }),
+        eraser(ToolWire::Frame),
+    ];
+    events.extend((0..10_000).map(|code| {
+        eraser(ToolWire::Button {
+            code,
+            pressed: code % 2 == 0,
+        })
+    }));
+    let lines = feed(&mut assembly, &events);
+    let gathered = assembly.tools[0].frame.buttons.len();
+    assert!(gathered <= MAX_FRAME_BUTTONS, "{gathered} buttons gathered");
+    assert!(
+        lines.iter().any(|line| line.contains("Pressed")),
+        "the parts are delivered"
+    );
+}

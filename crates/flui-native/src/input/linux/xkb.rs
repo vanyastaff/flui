@@ -652,9 +652,19 @@ mod keyboard {
         compose: Option<Compose>,
         context: Held<xkb_context>,
         modifiers: [xkb_mod_index_t; 7],
-        /// The XKB key codes pressed and not released, in order.
+        /// The key codes the keymap defines.
+        keycodes: std::ops::RangeInclusive<u32>,
+        /// The XKB key codes pressed and not released, in order; at most
+        /// [`MAX_HELD_KEYS`].
         held: Vec<u32>,
     }
+
+    /// The keys a keyboard holds down at once. A full-size keyboard has 104
+    /// to 108 keys and one with n-key rollover reports every one held; past
+    /// this the source is pressing keys it never releases, and a further
+    /// press is refused rather than held, and scanned, forever. A keymap's
+    /// key codes alone do not bound it: they may run past 255.
+    pub(crate) const MAX_HELD_KEYS: usize = 128;
 
     impl std::fmt::Debug for Keyboard {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -690,6 +700,7 @@ mod keyboard {
             let (keymap, state) = Self::read(api, &context, source)?;
             let compose = Self::open_compose(&context);
             let modifiers = Self::indices(api, &keymap);
+            let keycodes = Self::keycodes(api, &keymap);
             Some(Self {
                 api,
                 state,
@@ -697,8 +708,17 @@ mod keyboard {
                 compose,
                 context,
                 modifiers,
+                keycodes,
                 held: Vec::new(),
             })
+        }
+
+        fn keycodes(api: &XkbCommon, keymap: &Held<xkb_keymap>) -> std::ops::RangeInclusive<u32> {
+            // SAFETY: a live keymap.
+            unsafe {
+                (api.xkb_keymap_min_keycode)(keymap.as_ptr())
+                    ..=(api.xkb_keymap_max_keycode)(keymap.as_ptr())
+            }
         }
 
         /// The keymap and state `source` holds now.
@@ -808,6 +828,7 @@ mod keyboard {
                 return false;
             };
             self.modifiers = Self::indices(self.api, &keymap);
+            self.keycodes = Self::keycodes(self.api, &keymap);
             // The old state names the old keymap: it goes first.
             self.state = state;
             self.keymap = keymap;
@@ -949,19 +970,28 @@ mod keyboard {
 
         /// The key event of XKB key code `keycode` (the kernel's plus
         /// [`EVDEV_OFFSET`]) going `state` at `time`; a press feeds compose.
+        /// `None` for a key code the keymap does not define, unless it is the
+        /// release of a key held from an older keymap, and for a press past
+        /// [`MAX_HELD_KEYS`] held.
         pub(crate) fn key(
             &mut self,
             keycode: u32,
             state: KeyState,
             repeat: bool,
             time: EventTime,
-        ) -> KeyEvent {
+        ) -> Option<KeyEvent> {
+            let releases_held = state == KeyState::Up && self.held.contains(&keycode);
+            if !self.keycodes.contains(&keycode) && !releases_held {
+                return None;
+            }
             match state {
-                KeyState::Down => {
-                    if !self.held.contains(&keycode) {
-                        self.held.push(keycode);
+                KeyState::Down if !self.held.contains(&keycode) => {
+                    if self.held.len() >= MAX_HELD_KEYS {
+                        return None;
                     }
+                    self.held.push(keycode);
                 }
+                KeyState::Down => {}
                 KeyState::Up => self.held.retain(|held| *held != keycode),
             }
             // SAFETY: the live state; any key code may be asked.
@@ -974,14 +1004,16 @@ mod keyboard {
             };
             let key = composed.unwrap_or_else(|| key_of(keysym, &self.keysym_text(keysym)));
             let code = code_of(keycode.saturating_sub(EVDEV_OFFSET));
-            KeyEvent::new(state, key, code, time)
-                .with_location(location_for_code(code))
-                .with_modifiers(self.modifiers())
-                .with_repeat(if repeat {
-                    KeyRepeat::AutoRepeat
-                } else {
-                    KeyRepeat::First
-                })
+            Some(
+                KeyEvent::new(state, key, code, time)
+                    .with_location(location_for_code(code))
+                    .with_modifiers(self.modifiers())
+                    .with_repeat(if repeat {
+                        KeyRepeat::AutoRepeat
+                    } else {
+                        KeyRepeat::First
+                    }),
+            )
         }
 
         /// The keyboard leaves its window: the compose sequence in progress
@@ -989,9 +1021,10 @@ mod keyboard {
         /// they were pressed.
         pub(crate) fn leave(&mut self, time: EventTime) -> Vec<KeyEvent> {
             self.reset_compose();
-            std::mem::take(&mut self.held)
+            self.held
+                .clone()
                 .into_iter()
-                .map(|keycode| self.key(keycode, KeyState::Up, false, time))
+                .filter_map(|keycode| self.key(keycode, KeyState::Up, false, time))
                 .collect()
         }
     }
@@ -1001,7 +1034,7 @@ mod keyboard {
         use flui_platform::EventTime;
         use flui_platform::keyboard::{Key, KeyState, NamedKey};
 
-        use super::{Keyboard, KeymapSource};
+        use super::{Keyboard, KeymapSource, MAX_HELD_KEYS};
         use crate::input::linux::xkb::EVDEV_OFFSET;
 
         /// A whole keymap as a compositor shares it, NUL included, and named
@@ -1052,6 +1085,7 @@ xkb_symbols \"flui\" {
             let press = |keyboard: &mut Keyboard, code: u32| {
                 let key = keyboard
                     .key(code + EVDEV_OFFSET, KeyState::Down, false, time)
+                    .expect("the keymap defines the key")
                     .key;
                 keyboard.key(code + EVDEV_OFFSET, KeyState::Up, false, time);
                 key
@@ -1062,6 +1096,48 @@ xkb_symbols \"flui\" {
                 press(&mut keyboard, 18),
                 Key::character("e"),
                 "composed once"
+            );
+        }
+
+        /// A keymap with every key code a keyboard has, and more than the cap
+        /// lets it hold (libxkbcommon may clamp the maximum to 255).
+        const WIDE_KEYMAP: &[u8] = b"xkb_keymap {
+xkb_keycodes \"flui\" { minimum = 8; maximum = 20000; };
+xkb_types \"flui\" { };
+xkb_compatibility \"flui\" { };
+xkb_symbols \"flui\" { };
+};
+";
+
+        /// A source that presses keys it never releases leaves at most
+        /// `MAX_HELD_KEYS` held: further presses, and key codes the keymap
+        /// does not define, are refused, and leaving releases the held ones.
+        #[test]
+        fn a_keyboard_holds_a_bounded_number_of_keys() {
+            if xkbcommon_dl::xkbcommon_option().is_none() {
+                eprintln!("skipped: libxkbcommon is not installed");
+                return;
+            }
+            let source =
+                KeymapSource::compositor(WIDE_KEYMAP.to_vec()).expect("the keymap is text");
+            let mut keyboard = Keyboard::new(&source).expect("the keymap compiles");
+            let time = EventTime::from_nanos(1);
+            for outside in [0, 30_000] {
+                assert!(
+                    keyboard.key(outside, KeyState::Down, false, time).is_none(),
+                    "key code {outside}, outside the keymap's, is refused"
+                );
+            }
+            let pressed = (0..10_000)
+                .filter_map(|code| keyboard.key(code + EVDEV_OFFSET, KeyState::Down, false, time))
+                .count();
+            assert_eq!(pressed, MAX_HELD_KEYS);
+            assert_eq!(keyboard.leave(time).len(), MAX_HELD_KEYS);
+            assert!(
+                keyboard
+                    .key(EVDEV_OFFSET, KeyState::Down, false, time)
+                    .is_some(),
+                "leaving frees the keys"
             );
         }
     }

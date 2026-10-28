@@ -488,6 +488,11 @@ struct ToolFrame {
     buttons: SmallVec<[(u32, bool); 4]>,
 }
 
+/// The button changes a tablet frame gathers before it is delivered unclosed:
+/// a pen has two or three buttons and a frame changes each once, so this is
+/// many frames' worth.
+const MAX_FRAME_BUTTONS: usize = 32;
+
 /// A tablet tool: where it is, what its axes hold, and its frame.
 #[derive(Debug, Clone)]
 struct ToolState {
@@ -1086,7 +1091,14 @@ impl SeatAssembly {
                 state.sensors.tangential_pressure = Some(f64::from(position) / 65_535.0);
                 frame.moved = true;
             }
-            ToolWire::Button { code, pressed } => frame.buttons.push((code, pressed)),
+            ToolWire::Button { code, pressed } => {
+                // A frame the compositor never closes is delivered in parts
+                // rather than gathered without end.
+                if frame.buttons.len() >= MAX_FRAME_BUTTONS {
+                    self.tool_frame(device, kind, time, &mut out);
+                }
+                self.tool_state(device).frame.buttons.push((code, pressed));
+            }
             ToolWire::Frame => self.tool_frame(device, kind, time, &mut out),
         }
         out

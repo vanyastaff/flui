@@ -104,6 +104,10 @@ const COMPOSITOR_VERSION: u32 = 3;
 /// for each of a few tablets. A compositor announcing tools it never removes
 /// is refused past this rather than held forever.
 const MAX_TOOLS: usize = 16;
+/// The seats the input binds. A seat is a user at the machine, and a
+/// compositor with more than a few is unheard of; a compositor announcing
+/// seats without end is not bound past this.
+const MAX_SEATS: usize = 16;
 
 /// `CLOCK_MONOTONIC`, the clock compositors stamp input on.
 fn monotonic() -> Duration {
@@ -162,6 +166,21 @@ enum Wire {
         rate: i32,
         delay: i32,
     },
+}
+
+/// Record `wire` for the next delivery. A keymap replaces one its seat's
+/// keyboard has queued and not read: each is up to 8 MiB of text compiled on
+/// delivery, and a newer one supersedes it, so a seat queues one at most.
+fn queue(wires: &mut Vec<Wire>, wire: Wire) {
+    if let Wire::Keymap { seat, .. } = wire
+        && let Some(queued) = wires
+            .iter_mut()
+            .find(|queued| matches!(queued, Wire::Keymap { seat: held, .. } if *held == seat))
+    {
+        *queued = wire;
+        return;
+    }
+    wires.push(wire);
 }
 
 /// A window the input delivers to.
@@ -330,7 +349,7 @@ impl Shared {
     }
 
     fn record(&self, wire: Wire) {
-        self.wires.with(|wires| wires.push(wire));
+        self.wires.with(|wires| queue(wires, wire));
     }
 
     fn record_seat(&self, time: WireTime, event: SeatEvent) {
@@ -418,6 +437,15 @@ impl SeatInput {
         version: u32,
         queue: &QueueHandle<WaylandState>,
     ) {
+        let seats = self
+            .shared
+            .objects
+            .with(|objects| objects.seats.len())
+            .unwrap_or_default();
+        if seats >= MAX_SEATS {
+            tracing::debug!(name, "a Wayland seat past {MAX_SEATS} was not bound");
+            return;
+        }
         let key = self.shared.seat_key();
         let seat = registry.bind::<WlSeat, SeatData, WaylandState>(
             name,
@@ -640,7 +668,7 @@ impl Delivering {
         time: EventTime,
     ) -> Option<KeyEvent> {
         let keyboard = &mut self.keymap_mut(seat)?.keyboard;
-        Some(keyboard.key(code.saturating_add(EVDEV_OFFSET), state, repeat, time))
+        keyboard.key(code.saturating_add(EVDEV_OFFSET), state, repeat, time)
     }
 
     fn keyboard_wire(&mut self, wire: Wire) -> Vec<(Target, PlatformInput)> {
@@ -708,20 +736,25 @@ impl Delivering {
                 pressed,
             } => {
                 let stamp = self.assembly.stamp(time);
-                let (state, focus) = if pressed {
-                    let repeats = self.keymap(seat).is_some_and(|keymap| {
-                        keymap.keyboard.repeats(code.saturating_add(EVDEV_OFFSET))
-                    });
-                    (
-                        KeyState::Down,
-                        self.keyboards.press(seat, code, repeats, Instant::now()),
-                    )
+                let state = if pressed {
+                    KeyState::Down
                 } else {
-                    (KeyState::Up, self.keyboards.release(seat, code))
+                    KeyState::Up
                 };
                 // The keyboard reads every key, so a key pressed outside a
                 // window is not left held in it.
                 let event = self.key_event(seat, code, state, false, stamp);
+                let focus = if !pressed {
+                    self.keyboards.release(seat, code)
+                } else if event.is_some() {
+                    let repeats = self.keymap(seat).is_some_and(|keymap| {
+                        keymap.keyboard.repeats(code.saturating_add(EVDEV_OFFSET))
+                    });
+                    self.keyboards.press(seat, code, repeats, Instant::now())
+                } else {
+                    // A press the keyboard refused does not repeat either.
+                    None
+                };
                 let Some(focus) = focus else {
                     return Vec::new();
                 };
@@ -2259,5 +2292,44 @@ impl Dispatch<WpCursorShapeDeviceV1, ()> for WaylandState {
         _: &QueueHandle<Self>,
     ) {
         // A cursor shape device has no events.
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{KeymapSource, SeatKey, Wire, queue};
+
+    /// A compositor that sends keymap after keymap before the loop delivers
+    /// leaves one queued per seat, the newest.
+    #[test]
+    fn a_seat_queues_one_keymap() {
+        let mut wires = Vec::new();
+        for index in 0..10_000 {
+            let text = format!("xkb_keymap {{ /* {index} */ }};").into_bytes();
+            let source = KeymapSource::compositor(text).expect("the keymap is text");
+            queue(
+                &mut wires,
+                Wire::Keymap {
+                    seat: SeatKey(1),
+                    source,
+                },
+            );
+        }
+        queue(
+            &mut wires,
+            Wire::RepeatInfo {
+                seat: SeatKey(1),
+                rate: 25,
+                delay: 600,
+            },
+        );
+        assert_eq!(wires.len(), 2, "wires queued");
+        let Wire::Keymap { source, .. } = &wires[0] else {
+            panic!("the keymap stays first");
+        };
+        assert!(
+            format!("{source:?}").contains("9999"),
+            "the newest: {source:?}"
+        );
     }
 }

@@ -3586,7 +3586,14 @@ graph LR
   (`a_device_holds_a_bounded_number_of_touches`); сенсор Wayland отклоняет `down` сверх 32, а
   незакрытый кадр отдаёт частями после 256 шагов (`a_touchscreen_holds_a_bounded_number_of_touches`);
   оба теста падают без ограничения. Сидение держит не больше 16 инструментов планшета, лишний
-  уничтожается.
+  уничтожается. Правило «всё, что наполняет пир, ограничено» (ARCHITECTURE.md): клавиатура xkb
+  держит не больше 128 клавиш и отклоняет код вне keymap (`a_keyboard_holds_a_bounded_number_of_keys`,
+  Wayland и X11); кадр планшета отдаётся частями после 32 кнопок
+  (`a_tablet_frame_gathers_a_bounded_number_of_buttons`); в очереди одна keymap на сидение
+  (`a_seat_queues_one_keymap`); X11 знает не больше 128 устройств и 36 валюаторов на каждое
+  (`the_devices_and_valuators_known_are_bounded`); каждый тест падает без своего ограничения.
+  Сидений не больше 16, выходов не больше 64 — проверено только чтением, их привязку достигает
+  лишь композитор.
 - [x] **LY83** — ветка `platform/x11-input` от `main` @ `c8401e35b`, слито `main` @ `ee5480c57`
   (#1933). **Позиция ввода** таблицы `X11` — цикл (`type Input = X11Loop`): таблица делает
   `input::linux::x11::X11Input` (`X11Host::input`), цикл держит его через хук

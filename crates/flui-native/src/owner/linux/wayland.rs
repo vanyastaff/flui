@@ -451,6 +451,10 @@ mod event_loop {
     /// The newest `wl_output`; the loop binds every output only so that a
     /// surface's `enter` and `leave` name one.
     const OUTPUT_VERSION: u32 = 4;
+    /// The outputs the loop binds. A desk has a few screens and a video wall
+    /// a few dozen; a compositor announcing outputs without end is not bound
+    /// past this, and a surface on one of those names no display.
+    const MAX_OUTPUTS: usize = 64;
     /// `wp_viewporter` has one version.
     const VIEWPORTER_VERSION: u32 = 1;
     /// `zxdg_decoration_manager_v1` has one version.
@@ -865,6 +869,10 @@ mod event_loop {
         ) {
             let name = OutputName::new(name);
             if self.outputs.iter().any(|(bound, _)| *bound == name) {
+                return;
+            }
+            if self.outputs.len() >= MAX_OUTPUTS {
+                tracing::debug!(?name, "a Wayland output past {MAX_OUTPUTS} was not bound");
                 return;
             }
             let output = registry.bind::<WlOutput, OutputName, Self>(
