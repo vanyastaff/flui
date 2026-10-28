@@ -47,6 +47,8 @@ testing = []
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 flui-layer = { path = "../flui-layer", version = "=0.2.0-dev" }
+# The display's colour profile the surface is configured for (ADR-0256).
+flui-platform = { workspace = true }
 
 # === GPU Rendering (wgpu backend) ===
 wgpu = { workspace = true, default-features = false }

@@ -91,7 +91,7 @@ struct Win {
     native: MockWindow,
     /// The platform keeps its windows alive; the headless one does not, so the
     /// test does.
-    _window: Rc<dyn PlatformWindow>,
+    window: Rc<dyn PlatformWindow>,
     dispatcher: PresentationDispatcher,
     /// Redraws the window was asked for.
     redraws: Arc<AtomicUsize>,
@@ -167,7 +167,7 @@ fn install_window(
     (
         Win {
             native,
-            _window: window,
+            window,
             dispatcher,
             redraws,
             fail_redraw,
@@ -499,6 +499,47 @@ fn closed_window_receives_nothing() {
     assert_eq!(win.redraws(), before, "a closed window was notified");
 }
 
+/// A renderer is set up for the colour profile the accepted snapshot gives
+/// the window's display, and a profile change reaches the next one set up.
+fn a_surface_is_set_up_for_the_colour_of_its_window_s_display() {
+    use flui_platform::{CapabilityAbsence, ColorGamut, DisplayColor, Headroom};
+
+    let rig = boot();
+    let left = open_window(&rig, Some(LEFT));
+    let right = open_window(&rig, Some(RIGHT));
+    let colour_of = |win: &Win| super::super::host::display_color_of(win.window.as_ref());
+    assert_eq!(
+        colour_of(&left),
+        Some(DisplayColor::standard(ColorGamut::Srgb))
+    );
+
+    let hdr = DisplayColor::high(
+        ColorGamut::Rec2020,
+        Ok(Headroom::new(3.0).expect("headroom")),
+    );
+    rig.controls
+        .simulate_display_change(rig.ids[LEFT], DisplayChange::Color(Ok(hdr)))
+        .expect("HDR on");
+    rig.controls
+        .simulate_display_change(
+            rig.ids[RIGHT],
+            DisplayChange::Color(Err(CapabilityAbsence::NotOnThisDevice)),
+        )
+        .expect("colour gone");
+    rig.turns.drive();
+
+    assert_eq!(
+        colour_of(&left),
+        Some(hdr),
+        "the profile change was not accepted"
+    );
+    assert_eq!(
+        colour_of(&right),
+        None,
+        "a display without a colour leaves the surface's own report"
+    );
+}
+
 #[test]
 fn display_delivery_contract() {
     crate::table_test::run_table(
@@ -531,6 +572,10 @@ fn display_delivery_contract() {
             (
                 "foreign_thread_invalidation_wakes_the_owner",
                 foreign_thread_invalidation_wakes_the_owner as fn(),
+            ),
+            (
+                "a_surface_is_set_up_for_the_colour_of_its_window_s_display",
+                a_surface_is_set_up_for_the_colour_of_its_window_s_display as fn(),
             ),
         ],
     );

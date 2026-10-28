@@ -2019,6 +2019,7 @@ dependencies = [
  "flui-layer",
  "flui-objects",
  "flui-painting",
+ "flui-platform",
  "flui-rendering",
  "glam",
  "image",

@@ -104,6 +104,7 @@ where
     let renderer = pollster::block_on(Renderer::with_surface_color(
         Arc::clone(&surface),
         config.surface_color,
+        super::host::display_color_of(window.as_ref()),
     ));
     let mut renderer = match renderer {
         Ok(r) => r,

@@ -48,7 +48,7 @@ use std::sync::Arc;
 use crate::error::{EngineError, EngineResult};
 use crate::frame_latency::FrameLatency;
 use crate::raster::PresentDisposition;
-use crate::surface_color::{OutputEncoding, ResolvedSurfaceColor, SurfaceColor};
+use crate::surface_color::{ColorRequest, OutputEncoding, ResolvedSurfaceColor, SurfaceColor};
 use crate::surface_lease::SurfaceLease;
 use crate::window_target::WindowTarget;
 
@@ -937,27 +937,36 @@ impl Renderer {
     /// this constructor is the one this crate ships; it is the advertised
     /// entry point, not a temporary beside an unwired shared value type.
     pub async fn new(target: impl WindowTarget) -> EngineResult<Self> {
-        Self::with_surface_color(target, SurfaceColor::default()).await
+        Self::with_surface_color(target, SurfaceColor::default(), None).await
     }
 
-    /// [`Self::new`] with a request for the surface's colour capability.
+    /// [`Self::new`] with a request for the surface's colour capability, on a
+    /// display whose colour the platform reports as `display`.
     ///
-    /// The request is met as far as the surface and the adapter allow and falls
-    /// back down `Hdr` → `WideGamut` → `Srgb8`; [`Self::surface_color`] says
-    /// what was granted. A request other than [`SurfaceColor::Srgb8`] that is
-    /// granted paints in an `Rgba16Float` working target and converts it to the
-    /// surface in the presentation blit.
+    /// The request is met as far as the surface, the adapter and the display
+    /// allow and falls back down `Hdr` → `WideGamut` → `Srgb8`;
+    /// [`Self::surface_color`] says what was granted. `display` is the
+    /// [`DisplayInfo::color`](flui_platform::DisplayInfo::color) of the
+    /// display the window is on, `None` where the platform reports none: an
+    /// extended-range surface is granted only on a display in high range, and
+    /// its tone mapping is bounded by the display's headroom (ADR-0256). A
+    /// surface recreated later is resolved against the same report. A request
+    /// other than [`SurfaceColor::Srgb8`] that is granted paints in an
+    /// `Rgba16Float` working target and converts it to the surface in the
+    /// presentation blit.
     ///
     /// # Errors
     /// As [`Self::new`].
     pub async fn with_surface_color(
         target: impl WindowTarget,
         requested: SurfaceColor,
+        display: Option<flui_platform::DisplayColor>,
     ) -> EngineResult<Self> {
+        let color = ColorRequest { requested, display };
         // An `Arc<dyn SurfaceTarget>` (the common caller shape, a window's
         // surface target) becomes an `Arc<Arc<dyn SurfaceTarget>>` here:
-        // `Arc<dyn SurfaceTarget>` cannot upcast to `Arc<dyn WindowTarget>`
-        // without naming `flui-platform`, which this crate does not depend on.
+        // `Arc<dyn SurfaceTarget>` cannot upcast to `Arc<dyn WindowTarget>`:
+        // the contract's trait cannot name this crate's as a supertrait.
         // One extra pointer chase per surface creation.
         let (w, h) = (800u32, 600u32); // Will be updated on first resize
         let device_lost_hook = Arc::default();
@@ -971,7 +980,7 @@ impl Renderer {
                     h,
                     &device_lost_hook,
                     FrameLatency::default(),
-                    requested,
+                    color,
                 )
                 .await?;
                 Ok((target, stack))
@@ -1064,12 +1073,13 @@ impl Renderer {
         width: u32,
         height: u32,
         latency: FrameLatency,
-        requested_color: SurfaceColor,
+        color: ColorRequest,
     ) -> EngineResult<(wgpu::SurfaceConfiguration, bool, ResolvedSurfaceColor)> {
         let surface_caps = surface.get_capabilities(adapter);
         let surface_color = ResolvedSurfaceColor::resolve(
-            requested_color,
+            color.requested,
             &surface_caps,
+            color.display,
             &surface.display_hdr_info(adapter),
             crate::surface_color::working_format_renderable(adapter),
         )?;
@@ -1087,6 +1097,7 @@ impl Renderer {
             format = ?surface_color.format(),
             color_space = ?surface_color.color_space(),
             working_format = ?surface_color.working_format(),
+            display = ?color.display,
             "Selected surface color configuration"
         );
 
@@ -1169,7 +1180,7 @@ impl Renderer {
         height: u32,
         device_lost_hook: &Arc<DeviceLostSlot>,
         latency: FrameLatency,
-        requested_color: SurfaceColor,
+        color: ColorRequest,
     ) -> EngineResult<WindowedGpuStack> {
         let backends = Self::select_backend();
         tracing::info!("Creating wgpu instance with backends: {:?}", backends);
@@ -1253,14 +1264,8 @@ impl Renderer {
         let device = Arc::new(device);
         let queue = Arc::new(queue);
 
-        let (config, supports_copy_src, surface_color) = Self::derive_surface_config(
-            &surface,
-            &adapter,
-            width,
-            height,
-            latency,
-            requested_color,
-        )?;
+        let (config, supports_copy_src, surface_color) =
+            Self::derive_surface_config(&surface, &adapter, width, height, latency, color)?;
         surface.configure(&device, &config);
 
         let (painter, offscreen) = Self::build_format_consumers(
@@ -1439,7 +1444,7 @@ impl Renderer {
             height,
             &self.device_lost_hook,
             self.frame_latency,
-            self.surface_color.requested(),
+            self.surface_color.request(),
         )
         .await?;
 
@@ -2088,7 +2093,7 @@ impl Renderer {
             width,
             height,
             self.frame_latency,
-            self.surface_color.requested(),
+            self.surface_color.request(),
         )?;
 
         // Whether the fresh surface moved the working format away from the one
@@ -3041,6 +3046,7 @@ mod tests {
                     }],
                     ..Default::default()
                 },
+                None,
                 &wgpu::DisplayHdrInfo::default(),
                 false,
             )

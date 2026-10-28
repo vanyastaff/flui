@@ -8,6 +8,7 @@
 //! and what the application can read back.
 
 use bytemuck::{Pod, Zeroable};
+use flui_platform::{DisplayColor, DynamicRange, Headroom};
 
 use crate::error::{EngineError, EngineResult};
 
@@ -83,10 +84,20 @@ pub(crate) enum Transfer {
     Pq,
 }
 
+/// What a surface's colour is chosen from besides its capabilities: the
+/// application's request and the colour the platform reports for the display
+/// the window is on, which a recreated surface is resolved against again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ColorRequest {
+    pub(crate) requested: SurfaceColor,
+    pub(crate) display: Option<DisplayColor>,
+}
+
 /// The colour configuration a surface was given.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ResolvedSurfaceColor {
     requested: SurfaceColor,
+    display: Option<DisplayColor>,
     granted: SurfaceColor,
     format: wgpu::TextureFormat,
     color_space: wgpu::SurfaceColorSpace,
@@ -147,14 +158,28 @@ impl ResolvedSurfaceColor {
         self.output
     }
 
+    /// What this configuration was resolved from, for the surface that
+    /// replaces this one.
+    pub(crate) const fn request(&self) -> ColorRequest {
+        ColorRequest {
+            requested: self.requested,
+            display: self.display,
+        }
+    }
+
     /// Choose the surface configuration for `requested` from what the surface
     /// offers.
     ///
-    /// `hdr` is the display's live state; a display that reports no headroom
-    /// over SDR white is treated as SDR even where the surface lists extended
-    /// colour spaces. `working_renderable` says whether the adapter can render
-    /// and blend [`wgpu::TextureFormat::Rgba16Float`], the working format of
-    /// every non-`Srgb8` configuration.
+    /// The display's state comes from `display`, the colour the platform
+    /// reports for the display the window is on, where it reports one, and
+    /// otherwise from `hdr`, what the surface reports. A display that is not
+    /// in a high-range mode, or reports no headroom over SDR white, is treated
+    /// as SDR even where the surface lists extended colour spaces. The
+    /// headroom the tone mapping is bounded by is the platform's, then the
+    /// surface's, then a default for an HDR display that reports no peak.
+    /// `working_renderable` says whether the adapter can render and blend
+    /// [`wgpu::TextureFormat::Rgba16Float`], the working format of every
+    /// non-`Srgb8` configuration.
     ///
     /// # Errors
     /// [`EngineError::UnsupportedSurfaceColorConfiguration`] when the surface
@@ -162,17 +187,18 @@ impl ResolvedSurfaceColor {
     pub fn resolve(
         requested: SurfaceColor,
         caps: &wgpu::SurfaceCapabilities,
+        display: Option<DisplayColor>,
         hdr: &wgpu::DisplayHdrInfo,
         working_renderable: bool,
     ) -> EngineResult<Self> {
         let sdr = select_sdr(caps)?;
-        let headroom = hdr.tone_map_headroom();
-        let display_is_hdr = headroom.is_none_or(|h| h > 1.0);
+        let (display_is_hdr, headroom) = display_range(display, hdr);
         let offers =
             |format, space: wgpu::SurfaceColorSpaces| caps.color_spaces(format).contains(space);
         let working = wgpu::TextureFormat::Rgba16Float;
         let converted = |granted, format, color_space, gamut, transfer, headroom| Self {
             requested,
+            display,
             granted,
             format,
             color_space,
@@ -255,12 +281,37 @@ impl ResolvedSurfaceColor {
         } = sdr;
         Ok(Self {
             requested,
+            display,
             granted: SurfaceColor::Srgb8,
             format,
             color_space: wgpu::SurfaceColorSpace::Srgb,
             working_format,
             output,
         })
+    }
+}
+
+/// Whether the display shows extended range, and the headroom it reports:
+/// the platform's answer where it gives a colour for the display, the
+/// surface's otherwise.
+///
+/// A platform colour in standard range is SDR whatever the surface says. One
+/// in high range takes the platform's headroom, or the surface's when the
+/// platform reports no peak and the surface reports one over white. Without a
+/// platform colour, a surface that reports no headroom is taken as HDR-capable
+/// (wgpu reports `Some(1.0)` for a definitively-SDR display).
+fn display_range(display: Option<DisplayColor>, hdr: &wgpu::DisplayHdrInfo) -> (bool, Option<f32>) {
+    let surface = hdr.tone_map_headroom().filter(|h| h.is_finite());
+    match display {
+        Some(color) => (
+            color.color_space.dynamic_range == DynamicRange::High,
+            color
+                .headroom
+                .ok()
+                .map(Headroom::get)
+                .or_else(|| surface.filter(|&h| h > 1.0)),
+        ),
+        None => (surface.is_none_or(|h| h > 1.0), surface),
     }
 }
 
@@ -494,7 +545,69 @@ mod tests {
         pairs: &[(Format, Spaces)],
         hdr: &wgpu::DisplayHdrInfo,
     ) -> ResolvedSurfaceColor {
-        ResolvedSurfaceColor::resolve(requested, &caps(pairs), hdr, true).expect("SDR pair")
+        ResolvedSurfaceColor::resolve(requested, &caps(pairs), None, hdr, true).expect("SDR pair")
+    }
+
+    /// [`resolve`] on a display the platform reports `display` for.
+    fn resolve_on(
+        display: DisplayColor,
+        pairs: &[(Format, Spaces)],
+        hdr: &wgpu::DisplayHdrInfo,
+    ) -> ResolvedSurfaceColor {
+        ResolvedSurfaceColor::resolve(SurfaceColor::Hdr, &caps(pairs), Some(display), hdr, true)
+            .expect("SDR pair")
+    }
+
+    #[test]
+    fn the_platform_colour_decides_the_display_state_over_the_surface_report() {
+        use flui_platform::{CapabilityAbsence, ColorGamut};
+
+        let offered = [
+            SDR,
+            (Format::Rgba16Float, Spaces::EXTENDED_SRGB_LINEAR),
+            (Format::Bgra8Unorm, Spaces::SRGB.union(Spaces::DISPLAY_P3)),
+        ];
+        // The platform says HDR is off; the surface's report of headroom does
+        // not turn it on.
+        let sdr = resolve_on(
+            DisplayColor::standard(ColorGamut::Srgb),
+            &offered,
+            &hdr_display(4.0),
+        );
+        assert_eq!(sdr.granted(), SurfaceColor::WideGamut);
+
+        // The platform reports an extended-range display with 2.5 times white
+        // while the surface reports no headroom yet (Apple before a layer
+        // asks for extended range): the platform decides, with its headroom.
+        let platform_headroom = Headroom::new(2.5).expect("headroom");
+        let hdr = resolve_on(
+            DisplayColor::high(ColorGamut::DisplayP3, Ok(platform_headroom)),
+            &offered,
+            &hdr_display(1.0),
+        );
+        assert_eq!(hdr.granted(), SurfaceColor::Hdr);
+        assert_eq!(hdr.headroom(), 2.5);
+        assert_eq!(
+            hdr.request().display,
+            Some(DisplayColor::high(
+                ColorGamut::DisplayP3,
+                Ok(platform_headroom)
+            )),
+            "a recreated surface resolves against the same display report"
+        );
+
+        // High range without a reported peak: the surface's headroom, then
+        // the default.
+        let unreported =
+            DisplayColor::high(ColorGamut::Rec2020, Err(CapabilityAbsence::NotOnThisDevice));
+        assert_eq!(
+            resolve_on(unreported, &offered, &hdr_display(3.0)).headroom(),
+            3.0
+        );
+        assert_eq!(
+            resolve_on(unreported, &offered, &wgpu::DisplayHdrInfo::default()).headroom(),
+            DEFAULT_HDR_HEADROOM
+        );
     }
 
     const SDR: (Format, Spaces) = (Format::Bgra8Unorm, Spaces::SRGB);
@@ -596,6 +709,7 @@ mod tests {
         let resolved = ResolvedSurfaceColor::resolve(
             SurfaceColor::Hdr,
             &caps(&offered),
+            None,
             &hdr_display(4.0),
             false,
         )
@@ -713,7 +827,7 @@ mod tests {
             SurfaceColor::Hdr,
         ] {
             let error =
-                ResolvedSurfaceColor::resolve(requested, &only_hdr, &hdr_display(4.0), true)
+                ResolvedSurfaceColor::resolve(requested, &only_hdr, None, &hdr_display(4.0), true)
                     .expect_err("no SDR pair");
             assert!(matches!(
                 error,
