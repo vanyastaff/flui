@@ -508,10 +508,26 @@ impl X11Loop {
                 tracing::debug!(?error, "the X server refused a request");
                 continue;
             }
-            if self.input.event(&event) {
-                continue;
+            // A handler's panic in what the input delivered still leaves the
+            // windows the event, a focus change they follow too; the panic
+            // is raised again after.
+            let heard =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.input.event(&event)));
+            match heard {
+                Ok(true) => {}
+                Ok(false) => self.windows.event(&event),
+                Err(payload) => {
+                    // The first failure is the one raised.
+                    if let Err(second) =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            self.windows.event(&event);
+                        }))
+                    {
+                        flui_foundation::panic::retain_opaque_payload(second);
+                    }
+                    std::panic::resume_unwind(payload);
+                }
             }
-            self.windows.event(&event);
         }
     }
 

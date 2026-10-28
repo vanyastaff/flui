@@ -39,7 +39,185 @@ pub(crate) const CASES: &[(&str, fn())] = &[
         "a_window_shows_the_cursor_it_asks_for",
         a_window_shows_the_cursor_it_asks_for,
     ),
+    (
+        "losing_the_focus_ends_a_dead_key_and_releases_held_keys",
+        losing_the_focus_ends_a_dead_key_and_releases_held_keys,
+    ),
+    (
+        "a_window_follows_its_focus_when_a_cancel_handler_panics",
+        a_window_follows_its_focus_when_a_cancel_handler_panics,
+    ),
 ];
+
+/// `dead_acute` (`keysymdef.h`).
+const DEAD_ACUTE: u32 = 0xfe51;
+/// A key code the server's evdev keymap leaves free, which a case maps.
+const FREE_KEYCODE: u8 = 247;
+/// `e`.
+const KEYCODE_E: u8 = 26;
+
+/// Give `keycode` the one keysym `keysym` in the server's core keymap; XKB
+/// tells every client its keymap changed.
+fn map_key(fixture: &X11Fixture, keycode: u8, keysym: u32) {
+    fixture
+        .server
+        .change_keyboard_mapping(1, keycode, 1, &[keysym])
+        .expect("request");
+    fixture.server.flush().expect("flush");
+    run_for(&fixture.platform, Duration::from_millis(100)).expect("the loop turns");
+}
+
+/// Move the focus off every window, to the root, as another client may.
+fn focus_root(fixture: &X11Fixture) {
+    fixture
+        .server
+        .set_input_focus(
+            x11rb::protocol::xproto::InputFocus::POINTER_ROOT,
+            fixture.root(),
+            x11rb::CURRENT_TIME,
+        )
+        .expect("request");
+    fixture.server.flush().expect("flush");
+}
+
+fn key_downs(handler: &RecordingWindowHandler) -> Vec<KeyEvent> {
+    handler
+        .inputs()
+        .into_iter()
+        .filter_map(|input| match input {
+            PlatformInput::Keyboard(key) => Some(key),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A dead key pressed before the window loses the focus does not compose
+/// with the key pressed after it comes back; and a key held as the focus goes
+/// is released in the window it was pressed in.
+fn losing_the_focus_ends_a_dead_key_and_releases_held_keys() {
+    let handler = RecordingWindowHandler::new();
+    let mut fixture = X11Fixture::open_with("dead keys", Rc::clone(&handler));
+    map_key(&fixture, FREE_KEYCODE, DEAD_ACUTE);
+    let activate = |fixture: &mut X11Fixture| {
+        fixture
+            .window
+            .admit_and_apply(WindowCommand::Activate)
+            .expect("the window activates");
+        fixture.settle();
+        assert!(fixture.window.state().focused, "the window has the focus");
+    };
+    activate(&mut fixture);
+    let xtest = Xtest::new(&fixture);
+    // Without a focus change the two compose: compose is there.
+    xtest.tap(FREE_KEYCODE);
+    xtest.tap(KEYCODE_E);
+    let composed: Vec<Key> = key_downs(&handler)
+        .into_iter()
+        .filter(|key| key.state() == KeyState::Down)
+        .map(|key| key.key)
+        .collect();
+    assert_eq!(
+        composed,
+        [Key::Named(NamedKey::Dead), Key::character("é")],
+        "the dead key composes with e"
+    );
+    handler.take_calls();
+    // The dead key, then the focus goes while Shift is held.
+    xtest.tap(FREE_KEYCODE);
+    xtest.key(keycode::SHIFT_L, true);
+    focus_root(&fixture);
+    run_for(&fixture.platform, Duration::from_millis(100)).expect("the loop turns");
+    xtest.key(keycode::SHIFT_L, false);
+    let released: Vec<(KeyState, Key)> = key_downs(&handler)
+        .into_iter()
+        .map(|key| (key.state(), key.key))
+        .collect();
+    assert_eq!(
+        released.last(),
+        Some(&(KeyState::Up, Key::Named(NamedKey::Shift))),
+        "the held Shift is released as the focus goes: {released:?}"
+    );
+    handler.take_calls();
+    activate(&mut fixture);
+    let xtest = Xtest::new(&fixture);
+    xtest.tap(KEYCODE_E);
+    let after: Vec<Key> = key_downs(&handler)
+        .into_iter()
+        .filter(|key| key.state() == KeyState::Down)
+        .map(|key| key.key)
+        .collect();
+    assert_eq!(
+        after,
+        [Key::character("e")],
+        "the dead key pressed before the focus went is gone"
+    );
+    map_key(&fixture, FREE_KEYCODE, 0);
+}
+
+/// A handler that panics at the cancel the focus loss delivers.
+struct PanicsAtTheCancel(Rc<RecordingWindowHandler>);
+
+impl flui_platform::WindowHandler for PanicsAtTheCancel {
+    fn input(&self, event: PlatformInput) -> flui_platform::DispatchEventResult {
+        if matches!(event, PlatformInput::Pointer(PointerEvent::Cancel(_))) {
+            panic!("the handler panics at the cancel");
+        }
+        self.0.input(event)
+    }
+
+    fn state_changed(&self) {
+        self.0.state_changed();
+    }
+
+    fn frame_requested(&self, request: flui_platform::FrameRequest) -> flui_platform::FrameOutcome {
+        self.0.frame_requested(request)
+    }
+
+    fn close_requested(&self) -> flui_platform::CloseDecision {
+        self.0.close_requested()
+    }
+
+    fn closed(&self) {
+        self.0.closed();
+    }
+
+    fn surface_changed(&self, change: flui_platform::SurfaceChange) {
+        self.0.surface_changed(change);
+    }
+}
+
+/// The window hears its focus going even when the handler panics at the
+/// cancel the input delivers for it first; the panic is raised after.
+fn a_window_follows_its_focus_when_a_cancel_handler_panics() {
+    park_pointer();
+    let mut fixture = X11Fixture::open_with_handler(
+        "focus and a panic",
+        Rc::new(PanicsAtTheCancel(RecordingWindowHandler::new())),
+    );
+    fixture
+        .window
+        .admit_and_apply(WindowCommand::Activate)
+        .expect("the window activates");
+    fixture.settle();
+    assert!(fixture.window.state().focused, "the window has the focus");
+    let xtest = Xtest::new(&fixture);
+    xtest.move_to(20, 20);
+    xtest.send(BUTTON_PRESS_EVENT, 1, (0, 0));
+    focus_root(&fixture);
+    let turned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_for(&fixture.platform, Duration::from_millis(100))
+    }));
+    assert!(turned.is_err(), "the handler's panic is raised");
+    assert!(
+        !fixture.window.state().focused,
+        "the window heard its focus go"
+    );
+    fixture
+        .server
+        .xtest_fake_input(BUTTON_RELEASE_EVENT, 1, 0, fixture.root(), 0, 0, 0)
+        .expect("request");
+    fixture.server.flush().expect("flush");
+}
 
 /// Evdev key codes as the X server numbers them (the kernel's plus 8).
 mod keycode {
@@ -334,7 +512,7 @@ fn xtest_keys_reach_the_focused_window() {
         downs.len(),
         "every key is released"
     );
-    assert_eq!(fixture.platform.keyboard_layout(), "us");
+    assert_eq!(fixture.platform.keyboard_layout(), "English (US)");
 }
 
 /// A window shows the cursor it asks for, from the theme or the cursor

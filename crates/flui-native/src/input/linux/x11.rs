@@ -1,5 +1,5 @@
-//! The X11 host's input: XInput 2's pointers, touches, pens and smooth
-//! scrolling, XKB's keyboard, and the cursor.
+//! The X11 host's input: XInput 2's pointers, touches, pens, touchpad pinches
+//! and smooth scrolling, XKB's keyboard, and the cursor.
 //!
 //! The pure half ([`decode`]) turns XInput 2 events, copied into plain
 //! [`XiEvent`](decode::XiEvent)s, and the server's device list into owned
@@ -26,9 +26,20 @@
 //!   increment is the wheel's rotation, fractional for a touchpad; the legacy
 //!   wheel buttons of a device with no scroll valuator (XTest's) are whole
 //!   detents. Smooth scrolling has no phases on X11: the scroll is unphased.
+//! - **A pinch is one pan-zoom.** XInput 2.4 reports a touchpad pinch's scale
+//!   since it began and its rotation since the last update, as Wayland's
+//!   `pointer-gestures` does; each update's own factor and clockwise radians
+//!   are assembled about the cursor. Swipes are the window manager's.
 //! - **A grab that takes the pointer mid-press ends the press.** A `Leave` in
 //!   grab mode (the window manager's move, another client's grab) cancels the
 //!   pressed contact; the implicit grab of a press delivers its release.
+//! - **A device unplugged is gone.** One the hierarchy reports removed ends
+//!   its contacts and is removed before the list is read again, so a device
+//!   plugged back in under the same id is a new device.
+//! - **The server's time, while it is the time.** An event is stamped with
+//!   the server's millisecond time while that is within a second of the
+//!   monotonic clock (a local server keeps it), so a burst read in one turn
+//!   keeps its spacing; otherwise with its arrival.
 
 pub mod decode {
     //! XInput 2 events and devices as plain data, and their assembly.
@@ -40,25 +51,85 @@ pub mod decode {
     use flui_platform::EventTime;
     use flui_platform::PlatformInput;
     use flui_platform::input_capabilities::PointerKindSet;
+    use flui_platform::keyboard::Modifiers;
     use flui_platform::pointer::{
         PenTool, PointerButton, PointerEvent, PointerKind, ScrollPrecision, ScrollUnit,
     };
 
     use crate::input::assembly::{
-        ContactRegistry, ContactScroll, DecodeError, NativeCancel, NativeClock, NativeContact,
-        NativeDevice, NativeReading, NativeSurface, PenAngles, RawSensors, ReadingAction,
-        ReadingTime, decode,
+        ContactRegistry, ContactScroll, DecodeError, GestureComponent, GestureDelta, GesturePhase,
+        GestureReading, NativeCancel, NativeClock, NativeContact, NativeDevice, NativeReading,
+        NativeSurface, NativeTime, PenAngles, RawSensors, ReadingAction, ReadingTime, decode,
     };
-    use crate::input::linux::xkb::keys::ActiveModifiers;
+    use crate::input::linux::xkb::{XkbModifier, modifiers_of};
     use crate::input::scroll::{WheelAmount, wheel_step};
+
+    // The contact labels of the devices that are not touch screens. An
+    // XInput 2 touch id is 32 bits, so a touch never reaches them; the
+    // pinch's label is the one every backend gives a trackpad gesture.
 
     /// The cursor of a master pointer on a window.
     pub const CURSOR: NativeContact = NativeContact(u64::MAX);
+    /// A touchpad pinch of a master pointer.
+    pub const PINCH: NativeContact = NativeContact(u64::MAX - 1);
     /// A pen on a window.
     pub const PEN: NativeContact = NativeContact(u64::MAX - 2);
 
-    /// What an XInput 2 event says happened.
+    /// A master device's XInput 2 id, which the server gives another device
+    /// once this one is gone.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct XiMaster(pub u16);
+
+    /// A slave (physical) device's XInput 2 id, which the server gives
+    /// another device once this one is gone.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct XiSlave(pub u16);
+
+    /// How far the server's time may stand from the monotonic clock and still
+    /// be read as it: a local server keeps that clock; a remote one does not.
+    pub const SERVER_TIME_TRUSTED_WITHIN_MS: u32 = 1_000;
+
+    /// When an event happened: the server's time on it, and the monotonic
+    /// clock and the event timeline read as it arrived.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct XiTime {
+        /// The event's `time`, milliseconds of the server's clock, wrapping.
+        pub server_ms: u32,
+        /// The monotonic clock in milliseconds as the event arrived, the
+        /// clock the loop's [`NativeClock`] is anchored on.
+        pub observed_ms: u64,
+        /// The event timeline as the event arrived.
+        pub arrival: EventTime,
+    }
+
+    impl XiTime {
+        /// The reading's time: the server's while it is within
+        /// [`SERVER_TIME_TRUSTED_WITHIN_MS`] of the monotonic clock, placed
+        /// across the 49.7-day wrap; the arrival otherwise.
+        #[must_use]
+        pub fn reading_time(self) -> ReadingTime {
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "the server's time is the low 32 bits of a millisecond clock"
+            )]
+            let observed = self.observed_ms as u32;
+            let apart = self
+                .server_ms
+                .wrapping_sub(observed)
+                .min(observed.wrapping_sub(self.server_ms));
+            if apart <= SERVER_TIME_TRUSTED_WITHIN_MS {
+                ReadingTime::coarse(NativeTime::TickMillis {
+                    tick: self.server_ms,
+                    observed_ms: self.observed_ms,
+                })
+            } else {
+                ReadingTime::epoch(self.arrival)
+            }
+        }
+    }
+
+    /// What an XInput 2 event says happened.
+    #[derive(Debug, Clone, Copy, PartialEq)]
     pub enum XiAction {
         /// `XI_Motion`.
         Motion,
@@ -80,17 +151,33 @@ pub mod decode {
         TouchUpdate,
         /// `XI_TouchEnd`.
         TouchEnd,
+        /// `XI_GesturePinchBegin`.
+        PinchBegin,
+        /// `XI_GesturePinchUpdate`.
+        PinchUpdate {
+            /// The scale since the pinch began.
+            scale: f64,
+            /// The rotation since the last update, in degrees, clockwise.
+            rotation: f64,
+        },
+        /// `XI_GesturePinchEnd`; `cancelled` when the gesture was
+        /// (`XIGesturePinchEventCancelled`).
+        PinchEnd {
+            /// The pinch was cancelled.
+            cancelled: bool,
+        },
     }
 
-    /// One XInput 2 pointer or touch event, copied out of the protocol.
+    /// One XInput 2 pointer, touch or gesture event, copied out of the
+    /// protocol.
     #[derive(Debug, Clone, PartialEq)]
     pub struct XiEvent {
         /// What happened.
         pub action: XiAction,
         /// The master device it came through.
-        pub device: u16,
-        /// The physical (slave) device that produced it.
-        pub source: u16,
+        pub master: XiMaster,
+        /// The physical device that produced it.
+        pub source: XiSlave,
         /// The button of a press or release; the touch id of a touch.
         pub detail: u32,
         /// Where, in device pixels of the window.
@@ -101,8 +188,26 @@ pub mod decode {
         pub modifiers: u32,
         /// The valuators it carries: number and value.
         pub valuators: Vec<(u16, f64)>,
-        /// When it arrived, on the event timeline.
-        pub time: EventTime,
+        /// When it happened.
+        pub time: XiTime,
+    }
+
+    /// The modifiers of an X11 modifier mask (`ShiftMask` … `Mod5Mask`), as
+    /// XInput 2 events carry them, by the XKB modifier each bit is.
+    #[must_use]
+    pub fn modifiers_of_mask(mask: u32) -> Modifiers {
+        modifiers_of(|modifier| {
+            let bit = match modifier {
+                XkbModifier::Shift => 0x01,
+                XkbModifier::Lock => 0x02,
+                XkbModifier::Control => 0x04,
+                XkbModifier::Mod1 => 0x08,
+                XkbModifier::Mod2 => 0x10,
+                XkbModifier::Mod4 => 0x40,
+                XkbModifier::Mod5 => 0x80,
+            };
+            mask & bit != 0
+        })
     }
 
     /// What a valuator measures, as its label atom names it.
@@ -146,8 +251,7 @@ pub mod decode {
     /// An XInput 2 device as the server lists it (`XIQueryDevice`).
     #[derive(Debug, Clone, PartialEq)]
     pub struct DeviceDescription {
-        /// The device's id, which the server gives another device once this
-        /// one is gone.
+        /// The device's id.
         pub id: u16,
         /// It is a master pointer.
         pub master: bool,
@@ -193,6 +297,18 @@ pub mod decode {
         DeviceRole::Cursor
     }
 
+    /// The contact an event moves: its device's label, the contact's and its
+    /// kind.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Target {
+        /// The device's label.
+        pub device: NativeDevice,
+        /// The contact's label.
+        pub contact: NativeContact,
+        /// What kind of pointer it is.
+        pub kind: PointerKind,
+    }
+
     /// A slave pointer the decoder knows.
     #[derive(Debug, Clone)]
     struct Known {
@@ -204,12 +320,25 @@ pub mod decode {
         scrolls: Vec<ScrollAxis>,
     }
 
-    /// One master pointer: its label and the contact it moves now.
+    /// A pinch in progress.
+    #[derive(Debug, Clone, Copy)]
+    struct Pinch {
+        surface: NativeSurface,
+        /// The scale since it began, as the last update said.
+        scale: f64,
+    }
+
+    /// One master pointer: its labels, the contact it moves now and where,
+    /// and its pinch.
     #[derive(Debug, Clone, Copy)]
     struct Master {
         label: NativeDevice,
-        /// The contact the master's last event moved: the cursor, or a pen.
-        current: Option<(NativeDevice, NativeContact, PointerKind)>,
+        /// The label of its touchpad's gestures, once it pinched.
+        gestures: Option<NativeDevice>,
+        /// The contact its last event moved, the cursor or a pen, and the
+        /// window it moved it on.
+        current: Option<(NativeSurface, Target)>,
+        pinch: Option<Pinch>,
     }
 
     /// What one event delivers to its window.
@@ -221,32 +350,31 @@ pub mod decode {
         pub hover: Option<bool>,
     }
 
+    /// What a change of the devices delivers: each input with the window it
+    /// belongs to, or none for every window.
+    pub type DeviceChanges = Vec<(Option<NativeSurface>, PlatformInput)>;
+
     /// The X11 host's pointers: the shared registry, the devices the server
     /// lists and what each scroll valuator last reported.
     #[derive(Debug)]
     pub struct X11Pointers {
         contacts: ContactRegistry,
-        devices: HashMap<u16, Known>,
-        masters: HashMap<u16, Master>,
+        devices: HashMap<XiSlave, Known>,
+        masters: HashMap<XiMaster, Master>,
         /// The last value of each scroll valuator, by device and number.
-        scrolled: HashMap<(u16, u16), f64>,
+        scrolled: HashMap<(XiSlave, u16), f64>,
         /// The hovering contacts inside each window: entered and not left.
         inside: HashSet<(NativeSurface, NativeDevice, NativeContact)>,
         next_label: u64,
     }
 
-    impl Default for X11Pointers {
-        fn default() -> Self {
-            Self::new()
-        }
-    }
-
     impl X11Pointers {
-        /// No device known yet; readings are stamped on the event timeline.
+        /// No device known yet; readings are placed on the timeline by
+        /// `clock`, anchored on the monotonic clock the server's time keeps.
         #[must_use]
-        pub fn new() -> Self {
+        pub fn new(clock: NativeClock) -> Self {
             Self {
-                contacts: ContactRegistry::new(NativeClock::epoch_only()),
+                contacts: ContactRegistry::new(clock),
                 devices: HashMap::new(),
                 masters: HashMap::new(),
                 scrolled: HashMap::new(),
@@ -266,98 +394,108 @@ pub mod decode {
             NativeDevice(self.next_label)
         }
 
-        /// The server lists `devices` now: a device it no longer lists is
-        /// removed, its contacts cancelled; a new one is announced. Each
-        /// input names the surface it belongs to, or none for every window.
-        pub fn devices(
+        /// The hierarchy reports `slaves` and `masters` removed or disabled:
+        /// each ends its contacts and is removed, so an id the server lists
+        /// again is a new device.
+        pub fn removed(
             &mut self,
-            devices: &[DeviceDescription],
+            slaves: &[XiSlave],
+            masters: &[XiMaster],
             time: EventTime,
-        ) -> Vec<(Option<NativeSurface>, PlatformInput)> {
+        ) -> DeviceChanges {
             let mut out = Vec::new();
-            let listed_masters: Vec<u16> = devices
-                .iter()
-                .filter(|device| device.master)
-                .map(|device| device.id)
-                .collect();
-            let listed_slaves: Vec<&DeviceDescription> =
-                devices.iter().filter(|device| device.pointer).collect();
-            // Gone first: an id the server gives another device is a new one.
-            let gone_slaves: Vec<u16> = self
-                .devices
-                .iter()
-                .filter(|(id, known)| {
-                    listed_slaves
-                        .iter()
-                        .find(|device| device.id == **id)
-                        .is_none_or(|device| role(device) != known.role)
-                })
-                .map(|(id, _)| *id)
-                .collect();
-            for id in gone_slaves {
-                if let Some(known) = self.devices.remove(&id) {
-                    self.scrolled.retain(|(device, _), _| *device != id);
+            for slave in slaves {
+                if let Some(known) = self.devices.remove(slave) {
+                    self.reset_scrolling(*slave);
                     if let Some(label) = known.label {
                         out.extend(self.remove(label, time));
                     }
                 }
             }
-            let gone_masters: Vec<u16> = self
+            for master in masters {
+                if let Some(gone) = self.masters.remove(master) {
+                    for label in [Some(gone.label), gone.gestures].into_iter().flatten() {
+                        out.extend(self.remove(label, time));
+                    }
+                }
+            }
+            out
+        }
+
+        /// The server lists `devices` now: a device it no longer lists, or
+        /// lists in another role, is removed, its contacts cancelled; a new
+        /// one is announced.
+        pub fn devices(&mut self, devices: &[DeviceDescription], time: EventTime) -> DeviceChanges {
+            let listed = |id: u16| devices.iter().find(|device| device.id == id);
+            let gone_slaves: Vec<XiSlave> = self
+                .devices
+                .iter()
+                .filter(|(slave, known)| {
+                    listed(slave.0)
+                        .filter(|device| device.pointer)
+                        .is_none_or(|device| role(device) != known.role)
+                })
+                .map(|(slave, _)| *slave)
+                .collect();
+            let gone_masters: Vec<XiMaster> = self
                 .masters
                 .keys()
-                .filter(|id| !listed_masters.contains(id))
+                .filter(|master| !listed(master.0).is_some_and(|device| device.master))
                 .copied()
                 .collect();
-            for id in gone_masters {
-                if let Some(master) = self.masters.remove(&id) {
-                    out.extend(self.remove(master.label, time));
-                }
-            }
-            for id in listed_masters {
-                if self.masters.contains_key(&id) {
+            let mut out = self.removed(&gone_slaves, &gone_masters, time);
+            for device in devices {
+                if device.master {
+                    let master = XiMaster(device.id);
+                    if self.masters.contains_key(&master) {
+                        continue;
+                    }
+                    let label = self.mint();
+                    self.masters.insert(
+                        master,
+                        Master {
+                            label,
+                            gestures: None,
+                            current: None,
+                            pinch: None,
+                        },
+                    );
+                    if let Some(change) = self.contacts.add_device(label, PointerKind::Mouse, time)
+                    {
+                        out.push((
+                            None,
+                            PlatformInput::Pointer(PointerEvent::DeviceAdded(change)),
+                        ));
+                    }
                     continue;
                 }
-                let label = self.mint();
-                self.masters.insert(
-                    id,
-                    Master {
-                        label,
-                        current: None,
-                    },
-                );
-                if let Some(change) = self.contacts.add_device(label, PointerKind::Mouse, time) {
-                    out.push((
-                        None,
-                        PlatformInput::Pointer(PointerEvent::DeviceAdded(change)),
-                    ));
+                if !device.pointer {
+                    continue;
                 }
-            }
-            for device in listed_slaves {
-                if let Some(known) = self.devices.get_mut(&device.id) {
+                let slave = XiSlave(device.id);
+                if let Some(known) = self.devices.get_mut(&slave) {
                     // The same device: its classes may have changed.
                     known.axes.clone_from(&device.axes);
                     known.scrolls.clone_from(&device.scrolls);
                     continue;
                 }
                 let role = role(device);
-                let label = match role {
+                let kind = match role {
                     DeviceRole::Cursor => None,
-                    DeviceRole::Touchscreen | DeviceRole::Pen(_) => Some(self.mint()),
+                    DeviceRole::Touchscreen => Some(PointerKind::Touch),
+                    DeviceRole::Pen(tool) => Some(PointerKind::Pen { tool }),
                 };
-                if let Some(label) = label {
-                    let kind = match role {
-                        DeviceRole::Pen(tool) => PointerKind::Pen { tool },
-                        _ => PointerKind::Touch,
-                    };
-                    if let Some(change) = self.contacts.add_device(label, kind, time) {
-                        out.push((
-                            None,
-                            PlatformInput::Pointer(PointerEvent::DeviceAdded(change)),
-                        ));
-                    }
+                let label = kind.map(|_| self.mint());
+                if let (Some(label), Some(kind)) = (label, kind)
+                    && let Some(change) = self.contacts.add_device(label, kind, time)
+                {
+                    out.push((
+                        None,
+                        PlatformInput::Pointer(PointerEvent::DeviceAdded(change)),
+                    ));
                 }
                 self.devices.insert(
-                    device.id,
+                    slave,
                     Known {
                         role,
                         label,
@@ -369,19 +507,18 @@ pub mod decode {
             out
         }
 
-        fn remove(
-            &mut self,
-            label: NativeDevice,
-            time: EventTime,
-        ) -> Vec<(Option<NativeSurface>, PlatformInput)> {
+        fn remove(&mut self, label: NativeDevice, time: EventTime) -> DeviceChanges {
             for master in self.masters.values_mut() {
-                if master.current.is_some_and(|(device, _, _)| device == label) {
+                if master
+                    .current
+                    .is_some_and(|(_, current)| current.device == label)
+                {
                     master.current = None;
                 }
             }
             self.inside.retain(|(_, device, _)| *device != label);
             let (ended, removed) = self.contacts.remove_device(label, time);
-            let mut out: Vec<_> = ended
+            let mut out: DeviceChanges = ended
                 .into_iter()
                 .map(|(surface, input)| (Some(surface), input))
                 .collect();
@@ -396,11 +533,12 @@ pub mod decode {
 
         /// A slave device changed: the values its scroll valuators report
         /// start over.
-        pub fn reset_scrolling(&mut self, source: u16) {
+        pub fn reset_scrolling(&mut self, source: XiSlave) {
             self.scrolled.retain(|(device, _), _| *device != source);
         }
 
-        /// End every contact on `surface` with `reason`.
+        /// End every contact on `surface` with `reason`; what moves on
+        /// another window is left as it is.
         pub fn cancel_surface(
             &mut self,
             surface: NativeSurface,
@@ -408,32 +546,44 @@ pub mod decode {
             time: EventTime,
         ) -> Vec<PlatformInput> {
             for master in self.masters.values_mut() {
-                master.current = None;
+                if master.current.is_some_and(|(on, _)| on == surface) {
+                    master.current = None;
+                }
+                if master.pinch.is_some_and(|pinch| pinch.surface == surface) {
+                    master.pinch = None;
+                }
             }
             self.inside.retain(|(inside, _, _)| *inside != surface);
             self.contacts.cancel_surface(surface, time, reason)
         }
 
-        /// The device, contact and kind `event` moves: a pen's own, a touch,
-        /// or its master's cursor. `None` for a device the server has not
-        /// listed.
-        fn contact_of(
-            &self,
-            event: &XiEvent,
-        ) -> Option<(NativeDevice, NativeContact, PointerKind)> {
+        /// The contact `event` moves: a pen's own, a touch, or its master's
+        /// cursor. `None` for a device the server has not listed, and for a
+        /// touch screen's crossing, which is no contact.
+        fn target_of(&self, event: &XiEvent) -> Option<Target> {
             let known = self.devices.get(&event.source);
             match known.map(|known| (known.role, known.label)) {
-                Some((DeviceRole::Pen(tool), Some(label))) => {
-                    Some((label, PEN, PointerKind::Pen { tool }))
-                }
-                Some((DeviceRole::Touchscreen, Some(label))) => Some((
-                    label,
-                    NativeContact(u64::from(event.detail)),
-                    PointerKind::Touch,
-                )),
+                Some((DeviceRole::Pen(tool), Some(device))) => Some(Target {
+                    device,
+                    contact: PEN,
+                    kind: PointerKind::Pen { tool },
+                }),
+                Some((DeviceRole::Touchscreen, Some(device))) => matches!(
+                    event.action,
+                    XiAction::TouchBegin | XiAction::TouchUpdate | XiAction::TouchEnd
+                )
+                .then_some(Target {
+                    device,
+                    contact: NativeContact(u64::from(event.detail)),
+                    kind: PointerKind::Touch,
+                }),
                 _ => {
-                    let master = self.masters.get(&event.device)?;
-                    Some((master.label, CURSOR, PointerKind::Mouse))
+                    let master = self.masters.get(&event.master)?;
+                    Some(Target {
+                        device: master.label,
+                        contact: CURSOR,
+                        kind: PointerKind::Mouse,
+                    })
                 }
             }
         }
@@ -471,20 +621,25 @@ pub mod decode {
             }
         }
 
-        /// The reading of `contact` doing `action` for `event` on `surface`.
+        /// The reading of `target` doing `action` for `event` on `surface`.
         fn reading(
             event: &XiEvent,
             surface: NativeSurface,
             scale: f64,
-            (device, contact, kind): (NativeDevice, NativeContact, PointerKind),
+            target: Target,
             action: ReadingAction,
         ) -> NativeReading {
-            let reading = NativeReading::new(contact, kind, action, ReadingTime::epoch(event.time))
-                .on(surface)
-                .from_device(device)
-                .with_modifiers(ActiveModifiers::from_x11_mask(event.modifiers).modifiers())
-                .at(event.position.0, event.position.1, scale);
-            if kind == PointerKind::Touch {
+            let reading = NativeReading::new(
+                target.contact,
+                target.kind,
+                action,
+                event.time.reading_time(),
+            )
+            .on(surface)
+            .from_device(target.device)
+            .with_modifiers(modifiers_of_mask(event.modifiers))
+            .at(event.position.0, event.position.1, scale);
+            if target.kind == PointerKind::Touch {
                 reading
             } else {
                 reading.with_primary(true)
@@ -504,24 +659,31 @@ pub mod decode {
             if event.emulated {
                 return decoded;
             }
-            let Some(target) = self.contact_of(event) else {
+            if matches!(
+                event.action,
+                XiAction::PinchBegin | XiAction::PinchUpdate { .. } | XiAction::PinchEnd { .. }
+            ) {
+                self.pinch(surface, scale, event, &mut decoded.inputs);
+                return decoded;
+            }
+            let Some(target) = self.target_of(event) else {
                 return decoded;
             };
             let out = &mut decoded.inputs;
-            let touch = target.2 == PointerKind::Touch;
-            if !touch {
+            if target.kind != PointerKind::Touch {
                 self.switch_contact(event, surface, scale, target, out);
             }
             let sensors = self.sensors(event);
             let read =
                 |action| Self::reading(event, surface, scale, target, action).with_sensors(sensors);
+            let key = (surface, target.device, target.contact);
             match event.action {
                 XiAction::Motion => {
                     // A scroll valuator's motion that leaves the cursor where
                     // it was moves nothing.
                     let moved = self
                         .contacts
-                        .position(surface, Some(target.0), target.1)
+                        .position(surface, Some(target.device), target.contact)
                         .is_none_or(|(_, raw)| (raw.x, raw.y) != event.position);
                     if moved || !self.carries_scrolling(event) {
                         self.assemble(&read(ReadingAction::Move), out);
@@ -529,12 +691,12 @@ pub mod decode {
                     self.scroll_by_valuators(event, surface, target, out);
                 }
                 XiAction::ButtonPress => match wheel_button(event.detail) {
-                    Some((x, y)) => {
+                    Some(detents) => {
                         self.scroll(
                             event,
                             surface,
                             target,
-                            (x, y),
+                            detents,
                             ScrollPrecision::Notched,
                             out,
                         );
@@ -550,20 +712,20 @@ pub mod decode {
                     self.reset_scrolling(event.source);
                     decoded.hover = Some(true);
                     self.assemble(&read(ReadingAction::Enter), out);
-                    self.inside.insert((surface, target.0, target.1));
+                    self.inside.insert(key);
                 }
                 XiAction::Leave { grabbed } => {
                     let pressed = self
                         .contacts
-                        .buttons(surface, Some(target.0), target.1)
+                        .buttons(surface, Some(target.device), target.contact)
                         .is_some_and(|buttons| !buttons.is_empty());
                     if grabbed && pressed {
                         self.assemble(&read(ReadingAction::Cancel(NativeCancel::Platform)), out);
                     }
                     decoded.hover = Some(false);
                     self.assemble(&read(ReadingAction::Leave), out);
-                    self.inside.remove(&(surface, target.0, target.1));
-                    if let Some(master) = self.masters.get_mut(&event.device) {
+                    self.inside.remove(&key);
+                    if let Some(master) = self.masters.get_mut(&event.master) {
                         master.current = None;
                     }
                 }
@@ -574,40 +736,172 @@ pub mod decode {
                 XiAction::TouchEnd => {
                     self.assemble(&read(ReadingAction::Release(PointerButton::PRIMARY)), out);
                 }
+                XiAction::PinchBegin | XiAction::PinchUpdate { .. } | XiAction::PinchEnd { .. } => {
+                }
             }
             decoded
         }
 
         /// The master's cursor moves to `target` (a pen takes it over, or
-        /// gives it back): the contact it moved before leaves, unless a
-        /// button holds it, and `target` enters where the event is, unless
-        /// the event is an enter of its own.
+        /// gives it back): the contact it moved before leaves the window it
+        /// was on, unless a button holds it, and `target` enters where the
+        /// event is, unless the event is a crossing of its own.
         fn switch_contact(
             &mut self,
             event: &XiEvent,
             surface: NativeSurface,
             scale: f64,
-            target: (NativeDevice, NativeContact, PointerKind),
+            target: Target,
             out: &mut Vec<PlatformInput>,
         ) {
-            let Some(master) = self.masters.get_mut(&event.device) else {
+            let Some(master) = self.masters.get_mut(&event.master) else {
                 return;
             };
-            let previous = master.current.replace(target);
-            let Some(previous) = previous.filter(|previous| *previous != target) else {
-                return;
-            };
-            let held = self.contacts.buttons(surface, Some(previous.0), previous.1);
-            if held.is_some_and(flui_platform::pointer::PointerButtons::is_empty) {
-                let leave = Self::reading(event, surface, scale, previous, ReadingAction::Leave);
-                self.assemble(&leave, out);
-                self.inside.remove(&(surface, previous.0, previous.1));
+            let previous = master.current.replace((surface, target));
+            if let Some((on, previous)) = previous.filter(|(_, previous)| *previous != target) {
+                let held = self
+                    .contacts
+                    .buttons(on, Some(previous.device), previous.contact);
+                if held.is_some_and(flui_platform::pointer::PointerButtons::is_empty) {
+                    let leave = Self::reading(event, on, scale, previous, ReadingAction::Leave);
+                    self.assemble(&leave, out);
+                    self.inside.remove(&(on, previous.device, previous.contact));
+                }
             }
-            let inside = self.inside.contains(&(surface, target.0, target.1));
-            if !inside && !matches!(event.action, XiAction::Enter | XiAction::Leave { .. }) {
+            let key = (surface, target.device, target.contact);
+            let crossing = matches!(event.action, XiAction::Enter | XiAction::Leave { .. });
+            if !crossing && !self.inside.contains(&key) {
                 let enter = Self::reading(event, surface, scale, target, ReadingAction::Enter);
                 self.assemble(&enter, out);
-                self.inside.insert((surface, target.0, target.1));
+                self.inside.insert(key);
+            }
+        }
+
+        /// A touchpad pinch of the event's master: one pan-zoom about the
+        /// cursor.
+        fn pinch(
+            &mut self,
+            surface: NativeSurface,
+            scale: f64,
+            event: &XiEvent,
+            out: &mut Vec<PlatformInput>,
+        ) {
+            let Some(mut master) = self.masters.get(&event.master).copied() else {
+                return;
+            };
+            let device = if let Some(device) = master.gestures {
+                device
+            } else {
+                // The touchpad's gestures are a device of their own, announced
+                // with the master's first pinch.
+                let device = self.mint();
+                let time = self
+                    .contacts
+                    .stamp(event.time.reading_time())
+                    .unwrap_or(event.time.arrival);
+                if let Some(change) = self
+                    .contacts
+                    .add_device(device, PointerKind::Trackpad, time)
+                {
+                    out.push(PlatformInput::Pointer(PointerEvent::DeviceAdded(change)));
+                }
+                master.gestures = Some(device);
+                device
+            };
+            let readings: Vec<(GestureComponent, GesturePhase, GestureDelta)> = match event.action {
+                XiAction::PinchBegin => {
+                    master.pinch = Some(Pinch {
+                        surface,
+                        scale: 1.0,
+                    });
+                    vec![
+                        (
+                            GestureComponent::Scale,
+                            GesturePhase::Began,
+                            GestureDelta::None,
+                        ),
+                        (
+                            GestureComponent::Rotation,
+                            GesturePhase::Began,
+                            GestureDelta::None,
+                        ),
+                    ]
+                }
+                XiAction::PinchUpdate {
+                    scale: since_begin,
+                    rotation,
+                } => {
+                    let Some(pinch) = master
+                        .pinch
+                        .as_mut()
+                        .filter(|pinch| pinch.surface == surface)
+                    else {
+                        self.masters.insert(event.master, master);
+                        return;
+                    };
+                    // The scale is since the pinch began; the assembly takes
+                    // each update's own factor.
+                    let factor =
+                        if since_begin.is_finite() && since_begin > 0.0 && pinch.scale > 0.0 {
+                            let factor = since_begin / pinch.scale;
+                            pinch.scale = since_begin;
+                            factor
+                        } else {
+                            1.0
+                        };
+                    vec![
+                        (
+                            GestureComponent::Scale,
+                            GesturePhase::Changed,
+                            GestureDelta::Scale(factor),
+                        ),
+                        (
+                            GestureComponent::Rotation,
+                            GesturePhase::Changed,
+                            GestureDelta::Rotation(rotation.to_radians()),
+                        ),
+                    ]
+                }
+                XiAction::PinchEnd { cancelled } => {
+                    if master
+                        .pinch
+                        .take()
+                        .is_none_or(|pinch| pinch.surface != surface)
+                    {
+                        self.masters.insert(event.master, master);
+                        return;
+                    }
+                    let phase = if cancelled {
+                        GesturePhase::Cancelled
+                    } else {
+                        GesturePhase::Ended
+                    };
+                    vec![
+                        (GestureComponent::Scale, phase, GestureDelta::None),
+                        (GestureComponent::Rotation, phase, GestureDelta::None),
+                    ]
+                }
+                _ => Vec::new(),
+            };
+            self.masters.insert(event.master, master);
+            let target = Target {
+                device,
+                contact: PINCH,
+                kind: PointerKind::Trackpad,
+            };
+            for (component, phase, delta) in readings {
+                let reading = Self::reading(
+                    event,
+                    surface,
+                    scale,
+                    target,
+                    ReadingAction::Gesture(GestureReading {
+                        component,
+                        phase,
+                        delta,
+                    }),
+                );
+                self.assemble(&reading, out);
             }
         }
 
@@ -629,7 +923,7 @@ pub mod decode {
             &mut self,
             event: &XiEvent,
             surface: NativeSurface,
-            target: (NativeDevice, NativeContact, PointerKind),
+            target: Target,
             out: &mut Vec<PlatformInput>,
         ) {
             let Some(known) = self.devices.get(&event.source) else {
@@ -680,7 +974,7 @@ pub mod decode {
             &mut self,
             event: &XiEvent,
             surface: NativeSurface,
-            target: (NativeDevice, NativeContact, PointerKind),
+            target: Target,
             (x, y): (f64, f64),
             precision: ScrollPrecision,
             out: &mut Vec<PlatformInput>,
@@ -692,15 +986,18 @@ pub mod decode {
             ) else {
                 return;
             };
+            let Some(time) = self.contacts.stamp(event.time.reading_time()) else {
+                return;
+            };
             let scroll = ContactScroll {
                 surface,
-                device: Some(target.0),
-                contact: target.1,
+                device: Some(target.device),
+                contact: target.contact,
                 phase: None,
                 delta,
                 precision,
-                time: event.time,
-                modifiers: ActiveModifiers::from_x11_mask(event.modifiers).modifiers(),
+                time,
+                modifiers: modifiers_of_mask(event.modifiers),
             };
             out.extend(self.contacts.scroll(&scroll));
         }
@@ -760,28 +1057,25 @@ pub mod decode {
         }
     }
 
-    /// The layout at index `group` of the comma-separated layouts in
-    /// `_XKB_RULES_NAMES` (rules, model, layouts, variants, options, each
-    /// ended by a zero), with its variant: `us`, `de(nodeadkeys)`. Empty when
-    /// the property says nothing of it.
+    /// The valuators an event's mask names, in order, paired with its values:
+    /// the number of each set bit. A bit past the numbers a valuator has (16
+    /// bits) and a value the mask names but the event lacks are left out.
     #[must_use]
-    pub fn layout_name(property: &[u8], group: u32) -> String {
-        let mut fields = property.split(|byte| *byte == 0);
-        let layouts = fields.nth(2).unwrap_or_default();
-        let variants = fields.next().unwrap_or_default();
-        let nth = |list: &[u8]| {
-            usize::try_from(group)
-                .ok()
-                .and_then(|group| list.split(|byte| *byte == b',').nth(group))
-                .map(|item| String::from_utf8_lossy(item).trim().to_owned())
-                .unwrap_or_default()
-        };
-        let (layout, variant) = (nth(layouts), nth(variants));
-        if layout.is_empty() || variant.is_empty() {
-            layout
-        } else {
-            format!("{layout}({variant})")
-        }
+    pub fn valuators(mask: &[u32], values: &[f64]) -> Vec<(u16, f64)> {
+        let numbers = mask.iter().enumerate().flat_map(|(word, bits)| {
+            (0..32_u32)
+                .filter(move |bit| bits & (1 << bit) != 0)
+                .map(move |bit| {
+                    u32::try_from(word)
+                        .ok()
+                        .and_then(|word| word.checked_mul(32)?.checked_add(bit))
+                        .and_then(|number| u16::try_from(number).ok())
+                })
+        });
+        numbers
+            .zip(values.iter().copied())
+            .filter_map(|(number, value)| Some((number?, value)))
+            .collect()
     }
 
     #[cfg(test)]
@@ -797,9 +1091,9 @@ mod live {
 
     use std::cell::RefCell;
     use std::collections::HashMap;
-    use std::ptr::NonNull;
     use std::rc::Rc;
     use std::sync::Arc;
+    use std::time::Duration;
 
     use cursor_icon::CursorIcon;
     use flui_platform::input_capabilities::InputCapabilities;
@@ -813,23 +1107,27 @@ mod live {
     };
     use x11rb::protocol::xkb::{self, ConnectionExt as _};
     use x11rb::protocol::xproto::{
-        self, AtomEnum, ChangeWindowAttributesAux, ConnectionExt as _, NotifyMode,
+        self, ChangeWindowAttributesAux, ConnectionExt as _, NotifyMode,
     };
 
     use super::decode::{
-        Axis, AxisLabel, DeviceDescription, ScrollAxis, X11Pointers, XiAction, XiEvent, layout_name,
+        Axis, AxisLabel, DeviceChanges, DeviceDescription, ScrollAxis, X11Pointers, XiAction,
+        XiEvent, XiMaster, XiSlave, XiTime, valuators,
     };
-    use crate::input::assembly::{NativeCancel, NativeSurface};
+    use crate::input::assembly::{NativeCancel, NativeClock, NativeSurface};
     use crate::input::availability;
     use crate::input::event_timestamp_ns;
-    use crate::input::linux::xkb::{Keyboard, KeyboardSource};
+    use crate::input::linux::xkb::{Keyboard, KeymapSource};
     use crate::owner::linux::x11::{InputTarget, LoopInput, WindowRef, X11Connection};
     use crate::owner::panic_boundary::contain_owner_callback;
     use crate::owner::slot::OwnerSlot;
     use crate::owner::window_delivery::WindowDelivery;
 
-    /// The XInput 2 version the input speaks: 2.2 brought touch.
-    const XI_VERSION: (u16, u16) = (2, 2);
+    /// The XInput 2 version the input asks for: 2.4 brought touchpad
+    /// gestures.
+    const XI_ASKED: (u16, u16) = (2, 4);
+    /// The least it works with: 2.2 brought touch.
+    const XI_LEAST: (u16, u16) = (2, 2);
 
     /// What one turn delivers to a window, once no borrow is held.
     enum Delivery {
@@ -862,12 +1160,21 @@ mod live {
         }
     }
 
+    /// The core keyboard: its keymap and state, where they come from, and
+    /// the names of its layouts.
+    struct CoreKeyboard {
+        keyboard: Keyboard,
+        source: KeymapSource,
+        /// The layouts' names, by index, as XKB names the groups.
+        layouts: Vec<String>,
+    }
+
     /// What the input keeps on the owner thread.
     struct State {
         pointers: X11Pointers,
         /// The open windows, by their X id.
         windows: HashMap<xproto::Window, InputTarget>,
-        keyboard: Option<(Keyboard, KeyboardSource)>,
+        keyboard: Option<CoreKeyboard>,
         cursors: Option<x11rb::cursor::Handle>,
         /// The cursors loaded so far.
         loaded: HashMap<CursorIcon, xproto::Cursor>,
@@ -877,12 +1184,13 @@ mod live {
     /// platform's connection.
     pub(crate) struct X11Input {
         connection: Arc<X11Connection>,
-        /// XInput 2 answers, at the version the input speaks.
+        /// XInput 2 answers, at 2.2 or later.
         xinput: bool,
+        /// XInput 2 answers at 2.4: touchpad gestures.
+        gestures: bool,
         labels: LabelAtoms,
         state: OwnerSlot<Rc<RefCell<State>>>,
-        /// The layout the keyboard is in, by the name `_XKB_RULES_NAMES`
-        /// gives it.
+        /// The name of the layout the keyboard is in.
         layout: Mutex<String>,
         layout_listeners: Mutex<Vec<Box<dyn FnMut() + Send>>>,
     }
@@ -891,6 +1199,7 @@ mod live {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.debug_struct("X11Input")
                 .field("xinput", &self.xinput)
+                .field("gestures", &self.gestures)
                 .finish_non_exhaustive()
         }
     }
@@ -905,15 +1214,161 @@ mod live {
         f64::from(value.integral) + f64::from(value.frac) / 4_294_967_296.0
     }
 
-    /// The valuators an event carries: the set bits of its mask, in order,
-    /// with its values.
-    fn valuators(mask: &[u32], values: &[Fp3232]) -> Vec<(u16, f64)> {
-        let numbers = mask.iter().enumerate().flat_map(|(word, bits)| {
-            (0..32_u16)
-                .filter(move |bit| bits & (1 << bit) != 0)
-                .map(move |bit| u16::try_from(word).map_or(u16::MAX, |word| word * 32 + bit))
-        });
-        numbers.zip(values.iter().copied().map(fp3232)).collect()
+    /// The monotonic clock, which a local X server stamps its events on.
+    fn monotonic() -> Duration {
+        let now = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
+        Duration::new(
+            u64::try_from(now.tv_sec).unwrap_or(0),
+            u32::try_from(now.tv_nsec).unwrap_or(0),
+        )
+    }
+
+    /// An event's time: the server's, with the clocks read as it arrived.
+    fn xi_time(server_ms: xproto::Timestamp) -> XiTime {
+        XiTime {
+            server_ms,
+            observed_ms: u64::try_from(monotonic().as_millis()).unwrap_or(u64::MAX),
+            arrival: EventTime::from_nanos(event_timestamp_ns()),
+        }
+    }
+
+    /// The fields every XInput 2 pointer, touch and crossing event shares.
+    struct XiFields<'a> {
+        window: xproto::Window,
+        master: u16,
+        source: u16,
+        detail: u32,
+        time: xproto::Timestamp,
+        position: (Fp1616, Fp1616),
+        modifiers: u32,
+        mask: &'a [u32],
+        values: &'a [Fp3232],
+        emulated: bool,
+    }
+
+    /// The event `fields` make, as `action`, and the window it names.
+    fn xi_event(action: XiAction, fields: &XiFields<'_>) -> (xproto::Window, XiEvent) {
+        let values: Vec<f64> = fields.values.iter().copied().map(fp3232).collect();
+        (
+            fields.window,
+            XiEvent {
+                action,
+                master: XiMaster(fields.master),
+                source: XiSlave(fields.source),
+                detail: fields.detail,
+                position: (fp1616(fields.position.0), fp1616(fields.position.1)),
+                emulated: fields.emulated,
+                modifiers: fields.modifiers,
+                valuators: valuators(fields.mask, &values),
+                time: xi_time(fields.time),
+            },
+        )
+    }
+
+    /// The XInput 2 event `event` carries, and the window it names.
+    fn copied_event(event: &Event) -> Option<(xproto::Window, XiEvent)> {
+        let pointer = |action, e: &xinput::ButtonPressEvent| {
+            let emulated =
+                u32::from(e.flags) & u32::from(xinput::PointerEventFlags::POINTER_EMULATED) != 0;
+            xi_event(
+                action,
+                &XiFields {
+                    window: e.event,
+                    master: e.deviceid,
+                    source: e.sourceid,
+                    detail: e.detail,
+                    time: e.time,
+                    position: (e.event_x, e.event_y),
+                    modifiers: e.mods.effective,
+                    mask: &e.valuator_mask,
+                    values: &e.axisvalues,
+                    emulated,
+                },
+            )
+        };
+        let touch = |action, e: &xinput::TouchBeginEvent| {
+            xi_event(
+                action,
+                &XiFields {
+                    window: e.event,
+                    master: e.deviceid,
+                    source: e.sourceid,
+                    detail: e.detail,
+                    time: e.time,
+                    position: (e.event_x, e.event_y),
+                    modifiers: e.mods.effective,
+                    mask: &e.valuator_mask,
+                    values: &e.axisvalues,
+                    emulated: false,
+                },
+            )
+        };
+        let crossing = |action, e: &xinput::EnterEvent| {
+            xi_event(
+                action,
+                &XiFields {
+                    window: e.event,
+                    master: e.deviceid,
+                    source: e.sourceid,
+                    detail: 0,
+                    time: e.time,
+                    position: (e.event_x, e.event_y),
+                    modifiers: e.mods.effective,
+                    mask: &[],
+                    values: &[],
+                    emulated: false,
+                },
+            )
+        };
+        let pinch = |action, e: &xinput::GesturePinchBeginEvent| {
+            xi_event(
+                action,
+                &XiFields {
+                    window: e.event,
+                    master: e.deviceid,
+                    source: e.sourceid,
+                    detail: e.detail,
+                    time: e.time,
+                    position: (e.event_x, e.event_y),
+                    modifiers: e.mods.effective,
+                    mask: &[],
+                    values: &[],
+                    emulated: false,
+                },
+            )
+        };
+        Some(match event {
+            Event::XinputMotion(e) => pointer(XiAction::Motion, e),
+            Event::XinputButtonPress(e) => pointer(XiAction::ButtonPress, e),
+            Event::XinputButtonRelease(e) => pointer(XiAction::ButtonRelease, e),
+            Event::XinputTouchBegin(e) => touch(XiAction::TouchBegin, e),
+            Event::XinputTouchUpdate(e) => touch(XiAction::TouchUpdate, e),
+            Event::XinputTouchEnd(e) => touch(XiAction::TouchEnd, e),
+            Event::XinputEnter(e) => crossing(XiAction::Enter, e),
+            Event::XinputLeave(e) => crossing(
+                XiAction::Leave {
+                    grabbed: e.mode == xinput::NotifyMode::GRAB,
+                },
+                e,
+            ),
+            Event::XinputGesturePinchBegin(e) => pinch(XiAction::PinchBegin, e),
+            Event::XinputGesturePinchUpdate(e) => pinch(
+                XiAction::PinchUpdate {
+                    scale: fp1616(e.scale),
+                    rotation: fp1616(e.delta_angle),
+                },
+                e,
+            ),
+            Event::XinputGesturePinchEnd(e) => pinch(
+                XiAction::PinchEnd {
+                    cancelled: u32::from(e.flags)
+                        & u32::from(xinput::GesturePinchEventFlags::GESTURE_PINCH_CANCELLED)
+                        != 0,
+                },
+                e,
+            ),
+            _ => return None,
+        })
     }
 
     impl X11Input {
@@ -922,11 +1377,13 @@ mod live {
         /// the keyboard's changes heard from here on.
         pub(crate) fn new(connection: &Arc<X11Connection>) -> Arc<Self> {
             let xcb = connection.xcb();
-            let xinput = xcb
-                .xinput_xi_query_version(XI_VERSION.0, XI_VERSION.1)
+            let version = xcb
+                .xinput_xi_query_version(XI_ASKED.0, XI_ASKED.1)
                 .ok()
                 .and_then(|cookie| cookie.reply().ok())
-                .is_some_and(|reply| (reply.major_version, reply.minor_version) >= XI_VERSION);
+                .map(|reply| (reply.major_version, reply.minor_version));
+            let xinput = version.is_some_and(|version| version >= XI_LEAST);
+            let gestures = version.is_some_and(|version| version >= XI_ASKED);
             if !xinput {
                 tracing::warn!("the X server has no XInput 2.2: X11 windows get no pointer input");
             }
@@ -950,16 +1407,29 @@ mod live {
                         .reply()
                         .ok()
                 });
+            // The server's time is milliseconds of the monotonic clock: the
+            // registry places it on the event timeline from the two read
+            // together now.
+            let clock = NativeClock::new(
+                EventTime::from_nanos(event_timestamp_ns()),
+                monotonic(),
+                None,
+            );
+            let layout = keyboard
+                .as_ref()
+                .map(CoreKeyboard::layout_name)
+                .unwrap_or_default();
             let input = Arc::new(Self {
                 connection: Arc::clone(connection),
                 xinput,
+                gestures,
                 labels,
                 state: OwnerSlot::new(),
-                layout: Mutex::new(String::new()),
+                layout: Mutex::new(layout),
                 layout_listeners: Mutex::new(Vec::new()),
             });
             let state = State {
-                pointers: X11Pointers::new(),
+                pointers: X11Pointers::new(clock),
                 windows: HashMap::new(),
                 keyboard,
                 cursors,
@@ -981,24 +1451,23 @@ mod live {
                 }
                 // The devices present before any window opens: their
                 // announcements reach no window, only the presence.
-                let _ = input.read_devices();
+                drop(input.read_devices(&[], &[]));
             }
-            input.read_layout();
             input
         }
 
         /// The core keyboard, its XKB events selected.
-        fn keyboard(connection: &X11Connection) -> Option<(Keyboard, KeyboardSource)> {
-            let raw = NonNull::new(connection.xcb().get_raw_xcb_connection())?;
-            let Some(source) = KeyboardSource::x11_core_keyboard(raw) else {
+        fn keyboard(connection: &Arc<X11Connection>) -> Option<CoreKeyboard> {
+            let Some(source) = KeymapSource::x11_core_keyboard(connection) else {
                 tracing::warn!("libxkbcommon-x11 or XKB is missing: X11 windows get no keys");
                 return None;
             };
-            let keyboard = Keyboard::new(source)?;
+            let keyboard = Keyboard::new(&source)?;
+            let KeymapSource::X11 { device, .. } = &source;
+            let device = u16::try_from(*device).ok()?;
             let events = xkb::EventType::NEW_KEYBOARD_NOTIFY
                 | xkb::EventType::MAP_NOTIFY
                 | xkb::EventType::STATE_NOTIFY;
-            let device = u16::try_from(source.device()).ok()?;
             let selected = connection.xcb().xkb_select_events(
                 device,
                 xkb::EventType::from(0_u16),
@@ -1010,7 +1479,12 @@ mod live {
             if let Err(error) = selected {
                 tracing::debug!(%error, "the X11 keyboard's changes go unheard");
             }
-            Some((keyboard, source))
+            let layouts = group_names(connection, device);
+            Some(CoreKeyboard {
+                keyboard,
+                source,
+                layouts,
+            })
         }
 
         fn with_state<R>(&self, f: impl FnOnce(&mut State) -> R) -> Option<R> {
@@ -1071,14 +1545,24 @@ mod live {
                 .collect()
         }
 
-        /// Read the device list again: what changed goes to every window,
+        /// The hierarchy changed: the devices it reports removed go first,
+        /// then the list is read again; what changed goes to every window,
         /// with the kinds present.
-        fn read_devices(&self) -> Vec<(Arc<WindowDelivery>, Delivery)> {
+        fn read_devices(
+            &self,
+            removed_slaves: &[XiSlave],
+            removed_masters: &[XiMaster],
+        ) -> Vec<(Arc<WindowDelivery>, Delivery)> {
             let devices = self.devices();
             let time = EventTime::from_nanos(event_timestamp_ns());
+            let capabilities = self.capabilities_now();
             self.with_state(|state| {
-                let changes = state.pointers.devices(&devices, time);
-                let present = availability::x11().with_present(state.pointers.present());
+                let mut changes: DeviceChanges =
+                    state
+                        .pointers
+                        .removed(removed_slaves, removed_masters, time);
+                changes.extend(state.pointers.devices(&devices, time));
+                let present = capabilities.with_present(state.pointers.present());
                 let mut out = Vec::new();
                 for (surface, input) in changes {
                     for target in state.windows.values() {
@@ -1098,39 +1582,23 @@ mod live {
             .unwrap_or_default()
         }
 
-        /// The layout names `_XKB_RULES_NAMES` lists (`us,ru`), read again,
-        /// and the one the keyboard is in kept.
+        /// What a window opening now can be given: the table of what this
+        /// server's XInput 2 delivers.
+        fn capabilities_now(&self) -> InputCapabilities {
+            availability::x11(self.gestures)
+        }
+
+        /// The layout's name now, kept; whether it changed.
         fn read_layout(&self) -> bool {
-            let xcb = self.connection.xcb();
-            let names = xcb
-                .intern_atom(true, b"_XKB_RULES_NAMES")
-                .ok()
-                .and_then(|cookie| cookie.reply().ok())
-                .filter(|reply| reply.atom != 0)
-                .and_then(|reply| {
-                    xcb.get_property(
-                        false,
-                        self.connection.root(),
-                        reply.atom,
-                        AtomEnum::STRING,
-                        0,
-                        1024,
-                    )
-                    .ok()?
-                    .reply()
-                    .ok()
-                })
-                .map(|reply| reply.value)
-                .unwrap_or_default();
-            let group = self
+            let name = self
                 .with_state(|state| {
                     state
                         .keyboard
                         .as_ref()
-                        .map_or(0, |(keyboard, _)| keyboard.layout())
+                        .map(CoreKeyboard::layout_name)
+                        .unwrap_or_default()
                 })
-                .unwrap_or(0);
-            let name = layout_name(&names, group);
+                .unwrap_or_default();
             let mut layout = self.layout.lock();
             let changed = *layout != name;
             *layout = name;
@@ -1149,78 +1617,7 @@ mod live {
             *kept = listeners;
         }
 
-        /// The XInput 2 event `event` carries, and the window it names.
-        fn xi_event(event: &Event) -> Option<(xproto::Window, XiEvent)> {
-            let time = EventTime::from_nanos(event_timestamp_ns());
-            let pointer = |action, e: &xinput::ButtonPressEvent| {
-                (
-                    e.event,
-                    XiEvent {
-                        action,
-                        device: e.deviceid,
-                        source: e.sourceid,
-                        detail: e.detail,
-                        position: (fp1616(e.event_x), fp1616(e.event_y)),
-                        emulated: u32::from(e.flags)
-                            & u32::from(xinput::PointerEventFlags::POINTER_EMULATED)
-                            != 0,
-                        modifiers: e.mods.effective,
-                        valuators: valuators(&e.valuator_mask, &e.axisvalues),
-                        time,
-                    },
-                )
-            };
-            let touch = |action, e: &xinput::TouchBeginEvent| {
-                (
-                    e.event,
-                    XiEvent {
-                        action,
-                        device: e.deviceid,
-                        source: e.sourceid,
-                        detail: e.detail,
-                        position: (fp1616(e.event_x), fp1616(e.event_y)),
-                        emulated: false,
-                        modifiers: e.mods.effective,
-                        valuators: valuators(&e.valuator_mask, &e.axisvalues),
-                        time,
-                    },
-                )
-            };
-            let crossing = |action, e: &xinput::EnterEvent| {
-                (
-                    e.event,
-                    XiEvent {
-                        action,
-                        device: e.deviceid,
-                        source: e.sourceid,
-                        detail: 0,
-                        position: (fp1616(e.event_x), fp1616(e.event_y)),
-                        emulated: false,
-                        modifiers: e.mods.effective,
-                        valuators: Vec::new(),
-                        time,
-                    },
-                )
-            };
-            Some(match event {
-                Event::XinputMotion(e) => pointer(XiAction::Motion, e),
-                Event::XinputButtonPress(e) => pointer(XiAction::ButtonPress, e),
-                Event::XinputButtonRelease(e) => pointer(XiAction::ButtonRelease, e),
-                Event::XinputTouchBegin(e) => touch(XiAction::TouchBegin, e),
-                Event::XinputTouchUpdate(e) => touch(XiAction::TouchUpdate, e),
-                Event::XinputTouchEnd(e) => touch(XiAction::TouchEnd, e),
-                Event::XinputEnter(e) => crossing(XiAction::Enter, e),
-                Event::XinputLeave(e) => crossing(
-                    XiAction::Leave {
-                        grabbed: e.mode == xinput::NotifyMode::GRAB,
-                    },
-                    e,
-                ),
-                _ => return None,
-            })
-        }
-
-        /// What a pointer or touch event delivers.
+        /// What a pointer, touch or gesture event delivers.
         fn pointer_event(
             &self,
             window: xproto::Window,
@@ -1268,10 +1665,10 @@ mod live {
                     return Vec::new();
                 };
                 let delivery = Arc::clone(&target.delivery);
-                let Some((keyboard, _)) = input.keyboard.as_mut() else {
+                let Some(core) = input.keyboard.as_mut() else {
                     return Vec::new();
                 };
-                let key = keyboard.key(event.detail, state, repeat, time);
+                let key = core.keyboard.key(event.detail, state, repeat, time);
                 vec![(delivery, Delivery::Input(PlatformInput::Keyboard(key)))]
             })
             .unwrap_or_default()
@@ -1280,11 +1677,10 @@ mod live {
         /// The server's keyboard state changed: whether its layout did.
         fn keyboard_state(&self, event: &xkb::StateNotifyEvent) -> bool {
             self.with_state(|state| {
-                let Some((keyboard, _)) = state.keyboard.as_mut() else {
+                let Some(core) = state.keyboard.as_mut() else {
                     return false;
                 };
-                let before = keyboard.layout();
-                keyboard.update_mask(
+                core.keyboard.update_mask(
                     u32::from(event.base_mods),
                     u32::from(event.latched_mods),
                     u32::from(event.locked_mods),
@@ -1293,24 +1689,30 @@ mod live {
                         u32::from(event.latched_group.cast_unsigned()),
                         u32::from(u8::from(event.locked_group)),
                     ],
-                );
-                keyboard.layout() != before
+                )
             })
             .unwrap_or(false)
         }
 
-        /// The server's keymap changed: read it again.
+        /// The server's keymap changed: read it again, with its layouts'
+        /// names.
         fn keymap_changed(&self) {
+            let connection = &self.connection;
             self.with_state(|state| {
-                if let Some((keyboard, source)) = state.keyboard.as_mut()
-                    && !keyboard.reload(*source)
-                {
-                    tracing::debug!("the X11 keyboard's new keymap cannot be read");
+                if let Some(core) = state.keyboard.as_mut() {
+                    if !core.keyboard.reload(&core.source) {
+                        tracing::debug!("the X11 keyboard's new keymap cannot be read");
+                    }
+                    let KeymapSource::X11 { device, .. } = &core.source;
+                    if let Ok(device) = u16::try_from(*device) {
+                        core.layouts = group_names(connection, device);
+                    }
                 }
             });
         }
 
-        /// The focus left `window`: its contacts end.
+        /// The focus left `window`: its contacts end, the compose sequence in
+        /// progress ends and each key still held is released there.
         fn focus_out(&self, window: xproto::Window) -> Vec<(Arc<WindowDelivery>, Delivery)> {
             let time = EventTime::from_nanos(event_timestamp_ns());
             self.with_state(|state| {
@@ -1318,9 +1720,20 @@ mod live {
                     return Vec::new();
                 };
                 let delivery = Arc::clone(&target.delivery);
-                state
-                    .pointers
-                    .cancel_surface(surface_of(target.window), NativeCancel::FocusLost, time)
+                let mut inputs = state.pointers.cancel_surface(
+                    surface_of(target.window),
+                    NativeCancel::FocusLost,
+                    time,
+                );
+                if let Some(core) = state.keyboard.as_mut() {
+                    inputs.extend(
+                        core.keyboard
+                            .leave(time)
+                            .into_iter()
+                            .map(PlatformInput::Keyboard),
+                    );
+                }
+                inputs
                     .into_iter()
                     .map(|input| (Arc::clone(&delivery), Delivery::Input(input)))
                     .collect()
@@ -1329,12 +1742,12 @@ mod live {
         }
 
         /// Select a window's XInput 2 events: every master device's pointer,
-        /// touch and key events.
+        /// touch, key and, on XInput 2.4, pinch events.
         fn select(&self, window: xproto::Window) {
             if !self.xinput {
                 return;
             }
-            let mask = XIEventMask::MOTION
+            let mut mask = XIEventMask::MOTION
                 | XIEventMask::BUTTON_PRESS
                 | XIEventMask::BUTTON_RELEASE
                 | XIEventMask::ENTER
@@ -1344,6 +1757,15 @@ mod live {
                 | XIEventMask::TOUCH_BEGIN
                 | XIEventMask::TOUCH_UPDATE
                 | XIEventMask::TOUCH_END;
+            if self.gestures {
+                // x11rb names no XInput 2.4 mask bit; each is its event's
+                // type, as every XInput 2 mask bit is.
+                let bit = |event: u16| XIEventMask::from(1_u32 << u32::from(event));
+                mask = mask
+                    | bit(xinput::GESTURE_PINCH_BEGIN_EVENT)
+                    | bit(xinput::GESTURE_PINCH_UPDATE_EVENT)
+                    | bit(xinput::GESTURE_PINCH_END_EVENT);
+            }
             let selected = self.connection.xcb().xinput_xi_select_events(
                 window,
                 &[xinput::EventMask {
@@ -1355,6 +1777,43 @@ mod live {
                 tracing::debug!(%error, "an X11 window's input goes unheard");
             }
         }
+    }
+
+    impl CoreKeyboard {
+        /// The name of the layout in effect; empty when XKB names none.
+        fn layout_name(&self) -> String {
+            usize::try_from(self.keyboard.layout())
+                .ok()
+                .and_then(|index| self.layouts.get(index))
+                .cloned()
+                .unwrap_or_default()
+        }
+    }
+
+    /// The names XKB gives the core keyboard's layouts (its groups), in
+    /// order: `English (US)`, `Russian`.
+    fn group_names(connection: &X11Connection, device: u16) -> Vec<String> {
+        let xcb = connection.xcb();
+        let Some(reply) = xcb
+            .xkb_get_names(device, xkb::NameDetail::GROUP_NAMES)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+        else {
+            return Vec::new();
+        };
+        reply
+            .value_list
+            .groups
+            .unwrap_or_default()
+            .into_iter()
+            .map(|atom| {
+                xcb.get_atom_name(atom)
+                    .ok()
+                    .and_then(|cookie| cookie.reply().ok())
+                    .map(|reply| String::from_utf8_lossy(&reply.name).into_owned())
+                    .unwrap_or_default()
+            })
+            .collect()
     }
 
     /// The surface a window's contacts belong to: its identity, which no
@@ -1389,12 +1848,36 @@ mod live {
         }
     }
 
+    /// The devices a hierarchy change reports removed or disabled.
+    fn removed_devices(event: &xinput::HierarchyEvent) -> (Vec<XiSlave>, Vec<XiMaster>) {
+        let gone = |info: &&xinput::HierarchyInfo, flag: xinput::HierarchyMask| {
+            u32::from(info.flags)
+                & (u32::from(flag) | u32::from(xinput::HierarchyMask::DEVICE_DISABLED))
+                != 0
+        };
+        let slaves = event
+            .infos
+            .iter()
+            .filter(|info| gone(info, xinput::HierarchyMask::SLAVE_REMOVED))
+            .filter(|info| info.type_ == DeviceType::SLAVE_POINTER)
+            .map(|info| XiSlave(info.deviceid))
+            .collect();
+        let masters = event
+            .infos
+            .iter()
+            .filter(|info| gone(info, xinput::HierarchyMask::MASTER_REMOVED))
+            .filter(|info| info.type_ == DeviceType::MASTER_POINTER)
+            .map(|info| XiMaster(info.deviceid))
+            .collect();
+        (slaves, masters)
+    }
+
     impl LoopInput for X11Input {
         fn capabilities(&self) -> InputCapabilities {
             let present = self
                 .with_state(|state| state.pointers.present())
                 .unwrap_or_default();
-            availability::x11().with_present(present)
+            self.capabilities_now().with_present(present)
         }
 
         fn window_opened(&self, target: InputTarget) {
@@ -1416,11 +1899,12 @@ mod live {
                     .is_some_and(|target| target.window.id == window.id)
                 {
                     let time = EventTime::from_nanos(event_timestamp_ns());
-                    let _ = state.pointers.cancel_surface(
+                    // The window's handler hears nothing more.
+                    drop(state.pointers.cancel_surface(
                         surface_of(window),
                         NativeCancel::FocusLost,
                         time,
-                    );
+                    ));
                     return state.windows.remove(&window.xid);
                 }
                 None
@@ -1433,11 +1917,16 @@ mod live {
             let deliveries = match event {
                 Event::XinputKeyPress(key) => self.key_event(key, KeyState::Down),
                 Event::XinputKeyRelease(key) => self.key_event(key, KeyState::Up),
-                Event::XinputHierarchy(_) => self.read_devices(),
+                Event::XinputHierarchy(change) => {
+                    let (slaves, masters) = removed_devices(change);
+                    self.read_devices(&slaves, &masters)
+                }
                 Event::XinputDeviceChanged(changed) => {
-                    self.with_state(|state| state.pointers.reset_scrolling(changed.sourceid));
+                    self.with_state(|state| {
+                        state.pointers.reset_scrolling(XiSlave(changed.sourceid));
+                    });
                     if changed.reason == xinput::ChangeReason::DEVICE_CHANGE {
-                        self.read_devices()
+                        self.read_devices(&[], &[])
                     } else {
                         Vec::new()
                     }
@@ -1459,10 +1948,11 @@ mod live {
                     if focus.mode == NotifyMode::NORMAL {
                         deliver(self.focus_out(focus.event));
                     }
-                    // The window follows its focus too.
+                    // The window follows its focus too; the loop hands it
+                    // the event even when a handler panicked here.
                     return false;
                 }
-                _ => match Self::xi_event(event) {
+                _ => match copied_event(event) {
                     Some((window, xi)) => self.pointer_event(window, &xi),
                     None => return false,
                 },
@@ -1564,4 +2054,7 @@ mod live {
             drop(state);
         }
     }
+
+    #[cfg(test)]
+    mod tests;
 }

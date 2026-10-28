@@ -122,8 +122,13 @@ mod cases {
     /// The recordings an X11 session is held against are this harness's too,
     /// with their codec's contracts, in a build that captures.
     fn recording_cases() -> Vec<(&'static str, fn())> {
+        // The list is the module's whole, so nothing it builds is unused
+        // here; `platform_it` runs the rest.
         #[cfg(all(debug_assertions, feature = "native-capture"))]
-        return crate::native_recording::contracts();
+        return crate::native_recording::contracts()
+            .into_iter()
+            .filter(|(name, _)| name.contains("x11"))
+            .collect();
         #[cfg(not(all(debug_assertions, feature = "native-capture")))]
         Vec::new()
     }
@@ -193,6 +198,10 @@ mod cases {
             unsafe {
                 std::env::set_var("DISPLAY", display);
                 std::env::remove_var("WAYLAND_DISPLAY");
+                // A locale whose compose table XKB has, for the dead keys
+                // the input cases type; the table is X's, no locale need
+                // be installed.
+                std::env::set_var("LC_CTYPE", "en_US.UTF-8");
             }
             let window_manager = Command::new("openbox")
                 .arg("--sm-disable")
@@ -342,6 +351,14 @@ mod cases {
 
         /// A window delivering to `handler`.
         pub(crate) fn open_with(title: &str, handler: Rc<RecordingWindowHandler>) -> Self {
+            Self::open_with_handler(title, handler)
+        }
+
+        /// A window delivering to any `handler`.
+        pub(crate) fn open_with_handler(
+            title: &str,
+            handler: Rc<dyn flui_platform::WindowHandler>,
+        ) -> Self {
             let platform = X11Platform::new().expect("the X11 platform");
             let window = platform
                 .open_window(

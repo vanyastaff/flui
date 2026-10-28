@@ -13,9 +13,9 @@ X11 columns describe what winit delivers today. The native Wayland host (`Waylan
 `wayland` feature) and the native X11 host (`X11Platform`, the `x11` feature) have their loops,
 windows with their state and commands, displays, preferences, lifecycle and AT-SPI; the Wayland
 host ran the window conformance against a headless Weston, the X11 host under openbox on Xvfb.
-The X11 host has its input too: XInput 2's pointers, touches, pens and unphased smooth scrolling,
+The X11 host has its input too: XInput 2's pointers, touches, pens, touchpad pinches and unphased smooth scrolling,
 XKB's keys, compose and layout, and the cursor theme; XTest's pointer, buttons, wheel and keys ran
-through it on Xvfb under openbox and held against a native recording, while touch, pen and smooth
+through it on Xvfb under openbox and held against a native recording, while touch, pen, pinch and smooth
 scrolling are checked by their decoder only (no such device on Xvfb). Neither host has text input,
 clipboard or drag and drop yet, nor Wayland its input, and `current_platform` picks winit
 while winit is built, so their rows join the Wayland and X11 columns when they replace winit. The

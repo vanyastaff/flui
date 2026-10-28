@@ -333,7 +333,8 @@ xkbcommon-dl = { version = "0.4", optional = true, features = ["x11"] }
 wayland-client = { workspace = true, optional = true }
 wayland-protocols = { workspace = true, optional = true }
 wayland-backend = { workspace = true, optional = true }
-rustix = { workspace = true, optional = true }
+# `time`: the monotonic clock the X server stamps its events on.
+rustix = { workspace = true, optional = true, features = ["time"] }
 accesskit_unix = { version = "0.24" }
 zbus = { workspace = true }
 futures-util = { workspace = true }

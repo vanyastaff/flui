@@ -38,7 +38,7 @@ use flui_native::input::availability::{
 };
 use flui_native::input::keys::vk_to_key;
 use flui_native::input::linux::x11::decode as x11;
-use flui_native::input::linux::xkb::keys as x11_keys;
+use flui_native::input::linux::xkb as x11_keys;
 use flui_native::input::web::keys::key_composition;
 use flui_native::{HeadlessPlatform, HostWindow, MockWindow, OwnerPlatform, Platform as _};
 use flui_platform::Availability;
@@ -1061,6 +1061,8 @@ enum X11Reading {
 struct X11Decoder {
     pointers: x11::X11Pointers,
     devices: Vec<x11::DeviceDescription>,
+    /// The pinch's scale since it began, which XInput 2.4 reports.
+    pinch_scale: f64,
 }
 
 impl X11Decoder {
@@ -1071,8 +1073,9 @@ impl X11Decoder {
 
     fn new() -> Self {
         let mut decoder = Self {
-            pointers: x11::X11Pointers::new(),
+            pointers: x11::X11Pointers::new(Self::clock()),
             devices: Vec::new(),
+            pinch_scale: 1.0,
         };
         decoder.restart();
         decoder
@@ -1091,7 +1094,7 @@ impl X11Decoder {
     }
 
     fn restart(&mut self) {
-        self.pointers = x11::X11Pointers::new();
+        self.pointers = x11::X11Pointers::new(Self::clock());
         self.devices = vec![
             x11::DeviceDescription {
                 master: true,
@@ -1105,9 +1108,80 @@ impl X11Decoder {
         let _ = self.pointers.devices(&self.devices, EPOCH);
     }
 
+    /// The monotonic clock the server's time keeps, anchored at the epoch.
+    fn clock() -> NativeClock {
+        NativeClock::new(EPOCH, Duration::ZERO, None)
+    }
+
     fn time(stamp: Stamp) -> EventTime {
         let nanos = u64::try_from(stamp.uptime.as_nanos()).expect("uptime fits");
         EventTime::from_nanos(EPOCH.as_nanos() + nanos)
+    }
+
+    /// A step's time as the server stamps it: milliseconds of the
+    /// monotonic clock, read as the event arrives.
+    fn xi_time(stamp: Stamp) -> x11::XiTime {
+        let observed_ms = u64::try_from(stamp.uptime.as_millis()).expect("uptime fits");
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "the server's time is the low 32 bits of the clock"
+        )]
+        let server_ms = observed_ms as u32;
+        x11::XiTime {
+            server_ms,
+            observed_ms,
+            arrival: Self::time(stamp),
+        }
+    }
+
+    /// A pinch step as XInput 2.4 reports it: a begin, the scale since it
+    /// began, the rotation since the last update in clockwise degrees, an
+    /// end.
+    fn pinch(&mut self, step: PinchStep) -> Vec<X11Reading> {
+        let (factor, degrees) = match step.change {
+            PinchChange::Scale(factor) => (factor, 0.0),
+            PinchChange::Rotation(radians) => (1.0, radians.to_degrees()),
+            _ => (1.0, 0.0),
+        };
+        let mut actions = Vec::new();
+        match step.phase {
+            StepPhase::Began => {
+                self.pinch_scale = 1.0;
+                actions.push(x11::XiAction::PinchBegin);
+                if factor != 1.0 || degrees != 0.0 {
+                    self.pinch_scale *= factor;
+                    actions.push(x11::XiAction::PinchUpdate {
+                        scale: self.pinch_scale,
+                        rotation: degrees,
+                    });
+                }
+            }
+            StepPhase::Changed => {
+                self.pinch_scale *= factor;
+                actions.push(x11::XiAction::PinchUpdate {
+                    scale: self.pinch_scale,
+                    rotation: degrees,
+                });
+            }
+            StepPhase::Ended => actions.push(x11::XiAction::PinchEnd { cancelled: false }),
+            _ => actions.push(x11::XiAction::PinchEnd { cancelled: true }),
+        }
+        actions
+            .into_iter()
+            .map(|action| {
+                X11Reading::Event(x11::XiEvent {
+                    action,
+                    master: x11::XiMaster(Self::MASTER),
+                    source: x11::XiSlave(Self::XTEST),
+                    detail: 2,
+                    position: (step.x, step.y),
+                    emulated: false,
+                    modifiers: 0,
+                    valuators: Vec::new(),
+                    time: Self::xi_time(step.at),
+                })
+            })
+            .collect()
     }
 
     fn contact(&mut self, step: ContactStep, finite: bool) -> Option<Vec<X11Reading>> {
@@ -1150,8 +1224,8 @@ impl X11Decoder {
         let detail = if touch { step.contact } else { 1 };
         readings.push(X11Reading::Event(x11::XiEvent {
             action,
-            device: Self::MASTER,
-            source,
+            master: x11::XiMaster(Self::MASTER),
+            source: x11::XiSlave(source),
             detail,
             position: if finite {
                 (step.x, step.y)
@@ -1161,7 +1235,7 @@ impl X11Decoder {
             emulated: false,
             modifiers: 0,
             valuators: Vec::new(),
-            time: Self::time(step.at),
+            time: Self::xi_time(step.at),
         }));
         Some(readings)
     }
@@ -1171,11 +1245,12 @@ impl BackendUnderTest for X11Decoder {
     type Reading = Vec<X11Reading>;
 
     fn capabilities(&self) -> InputCapabilities {
-        input_availability::x11()
+        input_availability::x11(true)
     }
 
     fn clock(&self) -> ClockProfile {
-        ClockProfile::coarse(Duration::from_nanos(1))
+        ClockProfile::coarse(Duration::from_millis(1))
+            .wrapping_after(Duration::from_millis(1 << 32))
     }
 
     fn restart(&mut self) {
@@ -1184,6 +1259,7 @@ impl BackendUnderTest for X11Decoder {
 
     fn reading(&mut self, step: Step) -> Option<Vec<X11Reading>> {
         match step {
+            Step::Pinch(step) => Some(self.pinch(step)),
             Step::Contact(step) => self.contact(step, true),
             Step::Undecodable(step) => self.contact(step, false),
             Step::Key(step) => {
@@ -1226,7 +1302,7 @@ impl BackendUnderTest for X11Decoder {
                     } else {
                         Modifiers::NONE
                     };
-                    let key = x11_keys::key(keysym, "");
+                    let key = x11_keys::key_of(keysym, "");
                     inputs.extend([KeyState::Down, KeyState::Up].map(|state| {
                         PlatformInput::Keyboard(
                             KeyEvent::new(state, key.clone(), Code::Unidentified, EPOCH)

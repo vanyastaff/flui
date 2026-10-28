@@ -7,9 +7,9 @@ use flui_platform::pointer::{
 
 use super::{
     Axis, AxisLabel, DeviceDescription, DeviceRole, ScrollAxis, X11Pointers, XiAction, XiEvent,
-    button, layout_name, role,
+    XiMaster, XiSlave, XiTime, button, role, valuators,
 };
-use crate::input::assembly::NativeSurface;
+use crate::input::assembly::{NativeCancel, NativeClock, NativeSurface};
 
 const MASTER: u16 = 2;
 const XTEST: u16 = 4;
@@ -86,7 +86,7 @@ fn stylus() -> DeviceDescription {
 }
 
 fn pointers() -> X11Pointers {
-    let mut pointers = X11Pointers::new();
+    let mut pointers = X11Pointers::new(NativeClock::epoch_only());
     let _ = pointers.devices(
         &[
             master(),
@@ -100,17 +100,27 @@ fn pointers() -> X11Pointers {
     pointers
 }
 
+/// An event's time: the server's `ms` read as it arrives at the same
+/// millisecond of the monotonic clock.
+fn at_ms(ms: u32) -> XiTime {
+    XiTime {
+        server_ms: ms,
+        observed_ms: u64::from(ms),
+        arrival: EventTime::from_nanos(u64::from(ms) * 1_000_000),
+    }
+}
+
 fn event(action: XiAction, source: u16, at: (f64, f64)) -> XiEvent {
     XiEvent {
         action,
-        device: MASTER,
-        source,
+        master: XiMaster(MASTER),
+        source: XiSlave(source),
         detail: 0,
         position: at,
         emulated: false,
         modifiers: 0,
         valuators: Vec::new(),
-        time: EventTime::from_nanos(1_000),
+        time: at_ms(1),
     }
 }
 
@@ -368,7 +378,7 @@ fn a_grab_that_takes_a_pressed_pointer_cancels_it() {
 #[test]
 fn devices_come_and_go_with_the_hierarchy() {
     let time = EventTime::from_nanos(5);
-    let mut pointers = X11Pointers::new();
+    let mut pointers = X11Pointers::new(NativeClock::epoch_only());
     let added = pointers.devices(
         &[master(), device(XTEST, "Virtual core XTEST pointer")],
         time,
@@ -402,10 +412,11 @@ fn devices_come_and_go_with_the_hierarchy() {
             unplugged.as_slice(),
             [
                 (Some(SURFACE), PlatformInput::Pointer(PointerEvent::Cancel(cancel))),
+                (Some(SURFACE), PlatformInput::Pointer(PointerEvent::Leave(_))),
                 (None, PlatformInput::Pointer(PointerEvent::DeviceRemoved(_))),
             ] if cancel.reason == CancelReason::DeviceRemoved
         ),
-        "{unplugged:?}"
+        "the stroke ends, the pen leaves the window it entered: {unplugged:?}"
     );
     assert_eq!(pointers.present(), PointerKindSet::MOUSE);
     // The stylus's id, now an eraser's.
@@ -476,13 +487,203 @@ fn x_buttons_are_flui_buttons() {
     assert_ne!(button(10), button(11));
 }
 
+/// A pen unplugged and plugged back in before the list is read again (the
+/// hierarchy reports both, the server lists it under the same id) ends its
+/// stroke and comes back as a new device: no press stays down.
 #[test]
-fn the_layout_is_the_keyboards_group_of_the_rules_names() {
-    let names = b"evdev\0pc105\0us,de,ru\0,nodeadkeys,\0grp:alt_shift_toggle\0";
-    // (group, name)
-    let table = [(0, "us"), (1, "de(nodeadkeys)"), (2, "ru"), (3, "")];
-    for (group, expected) in table {
-        assert_eq!(layout_name(names, group), expected, "group {group}");
+fn a_pen_plugged_back_in_under_its_id_is_a_new_pen() {
+    let mut pointers = pointers();
+    let pressed = XiEvent {
+        detail: 1,
+        ..event(XiAction::ButtonPress, STYLUS, (3.0, 3.0))
+    };
+    let down = |events: &[PointerEvent]| {
+        events.iter().find_map(|event| match event {
+            PointerEvent::Down(press) => Some(press.pointer),
+            _ => None,
+        })
+    };
+    let first = down(&pointer_events(
+        pointers.event(SURFACE, 1.0, &pressed).inputs,
+    ))
+    .expect("the pen's press");
+    let time = EventTime::from_nanos(9);
+    let mut changes = pointers.removed(&[XiSlave(STYLUS)], &[], time);
+    changes.extend(pointers.devices(
+        &[
+            master(),
+            device(XTEST, "Virtual core XTEST pointer"),
+            touchpad(),
+            screen(),
+            stylus(),
+        ],
+        time,
+    ));
+    let events = pointer_events(changes.into_iter().map(|(_, input)| input).collect());
+    assert!(
+        matches!(
+            events.as_slice(),
+            [
+                PointerEvent::Cancel(cancel),
+                PointerEvent::Leave(_),
+                PointerEvent::DeviceRemoved(_),
+                PointerEvent::DeviceAdded(added),
+            ] if cancel.reason == CancelReason::DeviceRemoved
+                && cancel.pointer == first
+                && Some(added.device) != first.device
+        ),
+        "{events:?}"
+    );
+    // The pen's next press is the new device's: a new pointer.
+    let again = down(&pointer_events(
+        pointers.event(SURFACE, 1.0, &pressed).inputs,
+    ))
+    .expect("the new pen's press");
+    assert_ne!(again.id, first.id);
+    assert_ne!(again.device, first.device);
+}
+
+/// A window losing the focus ends its own contacts only: the pen hovering
+/// another window keeps its contact, and leaves that window when the mouse
+/// takes the cursor back.
+#[test]
+fn a_window_losing_the_focus_leaves_another_windows_pen_alone() {
+    let mut pointers = pointers();
+    let window_a = NativeSurface(1);
+    let window_b = NativeSurface(2);
+    let pen = event(XiAction::Motion, STYLUS, (40.0, 40.0));
+    let _ = pointers.event(window_b, 1.0, &pen);
+    let cancelled =
+        pointers.cancel_surface(window_a, NativeCancel::FocusLost, EventTime::from_nanos(2));
+    assert!(
+        cancelled.is_empty(),
+        "nothing moved on window A: {cancelled:?}"
+    );
+    let mouse = event(XiAction::Motion, XTEST, (5.0, 5.0));
+    let events = pointer_events(pointers.event(window_b, 1.0, &mouse).inputs);
+    assert!(
+        matches!(
+            events.first(),
+            Some(PointerEvent::Leave(signal)) if matches!(signal.pointer.kind, PointerKind::Pen { .. })
+        ),
+        "the pen leaves as the mouse takes the cursor back: {events:?}"
+    );
+}
+
+/// A touch screen's crossing is no contact: it makes no hover pointer.
+#[test]
+fn a_touch_screens_crossing_is_no_contact() {
+    let mut pointers = pointers();
+    let decoded = pointers.event(SURFACE, 1.0, &event(XiAction::Enter, SCREEN, (1.0, 1.0)));
+    assert!(decoded.inputs.is_empty(), "{:?}", decoded.inputs);
+    assert_eq!(decoded.hover, None);
+}
+
+/// Motions the loop reads in one turn keep the spacing of the server's
+/// times; a server whose clock is not the monotonic one is read by arrival,
+/// and the server's time is its own across the wrap.
+#[test]
+fn a_burst_keeps_the_spacing_of_the_servers_times() {
+    use crate::input::assembly::{NativeTime, ReadingTime};
+    let mut pointers = pointers();
+    let arrived: u64 = 1_000;
+    let burst: Vec<XiEvent> = (0..4_u32)
+        .map(|step| XiEvent {
+            time: XiTime {
+                server_ms: 960 + step * 4,
+                observed_ms: arrived,
+                arrival: EventTime::from_nanos(arrived * 1_000_000),
+            },
+            ..event(XiAction::Motion, XTEST, (f64::from(step), 0.0))
+        })
+        .collect();
+    let times: Vec<u64> = feed(&mut pointers, &burst)
+        .iter()
+        .filter_map(|event| match event {
+            PointerEvent::Move(movement) => Some(movement.current().time.as_nanos()),
+            _ => None,
+        })
+        .collect();
+    let gaps: Vec<u64> = times.windows(2).map(|pair| pair[1] - pair[0]).collect();
+    assert_eq!(gaps, [4_000_000; 3], "{times:?}");
+
+    let remote = XiTime {
+        server_ms: 5,
+        observed_ms: 100_000,
+        arrival: EventTime::from_nanos(77),
+    };
+    assert_eq!(
+        remote.reading_time(),
+        ReadingTime::epoch(EventTime::from_nanos(77))
+    );
+    let wrapped = XiTime {
+        server_ms: 3,
+        observed_ms: u64::from(u32::MAX) + 2,
+        arrival: EventTime::from_nanos(1),
+    };
+    assert!(matches!(
+        wrapped.reading_time().coarse,
+        NativeTime::TickMillis { tick: 3, .. }
+    ));
+}
+
+/// A touchpad pinch is one pan-zoom: each update's own factor, compounding
+/// to the scale the server says, about the cursor.
+#[test]
+fn a_touchpad_pinch_is_one_pan_zoom() {
+    use flui_platform::pointer::PanZoomPhase;
+    let mut pointers = pointers();
+    let at = (30.0, 30.0);
+    let update = |scale, rotation| event(XiAction::PinchUpdate { scale, rotation }, TOUCHPAD, at);
+    let events = feed(
+        &mut pointers,
+        &[
+            event(XiAction::PinchBegin, TOUCHPAD, at),
+            update(1.5, 0.0),
+            update(3.0, 90.0),
+            event(XiAction::PinchEnd { cancelled: false }, TOUCHPAD, at),
+        ],
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            PointerEvent::DeviceAdded(change) if change.kind == PointerKind::Trackpad
+        )),
+        "the touchpad's gestures are a device: {events:?}"
+    );
+    let mut scale = 0.0;
+    let mut phases = Vec::new();
+    for event in &events {
+        if let PointerEvent::PanZoom(gesture) = event {
+            match gesture.phase {
+                PanZoomPhase::Start => phases.push("start"),
+                PanZoomPhase::Update(transform) => {
+                    scale = transform.scale();
+                    phases.push("update");
+                }
+                PanZoomPhase::End => phases.push("end"),
+                _ => phases.push("other"),
+            }
+        }
     }
-    assert_eq!(layout_name(b"", 0), "");
+    assert_eq!(phases.first(), Some(&"start"), "{events:?}");
+    assert_eq!(phases.last(), Some(&"end"), "{events:?}");
+    assert!(
+        (scale - 3.0).abs() < 1e-9,
+        "the last update is the scale since the pinch began: {scale}"
+    );
+}
+
+/// The valuators a mask names: a bit past the 16 bits of a valuator's
+/// number skips its value without a panic, as does a value the event lacks.
+#[test]
+fn a_valuator_mask_past_its_numbers_is_skipped() {
+    assert_eq!(valuators(&[0b101], &[1.0, 2.0]), [(0, 1.0), (2, 2.0)]);
+    assert_eq!(valuators(&[0, 1], &[7.0]), [(32, 7.0)]);
+    // Word 2048 starts at number 65 536, past a `u16`.
+    let mut mask = vec![0_u32; 2049];
+    mask[0] = 1;
+    mask[2048] = 1;
+    assert_eq!(valuators(&mask, &[1.0, 2.0]), [(0, 1.0)]);
+    assert_eq!(valuators(&[0b11], &[1.0]), [(0, 1.0)]);
 }
