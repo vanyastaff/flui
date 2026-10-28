@@ -36,13 +36,15 @@ use std::os::fd::{AsFd, OwnedFd};
 use std::sync::{Arc, Weak};
 use std::thread::JoinHandle;
 
-use flui_platform::{DisplayId, DisplayInfo, DisplaySnapshot};
+use flui_platform::{DisplayInfo, DisplaySnapshot};
 use parking_lot::Mutex;
 use rustix::event::{EventfdFlags, eventfd};
 
 use super::protocol::{Environment, Protocol};
 use super::session::{DisplayError, Session, Step, connect};
-use super::view::{FreshIds, NativeIds, OutputView, display_of_native_number};
+#[cfg(any(wayland_host, winit_host))]
+use super::view::display_of_native_number;
+use super::view::{FreshIds, NativeIds, OutputView};
 use crate::display::source::DisplaySource;
 use crate::error::PlatformError;
 use crate::owner::panic_boundary::contain_owner_callback;
@@ -163,8 +165,15 @@ impl LinuxDisplays {
     /// CRTC — in the last published snapshot. `None` when the protocol is not
     /// the one the outputs were read from, or when no display answers to the
     /// number; the latter also marks the snapshot stale once per revision, since
-    /// a window can be on an output the snapshot does not hold yet.
-    pub(crate) fn display_of_native(&self, protocol: Protocol, native: u32) -> Option<DisplayId> {
+    /// a window can be on an output the snapshot does not hold yet. The
+    /// Wayland and winit hosts name a window's output by number; the X11 host
+    /// does not.
+    #[cfg(any(wayland_host, winit_host))]
+    pub(crate) fn display_of_native(
+        &self,
+        protocol: Protocol,
+        native: u32,
+    ) -> Option<flui_platform::DisplayId> {
         let found = {
             let state = self.state.lock();
             if state.protocol != Some(protocol) {
