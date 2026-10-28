@@ -3,9 +3,10 @@
 //! Both fill the window, displays, accessibility, preference, lifecycle and
 //! storage positions, and keep the session's sources (the Settings portal,
 //! logind, the kernel's memory pressure) in the same shape
-//! (`owner::linux`). Input, text input, the clipboard and drag and drop are
-//! `Absent` until each host speaks their protocols; a desktop has no haptics
-//! and no system bars.
+//! (`owner::linux`). X11 fills the input position too (XInput 2 and XKB).
+//! Wayland's input, and both hosts' text input, clipboard and drag and drop,
+//! are `Absent` until each host speaks their protocols; a desktop has no
+//! haptics and no system bars.
 
 use std::sync::Arc;
 
@@ -146,7 +147,8 @@ mod x11 {
         UserDataDirs, position,
     };
     use crate::display::linux::source::LinuxDisplays;
-    use crate::owner::linux::x11::{HostDisplays, X11Connection, X11Host, X11Loop};
+    use crate::input::linux::x11::X11Input;
+    use crate::owner::linux::x11::{HostDisplays, LoopInput, X11Connection, X11Host, X11Loop};
     use crate::window::linux::x11::{WindowAtoms, X11Window, X11Windows};
 
     /// The X11 host's table.
@@ -159,7 +161,7 @@ mod x11 {
         type Loop = X11Loop;
         type Window = X11Window;
         type Displays = X11Loop;
-        type Input = Absent<position::Input>;
+        type Input = X11Loop;
         type Text = Absent<position::Text>;
         type Accessibility = UnixAccessibility;
         type Clipboard = Absent<position::Clipboard>;
@@ -195,6 +197,12 @@ mod x11 {
             signal: &Arc<OwnerSignal>,
         ) -> Arc<dyn LinuxNotices> {
             super::session_notices(executor, signal)
+        }
+
+        /// XInput 2's pointers, XKB's keyboard and the cursor theme, on the
+        /// platform's connection.
+        fn input(connection: &Arc<X11Connection>) -> Arc<dyn LoopInput> {
+            X11Input::new(connection)
         }
     }
 
