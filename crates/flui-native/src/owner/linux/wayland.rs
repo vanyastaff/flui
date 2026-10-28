@@ -17,7 +17,10 @@
 //! The loop names no feature. What it keeps of one, it keeps through a hook
 //! declared here that the host's table fills (`WaylandHost`): the displays,
 //! the Settings portal's preferences, the notice channel and the sources of
-//! logind's and the kernel's notices. Its windows are the window feature's
+//! logind's and the kernel's notices. The last user input the seats report,
+//! which an activation token names, is kept here too (`LastInput`): the
+//! input feature records it, the window feature reads it. Its windows are the
+//! window feature's
 //! (`window::linux::wayland`): the loop holds them as `LoopWindow`s and asks
 //! each to settle after every read, and the window feature implements the
 //! dispatch of its own protocol objects on `WaylandState`.
@@ -26,9 +29,88 @@
 pub use event_loop::OutputName;
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(crate) use event_loop::{
-    LiveOutputs, LoopWaker, LoopWindow, OutputFacts, WaylandDisplays, WaylandHost, WaylandLoop,
-    WaylandState, WindowSeed, WindowTable,
+    LastInput, LiveOutputs, LoopWaker, LoopWindow, OutputFacts, WaylandDisplays, WaylandHost,
+    WaylandLoop, WaylandState, WindowSeed, WindowTable,
 };
+
+pub(crate) mod activation {
+    //! What the loop and its windows say of an activation (`xdg-activation`):
+    //! the user input a token names, the token itself, and the token a
+    //! launcher handed the process.
+
+    #![forbid(unsafe_code)]
+
+    use std::ffi::OsString;
+
+    /// A user input as an activation token names it: the seat it came from,
+    /// the serial the compositor gave its event (a key, a button, a touch,
+    /// or the keyboard focus entering a surface), and the surface it went to.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct UserInput<Seat, Surface> {
+        /// The seat whose device the input came from.
+        pub(crate) seat: Seat,
+        /// The serial of the input's event.
+        pub(crate) serial: u32,
+        /// The surface the input went to.
+        pub(crate) surface: Surface,
+    }
+
+    /// An activation token: what the compositor answered a token request
+    /// with, or what a launcher handed the process. Opaque; only the
+    /// compositor reads it.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct ActivationToken(String);
+
+    impl ActivationToken {
+        /// The token the compositor sent.
+        pub(crate) const fn new(token: String) -> Self {
+            Self(token)
+        }
+
+        /// The token, as `xdg_activation_v1.activate` takes it.
+        pub(crate) fn into_string(self) -> String {
+            self.0
+        }
+    }
+
+    /// The variable a launcher hands its process's activation token in.
+    pub(crate) const LAUNCH_TOKEN_VARIABLE: &str = "XDG_ACTIVATION_TOKEN";
+
+    /// The token a launcher handed the process, from the value of
+    /// [`LAUNCH_TOKEN_VARIABLE`]: none where it is unset, empty or not text.
+    pub(crate) fn launch_token(value: Option<OsString>) -> Option<ActivationToken> {
+        value
+            .and_then(|value| value.into_string().ok())
+            .filter(|token| !token.is_empty())
+            .map(ActivationToken)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// A launcher's token is the variable's text; unset, empty or not
+        /// text is none.
+        #[test]
+        fn a_launch_token_is_the_variables_text() {
+            assert_eq!(
+                launch_token(Some("launcher-1".into())),
+                Some(ActivationToken::new("launcher-1".to_owned()))
+            );
+            assert_eq!(launch_token(Some(OsString::new())), None);
+            assert_eq!(launch_token(None), None);
+            assert_eq!(
+                LAUNCH_TOKEN_VARIABLE, "XDG_ACTIVATION_TOKEN",
+                "the variable launchers set"
+            );
+            assert_eq!(
+                ActivationToken::new("handed".to_owned()).into_string(),
+                "handed",
+                "the compositor gets back what it sent"
+            );
+        }
+    }
+}
 
 pub(crate) mod wait {
     //! How long one turn of the Wayland loop may block in `poll`, and when a
@@ -285,11 +367,16 @@ mod event_loop {
     use wayland_client::protocol::wl_compositor::WlCompositor;
     use wayland_client::protocol::wl_output::{self, WlOutput};
     use wayland_client::protocol::wl_registry::{self, WlRegistry};
+    use wayland_client::protocol::wl_seat::WlSeat;
+    use wayland_client::protocol::wl_surface::WlSurface;
     use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
     use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_manager_v1::{
         self, WpFractionalScaleManagerV1,
     };
     use wayland_protocols::wp::viewporter::client::wp_viewporter::{self, WpViewporter};
+    use wayland_protocols::xdg::activation::v1::client::xdg_activation_v1::{
+        self, XdgActivationV1,
+    };
     use wayland_protocols::xdg::decoration::zv1::client::zxdg_decoration_manager_v1::{
         self, ZxdgDecorationManagerV1,
     };
@@ -297,6 +384,7 @@ mod event_loop {
     use wayland_protocols::xdg::shell::client::xdg_wm_base::{self, XdgWmBase};
     use web_time::Instant;
 
+    use super::activation::{ActivationToken, LAUNCH_TOKEN_VARIABLE, UserInput, launch_token};
     use super::wait::{BeforePoll, Flush, LoopTurn, before_poll, offer_now, poll_timeout};
     use crate::error::PlatformError;
     use crate::executor::BackgroundExecutor;
@@ -328,6 +416,8 @@ mod event_loop {
     const FRACTIONAL_SCALE_VERSION: u32 = 1;
     /// `zxdg_exporter_v2` has one version.
     const EXPORTER_VERSION: u32 = 1;
+    /// `xdg_activation_v1` has one version.
+    const ACTIVATION_VERSION: u32 = 1;
 
     /// What the host's table fills for the loop (ADR-0151 §10): the
     /// displays, the preference source, the notice channel and the sources
@@ -426,6 +516,33 @@ mod event_loop {
         }
     }
 
+    /// A user input on this connection, as an activation token names it.
+    pub(crate) type SeatInput = UserInput<WlSeat, WlSurface>;
+
+    /// The last user input the seats reported, on the owner thread: the seats'
+    /// input records it as its events come, and a window names it on the
+    /// activation token it asks for. Nothing recorded, a token names no input
+    /// and asks the compositor for the user's attention instead of the focus.
+    #[derive(Clone, Default)]
+    pub(crate) struct LastInput(Arc<OwnerCell<Option<SeatInput>>>);
+
+    impl LastInput {
+        /// The seats report `input`, which is now the last.
+        ///
+        /// Only a test records yet: the host binds no seat, so no input event
+        /// reaches the loop. The seats' input becomes its caller, and drops
+        /// this `cfg`, once the host binds them.
+        #[cfg(test)]
+        pub(crate) fn record(&self, input: SeatInput) {
+            self.0.with(|last| *last = Some(input));
+        }
+
+        /// The last input; `None` before any, or off the owner thread.
+        pub(crate) fn latest(&self) -> Option<SeatInput> {
+            self.0.with(|last| last.clone()).flatten()
+        }
+    }
+
     /// What the display snapshot says of one output.
     #[derive(Debug, Clone, Copy, PartialEq)]
     pub(crate) struct OutputFacts {
@@ -469,15 +586,23 @@ mod event_loop {
         emptied: AtomicBool,
         /// The last identity issued.
         issued: AtomicU64,
+        /// The activation token the process was launched with, until the
+        /// first window is held.
+        launch_token: OwnerCell<Option<ActivationToken>>,
     }
 
     impl WindowTable {
-        fn new() -> Self {
+        /// A table whose first window takes `launch_token`; made on the
+        /// owner thread.
+        fn new(launch_token: Option<ActivationToken>) -> Self {
+            let held = OwnerCell::new();
+            held.with(|held| *held = launch_token);
             Self {
                 windows: OwnerMap::new(),
                 active: OwnerCell::new(),
                 emptied: AtomicBool::new(false),
                 issued: AtomicU64::new(0),
+                launch_token: held,
             }
         }
 
@@ -493,14 +618,16 @@ mod event_loop {
             previous.checked_add(1).map(WindowId::new)
         }
 
-        /// Hold `window` as `id`, on the owner thread.
+        /// Hold `window` as `id`, on the owner thread. The first window held
+        /// is given the activation token the process was launched with; a
+        /// window refused leaves it for the next.
         fn register(
             &self,
             id: WindowId,
             window: Rc<dyn LoopWindow>,
-        ) -> Result<(), OpenWindowError> {
+        ) -> Result<Option<ActivationToken>, OpenWindowError> {
             match self.windows.insert(id, window) {
-                Ok(None) => Ok(()),
+                Ok(None) => Ok(self.launch_token.with(Option::take).flatten()),
                 Ok(Some(previous)) => {
                     contain_owner_callback(|| drop(previous));
                     Err(OpenWindowError::Backend {
@@ -738,6 +865,20 @@ mod event_loop {
         }
     }
 
+    impl Dispatch<XdgActivationV1, ()> for WaylandState {
+        fn event(
+            _: &mut Self,
+            _: &XdgActivationV1,
+            _: xdg_activation_v1::Event,
+            (): &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            // The activation global has no events; its tokens are the
+            // windows'.
+        }
+    }
+
     impl Dispatch<XdgWmBase, ()> for WaylandState {
         fn event(
             _: &mut Self,
@@ -780,6 +921,12 @@ mod event_loop {
         /// `zxdg_exporter_v2`, which hands out a handle another client
         /// (a portal's dialog) parents its window to.
         pub(crate) exporter: Option<ZxdgExporterV2>,
+        /// `xdg_activation_v1`, through which a window asks the compositor to
+        /// activate it; `None` where the compositor takes no such request.
+        pub(crate) activation: Option<XdgActivationV1>,
+        /// The last user input the seats reported, which an activation token
+        /// names.
+        pub(crate) last_input: LastInput,
         /// The outputs the compositor announces now.
         pub(crate) live: LiveOutputs,
         /// `wl_shm`, which a test draws a window's frames with in place of a
@@ -922,6 +1069,9 @@ mod event_loop {
             let exporter = globals
                 .bind::<ZxdgExporterV2, _, _>(&handle, 1..=EXPORTER_VERSION, ())
                 .ok();
+            let activation = globals
+                .bind::<XdgActivationV1, _, _>(&handle, 1..=ACTIVATION_VERSION, ())
+                .ok();
             #[cfg(any(test, feature = "testing"))]
             let shm = globals
                 .bind::<wayland_client::protocol::wl_shm::WlShm, _, _>(&handle, 1..=1, ())
@@ -963,6 +1113,8 @@ mod event_loop {
                     decoration,
                     fractional_scale,
                     exporter,
+                    activation,
+                    last_input: LastInput::default(),
                     live,
                     #[cfg(any(test, feature = "testing"))]
                     shm,
@@ -977,7 +1129,12 @@ mod event_loop {
                 signal,
                 notices: H::notices(&app),
                 app,
-                windows: Arc::new(WindowTable::new()),
+                // The variable stays set: unsetting it races every thread
+                // reading the environment, and the opener started for a link
+                // leaves it out (`xdg_open`).
+                windows: Arc::new(WindowTable::new(launch_token(std::env::var_os(
+                    LAUNCH_TOKEN_VARIABLE,
+                )))),
                 owner_thread: std::thread::current().id(),
                 displays: H::displays(),
                 portal: PortalSlot::default(),
@@ -1029,7 +1186,8 @@ mod event_loop {
             })
         }
 
-        /// Hold the window `id` until it closes.
+        /// Hold the window `id` until it closes. The first window held is
+        /// given the activation token the process was launched with.
         ///
         /// # Errors
         /// [`OpenWindowError::Unavailable`] off the owner thread.
@@ -1037,7 +1195,7 @@ mod event_loop {
             &self,
             id: WindowId,
             window: Rc<dyn LoopWindow>,
-        ) -> Result<(), OpenWindowError> {
+        ) -> Result<Option<ActivationToken>, OpenWindowError> {
             self.windows.register(id, window)
         }
 
@@ -1089,6 +1247,12 @@ mod event_loop {
         /// (`xdg-decoration`).
         pub(crate) fn offers_decorations(&self) -> bool {
             self.protocol.decoration.is_some()
+        }
+
+        /// Whether the compositor takes activation requests
+        /// (`xdg-activation`).
+        pub(crate) fn offers_activation(&self) -> bool {
+            self.protocol.activation.is_some()
         }
 
         /// Run turns for `span` on the owner thread, for a test that drives
@@ -1497,5 +1661,76 @@ mod event_loop {
     /// application held has nothing to release.
     impl LifecycleHooks for WaylandLoop {
         fn release_session_end(&self) {}
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// A window the table holds that does nothing on a turn.
+        struct Idle;
+
+        impl LoopWindow for Idle {
+            fn settle(&self) {}
+            fn frame_due(&self) -> bool {
+                false
+            }
+            fn frame_wait(&self) -> Option<Instant> {
+                None
+            }
+            fn request_frame(&self) {}
+            fn release(&self) {}
+        }
+
+        /// The launcher's token goes to the first window the table holds,
+        /// once: a window refused (here, one under an identity the table
+        /// holds already) leaves it for the next, and no later window gets
+        /// one.
+        #[test]
+        fn the_launch_token_goes_to_the_first_window_held() {
+            let token = ActivationToken::new("launcher".to_owned());
+            let table = WindowTable::new(Some(token.clone()));
+            let (first, second, third) = (WindowId::new(1), WindowId::new(2), WindowId::new(3));
+            assert!(
+                matches!(table.windows.insert(first, Rc::new(Idle)), Ok(None)),
+                "a window held before"
+            );
+            assert!(
+                table.register(first, Rc::new(Idle)).is_err(),
+                "an identity held already is refused"
+            );
+            assert_eq!(
+                table.register(second, Rc::new(Idle)).ok(),
+                Some(Some(token)),
+                "the first window held takes it"
+            );
+            assert_eq!(table.register(third, Rc::new(Idle)).ok(), Some(None));
+        }
+
+        /// The last input recorded is the one an activation token names,
+        /// on the owner thread only: another thread reads none.
+        #[test]
+        fn the_last_input_is_the_one_recorded_last() {
+            let (ours, _theirs) = std::os::unix::net::UnixStream::pair().expect("a socket pair");
+            let Ok(connection) = Connection::from_socket(ours) else {
+                eprintln!("no libwayland-client to load; the case was not run");
+                return;
+            };
+            let backend = connection.backend().downgrade();
+            let input = |serial| UserInput {
+                seat: WlSeat::inert(backend.clone()),
+                serial,
+                surface: WlSurface::inert(backend.clone()),
+            };
+            let last = LastInput::default();
+            assert!(last.latest().is_none(), "nothing recorded yet");
+            last.record(input(7));
+            last.record(input(42));
+            assert_eq!(last.latest().map(|input| input.serial), Some(42));
+            let off_owner = std::thread::spawn(move || last.latest().map(|input| input.serial))
+                .join()
+                .expect("the other thread");
+            assert_eq!(off_owner, None, "off the owner thread");
+        }
     }
 }

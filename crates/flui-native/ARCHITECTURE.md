@@ -940,7 +940,16 @@ trait depends on `flui-platform` instead.
   geometry (metrics, appearance, safe area, execution, hover, activation,
   capabilities) are one value, `window::state::ReportedFacts`, that every
   host builds. Activation is Win32's `WM_ACTIVATE` (a window whose owned
-  popup has the keyboard is active and not focused); the other hosts have
+  popup has the keyboard is active and not focused). A Win32 window asks for
+  the foreground in one place (`request_foreground`), which Windows grants
+  only to the process the user works with or one it handed the right
+  (`AllowSetForegroundWindow`); `Activate` refused it flashes the taskbar
+  button (`FLASHW_TIMERNOFG`) and never forces the foreground, and opening a
+  link, file or folder hands the right only to the handler process the shell
+  started, by its id (`ShellExecuteExW`, `foreground_recipient`): a handler
+  already running gets nothing and comes forward under the OS's own rules,
+  as no process is ever handed the right to take the foreground from any
+  other (`ASFW_ANY`). The other hosts have
   no notion apart from focus (AppKit's key window, winit's `Focused`, the
   canvas focus, the scene and the Activity), so their activation is their
   focus. `window_facts_arrive_only_in_the_snapshot` pins one revision and
@@ -1015,7 +1024,20 @@ trait depends on `flui-platform` instead.
   compositor's activation, which `UnixAccessibility::focus_changed` passes to
   the adapter (the X11 window already called it); the bridge reaches the
   adapter through `AtSpiAdapter`, the two calls it makes of
-  `accesskit_unix::Adapter`. `current_platform` picks the winit host
+  `accesskit_unix::Adapter`. `Activate` is a request with an
+  `xdg-activation` token (`activation`): the window asks for one naming the
+  last user input (its seat, serial and surface, `UserInput`, kept by the
+  loop in `LastInput`, which the windows read; no input records into it until
+  the host binds its seats, so every token asks for attention) and hands
+  it back once the compositor has shown the window (a frame callback came, or
+  the surface entered an output), each token once and in order. The
+  compositor decides: a token with no input behind it asks for the user's
+  attention, so `activates` is `Emulated`, and `NotOnThisDevice` without
+  `xdg_activation_v1`. The launcher's `XDG_ACTIVATION_TOKEN` is read once by
+  the loop and given to the first window its table holds (`WindowTable::register`),
+  so a window that failed to open leaves it; the variable stays set, as unsetting it
+  races every thread reading the environment, and `xdg_open` leaves it out
+  of the opener it starts. `current_platform` picks the winit host
   while it is built (the native hosts carry no input yet) and the native
   Wayland host for a Wayland session otherwise.
 - **Linux host events reach the owner through an inbox, and a machine that

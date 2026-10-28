@@ -103,6 +103,9 @@ priority = 100
 [test-groups]
 gpu-readback = { max-threads = 1 }
 system-clipboard = { max-threads = 1 }
+# flui-native's Win32 window tests share the one desktop's foreground (see
+# `desktop-foreground` below).
+desktop-foreground = { max-threads = 1 }
 # xtask's binary test spawns the built `cargo xtask` binary, which runs
 # `cargo metadata`; one at a time keeps it off the other tests' timing.
 xtask-binary = { max-threads = 1 }
@@ -128,6 +131,17 @@ priority = 90
 [[profile.default.overrides]]
 filter = 'package(flui-native) & test(/clipboard/)'
 test-group = 'system-clipboard'
+
+# flui-native's Win32 window tests show real windows on the one desktop, and a
+# shown window asks for the foreground; the foreground cases
+# (`windows_foreground::`, which run a second process) read where the
+# foreground is, so another test's window shown meanwhile takes it from under
+# them. They are modules of `platform_it`, run one process each, so no
+# in-process lock can keep them apart: the group runs them one at a time, the
+# contract's Win32 cases with them.
+[[profile.default.overrides]]
+filter = 'package(flui-native) & binary(platform_it) & (test(/^windows_/) | test(/^contract::/))'
+test-group = 'desktop-foreground'
 
 # flui-native's X11 window tests map real windows on the one X server the run
 # shares and read back what the server holds (map state, position, stacking),
