@@ -354,6 +354,21 @@ pub mod decode {
     /// belongs to, or none for every window.
     pub type DeviceChanges = Vec<(Option<NativeSurface>, PlatformInput)>;
 
+    /// The pointer devices, masters and slaves, the decoder knows. A machine
+    /// has a handful and a multi-seat rig a few dozen; past this the server
+    /// is listing devices without end, and the further ones are not known.
+    const MAX_DEVICES: usize = 128;
+
+    /// The valuators of a device the decoder reads. Xorg gives a device at
+    /// most 36 (`MAX_VALUATORS`); further ones are not read, so what each
+    /// scroll valuator last reported stays bounded too.
+    const MAX_VALUATORS: usize = 36;
+
+    /// The first [`MAX_VALUATORS`] of `listed`.
+    fn first_valuators<T: Clone>(listed: &[T]) -> Vec<T> {
+        listed[..listed.len().min(MAX_VALUATORS)].to_vec()
+    }
+
     /// The X11 host's pointers: the shared registry, the devices the server
     /// lists and what each scroll valuator last reported.
     #[derive(Debug)]
@@ -447,7 +462,7 @@ pub mod decode {
             for device in devices {
                 if device.master {
                     let master = XiMaster(device.id);
-                    if self.masters.contains_key(&master) {
+                    if self.masters.contains_key(&master) || self.is_full() {
                         continue;
                     }
                     let label = self.mint();
@@ -475,8 +490,11 @@ pub mod decode {
                 let slave = XiSlave(device.id);
                 if let Some(known) = self.devices.get_mut(&slave) {
                     // The same device: its classes may have changed.
-                    known.axes.clone_from(&device.axes);
-                    known.scrolls.clone_from(&device.scrolls);
+                    known.axes = first_valuators(&device.axes);
+                    known.scrolls = first_valuators(&device.scrolls);
+                    continue;
+                }
+                if self.is_full() {
                     continue;
                 }
                 let role = role(device);
@@ -499,12 +517,17 @@ pub mod decode {
                     Known {
                         role,
                         label,
-                        axes: device.axes.clone(),
-                        scrolls: device.scrolls.clone(),
+                        axes: first_valuators(&device.axes),
+                        scrolls: first_valuators(&device.scrolls),
                     },
                 );
             }
             out
+        }
+
+        /// Whether it knows [`MAX_DEVICES`] devices, and takes no more.
+        fn is_full(&self) -> bool {
+            self.devices.len() + self.masters.len() >= MAX_DEVICES
         }
 
         fn remove(&mut self, label: NativeDevice, time: EventTime) -> DeviceChanges {
@@ -1463,8 +1486,7 @@ mod live {
                 return None;
             };
             let keyboard = Keyboard::new(&source)?;
-            let KeymapSource::X11 { device, .. } = &source;
-            let device = u16::try_from(*device).ok()?;
+            let device = u16::try_from(source.x11_device()?).ok()?;
             let events = xkb::EventType::NEW_KEYBOARD_NOTIFY
                 | xkb::EventType::MAP_NOTIFY
                 | xkb::EventType::STATE_NOTIFY;
@@ -1668,7 +1690,9 @@ mod live {
                 let Some(core) = input.keyboard.as_mut() else {
                     return Vec::new();
                 };
-                let key = core.keyboard.key(event.detail, state, repeat, time);
+                let Some(key) = core.keyboard.key(event.detail, state, repeat, time) else {
+                    return Vec::new();
+                };
                 vec![(delivery, Delivery::Input(PlatformInput::Keyboard(key)))]
             })
             .unwrap_or_default()
@@ -1703,8 +1727,9 @@ mod live {
                     if !core.keyboard.reload(&core.source) {
                         tracing::debug!("the X11 keyboard's new keymap cannot be read");
                     }
-                    let KeymapSource::X11 { device, .. } = &core.source;
-                    if let Ok(device) = u16::try_from(*device) {
+                    if let Some(device) = core.source.x11_device()
+                        && let Ok(device) = u16::try_from(device)
+                    {
                         core.layouts = group_names(connection, device);
                     }
                 }

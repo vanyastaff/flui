@@ -56,7 +56,7 @@ pub use buttons::{ButtonTransition, ClickCounter, ClickSettings, HeldButtons};
 pub use clock::{ClockChoice, CounterAnchor, NativeClock, NativeTime, QpcTicks, ReadingTime};
 pub use pan_zoom::{GestureComponent, GestureDelta, GesturePhase, PanZoomAccumulator};
 pub(crate) use registry::decode_derived;
-pub use registry::{ContactRegistry, DeviceRegistry, decode};
+pub use registry::{ContactRegistry, DeviceRegistry, MAX_TOUCHES, decode};
 pub use scroll::{ContactScroll, ScrollPhases, ScrollReading};
 pub use touchpad::{ContentTransform, TouchpadFrame, ViewportReading, ViewportStatus};
 pub use wheel::{WHEEL_DETENT, WheelAxis, WheelReading};

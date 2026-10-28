@@ -435,19 +435,49 @@ mod meaning {
             let Some(rest) = rest.strip_prefix('=') else {
                 continue;
             };
-            let rest = rest.trim_start().strip_prefix('"')?;
-            let end = rest.find('"')?;
+            // A declaration without a quoted value names nothing: the next
+            // one may.
+            let Some(rest) = rest.trim_start().strip_prefix('"') else {
+                continue;
+            };
+            let Some(end) = rest.find('"') else {
+                continue;
+            };
             return Some(rest[..end].to_owned());
         }
         None
     }
+
+    /// The largest keymap a host reads: a desktop keymap is some tens of
+    /// kilobytes, so a size past this is a compositor's fault, not a keymap.
+    pub const KEYMAP_LIMIT: usize = 8 * 1024 * 1024;
+
+    /// The bytes to read for a keymap a compositor says is `size` long;
+    /// `None` for none, or past [`KEYMAP_LIMIT`].
+    #[must_use]
+    pub fn keymap_length(size: u32) -> Option<usize> {
+        usize::try_from(size)
+            .ok()
+            .filter(|length| (1..=KEYMAP_LIMIT).contains(length))
+    }
+
+    /// The keymap text in `bytes`: up to its terminating NUL, which the
+    /// Wayland protocol counts in the size; `None` when it is not UTF-8. The
+    /// one place a keymap's NUL is stripped.
+    #[must_use]
+    pub fn keymap_text(mut bytes: Vec<u8>) -> Option<String> {
+        if let Some(end) = bytes.iter().position(|byte| *byte == 0) {
+            bytes.truncate(end);
+        }
+        String::from_utf8(bytes).ok()
+    }
 }
 
-#[cfg(x11_host)]
+#[cfg(any(x11_host, wayland_host))]
 pub(crate) use keyboard::{Keyboard, KeymapSource};
 
 /// A keymap, its state and compose over libxkbcommon.
-#[cfg(x11_host)]
+#[cfg(any(x11_host, wayland_host))]
 mod keyboard {
     #![expect(
         unsafe_code,
@@ -456,6 +486,7 @@ mod keyboard {
 
     use std::ffi::{CStr, CString, c_char};
     use std::ptr::NonNull;
+    #[cfg(x11_host)]
     use std::sync::Arc;
 
     use flui_platform::EventTime;
@@ -467,7 +498,10 @@ mod keyboard {
     };
 
     use super::{EVDEV_OFFSET, XkbModifier, code_of, key_of, modifiers_of};
+    #[cfg(wayland_host)]
+    use super::{group_name, keymap_text};
     use crate::input::keys::location_for_code;
+    #[cfg(x11_host)]
     use crate::owner::linux::x11::X11Connection;
 
     /// Where a keyboard's keymap comes from.
@@ -476,16 +510,73 @@ mod keyboard {
         /// The X server's core keyboard, device `device` on `connection`,
         /// which the source holds: every libxkbcommon-x11 call through it
         /// names a connection that is open.
+        #[cfg(x11_host)]
         X11 {
             connection: Arc<X11Connection>,
             device: i32,
         },
+        /// The keymap a Wayland compositor shared, as text (XKB's text format
+        /// v1), its NUL stripped; the state is the masks the compositor
+        /// sends.
+        #[cfg(wayland_host)]
+        Compositor {
+            /// The keymap's text.
+            text: String,
+        },
     }
 
     impl KeymapSource {
+        /// The keymap a compositor shared as `bytes` (read within
+        /// [`super::KEYMAP_LIMIT`]); `None` when it is not UTF-8.
+        #[cfg(wayland_host)]
+        pub(crate) fn compositor(bytes: Vec<u8>) -> Option<Self> {
+            keymap_text(bytes).map(|text| Self::Compositor { text })
+        }
+
+        /// The X server's keyboard device the keymap is read from; `None` for
+        /// a keymap of another source.
+        #[cfg(x11_host)]
+        #[cfg_attr(
+            not(wayland_host),
+            expect(
+                clippy::unnecessary_wraps,
+                reason = "with the Wayland host built, a keymap may come from a compositor"
+            )
+        )]
+        pub(crate) fn x11_device(&self) -> Option<i32> {
+            match self {
+                Self::X11 { device, .. } => Some(*device),
+                #[cfg(wayland_host)]
+                Self::Compositor { .. } => None,
+            }
+        }
+
+        /// The first `chars` characters of the keymap's text, for a
+        /// diagnostic.
+        #[cfg(wayland_host)]
+        pub(crate) fn head(&self, chars: usize) -> String {
+            match self {
+                Self::Compositor { text } => text.chars().take(chars).collect(),
+                #[cfg(x11_host)]
+                Self::X11 { .. } => String::new(),
+            }
+        }
+
+        /// The name the compositor's keymap gives layout `layout`, as XKB
+        /// names the group; `None` where it names none.
+        #[cfg(wayland_host)]
+        pub(crate) fn layout_name(&self, layout: u32) -> Option<String> {
+            match self {
+                Self::Compositor { text } => group_name(text, layout),
+                #[cfg(x11_host)]
+                Self::X11 { .. } => None,
+            }
+        }
+
         /// The X server's core keyboard on `connection`, once XKB is set up
         /// on it; `None` when libxkbcommon-x11 cannot be loaded or the server
         /// has no XKB.
+        #[cfg(x11_host)]
         pub(crate) fn x11_core_keyboard(connection: &Arc<X11Connection>) -> Option<Self> {
             let x11 = xkbcommon_dl::x11::xkbcommon_x11_option()?;
             let raw = connection.xcb().get_raw_xcb_connection();
@@ -561,9 +652,19 @@ mod keyboard {
         compose: Option<Compose>,
         context: Held<xkb_context>,
         modifiers: [xkb_mod_index_t; 7],
-        /// The XKB key codes pressed and not released, in order.
+        /// The key codes the keymap defines.
+        keycodes: std::ops::RangeInclusive<u32>,
+        /// The XKB key codes pressed and not released, in order; at most
+        /// [`MAX_HELD_KEYS`].
         held: Vec<u32>,
     }
+
+    /// The keys a keyboard holds down at once. A full-size keyboard has 104
+    /// to 108 keys and one with n-key rollover reports every one held; past
+    /// this the source is pressing keys it never releases, and a further
+    /// press is refused rather than held, and scanned, forever. A keymap's
+    /// key codes alone do not bound it: they may run past 255.
+    pub(crate) const MAX_HELD_KEYS: usize = 128;
 
     impl std::fmt::Debug for Keyboard {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -599,6 +700,7 @@ mod keyboard {
             let (keymap, state) = Self::read(api, &context, source)?;
             let compose = Self::open_compose(&context);
             let modifiers = Self::indices(api, &keymap);
+            let keycodes = Self::keycodes(api, &keymap);
             Some(Self {
                 api,
                 state,
@@ -606,8 +708,17 @@ mod keyboard {
                 compose,
                 context,
                 modifiers,
+                keycodes,
                 held: Vec::new(),
             })
+        }
+
+        fn keycodes(api: &XkbCommon, keymap: &Held<xkb_keymap>) -> std::ops::RangeInclusive<u32> {
+            // SAFETY: a live keymap.
+            unsafe {
+                (api.xkb_keymap_min_keycode)(keymap.as_ptr())
+                    ..=(api.xkb_keymap_max_keycode)(keymap.as_ptr())
+            }
         }
 
         /// The keymap and state `source` holds now.
@@ -617,6 +728,30 @@ mod keyboard {
             source: &KeymapSource,
         ) -> Option<(Held<xkb_keymap>, Held<xkb_state>)> {
             match source {
+                #[cfg(wayland_host)]
+                KeymapSource::Compositor { text } => {
+                    let source = CString::new(text.as_str()).ok()?;
+                    // SAFETY: the live context and a NUL-terminated string that
+                    // outlives the call; the keymap copies what it reads.
+                    let keymap = Held::new(
+                        unsafe {
+                            (api.xkb_keymap_new_from_string)(
+                                context.as_ptr(),
+                                source.as_ptr(),
+                                xkbcommon_dl::xkb_keymap_format::XKB_KEYMAP_FORMAT_TEXT_V1,
+                                xkbcommon_dl::xkb_keymap_compile_flags::XKB_KEYMAP_COMPILE_NO_FLAGS,
+                            )
+                        },
+                        *api.xkb_keymap_unref,
+                    )?;
+                    // SAFETY: the keymap just made.
+                    let state = Held::new(
+                        unsafe { (api.xkb_state_new)(keymap.as_ptr()) },
+                        *api.xkb_state_unref,
+                    )?;
+                    Some((keymap, state))
+                }
+                #[cfg(x11_host)]
                 KeymapSource::X11 { connection, device } => {
                     let x11 = xkbcommon_dl::x11::xkbcommon_x11_option()?;
                     let raw = connection.xcb().get_raw_xcb_connection();
@@ -693,6 +828,7 @@ mod keyboard {
                 return false;
             };
             self.modifiers = Self::indices(self.api, &keymap);
+            self.keycodes = Self::keycodes(self.api, &keymap);
             // The old state names the old keymap: it goes first.
             self.state = state;
             self.keymap = keymap;
@@ -734,6 +870,14 @@ mod keyboard {
                     xkb_state_component::XKB_STATE_LAYOUT_EFFECTIVE,
                 )
             }
+        }
+
+        /// Whether holding the key with XKB key code `keycode` repeats, as the
+        /// keymap says: a Wayland client repeats keys itself.
+        #[cfg(wayland_host)]
+        pub(crate) fn repeats(&self, keycode: u32) -> bool {
+            // SAFETY: the live keymap; any key code may be asked.
+            unsafe { (self.api.xkb_keymap_key_repeats)(self.keymap.as_ptr(), keycode) != 0 }
         }
 
         /// The modifiers in effect.
@@ -826,19 +970,28 @@ mod keyboard {
 
         /// The key event of XKB key code `keycode` (the kernel's plus
         /// [`EVDEV_OFFSET`]) going `state` at `time`; a press feeds compose.
+        /// `None` for a key code the keymap does not define, unless it is the
+        /// release of a key held from an older keymap, and for a press past
+        /// [`MAX_HELD_KEYS`] held.
         pub(crate) fn key(
             &mut self,
             keycode: u32,
             state: KeyState,
             repeat: bool,
             time: EventTime,
-        ) -> KeyEvent {
+        ) -> Option<KeyEvent> {
+            let releases_held = state == KeyState::Up && self.held.contains(&keycode);
+            if !self.keycodes.contains(&keycode) && !releases_held {
+                return None;
+            }
             match state {
-                KeyState::Down => {
-                    if !self.held.contains(&keycode) {
-                        self.held.push(keycode);
+                KeyState::Down if !self.held.contains(&keycode) => {
+                    if self.held.len() >= MAX_HELD_KEYS {
+                        return None;
                     }
+                    self.held.push(keycode);
                 }
+                KeyState::Down => {}
                 KeyState::Up => self.held.retain(|held| *held != keycode),
             }
             // SAFETY: the live state; any key code may be asked.
@@ -851,14 +1004,16 @@ mod keyboard {
             };
             let key = composed.unwrap_or_else(|| key_of(keysym, &self.keysym_text(keysym)));
             let code = code_of(keycode.saturating_sub(EVDEV_OFFSET));
-            KeyEvent::new(state, key, code, time)
-                .with_location(location_for_code(code))
-                .with_modifiers(self.modifiers())
-                .with_repeat(if repeat {
-                    KeyRepeat::AutoRepeat
-                } else {
-                    KeyRepeat::First
-                })
+            Some(
+                KeyEvent::new(state, key, code, time)
+                    .with_location(location_for_code(code))
+                    .with_modifiers(self.modifiers())
+                    .with_repeat(if repeat {
+                        KeyRepeat::AutoRepeat
+                    } else {
+                        KeyRepeat::First
+                    }),
+            )
         }
 
         /// The keyboard leaves its window: the compose sequence in progress
@@ -866,10 +1021,124 @@ mod keyboard {
         /// they were pressed.
         pub(crate) fn leave(&mut self, time: EventTime) -> Vec<KeyEvent> {
             self.reset_compose();
-            std::mem::take(&mut self.held)
+            self.held
+                .clone()
                 .into_iter()
-                .map(|keycode| self.key(keycode, KeyState::Up, false, time))
+                .filter_map(|keycode| self.key(keycode, KeyState::Up, false, time))
                 .collect()
+        }
+    }
+
+    #[cfg(all(test, wayland_host))]
+    mod tests {
+        use flui_platform::EventTime;
+        use flui_platform::keyboard::{Key, KeyState, NamedKey};
+
+        use super::{Keyboard, KeymapSource, MAX_HELD_KEYS};
+        use crate::input::linux::xkb::EVDEV_OFFSET;
+
+        /// A whole keymap as a compositor shares it, NUL included, and named
+        /// here rather than compiled from the system's rules: the apostrophe
+        /// key (evdev 40) is dead acute, `E` (evdev 18) types `e`, and its one
+        /// group is named. Its every part is spelled out, so it compiles alike
+        /// on any xkeyboard-config.
+        const COMPOSITOR_KEYMAP: &[u8] = b"xkb_keymap {
+xkb_keycodes \"flui\" {
+    minimum = 8;
+    maximum = 255;
+    <AC11> = 48;
+    <AD03> = 26;
+};
+xkb_types \"flui\" {
+    type \"ONE_LEVEL\" {
+        modifiers = none;
+        level_name[Level1] = \"Any\";
+    };
+};
+xkb_compatibility \"flui\" {
+};
+xkb_symbols \"flui\" {
+    name[Group1] = \"FLUI (dead keys)\";
+    key <AC11> { type = \"ONE_LEVEL\", [ dead_acute ] };
+    key <AD03> { type = \"ONE_LEVEL\", [ e ] };
+};
+};
+\0";
+
+        /// The keymap a compositor shares reads through the shared keyboard,
+        /// compose included: dead acute then `e` is `é`, and the layout is
+        /// named as the keymap names its group.
+        #[test]
+        fn a_compositor_keymap_composes_dead_keys() {
+            if xkbcommon_dl::xkbcommon_option().is_none() {
+                eprintln!("skipped: libxkbcommon is not installed");
+                return;
+            }
+            let source =
+                KeymapSource::compositor(COMPOSITOR_KEYMAP.to_vec()).expect("the keymap is text");
+            let mut keyboard = Keyboard::new(&source).expect("the keymap compiles");
+            assert_eq!(
+                source.layout_name(keyboard.layout()).as_deref(),
+                Some("FLUI (dead keys)")
+            );
+            let time = EventTime::from_nanos(1);
+            let press = |keyboard: &mut Keyboard, code: u32| {
+                let key = keyboard
+                    .key(code + EVDEV_OFFSET, KeyState::Down, false, time)
+                    .expect("the keymap defines the key")
+                    .key;
+                keyboard.key(code + EVDEV_OFFSET, KeyState::Up, false, time);
+                key
+            };
+            assert_eq!(press(&mut keyboard, 40), Key::Named(NamedKey::Dead));
+            assert_eq!(press(&mut keyboard, 18), Key::character("é"));
+            assert_eq!(
+                press(&mut keyboard, 18),
+                Key::character("e"),
+                "composed once"
+            );
+        }
+
+        /// A keymap with every key code a keyboard has, and more than the cap
+        /// lets it hold (libxkbcommon may clamp the maximum to 255).
+        const WIDE_KEYMAP: &[u8] = b"xkb_keymap {
+xkb_keycodes \"flui\" { minimum = 8; maximum = 20000; };
+xkb_types \"flui\" { };
+xkb_compatibility \"flui\" { };
+xkb_symbols \"flui\" { };
+};
+";
+
+        /// A source that presses keys it never releases leaves at most
+        /// `MAX_HELD_KEYS` held: further presses, and key codes the keymap
+        /// does not define, are refused, and leaving releases the held ones.
+        #[test]
+        fn a_keyboard_holds_a_bounded_number_of_keys() {
+            if xkbcommon_dl::xkbcommon_option().is_none() {
+                eprintln!("skipped: libxkbcommon is not installed");
+                return;
+            }
+            let source =
+                KeymapSource::compositor(WIDE_KEYMAP.to_vec()).expect("the keymap is text");
+            let mut keyboard = Keyboard::new(&source).expect("the keymap compiles");
+            let time = EventTime::from_nanos(1);
+            for outside in [0, 30_000] {
+                assert!(
+                    keyboard.key(outside, KeyState::Down, false, time).is_none(),
+                    "key code {outside}, outside the keymap's, is refused"
+                );
+            }
+            let pressed = (0..10_000)
+                .filter_map(|code| keyboard.key(code + EVDEV_OFFSET, KeyState::Down, false, time))
+                .count();
+            assert_eq!(pressed, MAX_HELD_KEYS);
+            assert_eq!(keyboard.leave(time).len(), MAX_HELD_KEYS);
+            assert!(
+                keyboard
+                    .key(EVDEV_OFFSET, KeyState::Down, false, time)
+                    .is_some(),
+                "leaving frees the keys"
+            );
         }
     }
 }
@@ -985,6 +1254,26 @@ mod tests {
         assert_eq!(group_name(keymap, 1).as_deref(), Some("Russian"));
         assert_eq!(group_name(keymap, 2), None);
         assert_eq!(group_name("name[group1]", 0), None, "no value");
+        assert_eq!(
+            group_name("name[Group1]=unquoted;\n name[Group1]=\"German\";", 0).as_deref(),
+            Some("German"),
+            "a declaration without quotes is passed over for the next"
+        );
         assert_eq!(group_name(keymap, u32::MAX), None);
+    }
+
+    /// A keymap is read up to its NUL and only within the limit.
+    #[test]
+    fn a_keymap_is_read_within_its_limit() {
+        assert_eq!(keymap_length(0), None);
+        assert_eq!(keymap_length(64_756), Some(64_756));
+        let limit = u32::try_from(KEYMAP_LIMIT).expect("fits");
+        assert_eq!(keymap_length(limit), Some(KEYMAP_LIMIT));
+        assert_eq!(keymap_length(limit + 1), None);
+        assert_eq!(
+            keymap_text(b"xkb_keymap {};\0\0".to_vec()).as_deref(),
+            Some("xkb_keymap {};")
+        );
+        assert_eq!(keymap_text(vec![0xff, 0xfe, 0]), None);
     }
 }
