@@ -1517,7 +1517,13 @@ mod event_loop {
                 .filter_map(|window| window.frame_wait())
                 .min();
             drop(windows);
-            let answer = self.app.wake_deadline().or_resume(None);
+            // A loop that stopped accepting work asks for no deadline, as the
+            // X11 and Win32 loops do.
+            let answer = if self.signal.accepting() {
+                self.app.wake_deadline().or_resume(None)
+            } else {
+                None
+            };
             let wake_deadline = self
                 .deadline
                 .with(|deadline| deadline.arm(answer, self.frames.get()))
@@ -1526,8 +1532,8 @@ mod event_loop {
                 LoopTurn {
                     frame_due,
                     frame_wait,
-                    wake_deadline,
                     input_due: self.input.next_due(),
+                    wake_deadline,
                 },
                 now,
             );

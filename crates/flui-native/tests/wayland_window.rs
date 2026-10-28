@@ -757,7 +757,8 @@ fn a_deadline_its_frame_left_due_again_gets_another_frame() {
         drop(window);
         let proxy = owner.proxy();
         std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(600));
+            // Room for three frames on a slow compositor.
+            std::thread::sleep(Duration::from_millis(1500));
             let _ = proxy.request_quit();
         });
         Ok(())

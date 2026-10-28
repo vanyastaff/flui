@@ -1009,8 +1009,9 @@ trait depends on `flui-platform` instead.
   deadline that came due is offered to the windows as frame requests once and
   armed again only after a frame ran (`owner::wake_deadline::WakeDeadline`,
   the X11 and Win32 loops' rule), so a window that declines its frames, or one
-  the compositor does not draw, leaves the loop idle. A turn whose dispatch recorded events ends before it would
-  block, so they are applied first, and a flush the socket cut short makes the
+  the compositor does not draw, leaves the loop idle; a loop that no longer
+  accepts work asks for no deadline. A turn whose dispatch recorded events
+  ends before it would block, so they are applied first, and a flush the socket cut short makes the
   wait watch the socket for writing (`wait::before_poll`). A frame callback a
   skipped present never committed is given up after `frame::CALLBACK_GRACE`.
   The host and the display source connect to the one socket `WAYLAND_DISPLAY`
