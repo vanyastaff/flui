@@ -4088,7 +4088,9 @@ graph LR
   `linux_preferences`, которым нужен дисплей, под xvfb они зелёные.
   Не запускалось: Mac, iPhone (#1840; список в PR), Android-устройство, браузер, `cross-typecheck`.
   **Решения координатора и исправления после ревью (vanyastaff/flui#1943)**, коммитами поверх,
-  слиянием `main` @ `817fb6bbd` (LY68). Форма обратной связи принята и записана поправкой ADR-0257
+  слиянием `main` @ `817fb6bbd` (LY68) и @ `680fda761` (LY95: активация; вызовы `capabilities` Wayland
+  несут и активацию, и отчёт о показе, тест активации передаёт статистику презентера; DXGI-тест
+  Win32 уже в группе `desktop-foreground`). Форма обратной связи принята и записана поправкой ADR-0257
   (`FrameRequest::presented`, `reports_presentation`, `SwapChainStatistics`, п. 3 — граница
   idle по сетке свежего отчёта). Исправлено: (1) повторное чтение DXGI больше не новый отчёт —
   `frame_timing::PresentTracker` отбрасывает чтение с тем же `PresentCount` или
@@ -4112,9 +4114,10 @@ graph LR
   (запись 23). **Apple — остаток LY91, в сессию Mac после слияния:** свой `CAMetalLayer` хоста
   (`makeBackingLayer` с переносом display pass в `updateLayer` на AppKit, `layerClass` на UIKit),
   `nextDrawable` которого вешает `addPresentedHandler:` на выданный drawable. Проверки после
-  исправлений: Windows clippy рабочего пространства, nextest семи крейтов — 674 из 674; clippy
+  исправлений и слияния LY95: Windows clippy рабочего пространства, nextest семи крейтов — 680 из 680; clippy
   macOS, Android, iOS lib; `checks`, `doc-strict`, `wasm-check`, гейты; WSL clippy шести
-  вариантов и крейтов, xvfb 390 из 390, Weston 31 из 31, rustdoc, `api-closure`.
+  вариантов и крейтов, xvfb 397 из 397, Weston 38 из 38, rustdoc, `api-closure` (4 пакета чисто).
+  `cross-typecheck` (гейт строки) — в CI этого PR.
 
 ## Отступление от порядка, решённое владельцем
 
