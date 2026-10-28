@@ -196,11 +196,20 @@ pub(crate) mod configure {
         }
     }
 
+    /// Whether the compositor takes activation requests (`xdg_activation_v1`).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum Activation {
+        /// It announces `xdg_activation_v1`.
+        Offered,
+        /// It announces none (Weston 13).
+        Missing,
+    }
+
     /// What a Wayland window honours, given what its compositor announced
     /// (`None` before version 5, or before it said), why it cannot have its
     /// frame turned on and off (`decoration`, `None` where it can) and
-    /// whether the compositor takes activation requests
-    /// (`offers_activation`, `xdg-activation`): the title, the size and its
+    /// whether the compositor takes activation requests (`activation`):
+    /// the title, the size and its
     /// limits, the modes the compositor offers, and closing. Resizability is
     /// emulated with equal limits; placement, hiding, showing and position
     /// are not the client's on Wayland. Activation is emulated: the window
@@ -215,7 +224,7 @@ pub(crate) mod configure {
         announced: Option<WmCapabilities>,
         decoration: Option<CapabilityAbsence>,
         states: ToplevelStates,
-        offers_activation: bool,
+        activation: Activation,
     ) -> WindowCapabilities {
         let mut capabilities = WindowCapabilities::ALL
             .unavailable(
@@ -228,11 +237,12 @@ pub(crate) mod configure {
                 &WindowCommand::SetMaterial(flui_platform::WindowMaterial::System),
                 CapabilityAbsence::NotOnThisPlatform,
             );
-        if offers_activation {
-            capabilities.activates = Availability::Emulated;
-        } else {
-            capabilities = capabilities
-                .unavailable(&WindowCommand::Activate, CapabilityAbsence::NotOnThisDevice);
+        match activation {
+            Activation::Offered => capabilities.activates = Availability::Emulated,
+            Activation::Missing => {
+                capabilities = capabilities
+                    .unavailable(&WindowCommand::Activate, CapabilityAbsence::NotOnThisDevice);
+            }
         }
         if let Some(absence) = decoration {
             capabilities = capabilities.unavailable(&WindowCommand::SetDecorated(true), absence);
@@ -548,19 +558,23 @@ pub(crate) mod configure {
         #[test]
         fn the_capabilities_follow_the_compositor() {
             let free = ToplevelStates::default();
-            let unannounced =
-                capabilities(None, Some(CapabilityAbsence::NotOnThisDevice), free, false);
+            let unannounced = capabilities(
+                None,
+                Some(CapabilityAbsence::NotOnThisDevice),
+                free,
+                Activation::Missing,
+            );
             assert!(unannounced.maximizes.is_available());
             assert!(unannounced.minimizes.is_available());
             assert!(unannounced.sets_size.is_available());
             assert_eq!(unannounced.sets_resizable, Availability::Emulated);
             assert_eq!(
-                capabilities(None, None, free, false).sets_decorated,
+                capabilities(None, None, free, Activation::Missing).sets_decorated,
                 Availability::Native,
                 "a compositor that draws frames takes the command"
             );
             assert_eq!(
-                capabilities(None, None, free, true).activates,
+                capabilities(None, None, free, Activation::Offered).activates,
                 Availability::Emulated,
                 "the compositor decides what an activation request does"
             );
@@ -596,7 +610,7 @@ pub(crate) mod configure {
                 Some(WmCapabilities::decode(&array(&[CAN_FULLSCREEN]))),
                 None,
                 free,
-                true,
+                Activation::Offered,
             );
             assert!(!announced.maximizes.is_available());
             assert!(!announced.minimizes.is_available());
@@ -618,7 +632,7 @@ pub(crate) mod configure {
         fn a_tiled_window_takes_no_size() {
             let tiled = ToplevelStates::decode(&array(&[TILED_LEFT, ACTIVATED]));
             let refused = WindowCommand::SetSize(Size::new(640.0, 480.0))
-                .admit(&capabilities(None, None, tiled, false))
+                .admit(&capabilities(None, None, tiled, Activation::Missing))
                 .expect_err("the tiling holds the size");
             assert_eq!(
                 refused.unsupported().map(|unsupported| unsupported.reason),
@@ -626,13 +640,13 @@ pub(crate) mod configure {
             );
             let maximized = ToplevelStates::decode(&array(&[TILED_LEFT, MAXIMIZED]));
             assert!(
-                capabilities(None, None, maximized, false)
+                capabilities(None, None, maximized, Activation::Missing)
                     .sets_size
                     .is_available()
             );
             let floating = ToplevelStates::decode(&array(&[ACTIVATED]));
             assert!(
-                capabilities(None, None, floating, false)
+                capabilities(None, None, floating, Activation::Missing)
                     .sets_size
                     .is_available()
             );
@@ -1152,9 +1166,9 @@ mod toplevel {
 
     use web_time::Instant;
 
-    use super::activation::{Input, TokenRequest, Tokens, token_requests};
+    use super::activation::{TokenRequest, Tokens, token_requests};
     use super::configure::{
-        Sizing, ToplevelStates, WmCapabilities, capabilities, clamp, protocol_extent,
+        Activation, Sizing, ToplevelStates, WmCapabilities, capabilities, clamp, protocol_extent,
     };
     use super::decoration::{Decoration, FrameDrawer};
     #[cfg(any(test, feature = "testing"))]
@@ -1165,9 +1179,10 @@ mod toplevel {
     use crate::host_window::{CoreHostWindow, HostWindow, OwnerThreadToken};
     use crate::owner::OpenWindowError;
     use crate::owner::linux::PortalSlot;
+    use crate::owner::linux::wayland::activation::ActivationToken;
     use crate::owner::linux::wayland::{
-        LastInput, LiveOutputs, LoopWaker, LoopWindow, OutputName, UserInput, WaylandDisplays,
-        WaylandLoop, WaylandState, WindowSeed, WindowTable,
+        LastInput, LiveOutputs, LoopWaker, LoopWindow, OutputName, WaylandDisplays, WaylandLoop,
+        WaylandState, WindowSeed, WindowTable,
     };
     use crate::owner::window_delivery::{Publication, Retirement, WindowDelivery};
     use crate::text::WindowTextInput;
@@ -1193,6 +1208,10 @@ mod toplevel {
         /// The compositor answered a frame callback: it has shown the window
         /// at least once, so the window can be activated.
         frame_shown: AtomicBool,
+        /// How many activation tokens came, and how many the window handed
+        /// back, for a test (`testing::wayland::compositor_report`).
+        #[cfg(any(test, feature = "testing"))]
+        tokens_counted: Mutex<(u32, u32)>,
         /// A test has every configure carry `suspended`, as a compositor of
         /// xdg-shell version 6 would (`testing::wayland::suspend`).
         #[cfg(any(test, feature = "testing"))]
@@ -1265,6 +1284,8 @@ mod toplevel {
                 close_granted: AtomicBool::new(false),
                 tokens: Mutex::new(Tokens::default()),
                 frame_shown: AtomicBool::new(false),
+                #[cfg(any(test, feature = "testing"))]
+                tokens_counted: Mutex::new((0, 0)),
                 #[cfg(any(test, feature = "testing"))]
                 suspended_by_test: AtomicBool::new(false),
             }
@@ -1423,7 +1444,7 @@ mod toplevel {
         hovered: bool,
         viewported: bool,
         offers_decorations: bool,
-        offers_activation: bool,
+        activation: Activation,
         closed: bool,
     }
 
@@ -1468,7 +1489,7 @@ mod toplevel {
                     applied.told.wm,
                     decoration.absence(),
                     states,
-                    self.offers_activation,
+                    self.activation,
                 ),
             }
             .onto(state)
@@ -1493,13 +1514,8 @@ mod toplevel {
                 signal,
                 waker,
                 notices,
-                startup_token,
             } = owner.seed()?;
             let record = Arc::new(ToplevelRecord::new());
-            // The launcher's token activates the window once it is shown.
-            if let Some(token) = startup_token {
-                record.tokens.lock().grant(token);
-            }
             let queue = protocol.queue.clone();
             let surface = protocol
                 .compositor
@@ -1610,9 +1626,18 @@ mod toplevel {
                 .delivery
                 .publish_through_owner(&window, WaylandWindow::read_state);
             window.delivery.resume_through_signal(&signal);
-            if let Err(error) = owner.register(id, Rc::clone(&window) as Rc<dyn LoopWindow>) {
-                window.release();
-                return Err(error);
+            match owner.register(id, Rc::clone(&window) as Rc<dyn LoopWindow>) {
+                // The launcher's token activates the first window held once
+                // it is shown; a window that failed to open leaves it.
+                Ok(launch_token) => {
+                    if let Some(token) = launch_token {
+                        window.record.tokens.lock().grant(token);
+                    }
+                }
+                Err(error) => {
+                    window.release();
+                    return Err(error);
+                }
             }
             Ok(window)
         }
@@ -1628,7 +1653,11 @@ mod toplevel {
                 hovered: self.delivery.hovered(),
                 viewported: self.viewported,
                 offers_decorations: self.offers_decorations,
-                offers_activation: self.activation.is_some(),
+                activation: if self.activation.is_some() {
+                    Activation::Offered
+                } else {
+                    Activation::Missing
+                },
                 closed: self.closed.get(),
             }
             .state()
@@ -1718,12 +1747,8 @@ mod toplevel {
                 return Err(not_carried_out(&WindowCommand::Activate));
             };
             let token = activation.get_activation_token(&self.queue, Arc::clone(&self.record));
-            let input = self.last_input.latest().map(|input: UserInput| Input {
-                seat: input.seat,
-                serial: input.serial,
-                surface: input.surface,
-            });
-            let requests = token_requests(input, Proxy::is_alive, Proxy::is_alive);
+            let requests =
+                token_requests(self.last_input.latest(), Proxy::is_alive, Proxy::is_alive);
             for request in requests {
                 match request {
                     TokenRequest::SetSerial { serial, seat } => token.set_serial(serial, &seat),
@@ -1747,8 +1772,14 @@ mod toplevel {
             };
             let due = self.record.tokens.lock().take_due(mapped);
             if let Some(activation) = &self.activation {
+                #[cfg(any(test, feature = "testing"))]
+                {
+                    let used = u32::try_from(due.len()).unwrap_or(u32::MAX);
+                    let mut counted = self.record.tokens_counted.lock();
+                    counted.1 = counted.1.saturating_add(used);
+                }
                 for token in due {
-                    activation.activate(token, &self.surface.0);
+                    activation.activate(token.into_string(), &self.surface.0);
                 }
             }
         }
@@ -2367,7 +2398,11 @@ mod toplevel {
                 None,
                 decoration.absence(),
                 ToplevelStates::default(),
-                owner.offers_activation(),
+                if owner.offers_activation() {
+                    Activation::Offered
+                } else {
+                    Activation::Missing
+                },
             )
         }
 
@@ -2513,7 +2548,12 @@ mod toplevel {
             _: &QueueHandle<Self>,
         ) {
             if let xdg_activation_token_v1::Event::Done { token: granted } = event {
-                record.tokens.lock().grant(granted);
+                #[cfg(any(test, feature = "testing"))]
+                {
+                    let mut counted = record.tokens_counted.lock();
+                    counted.0 = counted.0.saturating_add(1);
+                }
+                record.tokens.lock().grant(ActivationToken::new(granted));
                 token.destroy();
             }
         }
@@ -2630,7 +2670,7 @@ mod toplevel {
         /// What the compositor sent the window so far.
         pub(crate) fn compositor_said(&self) -> CompositorSaid {
             let told = self.record.protocol.lock();
-            let tokens = self.record.tokens.lock();
+            let (activation_tokens, activations) = *self.record.tokens_counted.lock();
             CompositorSaid {
                 size: told.size,
                 raw_states: told.raw_states.clone(),
@@ -2639,8 +2679,8 @@ mod toplevel {
                 fractional_scale: told.fractional_scale,
                 frame_mode: told.raw_frame_mode,
                 outputs: told.outputs.clone(),
-                activation_tokens: tokens.came(),
-                activations: tokens.used(),
+                activation_tokens,
+                activations,
             }
         }
 

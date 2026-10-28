@@ -14,25 +14,14 @@
 //! application on its own, and its capability says `Emulated`.
 //!
 //! A token the launcher handed the process (`XDG_ACTIVATION_TOKEN`) is used
-//! the same way, by the first window the process opens.
+//! the same way, by the first window the process holds.
 //!
 //! A surface not mapped yet cannot be activated, so a token waits until the
 //! compositor has shown the window once.
 
 #![forbid(unsafe_code)]
 
-/// A user input as a token names it: the seat it came from, the serial the
-/// compositor gave its event, and the surface it went to.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Input<Seat, Surface> {
-    /// The seat whose device the input came from.
-    pub(crate) seat: Seat,
-    /// The serial of the input's event: a key, a button, a touch, or the
-    /// keyboard focus entering a surface.
-    pub(crate) serial: u32,
-    /// The surface the input went to.
-    pub(crate) surface: Surface,
-}
+use crate::owner::linux::wayland::activation::{ActivationToken, UserInput};
 
 /// A request on a token object, after `get_activation_token` made it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,12 +46,12 @@ pub(crate) enum TokenRequest<Seat, Surface> {
 /// only with its seat. A token that names no input asks the compositor for
 /// the user's attention rather than the focus.
 pub(crate) fn token_requests<Seat, Surface>(
-    input: Option<Input<Seat, Surface>>,
+    input: Option<UserInput<Seat, Surface>>,
     seat_alive: impl Fn(&Seat) -> bool,
     surface_alive: impl Fn(&Surface) -> bool,
 ) -> Vec<TokenRequest<Seat, Surface>> {
     let mut requests = Vec::with_capacity(3);
-    if let Some(Input {
+    if let Some(UserInput {
         seat,
         serial,
         surface,
@@ -83,53 +72,23 @@ pub(crate) fn token_requests<Seat, Surface>(
 /// answered its requests with and the one its launcher gave, in the order
 /// they came.
 #[derive(Debug, Default)]
-pub(crate) struct Tokens {
-    granted: Vec<String>,
-    /// How many tokens came, for a test.
-    #[cfg(any(test, feature = "testing"))]
-    came: u32,
-    /// How many were handed back, for a test.
-    #[cfg(any(test, feature = "testing"))]
-    used: u32,
-}
+pub(crate) struct Tokens(Vec<ActivationToken>);
 
 impl Tokens {
     /// A token came for the window.
-    pub(crate) fn grant(&mut self, token: String) {
-        #[cfg(any(test, feature = "testing"))]
-        {
-            self.came = self.came.saturating_add(1);
-        }
-        self.granted.push(token);
+    pub(crate) fn grant(&mut self, token: ActivationToken) {
+        self.0.push(token);
     }
 
     /// The tokens the window hands back now, each once and in the order
     /// they came: every one held once the compositor has shown the window
     /// (`mapped`), none before.
-    pub(crate) fn take_due(&mut self, mapped: bool) -> Vec<String> {
-        if !mapped {
-            return Vec::new();
+    pub(crate) fn take_due(&mut self, mapped: bool) -> Vec<ActivationToken> {
+        if mapped {
+            std::mem::take(&mut self.0)
+        } else {
+            Vec::new()
         }
-        let due = std::mem::take(&mut self.granted);
-        #[cfg(any(test, feature = "testing"))]
-        {
-            self.used = self
-                .used
-                .saturating_add(u32::try_from(due.len()).unwrap_or(u32::MAX));
-        }
-        due
-    }
-
-    /// How many tokens came, for a test.
-    #[cfg(any(test, feature = "testing"))]
-    pub(crate) const fn came(&self) -> u32 {
-        self.came
-    }
-
-    /// How many tokens were handed back, for a test.
-    #[cfg(any(test, feature = "testing"))]
-    pub(crate) const fn used(&self) -> u32 {
-        self.used
     }
 }
 
@@ -142,8 +101,12 @@ mod tests {
     type Seat = (&'static str, bool);
     type Surface = (&'static str, bool);
 
-    fn requests(input: Option<Input<Seat, Surface>>) -> Vec<TokenRequest<Seat, Surface>> {
+    fn requests(input: Option<UserInput<Seat, Surface>>) -> Vec<TokenRequest<Seat, Surface>> {
         token_requests(input, |seat| seat.1, |surface| surface.1)
+    }
+
+    fn token(name: &str) -> ActivationToken {
+        ActivationToken::new(name.to_owned())
     }
 
     /// The token names the last input: its serial with its seat, then the
@@ -155,7 +118,7 @@ mod tests {
         let seat = ("seat0", true);
         let surface = ("focused", true);
         assert_eq!(
-            requests(Some(Input {
+            requests(Some(UserInput {
                 seat,
                 serial: 42,
                 surface,
@@ -174,7 +137,7 @@ mod tests {
     #[test]
     fn a_token_names_no_seat_or_surface_that_is_gone() {
         let input = |seat, surface| {
-            Some(Input {
+            Some(UserInput {
                 seat,
                 serial: 7,
                 surface,
@@ -205,13 +168,12 @@ mod tests {
     #[test]
     fn a_token_is_handed_back_once_the_window_was_shown() {
         let mut tokens = Tokens::default();
-        tokens.grant("launcher".to_owned());
-        tokens.grant("asked".to_owned());
+        tokens.grant(token("launcher"));
+        tokens.grant(token("asked"));
         assert!(tokens.take_due(false).is_empty(), "not mapped yet");
-        assert_eq!(tokens.take_due(true), ["launcher", "asked"]);
+        assert_eq!(tokens.take_due(true), [token("launcher"), token("asked")]);
         assert!(tokens.take_due(true).is_empty(), "each is used once");
-        tokens.grant("later".to_owned());
-        assert_eq!(tokens.take_due(true), ["later"]);
-        assert_eq!((tokens.came(), tokens.used()), (3, 3));
+        tokens.grant(token("later"));
+        assert_eq!(tokens.take_due(true), [token("later")]);
     }
 }
