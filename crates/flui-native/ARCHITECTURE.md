@@ -982,8 +982,10 @@ trait depends on `flui-platform` instead.
   fractional scale (`wp_fractional_scale_v1`, which the loop binds only with
   the viewporter), else the surface's preferred whole scale, else its output's
   (`scale::buffer_scale`). Its frame is the compositor's answer through
-  `xdg-decoration`, never the request; where the compositor offers none, or
-  leaves the frame to the client, the window has none and `SetDecorated` is
+  `xdg-decoration`, never the request; a configure after a request that names
+  no mode answers it with the mode unchanged (wlroots sends no mode twice).
+  Where the compositor offers none, or answered the last request with the
+  other mode (sway frames every tiled window), `SetDecorated` is
   `NotOnThisDevice`: the host draws no frame of its own, a client-side frame
   being the application's title bar (`decoration`). A suspended window is
   occluded: it is given no frame and gives up no frame callback until the

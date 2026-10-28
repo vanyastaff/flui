@@ -1130,7 +1130,7 @@ mod toplevel {
         /// owner last looked: with a frame mode, or with a configure that
         /// carried none, which leaves the mode as it was (wlroots sends no
         /// mode it already sent).
-        frame_told: bool,
+        frame_answered: bool,
         /// The window asked for a frame mode and the compositor has not
         /// answered yet.
         frame_asked: bool,
@@ -1169,7 +1169,7 @@ mod toplevel {
             let taken = told.clone();
             told.configure = None;
             told.close_requested = false;
-            told.frame_told = false;
+            told.frame_answered = false;
             taken
         }
     }
@@ -1549,7 +1549,7 @@ mod toplevel {
                     );
                     resized || first
                 });
-                if told.frame_told {
+                if told.frame_answered {
                     applied.decoration_answered = true;
                 }
                 applied.told = told;
@@ -1948,7 +1948,7 @@ mod toplevel {
                     // the one before it.
                     {
                         let mut told = self.record.protocol.lock();
-                        told.frame_told = false;
+                        told.frame_answered = false;
                         told.frame_asked = true;
                     }
                     let mut applied = self.applied.borrow_mut();
@@ -2262,7 +2262,7 @@ mod toplevel {
                 // A configure after a frame request that named no mode keeps
                 // the mode: that is the compositor's answer.
                 if std::mem::take(&mut told.frame_asked) {
-                    told.frame_told = true;
+                    told.frame_answered = true;
                 }
                 #[cfg(any(test, feature = "testing"))]
                 {
@@ -2351,7 +2351,7 @@ mod toplevel {
                 }
                 if let Some(drawer) = FrameDrawer::from_mode(mode) {
                     told.frame = Some(drawer);
-                    told.frame_told = true;
+                    told.frame_answered = true;
                     told.frame_asked = false;
                 }
             }

@@ -3475,9 +3475,28 @@ graph LR
   {outputs, fullscreen_on}`), называет его дисплей, обработчик слышит изменение, масштаб тот
   же, после `Normal` — снова первый дисплей; с пропущенным `leave` падает; при одном выходе
   пропускается с сообщением (CI — один headless Weston). Weston 13 не предлагает ни
-  `xdg-decoration`, ни `wp_fractional_scale_v1`, ни `xdg-foreign` (проверено по реестру):
-  эти три пути исполнены только чистыми таблицами; conformance окна на Weston проходит по
-  ветке без менеджера декораций. Связь моста с адаптером (`update_window_focus_state`) без
+  `xdg-decoration`, ни `wp_fractional_scale_v1`, ни `xdg-foreign` (проверено по реестру);
+  conformance окна на Weston проходит по ветке без менеджера декораций. **Прогон под sway**
+  (одобрено владельцем: `apt install sway`, sway 1.9, wlroots headless, `WLR_LIBINPUT_NO_DEVICES=1`,
+  `output HEADLESS-1 scale 1.5`, окно «a floating frame» плавающее; в CI не добавлен). Три теста
+  идут на любом композиторе и сверяют ответ протокола, а не расшифровку окна:
+  `a_window_has_the_frame_its_compositor_answers` (режим `zxdg_toplevel_decoration_v1` из
+  `CompositorReport::frame_mode`; под sway плавающее окно получило `SetDecorated(false)` и
+  `(true)`, у мозаичного sway рамку оставил, и команда больше не предлагается; под Weston —
+  ветка без протокола), `a_window_draws_at_the_compositors_fractional_scale` (масштаб 180/120 =
+  1.5, физический размер — логический × 1.5 с округлением), `a_portal_parent_names_the_exported_window`
+  (второй клиент импортирует ручку через `zxdg_importer_v2`, импорт жив, после закрытия окна
+  композитор его отзывает). Откат: `decorated` по просьбе — падает первый, без дробного масштаба
+  — второй (2.0 вместо 1.5), без экспорта — третий. Найдено под sway и исправлено: wlroots не
+  шлёт режим рамки повторно, поэтому configure после просьбы без режима — тоже ответ
+  (`frame_asked`/`frame_answered`); иначе отклонённая просьба мозаичного окна оставалась
+  «предложенной» (с прежним кодом тест падал «an overruled request is no longer offered»), а
+  ещё не отвеченная просьба до ответа стоит (`Decoration::answered`). Фикстура читала масштаб
+  `preferred_buffer_scale` (2) прежде дробного — readback исправлен. Под sway conformance окна
+  падает там, где решает мозаика: `SetSize` мозаичного окна и `SetMode(Maximized)` (sway даёт
+  `xdg_wm_base` v2 без `wm_capabilities`, окно заранее не знает) — **для владельца**: снимать ли
+  `sets_size` у мозаичного окна; тесты темпа при параллельном запуске на одном sway видят кадры
+  от перестройки мозаики (по одному — зелёные). Связь моста с адаптером (`update_window_focus_state`) без
   шины AT-SPI не проверена тестом. `module-dag` — 331 модуль, 351 ребро, 1 исключение;
   `globals` — 57. **Проверки:** `cargo fmt`; Windows — clippy рабочего пространства
   `--all-targets -D warnings`, `module-dag`, `file-length`, `markers`, `testing`, `globals`,
@@ -3485,13 +3504,14 @@ graph LR
   Android `-p flui-native -p flui-app --all-targets`. WSL Ubuntu 24.04: clippy `-p flui-native`
   с `--all-targets` и без: по умолчанию, `--all-features`, `--no-default-features` с
   `winit-backend`; `--no-default-features`, `… x11`, `… wayland`, `… testing` без
-  `--all-targets` падают и на `main` (мёртвый код `accessibility::bridge`, `panic_boundary`,
-  `window::state`, `OwnerMap` под одним `x11`; правка — vanyastaff/flui#1933), новых ошибок
-  нет; clippy `flui-app`, `flui --features native`; rustdoc `-D warnings
-  --document-private-items` трёх вариантов; nextest по умолчанию под headless Weston — 297 из
-  297, `--all-features` под xvfb без тестов Wayland и тесты Wayland под Weston, тесты Wayland
-  под двумя выходами — 7 из 7. Не запускалось: композиторы рабочего стола (GNOME, KDE, Sway,
-  Hyprland) — ни один из трёх протоколов не исполнен вживую; дробный масштаб на HiDPI;
+  `--all-targets` падали и на `main`; после слияния `main` с vanyastaff/flui#1933 все
+  одиночные сочетания (`--no-default-features`, `x11`, `wayland`, `winit-backend`, `testing`)
+  с `--all-targets` и без — чисто; clippy `flui-app`, `flui --features native`; rustdoc `-D warnings
+  --document-private-items` трёх вариантов; nextest после слияния `main`: по умолчанию под
+  headless Weston — 300 из 300, `--all-features` под xvfb без тестов Wayland — 343 из 343 и тесты
+  Wayland под Weston — 12 из 12, тесты Wayland под двумя выходами — 10 из 10, три теста
+  протоколов под sway — 3 из 3. Не запускалось: композиторы рабочего
+  стола (GNOME, KDE, Hyprland) и sway с устройствами ввода; дробный масштаб на HiDPI-экране;
   портал с родителем; экранный диктор (Orca); Mac, iPhone, Android-устройство, браузер,
   `cross-typecheck`.
 - [x] **LY82** — ветка `platform/x11`, начата на вершине LY46 `8138ab489`, перенесена на `main`
