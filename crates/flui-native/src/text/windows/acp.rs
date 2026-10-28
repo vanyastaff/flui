@@ -74,8 +74,12 @@ impl Hresult {
 pub(crate) const TS_LF_SYNC: u32 = 0x1;
 /// `TS_LF_READWRITE`: a lock that reads and edits; it includes `TS_LF_READ`.
 pub(crate) const TS_LF_READWRITE: u32 = 0x6;
-/// `GXFPF_ROUND_NEAREST`: a point between two characters takes the nearer.
+/// `GXFPF_ROUND_NEAREST`: a point inside a character's box takes the box's
+/// nearer edge.
 pub(crate) const GXFPF_ROUND_NEAREST: u32 = 0x1;
+/// `GXFPF_NEAREST`: a point outside every character's box takes the nearest
+/// position instead of failing with `TS_E_INVALIDPOINT`.
+pub(crate) const GXFPF_NEAREST: u32 = 0x2;
 
 /// A `RequestLock`'s flags as the store's request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -133,7 +137,8 @@ pub(crate) fn request_lock(
 /// The store's answer to a lock request as `RequestLock`'s (ADR-0135 §2):
 ///
 /// - granted: the session result is what `OnLockGranted` returned
-///   (`session`), `S_OK` if the grant did not reach it;
+///   (`session`); a store that reports a grant it never ran gets `E_FAIL`,
+///   as no session took place;
 /// - deferred: `TS_S_ASYNC`, the grant runs at the store's next anchor;
 /// - no synchronous lock now: `RequestLock` succeeds, and the session result
 ///   is `TS_E_SYNCHRONOUS`;
@@ -143,7 +148,7 @@ pub(crate) fn lock_answer(
     session: Option<Hresult>,
 ) -> Result<Hresult, Hresult> {
     match outcome {
-        Ok(LockOutcome::Granted) => Ok(session.unwrap_or(Hresult::S_OK)),
+        Ok(LockOutcome::Granted) => Ok(session.unwrap_or(Hresult::E_FAIL)),
         Ok(LockOutcome::Deferred) => Ok(Hresult::TS_S_ASYNC),
         Err(TextStoreError::SyncLockUnavailable) => Ok(Hresult::TS_E_SYNCHRONOUS),
         Err(error) => Err(store_error(error)),
@@ -251,6 +256,11 @@ pub(crate) fn set_selection(
 /// the ACP after the last unit returned; a cap anywhere else, between CR and
 /// LF included, is kept.
 ///
+/// While there is room and text left the answer is never empty, so a caller
+/// reading on from the ACP after it always moves: a buffer of one unit at a
+/// pair gets the pair's high surrogate alone, since `GetText` counts units,
+/// not characters.
+///
 /// # Errors
 ///
 /// `TS_E_INVALIDPOS` for a range that is not in the document, and the
@@ -273,9 +283,17 @@ pub(crate) fn text(
         Err(TextStoreError::Offset(OffsetError::SplitsSurrogatePair(split)))
             if capped < end && offset(capped).is_ok_and(|cap| cap.get() == split) =>
         {
-            session
-                .text(range(start, capped - 1)?)
-                .map_err(store_error)?
+            if capped - 1 > start {
+                session
+                    .text(range(start, capped - 1)?)
+                    .map_err(store_error)?
+            } else {
+                // Room for one unit, and the pair starts at `start`.
+                let pair = session
+                    .text(range(start, capped.saturating_add(1))?)
+                    .map_err(store_error)?;
+                return Ok(pair.encode_utf16().take(1).collect());
+            }
         }
         Err(error) => return Err(store_error(error)),
     };
@@ -307,12 +325,13 @@ pub(crate) fn wide_text(units: &[u16]) -> Result<String, Hresult> {
     String::from_utf16(units).map_err(|_| Hresult::E_INVALIDARG)
 }
 
-/// `GetACPFromPoint`'s flags as the store's point mode.
+/// `GetACPFromPoint`'s flags as the store's point mode: the two flags are
+/// independent, and each sets one of the mode's two choices
+/// (<https://learn.microsoft.com/en-us/windows/win32/api/textstor/nf-textstor-itextstoreacp-getacpfrompoint>).
 pub(crate) const fn point_mode(flags: u32) -> PointMode {
-    if flags & GXFPF_ROUND_NEAREST == 0 {
-        PointMode::Exact
-    } else {
-        PointMode::Nearest
+    PointMode {
+        round_to_nearest_edge: flags & GXFPF_ROUND_NEAREST != 0,
+        nearest_when_outside: flags & GXFPF_NEAREST != 0,
     }
 }
 

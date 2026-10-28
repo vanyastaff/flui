@@ -171,6 +171,7 @@ pub(crate) mod geometry {
     mod tests;
 }
 
+#[cfg(any(windows, test))]
 pub(crate) mod acp;
 
 #[cfg(windows)]

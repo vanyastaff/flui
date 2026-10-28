@@ -5,6 +5,7 @@ use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
+use flui_foundation::geometry::Point;
 use flui_platform::text_store::{
     CommitGate, DEFERRED_LOCK_CAPACITY, InMemoryTextStore, LockGrant, LockKind, LockOutcome,
     LockTiming, OffsetError, PointMode, TextStore, TextStoreEdit, TextStoreError, TextStoreRead,
@@ -101,6 +102,13 @@ fn split_surrogate_offsets_are_invalid_positions() {
         ("a buffer ending inside the pair stops before it", || {
             assert_eq!(reading(|s| text(s, 0, -1, 2)), Ok(units("a")));
         }),
+        (
+            "a one-unit buffer at the pair gets its high surrogate",
+            || {
+                // An empty answer would leave the caller's next ACP where it was.
+                assert_eq!(reading(|s| text(s, 1, -1, 1)), Ok(vec![0xD83D]));
+            },
+        ),
         ("a buffer ending between CR and LF keeps the CR", || {
             assert_eq!(reading(|s| text(s, 3, -1, 2)), Ok(units("b\r")));
         }),
@@ -398,7 +406,13 @@ fn lock_flags_and_errors_translate_to_tsf_codes() {
         }),
         ("lock answers", || {
             let rows = [
-                (Ok(LockOutcome::Granted), None, Ok(Hresult::S_OK)),
+                // Granted, yet the grant never ran: no session took place.
+                (Ok(LockOutcome::Granted), None, Ok(Hresult::E_FAIL)),
+                (
+                    Ok(LockOutcome::Granted),
+                    Some(Hresult::S_OK),
+                    Ok(Hresult::S_OK),
+                ),
                 (
                     Ok(LockOutcome::Granted),
                     Some(Hresult::E_FAIL),
@@ -450,10 +464,39 @@ fn lock_flags_and_errors_translate_to_tsf_codes() {
                 assert_eq!(Hresult::new(code.value()), code);
             }
         }),
-        ("point modes", || {
-            assert_eq!(point_mode(0), PointMode::Exact);
-            assert_eq!(point_mode(0x1), PointMode::Nearest);
-            assert_eq!(point_mode(0x2), PointMode::Exact);
+        ("GetACPFromPoint flags", || {
+            let rows = [
+                (0x0, false, false),
+                (0x1, true, false),
+                (0x2, false, true),
+                (0x3, true, true),
+            ];
+            for (flags, round_to_nearest_edge, nearest_when_outside) in rows {
+                assert_eq!(
+                    point_mode(flags),
+                    PointMode {
+                        round_to_nearest_edge,
+                        nearest_when_outside,
+                    },
+                    "flags {flags:#x}"
+                );
+            }
+        }),
+        ("a point outside the text, by its flags", || {
+            // Left of the first cell, on its line.
+            let outside = Point::new(-5.0, 1.0);
+            let answer = |flags| {
+                reading(move |session| {
+                    session
+                        .index_at_point(outside, point_mode(flags))
+                        .map(acp)
+                        .map_err(store_error)
+                })
+            };
+            assert_eq!(answer(0x0), Err(Hresult::TS_E_INVALIDPOINT));
+            assert_eq!(answer(0x1), Err(Hresult::TS_E_INVALIDPOINT));
+            assert_eq!(answer(0x2), Ok(0));
+            assert_eq!(answer(0x3), Ok(0));
         }),
     ]);
 }

@@ -333,6 +333,14 @@ mod native_windows {
             "a_key_the_input_method_took_is_not_delivered",
             a_key_the_input_method_took_is_not_delivered,
         ),
+        (
+            "a_system_key_the_input_method_took_is_not_delivered",
+            a_system_key_the_input_method_took_is_not_delivered,
+        ),
+        (
+            "a_delivered_key_released_as_processkey_is_released",
+            a_delivered_key_released_as_processkey_is_released,
+        ),
         ("dead_key_is_reported_as_dead", dead_key_is_reported_as_dead),
         (
             "system_dead_key_is_reported_as_dead",
@@ -1749,10 +1757,91 @@ mod native_windows {
     // key, and neither is its release, whether that comes under
     // `VK_PROCESSKEY` or its own virtual key. The key typed after it is
     // delivered as usual.
-    #[expect(unsafe_code, reason = "owned Win32 keyboard dispatch")]
     fn a_key_the_input_method_took_is_not_delivered() {
-        const VK_PROCESSKEY: usize = 0xE5;
-        const RELEASE: isize = (1 << 30) | (1 << 31);
+        let (k, l, a) = (key_lparam(0x25), key_lparam(0x26), key_lparam(0x1e));
+        assert_eq!(
+            keys_delivered(&[
+                (WM_KEYDOWN, VK_PROCESSKEY, k),
+                (WM_KEYUP, 0x4B, k | KEY_RELEASE),
+                (WM_KEYDOWN, VK_PROCESSKEY, l),
+                (WM_KEYUP, VK_PROCESSKEY, l | KEY_RELEASE),
+                (WM_KEYDOWN, 0x41, a),
+                (WM_CHAR, usize::from(b'a'), a),
+                (WM_KEYUP, 0x41, a | KEY_RELEASE),
+            ]),
+            [
+                r#"Down Character(KeyText("a")) KeyA"#,
+                r#"Up Character(KeyText("a")) KeyA"#
+            ],
+            "only the application's own key is delivered"
+        );
+    }
+
+    // The same with Alt held: system key messages.
+    fn a_system_key_the_input_method_took_is_not_delivered() {
+        let (k, l, a) = (
+            key_lparam(0x25) | KEY_ALT,
+            key_lparam(0x26) | KEY_ALT,
+            key_lparam(0x1e),
+        );
+        assert_eq!(
+            keys_delivered(&[
+                (WM_SYSKEYDOWN, VK_PROCESSKEY, k),
+                (WM_SYSKEYUP, 0x4B, k | KEY_RELEASE),
+                (WM_SYSKEYDOWN, VK_PROCESSKEY, l),
+                (WM_SYSKEYUP, VK_PROCESSKEY, l | KEY_RELEASE),
+                (WM_KEYDOWN, 0x41, a),
+                (WM_CHAR, usize::from(b'a'), a),
+                (WM_KEYUP, 0x41, a | KEY_RELEASE),
+            ]),
+            [
+                r#"Down Character(KeyText("a")) KeyA"#,
+                r#"Up Character(KeyText("a")) KeyA"#
+            ],
+            "only the application's own key is delivered"
+        );
+    }
+
+    // A key pressed while the input method was closed and released once it
+    // opened arrives as a `VK_PROCESSKEY` release. The press was the
+    // application's, so its release is too: the key does not stay down.
+    fn a_delivered_key_released_as_processkey_is_released() {
+        let (a, b) = (key_lparam(0x1e), key_lparam(0x30) | KEY_ALT);
+        assert_eq!(
+            keys_delivered(&[
+                (WM_KEYDOWN, 0x41, a),
+                (WM_CHAR, usize::from(b'a'), a),
+                (WM_KEYUP, VK_PROCESSKEY, a | KEY_RELEASE),
+                (WM_SYSKEYDOWN, 0x42, b),
+                (WM_SYSKEYUP, VK_PROCESSKEY, b | KEY_RELEASE),
+            ]),
+            [
+                r#"Down Character(KeyText("a")) KeyA"#,
+                "Up Named(Unidentified) KeyA",
+                r#"Down Character(KeyText("b")) KeyB"#,
+                "Up Named(Unidentified) KeyB"
+            ],
+            "each delivered press is released"
+        );
+    }
+
+    const VK_PROCESSKEY: usize = 0xE5;
+    /// A key message's `LPARAM` bits for a release: the previous state and
+    /// the transition state.
+    const KEY_RELEASE: isize = (1 << 30) | (1 << 31);
+    /// A key message's `LPARAM` context code: Alt was down.
+    const KEY_ALT: isize = 1 << 29;
+
+    /// The `LPARAM` of one press of the key whose scancode is `scancode`.
+    fn key_lparam(scancode: isize) -> isize {
+        1 | (scancode << 16)
+    }
+
+    /// The key events a window delivers for `queued` key messages,
+    /// dispatched without `TranslateMessage`, so the characters are the ones
+    /// queued, whatever the machine's layout.
+    #[expect(unsafe_code, reason = "owned Win32 keyboard dispatch")]
+    fn keys_delivered(queued: &[(u32, usize, isize)]) -> Vec<String> {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open(&platform, true);
         let hwnd = hwnd_of(&window);
@@ -1774,28 +1863,12 @@ mod native_windows {
             (VK_CONTROL, false),
             (VK_MENU, false),
         ]);
-        // K taken, released under its own key; L taken, released under
-        // `VK_PROCESSKEY`; then A as the application's own key.
-        let k = 1 | (0x25 << 16);
-        let l = 1 | (0x26 << 16);
-        let a = 1 | (0x1e << 16);
-        let queued = [
-            (WM_KEYDOWN, VK_PROCESSKEY, k),
-            (WM_KEYUP, 0x4B, k | RELEASE),
-            (WM_KEYDOWN, VK_PROCESSKEY, l),
-            (WM_KEYUP, VK_PROCESSKEY, l | RELEASE),
-            (WM_KEYDOWN, 0x41, a),
-            (WM_CHAR, usize::from(b'a'), a),
-            (WM_KEYUP, 0x41, a | RELEASE),
-        ];
-        for (message, wparam, lparam) in queued {
+        for &(message, wparam, lparam) in queued {
             // SAFETY: integer key data for the fixture's own HWND on this
             // thread's queue.
             unsafe { PostMessageW(Some(hwnd), message, WPARAM(wparam), LPARAM(lparam)) }
                 .expect("queue a key message");
         }
-        // Dispatched without `TranslateMessage`: the characters are the
-        // ones queued above, whatever the machine's layout.
         for _ in 0..64 {
             let mut message = MSG::default();
             // SAFETY: only the fixture's owner-thread HWND is selected.
@@ -1805,15 +1878,9 @@ mod native_windows {
             // SAFETY: dispatch the message this thread's queue returned.
             unsafe { DispatchMessageW(&raw const message) };
         }
-        assert_eq!(
-            *keys.lock().expect("keys"),
-            [
-                r#"Down Character(KeyText("a")) KeyA"#,
-                r#"Up Character(KeyText("a")) KeyA"#
-            ],
-            "only the application's own key is delivered"
-        );
+        let delivered = keys.lock().expect("keys").clone();
         window.close_now();
+        delivered
     }
 
     // A dead key (an accent on an international layout) arrives as

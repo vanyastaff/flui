@@ -556,7 +556,9 @@ pub fn location_for_code(code: Code) -> Location {
 /// own route (TSF's text store, or the `WM_CHAR`s a legacy input method
 /// posts for its result). Reported as a key as well, it would be a second
 /// producer for one press (ADR-0069), so it produces no key at all, neither
-/// a character nor a named key, and its release none either.
+/// a character nor a named key. The window keeps which presses it took by
+/// scancode: their release is no key either, while a press it delivered is
+/// released even when the release reports `VK_PROCESSKEY`.
 pub fn taken_by_input_method(vk_code: u16) -> bool {
     vk_code == vk::PROCESSKEY
 }
