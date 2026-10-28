@@ -140,18 +140,18 @@
 //!
 //! # Feature Flags
 //!
-//! - `default` (`desktop`): the native desktop backend for the target OS. It
-//!   does not include winit.
+//! - `default` (`desktop`): the native desktop backend for the target OS; on
+//!   Linux the X11 host (`x11`). It does not include winit.
 //! - `winit-backend`: the winit backend, the Linux windowing path today. It
-//!   brings `wayland` and `x11`, and on Linux the AT-SPI accessibility bridge.
-//! - `wayland`, `x11`: on Linux, the clients the display source uses to read the
-//!   outputs and their refresh rates from the compositor. On other targets they
-//!   add nothing.
+//!   brings `wayland` and `x11`.
+//! - `x11`: on Linux, the native X11 host (`X11Platform`), and the X server's
+//!   outputs for the display source. `wayland`: on Linux, the compositor's
+//!   outputs for the display source. On other targets they add nothing.
 //! - `testing`: the `testing` module, test support for a native host's own
 //!   windows (ADR-0243). Not part of the release API.
 //!
-//! Accessibility has no feature: Win32, AppKit and Linux winit windows always
-//! hand out their operating system's AccessKit adapter. The headless testing
+//! Accessibility has no feature: Win32, AppKit, X11 and Linux winit windows
+//! always hand out their operating system's AccessKit adapter. The headless testing
 //! platform needs no feature.
 //!
 //! # Input capabilities

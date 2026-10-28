@@ -384,7 +384,8 @@ impl X11Window {
             // A change of a size known before: the first one an `Expose`
             // paints.
             let content = state.metrics.map(WindowMetrics::physical);
-            let resized = record.content.is_some() && content.is_some() && record.content != content;
+            let resized =
+                record.content.is_some() && content.is_some() && record.content != content;
             if content.is_some() {
                 record.content = content;
             }

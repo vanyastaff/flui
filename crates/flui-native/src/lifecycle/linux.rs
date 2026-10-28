@@ -1,6 +1,6 @@
 //! The Linux host's system notices: sleep and wake, shutdown, the screen lock
 //! and memory pressure, gathered from the login manager and the kernel and
-//! handed to the owner. Every Linux host reads them; today that is the winit
+//! handed to the owner. Every Linux host reads them: the X11 host and the winit
 //! host.
 //!
 //! Two sources run beside the owner and never run application code:
@@ -22,8 +22,8 @@
 //! A source that cannot start (no system bus, a kernel without pressure
 //! information) leaves the others running and says so once in the log.
 //!
-//! The sources name no host; how the winit loop starts them and delivers
-//! what they queue sits apart, in its own block. What each source's answers
+//! The sources name no host; how the X11 and winit loops start them and deliver
+//! what they queue sits apart, in a block per loop. What each source's answers
 //! mean is a pure rule beside it, which every host checks.
 
 #[cfg(all(target_os = "linux", any(feature = "winit-backend", feature = "x11")))]

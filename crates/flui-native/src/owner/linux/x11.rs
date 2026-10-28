@@ -11,7 +11,7 @@
 //!
 //! # The loop
 //!
-//! [`X11Loop::run`] waits in `poll` on two descriptors, the connection and the
+//! `X11Loop::run` waits in `poll` on two descriptors, the connection and the
 //! doorbell (an eventfd), with no timeout but the application's wake deadline:
 //! an idle application costs no CPU. A turn of the loop:
 //!
@@ -660,7 +660,10 @@ impl host::Loop for X11Loop {
         *self.preferences.lock() = Some(Arc::downgrade(&preferences));
         guard.preferences = Some(preferences);
         self.app
-            .ready(OwnerPlatform::new(Arc::clone(&platform), Arc::clone(&hooks)))
+            .ready(OwnerPlatform::new(
+                Arc::clone(&platform),
+                Arc::clone(&hooks),
+            ))
             .map_err(PlatformError::bootstrap)?;
         self.signal
             .start()

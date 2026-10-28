@@ -38,13 +38,17 @@ mod cases {
     use raw_window_handle::{HandleError, HasWindowHandle as _, RawWindowHandle};
     use x11rb::connection::Connection as _;
     use x11rb::protocol::xproto::{
-        AtomEnum, ClientMessageEvent, ConnectionExt as _, CreateWindowAux, EventMask, WindowClass,
-        MapState, PropMode,
+        AtomEnum, ClientMessageEvent, ConnectionExt as _, CreateWindowAux, EventMask, MapState,
+        PropMode, WindowClass,
     };
     use x11rb::rust_connection::RustConnection;
     use x11rb::wrapper::ConnectionExt as _;
 
     const CASES: &[(&str, fn())] = &[
+        (
+            "a_decorated_window_is_placed_and_measured_by_its_frame",
+            a_decorated_window_is_placed_and_measured_by_its_frame,
+        ),
         ("the_x11_window_conforms", the_x11_window_conforms),
         (
             "a_window_opened_in_a_mode_is_mapped_in_it",
@@ -156,9 +160,12 @@ mod cases {
         fn finish(server: Child, display: &str) -> Self {
             // SAFETY: the harness has started no thread yet; nothing else
             // reads or writes the environment while it is set.
-            #[expect(unsafe_code, reason = "the environment is set before any thread exists")]
+            #[expect(
+                unsafe_code,
+                reason = "the environment is set before any thread exists"
+            )]
             unsafe {
-                std::env::set_var("DISPLAY", &display);
+                std::env::set_var("DISPLAY", display);
                 std::env::remove_var("WAYLAND_DISPLAY");
             }
             let window_manager = Command::new("openbox")
@@ -170,7 +177,9 @@ mod cases {
             // The window manager is ready once it manages a window: a probe
             // window mapped now gets the `WM_STATE` only a window manager
             // sets.
-            let connection = RustConnection::connect(None).expect("the X server answers").0;
+            let connection = RustConnection::connect(None)
+                .expect("the X server answers")
+                .0;
             let root = connection.setup().roots[0].root;
             let probe = connection.generate_id().expect("an id");
             connection
@@ -312,7 +321,9 @@ mod cases {
                 )
                 .expect("an X11 window opens");
             let xid = xid_of(window.as_ref());
-            let server = RustConnection::connect(None).expect("the X server answers").0;
+            let server = RustConnection::connect(None)
+                .expect("the X server answers")
+                .0;
             let mut fixture = Self {
                 platform,
                 window,
@@ -345,15 +356,13 @@ mod cases {
                 .get_geometry(self.xid)
                 .ok()
                 .and_then(|cookie| cookie.reply().ok());
-            let metrics = geometry
-                .filter(|_| viewable)
-                .and_then(|geometry| {
-                    WindowMetrics::new(
-                        Size::new(i32::from(geometry.width), i32::from(geometry.height)),
-                        1.0,
-                    )
-                    .ok()
-                });
+            let metrics = geometry.filter(|_| viewable).and_then(|geometry| {
+                WindowMetrics::new(
+                    Size::new(i32::from(geometry.width), i32::from(geometry.height)),
+                    1.0,
+                )
+                .ok()
+            });
             let focus = server
                 .get_input_focus()
                 .ok()
@@ -421,7 +430,13 @@ mod cases {
                 .filter(|atom| *atom != fullscreen)
                 .collect();
             self.server
-                .change_property32(PropMode::REPLACE, root, supported_atom, AtomEnum::ATOM, &revised)
+                .change_property32(
+                    PropMode::REPLACE,
+                    root,
+                    supported_atom,
+                    AtomEnum::ATOM,
+                    &revised,
+                )
                 .expect("request");
             self.server.flush().expect("flush");
             self.supported = Some(supported);
@@ -458,6 +473,57 @@ mod cases {
         }
     }
 
+    /// A decorated window's outer rectangle is its frame's: the window
+    /// manager places the frame where the window was asked to go, and the
+    /// snapshot names that place and the frame's size, not the content's.
+    fn a_decorated_window_is_placed_and_measured_by_its_frame() {
+        let mut fixture = X11Fixture::open("framed");
+        let extents_atom = atom(&fixture.server, "_NET_FRAME_EXTENTS");
+        let extents: Vec<u32> = fixture
+            .server
+            .get_property(false, fixture.xid, extents_atom, AtomEnum::CARDINAL, 0, 4)
+            .expect("request")
+            .reply()
+            .expect("the property")
+            .value32()
+            .map(Iterator::collect)
+            .unwrap_or_default();
+        let [left, right, top, bottom] = extents[..] else {
+            panic!("openbox frames a decorated window: {extents:?}");
+        };
+        assert!(left + right + top + bottom > 0, "a frame: {extents:?}");
+        fixture
+            .window
+            .admit_and_apply(WindowCommand::SetPosition(
+                flui_foundation::geometry::Point::new(120.0, 90.0),
+            ))
+            .expect("a window moves");
+        fixture.settle();
+        let content = fixture
+            .server
+            .translate_coordinates(fixture.xid, fixture.root(), 0, 0)
+            .expect("request")
+            .reply()
+            .expect("the content's place");
+        let as_f64 = |value: u32| f64::from(value);
+        assert_eq!(
+            (f64::from(content.dst_x), f64::from(content.dst_y)),
+            (120.0 + as_f64(left), 90.0 + as_f64(top)),
+            "the frame is where the window was asked to go"
+        );
+        let state = fixture.window.state();
+        assert_eq!(
+            state.outer.position,
+            Some(flui_foundation::geometry::Point::new(120.0, 90.0))
+        );
+        assert_eq!(
+            state.outer.size,
+            Size::new(400.0 + as_f64(left + right), 300.0 + as_f64(top + bottom)),
+            "the outer size is the content's grown by the frame"
+        );
+        assert_eq!(state.content_size, Size::new(400.0, 300.0));
+    }
+
     fn the_x11_window_conforms() {
         let mut fixture = X11Fixture::open("window conformance");
         window_conformance::assert_conforms(&mut fixture);
@@ -468,7 +534,9 @@ mod cases {
     /// normal mode first.
     fn a_window_opened_in_a_mode_is_mapped_in_it() {
         let platform = X11Platform::new().expect("the X11 platform");
-        let server = RustConnection::connect(None).expect("the X server answers").0;
+        let server = RustConnection::connect(None)
+            .expect("the X server answers")
+            .0;
         let window = platform
             .open_window(
                 WindowOptions::default()
@@ -497,7 +565,11 @@ mod cases {
             );
             run_for(&platform, Duration::from_millis(20)).expect("the loop turns");
         }
-        assert_eq!(window.state().mode, WindowMode::Maximized, "mapped maximized");
+        assert_eq!(
+            window.state().mode,
+            WindowMode::Maximized,
+            "mapped maximized"
+        );
         window.close_for_cleanup();
         run_for(&platform, Duration::from_millis(50)).expect("the loop turns");
     }
@@ -507,9 +579,14 @@ mod cases {
     /// server and its surface target hands out nothing.
     fn the_window_managers_close_asks_the_handler() {
         let platform = X11Platform::new().expect("the X11 platform");
-        let server = RustConnection::connect(None).expect("the X server answers").0;
+        let server = RustConnection::connect(None)
+            .expect("the X server answers")
+            .0;
         let handler = RecordingWindowHandler::new();
-        let answers = Rc::new(RefCell::new(vec![CloseDecision::Close, CloseDecision::KeepOpen]));
+        let answers = Rc::new(RefCell::new(vec![
+            CloseDecision::Close,
+            CloseDecision::KeepOpen,
+        ]));
         let answered = Rc::clone(&answers);
         handler.react_to_close_request(move || {
             answered.borrow_mut().pop().expect("an answer per request")
@@ -524,7 +601,11 @@ mod cases {
         send_close(&server, xid);
         run_for(&platform, Duration::from_millis(200)).expect("the loop turns");
         assert_eq!(handler.count(&HandlerCall::CloseRequested), 1);
-        assert_eq!(handler.count(&HandlerCall::Closed), 0, "the handler kept it");
+        assert_eq!(
+            handler.count(&HandlerCall::Closed),
+            0,
+            "the handler kept it"
+        );
         window
             .admit_and_apply(WindowCommand::SetTitle("kept".into()))
             .expect("a kept window takes commands");
@@ -532,7 +613,11 @@ mod cases {
         send_close(&server, xid);
         run_for(&platform, Duration::from_millis(200)).expect("the loop turns");
         assert_eq!(handler.count(&HandlerCall::CloseRequested), 2);
-        assert_eq!(handler.count(&HandlerCall::Closed), 1, "the handler granted it");
+        assert_eq!(
+            handler.count(&HandlerCall::Closed),
+            1,
+            "the handler granted it"
+        );
         assert!(
             matches!(target.window_handle(), Err(HandleError::Unavailable)),
             "a closed window's target hands out no handle"
@@ -557,7 +642,10 @@ mod cases {
             let proxy = owner.proxy();
             let handler = RecordingWindowHandler::new();
             let window = owner
-                .open_window(WindowOptions::default().with_visible(false), Rc::clone(&handler) as _)?
+                .open_window(
+                    WindowOptions::default().with_visible(false),
+                    Rc::clone(&handler) as _,
+                )?
                 .try_ready()?;
             let quit = proxy.clone();
             handler.react_to_frame(move |_| {

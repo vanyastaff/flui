@@ -199,8 +199,10 @@ trait depends on `flui-platform` instead.
   `NSApplication`'s loop with the owner lane and the wake pump (`macos`) and
   `UIApplicationMain` with its delegates and scenes (`ios`); `owner::android`
   the looper over `android-activity`, the JNI `FluiView` and the NDK lookup;
-  `owner::web` the `requestAnimationFrame` loop; `owner::winit` winit's
-  `ApplicationHandler`; `owner::headless` the test double's owner turns. The
+  `owner::web` the `requestAnimationFrame` loop; `owner::linux::x11` the X11
+  host's loop over its libxcb connection and an eventfd doorbell;
+  `owner::winit` winit's `ApplicationHandler`; `owner::headless` the test
+  double's owner turns. The
   hosts' tables name these loops. A multiplexer of the operating system that
   serves several features dispatches through a hook declared beside it, which
   each feature's file implements and the host's table names: on Windows the
@@ -218,7 +220,7 @@ trait depends on `flui-platform` instead.
   `HostDisplays` (`observe_link`, `move_window`, `forget_link`). A
   loop keeps a feature's state the same way: each `owner` module declares one
   host trait (`WindowsHost`, `MacosHost`, `IosHost`, `AndroidHost`,
-  `WebHost`, `WinitHost`, `HeadlessHost`) whose methods the table implements
+  `WebHost`, `X11Host`, `WinitHost`, `HeadlessHost`) whose methods the table implements
   to make what the loop holds, each through a hook trait declared beside the
   loop, and the loop is the table's position for that feature, so the table
   cannot name one type and build another (the displays, the preferences and
@@ -501,7 +503,7 @@ trait depends on `flui-platform` instead.
   displays through the hook its `owner` module declares
   (`owner::<os>::HostDisplays`, on headless the snapshot itself), which the
   table fills through the owner's host trait (`WindowsHost`, `MacosHost`,
-  `IosHost`, `AndroidHost`, `WebHost`, `WinitHost`, `HeadlessHost`); the
+  `IosHost`, `AndroidHost`, `WebHost`, `X11Host`, `WinitHost`, `HeadlessHost`); the
   windows a loop opens reach the displays through the same hook, whose
   implementations hold the bodies. Every observer a display source starts for
   the loop (AppKit's and UIKit's screen notifications, Android's refresh-rate
@@ -3158,6 +3160,87 @@ The bounded Windows subprocess rows `unhandled_system_key_closes_window`,
 `deferred_system_key_preserves_window` send the system-key message through an actual
 owned HWND and dispatch the resulting native system command. These are native
 message-protocol checks, not physical keyboard input or rendered application checks.
+
+### The X11 host reads one libxcb connection on its owner thread, and its windows publish what the server holds
+
+`X11Platform` (`hosts/linux.rs`) is built on one libxcb connection
+(`owner::linux::x11::X11Connection`, x11rb's `XCBConnection`, libxcb loaded at
+run time): the windows send their requests on it, the loop reads every event
+off it, and a window's surface target names it as the window's display, so a
+renderer's surface lives on the connection its window lives on. The platform
+belongs to the thread that builds it: its window tables are owner maps of that
+thread, and `run` on another thread is refused with `PlatformError::EventLoop`.
+
+The loop (`X11Loop::run`) waits in `poll` on the connection and an eventfd
+doorbell, with no timeout but the application's wake deadline, so an idle
+application costs no CPU. The owner signal's notify, a window's redraw
+requester and an exit-policy request ring the doorbell from any thread; the
+loop reads it before anything it rang for, so a ring during a turn wakes the
+next one. A turn delivers a deadline that came due as a frame request to every
+window, by the rule `owner::wake_deadline` shares with the Win32 loop (a
+deadline no frame serviced is not delivered again until a frame ran or the
+instant changed), hands every queued event to the windows, begins the owner
+turn, delivers what the sources queued (logind and memory pressure, the
+portal's colour scheme, a change of the displays, after which every window
+reads itself again), drives the turn, delivers the frames the windows asked
+for, and asks the exit policy when a window closed or the application asked
+again. A request that waits for its reply reads events off the socket into
+libxcb's queue, where `poll` cannot see them, so the loop takes them before it
+waits; and a window that waits for a frame keeps it from waiting at all.
+
+The window (`window::linux::x11::X11Window`) publishes what the server and the
+window manager hold, never what it last asked: its content's geometry and its
+origin on the root, `_NET_FRAME_EXTENTS`, the map state, `WM_STATE` and
+`_NET_WM_STATE` (decided by `mode_of`), the input focus and
+`_NET_ACTIVE_WINDOW`, asked in one batch and then answered. The outer
+rectangle is the content's grown by the frame, in 64-bit arithmetic; the
+window's display is the one its outer rectangle overlaps most, and its scale
+that display's (`Xft.dpi`). An event that may change any fact (a configure, a
+map or unmap, a property, the focus, the visibility) publishes the snapshot
+again. What a window honours follows the window manager's support
+(`window::linux::x11::support`): with no window manager, minimize, maximize and
+fullscreen are unavailable on this device and minimizing is not observed; a
+window manager that does not list a state in `_NET_SUPPORTED` leaves that mode
+unavailable; the root's `_NET_SUPPORTED` changing revises every window's
+capabilities, so a command admitted before is superseded. The material and the
+frame-rate hint are unavailable on X11; the cursor, text input and drag source
+wait for the host's input and data-transfer parts (`NotYetOnThisHost` for the
+cursor). Commands go to the server (title, place, size, `WM_NORMAL_HINTS`,
+`_MOTIF_WM_HINTS`, map and the ICCCM withdraw) or to the window manager (the
+EWMH `_NET_WM_STATE`, `WM_CHANGE_STATE` and `_NET_ACTIVE_WINDOW` messages); a
+window not mapped yet asks its mode in its own `_NET_WM_STATE`, which the window
+manager reads as it maps it, so a window opened in a mode is mapped only once
+the property holds it. Logical numbers become 16-bit X11 coordinates and
+extents only when they are finite and fit (`window::linux::x11::placement`).
+
+A window's identity is the `WindowId` the platform mints from a checked
+counter; the X id only routes an event to the window that holds it now and is
+forgotten as the window closes, before the X window is destroyed. A close (the
+window manager's `WM_DELETE_WINDOW`, which asks the handler, or
+`WindowCommand::Close`, which does not) withdraws the window at once, delivers
+`closed`, takes the window out of the tables, and destroys the X window only in
+the completion of the delivery's clear (`WindowDelivery::clear_then`), after the
+handler and the renderer it owns are let go of; the surface target answers
+`Unavailable` from the start of that retirement.
+
+The loop's sources are the table's (`owner::linux::x11::X11Host`): the RandR
+display source of `display::linux` on a connection of its own, the Settings
+portal of `preferences::linux` and the logind and pressure sources of
+`lifecycle::linux`, each implementing the loop's hook beside the winit
+loop's; every window hands out the AT-SPI bridge of `accessibility::linux`.
+Input, text input, the clipboard and drag and drop are `Absent` in the table
+until the host's later parts fill them. Tests: the pure modules' tables
+(`what_the_window_manager_supports_is_what_a_window_honours`,
+`logical_numbers_become_x11_numbers_only_when_they_fit`,
+`an_unmapped_window_asks_its_mode_in_its_state_property`,
+`a_delivered_deadline_is_armed_again_only_after_a_frame`), and
+`tests/x11_window.rs`, a harness that starts its own Xvfb and openbox:
+`the_x11_window_conforms`, `a_decorated_window_is_placed_and_measured_by_its_frame`,
+`a_window_opened_in_a_mode_is_mapped_in_it`,
+`the_window_managers_close_asks_the_handler`,
+`a_frame_asked_for_on_another_thread_wakes_the_loop`,
+`the_loop_ends_with_its_last_window` and
+`a_wake_deadline_no_frame_serviced_is_delivered_once`.
 
 ### Linux displays come from the compositor on a connection of their own, and a winit window names its display by native number
 

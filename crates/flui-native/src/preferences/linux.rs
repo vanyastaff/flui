@@ -1,6 +1,6 @@
 //! The Linux host's system preferences: the Settings portal
 //! (`org.freedesktop.portal.Settings`) on the session bus, observed for one
-//! incarnation of the owner's loop. Every Linux host reads it; today that is
+//! incarnation of the owner's loop. Every Linux host reads it: the X11 host and
 //! the winit host.
 //!
 //! D-Bus runs on the existing background executor. The owner only reads an

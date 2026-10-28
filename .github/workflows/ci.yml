@@ -361,9 +361,11 @@ jobs:
       # tests that construct `WinitPlatform::new()` need a real (if virtual)
       # X11 connection. Unconditional install: a preinstalled xvfb-run must
       # not short-circuit the library install — winit's keyboard layer
-      # dlopens libxkbcommon-x11, which the hosted runners do not ship.
-      - name: Ensure Xvfb + xkbcommon are available (flui-native winit-backend X11 tests)
-        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends xvfb libxkbcommon-x11-0 libxkbcommon0
+      # dlopens libxkbcommon-x11, which the hosted runners do not ship. The
+      # native X11 host's window conformance (`tests/x11_window.rs`) starts an
+      # Xvfb and an openbox of its own, and its host loads libxcb at run time.
+      - name: Ensure Xvfb, openbox, libxcb + xkbcommon are available (flui-native X11 tests)
+        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends xvfb openbox libxcb1 libxkbcommon-x11-0 libxkbcommon0
 
       # The local command, so CI and a local run cannot drift. nextest gives
       # each test its own process, so a test that mutates a genuinely

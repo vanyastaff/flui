@@ -453,6 +453,12 @@ pub(crate) fn doctor(args: &DoctorArgs) -> anyhow::Result<ExitCode> {
             "apt-get install xvfb   (flui-native tests)",
             &["-h"],
         );
+        doctor.check_bin(
+            Scope::Info,
+            "openbox",
+            "apt-get install openbox   (the X11 host's window conformance, tests/x11_window.rs)",
+            &["--version"],
+        );
     }
     doctor.check_cargo_sub(
         Scope::Info,

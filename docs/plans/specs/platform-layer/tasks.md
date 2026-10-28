@@ -3438,6 +3438,89 @@ graph LR
   `checks`, `doc-strict`, `wasm-check`. WSL: clippy трёх вариантов (в том числе `-p flui-native
   --all-targets --features winit-backend` и `--all-features`), rustdoc; xvfb nextest 306 из 306
   и 353 из 353; без xvfb — 661 из 662 (прежний случай X-сервера WSLg).
+- [x] **LY82** — ветка `platform/x11`, начата на вершине LY46 `8138ab489`, перенесена на `main`
+  @ `d6e469a2b` после слияния #1927. **Хост.** `X11Platform = HostPlatform<X11>`
+  (`hosts/linux.rs`): одно соединение libxcb (`owner::linux::x11::X11Connection`, x11rb
+  `XCBConnection`, libxcb грузится при запуске — признаки `allow-unsafe-code`, `dl-libxcb`, уже
+  включённые winit, новых крейтов нет), платформа принадлежит потоку, который её построил
+  (`OwnerAffinity`; `run` на другом потоке — `PlatformError::EventLoop`). Таблица: окно
+  `X11Window`, дисплеи/предпочтения/lifecycle — `X11Loop`, доступность — `UnixAccessibility`,
+  хранилище — `UserDataDirs`; ввод, текст, clipboard, drag — `Absent` до LY83/LY84, haptics и
+  chrome — `Absent`. Хук-трейты цикла в `owner::linux::x11`: `X11Host` (`displays`, `notices`,
+  `preferences`, `host_notices`), `HostDisplays`, `PreferenceStart`/`PortalPreferences`,
+  `HostNoticeStart`/`HostNotices`, `LoopWindows`; реализации — `display::linux` (RandR на своём
+  соединении), `preferences::linux::X11Settings`, `lifecycle::linux::X11Notices` (блоки рядом с
+  winit-блоками). **Цикл.** `poll` на соединении и eventfd-звонке (`Doorbell`) без таймаута,
+  кроме дедлайна пробуждения приложения: в простое ноль CPU. Звонок читается до того, что он
+  просил (звонок во время хода будит следующий); события, оставленные ответами запросов в
+  очереди libxcb, забираются до ожидания; окно, ждущее кадра, не даёт ждать. Дедлайн — правило
+  `owner::wake_deadline` (перенесено из `owner/windows/` в `owner/`, `WakeDeadline` для цикла
+  со своим таймаутом): дедлайн, который не обслужил ни один кадр, не доставляется повторно.
+  Политика выхода спрашивается при закрытии окна и по запросу приложения; quit — через сигнал
+  владельца; `RunGuard` при выходе и раскрутке закрывает сигнал, источники, отпускает окна,
+  доставляет quit и отпускает обработчик. **Окно.** Снимок читает сервер одной пачкой
+  (геометрия, начало содержимого на корне, `_NET_FRAME_EXTENTS`, map state, `WM_STATE`,
+  `_NET_WM_STATE`, фокус ввода, `_NET_ACTIVE_WINDOW`), внешний прямоугольник — содержимое плюс
+  рамка в 64-битной арифметике, дисплей — по наибольшему перекрытию, масштаб — его (`Xft.dpi`).
+  Возможности следуют поддержке оконного менеджера (`support`): без менеджера свернуть,
+  развернуть, полный экран — `NotOnThisDevice`, свёрнутость не наблюдается; материал и
+  frame-rate hint — `NotOnThisPlatform`, курсор — `NotYetOnThisHost`. Команды: сервер (title,
+  место, размер, `WM_NORMAL_HINTS`, `_MOTIF_WM_HINTS`, map, ICCCM withdraw) или менеджер (EWMH
+  `_NET_WM_STATE`, `WM_CHANGE_STATE`, `_NET_ACTIVE_WINDOW`); окно до отображения просит режим в
+  своём `_NET_WM_STATE` (чистая `mode::with_mode`, ей теперь пользуется и зонд winit) и
+  отображается после. Логические числа в 16-битные X11 — только конечные и помещающиеся
+  (`placement`). Идентичность — `WindowId` из проверяемого счётчика; XID только маршрутизирует
+  события и забывается до уничтожения окна. Закрытие (`WM_DELETE_WINDOW` спрашивает
+  обработчик, `WindowCommand::Close` — нет): снять с экрана сразу, `closed`, убрать из таблиц,
+  уничтожить X-окно в завершении `WindowDelivery::clear_then`, после отпуска обработчика и
+  рендерера; цель поверхности (XCB-описатели) отвечает `Unavailable` с начала отставки. **Общее
+  с winit:** план открытия (`OpenPlan`, `PlacementDisplay`, `FrameInset`, `WindowShell`)
+  вынесен из `window/winit.rs` в модель `window/plan.rs`; тесты перенесены без правок.
+  **Зависимости:** `zbus`, `accesskit_unix`, `futures-util` — безусловные для Linux;
+  `accessibility::{bridge, linux}` и `os_entry` — под `target_os = "linux"`; `desktop`
+  (по умолчанию) = `["x11"]`; источники Linux (`preferences::linux`, `lifecycle::linux`,
+  `owner::{sources, watch}`) — под `any(winit-backend, x11)`. Общие правки, которые затронет
+  LY78: `Cargo.toml` (зависимости и `desktop`), `accessibility/mod.rs`, `owner/mod.rs` (модуль
+  `linux`), гейты `any(winit-backend, x11)` в `owner/`, `window/`, `preferences/`,
+  `lifecycle/`, `display/linux/mod.rs`. `current_platform` не тронут: выбор хоста — строка LY78,
+  и X11-хост без ввода (LY83) не может стать выбором по умолчанию — **решение для владельца**.
+  **Тесты** (откат проверен): чистые таблицы
+  `what_the_window_manager_supports_is_what_a_window_honours`,
+  `a_refused_command_says_where_it_is_missing`,
+  `logical_numbers_become_x11_numbers_only_when_they_fit`,
+  `the_outer_rectangle_is_the_content_grown_by_the_frame`,
+  `a_window_is_on_the_display_it_overlaps_most`, `a_window_asks_the_limits_it_was_given`,
+  `decorations_are_all_or_none`, `an_unmapped_window_asks_its_mode_in_its_state_property`,
+  `the_wait_for_a_deadline_rounds_up_to_the_millisecond`,
+  `a_delivered_deadline_is_armed_again_only_after_a_frame` (с всегда взводимым дедлайном
+  падает), `x11_windows_hand_out_the_at_spi_bridge` (с `Absent` падает). `tests/x11_window.rs`
+  — свой harness: запускает свой Xvfb (номер дисплея перебором от pid, `-displayfd` требует
+  записываемого `/tmp/.X11-unix`, у WSLg его нет) и openbox, ждёт, пока менеджер управляет
+  пробным окном: `the_x11_window_conforms` (conformance `flui-testing`, readback сервером,
+  `revise_capabilities` убирает `_NET_WM_STATE_FULLSCREEN` из `_NET_SUPPORTED`; с видимостью
+  без map state падает «after Hide, the window is still visible»),
+  `a_decorated_window_is_placed_and_measured_by_its_frame` (без рамки во внешнем
+  прямоугольнике падает), `a_window_opened_in_a_mode_is_mapped_in_it` (без записи режима до
+  отображения падает), `the_window_managers_close_asks_the_handler` (с закрытием без вопроса
+  падает), `a_frame_asked_for_on_another_thread_wakes_the_loop` (без звонка в запросчике
+  падает по сторожу), `the_loop_ends_with_its_last_window` (поймал дефект: хуки владельца
+  уходили в `ready`, доставка держит их слабо, и все вопросы и отчёты после `ready` шли
+  «без обработчика»; с прежним кодом падает «[Ready]»),
+  `a_wake_deadline_no_frame_serviced_is_delivered_once` (с всегда взводимым дедлайном
+  падает). CI: openbox и libxcb в установке job `test`, `xtask doctor` знает openbox,
+  `docs/testing.md`. **Документы:** ARCHITECTURE.md (раздел о X11-хосте, `X11Host` в списках),
+  `docs/platform-parity.md` (заметки, ячейки X11 остаются за winit до выбора хоста),
+  `docs/gaps.md` (записи 5 и 9), `changelog.d/platform-x11.md`.
+  Проверки: `cargo fmt`; Windows — clippy `-p flui-native -p flui-app --all-targets` обычный и с
+  `winit-backend`, nextest `flui-native` 307 из 308 (падает только trybuild
+  `owner_thread_token_has_no_default`, как на `main`; два теста реальных окон Win32 зелёные при
+  повторе), `checks`, `doc-strict`, `module-dag` (1 исключение), `globals` (57), `file-length`,
+  `markers`, `testing`, `docs-paths`, `deps`. WSL Ubuntu 24.04: clippy `-p flui-native
+  --all-targets -D warnings` обычный, `winit-backend`, `--no-default-features --features x11`,
+  `--all-features` — чисто; rustdoc `-D warnings --document-private-items` трёх вариантов;
+  nextest под xvfb (`FLUI_HEADLESS=1`, `dbus-run-session`) `--all-features` — 323 из 323,
+  `flui-native`+`flui-app` с `winit-backend` — 370 из 370. Не запускалось: `api-closure` (нет
+  nightly), `cross-typecheck`, X11 на настольном сервере с реальным менеджером, HiDPI.
 
 ## Отступление от порядка, решённое владельцем
 

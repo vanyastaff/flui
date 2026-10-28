@@ -2,9 +2,10 @@
 //! wrapper over `Arc<winit::window::Window>` carrying the platform-minted
 //! [`WindowId`], the per-window callback table, and the route its
 //! programmatic `WindowCommand::Close` takes back to the event-loop owner
-//! (`ControlSender`, crate-private); [`plan`], what the backend decides about
-//! a window before and while it exists; and [`WinitWindows`], which opens the
-//! windows the loop tracks (`owner::winit::LoopWindows`).
+//! (`ControlSender`, crate-private); and [`WinitWindows`], which opens the
+//! windows the loop tracks (`owner::winit::LoopWindows`). What the backend
+//! decides about a window before and while it exists is the window model's
+//! [`plan`](crate::window::plan), which the X11 host shares.
 
 use std::{
     cell::Cell,

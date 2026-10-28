@@ -142,8 +142,8 @@ pub(crate) mod mode {
     /// The `_NET_WM_STATE` a window not mapped yet holds to be mapped in
     /// `mode`, from the atoms it holds now (`current`): the maximized and
     /// fullscreen atoms replaced, every other kept, as EWMH has a client do for
-    /// a window the window manager does not manage yet. [`WindowMode::Normal`]
-    /// clears the mode, and so does [`WindowMode::Minimized`], which is no mode
+    /// a window the window manager does not manage yet. `WindowMode::Normal`
+    /// clears the mode, and so does `WindowMode::Minimized`, which is no mode
     /// to be mapped in (a window is minimized after it is mapped). `None` when
     /// the property already says so, or for a mode this model does not know:
     /// a write of what is there would still tell every watcher of the window

@@ -1,8 +1,8 @@
 //! What a Linux display protocol hands the snapshot, and the step that gives
 //! each output its id.
 //!
-//! Both protocol models ([`wayland_model`](super::wayland_model),
-//! [`x11_model`](super::x11_model)) end in a list of [`OutputView`]s; this
+//! Both protocol models (`wayland_model` and `x11_model`, each built with its
+//! protocol's feature) end in a list of [`OutputView`]s; this
 //! module turns that list into [`DisplayInfo`]s. An output the protocol keys
 //! gets the id of its key; an output it cannot key gets one fresh id that stays
 //! its own while the native object it stands for exists.

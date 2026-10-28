@@ -151,7 +151,9 @@ The first three are `cargo xtask gate`, the non-test half. Locally, `checks`
 skips typos, taplo or lychee with a message when they are not installed; CI
 passes `--strict`, which makes a missing one a failure. The flui-native step
 of `test` needs `xvfb-run` on Linux (`apt install xvfb`), runs without it on
-Windows, and is skipped with a message on macOS.
+Windows, and is skipped with a message on macOS. Its `x11_window` harness, the
+native X11 host's window conformance, starts an Xvfb and an openbox of its own
+and needs `openbox` too (`apt install openbox`).
 
 xtask does not schedule its commands. On a host shared by several agents and
 checkouts, [heli](https://github.com/vanyastaff/heli) does: every cargo, the
