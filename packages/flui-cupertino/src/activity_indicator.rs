@@ -11,7 +11,7 @@
 
 use std::any::Any;
 use std::f64::consts::TAU;
-use std::sync::Arc;
+use std::rc::Rc;
 use std::time::Duration;
 
 use flui_sdk::animation::{
@@ -102,7 +102,7 @@ impl Phases {
 /// controller and its registration with the ambient [`Vsync`](flui_sdk::animation::Vsync).
 pub struct CupertinoActivityIndicatorState {
     controller: DrivenController,
-    phases: Arc<Phases>,
+    phases: Rc<Phases>,
 }
 
 impl std::fmt::Debug for CupertinoActivityIndicatorState {
@@ -121,7 +121,7 @@ impl StatefulView for CupertinoActivityIndicator {
             controller: AnimationController::builder(CYCLE)
                 .debug_label("CupertinoActivityIndicator")
                 .build_on(None),
-            phases: Arc::new(Phases::new()),
+            phases: Rc::new(Phases::new()),
         }
     }
 }
@@ -147,7 +147,7 @@ impl ViewState<CupertinoActivityIndicator> for CupertinoActivityIndicatorState {
         let painter = TickPainter {
             controller: (self.controller.is_bound() && enabled && !reduced)
                 .then(|| self.controller.controller().clone()),
-            phases: Arc::clone(&self.phases),
+            phases: Rc::clone(&self.phases),
             color: TICK_COLOR.resolve_from(ctx),
         };
         Semantics::new()
@@ -168,7 +168,7 @@ impl ViewState<CupertinoActivityIndicator> for CupertinoActivityIndicatorState {
 #[derive(Debug)]
 struct TickPainter {
     controller: Option<AnimationController>,
-    phases: Arc<Phases>,
+    phases: Rc<Phases>,
     color: Color,
 }
 
@@ -207,14 +207,14 @@ impl CustomPainter for TickPainter {
         old.as_any().downcast_ref::<Self>().is_none_or(|old| {
             old.color != self.color
                 || old.controller.is_some() != self.controller.is_some()
-                || !Arc::ptr_eq(&old.phases, &self.phases)
+                || !Rc::ptr_eq(&old.phases, &self.phases)
         })
     }
 
-    fn repaint(&self) -> Option<std::rc::Rc<dyn Listenable>> {
+    fn repaint(&self) -> Option<Rc<dyn Listenable>> {
         self.controller
             .as_ref()
-            .map(|controller| std::rc::Rc::new(controller.clone()) as std::rc::Rc<dyn Listenable>)
+            .map(|controller| Rc::new(controller.clone()) as Rc<dyn Listenable>)
     }
 
     fn as_any(&self) -> &dyn Any {

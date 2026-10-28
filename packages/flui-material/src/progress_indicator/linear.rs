@@ -10,7 +10,7 @@
 //! so the bars move by repaint, never by rebuild.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::rc::Rc;
 use std::time::Duration;
 
 use flui_sdk::animation::{
@@ -138,7 +138,7 @@ impl Bars {
 /// indicator is indeterminate.
 pub struct LinearProgressIndicatorState {
     controller: DrivenController,
-    bars: Arc<Bars>,
+    bars: Rc<Bars>,
     vsync: Option<Vsync>,
     /// The current configuration, used when the ambient registry changes.
     indeterminate: bool,
@@ -161,7 +161,7 @@ impl StatefulView for LinearProgressIndicator {
             controller: AnimationController::builder(CYCLE)
                 .debug_label("ProgressIndicator")
                 .build_on(None),
-            bars: Arc::new(Bars::new()),
+            bars: Rc::new(Bars::new()),
             vsync: None,
             indeterminate: self.value.is_none(),
             fraction: Fraction::new(self.value),
@@ -207,7 +207,7 @@ impl ViewState<LinearProgressIndicator> for LinearProgressIndicatorState {
                 None if !self.controller.is_bound() || !moves(ctx) => Progress::StaticIndeterminate,
                 None => Progress::AnimatedIndeterminate {
                     controller: self.controller.controller().clone(),
-                    bars: Arc::clone(&self.bars),
+                    bars: Rc::clone(&self.bars),
                 },
             },
             track: colors.secondary_container,
@@ -245,7 +245,7 @@ enum Progress {
     /// Two bars at the controller's progress through the cycle.
     AnimatedIndeterminate {
         controller: AnimationController,
-        bars: Arc<Bars>,
+        bars: Rc<Bars>,
     },
 }
 
@@ -311,17 +311,15 @@ impl CustomPainter for BarPainter {
                 (
                     Progress::AnimatedIndeterminate { bars: a, .. },
                     Progress::AnimatedIndeterminate { bars: b, .. },
-                ) => !Arc::ptr_eq(a, b),
+                ) => !Rc::ptr_eq(a, b),
                 _ => true,
             }
     }
 
-    fn repaint(&self) -> Option<std::rc::Rc<dyn Listenable>> {
+    fn repaint(&self) -> Option<Rc<dyn Listenable>> {
         match &self.progress {
             Progress::Determinate(_) | Progress::StaticIndeterminate => None,
-            Progress::AnimatedIndeterminate { controller, .. } => {
-                Some(std::rc::Rc::new(controller.clone()))
-            }
+            Progress::AnimatedIndeterminate { controller, .. } => Some(Rc::new(controller.clone())),
         }
     }
 

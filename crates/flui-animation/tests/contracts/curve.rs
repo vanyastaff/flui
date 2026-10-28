@@ -746,8 +746,10 @@ impl Curve for CountingCurve {
 fn erased_custom_curve_holds_owner_local_state() {
     let evaluations = std::rc::Rc::new(std::cell::Cell::new(0));
     let curve = SharedCurve::new(CountingCurve(evaluations.clone()));
-    assert_eq!(curve.clone().transform(0.5), 0.25);
+    let clone = curve.clone();
+    assert_eq!(clone.transform(0.5), 0.25);
     assert_eq!(evaluations.get(), 1, "the clone evaluates the shared curve");
+    assert_eq!(clone, curve, "clones share one curve");
 }
 
 fn erased_curves_evaluate_like_the_curve() {
