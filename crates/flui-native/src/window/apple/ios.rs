@@ -770,6 +770,7 @@ impl IOSWindow {
             marker: mtm,
             signal,
             chrome: Arc::new(IOSSystemChrome(Arc::clone(&status_bar))),
+            delivery: Arc::downgrade(&delivery),
         };
         let facets = positions.for_window(&this);
         let _ = view.ivars().text.set(Arc::clone(&facets.text));
