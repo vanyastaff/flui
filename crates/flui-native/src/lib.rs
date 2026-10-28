@@ -430,7 +430,7 @@ pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {
             wayland: cfg!(feature = "wayland"),
             winit: cfg!(feature = "winit-backend"),
         };
-        match choose_linux_host(display::linux::protocol::Protocol::current(), built) {
+        match choose_linux_host(&display::linux::protocol::Environment::current(), built) {
             Ok(LinuxHost::Winit) => start_winit(),
             Ok(LinuxHost::Wayland) => start_wayland(),
             Err(message) => Err(PlatformError::Init { message }),
@@ -547,8 +547,9 @@ enum LinuxHost {
 }
 
 /// The host [`current_platform`] starts on Linux, chosen at run time from the
-/// session's protocol (`session`, as winit reads the environment) and the hosts
-/// the build carries.
+/// session `environment` names, by the one rule every Linux connection to a
+/// compositor follows (`display::linux::protocol`), and the hosts the build
+/// carries.
 ///
 /// The winit host is chosen whenever it is built: the native hosts do not
 /// carry input yet, and `flui-app` builds winit on Linux until they do
@@ -556,7 +557,7 @@ enum LinuxHost {
 /// host; an X11 session has no native host yet.
 #[cfg(any(target_os = "linux", test))]
 fn choose_linux_host(
-    session: Option<display::linux::protocol::Protocol>,
+    environment: &display::linux::protocol::Environment,
     built: LinuxHosts,
 ) -> Result<LinuxHost, String> {
     use display::linux::protocol::Protocol;
@@ -564,8 +565,17 @@ fn choose_linux_host(
     if built.winit {
         return Ok(LinuxHost::Winit);
     }
-    match session {
+    let inherited = environment
+        .wayland_socket
+        .as_deref()
+        .is_some_and(|socket| !socket.is_empty());
+    match Protocol::from_environment(environment) {
         Some(Protocol::Wayland) if built.wayland => Ok(LinuxHost::Wayland),
+        None if inherited => Err(
+            "only WAYLAND_SOCKET is set: the Wayland host connects to the socket WAYLAND_DISPLAY \
+             names, as its display source does"
+                .to_owned(),
+        ),
         Some(Protocol::Wayland) => Err(
             "the session is Wayland and the Wayland host is not built: enable the `wayland` \
              feature (part of `desktop`)"
@@ -577,8 +587,8 @@ fn choose_linux_host(
                 .to_owned(),
         ),
         None => Err(
-            "neither WAYLAND_DISPLAY nor DISPLAY is set: there is no display server to open \
-             windows on (FLUI_HEADLESS=1 selects the headless host)"
+            "neither WAYLAND_DISPLAY names a socket nor DISPLAY is set: there is no display server \
+             to open windows on (FLUI_HEADLESS=1 selects the headless host)"
                 .to_owned(),
         ),
     }
@@ -626,11 +636,23 @@ pub fn android_platform(app: android_activity::AndroidApp) -> Box<dyn Platform> 
 #[cfg(test)]
 mod linux_host_tests {
     use super::{LinuxHost, LinuxHosts, choose_linux_host};
-    use crate::display::linux::protocol::Protocol;
+    use crate::display::linux::protocol::Environment;
+
+    fn session(wayland: &str, socket: &str, display: &str) -> Environment {
+        let some = |text: &str| Some(text.to_owned());
+        Environment {
+            wayland_display: some(wayland),
+            wayland_socket: some(socket),
+            display: some(display),
+            runtime_dir: some("/run/user/1000"),
+        }
+    }
 
     /// The Linux host is chosen at run time from the session: winit while it
-    /// is built, the native Wayland host for a Wayland session otherwise, and
-    /// an error that says what is missing where neither fits.
+    /// is built, the native Wayland host for a Wayland session it can reach
+    /// otherwise, and an error that says what is missing where neither fits.
+    /// An inherited descriptor (`WAYLAND_SOCKET`) is no socket the host and
+    /// its display source can both connect to.
     #[test]
     fn the_linux_host_follows_the_session() {
         let native = LinuxHosts {
@@ -645,24 +667,20 @@ mod linux_host_tests {
             wayland: false,
             winit: false,
         };
+        let wayland = session("wayland-0", "", ":0");
+        assert_eq!(choose_linux_host(&wayland, native), Ok(LinuxHost::Wayland));
+        assert_eq!(choose_linux_host(&wayland, both), Ok(LinuxHost::Winit));
         assert_eq!(
-            choose_linux_host(Some(Protocol::Wayland), native),
-            Ok(LinuxHost::Wayland)
-        );
-        assert_eq!(
-            choose_linux_host(Some(Protocol::Wayland), both),
+            choose_linux_host(&session("", "", ""), both),
             Ok(LinuxHost::Winit)
         );
-        assert_eq!(choose_linux_host(None, both), Ok(LinuxHost::Winit));
-        for (session, built) in [
-            (Some(Protocol::X11), native),
-            (None, native),
-            (Some(Protocol::Wayland), none),
+        for (case, environment, built) in [
+            ("an X11 session", session("", "", ":0"), native),
+            ("no session", session("", "", ""), native),
+            ("only an inherited descriptor", session("", "7", ""), native),
+            ("Wayland, the host not built", wayland, none),
         ] {
-            assert!(
-                choose_linux_host(session, built).is_err(),
-                "{session:?} with {built:?}"
-            );
+            assert!(choose_linux_host(&environment, built).is_err(), "{case}");
         }
     }
 }

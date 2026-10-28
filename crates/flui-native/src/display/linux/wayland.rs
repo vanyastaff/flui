@@ -45,7 +45,7 @@ use super::source::LinuxDisplays;
 use super::view::OutputView;
 use super::wayland_model::{OutputEvent, WaylandOutputs};
 use crate::error::PlatformError;
-use crate::owner::linux::wayland::{OutputFacts, WaylandDisplays};
+use crate::owner::linux::wayland::{OutputFacts, OutputName, WaylandDisplays};
 use crate::owner::notices::StaleOnWake;
 use crate::owner::signal::OwnerSignal;
 use crate::owner::watch::Watch;
@@ -85,9 +85,11 @@ impl WaylandDisplays for WaylandDisplaySource {
         self.native.snapshot()
     }
 
-    fn output(&self, name: u32) -> Option<OutputFacts> {
+    fn output(&self, output: OutputName) -> Option<OutputFacts> {
         let snapshot = self.native.snapshot().ok()?;
-        let display = self.native.display_of_native(Protocol::Wayland, name)?;
+        let display = self
+            .native
+            .display_of_native(Protocol::Wayland, output.get())?;
         let info = snapshot.displays().iter().find(|info| info.id == display)?;
         Some(OutputFacts {
             display,

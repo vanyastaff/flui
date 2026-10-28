@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use crate::accessibility::linux::UnixAccessibility;
+use crate::display::linux::protocol::Environment;
 use crate::display::linux::wayland::WaylandDisplaySource;
 use crate::error::PlatformError;
 use crate::executor::BackgroundExecutor;
@@ -78,13 +79,24 @@ impl WaylandHost for Wayland {
 pub type WaylandPlatform = HostPlatform<Wayland>;
 
 impl HostPlatform<Wayland> {
-    /// Connect to the compositor. The calling thread owns the platform: it
-    /// opens the windows and runs the loop.
+    /// Connect to the compositor whose socket `WAYLAND_DISPLAY` names, the
+    /// one the display source reads too. The calling thread owns the
+    /// platform: it opens the windows and runs the loop.
     ///
     /// # Errors
-    /// [`PlatformError::Init`] when no compositor answers, libwayland cannot be
-    /// loaded, or the compositor lacks the globals a window needs.
+    /// [`PlatformError::Init`] when `WAYLAND_DISPLAY` names no socket, no
+    /// compositor answers on it, libwayland cannot be loaded, or the
+    /// compositor lacks the globals a window needs.
     pub fn new() -> Result<Self, PlatformError> {
-        Self::try_from_parts(WaylandWindows::new, |_| WaylandLoop::new::<Wayland>())
+        let socket = Environment::current()
+            .wayland_socket_path()
+            .ok_or_else(|| PlatformError::Init {
+                message: "Wayland: WAYLAND_DISPLAY names no socket (a bare name needs \
+                          XDG_RUNTIME_DIR)"
+                    .to_owned(),
+            })?;
+        Self::try_from_parts(WaylandWindows::new, |_| {
+            WaylandLoop::new::<Wayland>(&socket)
+        })
     }
 }

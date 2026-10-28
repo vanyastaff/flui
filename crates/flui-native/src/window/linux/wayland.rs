@@ -296,12 +296,13 @@ pub(crate) mod configure {
             self.states
         }
 
-        /// Take a configure of `width` by `height` (zero: the client decides)
-        /// with `states`. A window the compositor sizes takes the size it is
-        /// given; one in normal mode takes a size asked for meanwhile, else
-        /// the compositor's suggestion within `constraints`, else returns to
-        /// the size it had in normal mode. Returns whether the content size
-        /// changed.
+        /// Take a configure of `width` by `height` with `states`. Each axis
+        /// is zero on its own where the compositor leaves it to the client
+        /// (xdg-shell), and keeps the window's own extent. A window the
+        /// compositor sizes takes the size it is given; one in normal mode
+        /// takes a size asked for meanwhile, else the compositor's suggestion
+        /// within `constraints`, else returns to the size it had in normal
+        /// mode. Returns whether the content size changed.
         pub(crate) fn configure(
             &mut self,
             width: i32,
@@ -310,18 +311,28 @@ pub(crate) mod configure {
             constraints: SizeConstraints,
         ) -> bool {
             let before = self.content;
-            let suggested =
-                (width > 0 && height > 0).then(|| Size::new(f64::from(width), f64::from(height)));
+            let given = |extent: i32, own: f64| {
+                if extent > 0 { f64::from(extent) } else { own }
+            };
+            let suggested = width > 0 || height > 0;
+            // The extents the window falls back on: the normal size once the
+            // compositor lets go of it, its current size otherwise.
+            let own = if self.states.sized_by_compositor() && !states.sized_by_compositor() {
+                self.normal
+            } else {
+                self.content
+            };
             if states.sized_by_compositor() {
-                if let Some(size) = suggested {
-                    self.content = size;
-                }
+                self.content = Size::new(given(width, own.width), given(height, own.height));
             } else if let Some(size) = self.pending.take() {
                 self.content = clamp(size, constraints);
-            } else if let Some(size) = suggested {
-                self.content = clamp(size, constraints);
-            } else if self.states.sized_by_compositor() {
-                self.content = self.normal;
+            } else if suggested {
+                self.content = clamp(
+                    Size::new(given(width, own.width), given(height, own.height)),
+                    constraints,
+                );
+            } else {
+                self.content = own;
             }
             if !states.sized_by_compositor() {
                 self.normal = self.content;
@@ -453,6 +464,31 @@ pub(crate) mod configure {
             assert_eq!(sizing.content(), Size::new(1920.0, 1080.0));
         }
 
+        /// Each axis of a configure is zero on its own: the window keeps its
+        /// own extent on that axis and takes the other.
+        #[test]
+        fn a_configure_axis_left_to_the_window_keeps_its_extent() {
+            let none = SizeConstraints::NONE;
+            let normal = ToplevelStates::default();
+            let maximized = ToplevelStates {
+                maximized: true,
+                ..ToplevelStates::default()
+            };
+            let mut sizing = Sizing::new(Size::new(640.0, 480.0));
+            assert!(sizing.configure(800, 0, normal, none));
+            assert_eq!(sizing.content(), Size::new(800.0, 480.0));
+            assert!(sizing.configure(0, 300, normal, none));
+            assert_eq!(sizing.content(), Size::new(800.0, 300.0));
+            assert!(sizing.configure(1920, 0, maximized, none));
+            assert_eq!(sizing.content(), Size::new(1920.0, 300.0));
+            assert!(sizing.configure(0, 0, normal, none));
+            assert_eq!(
+                sizing.content(),
+                Size::new(800.0, 300.0),
+                "the normal size back"
+            );
+        }
+
         /// The capabilities follow what the compositor announces, and a
         /// command the client can never carry out on Wayland, or that this
         /// host does not carry out yet, is refused with its own reason.
@@ -518,6 +554,79 @@ pub(crate) mod configure {
     }
 }
 
+pub(crate) mod frame {
+    //! When a Wayland window delivers the frame it was asked for: once the
+    //! compositor has shown the last one (its frame callback's `done`), or
+    //! once that callback is given up.
+    //!
+    //! The raster thread arms the callback just before it presents, and the
+    //! present's commit carries it to the compositor. A present that is
+    //! skipped (an outdated surface, a zero size) commits nothing, so its
+    //! callback never comes: after [`CALLBACK_GRACE`] the window stops waiting
+    //! for it. A window the compositor does not draw sends no `done` either;
+    //! it is then asked for a frame at most once per grace.
+
+    #![forbid(unsafe_code)]
+
+    use std::time::Duration;
+
+    use web_time::Instant;
+
+    /// How long a window waits for a frame callback before it gives it up.
+    pub(crate) const CALLBACK_GRACE: Duration = Duration::from_secs(1);
+
+    /// Whether a callback armed at `armed` still holds the next frame back.
+    pub(crate) fn waiting_on_callback(armed: Option<Instant>, now: Instant) -> bool {
+        armed.is_some_and(|armed| now < armed + CALLBACK_GRACE)
+    }
+
+    /// When a window with a frame asked for gives up a callback armed at
+    /// `armed`; `None` with nothing armed or nothing asked for.
+    pub(crate) fn gives_up_at(armed: Option<Instant>, asked: bool) -> Option<Instant> {
+        armed.filter(|_| asked).map(|armed| armed + CALLBACK_GRACE)
+    }
+
+    /// The first output in `entered` (the order a surface entered them) the
+    /// compositor still announces: one removed while the surface was on it
+    /// sends the surface no `leave`.
+    pub(crate) fn first_live<T: Copy>(entered: &[T], live: impl Fn(T) -> bool) -> Option<T> {
+        entered.iter().copied().find(|output| live(*output))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// A frame waits on the callback its present armed until the
+        /// compositor answers or the grace runs out; a present that committed
+        /// nothing never holds the window for longer.
+        #[test]
+        fn a_lost_frame_callback_holds_the_window_for_its_grace_only() {
+            let now = Instant::now();
+            let ms = Duration::from_millis;
+            assert!(!waiting_on_callback(None, now), "nothing armed");
+            assert!(waiting_on_callback(Some(now), now), "just armed");
+            assert!(waiting_on_callback(now.checked_sub(ms(900)), now));
+            assert!(
+                !waiting_on_callback(now.checked_sub(CALLBACK_GRACE), now),
+                "given up at the grace"
+            );
+            assert_eq!(gives_up_at(Some(now), true), Some(now + CALLBACK_GRACE));
+            assert_eq!(gives_up_at(Some(now), false), None, "no frame asked for");
+            assert_eq!(gives_up_at(None, true), None);
+        }
+
+        /// A surface is on the first output it entered that still exists.
+        #[test]
+        fn a_removed_output_names_no_display() {
+            let live = |output: u32| output != 7;
+            assert_eq!(first_live(&[7, 9], live), Some(9));
+            assert_eq!(first_live(&[7], live), None);
+            assert_eq!(first_live::<u32>(&[], live), None);
+        }
+    }
+}
+
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 mod toplevel {
     use std::cell::{Cell, RefCell};
@@ -549,15 +658,18 @@ mod toplevel {
     use wayland_protocols::xdg::shell::client::xdg_surface::{self, XdgSurface};
     use wayland_protocols::xdg::shell::client::xdg_toplevel::{self, XdgToplevel};
 
+    use web_time::Instant;
+
     use super::configure::{
         Sizing, ToplevelStates, WmCapabilities, capabilities, clamp, protocol_extent,
     };
+    use super::frame::{first_live, gives_up_at, waiting_on_callback};
     use crate::host::{self, WindowFacets, WindowPositions};
     use crate::host_window::{CoreHostWindow, HostWindow, OwnerThreadToken};
     use crate::owner::OpenWindowError;
     use crate::owner::linux::wayland::{
-        LoopWaker, LoopWindow, PortalSlot, WaylandDisplays, WaylandLoop, WaylandState, WindowSeed,
-        WindowTable,
+        LiveOutputs, LoopWaker, LoopWindow, OutputName, PortalSlot, WaylandDisplays, WaylandLoop,
+        WaylandState, WindowSeed, WindowTable,
     };
     use crate::owner::window_delivery::{Publication, Retirement, WindowDelivery};
     use crate::text::WindowTextInput;
@@ -571,9 +683,10 @@ mod toplevel {
         protocol: Mutex<Told>,
         /// A frame was asked for.
         redraw: AtomicBool,
-        /// A frame callback is out: the compositor has not shown the last
-        /// frame yet, and the next waits for it.
-        frame_pending: AtomicBool,
+        /// When the frame callback that is out was armed: the compositor has
+        /// not shown the last frame yet, and the next waits for it, for the
+        /// grace at most (`frame::CALLBACK_GRACE`).
+        callback_armed: Mutex<Option<Instant>>,
         /// The handler granted a close request it was asked after the fact.
         close_granted: AtomicBool,
     }
@@ -588,12 +701,19 @@ mod toplevel {
         size: (i32, i32),
         /// The states of the last toplevel configure.
         states: ToplevelStates,
+        /// The last toplevel configure's states as the protocol sent them,
+        /// before they were decoded.
+        #[cfg(any(test, feature = "testing"))]
+        raw_states: Vec<u8>,
+        /// How many `xdg_surface.configure` events came.
+        #[cfg(any(test, feature = "testing"))]
+        configures: u32,
         /// A complete configure, waiting to be acknowledged.
         configure: Option<Configure>,
         /// The compositor asked the window to close.
         close_requested: bool,
-        /// The outputs the surface is on, by global, in the order entered.
-        outputs: Vec<u32>,
+        /// The outputs the surface is on, in the order entered.
+        outputs: Vec<OutputName>,
         /// The buffer scale the compositor prefers for the surface.
         preferred_scale: Option<i32>,
         /// What the compositor lets the toplevel do.
@@ -614,7 +734,7 @@ mod toplevel {
             Self {
                 protocol: Mutex::new(Told::default()),
                 redraw: AtomicBool::new(false),
-                frame_pending: AtomicBool::new(false),
+                callback_armed: Mutex::new(None),
                 close_granted: AtomicBool::new(false),
             }
         }
@@ -658,16 +778,11 @@ mod toplevel {
     }
 
     /// One window as its window-level positions are made for it
-    /// (`host::Window::Ref`): its surface. Public where it is defined, as the
-    /// host's table names it, and nameable only inside the crate.
-    pub struct SurfaceRef {
-        /// The window's surface.
-        #[expect(
-            dead_code,
-            reason = "no window-level position of the Wayland table reads the surface yet"
-        )]
-        surface: WlSurface,
-    }
+    /// (`host::Window::Ref`). No position of the Wayland table needs anything
+    /// of the window yet, so it carries nothing; the text and drag positions
+    /// add what they read. Public where it is defined, as the host's table
+    /// names it, and nameable only inside the crate.
+    pub struct SurfaceRef(());
 
     impl std::fmt::Debug for SurfaceRef {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -707,6 +822,7 @@ mod toplevel {
         table: Weak<WindowTable>,
         waker: Weak<LoopWaker>,
         viewported: bool,
+        live: LiveOutputs,
         applied: RefCell<Applied>,
         closed: Cell<bool>,
         /// What a test draws the window's frames with.
@@ -727,6 +843,7 @@ mod toplevel {
         applied: &'a Applied,
         displays: &'a dyn WaylandDisplays,
         portal: &'a PortalSlot,
+        live: &'a LiveOutputs,
         hovered: bool,
         viewported: bool,
         closed: bool,
@@ -735,11 +852,8 @@ mod toplevel {
     impl Sample<'_> {
         fn state(&self) -> WindowState {
             let applied = self.applied;
-            let output = applied
-                .told
-                .outputs
-                .first()
-                .and_then(|name| self.displays.output(*name));
+            let entered = first_live(&applied.told.outputs, |output| self.live.contains(output));
+            let output = entered.and_then(|output| self.displays.output(output));
             // The viewport lets the buffer be drawn at any scale; without it
             // the buffer is the surface's size.
             let scale = if self.viewported {
@@ -761,10 +875,7 @@ mod toplevel {
                 // configured window with a frame) enters an output, and one it
                 // does not draw is suspended.
                 .with_visible(
-                    applied.configured
-                        && !applied.told.outputs.is_empty()
-                        && !states.suspended
-                        && !self.closed,
+                    applied.configured && entered.is_some() && !states.suspended && !self.closed,
                 )
                 .with_focused(states.activated)
                 .with_title(Some(applied.title.clone()))
@@ -854,9 +965,7 @@ mod toplevel {
             };
             let window = Rc::new(Self {
                 id,
-                facets: windows.positions.for_window(&SurfaceRef {
-                    surface: surface.0.clone(),
-                }),
+                facets: windows.positions.for_window(&SurfaceRef(())),
                 delivery: Arc::new(WindowDelivery::new(handler, InputCapabilities::UNAVAILABLE)),
                 state: Arc::new(WindowStateCell::new(WindowState::new(
                     WindowGeometry::new(None, size),
@@ -868,6 +977,7 @@ mod toplevel {
                 connection: protocol.connection,
                 queue,
                 viewported: protocol.viewporter.is_some(),
+                live: protocol.live,
                 displays,
                 portal,
                 table,
@@ -905,6 +1015,7 @@ mod toplevel {
                 applied: &applied,
                 displays: self.displays.as_ref(),
                 portal: &self.portal,
+                live: &self.live,
                 hovered: self.delivery.hovered(),
                 viewported: self.viewported,
                 closed: self.closed.get(),
@@ -930,6 +1041,13 @@ mod toplevel {
         /// turn: acknowledge a configure and take its size. No handler runs.
         /// Returns whether the compositor asked the window to close.
         fn carry_out_protocol(&self) -> bool {
+            // An output the compositor removed while the surface was on it
+            // sent no `leave`: it is left here.
+            self.record
+                .protocol
+                .lock()
+                .outputs
+                .retain(|output| self.live.contains(*output));
             let told = self.record.take();
             let close_requested = told.close_requested;
             let configure = told.configure;
@@ -1179,13 +1297,20 @@ mod toplevel {
     impl flui_platform::SurfaceTarget for WaylandSurface {
         /// Arms the surface's frame callback with the commit the present
         /// makes: the next frame the window delivers waits until the
-        /// compositor has shown this one. Returns at once; one callback is
-        /// out at a time.
+        /// compositor has shown this one, or the grace after which a present
+        /// that never committed is given up (`frame::CALLBACK_GRACE`). Returns
+        /// at once; one callback is out at a time.
         fn pre_present_notify(&self) {
-            if self.retirement.is_retired()
-                || self.record.frame_pending.swap(true, Ordering::AcqRel)
-            {
+            if self.retirement.is_retired() {
                 return;
+            }
+            let now = Instant::now();
+            {
+                let mut armed = self.record.callback_armed.lock();
+                if waiting_on_callback(*armed, now) {
+                    return;
+                }
+                *armed = Some(now);
             }
             let _callback = self.surface.0.frame(&self.queue, Arc::clone(&self.record));
         }
@@ -1422,6 +1547,9 @@ mod toplevel {
             }
             if self.frame_due() {
                 self.record.redraw.store(false, Ordering::Release);
+                // A callback past its grace is given up: the present that
+                // armed it committed nothing.
+                *self.record.callback_armed.lock() = None;
                 self.delivery.dispatch_request_frame();
             }
         }
@@ -1430,7 +1558,17 @@ mod toplevel {
             !self.closed.get()
                 && self.applied.borrow().configured
                 && self.record.redraw.load(Ordering::Acquire)
-                && !self.record.frame_pending.load(Ordering::Acquire)
+                && !waiting_on_callback(*self.record.callback_armed.lock(), Instant::now())
+        }
+
+        fn frame_wait(&self) -> Option<Instant> {
+            if self.closed.get() {
+                return None;
+            }
+            gives_up_at(
+                *self.record.callback_armed.lock(),
+                self.record.redraw.load(Ordering::Acquire),
+            )
         }
 
         fn request_frame(&self) {
@@ -1512,14 +1650,14 @@ mod toplevel {
             let mut told = record.protocol.lock();
             match event {
                 wl_surface::Event::Enter { output } => {
-                    if let Some(name) = output.data::<u32>()
+                    if let Some(name) = output.data::<OutputName>()
                         && !told.outputs.contains(name)
                     {
                         told.outputs.push(*name);
                     }
                 }
                 wl_surface::Event::Leave { output } => {
-                    if let Some(name) = output.data::<u32>() {
+                    if let Some(name) = output.data::<OutputName>() {
                         told.outputs.retain(|entered| entered != name);
                     }
                 }
@@ -1544,6 +1682,10 @@ mod toplevel {
                 let mut told = record.protocol.lock();
                 let last = told.states;
                 let (width, height, states) = told.toplevel.take().unwrap_or((0, 0, last));
+                #[cfg(any(test, feature = "testing"))]
+                {
+                    told.configures = told.configures.saturating_add(1);
+                }
                 told.configure = Some(Configure {
                     serial,
                     width,
@@ -1570,7 +1712,12 @@ mod toplevel {
                     height,
                     states,
                 } => {
-                    let states = ToplevelStates::decode(&states);
+                    let decoded = ToplevelStates::decode(&states);
+                    #[cfg(any(test, feature = "testing"))]
+                    {
+                        told.raw_states = states;
+                    }
+                    let states = decoded;
                     told.states = states;
                     told.size = (width, height);
                     told.toplevel = Some((width, height, states));
@@ -1594,7 +1741,7 @@ mod toplevel {
             _: &QueueHandle<Self>,
         ) {
             if let wl_callback::Event::Done { .. } = event {
-                record.frame_pending.store(false, Ordering::Release);
+                *record.callback_armed.lock() = None;
             }
         }
     }
@@ -1612,36 +1759,36 @@ mod toplevel {
         }
     }
 
-    /// What the compositor said of a window, for a test that reads it apart
-    /// from the window's snapshot.
+    /// What the compositor sent a window, as the protocol carried it and
+    /// before the window decoded it, for a test that reads it apart from the
+    /// window's snapshot.
     #[cfg(any(test, feature = "testing"))]
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone)]
     pub(crate) struct CompositorSaid {
-        /// The size the last configure gave, `0` where it left the size to
-        /// the window.
+        /// The size the last toplevel configure gave, `0` where it left an
+        /// axis to the window.
         pub(crate) size: (i32, i32),
-        /// The states the last configure named.
-        pub(crate) states: ToplevelStates,
-        /// The window acknowledged a configure.
-        pub(crate) configured: bool,
+        /// The last toplevel configure's states array, undecoded.
+        pub(crate) raw_states: Vec<u8>,
+        /// How many `xdg_surface.configure` events came.
+        pub(crate) configures: u32,
         /// The buffer scale the compositor prefers for the surface.
         pub(crate) preferred_scale: Option<i32>,
-        /// The output the surface entered first, by global.
-        pub(crate) output: Option<u32>,
+        /// The globals of the outputs the surface entered and has not left.
+        pub(crate) outputs: Vec<u32>,
     }
 
     #[cfg(any(test, feature = "testing"))]
     impl WaylandWindow {
-        /// What the compositor said of the window, as its last turn
-        /// recorded it.
+        /// What the compositor sent the window so far.
         pub(crate) fn compositor_said(&self) -> CompositorSaid {
-            let applied = self.applied.borrow();
+            let told = self.record.protocol.lock();
             CompositorSaid {
-                size: applied.told.size,
-                states: applied.told.states,
-                configured: applied.configured,
-                preferred_scale: applied.told.preferred_scale,
-                output: applied.told.outputs.first().copied(),
+                size: told.size,
+                raw_states: told.raw_states.clone(),
+                configures: told.configures,
+                preferred_scale: told.preferred_scale,
+                outputs: told.outputs.iter().map(|output| output.get()).collect(),
             }
         }
 

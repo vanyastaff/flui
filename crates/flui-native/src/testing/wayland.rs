@@ -37,45 +37,44 @@ pub fn present(window: &dyn HostWindow) -> bool {
         .is_some_and(WaylandWindow::present_blank)
 }
 
-/// What the compositor said of a Wayland window in its configures, which the
-/// window acknowledged on its last turn.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What the compositor sent a Wayland window, as the protocol carried it:
+/// nothing here went through the window's own decoding, so a test that reads
+/// it checks the window's snapshot against the compositor, not against
+/// itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct CompositorReport {
-    /// The size the last configure gave, in logical pixels; `None` where it
-    /// left the size to the window.
-    pub size: Option<(i32, i32)>,
-    /// The compositor maximized the window.
-    pub maximized: bool,
-    /// The window covers its output.
-    pub fullscreen: bool,
-    /// The window has the compositor's activation.
-    pub activated: bool,
-    /// The compositor does not show the window.
-    pub suspended: bool,
-    /// The window acknowledged a configure.
-    pub configured: bool,
+    /// The size the last toplevel configure gave, in logical pixels; `0` on
+    /// an axis it left to the window.
+    pub size: (i32, i32),
+    /// The last toplevel configure's `xdg_toplevel.state` values, as numbered
+    /// by xdg-shell.
+    pub states: Vec<u32>,
+    /// How many `xdg_surface.configure` events came.
+    pub configures: u32,
     /// The buffer scale the compositor prefers for the window's surface.
     pub preferred_scale: Option<i32>,
-    /// The global of the output the surface entered first.
-    pub output: Option<u32>,
+    /// The globals of the outputs the surface entered and has not left.
+    pub outputs: Vec<u32>,
 }
 
-/// What the compositor said of `window`; `None` for a window of another
-/// host.
+/// What the compositor sent `window`; `None` for a window of another host.
 #[must_use]
 pub fn compositor_report(window: &dyn HostWindow) -> Option<CompositorReport> {
     let window = window.as_any().downcast_ref::<WaylandWindow>()?;
     let said = window.compositor_said();
-    let (width, height) = said.size;
     Some(CompositorReport {
-        size: (width > 0 && height > 0).then_some((width, height)),
-        maximized: said.states.maximized,
-        fullscreen: said.states.fullscreen,
-        activated: said.states.activated,
-        suspended: said.states.suspended,
-        configured: said.configured,
+        size: said.size,
+        states: said
+            .raw_states
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .copied()
+            .map(u32::from_ne_bytes)
+            .collect(),
+        configures: said.configures,
         preferred_scale: said.preferred_scale,
-        output: said.output,
+        outputs: said.outputs,
     })
 }

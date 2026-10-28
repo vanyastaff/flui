@@ -21,9 +21,15 @@ use flui_testing::window_conformance::{self, Readback, WindowFixture};
 use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
 
 /// The platform on the compositor `WAYLAND_DISPLAY` names, or `None` where
-/// there is none to run against.
+/// there is none to run against. Where `FLUI_REQUIRE_WAYLAND` is set (CI
+/// starts a headless Weston and sets it), a missing compositor fails the case
+/// instead of skipping it.
 fn platform(case: &str) -> Option<WaylandPlatform> {
     if std::env::var_os("WAYLAND_DISPLAY").is_none_or(|name| name.is_empty()) {
+        assert!(
+            std::env::var_os("FLUI_REQUIRE_WAYLAND").is_none(),
+            "{case}: FLUI_REQUIRE_WAYLAND is set and WAYLAND_DISPLAY names no compositor"
+        );
         eprintln!("{case}: skipped, WAYLAND_DISPLAY names no compositor");
         return None;
     }
@@ -105,28 +111,36 @@ impl WindowFixture for WaylandFixture {
         Rc::clone(&self.window) as Rc<dyn PlatformWindow>
     }
 
-    /// What the compositor said in the configures the window acknowledged:
-    /// the size where it sized the window itself (maximized or fullscreen), the
-    /// activation, and whether it shows the window at all. A floating window's
-    /// size is its client's, which the compositor does not report.
+    /// What the compositor sent, read here by xdg-shell's own numbering and
+    /// never through the window's decoding: the size where it sized the window
+    /// itself (maximized or fullscreen), the activation, and whether it shows
+    /// the window at all (configured, on an output, not suspended). A floating
+    /// window's size is its client's, which the compositor does not report.
     fn readback(&self) -> Readback {
+        /// `xdg_toplevel.state` values, as xdg-shell numbers them.
+        const MAXIMIZED: u32 = 1;
+        const FULLSCREEN: u32 = 2;
+        const ACTIVATED: u32 = 4;
+        const SUSPENDED: u32 = 9;
+
         let report =
             compositor_report(self.window.as_ref()).expect("the window is a Wayland window");
-        let metrics = report
-            .size
-            .filter(|_| report.maximized || report.fullscreen)
-            .and_then(|(width, height)| {
+        let has = |state: u32| report.states.contains(&state);
+        let (width, height) = report.size;
+        let metrics = (width > 0 && height > 0 && (has(MAXIMIZED) || has(FULLSCREEN)))
+            .then(|| {
                 WindowMetrics::from_logical(
                     Size::new(f64::from(width), f64::from(height)),
                     self.scale(),
                 )
                 .ok()
-            });
+            })
+            .flatten();
         Readback {
             metrics,
-            focused: report.activated,
-            active: report.activated,
-            visible: report.configured && report.output.is_some() && !report.suspended,
+            focused: has(ACTIVATED),
+            active: has(ACTIVATED),
+            visible: report.configures > 0 && !report.outputs.is_empty() && !has(SUSPENDED),
             material: None,
         }
     }
@@ -206,8 +220,9 @@ fn a_window_maximized_before_fullscreen_returns_to_normal() {
         assert_eq!(fixture.window.state().mode, mode, "after SetMode({mode:?})");
     }
     let report = compositor_report(fixture.window.as_ref()).expect("a Wayland window");
+    // xdg-shell's `maximized` (1) and `fullscreen` (2).
     assert!(
-        !report.maximized && !report.fullscreen,
+        !report.states.contains(&1) && !report.states.contains(&2),
         "the compositor still sizes the window: {report:?}"
     );
 }
@@ -249,6 +264,33 @@ fn a_redraw_from_another_thread_reaches_the_window() {
         frames(&fixture.handler),
         1,
         "the redraw asked for on another thread is one frame"
+    );
+}
+
+/// A present that is skipped (an outdated surface, a zero size) commits
+/// nothing, so the frame callback it armed never comes: the next frame waits
+/// for the callback's grace, not for good.
+#[test]
+fn a_frame_callback_no_commit_carried_is_given_up() {
+    let Some(platform) = platform("a_frame_callback_no_commit_carried_is_given_up") else {
+        return;
+    };
+    let fixture = WaylandFixture::open(platform, "a skipped present");
+    fixture.handler.take_calls();
+    // The raster side armed the callback and then presented nothing.
+    fixture.window.surface_target().pre_present_notify();
+    fixture.window.request_redraw();
+    run_for(&fixture.platform, Duration::from_millis(300)).expect("the loop turns");
+    assert_eq!(
+        frames(&fixture.handler),
+        0,
+        "the frame waits on the callback first"
+    );
+    run_for(&fixture.platform, Duration::from_millis(1200)).expect("the loop turns");
+    assert_eq!(
+        frames(&fixture.handler),
+        1,
+        "the frame is delivered once the lost callback is given up"
     );
 }
 

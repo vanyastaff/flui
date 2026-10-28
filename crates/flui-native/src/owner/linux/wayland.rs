@@ -24,8 +24,9 @@
 
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(crate) use event_loop::{
-    LoopWaker, LoopWindow, OutputFacts, PortalSlot, WaylandDisplays, WaylandHost, WaylandLoop,
-    WaylandNotices, WaylandPreferences, WaylandState, WindowSeed, WindowTable,
+    LiveOutputs, LoopWaker, LoopWindow, OutputFacts, OutputName, PortalSlot, WaylandDisplays,
+    WaylandHost, WaylandLoop, WaylandNotices, WaylandPreferences, WaylandState, WindowSeed,
+    WindowTable,
 };
 
 pub(crate) mod wait {
@@ -54,11 +55,50 @@ pub(crate) mod wait {
     pub(crate) struct LoopTurn {
         /// A window has a frame to deliver now.
         pub(crate) frame_due: bool,
+        /// The earliest instant a window gives up on a frame callback that
+        /// never came, with a frame asked for behind it.
+        pub(crate) frame_wait: Option<Instant>,
         /// The earliest instant the application's handler asked to be woken
         /// at.
         pub(crate) wake_deadline: Option<Instant>,
         /// The deadline already offered to the windows.
         pub(crate) offered: Option<Instant>,
+    }
+
+    /// How the last flush of the connection went.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum Flush {
+        /// Every request reached the socket.
+        Complete,
+        /// The socket was full: requests wait in the connection's buffer.
+        Partial,
+    }
+
+    /// What the loop does once it has dispatched and flushed, before it
+    /// would block.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum BeforePoll {
+        /// Dispatching recorded events: the windows carry them out before the
+        /// loop sleeps, so the turn ends here and the next applies them.
+        Apply,
+        /// Nothing waits to be applied: block, on the socket becoming readable
+        /// and, after a partial flush, writable, so the rest of the requests
+        /// go out.
+        Poll {
+            /// Wait for the socket to take more requests.
+            writable: bool,
+        },
+    }
+
+    /// What follows `dispatched` events and `flush` before the loop blocks.
+    pub(crate) fn before_poll(dispatched: usize, flush: Flush) -> BeforePoll {
+        if dispatched > 0 {
+            BeforePoll::Apply
+        } else {
+            BeforePoll::Poll {
+                writable: flush == Flush::Partial,
+            }
+        }
     }
 
     /// Whether the loop asks its windows for a frame for `deadline` now: it
@@ -77,15 +117,21 @@ pub(crate) mod wait {
         if turn.frame_due {
             return Some(Duration::ZERO);
         }
-        let deadline = turn.wake_deadline?;
-        if deadline > now {
-            Some(deadline.saturating_duration_since(now))
-        } else if Some(deadline) == turn.offered {
-            // Offered and waiting for a frame that serves it.
-            None
-        } else {
-            Some(Duration::ZERO)
-        }
+        let until = |instant: Instant| instant.saturating_duration_since(now);
+        let deadline = turn.wake_deadline.and_then(|deadline| {
+            if deadline > now {
+                Some(until(deadline))
+            } else if Some(deadline) == turn.offered {
+                // Offered and waiting for a frame that serves it.
+                None
+            } else {
+                Some(Duration::ZERO)
+            }
+        });
+        [deadline, turn.frame_wait.map(until)]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
     #[cfg(test)]
@@ -103,8 +149,15 @@ pub(crate) mod wait {
             let behind = now.checked_sub(ms(40));
             let turn = |frame_due, wake_deadline, offered| LoopTurn {
                 frame_due,
+                frame_wait: None,
                 wake_deadline,
                 offered,
+            };
+            let waiting = |frame_wait, wake_deadline| LoopTurn {
+                frame_due: false,
+                frame_wait,
+                wake_deadline,
+                offered: None,
             };
             for (case, turn, expected) in [
                 ("idle", turn(false, None, None), None),
@@ -148,8 +201,48 @@ pub(crate) mod wait {
                     turn(false, behind, Some(now + ms(5))),
                     Some(Duration::ZERO),
                 ),
+                (
+                    "a frame waits on a callback that may be lost",
+                    waiting(Some(now + ms(700)), None),
+                    Some(ms(700)),
+                ),
+                (
+                    "the earlier of a lost callback and a deadline",
+                    waiting(Some(now + ms(700)), Some(now + ms(100))),
+                    Some(ms(100)),
+                ),
             ] {
                 assert_eq!(poll_timeout(turn, now), expected, "{case}");
+            }
+        }
+
+        /// Events a dispatch recorded are carried out before the loop sleeps,
+        /// and a flush the socket cut short is finished when the socket takes
+        /// more: neither waits for an unrelated wake.
+        #[test]
+        fn the_loop_sleeps_only_with_nothing_to_apply_or_send() {
+            for (case, dispatched, flush, expected) in [
+                (
+                    "nothing recorded, all sent",
+                    0,
+                    Flush::Complete,
+                    BeforePoll::Poll { writable: false },
+                ),
+                (
+                    "nothing recorded, the socket full",
+                    0,
+                    Flush::Partial,
+                    BeforePoll::Poll { writable: true },
+                ),
+                ("events recorded", 3, Flush::Complete, BeforePoll::Apply),
+                (
+                    "events recorded, the socket full",
+                    1,
+                    Flush::Partial,
+                    BeforePoll::Apply,
+                ),
+            ] {
+                assert_eq!(before_poll(dispatched, flush), expected, "{case}");
             }
         }
 
@@ -197,7 +290,7 @@ mod event_loop {
     use wayland_protocols::xdg::shell::client::xdg_wm_base::{self, XdgWmBase};
     use web_time::Instant;
 
-    use super::wait::{LoopTurn, offer_now, poll_timeout};
+    use super::wait::{BeforePoll, Flush, LoopTurn, before_poll, offer_now, poll_timeout};
     use crate::error::PlatformError;
     use crate::executor::BackgroundExecutor;
     use crate::host;
@@ -260,14 +353,57 @@ mod event_loop {
         /// [`PlatformError::Displays`] when the compositor cannot be read.
         fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError>;
 
-        /// The display and scale of the output whose global is `name`, as
-        /// the last snapshot holds it; `None` for an output it does not hold
-        /// yet, which marks the snapshot stale.
-        fn output(&self, name: u32) -> Option<OutputFacts>;
+        /// The display and scale of `output`, as the last snapshot holds it;
+        /// `None` for an output it does not hold yet, which marks the
+        /// snapshot stale.
+        fn output(&self, output: OutputName) -> Option<OutputFacts>;
 
         /// Keep the outputs current, waking the owner behind `signal` when
         /// they change, until the watch is dropped.
         fn observe(self: Arc<Self>, signal: &Arc<OwnerSignal>) -> Watch;
+    }
+
+    /// An output by its global's name, which the compositor numbers alike for
+    /// every client: what a surface's `enter` names, and what the display
+    /// source keys an output by.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub(crate) struct OutputName(u32);
+
+    impl OutputName {
+        /// The output whose global is `name`.
+        pub(crate) const fn new(name: u32) -> Self {
+            Self(name)
+        }
+
+        /// The global's name.
+        pub(crate) const fn get(self) -> u32 {
+            self.0
+        }
+    }
+
+    /// The outputs the compositor announces now, which the registry keeps
+    /// current on the owner thread: an output removed while a surface was on
+    /// it sends that surface no `leave`.
+    #[derive(Clone, Default)]
+    pub(crate) struct LiveOutputs(Arc<OwnerCell<Vec<OutputName>>>);
+
+    impl LiveOutputs {
+        /// Whether `output` is still announced; `false` off the owner thread.
+        pub(crate) fn contains(&self, output: OutputName) -> bool {
+            self.0.with(|live| live.contains(&output)).unwrap_or(false)
+        }
+
+        fn add(&self, output: OutputName) {
+            self.0.with(|live| {
+                if !live.contains(&output) {
+                    live.push(output);
+                }
+            });
+        }
+
+        fn remove(&self, output: OutputName) {
+            self.0.with(|live| live.retain(|held| *held != output));
+        }
     }
 
     /// What the display snapshot says of one output.
@@ -328,6 +464,11 @@ mod event_loop {
         /// Whether the window has a frame to deliver now.
         fn frame_due(&self) -> bool;
 
+        /// When the window gives up on a frame callback that has not come,
+        /// with a frame asked for behind it: a present that was skipped never
+        /// commits the callback it armed.
+        fn frame_wait(&self) -> Option<Instant>;
+
         /// A wake deadline came due: ask the window for a frame.
         fn request_frame(&self);
 
@@ -339,7 +480,7 @@ mod event_loop {
     pub(crate) struct WindowTable {
         windows: OwnerMap<WindowId, Rc<dyn LoopWindow>>,
         /// The window the compositor last activated.
-        active: Mutex<Option<WindowId>>,
+        active: OwnerCell<Option<WindowId>>,
         /// The last window closed since the loop last looked: it asks the
         /// application's exit policy.
         emptied: AtomicBool,
@@ -351,7 +492,7 @@ mod event_loop {
         fn new() -> Self {
             Self {
                 windows: OwnerMap::new(),
-                active: Mutex::new(None),
+                active: OwnerCell::new(),
                 emptied: AtomicBool::new(false),
                 issued: AtomicU64::new(0),
             }
@@ -397,12 +538,11 @@ mod event_loop {
         /// loop asks the application's exit policy on its next turn.
         pub(crate) fn forget(&self, id: WindowId) {
             let window = self.windows.remove(&id);
-            {
-                let mut active = self.active.lock();
+            self.active.with(|active| {
                 if *active == Some(id) {
                     *active = None;
                 }
-            }
+            });
             if window.is_some() && self.windows.is_empty() {
                 self.emptied.store(true, Ordering::Release);
             }
@@ -412,16 +552,18 @@ mod event_loop {
 
         /// The compositor activated window `id`, or took the activation away.
         pub(crate) fn activation(&self, id: WindowId, activated: bool) {
-            let mut active = self.active.lock();
-            if activated {
-                *active = Some(id);
-            } else if *active == Some(id) {
-                *active = None;
-            }
+            self.active.with(|active| {
+                if activated {
+                    *active = Some(id);
+                } else if *active == Some(id) {
+                    *active = None;
+                }
+            });
         }
 
+        /// The active window; `None` off the owner thread.
         fn active(&self) -> Option<WindowId> {
-            *self.active.lock()
+            self.active.with(|active| *active).flatten()
         }
 
         fn values(&self) -> Vec<Rc<dyn LoopWindow>> {
@@ -470,7 +612,9 @@ mod event_loop {
     pub(crate) struct WaylandState {
         /// Every output the compositor announced, bound so that a surface's
         /// `enter` names it by its global.
-        outputs: Vec<(u32, WlOutput)>,
+        outputs: Vec<(OutputName, WlOutput)>,
+        /// The same outputs, as the windows read them.
+        live: LiveOutputs,
     }
 
     impl WaylandState {
@@ -481,19 +625,23 @@ mod event_loop {
             version: u32,
             queue: &QueueHandle<Self>,
         ) {
+            let name = OutputName::new(name);
             if self.outputs.iter().any(|(bound, _)| *bound == name) {
                 return;
             }
-            let output = registry.bind::<WlOutput, u32, Self>(
-                name,
+            let output = registry.bind::<WlOutput, OutputName, Self>(
+                name.get(),
                 version.min(OUTPUT_VERSION),
                 queue,
                 name,
             );
             self.outputs.push((name, output));
+            self.live.add(name);
         }
 
         fn remove_output(&mut self, name: u32) {
+            let name = OutputName::new(name);
+            self.live.remove(name);
             if let Some(index) = self.outputs.iter().position(|(bound, _)| *bound == name) {
                 let (_, output) = self.outputs.remove(index);
                 // `release` exists from version 3; below it the proxy is just
@@ -528,12 +676,12 @@ mod event_loop {
         }
     }
 
-    impl Dispatch<WlOutput, u32> for WaylandState {
+    impl Dispatch<WlOutput, OutputName> for WaylandState {
         fn event(
             _: &mut Self,
             _: &WlOutput,
             _: wl_output::Event,
-            _: &u32,
+            _: &OutputName,
             _: &Connection,
             _: &QueueHandle<Self>,
         ) {
@@ -599,6 +747,8 @@ mod event_loop {
         /// `wp_viewporter`, which sizes a surface apart from its buffer;
         /// `None` where the compositor has none.
         pub(crate) viewporter: Option<WpViewporter>,
+        /// The outputs the compositor announces now.
+        pub(crate) live: LiveOutputs,
         /// `wl_shm`, which a test draws a window's frames with in place of a
         /// renderer (`testing::wayland::present`).
         #[cfg(any(test, feature = "testing"))]
@@ -645,7 +795,9 @@ mod event_loop {
     /// owner thread keeps for the positions of its table.
     pub struct WaylandLoop {
         connection: Connection,
-        dispatcher: Mutex<Dispatcher>,
+        /// The event queue: owner-only, so a dispatch re-entered from a
+        /// handler fails loudly instead of waiting on itself.
+        dispatcher: OwnerCell<Option<Dispatcher>>,
         protocol: WaylandProtocol,
         waker: Arc<LoopWaker>,
         signal: Arc<OwnerSignal>,
@@ -666,7 +818,7 @@ mod event_loop {
         display_watch: OwnerCell<Option<Watch>>,
         executor: Arc<BackgroundExecutor>,
         /// The wake deadline already offered to the windows.
-        offered: Mutex<Option<Instant>>,
+        offered: OwnerCell<Option<Instant>>,
         /// The exit policy is asked again on the next turn.
         reevaluate: AtomicBool,
         /// The loop ran once; a platform runs once.
@@ -686,6 +838,12 @@ mod event_loop {
         }
     }
 
+    /// What a file prompt answers on this host: the file chooser portal is
+    /// not spoken here yet.
+    fn no_file_prompt() -> PlatformError {
+        flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotYetOnThisHost).into()
+    }
+
     /// `duration` as `poll` takes it.
     fn timespec(duration: Duration) -> Timespec {
         Timespec {
@@ -703,12 +861,14 @@ mod event_loop {
         /// [`PlatformError::Init`] when no compositor answers, libwayland
         /// cannot be loaded, or the compositor lacks `wl_compositor` or
         /// `xdg_wm_base`.
-        pub(crate) fn new<H: WaylandHost>() -> Result<Self, PlatformError> {
+        pub(crate) fn new<H: WaylandHost>(socket: &Path) -> Result<Self, PlatformError> {
             let init = |what: &str, error: &dyn std::fmt::Display| PlatformError::Init {
                 message: format!("Wayland: {what}: {error}"),
             };
+            let stream = std::os::unix::net::UnixStream::connect(socket)
+                .map_err(|error| init(&format!("no compositor at {}", socket.display()), &error))?;
             let connection =
-                Connection::connect_to_env().map_err(|error| init("no compositor", &error))?;
+                Connection::from_socket(stream).map_err(|error| init("the connection", &error))?;
             let (globals, queue) = registry_queue_init::<WaylandState>(&connection)
                 .map_err(|error| init("the registry", &error))?;
             let handle = queue.handle();
@@ -725,8 +885,10 @@ mod event_loop {
             let shm = globals
                 .bind::<wayland_client::protocol::wl_shm::WlShm, _, _>(&handle, 1..=1, ())
                 .ok();
+            let live = LiveOutputs::default();
             let mut state = WaylandState {
                 outputs: Vec::new(),
+                live: live.clone(),
             };
             let outputs = globals.contents().with_list(|list| {
                 list.iter()
@@ -757,11 +919,16 @@ mod event_loop {
                     compositor,
                     wm_base,
                     viewporter,
+                    live,
                     #[cfg(any(test, feature = "testing"))]
                     shm,
                 },
                 connection,
-                dispatcher: Mutex::new(Dispatcher { queue, state }),
+                dispatcher: {
+                    let dispatcher = OwnerCell::new();
+                    dispatcher.with(|held| *held = Some(Dispatcher { queue, state }));
+                    dispatcher
+                },
                 waker,
                 signal,
                 notices: H::notices(&app),
@@ -775,7 +942,7 @@ mod event_loop {
                 sources: Mutex::new(Sources::default()),
                 display_watch: OwnerCell::new(),
                 executor: Arc::new(BackgroundExecutor::new()),
-                offered: Mutex::new(None),
+                offered: OwnerCell::new(),
                 reevaluate: AtomicBool::new(false),
                 ran: AtomicBool::new(false),
             })
@@ -837,13 +1004,35 @@ mod event_loop {
         /// # Errors
         /// [`OpenWindowError::Backend`] when the connection failed.
         pub(crate) fn roundtrip(&self) -> Result<(), OpenWindowError> {
-            let mut dispatcher = self.dispatcher.lock();
-            let Dispatcher { queue, state } = &mut *dispatcher;
-            queue
-                .roundtrip(state)
-                .map(drop)
+            self.dispatching(|queue, state| queue.roundtrip(state).map(drop))
+                .map_err(|error| OpenWindowError::Backend {
+                    message: error.to_string(),
+                })?
                 .map_err(|error| OpenWindowError::Backend {
                     message: format!("the Wayland connection: {error}"),
+                })
+        }
+
+        /// Run `body` on the event queue and what it dispatches into, on the
+        /// owner thread. The queue is borrowed for `body` alone, which runs no
+        /// handler: a dispatch re-entered from inside one panics on the
+        /// borrow rather than waiting on itself.
+        ///
+        /// # Errors
+        /// [`PlatformError::EventLoop`] off the owner thread.
+        fn dispatching<R>(
+            &self,
+            body: impl FnOnce(&mut EventQueue<WaylandState>, &mut WaylandState) -> R,
+        ) -> Result<R, PlatformError> {
+            self.dispatcher
+                .with(|dispatcher| {
+                    let Dispatcher { queue, state } = dispatcher
+                        .as_mut()
+                        .expect("BUG: the Wayland loop holds its event queue from construction");
+                    body(queue, state)
+                })
+                .ok_or_else(|| PlatformError::EventLoop {
+                    message: "the Wayland event queue is reached on its owner thread only".into(),
                 })
         }
 
@@ -882,10 +1071,9 @@ mod event_loop {
         }
 
         /// Dispatch what the compositor already sent: the windows record it.
-        fn dispatch_pending(&self) -> Result<(), PlatformError> {
-            let mut dispatcher = self.dispatcher.lock();
-            let Dispatcher { queue, state } = &mut *dispatcher;
-            queue.dispatch_pending(state).map(drop).map_err(lost)
+        fn dispatch_pending(&self) -> Result<usize, PlatformError> {
+            self.dispatching(EventQueue::dispatch_pending)?
+                .map_err(lost)
         }
 
         /// One turn of the loop, blocking at most `limit`. `true` when the
@@ -905,26 +1093,33 @@ mod event_loop {
             let now = Instant::now();
             let deadline = self.app.wake_deadline().or_resume(None);
             let windows = self.windows.values();
-            let offer = {
-                let mut offered = self.offered.lock();
-                let offer = offer_now(deadline, *offered, now);
-                if offer {
-                    *offered = deadline;
-                }
-                offer
-            };
+            let offer = self
+                .offered
+                .with(|offered| {
+                    let offer = offer_now(deadline, *offered, now);
+                    if offer {
+                        *offered = deadline;
+                    }
+                    offer
+                })
+                .unwrap_or(false);
             if offer {
                 for window in &windows {
                     window.request_frame();
                 }
             }
             let frame_due = windows.iter().any(|window| window.frame_due());
+            let frame_wait = windows
+                .iter()
+                .filter_map(|window| window.frame_wait())
+                .min();
             drop(windows);
             let timeout = poll_timeout(
                 LoopTurn {
                     frame_due,
+                    frame_wait,
                     wake_deadline: deadline,
-                    offered: *self.offered.lock(),
+                    offered: self.offered.with(|offered| *offered).flatten(),
                 },
                 now,
             );
@@ -961,27 +1156,39 @@ mod event_loop {
         /// Block until the compositor sends something, another producer
         /// wakes the loop, or `timeout` passes; then read what came.
         fn wait(&self, timeout: Option<Duration>) -> Result<(), PlatformError> {
-            let guard = {
-                let mut dispatcher = self.dispatcher.lock();
-                let Dispatcher { queue, state } = &mut *dispatcher;
-                queue.dispatch_pending(state).map_err(lost)?;
-                match self.connection.flush() {
-                    Ok(()) => {}
-                    // A full socket: the rest goes out on a later turn.
+            let (next, guard) = self.dispatching(|queue, state| {
+                let dispatched = queue.dispatch_pending(state).map_err(lost)?;
+                let flush = match self.connection.flush() {
+                    Ok(()) => Flush::Complete,
+                    // A full socket: the rest goes out once it takes more.
                     Err(WaylandError::Io(error))
-                        if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                        if error.kind() == std::io::ErrorKind::WouldBlock =>
+                    {
+                        Flush::Partial
+                    }
                     Err(error) => return Err(lost(error)),
-                }
-                queue.prepare_read()
-            };
-            // Events were queued meanwhile: the next turn dispatches them.
-            let Some(guard) = guard else {
+                };
+                let next = before_poll(dispatched, flush);
+                // `None`: events were queued meanwhile, and the next turn
+                // dispatches them.
+                let guard = match next {
+                    BeforePoll::Apply => None,
+                    BeforePoll::Poll { .. } => queue.prepare_read(),
+                };
+                Ok((next, guard))
+            })??;
+            let (BeforePoll::Poll { writable }, Some(guard)) = (next, guard) else {
                 return Ok(());
             };
             let (compositor, woken) = {
                 let connection = guard.connection_fd();
+                let watched = if writable {
+                    PollFlags::IN | PollFlags::OUT
+                } else {
+                    PollFlags::IN
+                };
                 let mut descriptors = [
-                    PollFd::new(&connection, PollFlags::IN),
+                    PollFd::new(&connection, watched),
                     PollFd::new(&self.waker.0, PollFlags::IN),
                 ];
                 let timeout = timeout.map(timespec);
@@ -1148,40 +1355,41 @@ mod event_loop {
             })
         }
 
-        // The Wayland host opens no URL and shows no file prompt: those
-        // services move to the system capability crate (ADR-0151 §3).
         fn open_url(&self, url: &str) {
-            let _ = url;
+            crate::owner::linux::xdg_open(url.as_ref());
         }
 
         fn reveal_path(&self, path: &Path) {
             // The extension, not the path: the name is the user's data.
             tracing::info!(extension = ?path.extension(), "revealing a path");
             if let Some(parent) = path.parent() {
-                let _ = std::process::Command::new("xdg-open").arg(parent).spawn();
+                crate::owner::linux::xdg_open(parent.as_os_str());
             }
         }
 
         fn open_path(&self, path: &Path) {
             tracing::info!(extension = ?path.extension(), "opening a path");
-            let _ = std::process::Command::new("xdg-open").arg(path).spawn();
+            crate::owner::linux::xdg_open(path.as_os_str());
         }
 
+        /// The file chooser portal is the system capability crate's
+        /// (ADR-0151 §3): this host has none, and says so.
         fn prompt_for_paths(
             &self,
             options: crate::PathPromptOptions,
         ) -> crate::Task<Result<Option<Vec<PathBuf>>, PlatformError>> {
             let _ = options;
-            crate::Task::ready(Ok(None))
+            crate::Task::ready(Err(no_file_prompt()))
         }
 
+        /// See [`Self::prompt_for_paths`].
         fn prompt_for_new_path(
             &self,
             directory: &Path,
             suggested_name: Option<&str>,
         ) -> crate::Task<Result<Option<PathBuf>, PlatformError>> {
             let _ = (directory, suggested_name);
-            crate::Task::ready(Ok(None))
+            crate::Task::ready(Err(no_file_prompt()))
         }
 
         fn compositor_name(&self) -> &'static str {

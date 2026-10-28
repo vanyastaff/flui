@@ -72,9 +72,65 @@ pub mod handlers;
 pub(crate) mod headless;
 #[cfg(any(all(target_os = "linux", feature = "wayland"), test))]
 pub(crate) mod linux {
-    //! The Linux hosts' loops: Wayland's, over the compositor's connection.
+    //! The Linux hosts' loops: Wayland's, over the compositor's connection;
+    //! and what every Linux loop hands the desktop (`xdg_open`).
 
     pub(crate) mod wayland;
+
+    /// Hand `target` (a URL or a path) to the desktop's opener, `xdg-open`,
+    /// and reap it on a thread of its own, so no exited child is left
+    /// behind. The Wayland and winit hosts on Linux open through it. A
+    /// failure is logged: the services answer nothing.
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    pub(crate) fn xdg_open(target: &std::ffi::OsStr) {
+        let _ = spawn_reaped(std::process::Command::new("xdg-open").arg(target));
+    }
+
+    /// Start `command` and wait for it on a thread of its own; its process
+    /// id, or `None` when it could not start.
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    fn spawn_reaped(command: &mut std::process::Command) -> Option<u32> {
+        let child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                tracing::warn!(%error, "the desktop's opener could not start");
+                return None;
+            }
+        };
+        let id = child.id();
+        let reaped = std::thread::Builder::new()
+            .name("flui-xdg-open".into())
+            .spawn(move || {
+                let mut child = child;
+                if let Err(error) = child.wait() {
+                    tracing::warn!(%error, "the desktop's opener could not be waited for");
+                }
+            });
+        if let Err(error) = reaped {
+            tracing::warn!(%error, "the opener's reaper could not start; it stays unreaped");
+        }
+        Some(id)
+    }
+
+    #[cfg(all(test, target_os = "linux", feature = "wayland"))]
+    mod tests {
+        /// A process the desktop's opener started is reaped once it exits: no
+        /// zombie is left in the process table.
+        #[test]
+        fn an_opener_that_exited_leaves_no_zombie() {
+            let id = super::spawn_reaped(&mut std::process::Command::new("true"))
+                .expect("`true` starts");
+            let entry = std::path::PathBuf::from(format!("/proc/{id}"));
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while entry.exists() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            assert!(
+                !entry.exists(),
+                "the exited opener {id} is still in the process table"
+            );
+        }
+    }
 }
 #[cfg(any(test, windows))]
 pub(crate) mod modal_pace;
