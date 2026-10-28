@@ -7,6 +7,20 @@
 //! floor is gated ([`Since`](crate::version::gate::Since)) and answers
 //! `NotOnThisDevice` below it, and `NotYetOnThisHost` from it on while the
 //! host does not drive it.
+//!
+//! None of the three reports when its frames reached the screen yet
+//! ([`PRESENTATION`]): the platforms do, through the frame they present, which
+//! the renderer and not the host holds.
+
+/// Why an AppKit, UIKit or Activity window reports no presentation, though its
+/// platform tells when a frame reached the screen. On Apple platforms that is
+/// the drawable's `addPresentedHandler`, and wgpu presents a drawable it keeps
+/// to itself; the host would have to own the view's `CAMetalLayer` and hand
+/// out the drawables it makes. On Android the presenting swap chain's
+/// `VK_GOOGLE_display_timing` is wgpu's to read and it reads none; the
+/// choreographer's frame timelines name when a frame is due on screen, which
+/// is not that it was.
+pub(crate) const PRESENTATION: CapabilityAbsence = CapabilityAbsence::NotYetOnThisHost;
 
 #[cfg(any(target_os = "ios", target_os = "android", test))]
 use flui_platform::Availability;
@@ -33,8 +47,9 @@ const MATERIAL: WindowCommand = WindowCommand::SetMaterial(WindowMaterial::Opaqu
 /// host does not place yet.
 #[cfg(any(target_os = "ios", test))]
 pub(crate) const fn scene_capabilities() -> WindowCapabilities {
-    let mut capabilities =
-        WindowCapabilities::NONE.unavailable(&MATERIAL, CapabilityAbsence::NotYetOnThisHost);
+    let mut capabilities = WindowCapabilities::NONE
+        .unavailable(&MATERIAL, CapabilityAbsence::NotYetOnThisHost)
+        .without_presentation_feedback(PRESENTATION);
     capabilities.closes = Availability::Native;
     capabilities.frame_rate_hint = Availability::Native;
     capabilities
@@ -75,7 +90,7 @@ pub(crate) fn pointer_absence(version: AppleVersion, shows_a_pointer: bool) -> C
 #[cfg(any(target_os = "macos", test))]
 pub(crate) const fn appkit_window_capabilities(owner_is_main: bool) -> WindowCapabilities {
     use flui_platform::Availability::Native;
-    let mut capabilities = WindowCapabilities::NONE;
+    let mut capabilities = WindowCapabilities::NONE.without_presentation_feedback(PRESENTATION);
     capabilities.sets_title = Native;
     capabilities.sets_position = Native;
     capabilities.sets_size = Native;
@@ -148,10 +163,12 @@ pub(crate) struct ActivityFacts {
 /// [`material_absence`] gives.
 #[cfg(any(target_os = "android", test))]
 pub(crate) fn activity_capabilities(facts: ActivityFacts) -> WindowCapabilities {
-    let mut capabilities = WindowCapabilities::NONE.unavailable(
-        &MATERIAL,
-        material_absence(facts.api, facts.cross_window_blur),
-    );
+    let mut capabilities = WindowCapabilities::NONE
+        .unavailable(
+            &MATERIAL,
+            material_absence(facts.api, facts.cross_window_blur),
+        )
+        .without_presentation_feedback(PRESENTATION);
     capabilities.frame_rate_hint = facts.frame_rate_hint;
     capabilities
 }
@@ -199,6 +216,20 @@ mod tests {
             .then(|| capabilities.refusal(&MATERIAL))
     }
 
+    /// Why a window's capabilities report no presentation; `None` where they
+    /// report one.
+    fn presentation(capabilities: &WindowCapabilities) -> Option<CapabilityAbsence> {
+        use flui_platform::UnsupportedReason;
+        capabilities
+            .presentation_feedback()
+            .err()
+            .map(|absent| match absent.reason {
+                UnsupportedReason::NotYetOnThisHost => CapabilityAbsence::NotYetOnThisHost,
+                UnsupportedReason::NotOnThisDevice => CapabilityAbsence::NotOnThisDevice,
+                _ => CapabilityAbsence::NotOnThisPlatform,
+            })
+    }
+
     fn activity(level: u32, cross_window_blur: bool) -> ActivityFacts {
         ActivityFacts {
             api: AndroidApi::from_level(level),
@@ -215,7 +246,7 @@ mod tests {
         let ios = AppleVersion::new;
         let macos = MacOSVersion::new;
         let api = AndroidApi::from_level;
-        let rows: [(&str, Option<CapabilityAbsence>, Option<CapabilityAbsence>); 16] = [
+        let rows: [(&str, Option<CapabilityAbsence>, Option<CapabilityAbsence>); 19] = [
             (
                 "UIKit material",
                 material(&scene_capabilities()),
@@ -269,6 +300,21 @@ mod tests {
             (
                 "Activity material, API 31 with cross-window blur",
                 material(&activity_capabilities(activity(31, true))),
+                Some(NotYetOnThisHost),
+            ),
+            (
+                "UIKit presentation report",
+                presentation(&scene_capabilities()),
+                Some(NotYetOnThisHost),
+            ),
+            (
+                "AppKit presentation report",
+                presentation(&appkit_window_capabilities(true)),
+                Some(NotYetOnThisHost),
+            ),
+            (
+                "Activity presentation report",
+                presentation(&activity_capabilities(activity(33, true))),
                 Some(NotYetOnThisHost),
             ),
             (

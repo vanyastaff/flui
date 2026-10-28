@@ -163,6 +163,21 @@ this one path (ADR-0151 §9).
   target of a window with no native surface. `raw-window-handle` appears only
   through the two handle traits and their
   `WindowHandle`/`DisplayHandle`/`HandleError` (ADR-0089).
+- **A frame request carries when earlier frames reached the screen, on the
+  event timeline.** `FrameRequest::presented` is a `FramePresented { at,
+  refresh }`: the instant the display started showing the newest earlier
+  frame the platform reported since the window's last request, an `EventTime`
+  like every input stamp, so input-to-photon time is a subtraction; never a
+  prediction (a platform that names when a frame is due fills
+  `target_present`). Whether a window reports at all is a capability,
+  `WindowCapabilities::reports_presentation`, and
+  `presentation_feedback()` answers why not as `Unsupported`; no verb answers
+  for it, so the capabilities keep its reason. Where the platform reports
+  presentation only to whoever holds the swap chain (DXGI), the presenter
+  hands the surface target what it read before each present
+  (`pre_present_notify(SwapChainStatistics)`, `DxgiFrameStatistics` in the
+  platform's own units), and the host rebases it; a presenter that reads
+  nothing passes `SwapChainStatistics::None`.
 
 ## Mapping decisions
 

@@ -333,7 +333,8 @@ xkbcommon-dl = { version = "0.4", optional = true, features = ["x11"] }
 wayland-client = { workspace = true, optional = true }
 wayland-protocols = { workspace = true, optional = true }
 wayland-backend = { workspace = true, optional = true }
-# `time`: the monotonic clock the X server stamps its events on.
+# `time`: the monotonic clock the X server stamps its events on, and the clock
+# a compositor stamps presentation times on.
 rustix = { workspace = true, optional = true, features = ["time"] }
 accesskit_unix = { version = "0.24" }
 zbus = { workspace = true }
@@ -551,6 +552,17 @@ serde_json = { workspace = true, features = ["float_roundtrip"] }
 # Browser API fixtures mutate JS globals and therefore have their own process.
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test.workspace = true
+
+# A DXGI swap chain on a test window, presented the way a renderer presents,
+# whose frame statistics the window turns into its presentation report
+# (`the_win32_window_conforms`).
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+windows = { workspace = true, features = [
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+] }
 
 # The harnesses that run their cases on the main thread, where winit builds
 # its event loop (`linux_preferences`, `os_extensions`).
