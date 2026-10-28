@@ -862,11 +862,9 @@ impl UiRuntime {
             if let Some(presented) = request.presented
                 && let Some(at) = self.instant_of(presented.at)
             {
-                let mut report = flui_scheduler::PresentationReport::new(at);
-                if let Some(refresh) = presented.refresh {
-                    report = report.with_refresh(refresh);
-                }
-                presentation.clock().record_presentation(report);
+                presentation
+                    .clock()
+                    .record_presentation(at, presented.refresh);
             }
         }
         if recording {

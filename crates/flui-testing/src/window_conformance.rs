@@ -113,12 +113,15 @@ pub trait WindowFixture {
     /// checks run on (ADR-0254 §5); a headless window has none.
     fn has_native_surface(&self) -> bool;
 
-    /// Present frames into the window's surface the way a renderer does
+    /// Present frames into a window's surface the way a renderer does
     /// (the surface target's
     /// [`pre_present_notify`](flui_platform::SurfaceTarget::pre_present_notify)
     /// with what the presenter read, then the present), let the window system
     /// show them, then have the window ask for a frame and settle; the frame
-    /// request its handler received. `None` where the fixture cannot present
+    /// request its handler received. The window is the fixture's where the
+    /// window system still shows it whatever the earlier checks did, else one
+    /// of the same host the fixture opens for this and closes after (a
+    /// minimized Wayland window shows no frame and cannot be restored). `None` where the fixture cannot present
     /// into the window, which leaves the presentation check to the
     /// capability's own honesty.
     fn present_and_request_frame(&mut self) -> Option<FrameRequest> {
@@ -173,13 +176,6 @@ pub fn assert_conforms(fixture: &mut dyn WindowFixture) {
 type Check = fn(&mut dyn WindowFixture) -> Result<(), String>;
 
 const CHECKS: &[(&str, Check)] = &[
-    // First, while the window is as it opened (shown, in normal mode): a
-    // window system shows no frame of a window a later check minimized, and
-    // Wayland cannot bring one back.
-    (
-        "presentation_is_reported_exactly_when_claimed",
-        presentation_is_reported_exactly_when_claimed,
-    ),
     ("capabilities_are_honest", capabilities_are_honest),
     ("accepted_commands_converge", accepted_commands_converge),
     ("revisions_mean_change", revisions_mean_change),
@@ -195,6 +191,10 @@ const CHECKS: &[(&str, Check)] = &[
     (
         "per_frame_verbs_report_unsupported_exactly_when_unavailable",
         per_frame_verbs_report_unsupported_exactly_when_unavailable,
+    ),
+    (
+        "presentation_is_reported_exactly_when_claimed",
+        presentation_is_reported_exactly_when_claimed,
     ),
     (
         "a_surface_target_is_send_sync_and_unavailable_after_close",
@@ -533,11 +533,11 @@ fn presentation_is_reported_exactly_when_claimed(
             "presentation feedback is absent as {absent}, which asks to be tried again"
         ));
     }
-    let before = event_now();
+    let before = EventTime::now();
     let Some(request) = fixture.present_and_request_frame() else {
         return finish(broken);
     };
-    let after = event_now();
+    let after = EventTime::now();
     match (claimed, request.presented) {
         (Ok(_), Some(presented)) if presented.at < before || presented.at > after => {
             broken.push(format!(
@@ -557,12 +557,6 @@ fn presentation_is_reported_exactly_when_claimed(
         )),
     }
     finish(broken)
-}
-
-/// This reading of the event clock every backend stamps on.
-fn event_now() -> EventTime {
-    #[expect(clippy::cast_possible_truncation)] // ~584 years of nanoseconds fit u64
-    EventTime::from_nanos(flui_foundation::event_epoch().elapsed().as_nanos() as u64)
 }
 
 /// Close the window by the command where the window takes it, the way the

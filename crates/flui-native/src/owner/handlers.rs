@@ -38,9 +38,7 @@ pub fn frame_request_timed(
     age: std::time::Duration,
     until_present: Option<std::time::Duration>,
 ) -> FrameRequest {
-    #[expect(clippy::cast_possible_truncation)] // ~584 years of nanoseconds fit u64
-    let now = flui_foundation::event_epoch().elapsed().as_nanos() as u64;
-    frame_request_at(now, age, until_present)
+    frame_request_at(EventTime::now().as_nanos(), age, until_present)
 }
 
 fn frame_request_at(
@@ -67,14 +65,7 @@ fn frame_request_at(
 #[cfg(any(windows, wayland_host))]
 #[must_use]
 pub(crate) fn rebased(platform_now: std::time::Duration, stamp: std::time::Duration) -> EventTime {
-    rebased_at(event_now().as_nanos(), platform_now, stamp)
-}
-
-/// This reading of the event clock.
-#[must_use]
-pub(crate) fn event_now() -> EventTime {
-    #[expect(clippy::cast_possible_truncation)] // ~584 years of nanoseconds fit u64
-    EventTime::from_nanos(flui_foundation::event_epoch().elapsed().as_nanos() as u64)
+    rebased_at(EventTime::now().as_nanos(), platform_now, stamp)
 }
 
 /// The event-clock time `age` before this reading of it, for a platform stamp whose distance from

@@ -83,36 +83,37 @@ pub enum SwapChainStatistics {
     /// The presenter read nothing.
     #[default]
     None,
-    /// A DXGI swap chain's `GetFrameStatistics` and `GetLastPresentCount`.
+    /// A DXGI swap chain's `GetFrameStatistics`.
     Dxgi(DxgiFrameStatistics),
+    /// A DXGI swap chain's statistics broke off
+    /// (`DXGI_ERROR_FRAME_STATISTICS_DISJOINT`: a mode change, a move to
+    /// another output): the next statistics do not compare with the earlier
+    /// ones.
+    DxgiDisjoint,
 }
 
 /// A DXGI swap chain's frame statistics, as `IDXGISwapChain::GetFrameStatistics`
-/// fills `DXGI_FRAME_STATISTICS` and `GetLastPresentCount` answers, read before
-/// a present.
+/// fills `DXGI_FRAME_STATISTICS`, read before a present.
 ///
 /// The statistics name the newest present the display has shown:
 /// [`present_count`](Self::present_count) is that present's number, and it was
 /// shown at the refresh [`sync_refresh_count`](Self::sync_refresh_count), which
 /// began at [`sync_qpc_time`](Self::sync_qpc_time) on the performance counter.
+/// A host reports a present once: a read naming the present or the refresh it
+/// last reported is a repeat.
 ///
 /// ```
 /// use flui_platform::DxgiFrameStatistics;
 ///
-/// let read = DxgiFrameStatistics::new(41, 40, 1_200, 1_201, 9_000_000);
+/// let read = DxgiFrameStatistics::new(40, 1_201, 9_000_000);
 /// assert_eq!(read.present_count, 40);
 /// assert_eq!(read.sync_qpc_time, 9_000_000);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct DxgiFrameStatistics {
-    /// `GetLastPresentCount`: the number of the swap chain's last present
-    /// before the one about to happen.
-    pub last_present_count: u32,
     /// `PresentCount`: the number of the newest present the display showed.
     pub present_count: u32,
-    /// `PresentRefreshCount`: the refresh at which that present was queued.
-    pub present_refresh_count: u32,
     /// `SyncRefreshCount`: the refresh at which it was shown.
     pub sync_refresh_count: u32,
     /// `SyncQPCTime`: when that refresh began, in `QueryPerformanceCounter`
@@ -123,17 +124,9 @@ pub struct DxgiFrameStatistics {
 impl DxgiFrameStatistics {
     /// The statistics a presenter read, field by field in declaration order.
     #[must_use]
-    pub const fn new(
-        last_present_count: u32,
-        present_count: u32,
-        present_refresh_count: u32,
-        sync_refresh_count: u32,
-        sync_qpc_time: i64,
-    ) -> Self {
+    pub const fn new(present_count: u32, sync_refresh_count: u32, sync_qpc_time: i64) -> Self {
         Self {
-            last_present_count,
             present_count,
-            present_refresh_count,
             sync_refresh_count,
             sync_qpc_time,
         }

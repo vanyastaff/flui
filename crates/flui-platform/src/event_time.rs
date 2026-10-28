@@ -34,6 +34,14 @@ impl EventTime {
         Self(nanos)
     }
 
+    /// This reading of the event clock: the time since the process's event epoch
+    /// (`flui_foundation::event_epoch`), what a backend stamps where the platform reports no
+    /// time of its own. Past the end of the timeline (about 584 years) it is the end.
+    #[must_use]
+    pub fn now() -> Self {
+        Self(u64::try_from(flui_foundation::event_epoch().elapsed().as_nanos()).unwrap_or(u64::MAX))
+    }
+
     /// Nanoseconds since the process's event epoch.
     #[must_use]
     pub const fn as_nanos(self) -> u64 {

@@ -1482,17 +1482,21 @@ fn idle_tasks_run(target_present: Option<u64>) -> (usize, bool) {
 }
 
 /// How many of two idle tasks, each taking 20 ms of host time, run in a frame whose request names
-/// no present time, delivered 16 ms after an earlier frame whose request carried a report when
-/// `reported`: a frame shown 5 ms before that earlier frame's vsync, at `refresh` where the
-/// platform named one.
-fn idle_tasks_after_a_presentation(reported: bool, refresh: Option<Duration>) -> (usize, bool) {
+/// no present time, delivered 16 ms after an earlier frame whose request carried a report
+/// where `reported_ago` names one: a frame shown that long before the earlier frame's vsync, at
+/// `refresh` where the platform named one.
+fn idle_tasks_after_a_presentation(
+    reported_ago: Option<Duration>,
+    refresh: Option<Duration>,
+) -> (usize, bool) {
     let host = ManualClock::new();
     host.advance(Duration::from_secs(1));
     let mut runtime = manual_frame_runtime(&host);
     let earlier = host.now();
     let mut request = flui_platform::FrameRequest::new(crate::event_at(&host, earlier));
-    if reported {
-        let at = crate::event_at(&host, earlier).as_nanos() - 5_000_000;
+    if let Some(ago) = reported_ago {
+        let at = crate::event_at(&host, earlier).as_nanos()
+            - u64::try_from(ago.as_nanos()).expect("a test age fits");
         let mut shown =
             flui_platform::FramePresented::new(flui_platform::EventTime::from_nanos(at));
         if let Some(refresh) = refresh {
@@ -1528,20 +1532,32 @@ fn idle_tasks_after_a_presentation(reported: bool, refresh: Option<Duration>) ->
 #[test]
 fn a_presentation_report_bounds_the_idle_work_of_a_later_frame() {
     assert_eq!(
-        idle_tasks_after_a_presentation(true, Some(Duration::from_millis(10))),
+        idle_tasks_after_a_presentation(
+            Some(Duration::from_millis(5)),
+            Some(Duration::from_millis(10))
+        ),
         (1, false),
         "the frame's idle work ends at the next refresh the earlier report places (9 ms after \
          the vsync), and the host's own deadline is not asked"
     );
     assert_eq!(
-        idle_tasks_after_a_presentation(true, None),
+        idle_tasks_after_a_presentation(Some(Duration::from_millis(5)), None),
         (2, true),
         "a report with no refresh interval places no refresh"
     );
     assert_eq!(
-        idle_tasks_after_a_presentation(false, None),
+        idle_tasks_after_a_presentation(None, None),
         (2, true),
         "without a report the host's deadline stands"
+    );
+    assert_eq!(
+        idle_tasks_after_a_presentation(
+            Some(Duration::from_millis(200)),
+            Some(Duration::from_millis(10))
+        ),
+        (2, true),
+        "a report from twenty refreshes back bounds nothing: the window was idle, and the host's \
+         deadline stands"
     );
 }
 

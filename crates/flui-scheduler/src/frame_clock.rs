@@ -300,7 +300,7 @@ pub struct FrameClock {
     last_compositor_tick_interval: Cell<Option<Duration>>,
     /// The newest report that a frame of this presentation reached the
     /// screen ([`record_presentation`](Self::record_presentation)).
-    last_presentation: Cell<Option<PresentationReport>>,
+    last_presentation: Cell<Option<Shown>>,
     /// How many [`poll`](Self::poll) calls returned `Skip(Hidden)` — a
     /// deferral, never a drop. See the module doc's "Deferral accounting"
     /// section.
@@ -319,44 +319,30 @@ pub struct FrameClock {
     history: RefCell<FrameHistory>,
 }
 
-/// The platform's report that a frame of a presentation reached the screen,
-/// on this clock's timeline: what
-/// [`FrameClock::record_presentation`] keeps.
-///
-/// [`at`](Self::at) is when the display started showing the frame, and
-/// [`refresh`](Self::refresh) the display's refresh interval then, where the
-/// platform names a fixed one.
+/// The newest report that a frame of a presentation reached the screen, on
+/// this clock's timeline: what [`FrameClock::record_presentation`] keeps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct PresentationReport {
+struct Shown {
     /// When the display started showing the frame.
-    pub at: Instant,
-    /// The display's refresh interval, where the platform names a fixed one.
-    pub refresh: Option<Duration>,
+    at: Instant,
+    /// The display's refresh interval then, where the platform named one
+    /// (`flui_platform::FramePresented` makes a zero interval none).
+    refresh: Option<Duration>,
 }
 
-impl PresentationReport {
-    /// A frame shown at `at`, at an unknown refresh rate.
-    #[must_use]
-    pub fn new(at: Instant) -> Self {
-        Self { at, refresh: None }
-    }
-
-    /// The same report with the display's refresh interval; a zero interval
-    /// is an unknown one.
-    #[must_use]
-    pub fn with_refresh(mut self, refresh: Duration) -> Self {
-        self.refresh = (!refresh.is_zero()).then_some(refresh);
-        self
-    }
-}
-
-/// How many refreshes past the last presentation report
-/// [`FrameClock::next_presentation_after`] extrapolates the refresh grid:
-/// about a second at 60 to 240 Hz. Further out, a clock that drifts by a
-/// fraction of a percent, or a display that changed its rate without a
-/// report, would name an instant that is not a refresh.
-pub const PRESENTATION_GRID_HORIZON: u32 = 240;
+/// How many refreshes past the newest presentation report
+/// [`FrameClock::next_presentation_after`] still extrapolates the refresh
+/// grid: 8, about 133 ms at 60 Hz and 33 ms at 240 Hz.
+///
+/// A live report trails the frame that reads it by the frames in flight: two
+/// in the swap chain and the compositor's own, so three or four refreshes
+/// (measured on Windows: the shown present three behind the newest). Twice
+/// that is still a display presenting this window's frames; past it the
+/// window has been idle, the display may have changed its rate (variable
+/// refresh, a mode switch) without a report, and a grid carried over would
+/// end idle work at an instant that is not a refresh. The host's deadline
+/// applies then, as without a report.
+pub(crate) const PRESENTATION_GRID_HORIZON: u32 = 8;
 
 /// When the stages of one produced frame happened: what
 /// [`FrameClock::record_frame`] stores in its [`FrameSnapshot`].
@@ -619,23 +605,14 @@ impl FrameClock {
     // ------------------------------------------------------------------
 
     /// Record that the platform reported a frame of this presentation shown
-    /// at `report.at`. A report no later than the one kept is a repeat or out
-    /// of order and is ignored: the presentation timeline never runs
-    /// backwards.
-    pub fn record_presentation(&self, report: PresentationReport) {
-        if self
-            .last_presentation
-            .get()
-            .is_none_or(|last| report.at > last.at)
-        {
-            self.last_presentation.set(Some(report));
+    /// at `at`, at the display's `refresh` interval where it named one (a
+    /// `flui_platform::FramePresented`, rebased onto this clock). A report no
+    /// later than the one kept is a repeat or out of order and is ignored: the
+    /// presentation timeline never runs backwards.
+    pub fn record_presentation(&self, at: Instant, refresh: Option<Duration>) {
+        if self.last_presentation.get().is_none_or(|last| at > last.at) {
+            self.last_presentation.set(Some(Shown { at, refresh }));
         }
-    }
-
-    /// The newest presentation report, if the platform has made one.
-    #[must_use]
-    pub fn last_presentation(&self) -> Option<PresentationReport> {
-        self.last_presentation.get()
     }
 
     /// The first refresh strictly after `now` at which a frame can next reach
@@ -643,14 +620,17 @@ impl FrameClock {
     /// refresh interval apart, or the report itself when it lies after `now`.
     ///
     /// `None` without a report, without a refresh interval in it, or past
-    /// [`PRESENTATION_GRID_HORIZON`] refreshes from it: the grid is the
-    /// display's as last reported, not a prediction to carry indefinitely.
+    /// eight refreshes from it: a report that
+    /// old belongs to a window that has been idle, and the grid it started is
+    /// not the display's now.
     #[must_use]
     pub fn next_presentation_after(&self, now: Instant) -> Option<Instant> {
         let report = self.last_presentation.get()?;
         if report.at > now {
             return Some(report.at);
         }
+        // Zero is no interval; `FramePresented` already makes it none, and
+        // this keeps the division below defined whatever a caller passes.
         let refresh = report.refresh?.as_nanos();
         if refresh == 0 {
             return None;

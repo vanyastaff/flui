@@ -164,8 +164,7 @@ pub use config::TimingsCallback;
 /// field types.
 pub use flui_foundation::PresentationId;
 pub use frame_clock::{
-    ClockSource, DemandKind, DemandMask, FrameClock, FrameTimes, PRESENTATION_GRID_HORIZON,
-    PollDecision, PresentationReport, SkipReason,
+    ClockSource, DemandKind, DemandMask, FrameClock, FrameTimes, PollDecision, SkipReason,
 };
 pub use frame_histogram::{
     FRAME_RUN_GAP, FramePace, LatencyHistogram, frame_interval_histogram, frame_pace,

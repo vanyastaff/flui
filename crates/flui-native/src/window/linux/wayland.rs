@@ -1065,13 +1065,6 @@ pub(crate) mod presented {
         Some(Duration::new(seconds, tv_nsec))
     }
 
-    /// The refresh interval a `presented` event carries, in nanoseconds;
-    /// zero says the compositor knows no fixed one (a variable rate), which
-    /// is none.
-    pub(crate) fn refresh(nanos: u32) -> Option<Duration> {
-        (nanos > 0).then(|| Duration::from_nanos(u64::from(nanos)))
-    }
-
     /// `capabilities` with the presentation report the compositor makes:
     /// where it offers no `wp_presentation`, a window learns nothing of when
     /// its frames are shown.
@@ -1095,7 +1088,7 @@ pub(crate) mod presented {
         /// A `presented` event's words make the time it names; nanoseconds
         /// past a second do not.
         #[test]
-        fn a_presented_event_names_its_time_and_refresh() {
+        fn a_presented_event_names_its_time() {
             assert_eq!(
                 shown_at(0, 12, 500_000_000),
                 Some(Duration::from_millis(12_500))
@@ -1106,8 +1099,6 @@ pub(crate) mod presented {
                 "the high word holds the upper seconds"
             );
             assert_eq!(shown_at(0, 1, 1_000_000_000), None);
-            assert_eq!(refresh(16_666_666), Some(Duration::from_nanos(16_666_666)));
-            assert_eq!(refresh(0), None, "a variable rate");
         }
 
         /// A compositor without `wp_presentation` leaves a window without the
@@ -2552,10 +2543,9 @@ mod toplevel {
             ) else {
                 return;
             };
-            let mut report = flui_platform::FramePresented::new(rebased(now, shown));
-            if let Some(refresh) = presented::refresh(refresh) {
-                report = report.with_refresh(refresh);
-            }
+            // A zero refresh, a variable rate, is none (`FramePresented::with_refresh`).
+            let report = flui_platform::FramePresented::new(rebased(now, shown))
+                .with_refresh(std::time::Duration::from_nanos(u64::from(refresh)));
             presented_to.reports.report(report);
         }
     }

@@ -191,31 +191,44 @@ impl WindowFixture for WaylandFixture {
         true
     }
 
-    /// A frame drawn as the renderer would and the next asked for, turning
-    /// the loop until a frame request carries the compositor's report of the
+    /// A frame drawn as the renderer would into a window of its own (the
+    /// compositor shows no frame of a window an earlier check minimized, and
+    /// Wayland cannot bring it back), then the next asked for, turning the
+    /// loop until a frame request carries the compositor's report of the
     /// first, or two seconds pass: `presented` follows the compositor's
     /// repaint, and the window's next frame request carries it.
     fn present_and_request_frame(&mut self) -> Option<flui_platform::FrameRequest> {
-        // A report of a frame shown before this one (the window's first
-        // commit) may still wait for a request: the one wanted is this frame's.
-        let presented_since = flui_platform::EventTime::from_nanos(
-            u64::try_from(flui_foundation::event_epoch().elapsed().as_nanos())
-                .expect("the test's time fits the event timeline"),
-        );
-        self.window
+        let handler = RecordingWindowHandler::new();
+        let window = self
+            .platform
+            .open_window(
+                WindowOptions::default().with_title("presenting"),
+                Rc::clone(&handler) as _,
+            )
+            .expect("a Wayland window opens");
+        run_for(&self.platform, Duration::from_millis(200)).expect("the loop turns");
+        // A report of a frame shown before this one may still wait for a
+        // request: the one wanted is this frame's.
+        let presented_since = flui_platform::EventTime::now();
+        window
             .surface_target()
             .pre_present_notify(flui_platform::SwapChainStatistics::None);
-        let _ = present(self.window.as_ref());
-        self.handler.take_calls();
-        // The requests taken here are answered here, not drawn by `settle`.
-        self.drawn.set(0);
+        let _ = present(window.as_ref());
+        handler.take_calls();
         let deadline = Instant::now() + Duration::from_secs(2);
         let mut last = None;
-        while Instant::now() < deadline {
-            self.window.request_redraw();
+        while Instant::now() < deadline
+            && last.is_none_or(|request: flui_platform::FrameRequest| {
+                request
+                    .presented
+                    .is_none_or(|presented| presented.at < presented_since)
+            })
+        {
+            window.request_redraw();
             run_for(&self.platform, Duration::from_millis(20)).expect("the loop turns");
-            for call in self.handler.take_calls() {
+            for call in handler.take_calls() {
                 if let HandlerCall::FrameRequested(request) = call {
+                    last = Some(request);
                     if request
                         .presented
                         .is_some_and(|presented| presented.at >= presented_since)
@@ -224,12 +237,13 @@ impl WindowFixture for WaylandFixture {
                             "the frame request after a shown frame: vsync {:?}, presented {:?}",
                             request.vsync, request.presented
                         );
-                        return Some(request);
+                        break;
                     }
-                    last = Some(request);
                 }
             }
         }
+        window.close_for_cleanup();
+        run_for(&self.platform, Duration::from_millis(100)).expect("the loop turns");
         last
     }
 }

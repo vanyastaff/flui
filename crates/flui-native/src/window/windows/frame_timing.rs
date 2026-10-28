@@ -54,22 +54,22 @@ pub(crate) fn refresh_timing(
     })
 }
 
-/// A refresh DXGI reported a present shown at: its number and when it began, in counter ticks.
+/// A present DXGI reported shown: its number, and the refresh it began on, in counter ticks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct SyncPoint {
+struct SyncPoint {
+    /// `PresentCount`.
+    present: u32,
     /// `SyncRefreshCount`.
-    pub(crate) refresh: u32,
+    refresh: u32,
     /// `SyncQPCTime`.
-    pub(crate) ticks: u64,
+    ticks: u64,
 }
 
-/// The newest present a swap chain's frame statistics report shown, placed against a counter
+/// A present a swap chain's frame statistics newly report shown, placed against a counter
 /// reading.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ShownPresent {
-    /// The refresh it was shown at, for the next report to measure the period from.
-    pub(crate) sync: SyncPoint,
-    /// How long before the reading that refresh began.
+    /// How long before the reading the refresh it was shown at began.
     pub(crate) age: Duration,
     /// The refresh period the two latest reports measure: the counter time between their
     /// refreshes over the refreshes between them. `None` until two reports name different
@@ -77,97 +77,145 @@ pub(crate) struct ShownPresent {
     pub(crate) refresh: Option<Duration>,
 }
 
-/// Place the shown present of a DXGI frame statistics read (`SyncRefreshCount`, `SyncQPCTime`)
-/// against the counter reading `now`, measuring the refresh period from `previous`, the refresh
-/// the last read placed.
+/// What a window's swap chain statistics last reported, so each read names only what is new.
 ///
-/// A read that names no shown present (a zero or negative counter time: nothing reached the
-/// screen yet) or a refresh after the reading cannot be placed, and gives `None`. A refresh count
-/// that did not move, or moved backwards (a swap chain made again), measures no period.
-pub(crate) fn shown_present(
-    sync_refresh: u32,
-    sync_ticks: i64,
-    now: u64,
-    frequency: NonZeroU64,
-    previous: Option<SyncPoint>,
-) -> Option<ShownPresent> {
-    let ticks = u64::try_from(sync_ticks).ok().filter(|&ticks| ticks > 0)?;
-    if ticks > now {
-        return None;
+/// The renderer reads the statistics before every present, and a display that shows one present
+/// per refresh answers several reads with the same present. Only a read naming another present
+/// and another refresh is a new report: a repeat would replace a report that measured the period
+/// with one that measures none. A break in the statistics (`DXGI_ERROR_FRAME_STATISTICS_DISJOINT`,
+/// after a mode change or a move to another output) forgets the last refresh, so no period is
+/// measured across it.
+#[derive(Debug, Default)]
+pub(crate) struct PresentTracker {
+    last: Option<SyncPoint>,
+}
+
+impl PresentTracker {
+    /// The present a read names shown (`PresentCount`, `SyncRefreshCount`, `SyncQPCTime`),
+    /// placed against the counter reading `now`; `None` for a read that names the present or the
+    /// refresh the last one did, names nothing shown yet (a zero or negative counter time), or a
+    /// refresh after the reading.
+    pub(crate) fn read(
+        &mut self,
+        present: u32,
+        sync_refresh: u32,
+        sync_ticks: i64,
+        now: u64,
+        frequency: NonZeroU64,
+    ) -> Option<ShownPresent> {
+        if self
+            .last
+            .is_some_and(|last| last.present == present || last.refresh == sync_refresh)
+        {
+            return None;
+        }
+        let ticks = u64::try_from(sync_ticks).ok().filter(|&ticks| ticks > 0)?;
+        if ticks > now {
+            return None;
+        }
+        let to_duration = |ticks: u64| {
+            let nanos = u128::from(ticks) * 1_000_000_000 / u128::from(frequency.get());
+            Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
+        };
+        let refresh = self.last.and_then(|previous| {
+            let refreshes = sync_refresh
+                .checked_sub(previous.refresh)
+                .filter(|&n| n > 0)?;
+            let elapsed = ticks.checked_sub(previous.ticks).filter(|&t| t > 0)?;
+            Some(to_duration(elapsed / u64::from(refreshes))).filter(|period| !period.is_zero())
+        });
+        self.last = Some(SyncPoint {
+            present,
+            refresh: sync_refresh,
+            ticks,
+        });
+        Some(ShownPresent {
+            age: to_duration(now - ticks),
+            refresh,
+        })
     }
-    let to_duration = |ticks: u64| {
-        let nanos = u128::from(ticks) * 1_000_000_000 / u128::from(frequency.get());
-        Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
-    };
-    let sync = SyncPoint {
-        refresh: sync_refresh,
-        ticks,
-    };
-    let refresh = previous.and_then(|previous| {
-        let refreshes = sync_refresh
-            .checked_sub(previous.refresh)
-            .filter(|&n| n > 0)?;
-        let elapsed = ticks.checked_sub(previous.ticks).filter(|&t| t > 0)?;
-        Some(to_duration(elapsed / u64::from(refreshes))).filter(|period| !period.is_zero())
-    });
-    Some(ShownPresent {
-        sync,
-        age: to_duration(now - ticks),
-        refresh,
-    })
+
+    /// The statistics broke off: the next report measures no period from the ones before.
+    pub(crate) fn disjoint(&mut self) {
+        self.last = None;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// A shown present is placed by its age before the reading, and two reads a few refreshes
+    /// A shown present is placed by its age before the reading, and two reports a few refreshes
     /// apart measure the period between them.
     #[test]
     fn a_shown_present_is_aged_and_two_reads_measure_the_period() {
         let period = 166_667;
-        let first = shown_present(100, 1_000_000, 1_050_000, MHZ_10, None).unwrap();
+        let mut tracker = PresentTracker::default();
+        let first = tracker
+            .read(10, 100, 1_000_000, 1_050_000, MHZ_10)
+            .expect("a first report");
         assert_eq!(first.age, Duration::from_millis(5));
-        assert_eq!(first.refresh, None, "one read measures no period");
+        assert_eq!(first.refresh, None, "one report measures no period");
 
-        let second = shown_present(
-            103,
-            1_000_000 + 3 * period,
-            1_600_000,
-            MHZ_10,
-            Some(first.sync),
-        )
-        .unwrap();
+        let second = tracker
+            .read(13, 103, 1_000_000 + 3 * period, 1_600_000, MHZ_10)
+            .expect("a later present");
         assert_eq!(second.refresh, Some(Duration::from_nanos(16_666_700)));
 
-        let same_refresh = shown_present(
-            103,
-            1_000_000 + 3 * period,
-            1_700_000,
-            MHZ_10,
-            Some(second.sync),
-        )
-        .unwrap();
-        assert_eq!(same_refresh.refresh, None, "no refresh between the reads");
-
-        let remade = shown_present(2, 1_800_000, 1_900_000, MHZ_10, Some(second.sync)).unwrap();
+        let remade = tracker
+            .read(2, 2, 1_800_000, 1_900_000, MHZ_10)
+            .expect("a swap chain made again");
         assert_eq!(remade.refresh, None, "a refresh count that went back");
+    }
+
+    /// A read naming the present or the refresh the last report named is no report: the one
+    /// that measured the period stands.
+    #[test]
+    fn a_repeated_read_is_reported_once() {
+        let mut tracker = PresentTracker::default();
+        let read = |tracker: &mut PresentTracker, present, refresh, ticks| {
+            tracker.read(present, refresh, ticks, 2_000_000, MHZ_10)
+        };
+        assert!(read(&mut tracker, 10, 100, 1_000_000).is_some());
+        assert_eq!(
+            read(&mut tracker, 10, 100, 1_000_000),
+            None,
+            "the same statistics"
+        );
+        assert_eq!(
+            read(&mut tracker, 11, 100, 1_000_000),
+            None,
+            "two presents in one refresh"
+        );
+        let next = read(&mut tracker, 12, 101, 1_166_667).expect("the next refresh");
+        assert_eq!(next.refresh, Some(Duration::from_nanos(16_666_700)));
+    }
+
+    /// After a break in the statistics the next report measures no period across it.
+    #[test]
+    fn a_disjoint_read_measures_no_period_across_it() {
+        let mut tracker = PresentTracker::default();
+        assert!(
+            tracker
+                .read(10, 100, 1_000_000, 2_000_000, MHZ_10)
+                .is_some()
+        );
+        tracker.disjoint();
+        let after = tracker
+            .read(11, 105, 1_400_000, 2_000_000, MHZ_10)
+            .expect("a report after the break");
+        assert_eq!(after.refresh, None);
     }
 
     /// Statistics that name nothing shown, or a refresh after the reading, place no present.
     #[test]
     fn statistics_that_name_no_shown_present_place_none() {
-        assert_eq!(
-            shown_present(0, 0, 100, MHZ_10, None),
-            None,
-            "nothing shown yet"
-        );
-        assert_eq!(shown_present(1, -5, 100, MHZ_10, None), None);
-        assert_eq!(
-            shown_present(1, 200, 100, MHZ_10, None),
-            None,
-            "after the reading"
-        );
+        let read = |present, refresh, ticks| {
+            PresentTracker::default().read(present, refresh, ticks, 100, MHZ_10)
+        };
+        assert_eq!(read(0, 0, 0), None, "nothing shown yet");
+        assert_eq!(read(1, 1, -5), None);
+        assert_eq!(read(1, 1, 200), None, "after the reading");
     }
 
     const MHZ_10: NonZeroU64 = NonZeroU64::new(10_000_000).unwrap();

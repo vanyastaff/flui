@@ -308,9 +308,8 @@ impl WindowFixture for Fixture {
         self.model
             .surface_target()
             .pre_present_notify(flui_platform::SwapChainStatistics::None);
-        #[expect(clippy::cast_possible_truncation)] // ~584 years of nanoseconds fit u64
-        let now = EventTime::from_nanos(flui_foundation::event_epoch().elapsed().as_nanos() as u64);
-        self.mock().simulate_presented(FramePresented::new(now));
+        self.mock()
+            .simulate_presented(FramePresented::new(EventTime::now()));
         self.handler.take_calls();
         self.window.request_redraw();
         self.handler
@@ -407,18 +406,11 @@ fn a_window_that_claims_what_it_cannot_do_is_caught() {
     .into_iter()
     .map(|violation| violation.check)
     .collect();
-    // The checks that send a claimed command see it fail too; of the checks
-    // that run before any command, the presentation check catches the claimed
-    // report the window never makes, and the honesty check names the
-    // commands' cause next.
+    // The checks that send a claimed command see it fail too; the honesty
+    // check names the cause first.
     assert_eq!(
-        checks.get(..2),
-        Some(
-            &[
-                "presentation_is_reported_exactly_when_claimed",
-                "capabilities_are_honest"
-            ][..]
-        ),
+        checks.first(),
+        Some(&"capabilities_are_honest"),
         "caught by {checks:?}"
     );
 }

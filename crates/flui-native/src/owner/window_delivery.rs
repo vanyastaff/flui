@@ -28,7 +28,7 @@ use flui_platform::{
 };
 
 use super::call_point::{Called, Failure, HandlerSlot, call, retire};
-use super::handlers::{PresentationReports, event_now, frame_request_now};
+use super::handlers::{PresentationReports, frame_request_now};
 use super::panic_boundary::contain_owner_callback;
 use super::signal::WindowWake;
 use super::slot::OwnerSlot;
@@ -766,7 +766,9 @@ impl WindowDelivery {
     /// carrying the newest presentation the platform reported since the
     /// window's last request.
     pub(crate) fn dispatch_frame(&self, request: FrameRequest) {
-        let request = self.presented.carried_by(request, event_now());
+        let request = self
+            .presented
+            .carried_by(request, flui_platform::EventTime::now());
         self.drain(Delivery::Frame(request));
     }
 

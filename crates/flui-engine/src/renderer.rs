@@ -52,9 +52,15 @@ use crate::surface_color::{OutputEncoding, ResolvedSurfaceColor, SurfaceColor};
 use crate::surface_lease::SurfaceLease;
 use crate::window_target::WindowTarget;
 
+/// `DXGI_ERROR_FRAME_STATISTICS_DISJOINT`: the statistics broke off (a mode
+/// change, a move to another output), so what came before does not compare.
+#[cfg(windows)]
+const DXGI_ERROR_FRAME_STATISTICS_DISJOINT: u32 = 0x887A_000B;
+
 /// The frame statistics of the DXGI swap chain behind `surface`, when wgpu
-/// presents it through DX12 and the display has shown a present of it; `None`
-/// on another backend or before anything was shown.
+/// presents it through DX12: a shown present, a break in the statistics, or
+/// nothing (another backend, or nothing shown yet: DXGI then answers an
+/// error, not statistics).
 ///
 /// The crate's one production `unsafe`: wgpu reaches its swap chain only
 /// through the hal escape (`Surface::as_hal`), and DXGI's statistics are COM
@@ -68,36 +74,47 @@ use crate::window_target::WindowTarget;
     clippy::default_trait_access,
     reason = "`DXGI_FRAME_STATISTICS` is wgpu-hal's `windows` type, which this crate does not name"
 )]
-fn dxgi_frame_statistics(
-    surface: &wgpu::Surface<'static>,
-) -> Option<flui_platform::DxgiFrameStatistics> {
-    // SAFETY: the DX12 surface is only read through the guard, which is
-    // dropped before this function returns; no wgpu call runs while it is
-    // held, so nothing wgpu does to the surface overlaps the read.
-    let hal = unsafe { surface.as_hal::<wgpu::hal::api::Dx12>() }?;
-    // A counted reference to the swap chain, released at the end of this
-    // function: holding it past the present would keep a swap chain wgpu
-    // replaced alive against its window.
-    let swap_chain = hal.swap_chain()?;
+fn dxgi_frame_statistics(surface: &wgpu::Surface<'static>) -> flui_platform::SwapChainStatistics {
+    use flui_platform::{DxgiFrameStatistics, SwapChainStatistics};
+
+    // SAFETY: `as_hal` requires that the resource it hands out is not
+    // destroyed unless its guard is the last reference to it and the GPU no
+    // longer uses it, and that wgpu-hal's own rules hold. Nothing here
+    // destroys anything: the guard is only read for a counted reference to
+    // the swap chain (`swap_chain()` clones the COM pointer, an AddRef), and
+    // is dropped before any call on that reference; the swap chain stays
+    // wgpu's, alive while wgpu keeps it. The read runs on the thread that
+    // presents through this surface, between its presents, so no wgpu call on
+    // the surface overlaps it.
+    let Some(hal) = (unsafe { surface.as_hal::<wgpu::hal::api::Dx12>() }) else {
+        return SwapChainStatistics::None;
+    };
+    // Released at the end of this function: holding it past the present would
+    // keep a swap chain wgpu replaced alive against its window.
+    let Some(swap_chain) = hal.swap_chain() else {
+        return SwapChainStatistics::None;
+    };
     drop(hal);
     let mut statistics = Default::default();
-    // SAFETY: both are reads of the swap chain's counters on the thread that
-    // presents through it, between presents; `statistics` is an initialized
-    // `DXGI_FRAME_STATISTICS` the call fills, and outlives it.
-    let (read, last_present) = unsafe {
-        (
-            swap_chain.GetFrameStatistics(&raw mut statistics),
-            swap_chain.GetLastPresentCount(),
-        )
-    };
-    read.ok()?;
-    Some(flui_platform::DxgiFrameStatistics::new(
-        last_present.ok()?,
-        statistics.PresentCount,
-        statistics.PresentRefreshCount,
-        statistics.SyncRefreshCount,
-        statistics.SyncQPCTime,
-    ))
+    // SAFETY: a read of the swap chain's counters through a reference this
+    // function holds, on the thread that presents through it; `statistics`
+    // is an initialized `DXGI_FRAME_STATISTICS` the call fills and outlives.
+    let read = unsafe { swap_chain.GetFrameStatistics(&raw mut statistics) };
+    match read {
+        Ok(()) => SwapChainStatistics::Dxgi(DxgiFrameStatistics::new(
+            statistics.PresentCount,
+            statistics.SyncRefreshCount,
+            statistics.SyncQPCTime,
+        )),
+        #[expect(
+            clippy::cast_sign_loss,
+            reason = "an HRESULT's bits, compared with the documented value"
+        )]
+        Err(error) if error.code().0 as u32 == DXGI_ERROR_FRAME_STATISTICS_DISJOINT => {
+            SwapChainStatistics::DxgiDisjoint
+        }
+        Err(_) => SwapChainStatistics::None,
+    }
 }
 
 /// What a frame's presentation became, from the two facts `render_scene`
@@ -1764,8 +1781,8 @@ impl Renderer {
     )]
     fn swap_chain_statistics(&self) -> flui_platform::SwapChainStatistics {
         #[cfg(windows)]
-        if let Some(statistics) = self.lease.surface().and_then(dxgi_frame_statistics) {
-            return flui_platform::SwapChainStatistics::Dxgi(statistics);
+        if let Some(surface) = self.lease.surface() {
+            return dxgi_frame_statistics(surface);
         }
         flui_platform::SwapChainStatistics::None
     }

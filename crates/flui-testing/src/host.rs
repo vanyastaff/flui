@@ -87,6 +87,9 @@ pub struct HeadlessWindow {
     input_regions: Mutex<SentInputRegions>,
     haptics: Arc<flui_platform::haptics::FakeHaptics>,
     os_drags: Arc<HeadlessOsDrags>,
+    /// Whether the simulated platform reports when frames reached the screen
+    /// ([`HeadlessWindow::with_presentation_reports`]).
+    reports_presentation: bool,
 }
 
 impl std::fmt::Debug for HeadlessWindow {
@@ -156,6 +159,7 @@ impl HeadlessWindow {
             input_regions: Mutex::default(),
             haptics: Arc::new(flui_platform::haptics::FakeHaptics::new()),
             os_drags: Arc::new(HeadlessOsDrags::default()),
+            reports_presentation: false,
         }
     }
 
@@ -194,6 +198,16 @@ impl HeadlessWindow {
     #[must_use]
     pub fn with_text_store_host(mut self) -> Self {
         self.text_store_host = true;
+        self
+    }
+
+    /// Play a platform that reports when frames reached the screen: the
+    /// window's capabilities say so, and [`HeadlessHost::report_presented`]
+    /// reaches its frame requests. Without it the window reports none, as its
+    /// capabilities say.
+    #[must_use]
+    pub fn with_presentation_reports(mut self) -> Self {
+        self.reports_presentation = true;
         self
     }
 
@@ -330,6 +344,11 @@ impl PlatformWindow for HeadlessWindow {
                     )
                     .ok(),
                 );
+        if self.reports_presentation {
+            let mut capabilities = flui_platform::WindowCapabilities::NONE;
+            capabilities.reports_presentation = flui_platform::Availability::Native;
+            state = state.with_capabilities(capabilities);
+        }
         state.revision = *self.revision.lock();
         state
     }
@@ -713,9 +732,14 @@ impl HeadlessHost {
     /// and each presentation's frame clock keeps it. Its time is on the
     /// event timeline input and frames are stamped on: the time since the
     /// [`clock`](Self::clock) started. A later report before that pump
-    /// replaces it.
+    /// replaces it. A primary window whose capabilities say it reports no
+    /// presentation (made without
+    /// [`HeadlessWindow::with_presentation_reports`]) ignores it, as a host
+    /// whose platform reports none does.
     pub fn report_presented(&mut self, presented: flui_platform::FramePresented) {
-        self.presented = Some(presented);
+        if self.window.reports_presentation {
+            self.presented = Some(presented);
+        }
     }
 
     /// Hand this UI runtime's window to `agent`'s hook, as a runner hands it a

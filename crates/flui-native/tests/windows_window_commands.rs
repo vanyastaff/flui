@@ -1386,9 +1386,8 @@ fn activation_is_a_fact_apart_from_focus() {
 
 /// A Win32 window for the conformance checks of `flui-testing`.
 struct Win32Fixture {
-    _platform: WindowsPlatform,
+    platform: WindowsPlatform,
     window: Rc<dyn HostWindow>,
-    handler: Rc<flui_testing::window_handler::RecordingWindowHandler>,
     hwnd: HWND,
 }
 
@@ -1468,25 +1467,18 @@ impl DxgiPresenter {
     /// none until the display has shown one.
     fn statistics(&self) -> flui_platform::SwapChainStatistics {
         let mut statistics = windows::Win32::Graphics::Dxgi::DXGI_FRAME_STATISTICS::default();
-        // SAFETY: reads of the swap chain's counters on its presenting
+        // SAFETY: a read of the swap chain's counters on its presenting
         // thread; `statistics` outlives the call that fills it.
-        let (read, last) = unsafe {
-            (
-                self.swap_chain.GetFrameStatistics(&raw mut statistics),
-                self.swap_chain.GetLastPresentCount(),
-            )
-        };
-        match (read, last) {
-            (Ok(()), Ok(last)) => {
+        let read = unsafe { self.swap_chain.GetFrameStatistics(&raw mut statistics) };
+        match read {
+            Ok(()) => {
                 flui_platform::SwapChainStatistics::Dxgi(flui_platform::DxgiFrameStatistics::new(
-                    last,
                     statistics.PresentCount,
-                    statistics.PresentRefreshCount,
                     statistics.SyncRefreshCount,
                     statistics.SyncQPCTime,
                 ))
             }
-            _ => flui_platform::SwapChainStatistics::None,
+            Err(_) => flui_platform::SwapChainStatistics::None,
         }
     }
 
@@ -1533,16 +1525,21 @@ impl WindowFixture for Win32Fixture {
         true
     }
 
-    /// Frames presented through a DXGI swap chain on the window, each after
-    /// handing the window's target the statistics read before it, as the
-    /// renderer does, until the statistics have named a shown present twice
-    /// (the second measures the refresh period); the swap chain is let go
-    /// before the window's next frame. DXGI updates its statistics when the
-    /// compositor reports a flip, which can take many presents.
+    /// Frames presented through a DXGI swap chain on a window of its own, as
+    /// a window an earlier check minimized shows none, each after handing the
+    /// window's target the statistics read before it, as the renderer does,
+    /// until the statistics have named a shown present twice (the second
+    /// measures the refresh period); the swap chain is let go before the
+    /// window's next frame, and the window closes after it. DXGI updates its
+    /// statistics when the compositor reports a flip, which can take many
+    /// presents.
     fn present_and_request_frame(&mut self) -> Option<flui_platform::FrameRequest> {
-        let target = self.window.surface_target();
+        let presenting = open(&self.platform, options());
+        settle();
+        let hwnd = hwnd_of(&presenting.window);
+        let target = presenting.window.surface_target();
         {
-            let presenter = DxgiPresenter::on(self.hwnd);
+            let presenter = DxgiPresenter::on(hwnd);
             let mut shown = std::collections::BTreeSet::new();
             for _ in 0..300 {
                 let statistics = presenter.statistics();
@@ -1551,13 +1548,8 @@ impl WindowFixture for Win32Fixture {
                     && shown.insert(read.present_count)
                 {
                     eprintln!(
-                        "DXGI before present {}: present {} shown at refresh {} (queued at \
-                         refresh {}), QPC {}",
-                        read.last_present_count + 1,
-                        read.present_count,
-                        read.sync_refresh_count,
-                        read.present_refresh_count,
-                        read.sync_qpc_time
+                        "DXGI before a present: present {} shown at refresh {}, QPC {}",
+                        read.present_count, read.sync_refresh_count, read.sync_qpc_time
                     );
                 }
                 target.pre_present_notify(statistics);
@@ -1568,24 +1560,32 @@ impl WindowFixture for Win32Fixture {
                 }
             }
         }
-        self.handler.take_calls();
-        self.window.request_redraw();
+        presenting.handler.take_calls();
+        presenting.window.request_redraw();
         settle();
-        let request = self
-            .handler
-            .take_calls()
-            .into_iter()
-            .rev()
-            .find_map(|call| match call {
-                flui_testing::window_handler::HandlerCall::FrameRequested(request) => Some(request),
-                _ => None,
-            });
+        let request =
+            presenting
+                .handler
+                .take_calls()
+                .into_iter()
+                .rev()
+                .find_map(|call| match call {
+                    flui_testing::window_handler::HandlerCall::FrameRequested(request) => {
+                        Some(request)
+                    }
+                    _ => None,
+                });
         if let Some(request) = request {
             eprintln!(
                 "the next frame request: vsync {:?}, presented {:?}",
                 request.vsync, request.presented
             );
         }
+        presenting
+            .window
+            .admit_and_apply(flui_platform::WindowCommand::Close)
+            .expect("a Win32 window closes");
+        settle();
         request
     }
 }
@@ -1595,9 +1595,8 @@ fn the_win32_window_conforms() {
     let window = open(&platform, options());
     let hwnd = hwnd_of(&window);
     window_conformance::assert_conforms(&mut Win32Fixture {
-        _platform: platform,
+        platform,
         window: window.window,
-        handler: window.handler,
         hwnd,
     });
 }

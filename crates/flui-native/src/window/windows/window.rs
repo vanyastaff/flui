@@ -698,7 +698,7 @@ impl WindowsWindow {
             context: self.context as isize,
             retirement: self.delivery.retirement(),
             presented: self.delivery.presentation_reports(),
-            last_sync: Mutex::new(None),
+            tracker: Mutex::default(),
         }
     }
 
@@ -1650,9 +1650,9 @@ pub(crate) struct Win32Surface {
     /// Where the presentations the renderer's swap chain reports go, for the
     /// window's next frame request.
     presented: crate::owner::handlers::PresentationReports,
-    /// The refresh the last statistics placed, which the next measure the
-    /// refresh period from.
-    last_sync: Mutex<Option<super::frame_timing::SyncPoint>>,
+    /// What the statistics last reported, so each read reports only a new
+    /// present.
+    tracker: Mutex<super::frame_timing::PresentTracker>,
 }
 
 impl Win32Surface {
@@ -1719,15 +1719,22 @@ impl flui_platform::SurfaceTarget for Win32Surface {
     /// statistics the renderer read become the window's presentation report:
     /// the newest present the display showed, at the refresh it began on,
     /// rebased from the performance counter onto the event clock, with the
-    /// refresh period two reads measure.
+    /// refresh period two reports measure. A read naming the present or the
+    /// refresh already reported reports nothing, and a disjoint read forgets
+    /// the last refresh ([`PresentTracker`](super::frame_timing::PresentTracker)).
     fn pre_present_notify(&self, statistics: flui_platform::SwapChainStatistics) {
         use std::num::NonZeroU64;
         use windows::Win32::System::Performance::{
             QueryPerformanceCounter, QueryPerformanceFrequency,
         };
 
-        let flui_platform::SwapChainStatistics::Dxgi(read) = statistics else {
-            return;
+        let read = match statistics {
+            flui_platform::SwapChainStatistics::Dxgi(read) => read,
+            flui_platform::SwapChainStatistics::DxgiDisjoint => {
+                self.tracker.lock().disjoint();
+                return;
+            }
+            _ => return,
         };
         if self.retirement.is_retired() {
             return;
@@ -1746,20 +1753,13 @@ impl flui_platform::SurfaceTarget for Win32Surface {
         ) else {
             return;
         };
-        let shown = {
-            let mut last = self.last_sync.lock();
-            let shown = super::frame_timing::shown_present(
-                read.sync_refresh_count,
-                read.sync_qpc_time,
-                now,
-                frequency,
-                *last,
-            );
-            if let Some(shown) = shown {
-                *last = Some(shown.sync);
-            }
-            shown
-        };
+        let shown = self.tracker.lock().read(
+            read.present_count,
+            read.sync_refresh_count,
+            read.sync_qpc_time,
+            now,
+            frequency,
+        );
         let Some(shown) = shown else {
             return;
         };
@@ -1771,7 +1771,6 @@ impl flui_platform::SurfaceTarget for Win32Surface {
         tracing::trace!(
             target: "flui.present",
             present = read.present_count,
-            last_present = read.last_present_count,
             sync_refresh = read.sync_refresh_count,
             sync_qpc = read.sync_qpc_time,
             at_ns = presented.at.as_nanos(),

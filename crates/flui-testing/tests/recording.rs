@@ -685,29 +685,35 @@ fn a_factory_tap_ends_its_recording_when_the_runtime_goes_away() {
     );
 }
 
-/// One timeline for input, frames and presentation: a report that a
-/// frame reached the screen, injected on the headless host, is recorded with
-/// the frame that carried it, and the time from a touch to that frame's
-/// showing is a subtraction of the two recorded stamps, with no conversion.
-#[test]
-fn a_presentation_and_the_input_before_it_are_on_one_timeline() {
-    let event_now = |host: &HeadlessHost| {
-        EventTime::from_nanos(
+/// [`host`] on a window whose platform reports when frames reached the screen.
+fn reporting_host(log: &Rc<RefCell<Vec<&'static str>>>) -> HeadlessHost {
+    host_on(
+        HeadlessWindow::new(200, 200).with_presentation_reports(),
+        log,
+    )
+}
+
+const REFRESH: Duration = Duration::from_millis(16);
+
+/// A touch, the frame that draws it, a report that the frame was shown 24 ms after the touch,
+/// and two more frames, recorded on the host `make` builds: the touch's arrival and the
+/// presentation report a frame carried, if any did.
+fn touch_and_presentation(
+    make: fn(&Rc<RefCell<Vec<&'static str>>>) -> HeadlessHost,
+) -> (EventTime, Option<FramePresented>) {
+    let (bytes, _) = recorded_on(make, Privacy::Redact, |host| {
+        let touched = EventTime::from_nanos(
             u64::try_from(host.clock().elapsed().as_nanos()).expect("test time fits"),
-        )
-    };
-    let refresh = Duration::from_millis(16);
-    let (bytes, _) = recorded(Privacy::Redact, |host| {
-        let touched = event_now(host);
+        );
         touch(host, 1, true);
-        let _ = host.pump(refresh);
+        let _ = host.pump(REFRESH);
         // The frame that drew the touch is shown at the refresh after it.
         host.report_presented(
-            FramePresented::new(touched + Duration::from_millis(24)).with_refresh(refresh),
+            FramePresented::new(touched + Duration::from_millis(24)).with_refresh(REFRESH),
         );
-        let _ = host.pump(refresh);
+        let _ = host.pump(REFRESH);
         touch(host, 1, false);
-        let _ = host.pump(refresh);
+        let _ = host.pump(REFRESH);
     });
     let recording = replayable(&bytes).expect("a whole recording");
     let rows = recording.rows();
@@ -715,26 +721,41 @@ fn a_presentation_and_the_input_before_it_are_on_one_timeline() {
         .first()
         .map(|(_, row)| row.arrival)
         .expect("the touch was recorded");
-    let presented = rows
-        .iter()
-        .find_map(|row| match row {
-            InputRecord::Input(InputRow {
-                input:
-                    HostInput::Frame {
-                        presented: Some(presented),
-                        ..
-                    },
-                ..
-            }) => Some(*presented),
-            _ => None,
-        })
-        .expect("a frame carried the presentation report");
+    let presented = rows.iter().find_map(|row| match row {
+        InputRecord::Input(InputRow {
+            input:
+                HostInput::Frame {
+                    presented: Some(presented),
+                    ..
+                },
+            ..
+        }) => Some(*presented),
+        _ => None,
+    });
+    (touch, presented)
+}
+
+/// One timeline for input, frames and presentation: a report that a
+/// frame reached the screen, injected on the headless host, is recorded with
+/// the frame that carried it, and the time from a touch to that frame's
+/// showing is a subtraction of the two recorded stamps, with no conversion.
+#[test]
+fn a_presentation_and_the_input_before_it_are_on_one_timeline() {
+    let (touch, presented) = touch_and_presentation(reporting_host);
+    let presented = presented.expect("a frame carried the presentation report");
     assert_eq!(
         presented.at.saturating_duration_since(touch),
         Duration::from_millis(24),
         "the touch's stamp and the presentation's are on one timeline"
     );
-    assert_eq!(presented.refresh, Some(refresh));
+    assert_eq!(presented.refresh, Some(REFRESH));
+}
+
+/// A headless window whose capabilities say it reports no presentation
+/// carries none, whatever a test injects.
+#[test]
+fn a_window_that_reports_no_presentation_carries_none() {
+    assert_eq!(touch_and_presentation(host).1, None);
 }
 
 /// The pointer rows of `rows`, with their positions.
