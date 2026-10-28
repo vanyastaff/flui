@@ -104,8 +104,9 @@ trait depends on `flui-platform` instead.
   documents it for Linux, Windows and macOS with every feature and for iOS,
   Android and wasm32. A list of what may be named fails closed: an OS binding
   a dependency brings is a finding without anyone listing it. The windows a
-  host builds are crate-private: the platform hands out `Arc<dyn HostWindow>`,
-  a raw window or display handle leaves through `raw-window-handle`, and what
+  host builds are crate-private: the platform hands out `Rc<dyn HostWindow>`,
+  a raw window or display handle leaves through the window's `SurfaceTarget`
+  and `raw-window-handle`, and what
   one OS offers beyond the window contract is an extension implemented for
   `dyn HostWindow` (`os::windows::WindowsWindowExt::win32`,
   `os::macos::MacOSWindowExt::appkit`) over
@@ -790,14 +791,35 @@ trait depends on `flui-platform` instead.
   it does not enable desktop clipboard code. The required-target and
   all-features `cargo xtask cross-typecheck` configurations compile this
   boundary, including the selected packages' tests, examples and benches.
-- **A window leaves a backend as an `Arc<dyn HostWindow>`.**
-  `HostWindow: PlatformWindow` adds the one AccessKit-speaking accessor,
-  `accessibility()`. `Platform::open_window`, `WindowOpen::Ready` and
-  `PendingWindow` return it; every backend window implements it next to its
+- **A window leaves a backend as an `Rc<dyn HostWindow>`, and stays on its
+  owner thread (ADR-0254 §5).** `HostWindow: PlatformWindow` adds the one
+  AccessKit-speaking accessor, `accessibility()`. `Platform::open_window` and
+  `WindowOpen::Ready` return it; a deferred open (`PendingWindow`) resolves to
+  an `OpenedWindow`, whose identity any thread may hold and whose window only
+  the owner thread reaches. Every backend window implements it next to its
   `PlatformWindow` impl, and its accessibility bridge is fixed when the window
-  is built, so a runner may read it once. `dyn HostWindow` has its own
-  `HasWindowHandle`/`HasDisplayHandle` impls: without them an `open_window`
-  result would not be a `flui_engine::WindowTarget` until upcast.
+  is built, so a runner may read it once. Neither `dyn PlatformWindow` nor
+  `dyn HostWindow` is `Send` or `Sync`; what other threads hold of a window
+  is `Send + Sync` and keeps nothing of it alive:
+  - its `SurfaceTarget` (`surface_target()`), from which the renderer takes
+    the raw window and display handles. It answers `Unavailable` once the
+    window's `Retirement` started (`WindowDelivery::clear`, where every host
+    retires its native window) and, per host, when Win32's identity probe no
+    longer finds the window behind its handle, AppKit's or UIKit's closed
+    flag is set, or the Android activity has no native window. Its
+    `pre_present_notify` arms the Wayland frame callback on winit and returns
+    at once elsewhere. Only the web and Apple targets hold a non-`Send`
+    object and carry an `unsafe impl Send + Sync`, whose SAFETY names the
+    invariant;
+  - its `RedrawRequester` (`redraw_requester()`), how a waker, a signal
+    written on a worker or an accessibility adapter's thread asks for a
+    frame: Win32, winit and Android ask the window system directly, AppKit
+    hops to the owner lane, the headless host waits for an owner turn, UIKit
+    and the web serve every frame from their display links.
+  A host table of open windows (`WindowSet`, winit's `windows`, the AppKit
+  registry) holds them in `owner::slot::{OwnerCell, OwnerMap}`, which only the
+  owner thread reaches; `OwnerWeak` is the `Send` weak reference a queued
+  close or state publisher carries.
 - **A window publishes a state snapshot and takes commands (ADR-0237).** There
   is one window trait. `PlatformWindow::state` returns an immutable
   `WindowState` with a revision, and `apply` takes an `AdmittedCommand`
@@ -876,19 +898,15 @@ trait depends on `flui-platform` instead.
   or decline a maximize) and publishes after each command or `simulate_*`
   call. The iOS window rereads its metrics and lifecycle on each `state` call
   and publishes from its view's metric updates and each lifecycle step.
-- **The macOS backend enforces the window thread-affinity default
-  mechanically.** `PlatformWindow`'s rule is that a method driving a window runs
-  on the thread that owns the platform event loop. Every window-driving
-  `PlatformWindow` body and extension command on `MacOSWindow`
-  re-enters the owner lane through `route_on_owner`, so a call from any thread
-  is marshaled onto the window's owner lane before any AppKit message is sent.
-  Two carve-outs: the class-E raw-handle accessors
-  (`raw_window_handle`/`window_handle`, and `display_handle` which carries no
-  pointer) take their NSView outside the routing — `!Send` outputs whose
-  enforcement is upstream (raw-window-metal's main-thread hard panic plus
-  `debug_assert_appkit_main_thread`-guarded platform entries, ADR-0039); and
-  the `enable_tiling`/`disable_tiling`/`is_tiling_enabled` trio never routes
-  (recorded for observability only until the native API is adopted).
+- **The macOS window is reached on its owner thread only, by type.**
+  `MacOSWindow` is neither `Send` nor `Sync`, so every window method and
+  extension command runs on the thread that holds the window, the AppKit main
+  thread, and messages AppKit directly. What leaves the thread is the window's
+  `MacOSRedraw`, which queues a redraw on the owner lane
+  (`exec_async_on_owner`) when asked from another thread, and its
+  `MacOSSurface`, which hands out the content view's pointer while the window
+  is open and never messages it (raw-window-metal checks that the Metal layer
+  is made on the main thread).
 - **Linux host events reach the owner through an inbox, and a machine that
   waits for the application waits for delivery, not for receipt.** Two sources
   run beside the owner and never run application code: an async logind task

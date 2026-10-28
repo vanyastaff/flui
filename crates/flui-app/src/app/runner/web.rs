@@ -383,18 +383,15 @@ impl WebFrameDriver {
                     let built = renderer.recover().await;
                     (Some(renderer), built)
                 }
-                None => match flui_engine::Renderer::with_surface_color(
-                    surface,
-                    surface_color,
-                )
-                .await
-                {
-                    Ok(mut renderer) => {
-                        renderer.set_frame_latency(frame_latency);
-                        (Some(renderer), Ok(()))
+                None => {
+                    match flui_engine::Renderer::with_surface_color(surface, surface_color).await {
+                        Ok(mut renderer) => {
+                            renderer.set_frame_latency(frame_latency);
+                            (Some(renderer), Ok(()))
+                        }
+                        Err(error) => (None, Err(error)),
                     }
-                    Err(error) => (None, Err(error)),
-                },
+                }
             };
             if !authority.is_live() {
                 return;

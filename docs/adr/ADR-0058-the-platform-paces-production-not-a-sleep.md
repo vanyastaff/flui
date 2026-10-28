@@ -50,7 +50,8 @@ whole extra period in the acquire, which halved the frame rate of a realistic wo
 AppKit/Metal.
 
 **1. The platform's own frame-pacing signal is armed before every present.**
-`PlatformWindow::pre_present_notify` (default no-op) is called by the raster backend
+`SurfaceTarget::pre_present_notify` (the window's surface target, ADR-0254 §5; a host
+without a frame callback returns at once) is called by the raster backend
 immediately before `queue.present`, through `RasterBackend::set_pre_present_hook`. The engine
 owns the *when* (only for a frame that will present, never on a skip path — a Wayland frame
 callback requested with no commit behind it withholds every later redraw); the app layer owns

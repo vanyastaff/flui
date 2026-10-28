@@ -288,8 +288,7 @@ pub(crate) struct AppRuntime {
     /// queue reaches is found here by allocation, never by a numeric id the
     /// operating system may reuse.
     #[cfg(feature = "native")]
-    pub(super) native_windows:
-        std::cell::RefCell<Vec<std::rc::Weak<dyn flui_native::HostWindow>>>,
+    pub(super) native_windows: std::cell::RefCell<Vec<std::rc::Weak<dyn flui_native::HostWindow>>>,
     /// The session end the host is answering: every presentation's subscribers
     /// hold their blocks on this one request, so the answer to the operating
     /// system is the aggregate. Kept from the query until the session end is

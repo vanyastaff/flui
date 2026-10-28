@@ -17,8 +17,7 @@ use flui_foundation::geometry::Point;
 
 use crate::{
     AdmittedCommand, ApplyError, CursorError, PlatformHaptics, PlatformTextInput, RedrawRequester,
-    SurfaceTarget,
-    Unsupported, WindowId, WindowState,
+    SurfaceTarget, Unsupported, WindowId, WindowState,
 };
 
 /// What lies under a point given in one window's coordinates, as

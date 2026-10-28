@@ -280,7 +280,10 @@ impl MainController {
                     super::discard_window(window.as_ref(), "a main window nobody waits for");
                 }),
                 Some(Ok(WindowOpen::Pending(mut pending))) => {
-                    if let Some(Ok(window)) = pending.try_take().map(|taken| taken.and_then(super::opened_window)) {
+                    if let Some(Ok(window)) = pending
+                        .try_take()
+                        .map(|taken| taken.and_then(super::opened_window))
+                    {
                         contain(|| {
                             super::discard_window(
                                 window.as_ref(),
@@ -430,7 +433,10 @@ impl MainController {
             contain(|| drop(installing));
         }
         if let Some(mut pending) = self.pending.take() {
-            if let Some(Ok(window)) = pending.try_take().map(|taken| taken.and_then(super::opened_window)) {
+            if let Some(Ok(window)) = pending
+                .try_take()
+                .map(|taken| taken.and_then(super::opened_window))
+            {
                 contain(|| {
                     super::discard_window(window.as_ref(), "a main window nobody waits for");
                 });

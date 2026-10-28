@@ -370,7 +370,10 @@ impl WindowDelivery {
     /// read publishes what changed.
     #[cfg_attr(
         all(windows, not(feature = "winit-backend")),
-        expect(dead_code, reason = "the Win32 window publishes through its window procedure")
+        expect(
+            dead_code,
+            reason = "the Win32 window publishes through its window procedure"
+        )
     )]
     pub(crate) fn publish_through_owner<W: 'static>(
         &self,

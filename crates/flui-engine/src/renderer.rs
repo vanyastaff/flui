@@ -954,13 +954,11 @@ impl Renderer {
         target: impl WindowTarget,
         requested: SurfaceColor,
     ) -> EngineResult<Self> {
-        // An `Rc<dyn PlatformWindow>` (the common caller shape) becomes an
-        // `Arc<Rc<dyn PlatformWindow>>` here — forced: `Arc<dyn
-        // PlatformWindow>` cannot upcast to `Arc<dyn WindowTarget>` without
-        // `PlatformWindow: WindowTarget`, which would invert the
-        // flui-native → flui-engine layer edge (`cargo xtask workspace`).
-        // One extra pointer chase per surface creation; documented, not
-        // fixed — see issue #1043.
+        // An `Arc<dyn SurfaceTarget>` (the common caller shape, a window's
+        // surface target) becomes an `Arc<Arc<dyn SurfaceTarget>>` here:
+        // `Arc<dyn SurfaceTarget>` cannot upcast to `Arc<dyn WindowTarget>`
+        // without naming `flui-platform`, which this crate does not depend on.
+        // One extra pointer chase per surface creation.
         let (w, h) = (800u32, 600u32); // Will be updated on first resize
         let device_lost_hook = Arc::default();
         let (target, stack) = Self::probe_then_build(Arc::new(target), |target| {

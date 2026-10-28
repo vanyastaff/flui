@@ -254,7 +254,10 @@ impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V
     /// A clone of the value under `key`.
     #[cfg_attr(
         not(feature = "winit-backend"),
-        expect(dead_code, reason = "only the winit host reads its window table this way")
+        expect(
+            dead_code,
+            reason = "only the winit host reads its window table this way"
+        )
     )]
     pub(crate) fn get(&self, key: &K) -> Option<V> {
         self.cell.with(|map| map.get(key).cloned()).flatten()
@@ -264,7 +267,10 @@ impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V
     /// open or close windows.
     #[cfg_attr(
         not(feature = "winit-backend"),
-        expect(dead_code, reason = "only the winit host reads its window table this way")
+        expect(
+            dead_code,
+            reason = "only the winit host reads its window table this way"
+        )
     )]
     pub(crate) fn entries(&self) -> Vec<(K, V)> {
         self.cell
@@ -279,7 +285,10 @@ impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V
     /// A snapshot of the values.
     #[cfg_attr(
         not(any(feature = "winit-backend", target_os = "macos")),
-        expect(dead_code, reason = "only the winit and AppKit hosts read their window tables")
+        expect(
+            dead_code,
+            reason = "only the winit and AppKit hosts read their window tables"
+        )
     )]
     pub(crate) fn values(&self) -> Vec<V> {
         self.cell
@@ -290,7 +299,10 @@ impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V
     /// A snapshot of the keys.
     #[cfg_attr(
         not(any(feature = "winit-backend", target_os = "macos")),
-        expect(dead_code, reason = "only the winit and AppKit hosts read their window tables")
+        expect(
+            dead_code,
+            reason = "only the winit and AppKit hosts read their window tables"
+        )
     )]
     pub(crate) fn keys(&self) -> Vec<K> {
         self.cell
@@ -302,7 +314,10 @@ impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V
     /// nothing.
     #[cfg_attr(
         not(any(feature = "winit-backend", target_os = "macos")),
-        expect(dead_code, reason = "only the winit and AppKit hosts read their window tables")
+        expect(
+            dead_code,
+            reason = "only the winit and AppKit hosts read their window tables"
+        )
     )]
     pub(crate) fn is_empty(&self) -> bool {
         self.cell.with(|map| map.is_empty()).unwrap_or(true)

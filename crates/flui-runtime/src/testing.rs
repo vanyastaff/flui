@@ -189,10 +189,7 @@ impl TestWindow {
     }
 }
 
-fn record_redraw(
-    calls: &AtomicU32,
-    threads: &parking_lot::Mutex<Vec<std::thread::ThreadId>>,
-) {
+fn record_redraw(calls: &AtomicU32, threads: &parking_lot::Mutex<Vec<std::thread::ThreadId>>) {
     calls.fetch_add(1, Ordering::Relaxed);
     threads.lock().push(std::thread::current().id());
 }

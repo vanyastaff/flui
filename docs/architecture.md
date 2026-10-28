@@ -147,7 +147,7 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
         &self,
         options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
-    ) -> Result<Arc<dyn HostWindow>, OpenWindowError>;
+    ) -> Result<Rc<dyn HostWindow>, OpenWindowError>;
     fn active_window(&self) -> Option<WindowId>;
     fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError>;
 

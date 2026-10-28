@@ -732,6 +732,73 @@ fn a_hidden_windows_frame_request_reaches_its_frame_callback() {
         > 0));
 }
 
+/// The window stays on its thread; another thread asks for a frame through
+/// its redraw requester, and the window's frame callback runs (ADR-0254 §5).
+fn a_redraw_asked_from_another_thread_reaches_the_window() {
+    let platform = platform();
+    let window = open(&platform, options());
+    settle();
+    let redraws = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&redraws);
+    window.handler.react_to_frame(move |_| {
+        counted.fetch_add(1, Ordering::SeqCst);
+    });
+    pump_until(Duration::from_millis(200), || false);
+    let before = redraws.load(Ordering::SeqCst);
+    let requester = window.redraw_requester();
+    std::thread::spawn(move || requester.request_redraw())
+        .join()
+        .expect("the requesting thread");
+    assert!(
+        pump_until(Duration::from_secs(2), || redraws.load(Ordering::SeqCst)
+            > before),
+        "a redraw asked from another thread never reached the frame callback"
+    );
+}
+
+/// `a_surface_target_is_send_sync_and_unavailable_after_close`, on Win32: the
+/// target hands out the window's handle on any thread while the window is
+/// open, and `Unavailable` once it closed; it does not keep the window open,
+/// and a redraw asked after the close reaches nothing.
+fn a_surface_target_is_unavailable_once_its_window_closed() {
+    let platform = platform();
+    let window = open(&platform, options());
+    settle();
+    let hwnd = hwnd_of(&window).0 as isize;
+    let target = window.surface_target();
+    let requester = window.redraw_requester();
+    let (open_target, open_hwnd) = (Arc::clone(&target), hwnd);
+    std::thread::spawn(move || {
+        let handle = raw_window_handle::HasWindowHandle::window_handle(&*open_target)
+            .expect("an open window's target has a handle on any thread");
+        let raw_window_handle::RawWindowHandle::Win32(handle) = handle.as_raw() else {
+            panic!("not a Win32 handle");
+        };
+        assert_eq!(handle.hwnd.get(), open_hwnd, "the window's own handle");
+        assert!(raw_window_handle::HasDisplayHandle::display_handle(&*open_target).is_ok());
+    })
+    .join()
+    .expect("the target's thread");
+
+    window.close_now();
+    pump_until(Duration::from_millis(100), || false);
+    drop(window);
+    assert!(
+        matches!(
+            raw_window_handle::HasWindowHandle::window_handle(&*target),
+            Err(raw_window_handle::HandleError::Unavailable)
+        ),
+        "a closed window's target hands out no handle"
+    );
+    assert!(matches!(
+        raw_window_handle::HasDisplayHandle::display_handle(&*target),
+        Err(raw_window_handle::HandleError::Unavailable)
+    ));
+    std::thread::spawn(move || requester.request_redraw())
+        .join()
+        .expect("a redraw asked of a closed window reaches nothing");
+}
+
 /// Run `changed` with the snapshot before and after each `state_changed` of
 /// `window`'s handler from here on, as a consumer compares them.
 fn on_changes(
@@ -1602,6 +1669,14 @@ fn native_window_commands() {
         (
             "a_hidden_windows_frame_request_reaches_its_frame_callback",
             a_hidden_windows_frame_request_reaches_its_frame_callback,
+        ),
+        (
+            "a_redraw_asked_from_another_thread_reaches_the_window",
+            a_redraw_asked_from_another_thread_reaches_the_window,
+        ),
+        (
+            "a_surface_target_is_unavailable_once_its_window_closed",
+            a_surface_target_is_unavailable_once_its_window_closed,
         ),
         (
             "a_show_asked_for_while_a_hidden_window_is_restored_is_kept",

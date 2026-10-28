@@ -435,10 +435,13 @@ thread_local! {
     /// draining, owner thread, address cache, window registry, surface
     /// applier) and the loop-scoped `OwnerPlatform` host —
     /// see [`AppRuntime`]'s own module doc for why one struct correctly
-    /// carries both invariants. The platform callback surface still
-    /// requires `Send`, so the `!Send` UI runtime this holds remains in owner TLS
-    /// until that seam is retired (ADR-0027 follow-up 5); access is only
-    /// through the stamped FIFO dispatcher below and the fenced
+    /// carries both invariants. A window's handler and the window itself are
+    /// owner-local (ADR-0254 §4, §5), but the application-level registrations
+    /// the owner platform takes (`on_wake`, `on_host_notice`,
+    /// `on_session_end`, the exit-policy and wake-deadline hooks) are still
+    /// `Send` closures until they become the `AppHandler` (ADR-0254 §4), so
+    /// the `!Send` UI runtime this holds remains in owner TLS for them; access
+    /// is only through the stamped FIFO dispatcher below and the fenced
     /// `with_owner_platform` accessor.
     ///
     /// `AppRuntime::new()` is cheap and side-effect-free (no singleton

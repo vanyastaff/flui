@@ -82,7 +82,7 @@
 //! // borrow: the renderer keeps it for as long as its surface lives, so it
 //! // outlives this stack frame. Almost anything that implements
 //! // `HasWindowHandle + HasDisplayHandle + Send + Sync + 'static` qualifies —
-//! // including `Rc<dyn PlatformWindow>` from `flui-native`.
+//! // including the `Arc<dyn SurfaceTarget>` a `flui-platform` window hands out.
 //! let mut renderer = Renderer::new(window).await?;
 //!
 //! // Render on every frame your event loop asks for; `render_scene` is sync
