@@ -175,8 +175,7 @@ pub mod repeat {
 
 pub mod keyboards {
     //! The seats' keyboards, each apart from the others: the window it types
-    //! into and the key it repeats, and the bounds of the keymap a compositor
-    //! shares.
+    //! into and the key it repeats.
     //!
     //! A key repeats only while its keyboard is in a window: a repeat that
     //! reaches no one would only wake the loop.
@@ -188,29 +187,6 @@ pub mod keyboards {
     use super::repeat::KeyRepeat;
     use super::wire::SeatKey;
     use crate::input::assembly::NativeSurface;
-
-    /// The largest keymap the host reads: a desktop keymap is some tens of
-    /// kilobytes, so a size past this is a compositor's fault, not a keymap.
-    pub const KEYMAP_LIMIT: usize = 8 * 1024 * 1024;
-
-    /// The bytes to read for a keymap the compositor says is `size` long;
-    /// `None` for none, or past [`KEYMAP_LIMIT`].
-    #[must_use]
-    pub fn keymap_length(size: u32) -> Option<usize> {
-        usize::try_from(size)
-            .ok()
-            .filter(|length| (1..=KEYMAP_LIMIT).contains(length))
-    }
-
-    /// The keymap text in `bytes`: up to its terminating NUL, which the
-    /// protocol includes in the size; `None` when it is not UTF-8.
-    #[must_use]
-    pub fn keymap_text(mut bytes: Vec<u8>) -> Option<String> {
-        if let Some(end) = bytes.iter().position(|byte| *byte == 0) {
-            bytes.truncate(end);
-        }
-        String::from_utf8(bytes).ok()
-    }
 
     /// One seat's keyboard.
     #[derive(Debug, Clone)]
@@ -380,21 +356,6 @@ pub mod keyboards {
             keyboards.press(A, 30, true, start);
             keyboards.forget_surface(FIRST);
             assert_eq!(keyboards.due(), None, "its window closed");
-        }
-
-        /// A keymap is read up to its NUL and only within the limit.
-        #[test]
-        fn a_keymap_is_read_within_its_limit() {
-            assert_eq!(keymap_length(0), None);
-            assert_eq!(keymap_length(64_756), Some(64_756));
-            let limit = u32::try_from(KEYMAP_LIMIT).expect("fits");
-            assert_eq!(keymap_length(limit), Some(KEYMAP_LIMIT));
-            assert_eq!(keymap_length(limit + 1), None);
-            assert_eq!(
-                keymap_text(b"xkb_keymap {};\0\0".to_vec()).as_deref(),
-                Some("xkb_keymap {};")
-            );
-            assert_eq!(keymap_text(vec![0xff, 0xfe, 0]), None);
         }
     }
 }

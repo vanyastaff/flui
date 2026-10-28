@@ -15,9 +15,10 @@
 //!
 //! The platform files are `windows` (the window class's input hook with each
 //! window's input, the messages' decoding in `raw` and the precision touchpad
-//! in `direct_manipulation`), `apple`, `android`, `web`, `linux` (`wayland`,
-//! with the XKB keyboard in `linux::xkb`), `winit` and `headless`. A platform
-//! file's pure half is a module inside it, compiled and tested on every host.
+//! in `direct_manipulation`), `apple`, `android`, `web`, `linux` (what the
+//! Wayland and X11 hosts share, the XKB keyboard, beside the Wayland seats
+//! and the X11 host's XInput 2), `winit` and `headless`. A platform file's
+//! pure half is a module inside it, compiled and tested on every host.
 //!
 //! The model and the pure halves the backend conformance table and the native
 //! recordings in `tests/` decode with are public and hidden from the

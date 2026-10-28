@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use cursor_icon::CursorIcon;
 use flui_platform::input_capabilities::InputCapabilities;
-use flui_platform::keyboard::{KeyEvent, KeyRepeat as Repeat, KeyState};
+use flui_platform::keyboard::{KeyEvent, KeyState};
 use flui_platform::pointer::{PenTool, PointerEvent, PointerKind};
 use flui_platform::{
     CursorError, EventTime, PlatformInput, Unsupported, UnsupportedReason, WindowId,
@@ -70,7 +70,7 @@ use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_v2::{self, ZwpTabletV
 use web_time::Instant;
 
 use super::cursor;
-use super::keyboards::{Keyboards, keymap_length, keymap_text};
+use super::keyboards::Keyboards;
 use super::wire::{
     Axis, AxisSource, PinchWire, PointerWire, Routed, SeatAssembly, SeatEvent, SeatKey, SeatWire,
     ToolWire, TouchWire, WireTime,
@@ -78,8 +78,7 @@ use super::wire::{
 use crate::input::assembly::{NativeClock, NativeDevice, NativeSurface};
 use crate::input::availability::{self, WaylandInputGlobals};
 use crate::input::event_timestamp_ns;
-use crate::input::keys::location_for_code;
-use crate::input::linux::xkb::{Keymap, code_of, key_of};
+use crate::input::linux::xkb::{EVDEV_OFFSET, Keyboard, KeymapSource, keymap_length};
 #[cfg(any(test, feature = "testing"))]
 use crate::owner::linux::wayland::ShownCursor;
 use crate::owner::linux::wayland::{SeatWindow, WaylandInput, WaylandState};
@@ -130,7 +129,7 @@ enum Wire {
     /// or went.
     Seat(SeatWire),
     /// A keyboard's keymap, as text.
-    Keymap { seat: SeatKey, text: String },
+    Keymap { seat: SeatKey, source: KeymapSource },
     /// A keyboard entered the window of a surface, or left (`None`).
     KeyFocus {
         seat: SeatKey,
@@ -226,12 +225,19 @@ impl Objects {
     }
 }
 
+/// One seat's keymap: where it came from, which names its layouts, and the
+/// keyboard (state, compose and the keys held) read through it.
+struct SeatKeymap {
+    source: KeymapSource,
+    keyboard: Keyboard,
+}
+
 /// What the delivery side keeps: the assembly, each seat's keymap and
 /// keyboard, the layout last named, and the capabilities the windows were
 /// last given.
 struct Delivering {
     assembly: SeatAssembly,
-    keymaps: Vec<(SeatKey, Keymap)>,
+    keymaps: Vec<(SeatKey, SeatKeymap)>,
     keyboards: Keyboards,
     /// The layout's name as last reported, of the keyboard whose keymap or
     /// group changed last.
@@ -500,11 +506,8 @@ impl SeatInput {
                 let due = delivering.keyboards.take_due(Instant::now());
                 due.into_iter()
                     .filter_map(|(seat, code, focus)| {
-                        let event = delivering.key_event(seat, code, KeyState::Down, time)?;
-                        Some((
-                            Target::Surface(focus),
-                            PlatformInput::Keyboard(event.with_repeat(Repeat::AutoRepeat)),
-                        ))
+                        let event = delivering.key_event(seat, code, KeyState::Down, true, time)?;
+                        Some((Target::Surface(focus), PlatformInput::Keyboard(event)))
                     })
                     .collect()
             })
@@ -550,64 +553,92 @@ enum Target {
 }
 
 impl Delivering {
-    fn keymap(&self, seat: SeatKey) -> Option<&Keymap> {
+    fn keymap(&self, seat: SeatKey) -> Option<&SeatKeymap> {
         self.keymaps
             .iter()
             .find(|(held, _)| *held == seat)
             .map(|(_, keymap)| keymap)
     }
 
-    /// The key event of `seat`'s key `code` going `state` at `time`, as its
-    /// keymap reads it now; `None` before a keymap came.
+    fn keymap_mut(&mut self, seat: SeatKey) -> Option<&mut SeatKeymap> {
+        self.keymaps
+            .iter_mut()
+            .find(|(held, _)| *held == seat)
+            .map(|(_, keymap)| keymap)
+    }
+
+    /// The key event of `seat`'s key `code` (the kernel's) going `state` at
+    /// `time`, as its keyboard reads it now, compose included; `None` before
+    /// a keymap came.
     fn key_event(
-        &self,
+        &mut self,
         seat: SeatKey,
         code: u32,
         state: KeyState,
+        repeat: bool,
         time: EventTime,
     ) -> Option<KeyEvent> {
-        let keymap = self.keymap(seat)?;
-        let facts = keymap.key(code);
-        let physical = code_of(code);
-        Some(
-            KeyEvent::new(state, key_of(facts.keysym, &facts.text), physical, time)
-                .with_location(location_for_code(physical))
-                .with_modifiers(keymap.modifiers()),
-        )
+        let keyboard = &mut self.keymap_mut(seat)?.keyboard;
+        Some(keyboard.key(code.saturating_add(EVDEV_OFFSET), state, repeat, time))
     }
 
     fn keyboard_wire(&mut self, wire: Wire) -> Vec<(Target, PlatformInput)> {
         match wire {
-            Wire::Keymap { seat, text } => {
+            Wire::Keymap { seat, source } => {
                 self.keyboards.stop(seat);
-                self.keymaps.retain(|(held, _)| *held != seat);
-                match Keymap::compile(&text) {
-                    Some(keymap) => self.keymaps.push((seat, keymap)),
-                    None => {
-                        tracing::warn!("the compositor's keymap was not compiled: keys are unread");
+                // A new keymap for a keyboard that has one is read into it:
+                // the keys it holds stay held, and compose starts over.
+                let read = match self.keymap_mut(seat) {
+                    Some(held) => {
+                        let read = held.keyboard.reload(&source);
+                        if read {
+                            held.source = source;
+                        }
+                        read
                     }
+                    None => match Keyboard::new(&source) {
+                        Some(keyboard) => {
+                            self.keymaps.push((seat, SeatKeymap { source, keyboard }));
+                            true
+                        }
+                        None => false,
+                    },
+                };
+                if !read {
+                    tracing::warn!("the compositor's keymap was not compiled: keys are unread");
                 }
                 self.note_layout(seat);
-                if self.layout.is_empty() {
-                    let head: String = text.chars().take(400).collect();
-                    tracing::info!(%head, "the compositor's keymap names no layout");
-                }
                 if self.keyboards.focused(seat).is_some() {
                     self.send_modifiers(seat, arrival(None));
                 }
                 Vec::new()
             }
             Wire::KeyFocus { seat, focus } => {
+                let left = self.keyboards.focused(seat);
                 self.keyboards.focus(seat, focus);
-                if focus.is_none() {
-                    // What the keyboard held stays with it: the window's next
-                    // readings carry no modifier it no longer hears of.
-                    self.assembly.assemble(SeatWire {
-                        time: arrival(None),
-                        event: SeatEvent::KeyboardLeft(seat),
-                    });
+                if focus.is_some() {
+                    return Vec::new();
                 }
-                Vec::new()
+                // What the keyboard held stays with it: the window's next
+                // readings carry no modifier it no longer hears of, and the
+                // keys still held are released in the window they were
+                // pressed in, where compose ends too.
+                self.assembly.assemble(SeatWire {
+                    time: arrival(None),
+                    event: SeatEvent::KeyboardLeft(seat),
+                });
+                let time = EventTime::from_nanos(event_timestamp_ns());
+                let released = self
+                    .keymap_mut(seat)
+                    .map(|keymap| keymap.keyboard.leave(time))
+                    .unwrap_or_default();
+                let Some(left) = left else {
+                    return Vec::new();
+                };
+                released
+                    .into_iter()
+                    .map(|event| (Target::Surface(left), PlatformInput::Keyboard(event)))
+                    .collect()
             }
             Wire::Key {
                 seat,
@@ -617,9 +648,9 @@ impl Delivering {
             } => {
                 let stamp = self.assembly.stamp(time);
                 let (state, focus) = if pressed {
-                    let repeats = self
-                        .keymap(seat)
-                        .is_some_and(|keymap| keymap.key(code).repeats);
+                    let repeats = self.keymap(seat).is_some_and(|keymap| {
+                        keymap.keyboard.repeats(code.saturating_add(EVDEV_OFFSET))
+                    });
                     (
                         KeyState::Down,
                         self.keyboards.press(seat, code, repeats, Instant::now()),
@@ -627,10 +658,13 @@ impl Delivering {
                 } else {
                     (KeyState::Up, self.keyboards.release(seat, code))
                 };
+                // The keyboard reads every key, so a key pressed outside a
+                // window is not left held in it.
+                let event = self.key_event(seat, code, state, false, stamp);
                 let Some(focus) = focus else {
                     return Vec::new();
                 };
-                self.key_event(seat, code, state, stamp)
+                event
                     .map(|event| (Target::Surface(focus), PlatformInput::Keyboard(event)))
                     .into_iter()
                     .collect()
@@ -643,11 +677,13 @@ impl Delivering {
                 group,
                 time,
             } => {
-                let layout_moved = self
-                    .keymaps
-                    .iter_mut()
-                    .find(|(held, _)| *held == seat)
-                    .is_some_and(|(_, keymap)| keymap.update(depressed, latched, locked, group));
+                // The compositor sends the layout in effect; it is the locked
+                // one as XKB counts them.
+                let layout_moved = self.keymap_mut(seat).is_some_and(|keymap| {
+                    keymap
+                        .keyboard
+                        .update_mask(depressed, latched, locked, [0, 0, group])
+                });
                 if layout_moved {
                     self.note_layout(seat);
                 }
@@ -668,17 +704,28 @@ impl Delivering {
     fn send_modifiers(&mut self, seat: SeatKey, time: WireTime) {
         let modifiers = self
             .keymap(seat)
-            .map_or(flui_platform::keyboard::Modifiers::NONE, Keymap::modifiers);
+            .map_or(flui_platform::keyboard::Modifiers::NONE, |keymap| {
+                keymap.keyboard.modifiers()
+            });
         self.assembly.assemble(SeatWire {
             time,
             event: SeatEvent::Modifiers { seat, modifiers },
         });
     }
 
-    /// Note the name of `seat`'s layout, and that the layout changed when it
-    /// did.
+    /// Note the name of `seat`'s layout, as its keymap names the XKB group in
+    /// effect, and that the layout changed when it did.
     fn note_layout(&mut self, seat: SeatKey) {
-        let layout = self.keymap(seat).map(Keymap::layout).unwrap_or_default();
+        let layout = self
+            .keymap(seat)
+            .and_then(|keymap| keymap.source.layout_name(keymap.keyboard.layout()))
+            .unwrap_or_default();
+        if layout.is_empty()
+            && let Some(keymap) = self.keymap(seat)
+        {
+            let head = keymap.source.head(400);
+            tracing::info!(?seat, %head, "the compositor's keymap names no layout");
+        }
         if layout != self.layout {
             self.layout = layout;
             self.layout_changed = true;
@@ -1673,7 +1720,7 @@ impl Dispatch<WlKeyboard, KeyboardData> for WaylandState {
                     return;
                 }
                 match read_keymap(fd, size) {
-                    Ok(text) => Wire::Keymap { seat, text },
+                    Ok(source) => Wire::Keymap { seat, source },
                     Err(error) => {
                         tracing::warn!(%error, "the compositor's keymap could not be read");
                         return;
@@ -1716,16 +1763,16 @@ impl Dispatch<WlKeyboard, KeyboardData> for WaylandState {
     }
 }
 
-/// The keymap text the compositor shared through `fd`, `size` bytes with its
-/// terminating NUL, within the keymap limit (`keyboards::KEYMAP_LIMIT`).
-fn read_keymap(fd: OwnedFd, size: u32) -> std::io::Result<String> {
+/// The keymap the compositor shared through `fd`, `size` bytes with its
+/// terminating NUL, within the keymap limit (`xkb::KEYMAP_LIMIT`).
+fn read_keymap(fd: OwnedFd, size: u32) -> std::io::Result<KeymapSource> {
     let length = keymap_length(size).ok_or_else(|| {
         std::io::Error::other(format!("a keymap of {size} bytes is past the limit"))
     })?;
     let file = std::fs::File::from(fd);
     let mut bytes = vec![0_u8; length];
     file.read_exact_at(&mut bytes, 0)?;
-    keymap_text(bytes).ok_or_else(|| std::io::Error::other("the keymap is not UTF-8"))
+    KeymapSource::compositor(bytes).ok_or_else(|| std::io::Error::other("the keymap is not UTF-8"))
 }
 
 impl Dispatch<WlTouch, TouchData> for WaylandState {

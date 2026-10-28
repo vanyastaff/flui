@@ -1,23 +1,26 @@
-//! The keyboard as XKB describes it: what a Linux host's key means under the
-//! active layout, which physical key it was, which modifiers are held, and
-//! the layout's name.
+//! The keyboard as XKB describes it, for both Linux hosts: what a key means
+//! under the active layout, which physical key it was, which modifiers are
+//! held, and compose.
 //!
 //! Two halves:
 //!
 //! - the tables, pure and compiled on every host: an evdev key code's
 //!   [`Code`](flui_platform::keyboard::Code) ([`code_of`]), a keysym's
 //!   [`NamedKey`](flui_platform::keyboard::NamedKey) ([`keysym_key`]), the
-//!   [`Key`](flui_platform::keyboard::Key) a press means from its keysym and the text XKB gives it
+//!   [`Key`](flui_platform::keyboard::Key) a press means from its keysym and the text it spells
 //!   ([`key_of`]), the [`Modifiers`](flui_platform::keyboard::Modifiers) the named XKB modifiers hold
 //!   ([`modifiers_of`]) and a layout's name in a keymap's text
 //!   ([`group_name`]);
-//! - `keymap`, a compiled keymap and its state over libxkbcommon, loaded at
-//!   run time (the `wayland` feature): what the compositor's keymap says of a
-//!   key, read through the tables.
+//! - `keyboard`, a keymap, its state and compose over libxkbcommon, loaded at
+//!   run time: what a key means now, read through the tables. Its keymap comes
+//!   from a `KeymapSource`, which names where a host reads it: the X server's
+//!   core keyboard (the X11 host, whose server keeps the state and reports it
+//!   in XKB's `StateNotify`). A press feeds compose: a dead key or a sequence in
+//!   progress is [`NamedKey::Dead`](flui_platform::keyboard::NamedKey::Dead),
+//!   and the key that completes it carries the composed text; a window losing
+//!   the keyboard ends the sequence.
 //!
-//! A Wayland compositor sends the keymap as text and the modifier state as
-//! masks; the key code it reports is the kernel's evdev code, which XKB
-//! numbers eight higher.
+//! XKB numbers a key eight higher than the kernel's evdev code.
 
 pub use meaning::*;
 
@@ -444,134 +447,402 @@ mod meaning {
         }
         None
     }
+
+    /// The largest keymap a host reads: a desktop keymap is some tens of
+    /// kilobytes, so a size past this is a compositor's fault, not a keymap.
+    pub const KEYMAP_LIMIT: usize = 8 * 1024 * 1024;
+
+    /// The bytes to read for a keymap a compositor says is `size` long;
+    /// `None` for none, or past [`KEYMAP_LIMIT`].
+    #[must_use]
+    pub fn keymap_length(size: u32) -> Option<usize> {
+        usize::try_from(size)
+            .ok()
+            .filter(|length| (1..=KEYMAP_LIMIT).contains(length))
+    }
+
+    /// The keymap text in `bytes`: up to its terminating NUL, which the
+    /// Wayland protocol counts in the size; `None` when it is not UTF-8. The
+    /// one place a keymap's NUL is stripped.
+    #[must_use]
+    pub fn keymap_text(mut bytes: Vec<u8>) -> Option<String> {
+        if let Some(end) = bytes.iter().position(|byte| *byte == 0) {
+            bytes.truncate(end);
+        }
+        String::from_utf8(bytes).ok()
+    }
 }
 
-#[cfg(wayland_host)]
-pub(crate) use keymap::Keymap;
+#[cfg(any(x11_host, wayland_host))]
+pub(crate) use keyboard::{Keyboard, KeymapSource};
 
-/// A compiled keymap and its state over libxkbcommon.
-#[cfg(wayland_host)]
-mod keymap {
+/// A keymap, its state and compose over libxkbcommon.
+#[cfg(any(x11_host, wayland_host))]
+mod keyboard {
     #![expect(
         unsafe_code,
         reason = "libxkbcommon is a C library, loaded at run time"
     )]
 
-    use std::ffi::{CString, c_char};
+    use std::ffi::{CStr, CString, c_char};
     use std::ptr::NonNull;
+    #[cfg(x11_host)]
+    use std::sync::Arc;
 
-    use flui_platform::keyboard::Modifiers;
+    use flui_platform::EventTime;
+    use flui_platform::keyboard::{Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey};
     use xkbcommon_dl::{
-        XkbCommon, xkb_context, xkb_context_flags, xkb_keymap, xkb_keymap_compile_flags,
-        xkb_keymap_format, xkb_state, xkb_state_component, xkbcommon_option,
+        XkbCommon, XkbCommonCompose, xkb_compose_feed_result, xkb_compose_state,
+        xkb_compose_status, xkb_compose_table, xkb_context, xkb_keymap, xkb_mod_index_t, xkb_state,
+        xkb_state_component,
     };
 
-    use super::{EVDEV_OFFSET, XkbModifier, group_name, modifiers_of};
+    use super::{EVDEV_OFFSET, XkbModifier, code_of, key_of, modifiers_of};
+    #[cfg(wayland_host)]
+    use super::{group_name, keymap_text};
+    use crate::input::keys::location_for_code;
+    #[cfg(x11_host)]
+    use crate::owner::linux::x11::X11Connection;
 
-    /// What the keymap says of one key in the current state.
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    pub(crate) struct KeyFacts {
-        /// The keysym the key produces.
-        pub(crate) keysym: u32,
-        /// The text it types; empty for none.
-        pub(crate) text: String,
-        /// Whether holding it repeats.
-        pub(crate) repeats: bool,
+    /// Where a keyboard's keymap comes from.
+    #[derive(Debug, Clone)]
+    pub(crate) enum KeymapSource {
+        /// The X server's core keyboard, device `device` on `connection`,
+        /// which the source holds: every libxkbcommon-x11 call through it
+        /// names a connection that is open.
+        #[cfg(x11_host)]
+        X11 {
+            connection: Arc<X11Connection>,
+            device: i32,
+        },
+        /// The keymap a Wayland compositor shared, as text (XKB's text format
+        /// v1), its NUL stripped; the state is the masks the compositor
+        /// sends.
+        #[cfg(wayland_host)]
+        Compositor {
+            /// The keymap's text.
+            text: String,
+        },
     }
 
-    /// A keymap the compositor sent, compiled, with the state its modifier
-    /// masks put it in. Owned by one thread: libxkbcommon's objects are not
-    /// shared.
-    pub(crate) struct Keymap {
-        api: &'static XkbCommon,
-        context: NonNull<xkb_context>,
-        compiled: NonNull<xkb_keymap>,
-        state: NonNull<xkb_state>,
-        /// The keymap's text, which names its layouts.
-        text: String,
-    }
+    impl KeymapSource {
+        /// The keymap a compositor shared as `bytes` (read within
+        /// [`super::KEYMAP_LIMIT`]); `None` when it is not UTF-8.
+        #[cfg(wayland_host)]
+        pub(crate) fn compositor(bytes: Vec<u8>) -> Option<Self> {
+            keymap_text(bytes).map(|text| Self::Compositor { text })
+        }
 
-    impl std::fmt::Debug for Keymap {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.debug_struct("Keymap").finish_non_exhaustive()
+        /// The X server's keyboard device the keymap is read from; `None` for
+        /// a keymap of another source.
+        #[cfg(x11_host)]
+        #[cfg_attr(
+            not(wayland_host),
+            expect(
+                clippy::unnecessary_wraps,
+                reason = "with the Wayland host built, a keymap may come from a compositor"
+            )
+        )]
+        pub(crate) fn x11_device(&self) -> Option<i32> {
+            match self {
+                Self::X11 { device, .. } => Some(*device),
+                #[cfg(wayland_host)]
+                Self::Compositor { .. } => None,
+            }
+        }
+
+        /// The first `chars` characters of the keymap's text, for a
+        /// diagnostic.
+        #[cfg(wayland_host)]
+        pub(crate) fn head(&self, chars: usize) -> String {
+            match self {
+                Self::Compositor { text } => text.chars().take(chars).collect(),
+                #[cfg(x11_host)]
+                Self::X11 { .. } => String::new(),
+            }
+        }
+
+        /// The name the compositor's keymap gives layout `layout`, as XKB
+        /// names the group; `None` where it names none.
+        #[cfg(wayland_host)]
+        pub(crate) fn layout_name(&self, layout: u32) -> Option<String> {
+            match self {
+                Self::Compositor { text } => group_name(text, layout),
+                #[cfg(x11_host)]
+                Self::X11 { .. } => None,
+            }
+        }
+
+        /// The X server's core keyboard on `connection`, once XKB is set up
+        /// on it; `None` when libxkbcommon-x11 cannot be loaded or the server
+        /// has no XKB.
+        #[cfg(x11_host)]
+        pub(crate) fn x11_core_keyboard(connection: &Arc<X11Connection>) -> Option<Self> {
+            let x11 = xkbcommon_dl::x11::xkbcommon_x11_option()?;
+            let raw = connection.xcb().get_raw_xcb_connection();
+            // SAFETY: `raw` is the libxcb connection `connection` holds open
+            // for the call; the version and error outputs are optional and
+            // passed null.
+            let set_up = unsafe {
+                (x11.xkb_x11_setup_xkb_extension)(
+                    raw,
+                    xkbcommon_dl::x11::XKB_X11_MIN_MAJOR_XKB_VERSION,
+                    xkbcommon_dl::x11::XKB_X11_MIN_MINOR_XKB_VERSION,
+                    xkbcommon_dl::x11::xkb_x11_setup_xkb_extension_flags::XKB_X11_SETUP_XKB_EXTENSION_NO_FLAGS,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            };
+            if set_up != 1 {
+                return None;
+            }
+            // SAFETY: as above, with XKB set up on it.
+            let device = unsafe { (x11.xkb_x11_get_core_keyboard_device_id)(raw) };
+            (device >= 0).then(|| Self::X11 {
+                connection: Arc::clone(connection),
+                device,
+            })
         }
     }
 
-    impl Keymap {
-        /// Compile the keymap `text` (XKB's text format v1, without its
-        /// terminating NUL); `None` when libxkbcommon cannot be loaded or
-        /// refuses the text.
-        pub(crate) fn compile(text: &str) -> Option<Self> {
-            let api = xkbcommon_option()?;
-            let source = CString::new(text).ok()?;
-            // SAFETY: `xkb_context_new` takes flags only and returns an owned
-            // context or null.
-            let context = NonNull::new(unsafe {
-                (api.xkb_context_new)(xkb_context_flags::XKB_CONTEXT_NO_FLAGS)
-            })?;
-            // SAFETY: `context` is the live context made above and `source`
-            // a NUL-terminated string that outlives the call; the keymap
-            // copies what it reads.
-            let keymap = NonNull::new(unsafe {
-                (api.xkb_keymap_new_from_string)(
-                    context.as_ptr(),
-                    source.as_ptr(),
-                    xkb_keymap_format::XKB_KEYMAP_FORMAT_TEXT_V1,
-                    xkb_keymap_compile_flags::XKB_KEYMAP_COMPILE_NO_FLAGS,
-                )
-            });
-            let Some(keymap) = keymap else {
-                // SAFETY: the context made above, released once.
-                unsafe { (api.xkb_context_unref)(context.as_ptr()) };
-                return None;
-            };
-            // SAFETY: `keymap` is the live keymap compiled above.
-            let state = NonNull::new(unsafe { (api.xkb_state_new)(keymap.as_ptr()) });
-            let Some(state) = state else {
-                // SAFETY: the keymap and context made above, each released once.
+    /// A libxkbcommon object held by one reference, released on drop.
+    struct Held<T> {
+        pointer: NonNull<T>,
+        release: unsafe extern "C" fn(*mut T),
+    }
+
+    impl<T> Held<T> {
+        /// `pointer` as a constructor returned it; `None` for a null one.
+        fn new(pointer: *mut T, release: unsafe extern "C" fn(*mut T)) -> Option<Self> {
+            NonNull::new(pointer).map(|pointer| Self { pointer, release })
+        }
+
+        fn as_ptr(&self) -> *mut T {
+            self.pointer.as_ptr()
+        }
+    }
+
+    impl<T> Drop for Held<T> {
+        fn drop(&mut self) {
+            // SAFETY: the pointer is a reference this value owns, taken from
+            // the constructor `release` pairs with, released once.
+            unsafe { (self.release)(self.pointer.as_ptr()) };
+        }
+    }
+
+    /// Compose: the locale's table and the sequence in progress.
+    struct Compose {
+        api: &'static XkbCommonCompose,
+        // Field order: the state goes before the table it reads.
+        state: Held<xkb_compose_state>,
+        _table: Held<xkb_compose_table>,
+    }
+
+    /// A keyboard: its keymap, the state its source reports and compose, and
+    /// the keys pressed and not released. Owned by one thread: libxkbcommon's
+    /// objects are not shared.
+    pub(crate) struct Keyboard {
+        api: &'static XkbCommon,
+        // Field order: the state goes before the keymap it names, the
+        // keymap before the context.
+        state: Held<xkb_state>,
+        keymap: Held<xkb_keymap>,
+        compose: Option<Compose>,
+        context: Held<xkb_context>,
+        modifiers: [xkb_mod_index_t; 7],
+        /// The XKB key codes pressed and not released, in order.
+        held: Vec<u32>,
+    }
+
+    impl std::fmt::Debug for Keyboard {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("Keyboard")
+                .field("compose", &self.compose.is_some())
+                .field("held", &self.held)
+                .finish_non_exhaustive()
+        }
+    }
+
+    /// The locale compose sequences are read for: the first of `LC_ALL`,
+    /// `LC_CTYPE` and `LANG` that is set, else `C`.
+    fn compose_locale() -> CString {
+        ["LC_ALL", "LC_CTYPE", "LANG"]
+            .into_iter()
+            .find_map(|name| std::env::var(name).ok().filter(|value| !value.is_empty()))
+            .and_then(|value| CString::new(value).ok())
+            .unwrap_or_else(|| c"C".to_owned())
+    }
+
+    impl Keyboard {
+        /// The keyboard `source` describes; `None` when libxkbcommon cannot
+        /// be loaded or the keymap cannot be read.
+        pub(crate) fn new(source: &KeymapSource) -> Option<Self> {
+            let api = xkbcommon_dl::xkbcommon_option()?;
+            // SAFETY: a constructor that takes flags only.
+            let context = Held::new(
                 unsafe {
-                    (api.xkb_keymap_unref)(keymap.as_ptr());
-                    (api.xkb_context_unref)(context.as_ptr());
-                }
-                return None;
-            };
+                    (api.xkb_context_new)(xkbcommon_dl::xkb_context_flags::XKB_CONTEXT_NO_FLAGS)
+                },
+                *api.xkb_context_unref,
+            )?;
+            let (keymap, state) = Self::read(api, &context, source)?;
+            let compose = Self::open_compose(&context);
+            let modifiers = Self::indices(api, &keymap);
             Some(Self {
                 api,
-                context,
-                compiled: keymap,
                 state,
-                text: source.into_string().unwrap_or_default(),
+                keymap,
+                compose,
+                context,
+                modifiers,
+                held: Vec::new(),
             })
         }
 
-        /// Put the state in the modifier and layout masks the compositor
-        /// sent. Returns whether the effective layout changed.
-        pub(crate) fn update(
+        /// The keymap and state `source` holds now.
+        fn read(
+            api: &'static XkbCommon,
+            context: &Held<xkb_context>,
+            source: &KeymapSource,
+        ) -> Option<(Held<xkb_keymap>, Held<xkb_state>)> {
+            match source {
+                #[cfg(wayland_host)]
+                KeymapSource::Compositor { text } => {
+                    let source = CString::new(text.as_str()).ok()?;
+                    // SAFETY: the live context and a NUL-terminated string that
+                    // outlives the call; the keymap copies what it reads.
+                    let keymap = Held::new(
+                        unsafe {
+                            (api.xkb_keymap_new_from_string)(
+                                context.as_ptr(),
+                                source.as_ptr(),
+                                xkbcommon_dl::xkb_keymap_format::XKB_KEYMAP_FORMAT_TEXT_V1,
+                                xkbcommon_dl::xkb_keymap_compile_flags::XKB_KEYMAP_COMPILE_NO_FLAGS,
+                            )
+                        },
+                        *api.xkb_keymap_unref,
+                    )?;
+                    // SAFETY: the keymap just made.
+                    let state = Held::new(
+                        unsafe { (api.xkb_state_new)(keymap.as_ptr()) },
+                        *api.xkb_state_unref,
+                    )?;
+                    Some((keymap, state))
+                }
+                #[cfg(x11_host)]
+                KeymapSource::X11 { connection, device } => {
+                    let x11 = xkbcommon_dl::x11::xkbcommon_x11_option()?;
+                    let raw = connection.xcb().get_raw_xcb_connection();
+                    // SAFETY: the libxcb connection the source holds open, and
+                    // the live context.
+                    let keymap = Held::new(
+                        unsafe {
+                            (x11.xkb_x11_keymap_new_from_device)(
+                                context.as_ptr(),
+                                raw,
+                                *device,
+                                xkbcommon_dl::xkb_keymap_compile_flags::XKB_KEYMAP_COMPILE_NO_FLAGS,
+                            )
+                        },
+                        *api.xkb_keymap_unref,
+                    )?;
+                    // SAFETY: as above, with the keymap just made.
+                    let state = Held::new(
+                        unsafe {
+                            (x11.xkb_x11_state_new_from_device)(keymap.as_ptr(), raw, *device)
+                        },
+                        *api.xkb_state_unref,
+                    )?;
+                    Some((keymap, state))
+                }
+            }
+        }
+
+        /// Compose for the locale, when libxkbcommon has its module and the
+        /// locale a table.
+        fn open_compose(context: &Held<xkb_context>) -> Option<Compose> {
+            let api = xkbcommon_dl::xkbcommon_compose_option()?;
+            let locale = compose_locale();
+            // SAFETY: a live context and a NUL-terminated locale that
+            // outlives the call.
+            let table = Held::new(
+                unsafe {
+                    (api.xkb_compose_table_new_from_locale)(
+                        context.as_ptr(),
+                        locale.as_ptr(),
+                        xkbcommon_dl::xkb_compose_compile_flags::XKB_COMPOSE_COMPILE_NO_FLAGS,
+                    )
+                },
+                *api.xkb_compose_table_unref,
+            )?;
+            // SAFETY: the live table just made.
+            let state = Held::new(
+                unsafe {
+                    (api.xkb_compose_state_new)(
+                        table.as_ptr(),
+                        xkbcommon_dl::xkb_compose_state_flags::XKB_COMPOSE_STATE_NO_FLAGS,
+                    )
+                },
+                *api.xkb_compose_state_unref,
+            )?;
+            Some(Compose {
+                api,
+                state,
+                _table: table,
+            })
+        }
+
+        fn indices(api: &XkbCommon, keymap: &Held<xkb_keymap>) -> [xkb_mod_index_t; 7] {
+            // SAFETY: a live keymap and NUL-terminated static names.
+            XkbModifier::ALL.map(|modifier| unsafe {
+                (api.xkb_keymap_mod_get_index)(keymap.as_ptr(), modifier.name().as_ptr())
+            })
+        }
+
+        /// Read the keymap and state again from `source`: its keymap
+        /// changed. The compose sequence in progress ends.
+        pub(crate) fn reload(&mut self, source: &KeymapSource) -> bool {
+            let Some((keymap, state)) = Self::read(self.api, &self.context, source) else {
+                return false;
+            };
+            self.modifiers = Self::indices(self.api, &keymap);
+            // The old state names the old keymap: it goes first.
+            self.state = state;
+            self.keymap = keymap;
+            self.reset_compose();
+            true
+        }
+
+        /// Set the state its source reports; whether the layout in effect
+        /// changed.
+        pub(crate) fn update_mask(
             &mut self,
             depressed: u32,
             latched: u32,
             locked: u32,
-            group: u32,
+            layouts: [u32; 3],
         ) -> bool {
-            let before = self.group();
-            // SAFETY: `state` is this keymap's live state; the masks are
-            // plain numbers libxkbcommon validates.
+            let before = self.layout();
+            // SAFETY: the live state; libxkbcommon validates the masks.
             unsafe {
                 (self.api.xkb_state_update_mask)(
                     self.state.as_ptr(),
                     depressed,
                     latched,
                     locked,
-                    0,
-                    0,
-                    group,
+                    layouts[0],
+                    layouts[1],
+                    layouts[2],
                 );
             }
-            self.group() != before
+            self.layout() != before
         }
 
-        fn group(&self) -> u32 {
-            // SAFETY: `state` is this keymap's live state.
+        /// The layout in effect, by its index in the keymap.
+        pub(crate) fn layout(&self) -> u32 {
+            // SAFETY: the live state.
             unsafe {
                 (self.api.xkb_state_serialize_layout)(
                     self.state.as_ptr(),
@@ -580,78 +851,236 @@ mod keymap {
             }
         }
 
-        /// What the key with kernel code `code` means now.
-        pub(crate) fn key(&self, code: u32) -> KeyFacts {
-            let key = code.saturating_add(EVDEV_OFFSET);
-            // SAFETY: `state` is this keymap's live state; any key code is
-            // valid to ask about.
-            let keysym = unsafe { (self.api.xkb_state_key_get_one_sym)(self.state.as_ptr(), key) };
-            let mut buffer = [0 as c_char; 64];
-            // SAFETY: `buffer` is writable for its whole length, which is
-            // passed; libxkbcommon writes at most that many bytes, NUL
-            // included, and returns the length it needed.
-            let length = unsafe {
-                (self.api.xkb_state_key_get_utf8)(
-                    self.state.as_ptr(),
-                    key,
-                    buffer.as_mut_ptr(),
-                    buffer.len(),
-                )
-            };
-            let text = usize::try_from(length)
-                .ok()
-                .filter(|length| *length < buffer.len())
-                .map(|length| {
-                    // `c_char` is signed on some targets and not on others.
-                    let bytes: Vec<u8> = buffer[..length]
-                        .iter()
-                        .map(|byte| u8::from_ne_bytes(byte.to_ne_bytes()))
-                        .collect();
-                    String::from_utf8_lossy(&bytes).into_owned()
-                })
-                .unwrap_or_default();
-            // SAFETY: `keymap` is the live keymap; any key code is valid.
-            let repeats =
-                unsafe { (self.api.xkb_keymap_key_repeats)(self.compiled.as_ptr(), key) } != 0;
-            KeyFacts {
-                keysym,
-                text,
-                repeats,
-            }
+        /// Whether holding the key with XKB key code `keycode` repeats, as the
+        /// keymap says: a Wayland client repeats keys itself.
+        #[cfg(wayland_host)]
+        pub(crate) fn repeats(&self, keycode: u32) -> bool {
+            // SAFETY: the live keymap; any key code may be asked.
+            unsafe { (self.api.xkb_keymap_key_repeats)(self.keymap.as_ptr(), keycode) != 0 }
         }
 
         /// The modifiers in effect.
         pub(crate) fn modifiers(&self) -> Modifiers {
-            modifiers_of(|modifier: XkbModifier| {
-                // SAFETY: `state` is this keymap's live state and the name a
-                // NUL-terminated static string.
-                unsafe {
-                    (self.api.xkb_state_mod_name_is_active)(
-                        self.state.as_ptr(),
-                        modifier.name().as_ptr(),
-                        xkb_state_component::XKB_STATE_MODS_EFFECTIVE,
-                    ) > 0
-                }
+            modifiers_of(|modifier| {
+                let index = self.modifiers[XkbModifier::ALL
+                    .iter()
+                    .position(|known| *known == modifier)
+                    .expect("BUG: every modifier is in ALL")];
+                index != xkbcommon_dl::XKB_MOD_INVALID
+                    // SAFETY: the live state and an index of its keymap.
+                    && unsafe {
+                        (self.api.xkb_state_mod_index_is_active)(
+                            self.state.as_ptr(),
+                            index,
+                            xkb_state_component::XKB_STATE_MODS_EFFECTIVE,
+                        )
+                    } > 0
             })
         }
 
-        /// The effective layout's name, as the keymap names it; empty when
-        /// it names none.
-        pub(crate) fn layout(&self) -> String {
-            group_name(&self.text, self.group()).unwrap_or_default()
+        /// What `keysym` spells by itself, no modifier applied.
+        fn keysym_text(&self, keysym: u32) -> String {
+            let mut buffer = [0 as c_char; 64];
+            // SAFETY: the buffer and its length.
+            let written =
+                unsafe { (self.api.xkb_keysym_to_utf8)(keysym, buffer.as_mut_ptr(), buffer.len()) };
+            if written <= 0 {
+                return String::new();
+            }
+            // SAFETY: libxkbcommon NUL-terminates what it wrote.
+            unsafe { CStr::from_ptr(buffer.as_ptr()) }
+                .to_string_lossy()
+                .into_owned()
+        }
+
+        /// What compose makes of a press of `keysym`: `None` when compose did
+        /// not take it, else the key the press is.
+        fn compose(&self, keysym: u32) -> Option<Key> {
+            let compose = self.compose.as_ref()?;
+            let state = compose.state.as_ptr();
+            // SAFETY: the live compose state.
+            let fed = unsafe { (compose.api.xkb_compose_state_feed)(state, keysym) };
+            if fed == xkb_compose_feed_result::XKB_COMPOSE_FEED_IGNORED {
+                return None;
+            }
+            // SAFETY: the live compose state.
+            match unsafe { (compose.api.xkb_compose_state_get_status)(state) } {
+                xkb_compose_status::XKB_COMPOSE_COMPOSING => Some(Key::Named(NamedKey::Dead)),
+                xkb_compose_status::XKB_COMPOSE_COMPOSED => {
+                    let mut buffer = [0 as c_char; 64];
+                    // SAFETY: the live compose state, the buffer and its length.
+                    let written = unsafe {
+                        (compose.api.xkb_compose_state_get_utf8)(
+                            state,
+                            buffer.as_mut_ptr(),
+                            buffer.len(),
+                        )
+                    };
+                    let text = (written > 0)
+                        // SAFETY: libxkbcommon NUL-terminates what it wrote.
+                        .then(|| unsafe { CStr::from_ptr(buffer.as_ptr()) })
+                        .map(|text| text.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    // SAFETY: the live compose state.
+                    let sym = unsafe { (compose.api.xkb_compose_state_get_one_sym)(state) };
+                    self.reset_compose();
+                    Some(if text.is_empty() {
+                        key_of(sym, &self.keysym_text(sym))
+                    } else {
+                        Key::character(text)
+                    })
+                }
+                xkb_compose_status::XKB_COMPOSE_CANCELLED => {
+                    self.reset_compose();
+                    // The key that broke the sequence is itself.
+                    None
+                }
+                xkb_compose_status::XKB_COMPOSE_NOTHING => None,
+            }
+        }
+
+        /// End the compose sequence in progress, if any.
+        pub(crate) fn reset_compose(&self) {
+            if let Some(compose) = &self.compose {
+                // SAFETY: the live compose state.
+                unsafe { (compose.api.xkb_compose_state_reset)(compose.state.as_ptr()) };
+            }
+        }
+
+        /// The key event of XKB key code `keycode` (the kernel's plus
+        /// [`EVDEV_OFFSET`]) going `state` at `time`; a press feeds compose.
+        pub(crate) fn key(
+            &mut self,
+            keycode: u32,
+            state: KeyState,
+            repeat: bool,
+            time: EventTime,
+        ) -> KeyEvent {
+            match state {
+                KeyState::Down => {
+                    if !self.held.contains(&keycode) {
+                        self.held.push(keycode);
+                    }
+                }
+                KeyState::Up => self.held.retain(|held| *held != keycode),
+            }
+            // SAFETY: the live state; any key code may be asked.
+            let keysym =
+                unsafe { (self.api.xkb_state_key_get_one_sym)(self.state.as_ptr(), keycode) };
+            let composed = if state == KeyState::Down && !repeat {
+                self.compose(keysym)
+            } else {
+                None
+            };
+            let key = composed.unwrap_or_else(|| key_of(keysym, &self.keysym_text(keysym)));
+            let code = code_of(keycode.saturating_sub(EVDEV_OFFSET));
+            KeyEvent::new(state, key, code, time)
+                .with_location(location_for_code(code))
+                .with_modifiers(self.modifiers())
+                .with_repeat(if repeat {
+                    KeyRepeat::AutoRepeat
+                } else {
+                    KeyRepeat::First
+                })
+        }
+
+        /// The keyboard leaves its window: the compose sequence in progress
+        /// ends, and each key still held is released there, in the order
+        /// they were pressed.
+        pub(crate) fn leave(&mut self, time: EventTime) -> Vec<KeyEvent> {
+            self.reset_compose();
+            std::mem::take(&mut self.held)
+                .into_iter()
+                .map(|keycode| self.key(keycode, KeyState::Up, false, time))
+                .collect()
         }
     }
 
-    impl Drop for Keymap {
-        fn drop(&mut self) {
-            // SAFETY: each object was made by `compile` and is released once,
-            // the state before the keymap it reads and the keymap before its
-            // context.
+    #[cfg(all(test, wayland_host))]
+    mod tests {
+        use flui_platform::EventTime;
+        use flui_platform::keyboard::{Key, KeyState, NamedKey};
+
+        use super::{Keyboard, KeymapSource};
+        use crate::input::linux::xkb::EVDEV_OFFSET;
+
+        /// The text of the keymap XKB compiles for `layout` and `variant`,
+        /// as a compositor writes it out and shares it, NUL included.
+        fn compositor_keymap(layout: &str, variant: &str) -> Option<Vec<u8>> {
+            let api = xkbcommon_dl::xkbcommon_option()?;
+            let layout = std::ffi::CString::new(layout).ok()?;
+            let variant = std::ffi::CString::new(variant).ok()?;
+            let names = xkbcommon_dl::xkb_rule_names {
+                rules: c"evdev".as_ptr(),
+                model: c"pc105".as_ptr(),
+                layout: layout.as_ptr(),
+                variant: variant.as_ptr(),
+                options: std::ptr::null(),
+            };
+            // SAFETY: test-only calls with a live context and keymap, each
+            // released once; the names outlive the calls.
             unsafe {
-                (self.api.xkb_state_unref)(self.state.as_ptr());
-                (self.api.xkb_keymap_unref)(self.compiled.as_ptr());
-                (self.api.xkb_context_unref)(self.context.as_ptr());
+                let context =
+                    (api.xkb_context_new)(xkbcommon_dl::xkb_context_flags::XKB_CONTEXT_NO_FLAGS);
+                if context.is_null() {
+                    return None;
+                }
+                let keymap = (api.xkb_keymap_new_from_names)(
+                    context,
+                    &raw const names,
+                    xkbcommon_dl::xkb_keymap_compile_flags::XKB_KEYMAP_COMPILE_NO_FLAGS,
+                );
+                let text = if keymap.is_null() {
+                    None
+                } else {
+                    let text = (api.xkb_keymap_get_as_string)(
+                        keymap,
+                        xkbcommon_dl::xkb_keymap_format::XKB_KEYMAP_FORMAT_TEXT_V1,
+                    );
+                    let bytes = (!text.is_null())
+                        .then(|| std::ffi::CStr::from_ptr(text).to_bytes_with_nul().to_vec());
+                    // The string libxkbcommon allocated is left to the test
+                    // process: freeing it needs the C allocator, which the
+                    // crate does not link here.
+                    (api.xkb_keymap_unref)(keymap);
+                    bytes
+                };
+                (api.xkb_context_unref)(context);
+                text
             }
+        }
+
+        /// The keymap a compositor shares reads through the shared keyboard,
+        /// compose included: on US international, dead acute then `e` is `é`,
+        /// and the layout is named as the keymap names its group.
+        #[test]
+        fn a_compositor_keymap_composes_dead_keys() {
+            let Some(bytes) = compositor_keymap("us", "intl") else {
+                eprintln!("skipped: libxkbcommon or its keymaps are not installed");
+                return;
+            };
+            let source = KeymapSource::compositor(bytes).expect("the keymap is text");
+            let mut keyboard = Keyboard::new(&source).expect("the keymap compiles");
+            assert_eq!(
+                source.layout_name(keyboard.layout()).as_deref(),
+                Some("English (US, intl., with dead keys)")
+            );
+            // KEY_APOSTROPHE (40) is dead acute on US international; KEY_E is 18.
+            let time = EventTime::from_nanos(1);
+            let press = |keyboard: &mut Keyboard, code: u32| {
+                let key = keyboard
+                    .key(code + EVDEV_OFFSET, KeyState::Down, false, time)
+                    .key;
+                keyboard.key(code + EVDEV_OFFSET, KeyState::Up, false, time);
+                key
+            };
+            assert_eq!(press(&mut keyboard, 40), Key::Named(NamedKey::Dead));
+            assert_eq!(press(&mut keyboard, 18), Key::character("é"));
+            assert_eq!(
+                press(&mut keyboard, 18),
+                Key::character("e"),
+                "composed once"
+            );
         }
     }
 }
@@ -773,5 +1202,20 @@ mod tests {
             "a declaration without quotes is passed over for the next"
         );
         assert_eq!(group_name(keymap, u32::MAX), None);
+    }
+
+    /// A keymap is read up to its NUL and only within the limit.
+    #[test]
+    fn a_keymap_is_read_within_its_limit() {
+        assert_eq!(keymap_length(0), None);
+        assert_eq!(keymap_length(64_756), Some(64_756));
+        let limit = u32::try_from(KEYMAP_LIMIT).expect("fits");
+        assert_eq!(keymap_length(limit), Some(KEYMAP_LIMIT));
+        assert_eq!(keymap_length(limit + 1), None);
+        assert_eq!(
+            keymap_text(b"xkb_keymap {};\0\0".to_vec()).as_deref(),
+            Some("xkb_keymap {};")
+        );
+        assert_eq!(keymap_text(vec![0xff, 0xfe, 0]), None);
     }
 }

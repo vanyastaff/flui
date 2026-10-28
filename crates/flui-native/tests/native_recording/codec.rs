@@ -113,6 +113,9 @@ pub enum Backend {
     /// The winit fallback.
     #[serde(rename = "winit")]
     Winit,
+    /// The native X11 host's XInput 2 events.
+    #[serde(rename = "x11")]
+    X11,
     /// DOM `PointerEvent`s.
     #[serde(rename = "web")]
     Web,
@@ -1234,8 +1237,8 @@ struct ScrollDto {
     delta: [f64; 2],
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     precise: bool,
-    /// A wheel that says its step is whole notches (Wayland's `value120`);
-    /// neither this nor `precise` is a step of unknown precision.
+    /// Whole notches of a wheel the device reports as such (X11's, Wayland's
+    /// `value120`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     notched: bool,
     time_ns: u64,
@@ -1320,7 +1323,7 @@ impl TryFrom<ScrollDto> for ContactScroll {
                 (false, false) => ScrollPrecision::Unknown,
                 (true, true) => {
                     return Err(DtoError::Invalid(
-                        "a scroll step is precise or notched, not both".to_owned(),
+                        "a scroll is precise or notched, not both".into(),
                     ));
                 }
             },

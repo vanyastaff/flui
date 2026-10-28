@@ -314,7 +314,19 @@ console_error_panic_hook = "0.1"
 # made from it and libxcb is loaded at run time rather than linked), and the
 # display source's pure-Rust connection for RandR. winit enables the same
 # features, so the tree gains no crate.
-x11rb = { workspace = true, optional = true, features = ["allow-unsafe-code", "dl-libxcb"] }
+x11rb = { workspace = true, optional = true, features = [
+    "allow-unsafe-code",
+    "dl-libxcb",
+    # The X11 host's input: XInput 2 (pointer, touch, pen, smooth scrolling),
+    # XKB's keyboard events and the cursor theme.
+    "xinput",
+    "xkb",
+    "cursor",
+] }
+# libxkbcommon and libxkbcommon-x11, loaded at run time as winit loads them:
+# the keymap, the keyboard state and compose, which both Linux hosts read
+# through `input::linux::xkb`.
+xkbcommon-dl = { version = "0.4", optional = true, features = ["x11"] }
 # The native Wayland host's protocol clients, also the display source's, and
 # the descriptor primitives both Linux hosts wait on, behind the `wayland` and
 # `x11` features (`desktop` and `winit-backend` enable both).
@@ -323,12 +335,9 @@ wayland-client = { workspace = true, optional = true }
 # the unstable `tablet` and `pointer-gestures`.
 wayland-protocols = { workspace = true, optional = true, features = ["staging"] }
 wayland-backend = { workspace = true, optional = true }
-# `time` reads `CLOCK_MONOTONIC`, the clock a compositor stamps input on.
+# `time`: the monotonic clock the X server and a Wayland compositor stamp
+# their input on.
 rustix = { workspace = true, optional = true, features = ["time"] }
-# The keyboard's layout and keys on the native Wayland host, loaded at run
-# time like libwayland and libxcb. winit loads the same crate, so the tree
-# gains no crate.
-xkbcommon-dl = { version = "0.4", optional = true }
 # The cursor theme the Wayland host draws a cursor from where the compositor
 # has no `cursor-shape`. winit loads the same crate, so the tree gains none.
 wayland-cursor = { version = "0.31", optional = true }
@@ -490,7 +499,7 @@ winit-backend = [
 # disabling it changes nothing observable. Kept as a forward-compatible name
 # for downstream `Cargo.toml`s, mirroring `desktop`.
 web = []
-x11 = ["dep:x11rb", "dep:rustix"]
+x11 = ["dep:x11rb", "dep:rustix", "dep:xkbcommon-dl"]
 
 # Debug builds only: `input::assembly::capture` journals every
 # pointer registry call on a thread as a native recording (ADR-0215 §4), for
@@ -544,7 +553,9 @@ wasm-bindgen-test.workspace = true
 [target.'cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))'.dev-dependencies]
 libtest-mimic.workspace = true
 
-# `wayland_input` drives a Weston's X11 backend through XTest.
+# The X11 host's input tests press keys and buttons and move the pointer on
+# their own X server through XTest, as a user's devices do; `wayland_input`
+# drives a Weston's X11 backend the same way.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 x11rb = { workspace = true, features = ["xtest"] }
 

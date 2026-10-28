@@ -927,8 +927,8 @@ moves, prints `CANNOT_VERIFY` and records nothing. A precision touchpad has no
 injector: its DirectManipulation viewport calls are journaled, but the golden
 that certifies them has to come from a `native-capture` run on that hardware,
 and keyboard and OLE drag-and-drop input have no native recording rows yet.
-On an Android device, the host test
-`native_recording::pulled_device_recordings_replay_to_what_they_delivered`
+On an Android device, the case
+`pulled_device_recordings_replay_to_what_they_delivered` of `native_recording::native_recording_contracts`
 requires each recording pulled into `FLUI_DEVICE_RECORDING_DIR` to replay to
 the delivered events exactly and holds it against its golden by event grammar,
 since the device resamples moves by its frame timing.

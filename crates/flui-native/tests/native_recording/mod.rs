@@ -277,7 +277,6 @@ fn write_sample(out: &mut String, sample: &PointerSample) {
 /// this row holds each against its golden on the host; without that
 /// directory there is nothing fresh to hold.
 #[cfg(all(debug_assertions, feature = "native-capture"))]
-#[test]
 fn browser_sessions_hold_against_their_goldens() {
     let Some(directory) = std::env::var_os("FLUI_NATIVE_RECORDING_FRESH") else {
         eprintln!("no fresh browser recordings: a browser driver writes them");
@@ -596,6 +595,30 @@ fn wayland_recordings_decode_to_their_host_input() {
         ],
     );
 }
+/// XInput 2 on a real X server, driven by XTest (`x11_input` in the
+/// `x11_window` harness): the master pointer's cursor entering, a drag, the
+/// right button, a whole detent of the legacy wheel each way, a
+/// Control-held click and a leave.
+fn x11_recordings_decode_to_their_host_input() {
+    assert_replays(
+        include_str!("x11_xtest_mouse_and_wheel.jsonl"),
+        &[
+            "device+ d1 mouse t=51656",
+            "enter p1* mouse d1 t=637970365 (50, 40)",
+            "move p1* mouse d1 [] t=637970365 (50, 40)",
+            "down p1* mouse d1 b1 [1] t=677970365 (50, 40)",
+            "move p1* mouse d1 [1] t=718970365 (60, 40)",
+            "up p1* mouse d1 b1 [] t=758970365 (60, 40)",
+            "down p1* mouse d1 b2 [2] t=798970365 (60, 40)",
+            "up p1* mouse d1 b2 [] t=838970365 (60, 40)",
+            "scroll p1* mouse d1 unphased Detents(0, 1) t=879970365 (60, 40)",
+            "scroll p1* mouse d1 unphased Detents(0, -1) t=959970365 (60, 40)",
+            "down p1* mouse d1 b1 [1] {CONTROL} t=1080970365 (60, 40)",
+            "up p1* mouse d1 b1 [] {CONTROL} t=1121970365 (60, 40)",
+            "leave p1* mouse d1 t=1201970365 (830, 641)",
+        ],
+    );
+}
 
 /// DOM pointer events: a pen move carrying the browser's coalesced and
 /// predicted events, a mouse chord, and a touch the browser cancelled.
@@ -657,7 +680,7 @@ fn web_bidi_recording_decodes_to_its_host_input() {
 }
 
 /// Every checked-in recording, by name.
-const RECORDINGS: [(&str, &str); 14] = [
+const RECORDINGS: [(&str, &str); 15] = [
     (
         "wayland_weston_mouse_wheel",
         include_str!("wayland_weston_mouse_wheel.jsonl"),
@@ -713,6 +736,10 @@ const RECORDINGS: [(&str, &str); 14] = [
     (
         "web_bidi_mouse_pen_touch",
         include_str!("web_bidi_mouse_pen_touch.jsonl"),
+    ),
+    (
+        "x11_xtest_mouse_and_wheel",
+        include_str!("x11_xtest_mouse_and_wheel.jsonl"),
     ),
 ];
 
@@ -830,7 +857,20 @@ fn a_native_recording_outside_its_format_is_refused() {
 
 #[test]
 fn native_recording_contracts() {
+    crate::run_table("native_recording_contracts", &contracts());
+}
+
+/// Every case of the native recordings: the checked-in recordings' replay
+/// and codec, the capture's own contracts, and the fresh browser and device
+/// sessions held against their goldens. Each harness that includes this
+/// module runs them (`platform_it` as `native_recording_contracts`, and
+/// `x11_window`, which captures X11 sessions).
+pub(crate) fn contracts() -> Vec<(&'static str, fn())> {
     let cases: Vec<(&str, fn())> = vec![
+        (
+            "pulled_device_recordings_replay_to_what_they_delivered",
+            pulled_device_recordings_replay_to_what_they_delivered,
+        ),
         (
             "win32_pointer_info_recordings_decode_to_their_host_input",
             win32_pointer_info_recordings_decode_to_their_host_input,
@@ -854,6 +894,10 @@ fn native_recording_contracts() {
         (
             "android_device_recordings_decode_to_their_host_input",
             android_device_recordings_decode_to_their_host_input,
+        ),
+        (
+            "x11_recordings_decode_to_their_host_input",
+            x11_recordings_decode_to_their_host_input,
         ),
         (
             "winit_recordings_decode_to_their_host_input",
@@ -885,14 +929,21 @@ fn native_recording_contracts() {
         ),
     ];
     #[cfg(all(debug_assertions, feature = "native-capture"))]
-    let cases = [cases, capture::CASES.to_vec()].concat();
-    crate::run_table("native_recording_contracts", &cases);
+    let cases = [
+        cases,
+        vec![(
+            "browser_sessions_hold_against_their_goldens",
+            browser_sessions_hold_against_their_goldens as fn(),
+        )],
+        capture::CASES.to_vec(),
+    ]
+    .concat();
+    cases
 }
 
 /// The recordings a device run pulled
 /// into `FLUI_DEVICE_RECORDING_DIR` replay to what the device delivered and
 /// hold against their goldens; without a pull there is nothing to hold.
-#[test]
 fn pulled_device_recordings_replay_to_what_they_delivered() {
     #[cfg(all(debug_assertions, feature = "native-capture"))]
     {
