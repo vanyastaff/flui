@@ -277,7 +277,6 @@ fn write_sample(out: &mut String, sample: &PointerSample) {
 /// this row holds each against its golden on the host; without that
 /// directory there is nothing fresh to hold.
 #[cfg(all(debug_assertions, feature = "native-capture"))]
-#[test]
 fn browser_sessions_hold_against_their_goldens() {
     let Some(directory) = std::env::var_os("FLUI_NATIVE_RECORDING_FRESH") else {
         eprintln!("no fresh browser recordings: a browser driver writes them");
@@ -291,7 +290,6 @@ fn browser_sessions_hold_against_their_goldens() {
 }
 
 /// `text` replays to `expected`, one event per line.
-#[cfg(test)]
 fn assert_replays(text: &str, expected: &[&str]) {
     let replayed = transcript(&recording(text).replay());
     assert_eq!(replayed, expected, "replayed transcript");
@@ -300,7 +298,6 @@ fn assert_replays(text: &str, expected: &[&str]) {
 /// A Win32 pen burst whose coalesced history shares one `dwTime`, a touch
 /// lost to a capture change, and legacy mouse clicks counted by the OS
 /// double-click settings.
-#[cfg(test)]
 fn win32_pointer_info_recordings_decode_to_their_host_input() {
     assert_replays(
         include_str!("win32_pen_touch_mouse.jsonl"),
@@ -378,7 +375,6 @@ fn win32_pointer_info_recordings_decode_to_their_host_input() {
 /// pinch, and a pan the window abandons mid-manipulation, each stamped from
 /// the performance counter. Hand-written from the documented callback order,
 /// not captured.
-#[cfg(test)]
 fn win32_direct_manipulation_recording_decodes_to_scroll_and_pinch() {
     assert_replays(
         include_str!("win32_direct_manipulation.jsonl"),
@@ -403,7 +399,6 @@ fn win32_direct_manipulation_recording_decodes_to_scroll_and_pinch() {
 
 /// AppKit mouse clicks counted by the platform, a force-touch pressure move
 /// and a pinch-and-rotate gesture session, stamped on system uptime.
-#[cfg(test)]
 fn appkit_recordings_decode_to_their_host_input() {
     assert_replays(
         include_str!("appkit_mouse_and_pinch.jsonl"),
@@ -428,7 +423,6 @@ fn appkit_recordings_decode_to_their_host_input() {
 /// UIKit touches stamped on system uptime, a second finger that is not
 /// primary, a system cancel, and a Pencil whose hover is stamped on the
 /// event epoch and whose contact keeps the reserved identity.
-#[cfg(test)]
 fn uikit_recordings_decode_to_their_host_input() {
     assert_replays(
         include_str!("uikit_touches_and_pencil.jsonl"),
@@ -451,7 +445,6 @@ fn uikit_recordings_decode_to_their_host_input() {
 
 /// Android multi-touch with a historical batch, and a stylus whose device is
 /// removed mid-contact.
-#[cfg(test)]
 fn android_recordings_decode_to_their_host_input() {
     assert_replays(
         include_str!("android_touches_and_stylus.jsonl"),
@@ -472,7 +465,6 @@ fn android_recordings_decode_to_their_host_input() {
 
 /// `text`'s replay as verb, pointer and kind, a run of one such line counted
 /// once: the order of who entered, pressed, moved, pinched or scrolled.
-#[cfg(test)]
 fn outline(text: &str) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     for line in transcript(&recording(text).replay()) {
@@ -502,7 +494,6 @@ fn outline(text: &str) -> Vec<String> {
 /// keeps one identity from hover through contact and back; a `uinput`
 /// touchpad whose pinch is `PanZoom` about its cursor and whose two-finger
 /// scroll is phased `Scroll` from it, its fake fingers never touches.
-#[cfg(test)]
 fn android_device_recordings_decode_to_their_host_input() {
     assert_eq!(
         outline(include_str!("android_input_touch_stylus_mouse.jsonl")),
@@ -562,7 +553,6 @@ fn android_device_recordings_decode_to_their_host_input() {
 /// The winit fallback: a mouse chord on a window surface, a touchpad
 /// pressure reading without a position, a cancelled touch, and a pinch
 /// centred on the device's cursor.
-#[cfg(test)]
 fn winit_recordings_decode_to_their_host_input() {
     assert_replays(
         include_str!("winit_mouse_touch_pinch.jsonl"),
@@ -591,7 +581,6 @@ fn winit_recordings_decode_to_their_host_input() {
 /// `x11_window` harness): the master pointer's cursor entering, a drag, the
 /// right button, a whole detent of the legacy wheel each way, a
 /// Control-held click and a leave.
-#[cfg(test)]
 fn x11_recordings_decode_to_their_host_input() {
     assert_replays(
         include_str!("x11_xtest_mouse_and_wheel.jsonl"),
@@ -615,7 +604,6 @@ fn x11_recordings_decode_to_their_host_input() {
 
 /// DOM pointer events: a pen move carrying the browser's coalesced and
 /// predicted events, a mouse chord, and a touch the browser cancelled.
-#[cfg(test)]
 fn web_recordings_decode_to_their_host_input() {
     assert_replays(
         include_str!("web_pen_mouse_touch.jsonl"),
@@ -639,7 +627,6 @@ fn web_recordings_decode_to_their_host_input() {
 /// (over a browser driver): a click, a double click, a drag and a
 /// secondary click of the mouse, a pen stroke with pressure, angles and
 /// twist, and two touches moving and lifting one at a time.
-#[cfg(test)]
 fn web_bidi_recording_decodes_to_its_host_input() {
     assert_replays(
         include_str!("web_bidi_mouse_pen_touch.jsonl"),
@@ -675,7 +662,6 @@ fn web_bidi_recording_decodes_to_its_host_input() {
 }
 
 /// Every checked-in recording, by name.
-#[cfg(test)]
 const RECORDINGS: [(&str, &str); 14] = [
     (
         "android_input_touch_stylus_mouse",
@@ -738,7 +724,6 @@ const RECORDINGS: [(&str, &str); 14] = [
 /// The codec writes each checked-in recording back byte for byte: the files
 /// are in the written form, every field read is written, and the header's
 /// device list is the one the rows imply.
-#[cfg(test)]
 fn native_recordings_write_back_byte_for_byte() {
     for (name, text) in RECORDINGS {
         let mut written = Vec::new();
@@ -753,17 +738,14 @@ fn native_recordings_write_back_byte_for_byte() {
     }
 }
 
-#[cfg(test)]
 fn read_error(text: &str) -> CodecError {
     NativeRecording::read(text.as_bytes()).expect_err("the recording is refused")
 }
 
-#[cfg(test)]
 const HEADER: &str = r#"{"flui_native_recording":1,"backend":"web","epoch_ns":0,"uptime_ns":0,"devices":[{"device":4,"kinds":["touch"]}]}"#;
 
 /// An unknown row, action or kind is a typed error naming its line and
 /// spelling, never a skipped row; an unknown field is skipped.
-#[cfg(test)]
 fn an_unknown_native_variant_is_a_typed_error_not_a_skipped_row() {
     let touch = r#""contact":1,"kind":"touch","action":"move","time":{"epoch_ns":5}"#;
     for (case, row, tag) in [
@@ -807,7 +789,6 @@ fn an_unknown_native_variant_is_a_typed_error_not_a_skipped_row() {
 
 /// Another major version, a value outside its range and a device the header
 /// does not declare are refused.
-#[cfg(test)]
 fn a_native_recording_outside_its_format_is_refused() {
     let version = HEADER.replace(
         r#""flui_native_recording":1"#,
@@ -854,7 +835,24 @@ fn a_native_recording_outside_its_format_is_refused() {
 
 #[test]
 fn native_recording_contracts() {
+    crate::run_table("native_recording_contracts", &contracts());
+}
+
+/// Every case of the native recordings: the checked-in recordings' replay
+/// and codec, the capture's own contracts, and the fresh browser and device
+/// sessions held against their goldens. Each harness that includes this
+/// module runs them (`platform_it` as `native_recording_contracts`, and
+/// `x11_window`, which captures X11 sessions).
+pub(crate) fn contracts() -> Vec<(&'static str, fn())> {
     let cases: Vec<(&str, fn())> = vec![
+        (
+            "browser_sessions_hold_against_their_goldens",
+            browser_sessions_hold_against_their_goldens,
+        ),
+        (
+            "pulled_device_recordings_replay_to_what_they_delivered",
+            pulled_device_recordings_replay_to_what_they_delivered,
+        ),
         (
             "win32_pointer_info_recordings_decode_to_their_host_input",
             win32_pointer_info_recordings_decode_to_their_host_input,
@@ -910,13 +908,12 @@ fn native_recording_contracts() {
     ];
     #[cfg(all(debug_assertions, feature = "native-capture"))]
     let cases = [cases, capture::CASES.to_vec()].concat();
-    crate::run_table("native_recording_contracts", &cases);
+    cases
 }
 
 /// The recordings a device run pulled
 /// into `FLUI_DEVICE_RECORDING_DIR` replay to what the device delivered and
 /// hold against their goldens; without a pull there is nothing to hold.
-#[test]
 fn pulled_device_recordings_replay_to_what_they_delivered() {
     #[cfg(all(debug_assertions, feature = "native-capture"))]
     {

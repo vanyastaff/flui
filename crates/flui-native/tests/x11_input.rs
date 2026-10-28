@@ -83,7 +83,11 @@ impl<'a> Xtest<'a> {
 
     /// Move the pointer to `(x, y)` of the window's content.
     fn move_to(&self, x: i16, y: i16) {
-        self.send(MOTION_NOTIFY_EVENT, 0, (self.origin.0 + x, self.origin.1 + y));
+        self.send(
+            MOTION_NOTIFY_EVENT,
+            0,
+            (self.origin.0 + x, self.origin.1 + y),
+        );
     }
 
     /// Move the pointer to `(x, y)` of the root window.
@@ -114,8 +118,8 @@ impl<'a> Xtest<'a> {
 /// Put the pointer in the screen's far corner, where no window opens, before
 /// a window opens.
 fn park_pointer() {
-    let (server, screen) = x11rb::rust_connection::RustConnection::connect(None)
-        .expect("the X server answers");
+    let (server, screen) =
+        x11rb::rust_connection::RustConnection::connect(None).expect("the X server answers");
     let root = server.setup().roots[screen].root;
     server
         .xtest_fake_input(MOTION_NOTIFY_EVENT, 0, 0, root, 1270, 1010, 0)
@@ -148,8 +152,7 @@ fn line(event: &PointerEvent) -> Option<String> {
         PointerEvent::Down(press) | PointerEvent::ButtonChange(ButtonChange::Pressed(press)) => {
             format!("down {:?}{}", press.button(), control(press.modifiers))
         }
-        PointerEvent::Up(release)
-        | PointerEvent::ButtonChange(ButtonChange::Released(release)) => {
+        PointerEvent::Up(release) | PointerEvent::ButtonChange(ButtonChange::Released(release)) => {
             format!("up {:?}", release.button())
         }
         PointerEvent::Scroll(scroll) => format!(
@@ -325,7 +328,9 @@ fn xtest_keys_reach_the_focused_window() {
         "{keys:#?}"
     );
     assert_eq!(
-        keys.iter().filter(|key| key.state() == KeyState::Up).count(),
+        keys.iter()
+            .filter(|key| key.state() == KeyState::Up)
+            .count(),
         downs.len(),
         "every key is released"
     );

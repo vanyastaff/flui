@@ -1045,7 +1045,10 @@ impl BackendUnderTest for Win32Window {
 enum X11Reading {
     Devices(Vec<x11::DeviceDescription>),
     Event(x11::XiEvent),
-    Key { keysym: u32, shift: bool },
+    Key {
+        keysym: u32,
+        shift: bool,
+    },
     /// The window lost the focus (a core `FocusOut`).
     FocusOut(EventTime),
 }
@@ -1209,11 +1212,9 @@ impl BackendUnderTest for X11Decoder {
                         .into_iter()
                         .map(|(_, input)| input),
                 ),
-                X11Reading::Event(event) => inputs.extend(
-                    self.pointers
-                        .event(NativeSurface(1), 1.0, &event)
-                        .inputs,
-                ),
+                X11Reading::Event(event) => {
+                    inputs.extend(self.pointers.event(NativeSurface(1), 1.0, &event).inputs)
+                }
                 X11Reading::FocusOut(time) => inputs.extend(self.pointers.cancel_surface(
                     NativeSurface(1),
                     NativeCancel::FocusLost,

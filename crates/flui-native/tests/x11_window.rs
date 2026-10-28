@@ -97,11 +97,17 @@ mod cases {
             })
         };
         // A listing, or a run with nothing to run, starts no server.
-        let cases = || CASES.iter().chain(crate::x11_input::CASES);
-        let session = (!arguments.list && cases().any(|(name, _)| !filtered_out(name)))
+        let cases: Vec<(&str, fn())> = CASES
+            .iter()
+            .chain(crate::x11_input::CASES)
+            .copied()
+            .chain(recording_cases())
+            .collect();
+        let session = (!arguments.list && cases.iter().any(|(name, _)| !filtered_out(name)))
             .then(Session::start);
-        let trials = cases()
-            .map(|&(name, case)| {
+        let trials = cases
+            .into_iter()
+            .map(|(name, case)| {
                 libtest_mimic::Trial::test(name, move || {
                     case();
                     Ok(())
@@ -111,6 +117,15 @@ mod cases {
         let conclusion = libtest_mimic::run(&arguments, trials);
         drop(session);
         conclusion.exit();
+    }
+
+    /// The recordings an X11 session is held against are this harness's too,
+    /// with their codec's contracts, in a build that captures.
+    fn recording_cases() -> Vec<(&'static str, fn())> {
+        #[cfg(all(debug_assertions, feature = "native-capture"))]
+        return crate::native_recording::contracts();
+        #[cfg(not(all(debug_assertions, feature = "native-capture")))]
+        Vec::new()
     }
 
     /// An X server of the harness's own with a window manager on it, which
