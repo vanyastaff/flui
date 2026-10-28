@@ -308,6 +308,12 @@ jobs:
       - name: cargo clippy flui-engine --features testing
         run: cargo clippy -p flui-engine --all-targets --locked --features testing -- -D warnings
 
+      # The slice of `feature-matrix` (main only) that a pull request can break
+      # most cheaply: the workspace pass above builds flui-native with `desktop`
+      # (Wayland and X11 together), which hides a `cfg` gap in any one backend.
+      - name: cargo xtask native-features
+        run: cargo xtask native-features
+
   # ─────────────────────────────────────────────────────────────────────────
   # test — the workspace suite on Linux (`cargo xtask test --fast`: nextest
   # over TEST_SCOPE, then flui-native under Xvfb, then its Wayland tests
