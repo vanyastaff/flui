@@ -21,8 +21,7 @@
 mod absent;
 #[path = "android_exit_path.rs"]
 mod android_exit_path;
-#[path = "support/app.rs"]
-mod app;
+use flui_native::testing::app;
 #[path = "app_handler.rs"]
 #[cfg(not(target_arch = "wasm32"))]
 mod app_handler;

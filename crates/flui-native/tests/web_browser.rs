@@ -8,8 +8,7 @@
 //! default actions.
 #![cfg(target_arch = "wasm32")]
 
-#[path = "support/app.rs"]
-mod app;
+use flui_native::testing::app;
 
 use flui_testing::window_commands::AdmitAndApply as _;
 use flui_testing::window_handler::RecordingWindowHandler;

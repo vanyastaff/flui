@@ -228,7 +228,7 @@ impl WindowsWindow {
         drag: Arc<dyn crate::owner::windows::HostDrag>,
     ) -> Result<Arc<Self>, OpenWindowError> {
         let crate::owner::windows::control::OwnerShares {
-            handlers,
+            app_hooks,
             frames,
             exit_policy,
             displays,
@@ -248,7 +248,7 @@ impl WindowsWindow {
             options,
             handler,
             windows,
-            handlers,
+            app_hooks,
             frames,
             exit_policy,
             displays,
@@ -352,7 +352,7 @@ impl WindowsWindow {
         options: WindowOptions,
         handler: Rc<dyn flui_platform::WindowHandler>,
         windows: Arc<WindowSet>,
-        handlers: Rc<RefCell<AppHooks>>,
+        app_hooks: Rc<RefCell<AppHooks>>,
         frames: Rc<crate::owner::windows::FrameCount>,
         exit_policy: crate::owner::windows::control::ExitPolicyRequest,
         displays: Arc<dyn crate::owner::windows::HostDisplays>,
@@ -535,7 +535,7 @@ impl WindowsWindow {
                 last_resize: std::cell::Cell::new(None),
                 modal_pacing: crate::owner::windows::modal_loop::ModalPacing::new(
                     crate::owner::windows::modal_loop::ModalFrames::new(
-                        std::sync::Arc::clone(&handlers.borrow().app),
+                        std::sync::Arc::clone(&app_hooks.borrow().app),
                         Arc::downgrade(&windows)
                             as std::sync::Weak<dyn crate::owner::windows::ClassWindows>,
                         Rc::clone(&frames),
@@ -592,7 +592,7 @@ impl WindowsWindow {
                     client_size: size,
                     scale,
                     delivery,
-                    handlers: Rc::clone(&handlers),
+                    app_hooks: Rc::clone(&app_hooks),
                     preferences,
                     hooks: Rc::clone(&window_hooks),
                     apartment,

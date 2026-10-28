@@ -583,12 +583,7 @@ pub(crate) fn install_owner_platform(
             );
             let previous_host =
                 std::mem::replace(&mut state.installed_host, super::InstalledHost::new());
-            // The routes of the run before go with its owner-turn wake: this run's
-            // bootstrap sets its own.
-            let previous_owner_turn_wake = (
-                state.owner_turn_wake.replace(owner_turn_wake),
-                std::mem::take(&mut state.app_routes),
-            );
+            let previous_owner_turn_wake = state.owner_turn_wake.replace(owner_turn_wake);
             let previous = state.owner_platform.replace(std::rc::Rc::new(owner));
             #[cfg(all(not(target_os = "android"), not(target_os = "ios")))]
             {
@@ -647,15 +642,18 @@ pub(crate) fn install_owner_platform(
 type Bootstrap =
     Box<dyn FnOnce(flui_native::OwnerPlatform) -> Result<(), flui_native::BootstrapError>>;
 
-/// Where the application handler of the current run sends what the platform
-/// tells and asks it beyond its bootstrap, set by the runner as its bootstrap
-/// installs what each one reaches (the main window, the UI runtimes' wake
-/// deadlines, a mobile runner's own drivers). Every owner install starts the
-/// routes over, so a run never answers with what an earlier one set.
+/// Where the application handler of a run sends what the platform tells and
+/// asks it beyond its bootstrap, set by the runner as its bootstrap installs
+/// what each one reaches (the main window, the UI runtimes' wake deadlines, a
+/// mobile runner's own drivers). The handler owns its routes, so a run never
+/// answers with what another set: a platform run from inside a handler, as a
+/// test does, routes to its own handler and leaves the outer run's routes as
+/// they were.
 ///
-/// A route the runner never sets answers as a run that cares about it not:
-/// a quit or a reopen reaches nothing, the exit policy keeps the loop
-/// running, and no deadline is asked for.
+/// A route the runner never sets answers as a run that cares about it not: a
+/// quit or a reopen reaches nothing, the exit is left to the host, as with no
+/// handler bound ([`ExitAnswer::HostDecides`](flui_native::ExitAnswer)), and
+/// no deadline is asked for.
 #[derive(Default)]
 pub(crate) struct AppRoutes {
     quit: Option<Rc<dyn Fn()>>,
@@ -664,11 +662,20 @@ pub(crate) struct AppRoutes {
     wake_deadline: Option<Rc<dyn Fn() -> Option<web_time::Instant>>>,
 }
 
-/// Replace one route of the current run; the one it displaces goes outside
-/// the composition root's borrow.
+/// Replace one route of the innermost run on this thread whose handler is
+/// alive; the one it displaces goes outside every borrow. With no run, there
+/// is no handler to answer through, and the route is let go.
 fn set_route<T: ?Sized>(project: fn(&mut AppRoutes) -> &mut Option<Rc<T>>, route: Rc<T>) {
-    let displaced =
-        APP_RUNTIME.with(|slot| project(&mut slot.borrow_mut().app_routes).replace(route));
+    let routes = APP_RUNTIME.with(|slot| {
+        let runs = &mut slot.borrow_mut().run_routes;
+        runs.retain(|routes| routes.strong_count() > 0);
+        runs.last().and_then(std::rc::Weak::upgrade)
+    });
+    let Some(routes) = routes else {
+        tracing::debug!("a route set outside any run has no handler to answer through");
+        return;
+    };
+    let displaced = project(&mut routes.borrow_mut()).replace(route);
     drop(displaced);
 }
 
@@ -696,7 +703,7 @@ pub(crate) fn route_exit_policy(route: impl Fn() -> bool + 'static) {
 
 /// Answer the platform's wake-deadline question with `route`.
 #[cfg_attr(
-    target_arch = "wasm32",
+    all(target_arch = "wasm32", not(test)),
     expect(dead_code, reason = "the web host has no idle wait to bound")
 )]
 pub(super) fn route_wake_deadline(route: impl Fn() -> Option<web_time::Instant> + 'static) {
@@ -711,14 +718,15 @@ pub(super) fn route_wake_deadline(route: impl Fn() -> Option<web_time::Instant> 
 /// on the thread, and the rest goes to the routes the bootstrap set
 /// ([`AppRoutes`]).
 ///
-/// The routes belong to the owner install the bootstrap made: once another
-/// run installs its owner on the thread (a platform run from inside a
-/// handler, as a test does), this handler's quit, reopen and questions reach
-/// none of that run's routes.
+/// The handler owns its routes; its bootstrap, and the run's code after it,
+/// set them through the `route_*` functions, which reach the innermost run on
+/// the thread whose handler is alive. A run from inside a handler (as a test
+/// does) gets its own routes and leaves the outer run's as they were; a
+/// bootstrap that fails before setting one answers with none of another
+/// run's.
 struct RunnerHandler {
     bootstrap: std::cell::RefCell<Option<Bootstrap>>,
-    /// The owner install the bootstrap made, once it returned.
-    install: std::cell::Cell<Option<u64>>,
+    routes: Rc<std::cell::RefCell<AppRoutes>>,
 }
 
 /// The application handler a runner passes to `Platform::run`, with
@@ -729,23 +737,16 @@ pub(crate) fn app_handler(
 ) -> Rc<dyn flui_native::AppHandler> {
     Rc::new(RunnerHandler {
         bootstrap: std::cell::RefCell::new(Some(Box::new(bootstrap))),
-        install: std::cell::Cell::new(None),
+        routes: Rc::default(),
     })
 }
 
 impl RunnerHandler {
-    /// The route `pick` names, when this run's install is the current one.
-    /// The composition root is only read: a route asked while it is borrowed
-    /// (a platform call made with it held) is no route.
+    /// The route `pick` names. Setting a route borrows the routes only to
+    /// swap it in, and this only to clone it, so neither ever finds them
+    /// borrowed.
     fn route<T: ?Sized>(&self, pick: impl FnOnce(&AppRoutes) -> Option<Rc<T>>) -> Option<Rc<T>> {
-        APP_RUNTIME.with(|slot| {
-            let state = slot.try_borrow().ok()?;
-            let current = self
-                .install
-                .get()
-                .is_none_or(|install| install == state.owner_install_generation);
-            current.then(|| pick(&state.app_routes)).flatten()
-        })
+        pick(&self.routes.borrow())
     }
 }
 
@@ -756,10 +757,13 @@ impl flui_native::AppHandler for RunnerHandler {
             .borrow_mut()
             .take()
             .expect("BUG: a platform runs its bootstrap once");
-        let ran = bootstrap(owner);
-        let install = APP_RUNTIME.with(|slot| slot.borrow().owner_install_generation);
-        self.install.set(Some(install));
-        ran
+        // From here the `route_*` functions reach this run's routes.
+        APP_RUNTIME.with(|slot| {
+            slot.borrow_mut()
+                .run_routes
+                .push(Rc::downgrade(&self.routes));
+        });
+        bootstrap(owner)
     }
 
     fn quit_requested(&self, _: &flui_native::OwnerPlatform) {
@@ -788,9 +792,12 @@ impl flui_native::AppHandler for RunnerHandler {
         super::owner_dispatch::deliver_host_notice(&notice.into());
     }
 
-    fn exit_policy(&self, _: &flui_native::OwnerPlatform) -> bool {
-        self.route(|routes| routes.exit_policy.clone())
-            .is_some_and(|exit| exit())
+    fn exit_policy(&self, _: &flui_native::OwnerPlatform) -> flui_native::ExitAnswer {
+        match self.route(|routes| routes.exit_policy.clone()) {
+            Some(exit) if exit() => flui_native::ExitAnswer::End,
+            Some(_) => flui_native::ExitAnswer::KeepRunning,
+            None => flui_native::ExitAnswer::HostDecides,
+        }
     }
 
     fn wake_deadline(&self, _: &flui_native::OwnerPlatform) -> Option<web_time::Instant> {
@@ -1136,3 +1143,7 @@ impl Drop for OwnerHostClearGuard {
         drop(storage);
     }
 }
+
+#[cfg(test)]
+#[path = "app_handler_tests.rs"]
+mod app_handler_tests;

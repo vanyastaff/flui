@@ -71,7 +71,7 @@ pub(crate) struct OwnerControlContext {
     /// holding a recycled handle cannot reach another platform's state.
     identity: WindowIdentity,
     signal: Arc<OwnerSignal>,
-    handlers: Rc<RefCell<super::AppHooks>>,
+    app_hooks: Rc<RefCell<super::AppHooks>>,
     turn: Rc<OwnerTurnSlot>,
     frames: Rc<FrameCount>,
     preferences: Rc<dyn OwnerPreferences>,
@@ -202,7 +202,7 @@ pub(crate) struct OwnerShares {
     /// What the application gave the loop (its handler's delivery, the keyboard
     /// layout callback),
     /// shared with every window context this platform opens.
-    pub(crate) handlers: Rc<RefCell<super::AppHooks>>,
+    pub(crate) app_hooks: Rc<RefCell<super::AppHooks>>,
     /// Where the owner-turn callback waits between turns.
     pub(crate) turn: Rc<OwnerTurnSlot>,
     /// Frame callbacks dispatched by every window this platform opens.
@@ -402,7 +402,7 @@ impl OwnerControl {
                 })
         }));
         let exit_policy_pending = Arc::new(AtomicBool::new(false));
-        let handlers = Rc::new(RefCell::new(super::AppHooks::new(Arc::clone(&app))));
+        let app_hooks = Rc::new(RefCell::new(super::AppHooks::new(Arc::clone(&app))));
         let seeds = OwnerSeeds {
             signal: &signal,
             app: &app,
@@ -429,7 +429,7 @@ impl OwnerControl {
         let context = Box::new(OwnerControlContext {
             identity,
             signal: Arc::clone(&signal),
-            handlers: Rc::clone(&handlers),
+            app_hooks: Rc::clone(&app_hooks),
             turn: Rc::new(OwnerTurnSlot::default()),
             frames: Rc::clone(&frames),
             preferences,
@@ -591,7 +591,7 @@ impl OwnerGate {
                     return Err(UserDataRefusal::WindowGone);
                 }
                 Ok(OwnerShares {
-                    handlers: Rc::clone(&context.handlers),
+                    app_hooks: Rc::clone(&context.app_hooks),
                     turn: Rc::clone(&context.turn),
                     frames: Rc::clone(&context.frames),
                     preferences: Rc::clone(&context.preferences),
@@ -703,7 +703,7 @@ fn quit_owner_loop(signal: &OwnerSignal, turn: &OwnerTurnSlot) {
 /// so does a handler that panics.
 fn exit_policy_allows_exit(
     signal: &OwnerSignal,
-    handlers: &RefCell<super::AppHooks>,
+    app: &AppDelivery,
     windows: &Weak<dyn ClassWindows>,
 ) -> bool {
     let no_windows = || windows.upgrade().is_some_and(|windows| windows.is_empty());
@@ -713,7 +713,6 @@ fn exit_policy_allows_exit(
     // The handler is embedder code running inside this window procedure,
     // where an unwind cannot cross the FFI boundary. A panic is contained and
     // counts as a veto.
-    let app = Arc::clone(&handlers.borrow().app);
     let allowed = match app.exit_policy() {
         Called::Vacant => true,
         called => called.or_contain(false, "the application's exit policy"),
@@ -787,9 +786,9 @@ unsafe fn receive(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> L
             context.exit_policy_pending.store(false, Ordering::Release);
             let signal = Arc::clone(&context.signal);
             let turn = Rc::clone(&context.turn);
-            let handlers = Rc::clone(&context.handlers);
+            let app = Arc::clone(&context.app_hooks.borrow().app);
             let windows = context.windows.clone();
-            if exit_policy_allows_exit(&signal, &handlers, &windows) {
+            if exit_policy_allows_exit(&signal, &app, &windows) {
                 quit_owner_loop(&signal, &turn);
             }
             return LRESULT(0);

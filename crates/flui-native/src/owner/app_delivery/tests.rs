@@ -61,7 +61,10 @@ fn a_report_raised_inside_a_question_is_heard_after_the_answer() {
             seen.borrow_mut().push(("end", call));
         }
     });
-    assert!(matches!(run.delivery.exit_policy(), Called::Returned(true)));
+    assert!(matches!(
+        run.delivery.exit_policy(),
+        Called::Returned(false)
+    ));
     assert_eq!(
         *log.borrow(),
         [
@@ -114,7 +117,7 @@ fn a_failed_bootstrap_keeps_the_reports() {
         fn host_notice(&self, owner: &OwnerPlatform, notice: SystemNotice) {
             self.0.host_notice(owner, notice);
         }
-        fn exit_policy(&self, owner: &OwnerPlatform) -> bool {
+        fn exit_policy(&self, owner: &OwnerPlatform) -> ExitAnswer {
             self.0.exit_policy(owner)
         }
         fn wake_deadline(&self, owner: &OwnerPlatform) -> Option<web_time::Instant> {
@@ -286,8 +289,8 @@ fn a_released_handler_drops_outside_the_delivery_lock() {
             SessionEndAnswer::Proceed
         }
         fn host_notice(&self, _: &OwnerPlatform, _: SystemNotice) {}
-        fn exit_policy(&self, _: &OwnerPlatform) -> bool {
-            true
+        fn exit_policy(&self, _: &OwnerPlatform) -> ExitAnswer {
+            ExitAnswer::End
         }
         fn wake_deadline(&self, _: &OwnerPlatform) -> Option<web_time::Instant> {
             None
@@ -298,6 +301,64 @@ fn a_released_handler_drops_outside_the_delivery_lock() {
     let run = bind(delivery, handler);
     run.delivery.ready(run.owner()).expect("bootstrap");
     run.delivery.release();
+}
+
+/// A loop that ends from inside a method — the web page and the Android
+/// Activity quit, then release the handler — still delivers the quit raised
+/// there, once: the release waits for the running delivery.
+fn a_quit_raised_as_the_loop_ends_inside_a_method_is_heard_once() {
+    // The way the web and Android loops end: report the quit, let go of the
+    // handler.
+    fn end_loop(delivery: &AppDelivery) {
+        let _ = delivery.quit_requested();
+        delivery.release();
+    }
+
+    let app = AppLog::new();
+    let run = bound(app.clone());
+    let delivery = Arc::clone(&run.delivery);
+    app.react(move |call, _| {
+        if call == SLEEP {
+            end_loop(&delivery);
+        }
+    });
+    let _ = run.delivery.host_notice(SystemNotice::Sleep);
+    assert_eq!(app.calls(), [AppCall::Ready, SLEEP, AppCall::Quit]);
+    end_loop(&run.delivery);
+    assert_eq!(app.count(AppCall::Quit), 1);
+    assert!(
+        matches!(run.delivery.wake_deadline(), Called::Vacant),
+        "the handler was released once the delivery ended"
+    );
+
+    let app = AppLog::new();
+    let delivery = Arc::new(AppDelivery::new());
+    let inside = Arc::clone(&delivery);
+    app.react(move |call, _| {
+        if call == AppCall::Ready {
+            end_loop(&inside);
+        }
+    });
+    let run = bind(delivery, app.clone());
+    run.delivery.ready(run.owner()).expect("bootstrap");
+    assert_eq!(app.calls(), [AppCall::Ready, AppCall::Quit]);
+    assert!(matches!(run.delivery.exit_policy(), Called::Vacant));
+}
+
+/// A handler that leaves the exit to the host is answered for as if no
+/// handler were bound: the host's own default decides.
+fn an_exit_policy_left_to_the_host_is_the_hosts() {
+    let app = AppLog::new();
+    let run = bound(app.clone());
+    app.answer_exit_policy(ExitAnswer::HostDecides);
+    assert!(matches!(run.delivery.exit_policy(), Called::Vacant));
+    app.answer_exit_policy(ExitAnswer::End);
+    assert!(matches!(run.delivery.exit_policy(), Called::Returned(true)));
+    app.answer_exit_policy(ExitAnswer::KeepRunning);
+    assert!(matches!(
+        run.delivery.exit_policy(),
+        Called::Returned(false)
+    ));
 }
 
 /// The delivery's contracts: order, waiting, containment, threads, the one
@@ -343,6 +404,14 @@ fn app_delivery_contracts() {
             (
                 "a released handler drops outside the delivery lock",
                 a_released_handler_drops_outside_the_delivery_lock,
+            ),
+            (
+                "a quit raised as the loop ends inside a method is heard once",
+                a_quit_raised_as_the_loop_ends_inside_a_method_is_heard_once,
+            ),
+            (
+                "an exit policy left to the host is the host's",
+                an_exit_policy_left_to_the_host_is_the_hosts,
             ),
         ],
     );

@@ -47,9 +47,10 @@ use crate::task::Task;
 /// raised afterwards. A second panic never replaces the first.
 ///
 /// A trait of the host crate, not of the contract: it names
-/// [`OwnerPlatform`], and only the composition root (`flui-app`) implements it
-/// (ADR-0151 §9). It is not `Send`: the handler lives on the owner thread with
-/// the capability it receives.
+/// [`OwnerPlatform`], so what implements it is code that runs a host itself —
+/// the composition root (`flui-app`), and an example or test that drives
+/// `flui-native` directly (ADR-0151 §9). It is not `Send`: the handler lives
+/// on the owner thread with the capability it receives.
 pub trait AppHandler: 'static {
     /// The loop runs and windows can open: the application's bootstrap.
     /// Called once, before any other method, with the owner-thread capability
@@ -83,13 +84,12 @@ pub trait AppHandler: 'static {
     fn host_notice(&self, owner: &OwnerPlatform, notice: SystemNotice);
 
     /// Whether the platform may end its loop now that its own window
-    /// bookkeeping holds no window: `true` lets it end, `false` keeps it
-    /// running (another window is about to open, a service holds the
-    /// application). Asked by the Win32, AppKit, winit and headless hosts when
-    /// their last window closes, and again on
-    /// [`Platform::request_exit_policy_reevaluation`]; Android, the web and
-    /// iOS leave the end of the process to the Activity, the page and UIKit.
-    fn exit_policy(&self, owner: &OwnerPlatform) -> bool;
+    /// bookkeeping holds no window ([`ExitAnswer`]). Asked by the Win32,
+    /// AppKit, winit and headless hosts when their last window closes, and
+    /// again on [`Platform::request_exit_policy_reevaluation`]; Android, the
+    /// web and iOS leave the end of the process to the Activity, the page and
+    /// UIKit.
+    fn exit_policy(&self, owner: &OwnerPlatform) -> ExitAnswer;
 
     /// The earliest wall-clock instant the loop must wake at even with
     /// nothing else to do (a gesture's hold deadline, a timer), or `None`.
@@ -97,6 +97,20 @@ pub trait AppHandler: 'static {
     /// AppKit, winit, Android, iOS); the headless and web hosts have no idle
     /// wait to bound.
     fn wake_deadline(&self, owner: &OwnerPlatform) -> Option<web_time::Instant>;
+}
+
+/// The application's answer to [`AppHandler::exit_policy`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExitAnswer {
+    /// The loop may end.
+    End,
+    /// The loop keeps running: another window is about to open, or a service
+    /// holds the application.
+    KeepRunning,
+    /// The application has no policy of its own: the host decides as it does
+    /// before `ready` and after the loop ended. The Win32, AppKit and winit
+    /// hosts end the loop; the headless host keeps it running.
+    HostDecides,
 }
 
 mod sealed {

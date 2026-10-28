@@ -1,16 +1,15 @@
-//! The application handlers the integration tests run a platform with: one
-//! that only bootstraps, and a log that records every call and answers what
-//! it was told to.
-#![allow(
-    dead_code,
-    reason = "each test binary that includes this uses a part of it"
-)]
+//! Application handlers to run a platform with in a test: one that only
+//! bootstraps, and a log that records every call and answers what it was told
+//! to.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use flui_native::{AppHandler, BootstrapError, OwnerPlatform};
 use flui_platform::{SessionEndAnswer, SessionEndPhase, SystemNotice};
+
+use crate::error::BootstrapError;
+use crate::owner::OwnerPlatform;
+use crate::platform::{AppHandler, ExitAnswer, Platform};
 
 /// A handler whose bootstrap is `ready` and that has nothing to say about
 /// anything else: it ignores reports, lets a session end proceed, keeps the
@@ -31,7 +30,7 @@ pub fn with_log(
     let log = AppLog::new();
     let weak = Rc::downgrade(&log);
     log.bootstrap(move |owner| {
-        let log = weak.upgrade().expect("the log runs its own bootstrap");
+        let log = weak.upgrade().expect("BUG: the log runs its own bootstrap");
         ready(&log, owner)
     });
     log
@@ -40,10 +39,10 @@ pub fn with_log(
 /// Run `platform` with `log` as its handler and hand back the owner
 /// capability its bootstrap received: for a host whose `run` returns once the
 /// bootstrap has (headless, the web).
-pub fn run_keeping_owner(
-    platform: Box<dyn flui_native::Platform>,
-    log: &Rc<AppLog>,
-) -> OwnerPlatform {
+///
+/// # Panics
+/// When the platform does not run, or runs without bootstrapping.
+pub fn run_keeping_owner(platform: Box<dyn Platform>, log: &Rc<AppLog>) -> OwnerPlatform {
     let kept = Rc::new(RefCell::new(None));
     let keep = Rc::clone(&kept);
     log.bootstrap(move |owner| {
@@ -59,12 +58,19 @@ pub fn run_keeping_owner(
 /// One call an [`AppLog`] heard.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AppCall {
+    /// [`AppHandler::ready`].
     Ready,
+    /// [`AppHandler::quit_requested`].
     Quit,
+    /// [`AppHandler::reopen`].
     Reopen,
+    /// [`AppHandler::session_end`] with its phase.
     SessionEnd(SessionEndPhase),
+    /// [`AppHandler::host_notice`] with its notice.
     Notice(SystemNotice),
+    /// [`AppHandler::exit_policy`].
     ExitPolicy,
+    /// [`AppHandler::wake_deadline`].
     WakeDeadline,
 }
 
@@ -72,25 +78,27 @@ type Bootstrap = Box<dyn FnOnce(OwnerPlatform) -> Result<(), BootstrapError>>;
 type Reaction = Rc<dyn Fn(AppCall, &OwnerPlatform)>;
 
 /// Records every call, runs what it was told to on each, and answers with
-/// what it was given: `Proceed`, no exit and no deadline until told
+/// what it was given: `Proceed`, keep running and no deadline until told
 /// otherwise.
 pub struct AppLog {
     calls: RefCell<Vec<AppCall>>,
     bootstrap: RefCell<Option<Bootstrap>>,
     reaction: RefCell<Option<Reaction>>,
     session_end: RefCell<Rc<dyn Fn(SessionEndPhase) -> SessionEndAnswer>>,
-    exit: RefCell<Rc<dyn Fn() -> bool>>,
+    exit: RefCell<Rc<dyn Fn() -> ExitAnswer>>,
     deadline: RefCell<Rc<dyn Fn() -> Option<web_time::Instant>>>,
 }
 
 impl AppLog {
+    /// A log with no bootstrap and the default answers.
+    #[must_use]
     pub fn new() -> Rc<Self> {
         Rc::new(Self {
             calls: RefCell::new(Vec::new()),
             bootstrap: RefCell::new(None),
             reaction: RefCell::new(None),
             session_end: RefCell::new(Rc::new(|_| SessionEndAnswer::Proceed)),
-            exit: RefCell::new(Rc::new(|| false)),
+            exit: RefCell::new(Rc::new(|| ExitAnswer::KeepRunning)),
             deadline: RefCell::new(Rc::new(|| None)),
         })
     }
@@ -108,6 +116,7 @@ impl AppLog {
         self.reaction.replace(Some(Rc::new(reaction)));
     }
 
+    /// Answer a session end with `answer`.
     pub fn answer_session_end(&self, answer: SessionEndAnswer) {
         self.answer_session_end_with(move |_| answer);
     }
@@ -120,17 +129,32 @@ impl AppLog {
         self.session_end.replace(Rc::new(answer));
     }
 
+    /// Answer the exit policy: [`ExitAnswer::End`] when `allow`, else
+    /// [`ExitAnswer::KeepRunning`].
     pub fn answer_exit(&self, allow: bool) {
         self.answer_exit_with(move || allow);
     }
 
-    pub fn answer_deadline(&self, deadline: Option<web_time::Instant>) {
-        self.answer_deadline_with(move || deadline);
+    /// Answer the exit policy with `answer`.
+    pub fn answer_exit_policy(&self, answer: ExitAnswer) {
+        self.exit.replace(Rc::new(move || answer));
     }
 
-    /// Answer the exit policy with what `answer` says when asked.
-    pub fn answer_exit_with(&self, answer: impl Fn() -> bool + 'static) {
-        self.exit.replace(Rc::new(answer));
+    /// Answer the exit policy with what `allow` says when asked:
+    /// [`ExitAnswer::End`] or [`ExitAnswer::KeepRunning`].
+    pub fn answer_exit_with(&self, allow: impl Fn() -> bool + 'static) {
+        self.exit.replace(Rc::new(move || {
+            if allow() {
+                ExitAnswer::End
+            } else {
+                ExitAnswer::KeepRunning
+            }
+        }));
+    }
+
+    /// Answer the wake deadline with `deadline`.
+    pub fn answer_deadline(&self, deadline: Option<web_time::Instant>) {
+        self.answer_deadline_with(move || deadline);
     }
 
     /// Answer the wake deadline with what `answer` says when asked.
@@ -139,11 +163,13 @@ impl AppLog {
     }
 
     /// What it heard, in order.
+    #[must_use]
     pub fn calls(&self) -> Vec<AppCall> {
         self.calls.borrow().clone()
     }
 
     /// How many times it heard `call`.
+    #[must_use]
     pub fn count(&self, call: AppCall) -> usize {
         self.calls
             .borrow()
@@ -152,12 +178,33 @@ impl AppLog {
             .count()
     }
 
+    /// The notices it heard, in order.
+    #[must_use]
+    pub fn notices(&self) -> Vec<SystemNotice> {
+        self.calls
+            .borrow()
+            .iter()
+            .filter_map(|call| match call {
+                AppCall::Notice(notice) => Some(*notice),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn heard(&self, call: AppCall, owner: &OwnerPlatform) {
         self.calls.borrow_mut().push(call);
         let reaction = self.reaction.borrow().clone();
         if let Some(reaction) = reaction {
             reaction(call, owner);
         }
+    }
+}
+
+impl std::fmt::Debug for AppLog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AppLog")
+            .field("calls", &self.calls.borrow())
+            .finish_non_exhaustive()
     }
 }
 
@@ -186,7 +233,7 @@ impl AppHandler for AppLog {
         self.heard(AppCall::Notice(notice), owner);
     }
 
-    fn exit_policy(&self, owner: &OwnerPlatform) -> bool {
+    fn exit_policy(&self, owner: &OwnerPlatform) -> ExitAnswer {
         self.heard(AppCall::ExitPolicy, owner);
         let exit = self.exit.borrow().clone();
         exit()

@@ -2879,6 +2879,7 @@ mod tests {
         let host = Arc::new(quiet_platform());
         let platform = host.shared_owner();
         let app = AppLog::new();
+        app.answer_exit(true);
         let _run = bind(Arc::clone(&platform.app), app.clone());
         let unlocked = Rc::new(Cell::new(false));
         let (seen, probe) = (Rc::clone(&unlocked), Arc::clone(&platform));

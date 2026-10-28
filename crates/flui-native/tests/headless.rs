@@ -9,8 +9,7 @@
 // same binary.
 #![expect(unsafe_code)]
 
-#[path = "support/app.rs"]
-mod app;
+use flui_native::testing::app;
 
 use app::{AppCall, AppLog, run_keeping_owner};
 use flui_native::{HeadlessPlatform, current_platform};

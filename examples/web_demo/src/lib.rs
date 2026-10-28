@@ -190,8 +190,9 @@ impl flui_native::AppHandler for Page {
 
     fn host_notice(&self, _: &flui_native::OwnerPlatform, _: flui_platform::SystemNotice) {}
 
-    fn exit_policy(&self, _: &flui_native::OwnerPlatform) -> bool {
-        false
+    fn exit_policy(&self, _: &flui_native::OwnerPlatform) -> flui_native::ExitAnswer {
+        // The page ends with its tab.
+        flui_native::ExitAnswer::HostDecides
     }
 
     fn wake_deadline(&self, _: &flui_native::OwnerPlatform) -> Option<web_time::Instant> {

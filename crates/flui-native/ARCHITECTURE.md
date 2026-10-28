@@ -740,10 +740,15 @@ trait depends on `flui-platform` instead.
   end, exit policy, wake deadline) is asked at once, re-entrantly if need be,
   and a report it raises is delivered right after its answer; with no handler
   bound the host answers it itself (proceed, its own exit default, no
-  deadline). A panicking method is contained, the tail behind it still
-  delivered, the first panic returned. The loop releases the handler when its
-  run ends; one released while an unwind is under way is retained, never left
-  in the owner thread's table to be dropped when the thread exits. The
+  deadline), and so it does for an exit the handler leaves to it
+  (`ExitAnswer::HostDecides`). A panicking method is contained, the tail behind
+  it still delivered, the first panic returned. The loop releases the handler
+  when its run ends; a release made while a delivery runs (the web page and the
+  Android Activity end from inside a method) waits for that delivery, so the
+  quit it queued is heard first. One released while an unwind is under way is
+  retained, never left in the owner thread's table to be dropped when the
+  thread exits. The handlers tests run a platform with are
+  `testing::app` (the `testing` feature). The
   lifecycle position keeps only the release of a held session end and the
   activation; the keyboard layout callback stays a registration until nothing
   above the host reads it. Tests: `owner::app_delivery::tests::app_delivery_contracts`,

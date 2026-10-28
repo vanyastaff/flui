@@ -10,10 +10,6 @@
 //! cases build wherever the macOS target is type-checked; they run only on a
 //! Mac.
 
-#[cfg(any(target_os = "windows", target_os = "macos"))]
-#[path = "support/app.rs"]
-mod app;
-
 fn main() {
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
@@ -95,7 +91,7 @@ mod cases {
             let marked = Rc::clone(&checked);
             let platform: Box<dyn Platform> = Box::new(flui_native::WinitPlatform::new());
             platform
-                .run(crate::app::on_ready(move |owner| {
+                .run(flui_native::testing::app::on_ready(move |owner| {
                     let window = owner
                         .open_window(
                             hidden(),

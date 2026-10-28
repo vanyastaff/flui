@@ -42,7 +42,7 @@ use super::signal::{OwnerSignal, WindowWake};
 use super::slot::OwnerSlot;
 use super::{OwnerHooks, OwnerPlatform};
 use crate::error::BootstrapError;
-use crate::platform::{AppHandler, Platform};
+use crate::platform::{AppHandler, ExitAnswer, Platform};
 
 /// What the platform reports to the application, accepted in order.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -80,6 +80,17 @@ struct State {
     delivering: bool,
     /// The quit was accepted: a later one is the same quit.
     quit_accepted: bool,
+    /// The loop ended while a delivery ran: the handler is released once the
+    /// delivery has heard what is queued behind the running method.
+    release_after_delivery: bool,
+}
+
+impl State {
+    /// End the running delivery; whether the loop's release waited for it.
+    fn end_delivery(&mut self) -> bool {
+        self.delivering = false;
+        std::mem::take(&mut self.release_after_delivery)
+    }
 }
 
 impl State {
@@ -124,8 +135,9 @@ impl HandlerSlot for Resident<'_> {
     }
 }
 
-/// Ends a delivery that unwinds out of a method, so the next report delivers
-/// again. One that runs out of reports has already ended under the lock and
+/// Ends a delivery that unwinds out of a method or a bootstrap that fails, so
+/// the next report delivers again, and carries out a release that waited for
+/// it. One that runs out of reports has already ended under the lock and
 /// disarms this.
 struct Walk<'a>(&'a AppDelivery);
 
@@ -137,7 +149,13 @@ impl Walk<'_> {
 
 impl Drop for Walk<'_> {
     fn drop(&mut self) {
-        self.0.state.lock().delivering = false;
+        // A method unwound or the bootstrap failed: what is still queued is
+        // not delivered from here, so a release that waited for this
+        // delivery lets it go.
+        let release = self.0.state.lock().end_delivery();
+        if release {
+            self.0.release();
+        }
     }
 }
 
@@ -173,6 +191,11 @@ impl AppDelivery {
 
     /// Release the run's handler: its loop ended. It is dropped here, outside
     /// every lock; a report still queued has no handler left to hear it.
+    ///
+    /// A loop that ends from inside a method (the handler quit the page, or
+    /// a quit raised while it answers) has queued reports the running
+    /// delivery has yet to hear, its quit among them: the release waits for
+    /// that delivery and happens when it ends.
     #[cfg_attr(
         not(any(
             windows,
@@ -191,6 +214,10 @@ impl AppDelivery {
     pub(crate) fn release(&self) {
         let (binding, unheard) = {
             let mut state = self.state.lock();
+            if state.delivering && state.on_owner() {
+                state.release_after_delivery = true;
+                return;
+            }
             (state.binding.take(), std::mem::take(&mut state.pending))
         };
         if !unheard.is_empty() {
@@ -256,9 +283,15 @@ impl AppDelivery {
     }
 
     /// Ask the handler whether the loop may end ([`AppHandler::exit_policy`]);
-    /// vacant with no handler to ask.
+    /// vacant with no handler to ask, and when the handler leaves the decision
+    /// to the host.
     pub(crate) fn exit_policy(&self) -> Called<bool> {
-        self.question(<dyn AppHandler>::exit_policy)
+        match self.question(<dyn AppHandler>::exit_policy) {
+            Called::Returned(ExitAnswer::End) => Called::Returned(true),
+            Called::Returned(ExitAnswer::KeepRunning) => Called::Returned(false),
+            Called::Returned(ExitAnswer::HostDecides) | Called::Vacant => Called::Vacant,
+            Called::Panicked(failure) => Called::Panicked(failure),
+        }
     }
 
     /// Ask the handler for its wake deadline ([`AppHandler::wake_deadline`]);
@@ -367,12 +400,13 @@ impl AppDelivery {
         let walk = Walk(self);
         let mut first: Option<Failure> = None;
         let mut heard = false;
+        let mut release = false;
         loop {
             let next = {
                 let mut state = self.state.lock();
                 let next = state.pending.pop_front();
                 if next.is_none() {
-                    state.delivering = false;
+                    release = state.end_delivery();
                 }
                 next
             };
@@ -390,6 +424,9 @@ impl AppDelivery {
             }
         }
         walk.disarm();
+        if release {
+            self.release();
+        }
         match first {
             Some(failure) => Called::Panicked(failure),
             None if heard => Called::Returned(()),

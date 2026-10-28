@@ -507,7 +507,7 @@ pub(crate) struct CreatedWindow {
     /// to.
     pub(crate) delivery: Arc<WindowDelivery>,
     /// What the application gave the loop, shared with every window of it.
-    pub(crate) handlers: Rc<RefCell<AppHooks>>,
+    pub(crate) app_hooks: Rc<RefCell<AppHooks>>,
     /// The system preference source the loop keeps, which measures the
     /// system's mouse geometry at the window's scale.
     pub(crate) preferences: Rc<dyn control::OwnerPreferences>,
@@ -1301,7 +1301,7 @@ impl WindowsLoop {
         project: fn(&mut AppHooks) -> &mut Option<H>,
     ) {
         match self.owner_control.shares(op) {
-            Ok(shares) => install(&Field::new(&*shares.handlers, project), callback),
+            Ok(shares) => install(&Field::new(&*shares.app_hooks, project), callback),
             Err(UserDataRefusal::ForeignThread) => {
                 tracing::error!(
                     op,

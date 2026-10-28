@@ -360,8 +360,8 @@ impl flui_native::AppHandler for SceneApp {
 
     fn host_notice(&self, _: &flui_native::OwnerPlatform, _: flui_platform::SystemNotice) {}
 
-    fn exit_policy(&self, _: &flui_native::OwnerPlatform) -> bool {
-        true
+    fn exit_policy(&self, _: &flui_native::OwnerPlatform) -> flui_native::ExitAnswer {
+        flui_native::ExitAnswer::End
     }
 
     fn wake_deadline(&self, _: &flui_native::OwnerPlatform) -> Option<std::time::Instant> {

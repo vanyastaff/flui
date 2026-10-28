@@ -301,9 +301,11 @@ pub(crate) struct AppRuntime {
     /// another UI runtime before it exits (hot-restart does exactly this).
     pub(super) owner_platform: Option<std::rc::Rc<OwnerPlatform>>,
     pub(super) owner_install_generation: u64,
-    /// What the application handler of the current run forwards its quit,
-    /// reopen, exit and deadline questions to; reset by every owner install.
-    pub(crate) app_routes: super::runner::AppRoutes,
+    /// Where the bootstrap of each run on this thread sets the routes its
+    /// application handler owns, innermost last. The routes live in the
+    /// handler; a run whose handler is gone leaves a dead entry the next
+    /// lookup prunes.
+    pub(crate) run_routes: Vec<std::rc::Weak<std::cell::RefCell<super::runner::AppRoutes>>>,
     #[cfg(all(
         not(target_os = "android"),
         not(target_os = "ios"),
@@ -459,7 +461,7 @@ impl AppRuntime {
             owner_thread: None,
             owner_platform: None,
             owner_install_generation: 0,
-            app_routes: super::runner::AppRoutes::default(),
+            run_routes: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             pending_window_reservations: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             #[cfg(all(

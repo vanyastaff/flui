@@ -179,7 +179,7 @@ fn created(hwnd: HWND) -> CreatedWindow {
             flui_testing::window_handler::RecordingWindowHandler::new(),
             flui_platform::input_capabilities::InputCapabilities::UNAVAILABLE,
         )),
-        handlers: Rc::new(RefCell::new(super::AppHooks::new(Arc::new(
+        app_hooks: Rc::new(RefCell::new(super::AppHooks::new(Arc::new(
             crate::owner::app_delivery::AppDelivery::new(),
         )))),
         preferences: Rc::new(NoPreferences),

@@ -216,7 +216,7 @@ pub mod storage;
 #[cfg(test)]
 mod table_test;
 pub mod task;
-#[cfg(feature = "testing")]
+#[cfg(any(test, feature = "testing"))]
 pub mod testing;
 // Reachable for the text position's trait, which bounds a host's table; not
 // an embedding API.
@@ -289,7 +289,7 @@ pub use task::{Task, TaskLabel};
 // `flui_platform`, the accessibility capability from `flui_semantics::platform`.
 // Each has this one path (ADR-0151 §9).
 pub use host_window::HostWindow;
-pub use platform::{AppHandler, PathPromptOptions, Platform, PlatformExecutor};
+pub use platform::{AppHandler, ExitAnswer, PathPromptOptions, Platform, PlatformExecutor};
 // The owner-thread capability (ADR-0039 §1): minted only by a backend,
 // handed to `on_ready`, never re-exported with a public minting seam.
 pub use owner::{
