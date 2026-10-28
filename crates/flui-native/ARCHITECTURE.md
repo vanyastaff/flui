@@ -1123,8 +1123,10 @@ trait depends on `flui-platform` instead.
   keymap), one queued keymap per seat, and the X11 devices and valuators a
   query lists. A pointer frame's axes are fixed fields and bounded by their
   type. The Wayland seats' queue of recorded events holds what one read of the
-  socket dispatched, since the loop delivers it before it reads again, and a
-  newer keymap replaces a queued one rather than queueing 8 MiB more. Each cap
+  socket dispatched, since the loop delivers it before it reads again; a
+  keymap is queued as the compositor's file, and a newer one replaces the
+  queued one and closes its file unread, so delivery reads one keymap of up to
+  8 MiB per seat. Each cap
   in the pure translation has a test that feeds 10 000 distinct events without
   the one that clears them and fails with the cap removed; the seat, output
   and tablet-tool caps sit where a global or a tool is bound, which only a
@@ -1140,8 +1142,14 @@ trait depends on `flui-platform` instead.
   list at start. **Tied to a request of ours:** a seat's pointer, keyboard and
   touch, a pointer's pinch and cursor-shape device, a window's surfaces and
   frame callbacks, an activation token (destroyed at its `done`), a
-  presentation feedback (ended by its own `presented` or `discarded`). No
-  `wl_data_device` is bound yet, so no data offer arrives.
+  presentation feedback (ended by its own `presented` or `discarded`), and the
+  display watch's colour objects: an output's `wp_color_management_output_v1`,
+  and one image description with its information at a time per output — a
+  change announced while one is read is asked for once it is done or failed,
+  and the description it replaces is destroyed (the information destroys
+  itself at its `done`). The display watch, on its own connection, reads at
+  most the outputs the loop binds. No `wl_data_device` is bound yet, so no
+  data offer arrives.
 
 ---
 

@@ -137,8 +137,13 @@ enum Wire {
     /// A pointer, touch, tool or pinch event, or a device or seat that came
     /// or went.
     Seat(SeatWire),
-    /// A keyboard's keymap, as text.
-    Keymap { seat: SeatKey, source: KeymapSource },
+    /// A keyboard's keymap: the compositor's file and its size, read when it
+    /// is delivered.
+    Keymap {
+        seat: SeatKey,
+        fd: OwnedFd,
+        size: u32,
+    },
     /// A keyboard entered the window of a surface, or left (`None`).
     KeyFocus {
         seat: SeatKey,
@@ -169,8 +174,9 @@ enum Wire {
 }
 
 /// Record `wire` for the next delivery. A keymap replaces one its seat's
-/// keyboard has queued and not read: each is up to 8 MiB of text compiled on
-/// delivery, and a newer one supersedes it, so a seat queues one at most.
+/// keyboard has queued and not read, whose file it closes unread: each is up
+/// to 8 MiB read and compiled on delivery, and a newer one supersedes it, so a
+/// seat queues one at most and only the newest is read.
 fn queue(wires: &mut Vec<Wire>, wire: Wire) {
     if let Wire::Keymap { seat, .. } = wire
         && let Some(queued) = wires
@@ -691,7 +697,14 @@ impl Delivering {
 
     fn keyboard_wire(&mut self, wire: Wire) -> Vec<(Target, PlatformInput)> {
         match wire {
-            Wire::Keymap { seat, source } => {
+            Wire::Keymap { seat, fd, size } => {
+                let source = match read_keymap(fd, size) {
+                    Ok(source) => source,
+                    Err(error) => {
+                        tracing::warn!(%error, "the compositor's keymap could not be read");
+                        return Vec::new();
+                    }
+                };
                 self.keyboards.stop(seat);
                 // A new keymap for a keyboard that has one is read into it:
                 // the keys it holds stay held, and compose starts over.
@@ -1871,13 +1884,7 @@ impl Dispatch<WlKeyboard, KeyboardData> for WaylandState {
                     tracing::warn!("the compositor's keymap is not XKB's: keys are unread");
                     return;
                 }
-                match read_keymap(fd, size) {
-                    Ok(source) => Wire::Keymap { seat, source },
-                    Err(error) => {
-                        tracing::warn!(%error, "the compositor's keymap could not be read");
-                        return;
-                    }
-                }
+                Wire::Keymap { seat, fd, size }
             }
             wl_keyboard::Event::Enter {
                 serial, surface, ..
@@ -2353,24 +2360,40 @@ impl Dispatch<WpCursorShapeDeviceV1, ()> for WaylandState {
 
 #[cfg(test)]
 mod tests {
-    use super::{KeymapSource, SeatKey, Wire, queue};
+    use std::os::fd::OwnedFd;
+
+    use super::{SeatKey, Wire, queue, read_keymap};
+
+    /// The descriptors the process holds open.
+    fn open_descriptors() -> usize {
+        std::fs::read_dir("/proc/self/fd")
+            .expect("procfs lists the descriptors")
+            .count()
+    }
 
     /// A compositor that sends keymap after keymap before the loop delivers
-    /// leaves one queued per seat, the newest.
+    /// leaves one queued per seat, the newest: the older files are closed
+    /// unread, and the one delivery reads reads.
     #[test]
     fn a_seat_queues_one_keymap() {
+        let text = b"xkb_keymap { };\0";
+        let path = std::env::temp_dir().join(format!("flui-keymap-{}", std::process::id()));
+        std::fs::write(&path, text).expect("the keymap is written");
+        let size = u32::try_from(text.len()).expect("a short keymap");
+        let before = open_descriptors();
         let mut wires = Vec::new();
-        for index in 0..10_000 {
-            let text = format!("xkb_keymap {{ /* {index} */ }};").into_bytes();
-            let source = KeymapSource::compositor(text).expect("the keymap is text");
+        for _ in 0..1_000 {
+            let fd = OwnedFd::from(std::fs::File::open(&path).expect("the keymap opens"));
             queue(
                 &mut wires,
                 Wire::Keymap {
                     seat: SeatKey(1),
-                    source,
+                    fd,
+                    size,
                 },
             );
         }
+        let held = open_descriptors() - before;
         queue(
             &mut wires,
             Wire::RepeatInfo {
@@ -2379,13 +2402,13 @@ mod tests {
                 delay: 600,
             },
         );
+        std::fs::remove_file(&path).expect("the keymap is removed");
+        assert_eq!(held, 1, "keymap files held open");
         assert_eq!(wires.len(), 2, "wires queued");
-        let Wire::Keymap { source, .. } = &wires[0] else {
+        let Some(Wire::Keymap { fd, size, .. }) = wires.into_iter().next() else {
             panic!("the keymap stays first");
         };
-        assert!(
-            format!("{source:?}").contains("9999"),
-            "the newest: {source:?}"
-        );
+        let source = read_keymap(fd, size).expect("the queued keymap reads");
+        assert!(format!("{source:?}").contains("xkb_keymap"), "{source:?}");
     }
 }

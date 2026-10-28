@@ -38,8 +38,9 @@ pub use event_loop::OutputName;
 pub(crate) use event_loop::ShownCursor;
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(crate) use event_loop::{
-    LastInput, LiveOutputs, LoopWaker, LoopWindow, OutputFacts, PresentationTime, SeatWindow,
-    WaylandDisplays, WaylandHost, WaylandInput, WaylandLoop, WaylandState, WindowSeed, WindowTable,
+    LastInput, LiveOutputs, LoopWaker, LoopWindow, MAX_OUTPUTS, OutputFacts, PresentationTime,
+    SeatWindow, WaylandDisplays, WaylandHost, WaylandInput, WaylandLoop, WaylandState, WindowSeed,
+    WindowTable,
 };
 
 pub(crate) mod activation {
@@ -455,7 +456,7 @@ mod event_loop {
     /// The outputs the loop binds. A desk has a few screens and a video wall
     /// a few dozen; a compositor announcing outputs without end is not bound
     /// past this, and a surface on one of those names no display.
-    const MAX_OUTPUTS: usize = 64;
+    pub(crate) const MAX_OUTPUTS: usize = 64;
     /// `wp_viewporter` has one version.
     const VIEWPORTER_VERSION: u32 = 1;
     /// `zxdg_decoration_manager_v1` has one version.
