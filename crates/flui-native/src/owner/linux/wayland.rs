@@ -17,7 +17,10 @@
 //! The loop names no feature. What it keeps of one, it keeps through a hook
 //! declared here that the host's table fills (`WaylandHost`): the displays,
 //! the Settings portal's preferences, the notice channel and the sources of
-//! logind's and the kernel's notices. Its windows are the window feature's
+//! logind's and the kernel's notices. The last user input the seats report,
+//! which an activation token names, is kept here too (`LastInput`): the
+//! input feature records it, the window feature reads it. Its windows are the
+//! window feature's
 //! (`window::linux::wayland`): the loop holds them as `LoopWindow`s and asks
 //! each to settle after every read, and the window feature implements the
 //! dispatch of its own protocol objects on `WaylandState`.
@@ -26,8 +29,8 @@
 pub use event_loop::OutputName;
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(crate) use event_loop::{
-    LiveOutputs, LoopWaker, LoopWindow, OutputFacts, WaylandDisplays, WaylandHost, WaylandLoop,
-    WaylandState, WindowSeed, WindowTable,
+    LastInput, LiveOutputs, LoopWaker, LoopWindow, OutputFacts, UserInput, WaylandDisplays,
+    WaylandHost, WaylandLoop, WaylandState, WindowSeed, WindowTable,
 };
 
 pub(crate) mod wait {
@@ -285,11 +288,16 @@ mod event_loop {
     use wayland_client::protocol::wl_compositor::WlCompositor;
     use wayland_client::protocol::wl_output::{self, WlOutput};
     use wayland_client::protocol::wl_registry::{self, WlRegistry};
+    use wayland_client::protocol::wl_seat::WlSeat;
+    use wayland_client::protocol::wl_surface::WlSurface;
     use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
     use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_manager_v1::{
         self, WpFractionalScaleManagerV1,
     };
     use wayland_protocols::wp::viewporter::client::wp_viewporter::{self, WpViewporter};
+    use wayland_protocols::xdg::activation::v1::client::xdg_activation_v1::{
+        self, XdgActivationV1,
+    };
     use wayland_protocols::xdg::decoration::zv1::client::zxdg_decoration_manager_v1::{
         self, ZxdgDecorationManagerV1,
     };
@@ -328,6 +336,10 @@ mod event_loop {
     const FRACTIONAL_SCALE_VERSION: u32 = 1;
     /// `zxdg_exporter_v2` has one version.
     const EXPORTER_VERSION: u32 = 1;
+    /// `xdg_activation_v1` has one version.
+    const ACTIVATION_VERSION: u32 = 1;
+    /// The variable a launcher hands its process's activation token in.
+    const ACTIVATION_TOKEN_VARIABLE: &str = "XDG_ACTIVATION_TOKEN";
 
     /// What the host's table fills for the loop (ADR-0151 §10): the
     /// displays, the preference source, the notice channel and the sources
@@ -423,6 +435,42 @@ mod event_loop {
 
         fn remove(&self, output: OutputName) {
             self.0.with(|live| live.retain(|held| *held != output));
+        }
+    }
+
+    /// A user input an activation token names: the seat it came from, the
+    /// serial of its event (a key, a button, a touch, or the keyboard focus
+    /// entering a surface), and the surface it went to.
+    #[derive(Debug, Clone)]
+    pub(crate) struct UserInput {
+        /// The seat whose device the input came from.
+        pub(crate) seat: WlSeat,
+        /// The serial of the input's event.
+        pub(crate) serial: u32,
+        /// The surface the input went to.
+        pub(crate) surface: WlSurface,
+    }
+
+    /// The last user input the seats reported, on the owner thread: the seats'
+    /// input records it as its events come, and a window names it on the
+    /// activation token it asks for. Nothing recorded, a token names no input
+    /// and asks the compositor for the user's attention instead of the focus.
+    #[derive(Clone, Default)]
+    pub(crate) struct LastInput(Arc<OwnerCell<Option<UserInput>>>);
+
+    impl LastInput {
+        /// The seats report `input`, which is now the last.
+        #[expect(
+            dead_code,
+            reason = "the seats' input records here once the host binds its seats"
+        )]
+        pub(crate) fn record(&self, input: UserInput) {
+            self.0.with(|last| *last = Some(input));
+        }
+
+        /// The last input; `None` before any, or off the owner thread.
+        pub(crate) fn latest(&self) -> Option<UserInput> {
+            self.0.with(|last| last.clone()).flatten()
         }
     }
 
@@ -738,6 +786,20 @@ mod event_loop {
         }
     }
 
+    impl Dispatch<XdgActivationV1, ()> for WaylandState {
+        fn event(
+            _: &mut Self,
+            _: &XdgActivationV1,
+            _: xdg_activation_v1::Event,
+            (): &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            // The activation global has no events; its tokens are the
+            // windows'.
+        }
+    }
+
     impl Dispatch<XdgWmBase, ()> for WaylandState {
         fn event(
             _: &mut Self,
@@ -780,6 +842,12 @@ mod event_loop {
         /// `zxdg_exporter_v2`, which hands out a handle another client
         /// (a portal's dialog) parents its window to.
         pub(crate) exporter: Option<ZxdgExporterV2>,
+        /// `xdg_activation_v1`, through which a window asks the compositor to
+        /// activate it; `None` where the compositor takes no such request.
+        pub(crate) activation: Option<XdgActivationV1>,
+        /// The last user input the seats reported, which an activation token
+        /// names.
+        pub(crate) last_input: LastInput,
         /// The outputs the compositor announces now.
         pub(crate) live: LiveOutputs,
         /// `wl_shm`, which a test draws a window's frames with in place of a
@@ -808,6 +876,9 @@ mod event_loop {
         /// The channel a wake from sleep marks the window's state stale
         /// through.
         pub(crate) notices: Arc<dyn NoticeChannel>,
+        /// The activation token the process was launched with
+        /// (`XDG_ACTIVATION_TOKEN`), which the first window seeded takes.
+        pub(crate) startup_token: Option<String>,
     }
 
     /// The owner's event queue and what it dispatches into, kept together:
@@ -851,6 +922,9 @@ mod event_loop {
         executor: Arc<BackgroundExecutor>,
         /// The wake deadline already offered to the windows.
         offered: OwnerCell<Option<Instant>>,
+        /// The activation token the process was launched with, until a
+        /// window takes it.
+        startup_token: OwnerCell<Option<String>>,
         /// The exit policy is asked again on the next turn.
         reevaluate: AtomicBool,
         /// The loop ran once; a platform runs once.
@@ -922,6 +996,9 @@ mod event_loop {
             let exporter = globals
                 .bind::<ZxdgExporterV2, _, _>(&handle, 1..=EXPORTER_VERSION, ())
                 .ok();
+            let activation = globals
+                .bind::<XdgActivationV1, _, _>(&handle, 1..=ACTIVATION_VERSION, ())
+                .ok();
             #[cfg(any(test, feature = "testing"))]
             let shm = globals
                 .bind::<wayland_client::protocol::wl_shm::WlShm, _, _>(&handle, 1..=1, ())
@@ -963,6 +1040,8 @@ mod event_loop {
                     decoration,
                     fractional_scale,
                     exporter,
+                    activation,
+                    last_input: LastInput::default(),
                     live,
                     #[cfg(any(test, feature = "testing"))]
                     shm,
@@ -987,6 +1066,18 @@ mod event_loop {
                 display_watch: OwnerCell::new(),
                 executor: Arc::new(BackgroundExecutor::new()),
                 offered: OwnerCell::new(),
+                startup_token: {
+                    // An empty token is none. The variable stays set: unsetting
+                    // it is a race with every thread reading the environment,
+                    // and the opener started for a link leaves it out
+                    // (`xdg_open`).
+                    let token = std::env::var(ACTIVATION_TOKEN_VARIABLE)
+                        .ok()
+                        .filter(|token| !token.is_empty());
+                    let cell = OwnerCell::new();
+                    cell.with(|held| *held = token);
+                    cell
+                },
                 reevaluate: AtomicBool::new(false),
                 ran: AtomicBool::new(false),
             })
@@ -1026,6 +1117,7 @@ mod event_loop {
                 signal: Arc::clone(&self.signal),
                 waker: Arc::downgrade(&self.waker),
                 notices: Arc::clone(&self.notices),
+                startup_token: self.startup_token.with(Option::take).flatten(),
             })
         }
 
@@ -1089,6 +1181,12 @@ mod event_loop {
         /// (`xdg-decoration`).
         pub(crate) fn offers_decorations(&self) -> bool {
             self.protocol.decoration.is_some()
+        }
+
+        /// Whether the compositor takes activation requests
+        /// (`xdg-activation`).
+        pub(crate) fn offers_activation(&self) -> bool {
+            self.protocol.activation.is_some()
         }
 
         /// Run turns for `span` on the owner thread, for a test that drives

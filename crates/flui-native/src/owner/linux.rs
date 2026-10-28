@@ -81,7 +81,14 @@ mod session {
     /// Every Linux host opens through it. A failure is logged: the services
     /// answer nothing.
     pub(crate) fn xdg_open(target: &std::ffi::OsStr) {
-        let _ = spawn_reaped(std::process::Command::new("xdg-open").arg(target));
+        // The activation token the process was launched with is its own
+        // first window's, used up once that window activates; the handler
+        // the opener starts is not handed it.
+        let _ = spawn_reaped(
+            std::process::Command::new("xdg-open")
+                .arg(target)
+                .env_remove("XDG_ACTIVATION_TOKEN"),
+        );
     }
 
     /// Start `command` and wait for it on a thread of its own; its process
