@@ -180,14 +180,46 @@ pub(crate) fn pointer_icon_absence(api: AndroidApi) -> CapabilityAbsence {
     }
 }
 
+/// `Window.setColorMode` (API 26): the colour mode a window asks its display
+/// for. Below it the window keeps the display's default.
+#[cfg(any(target_os = "android", test))]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WindowColorMode;
+
+#[cfg(any(target_os = "android", test))]
+impl crate::version::gate::Gate for WindowColorMode {
+    type Version = AndroidApi;
+    const SINCE: u64 = 26;
+}
+
+/// The `ActivityInfo.COLOR_MODE_*` value an Activity's window asks for to
+/// show `mode`; `None` for the default, which the window has without asking.
+#[cfg(any(target_os = "android", test))]
+pub(crate) fn activity_color_mode(
+    mode: flui_platform::os_options::AndroidColorMode,
+) -> Option<i32> {
+    use flui_platform::os_options::AndroidColorMode;
+
+    /// `ActivityInfo.COLOR_MODE_WIDE_COLOR_GAMUT`.
+    const COLOR_MODE_WIDE_COLOR_GAMUT: i32 = 1;
+    /// `ActivityInfo.COLOR_MODE_HDR`.
+    const COLOR_MODE_HDR: i32 = 2;
+    match mode {
+        AndroidColorMode::WideColorGamut => Some(COLOR_MODE_WIDE_COLOR_GAMUT),
+        AndroidColorMode::Hdr => Some(COLOR_MODE_HDR),
+        // `Default`, and a mode the contract adds later, ask for nothing.
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use flui_platform::{Availability, CapabilityAbsence, WindowCapabilities};
 
     use super::{
         ActivityFacts, AppleVersion, MATERIAL, MacOSVersion, PointerInteraction, ViewDisplayLink,
-        activity_capabilities, appkit_window_capabilities, frame_rate_absence, pointer_absence,
-        pointer_icon_absence, scene_capabilities,
+        WindowColorMode, activity_capabilities, activity_color_mode, appkit_window_capabilities,
+        frame_rate_absence, pointer_absence, pointer_icon_absence, scene_capabilities,
     };
     use crate::version::gate::android::AndroidApi;
     use crate::version::gate::testing::row;
@@ -337,6 +369,26 @@ mod tests {
             MacOSVersion::new(14, 0, 0),
             MacOSVersion::UNKNOWN,
         ));
+        failures.extend(row::<WindowColorMode>(
+            "WindowColorMode",
+            AndroidApi::from_level(25),
+            AndroidApi::from_level(26),
+            AndroidApi::UNKNOWN,
+        ));
         assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// The Activity window asks for the colour mode the application's surface
+    /// is requested in, and asks nothing for the default.
+    #[test]
+    fn an_activity_asks_for_the_colour_mode_of_its_surface() {
+        use flui_platform::os_options::AndroidColorMode;
+
+        assert_eq!(activity_color_mode(AndroidColorMode::Default), None);
+        assert_eq!(
+            activity_color_mode(AndroidColorMode::WideColorGamut),
+            Some(1)
+        );
+        assert_eq!(activity_color_mode(AndroidColorMode::Hdr), Some(2));
     }
 }
