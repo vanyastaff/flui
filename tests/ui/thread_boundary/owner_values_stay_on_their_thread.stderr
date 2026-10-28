@@ -1,21 +1,7 @@
-error[E0432]: unresolved import `flui::cupertino`
- --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:2:11
-  |
-2 | use flui::cupertino::CupertinoTabController;
-  |           ^^^^^^^^^ could not find `cupertino` in `flui`
-  |
-note: found an item that was configured out
- --> src/lib.rs
-  |
-  | #[cfg(feature = "cupertino")]
-  |       --------------------- the item is gated behind the `cupertino` feature
-  | pub use flui_cupertino as cupertino;
-  |                           ^^^^^^^^^
-
 error[E0277]: `Rc<std::cell::Cell<WidgetStates>>` cannot be sent between threads safely
-  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:16:30
+  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:13:30
    |
-16 |     require_thread_spawnable(states);
+13 |     require_thread_spawnable(states);
    |     ------------------------ ^^^^^^ `Rc<std::cell::Cell<WidgetStates>>` cannot be sent between threads safely
    |     |
    |     required by a bound introduced by this call
@@ -27,15 +13,15 @@ note: required because it appears within the type `WidgetStatesController`
    | pub struct WidgetStatesController {
    |            ^^^^^^^^^^^^^^^^^^^^^^
 note: required by a bound in `require_thread_spawnable`
-  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:6:32
+  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:5:32
    |
- 6 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+ 5 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
    |                                ^^^^ required by this bound in `require_thread_spawnable`
 
 error[E0277]: `Rc<notifier_generic::ListenerStorage<()>>` cannot be sent between threads safely
-  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:16:30
+  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:13:30
    |
-16 |     require_thread_spawnable(states);
+13 |     require_thread_spawnable(states);
    |     ------------------------ ^^^^^^ `Rc<notifier_generic::ListenerStorage<()>>` cannot be sent between threads safely
    |     |
    |     required by a bound introduced by this call
@@ -57,15 +43,15 @@ note: required because it appears within the type `WidgetStatesController`
    | pub struct WidgetStatesController {
    |            ^^^^^^^^^^^^^^^^^^^^^^
 note: required by a bound in `require_thread_spawnable`
-  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:6:32
+  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:5:32
    |
- 6 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+ 5 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
    |                                ^^^^ required by this bound in `require_thread_spawnable`
 
 error[E0277]: `Rc<std::cell::Cell<usize>>` cannot be sent between threads safely
-  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:16:30
+  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:13:30
    |
-16 |     require_thread_spawnable(states);
+13 |     require_thread_spawnable(states);
    |     ------------------------ ^^^^^^ `Rc<std::cell::Cell<usize>>` cannot be sent between threads safely
    |     |
    |     required by a bound introduced by this call
@@ -87,15 +73,15 @@ note: required because it appears within the type `WidgetStatesController`
    | pub struct WidgetStatesController {
    |            ^^^^^^^^^^^^^^^^^^^^^^
 note: required by a bound in `require_thread_spawnable`
-  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:6:32
+  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:5:32
    |
- 6 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+ 5 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
    |                                ^^^^ required by this bound in `require_thread_spawnable`
 
 error[E0277]: `Rc<std::cell::Cell<bool>>` cannot be sent between threads safely
-  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:16:30
+  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:13:30
    |
-16 |     require_thread_spawnable(states);
+13 |     require_thread_spawnable(states);
    |     ------------------------ ^^^^^^ `Rc<std::cell::Cell<bool>>` cannot be sent between threads safely
    |     |
    |     required by a bound introduced by this call
@@ -117,15 +103,15 @@ note: required because it appears within the type `WidgetStatesController`
    | pub struct WidgetStatesController {
    |            ^^^^^^^^^^^^^^^^^^^^^^
 note: required by a bound in `require_thread_spawnable`
-  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:6:32
+  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:5:32
    |
- 6 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+ 5 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
    |                                ^^^^ required by this bound in `require_thread_spawnable`
 
 error[E0277]: `Rc<(dyn for<'a> std::ops::Fn(&'a WidgetStates) -> u32 + 'static)>` cannot be sent between threads safely
-  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:17:30
+  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:14:30
    |
-17 |     require_thread_spawnable(property);
+14 |     require_thread_spawnable(property);
    |     ------------------------ ^^^^^^^^ `Rc<(dyn for<'a> std::ops::Fn(&'a WidgetStates) -> u32 + 'static)>` cannot be sent between threads safely
    |     |
    |     required by a bound introduced by this call
@@ -137,19 +123,19 @@ note: required because it appears within the type `WidgetStateProperty<u32>`
    | pub enum WidgetStateProperty<T> {
    |          ^^^^^^^^^^^^^^^^^^^
 note: required by a bound in `require_thread_spawnable`
-  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:6:32
+  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:5:32
    |
- 6 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+ 5 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
    |                                ^^^^ required by this bound in `require_thread_spawnable`
 help: use parentheses to call this trait object
    |
-17 |     require_thread_spawnable(property(/* &WidgetStates */));
+14 |     require_thread_spawnable(property(/* &WidgetStates */));
    |                                      +++++++++++++++++++++
 
 error[E0277]: `Rc<(dyn flui::flui_animation::Curve + 'static)>` cannot be sent between threads safely
-  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:18:30
+  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:15:30
    |
-18 |     require_thread_spawnable(curve);
+15 |     require_thread_spawnable(curve);
    |     ------------------------ ^^^^^ `Rc<(dyn flui::flui_animation::Curve + 'static)>` cannot be sent between threads safely
    |     |
    |     required by a bound introduced by this call
@@ -166,15 +152,15 @@ note: required because it appears within the type `SharedCurve`
    | pub struct SharedCurve(Erased);
    |            ^^^^^^^^^^^
 note: required by a bound in `require_thread_spawnable`
-  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:6:32
+  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:5:32
    |
- 6 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+ 5 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
    |                                ^^^^ required by this bound in `require_thread_spawnable`
 
 error[E0277]: `Rc<(dyn std::any::Any + 'static)>` cannot be sent between threads safely
-  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:19:30
+  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:16:30
    |
-19 |     require_thread_spawnable(metadata);
+16 |     require_thread_spawnable(metadata);
    |     ------------------------ ^^^^^^^^ `Rc<(dyn std::any::Any + 'static)>` cannot be sent between threads safely
    |     |
    |     required by a bound introduced by this call
@@ -186,7 +172,7 @@ note: required because it appears within the type `HitMetadata`
    | pub struct HitMetadata(std::rc::Rc<dyn std::any::Any>);
    |            ^^^^^^^^^^^
 note: required by a bound in `require_thread_spawnable`
-  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:6:32
+  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:5:32
    |
- 6 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+ 5 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
    |                                ^^^^ required by this bound in `require_thread_spawnable`

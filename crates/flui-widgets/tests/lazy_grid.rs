@@ -8,7 +8,7 @@
 //! tiles.
 
 use crate::common::{lay_out, tight};
-use flui_rendering::delegates::{SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount};
+use flui_rendering::delegates::SliverGridDelegateWithFixedCrossAxisCount;
 use flui_view::ViewExt;
 use flui_widgets::prelude::*;
 

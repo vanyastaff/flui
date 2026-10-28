@@ -110,7 +110,18 @@ T3 и T10 не делят файлов и идут параллельно. T9 ж
 - [x] T6a — #1523, #1539
 - [x] T6b — #1523 (ADR-0178)
 - [ ] T3 — путь записи, остаток
-- [ ] T10 — остаток flip
+- [ ] T10 — остаток flip: код готов, ветка `send-flip/send-sweep`, ждёт проверок и ревью.
+  Сняты все позиции строки T10. Отличия от строки: `ArcCurve` держит кривую в `Rc` и
+  переименован в `SharedCurve`; `SnapPolicy` остаётся `Send + Sync` (ADR-0209 §9, §10);
+  `PhysicalClipShape`/`PhysicalClipSource` снаружи крейта не видны (модуль `proxy` их не
+  реэкспортирует), закреплять нечего; у сетки общий делегат остаётся `Rc<dyn …>` в
+  `RenderSliverGrid::{with_shared_delegate, set_grid_delegate}` и `SliverGrid::over`, по значению
+  его берут `new`/`list`/`GridView::builder`/`AnimatedGrid::new`; `flui::rendering` экспортирует
+  `HitMetadata`. Тесты: `owner_local_values_fit_every_flip_position` в
+  `tests/facade_consumer.rs` (через `flui` и `flui-sdk`),
+  `owner_local_values_fit_hit_metadata_and_semantics_actions` и закрепления `!Send` в
+  `flui-widgets`, `flui-interaction`, `flui-animation`; trybuild
+  `owner_values_stay_on_their_thread`.
 - [ ] T11 — отказ мутации контроллеров во время `build`
 - [ ] T9 — `TextEditingController`
 - [ ] T2 — gate
