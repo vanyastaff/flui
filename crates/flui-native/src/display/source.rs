@@ -517,6 +517,7 @@ mod mapping {
             density_dpi: 420,
             refresh_hz: hertz as f32,
             max_refresh_hz: None,
+            color: None,
         };
         display
             .info(id)

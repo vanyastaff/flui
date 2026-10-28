@@ -19,9 +19,13 @@ pub(crate) mod sample {
     use std::sync::Arc;
 
     use flui_foundation::geometry::{Bounds, Point, Size};
-    use flui_platform::{Availability, DisplayId, DisplayInfo, FrameRateHint, RefreshPeriod};
+    use flui_platform::{
+        Availability, CapabilityAbsence, ColorGamut, DisplayColor, DisplayId, DisplayInfo,
+        FrameRateHint, Headroom, RefreshPeriod,
+    };
 
     use crate::owner::android::ndk::{NdkFn, SetFrameRate, SymbolSource};
+    use crate::version::gate::Gate;
     use crate::version::gate::android::AndroidApi;
 
     /// What one `android.view.Display` reported, before it has an identity.
@@ -42,6 +46,67 @@ pub(crate) mod sample {
         pub(crate) refresh_hz: f32,
         /// The highest rate among `getSupportedModes`.
         pub(crate) max_refresh_hz: Option<f32>,
+        /// What the display reports of its colour; `None` below API 26, which
+        /// has no such report.
+        pub(crate) color: Option<ColorReport>,
+    }
+
+    /// `Display.isWideColorGamut` and `Display.isHdr` (API 26).
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct DisplayColorReport;
+
+    impl Gate for DisplayColorReport {
+        type Version = AndroidApi;
+        const SINCE: u64 = 26;
+    }
+
+    /// `Display.getHighestHdrSdrRatio` (API 35): how far above SDR white the
+    /// display can go, which `getHdrSdrRatio` reports only while HDR content
+    /// is on screen.
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct HighestHdrSdrRatio;
+
+    impl Gate for HighestHdrSdrRatio {
+        type Version = AndroidApi;
+        const SINCE: u64 = 35;
+    }
+
+    /// What one `Display` reports of its colour.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub(crate) struct ColorReport {
+        /// `Display.isWideColorGamut`.
+        pub(crate) wide_gamut: bool,
+        /// `Display.isHdr`.
+        pub(crate) hdr: bool,
+        /// `Display.getHighestHdrSdrRatio`; `None` below API 35.
+        pub(crate) highest_hdr_sdr_ratio: Option<f32>,
+    }
+
+    /// The colour of an Android display from what it reports.
+    ///
+    /// A display that reports no colour (below API 26) is a device without the
+    /// report. A wide-gamut display shows Display P3, Android's wide colour
+    /// space. An HDR display is high range; its headroom is the highest HDR/SDR
+    /// ratio when that is a finite multiple over white, and absent otherwise
+    /// (below API 35, or a ratio that is not one).
+    pub(crate) fn display_color(
+        report: Option<ColorReport>,
+    ) -> Result<DisplayColor, CapabilityAbsence> {
+        let report = report.ok_or(CapabilityAbsence::NotOnThisDevice)?;
+        let gamut = if report.wide_gamut {
+            ColorGamut::DisplayP3
+        } else {
+            ColorGamut::Srgb
+        };
+        if !report.hdr {
+            return Ok(DisplayColor::standard(gamut));
+        }
+        let headroom = report
+            .highest_hdr_sdr_ratio
+            .and_then(|ratio| Headroom::new(ratio).ok())
+            .filter(|headroom| *headroom > Headroom::SDR)
+            .ok_or(CapabilityAbsence::NotOnThisDevice);
+        Ok(DisplayColor::high(gamut, headroom))
     }
 
     impl RawDisplay {
@@ -56,7 +121,8 @@ pub(crate) mod sample {
             }
             let bounds = Bounds::new(Point::new(0, 0), Size::new(self.width, self.height));
             let mut info = DisplayInfo::new(id, &self.name, bounds, scale_factor(self.density_dpi))
-                .with_primary(self.display_id == Self::DEFAULT_DISPLAY_ID);
+                .with_primary(self.display_id == Self::DEFAULT_DISPLAY_ID)
+                .with_color(display_color(self.color));
             info.refresh_period = RefreshPeriod::from_hz(f64::from(self.refresh_hz)).ok();
             Some(info)
         }
@@ -179,6 +245,7 @@ pub(crate) mod sample {
                 density_dpi: 420,
                 refresh_hz: 120.0,
                 max_refresh_hz: Some(120.0),
+                color: None,
             };
             let info = healthy.info(id).expect("a healthy display");
             assert_eq!(info.scale_factor, 2.625, "420 dpi is 2.625 logical pixels");
@@ -212,6 +279,77 @@ pub(crate) mod sample {
             let info = external.info(id).expect("an external display");
             assert!(!info.is_primary);
             assert_eq!(info.refresh_period, None, "an unknown rate stays unknown");
+        }
+
+        fn report(wide_gamut: bool, hdr: bool, ratio: Option<f32>) -> ColorReport {
+            ColorReport {
+                wide_gamut,
+                hdr,
+                highest_hdr_sdr_ratio: ratio,
+            }
+        }
+
+        /// The colour reports' gates: none before the API level that has them.
+        fn android_colour_gate_table() {
+            for (level, color, highest) in [
+                (25, false, false),
+                (26, true, false),
+                (34, true, false),
+                (35, true, true),
+            ] {
+                let api = AndroidApi::from_level(level);
+                assert_eq!(
+                    api.since::<DisplayColorReport>().is_some(),
+                    color,
+                    "API {level}"
+                );
+                assert_eq!(
+                    api.since::<HighestHdrSdrRatio>().is_some(),
+                    highest,
+                    "API {level}"
+                );
+            }
+        }
+
+        /// Each colour report a `Display` gives, to the display colour it means.
+        fn android_colour_reports_map_to_the_display_colour() {
+            assert_eq!(
+                display_color(None),
+                Err(CapabilityAbsence::NotOnThisDevice),
+                "below API 26"
+            );
+            assert_eq!(
+                display_color(Some(report(false, false, None))),
+                Ok(DisplayColor::standard(ColorGamut::Srgb))
+            );
+            assert_eq!(
+                display_color(Some(report(true, false, Some(4.0)))),
+                Ok(DisplayColor::standard(ColorGamut::DisplayP3)),
+                "a ratio without HDR is no high range"
+            );
+            assert_eq!(
+                display_color(Some(report(true, true, Some(4.92)))),
+                Ok(DisplayColor::high(
+                    ColorGamut::DisplayP3,
+                    Ok(Headroom::new(4.92).expect("headroom"))
+                ))
+            );
+            for ratio in [
+                None,
+                Some(1.0),
+                Some(f32::NAN),
+                Some(f32::INFINITY),
+                Some(0.0),
+            ] {
+                assert_eq!(
+                    display_color(Some(report(true, true, ratio))),
+                    Ok(DisplayColor::high(
+                        ColorGamut::DisplayP3,
+                        Err(CapabilityAbsence::NotOnThisDevice)
+                    )),
+                    "ratio {ratio:?} publishes no headroom"
+                );
+            }
         }
 
         fn highest_rate_ignores_values_that_are_not_rates() {
@@ -256,6 +394,14 @@ pub(crate) mod sample {
                     (
                         "the_requested_rate_follows_the_hint",
                         the_requested_rate_follows_the_hint as fn(),
+                    ),
+                    (
+                        "android_colour_reports_map_to_the_display_colour",
+                        android_colour_reports_map_to_the_display_colour as fn(),
+                    ),
+                    (
+                        "android_colour_gate_table",
+                        android_colour_gate_table as fn(),
                     ),
                 ],
             );
@@ -312,7 +458,10 @@ pub(crate) mod source {
     };
     use parking_lot::Mutex;
 
-    use super::sample::{FrameRateRequests, RawDisplay, max_refresh_hz, requested_frame_rate};
+    use super::sample::{
+        ColorReport, DisplayColorReport, FrameRateRequests, HighestHdrSdrRatio, RawDisplay,
+        max_refresh_hz, requested_frame_rate,
+    };
     use crate::display::source::DisplaySource;
     use crate::error::PlatformError;
     use crate::owner::android::ndk::{AChoreographer, RefreshRateWatch, SymbolSource};
@@ -638,6 +787,7 @@ pub(crate) mod source {
                     scale_factor = $info.scale_factor,
                     refresh_period_us = $refresh_period_us,
                     primary = $info.is_primary,
+                    color.public = ?$info.color,
                     on_activity = $on_activity,
                     "Android display"
                 )
@@ -700,7 +850,7 @@ pub(crate) mod source {
                         32,
                         |env| -> jni::errors::Result<RawDisplay> {
                             let display = listed.get_element(env, index)?;
-                            read_display(env, &display)
+                            read_display(env, &display, api)
                         },
                     )?);
                 }
@@ -777,7 +927,11 @@ pub(crate) mod source {
             .i()
     }
 
-    fn read_display(env: &mut Env<'_>, display: &JObject<'_>) -> jni::errors::Result<RawDisplay> {
+    fn read_display(
+        env: &mut Env<'_>,
+        display: &JObject<'_>,
+        api: AndroidApi,
+    ) -> jni::errors::Result<RawDisplay> {
         let display_id = env
             .call_method(display, jni_str!("getDisplayId"), jni_sig!("()I"), &[])?
             .i()?;
@@ -865,6 +1019,42 @@ pub(crate) mod source {
             density_dpi,
             refresh_hz,
             max_refresh_hz: max_refresh_hz(rates),
+            color: read_color(env, display, api)?,
         })
+    }
+
+    /// What `display` reports of its colour, on the APIs that have each report.
+    fn read_color(
+        env: &mut Env<'_>,
+        display: &JObject<'_>,
+        api: AndroidApi,
+    ) -> jni::errors::Result<Option<ColorReport>> {
+        if api.since::<DisplayColorReport>().is_none() {
+            return Ok(None);
+        }
+        let wide_gamut = env
+            .call_method(display, jni_str!("isWideColorGamut"), jni_sig!("()Z"), &[])?
+            .z()?;
+        let hdr = env
+            .call_method(display, jni_str!("isHdr"), jni_sig!("()Z"), &[])?
+            .z()?;
+        let highest_hdr_sdr_ratio = if api.since::<HighestHdrSdrRatio>().is_some() {
+            Some(
+                env.call_method(
+                    display,
+                    jni_str!("getHighestHdrSdrRatio"),
+                    jni_sig!("()F"),
+                    &[],
+                )?
+                .f()?,
+            )
+        } else {
+            None
+        };
+        Ok(Some(ColorReport {
+            wide_gamut,
+            hdr,
+            highest_hdr_sdr_ratio,
+        }))
     }
 }
