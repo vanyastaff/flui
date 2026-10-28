@@ -33,6 +33,14 @@ pub fn outputs<H: Host<Loop = WaylandLoop>>(platform: &HostPlatform<H>) -> Vec<O
     platform.owner().outputs()
 }
 
+/// Whether the compositor of `platform`, a `WaylandPlatform`, announced
+/// `xdg_activation_v1`, as the loop bound its globals: what a window's
+/// activation capability is checked against.
+#[must_use]
+pub fn offers_activation<H: Host<Loop = WaylandLoop>>(platform: &HostPlatform<H>) -> bool {
+    platform.owner().offers_activation()
+}
+
 /// Ask the compositor to show `window`, a window of `platform`, fullscreen on
 /// `output`, which moves the window there: a Wayland client has no other way
 /// to place its window on an output. `false` for a window of another host, a
@@ -122,6 +130,13 @@ pub struct CompositorReport {
     pub frame_mode: Option<u32>,
     /// The outputs the surface entered and has not left.
     pub outputs: Vec<OutputName>,
+    /// How many activation tokens came for the window: the compositor's
+    /// answers to its `xdg_activation_token_v1` requests, and the token the
+    /// process was launched with.
+    pub activation_tokens: u32,
+    /// How many of those tokens the window handed back to the compositor
+    /// with its surface (`xdg_activation_v1.activate`).
+    pub activations: u32,
 }
 
 /// What the compositor sent `window`; `None` for a window of another host.
@@ -144,5 +159,7 @@ pub fn compositor_report(window: &dyn HostWindow) -> Option<CompositorReport> {
         fractional_scale: said.fractional_scale,
         frame_mode: said.frame_mode,
         outputs: said.outputs,
+        activation_tokens: said.activation_tokens,
+        activations: said.activations,
     })
 }

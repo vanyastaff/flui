@@ -308,12 +308,18 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
 
     // ==================== App Activation (US3) ====================
 
-    /// Activate the application (bring to front)
+    /// Activate the application (bring to front).
     ///
-    /// On Windows: brings the active window to the foreground.
-    /// The other hosts do nothing: AppKit activates the application once, as
-    /// its loop starts, and winit, the web, Android and iOS have no way to
-    /// bring the whole application forward.
+    /// Every host does nothing on this call, on purpose: an application is
+    /// brought forward through one of its windows (`WindowCommand::Activate`),
+    /// under the OS's focus rules, which refuse an application the user is not
+    /// working with and turn the request into one for the user's attention.
+    /// Windows grants the foreground only to the process in front, one it
+    /// started or handed the right (`AllowSetForegroundWindow`); Wayland only
+    /// to a window whose `xdg-activation` token the compositor accepts. AppKit
+    /// activates the application once, as its loop starts, not on this call;
+    /// UIKit and Android decide which application is in front; winit raises
+    /// one window at a time; the Web has no way to.
     fn activate(&self, ignoring_other_apps: bool);
 
     // ==================== Clipboard (US3 Enhanced) ====================
