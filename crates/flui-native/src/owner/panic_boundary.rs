@@ -76,14 +76,9 @@ pub(crate) enum AfterPanic<A, R> {
     Answer(fn(A) -> R),
     /// The state behind the entry may be torn mid-dispatch, and answering
     /// would let the OS run more of it: the process ends once the panic is
-    /// logged.
-    #[cfg_attr(
-        not(any(target_os = "windows", target_os = "macos", target_os = "ios")),
-        expect(
-            dead_code,
-            reason = "only the Win32, AppKit and UIKit entries have no answer to give"
-        )
-    )]
+    /// logged. Only the Win32, AppKit and UIKit entries have no answer to
+    /// give.
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "ios"))]
     Abort,
 }
 
@@ -129,6 +124,7 @@ where
                 end_process(entry, shown, "its answer after the panic panicked too")
             })
         }
+        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "ios"))]
         AfterPanic::Abort => end_process(entry, shown, "the state behind it may be torn"),
     }
 }

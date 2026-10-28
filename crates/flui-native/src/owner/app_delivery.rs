@@ -196,21 +196,6 @@ impl AppDelivery {
     /// a quit raised while it answers) has queued reports the running
     /// delivery has yet to hear, its quit among them: the release waits for
     /// that delivery and happens when it ends.
-    #[cfg_attr(
-        not(any(
-            windows,
-            target_os = "macos",
-            target_os = "ios",
-            target_os = "android",
-            target_arch = "wasm32",
-            all(target_os = "linux", feature = "winit-backend"),
-            test
-        )),
-        expect(
-            dead_code,
-            reason = "a headless platform keeps its handler for its life: its run never ends"
-        )
-    )]
     pub(crate) fn release(&self) {
         let (binding, unheard) = {
             let mut state = self.state.lock();
