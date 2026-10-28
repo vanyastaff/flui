@@ -542,6 +542,43 @@ fn feature_matrix_plan(slice: Slice) -> Vec<Step> {
     hack_passes(&packages).map(Step::from).into()
 }
 
+/// The single-feature builds of flui-native that pull requests lint. The
+/// default build and the workspace pass enable `desktop` (Wayland and X11)
+/// together, so a `cfg` that is wrong with only one backend, or with none,
+/// compiles there and breaks only in the full `feature-matrix` on main.
+const NATIVE_FEATURE_SLICES: [&[&str]; 5] = [
+    &[],
+    &["x11"],
+    &["wayland"],
+    &["winit-backend"],
+    &["testing"],
+];
+
+/// `-D warnings` clippy of flui-native for each of [`NATIVE_FEATURE_SLICES`]
+/// with default features off: libs and bins as a downstream crate builds them,
+/// then every target (a dev-dependency can enable a feature the library lacks).
+/// `target` is a triple, or the host when `None`.
+fn native_feature_slice_plan(target: Option<&str>) -> Vec<Step> {
+    let mut steps = Vec::new();
+    for features in NATIVE_FEATURE_SLICES {
+        for all_targets in [false, true] {
+            let mut cmd = Cmd::cargo(["clippy", "-p", "flui-native", "--locked"])
+                .args(["--no-default-features"]);
+            if !features.is_empty() {
+                cmd = cmd.args(["--features", &features.join(",")]);
+            }
+            if all_targets {
+                cmd = cmd.args(["--all-targets"]);
+            }
+            if let Some(target) = target {
+                cmd = cmd.args(["--target", target]);
+            }
+            steps.push(deny_warnings(cmd).into());
+        }
+    }
+    steps
+}
+
 /// Local `gpu-test` gate: engine readbacks and path-recording allocations, then the facade's
 /// composited-layer update readback (it needs the render pipeline and the
 /// headless renderer, which only the facade depends on together).
@@ -907,6 +944,29 @@ pub(crate) struct FeatureMatrixArgs {
 /// CI runner does. Needs cargo-hack.
 pub(crate) fn feature_matrix(args: &FeatureMatrixArgs) -> anyhow::Result<ExitCode> {
     done(feature_matrix_stage(args.run.runner(), args.slice))
+}
+
+/// Arguments for `cargo xtask native-features`.
+#[derive(Debug, clap::Args)]
+pub(crate) struct NativeFeaturesArgs {
+    /// Lint for this triple instead of the host (a Windows or macOS checkout
+    /// takes `x86_64-unknown-linux-gnu` to see the Linux backends).
+    #[arg(long)]
+    target: Option<String>,
+    #[command(flatten)]
+    pub(crate) run: RunOpts,
+}
+
+/// `cargo xtask native-features`: clippy flui-native once per single feature.
+///
+/// The slice of `feature-matrix` that pull requests run; it fails only after
+/// every build ran, so one run reports each broken configuration.
+pub(crate) fn native_features(args: &NativeFeaturesArgs) -> anyhow::Result<ExitCode> {
+    done(
+        args.run
+            .runner()
+            .every(&native_feature_slice_plan(args.target.as_deref())),
+    )
 }
 
 /// Arguments for `cargo xtask facade-combos`.
@@ -1283,6 +1343,32 @@ mod tests {
         }
     }
 
+    fn native_feature_slices_lint_each_feature_alone_with_and_without_all_targets() {
+        let plan = lines(&native_feature_slice_plan(None));
+        assert_eq!(plan.len(), 10);
+        let command = |features: &str, all_targets: &str| {
+            format!(
+                "$ cargo clippy -p flui-native --locked --no-default-features{features}{all_targets} -- -D warnings"
+            )
+        };
+        for (pair, features) in plan.chunks(2).zip([
+            "",
+            " --features x11",
+            " --features wayland",
+            " --features winit-backend",
+            " --features testing",
+        ]) {
+            assert_eq!(pair[0], command(features, ""));
+            assert_eq!(pair[1], command(features, " --all-targets"));
+        }
+        for line in lines(&native_feature_slice_plan(Some("x86_64-unknown-linux-gnu"))) {
+            assert!(
+                line.contains(" --target x86_64-unknown-linux-gnu -- -D warnings"),
+                "{line}"
+            );
+        }
+    }
+
     #[test]
     fn task_plans_contract() {
         crate::table_test::run_table(
@@ -1315,6 +1401,11 @@ mod tests {
                 (
                     "feature_matrix_slices_parse",
                     feature_matrix_slices_parse as fn(),
+                ),
+                (
+                    "native_feature_slices_lint_each_feature_alone_with_and_without_all_targets",
+                    native_feature_slices_lint_each_feature_alone_with_and_without_all_targets
+                        as fn(),
                 ),
             ],
         );
