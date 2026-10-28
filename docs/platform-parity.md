@@ -18,7 +18,7 @@ pointer and wheel, touch, `tablet-v2` pens, `pointer-gestures` pinches, `cursor-
 the cursor, a click, a wheel notch and a key ran from a real Weston seat (Weston 13 on its X11
 backend under Xvfb, driven through XTest, 2026-10-28), recorded and replayed; touch, pens and
 pinches are held by their translation tests only, with no device behind them; Weston 13 offers no
-`cursor-shape`, so no cursor shape ran. Neither host has text input, clipboard or drag and drop
+`cursor-shape`, so the cursor ran from the cursor theme only. Neither host has text input, clipboard or drag and drop
 yet, the X11 host has no input, and `current_platform` picks winit while winit is built, so their
 rows join the Wayland and X11 columns when they replace winit. The
 headless host is the test double: ✅ there means a test can drive the row.

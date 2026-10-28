@@ -3526,6 +3526,35 @@ graph LR
   Не запускалось: композиторы рабочего стола (GNOME, KDE, Hyprland), сенсорный экран, перо,
   тачпад (pinch, пальцевый скролл), `cursor-shape`, смена раскладки на живой сессии, Mac, iPhone,
   Android, браузер, `cross-typecheck`.
+  **Исправления после ревью (vanyastaff/flui#1937)**, коммитами поверх, слиянием. (1) Клавиатура
+  каждого сидения своя: проводные события клавиатуры несут типизированный `SeatKey`, keymap,
+  окно и повтор — у каждого сидения (`keyboards::Keyboards`); (2) сборка знает сидение каждого
+  устройства (`DeviceAdded { seat }`), удалённое сидение (`SeatRemoved`) убирает все свои
+  устройства, инструменты планшета тоже, с отменой открытых последовательностей; (3)
+  модификаторы уходят вместе с клавиатурой (`KeyboardLeft`); (4) повтор не начинается без окна
+  у клавиатуры; (5) keymap больше 8 МиБ отвергается, NUL снимается в одном месте
+  (`keymap_text`); (6) кнопки кадра планшета — `SmallVec`, ни одна не теряется; вид инструмента —
+  `OwnerCell`; `group_name` пропускает объявление без кавычек; клавиши штампуются
+  `SeatAssembly::stamp`; удалены `WireTime::with_stamp`, `SeatAssembly::{contacts, modifiers}`;
+  (7) отменённый pinch отменяет и поворот — дефекта не было: `PanZoomAccumulator::apply` по
+  `Cancelled` любого компонента снимает весь жест, тест `a_cancelled_pinch_ends_whole` это
+  держит и с откатом проходит; (8) без `cursor-shape` курсор берётся из темы (`wayland-cursor`,
+  `XCURSOR_THEME`/`XCURSOR_SIZE`) на своей поверхности указателя, масштаб окна округляется вверх
+  (`cursor::theme_scale`), `testing::wayland::cursor_report`. CI: conformance настоящего окна
+  перенесена в `wayland_window::the_wayland_window_input_conforms` (набор с композитором; в
+  наборе Xvfb `WAYLAND_DISPLAY` пуст при `FLUI_REQUIRE_WAYLAND=1`); `wayland_input` не требует
+  имени раскладки и пишет начало keymap, если имени нет. `WindowStateCell::published` открыт
+  для `wayland_host`. Тесты (откат проверен): `each_seat_keeps_its_own_keyboard`,
+  `a_key_with_no_window_does_not_repeat`, `a_keymap_is_read_within_its_limit`,
+  `a_removed_seat_ends_its_pens`, `modifiers_leave_with_the_keyboard`,
+  `every_button_of_a_tablet_frame_is_delivered`, `a_theme_cursor_is_drawn_at_the_window_scale`,
+  строка `group_name` без кавычек, `a_compositor_seat_reaches_the_window` (без темы курсора
+  падает «a cursor was shown»). Проверки: WSL — `cargo xtask native-features`, clippy семи
+  вариантов признаков с `--all-targets` и без, rustdoc; наборы как в CI: Xvfb (`FLUI_HEADLESS=1`,
+  `WAYLAND_DISPLAY=''`, `FLUI_REQUIRE_WAYLAND=1`) 366 из 366, Wayland под Weston 7 из 7;
+  Windows — clippy рабочего пространства, nextest `flui-native` 341 из 341, clippy Android и
+  macOS, `wasm-check`, `checks`, `doc-strict`, `module-dag`, `file-length`, `globals`,
+  `markers`, `testing`.
 - [x] **LY82** — ветка `platform/x11`, начата на вершине LY46 `8138ab489`, перенесена на `main`
   @ `d6e469a2b` после слияния #1927. **Хост.** `X11Platform = HostPlatform<X11>`
   (`hosts/linux.rs`): одно соединение libxcb (`owner::linux::x11::X11Connection`, x11rb

@@ -3247,8 +3247,16 @@ Weston's `wl_pointer` and `wl_keyboard` send
 replays to exactly what the window heard and is checked in as
 `wayland_weston_mouse_wheel.jsonl`. Touch, tablet tools and pinches have no
 source in a headless compositor: their translation is held by the wire
-tests alone. A compositor without `cursor-shape` (Weston 13) gets no cursor
-from the host, and `set_cursor` says so (`NotYetOnThisHost`).
+tests alone. A compositor without `cursor-shape` (Weston 13) gets the
+cursor theme's image (`wayland-cursor`, `XCURSOR_THEME` and `XCURSOR_SIZE`)
+on a surface of the pointer's own, drawn at the window's scale rounded up;
+`wayland_input` sees Weston 13 show the theme's pointer.
+
+Each seat's keyboard has its own keymap, window and repeat (`SeatKey` on
+every keyboard wire, `keyboards::Keyboards`); a key repeats only while its
+keyboard is in a window, and the modifiers it held leave with it. The
+assembly knows each device's seat, so a removed seat ends every device of
+it, tablet tools included. A keymap past 8 MiB is refused.
 
 ### The X11 host reads one libxcb connection on its owner thread, and its windows publish what the server holds
 
