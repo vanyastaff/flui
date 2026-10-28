@@ -593,7 +593,11 @@ would likewise encode those values a second time on storage.
 This follows [wgpu's per-format surface capabilities](https://docs.rs/wgpu/30.0.1/wgpu/struct.SurfaceCapabilities.html)
 and [explicit presentation color-space contract](https://docs.rs/wgpu/30.0.1/wgpu/enum.SurfaceColorSpace.html).
 A backend name is not evidence of display HDR support. `GpuCapabilities::supports_hdr`
-is removed; actual HDR requires a future end-to-end color-management contract.
+is removed. Whether the display is in high range, and its headroom, come from the
+`flui_platform::DisplayColor` the platform reports for the window's display, which the
+renderer is given at construction and keeps for every surface it recreates; only without
+one does it read wgpu's `DisplayHdrInfo` (ADR-0256 §2,
+`the_platform_colour_decides_the_display_state_over_the_surface_report`).
 There is no arbitrary format fallback: incompatible capabilities produce
 `UnsupportedSurfaceColorConfiguration` before configuration or recreation commits.
 The error is nonretryable; failed recreation retains the released surface lease.

@@ -476,7 +476,17 @@ trait depends on `flui-platform` instead.
   measure a cadence, the iOS display link and the browser's frame estimate,
   publish through `MeasuredPeriod::offer`, which replaces the published
   period only when a measurement leaves its band (`outside_band`, the band
-  rule the estimate also judges its frames' agreement by).
+  rule the estimate also judges its frames' agreement by). Each platform
+  file's pure half also maps what its OS reports of a display's colour to the
+  contract's `DisplayColor` (DXGI colour spaces and luminances, Apple's gamut
+  and potential EDR headroom, Android's wide-gamut, HDR and highest HDR/SDR
+  ratio, a Wayland image description, the browser's colour queries), and a
+  report that is not a finite multiple of white publishes no headroom. Where
+  the OS reports nothing the colour is the `CapabilityAbsence` that says why:
+  X11 `NotYetOnThisHost`, a compositor without `wp_color_management_v1` or a
+  device below the API that reports it `NotOnThisDevice`, the browser's
+  headroom `NotOnThisPlatform`. The Wayland model numbers each image
+  description it asks for and takes over only the newest one's `done`.
   `display::source::mapping` reads one table of cadences through the
   Android sample, the Windows rule, the Wayland and RandR models, the
   display link and the estimator; the macOS source hands CoreGraphics' rate
