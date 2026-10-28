@@ -713,6 +713,8 @@ impl PlatformWindow for AndroidWindow {
     fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
         Arc::new(AndroidSurface {
             app: self.app.clone(),
+            looper: self.owner,
+            kept: Mutex::new(None),
             retirement: self.delivery.retirement(),
         })
     }
@@ -813,15 +815,21 @@ impl flui_platform::RedrawRequester for AndroidRedraw {
 }
 
 /// An Android window's surface target (ADR-0254 §5): the Activity's
-/// `ANativeWindow`, re-queried on every call.
+/// `ANativeWindow`, on the looper thread.
 ///
-/// It answers `Unavailable` while the Activity has no native window, from
-/// `TerminateWindow` to the next `InitWindow`, and once the window was retired
-/// (the looper's exit). An ordinary pause keeps the native window, and the
-/// target with it: the surface is released by the handler's
-/// `surface_changed(Release)`, not by this answer.
+/// It answers `Unavailable` off the looper thread, while the Activity has no
+/// native window (from `TerminateWindow` to the next `InitWindow`), and once
+/// the window was retired (the looper's exit). An ordinary pause keeps the
+/// native window, and the target with it: the surface is released by the
+/// handler's `surface_changed(Release)`, not by this answer.
 struct AndroidSurface {
     app: AndroidApp,
+    /// The looper thread, the one that creates and replaces the surface.
+    looper: std::thread::ThreadId,
+    /// A counted reference to the native window the target last handed out,
+    /// so the pointer in that handle stays valid as long as the target
+    /// lives, whatever the glue does with its own reference.
+    kept: Mutex<Option<android_activity::ndk::native_window::NativeWindow>>,
     retirement: crate::owner::window_delivery::Retirement,
 }
 
@@ -829,31 +837,38 @@ impl raw_window_handle::HasWindowHandle for AndroidSurface {
     fn window_handle(
         &self,
     ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
-        if self.retirement.is_retired() {
+        if std::thread::current().id() != self.looper || self.retirement.is_retired() {
             return Err(raw_window_handle::HandleError::Unavailable);
         }
         // `native_window()` answers `None` exactly while no ANativeWindow is
         // live: from `MainEvent::TerminateWindow` (cleared in `post_exec_cmd`
         // once that callback returned) to the next `MainEvent::InitWindow`
         // (set in `pre_exec_cmd` before it). A pause does not clear it.
-        let native_window = self
+        let current = self
             .app
             .native_window()
             .ok_or(raw_window_handle::HandleError::Unavailable)?;
-        // The handle is built by hand: `NativeWindow::window_handle` would
-        // borrow the temporary.
-        let ptr = native_window.ptr().cast();
+        let ptr = {
+            let mut kept = self.kept.lock();
+            // The kept reference holds its window alive, so an equal address
+            // is that same window, never a new one at a reused address.
+            if kept.as_ref().is_none_or(|kept| kept.ptr() != current.ptr()) {
+                *kept = Some(current);
+            }
+            kept.as_ref()
+                .expect("BUG: a native window was just kept")
+                .ptr()
+                .cast()
+        };
         let raw = raw_window_handle::RawWindowHandle::AndroidNdk(
             raw_window_handle::AndroidNdkWindowHandle::new(ptr),
         );
-        // SAFETY: `ptr` is the ANativeWindow `AndroidApp` holds now, queried
-        // just above; it stays valid while the glue keeps its reference, which
-        // it drops in `post_exec_cmd(AppCmd::TermWindow)`, after the
-        // `TerminateWindow` callback returns. The handle's `'_` is the borrow
-        // of this target and does not encode that, so the obligation is the
-        // consumer's: `flui-app` releases the surface built from this handle in
-        // `WindowHandler::surface_changed(Release)`, which `Pause` and
-        // `TerminateWindow` deliver before the release.
+        // SAFETY: `ptr` is the ANativeWindow this target holds a counted
+        // reference to (`kept`, `ANativeWindow_acquire`), released no sooner
+        // than the target drops or hands out a different window, so it
+        // outlives every handle borrowed from the target. A surface made from
+        // it is released by the window's handler at `surface_changed(Release)`,
+        // before the Activity replaces its window.
         #[expect(unsafe_code)]
         Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(raw) })
     }

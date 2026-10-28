@@ -692,7 +692,9 @@ mod window_scenario {
                 let Some(call) = call.lock().take() else {
                     return;
                 };
-                let window = opened.window().expect("the scenario's window is open");
+                let crate::OpenedWindowReach::Open(window) = opened.window() else {
+                    panic!("the scenario's window is open, on its owner thread");
+                };
                 let _ = answer.send(catch_unwind(AssertUnwindSafe(|| call(&window))));
             });
             turn();

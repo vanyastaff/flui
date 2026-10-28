@@ -211,9 +211,9 @@ impl PlatformWindow for TestWindow {
         Arc::new(move || record_redraw(&calls, &threads))
     }
 
-    /// No native window: [`flui_platform::NoNativeSurface`].
+    /// No native window: [`flui_platform::testing::NoNativeSurface`].
     fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
-        Arc::new(flui_platform::NoNativeSurface)
+        Arc::new(flui_platform::testing::NoNativeSurface)
     }
 
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {

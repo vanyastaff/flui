@@ -266,9 +266,9 @@ impl PlatformWindow for HeadlessWindow {
         Arc::new(|| {})
     }
 
-    /// No native window: [`flui_platform::NoNativeSurface`].
+    /// No native window: [`flui_platform::testing::NoNativeSurface`].
     fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
-        Arc::new(flui_platform::NoNativeSurface)
+        Arc::new(flui_platform::testing::NoNativeSurface)
     }
 
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {

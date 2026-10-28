@@ -142,7 +142,7 @@ pub fn run_direct(
             };
 
         // 2. Create GPU renderer. `Renderer::new` takes ownership of a
-        // `WindowTarget` (issue #1043): the window's surface target, which it
+        // `WindowTarget`: the window's surface target, which it
         // owns rather than borrows, so the renderer stays sound
         // even if this scope's `window` binding is dropped first.
         let phys_size = window
@@ -216,7 +216,7 @@ pub fn run_direct(
                     }
                     Err(e @ EngineError::SurfaceTargetUnavailable { .. }) => {
                         // The window owner reports its native handle is gone
-                        // or suspended (issue #1043). `HandleError::Unavailable`
+                        // or suspended. `HandleError::Unavailable`
                         // is `Recoverability::Recoverable` (worth waiting out);
                         // `HandleError::NotSupported` is `Fatal` (the owner can
                         // never answer this handle kind) — but this frame loop

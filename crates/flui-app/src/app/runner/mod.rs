@@ -134,11 +134,17 @@ pub(crate) fn presentation_window(
 pub(super) fn opened_window(
     opened: flui_native::OpenedWindow,
 ) -> Result<Rc<dyn flui_native::HostWindow>, flui_native::OpenWindowError> {
-    opened
-        .window()
-        .ok_or_else(|| flui_native::OpenWindowError::Backend {
+    match opened.window() {
+        flui_native::OpenedWindowReach::Open(window) => Ok(window),
+        flui_native::OpenedWindowReach::Closed => Err(flui_native::OpenWindowError::Backend {
             message: "the window closed before it was installed".to_owned(),
-        })
+        }),
+        flui_native::OpenedWindowReach::OtherThread => {
+            Err(flui_native::OpenWindowError::Unavailable {
+                message: "a deferred window is installed on the thread that owns it".to_owned(),
+            })
+        }
+    }
 }
 
 /// Close a window the runner is discarding: one whose installation failed or

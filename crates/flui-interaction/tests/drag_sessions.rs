@@ -138,7 +138,7 @@ impl PlatformWindow for DragWindow {
         Arc::new(|| {})
     }
     fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
-        Arc::new(flui_platform::NoNativeSurface)
+        Arc::new(flui_platform::testing::NoNativeSurface)
     }
     flui_platform::window_takes_no_frame_verbs!();
 

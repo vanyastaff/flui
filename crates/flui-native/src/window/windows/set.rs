@@ -235,9 +235,12 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
         let hwnd_value = window.hwnd().0 as isize;
 
         // Store window
+        // A window opens on the owner thread alone (`shares` above), which
+        // built the set.
         let _prev = windows
             .by_handle
-            .with_bound(|tracked| tracked.insert(hwnd_value, Rc::clone(&window)));
+            .with(|tracked| tracked.insert(hwnd_value, Rc::clone(&window)))
+            .expect("BUG: a window set is built on the owner thread that opens its windows");
 
         Ok(window)
     }

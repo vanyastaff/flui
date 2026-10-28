@@ -49,22 +49,18 @@ fn request(options: WindowOptions) -> crate::WindowRequest {
 
 /// What a test does once the loop is ready, on its owner thread, as an
 /// application handler that hears nothing else.
-#[cfg(target_os = "linux")]
 type ReadyStep = Box<dyn FnOnce(&crate::OwnerPlatform) -> Result<(), crate::BootstrapError>>;
 
-#[cfg(target_os = "linux")]
 struct OnReady(std::cell::RefCell<Option<ReadyStep>>);
 
-#[cfg(target_os = "linux")]
 impl OnReady {
-    fn new(
+    fn running(
         step: impl FnOnce(&crate::OwnerPlatform) -> Result<(), crate::BootstrapError> + 'static,
     ) -> std::rc::Rc<dyn crate::AppHandler> {
         std::rc::Rc::new(Self(std::cell::RefCell::new(Some(Box::new(step)))))
     }
 }
 
-#[cfg(target_os = "linux")]
 impl crate::AppHandler for OnReady {
     fn ready(&self, owner: crate::OwnerPlatform) -> Result<(), crate::BootstrapError> {
         let step = self.0.borrow_mut().take();
@@ -525,6 +521,63 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
     drop(kept);
 }
 
+/// `a_surface_target_is_send_sync_and_unavailable_after_close`, on a real
+/// winit loop: the target hands out the window's handle while it is open,
+/// returns from `pre_present_notify` on another thread, and answers
+/// `Unavailable` once the window closed.
+#[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "winit requires AppKit's event loop on the real main thread; \
+              run on a Mac in a bundled process"
+)]
+fn a_winit_surface_target_answers_until_its_window_closes() {
+    use raw_window_handle::{HandleError, HasWindowHandle};
+
+    let host = Arc::new(WinitPlatform::new());
+    let platform = host.shared_owner();
+    let event_loop = build_test_event_loop();
+    install_test_owner_signal(&platform, &event_loop);
+    let (_control, lane) = install_control_lane(&platform, &event_loop);
+
+    let kept: Rc<std::cell::RefCell<Option<Arc<dyn flui_platform::SurfaceTarget>>>> = Rc::default();
+    let opened = Arc::new(AtomicBool::new(false));
+    let (keep, open) = (Rc::clone(&kept), Arc::clone(&opened));
+    let on_ready = OnReady::running(move |owner| {
+        use flui_testing::window_commands::AdmitAndApply as _;
+
+        let window = owner
+            .open_window(options("surface target"), RecordingWindowHandler::new())?
+            .try_ready()?;
+        let target = window.surface_target();
+        open.store(target.window_handle().is_ok(), Ordering::SeqCst);
+        let presenting = Arc::clone(&target);
+        thread::spawn(move || presenting.pre_present_notify())
+            .join()
+            .expect("pre_present_notify returns on another thread");
+        *keep.borrow_mut() = Some(target);
+        window
+            .admit_and_apply(flui_platform::WindowCommand::Close)
+            .expect("a winit window closes");
+        owner.quit();
+        Ok(())
+    });
+
+    let mut app = WinitApp::for_test(Arc::clone(&platform), host, lane, Some(on_ready));
+    event_loop
+        .run_app(&mut app)
+        .expect("event loop runs to completion");
+    assert!(
+        opened.load(Ordering::SeqCst),
+        "an open winit window's target hands out its handle"
+    );
+    let target = kept.borrow_mut().take().expect("the target was kept");
+    assert!(
+        matches!(target.window_handle(), Err(HandleError::Unavailable)),
+        "a closed winit window's target hands out no handle"
+    );
+}
+
 /// A winit window on Linux hands out its AT-SPI bridge with no feature beyond
 /// the host's own (ADR-0151 §15): the composition root reads the bridge once,
 /// and a window without one is invisible to Orca however its widgets are
@@ -542,7 +595,7 @@ fn a_linux_winit_window_hands_out_its_at_spi_bridge() {
     // becomes ready.
     let bridged = Arc::new(AtomicBool::new(false));
     let read = Arc::clone(&bridged);
-    let on_ready = OnReady::new(move |owner| {
+    let on_ready = OnReady::running(move |owner| {
         let window = owner
             .open_window(options("accessibility"), RecordingWindowHandler::new())?
             .try_ready()?;
@@ -608,7 +661,7 @@ mod wayland_window {
         let host_on_owner = Arc::clone(&host);
         let checked = Arc::new(AtomicBool::new(false));
         let done = Arc::clone(&checked);
-        let on_ready = OnReady::new(move |owner| {
+        let on_ready = OnReady::running(move |owner| {
             let outcome = catch_unwind(AssertUnwindSafe(|| {
                 let window = owner
                     .open_window(

@@ -454,7 +454,7 @@ impl flui_platform::PlatformWindow for CaptureWakeWindow {
         })
     }
     fn surface_target(&self) -> std::sync::Arc<dyn flui_platform::SurfaceTarget> {
-        std::sync::Arc::new(flui_platform::NoNativeSurface)
+        std::sync::Arc::new(flui_platform::testing::NoNativeSurface)
     }
     flui_platform::window_takes_no_frame_verbs!();
 

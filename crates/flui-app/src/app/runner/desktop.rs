@@ -95,7 +95,7 @@ where
     let first_reveal = Arc::new(FirstReveal::new());
 
     // 2. Create GPU renderer directly (no DesktopEmbedder). `Renderer::new`
-    // takes ownership of a `WindowTarget` (issue #1043): the window's
+    // takes ownership of a `WindowTarget`: the window's
     // surface target, which the raster side may hold on any thread, never
     // the window itself (ADR-0254 §5).
     let geometry = super::window_install::SurfaceGeometry::of(window.as_ref());

@@ -657,19 +657,16 @@ fn sample_state(window: &Window, facts: &RecordedState<'_>) -> WindowState {
 
 impl Drop for WinitWindow {
     fn drop(&mut self) {
-        // Teardown-order invariant: the window's handler may own this
-        // window's GPU renderer, whose `wgpu::Surface` is built from the
-        // `Rc<dyn PlatformWindow>` clone the renderer owns (ADR-0063) —
-        // that surface must be destroyed while the native window behind
-        // that clone is still alive (on Wayland, destroying the swapchain
-        // after the `wl_surface` is a use-after-free on the surface's
-        // `wl_proxy`; observed as the post-quit SIGSEGV of issue #713).
-        // `Drop::drop` runs before any field is dropped, so letting go of
-        // the handler here guarantees the renderer dies before `self.window`
-        // regardless of field order.
-        // The winit `CloseRequested` arm also clears eagerly at close (the
-        // primary, in-loop path); this is the last-resort guarantee for a
-        // window whose final `Arc` unwinds anywhere else.
+        // Teardown order: the window's handler may own this window's GPU
+        // renderer, whose `wgpu::Surface` is built from the window's surface
+        // target, which holds the winit window. Letting go of the handler
+        // here drops the renderer, and with it the surface and the target,
+        // while the winit window is still alive (on Wayland, destroying the
+        // swapchain after the `wl_surface` uses the surface's freed
+        // `wl_proxy`). `Drop::drop` runs before any field is dropped, so this
+        // holds whatever the field order. The winit `CloseRequested` arm also
+        // clears eagerly at close (the in-loop path); this is the guarantee
+        // for a window whose last handle drops anywhere else.
         self.delivery.clear();
     }
 }
@@ -743,7 +740,9 @@ impl PlatformWindow for WinitWindow {
     }
 
     fn request_redraw(&self) {
-        self.window.request_redraw();
+        if !self.delivery.retirement().is_retired() {
+            self.window.request_redraw();
+        }
     }
 
     fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {

@@ -3,7 +3,8 @@
 
 use std::sync::Arc;
 
-use flui_platform::{NoNativeSurface, PlatformWindow, SurfaceTarget};
+use flui_platform::testing::NoNativeSurface;
+use flui_platform::{PlatformWindow, SurfaceTarget};
 use raw_window_handle::{HandleError, HasDisplayHandle, HasWindowHandle};
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 

@@ -780,9 +780,15 @@ fn a_surface_target_is_unavailable_once_its_window_closed() {
     .join()
     .expect("the target's thread");
 
+    let frames = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&frames);
+    window.handler.react_to_frame(move |_| {
+        counted.fetch_add(1, Ordering::SeqCst);
+    });
     window.close_now();
     pump_until(Duration::from_millis(100), || false);
-    drop(window);
+    // The window is still held: its target answers for the close, not for
+    // the last handle's drop.
     assert!(
         matches!(
             raw_window_handle::HasWindowHandle::window_handle(&*target),
@@ -794,9 +800,24 @@ fn a_surface_target_is_unavailable_once_its_window_closed() {
         raw_window_handle::HasDisplayHandle::display_handle(&*target),
         Err(raw_window_handle::HandleError::Unavailable)
     ));
+    let before = frames.load(Ordering::SeqCst);
     std::thread::spawn(move || requester.request_redraw())
         .join()
-        .expect("a redraw asked of a closed window reaches nothing");
+        .expect("the requesting thread");
+    window.request_redraw();
+    pump_until(Duration::from_millis(200), || false);
+    assert_eq!(
+        frames.load(Ordering::SeqCst),
+        before,
+        "a redraw asked of a closed window runs no frame"
+    );
+    // Neither the target nor the requester keeps the window alive.
+    let gone = Rc::downgrade(&window.window);
+    drop(window);
+    assert!(
+        gone.upgrade().is_none(),
+        "the target and the requester keep no handle on the window"
+    );
 }
 
 /// Run `changed` with the snapshot before and after each `state_changed` of
@@ -1394,6 +1415,11 @@ impl WindowFixture for Win32Fixture {
     /// system no input region.
     fn input_regions(&self) -> flui_platform::Availability {
         flui_native::input::availability::windows(false).input_regions()
+    }
+
+    /// A Win32 window's target hands out its `HWND` on any thread.
+    fn has_native_surface(&self) -> bool {
+        true
     }
 }
 

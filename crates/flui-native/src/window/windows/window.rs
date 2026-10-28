@@ -1333,11 +1333,9 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn request_redraw(&self) {
-        // A handle the OS has reused for another window is not this one.
-        if !handle_available(super::proc::teardown_route(self.hwnd, self.context)) {
-            return;
-        }
-        Self::redraw_native(self.hwnd);
+        // Retired, destroyed, or a handle the OS reused for another window:
+        // not this window, which asks for nothing.
+        flui_platform::RedrawRequester::request_redraw(&self.surface());
     }
 
     fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {

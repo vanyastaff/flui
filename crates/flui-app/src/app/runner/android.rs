@@ -192,7 +192,7 @@ where
         let window = std::rc::Rc::clone(presentation_window.window());
 
         // 2. Create GPU renderer (Vulkan backend on Android). `Renderer::new`
-        // takes ownership of a `WindowTarget` (issue #1043): the window's
+        // takes ownership of a `WindowTarget`: the window's
         // surface target, never the window (ADR-0254 §5).
         let geometry = super::window_install::SurfaceGeometry::of(window.as_ref());
         let phys_size = geometry.physical;

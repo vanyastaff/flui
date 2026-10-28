@@ -98,7 +98,7 @@ pub enum WindowAt {
 /// use flui_platform::input_regions::InputRegion;
 /// use flui_platform::{
 ///     AdmissionError, AdmittedCommand, ApplyError, CursorError, CursorIcon, FrameRateHint,
-///     NoNativeSurface, PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
+///     PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
 ///     RedrawRequester,
 ///     SurfaceTarget, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand,
 ///     WindowGeometry, WindowId, WindowMaterial, WindowMode, WindowState,
@@ -116,7 +116,7 @@ pub enum WindowAt {
 ///         Arc::new(|| {})
 ///     }
 ///     fn surface_target(&self) -> Arc<dyn SurfaceTarget> {
-///         Arc::new(NoNativeSurface)
+///         Arc::new(flui_platform::testing::NoNativeSurface)
 ///     }
 ///     fn state(&self) -> WindowState {
 ///         WindowState::new(WindowGeometry::new(None, Size::default()), Size::default())
@@ -198,7 +198,7 @@ pub enum WindowAt {
 /// use flui_platform::input_regions::InputRegion;
 /// use flui_platform::{
 ///     AdmissionError, AdmittedCommand, ApplyError, CursorError, CursorIcon, FrameRateHint,
-///     NoNativeSurface, PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
+///     PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
 ///     RedrawRequester,
 ///     SurfaceTarget, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand,
 ///     WindowGeometry, WindowId, WindowMaterial, WindowMode, WindowState,
@@ -216,7 +216,7 @@ pub enum WindowAt {
 ///         Arc::new(|| {})
 ///     }
 ///     fn surface_target(&self) -> Arc<dyn SurfaceTarget> {
-///         Arc::new(NoNativeSurface)
+///         Arc::new(flui_platform::testing::NoNativeSurface)
 ///     }
 ///     fn state(&self) -> WindowState {
 ///         WindowState::new(WindowGeometry::new(None, Size::default()), Size::default())
@@ -309,7 +309,7 @@ pub trait PlatformWindow {
     /// [`HandleError::Unavailable`](raw_window_handle::HandleError::Unavailable)
     /// once this window is gone, and does not keep the window open. Required,
     /// with no default: a window with no native surface hands out
-    /// [`NoNativeSurface`](crate::NoNativeSurface).
+    /// [`NoNativeSurface`](crate::testing::NoNativeSurface).
     fn surface_target(&self) -> Arc<dyn SurfaceTarget>;
 
     // ==================== State and commands (ADR-0237) ====================

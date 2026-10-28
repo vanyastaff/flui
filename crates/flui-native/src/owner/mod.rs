@@ -818,11 +818,36 @@ impl OpenedWindow {
         self.id
     }
 
-    /// The window, on the owner thread while it is still open; `None` on
-    /// any other thread, and once the window closed.
+    /// The window, on the owner thread while it is still open.
     #[must_use]
-    pub fn window(&self) -> Option<Rc<dyn HostWindow>> {
-        self.window.upgrade()
+    pub fn window(&self) -> OpenedWindowReach {
+        if !self.window.is_owner_thread() {
+            return OpenedWindowReach::OtherThread;
+        }
+        self.window
+            .upgrade()
+            .map_or(OpenedWindowReach::Closed, OpenedWindowReach::Open)
+    }
+}
+
+/// What [`OpenedWindow::window`] reaches.
+pub enum OpenedWindowReach {
+    /// The window, which is open: the caller is on its owner thread.
+    Open(Rc<dyn HostWindow>),
+    /// The window closed after it was opened.
+    Closed,
+    /// The caller is not the window's owner thread, which alone reaches it:
+    /// what another thread has of the window is its identity.
+    OtherThread,
+}
+
+impl fmt::Debug for OpenedWindowReach {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Open(window) => f.debug_tuple("Open").field(&window.id()).finish(),
+            Self::Closed => f.write_str("Closed"),
+            Self::OtherThread => f.write_str("OtherThread"),
+        }
     }
 }
 

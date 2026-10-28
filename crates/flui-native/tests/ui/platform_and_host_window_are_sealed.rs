@@ -173,7 +173,7 @@ impl PlatformWindow for OutsideWindow {
     }
 
     fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
-        Arc::new(flui_platform::NoNativeSurface)
+        Arc::new(flui_platform::testing::NoNativeSurface)
     }
 }
 

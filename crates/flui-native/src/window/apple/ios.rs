@@ -1302,9 +1302,15 @@ impl PlatformWindow for IOSWindow {
         let marker = MainThreadMarker::new()
             .expect("BUG: a UIKit window lives on the main thread, where it is used");
         Arc::new(IOSSurface {
-            view: Retained::as_ptr(&self.native.get(marker).view)
-                .cast_mut()
-                .cast(),
+            // SAFETY: the pointer is the window's live `FluiView`, which it
+            // holds as a `Retained`.
+            view: unsafe {
+                super::MainRetainedView::retain(
+                    Retained::as_ptr(&self.native.get(marker).view)
+                        .cast_mut()
+                        .cast(),
+                )
+            },
             closed: Arc::clone(&self.closed),
             lifecycle: Arc::clone(&self.lifecycle),
             retirement: self.delivery.retirement(),
@@ -1454,12 +1460,15 @@ impl RedrawRequester for IOSRedraw {
 }
 
 /// A UIKit window's surface target (ADR-0254 §5): the window's content
-/// `UIView`, as a `UiKitWindowHandle`, while the window is attached to a
-/// scene and has not closed.
+/// `UIView`, as a `UiKitWindowHandle`, on the main thread, while the window is
+/// attached to a scene and has not closed.
+///
+/// It keeps the view alive for as long as it lives
+/// ([`MainRetainedView`](super::MainRetainedView)), so a Metal surface made
+/// from the handle never outlives the view.
 struct IOSSurface {
-    /// The window's `FluiView`. Never messaged, retained or dereferenced
-    /// here.
-    view: *mut std::ffi::c_void,
+    /// The window's `FluiView`.
+    view: super::MainRetainedView,
     /// The window's closed flag.
     closed: Arc<AtomicBool>,
     /// The window's lifecycle: a detached window hands out no handle.
@@ -1467,20 +1476,6 @@ struct IOSSurface {
     /// Whether the window's native retirement has started.
     retirement: Retirement,
 }
-
-// SAFETY: the target holds the view's address, the window's `closed` flag, its
-// lifecycle behind a mutex and its `Retirement`. It never messages, retains or
-// dereferences the view: the address goes into a `UiKitWindowHandle` only
-// while `closed` and the retirement are unset and the window is attached. The
-// window keeps the view for its whole life and releases it on the main thread
-// when it drops, after its `Drop` has set `closed`; and a Metal layer is made
-// from the handle on the main thread alone (raw-window-metal's
-// `Layer::from_ui_view` checks it), where the handle query and its use run with
-// no release of the view between them.
-unsafe impl Send for IOSSurface {}
-// SAFETY: see `Send` above: a shared reference reads the flags, locks the
-// lifecycle and copies the address, and nothing else.
-unsafe impl Sync for IOSSurface {}
 
 impl IOSSurface {
     /// Whether the window has no surface to hand out: closed, retired, or
@@ -1496,14 +1491,19 @@ impl raw_window_handle::HasWindowHandle for IOSSurface {
     fn window_handle(
         &self,
     ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        let main = MainThreadMarker::new().ok_or(raw_window_handle::HandleError::Unavailable)?;
         if self.is_unavailable() {
             return Err(raw_window_handle::HandleError::Unavailable);
         }
-        let view =
-            std::ptr::NonNull::new(self.view).ok_or(raw_window_handle::HandleError::Unavailable)?;
+        let view = self
+            .view
+            .view(main)
+            .ok_or(raw_window_handle::HandleError::Unavailable)?;
         let handle = raw_window_handle::UiKitWindowHandle::new(view);
-        // SAFETY: the window has not closed, so it still holds the view; the
-        // handle stops being handed out once it closes.
+        // SAFETY: the target holds a +1 reference to the view
+        // (`MainRetainedView`), released no sooner than the target drops, so
+        // the view outlives every handle borrowed from the target and every
+        // surface made while the target lives.
         Ok(unsafe {
             raw_window_handle::WindowHandle::borrow_raw(raw_window_handle::RawWindowHandle::UiKit(
                 handle,
@@ -1516,7 +1516,7 @@ impl raw_window_handle::HasDisplayHandle for IOSSurface {
     fn display_handle(
         &self,
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
-        if self.is_unavailable() {
+        if MainThreadMarker::new().is_none() || self.is_unavailable() {
             return Err(raw_window_handle::HandleError::Unavailable);
         }
         let handle = raw_window_handle::UiKitDisplayHandle::new();

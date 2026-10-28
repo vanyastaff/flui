@@ -229,7 +229,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         opened.map_or(1.0, |metrics| metrics.scale().get())
     );
 
-    // `Renderer::new` takes ownership of a `WindowTarget` (issue #1043): the
+    // `Renderer::new` takes ownership of a `WindowTarget`: the
     // window's surface target, never the window (ADR-0254 §5).
     let mut renderer = pollster::block_on(Renderer::new(window.surface_target()))
         .expect("Failed to create GPU renderer");

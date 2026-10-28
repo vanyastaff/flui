@@ -191,6 +191,12 @@ mod cases {
         fn input_regions(&self) -> Availability {
             flui_native::input::availability::macos().input_regions()
         }
+
+        /// The checks run on the main thread, where an AppKit window's target
+        /// hands out its view.
+        fn has_native_surface(&self) -> bool {
+            true
+        }
     }
 
     impl Drop for AppKitFixture {

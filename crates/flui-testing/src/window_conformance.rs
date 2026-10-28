@@ -99,6 +99,11 @@ pub trait WindowFixture {
     /// reports it: the capability the input-region verb answers to, which
     /// the snapshot does not carry.
     fn input_regions(&self) -> Availability;
+
+    /// Whether the window has a native surface, which its surface target
+    /// hands out a window handle for while it is open, on the thread the
+    /// checks run on (ADR-0254 §5); a headless window has none.
+    fn has_native_surface(&self) -> bool;
 }
 
 /// One promise a window broke.
@@ -163,6 +168,10 @@ const CHECKS: &[(&str, Check)] = &[
     (
         "per_frame_verbs_report_unsupported_exactly_when_unavailable",
         per_frame_verbs_report_unsupported_exactly_when_unavailable,
+    ),
+    (
+        "a_surface_target_is_send_sync_and_unavailable_after_close",
+        a_surface_target_is_send_sync_and_unavailable_after_close,
     ),
     ("a_closed_window_refuses", a_closed_window_refuses),
 ];
@@ -475,12 +484,19 @@ fn per_frame_verbs_report_unsupported_exactly_when_unavailable(
     finish(broken)
 }
 
-fn a_closed_window_refuses(fixture: &mut dyn WindowFixture) -> Result<(), String> {
+/// Close the window by the command where the window takes it, the way the
+/// application closes a window; else the way the window system would. A
+/// window already closed (by an earlier check) is left as it is.
+fn close_window(fixture: &mut dyn WindowFixture, broken: &mut Vec<String>) {
     let window = fixture.window();
-    let mut broken = Vec::new();
-    // Closed by the command where the window takes it, the way the
-    // application closes a window; else the way the window system would.
-    if window.state().capabilities.permits(&WindowCommand::Close) {
+    let state = window.state();
+    let probe = WindowCommand::SetTitle(state.title.clone().unwrap_or_default());
+    if let Ok(admitted) = probe.admit(&state.capabilities)
+        && window.apply(admitted) == Err(ApplyError::Closed)
+    {
+        return;
+    }
+    if state.capabilities.permits(&WindowCommand::Close) {
         if let Err(refusal) = window.admit_and_apply(WindowCommand::Close) {
             broken.push(format!("Close is supported but answered {refusal:?}"));
         }
@@ -488,6 +504,61 @@ fn a_closed_window_refuses(fixture: &mut dyn WindowFixture) -> Result<(), String
     } else {
         fixture.close();
     }
+}
+
+/// `a_surface_target_is_send_sync_and_unavailable_after_close` (ADR-0254 §5):
+/// the target crosses threads, hands out a handle while a window with a
+/// native surface is open, returns from `pre_present_notify` at once, and
+/// answers `Unavailable` once the window closed.
+fn a_surface_target_is_send_sync_and_unavailable_after_close(
+    fixture: &mut dyn WindowFixture,
+) -> Result<(), String> {
+    use raw_window_handle::{HandleError, HasDisplayHandle, HasWindowHandle};
+
+    const fn send_sync<T: Send + Sync + 'static>(_: &T) {}
+
+    let window = fixture.window();
+    let target = window.surface_target();
+    send_sync(&target);
+    let mut broken = Vec::new();
+    match (target.window_handle(), fixture.has_native_surface()) {
+        (Ok(_), true) | (Err(HandleError::Unavailable), false) => {}
+        (answer, native) => broken.push(format!(
+            "an open window {} a native surface answered {:?}",
+            if native { "with" } else { "without" },
+            answer.map(|_| ())
+        )),
+    }
+    // The raster side calls it on its own thread before each present: it
+    // returns there, and at once.
+    let (done, returned) = std::sync::mpsc::channel();
+    let presenting = std::sync::Arc::clone(&target);
+    std::thread::spawn(move || {
+        presenting.pre_present_notify();
+        let _ = done.send(());
+    });
+    if returned
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .is_err()
+    {
+        broken.push("pre_present_notify did not return".to_owned());
+    }
+    close_window(fixture, &mut broken);
+    if !matches!(target.window_handle(), Err(HandleError::Unavailable)) {
+        broken.push("a closed window's target still hands out a window handle".to_owned());
+    }
+    if !matches!(target.display_handle(), Err(HandleError::Unavailable))
+        && fixture.has_native_surface()
+    {
+        broken.push("a closed window's target still hands out a display handle".to_owned());
+    }
+    finish(broken)
+}
+
+fn a_closed_window_refuses(fixture: &mut dyn WindowFixture) -> Result<(), String> {
+    let window = fixture.window();
+    let mut broken = Vec::new();
+    close_window(fixture, &mut broken);
     for command in sample_commands(&window.state()) {
         // What the closed window's last snapshot admits still reaches it, as
         // a command queued before the close does.

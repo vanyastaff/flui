@@ -3,7 +3,36 @@
 //! [`window_takes_no_frame_verbs!`](crate::window_takes_no_frame_verbs) writes
 //! the per-frame verbs of a [`PlatformWindow`](crate::PlatformWindow) double
 //! whose window system takes neither a refresh-rate request nor input
-//! regions, so each double does not repeat them.
+//! regions, so each double does not repeat them; [`NoNativeSurface`] is the
+//! surface target of a double with no native surface.
+
+use raw_window_handle::{
+    DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,
+};
+
+/// The surface target of a window double with no native surface: both handle
+/// queries answer [`HandleError::Unavailable`], and
+/// [`pre_present_notify`](crate::SurfaceTarget::pre_present_notify) returns at
+/// once, since nothing presents into it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NoNativeSurface;
+
+impl HasWindowHandle for NoNativeSurface {
+    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
+        Err(HandleError::Unavailable)
+    }
+}
+
+impl HasDisplayHandle for NoNativeSurface {
+    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
+        Err(HandleError::Unavailable)
+    }
+}
+
+impl crate::SurfaceTarget for NoNativeSurface {
+    /// Nothing presents into a surface that does not exist.
+    fn pre_present_notify(&self) {}
+}
 
 /// The per-frame verbs of a window double whose window system takes neither
 /// a refresh-rate request nor input regions: both answer
@@ -24,7 +53,7 @@
 ///     flui_platform::window_takes_no_frame_verbs!();
 /// #   fn id(&self) -> WindowId { WindowId(1) }
 /// #   fn request_redraw(&self) {}
-/// #   fn surface_target(&self) -> Arc<dyn SurfaceTarget> { Arc::new(NoNativeSurface) }
+/// #   fn surface_target(&self) -> Arc<dyn SurfaceTarget> { Arc::new(testing::NoNativeSurface) }
 /// #   fn redraw_requester(&self) -> Arc<dyn RedrawRequester> { Arc::new(|| {}) }
 /// #   fn state(&self) -> WindowState {
 /// #       WindowState::new(WindowGeometry::new(None, Size::default()), Size::default())

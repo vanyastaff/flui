@@ -256,7 +256,7 @@ impl ControlSender {
     }
 
     /// Asks the owner to run the close teardown for `window_id` — the
-    /// programmatic [`WindowCommand::Close`](flui_platform::WindowCommand::Close) route (issue #919). The owner
+    /// programmatic [`WindowCommand::Close`](flui_platform::WindowCommand::Close) route. The owner
     /// answers on its next turn with the SAME teardown a compositor close
     /// takes after its should-close veto (per-window close callback, map
     /// removal, cursor/drag cleanup, callback clear, exit-policy consult),
@@ -270,7 +270,7 @@ impl ControlSender {
     /// coalesces (one teardown). A request after admission closed is
     /// dropped: the loop has already stopped, so no owner turn will ever
     /// run the teardown — that window's `WindowHandler::closed` does not fire, its
-    /// callbacks clear when the embedder's last `Arc` drops
+    /// handler is let go of when the application's last handle on the window drops
     /// (`WinitWindow::drop`), and the loop's own quit callback is the
     /// embedder's signal that everything is over. The owner drains closes
     /// posted BEFORE a quit ahead of the exit itself, so this is only ever
@@ -460,7 +460,7 @@ mod tests {
             Arc::new(|| {})
         }
         fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
-            Arc::new(flui_platform::NoNativeSurface)
+            Arc::new(flui_platform::testing::NoNativeSurface)
         }
         fn set_cursor(
             &self,
@@ -511,7 +511,14 @@ mod tests {
             let handle = sender
                 .request_open_window(options("cross-thread"))
                 .expect("owner lane accepts request");
-            handle.wait()
+            let outcome = handle.wait();
+            if let ClaimOutcome::Delivered(Ok(opened)) = &outcome {
+                assert!(
+                    matches!(opened.window(), crate::OpenedWindowReach::OtherThread),
+                    "a worker reaches the opened window's identity, never the window"
+                );
+            }
+            outcome
         });
 
         wake_rx
@@ -534,10 +541,15 @@ mod tests {
             ClaimOutcome::OwnerGone => panic!("the owner never disconnects in this test"),
         };
         assert_eq!(opened.id(), stub.id());
-        let window = opened
-            .window()
-            .expect("the owner reaches the opened window");
+        let crate::OpenedWindowReach::Open(window) = opened.window() else {
+            panic!("the owner reaches the opened window");
+        };
         assert!(window.state().visible);
+        drop((window, stub));
+        assert!(
+            matches!(opened.window(), crate::OpenedWindowReach::Closed),
+            "a window that is gone is closed, on the owner"
+        );
     }
 
     /// The owner lane: a cross-thread request is processed on the owner, and

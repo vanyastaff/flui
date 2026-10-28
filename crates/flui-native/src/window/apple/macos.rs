@@ -928,34 +928,23 @@ impl RedrawRequester for MacOSRedraw {
 }
 
 /// A macOS window's surface target (ADR-0254 §5): the window's content view,
-/// as an `AppKitWindowHandle`, until the window closes.
+/// as an `AppKitWindowHandle`, on the main thread, until the window closes.
 ///
-/// It answers `Unavailable` once `closed` is set — by `windowWillClose:`, or
-/// by the window's [`Drop`] for a window dropped without closing — or the
-/// window's delivery is retired.
+/// It keeps the view alive for as long as it lives
+/// ([`MainRetainedView`](super::MainRetainedView)), so a Metal surface made
+/// from the handle never outlives the view, however long the renderer holding
+/// the target outlives the window. It answers `Unavailable` off the main
+/// thread, and once `closed` is set — by `windowWillClose:`, or by the
+/// window's [`Drop`] for a window dropped without closing — or the window's
+/// delivery is retired.
 struct MacOSSurface {
-    /// The window's `FLUIContentView`, the `ns_view` of its handle. Never
-    /// messaged, retained or dereferenced here.
-    view: ObjcId,
+    /// The window's `FLUIContentView`, the `ns_view` of its handle.
+    view: super::MainRetainedView,
     /// The window's closed flag.
     closed: Arc<AtomicBool>,
     /// Whether the window's native retirement has started.
     retirement: Retirement,
 }
-
-// SAFETY: the target holds the content view's address, the window's `closed`
-// flag and its `Retirement`; the latter two are atomics. It never messages,
-// retains or dereferences the view: the address goes into an
-// `AppKitWindowHandle` only while neither `closed` nor the retirement is set.
-// The view is freed only by the window's release of its NSWindow, in the
-// window's `Drop` on the main thread, which sets `closed` first; and an AppKit
-// surface is made from the handle on the main thread alone (raw-window-metal's
-// `Layer::from_ns_view` checks it), where the handle query and its use run with
-// no free of the view between them.
-unsafe impl Send for MacOSSurface {}
-// SAFETY: see `Send` above: a shared reference reads the atomics and copies
-// the address, and nothing else.
-unsafe impl Sync for MacOSSurface {}
 
 impl MacOSSurface {
     /// Whether the window is gone, so no handle is handed out.
@@ -968,17 +957,22 @@ impl HasWindowHandle for MacOSSurface {
     fn window_handle(
         &self,
     ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        let main = MainThreadMarker::new().ok_or(raw_window_handle::HandleError::Unavailable)?;
         if self.is_gone() {
             return Err(raw_window_handle::HandleError::Unavailable);
         }
         // raw-window-handle 0.6 AppKitWindowHandle expects the NSView, not
         // the NSWindow: the FLUI view, which stays the surface view whatever
         // the window's content view is.
-        let ns_view = std::ptr::NonNull::new(self.view.cast::<std::ffi::c_void>())
+        let ns_view = self
+            .view
+            .view(main)
             .ok_or(raw_window_handle::HandleError::Unavailable)?;
         let handle = AppKitWindowHandle::new(ns_view);
-        // SAFETY: the window has not closed, so its view hierarchy holds the
-        // view; the handle stops being handed out once it closes.
+        // SAFETY: the target holds a +1 reference to the view
+        // (`MainRetainedView`), released no sooner than the target drops, so
+        // the view outlives every handle borrowed from the target and every
+        // surface made while the target lives.
         Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(RawWindowHandle::AppKit(handle)) })
     }
 }
@@ -987,11 +981,11 @@ impl HasDisplayHandle for MacOSSurface {
     fn display_handle(
         &self,
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
-        if self.is_gone() {
+        if MainThreadMarker::new().is_none() || self.is_gone() {
             return Err(raw_window_handle::HandleError::Unavailable);
         }
         let handle = AppKitDisplayHandle::new();
-        // SAFETY: AppKit display handles carry no pointer; always valid.
+        // SAFETY: AppKit display handles carry no pointer.
         Ok(unsafe {
             raw_window_handle::DisplayHandle::borrow_raw(RawDisplayHandle::AppKit(handle))
         })
@@ -1277,7 +1271,9 @@ impl PlatformWindow for MacOSWindow {
 
     fn surface_target(&self) -> Arc<dyn SurfaceTarget> {
         Arc::new(MacOSSurface {
-            view: self.view,
+            // SAFETY: `self.view` is the window's content view, which the
+            // window's view hierarchy holds while the window lives.
+            view: unsafe { super::MainRetainedView::retain(self.view) },
             closed: Arc::clone(&self.closed),
             retirement: self.delivery.retirement(),
         })

@@ -788,12 +788,10 @@ impl WindowProc {
                         // Without this, the frame callback registered via
                         // `WindowHandler::frame_requested` — which in `flui-app`'s wiring
                         // owns this window's GPU renderer, whose
-                        // `wgpu::Surface` is built from the
-                        // `Rc<dyn PlatformWindow>` clone the renderer owns
-                        // (ADR-0063) — stays pinned forever: window (through
-                        // its callback slots) → frame closure → raster lane
-                        // → renderer → surface → `Arc<WindowsWindow>`, a
-                        // cycle nothing else in this arm breaks. Calling it
+                        // `wgpu::Surface` is built from the window's surface
+                        // target — stays alive past the window it draws into:
+                        // window (through its handler) → frame closure →
+                        // raster lane → renderer → surface. Calling it
                         // here, before the swapchain-owning callback's
                         // native window is gone, releases the surface while
                         // it is still valid to destroy.
