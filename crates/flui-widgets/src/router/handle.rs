@@ -150,12 +150,21 @@ impl<R: Routable> RouterHandle<R> {
         // Parsed values can own arbitrary destructors, including values in the
         // retained prefix. Protect them before popup dismissal delivers effects.
         let mut target = RouterRetiredValues(R::back_stack(&RoutePath::parse(location)?)?);
+        // The routes' `==` runs on a snapshot, outside the stack's borrow, and
+        // may navigate: only the matching pages still in place are kept.
         let common_prefix = || {
+            let pages = self.shared.pages();
+            let equal = pages
+                .0
+                .iter()
+                .zip(&target.0)
+                .take_while(|((_, route), target)| **route == **target)
+                .count();
             let stack = self.shared.stack.borrow();
             let shared_len = stack
                 .iter()
-                .zip(&target.0)
-                .take_while(|(entry, route)| *entry.route == **route)
+                .zip(&pages.0[..equal])
+                .take_while(|(entry, (id, _))| entry.id == *id)
                 .count();
             (shared_len, stack.len())
         };

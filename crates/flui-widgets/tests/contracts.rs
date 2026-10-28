@@ -801,6 +801,7 @@ fn router_and_widgets_app() {
             ("router::stack_leaves_out_popups", crate::router::stack_leaves_out_popups),
             ("router::debug_prints_the_whole_stack", crate::router::debug_prints_the_whole_stack),
             ("router::a_route_clone_may_drive_its_router", crate::router::a_route_clone_may_drive_its_router),
+            ("router::a_route_eq_may_drive_its_router_during_go", crate::router::a_route_eq_may_drive_its_router_during_go),
             ("widgets_app::builder_only_app_receives_no_routing_and_supplies_the_subtree", crate::widgets_app::builder_only_app_receives_no_routing_and_supplies_the_subtree),
             ("widgets_app::home_is_seeded_once_as_the_root_route", crate::widgets_app::home_is_seeded_once_as_the_root_route),
             ("widgets_app::observers_attach_at_mount_and_see_the_home_route", crate::widgets_app::observers_attach_at_mount_and_see_the_home_route),

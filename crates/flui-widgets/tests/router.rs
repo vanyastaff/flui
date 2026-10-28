@@ -1601,29 +1601,49 @@ pub(crate) fn debug_prints_the_whole_stack() {
     assert!(handle.contains(printed), "{handle}");
 }
 
-/// A route whose `Clone`, once armed, pops the router it is on.
+/// A route whose `Clone` or `==`, once armed, pops the router it is on.
 struct PoppingRoute {
     index: u32,
     router: Rc<RefCell<Option<RouterHandle<PoppingRoute>>>>,
-    armed: Rc<Cell<bool>>,
+    pop_on_clone: Rc<Cell<bool>>,
+    pop_on_eq: Rc<Cell<bool>>,
+}
+
+impl PoppingRoute {
+    /// A route with its own unarmed hooks: what parsing a location yields.
+    fn parsed(index: u32) -> Self {
+        Self {
+            index,
+            router: Rc::default(),
+            pop_on_clone: Rc::default(),
+            pop_on_eq: Rc::default(),
+        }
+    }
+
+    fn pop_router_if(&self, armed: &Cell<bool>) {
+        if armed.replace(false) {
+            let router = self.router.borrow().clone().expect("the page was mounted");
+            assert_eq!(router.pop(), Ok(true), "the route pops the top page");
+        }
+    }
 }
 
 impl Clone for PoppingRoute {
     fn clone(&self) -> Self {
-        if self.armed.replace(false) {
-            let router = self.router.borrow().clone().expect("the page was mounted");
-            assert_eq!(router.pop(), Ok(true), "the clone pops the top page");
-        }
+        self.pop_router_if(&self.pop_on_clone);
         Self {
             index: self.index,
             router: Rc::clone(&self.router),
-            armed: Rc::clone(&self.armed),
+            pop_on_clone: Rc::clone(&self.pop_on_clone),
+            pop_on_eq: Rc::clone(&self.pop_on_eq),
         }
     }
 }
 
 impl PartialEq for PoppingRoute {
     fn eq(&self, other: &Self) -> bool {
+        self.pop_router_if(&self.pop_on_eq);
+        other.pop_router_if(&other.pop_on_eq);
         self.index == other.index
     }
 }
@@ -1634,7 +1654,26 @@ impl Routable for PoppingRoute {
     }
 
     fn from_path(path: &RoutePath) -> Result<Self, RouteParseError> {
-        Err(RouteParseError::NoMatch { path: path.clone() })
+        let segments: Vec<_> = path.segments().collect();
+        match segments.as_slice() {
+            [index] => index
+                .parse()
+                .map(Self::parsed)
+                .map_err(|_| RouteParseError::NoMatch { path: path.clone() }),
+            _ => Err(RouteParseError::NoMatch { path: path.clone() }),
+        }
+    }
+
+    /// `/0/1/5` opens on `0`, `1` and `5`.
+    fn back_stack(path: &RoutePath) -> Result<Vec<Self>, RouteParseError> {
+        path.segments()
+            .map(|index| {
+                index
+                    .parse()
+                    .map(Self::parsed)
+                    .map_err(|_| RouteParseError::NoMatch { path: path.clone() })
+            })
+            .collect()
     }
 }
 
@@ -1674,16 +1713,25 @@ impl ViewState<HandleKeeper> for HandleKeeperState {
     }
 }
 
-/// `stack()` and `current()` clone routes after releasing the router's
-/// stack, so a route's `Clone` may drive the router; each reads the stack as
-/// it was when called.
-pub(crate) fn a_route_clone_may_drive_its_router() {
+/// A mounted router on `0`, `1`, `2` whose routes pop it.
+struct PoppingRouter {
+    laid: LaidOut,
+    handle: RouterHandle<PoppingRoute>,
+    /// Arms a pop from the next route `Clone`.
+    pop_on_clone: Rc<Cell<bool>>,
+    /// Arms a pop from the next route `==`.
+    pop_on_eq: Rc<Cell<bool>>,
+}
+
+fn popping_router() -> PoppingRouter {
     let router = Rc::new(RefCell::new(None));
-    let armed = Rc::new(Cell::new(false));
+    let pop_on_clone = Rc::new(Cell::new(false));
+    let pop_on_eq = Rc::new(Cell::new(false));
     let route = |index| PoppingRoute {
         index,
         router: Rc::clone(&router),
-        armed: Rc::clone(&armed),
+        pop_on_clone: Rc::clone(&pop_on_clone),
+        pop_on_eq: Rc::clone(&pop_on_eq),
     };
     let keeper = HandleKeeper {
         router: Rc::clone(&router),
@@ -1695,6 +1743,43 @@ pub(crate) fn a_route_clone_may_drive_its_router() {
     let mut laid = mount(restored);
     settle(&mut laid);
     let handle = router.borrow().clone().expect("the page was mounted");
+    PoppingRouter {
+        laid,
+        handle,
+        pop_on_clone,
+        pop_on_eq,
+    }
+}
+
+/// `go` compares routes after releasing the router's stack, so a route's
+/// `==` may drive the router; `go` then reconciles against the pages still
+/// in place.
+pub(crate) fn a_route_eq_may_drive_its_router_during_go() {
+    let PoppingRouter {
+        mut laid,
+        handle,
+        pop_on_eq,
+        ..
+    } = popping_router();
+
+    pop_on_eq.set(true);
+    assert_eq!(handle.go("/0/1/5"), Ok(()));
+    assert!(!pop_on_eq.get(), "a comparison popped the top page");
+    settle(&mut laid);
+    let indices: Vec<_> = handle.stack().iter().map(|route| route.index).collect();
+    assert_eq!(indices, [0, 1, 5]);
+}
+
+/// `stack()` and `current()` clone routes after releasing the router's
+/// stack, so a route's `Clone` may drive the router; each reads the stack as
+/// it was when called.
+pub(crate) fn a_route_clone_may_drive_its_router() {
+    let PoppingRouter {
+        mut laid,
+        handle,
+        pop_on_clone: armed,
+        ..
+    } = popping_router();
     let indices = |routes: Vec<PoppingRoute>| routes.iter().map(|r| r.index).collect::<Vec<_>>();
 
     armed.set(true);

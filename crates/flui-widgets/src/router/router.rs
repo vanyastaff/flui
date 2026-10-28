@@ -483,6 +483,18 @@ impl<R: Routable> RouterShared<R> {
         )
     }
 
+    /// Each page's id and route, bottom to top, taken as
+    /// [`routes`](Self::routes) takes the routes.
+    pub(super) fn pages(&self) -> RouterRetiredValues<(RouteId, Rc<R>)> {
+        RouterRetiredValues(
+            self.stack
+                .borrow()
+                .iter()
+                .map(|entry| (entry.id, Rc::clone(&entry.route)))
+                .collect(),
+        )
+    }
+
     /// The top route's path; `None` only before the first page is seeded.
     pub(super) fn location(&self) -> Option<RoutePath> {
         let routes = self.routes();
