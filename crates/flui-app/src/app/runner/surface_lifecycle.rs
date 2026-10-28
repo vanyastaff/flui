@@ -96,6 +96,64 @@ impl SurfaceLifecycle for flui_engine::Renderer {
     }
 }
 
+/// The seam through which a runner hands its renderer the colour of the
+/// display its window is on (ADR-0256 §6), narrowed from the concrete
+/// renderer as [`SurfaceLifecycle`] is.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) trait DisplayColorFollow {
+    /// Take `display` as the colour of the window's display: whether the held
+    /// surface was configured again for it.
+    fn follow_display_color(
+        &mut self,
+        display: Option<flui_platform::DisplayColor>,
+    ) -> Result<bool, EngineError>;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl DisplayColorFollow for flui_engine::Renderer {
+    fn follow_display_color(
+        &mut self,
+        display: Option<flui_platform::DisplayColor>,
+    ) -> Result<bool, EngineError> {
+        flui_engine::Renderer::set_display_color(self, display)
+    }
+}
+
+/// Before a frame, hand the renderer the colour the host last delivered for
+/// the window's display: the display's profile changed, or the window moved to
+/// another display. A surface configured again for it gets a new surface
+/// generation, and `true` tells the caller to repaint in full.
+///
+/// A lane busy at this moment leaves it to the next frame, which reads the
+/// display again, so no report is lost. A failure is logged and the surface
+/// keeps the configuration it had.
+///
+/// Not on the Web: its renderer is not behind a raster lane, and its runner
+/// hands the renderer the colour itself.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn follow_display_color<B>(
+    lane: &parking_lot::Mutex<crate::app::raster_lane::RasterLane<B>>,
+    display: Option<flui_platform::DisplayColor>,
+) -> bool
+where
+    B: flui_engine::RasterBackend + DisplayColorFollow,
+{
+    let Some(mut lane) = lane.try_lock() else {
+        return false;
+    };
+    match lane.with_backend(|backend| backend.follow_display_color(display)) {
+        Ok(true) => {
+            lane.note_surface_recreated();
+            true
+        }
+        Ok(false) => false,
+        Err(error) => {
+            tracing::warn!(%error, "the surface could not be set up for its display's colour");
+            false
+        }
+    }
+}
+
 /// What [`ensure_surface`] did, and what the caller still owes for it.
 ///
 /// `#[must_use]`: [`Self::Recreated`] carries an obligation, and a caller
@@ -806,7 +864,101 @@ mod surface_lifecycle_tests {
                     a_failed_recreation_carries_the_error_and_leaves_the_presentation_released
                         as fn(),
                 ),
+                (
+                    "a_display_colour_change_reaches_the_renderer_before_the_frame",
+                    a_display_colour_change_reaches_the_renderer_before_the_frame as fn(),
+                ),
             ],
+        );
+    }
+
+    /// A renderer that keeps the display colour it was handed and reports a
+    /// reconfiguration when it differs from the one it had.
+    #[derive(Default)]
+    struct ColourFollowingBackend {
+        display: Option<flui_platform::DisplayColor>,
+    }
+
+    impl RasterBackend for ColourFollowingBackend {
+        fn render_scene(
+            &mut self,
+            _scene: &flui_layer::Scene,
+        ) -> Result<PresentDisposition, EngineError> {
+            Ok(PresentDisposition::Presented)
+        }
+        fn resize(&mut self, _width: u32, _height: u32) {}
+        fn is_device_lost(&self) -> bool {
+            false
+        }
+        fn mark_dirty(&mut self, _rect: flui_foundation::geometry::Rect<f64>) {}
+        fn mark_full_repaint(&mut self) {}
+        fn has_damage(&self) -> bool {
+            true
+        }
+        fn size(&self) -> (u32, u32) {
+            (800, 600)
+        }
+        fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
+            Ok(())
+        }
+    }
+
+    impl super::DisplayColorFollow for ColourFollowingBackend {
+        fn follow_display_color(
+            &mut self,
+            display: Option<flui_platform::DisplayColor>,
+        ) -> Result<bool, EngineError> {
+            let changed = self.display != display;
+            self.display = display;
+            Ok(changed)
+        }
+    }
+
+    /// The window moves from an HDR monitor to an SDR one: the next frame hands
+    /// the renderer the new colour and asks for a full repaint; the same colour
+    /// again asks nothing; a lane busy at that moment leaves it to the next
+    /// frame instead of dropping it.
+    fn a_display_colour_change_reaches_the_renderer_before_the_frame() {
+        use flui_platform::{ColorGamut, DisplayColor, Headroom};
+
+        let hdr = DisplayColor::high(
+            ColorGamut::Rec2020,
+            Ok(Headroom::try_new(4.0).expect("headroom")),
+        );
+        let sdr = DisplayColor::standard(ColorGamut::Srgb);
+        let lane = parking_lot::Mutex::new(crate::app::raster_lane::RasterLane::new(
+            ColourFollowingBackend::default(),
+            flui_foundation::PresentationAddress {
+                ui_runtime_id: flui_foundation::UiRuntimeId::new(1),
+                presentation_id: flui_foundation::PresentationId::new(1),
+            },
+            800,
+            600,
+        ));
+
+        assert!(
+            super::follow_display_color(&lane, Some(hdr)),
+            "set up on HDR"
+        );
+        assert!(
+            !super::follow_display_color(&lane, Some(hdr)),
+            "the same colour asks nothing"
+        );
+        assert!(
+            super::follow_display_color(&lane, Some(sdr)),
+            "moved to the SDR monitor"
+        );
+        assert_eq!(
+            lane.lock().with_backend(|backend| backend.display),
+            Some(sdr)
+        );
+
+        let busy = lane.lock();
+        assert!(!super::follow_display_color(&lane, None));
+        drop(busy);
+        assert!(
+            super::follow_display_color(&lane, None),
+            "the report a busy lane missed reaches the next frame"
         );
     }
 

@@ -3,8 +3,9 @@ use std::time::Duration;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::{
-    DisplayId, DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot, RefreshPeriod,
-    WindowDisplay,
+    CapabilityAbsence, ColorGamut, DisplayColor, DisplayId, DisplayInfo, DisplayKey,
+    DisplayRegistry, DisplaySnapshot, DynamicRange, Headroom, InvalidHeadroom, RefreshPeriod,
+    SurfaceColorSpace, UnsupportedReason, WindowDisplay,
 };
 
 fn same_connector_after_replug_keeps_the_id() {
@@ -330,6 +331,147 @@ fn refresh_value_classification_table() {
             (
                 "measured_interval_is_the_period",
                 measured_interval_is_the_period as fn(),
+            ),
+        ],
+    );
+}
+
+fn panel(id: DisplayId) -> DisplayInfo {
+    DisplayInfo::new(
+        id,
+        "Panel",
+        Bounds::new(Point::new(0, 0), Size::new(1920, 1080)),
+        1.0,
+    )
+}
+
+fn headroom_refuses_what_is_not_a_finite_multiple_of_white() {
+    for refused in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, 0.99, -2.0] {
+        assert_eq!(
+            Headroom::try_new(refused),
+            Err(InvalidHeadroom),
+            "{refused} is no headroom"
+        );
+    }
+    assert_eq!(Headroom::try_new(1.0), Ok(Headroom::SDR));
+    assert_eq!(Headroom::try_new(4.5).map(Headroom::get), Ok(4.5));
+}
+
+fn headroom_from_luminance_is_the_peak_over_white() {
+    assert_eq!(
+        Headroom::from_luminance(1000.0, 250.0).map(Headroom::get),
+        Ok(4.0)
+    );
+    assert_eq!(
+        Headroom::from_luminance(400.0, 480.0),
+        Ok(Headroom::SDR),
+        "white set above the reported peak is no headroom, not a fraction"
+    );
+    for (peak, white) in [
+        (0.0, 80.0),
+        (1000.0, 0.0),
+        (f32::NAN, 80.0),
+        (1000.0, f32::INFINITY),
+        (-5.0, 80.0),
+        // The ratio overflows to infinity.
+        (f32::MAX, f32::MIN_POSITIVE),
+    ] {
+        assert_eq!(
+            Headroom::from_luminance(peak, white),
+            Err(InvalidHeadroom),
+            "{peak} nits over {white} nits must not publish a headroom"
+        );
+    }
+}
+
+fn display_colour_queries_answer_unsupported_with_the_reason() {
+    let registry = DisplayRegistry::new();
+    let unread = panel(registry.mint(&DisplayKey::Injected(1)).expect("id"));
+    assert_eq!(
+        unread.color_space().map_err(|refused| refused.reason),
+        Err(UnsupportedReason::NotYetOnThisHost),
+        "a display whose host did not read its colour says so"
+    );
+
+    let browser = unread.clone().with_color(Ok(DisplayColor::high(
+        ColorGamut::DisplayP3,
+        Err(CapabilityAbsence::NotOnThisPlatform),
+    )));
+    assert_eq!(
+        browser.color_space(),
+        Ok(SurfaceColorSpace::new(
+            ColorGamut::DisplayP3,
+            DynamicRange::High
+        ))
+    );
+    assert_eq!(
+        browser.headroom().map_err(|refused| refused.reason),
+        Err(UnsupportedReason::NotOnThisPlatform),
+        "a high-range display without a reported peak answers why"
+    );
+
+    let sdr = unread
+        .clone()
+        .with_color(Ok(DisplayColor::standard(ColorGamut::Srgb)));
+    assert_eq!(
+        sdr.color_space(),
+        Ok(SurfaceColorSpace::new(
+            ColorGamut::Srgb,
+            DynamicRange::Standard
+        ))
+    );
+    assert_eq!(sdr.headroom(), Ok(Headroom::SDR));
+
+    let absent = unread.with_color(Err(CapabilityAbsence::NotOnThisDevice));
+    assert_eq!(
+        absent.headroom().map_err(|refused| refused.reason),
+        Err(UnsupportedReason::NotOnThisDevice)
+    );
+}
+
+fn a_profile_change_is_a_new_revision() {
+    let registry = DisplayRegistry::new();
+    let id = registry.mint(&DisplayKey::Injected(1)).expect("id");
+    let sdr = panel(id).with_color(Ok(DisplayColor::standard(ColorGamut::Srgb)));
+    let first = DisplaySnapshot::empty()
+        .successor(vec![sdr.clone()])
+        .expect("revision");
+    let three = Headroom::try_new(3.0).expect("headroom");
+    let hdr = sdr.with_color(Ok(DisplayColor::high(ColorGamut::Rec2020, Ok(three))));
+    let second = first.successor(vec![hdr.clone()]).expect("revision");
+    assert!(
+        second.revision() > first.revision(),
+        "HDR switching on is a display change"
+    );
+    assert_eq!(second.get(id).map(DisplayInfo::headroom), Some(Ok(three)));
+    let again = second.successor(vec![hdr]).expect("revision");
+    assert_eq!(
+        again.revision(),
+        second.revision(),
+        "the same profile sampled again is no change"
+    );
+}
+
+#[test]
+fn display_colour_table() {
+    crate::run_table(
+        "display_colour_table",
+        &[
+            (
+                "headroom_refuses_what_is_not_a_finite_multiple_of_white",
+                headroom_refuses_what_is_not_a_finite_multiple_of_white as fn(),
+            ),
+            (
+                "headroom_from_luminance_is_the_peak_over_white",
+                headroom_from_luminance_is_the_peak_over_white as fn(),
+            ),
+            (
+                "display_colour_queries_answer_unsupported_with_the_reason",
+                display_colour_queries_answer_unsupported_with_the_reason as fn(),
+            ),
+            (
+                "a_profile_change_is_a_new_revision",
+                a_profile_change_is_a_new_revision as fn(),
             ),
         ],
     );

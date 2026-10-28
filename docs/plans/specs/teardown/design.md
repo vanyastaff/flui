@@ -8,6 +8,10 @@
   [persistence](../persistence/requirements.md) (R3, R12, R14, R15, R21, R24) и её
   [design](../persistence/design.md), [text-ime](../text-ime/requirements.md) (R8, F5) и её
   [design](../text-ime/design.md)
+- **Решения владельца 2026-10-28:** Notes, `notes_flow`, `notes_faults`, live-smoke и
+  `cargo xtask device windows-notes` удалены. Headless-строки на Notes идут на приложении
+  приёмки (persistence P10), нативные — через лейн `os` flui-driver. Выбор c2 и ответы на
+  вопросы 1–4 ниже — предложения design; решает владелец в задачах tasks.md.
 
 Teardown **владеет** общим контрактом закрытия и завершения сеанса: close guard, причина
 закрытия, реестр сброса, порядок доставки. Persistence его потребляет.
@@ -99,6 +103,8 @@ realm в `teardown_platform_realm`, `queued_turns`, `on_quit`, ошибка сб
 
 **Выбор: c2** (`DropLedger`, как флаг `retired` у `Readiness` в `tests/fixtures/notes_flow.rs`),
 плюс типизированные отказы устаревших handle (R19) как доказательство того, что realm ушёл.
+Фикстура Notes удалена, поэтому выбор снова открыт: механизм учёта — решение владельца
+(вопрос 1, tasks.md T18).
 
 ### (d) Завершение сеанса Windows
 
@@ -319,28 +325,28 @@ helper локализации (catch, удержание payload по ADR-0127, 
 «Ребёнок» означает дочерний процесс по образцу `opaque_frame_child`: родитель проверяет успех
 ребёнка, маркеры порядка и отсутствие abort. На headless старый код выпускает панику без
 teardown, поэтому код 101 проходит в обе стороны; различает маркер сброса до возобновления.
-Нативный 101 доказывает `windows-notes`. **Fix** падает на старом коде; **характеризация**
+Нативный 101 доказывает прогон через лейн `os` flui-driver. **Fix** падает на старом коде; **характеризация**
 на headless проходит и на старом коде.
 
 | Треб. | Тест (уровень; таблица) | Вид | Без изменения |
 |---|---|---|---|
-| R1 | `notes_close_releases_every_owner_after_navigation` (headless; `notes_flow`), `last_window_close_releases_the_realm_through_the_runner` (headless-runner; новая `runner_teardown_matrix`) | Характеризация | Сторож жив |
+| R1 | `acceptance_app_close_releases_every_owner_after_navigation` (headless; приложение приёмки), `last_window_close_releases_the_realm_through_the_runner` (headless-runner; новая `runner_teardown_matrix`) | Характеризация | Сторож жив |
 | R2 | `closing_with_a_pending_load_retires_the_future_once` (headless-runner) | Характеризация | `Drop` ≠ 1 |
 | R3 | `dropping_an_owner_with_an_observer_detaches_it_once` (headless; `tree_observer_inspector`) | Fix | 0 вызовов |
-| R4 | `last_window_close_returns_ok_on_both_routes` (headless-runner); live-smoke Notes; windows | Fix (live-smoke) | — |
+| R4 | `last_window_close_returns_ok_on_both_routes` (headless-runner); нативный прогон | Fix (нативный) | — |
 | R5 | `win32_close_drains_platform_map_entry` (`#[ignore]`, `tests/contract.rs`) | Характеризация | `Weak` жив |
 | R6 | `a_write_past_the_deadline_leaves_a_whole_file_and_exits_ok` (headless-runner, двойник хранилища с барьером) | Fix | Реестра нет |
 | R7 | `teardown_panic_flushes_the_registry_before_resuming` (ребёнок) | Fix | Нет маркера сброса |
 | R8 | `a_panicking_note_build_shows_error_view_and_other_screens_work` (headless) | Характеризация | — |
-| R9 | `a_panicking_tap_handler_reports_once_and_the_next_tap_works`, `a_panicking_post_frame_callback_reports_once_and_the_next_frame_builds` (ребёнок; `runner_teardown_matrix`); windows `notes_faults save-panic` | Fix | Паника выходит из dispatch |
+| R9 | `a_panicking_tap_handler_reports_once_and_the_next_tap_works`, `a_panicking_post_frame_callback_reports_once_and_the_next_frame_builds` (ребёнок; `runner_teardown_matrix`); нативный: паника в Save (внедрение — вопрос 3) | Fix | Паника выходит из dispatch |
 | R10 | `a_repeating_paint_panic_backs_off_but_keeps_retrying` (headless; `headless_frame_driver_matrix`: без ввода 12 с, за последние 10 с от 8 до 12 отчётов); `a_single_paint_panic_redraws_without_input`; `a_pointer_move_does_not_bypass_the_backoff`; `a_failure_streak_past_thirty_three_keeps_the_one_second_cap` (k до 40); `the_runner_sleeps_until_the_failure_retry_deadline` (headless-runner: платформа спит до дедлайна `next_wake`) | Fix | ~60/с; 0 после затишья; переполнение сдвига |
 | R11 | `user_panic_exit_code_matrix` (ребёнок, строка на путь); `a_non_bug_panic_at_the_window_proc_resumes_as_101` (Win32-unit, `#[ignore]`) | Fix | abort |
-| R12 | `dispose_panic_on_last_window_close_resumes_after_flush` (ребёнок); windows `notes_faults dispose-panic` → 101 | Fix | `0xC0000409` |
+| R12 | `dispose_panic_on_last_window_close_resumes_after_flush` (ребёнок); нативный: паника в `dispose` → 101 | Fix | `0xC0000409` |
 | R13 | `capture_drop_panic_keeps_the_first_failure_and_still_flushes` (ребёнок) | Fix | Сброс пропущен |
 | R14 | `user_drop_panic_inside_an_unwind_is_retained` (ребёнок; `realm_and_presentation_isolation_matrix`) | Характеризация | abort |
 | R15–R20 | `close_requested_inside_a_frame_runs_once_on_the_next_turn`, `a_late_completion_after_close_requests_no_frame`, R17-строки роутера `flui-widgets`, `a_second_close_request_tears_down_once`, `stale_handles_refuse_after_realm_drop`, `device_loss_on_the_closing_frame_still_exits_ok` | Характеризация | — |
 | R21 | `closing_during_composition_commits_before_detached` (headless-runner); windows | Fix | Detached без preedit |
-| R22 | `session_end_flushes_the_registry_within_the_framework_budget` (доля фреймворка ≤ бюджет); `session_end_with_a_checked_out_realm_writes_registry_bytes_and_calls_no_user_code` (`simulate_session_end` из handler'а; счётчик вызовов наблюдателей = 0, байты на диске); windows: сообщения сеанса окну Notes, перезапуск | Fix | Нет реестра; пользовательский код при извлечённом realm |
+| R22 | `session_end_flushes_the_registry_within_the_framework_budget` (доля фреймворка ≤ бюджет); `session_end_with_a_checked_out_realm_writes_registry_bytes_and_calls_no_user_code` (`simulate_session_end` из handler'а; счётчик вызовов наблюдателей = 0, байты на диске); нативный: сообщения сеанса окну приложения приёмки, перезапуск | Fix | Нет реестра; пользовательский код при извлечённом realm |
 | — | `close_delivery_is_idempotent` (headless: вложенная доставка из наблюдателя Detached и повтор из `UiRealm::drop`, одна доставка) | Fix | Двойной Detached |
 | — | `a_cancelled_logoff_withdraws_only_the_session_entry` (`close_request_matrix`: крестик `User` остаётся `pending` после `Cancelled`) | Fix | — |
 | — | `the_query_cache_ends_with_its_burst` (`close_request_matrix`) | Fix | — |
@@ -348,14 +354,16 @@ teardown, поэтому код 101 проходит в обе стороны; �
 | R23 | `a_vetoed_close_disposes_nothing` (`close_request_matrix`) | Характеризация | — |
 | R24 | Строка README | — | — |
 
-R1 доказывается парой «Notes на headless» плюс «пробное дерево через раннер» (см. риск 3).
+R1 доказывается парой «приложение приёмки на headless» плюс «пробное дерево через раннер» (см. риск 3).
 
-**Ответы на открытые вопросы требований.**
+**Предложения design по открытым вопросам требований** (решает владелец; tasks.md T8, T10,
+T18, T19).
 
-1. Механизм учёта — c2.
+1. Механизм учёта — c2 (опирался на удалённую фикстуру Notes).
 2. Нового бюджета в `measurements` нет: потолок 15 с выводится из констант, для сеанса 3 с.
 3. Пример `notes_faults` (`save-panic`, `dispose-panic` — аргументом), seam в `tree.rs` по
-   образцу `with_loader`; env в Notes отвергнута.
+   образцу `with_loader`; env в Notes отвергнута. Notes удалён: на приложении приёмки шов —
+   аргумент конструктора, для нативного процесса вопрос открыт.
 4. Коридор: от 8 до 12 попыток за 10 с после 2 с разгона. Нижняя граница доказывает
    пробуждение, верхняя — отсутствие горячего цикла.
 
@@ -392,7 +400,7 @@ R1 доказывается парой «Notes на headless» плюс «про
    `BuildOwner::drop`; R3, `close_delivery_is_idempotent`.
 3. ‖ `flui-platform`: `SessionEnd`, `on_session_end`, Win32 сообщения сеанса с кэшем пачки и
    `ShutdownBlockReason*`, слот в `window_proc`, `simulate_session_end`, тест R5.
-4. ‖ Фикстуры Notes: `DropLedger`, seam в `tree.rs`, `notes_faults`; R1, R8.
+4. ‖ Приложение приёмки (persistence P10): шов отказов — аргумент конструктора; строки R1, R8 (tasks.md T18). Фикстуры Notes удалены.
 5. ‖ `flui-widgets`: строки R17.
 6. `flui-runtime` (после 2): `CallbackPanic`, `report_contained_panic`, общая доставка закрытия,
    откат в очереди дедлайнов; R10.
@@ -404,8 +412,8 @@ R1 доказывается парой «Notes на headless» плюс «про
 9. Обход #1165 (после 2 и 7): `resume_unwind` из `Drop`, поля `UiRealm`; R14; `ARCHITECTURE.md`.
 10. IME-шаг доставки (после 6 и W5 design text-ime); R21.
 11. Session end в `flui-app` (после 3, 8, 10): S1–S6; R22.
-12. `tools/xtask` (после 4, 11): live-smoke на Notes; `windows-notes`: программный и двойной
-    close, `notes_faults`, сообщения сеанса.
+12. Нативный прогон через лейн `os` flui-driver (после 4, 11): программный и двойной
+    close, паника в Save и в `dispose`, сообщения сеанса (tasks.md T19).
 13. README-матрица (R24); датированный прогон Windows.
 
 **Обязательства persistence.** `Persisted::set` кодирует на owner-потоке и публикует байты в
@@ -424,5 +432,5 @@ R1 доказывается парой «Notes на headless» плюс «про
 2. **Сеанс на реальной ОС.** Доставляет ли Windows `WM_ENDSESSION` во вложенный модальный цикл,
    и укладывается ли S4 в долю бюджета на медленном диске и OneDrive. Нужен датированный прогон
    с модальным диалогом и перетаскиванием.
-3. **Уровень R1.** Notes на headless плюс пробное дерево через раннер, а не Notes в раннере.
+3. **Уровень R1.** Приложение приёмки на headless плюс пробное дерево через раннер, а не приложение в раннере.
    Владелец принимает это или просит test-support seam в `flui-app`.
