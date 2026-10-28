@@ -32,13 +32,12 @@
 
 use std::sync::Arc;
 
-use accesskit::{ActionHandler, ActionRequest, ActivationHandler, TreeUpdate};
+use accesskit::TreeUpdate;
 use accesskit_windows::SubclassingAdapter;
 use parking_lot::Mutex;
 use windows::Win32::Foundation::HWND;
 
 use super::bridge::{Action, Activation, BridgeShared};
-use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use flui_semantics::{
     platform::AccessibilityActionListener, platform::AccessibilityActivationListener,
     platform::PlatformAccessibility,

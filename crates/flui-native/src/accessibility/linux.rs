@@ -30,14 +30,15 @@
 //! tree yet. That is not a failure: AccessKit treats it as "not ready", and the
 //! next [`publish`](PlatformAccessibility::publish) delivers the tree once
 //! assembly has produced one.
+//!
+//! [`ActivationHandler::request_initial_tree`]: accesskit::ActivationHandler::request_initial_tree
 
 use std::sync::Arc;
 
-use accesskit::{ActionHandler, ActionRequest, ActivationHandler, DeactivationHandler, TreeUpdate};
+use accesskit::TreeUpdate;
 use parking_lot::Mutex;
 
 use crate::accessibility::bridge::{Action, Activation, BridgeShared, Deactivation};
-use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use flui_semantics::{
     platform::AccessibilityActionListener, platform::AccessibilityActivationListener,
     platform::PlatformAccessibility,
@@ -178,7 +179,10 @@ impl PlatformAccessibility for UnixAccessibility {
 
 #[cfg(test)]
 mod tests {
-    use accesskit::{Node, NodeId, Role, TreeId, TreeInfo};
+    use accesskit::{
+        ActionHandler, ActionRequest, ActivationHandler, DeactivationHandler, Node, NodeId, Role,
+        TreeId, TreeInfo,
+    };
 
     use super::*;
 
