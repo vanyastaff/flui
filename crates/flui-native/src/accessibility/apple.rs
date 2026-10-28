@@ -1,6 +1,8 @@
 //! The Apple accessibility adapters: NSAccessibility on macOS, UIAccessibility
-//! on iOS.
+//! on iOS, and the adapter cell the iOS bridge shares with its view.
 
+#[cfg(any(target_os = "ios", test))]
+mod adapter_cell;
 #[cfg(target_os = "ios")]
 mod ios;
 #[cfg(target_os = "macos")]

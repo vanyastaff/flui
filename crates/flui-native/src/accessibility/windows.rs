@@ -37,52 +37,12 @@ use accesskit_windows::SubclassingAdapter;
 use parking_lot::Mutex;
 use windows::Win32::Foundation::HWND;
 
-use super::bridge::BridgeShared;
+use super::bridge::{Action, Activation, BridgeShared};
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use flui_semantics::{
     platform::AccessibilityActionListener, platform::AccessibilityActivationListener,
     platform::PlatformAccessibility,
 };
-
-struct Activation(Arc<BridgeShared>);
-
-// Each handler runs the composition root's listener inside AccessKit's UIA
-// entry, an `extern "system"` vtable method: a panic in it is contained here
-// and answers as if no listener ran.
-
-impl ActivationHandler for Activation {
-    fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
-        os_entry(
-            "AccessKit's activation",
-            (),
-            AfterPanic::Answer(|()| None),
-            || {
-                // Order matters: mark active and tell the composition root *before*
-                // reading the retained tree. The listener typically enables
-                // semantics, and on a cold start that is what will produce the first
-                // tree at all — reading first would answer `None` even when a
-                // synchronous listener could have supplied one.
-                self.0.notify_activation(true);
-                self.0.retained()
-            },
-        )
-    }
-}
-
-struct Action(Arc<BridgeShared>);
-
-impl ActionHandler for Action {
-    fn do_action(&mut self, request: ActionRequest) {
-        os_entry(
-            "an AccessKit action",
-            (),
-            AfterPanic::Answer(|()| ()),
-            || {
-                self.0.notify_action(request);
-            },
-        );
-    }
-}
 
 /// UIA accessibility for one window.
 pub struct WindowsAccessibility {

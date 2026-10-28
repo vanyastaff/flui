@@ -317,56 +317,12 @@ pub struct ViewRef {
     pub(crate) chrome: Arc<dyn flui_platform::PlatformSystemChrome>,
     /// What the window's view forwards UIKit's accessibility container
     /// methods to, which the accessibility position fills.
-    pub(crate) accessibility: AccessibilitySlot,
+    pub(crate) accessibility: crate::owner::accessibility_slot::AccessibilitySlot,
 }
 
 impl std::fmt::Debug for ViewRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ViewRef").finish_non_exhaustive()
-    }
-}
-
-/// What a window's view asks of the accessibility bridge, on the main
-/// thread: UIKit's container methods. `None` leaves the answer to `UIView`.
-pub(crate) trait ViewAccessibility {
-    /// `isAccessibilityElement`.
-    fn is_accessibility_element(&self) -> Option<bool>;
-
-    /// `accessibilityElements`, an autoreleased array.
-    fn accessibility_elements(&self) -> Option<*mut AnyObject>;
-
-    /// `accessibilityHitTest:` at `(x, y)` in the view's points, an
-    /// autoreleased element or null.
-    fn hit_test(&self, x: f64, y: f64) -> Option<*mut AnyObject>;
-
-    /// The view is on screen.
-    fn view_did_appear(&self);
-}
-
-/// Where a window's view finds its accessibility bridge: shared by the view
-/// and the window's [`ViewRef`], filled once by the accessibility position
-/// as the window opens, and empty for a table that names none, in which case
-/// the view answers as a plain `UIView`.
-#[derive(Clone, Default)]
-pub(crate) struct AccessibilitySlot(Rc<std::cell::OnceCell<Rc<dyn ViewAccessibility>>>);
-
-impl AccessibilitySlot {
-    /// The bridge, from now on; a second fill is ignored.
-    pub(crate) fn fill(&self, bridge: Rc<dyn ViewAccessibility>) {
-        let _ = self.0.set(bridge);
-    }
-
-    /// The bridge, once filled.
-    pub(crate) fn get(&self) -> Option<&dyn ViewAccessibility> {
-        self.0.get().map(|bridge| &**bridge)
-    }
-}
-
-impl std::fmt::Debug for AccessibilitySlot {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AccessibilitySlot")
-            .field("filled", &self.0.get().is_some())
-            .finish()
     }
 }
 

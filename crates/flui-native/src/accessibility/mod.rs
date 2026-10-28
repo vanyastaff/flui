@@ -18,7 +18,7 @@
 //! Android and the Web have none yet: their tables name
 //! `Absent<Accessibility>`.
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) mod apple;
 #[cfg(any(
     target_os = "windows",

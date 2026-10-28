@@ -46,9 +46,10 @@ use crate::host::{Host, WindowFacets, WindowPositions};
 use crate::host_window::HostWindow;
 
 use crate::owner::OpenWindowError;
+use crate::owner::accessibility_slot::{ViewAccessibility, ViewPoint};
 use crate::owner::apple::IOSLoop;
 use crate::owner::apple::ios::{
-    HostDisplays, NativeOwner, ScreenIdentity, TouchPhase, ViewAccessibility, ViewRef, ViewTouches,
+    HostDisplays, NativeOwner, ScreenIdentity, TouchPhase, ViewRef, ViewTouches,
 };
 use crate::owner::apple::ios::{
     IOSSceneAttachmentId, IOSSceneSessionId, LifecycleObservation, SceneConsumer,
@@ -99,7 +100,7 @@ pub struct FluiViewIvars {
     text: std::cell::OnceCell<Arc<dyn TextInput>>,
     /// The window's accessibility bridge, which its UIKit container methods
     /// forward to once the bridge has filled it (ADR-0255 decision 12).
-    accessibility: crate::owner::apple::ios::AccessibilitySlot,
+    accessibility: crate::owner::accessibility_slot::AccessibilitySlot,
     owner_signal: std::sync::Weak<crate::owner::signal::OwnerSignal>,
     /// The input's part of the view: its touches, as the table made it.
     input: RefCell<Box<dyn ViewTouches>>,
@@ -171,7 +172,7 @@ define_class!(
                 if self.window().is_some() {
                     crate::owner::panic_boundary::contain_owner_callback(|| {
                         if let Some(bridge) = self.ivars().accessibility.get() {
-                            bridge.view_did_appear();
+                            bridge.did_move_to_window();
                         }
                     });
                 }
@@ -194,22 +195,25 @@ define_class!(
         #[unsafe(method(accessibilityElements))]
         fn accessibility_elements(&self) -> *mut AnyObject {
             os_entry("accessibilityElements", (), AfterPanic::Answer(|()| std::ptr::null_mut()), || {
-                self.ivars().accessibility.get().and_then(ViewAccessibility::accessibility_elements).unwrap_or_else(|| {
+                match self.ivars().accessibility.get().and_then(ViewAccessibility::accessibility_elements) {
+                    Some(elements) => elements.cast::<AnyObject>(),
                     // SAFETY: UIView declares this selector; its answer is
                     // autoreleased, as the bridge's is.
-                    unsafe { msg_send![super(self), accessibilityElements] }
-                })
+                    None => unsafe { msg_send![super(self), accessibilityElements] },
+                }
             })
         }
 
         #[unsafe(method(accessibilityHitTest:))]
         fn accessibility_hit_test(&self, point: NSPoint) -> *mut AnyObject {
             os_entry("accessibilityHitTest:", (), AfterPanic::Answer(|()| std::ptr::null_mut()), || {
-                self.ivars().accessibility.get().and_then(|bridge| bridge.hit_test(point.x, point.y)).unwrap_or_else(|| {
+                let at = ViewPoint { x: point.x, y: point.y };
+                match self.ivars().accessibility.get().and_then(|bridge| bridge.hit_test(at)) {
+                    Some(element) => element.cast::<AnyObject>(),
                     // SAFETY: UIView declares this selector; its answer is
                     // autoreleased, as the bridge's is.
-                    unsafe { msg_send![super(self), accessibilityHitTest: point] }
-                })
+                    None => unsafe { msg_send![super(self), accessibilityHitTest: point] },
+                }
             })
         }
 
@@ -331,7 +335,7 @@ impl FluiView {
         let this = this.set_ivars(FluiViewIvars {
             delivery,
             text: std::cell::OnceCell::new(),
-            accessibility: crate::owner::apple::ios::AccessibilitySlot::default(),
+            accessibility: crate::owner::accessibility_slot::AccessibilitySlot::default(),
             owner_signal,
             input: RefCell::new(touches),
             sampling: std::cell::Cell::new(SamplingAdmission::Detached),
