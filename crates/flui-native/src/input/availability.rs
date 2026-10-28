@@ -133,6 +133,14 @@ pub const fn winit(session: WinitSession) -> InputCapabilities {
     }
 }
 
+/// The native X11 backend: XInput 2 carries pen input (a tablet's stylus and
+/// eraser) and touch; its smooth scrolling has no phases and there are no
+/// trackpad gestures, and no outgoing drag yet.
+#[must_use]
+pub const fn x11() -> InputCapabilities {
+    InputCapabilities::builder().pen(Native).build()
+}
+
 /// When an OS drag session can start on Win32, AppKit, Android and winit: the
 /// drag runs in its window and escalates when the pointer leaves it
 /// (ADR-0211 §2). Win32 starts them through OLE and Android through

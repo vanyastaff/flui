@@ -2225,6 +2225,7 @@ dependencies = [
  "windows-core 0.62.2",
  "winit",
  "x11rb",
+ "xkbcommon-dl",
  "zbus",
 ]
 
@@ -7734,6 +7735,7 @@ dependencies = [
  "once_cell",
  "rustix 1.1.5",
  "x11rb-protocol",
+ "xcursor",
 ]
 
 [[package]]
