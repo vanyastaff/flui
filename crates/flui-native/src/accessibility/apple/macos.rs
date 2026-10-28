@@ -159,10 +159,12 @@ impl MacosAccessibility {
     /// `view` must be a valid, live `NSView` pointer, and it must outlive
     /// the returned value — the adapter unhooks its dynamic subclass on
     /// drop, which dereferences the view. The window constructor satisfies
-    /// both: it passes the content view it just installed, and the window
-    /// owns this capability so drop order follows window teardown. Must be
-    /// called on the main thread (AppKit affinity), which the window
-    /// constructor also is.
+    /// both: it passes the content view it just installed, and the window's
+    /// `Drop` calls [`detach`](crate::host::WindowAccessibility::detach)
+    /// before it releases the view, and keeps the view if that detach fails;
+    /// the order the window's fields drop in plays no part. Must be called on
+    /// the main thread (AppKit affinity), which the window constructor also
+    /// is.
     #[must_use]
     unsafe fn new(view: *mut std::ffi::c_void) -> Self {
         let shared = Arc::new(BridgeShared::new());

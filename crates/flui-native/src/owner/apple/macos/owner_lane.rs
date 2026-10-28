@@ -215,9 +215,16 @@ pub(crate) fn exec_async_on_owner(
 /// group so remaining windows and the quit notification still get their turn.
 /// Forget only panic payloads: dropping an arbitrary payload can itself panic
 /// while bootstrap is already unwinding. This exceptional leak prevents abort.
-pub(crate) fn run_cleanup_guarded(body: impl FnOnce()) {
-    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
-        report_contained_panic(payload);
+///
+/// Answers whether `body` ran to its end, for a step whose failure changes
+/// what the next one may do.
+pub(crate) fn run_cleanup_guarded(body: impl FnOnce()) -> bool {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+        Ok(()) => true,
+        Err(payload) => {
+            report_contained_panic(payload);
+            false
+        }
     }
 }
 

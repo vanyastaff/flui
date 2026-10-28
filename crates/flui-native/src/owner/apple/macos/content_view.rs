@@ -176,35 +176,38 @@ pub(crate) fn create(
     delivery: Weak<WindowDelivery>,
     hooks: ViewHooks,
 ) -> Retained<AnyObject> {
-    // SAFETY: FLUIContentView is registered before alloc/init; the boxed
-    // ViewContext pointer is stored in the view's ivar and released in
-    // `dealloc`, so it lives exactly as long as the view.
-    unsafe {
-        let class = view_class();
+    let class = view_class();
+    // SAFETY: FLUIContentView is registered before alloc/init, and
+    // `alloc`/`initWithFrame:` hand back a +1 reference (or nil), which the
+    // `Retained` takes over at once: a later panic releases the view, whose
+    // `dealloc` finds no context yet.
+    let view = unsafe {
         let view: *mut AnyObject = msg_send![class, alloc];
         let view: *mut AnyObject = msg_send![view, initWithFrame: frame];
-
-        let context = Box::into_raw(Box::new(ViewContext {
-            delivery,
-            input: (hooks.input)(),
-            text: (hooks.text)(),
-            pending_key_event: Cell::new(std::ptr::null_mut()),
-            appearance: Cell::new(effective_appearance(as_view(&*view))),
-        }))
-        .cast::<std::ffi::c_void>();
-
-        // SAFETY: `view` is a live FLUIContentView just allocated above, so it
-        // carries `CONTEXT_IVAR`; the value is a pointer this function owns.
-        let ivar = class
-            .instance_variable(CONTEXT_IVAR)
-            .expect("BUG: FLUIContentView declares the context ivar");
-        let slot: *mut *mut std::ffi::c_void = ivar.load_ptr(&*view);
-        *slot = context;
-
-        // SAFETY: `alloc`/`initWithFrame:` hand back a +1 reference, which
-        // the `Retained` takes over.
-        Retained::from_raw(view).expect("BUG: initWithFrame: answers the view it was sent to")
+        Retained::from_raw(view)
     }
+    .expect("BUG: initWithFrame: answers the view it was sent to");
+
+    let context = Box::into_raw(Box::new(ViewContext {
+        delivery,
+        input: (hooks.input)(),
+        text: (hooks.text)(),
+        pending_key_event: Cell::new(std::ptr::null_mut()),
+        appearance: Cell::new(effective_appearance(as_view(&view))),
+    }))
+    .cast::<std::ffi::c_void>();
+
+    let ivar = class
+        .instance_variable(CONTEXT_IVAR)
+        .expect("BUG: FLUIContentView declares the context ivar");
+    // SAFETY: `view` is a live FLUIContentView, so it carries `CONTEXT_IVAR`;
+    // the boxed context is stored there and released in `dealloc`, so it
+    // lives exactly as long as the view.
+    unsafe {
+        let slot: *mut *mut std::ffi::c_void = ivar.load_ptr(&view);
+        *slot = context;
+    }
+    view
 }
 
 /// The light/dark half of `object`'s effective appearance: the system theme,
