@@ -3288,7 +3288,8 @@ graph LR
   по-прежнему сверяют `loop_identity`: главное окно на поток одно. (4) `exit_policy` отвечает
   `ExitAnswer { End, KeepRunning, HostDecides }`; без маршрута `flui-app` отвечает
   `HostDecides`, и хост решает как без обработчика (Win32, AppKit, winit — выход, headless —
-  нет); прямой режим — `End`. Строки «an exit policy left to the host is the host's» и «a run
+  нет); прямой режим — `End`. `ExitAnswer` одобрен владельцем 2026-10-27, поправка ADR-0254 §4
+  записана. Строки «an exit policy left to the host is the host's» и «a run
   that routes no exit leaves it to the host». (6) R9.7: настройки идут прежним путём ADR-0172
   через запуск с `AppHandler` — `a_panicking_preference_delivery_does_not_stop_later_changes`,
   `a_replacement_platform_starts_a_new_preference_owner`,

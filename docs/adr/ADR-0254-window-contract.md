@@ -20,6 +20,11 @@
   until the host publishes it again; an absence counts for equality only while its capability is
   unavailable. The verbs outside the command queue (the frame-rate hint, the input regions) answer
   their reason themselves: nothing admits them against the capabilities.
+- **Amended:** 2026-10-27 — decision 4, approved by the owner: `AppHandler::exit_policy` answers
+  an `ExitAnswer { End, KeepRunning, HostDecides }` instead of a `bool`. An application with no
+  exit policy of its own had to answer `false`, which silently changed the hosts' behaviour (the
+  Win32, AppKit and winit loops no longer ended with their last window); `HostDecides` keeps the
+  host's own default, as with no handler bound.
 - **Supersedes:**
   - [ADR-0237](ADR-0237-window-state-and-host-notices.md), in part: the window-scoped getters and
     per-fact callbacks that sit beside the snapshot; decision 3's refusal inside `apply` (it moves
@@ -329,8 +334,11 @@ replaces the registrations `Platform` has today for application-level events and
 (`on_quit`, `on_reopen`, `on_session_end`, `on_host_notice`, `set_exit_policy_hook`,
 `set_wake_deadline_hook`) and the one-shot `PlatformReadyCallback`: one required method per
 obligation (`ready` with the `OwnerPlatform`, quit requested, reopened, session end with its
-answer, host notice, and the two queries `exit_policy` and `wake_deadline`), each receiving
-`&OwnerPlatform` where the platform exists. `AppHandler` is a trait of the host crate, not of the
+answer, host notice, and the two queries `exit_policy(&OwnerPlatform) -> ExitAnswer` and
+`wake_deadline(&OwnerPlatform) -> Option<Instant>`), each receiving `&OwnerPlatform` where the
+platform exists. `ExitAnswer` is `End`, `KeepRunning` or `HostDecides`; `HostDecides` leaves the
+exit to the host's own default, as with no handler bound (the Win32, AppKit and winit hosts end
+the loop, the headless host keeps it running). `AppHandler` is a trait of the host crate, not of the
 contract: it names `OwnerPlatform`, so only code that runs a host itself implements it — `flui-app`,
 and an example or a test that drives `flui-native` directly (ADR-0151 §9). The other
 registrations are not carried over.
