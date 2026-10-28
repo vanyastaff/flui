@@ -1004,68 +1004,50 @@ mod keyboard {
         use super::{Keyboard, KeymapSource};
         use crate::input::linux::xkb::EVDEV_OFFSET;
 
-        /// The text of the keymap XKB compiles for `layout` and `variant`,
-        /// as a compositor writes it out and shares it, NUL included.
-        fn compositor_keymap(layout: &str, variant: &str) -> Option<Vec<u8>> {
-            let api = xkbcommon_dl::xkbcommon_option()?;
-            let layout = std::ffi::CString::new(layout).ok()?;
-            let variant = std::ffi::CString::new(variant).ok()?;
-            let names = xkbcommon_dl::xkb_rule_names {
-                rules: c"evdev".as_ptr(),
-                model: c"pc105".as_ptr(),
-                layout: layout.as_ptr(),
-                variant: variant.as_ptr(),
-                options: std::ptr::null(),
-            };
-            // SAFETY: test-only calls with a live context and keymap, each
-            // released once; the names outlive the calls.
-            unsafe {
-                let context =
-                    (api.xkb_context_new)(xkbcommon_dl::xkb_context_flags::XKB_CONTEXT_NO_FLAGS);
-                if context.is_null() {
-                    return None;
-                }
-                let keymap = (api.xkb_keymap_new_from_names)(
-                    context,
-                    &raw const names,
-                    xkbcommon_dl::xkb_keymap_compile_flags::XKB_KEYMAP_COMPILE_NO_FLAGS,
-                );
-                let text = if keymap.is_null() {
-                    None
-                } else {
-                    let text = (api.xkb_keymap_get_as_string)(
-                        keymap,
-                        xkbcommon_dl::xkb_keymap_format::XKB_KEYMAP_FORMAT_TEXT_V1,
-                    );
-                    let bytes = (!text.is_null())
-                        .then(|| std::ffi::CStr::from_ptr(text).to_bytes_with_nul().to_vec());
-                    // The string libxkbcommon allocated is left to the test
-                    // process: freeing it needs the C allocator, which the
-                    // crate does not link here.
-                    (api.xkb_keymap_unref)(keymap);
-                    bytes
-                };
-                (api.xkb_context_unref)(context);
-                text
-            }
-        }
+        /// A whole keymap as a compositor shares it, NUL included, and named
+        /// here rather than compiled from the system's rules: the apostrophe
+        /// key (evdev 40) is dead acute, `E` (evdev 18) types `e`, and its one
+        /// group is named. Its every part is spelled out, so it compiles alike
+        /// on any xkeyboard-config.
+        const COMPOSITOR_KEYMAP: &[u8] = b"xkb_keymap {
+xkb_keycodes \"flui\" {
+    minimum = 8;
+    maximum = 255;
+    <AC11> = 48;
+    <AD03> = 26;
+};
+xkb_types \"flui\" {
+    type \"ONE_LEVEL\" {
+        modifiers = none;
+        level_name[Level1] = \"Any\";
+    };
+};
+xkb_compatibility \"flui\" {
+};
+xkb_symbols \"flui\" {
+    name[Group1] = \"FLUI (dead keys)\";
+    key <AC11> { type = \"ONE_LEVEL\", [ dead_acute ] };
+    key <AD03> { type = \"ONE_LEVEL\", [ e ] };
+};
+};
+\0";
 
         /// The keymap a compositor shares reads through the shared keyboard,
-        /// compose included: on US international, dead acute then `e` is `é`,
-        /// and the layout is named as the keymap names its group.
+        /// compose included: dead acute then `e` is `é`, and the layout is
+        /// named as the keymap names its group.
         #[test]
         fn a_compositor_keymap_composes_dead_keys() {
-            let Some(bytes) = compositor_keymap("us", "intl") else {
-                eprintln!("skipped: libxkbcommon or its keymaps are not installed");
+            if xkbcommon_dl::xkbcommon_option().is_none() {
+                eprintln!("skipped: libxkbcommon is not installed");
                 return;
-            };
-            let source = KeymapSource::compositor(bytes).expect("the keymap is text");
+            }
+            let source =
+                KeymapSource::compositor(COMPOSITOR_KEYMAP.to_vec()).expect("the keymap is text");
             let mut keyboard = Keyboard::new(&source).expect("the keymap compiles");
             assert_eq!(
                 source.layout_name(keyboard.layout()).as_deref(),
-                Some("English (US, intl., with dead keys)")
+                Some("FLUI (dead keys)")
             );
-            // KEY_APOSTROPHE (40) is dead acute on US international; KEY_E is 18.
             let time = EventTime::from_nanos(1);
             let press = |keyboard: &mut Keyboard, code: u32| {
                 let key = keyboard
