@@ -995,8 +995,8 @@ fn custom_single_child_delegate(
     size: Size,
     child_constraints: BoxConstraints,
     offset: Offset,
-) -> Arc<dyn SingleChildLayoutDelegate> {
-    Arc::new(HarnessSingleChildLayoutDelegate::new(
+) -> Rc<dyn SingleChildLayoutDelegate> {
+    Rc::new(HarnessSingleChildLayoutDelegate::new(
         size,
         child_constraints,
         offset,
@@ -1047,8 +1047,8 @@ impl MultiChildLayoutDelegate for HarnessMultiChildLayoutDelegate {
     }
 }
 
-fn custom_multi_child_delegate(size: Size) -> Arc<dyn MultiChildLayoutDelegate> {
-    Arc::new(HarnessMultiChildLayoutDelegate::new(size))
+fn custom_multi_child_delegate(size: Size) -> Rc<dyn MultiChildLayoutDelegate> {
+    Rc::new(HarnessMultiChildLayoutDelegate::new(size))
 }
 
 fn multi_child_layout_parent_data(id: &str) -> MultiChildLayoutParentData {

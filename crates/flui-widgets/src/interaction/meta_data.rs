@@ -2,11 +2,10 @@
 //!
 //! The widget over `RenderMetaData`.
 
-use flui_rendering::hit_testing::HitMetadata;
 use std::any::Any;
 
 use flui_objects::RenderMetaData;
-use flui_rendering::hit_testing::HitTestBehavior;
+use flui_rendering::hit_testing::{HitMetadata, HitTestBehavior};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 

@@ -3306,7 +3306,7 @@ pub(crate) fn a_rebuilt_run_keeps_the_mode_its_release_started_in() {
 }
 
 /// A scrollable rebuilt with a fresh physics value every frame, as a build
-/// that writes `.physics(Arc::new(..))` does, keeps its fling: the run goes
+/// that writes `.physics(Rc::new(..))` does, keeps its fling: the run goes
 /// on, bounces past the edge and comes back to rest exactly on it, and a
 /// press after it rests reaches the content as a tap.
 pub(crate) fn a_fresh_physics_each_build_keeps_the_fling_and_its_bounce() {

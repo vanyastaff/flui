@@ -406,12 +406,12 @@ impl ViewState<Checkbox> for CheckboxState {
                 .or_else(|| Some(checkbox_default_overlay_color(&colors, resolved_states)))
         });
 
-        let painter: std::rc::Rc<dyn CustomPainter> = std::rc::Rc::new(CheckboxPainter {
+        let painter = CheckboxPainter {
             fill_color,
             side,
             check_color,
             value: view.mode.value(),
-        });
+        };
 
         let interactive = view.is_interactive();
         let next_value = view.next_value();

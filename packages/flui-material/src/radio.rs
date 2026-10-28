@@ -307,10 +307,10 @@ impl<T: PartialEq + Clone + 'static> ViewState<Radio<T>> for RadioState {
         });
 
         let selected = view.is_selected();
-        let painter: std::rc::Rc<dyn CustomPainter> = std::rc::Rc::new(RadioPainter {
+        let painter = RadioPainter {
             ring_color,
             selected,
-        });
+        };
 
         let interactive = view.is_interactive();
         let next_value = view.value.clone();

@@ -217,7 +217,7 @@ impl ViewState<LinearProgressIndicator> for LinearProgressIndicatorState {
         progress_semantics(&view.label, fraction).child(
             CustomPaint::new()
                 .size(Size::new(WIDTH, STROKE))
-                .painter(std::rc::Rc::new(painter)),
+                .painter(painter),
         )
     }
 

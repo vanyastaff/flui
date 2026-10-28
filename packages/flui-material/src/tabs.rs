@@ -698,13 +698,12 @@ impl ViewState<TabBar> for TabBarState {
         };
         // The indicator only paints: the tabs' ink wells beneath it own every
         // pointer in the band.
-        let indicator = Positioned::new(
-            IgnorePointer::new().child(CustomPaint::new().painter(Rc::new(painter))),
-        )
-        .left(0.0)
-        .right(0.0)
-        .bottom(0.0)
-        .height(view.indicator_weight);
+        let indicator =
+            Positioned::new(IgnorePointer::new().child(CustomPaint::new().painter(painter)))
+                .left(0.0)
+                .right(0.0)
+                .bottom(0.0)
+                .height(view.indicator_weight);
 
         let mut layers = Vec::with_capacity(3);
         if resolved.divider_height > 0.0 && resolved.divider_color != Color::TRANSPARENT {

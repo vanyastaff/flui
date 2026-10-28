@@ -503,10 +503,10 @@ impl ViewState<InkWell> for InkWellState {
         self.indication.set_painted(active);
         let mut content = CustomPaint::new();
         if active {
-            content = content.painter(Rc::new(IndicationPainter {
+            content = content.painter(IndicationPainter {
                 indication: Rc::clone(&self.indication),
                 shape: view.shape,
-            }));
+            });
         }
         let content = content.child(view.child.clone());
         let focus_states = self.states.clone();

@@ -3182,7 +3182,7 @@ and a drop autoscroll — under the sequences they began, so a rebuild mid-drag 
 drag and one mid-fling keeps the fling and its bounce; the move calls no participant. A
 new physics or snap policy is taken in place and shapes the next step and release, while
 a run in progress keeps the simulation or target it started with: a build that writes
-`.physics(Arc::new(..))` keeps its owner and the chains below it, and replacing a sheet's
+`.physics(Rc::new(..))` keeps its owner and the chains below it, and replacing a sheet's
 stops never cuts its drag or its settle short. Rows:
 `a_fresh_physics_each_build_keeps_the_fling_and_its_bounce`,
 `a_fresh_ancestor_physics_mid_drag_keeps_taking_the_remainder` and

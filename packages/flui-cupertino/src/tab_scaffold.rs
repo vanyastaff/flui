@@ -46,10 +46,8 @@
 //! - **Text-scaling suppression on the tab bar** — `MediaQueryData` has no
 //!   no-scaling variant to apply yet.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_sdk::foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use flui_sdk::geometry::EdgeInsets;
@@ -68,7 +66,7 @@ use crate::theme::CupertinoTheme;
 
 /// Coordinates tab selection between a [`CupertinoTabBar`] and a
 /// [`CupertinoTabScaffold`]. A `ChangeNotifier` wrapping
-/// an index, as a genuinely `Arc`-shared handle (every
+/// an index, as a shared owner-local handle (every
 /// `.clone()` observes and mutates the *same* index — unlike
 /// `flui_sdk::foundation::ValueNotifier<T>`, whose `Clone` deep-copies the
 /// value; this controller is handed to both the scaffold and the tab bar's
@@ -84,7 +82,7 @@ use crate::theme::CupertinoTheme;
 /// ```
 #[derive(Clone)]
 pub struct CupertinoTabController {
-    index: Arc<AtomicUsize>,
+    index: Rc<Cell<usize>>,
     notifier: ChangeNotifier,
 }
 
@@ -93,7 +91,7 @@ impl CupertinoTabController {
     #[must_use]
     pub fn new(initial_index: usize) -> Self {
         Self {
-            index: Arc::new(AtomicUsize::new(initial_index)),
+            index: Rc::new(Cell::new(initial_index)),
             notifier: ChangeNotifier::new(),
         }
     }
@@ -101,12 +99,12 @@ impl CupertinoTabController {
     /// The index of the currently selected tab.
     #[must_use]
     pub fn index(&self) -> usize {
-        self.index.load(Ordering::Acquire)
+        self.index.get()
     }
 
     /// Selects `index`, notifying listeners if it actually changed.
     pub fn set_index(&self, index: usize) {
-        let previous = self.index.swap(index, Ordering::AcqRel);
+        let previous = self.index.replace(index);
         if previous != index {
             self.notifier.notify_listeners();
         }

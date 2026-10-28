@@ -156,7 +156,7 @@ impl ViewState<CupertinoActivityIndicator> for CupertinoActivityIndicatorState {
             .child(
                 CustomPaint::new()
                     .size(Size::new(RADIUS * 2.0, RADIUS * 2.0))
-                    .painter(std::rc::Rc::new(painter)),
+                    .painter(painter),
             )
     }
 

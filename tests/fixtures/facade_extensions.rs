@@ -68,8 +68,7 @@ fn custom_painter_records_a_rectangle() {
     assert_eq!(paint.color, Color::rgb(10, 20, 30));
 
     let mut laid = lay_out(
-        flui::widgets::CustomPaint::new()
-            .painter(Rc::new(RectanglePainter))
+        flui::widgets::CustomPaint::new().painter(RectanglePainter)
             .size(Size::new(24.0, 16.0)),
         loose(100.0),
     );
@@ -146,8 +145,7 @@ fn nested_custom_motion_repaints_and_retargets_through_the_facade() {
     )).expect("first custom motion");
     let mut laid = lay_out_animated(
         VsyncScope::new(vsync.clone(), CustomPaint::new()
-            .size(Size::new(100.0, 100.0))
-            .painter(Rc::new(MotionPainter(owner.animation())))),
+            .size(Size::new(100.0, 100.0)).painter(MotionPainter(owner.animation()))),
         loose(100.0),
         vsync,
     );

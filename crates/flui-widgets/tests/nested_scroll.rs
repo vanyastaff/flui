@@ -1780,7 +1780,7 @@ pub(crate) fn a_new_chain_above_keeps_the_leaf_run() {
 }
 
 /// An ancestor rebuilt with a fresh physics value mid-drag, as a build that
-/// writes `.physics(Arc::new(..))` does, stays the same link of the drag's
+/// writes `.physics(Rc::new(..))` does, stays the same link of the drag's
 /// chain: the remainder of the list inside it goes on moving it.
 pub(crate) fn a_fresh_ancestor_physics_mid_drag_keeps_taking_the_remainder() {
     let (outer, inner, vsync) = (

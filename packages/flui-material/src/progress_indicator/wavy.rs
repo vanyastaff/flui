@@ -383,7 +383,7 @@ impl ViewState<LinearWavyProgressIndicator> for LinearWavyProgressIndicatorState
         progress_semantics(&view.label, fraction).child(
             CustomPaint::new()
                 .size(Size::new(linear::WIDTH, LINEAR_HEIGHT))
-                .painter(std::rc::Rc::new(painter)),
+                .painter(painter),
         )
     }
 
@@ -422,7 +422,7 @@ impl ViewState<CircularWavyProgressIndicator> for CircularWavyProgressIndicatorS
         progress_semantics(&view.label, fraction).child(
             CustomPaint::new()
                 .size(Size::new(CIRCULAR_SIDE, CIRCULAR_SIDE))
-                .painter(std::rc::Rc::new(painter)),
+                .painter(painter),
         )
     }
 

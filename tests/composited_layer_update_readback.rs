@@ -624,7 +624,7 @@ fn a_color_tween_preserves_sub_byte_alpha_until_rasterization() {
         FocusRoot::new(
             CustomPaint::new()
                 .size(Size::new(16.0, 16.0))
-                .painter(Rc::new(FadePainter(color.clone(), painted.clone()))),
+                .painter(FadePainter(color.clone(), painted.clone())),
         ),
     );
     let _mounted = binding.mount_root(&root, MountOwners::fresh(), MountOptions::tight(16.0, 16.0));
