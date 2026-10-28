@@ -241,8 +241,8 @@ mod tests {
         let initial = contained.expect("a listener's panic unwound out of its handler");
         assert!(initial.is_none(), "a failed activation answers no tree");
         assert!(
-            shared.is_active(),
-            "the activation reached the bridge before its listener failed"
+            !shared.is_active(),
+            "the root never heard of the activation whose listener failed"
         );
     }
 }

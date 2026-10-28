@@ -577,6 +577,24 @@ fn winit_recordings_decode_to_their_host_input() {
     );
 }
 
+/// A Weston seat (`wayland_input`, Weston's X11 backend driven through
+/// XTest): the cursor's enter and move, a click, and a wheel notch as one
+/// notched step in detents. Weston stamps this backend's events on the X
+/// server's clock, not the monotonic one, so every reading carries its
+/// arrival.
+fn wayland_recordings_decode_to_their_host_input() {
+    assert_replays(
+        include_str!("wayland_weston_mouse_wheel.jsonl"),
+        &[
+            "device+ d1 mouse t=466170",
+            "enter p1* mouse d1 t=36354921 (512, 384)",
+            "move p1* mouse d1 [] t=46830826 (100, 120)",
+            "down p1* mouse d1 b1 [1] t=67347279 (100, 120)",
+            "up p1* mouse d1 b1 [] t=67349665 (100, 120)",
+            "scroll p1* mouse d1 unphased Detents(0, -1) t=67351510 (100, 120)",
+        ],
+    );
+}
 /// XInput 2 on a real X server, driven by XTest (`x11_input` in the
 /// `x11_window` harness): the master pointer's cursor entering, a drag, the
 /// right button, a whole detent of the legacy wheel each way, a
@@ -662,7 +680,11 @@ fn web_bidi_recording_decodes_to_its_host_input() {
 }
 
 /// Every checked-in recording, by name.
-const RECORDINGS: [(&str, &str); 14] = [
+const RECORDINGS: [(&str, &str); 15] = [
+    (
+        "wayland_weston_mouse_wheel",
+        include_str!("wayland_weston_mouse_wheel.jsonl"),
+    ),
     (
         "android_input_touch_stylus_mouse",
         include_str!("android_input_touch_stylus_mouse.jsonl"),
@@ -884,6 +906,10 @@ pub(crate) fn contracts() -> Vec<(&'static str, fn())> {
         (
             "web_recordings_decode_to_their_host_input",
             web_recordings_decode_to_their_host_input,
+        ),
+        (
+            "wayland_recordings_decode_to_their_host_input",
+            wayland_recordings_decode_to_their_host_input,
         ),
         (
             "web_bidi_recording_decodes_to_its_host_input",

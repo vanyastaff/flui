@@ -353,7 +353,7 @@ r с черновиком заметки 3; данные переписаны б
 **`Persisted<D>`** (H; модуль `persist` в `crates/flui-view/tests/main.rs`, через его `run_table`).
 `persisted_document_contract`: `user_close_waits_for_an_in_flight_save` (R12),
 `saved_status_appears_only_after_commit`, `drop_before_commit_loses_only_that_edit` (R15),
-`busy_retry_follows_the_realm_clock` (R16, R22: на 49 мс повтора нет, на 50 мс есть; пять `Busy`
+`busy_retry_follows_the_runtime_clock` (R16, R22: на 49 мс повтора нет, на 50 мс есть; пять `Busy`
 → `Failed`), `retry_after_failure_publishes_the_latest_value` (R20),
 `repeated_retries_apply_exactly_one_result` (R25), `a_later_edit_supersedes_an_unstarted_one` (R28),
 `unmount_during_load_releases_requests` (R27), `no_write_without_a_loaded_base` (R24).
@@ -362,7 +362,7 @@ r с черновиком заметки 3; данные переписаны б
 `oversized_file_is_refused_unread` (R30), `older_version_decodes_or_reports_without_writing`,
 `newer_version_is_never_written` (R31), `unavailable_storage_runs_in_memory_with_status` (R33),
 `codec_panic_is_contained_first_failure_kept` (R29: паника в `encode`, затем в `decode`, payload с
-паникующим `Drop`; следующий `set` пишет), `two_realms_keep_independent_documents` (R36).
+паникующим `Drop`; следующий `set` пишет), `two_runtimes_keep_independent_documents` (R36).
 
 **Реестр и закрытие** (`flui-app`, in-src: реестр — приватный шов с блокирующим поддельным
 `FileStore`). `flush_registry_matrix`: `a_blocked_store_keeps_frames_and_input_live` (R11 через
@@ -398,8 +398,8 @@ In-src `storage::tests::file_store_interruption_matrix`: обрыв после t
 ## ADR
 
 Нужен: новые контракты `flui-platform-api`, `flui-view`, `flui-app`, `flui-widgets` и facade.
-**ADR (номер назначит оркестратор) «Persistence: byte storage capability, flush registry and
-versioned documents».** Решение:
+**ADR-0262 (`Proposed`; было «Persistence: byte storage capability, flush registry and
+versioned documents»).** Решение:
 
 1. `flui-platform-api::Storage` — асинхронное чтение и синхронно принимаемая публикация байтов;
    через границу IO идут только байты и версии. Данные пишутся с CAS под короткой
@@ -418,10 +418,9 @@ versioned documents».** Решение:
 
 ## Риски и открытые вопросы
 
-1. **R34 (владелец).** Notes с persistence требует фичу `persist` и собственные зависимости
-   `serde`/`serde_json`; R34 говорит «только `flui` с `material`». Предлагаю «`flui` с `material`
-   и `persist`; кодирование — зависимость приложения». Альтернатива — построчный формат в Notes
-   без serde: хуже как образец.
+1. **R34 — закрыт.** Фича `persist` удалена (решение владельца 2026-10-17, «Изменения после
+   P6»), так что набор фич R34 — `flui` с `material` (и `testing` для headless-строк), кодек
+   (`serde_json`) — зависимость приложения; записано в ADR-0262 §1.
 2. **Зависимость от send-flip — закрыта.** Owner-local очередь `AsyncDriver` слита (send-flip
    T1, #1496).
 3. **Windows-эксперимент.** `LockFileEx` и `MoveFileExW` на OneDrive-каталоге с файлами по

@@ -354,6 +354,11 @@ pub struct ContactRegistry {
 
 const RESERVED_POINTER: NonZeroU64 = NonZeroU64::MIN;
 
+/// The fingers one touch device keeps down at once. Panels report ten, the
+/// largest twenty-odd; past this a device is minting touch ids it never
+/// lifts, and each further press is refused rather than held forever.
+pub const MAX_TOUCHES: usize = 32;
+
 /// What a validated reading measured.
 #[derive(Debug, Clone, Copy)]
 struct Measured {
@@ -744,6 +749,9 @@ impl ContactRegistry {
         if (!reserved && self.pointers.is_exhausted()) || !self.devices.can_admit(reading.device) {
             return None;
         }
+        if reading.kind == PointerKind::Touch && self.touches_of(reading.device) >= MAX_TOUCHES {
+            return None;
+        }
         let id = if reserved {
             RESERVED_POINTER
         } else {
@@ -781,6 +789,16 @@ impl ContactRegistry {
             entered: false,
         });
         Some(self.contacts.len() - 1)
+    }
+
+    /// The touch contacts `device` holds open.
+    fn touches_of(&self, device: Option<NativeDevice>) -> usize {
+        self.contacts
+            .iter()
+            .filter(|contact| {
+                contact.info.kind == PointerKind::Touch && contact.key.device == device
+            })
+            .count()
     }
 
     /// When `reading` ends `contact`: its own stamp when it has one, never

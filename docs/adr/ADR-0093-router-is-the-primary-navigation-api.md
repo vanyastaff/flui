@@ -8,6 +8,11 @@
 - **Superseded-by:** [ADR-0254](ADR-0254-window-contract.md) decision 4, in part: the
   `Platform::on_open_urls` registration named here as a deep link's source is deleted; the
   opened URLs and files reach `AppHandler` with the activation feature.
+- **Superseded-by (on acceptance):**
+  [ADR-0262](ADR-0262-persisted-documents-over-a-byte-storage-capability.md) §6, for step 8's
+  "stack restoration as a list of paths" only: `Router::from_stack` and `RouterHandle::stack` carry
+  the whole typed stack, and the application stores it as paths in its own document. Web history,
+  query and fragment stay in step 8.
 - **Supersedes (on acceptance):** [ADR-0024](ADR-0024-named-routes-seam.md) (string-named
   routes; `RouteKey<T>` of its §3 carries over)
 - **Supersedes in part (on acceptance):** [ADR-0019](ADR-0019-navigator-routing-seam.md) (the

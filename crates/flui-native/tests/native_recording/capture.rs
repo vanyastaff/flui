@@ -16,9 +16,18 @@ use flui_platform::EventTime;
 use flui_platform::pointer::{PointerButton, PointerEvent, PointerKind};
 use parking_lot::Mutex;
 
-use super::codec::{NativeRecording, Row};
-pub use super::journal::record;
+use super::codec::{Backend, NativeRecording, Row};
+use super::journal::Recorder;
 use super::{RECORDINGS, recording};
+
+/// Run `session` with a capture installed on this thread, and return its
+/// result with the recording of every registry created during it, in
+/// creation order.
+pub fn record<T>(backend: Backend, session: impl FnOnce() -> T) -> (T, Vec<NativeRecording>) {
+    let recorder = Recorder::start(backend);
+    let result = session();
+    (result, recorder.finish())
+}
 
 /// Where the checked-in recordings live.
 const GOLDEN_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/native_recording");
