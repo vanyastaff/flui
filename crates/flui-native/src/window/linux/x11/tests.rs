@@ -41,8 +41,8 @@ use crate::platform::HostPlatform;
 use crate::window::linux::x11::connect_window_manager;
 use crate::window::winit::{WinitWindow, WinitWindows};
 use flui_platform::{
-    WindowCapabilities, WindowCommand, WindowGeometry, WindowHandler, WindowMode, WindowOptions,
-    WindowReveal, WindowState,
+    CapabilityAbsence, WindowCapabilities, WindowCommand, WindowGeometry, WindowHandler,
+    WindowMode, WindowOptions, WindowReveal, WindowState,
 };
 
 /// The table these tests run: the winit window and its X11 probe over the
@@ -258,7 +258,11 @@ fn x11_window_takes_commands_and_publishes_what_the_server_holds() {
         // already counts as visible, which is the intent.
         assert_eq!(map_state(server, id), MapState::UNMAPPED);
         assert!(window.state().visible);
-        assert_eq!(window.state().capabilities, WindowCapabilities::ALL);
+        assert_eq!(
+            window.state().capabilities,
+            WindowCapabilities::ALL
+                .without_presentation_feedback(CapabilityAbsence::NotYetOnThisHost)
+        );
         let watching = Arc::clone(&watched);
         window.with(move |window| *watching.lock() = Some(OwnerWeak::new(window)));
 
@@ -610,7 +614,8 @@ fn x11_window_without_a_probe_does_not_claim_to_observe_minimizing() {
             let capabilities = window.state().capabilities;
             assert!(!capabilities.observes_minimized.is_available());
             // Nothing else is taken away.
-            let mut expected = WindowCapabilities::ALL;
+            let mut expected = WindowCapabilities::ALL
+                .without_presentation_feedback(CapabilityAbsence::NotYetOnThisHost);
             expected.observes_minimized = flui_platform::Availability::Unavailable;
             assert_eq!(capabilities, expected);
             // Asking is still allowed: the compositor or window manager acts.

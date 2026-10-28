@@ -39,6 +39,15 @@ let everScreens = [];
 let windowListeners = [];
 let lastCanvas;
 let resizeObservers = [];
+// The colour media queries: which state key each answers from, the state, and
+// the lists handed out.
+const colourKeys = {
+    '(dynamic-range: high)': 'high',
+    '(color-gamut: rec2020)': 'rec2020',
+    '(color-gamut: p3)': 'p3',
+};
+let colour = { high: false, rec2020: false, p3: false };
+let colourLists = [];
 
 // An event target that counts the listeners it really holds, and removes one
 // only when that very function was added.
@@ -163,7 +172,16 @@ export function installDisplayProbe(windowManagement) {
         return rafIds;
     });
     define('cancelAnimationFrame', id => { rafQueue = rafQueue.filter(entry => entry.id !== id); });
+    colour = { high: false, rec2020: false, p3: false };
+    colourLists = [];
     define('matchMedia', query => {
+        const key = colourKeys[query];
+        if (key) {
+            const list = track(new EventTarget());
+            Object.defineProperty(list, 'matches', { get: () => colour[key] });
+            colourLists.push({ key, list });
+            return list;
+        }
         const match = /^\(resolution: ([0-9.]+)dppx\)$/.exec(query);
         if (match && failQueries > 0) { failQueries -= 1; throw new Error('matchMedia refused'); }
         const target = track(new EventTarget());
@@ -391,6 +409,18 @@ export function changeSideScreen(width) {
     sideScreen.dispatchEvent(new Event('change'));
 }
 export function nextOwnerTask() { return new Promise(resolve => setImmediate(resolve)); }
+// The system switches the screen's colour: each list whose answer moved raises
+// `change`, as a browser's does.
+export function setColour(high, rec2020, p3) {
+    const before = colour;
+    colour = { high, rec2020, p3 };
+    for (const { key, list } of colourLists) {
+        if (before[key] !== colour[key]) list.dispatchEvent(new Event('change'));
+    }
+}
+export function colourListeners() {
+    return colourLists.reduce((sum, { list }) => sum + list.listenerCount(), 0);
+}
 "#)]
 extern "C" {
     #[wasm_bindgen(js_name = installDisplayProbe)]
@@ -470,6 +500,10 @@ extern "C" {
     fn change_side_screen(width: u32);
     #[wasm_bindgen(js_name = nextOwnerTask)]
     fn next_task() -> js_sys::Promise;
+    #[wasm_bindgen(js_name = setColour)]
+    fn set_colour(high: bool, rec2020: bool, p3: bool);
+    #[wasm_bindgen(js_name = colourListeners)]
+    fn colour_listeners() -> i32;
 }
 
 pub(super) struct Probe;
@@ -568,6 +602,40 @@ fn has_period(snapshot: &DisplaySnapshot) -> Vec<bool> {
         .iter()
         .map(|display| display.refresh_period.is_some())
         .collect()
+}
+
+/// The screen's colour follows the `dynamic-range` and `color-gamut` queries:
+/// their change wakes the owner, and the snapshot after it carries the new
+/// colour, with a headroom the browser never exposes.
+#[wasm_bindgen_test]
+async fn web_colour_follows_the_media_queries() {
+    use flui_platform::{CapabilityAbsence, ColorGamut, DisplayColor};
+
+    install_probe("none");
+    let _probe = Probe;
+    let running = Running::start();
+    let colour = |snapshot: &DisplaySnapshot| snapshot.primary().map(|display| display.color);
+    let before = running.snapshot();
+    assert_eq!(
+        colour(&before),
+        Some(Ok(DisplayColor::standard(ColorGamut::Srgb)))
+    );
+    assert_eq!(colour_listeners(), 3, "each colour query is listened to");
+
+    set_colour(true, false, true);
+    settle().await;
+    assert_eq!(running.wakes(), 1, "the colour change wakes the owner once");
+    let after = running.snapshot();
+    assert!(after.revision() > before.revision());
+    assert_eq!(
+        colour(&after),
+        Some(Ok(DisplayColor::high(
+            ColorGamut::DisplayP3,
+            Err(CapabilityAbsence::NotOnThisPlatform)
+        )))
+    );
+    running.quit();
+    settle().await;
 }
 
 #[wasm_bindgen_test]

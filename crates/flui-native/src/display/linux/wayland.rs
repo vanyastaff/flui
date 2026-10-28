@@ -12,6 +12,10 @@
 //! - `zxdg_output_v1` is bound where offered, at version 3 at most; it carries
 //!   the logical position and size. Its own `done` closes a burst only below
 //!   version 3, where `wl_output.done` does not cover it.
+//! - `wp_color_manager_v1` is bound where offered, at version 2 at most. Each
+//!   output's image description is asked for, its information read, and asked
+//!   for again on `image_description_changed`; each description is numbered so
+//!   the model keeps only the newest.
 //!
 //! [`WaylandDisplaySource`] is the native Wayland host's displays position over
 //! the source: the snapshot, the display and scale of an output a window's
@@ -25,6 +29,7 @@ use std::sync::Arc;
 
 use flui_platform::DisplaySnapshot;
 
+use flui_platform::ColorGamut;
 use wayland_client::{
     Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum,
     backend::{ReadEventsGuard, WaylandError},
@@ -33,6 +38,12 @@ use wayland_client::{
         wl_output::{self, WlOutput},
         wl_registry::{self, WlRegistry},
     },
+};
+use wayland_protocols::wp::color_management::v1::client::{
+    wp_color_management_output_v1::{self, WpColorManagementOutputV1},
+    wp_color_manager_v1::{self, Primaries, TransferFunction, WpColorManagerV1},
+    wp_image_description_info_v1::{self, WpImageDescriptionInfoV1},
+    wp_image_description_v1::{self, WpImageDescriptionV1},
 };
 use wayland_protocols::xdg::xdg_output::zv1::client::{
     zxdg_output_manager_v1::ZxdgOutputManagerV1,
@@ -43,7 +54,7 @@ use super::protocol::{Environment, Protocol};
 use super::session::{DisplayError, Session, Step, wait_readable};
 use super::source::LinuxDisplays;
 use super::view::OutputView;
-use super::wayland_model::{OutputEvent, WaylandOutputs};
+use super::wayland_model::{ColorEvent, OutputEvent, TransferRange, WaylandOutputs};
 use crate::error::PlatformError;
 use crate::owner::linux::wayland::{OutputFacts, OutputName, WaylandDisplays};
 use crate::owner::notices::StaleOnWake;
@@ -118,27 +129,99 @@ const WL_OUTPUT_VERSION: u32 = 4;
 /// The newest `zxdg_output_manager_v1` it understands (it deprecates the
 /// xdg-output `done` in favour of `wl_output.done`).
 const XDG_OUTPUT_VERSION: u32 = 3;
+/// The newest `wp_color_manager_v1` it understands (version 2 makes an image
+/// description announce itself with `ready2`).
+const COLOR_MANAGER_VERSION: u32 = 2;
 
 fn error(error: impl std::fmt::Display) -> DisplayError {
     DisplayError::connection(PROTOCOL, error)
 }
 
-/// One bound `wl_output` and its xdg-output.
+/// One bound `wl_output`, its xdg-output and its colour.
 struct BoundOutput {
     global: u32,
     output: WlOutput,
     xdg: Option<ZxdgOutputV1>,
+    /// The output's color-management object, where the compositor has the
+    /// protocol.
+    color: Option<WpColorManagementOutputV1>,
+    /// The image description asked for last; a newer one replaces it.
+    description: Option<WpImageDescriptionV1>,
 }
+
+impl BoundOutput {
+    fn release(self) {
+        if let Some(description) = self.description {
+            description.destroy();
+        }
+        if let Some(color) = self.color {
+            color.destroy();
+        }
+        if let Some(xdg) = self.xdg {
+            xdg.destroy();
+        }
+        // `release` exists from version 3; below that the proxy is just dropped.
+        if self.output.version() >= 3 {
+            self.output.release();
+        }
+    }
+}
+
+/// The user data of an image description and of its information: the output's
+/// global and the description's number.
+type Described = (u32, u64);
 
 struct State {
     outputs: WaylandOutputs,
     bound: Vec<BoundOutput>,
     manager: Option<ZxdgOutputManagerV1>,
+    color_manager: Option<WpColorManagerV1>,
+    /// The number the next image description is given. Rising, so a late event
+    /// of an older description is told from the newest one's; at 2^64 the
+    /// colour is no longer followed rather than numbered again.
+    next_description: Option<u64>,
     /// Set when an event changed the list; the session reports it and clears it.
     changed: bool,
 }
 
 impl State {
+    /// Follow the colour of the output at `index` of `bound`: its
+    /// color-management object, and a first description.
+    fn watch_color(&mut self, index: usize, queue: &QueueHandle<Self>) {
+        let Some(manager) = &self.color_manager else {
+            return;
+        };
+        let bound = &mut self.bound[index];
+        if bound.color.is_none() {
+            bound.color = Some(manager.get_output(&bound.output, queue, bound.global));
+        }
+        let global = bound.global;
+        self.describe(global, queue);
+    }
+
+    /// Ask for the current image description of the output `global`. The
+    /// description it replaces is destroyed, and the model drops its events.
+    fn describe(&mut self, global: u32, queue: &QueueHandle<Self>) {
+        let Some(number) = self.next_description else {
+            return;
+        };
+        let Some(bound) = self.bound.iter_mut().find(|bound| bound.global == global) else {
+            return;
+        };
+        let Some(color) = &bound.color else {
+            return;
+        };
+        self.next_description = number.checked_add(1);
+        let description = color.get_image_description(queue, (global, number));
+        if let Some(previous) = bound.description.replace(description) {
+            previous.destroy();
+        }
+        self.outputs.describe(global, number);
+    }
+
+    fn apply_color(&mut self, (global, number): Described, event: ColorEvent) {
+        self.changed |= self.outputs.apply_color(global, number, event);
+    }
     fn bind_global(
         &mut self,
         registry: &WlRegistry,
@@ -170,7 +253,20 @@ impl State {
                 global: name,
                 output,
                 xdg,
+                color: None,
+                description: None,
             });
+            self.watch_color(self.bound.len() - 1, queue);
+        } else if interface == WpColorManagerV1::interface().name && self.color_manager.is_none() {
+            self.color_manager = Some(registry.bind::<WpColorManagerV1, (), Self>(
+                name,
+                version.min(COLOR_MANAGER_VERSION),
+                queue,
+                (),
+            ));
+            for index in 0..self.bound.len() {
+                self.watch_color(index, queue);
+            }
         } else if interface == ZxdgOutputManagerV1::interface().name && self.manager.is_none() {
             let manager = registry.bind::<ZxdgOutputManagerV1, (), Self>(
                 name,
@@ -192,14 +288,7 @@ impl State {
         let Some(index) = self.bound.iter().position(|bound| bound.global == name) else {
             return;
         };
-        let bound = self.bound.remove(index);
-        if let Some(xdg) = bound.xdg {
-            xdg.destroy();
-        }
-        // `release` exists from version 3; below that the proxy is just dropped.
-        if bound.output.version() >= 3 {
-            bound.output.release();
-        }
+        self.bound.remove(index).release();
         self.changed |= self.outputs.remove(name);
     }
 
@@ -320,6 +409,104 @@ impl Dispatch<ZxdgOutputV1, u32> for State {
     }
 }
 
+impl Dispatch<WpColorManagerV1, ()> for State {
+    fn event(
+        _: &mut Self,
+        _: &WpColorManagerV1,
+        _: wp_color_manager_v1::Event,
+        (): &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        // What the compositor supports for surfaces; an output's description
+        // says what it is.
+    }
+}
+
+impl Dispatch<WpColorManagementOutputV1, u32> for State {
+    fn event(
+        state: &mut Self,
+        _: &WpColorManagementOutputV1,
+        event: wp_color_management_output_v1::Event,
+        global: &u32,
+        _: &Connection,
+        queue: &QueueHandle<Self>,
+    ) {
+        if let wp_color_management_output_v1::Event::ImageDescriptionChanged = event {
+            state.describe(*global, queue);
+        }
+    }
+}
+
+impl Dispatch<WpImageDescriptionV1, Described> for State {
+    fn event(
+        state: &mut Self,
+        description: &WpImageDescriptionV1,
+        event: wp_image_description_v1::Event,
+        described: &Described,
+        _: &Connection,
+        queue: &QueueHandle<Self>,
+    ) {
+        match event {
+            wp_image_description_v1::Event::Ready { .. }
+            | wp_image_description_v1::Event::Ready2 { .. } => {
+                // The information object destroys itself after its `done`.
+                let _info = description.get_information(queue, *described);
+            }
+            wp_image_description_v1::Event::Failed { .. } => {
+                let (global, number) = *described;
+                state.changed |= state.outputs.color_failed(global, number);
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<WpImageDescriptionInfoV1, Described> for State {
+    fn event(
+        state: &mut Self,
+        _: &WpImageDescriptionInfoV1,
+        event: wp_image_description_info_v1::Event,
+        described: &Described,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        use wp_image_description_info_v1::Event;
+        let event = match event {
+            Event::PrimariesNamed { primaries } => ColorEvent::NamedPrimaries(match primaries {
+                WEnum::Value(Primaries::Srgb) => Some(ColorGamut::Srgb),
+                WEnum::Value(Primaries::DisplayP3 | Primaries::DciP3) => {
+                    Some(ColorGamut::DisplayP3)
+                }
+                WEnum::Value(Primaries::Bt2020) => Some(ColorGamut::Rec2020),
+                _ => None,
+            }),
+            Event::Primaries { r_x, .. } => ColorEvent::Primaries { red_x: r_x },
+            Event::TfNamed { tf } => ColorEvent::Transfer(match tf {
+                WEnum::Value(TransferFunction::St2084Pq) => TransferRange::Pq,
+                WEnum::Value(
+                    TransferFunction::Hlg | TransferFunction::ExtLinear | TransferFunction::ExtSrgb,
+                ) => TransferRange::Extended,
+                _ => TransferRange::Standard,
+            }),
+            // A pure power curve ends at white.
+            Event::TfPower { .. } => ColorEvent::Transfer(TransferRange::Standard),
+            Event::Luminances {
+                max_lum,
+                reference_lum,
+                ..
+            } => ColorEvent::Luminances {
+                max: max_lum,
+                reference: reference_lum,
+            },
+            Event::TargetLuminance { max_lum, .. } => ColorEvent::TargetLuminance { max: max_lum },
+            Event::Done => ColorEvent::Done,
+            _ => return,
+        };
+        state.apply_color(*described, event);
+    }
+}
+
 /// A connection to the compositor and the outputs it announced.
 pub(super) struct WaylandSession {
     connection: Connection,
@@ -341,6 +528,8 @@ impl WaylandSession {
             outputs: WaylandOutputs::default(),
             bound: Vec::new(),
             manager: None,
+            color_manager: None,
+            next_description: Some(0),
             changed: false,
         };
         let queue_handle = queue.handle();
@@ -355,8 +544,9 @@ impl WaylandSession {
                 &queue_handle,
             );
         }
-        // The first round trip delivers the outputs' bursts, which request
-        // their xdg-outputs; the second delivers those.
+        // The first round trip delivers the outputs' bursts and their image
+        // descriptions' readiness, which request their information; the second
+        // delivers that and the xdg-outputs.
         queue.roundtrip(&mut state).map_err(error)?;
         queue.roundtrip(&mut state).map_err(error)?;
         state.changed = false;

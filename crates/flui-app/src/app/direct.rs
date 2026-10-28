@@ -151,9 +151,14 @@ pub fn run_direct(
             .map_or_else(flui_foundation::geometry::Size::default, |metrics| {
                 metrics.physical()
             });
+        // Direct mode has no installed host, so the display is sampled here.
+        let display = owner_platform_installed(flui_native::OwnerPlatform::display_snapshot)
+            .ok()
+            .and_then(|snapshot| crate::app::runner::display_color_on(&snapshot, window.as_ref()));
         let renderer = pollster::block_on(Renderer::with_surface_color(
             window.surface_target(),
             config.surface_color,
+            display,
         ));
         let mut renderer = match renderer {
             Ok(r) => r,

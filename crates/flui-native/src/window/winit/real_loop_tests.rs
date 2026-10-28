@@ -552,9 +552,11 @@ fn a_winit_surface_target_answers_until_its_window_closes() {
         let target = window.surface_target();
         open.store(target.window_handle().is_ok(), Ordering::SeqCst);
         let presenting = Arc::clone(&target);
-        thread::spawn(move || presenting.pre_present_notify())
-            .join()
-            .expect("pre_present_notify returns on another thread");
+        thread::spawn(move || {
+            presenting.pre_present_notify(flui_platform::SwapChainStatistics::None);
+        })
+        .join()
+        .expect("pre_present_notify returns on another thread");
         *keep.borrow_mut() = Some(target);
         window
             .admit_and_apply(flui_platform::WindowCommand::Close)
