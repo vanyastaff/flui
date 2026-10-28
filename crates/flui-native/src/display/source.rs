@@ -106,7 +106,8 @@ pub(crate) struct DisplaySource {
     stale: std::sync::atomic::AtomicBool,
     #[cfg(any(
         windows,
-        target_os = "linux",
+        wayland_host,
+        winit_host,
         target_os = "macos",
         target_os = "ios",
         target_os = "android",
@@ -153,7 +154,8 @@ impl DisplaySource {
             stale: std::sync::atomic::AtomicBool::new(true),
             #[cfg(any(
                 windows,
-                target_os = "linux",
+                wayland_host,
+                winit_host,
                 target_os = "macos",
                 target_os = "ios",
                 target_os = "android",
@@ -296,7 +298,8 @@ impl DisplaySource {
     /// changes.
     #[cfg(any(
         windows,
-        target_os = "linux",
+        wayland_host,
+        winit_host,
         target_os = "macos",
         target_os = "ios",
         test
@@ -313,7 +316,8 @@ impl DisplaySource {
     /// already wake the owner uses `note_miss`.
     #[cfg(any(
         windows,
-        target_os = "linux",
+        wayland_host,
+        winit_host,
         target_os = "macos",
         target_os = "ios",
         target_os = "android",
@@ -335,7 +339,8 @@ impl DisplaySource {
 /// there are.
 #[cfg(any(
     windows,
-    target_os = "linux",
+    wayland_host,
+    winit_host,
     target_os = "macos",
     target_os = "ios",
     target_os = "android",
@@ -349,7 +354,8 @@ struct MissLedger {
 
 #[cfg(any(
     windows,
-    target_os = "linux",
+    wayland_host,
+    winit_host,
     target_os = "macos",
     target_os = "ios",
     target_os = "android",

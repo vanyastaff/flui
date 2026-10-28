@@ -58,6 +58,7 @@ use crate::version::gate::Since;
 /// use flui_native::os::windows::{WindowsBackdrop, WindowsWindowExt};
 /// use flui_native::{HostWindow, headless_platform};
 /// use flui_platform::WindowOptions;
+/// use flui_testing::window_handler::RecordingWindowHandler;
 ///
 /// /// Mica behind the window, if it is a Win32 window that took it.
 /// fn mica(window: &dyn HostWindow) -> bool {
@@ -67,7 +68,10 @@ use crate::version::gate::Since;
 /// }
 ///
 /// // A headless window is not a Win32 window: nothing is asked of it.
-/// let window = headless_platform().open_window(WindowOptions::default().with_visible(false))?;
+/// let window = headless_platform().open_window(
+///     WindowOptions::default().with_visible(false),
+///     RecordingWindowHandler::new(),
+/// )?;
 /// assert!(!mica(window.as_ref()));
 /// # Ok::<(), flui_native::OpenWindowError>(())
 /// ```

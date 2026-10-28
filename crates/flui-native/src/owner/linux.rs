@@ -58,7 +58,8 @@ mod session {
 
     impl PortalSlot {
         /// The colour scheme the portal reports; light while it is not
-        /// running.
+        /// running. The Wayland host's windows ask it when they open.
+        #[cfg(wayland_host)]
         pub(crate) fn appearance(&self) -> WindowAppearance {
             self.source()
                 .map_or(WindowAppearance::Light, |source| source.appearance())

@@ -146,20 +146,15 @@ mod uri_list {
 
     /// How a host's paths are spelled. A drive (`C:\`), a UNC share
     /// (`\\host\share`) and a verbatim prefix (`\\?\`) are Windows paths; a
-    /// POSIX path is rooted at `/` and may hold a backslash in a name.
+    /// POSIX path is rooted at `/` and may hold a backslash in a name. A host
+    /// has only the style its OS hands out.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(crate) enum PathStyle {
         /// Win32 paths (`CF_HDROP`, a winit host on Windows).
-        #[cfg_attr(
-            not(any(windows, test)),
-            expect(dead_code, reason = "only a Windows host spells Win32 paths")
-        )]
+        #[cfg(any(windows, test))]
         Windows,
         /// POSIX paths (Android, a winit host on macOS and Linux).
-        #[cfg_attr(
-            all(windows, not(test)),
-            expect(dead_code, reason = "a Windows host spells only Win32 paths")
-        )]
+        #[cfg(any(not(windows), test))]
         Posix,
     }
 
@@ -186,14 +181,9 @@ mod uri_list {
     pub(crate) enum TransferUri {
         /// A local filesystem path.
         Path(PathBuf),
-        /// Any other URI, unparsed.
-        #[cfg_attr(
-            not(any(windows, target_os = "android", test)),
-            expect(
-                dead_code,
-                reason = "the winit host on macOS and Linux reads only paths"
-            )
-        )]
+        /// Any other URI, unparsed. The winit host on macOS and Linux reads
+        /// only paths.
+        #[cfg(any(windows, target_os = "android", test))]
         Uri(String),
     }
 
@@ -255,6 +245,7 @@ mod uri_list {
         /// This entry as a URI, or `None` for a path with no `file:` URI.
         fn to_uri(&self, style: PathStyle) -> Option<String> {
             match self {
+                #[cfg(any(windows, target_os = "android", test))]
                 Self::Uri(uri) => Some(uri.clone()),
                 Self::Path(path) => file_uri(path, style),
             }
@@ -262,6 +253,7 @@ mod uri_list {
     }
 
     /// Whether `text` starts with a drive (`C:`), alone or before a separator.
+    #[cfg(any(windows, test))]
     fn starts_with_drive(text: &str) -> bool {
         match text.as_bytes() {
             [letter, b':'] => letter.is_ascii_alphabetic(),
@@ -288,6 +280,7 @@ mod uri_list {
     fn file_uri(path: &Path, style: PathStyle) -> Option<String> {
         let text = path.to_str()?;
         let (prefix, rest) = match style {
+            #[cfg(any(windows, test))]
             PathStyle::Windows => {
                 if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
                     ("file://", unc)
@@ -303,12 +296,14 @@ mod uri_list {
                     return None;
                 }
             }
+            #[cfg(any(not(windows), test))]
             PathStyle::Posix => (text.starts_with('/').then_some("file://")?, text),
         };
         let mut uri = String::with_capacity(prefix.len() + rest.len());
         uri.push_str(prefix);
         for byte in rest.bytes() {
             match byte {
+                #[cfg(any(windows, test))]
                 b'\\' if matches!(style, PathStyle::Windows) => uri.push('/'),
                 b'A'..=b'Z'
                 | b'a'..=b'z'
@@ -351,21 +346,24 @@ mod uri_list {
         };
         let decoded = String::from_utf8(percent_decoded(path)?).ok()?;
         let remote = !host.is_empty() && !host.eq_ignore_ascii_case("localhost");
-        let local = decoded.strip_prefix('/');
         match style {
+            #[cfg(any(windows, test))]
             PathStyle::Windows if remote => {
                 let host = String::from_utf8(percent_decoded(host)?).ok()?;
                 Some(format!(r"\\{host}{}", decoded.replace('/', "\\")).into())
             }
+            #[cfg(any(windows, test))]
             PathStyle::Windows => {
-                let local = local?;
+                let local = decoded.strip_prefix('/')?;
                 Some(if starts_with_drive(local) {
                     local.replace('/', "\\").into()
                 } else {
                     decoded.replace('/', "\\").into()
                 })
             }
+            #[cfg(any(not(windows), test))]
             PathStyle::Posix if remote => None,
+            #[cfg(any(not(windows), test))]
             PathStyle::Posix => decoded.starts_with('/').then(|| decoded.into()),
         }
     }
