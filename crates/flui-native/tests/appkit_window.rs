@@ -56,6 +56,10 @@ mod cases {
             a_redraw_from_another_thread_is_queued_without_waiting,
         ),
         (
+            "a_surface_target_keeps_its_view_and_releases_it_on_main",
+            a_surface_target_keeps_its_view_and_releases_it_on_main,
+        ),
+        (
             "each_display_is_named_as_appkit_names_its_screen",
             each_display_is_named_as_appkit_names_its_screen,
         ),
@@ -286,6 +290,65 @@ mod cases {
         assert!(
             frames(&fixture.handler) >= 1,
             "the redraw asked for on another thread produced no frame request"
+        );
+    }
+
+    /// A surface target holds a reference of its own to its window's view, so
+    /// a renderer that outlives the window holds no dangling view; dropped on
+    /// another thread, it gives that reference back in a later turn of the
+    /// main queue, not on the dropping thread.
+    #[expect(
+        unsafe_code,
+        reason = "the view behind the target's raw handle, and its retain count"
+    )]
+    fn a_surface_target_keeps_its_view_and_releases_it_on_main() {
+        use objc2::msg_send;
+        use objc2::rc::autoreleasepool;
+        use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+
+        // SAFETY: `retainCount` on a live view, on the main thread.
+        let count = |view: &NSView| -> usize { unsafe { msg_send![view, retainCount] } };
+        let (target, view) = autoreleasepool(|_| {
+            let fixture = open("surface target outlives its window");
+            let view = {
+                let target = fixture.window.surface_target();
+                let handle = target.window_handle().expect("an open window's handle");
+                let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+                    panic!("an AppKit window hands out an AppKit handle");
+                };
+                // SAFETY: the handle names the window's FLUI view, which the
+                // open window holds; it is retained on the main thread the
+                // cases run on, so the counts below read a live view.
+                unsafe { Retained::retain(handle.ns_view.as_ptr().cast::<NSView>()) }
+                    .expect("the handle names a view")
+            };
+            let before = count(&view);
+            let target = fixture.window.surface_target();
+            assert_eq!(
+                count(&view),
+                before + 1,
+                "a surface target keeps its own reference to the view"
+            );
+            // Dropping the fixture closes the window and drops it.
+            drop(fixture);
+            (target, view)
+        });
+        autoreleasepool(|_| appkit::run_for(Duration::from_millis(500)));
+        let held = count(&view);
+
+        std::thread::spawn(move || drop(target))
+            .join()
+            .expect("the dropping thread");
+        assert_eq!(
+            count(&view),
+            held,
+            "the view was released on the thread that dropped the target"
+        );
+        autoreleasepool(|_| appkit::run_for(Duration::from_millis(500)));
+        assert_eq!(
+            count(&view),
+            held - 1,
+            "the main queue gave back the target's reference"
         );
     }
 
