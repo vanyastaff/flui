@@ -2236,6 +2236,7 @@ dependencies = [
  "wasm-bindgen-test",
  "wayland-backend",
  "wayland-client",
+ "wayland-cursor",
  "wayland-protocols",
  "web-sys",
  "web-time",

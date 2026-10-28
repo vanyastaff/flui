@@ -360,7 +360,7 @@ winit = "0.30.12"
 # into the lock, so the tree gains no second copy. `x11rb` runs on its pure-Rust
 # connection (no libxcb) and needs RandR only; `wayland-protocols` carries
 # `zxdg_output_v1`, `xdg-decoration` and `xdg-foreign` under `unstable`, and
-# `wp_fractional_scale_v1` under `staging`.
+# `wp_fractional_scale_v1` and `wp_color_management_v1` under `staging`.
 x11rb = { version = "0.13", default-features = false, features = ["randr"] }
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "unstable", "staging"] }

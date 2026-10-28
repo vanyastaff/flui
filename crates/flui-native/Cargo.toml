@@ -112,6 +112,9 @@ windows = { workspace = true, features = [
     "Win32_UI_Shell",
     "Win32_Graphics_Gdi",
     "Win32_Devices_Display",
+    # A display's colour: `IDXGIOutput6::GetDesc1` (colour space and peak).
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Dwm",
     "Win32_System_LibraryLoader",
     "Win32_System_Registry",
@@ -346,11 +349,16 @@ xkbcommon-dl = { version = "0.4", optional = true, features = ["x11"] }
 # the descriptor primitives both Linux hosts wait on, behind the `wayland` and
 # `x11` features (`desktop` and `winit-backend` enable both).
 wayland-client = { workspace = true, optional = true }
-wayland-protocols = { workspace = true, optional = true }
+# `staging` for `cursor-shape`, which the Wayland host's input speaks beside
+# the unstable `tablet` and `pointer-gestures`.
+wayland-protocols = { workspace = true, optional = true, features = ["staging"] }
 wayland-backend = { workspace = true, optional = true }
-# `time`: the monotonic clock the X server stamps its events on, and the clock
-# a compositor stamps presentation times on.
+# `time`: the monotonic clock the X server and a Wayland compositor stamp
+# their input on, and the clock a compositor stamps presentation times on.
 rustix = { workspace = true, optional = true, features = ["time"] }
+# The cursor theme the Wayland host draws a cursor from where the compositor
+# has no `cursor-shape`. winit loads the same crate, so the tree gains none.
+wayland-cursor = { version = "0.31", optional = true }
 accesskit_unix = { version = "0.24" }
 zbus = { workspace = true }
 futures-util = { workspace = true }
@@ -492,7 +500,14 @@ desktop = ["wayland", "x11"]
 # the native X11 host (`hosts::linux`), and both read the outputs and their
 # refresh rates from the server for the display source (`display::linux`). On
 # other targets the features exist and add nothing.
-wayland = ["dep:wayland-client", "dep:wayland-protocols", "dep:wayland-backend", "dep:rustix"]
+wayland = [
+    "dep:wayland-client",
+    "dep:wayland-protocols",
+    "dep:wayland-backend",
+    "dep:rustix",
+    "dep:xkbcommon-dl",
+    "dep:wayland-cursor",
+]
 
 # winit fallback backend — the Linux host `current_platform` picks while it is
 # built, until the native Wayland and X11 hosts are complete (ADR-0151 §11);
@@ -585,7 +600,8 @@ windows = { workspace = true, features = [
 libtest-mimic.workspace = true
 
 # The X11 host's input tests press keys and buttons and move the pointer on
-# their own X server through XTest, as a user's devices do.
+# their own X server through XTest, as a user's devices do; `wayland_input`
+# drives a Weston's X11 backend the same way.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 x11rb = { workspace = true, features = ["xtest"] }
 
@@ -619,6 +635,15 @@ name = "x11_window"
 path = "tests/x11_window.rs"
 harness = false
 required-features = ["x11"]
+
+# The native Wayland host's input from a real compositor seat: its own
+# harness, because it starts an X server and a Weston on it and names that
+# Weston in the process's environment before anything connects.
+[[test]]
+name = "wayland_input"
+path = "tests/wayland_input.rs"
+harness = false
+required-features = ["wayland"]
 
 [[test]]
 name = "wasm32"

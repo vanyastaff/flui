@@ -178,9 +178,9 @@ impl FrameDriver {
             ))]
             Self::Desktop(driver) => driver.wake(runtime, record.binding.0.presentation_id),
             #[cfg(target_os = "android")]
-            Self::Android(driver) => driver.wake(runtime),
+            Self::Android(driver) => driver.wake(runtime, record.binding.0.presentation_id),
             #[cfg(target_os = "ios")]
-            Self::Ios(driver) => driver.wake(runtime),
+            Self::Ios(driver) => driver.wake(runtime, record.binding.0.presentation_id),
             #[cfg(target_arch = "wasm32")]
             Self::Web(driver) => driver.wake(runtime, FrameLiveness(Rc::downgrade(record))),
             #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]

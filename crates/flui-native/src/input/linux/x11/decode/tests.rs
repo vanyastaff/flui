@@ -687,3 +687,29 @@ fn a_valuator_mask_past_its_numbers_is_skipped() {
     assert_eq!(valuators(&mask, &[1.0, 2.0]), [(0, 1.0)]);
     assert_eq!(valuators(&[0b11], &[1.0]), [(0, 1.0)]);
 }
+
+#[test]
+/// A server that lists devices and valuators without end has the decoder
+/// know `MAX_DEVICES` devices and read `MAX_VALUATORS` valuators of each.
+fn the_devices_and_valuators_known_are_bounded() {
+    let time = EventTime::from_nanos(5);
+    let mut pointers = X11Pointers::new(NativeClock::epoch_only());
+    let scroll = |number| ScrollAxis {
+        number,
+        horizontal: false,
+        increment: 15.0,
+    };
+    let wide = DeviceDescription {
+        scrolls: (0..10_000).map(scroll).collect(),
+        ..touchpad()
+    };
+    let listed: Vec<DeviceDescription> = std::iter::once(master())
+        .chain(std::iter::once(wide))
+        .chain((100..10_100).map(|id| device(id, "Spurious pointer")))
+        .collect();
+    let _ = pointers.devices(&listed, time);
+    let known = pointers.devices.len() + pointers.masters.len();
+    assert!(known <= super::MAX_DEVICES, "{known} devices known");
+    let scrolls = pointers.devices[&XiSlave(TOUCHPAD)].scrolls.len();
+    assert!(scrolls <= super::MAX_VALUATORS, "{scrolls} valuators read");
+}
