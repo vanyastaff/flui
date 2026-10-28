@@ -26,7 +26,8 @@ pub(crate) use loop_control::LoopControl;
 #[cfg(test)]
 pub(crate) use owner_lane::test_owner_queue;
 pub(crate) use owner_lane::{
-    exec_async_on_owner, exec_on_owner, on_owner_thread, owner_queue, run_cleanup_guarded,
+    exec_after_on_owner, exec_async_on_owner, exec_on_owner, on_owner_thread, owner_queue,
+    run_cleanup_guarded,
 };
 pub(crate) use wake_pump::WeakWakePump;
 

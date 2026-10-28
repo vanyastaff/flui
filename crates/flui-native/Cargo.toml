@@ -464,6 +464,12 @@ version = "0.35.1"
 [target.'cfg(target_os = "macos")'.dependencies.accesskit_macos]
 version = "0.27.1"
 
+# UIAccessibility (ADR-0255 decision 12): the low-level adapter, which the
+# window's own view forwards to. Same 0.25 accesskit cohort; it is built on
+# objc2 0.5 beside FLUI's 0.6, and the two meet only through raw pointers.
+[target.'cfg(target_os = "ios")'.dependencies.accesskit_ios]
+version = "0.2.2"
+
 [features]
 default = ["desktop"]
 

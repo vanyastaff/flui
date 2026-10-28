@@ -74,8 +74,9 @@ request.
 > **Environments:** iOS, Android, Web; desktop · **Who it hurts:** Blind and low-vision users; anyone who must meet accessibility law · **Parity:** [Accessibility](platform-parity.md#accessibility)
 
 - Desktop is always on but untested with a screen reader.
-- AccessKit has iOS and Android adapters but none for the Web (it needs a parallel ARIA DOM).
-- When they are wired, the semantics identifier (ADR-0240) must reach Android's `viewIdResourceName`, iOS's `accessibilityIdentifier` and a `data-flui-id` DOM attribute, as it reaches `AutomationId`, `AXIdentifier` and AT-SPI's id through `author_id` on the desktop.
+- **Runs on iOS:** every UIKit window answers UIAccessibility through `accesskit_ios`'s low-level adapter, and the semantics identifier reaches `accessibilityIdentifier`; on the iOS Simulator an XCUITest client read the tree, found a button by its identifier and pressed it (2026-10-28). No VoiceOver session ran, and no AccessKit action was sent.
+- AccessKit has an Android adapter, not yet wired, and none for the Web (it needs a parallel ARIA DOM).
+- When they are wired, the semantics identifier (ADR-0240) must reach Android's `viewIdResourceName` and a `data-flui-id` DOM attribute, as it reaches `AutomationId`, `AXIdentifier`, AT-SPI's id and iOS's `accessibilityIdentifier` through `author_id`.
 - The runs read one control, not a Narrator, VoiceOver or Orca session.
 - No locked adapter routes custom actions or `ShowContextMenu`, so gesture alternatives (ADR-0216) keep a control on every path.
 
@@ -163,7 +164,6 @@ request.
 - **Runs:** title, mode, fullscreen, position, size and constraint commands with a state readback ship on every desktop host ([ADR-0237](adr/ADR-0237-window-state-and-host-notices.md)).
 - **macOS:** the AppKit window conformance kit passes on an M1, macOS 27.0, 2026-10-27 (nextest flui-native 233/233); the fixture after review: appkit_window 3/3, nextest flui-native 237/237, 2026-10-27. No live change was made by hand: [#1736](https://github.com/vanyastaff/flui/issues/1736) still lists a drag, the y-axis and a second display; the green button, Cmd-M and the Dock; opening options; displays (UUID and bounds); sleep, lock and memory-pressure notices; session end.
   - **A transient `Normal` publish on leaving full screen.** `windowDidExitFullScreen:` publishes the window before AppKit puts back the frame it had before full screen; only the held mode waits for the owner lane's next turn. A window zoomed before full screen therefore publishes `Normal` for a moment before it publishes `Maximized`. The final state is correct, seen on an M1, macOS 27.0: without a subscriber command the window comes back maximized, and with a subscriber's `SetMode(Normal)` it ends normal and unzoomed. Proposed fix: defer the publish with the held mode. Reported on [#1736](https://github.com/vanyastaff/flui/issues/1736).
-  - **Two commands in one turn are admitted against the published mode, not the queued one.** `capabilities_of` reads the window's current flags, so a zoomed window sent `SetMode(Normal)` and then `SetResizable(false)` in the same turn has the second refused (`sets_resizable` is unavailable while maximized) although the first takes the window back to normal. Reported on [#1736](https://github.com/vanyastaff/flui/issues/1736).
 - X11 through winit ran only on an Xvfb server with the test standing in for the window manager. The native X11 host's window passes the window conformance under openbox on Xvfb (2026-10-27), the snapshot compared with what the server reads back; not yet under a desktop's window manager or on a HiDPI server.
 - winit cannot read a title back on Linux, so the snapshot holds the one last set.
 - Wayland never reports minimized.

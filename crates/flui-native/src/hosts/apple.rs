@@ -3,6 +3,8 @@
 
 use std::sync::Arc;
 
+#[cfg(target_os = "ios")]
+use crate::accessibility::apple::IosAccessibility;
 #[cfg(target_os = "macos")]
 use crate::accessibility::apple::MacosAccessibility;
 #[cfg(target_os = "ios")]
@@ -91,11 +93,10 @@ impl Host for Apple {
     #[cfg(target_os = "ios")]
     type Text = IosTextSizing;
 
-    // UIKit windows hand out no accessibility yet.
     #[cfg(target_os = "macos")]
     type Accessibility = MacosAccessibility;
     #[cfg(target_os = "ios")]
-    type Accessibility = Absent<position::Accessibility>;
+    type Accessibility = IosAccessibility;
 
     #[cfg(target_os = "macos")]
     type Clipboard = MacOSClipboard;
