@@ -3236,9 +3236,9 @@ fullscreen are unavailable on this device and minimizing is not observed; a
 window manager that does not list a state in `_NET_SUPPORTED` leaves that mode
 unavailable; the root's `_NET_SUPPORTED` changing revises every window's
 capabilities, so a command admitted before is superseded. The material and the
-frame-rate hint are unavailable on X11; the cursor, text input and drag source
-wait for the host's input and data-transfer parts (`NotYetOnThisHost` for the
-cursor). Commands go to the server (title, place, size, `WM_NORMAL_HINTS`,
+frame-rate hint are unavailable on X11; text input and the drag source wait
+for the host's data-transfer parts, and the cursor is the input's (below).
+Commands go to the server (title, place, size, `WM_NORMAL_HINTS`,
 `_MOTIF_WM_HINTS`, map and the ICCCM withdraw) or to the window manager (the
 EWMH `_NET_WM_STATE`, `WM_CHANGE_STATE` and `_NET_ACTIVE_WINDOW` messages); a
 window not mapped yet asks its mode in its own `_NET_WM_STATE`, which the window
@@ -3263,8 +3263,51 @@ portal of `preferences::linux` and the logind and pressure sources of
 (`owner::linux::{LinuxPreferences, LinuxNotices}`); every window hands out the
 AT-SPI bridge of `accessibility::linux`. `current_platform` picks the host for
 an X11 session when the winit host is not built (`choose_linux_host`).
-Input, text input, the clipboard and drag and drop are `Absent` in the table
-until the host's later parts fill them. Tests: the pure modules' tables
+Text input, the clipboard and drag and drop are `Absent` in the table until
+the host's later parts fill them.
+
+The input position is the loop's (`type Input = X11Loop`): the table makes
+the input feature's `input::linux::x11::X11Input` (`X11Host::input`) and the
+loop holds it by the hook `owner::linux::x11::LoopInput`, hands it every event
+before the windows (a core `FocusOut` it follows and leaves to the window
+too), and answers the keyboard layout from it. A window reaches it through the
+loop as it opens (its capabilities, then `window_opened` with an
+`InputTarget`: its `WindowRef`, its delivery and the `WindowScale` the window
+updates as it reads its display), as it closes (`window_closed`, keyed by
+identity, so an X id given to a later window is not dropped) and to set its
+cursor. XInput 2.2 is selected on each window for every master device's
+pointer, touch and key events, and on the root for the device hierarchy; the
+pure `input::linux::x11::decode` turns copied events (`XiEvent`) and the
+server's device list (`DeviceDescription`) into owned input through the
+shared pointer assembly: one cursor contact per master pointer (a mouse and a
+touchpad move the same cursor), a pen its own contact that takes the cursor
+over and gives it back with a leave and an enter, a touch screen's touches by
+touch id, events the server emulated (`XIPointerEmulated`: legacy wheel
+buttons, a touch's pointer) dropped, a scroll valuator's change in detents of
+its increment (fractional for a touchpad, unphased), the legacy wheel buttons
+of a device with no scroll valuator whole detents, and a grab's leave
+mid-press a platform cancel. Readings are stamped on arrival
+(`event_timestamp_ns`). Keys come through XKB (`input::linux::xkb`, which the
+Wayland host's input shares): libxkbcommon and libxkbcommon-x11 loaded at run
+time, the keymap read from the core keyboard and the state set from the
+server's `StateNotify`, compose from the locale's table; a keysym is a named
+key or the character it spells by itself, a kernel key code the physical key.
+The layout is the current group's entry of `_XKB_RULES_NAMES`, and a group or
+keymap change runs the listeners with no lock held. A window's cursor comes
+from the cursor theme (x11rb's `cursor::Handle`), by the CSS name, its
+alternatives and then the core cursor font's closest glyph, loaded once per
+shape. Deliveries are collected under the input's owner-thread borrow and
+dispatched after it, each in a boundary of its own, the first panic raised
+again after the rest are delivered. Tests: `input::linux::x11::decode::tests`
+(scrolling, the pen taking the cursor over, touches, a grab's cancel, the
+hierarchy, device roles, buttons, the layout name),
+`input::linux::xkb::keys::tests`, the native X11 decoder in the backend
+conformance table (`native x11`), and in `tests/x11_window.rs`
+`xtest_pointer_buttons_and_wheel_reach_the_window` (with `native-capture`,
+held against `x11_xtest_mouse_and_wheel.jsonl`),
+`xtest_keys_reach_the_focused_window` and
+`a_window_shows_the_cursor_it_asks_for`; the harness runs the native
+recording contracts beside them. Tests of the window: the pure modules' tables
 (`what_the_window_manager_supports_is_what_a_window_honours`,
 `logical_numbers_become_x11_numbers_only_when_they_fit`,
 `an_unmapped_window_asks_its_mode_in_its_state_property`,
@@ -3607,7 +3650,7 @@ fresh launch, is injected by the system (`adb shell input`, and `uinput`
 devices the real `InputReader` reads: a pen with pressure, tilt and hover, a
 touchpad in pointer mode), and the library wrote its journal and the `Debug`
 of every pointer event its window delivered. The host test
-`pulled_device_recordings_replay_to_what_they_delivered` requires the replay
+`pulled_device_recordings_replay_to_what_they_delivered` of `native_recording_contracts` requires the replay
 to equal what the device delivered exactly, then holds the recording against
 its golden by grammar (`capture::grammar`: who entered, pressed, moved,
 pinched or scrolled, in order, with each press's sensors), not by shape: the

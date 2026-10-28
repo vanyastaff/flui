@@ -3438,6 +3438,75 @@ graph LR
   `checks`, `doc-strict`, `wasm-check`. WSL: clippy трёх вариантов (в том числе `-p flui-native
   --all-targets --features winit-backend` и `--all-features`), rustdoc; xvfb nextest 306 из 306
   и 353 из 353; без xvfb — 661 из 662 (прежний случай X-сервера WSLg).
+- [x] **LY83** — ветка `platform/x11-input` от `main` @ `c8401e35b`, слито `main` @ `ee5480c57`
+  (#1933). **Позиция ввода** таблицы `X11` — цикл (`type Input = X11Loop`): таблица делает
+  `input::linux::x11::X11Input` (`X11Host::input`), цикл держит его через хук
+  `owner::linux::x11::LoopInput` и отдаёт ему каждое событие раньше окон (ядровой `FocusOut`
+  ввод отменяет контакты окна и оставляет окну). Окно доходит до ввода через цикл: при открытии —
+  `capabilities()` и `window_opened(InputTarget { WindowRef, WindowDelivery, WindowScale })`
+  (масштаб окно обновляет, читая свой дисплей), при закрытии — `window_closed` по идентичности
+  (XID, отданный следующему окну, не теряется), курсор — `set_cursor`. **XInput 2.2**: на окне
+  выбраны указатель, касание и клавиши всех master-устройств, на корне — иерархия и смена
+  классов. Чистый `input::linux::x11::decode` (`XiEvent`, `DeviceDescription`, `X11Pointers`)
+  через общую сборку указателя: один курсор на master-указатель (мышь и тачпад двигают один
+  курсор), перо — свой контакт, который забирает курсор и отдаёт его с leave и enter (роль
+  устройства по классу касания, имени и меткам валюаторов `Abs Pressure`/`Abs Tilt X`;
+  давление и наклон из валюаторов), касание — по touch id, эмулированные события
+  (`XIPointerEmulated`: кнопки колеса, указатель касания) отброшены, валюатор прокрутки — в
+  детентах своего инкремента (дробные — `Precise`, без фаз), кнопки 4–7 устройства без
+  валюатора прокрутки (XTest) — целые детенты `Notched`, leave захвата посреди нажатия —
+  отмена `Platform`, устройство, которого нет в списке сервера, — снятие с `DeviceRemoved`, XID,
+  отданный устройству другой роли, — новое устройство. Время — по приходу
+  (`event_timestamp_ns`). **XKB** — общий модуль обоих хостов `input::linux::xkb` (для LY79):
+  чистые `keys::{named_key, key, code, ActiveModifiers}` (keysym → `NamedKey` или символ,
+  который он пишет сам; код ядра → `Code`) и живой `Keyboard`/`KeyboardSource` над
+  `xkbcommon-dl` (libxkbcommon и libxkbcommon-x11 грузятся при запуске, как у winit; новых
+  крейтов в дереве нет): keymap ядровой клавиатуры, состояние из `StateNotify` сервера, compose
+  из таблицы локали (мёртвая клавиша — `NamedKey::Dead`, завершающая — текст). Раскладка —
+  текущая группа `_XKB_RULES_NAMES`, её смена зовёт слушателей без удержания замков. **Курсор**
+  — тема курсоров (`x11rb::cursor::Handle`: имя CSS, альтернативы, затем глиф ядрового шрифта),
+  кэш по форме; закрытое окно — `NoWindow`. Доставки собираются под заёмом owner-потока и
+  отдаются после, каждая в своей границе паники, первая паника — после остальных. Признаки
+  x11rb: `xinput`, `xkb`, `cursor` (тянет `xcursor`, уже в дереве). Таблица доступности
+  `input::availability::x11()`: перо `Native`, точная прокрутка и жесты тачпада — нет.
+  **Тесты** (откат проверен для каждого): `a_wheel_is_detents_and_a_touchpad_scrolls_precisely`
+  и `a_touch_is_its_own_contact` (без отбрасывания эмулированных падают),
+  `a_grab_that_takes_a_pressed_pointer_cancels_it` (без отмены захвата падает),
+  `devices_come_and_go_with_the_hierarchy` (без сравнения ролей падает),
+  `a_pen_takes_the_cursor_over_and_gives_it_back` (без enter при переходе падает),
+  `a_device_s_role_is_read_from_its_classes_and_name`, `x_buttons_are_flui_buttons`,
+  `the_layout_is_the_keyboards_group_of_the_rules_names` (`input::linux::x11::decode`),
+  `a_keysym_is_the_key_it_names_or_the_character_it_spells`,
+  `a_kernel_key_code_is_the_key_where_it_sits`, `an_x11_modifier_mask_is_flui_modifiers`
+  (`input::linux::xkb::keys`). Conformance: строка `native x11` таблицы
+  `every_backend_passes_the_conformance_table` гонит шаги через сам декодер (касание, перо, мышь,
+  именованное устройство через список сервера, отмена касания — `FocusOut`, клавиши — таблица
+  keysym). Реальный сервер (`tests/x11_window.rs`, свой Xvfb и openbox, XTest через x11rb):
+  `xtest_pointer_buttons_and_wheel_reach_the_window` (с `native-capture` журнал воспроизводится
+  в то, что доставило окно, и держится против золотой записи `x11_xtest_mouse_and_wheel.jsonl`;
+  без чтения кнопок 4/5 падает), `xtest_keys_reach_the_focused_window` (буква, Shift, Escape,
+  F10, Menu с физическими клавишами, раскладка `us`; без выбора `KEY_PRESS` падает),
+  `a_window_shows_the_cursor_it_asks_for` (с прежним `NotYetOnThisHost` падает). Кодек записей:
+  бэкенд `x11`, точность прокрутки `notched`; случаи записей — один список `contracts()`, его
+  гонят `platform_it` (`native_recording_contracts`, туда вошли
+  `browser_sessions_hold_against_their_goldens` и
+  `pulled_device_recordings_replay_to_what_they_delivered`) и харнесс `x11_window`. Проверки:
+  `cargo fmt`; Windows — clippy рабочего пространства `--all-targets -D warnings`, clippy
+  Android и macOS (LLVM) с `testing,winit-backend` `--all-targets`, `wasm-check`, `doc-strict`,
+  `checks`, `module-dag` (334 модуля, 355 рёбер, 1 исключение), `file-length`, `globals`,
+  `markers`, `testing`. WSL Ubuntu 24.04: clippy `flui-native` `-D warnings` в 16 вариантах
+  (по умолчанию, `--no-default-features`, `x11`, `wayland`, `winit-backend`, `testing`,
+  `native-capture`, `--all-features`, каждый с `--all-targets` и без); rustdoc `-D warnings
+  --document-private-items` (по умолчанию, `--all-features`, только `x11`); nextest под xvfb
+  `--all-features` 378 из 378, по умолчанию 305 из 305; `x11_window` 30 из 30. **Не
+  запускалось:** касание, перо, плавная прокрутка тачпада и смена раскладки на настоящем
+  устройстве (в Xvfb их нет — только декодер и conformance), X11 на настольном сервере, тесты
+  Wayland под Weston (код Wayland не тронут), `cross-typecheck`, `api-closure`. **До выбора
+  нативного X11-хоста в `current_platform` не хватает:** текстового ввода (XIM/IBus, LY84),
+  clipboard и primary selection (LY84), drag and drop (XDND, LY84); жестов тачпада (XInput 2.4
+  pinch/swipe) и фаз прокрутки нет на X11 вообще; файловых диалогов портала нет на обоих
+  нативных хостах. **Общее с LY79:** `input::linux::xkb` (`keys` и `Keyboard`), живая часть под
+  `x11_host` — Wayland добавляет источник keymap из fd и свой признак.
 - [x] **LY82** — ветка `platform/x11`, начата на вершине LY46 `8138ab489`, перенесена на `main`
   @ `d6e469a2b` после слияния #1927. **Хост.** `X11Platform = HostPlatform<X11>`
   (`hosts/linux.rs`): одно соединение libxcb (`owner::linux::x11::X11Connection`, x11rb

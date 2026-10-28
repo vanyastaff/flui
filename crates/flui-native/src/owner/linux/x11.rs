@@ -243,10 +243,10 @@ pub(crate) trait LoopInput: Send + Sync {
     /// reports.
     fn set_cursor(&self, window: WindowRef, cursor: CursorIcon) -> Result<(), CursorError>;
 
-    /// [`Platform::keyboard_layout`](crate::Platform::keyboard_layout).
+    /// [`Platform::keyboard_layout`].
     fn keyboard_layout(&self) -> String;
 
-    /// [`Platform::on_keyboard_layout_change`](crate::Platform::on_keyboard_layout_change).
+    /// [`Platform::on_keyboard_layout_change`].
     fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut() + Send>);
 }
 
