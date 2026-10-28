@@ -74,6 +74,12 @@ pub struct CompositorReport {
     pub configures: u32,
     /// The buffer scale the compositor prefers for the window's surface.
     pub preferred_scale: Option<i32>,
+    /// The fractional scale the compositor prefers for the window's surface
+    /// (`wp_fractional_scale_v1`), as a numerator over 120.
+    pub fractional_scale: Option<u32>,
+    /// The last frame mode the compositor gave the window
+    /// (`zxdg_toplevel_decoration_v1`: 1 client side, 2 server side).
+    pub frame_mode: Option<u32>,
     /// The globals of the outputs the surface entered and has not left.
     pub outputs: Vec<u32>,
 }
@@ -95,6 +101,8 @@ pub fn compositor_report(window: &dyn HostWindow) -> Option<CompositorReport> {
             .collect(),
         configures: said.configures,
         preferred_scale: said.preferred_scale,
+        fractional_scale: said.fractional_scale,
+        frame_mode: said.frame_mode,
         outputs: said.outputs,
     })
 }

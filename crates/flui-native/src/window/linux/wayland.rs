@@ -791,6 +791,8 @@ pub(crate) mod decoration {
         pub(crate) requested: bool,
         /// What the compositor last said; `None` before it said.
         pub(crate) told: Option<FrameDrawer>,
+        /// The compositor answered the last request.
+        pub(crate) answered: bool,
     }
 
     impl Decoration {
@@ -800,11 +802,16 @@ pub(crate) mod decoration {
         }
 
         /// Why the window's frame cannot be turned on and off, or `None`
-        /// where it can: a compositor that offers no frames, or one that
-        /// answered a request for its frame by leaving it to the client,
-        /// draws none whatever the window asks.
+        /// where it can: a compositor that offers no frames draws none, and
+        /// one that answered the window's last request with the other mode
+        /// decides the frame itself (sway draws one around every tiled
+        /// window). Until it answers, the request stands.
         pub(crate) const fn absence(self) -> Option<CapabilityAbsence> {
-            if !self.offered || (self.requested && matches!(self.told, Some(FrameDrawer::Client))) {
+            let overruled = match (self.answered, self.told) {
+                (true, Some(drawer)) => matches!(drawer, FrameDrawer::Compositor) != self.requested,
+                _ => false,
+            };
+            if !self.offered || overruled {
                 Some(CapabilityAbsence::NotOnThisDevice)
             } else {
                 None
@@ -820,10 +827,13 @@ pub(crate) mod decoration {
         /// and a compositor that draws no frame takes no command for it.
         #[test]
         fn a_window_has_the_frame_its_compositor_draws() {
-            let drawn = |requested, told| Decoration {
+            use FrameDrawer::{Client, Compositor};
+            let overruled = Some(CapabilityAbsence::NotOnThisDevice);
+            let drawn = |requested, told, answered| Decoration {
                 offered: true,
                 requested,
                 told,
+                answered,
             };
             for (case, decoration, decorated, absence) in [
                 (
@@ -832,32 +842,39 @@ pub(crate) mod decoration {
                         offered: false,
                         requested: true,
                         told: None,
+                        answered: false,
                     },
                     false,
-                    Some(CapabilityAbsence::NotOnThisDevice),
+                    overruled,
                 ),
-                ("asked, not answered yet", drawn(true, None), false, None),
+                (
+                    "asked, not answered yet",
+                    drawn(true, None, false),
+                    false,
+                    None,
+                ),
                 (
                     "asked and drawn",
-                    drawn(true, Some(FrameDrawer::Compositor)),
+                    drawn(true, Some(Compositor), true),
                     true,
                     None,
                 ),
                 (
                     "asked, left to the client",
-                    drawn(true, Some(FrameDrawer::Client)),
+                    drawn(true, Some(Client), true),
                     false,
-                    Some(CapabilityAbsence::NotOnThisDevice),
+                    overruled,
                 ),
-                (
-                    "turned off",
-                    drawn(false, Some(FrameDrawer::Client)),
-                    false,
-                    None,
-                ),
+                ("turned off", drawn(false, Some(Client), true), false, None),
                 (
                     "turned off, drawn regardless",
-                    drawn(false, Some(FrameDrawer::Compositor)),
+                    drawn(false, Some(Compositor), true),
+                    true,
+                    overruled,
+                ),
+                (
+                    "turned off, the old frame until the answer",
+                    drawn(false, Some(Compositor), false),
                     true,
                     None,
                 ),
@@ -1109,6 +1126,17 @@ mod toplevel {
         fractional_scale: Option<u32>,
         /// Who draws the frame, as the compositor last said.
         frame: Option<FrameDrawer>,
+        /// The compositor answered the window's last frame request since the
+        /// owner last looked: with a frame mode, or with a configure that
+        /// carried none, which leaves the mode as it was (wlroots sends no
+        /// mode it already sent).
+        frame_told: bool,
+        /// The window asked for a frame mode and the compositor has not
+        /// answered yet.
+        frame_asked: bool,
+        /// The last frame mode as the protocol sent it.
+        #[cfg(any(test, feature = "testing"))]
+        raw_frame_mode: Option<u32>,
         /// The handle of the window's export (`xdg-foreign`).
         exported: Option<String>,
         /// What the compositor lets the toplevel do.
@@ -1141,6 +1169,7 @@ mod toplevel {
             let taken = told.clone();
             told.configure = None;
             told.close_requested = false;
+            told.frame_told = false;
             taken
         }
     }
@@ -1216,6 +1245,8 @@ mod toplevel {
         leaving_maximized: bool,
         /// The window last asked the compositor to draw its frame.
         decoration_requested: bool,
+        /// The compositor answered that request.
+        decoration_answered: bool,
         told: Told,
     }
 
@@ -1226,6 +1257,7 @@ mod toplevel {
                 offered,
                 requested: self.decoration_requested,
                 told: self.told.frame,
+                answered: self.decoration_answered,
             }
         }
     }
@@ -1406,6 +1438,7 @@ mod toplevel {
                 configured: false,
                 leaving_maximized: false,
                 decoration_requested: options.decorated,
+                decoration_answered: false,
                 told: Told::default(),
             };
             let window = Rc::new(Self {
@@ -1516,6 +1549,9 @@ mod toplevel {
                     );
                     resized || first
                 });
+                if told.frame_told {
+                    applied.decoration_answered = true;
+                }
                 applied.told = told;
                 (resized, applied.sizing.states().activated, was_activated)
             };
@@ -1908,7 +1944,16 @@ mod toplevel {
                     };
                     decoration.set_mode(frame_mode(decorated));
                     drop(roles);
-                    self.applied.borrow_mut().decoration_requested = decorated;
+                    // What the compositor said before this request answers
+                    // the one before it.
+                    {
+                        let mut told = self.record.protocol.lock();
+                        told.frame_told = false;
+                        told.frame_asked = true;
+                    }
+                    let mut applied = self.applied.borrow_mut();
+                    applied.decoration_requested = decorated;
+                    applied.decoration_answered = false;
                 }
                 WindowCommand::SetMode(WindowMode::Normal) => self.leave_compositor_modes(),
                 WindowCommand::SetMode(mode) => {
@@ -2155,6 +2200,7 @@ mod toplevel {
                 offered: owner.offers_decorations(),
                 requested: true,
                 told: None,
+                answered: false,
             };
             capabilities(None, decoration.absence())
         }
@@ -2213,6 +2259,11 @@ mod toplevel {
                 let mut told = record.protocol.lock();
                 let last = told.states;
                 let (width, height, states) = told.toplevel.take().unwrap_or((0, 0, last));
+                // A configure after a frame request that named no mode keeps
+                // the mode: that is the compositor's answer.
+                if std::mem::take(&mut told.frame_asked) {
+                    told.frame_told = true;
+                }
                 #[cfg(any(test, feature = "testing"))]
                 {
                     told.configures = told.configures.saturating_add(1);
@@ -2293,8 +2344,15 @@ mod toplevel {
                     WEnum::Value(mode) => u32::from(mode),
                     WEnum::Unknown(mode) => mode,
                 };
+                let mut told = record.protocol.lock();
+                #[cfg(any(test, feature = "testing"))]
+                {
+                    told.raw_frame_mode = Some(mode);
+                }
                 if let Some(drawer) = FrameDrawer::from_mode(mode) {
-                    record.protocol.lock().frame = Some(drawer);
+                    told.frame = Some(drawer);
+                    told.frame_told = true;
+                    told.frame_asked = false;
                 }
             }
         }
@@ -2358,6 +2416,11 @@ mod toplevel {
         pub(crate) configures: u32,
         /// The buffer scale the compositor prefers for the surface.
         pub(crate) preferred_scale: Option<i32>,
+        /// The fractional scale the compositor prefers, as a numerator over
+        /// 120.
+        pub(crate) fractional_scale: Option<u32>,
+        /// The last `zxdg_toplevel_decoration_v1.configure` mode.
+        pub(crate) frame_mode: Option<u32>,
         /// The globals of the outputs the surface entered and has not left.
         pub(crate) outputs: Vec<u32>,
     }
@@ -2372,6 +2435,8 @@ mod toplevel {
                 raw_states: told.raw_states.clone(),
                 configures: told.configures,
                 preferred_scale: told.preferred_scale,
+                fractional_scale: told.fractional_scale,
+                frame_mode: told.raw_frame_mode,
                 outputs: told.outputs.iter().map(|output| output.get()).collect(),
             }
         }
