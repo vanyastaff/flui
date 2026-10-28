@@ -14,7 +14,8 @@ or WASM targets with their own build step.
 
 | Example | Run |
 |---|---|
-| **acceptance_app** — the notes application the headless acceptance rows run (`tests/fixtures/acceptance_app/`, through `tests/facade_consumer.rs`), in a window for native runs; `-- note-build`, `save-pressed` or `note-dispose` inject a panic there | `cargo run --example acceptance_app --features material` |
+| **acceptance_app** — the notes application the headless acceptance rows run (`tests/fixtures/acceptance_app/`, through `tests/facade_consumer.rs`), in a window for native runs | `cargo run --example acceptance_app --features material` |
+| **acceptance_app_faults** — the same application with one injected panic, named by its argument (a `Fault` name, listed when the argument is missing) | `cargo run --example acceptance_app_faults --features material -- <fault>` |
 
 ## Rendering / engine internals
 

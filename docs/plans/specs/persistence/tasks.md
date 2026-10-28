@@ -50,16 +50,27 @@ graph LR
   `MemoryStorage`, контрактные тесты под `ignore` (#1457).
 - [x] **P2** — `FileStore`: атомарная запись, блокировка `IfUnchanged`, классификация ошибок ОС
   (#1463); Web — IndexedDB (#1712).
-- [x] **P10** — приложение приёмки: `tests/fixtures/acceptance_app/` (`app.rs` — заметки Home,
-  Note, Settings под `Router`, `NoteId(u64)` без повторного использования, `TextFormField`
-  Title, «Save note», черновик, корневой `FutureBuilder` с Retry на `wrapping_add`, шов отказов
-  `Faults`; `testing.rs` — `AppRun`: старт и перезапуск над тем же `MemoryStorage`,
-  `request_close`, `end_session`, нажатия и клавиши; `lib.rs` — корень consumer'а, строки спек —
-  модулями рядом со `smoke.rs`), `acceptance_app_runs_through_the_facade` требует `... ok` у
+- [x] **P10** — приложение приёмки (#1952): `tests/fixtures/acceptance_app/`. `app.rs` — заметки
+  Home, Note, Settings под `Router`; `NoteId(u64)` — идентичность, растёт через `checked_add` и
+  не переиспользуется; номер попытки — ключ `FutureBuilder`, Retry переходит к следующему с
+  `wrapping_add` (правило в rustdoc `Loader`), начальный — `first_attempt`; `TextFormField`
+  Title, «Save note» с отказом на пустом заголовке, черновик переживает Back; «New note»; шов
+  отказов — `Faults` из `Fault` (`build-panic`, `save-panic`, `dispose-panic`, имена — только в
+  `Fault::name`). `testing.rs` — `AppRun`: старт и перезапуск над тем же `MemoryStorage`,
+  `request_close`, `end_session`, `rebuild`, нажатия и клавиши. `lib.rs` — корень consumer'а;
+  строки спек — модулями рядом со `smoke.rs`. `acceptance_app_runs_through_the_facade` копирует
+  каталог рекурсивно и требует `... ok` у каждой `#[test]` в нём — второго списка нет. Строки:
   `acceptance_app_walks_home_note_settings_and_back`, `acceptance_app_saves_an_edited_title`,
-  `acceptance_app_retries_a_failed_load`; пускач `examples/acceptance_app.rs` (`-- note-build`,
-  `save-pressed`, `note-dispose`). Откат `pop`, записи заголовка и `wrapping_add` роняет каждую
-  из трёх строк. Хранилище — `lay_out_with_storage` (до LY52) (#1952).
+  `acceptance_app_keeps_the_draft_after_back`, `acceptance_app_adds_notes_and_refuses_an_empty_title`,
+  `acceptance_app_retries_a_failed_load` (перестройка не перезапускает загрузку, Retry —
+  перезапускает), `retry_counter_overflow_still_starts_a_load` (R26: старт на `u32::MAX`). Откаты:
+  `pop`, запись заголовка, сброс черновика при открытии, повтор id, ключ, меняющийся на каждой
+  перестройке, и `+ 1` вместо `wrapping_add` роняют свою строку. Пускачи
+  `examples/acceptance_app.rs` (без отказов) и `examples/acceptance_app_faults.rs` (один `Fault`
+  через `FromStr`, ADR-0258 §4). Хранилище — `lay_out_with_storage` (до LY52). Швы, которые
+  добавляет P11: загрузчик, несущий данные; начальный стек маршрутов; удаление заметки; исход
+  решения о закрытии из `request_close`; сохранение в полёте при завершении сеанса; для T18 —
+  крюк счёта `Drop`.
 
 ## Сделано в части
 
@@ -86,7 +97,7 @@ graph LR
 | **P4** | **`Persisted`: путь загрузки на шве** (design «Публичный контракт», «Решения владельца 2026-10-28»). `Persisted::open` берёт `Storage` через шов возможностей (провайдер LY52), `load()` (сегодня `NOT_WIRED` = `UnsupportedReason::NotRegistered`) — owner-local задача в `AsyncDriver`; заголовок `flui-document <name> <version> <revision>`; `Corrupt`, `ReadOnly(NewerVersion)`, `decode` под `catch_unwind` (`Panicked`), `TooLarge`, поколение (применяется последняя), отмена при `Drop`; без провайдера — `StorageError::Unsupported(Unsupported)` с `NotRegistered`; `UnsavedChanges` при `Saving`/`Failed`. Doctest: `FutureBuilder` принимает `data.load()` | LY50, LY52 | `crates/flui-view/src/persist/*`, `crates/flui-view/tests/persist.rs`, `changelog.d/` | clippy и nextest: `-p flui-view` и зависимые; `cargo test -p flui-view --doc`; `cargo heli xtask wasm-check`; `reach` | снимает `ignore` с `a_loaded_document_round_trips_through_memory_storage`; R18 `inaccessible_is_reported_apart_from_corrupt`; R25 `repeated_retries_apply_exactly_one_result`; R27 `unmount_during_load_releases_requests`; R30 `oversized_file_is_refused_unread`; R31 `older_version_decodes_or_reports_without_writing`; R33 `unavailable_storage_runs_in_memory_with_status` | L + T |
 | **P6** | **Остаток: реестр сброса хоста.** Провайдер хранилища хоста (после LY52 — `storage_host.rs` как провайдер шва) создаёт `FlushHost::new` с писателем на IO-пуле — первый production-вызов; реестр доступен teardown-сбросу и `Persisted::set` | LY52, teardown T4 | `crates/flui-app/src/app/storage_host.rs`, in-crate тесты рядом с `a_configured_storage_dir_reaches_lifecycle_context` (`runner/main_window.rs`: realm runner'а без GPU публично не собрать), `changelog.d/` | clippy и nextest: `-p flui-app -p flui-view`; `cargo heli xtask wasm-check`; `globals` | `a_runner_write_lands_under_the_configured_roots` (R19); `placement_recorder` пишет и читает через тот же провайдер | L + T |
 | **P5** | **`Persisted`: запись и удержание закрытия.** `set`: ревизия +1 (`u64::MAX` → `Exhausted` навсегда), `encode` под `catch_unwind` без заимствования `RefCell`, `FlushRegistry::publish` (данные — `IfUnchanged(base)`, сеанс — `Replace`); `committed` и «Saved» — после ответа реестра; повтор `Busy` 50…800 мс по часам UI-runtime; немедленная запись на `Hidden`/`Paused` и на запрос закрытия; `hold()` на `Saving`, `require_decision()` на `Failed`/`ReadOnly`/`NotLoaded` с правками; `retry` публикует актуальное; `start_over` (копия `<name>-corrupt-N`, затем `initial()`); rustdoc о потере без вето | P4, P6, teardown T2, T4, T8 | `crates/flui-view/src/persist/*`, `crates/flui-view/tests/persist.rs`, `changelog.d/` | clippy и nextest: `-p flui-view -p flui-app` | снимает `ignore` с `saved_status_appears_only_after_commit`; R12 `user_close_waits_for_an_in_flight_save`; R14 `a_saving_document_holds_user_close_only`; R15 `drop_before_commit_loses_only_that_edit`; R16 `busy_retry_follows_the_realm_clock` (49 мс — нет, 50 мс — есть; пять `Busy` → `Failed`); R17 `corrupt_bytes_are_kept_until_start_over`; R20 `retry_after_failure_publishes_the_latest_value`; R24 `no_write_without_a_loaded_base`; R28 `a_later_edit_supersedes_an_unstarted_one`; R29 `codec_panic_is_contained_first_failure_kept`; R30 `full_disk_keeps_memory_and_the_old_file`; R31 `newer_version_is_never_written`; R36 `two_realms_keep_independent_documents` | L |
-| **P11** | **Строки приёмки persistence.** Приложение P10 хранит данные (`notes`, заметки и compact-флаг) и сеанс (`machine_local`: черновик, стек маршрутов, смещение списка) как `Persisted`-документы; кодек — `serde_json`, зависимость consumer'а (R34, R35); корневой `FutureBuilder`: данные, затем сеанс; `Router::from_stack`, смещение и черновик до первой раскладки; fallback R7; экраны `Corrupt` («Начать заново»), `Inaccessible`, только чтение, баннер «хранение недоступно»; решение при закрытии (`discard_and_close`/`stay_open`). Таблицы «перезапуск» и «отказы хранилища» на `MemoryStorage` | P10, P3, P5 | `tests/fixtures/acceptance_app/` (приложение и модуль строк persistence), `tests/facade_consumer.rs` (список ожидаемых строк, `serde_json` у consumer'а) | clippy и nextest: `-p flui` (nested-cargo) | строки R1–R11, R13, R14, R26, R34 из таблицы ниже; каждая падает на P10 без P11 (хранилище не читается) | C |
+| **P11** | **Строки приёмки persistence.** Приложение P10 хранит данные (`notes`, заметки и compact-флаг) и сеанс (`machine_local`: черновик, стек маршрутов, смещение списка) как `Persisted`-документы; кодек — `serde_json`, зависимость consumer'а (R34, R35); корневой `FutureBuilder`: данные, затем сеанс; `Router::from_stack`, смещение и черновик до первой раскладки; fallback R7; экраны `Corrupt` («Начать заново»), `Inaccessible`, только чтение, баннер «хранение недоступно»; решение при закрытии (`discard_and_close`/`stay_open`). Таблицы «перезапуск» и «отказы хранилища» на `MemoryStorage` | P10, P3, P5 | `tests/fixtures/acceptance_app/` (приложение и модуль строк persistence), `tests/facade_consumer.rs` (список ожидаемых строк, `serde_json` у consumer'а) | clippy и nextest: `-p flui` (nested-cargo) | строки R1–R11, R13, R14, R34 из таблицы ниже; каждая падает на P10 без P11 (хранилище не читается) | C |
 | **P12** | **Нативный прогон persistence** через лейн `os` flui-driver на пускаче P10: R1, R12, R13 (сворачивание → `Hidden`), R14 (файл только для чтения), R18, R21 (`taskkill /F` в цикле записей), R22 (держатель без `FILE_SHARE_DELETE`), R23 (не-ASCII профиль, перенаправленный AppData/OneDrive, путь > 260), R32 (два процесса), завершение сеанса во время Save; эксперимент риска 3 design (повтор ≈ 1,5 с, сброс ≤ 3 с). Протокол — в PR, строка в `docs/platform-parity.md` | P11, flui-driver FD11 | шаги лейна `os` (по форме FD11), `docs/platform-parity.md`, `docs/gaps.md` | `cargo heli xtask checks` | датированный вывод каждого шага; ✅ в parity — только после прогона | D |
 
 ## Требование → тест
@@ -118,7 +129,7 @@ graph LR
 | R23 | `long_non_ascii_path_round_trips`; профиль и OneDrive | P2 (сделано); P12 | L, D |
 | R24 | `no_write_without_a_loaded_base`; teardown R6 | P5 | L |
 | R25 | `repeated_retries_apply_exactly_one_result` | P4 | L |
-| R26 | `retry_counter_overflow_still_starts_a_load` | P11 | C |
+| R26 | `retry_counter_overflow_still_starts_a_load` | P10 (сделано) | C |
 | R27 | `unmount_during_load_releases_requests` | P4 | L |
 | R28 | `a_later_edit_supersedes_an_unstarted_one`; `same_writer_edits_rebase_instead_of_conflicting` | P5; teardown T4 | L |
 | R29 | `codec_panic_is_contained_first_failure_kept` (паника `encode`, затем `decode`, payload с паникующим `Drop`) | P5 | L |
@@ -138,7 +149,7 @@ graph LR
 - [x] P1 — #1457
 - [x] P2 — #1463, #1712
 - [ ] P3 — Router: весь стек
-- [ ] P10 — приложение приёмки
+- [x] P10 — #1952
 - [ ] P4 — загрузка на шве (после LY50, LY52)
 - [ ] P6 — остаток: реестр сброса хоста (после LY52)
 - [ ] P5 — запись и удержание закрытия

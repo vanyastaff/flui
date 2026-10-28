@@ -2,7 +2,7 @@
 //!
 //! `tests/facade_consumer.rs` copies this directory into a consumer that
 //! depends on `flui` alone, with this file as its library root, and requires
-//! every row it lists to report `... ok`. `examples/acceptance_app.rs` runs
+//! every `#[test]` here to report `... ok`. `examples/acceptance_app.rs` runs
 //! `app` in a window. Each spec's rows are a module beside `smoke`.
 
 pub mod app;

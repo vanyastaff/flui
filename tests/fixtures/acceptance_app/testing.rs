@@ -85,6 +85,13 @@ impl AppRun {
         settle_lazy(&mut self.laid);
     }
 
+    /// Rebuild the application from its root, as a parent's rebuild would,
+    /// with nothing changed, then settle.
+    pub fn rebuild(&mut self) {
+        self.laid.pump();
+        self.settle();
+    }
+
     /// Whether `text` is on screen where a pointer reaches it: a covered or
     /// departed page's text is not.
     pub fn shows(&self, text: &str) -> bool {

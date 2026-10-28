@@ -7,9 +7,9 @@
 //! [`FutureBuilder`] above the router, with Loading, an error and Retry.
 //! Everything is held in memory by the root's state, so a restart starts over.
 //!
-//! [`Faults`] is the constructor's seam for injected failures: a panic in the
-//! Note screen's `build`, in the Save handler, or in the Note screen's
-//! `dispose`.
+//! [`Faults`] is the constructor's seam for injected failures, a set of
+//! [`Fault`]s: a panic in the Note screen's `build`, in the Save handler, or in
+//! the Note screen's `dispose`.
 
 use std::fmt;
 use std::future::poll_fn;
@@ -63,20 +63,104 @@ pub enum Route {
     Settings,
 }
 
-/// Failures injected into the application, for the rows that check what a
-/// panic leaves behind. [`Faults::default`] injects none.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Faults {
-    /// The Note screen's `build` panics.
-    pub note_build: bool,
-    /// Pressing "Save note" panics before anything is saved.
-    pub save_pressed: bool,
-    /// The Note screen's state panics when it is disposed.
-    pub note_dispose: bool,
+/// A failure injected into the application, for the rows and native runs that
+/// check what a panic leaves behind. Each has one name, which [`Fault::name`]
+/// gives and [`FromStr`] reads: the `acceptance_app_faults` example takes it as
+/// its argument.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fault {
+    /// `build-panic`: the Note screen's `build` panics.
+    Build,
+    /// `save-panic`: pressing "Save note" panics before anything is saved.
+    Save,
+    /// `dispose-panic`: the Note screen's state panics when it is disposed.
+    Dispose,
 }
 
-/// The readiness operation, called with the attempt number: 0 for the first
-/// load, one more for each Retry, wrapping at `u32::MAX`.
+impl Fault {
+    /// Every fault, in the order their names are listed.
+    pub const ALL: [Self; 3] = [Self::Build, Self::Save, Self::Dispose];
+
+    /// The fault's name.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Build => "build-panic",
+            Self::Save => "save-panic",
+            Self::Dispose => "dispose-panic",
+        }
+    }
+
+    const fn bit(self) -> u8 {
+        1 << self as u8
+    }
+}
+
+impl fmt::Display for Fault {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// A name that is not a [`Fault`]'s.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnknownFault(pub String);
+
+impl fmt::Display for UnknownFault {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "unknown fault `{}`; the faults are", self.0)?;
+        for fault in Fault::ALL {
+            write!(f, " `{fault}`")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for UnknownFault {}
+
+impl FromStr for Fault {
+    type Err = UnknownFault;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|fault| fault.name() == name)
+            .ok_or_else(|| UnknownFault(name.to_owned()))
+    }
+}
+
+/// The set of faults the application injects.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Faults(u8);
+
+impl Faults {
+    /// No fault.
+    pub const NONE: Self = Self(0);
+
+    /// This set and `fault`.
+    #[must_use]
+    pub const fn with(self, fault: Fault) -> Self {
+        Self(self.0 | fault.bit())
+    }
+
+    /// Whether `fault` is in the set.
+    #[must_use]
+    pub const fn contains(self, fault: Fault) -> bool {
+        self.0 & fault.bit() != 0
+    }
+}
+
+impl From<Fault> for Faults {
+    fn from(fault: Fault) -> Self {
+        Self::NONE.with(fault)
+    }
+}
+
+/// The readiness operation, called with the attempt number.
+///
+/// The attempt number is a key, not a count: Retry moves it to the next value,
+/// wrapping from `u32::MAX` to 0, so it always differs from the last one and
+/// always starts a new load. A [`NoteId`] is an identity and never wraps.
 pub type Loader = Rc<dyn Fn(u32) -> BoxedResultFuture<(), String>>;
 
 /// The acceptance application's root view.
@@ -84,15 +168,18 @@ pub type Loader = Rc<dyn Fn(u32) -> BoxedResultFuture<(), String>>;
 pub struct AcceptanceApp {
     faults: Faults,
     loader: Loader,
+    first_attempt: u32,
 }
 
 impl AcceptanceApp {
-    /// The application with `faults` injected and a loader that succeeds on
-    /// its second poll, so the first frame shows Loading.
+    /// The application with `faults` injected, a first attempt of 0 and a
+    /// loader that succeeds on its second poll, so the first frame shows
+    /// Loading.
     #[must_use]
     pub fn new(faults: Faults) -> Self {
         Self {
             faults,
+            first_attempt: 0,
             loader: Rc::new(|_attempt| {
                 let mut polled = false;
                 Box::pin(poll_fn(move |cx| {
@@ -113,6 +200,13 @@ impl AcceptanceApp {
         self.loader = loader;
         self
     }
+
+    /// Start the attempt number at `attempt` instead of 0.
+    #[must_use]
+    pub fn first_attempt(mut self, attempt: u32) -> Self {
+        self.first_attempt = attempt;
+        self
+    }
 }
 
 impl StatelessView for AcceptanceApp {
@@ -120,6 +214,7 @@ impl StatelessView for AcceptanceApp {
         Root {
             faults: self.faults,
             loader: Rc::clone(&self.loader),
+            first_attempt: self.first_attempt,
         }
     }
 }
@@ -189,12 +284,14 @@ struct Shared {
 struct Root {
     faults: Faults,
     loader: Loader,
+    first_attempt: u32,
 }
 
 struct RootState {
     shared: Option<Shared>,
     attempt: Signal<u32>,
     faults: Faults,
+    first_attempt: u32,
 }
 
 impl StatefulView for Root {
@@ -205,13 +302,14 @@ impl StatefulView for Root {
             shared: None,
             attempt: Signal::default(),
             faults: self.faults,
+            first_attempt: self.first_attempt,
         }
     }
 }
 
 impl ViewState<Root> for RootState {
     fn init_state(&mut self, cx: &dyn LifecycleContext) {
-        self.attempt = cx.signal(0);
+        self.attempt = cx.signal(self.first_attempt);
         self.shared = Some(Shared {
             notebook: cx.signal(Notebook::seeded()),
             editing: cx.signal(None),
@@ -280,7 +378,7 @@ impl StatefulView for Screen {
             router: None,
             form: FormHandle::new(),
             focus: FocusNode::new(),
-            panic_on_dispose: self.shared.faults.note_dispose
+            panic_on_dispose: self.shared.faults.contains(Fault::Dispose)
                 && matches!(self.route, Route::Note { .. }),
         }
     }
@@ -298,7 +396,7 @@ impl ViewState<Screen> for ScreenState {
             Route::Home => home(cx, shared, &router),
             Route::Note { id } => {
                 assert!(
-                    !shared.faults.note_build,
+                    !shared.faults.contains(Fault::Build),
                     "injected fault: the Note screen's build panics"
                 );
                 editor(cx, id, shared, &router, &self.form, &self.focus)
@@ -495,7 +593,7 @@ fn editor(
             &Route::Note { id },
             move |cx, _router| {
                 assert!(
-                    !save.faults.save_pressed,
+                    !save.faults.contains(Fault::Save),
                     "injected fault: pressing Save note panics"
                 );
                 let message = if validate.validate() {
