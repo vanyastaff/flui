@@ -87,6 +87,10 @@ mod cases {
             "each_display_is_named_as_appkit_names_its_screen",
             each_display_is_named_as_appkit_names_its_screen,
         ),
+        (
+            "each_display_reports_the_colour_appkit_reports",
+            each_display_reports_the_colour_appkit_reports,
+        ),
     ];
 
     /// The snapshot names a display the way System Settings does, from
@@ -107,6 +111,57 @@ mod cases {
             .map(|display| display.name.as_str())
             .collect();
         assert_eq!(published, names, "the snapshot's display names");
+    }
+
+    /// The snapshot gives each display the colour its screen reports: Display
+    /// P3 where AppKit says the screen can show it, and high range at the
+    /// screen's potential headroom where that is over white. The values are
+    /// printed, so a run records what this machine's screens report.
+    fn each_display_reports_the_colour_appkit_reports() {
+        use flui_platform::{ColorGamut, DisplayColor, Headroom};
+        use objc2_app_kit::{NSDisplayGamut, NSScreen};
+
+        let mtm = MainThreadMarker::new().expect("the cases run on the main thread");
+        let platform = MacOSPlatform::new().expect("the AppKit platform");
+        let snapshot = platform.display_snapshot().expect("a display snapshot");
+        let screens = NSScreen::screens(mtm);
+        assert_eq!(
+            snapshot.displays().len(),
+            screens.len(),
+            "one display a screen"
+        );
+        for (display, screen) in snapshot.displays().iter().zip(screens.iter()) {
+            let p3 = screen.canRepresentDisplayGamut(NSDisplayGamut::P3);
+            let potential = screen.maximumPotentialExtendedDynamicRangeColorComponentValue();
+            let current = screen.maximumExtendedDynamicRangeColorComponentValue();
+            println!(
+                "{}: p3 {p3}, potential EDR {potential}, current EDR {current}, published {:?}",
+                display.name, display.color
+            );
+            let gamut = if p3 {
+                ColorGamut::DisplayP3
+            } else {
+                ColorGamut::Srgb
+            };
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "a screen's headroom is a small multiple of white"
+            )]
+            let expected = if potential > 1.0 {
+                DisplayColor::high(
+                    gamut,
+                    Ok(Headroom::try_new(potential as f32).expect("a finite headroom over white")),
+                )
+            } else {
+                DisplayColor::standard(gamut)
+            };
+            assert_eq!(
+                display.color,
+                Ok(expected),
+                "{}: the published colour",
+                display.name
+            );
+        }
     }
 
     /// The application as `MacOSPlatform::run` makes it before its loop: a
