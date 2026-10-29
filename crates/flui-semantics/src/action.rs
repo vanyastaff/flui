@@ -256,7 +256,7 @@ impl CustomActionId {
     ///
     /// A widget that offers only some of its custom actions at a time names
     /// each by its place in the full list, so a handler keeps its id while
-    /// the others come and go ([`SemanticsConfiguration::add_custom_action_as`]).
+    /// the others come and go ([`SemanticsConfiguration::add_custom_action_as`](crate::SemanticsConfiguration::add_custom_action_as)).
     #[must_use]
     pub fn at(index: usize) -> Self {
         let position = u32::try_from(index + 1)
