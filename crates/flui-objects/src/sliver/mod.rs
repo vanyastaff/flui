@@ -1,3 +1,4 @@
+mod carousel;
 mod placement;
 mod sliver_animated_opacity;
 mod sliver_constrained_cross_axis;
@@ -18,6 +19,10 @@ mod sliver_to_box_adapter;
 mod viewport;
 mod virtualized_band;
 
+pub use carousel::{
+    CarouselConfig, CarouselGeometry, CarouselItemFrames, CarouselItemPlacement, CarouselLayout,
+    CarouselLayoutError, MAX_ITEM_EXTENT, RenderSliverCarousel,
+};
 pub use placement::{Placement, PlacementSlot};
 pub use sliver_animated_opacity::*;
 pub use sliver_constrained_cross_axis::{

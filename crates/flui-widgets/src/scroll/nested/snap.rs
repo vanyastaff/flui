@@ -17,6 +17,17 @@ pub trait SnapPolicy: Send + Sync + std::fmt::Debug {
     /// per second along the scroll axis (positive toward the maximum
     /// extent).
     fn target(&self, metrics: &ScrollMetrics, velocity: f64) -> f64;
+
+    /// [`target`](Self::target) for the release of a scroll that began at
+    /// `origin`: where the offset stood when the contact went down, or the
+    /// release's own offset when no contact began it (an assistive scroll, a
+    /// key, a scroll handed in by a nested scrollable). A policy that bounds
+    /// how far one gesture travels, one item per swipe however long the drag,
+    /// reads it; the default ignores it.
+    fn target_from(&self, metrics: &ScrollMetrics, velocity: f64, origin: f64) -> f64 {
+        let _ = origin;
+        self.target(metrics, velocity)
+    }
 }
 
 /// The release speed, logical px/s, below which a policy settles on the

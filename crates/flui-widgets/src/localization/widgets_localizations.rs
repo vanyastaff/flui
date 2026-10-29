@@ -73,6 +73,10 @@ pub trait WidgetsLocalizations: Any + fmt::Debug + Send + Sync {
     /// Semantics label of the adjustable position control every scroll view
     /// publishes for assistive technology.
     fn scroll_position_label(&self) -> &'static str;
+    /// Semantics label of a carousel's control that pauses its autoplay.
+    fn autoplay_pause_label(&self) -> &'static str;
+    /// Semantics label of a carousel's control that resumes its paused autoplay.
+    fn autoplay_resume_label(&self) -> &'static str;
 }
 
 /// US English localizations for the widgets library — the only locale FLUI
@@ -155,5 +159,13 @@ impl WidgetsLocalizations for DefaultWidgetsLocalizations {
 
     fn scroll_position_label(&self) -> &'static str {
         "Scroll position"
+    }
+
+    fn autoplay_pause_label(&self) -> &'static str {
+        "Pause autoplay"
+    }
+
+    fn autoplay_resume_label(&self) -> &'static str {
+        "Resume autoplay"
     }
 }

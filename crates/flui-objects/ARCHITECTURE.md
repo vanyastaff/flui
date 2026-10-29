@@ -556,6 +556,21 @@ unchanged-placement no-op and the unarmed resize; the widgets row
 `an_item_entering_the_band_takes_its_place_without_sliding` pins the band rule
 through a mounted list.
 
+### A carousel sliver lays items out at the large extent and masks them
+
+`RenderSliverCarousel` lays every shown item out tight at the item extent (the layout's large
+keyline) and draws it at the centre the keylines give it, clipped to a mask of the extent its
+keyline has at that offset, so an item shrinks without its content reflowing. Paint clips each
+item to its mask, the largest in front; hit testing and the semantics clip use the same mask, so
+a tap or a touch exploration reaches only the item that shows there, though a neighbour's box
+reaches over it. The masks and parallax progress of the last layout go to `CarouselItemFrames`,
+which the widget reads in paint. The scroll extent is the strip's range plus the viewport, and a
+controller asking for an item before the first layout opens there through a scroll-offset
+correction. Under an unbounded viewport (a shrink-wrapping one) there is no keyline to measure
+against: the sliver publishes zero geometry and warns once.
+`harness_sliver_carousel_geometry_and_frames` and the widgets row
+`carousel::a_tap_lands_only_where_an_item_shows` pin it.
+
 ### Editable text scrolls its content within the allocated viewport
 
 `RenderEditable` keeps full text layout for single-line caret movement while
