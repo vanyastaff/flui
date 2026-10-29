@@ -312,7 +312,7 @@ mod cases {
                 })
                 .collect()
         };
-        let replayed = pointers(recording.replay());
+        let replayed = pointers(recording.replay().expect("a registry's recording replays"));
         assert_eq!(
             replayed.as_slice(),
             heard,
@@ -323,7 +323,7 @@ mod cases {
         let read = flui_native::journal::codec::NativeRecording::read(out.as_slice())
             .expect("it reads back");
         assert_eq!(
-            pointers(read.replay()),
+            pointers(read.replay().expect("a registry's recording replays")),
             replayed,
             "the written recording replays alike"
         );

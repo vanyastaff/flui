@@ -4252,6 +4252,7 @@ mod native_windows {
         );
         let replayed: Vec<String> = recording
             .replay()
+            .expect("a registry's recording replays")
             .iter()
             .map(|input| format!("{:?}", input.as_pointer().expect("pointer input")))
             .collect();
@@ -4449,6 +4450,7 @@ mod native_windows {
         );
         let replayed: Vec<String> = recording
             .replay()
+            .expect("a registry's recording replays")
             .iter()
             .map(|input| format!("{:?}", input.as_pointer().expect("pointer input")))
             .collect();

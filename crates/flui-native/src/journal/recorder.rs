@@ -4,13 +4,29 @@
 
 use std::sync::Arc;
 
+use flui_platform::ImeEvent;
 use parking_lot::Mutex;
 
 use super::capture::{CaptureGuard, CaptureSource, Captured, capture};
 use super::codec::{Backend, Header, NativeRecording, Row};
 
-/// A capture installed on this thread, journalling every registry created
-/// on it while it lives, in creation order.
+/// Whether a recorder keeps the text it journals (ADR-0215 §5).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Privacy {
+    /// Input method text is replaced, and each row that lost text is marked
+    /// redacted, which its replay refuses.
+    #[default]
+    Redact,
+    /// Keep all text: the one explicit opt-in per recording.
+    KeepText,
+}
+
+/// The text a redacted row carries in place of the original.
+const REDACTED: &str = "\u{fffd}";
+
+/// A capture installed on this thread, journalling every registry, loop
+/// delivery and window delivery created on it while it lives, in creation
+/// order.
 #[derive(Debug)]
 #[must_use = "the capture ends when the recorder is finished or dropped"]
 pub struct Recorder {
@@ -19,11 +35,19 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    /// Install a capture for `backend` on this thread.
+    /// Install a capture for `backend` on this thread, redacting text.
     pub fn start(backend: Backend) -> Self {
+        Self::with_privacy(backend, Privacy::Redact)
+    }
+
+    /// Install a capture for `backend` on this thread that treats text as
+    /// `privacy` says.
+    pub fn with_privacy(backend: Backend, privacy: Privacy) -> Self {
         let journals: Arc<Mutex<Vec<NativeRecording>>> = Arc::default();
         let sink = Arc::clone(&journals);
-        let guard = capture(move |source, call| journal(&mut sink.lock(), backend, source, call));
+        let guard = capture(move |source, call| {
+            journal(&mut sink.lock(), backend, privacy, source, call);
+        });
         Self { journals, guard }
     }
 
@@ -50,23 +74,32 @@ impl Journals {
     }
 }
 
-/// Fold one captured call into the recording of its registry.
+/// Fold one captured call into the recording of its source.
 fn journal(
     recordings: &mut Vec<NativeRecording>,
     backend: Backend,
+    privacy: Privacy,
     source: CaptureSource,
     call: Captured<'_>,
 ) {
     let index = source.0 as usize;
-    if let Captured::Started {
-        epoch,
-        uptime,
-        counter,
-    } = call
-    {
-        assert_eq!(index, recordings.len(), "sources are numbered in order");
+    let header = match call {
+        Captured::Started {
+            epoch,
+            uptime,
+            counter,
+        } => Some(Header::new(backend, epoch, uptime, counter)),
+        Captured::Opened(stream) => Some(Header::for_stream(backend, stream)),
+        _ => None,
+    };
+    if let Some(header) = header {
+        assert_eq!(
+            index,
+            recordings.len(),
+            "BUG: a capture numbers its sources in order"
+        );
         recordings.push(NativeRecording {
-            header: Header::new(backend, epoch, uptime, counter),
+            header,
             rows: Vec::new(),
         });
         return;
@@ -128,7 +161,37 @@ fn journal(
         Captured::ViewportAbandoned { frame } => Row::ViewportAbandoned { frame },
         Captured::Wheel(reading) => Row::Wheel(*reading),
         Captured::Scroll(reading) => Row::Scroll(*reading),
-        Captured::Started { .. } => unreachable!("BUG: a source starts once, handled above"),
+        Captured::Notice(notice) => Row::Notice(notice),
+        Captured::SessionEnd(phase) => Row::SessionEnd(phase),
+        Captured::Reopen => Row::Reopen,
+        Captured::Ime(event) => match privacy {
+            Privacy::KeepText => Row::Ime {
+                event: event.clone(),
+                redacted: false,
+            },
+            Privacy::Redact => {
+                let (event, redacted) = redacted(event);
+                Row::Ime { event, redacted }
+            }
+        },
+        Captured::Started { .. } | Captured::Opened(_) => {
+            unreachable!("BUG: a source opens once, handled above")
+        }
     };
     recording.rows.push(row);
+}
+
+/// `event` with its text replaced, and whether it had any to replace.
+fn redacted(event: &ImeEvent) -> (ImeEvent, bool) {
+    match event {
+        ImeEvent::Preedit { cursor, .. } => (
+            ImeEvent::Preedit {
+                text: REDACTED.to_owned(),
+                cursor: cursor.map(|_| (0, REDACTED.len())),
+            },
+            true,
+        ),
+        ImeEvent::Commit(_) => (ImeEvent::Commit(REDACTED.to_owned()), true),
+        other => (other.clone(), false),
+    }
 }
