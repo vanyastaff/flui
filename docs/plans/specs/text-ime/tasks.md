@@ -157,6 +157,6 @@ graph LR
   `a_reset_mid_composition_removes_the_preedit` (в `crates/flui-widgets/tests/form.rs`, рядом с
   остальными строками композиции формы). Красные по assert на `df3d56dd6`, зелёные после;
   проверено на Windows 2026-10-28
-- [ ] T9 — остаток: реконверсия; L-часть — ответ `TS_IAS_QUERYONLY` в модуле `acp` (`acp::insert_at_selection`), `query_only_insert_answers_from_the_selection` зелёный на Linux, clippy `-p flui-native --target x86_64-pc-windows-msvc --all-targets` чистый; W-строка `reconversion_requests_leave_the_document_unchanged` ждёт прогона на Windows (Ваня)
+- [ ] T9 — остаток: реконверсия; L-часть — ответ `TS_IAS_QUERYONLY` в модуле `acp` (`acp::insert_at_selection`), `query_only_insert_answers_from_the_selection` зелёный на Linux, clippy `-p flui-native --target x86_64-pc-windows-msvc --all-targets` чистый; W-строка `reconversion_requests_leave_the_document_unchanged` написана (кейс «reconversion requests» в `tsf/tests.rs`, clippy под Windows чистый), ждёт прогона `-p flui-native` на Windows
 - [ ] T11 — строки IME на приложении приёмки
 - [ ] T10 — нативное доказательство (после flui-driver FD11)
