@@ -892,9 +892,6 @@ impl ModalHandle {
         self.inner.pop_entries.notify_pop_invoked(did_pop);
     }
 
-    /// Fire the `on_remove`s owed by local-history pops that happened inside
-    /// the flush, and the emptied-edge `changed_internal_state`. Called by
-    /// `NavigatorShared::apply` with **no lock held** (ADR-0025).
     /// Make this route's focus scope the active one and restore the focus it
     /// remembers. Called by the navigator from
     /// `apply`, **outside** the history lock: this moves the primary focus, and
@@ -921,14 +918,25 @@ impl ModalHandle {
             .set_descendants_are_focusable(focusable);
     }
 
-    pub(crate) fn drain_local_history(&self) {
+    /// Settle what local-history pops inside the flush owe: the emptied-edge
+    /// `changed_internal_state` now, and each `on_remove` after the frame, on
+    /// `post_frame` (ADR-0086 §6). A flush can run inside `build`, where a
+    /// write the callback makes through its captured `WriterSource` is
+    /// refused; after the frame it lands. The edge goes first because it is
+    /// the flush's own consequence: the rebuild it requests joins the frame
+    /// the pop happened in, while the callbacks wait for that frame to end.
+    /// Called by `NavigatorShared::apply` with **no lock held** (ADR-0025);
+    /// each step is contained in `recovery` on its own.
+    pub(crate) fn drain_local_history(
+        &self,
+        post_frame: Option<&flui_scheduler::PostFrameHandle>,
+        recovery: &mut flui_foundation::panic::PanicRecovery,
+    ) {
         let (callbacks, emptied) = self.inner.local_history.take_owed();
-        for callback in callbacks {
-            callback();
-        }
         if emptied {
-            changed_internal_state(&self.inner);
+            recovery.run(|| changed_internal_state(&self.inner));
         }
+        super::local_history::deliver_on_remove(post_frame, callbacks, recovery);
     }
 
     /// Force the route offstage (or back), whole: the early return on an

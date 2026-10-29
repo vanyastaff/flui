@@ -475,6 +475,8 @@ impl NavigatorShared {
             // an animated push's own `AwaitPush` effect (the common case,
             // since every push produces one) never needs this map at all.
             let mut modals: Option<HashMap<RouteId, ModalHandle>> = None;
+            // Read once, as the flush left it: where its owed `on_remove`s go.
+            let post_frame = self.post_frame.lock().clone();
             for effect in std::mem::take(&mut outcome.deferred) {
                 match effect {
                     DeferredEffect::PopInvoked(route, did_pop) => {
@@ -488,7 +490,7 @@ impl NavigatorShared {
                         let modals =
                             modals.get_or_insert_with(|| self.registries.modals.lock().clone());
                         if let Some(modal) = modals.get(&route) {
-                            recovery.run(|| modal.drain_local_history());
+                            modal.drain_local_history(post_frame.as_ref(), &mut recovery);
                         }
                     }
                     // **Load-bearing placement (ADR-0064).** Registered here,
