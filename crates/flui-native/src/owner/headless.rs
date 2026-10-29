@@ -9,45 +9,35 @@
 use std::{
     collections::HashMap,
     path::PathBuf,
+    rc::Rc,
     sync::{Arc, Weak, atomic::Ordering},
     thread::{self, ThreadId},
 };
 
-use flui_foundation::geometry::Point;
+use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_foundation::{ClaimSlot, DataTransferId, claim_slot};
 use flui_platform::InMemoryClipboard;
-use flui_platform::data_transfer::{
-    DropFeedback, OfferTable, RepresentationDescriptor, TransferActions,
-};
-use flui_platform::drag::{OsDragEndHook, OsDragProvider, OsDragStart};
+use flui_platform::data_transfer::{DropFeedback, RepresentationDescriptor, TransferActions};
+use flui_platform::drag::{OsDragEndHook, OsDragProvider, OsDragStart, PlatformDragSource};
 use parking_lot::Mutex;
 
 use crate::host::{self, Host};
-use crate::owner::call_point::{Field, Once, call, install};
+use crate::owner::app_delivery::AppDelivery;
 use crate::owner::slot::OwnerSlot;
 use crate::platform::HostPlatform;
 use crate::{
-    error::PlatformError,
-    host_window::HostWindow,
-    owner::DirectOwnerHooks,
-    owner::OpenWindowError,
-    owner::OwnerHooks,
-    owner::OwnerPlatform,
-    owner::PendingWindow,
-    owner::ProxyTransport,
-    owner::WindowOpen,
-    owner::handlers::{OpenWindows, PlatformHandlers, WindowCallbacks},
-    platform::Platform,
-    platform::PlatformExecutor,
-    platform::PlatformReadyCallback,
+    error::PlatformError, host_window::HostWindow, owner::DirectOwnerHooks, owner::OpenWindowError,
+    owner::OwnerHooks, owner::OwnerPlatform, owner::PendingWindow, owner::ProxyTransport,
+    owner::WindowOpen, owner::handlers::OpenWindows, owner::window_delivery::WindowDelivery,
+    platform::AppHandler, platform::Platform, platform::PlatformExecutor,
 };
-use flui_platform::{DisplaySnapshot, WindowEvent, WindowId, WindowOptions};
+use flui_platform::{DisplayId, DisplaySnapshot, WindowHandler, WindowId, WindowOptions};
 
 /// The value a deferred (or synchronous) window-open request resolves to —
 /// mirrors the winit backend's own private `OpenWindowResult` alias
 /// (`owner/winit/control.rs`) so both backends complete a
 /// [`ClaimSlot`]/[`PendingWindow`] pair with an identical shape.
-type OpenWindowResult = Result<Arc<dyn HostWindow>, OpenWindowError>;
+type OpenWindowResult = Result<crate::owner::OpenedWindow, OpenWindowError>;
 
 /// Builds the text-store host a headless window offers
 /// ([`HeadlessPlatform::with_text_store_host`](crate::HeadlessPlatform::with_text_store_host)).
@@ -66,10 +56,17 @@ pub(crate) trait HeadlessHost: 'static {
     fn displays() -> DisplaySnapshot;
 
     /// The channel the system notices a test reports take to the application.
-    fn notices() -> Arc<dyn crate::owner::notices::NoticeChannel>;
+    fn notices(app: &Arc<AppDelivery>) -> Arc<dyn crate::owner::notices::NoticeChannel>;
 
     /// The simulated system's pointer devices, none attached.
     fn devices() -> Box<dyn SimulatedDevices>;
+
+    /// The table the simulated system mints its drag offers in, empty.
+    fn offers() -> Box<dyn SimulatedOffers>;
+
+    /// The drag source a window opened now in `state`'s system hands out:
+    /// none until a test lets the windows start sessions.
+    fn drag_source(state: &HeadlessState) -> Option<Arc<dyn PlatformDragSource>>;
 }
 
 /// The pointer devices of the simulated system, which the input feature
@@ -97,6 +94,18 @@ pub(crate) trait SimulatedDevices: Send {
     fn present(&self) -> flui_platform::input_capabilities::PointerKindSet;
 }
 
+/// The table the simulated system mints its drag offers in, which the drag
+/// feature keeps ([`HeadlessHost::offers`]) and the loop holds with the rest
+/// of the system's drag state ([`OsDrags`]).
+pub(crate) trait SimulatedOffers: Send {
+    /// Mint a live offer announcing `representations`.
+    fn mint(&mut self, representations: Arc<[RepresentationDescriptor]>) -> DataTransferId;
+
+    /// Retire live offer `id`, so it is stale for good; a stale `id` is a
+    /// no-op.
+    fn retire(&mut self, id: DataTransferId);
+}
+
 /// The displays position is the loop's: the snapshot it holds.
 impl host::Displays<HeadlessLoop> for HeadlessLoop {
     fn snapshot(owner: &HeadlessLoop) -> Result<DisplaySnapshot, PlatformError> {
@@ -113,22 +122,28 @@ impl host::Displays<HeadlessLoop> for HeadlessLoop {
 /// through it; the simulated devices and drag sessions reach a window's
 /// callbacks through it.
 pub(crate) trait TrackedWindows: OpenWindows {
-    /// Builds a window under the locked `state` and tracks it; `platform` is
-    /// the lock `state` came from, which the window keeps to close. The caller
-    /// announces the window (`WindowEvent::Created`) once it released the
-    /// lock.
+    /// Builds a window delivering to `handler` under the locked `state` and
+    /// tracks it; `platform` is the lock `state` came from, which the window
+    /// keeps to close. The caller delivers the capability snapshot once the
+    /// lock is released.
     fn open(
         self: Arc<Self>,
         state: &mut HeadlessState,
         platform: Weak<Mutex<HeadlessState>>,
         options: WindowOptions,
-    ) -> Arc<dyn HostWindow>;
+        handler: Rc<dyn WindowHandler>,
+    ) -> Rc<dyn HostWindow>;
 
-    /// The callbacks of every open window, in the order they opened.
-    fn callbacks_of_all(&self) -> Vec<Arc<WindowCallbacks>>;
+    /// Keep `window`, which a deferred open built, until it closes: its
+    /// opener gets its identity, never the window (ADR-0254 §4).
+    fn keep_deferred(&self, window: &Rc<dyn HostWindow>);
 
-    /// The callbacks of the open window `id` names.
-    fn callbacks_of(&self, id: WindowId) -> Option<Arc<WindowCallbacks>>;
+    /// What every open window delivers to its handler, in the order they
+    /// opened.
+    fn deliveries_of_all(&self) -> Vec<Arc<WindowDelivery>>;
+
+    /// What the open window `id` names delivers to its handler.
+    fn delivery_of(&self, id: WindowId) -> Option<Arc<WindowDelivery>>;
 }
 
 /// The headless host's loop: the state every position of its table reads.
@@ -146,9 +161,8 @@ pub struct HeadlessLoop {
 /// holds open and the session in flight. The loop holds it as it holds the
 /// rest of the simulated system; `drag::headless` plays the sessions over it
 /// and is the platform's one data-transfer source over it.
-#[derive(Default)]
 pub(crate) struct OsDrags {
-    pub(crate) table: OfferTable,
+    pub(crate) table: Box<dyn SimulatedOffers>,
     pub(crate) session: Option<OsDragSession>,
     /// The providers behind offers still open at the system, by id, so a
     /// target may fetch after the drop until it concludes it.
@@ -182,7 +196,11 @@ pub(crate) struct HeadlessState {
     /// ([`HeadlessPlatform::with_os_drag`](crate::HeadlessPlatform::with_os_drag)).
     pub(crate) os_drag_start: Option<OsDragStart>,
     pub(crate) owner_signal: Weak<crate::owner::signal::OwnerSignal>,
-    pub(crate) handlers: PlatformHandlers,
+    /// What the platform delivers to the application's handler, which `run`
+    /// binds.
+    pub(crate) app: Arc<AppDelivery>,
+    /// Called when a test changes the keyboard layout.
+    pub(crate) keyboard_layout_changed: Option<Box<dyn FnMut() + Send>>,
     background_executor: Arc<TestExecutor>,
     pub(crate) clipboard: Arc<InMemoryClipboard>,
     is_running: bool,
@@ -202,7 +220,7 @@ pub(crate) struct HeadlessState {
     /// while `deferred_window_open` is set, awaiting a manual
     /// `HeadlessDeferredWindowOpens::resolve_next` call. FIFO order: the
     /// oldest request resolves first.
-    pending_opens: Vec<(ClaimSlot<OpenWindowResult>, WindowOptions)>,
+    pending_opens: Vec<PendingOpen>,
     /// Parked `Platform::request_exit_policy_reevaluation` request (any
     /// thread may set it; coalesced). This mock has no event loop of its
     /// own, so the embedder drives the actual owner-thread re-check via
@@ -235,6 +253,50 @@ pub(crate) struct HeadlessState {
     /// The failure the next `Platform::preferences` read reports instead of a
     /// value ([`HeadlessPreferences::fail_next_read`](crate::HeadlessPreferences::fail_next_read)).
     pub(crate) preference_failure: Option<String>,
+    /// What makes the drag source of a window opened now, as the table names
+    /// it ([`HeadlessHost::drag_source`]).
+    drag_source: fn(&HeadlessState) -> Option<Arc<dyn PlatformDragSource>>,
+}
+
+/// What the simulated system tells a window that opens in it: the displays
+/// it lays out and the drag source it hands out, read from the system's state
+/// so the window names neither feature.
+impl HeadlessState {
+    /// The display a new window opens on: the primary, or the first when
+    /// none is.
+    pub(crate) fn window_display(&self) -> Option<DisplayId> {
+        self.displays
+            .primary()
+            .or_else(|| self.displays.displays().first())
+            .map(|display| display.id)
+    }
+
+    /// Whether the system holds display `id`.
+    pub(crate) fn holds_display(&self, id: DisplayId) -> bool {
+        self.displays.get(id).is_some()
+    }
+
+    /// The bounds of display `id` in the logical pixels of its own scale.
+    pub(crate) fn display_bounds(&self, id: DisplayId) -> Option<Bounds<f64>> {
+        let display = self.displays.get(id)?;
+        let scale = display.scale_factor;
+        let device = display.bounds;
+        Some(Bounds::new(
+            Point::new(
+                f64::from(device.origin.x) / scale,
+                f64::from(device.origin.y) / scale,
+            ),
+            Size::new(
+                f64::from(device.size.width) / scale,
+                f64::from(device.size.height) / scale,
+            ),
+        ))
+    }
+
+    /// The drag source a window opened now hands out.
+    pub(crate) fn window_drag_source(&self) -> Option<Arc<dyn PlatformDragSource>> {
+        (self.drag_source)(self)
+    }
 }
 
 impl HeadlessLoop {
@@ -242,11 +304,18 @@ impl HeadlessLoop {
     /// channel and the simulated devices, and whose windows are `windows`, the
     /// window feature's.
     pub(crate) fn new<H: HeadlessHost>(windows: Arc<dyn TrackedWindows>) -> Self {
+        let app = Arc::new(AppDelivery::new());
         let state = HeadlessState {
-            drags: Arc::default(),
+            drags: Arc::new(Mutex::new(OsDrags {
+                table: H::offers(),
+                session: None,
+                open: HashMap::new(),
+            })),
             os_drag_start: None,
             owner_signal: Weak::new(),
-            handlers: PlatformHandlers::new(),
+            notices: H::notices(&app),
+            app,
+            keyboard_layout_changed: None,
             background_executor: Arc::new(TestExecutor::new("background")),
             clipboard: Arc::new(InMemoryClipboard::new()),
             is_running: false,
@@ -260,10 +329,10 @@ impl HeadlessLoop {
             input_availability: default_input_availability(),
             devices: H::devices(),
             displays: H::displays(),
-            notices: H::notices(),
             session_end_releases: 0,
             preferences: flui_platform::SystemPreferences::default(),
             preference_failure: None,
+            drag_source: H::drag_source,
         };
 
         let wake_failure = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -294,61 +363,43 @@ impl HeadlessLoop {
     }
 }
 
-/// Call the application's window-event handler with `event` through the call
-/// point, with the state lock released: the handler re-enters the embedder's
-/// runtime, which may open a window, install another handler or quit
-/// (ADR-0039). Its panic reaches the caller. An event emitted from inside the
-/// handler finds the slot empty and is dropped, as on winit.
-pub(crate) fn emit_window_event(state: &Mutex<HeadlessState>, event: WindowEvent) {
-    call(
-        &Field::new(state, |state| &mut state.handlers.window_event),
-        |handler| handler(event),
-    )
-    .or_resume(());
-}
-
-/// Stop the platform and run the application's quit handler, once: it is
-/// retired after its call. The signal, when there is one, closes first.
+/// Stop the platform and tell the application's handler it quits; the
+/// delivery hears the quit once per run. The signal, when there is one,
+/// closes first.
 fn finish_quit(state: &Mutex<HeadlessState>) {
-    let signal = {
+    let (signal, app) = {
         let mut state = state.lock();
         state.is_running = false;
-        state.owner_signal.upgrade()
+        (state.owner_signal.upgrade(), Arc::clone(&state.app))
     };
     if let Some(signal) = signal {
         signal.close();
     }
-    call(
-        &Once(Field::new(state, |state| &mut state.handlers.quit)),
-        |quit| quit(),
-    )
-    .or_resume(());
+    app.quit_requested().or_resume(());
 }
 
-/// Ask the application's exit-policy hook whether the platform may quit now
-/// that no window is tracked, and quit when it may. No hook never quits.
+/// Ask the application's handler whether the platform may quit now that no
+/// window is tracked, and quit when it may. With no handler bound it never
+/// quits.
 ///
-/// The hook runs with the state lock released: it drops removed UI runtime
+/// The handler runs with the state lock released: it drops removed UI runtime
 /// state, whose destructors may call back into this platform (a dispose hook
-/// opening another window, say). Emptiness is checked before the hook and
-/// again before quitting, so a window opened meanwhile — by the hook itself
+/// opening another window, say). Emptiness is checked before the question and
+/// again before quitting, so a window opened meanwhile — by the handler itself
 /// too — keeps the platform running. `true` when it quit.
 pub(crate) fn consult_exit_policy(state: &Mutex<HeadlessState>) -> bool {
-    if !state.lock().windows.is_empty() {
-        return false;
-    }
-    // `false` when vacant, not `true`: headless's own pre-#555 default is "no
-    // hook -> never quit" (matching every headless test/consumer that
-    // predates this mechanism, none of which expects closing a mock window
-    // to spontaneously call `quit`) -- the OPPOSITE of winit's "no hook ->
-    // exit unconditionally" default, which matches real native pre-#555
-    // window-close behavior instead. The two backends' defaults are
-    // deliberately different; this is not a typo.
-    let allowed = call(
-        &Field::new(state, |state| &mut state.handlers.exit_policy),
-        |hook| hook(),
-    )
-    .or_resume(false);
+    let app = {
+        let state = state.lock();
+        if !state.windows.is_empty() {
+            return false;
+        }
+        Arc::clone(&state.app)
+    };
+    // `false` with no handler, not `true`: a headless platform before or
+    // after its run never quits on its own, the opposite of the desktop
+    // hosts, whose loop ends with its last window when nothing says
+    // otherwise.
+    let allowed = app.exit_policy().or_resume(false);
     if !allowed || !state.lock().windows.is_empty() {
         return false;
     }
@@ -411,7 +462,7 @@ impl host::Loop for HeadlessLoop {
     fn run(
         self: Arc<Self>,
         platform: Arc<dyn Platform>,
-        on_ready: PlatformReadyCallback,
+        handler: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError> {
         tracing::info!("Starting headless platform (no event loop)");
 
@@ -456,11 +507,15 @@ impl host::Loop for HeadlessLoop {
             ))
         };
 
-        // In headless mode, just call on_ready and return immediately. A
-        // fallible bootstrap has nowhere else to go on this backend since
-        // there is no loop to keep running with a half-built app --
-        // propagate straight out of `run`.
-        if let Err(error) = on_ready(OwnerPlatform::new(platform, hooks)) {
+        // In headless mode, just run the bootstrap and return immediately. A
+        // failed bootstrap has nowhere else to go on this backend since there
+        // is no loop to keep running with a half-built app -- propagate
+        // straight out of `run`. The handler stays bound for the platform's
+        // life: a test reports to it after `run` returned.
+        let app = Arc::clone(&self.state.lock().app);
+        app.bind(handler, &platform, &hooks);
+        app.resume_through_signal(&signal);
+        if let Err(error) = app.ready(OwnerPlatform::new(platform, hooks)) {
             signal.close();
             return Err(PlatformError::bootstrap(error));
         }
@@ -481,33 +536,11 @@ impl host::Loop for HeadlessLoop {
         finish_quit(&self.state);
     }
 
-    fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
-        install(
-            &Field::new(&*self.state, |state| &mut state.handlers.exit_policy),
-            hook,
-        );
-    }
-
     fn request_exit_policy_reevaluation(&self) {
         // Park only (coalesced): this mock has no event loop, so the
         // owner-thread half runs when the embedder calls
         // `HeadlessExitReevaluation::drive` — see that method's doc.
         self.with_state(|state| state.exit_reevaluation_requested = true);
-    }
-
-    fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
-        install(
-            &Field::new(&*self.state, |state| &mut state.handlers.quit),
-            callback,
-        );
-    }
-
-    fn set_wake_deadline_hook(
-        &self,
-        hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
-    ) {
-        // No idle wait to bound: the test drives every owner turn.
-        drop(hook);
     }
 }
 
@@ -559,7 +592,7 @@ impl host::Services for HeadlessLoop {
 
 /// What the headless backend implements unless a test says otherwise.
 const fn default_input_availability() -> flui_platform::input_capabilities::InputCapabilities {
-    use flui_platform::input_capabilities::Availability::Native;
+    use flui_platform::Availability::Native;
     flui_platform::input_capabilities::InputCapabilities::builder()
         .pen(Native)
         .precise_scroll(Native)
@@ -577,6 +610,15 @@ const fn default_input_availability() -> flui_platform::input_capabilities::Inpu
 /// instead of creating synchronously, and
 /// [`HeadlessDeferredWindowOpens::resolve_next`] completes the oldest one on
 /// demand.
+/// A deferred open waiting for [`HeadlessDeferredWindowOpens::resolve_next`]:
+/// where its window goes, its options, and its handler, which stays on the
+/// owner thread that made it.
+pub(crate) struct PendingOpen {
+    slot: ClaimSlot<OpenWindowResult>,
+    options: WindowOptions,
+    handler: OwnerSlot<Rc<dyn WindowHandler>>,
+}
+
 struct HeadlessDeferredOwnerHooks {
     signal: Arc<crate::owner::signal::OwnerSignal>,
     state: Arc<Mutex<HeadlessState>>,
@@ -591,7 +633,11 @@ impl OwnerHooks for HeadlessDeferredOwnerHooks {
         self.signal.register(callback)
     }
 
-    fn open_owner_window(&self, options: WindowOptions) -> Result<WindowOpen, OpenWindowError> {
+    fn open_owner_window(
+        &self,
+        options: WindowOptions,
+        handler: Rc<dyn WindowHandler>,
+    ) -> Result<WindowOpen, OpenWindowError> {
         // No wake-worthy event loop to notify on abandonment (this backend
         // never parks a real loop on the request) -- see `claim_slot`'s own
         // doc for why a no-op wake is the correct choice for a generic
@@ -601,8 +647,19 @@ impl OwnerHooks for HeadlessDeferredOwnerHooks {
                 rejected: Some(Box::new(options)),
             });
         }
+        let kept = OwnerSlot::new();
+        if let Err(handler) = kept.replace(handler) {
+            crate::owner::call_point::retire(handler);
+            return Err(OpenWindowError::Unavailable {
+                message: "the owner thread cannot keep another window handler".to_owned(),
+            });
+        }
         let (slot, handle) = claim_slot::<OpenWindowResult>(Arc::new(|| {}));
-        self.state.lock().pending_opens.push((slot, options));
+        self.state.lock().pending_opens.push(PendingOpen {
+            slot,
+            options,
+            handler: kept,
+        });
         Ok(WindowOpen::Pending(PendingWindow::new(
             handle,
             self.owner_thread,
@@ -766,8 +823,11 @@ impl HeadlessDeferredWindowOpens {
     /// a genuine `.close()` — since the whole point of this test seam is
     /// that nothing else in the framework hands that handle back once a
     /// request defers), or `None` if there was nothing pending (the platform
-    /// was dropped, or every request so far has already been resolved).
-    pub fn resolve_next(&self) -> Option<Arc<dyn HostWindow>> {
+    /// was dropped, or every request so far has already been resolved) or
+    /// the call is not on the owner thread whose handler the oldest request
+    /// carries, which it leaves pending. The window's handler hears the
+    /// capability snapshot before this returns.
+    pub fn resolve_next(&self) -> Option<Rc<dyn HostWindow>> {
         let platform_state = self.state.upgrade()?;
 
         // Pop the request and build its window under one lock acquisition,
@@ -777,15 +837,32 @@ impl HeadlessDeferredWindowOpens {
         // rely on that.
         let (slot, window) = {
             let mut state = platform_state.lock();
-            if state.pending_opens.is_empty() {
+            // The handler lives on the owner thread that asked: off it, the
+            // request stays pending.
+            if state.pending_opens.first()?.handler.is_occupied() != Some(true) {
                 return None;
             }
-            let (slot, options) = state.pending_opens.remove(0);
+            let PendingOpen {
+                slot,
+                options,
+                handler,
+            } = state.pending_opens.remove(0);
+            let handler = handler
+                .take()
+                .expect("BUG: a deferred open resolves on the owner thread that made it");
             let windows = Arc::clone(&state.windows);
-            let window = windows.open(&mut state, Arc::downgrade(&platform_state), options);
+            let window = Arc::clone(&windows).open(
+                &mut state,
+                Arc::downgrade(&platform_state),
+                options,
+                handler,
+            );
+            windows.keep_deferred(&window);
             (slot, window)
         };
-        emit_window_event(&platform_state, WindowEvent::Created(window.id()));
+        // The lock is released: the handler hears its window's capabilities
+        // before anything later.
+        window.delivery().deliver_capability_snapshot();
 
         // The requester may have already abandoned the request (dropped its
         // `PendingWindow` before this call) -- `deliver`'s `Err` hands the
@@ -795,7 +872,7 @@ impl HeadlessDeferredWindowOpens {
         // test driving `resolve_next` directly (rather than through a real
         // `PendingWindow`) legitimately wants it regardless of whether some
         // OTHER requester abandoned their own claim to it.
-        if let Err(_unclaimed) = slot.deliver(Ok(Arc::clone(&window))) {
+        if let Err(_unclaimed) = slot.deliver(Ok(crate::owner::OpenedWindow::new(&window))) {
             tracing::debug!(
                 "resolved a deferred window open whose PendingWindow was \
                  already abandoned by the requester; the created mock window \
@@ -845,12 +922,22 @@ mod tests {
             DisplaySnapshot::empty()
         }
 
-        fn notices() -> Arc<dyn crate::owner::notices::NoticeChannel> {
+        fn notices(_: &Arc<AppDelivery>) -> Arc<dyn crate::owner::notices::NoticeChannel> {
             Arc::new(NoNotices)
         }
 
         fn devices() -> Box<dyn SimulatedDevices> {
             Box::new(NoDevices)
+        }
+
+        fn offers() -> Box<dyn SimulatedOffers> {
+            Box::new(crate::drag::offers::OfferTable::default())
+        }
+
+        fn drag_source(
+            _: &HeadlessState,
+        ) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+            None
         }
     }
 
@@ -894,68 +981,54 @@ mod tests {
             _: &mut HeadlessState,
             _: Weak<Mutex<HeadlessState>>,
             _: WindowOptions,
-        ) -> Arc<dyn HostWindow> {
+            _: Rc<dyn WindowHandler>,
+        ) -> Rc<dyn HostWindow> {
             unreachable!("the test opens no window")
         }
 
-        fn callbacks_of_all(&self) -> Vec<Arc<WindowCallbacks>> {
+        fn keep_deferred(&self, _: &Rc<dyn HostWindow>) {
+            unreachable!("the test opens no window")
+        }
+
+        fn deliveries_of_all(&self) -> Vec<Arc<WindowDelivery>> {
             Vec::new()
         }
 
-        fn callbacks_of(&self, _: WindowId) -> Option<Arc<WindowCallbacks>> {
+        fn delivery_of(&self, _: WindowId) -> Option<Arc<WindowDelivery>> {
             None
         }
     }
 
+    /// The quit reaches the handler once, outside the state lock, and a quit
+    /// the handler issues from inside it is the same quit.
     #[test]
-    fn explicit_quit_reenters_and_drops_its_callback_outside_the_state_lock() {
-        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-        struct CallbackDrop {
-            platform: std::sync::Weak<HeadlessLoop>,
-            released: Arc<AtomicBool>,
-        }
-        impl Drop for CallbackDrop {
-            fn drop(&mut self) {
-                let platform = self
-                    .platform
-                    .upgrade()
-                    .expect("platform still owned by test");
-                // Record rather than assert in Drop: on RED the callback body
-                // itself panics, so a second panic here would abort the process.
-                self.released
-                    .store(platform.state.try_lock().is_some(), Ordering::SeqCst);
-            }
-        }
+    fn explicit_quit_reenters_and_reaches_the_handler_outside_the_state_lock() {
+        use std::cell::Cell;
+
+        use crate::owner::app_delivery::testing::{AppCall, AppLog, bind};
+
         let platform = Arc::new(HeadlessLoop::new::<EmptyHost>(Arc::new(NoWindows)));
         platform.state.lock().is_running = true;
-        let calls = Arc::new(AtomicUsize::new(0));
-        let released = Arc::new(AtomicBool::new(false));
-        let callback_drop = CallbackDrop {
-            platform: Arc::downgrade(&platform),
-            released: Arc::clone(&released),
-        };
-        let callback_platform = Arc::clone(&platform);
-        let callback_calls = Arc::clone(&calls);
-        platform.on_quit(Box::new(move || {
-            let _ = &callback_drop;
-            assert!(
-                callback_platform.state.try_lock().is_some(),
-                "quit callback must run outside the state lock"
-            );
-            callback_calls.fetch_add(1, Ordering::SeqCst);
-            callback_platform.quit();
-        }));
+        let app = AppLog::new();
+        let delivery = Arc::clone(&platform.state.lock().app);
+        let run = bind(delivery, app.clone());
+        run.delivery.ready(run.owner()).expect("bootstrap");
+        let unlocked = Rc::new(Cell::new(false));
+        let (seen, reentered) = (Rc::clone(&unlocked), Arc::clone(&platform));
+        app.react(move |call, _| {
+            if call == AppCall::Quit {
+                seen.set(reentered.state.try_lock().is_some());
+                reentered.quit();
+            }
+        });
         platform.quit();
         platform.quit();
-        assert_eq!(
-            calls.load(Ordering::SeqCst),
-            1,
-            "the registered callback is consumed before reentry"
-        );
+        assert_eq!(app.calls(), [AppCall::Ready, AppCall::Quit]);
         assert!(
-            released.load(Ordering::SeqCst),
-            "captured callback data drops outside the state lock"
+            unlocked.get(),
+            "the handler heard the quit outside the state lock"
         );
         assert!(!platform.state.lock().is_running);
+        run.delivery.release();
     }
 }

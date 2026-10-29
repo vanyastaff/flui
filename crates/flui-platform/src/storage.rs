@@ -15,6 +15,8 @@ use std::future::Future;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::pin::Pin;
 
+use crate::Unsupported;
+
 /// A store of named byte values that outlive the process.
 ///
 /// Implementations answer on their own threads: the futures they return are
@@ -295,9 +297,11 @@ pub enum WriteMode {
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum StorageError {
-    /// This platform keeps no files, or no storage was configured.
-    #[error("storage is unavailable")]
-    Unavailable,
+    /// What the request needs is not here: the platform keeps no files, no
+    /// storage was configured, or the storage directory cannot be locked, so
+    /// a write based on a version cannot be made safely there.
+    #[error("storage cannot do this: {0}")]
+    Unsupported(#[from] Unsupported),
     /// The value or its directory cannot be reached: no permission, a
     /// directory in the file's place, a removed medium.
     #[error("the stored value is inaccessible: {kind}")]
@@ -322,10 +326,6 @@ pub enum StorageError {
     /// The stored value changed since the version the write was based on.
     #[error("the stored value changed since it was read")]
     Conflict,
-    /// The storage directory cannot be locked, so a write based on a version
-    /// cannot be made safely there.
-    #[error("the storage directory does not support file locks")]
-    LockUnsupported,
     /// A newer value of the same name replaced this one before it was
     /// written.
     #[error("a newer value replaced this one before it was written")]
@@ -333,4 +333,21 @@ pub enum StorageError {
     /// The request was dropped before it completed.
     #[error("the storage request was cancelled")]
     Cancelled,
+}
+
+impl StorageError {
+    /// What is not here, when that is why the request failed.
+    #[must_use]
+    pub const fn unsupported(&self) -> Option<Unsupported> {
+        match self {
+            Self::Unsupported(unsupported) => Some(*unsupported),
+            Self::Inaccessible { .. }
+            | Self::Busy
+            | Self::Full
+            | Self::TooLarge { .. }
+            | Self::Conflict
+            | Self::Superseded
+            | Self::Cancelled => None,
+        }
+    }
 }

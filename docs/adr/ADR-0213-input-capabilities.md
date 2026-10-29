@@ -2,6 +2,9 @@
 
 - **Status:** Accepted (2026-10-13). Implemented: `InputCapabilities`, `Availability` and `PointerKindSet` in `flui-platform::input_capabilities`; the snapshot-then-changes delivery and its recovery rules in `flui-native`'s `WindowCallbacks`; every backend's availability table in `flui-native/src/input/availability.rs`; `PlatformCapabilities` removed; the `unstable-input` re-exports in `flui-sdk` and the facade. The per-backend availability rows of `assert_backend_conforms` (ADR-0215) run in CI over each backend's table. Pending: the recording round trip of `PlatformInput::Capabilities`, presence changes from the native Win32, AppKit, UIKit, Android and web backends (they report their initial table; the headless and winit backends report changes), and Win32 DirectManipulation, until which Windows reports precise scrolling and trackpad gestures `Unavailable`; the last two land with the native backend work.
 - **Date:** 2026-10-13
+- **Amended:** 2026-10-22 — following [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md)
+  §4: `Availability` is `flui_platform::Availability`, beside `Unsupported`, and ADR-0211's
+  matching error is `DragError::Unsupported`.
 - **Amends:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) §5: adopts the removal of
   `PlatformCapabilities` and `Platform::capabilities`, and names what replaces them.
 - **Superseded-by:** [ADR-0254](ADR-0254-window-contract.md), in part: decision 3's delivery rules
@@ -40,7 +43,7 @@ returning `None` (and `HapticCapabilities`, ADR-0210), `text_input()` for IME.
    input, precise (phased) scrolling, trackpad gestures (pinch and rotate as `PanZoom`), input
    regions and outgoing drags to the OS. Haptics and IME keep answering through their handles;
    nothing is reported twice. `outgoing_drag()` is the one authoritative answer for starting an
-   OS drag session; [ADR-0211](ADR-0211-unified-drag-and-drop.md)'s `DragError::Unavailable` is
+   OS drag session; [ADR-0211](ADR-0211-unified-drag-and-drop.md)'s `DragError::Unsupported` is
    the matching error.
 
    ```rust
@@ -71,7 +74,8 @@ returning `None` (and `HapticCapabilities`, ADR-0210), `text_input()` for IME.
    `DeviceRegistry` (`flui-native/src/input/assembly/`), the same registry that assigns `DeviceId`s,
    so presence and the device ids in events cannot disagree. `Native` with no pen attached is a
    normal state.
-3. **Snapshot, then changes, as events.** Every backend computes an initial
+3. **Snapshot, then changes, as events.** *(Superseded-by ADR-0254 §4 in part: see the header.)*
+   Every backend computes an initial
    `PlatformInput::Capabilities` for a surface when it is created, reflecting the devices
    already attached, retains it, coalesces capability changes into that pending snapshot only until the first ordinary input is queued; from then on capability transitions are queued in order with that input, so a pen that produced a Down and was then detached reports "present" before the Down and "absent" after it. Delivery is reentrancy-safe: installation commits the callback registration, then takes the pending snapshot and queued entries out of the backend's state one at a time, releasing every borrow and lock before each callback invocation; the not-yet-delivered tail stays in the backend's queue, ahead of input admitted during the callback, so a callback panic contained at the backend's callback boundary leaves the tail queued in its original order; an ordinary input entry that panicked is not re-delivered, but the capability snapshot is idempotent and stays at the head until a callback call for it returns normally, so no input is ever delivered before its baseline; the backend schedules an owner-thread wake that resumes the drain, so the tail does not wait for unrelated input. Each pass drains only the entries present when it started; input admitted reentrantly during a pass waits for the next pass, which the same wake schedules, so a callback that admits input on every call cannot monopolize the owner thread. Retries of the snapshot by one registration are bounded (three failed passes); after that the snapshot and the queued input stay held, with no further wakes, until the callback is re-registered or the surface closes (rows `a_panic_on_the_initial_snapshot_keeps_the_queued_tail_in_order` with an otherwise idle application, `the_snapshot_is_retried_before_any_queued_input`, `reentrantly_admitted_input_waits_for_the_next_pass`); a callback that re-registers, closes the window or releases its owner during that first delivery sees the committed state, and an outgoing callback is retired only after all guards are released, never restored over its replacement, and under containment custody: a panic while destroying its captures is contained separately, never replaces the first failure, and neither the committed replacement, the queued tail nor the scheduled recovery wake is lost to it (rows: replacement and owner release from the first delivery, `a_replaced_input_callback_whose_drop_panics_still_delivers_the_tail`). The snapshot is delivered as the first event when the surface's input
    callback is installed (`on_input` is registered after `open_window` returns), before

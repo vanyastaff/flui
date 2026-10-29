@@ -75,6 +75,8 @@ enum Command {
     Deps(tasks::DepsArgs),
     /// Clippy every feature on its own (cargo-hack).
     FeatureMatrix(tasks::FeatureMatrixArgs),
+    /// Clippy flui-native once per single feature (the part of feature-matrix pull requests run).
+    NativeFeatures(tasks::NativeFeaturesArgs),
     /// Build each supported facade feature combination on its own.
     FacadeCombos(tasks::FacadeCombosArgs),
     /// Clippy the Win32, AppKit, Android and iOS backends without linking.
@@ -171,6 +173,7 @@ fn main() -> ExitCode {
         Command::CiFull(args) => tasks::ci_full(&args),
         Command::Deps(args) => tasks::deps(&args),
         Command::FeatureMatrix(args) => tasks::feature_matrix(&args),
+        Command::NativeFeatures(args) => tasks::native_features(&args),
         Command::FacadeCombos(args) => tasks::facade_combos(&args),
         Command::CrossTypecheck(args) => tasks::cross_typecheck(&args),
         Command::WasmCheck(args) => tasks::wasm_check(&args),

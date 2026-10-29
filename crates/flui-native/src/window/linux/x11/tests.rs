@@ -11,7 +11,9 @@
 //! (`owner::winit::testing::QuietHost`), under a table of its own
 //! ([`X11Windows`]): the window, its probe and the loop, without the host's.
 
+use flui_testing::window_handler::RecordingWindowHandler;
 use std::{
+    rc::Rc,
     sync::{Arc, atomic::Ordering},
     thread,
     time::{Duration, Instant},
@@ -29,16 +31,18 @@ use x11rb::{
     wrapper::ConnectionExt as _,
 };
 
+use crate::WindowRequest;
 use crate::host::{Absent, Host, position};
 use crate::host_window::HostWindow;
-use crate::owner::winit::testing::{QuietHost, run_window_scenario};
+use crate::owner::slot::OwnerWeak;
+use crate::owner::winit::testing::{QuietHost, ScenarioWindow, run_window_scenario};
 use crate::owner::winit::{LoopWindow, WinitLoop};
 use crate::platform::HostPlatform;
 use crate::window::linux::x11::connect_window_manager;
 use crate::window::winit::{WinitWindow, WinitWindows};
 use flui_platform::{
-    WindowCapabilities, WindowCommand, WindowGeometry, WindowMode, WindowOptions, WindowReveal,
-    WindowState,
+    CapabilityAbsence, WindowCapabilities, WindowCommand, WindowGeometry, WindowHandler,
+    WindowMode, WindowOptions, WindowReveal, WindowState,
 };
 
 /// The table these tests run: the winit window and its X11 probe over the
@@ -66,7 +70,7 @@ impl Host for X11Windows {
 /// A platform of [`X11Windows`] whose windows attach the X11 probe.
 fn platform() -> Arc<HostPlatform<X11Windows>> {
     Arc::new(HostPlatform::from_parts(
-        WinitWindows::new(connect_window_manager),
+        |positions| WinitWindows::new(positions, connect_window_manager),
         |windows| WinitLoop::new::<QuietHost>(Arc::clone(windows) as _),
     ))
 }
@@ -80,7 +84,7 @@ fn build_x11_event_loop() -> EventLoop<()> {
 }
 
 /// Poll (bounded, 5 s) until `check` holds of the window's snapshot.
-fn until_state(window: &Arc<dyn HostWindow>, what: &str, check: impl Fn(&WindowState) -> bool) {
+fn until_state(window: &ScenarioWindow, what: &str, check: impl Fn(&WindowState) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let state = window.state();
@@ -99,7 +103,7 @@ fn until_state(window: &Arc<dyn HostWindow>, what: &str, check: impl Fn(&WindowS
 /// `expected`, the last of which `is_visible` answers. A report may follow
 /// a publication on another thread, hence the wait.
 fn until_reports(
-    window: &Arc<dyn HostWindow>,
+    window: &ScenarioWindow,
     reports: &Mutex<Vec<bool>>,
     expected: &[bool],
     what: &str,
@@ -113,7 +117,7 @@ fn until_reports(
         );
         thread::sleep(Duration::from_millis(10));
     }
-    assert_eq!(Some(&window.is_visible()), expected.last(), "{what}");
+    assert_eq!(Some(&window.state().is_seen()), expected.last(), "{what}");
 }
 
 fn map_state(connection: &RustConnection, id: u32) -> MapState {
@@ -165,18 +169,28 @@ fn set_window_manager_state(connection: &RustConnection, id: u32, wm_state: u32,
         .expect("the server sets the properties");
 }
 
-/// Open a window with `opening` on a real X server in a loop of its own and
+/// A request for a window with `options` whose handler only records.
+fn recorded(options: WindowOptions) -> WindowRequest {
+    WindowRequest::new(options, || -> Rc<dyn WindowHandler> {
+        RecordingWindowHandler::new()
+    })
+}
+
+/// Open a window for `opening` on a real X server in a loop of its own and
 /// run `scenario` on a worker thread against it, with the window, its X11
 /// id and a connection to the server.
 fn run_x11_scenario(
-    opening: WindowOptions,
-    scenario: impl FnOnce(Arc<dyn HostWindow>, u32, &RustConnection) + Send + 'static,
+    opening: WindowRequest,
+    scenario: impl FnOnce(ScenarioWindow, u32, &RustConnection) + Send + 'static,
 ) {
     run_x11_window(platform(), opening, move |window, server| {
         let id = window
-            .as_any()
-            .downcast_ref::<WinitWindow>()
-            .and_then(LoopWindow::x11_id)
+            .with(|window| {
+                window
+                    .as_any()
+                    .downcast_ref::<WinitWindow>()
+                    .and_then(LoopWindow::x11_id)
+            })
             .expect("an X11 window has an id once the probe is attached");
         scenario(window, id, server);
     });
@@ -185,8 +199,8 @@ fn run_x11_scenario(
 /// scenario that needs no X11 id.
 fn run_x11_window(
     host: Arc<HostPlatform<X11Windows>>,
-    opening: WindowOptions,
-    scenario: impl FnOnce(Arc<dyn HostWindow>, &RustConnection) + Send + 'static,
+    opening: WindowRequest,
+    scenario: impl FnOnce(ScenarioWindow, &RustConnection) + Send + 'static,
 ) {
     run_window_scenario(
         host.shared_owner(),
@@ -213,32 +227,44 @@ fn x11_window_takes_commands_and_publishes_what_the_server_holds() {
         .with_size(Size::new(320.0, 240.0))
         .with_position(Some(Point::new(840.0, 640.0)))
         .with_reveal(WindowReveal::AfterFirstFrame);
-    run_x11_scenario(opening, |window, id, server| {
+    // Each change of whether the window is seen, after the one the window
+    // opened with (an unmapped window has had no visibility event yet),
+    // and the notifications in all, from when the scenario starts watching.
+    let changes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let visibility = Arc::new(Mutex::new(vec![true]));
+    let watched: Arc<Mutex<Option<OwnerWeak<dyn HostWindow>>>> = Arc::default();
+    let (counter, reported, observed) = (
+        Arc::clone(&changes),
+        Arc::clone(&visibility),
+        Arc::clone(&watched),
+    );
+    let opening = WindowRequest::new(opening, move || -> Rc<dyn WindowHandler> {
+        let handler = RecordingWindowHandler::new();
+        handler.react_to_state_change(move || {
+            let Some(window) = observed.lock().as_ref().and_then(OwnerWeak::upgrade) else {
+                return;
+            };
+            counter.fetch_add(1, Ordering::SeqCst);
+            let seen = window.state().is_seen();
+            let mut reports = reported.lock();
+            if reports.last() != Some(&seen) {
+                reports.push(seen);
+            }
+        });
+        handler
+    });
+    run_x11_scenario(opening, move |window, id, server| {
         // Created hidden, to be shown with the first frame; the window
         // already counts as visible, which is the intent.
         assert_eq!(map_state(server, id), MapState::UNMAPPED);
         assert!(window.state().visible);
-        assert_eq!(window.capabilities(), WindowCapabilities::ALL);
-        let changes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let counter = Arc::clone(&changes);
-        window.on_state_changed(Box::new(move || {
-            counter.fetch_add(1, Ordering::SeqCst);
-        }));
-        // Every visibility report, after the one the window opened with:
-        // an unmapped window has had no visibility event yet.
-        // Each report also checks that the snapshot already says the same.
-        let visibility = Arc::new(Mutex::new(vec![true]));
-        let reported = Arc::clone(&visibility);
-        let observed = Arc::downgrade(&window);
-        window.on_visibility_status_change(Box::new(move |visible| {
-            let published = observed.upgrade().map(|window| window.state().visible);
-            assert_eq!(
-                published,
-                Some(visible),
-                "the snapshot runs behind a report"
-            );
-            reported.lock().push(visible);
-        }));
+        assert_eq!(
+            window.state().capabilities,
+            WindowCapabilities::ALL
+                .without_presentation_feedback(CapabilityAbsence::NotYetOnThisHost)
+        );
+        let watching = Arc::clone(&watched);
+        window.with(move |window| *watching.lock() = Some(OwnerWeak::new(window)));
 
         window.reveal_after_first_frame();
         until_map_state(server, id, MapState::VIEWABLE);
@@ -249,19 +275,19 @@ fn x11_window_takes_commands_and_publishes_what_the_server_holds() {
             state.outer.position == Some(Point::new(840.0, 640.0))
         });
         window
-            .apply(WindowCommand::SetSize(Size::new(400.0, 300.0)))
+            .admit_and_apply(WindowCommand::SetSize(Size::new(400.0, 300.0)))
             .expect("a desktop window resizes");
         until_state(&window, "the new size", |state| {
             state.content_size == Size::new(400.0, 300.0)
         });
         window
-            .apply(WindowCommand::SetPosition(Point::new(860.0, 680.0)))
+            .admit_and_apply(WindowCommand::SetPosition(Point::new(860.0, 680.0)))
             .expect("a desktop window moves");
         until_state(&window, "the new position", |state| {
             state.outer.position == Some(Point::new(860.0, 680.0))
         });
         window
-            .apply(WindowCommand::SetTitle("renamed".into()))
+            .admit_and_apply(WindowCommand::SetTitle("renamed".into()))
             .expect("a title is set");
         assert_eq!(window.state().title.as_deref(), Some("renamed"));
 
@@ -269,13 +295,13 @@ fn x11_window_takes_commands_and_publishes_what_the_server_holds() {
         // either cannot leave the last report behind what the window
         // answers.
         window
-            .apply(WindowCommand::Hide)
+            .admit_and_apply(WindowCommand::Hide)
             .expect("a desktop window hides");
         until_map_state(server, id, MapState::UNMAPPED);
         assert!(!window.state().visible);
         until_reports(&window, &visibility, &[true, false], "a report of the hide");
         window
-            .apply(WindowCommand::Show)
+            .admit_and_apply(WindowCommand::Show)
             .expect("a desktop window shows");
         until_map_state(server, id, MapState::VIEWABLE);
         assert!(window.state().visible);
@@ -288,15 +314,16 @@ fn x11_window_takes_commands_and_publishes_what_the_server_holds() {
 
         // The window manager minimizes the window: winit reports no
         // event, the probe hears of it, and the snapshot follows with
-        // a notification. X sends no visibility event for it either, so
-        // the window reports itself hidden from the mode.
+        // a notification. X sends no visibility event for it either; the
+        // mode alone keeps it from being seen, and it is still shown.
         let before = changes.load(Ordering::SeqCst);
         set_window_manager_state(server, id, 3, &["_NET_WM_STATE_HIDDEN"]);
         until_state(&window, "the minimized mode", |state| {
             state.mode == WindowMode::Minimized
         });
         assert!(changes.load(Ordering::SeqCst) > before, "a notification");
-        assert!(!window.state().visible, "a minimized window is not visible");
+        assert!(!window.state().is_seen(), "a minimized window is not seen");
+        assert!(window.state().visible, "a minimized window is still shown");
         // The report follows the publication on whichever thread made it.
         until_reports(
             &window,
@@ -345,8 +372,13 @@ fn x11_window_takes_commands_and_publishes_what_the_server_holds() {
             "a report of the cover",
         );
         // A show of a window that stays mapped keeps its occlusion.
-        window.show().expect("a desktop window shows");
-        assert!(!window.state().visible, "still covered");
+        window
+            .admit_and_apply(WindowCommand::Show)
+            .expect("a desktop window shows");
+        assert!(
+            window.state().visible && window.state().occluded,
+            "still shown, and still covered"
+        );
         assert_eq!(*visibility.lock(), [true, false, true, false, true, false]);
         server.destroy_window(cover).expect("request");
         server.flush().expect("flush");
@@ -396,7 +428,7 @@ fn x11_window_opens_maximized_with_the_property_set_before_it_is_mapped() {
         .with_mode(WindowMode::Maximized)
         .with_normal_geometry(Some(returns_to))
         .with_reveal(WindowReveal::AfterFirstFrame);
-    run_x11_scenario(opening, move |window, id, server| {
+    run_x11_scenario(recorded(opening), move |window, id, server| {
         assert_eq!(map_state(server, id), MapState::UNMAPPED);
         let atom = |name: &str| {
             server
@@ -436,7 +468,7 @@ fn opens_in_mode_with_the_property_set(mode: WindowMode, state_atoms: &'static [
         .with_size(Size::new(320.0, 240.0))
         .with_mode(mode)
         .with_reveal(WindowReveal::AtOpen);
-    run_x11_scenario(opening, move |window, id, server| {
+    run_x11_scenario(recorded(opening), move |window, id, server| {
         until_map_state(server, id, MapState::VIEWABLE);
         let atom = |name: &str| {
             server
@@ -516,7 +548,7 @@ fn x11_window_opened_hidden_in_a_mode_keeps_the_mode_until_it_is_shown() {
         .with_size(Size::new(320.0, 240.0))
         .with_mode(WindowMode::Maximized)
         .with_visible(false);
-    run_x11_scenario(opening, |window, id, server| {
+    run_x11_scenario(recorded(opening), |window, id, server| {
         assert_eq!(map_state(server, id), MapState::UNMAPPED);
         let names = state_names(server, id);
         assert!(
@@ -527,7 +559,7 @@ fn x11_window_opened_hidden_in_a_mode_keeps_the_mode_until_it_is_shown() {
         assert!(!window.state().visible);
 
         window
-            .apply(WindowCommand::Show)
+            .admit_and_apply(WindowCommand::Show)
             .expect("a desktop window shows");
         until_map_state(server, id, MapState::VIEWABLE);
     });
@@ -542,25 +574,25 @@ fn x11_window_asked_for_a_mode_before_its_first_frame_opens_in_that_mode() {
         .with_size(Size::new(320.0, 240.0))
         .with_mode(WindowMode::Maximized)
         .with_reveal(WindowReveal::AfterFirstFrame);
-    run_x11_scenario(opening, |window, id, server| {
+    run_x11_scenario(recorded(opening), |window, id, server| {
         window
-            .apply(WindowCommand::SetMode(WindowMode::Fullscreen))
+            .admit_and_apply(WindowCommand::SetMode(WindowMode::Fullscreen))
             .expect("a desktop window enters fullscreen");
         assert_eq!(state_names(server, id), ["_NET_WM_STATE_FULLSCREEN"]);
 
         window
-            .apply(WindowCommand::SetMode(WindowMode::Normal))
+            .admit_and_apply(WindowCommand::SetMode(WindowMode::Normal))
             .expect("a desktop window returns to normal");
         assert_eq!(state_names(server, id), Vec::<String>::new());
 
         // Minimizing it leaves no mode to be mapped in; the window is
         // minimized once it is mapped.
         window
-            .apply(WindowCommand::SetMode(WindowMode::Fullscreen))
+            .admit_and_apply(WindowCommand::SetMode(WindowMode::Fullscreen))
             .expect("a desktop window enters fullscreen");
         assert_eq!(state_names(server, id), ["_NET_WM_STATE_FULLSCREEN"]);
         window
-            .apply(WindowCommand::SetMode(WindowMode::Minimized))
+            .admit_and_apply(WindowCommand::SetMode(WindowMode::Minimized))
             .expect("a minimize is requested");
         assert_eq!(state_names(server, id), Vec::<String>::new());
 
@@ -579,16 +611,21 @@ fn x11_window_without_a_probe_does_not_claim_to_observe_minimizing() {
         host.window_shared().window_manager.set(None).is_ok(),
         "no probe was made yet"
     );
-    run_x11_window(host, WindowOptions::default(), |window, _server| {
-        let capabilities = window.capabilities();
-        assert!(!capabilities.observes_minimized);
-        // Nothing else is taken away.
-        let mut expected = WindowCapabilities::ALL;
-        expected.observes_minimized = false;
-        assert_eq!(capabilities, expected);
-        // Asking is still allowed: the compositor or window manager acts.
-        window
-            .apply(WindowCommand::SetMode(WindowMode::Minimized))
-            .expect("a minimize is requested");
-    });
+    run_x11_window(
+        host,
+        recorded(WindowOptions::default()),
+        |window, _server| {
+            let capabilities = window.state().capabilities;
+            assert!(!capabilities.observes_minimized.is_available());
+            // Nothing else is taken away.
+            let mut expected = WindowCapabilities::ALL
+                .without_presentation_feedback(CapabilityAbsence::NotYetOnThisHost);
+            expected.observes_minimized = flui_platform::Availability::Unavailable;
+            assert_eq!(capabilities, expected);
+            // Asking is still allowed: the compositor or window manager acts.
+            window
+                .admit_and_apply(WindowCommand::SetMode(WindowMode::Minimized))
+                .expect("a minimize is requested");
+        },
+    );
 }

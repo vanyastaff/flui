@@ -606,7 +606,7 @@ impl ViewState<PartialTextFrame> for PartialTextFrameState {
                     let bounds = session.document_bounds();
                     let index = session.index_at_point(
                         flui_foundation::geometry::Point::new(0.0, 0.0),
-                        PointMode::Nearest,
+                        PointMode::NEAREST,
                     );
                     let document_len = session.document_len().get();
                     let edited = session.insert_at_selection("x").is_ok();
@@ -858,7 +858,7 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
                     session
                         .index_at_point(
                             flui_foundation::geometry::Point::new(0.0, 0.0),
-                            flui_platform::text_store::PointMode::Nearest,
+                            flui_platform::text_store::PointMode::NEAREST,
                         )
                         .is_ok()
                 );

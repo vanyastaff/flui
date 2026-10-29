@@ -123,13 +123,16 @@ pub trait BuildContext: sealed::Sealed + flui_foundation::read_scope::ReadScope 
     /// Only valid in debug builds.
     fn is_building(&self) -> bool;
 
-    /// The UI runtime's reactive graph (ADR-0074). Reachable from every lifecycle
-    /// hook and callback; the graph is owned by the `BuildOwner`.
+    /// The `BuildOwner`'s reactive graph (ADR-0074), for minting the signals
+    /// [`BuildContextExt::signal`] creates. Uncallable outside `flui-view`: it
+    /// takes a crate-private token, so a context hands out no graph and so no
+    /// path to a write (ADR-0086 §2).
     ///
     /// Signal *reads* do not go through this: they take the context itself as
     /// a [`ReadScope`](flui_foundation::read_scope::ReadScope), the supertrait
     /// whose scope subscribes the building element.
-    fn reactive(&self) -> crate::reactive::Reactive;
+    #[doc(hidden)]
+    fn graph(&self, token: sealed::CrateToken) -> &crate::reactive::Reactive;
 
     // ========================================================================
     // Inherited Data (Dependency Injection)
@@ -411,16 +414,24 @@ pub trait LifecycleContext: BuildContext {
     /// }
     /// ```
     ///
-    /// Nor can one be made from the graph a context exposes:
-    /// `trybuild_ui::ui_tests` pins the private-constructor diagnostic alongside
-    /// a valid lifecycle-context caller.
+    /// A build context hands out no graph to make one from:
     ///
-    /// ```compile_fail,E0624
-    /// use flui_view::{BuildContext, WriterSource};
+    /// ```compile_fail,E0599
+    /// use flui_view::BuildContext;
     ///
     /// fn build_body(ctx: &dyn BuildContext) {
-    ///     let _ = WriterSource::new(ctx.reactive());
+    ///     let _ = ctx.reactive();
     /// }
+    /// ```
+    ///
+    /// Nor can one be made from a graph: `trybuild_ui::ui_tests` pins the
+    /// private-constructor diagnostic alongside a valid lifecycle-context
+    /// caller.
+    ///
+    /// ```compile_fail,E0624
+    /// use flui_view::{Reactive, WriterSource};
+    ///
+    /// let _ = WriterSource::new(Reactive::new());
     /// ```
     ///
     /// A widget that invokes a user callback synchronously inside its own
@@ -503,9 +514,7 @@ pub trait LifecycleContext: BuildContext {
     ///
     /// Acquire it in `init_state`/`did_change_dependencies`. `None` on a
     /// bare owner with no presentation behind it.
-    fn texture_registry(&self) -> Option<flui_rendering::layer::TextureRegistry> {
-        None
-    }
+    fn texture_registry(&self) -> Option<flui_rendering::layer::TextureRegistry>;
 
     /// The UI runtime's byte storage, which a
     /// [`Persisted`](crate::persist::Persisted) document reads and writes
@@ -520,9 +529,7 @@ pub trait LifecycleContext: BuildContext {
     /// the session ends: a write still in flight then may be lost. Only what
     /// a [`Persisted`](crate::persist::Persisted) document publishes goes
     /// through the host's flush registry, which the host writes at teardown.
-    fn storage(&self) -> Option<std::sync::Arc<dyn flui_platform::Storage>> {
-        None
-    }
+    fn storage(&self) -> Option<std::sync::Arc<dyn flui_platform::Storage>>;
 
     /// The presentation's close guard: hold the window's close while work
     /// that must not be lost finishes.
@@ -707,7 +714,8 @@ pub trait BuildContextExt: BuildContext {
     /// (`SignalError::CreatedDuringBuild`): a slot per rebuild is a leak.
     #[must_use]
     fn signal<T: 'static>(&self, value: T) -> crate::reactive::Signal<T> {
-        self.reactive().signal_owned_by(self.element_id(), value)
+        self.graph(sealed::CrateToken::new())
+            .signal_owned_by(self.element_id(), value)
     }
 
     /// [`depend_on`](Self::depend_on) at **field** granularity (issue #1090):

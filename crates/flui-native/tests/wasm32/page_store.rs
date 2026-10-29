@@ -233,7 +233,9 @@ async fn a_page_without_indexed_db_is_unavailable() {
     let store = fresh_store();
     assert_eq!(
         store.read(&NOTES, 1024).await,
-        Err(StorageError::Unavailable)
+        Err(StorageError::Unsupported(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::Unavailable
+        )))
     );
     assert_eq!(
         store
@@ -243,7 +245,9 @@ async fn a_page_without_indexed_db_is_unavailable() {
                 WriteMode::IfUnchanged(StoredVersion::ABSENT)
             )
             .await,
-        Err(StorageError::Unavailable)
+        Err(StorageError::Unsupported(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::Unavailable
+        )))
     );
 }
 

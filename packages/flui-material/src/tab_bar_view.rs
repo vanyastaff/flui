@@ -59,6 +59,7 @@
 use std::cell::RefCell;
 
 use flui_sdk::animation::MotionPolicy;
+use flui_sdk::foundation::ChangeNotifier;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, EventCx};
 use flui_sdk::widgets::{Action, ActionOutcome, Actions, MediaQuery, PageController, PageView};
@@ -291,6 +292,10 @@ struct TabStepAction {
 impl Action<TabStep> for TabStepAction {
     fn is_enabled(&self, step: &TabStep) -> bool {
         self.target(*step).is_some()
+    }
+
+    fn enablement_changes(&self) -> Option<ChangeNotifier> {
+        Some(self.controller.step_changes())
     }
 
     fn invoke(&self, _cx: &mut EventCx<'_>, step: &TabStep) -> ActionOutcome {

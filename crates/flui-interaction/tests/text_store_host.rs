@@ -13,7 +13,7 @@ use flui_platform::text_store::{
     CompositionEnd, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore,
     TextStoreHost, TextStoreHostError, project_ime_event,
 };
-use flui_platform::{ImeEvent, PlatformTextInput};
+use flui_platform::{ImeEvent, PlatformTextInput, Unsupported, UnsupportedReason};
 
 type Log = Rc<RefCell<Vec<&'static str>>>;
 
@@ -198,7 +198,9 @@ fn host_operations_in_a_frame_wait_for_the_anchor_and_run_first() {
 fn an_abandoned_completion_commits_the_composition_in_place() {
     for answer in [
         Ok(CompositionEnd::Abandoned),
-        Err(TextStoreHostError::Unavailable),
+        Err(TextStoreHostError::Unsupported(Unsupported::new(
+            UnsupportedReason::NoWindow,
+        ))),
     ] {
         let (owner, host, log) = pull_owner();
         let store = composing_store();

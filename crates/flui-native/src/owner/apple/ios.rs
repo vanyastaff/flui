@@ -50,6 +50,7 @@ pub(crate) use scene::{SceneConsumer, SceneInstallation};
 use std::cell::RefCell;
 use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -70,22 +71,23 @@ use parking_lot::Mutex;
 
 use crate::error::PlatformError;
 use crate::host;
-use crate::owner::call_point::{Called, Field, Once, SharedField, call, install, retire};
-use crate::owner::handlers::{PlatformHandlers, SessionEndHook};
+use crate::owner::app_delivery::AppDelivery;
+use crate::owner::call_point::{Called, Field, call, install, retire};
 use crate::owner::notices::{LifecycleHooks, NoticeChannel};
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::owner::sources::SystemPreferenceSource;
 use crate::{
-    owner::DirectOwnerHooks, owner::OwnerHooks, owner::OwnerPlatform, platform::Platform,
-    platform::PlatformExecutor, platform::PlatformReadyCallback,
+    owner::DirectOwnerHooks, owner::OwnerHooks, owner::OwnerPlatform, platform::AppHandler,
+    platform::Platform, platform::PlatformExecutor,
 };
 use flui_platform::{SessionEndAnswer, SessionEndPhase, SystemPreferences, WindowId};
 
 use crate::host_window::HostWindow;
 use crate::owner::watch::Watch;
-use flui_platform::{DisplayId, DisplaySnapshot, RefreshPeriod};
+use flui_platform::PlatformInput;
+use flui_platform::{DisplayId, DisplaySnapshot, FrameRateHint};
 use objc2_quartz_core::CADisplayLink;
-use objc2_ui_kit::UIScreen;
+use objc2_ui_kit::{UIHoverGestureRecognizer, UIScreen, UITouch, UIView};
 
 /// What the iOS host's table names for its owner thread (ADR-0151 §10): the
 /// displays, the preference source and the notice channel the loop holds. The
@@ -105,7 +107,38 @@ pub(crate) trait IosHost: 'static {
     ) -> Box<dyn UIKitPreferences>;
 
     /// The channel the memory warning takes to the application.
-    fn notices() -> Arc<dyn NoticeChannel>;
+    fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel>;
+
+    /// The touches of a window's view made now: the input's part of the
+    /// view, which keeps the contacts it admitted.
+    fn view_touches() -> Box<dyn ViewTouches>;
+}
+
+/// Which UIKit touch callback delivered a batch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TouchPhase {
+    /// `touchesBegan:withEvent:`.
+    Down,
+    /// `touchesMoved:withEvent:`.
+    Move,
+    /// `touchesEnded:withEvent:`.
+    Up,
+    /// `touchesCancelled:withEvent:`.
+    Cancel,
+}
+
+/// The input's part of one window's view: the touches and the Pencil hover
+/// UIKit delivers to it, which the view hands over as they arrive and
+/// dispatches what they carry. Made with the view ([`IosHost::view_touches`])
+/// and dropped with it, so the contacts it admitted are the view's own.
+pub(crate) trait ViewTouches {
+    /// What `touch`, delivered in `phase`, carries.
+    fn touch(&mut self, touch: &UITouch, phase: TouchPhase) -> Vec<PlatformInput>;
+
+    /// What the Pencil's hover over `view`, as `recognizer` reports it,
+    /// carries.
+    fn hover(&mut self, recognizer: &UIHoverGestureRecognizer, view: &UIView)
+    -> Vec<PlatformInput>;
 }
 
 /// The system preference source the UIKit loop keeps, on the main thread
@@ -145,23 +178,47 @@ pub(crate) trait HostDisplays: Send + Sync {
     /// [`PlatformError::Displays`] when the snapshot revision space is used up.
     fn snapshot(&self, marker: MainThreadMarker) -> Result<DisplaySnapshot, PlatformError>;
 
-    /// Mark the snapshot stale; the next [`snapshot`](Self::snapshot) samples
-    /// again. Any thread.
-    fn invalidate(&self);
-
     /// The identity of `screen`, which the source retains.
     fn identify(&self, marker: MainThreadMarker, screen: &UIScreen) -> ScreenIdentity;
 
-    /// Record the period `window`'s display link measured on screen `number`,
-    /// and mark the snapshot stale.
-    fn report_link_period(&self, number: ScreenNumber, window: WindowId, period: RefreshPeriod);
+    /// `window`, whose screen `slot` holds, is now on the screen `next` names
+    /// (the default names none, as for a window detached from its scene).
+    /// When that differs, what `window`'s display link measured on the screen
+    /// it left is forgotten and the snapshot is marked stale; answers whether
+    /// it differed, for which the window owes a display-changed notification.
+    fn move_window(
+        &self,
+        window: WindowId,
+        slot: &Mutex<ScreenIdentity>,
+        next: ScreenIdentity,
+    ) -> bool;
 
-    /// Forget `window`'s period on screen `number`: its link is gone.
-    fn forget_link_period(&self, number: ScreenNumber, window: WindowId);
+    /// One tick of `window`'s display link on the screen numbered `number`
+    /// showed `interval_seconds` to the frame it targets. Answers whether the
+    /// period the link publishes for that screen changed, which marks the
+    /// snapshot stale; the window then owes the owner a wake and a
+    /// display-changed notification.
+    fn observe_link(
+        &self,
+        window: WindowId,
+        number: Option<ScreenNumber>,
+        interval_seconds: f64,
+    ) -> bool;
 
-    /// Ask `link` to run at the best rate `screen` sustains on the version the
-    /// platform runs on.
-    fn request_frame_rate(&self, link: &CADisplayLink, screen: &UIScreen);
+    /// `window`'s display link is gone: what it measured on the screen
+    /// numbered `number` is forgotten, and the snapshot is marked stale when
+    /// that screen had a period from it.
+    fn forget_link(&self, window: WindowId, number: Option<ScreenNumber>);
+
+    /// Ask `link` for the rate `hint` names: the best rate `screen` sustains on
+    /// the version the platform runs on, or no preference.
+    fn request_frame_rate(&self, link: &CADisplayLink, screen: &UIScreen, hint: FrameRateHint);
+
+    /// The iOS version the process runs on, read once (ADR-0244).
+    fn version(&self) -> crate::version::gate::apple::AppleVersion;
+
+    /// Whether the device shows a pointer for a trackpad or mouse: an iPad.
+    fn shows_a_pointer(&self) -> bool;
 
     /// Mark the screens stale and wake the owner behind `signal` on screen and
     /// scene notifications, until the watch is dropped.
@@ -226,15 +283,49 @@ pub(crate) trait SceneWindow: HostWindow {
 /// Makes the windows the scenes connect: the window feature's, handed to the
 /// loop by the host.
 pub(crate) trait SceneWindows: Send + Sync {
-    /// A new window `id`, which wakes the owner through `signal` and names its
-    /// screen through `displays`.
+    /// A new window `id`, which wakes the owner through `signal`, names its
+    /// screen through `displays`, hands its view's touches to `touches` and
+    /// delivers to `handler`.
     fn create(
         &self,
         marker: MainThreadMarker,
         id: WindowId,
         signal: std::sync::Weak<OwnerSignal>,
         displays: Arc<dyn HostDisplays>,
-    ) -> Arc<dyn SceneWindow>;
+        touches: Box<dyn ViewTouches>,
+        handler: Rc<dyn flui_platform::WindowHandler>,
+    ) -> Rc<dyn SceneWindow>;
+}
+
+/// An iOS window as the features beside it reach it (ADR-0151 §3), on the
+/// main thread: the view that outlives its scene attachments, the owner it
+/// wakes, and the system chrome its root controllers answer UIKit from, which
+/// the window keeps because UIKit asks the controller, not the application,
+/// for the status bar. The table's text, haptics and chrome positions make
+/// the window's part of them from this, as the window is made.
+///
+/// Public where it is defined, so the host table can name it as the window's
+/// reference; the module is private, so it is nameable only inside the crate.
+pub struct ViewRef {
+    /// The window's view.
+    pub(crate) view: Retained<UIView>,
+    /// The thread the reference is read on.
+    pub(crate) marker: MainThreadMarker,
+    /// The owner the window wakes.
+    pub(crate) signal: std::sync::Weak<OwnerSignal>,
+    /// The window's system chrome.
+    pub(crate) chrome: Arc<dyn flui_platform::PlatformSystemChrome>,
+    /// What the window's view forwards UIKit's accessibility container
+    /// methods to, which the accessibility position fills.
+    pub(crate) accessibility: crate::owner::accessibility_slot::AccessibilitySlot,
+    /// The window's delivery, which the keyboard's edits are told to.
+    pub(crate) delivery: std::sync::Weak<crate::owner::window_delivery::WindowDelivery>,
+}
+
+impl std::fmt::Debug for ViewRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ViewRef").finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone)]
@@ -245,7 +336,7 @@ struct SceneOrigin {
 struct SessionRecord {
     origin: SceneOrigin,
     session: Retained<UISceneSession>,
-    window: Arc<dyn SceneWindow>,
+    window: Rc<dyn SceneWindow>,
     installed: bool,
     attaching: bool,
     retiring: bool,
@@ -297,7 +388,9 @@ struct SceneState {
 ///
 /// [`IOSPlatform`](crate::IOSPlatform) is its platform.
 pub struct IOSLoop {
-    handlers: Arc<Mutex<PlatformHandlers>>,
+    /// What the loop delivers to the application's handler, which the
+    /// bootstrap binds.
+    app: Arc<AppDelivery>,
     /// Makes the window a scene session connects.
     windows: Arc<dyn SceneWindows>,
     running: Arc<AtomicBool>,
@@ -315,6 +408,8 @@ pub struct IOSLoop {
     _screen_observer: NativeOwner<Watch>,
     /// Where the memory warning goes on its way to the host.
     notices: Arc<dyn NoticeChannel>,
+    /// Makes the touches of each window's view, as the table names them.
+    view_touches: fn() -> Box<dyn ViewTouches>,
 }
 
 impl std::fmt::Debug for IOSLoop {
@@ -369,8 +464,9 @@ impl IOSLoop {
         }));
         let displays = H::displays(marker);
         let screen_observer = Arc::clone(&displays).observe(&signal);
+        let app = Arc::new(AppDelivery::new());
         Ok(Self {
-            handlers: Arc::new(Mutex::new(PlatformHandlers::new())),
+            app: Arc::clone(&app),
             windows,
             running: Arc::new(AtomicBool::new(true)),
             scenes: NativeOwner::new(
@@ -394,7 +490,8 @@ impl IOSLoop {
             background_executor: Arc::new(IOSExecutor),
             displays,
             _screen_observer: NativeOwner::new(screen_observer, marker),
-            notices: H::notices(),
+            notices: H::notices(&app),
+            view_touches: H::view_touches,
         })
     }
 
@@ -445,38 +542,28 @@ impl IOSLoop {
         }
     }
 
-    /// One of the application's handlers, as a slot of the handler set.
-    pub(crate) fn handler<H>(
-        &self,
-        project: fn(&mut PlatformHandlers) -> &mut Option<H>,
-    ) -> Field<'_, Mutex<PlatformHandlers>, H> {
-        Field::new(&*self.handlers, project)
-    }
-
     /// Retire the scene consumer outside the scene state's borrow.
     fn retire_scene_consumer(&self) {
         let consumer = self.state().borrow_mut().handler.take();
         retire(consumer);
     }
 
-    pub(crate) fn active(&self) -> Option<Arc<dyn SceneWindow>> {
+    pub(crate) fn active(&self) -> Option<Rc<dyn SceneWindow>> {
         self.state()
             .borrow()
             .session
             .as_ref()
-            .map(|record| Arc::clone(&record.window))
+            .map(|record| Rc::clone(&record.window))
     }
 
     /// UIKit is about to terminate the process: let the application write what
     /// must survive. There is no way to ask it to wait, so the answer is not
     /// read.
     fn announce_session_end(&self) {
-        // The session ends once: the hook is retired after this call.
-        let _answer = call(
-            &Once(self.handler(|handlers| &mut handlers.session_end)),
-            |hook| hook(SessionEndPhase::Ending),
-        )
-        .or_contain(SessionEndAnswer::Proceed, "the session-end hook");
+        let _answer = self
+            .app
+            .session_end(SessionEndPhase::Ending)
+            .or_contain(SessionEndAnswer::Proceed, "the session-end handler");
     }
 
     /// UIKit's memory warning means the system is close to terminating the
@@ -488,11 +575,12 @@ impl IOSLoop {
             ));
     }
 
+    /// Tell the application's handler the platform quits, then let it go.
     fn invoke_quit(&self) {
-        call(&Once(self.handler(|handlers| &mut handlers.quit)), |quit| {
-            quit();
-        })
-        .or_contain((), "the quit callback");
+        self.app
+            .quit_requested()
+            .or_contain((), "the application's quit");
+        self.app.release();
     }
 
     fn finish_quit(&self) {
@@ -523,11 +611,7 @@ impl IOSLoop {
         if !self.signal.accepting() {
             return;
         }
-        let next = call(
-            &SharedField::new(&*self.handlers, |handlers| &mut handlers.wake_deadline),
-            |hook| hook(),
-        )
-        .or_resume(None);
+        let next = self.app.wake_deadline().or_resume(None);
         let ticket = {
             let mut current = self.deadline.lock();
             if current.as_ref().map(|(_, deadline)| *deadline) == next {
@@ -592,7 +676,8 @@ impl IOSLoop {
 // adds no process-global.
 thread_local! {
     static DELEGATE_STATE: RefCell<DelegateState> = const { RefCell::new(DelegateState {
-        on_ready: None,
+        handler: None,
+        hooks: None,
         platform: None,
         owner_platform: None,
     }) };
@@ -600,7 +685,10 @@ thread_local! {
 
 struct DelegateState {
     /// Taken exactly once, by `didFinishLaunching`.
-    on_ready: Option<PlatformReadyCallback>,
+    handler: Option<Rc<dyn AppHandler>>,
+    /// The owner hooks of the run, kept for the session: the delivery holds
+    /// them weakly.
+    hooks: Option<Arc<dyn OwnerHooks>>,
     /// Live for the whole session; read by every lifecycle callback.
     platform: Option<Arc<IOSLoop>>,
     /// The platform over `platform` that the owner capability is built on,
@@ -612,7 +700,7 @@ impl host::Loop for IOSLoop {
     fn run(
         self: Arc<Self>,
         platform: Arc<dyn Platform>,
-        on_ready: PlatformReadyCallback,
+        handler: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError> {
         let mtm = MainThreadMarker::new().ok_or_else(|| PlatformError::Init {
             message: "IOSPlatform::run must be called on the main thread".to_string(),
@@ -631,7 +719,7 @@ impl host::Loop for IOSLoop {
             let mut state = state.borrow_mut();
             state.platform = Some(self);
             state.owner_platform = Some(platform);
-            state.on_ready = Some(on_ready);
+            state.handler = Some(handler);
         });
 
         // FORCE the delegate class to register before `UIApplicationMain`
@@ -653,31 +741,8 @@ impl host::Loop for IOSLoop {
         let _ = self.signal.request_quit();
     }
 
-    fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
-        install(&self.handler(|handlers| &mut handlers.quit), callback);
-    }
-
-    fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
-        // UIKit decides when the app exits; there is no exit policy to consult.
-        drop(hook);
-    }
-
     fn request_exit_policy_reevaluation(&self) {
         // With no exit policy there is nothing to consult again.
-    }
-
-    /// iOS has no `ControlFlow::WaitUntil` — like Android, its loop actuates
-    /// deadlines itself. A `CADisplayLink` is the frame source; this stores
-    /// the hook so a future deadline actuation can consult it.
-    fn set_wake_deadline_hook(
-        &self,
-        hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
-    ) {
-        install(
-            &self.handler(|handlers| &mut handlers.wake_deadline),
-            Arc::from(hook),
-        );
-        let _ = self.signal.wake();
     }
 }
 
@@ -761,38 +826,24 @@ impl host::Preferences<IOSLoop> for IOSLoop {
 /// and has no reopen. The lifecycle feature's position reaches the hooks
 /// through this.
 impl LifecycleHooks for IOSLoop {
-    fn notices(&self) -> &dyn NoticeChannel {
-        &*self.notices
-    }
-
-    fn set_session_end_hook(&self, hook: SessionEndHook) {
-        install(&self.handler(|handlers| &mut handlers.session_end), hook);
-    }
-
     fn release_session_end(&self) {
-        // The answer to the session-end hook is not read, so no session end is
-        // held open.
-    }
-
-    fn set_reopen_hook(&self, hook: Box<dyn FnMut() + Send>) {
-        // UIKit has no reopen signal.
-        drop(hook);
+        // The answer to a session end is not read, so no session end is held
+        // open.
     }
 }
 
 /// Run the bootstrap stashed by [`IOSLoop`]'s `run`, on the main thread,
 /// from `didFinishLaunching`. Returns `true` if a bootstrap ran.
 fn run_pending_bootstrap() -> bool {
-    let (platform, owner_platform, on_ready) = DELEGATE_STATE.with(|state| {
+    let (platform, owner_platform, handler) = DELEGATE_STATE.with(|state| {
         let mut state = state.borrow_mut();
         (
             state.platform.clone(),
             state.owner_platform.clone(),
-            state.on_ready.take(),
+            state.handler.take(),
         )
     });
-    let (Some(platform), Some(owner_platform), Some(on_ready)) =
-        (platform, owner_platform, on_ready)
+    let (Some(platform), Some(owner_platform), Some(handler)) = (platform, owner_platform, handler)
     else {
         return false;
     };
@@ -802,14 +853,20 @@ fn run_pending_bootstrap() -> bool {
         Arc::clone(&platform.signal),
     ));
     if !platform.signal.accepting() {
-        crate::owner::panic_boundary::contain_owner_callback(|| drop(on_ready));
+        crate::owner::panic_boundary::contain_owner_callback(|| drop(handler));
         platform.finish_quit();
         return false;
     }
-    // FnOnce consumes its own captures. Catch the entire invocation; a body
-    // panic plus a capture panic during that unwind remains Rust's abort case.
+    // The delivery holds the platform and the hooks weakly: the delegate's
+    // state keeps them for the session, which `UIApplicationMain` never ends.
+    platform.app.bind(handler, &owner_platform, &hooks);
+    platform.app.resume_through_signal(&platform.signal);
+    DELEGATE_STATE.with(|state| state.borrow_mut().hooks = Some(Arc::clone(&hooks)));
+    // The bootstrap's panic is caught here: UIKit's callback cannot unwind.
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        on_ready(OwnerPlatform::new(owner_platform, hooks))
+        platform
+            .app
+            .ready(OwnerPlatform::new(owner_platform, hooks))
     }));
     match outcome {
         Ok(Ok(())) => {}
@@ -979,11 +1036,30 @@ impl IOSLoop {
             return None;
         };
         if let Some(id) = fresh {
+            // The window delivers to its handler from its first event on, so
+            // the application makes it before the window exists. No handler,
+            // no window: the reservation is released and the scene refused.
+            let handler = match self
+                .tell_scene_consumer(|consumer| Ok(consumer.window_handler(&origin.session)))
+            {
+                Ok(handler) => handler,
+                Err(error) => {
+                    self.state().borrow_mut().reservation = None;
+                    tracing::warn!(
+                        session = origin.session.as_str(),
+                        %error,
+                        "rejecting a scene whose window has no handler"
+                    );
+                    return None;
+                }
+            };
             let window = self.windows.create(
                 marker,
                 id,
                 Arc::downgrade(&self.signal),
                 Arc::clone(&self.displays),
+                (self.view_touches)(),
+                handler,
             );
             let admitted = {
                 let mut state = self.state().borrow_mut();
@@ -997,7 +1073,7 @@ impl IOSLoop {
                     state.session = Some(SessionRecord {
                         origin: origin.clone(),
                         session,
-                        window: Arc::clone(&window),
+                        window: Rc::clone(&window),
                         installed: false,
                         attaching: false,
                         retiring: false,
@@ -1015,7 +1091,7 @@ impl IOSLoop {
         Some(origin)
     }
 
-    fn current(&self, origin: &SceneOrigin) -> Option<(Arc<dyn SceneWindow>, bool)> {
+    fn current(&self, origin: &SceneOrigin) -> Option<(Rc<dyn SceneWindow>, bool)> {
         if !self.signal.accepting() {
             return None;
         }
@@ -1028,7 +1104,7 @@ impl IOSLoop {
                     && record.origin.session == origin.session
                     && record.origin.attachment == origin.attachment
             })
-            .map(|record| (Arc::clone(&record.window), record.installed))
+            .map(|record| (Rc::clone(&record.window), record.installed))
     }
 
     fn enqueue(&self, action: SceneAction) {
@@ -1092,7 +1168,7 @@ impl IOSLoop {
                     .session
                     .as_ref()
                     .filter(|record| record.origin.session == *session)
-                    .map(|record| Arc::clone(&record.window)),
+                    .map(|record| Rc::clone(&record.window)),
                 SceneAction::Rollback(origin) => state
                     .session
                     .as_ref()
@@ -1100,7 +1176,7 @@ impl IOSLoop {
                         record.origin.session == origin.session
                             && record.origin.attachment == origin.attachment
                     })
-                    .map(|record| Arc::clone(&record.window)),
+                    .map(|record| Rc::clone(&record.window)),
                 SceneAction::Observe(origin, LifecycleObservation::Background)
                 | SceneAction::Disconnect(origin) => state
                     .session
@@ -1109,7 +1185,7 @@ impl IOSLoop {
                         record.origin.session == origin.session
                             && record.origin.attachment <= origin.attachment
                     })
-                    .map(|record| Arc::clone(&record.window)),
+                    .map(|record| Rc::clone(&record.window)),
                 _ => None,
             };
             state.pending.push_back(action);
@@ -1182,8 +1258,8 @@ impl IOSLoop {
                 });
             if can_publish
                 && self.signal.accepting()
-                && window.is_visible()
-                && window.execution_state() == flui_platform::WindowExecutionState::Running
+                && window.state().is_seen()
+                && window.state().execution == flui_platform::WindowExecutionState::Running
             {
                 window.publish(origin.attachment, marker);
             }
@@ -1235,7 +1311,7 @@ impl IOSLoop {
                             record.attaching = true;
                             record.retiring = false;
                             (
-                                Arc::clone(&record.window),
+                                Rc::clone(&record.window),
                                 record.installed,
                                 record.installation.take(),
                             )
@@ -1261,7 +1337,7 @@ impl IOSLoop {
                     consumer.connected(
                         origin.session.clone(),
                         origin.attachment,
-                        Arc::clone(&window) as Arc<dyn HostWindow>,
+                        Rc::clone(&window) as Rc<dyn HostWindow>,
                         reconnect,
                         proxy,
                     )
@@ -1315,7 +1391,8 @@ impl IOSLoop {
                     pending.session == origin.session && pending.attachment == origin.attachment
                 });
                 if retiring
-                    || (window.resource_generation() != resource_generation && !window.is_visible())
+                    || (window.resource_generation() != resource_generation
+                        && !window.state().is_seen())
                 {
                     // Keep the acknowledged ui_runtime, but do not publish a native
                     // attachment already superseded by a queued detach intent.

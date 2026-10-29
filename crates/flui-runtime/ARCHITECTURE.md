@@ -481,8 +481,8 @@ text owners, a window observation to metrics and lifecycle, a frame's vsync to t
 next render's motion sampling, and an AT request — decoded on the owner thread,
 after the adapter's thread only transported it — to the semantics owner with an
 assistive sequence id the binding minted. The window payload is the runtime's
-normalized `WindowObservation`, not `flui_platform::WindowEvent`, which keys
-raw window events by native id. `owner_input_contract`'s
+normalized `WindowObservation`, derived from the window's state snapshot, so
+no raw platform event crosses into it. `owner_input_contract`'s
 `accessibility_input_reaches_the_semantics_owner` pins the AT path.
 
 ### Recorded input is emitted where it is applied
@@ -603,7 +603,7 @@ the first terminal failure remains authoritative and new input recovers.
 A presentation segment runs build, then the build-during-layout fixpoint
 (`WidgetsBinding::settle_layout_with_builders`), then
 `FocusManager::settle_orphaned_focus` with no tree borrow held, then paint
-(`run_settled_frame`). Removal records an orphan marker inside reconciliation
+(`PipelineCell::run_frame`). Removal records an orphan marker inside reconciliation
 and runs no user code, so the one focus edge to the successor is published
 here, in the frame that removed the node, and never through `None` while a
 candidate remains. When that edge moved the primary, the segment rebuilds
@@ -810,10 +810,18 @@ not roll back reassembly or promise a host turn after every delivery fails.
 `reassemble_failure_keeps_priority_over_a_failed_rearm` exercise the real
 widget reassembly callback with a queued agent read.
 
-This is continuation safety, not rollback or callback isolation. The panic
-still leaves the dispatch boundary, and arbitrary external effects remain the
-application's responsibility. Pinned by the panicking secondary-presentation
+This is continuation safety, not rollback. Arbitrary external effects remain
+the application's responsibility. Pinned by the panicking secondary-presentation
 signal command, command-capture destructor, and addressed keyboard/IME tests.
+
+Today the first panic still leaves the dispatch boundary after the continuation
+above. ADR-0258 (accepted, not implemented) ends that: each owner operation is
+contained on its own and reported once as `FrameFailureKind::CallbackPanic`
+through `UiRuntime::report_contained_panic`, the runtime goes back to its slot
+and the FIFO tail runs; only a terminal failure (the last runtime closing, or
+loop exit) leaves, and it goes to the host's terminal slot, to resume with 101
+after the exit flush. The continuation rules here stay as they are; what
+changes is that the panic stops after them instead of resuming.
 
 Runtime and scheduling topology, including background execution
 (`execution`), is designed for Rust (ADR-0027); ADR-0047 records its design.

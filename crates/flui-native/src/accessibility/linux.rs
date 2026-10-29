@@ -7,10 +7,9 @@
 //! # Where it builds
 //!
 //! `accesskit_unix` brings ~66 crates (zbus, atspi, an async executor). AT-SPI
-//! *is* D-Bus, so there is no lighter path, and the Linux host reads the
+//! *is* D-Bus, so there is no lighter path, and every Linux host reads the
 //! Settings portal and logind over D-Bus anyway. The adapter therefore builds
-//! wherever that host does, with `winit-backend`, and has no feature of its
-//! own.
+//! on Linux always and has no feature of its own (ADR-0151 §15).
 //!
 //! # Nothing async reaches the frame path
 //!
@@ -31,14 +30,15 @@
 //! tree yet. That is not a failure: AccessKit treats it as "not ready", and the
 //! next [`publish`](PlatformAccessibility::publish) delivers the tree once
 //! assembly has produced one.
+//!
+//! [`ActivationHandler::request_initial_tree`]: accesskit::ActivationHandler::request_initial_tree
 
 use std::sync::Arc;
 
-use accesskit::{ActionHandler, ActionRequest, ActivationHandler, DeactivationHandler, TreeUpdate};
+use accesskit::TreeUpdate;
 use parking_lot::Mutex;
 
-use crate::accessibility::bridge::BridgeShared;
-use crate::owner::panic_boundary::{AfterPanic, os_entry};
+use crate::accessibility::bridge::{Action, Activation, BridgeShared, Deactivation};
 use flui_semantics::{
     platform::AccessibilityActionListener, platform::AccessibilityActivationListener,
     platform::PlatformAccessibility,
@@ -51,58 +51,25 @@ use flui_semantics::{
 // retention/dispatch rules are common to every OS adapter, so they are
 // written and unit-tested once there rather than re-derived per OS.
 
-struct Activation(Arc<BridgeShared>);
+/// What the bridge tells the AT-SPI adapter: `accesskit_unix::Adapter`'s
+/// two calls, behind a trait so the bridge's side of each is checked without
+/// a bus.
+trait AtSpiAdapter: Send {
+    /// Hand `update` to the adapter if an assistive technology is attached.
+    fn publish(&mut self, update: TreeUpdate);
 
-// Each handler runs the composition root's listener on the adapter's thread,
-// inside AccessKit's own AT-SPI entry: a panic in it is contained there and
-// answers as if no listener ran.
-
-impl ActivationHandler for Activation {
-    fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
-        os_entry(
-            "AccessKit's activation",
-            (),
-            AfterPanic::Answer(|()| None),
-            || {
-                // Order matters: mark active and tell the composition root *before*
-                // reading `latest`. The listener typically enables semantics, and on a
-                // cold start that is what will produce the first tree at all — reading
-                // first would answer `None` even when a synchronous listener could
-                // have supplied one.
-                self.0.notify_activation(true);
-                self.0.retained()
-            },
-        )
-    }
+    /// Whether the window is the active one.
+    fn window_focused(&mut self, focused: bool);
 }
 
-struct Deactivation(Arc<BridgeShared>);
-
-impl DeactivationHandler for Deactivation {
-    fn deactivate_accessibility(&mut self) {
-        os_entry(
-            "AccessKit's deactivation",
-            (),
-            AfterPanic::Answer(|()| ()),
-            || {
-                self.0.notify_activation(false);
-            },
-        );
+impl AtSpiAdapter for accesskit_unix::Adapter {
+    fn publish(&mut self, update: TreeUpdate) {
+        // A factory: with nobody listening the update is simply dropped.
+        self.update_if_active(move || update);
     }
-}
 
-struct Action(Arc<BridgeShared>);
-
-impl ActionHandler for Action {
-    fn do_action(&mut self, request: ActionRequest) {
-        os_entry(
-            "an AccessKit action",
-            (),
-            AfterPanic::Answer(|()| ()),
-            || {
-                self.0.notify_action(request);
-            },
-        );
+    fn window_focused(&mut self, focused: bool) {
+        self.update_window_focus_state(focused);
     }
 }
 
@@ -111,7 +78,7 @@ pub struct UnixAccessibility {
     shared: Arc<BridgeShared>,
     /// The adapter needs `&mut` to publish, and the capability is shared behind
     /// an `Arc`, so the mutability lives here rather than in the trait.
-    adapter: Mutex<accesskit_unix::Adapter>,
+    adapter: Mutex<Box<dyn AtSpiAdapter>>,
 }
 
 impl UnixAccessibility {
@@ -122,13 +89,20 @@ impl UnixAccessibility {
     /// activates, which is exactly the state a headless CI machine is in.
     #[must_use]
     pub fn new() -> Self {
-        let shared = Arc::new(BridgeShared::new());
-        let adapter = accesskit_unix::Adapter::new(
-            Activation(Arc::clone(&shared)),
-            Action(Arc::clone(&shared)),
-            Deactivation(Arc::clone(&shared)),
-        );
+        Self::over(|shared| {
+            Box::new(accesskit_unix::Adapter::new(
+                Activation(Arc::clone(shared)),
+                Action(Arc::clone(shared)),
+                Deactivation(Arc::clone(shared)),
+            ))
+        })
+    }
 
+    /// The bridge over the adapter `adapter` makes from the state it shares
+    /// with its handlers.
+    fn over(adapter: impl FnOnce(&Arc<BridgeShared>) -> Box<dyn AtSpiAdapter>) -> Self {
+        let shared = Arc::new(BridgeShared::new());
+        let adapter = adapter(&shared);
         Self {
             shared,
             adapter: Mutex::new(adapter),
@@ -139,6 +113,29 @@ impl UnixAccessibility {
 impl Default for UnixAccessibility {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// The adapter announces the window on the bus, not on the window: it leaves
+/// the bus when its last handle drops, and nothing of the window needs undoing.
+impl crate::host::WindowAccessibility for UnixAccessibility {
+    fn detach(&self) {}
+
+    /// Tell the bus whether the window is the one the window manager or
+    /// compositor activated: a screen reader announces the window it moves
+    /// to and reads the focus only in the active one. Before an assistive
+    /// technology attaches, the adapter keeps it for its first tree.
+    fn focus_changed(&self, focused: bool) {
+        self.adapter.lock().window_focused(focused);
+    }
+}
+
+/// Each window of a Linux host announces itself on the AT-SPI bus. The
+/// adapter needs nothing of the window itself, so one implementation serves
+/// the windows of every Linux host, whatever their reference.
+impl<W: ?Sized> crate::host::Accessibility<W> for UnixAccessibility {
+    fn for_window(_: &W) -> Arc<dyn crate::host::WindowAccessibility> {
+        Arc::new(Self::new())
     }
 }
 
@@ -164,7 +161,7 @@ impl PlatformAccessibility for UnixAccessibility {
         // something is attached; with nobody listening the closure never runs
         // and the value is simply dropped.
         self.shared.retain_if_self_contained(&update);
-        self.adapter.lock().update_if_active(move || update);
+        self.adapter.lock().publish(update);
     }
 
     fn is_active(&self) -> bool {
@@ -182,7 +179,10 @@ impl PlatformAccessibility for UnixAccessibility {
 
 #[cfg(test)]
 mod tests {
-    use accesskit::{Node, NodeId, Role, TreeId, TreeInfo};
+    use accesskit::{
+        ActionHandler, ActionRequest, ActivationHandler, DeactivationHandler, Node, NodeId, Role,
+        TreeId, TreeInfo,
+    };
 
     use super::*;
 
@@ -213,6 +213,31 @@ mod tests {
         let (_, node) = initial.nodes.first().expect("one node");
         assert_eq!(node.label(), Some("Submit"));
         assert!(accessibility.is_active());
+    }
+
+    /// What the bridge told its adapter of the window's focus.
+    struct FocusTold(Arc<Mutex<Vec<bool>>>);
+
+    impl AtSpiAdapter for FocusTold {
+        fn publish(&mut self, _: TreeUpdate) {}
+
+        fn window_focused(&mut self, focused: bool) {
+            self.0.lock().push(focused);
+        }
+    }
+
+    /// The window's bridge passes each focus change its window reports to the
+    /// adapter, which tells the screen reader which window is active.
+    #[test]
+    fn the_bridge_tells_the_adapter_the_windows_focus() {
+        use crate::host::WindowAccessibility as _;
+
+        let told = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&told);
+        let bridge = UnixAccessibility::over(move |_| Box::new(FocusTold(log)));
+        bridge.focus_changed(true);
+        bridge.focus_changed(false);
+        assert_eq!(*told.lock(), [true, false]);
     }
 
     /// The listeners are the composition root's code, run inside AccessKit's

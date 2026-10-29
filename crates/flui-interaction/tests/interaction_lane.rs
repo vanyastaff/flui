@@ -436,49 +436,59 @@ fn capture_release_refuses_only_its_own_device_tail() {
     });
 }
 
-struct CaptureWakeWindow(std::sync::atomic::AtomicUsize);
+struct CaptureWakeWindow(std::sync::Arc<std::sync::atomic::AtomicUsize>);
 
 impl flui_platform::PlatformWindow for CaptureWakeWindow {
     fn id(&self) -> flui_platform::WindowId {
         flui_platform::WindowId::new(21)
     }
-    fn physical_size(&self) -> flui_foundation::geometry::Size<i32> {
-        flui_foundation::geometry::Size::new(80, 80)
-    }
-    fn logical_size(&self) -> flui_foundation::geometry::Size<f64> {
-        flui_foundation::geometry::Size::new(80.0, 80.0)
-    }
-    fn scale_factor(&self) -> f64 {
-        1.0
-    }
     fn request_redraw(&self) {
         self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         panic!("capture wake failure");
     }
-    fn is_focused(&self) -> bool {
-        true
+    fn redraw_requester(&self) -> std::sync::Arc<dyn flui_platform::RedrawRequester> {
+        let requests = std::sync::Arc::clone(&self.0);
+        std::sync::Arc::new(move || {
+            requests.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            panic!("capture wake failure");
+        })
     }
-    fn is_visible(&self) -> bool {
-        true
+    fn surface_target(&self) -> std::sync::Arc<dyn flui_platform::SurfaceTarget> {
+        std::sync::Arc::new(flui_platform::testing::NoNativeSurface)
     }
+    flui_platform::window_takes_no_frame_verbs!();
+
     fn set_cursor(&self, _: flui_platform::CursorIcon) -> Result<(), flui_platform::CursorError> {
         Ok(())
     }
     fn state(&self) -> flui_platform::WindowState {
-        let size = self.logical_size();
+        let size = flui_foundation::geometry::Size::new(80.0, 80.0);
         flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
-    }
-
-    fn capabilities(&self) -> flui_platform::WindowCapabilities {
-        flui_platform::WindowCapabilities::NONE
+            .with_focused(true)
+            .with_metrics(flui_foundation::geometry::WindowMetrics::from_logical(size, 1.0).ok())
     }
 
     fn apply(
         &self,
-        command: flui_platform::WindowCommand,
-    ) -> Result<(), flui_platform::WindowCommandError> {
-        command.admit(&flui_platform::WindowCapabilities::NONE)?;
+        command: flui_platform::AdmittedCommand,
+    ) -> Result<(), flui_platform::ApplyError> {
+        command.against(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
+    }
+
+    fn text_input(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformTextInput>> {
+        None
+    }
+
+    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformHaptics>> {
+        None
+    }
+
+    fn system_chrome(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformSystemChrome>> {
+        None
+    }
+    fn drag_source(&self) -> Option<std::sync::Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        None
     }
 }
 
@@ -505,9 +515,9 @@ fn assert_capture_wake_failure(active_unwind: bool) {
 
     let lane = InteractionLane::try_new().expect("lane");
     let binding = GestureBinding::new();
-    let window = Arc::new(CaptureWakeWindow(AtomicUsize::new(0)));
-    let capability: Arc<dyn flui_platform::PlatformWindow> = window.clone();
-    flui_interaction::__runtime::set_pointer_capture_wake(&binding, Arc::downgrade(&capability));
+    let window = Rc::new(CaptureWakeWindow(Arc::new(AtomicUsize::new(0))));
+    let capability: Rc<dyn flui_platform::PlatformWindow> = window.clone();
+    flui_interaction::__runtime::set_pointer_capture_wake(&binding, Rc::downgrade(&capability));
     let held = Rc::new(RefCell::new(None::<PointerCapture>));
     let store = held.clone();
     let lost = Rc::new(Cell::new(0));

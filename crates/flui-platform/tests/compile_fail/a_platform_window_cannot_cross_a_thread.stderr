@@ -1,0 +1,96 @@
+error[E0277]: `Rc<dyn PlatformWindow>` cannot be sent between threads safely
+ --> tests/compile_fail/a_platform_window_cannot_cross_a_thread.rs:7:24
+  |
+7 |     std::thread::spawn(move || window.request_redraw());
+  |     ------------------ -------^^^^^^^^^^^^^^^^^^^^^^^^
+  |     |                  |
+  |     |                  `Rc<dyn PlatformWindow>` cannot be sent between threads safely
+  |     |                  within this `{closure@$DIR/tests/compile_fail/a_platform_window_cannot_cross_a_thread.rs:7:24: 7:31}`
+  |     required by a bound introduced by this call
+  |
+  = help: within `{closure@$DIR/tests/compile_fail/a_platform_window_cannot_cross_a_thread.rs:7:24: 7:31}`, the trait `Send` is not implemented for `Rc<dyn PlatformWindow>`
+note: required because it's used within this closure
+ --> tests/compile_fail/a_platform_window_cannot_cross_a_thread.rs:7:24
+  |
+7 |     std::thread::spawn(move || window.request_redraw());
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `dyn PlatformWindow` cannot be shared between threads safely
+  --> tests/compile_fail/a_platform_window_cannot_cross_a_thread.rs:11:24
+   |
+11 |     std::thread::spawn(move || window.request_redraw());
+   |     ------------------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `dyn PlatformWindow` cannot be shared between threads safely
+   |     |
+   |     required by a bound introduced by this call
+   |
+   = help: the trait `std::marker::Sync` is not implemented for `dyn PlatformWindow`
+   = note: required for `Arc<dyn PlatformWindow>` to implement `Send`
+note: required because it's used within this closure
+  --> tests/compile_fail/a_platform_window_cannot_cross_a_thread.rs:11:24
+   |
+11 |     std::thread::spawn(move || window.request_redraw());
+   |                        ^^^^^^^
+note: required by a bound in `spawn`
+  --> $RUST/std/src/thread/functions.rs
+   |
+   | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+   |        ----- required by a bound in this function
+...
+   |     F: Send + 'static,
+   |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `dyn PlatformWindow` cannot be sent between threads safely
+  --> tests/compile_fail/a_platform_window_cannot_cross_a_thread.rs:11:24
+   |
+11 |     std::thread::spawn(move || window.request_redraw());
+   |     ------------------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `dyn PlatformWindow` cannot be sent between threads safely
+   |     |
+   |     required by a bound introduced by this call
+   |
+   = help: the trait `Send` is not implemented for `dyn PlatformWindow`
+   = note: required for `Arc<dyn PlatformWindow>` to implement `Send`
+note: required because it's used within this closure
+  --> tests/compile_fail/a_platform_window_cannot_cross_a_thread.rs:11:24
+   |
+11 |     std::thread::spawn(move || window.request_redraw());
+   |                        ^^^^^^^
+note: required by a bound in `spawn`
+  --> $RUST/std/src/thread/functions.rs
+   |
+   | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+   |        ----- required by a bound in this function
+...
+   |     F: Send + 'static,
+   |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `dyn PlatformWindow` cannot be shared between threads safely
+  --> tests/compile_fail/a_platform_window_cannot_cross_a_thread.rs:15:24
+   |
+15 |     std::thread::spawn(move || window.request_redraw());
+   |     ------------------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `dyn PlatformWindow` cannot be shared between threads safely
+   |     |
+   |     required by a bound introduced by this call
+   |
+   = help: the trait `std::marker::Sync` is not implemented for `dyn PlatformWindow`
+   = note: required for `&dyn PlatformWindow` to implement `Send`
+note: required because it's used within this closure
+  --> tests/compile_fail/a_platform_window_cannot_cross_a_thread.rs:15:24
+   |
+15 |     std::thread::spawn(move || window.request_redraw());
+   |                        ^^^^^^^
+note: required by a bound in `spawn`
+  --> $RUST/std/src/thread/functions.rs
+   |
+   | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+   |        ----- required by a bound in this function
+...
+   |     F: Send + 'static,
+   |        ^^^^ required by this bound in `spawn`

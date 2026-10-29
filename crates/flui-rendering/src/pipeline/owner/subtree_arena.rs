@@ -1,4 +1,4 @@
-//! Pre-acquired subtree borrow arena and recursive layout walks.
+//! Leased subtree access and recursive layout walks.
 //!
 //! This module owns **all** of the `unsafe` code for the re-entrant layout
 //! walk.  Every export to `super` is a **safe** function or method; callers
@@ -6,11 +6,11 @@
 //!
 //! ## Design overview
 //!
-//! Before the layout walk the pipeline pre-acquires N disjoint
-//! `&mut RenderNode` borrows for every node in the dirty subtree via
-//! [`crate::storage::RenderTree::get_subtree_mut`].  [`SubtreeArena`] wraps
-//! those borrows as raw [`NodePtr`] aliases and allows the recursive walk to
-//! reborrow exactly one slot per call level — a different slot at each
+//! The pipeline takes one lease on the render tree
+//! ([`crate::storage::RenderTree`]'s `lease`, see ADR-0252) and the walk acquires each node as it
+//! reaches it, so the cost of a walk follows the nodes it touches, not the size of the dirty
+//! subtree.  [`SubtreeArena`] wraps the lease and hands out raw [`NodePtr`] aliases, allowing the
+//! recursive walk to reborrow exactly one slot per call level — a different slot at each
 //! recursion depth — without ever holding a `&mut RenderTree` inside a
 //! callback that could itself call back into the tree.
 //!
@@ -24,10 +24,10 @@
 //!    move an arena — or a `NodePtr` borrowed from one — to another thread
 //!    in the first place. There is no runtime thread check to bypass.
 //! 2. [`LayoutCycleGuard`] detecting and rejecting re-entry into a slot
-//!    whose `&mut` is already live up the call stack.
-//! 3. [`SubtreeArena`]'s `PhantomData<&'tree mut ()>` tying the arena's
-//!    lifetime to the source `&mut RenderTree` borrow, preventing any
-//!    [`NodePtr`] from outliving the borrow window.
+//!    whose `&mut` is already live up the call stack, and an id that is not a child of the frame
+//!    asking for it (both read slot headers only).
+//! 3. [`SubtreeArena`]'s lease, which holds the `&mut RenderTree` borrow for the walk, preventing
+//!    any [`NodePtr`] from outliving it.
 //!
 //! ## Safety-gate note
 //!
@@ -45,10 +45,9 @@
 #![expect(unsafe_code)]
 
 use crate::pipeline::TextLender;
+use crate::storage::TreeLease;
 
-use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_foundation::RenderId;
 use flui_foundation::panic::{payload_text, retain_opaque_payload};
@@ -80,16 +79,13 @@ use super::poison::{FailedAttempt, LayoutFailureKind, LayoutPoison};
 // NodePtr — raw-pointer alias of a single &mut RenderNode borrow
 // ============================================================================
 
-/// Raw-pointer alias of a single `&mut RenderNode` borrow held in
+/// Raw-pointer alias of a single `&mut RenderNode`, taken from the lease held by
 /// [`SubtreeArena`].
 ///
-/// Each `NodePtr` in [`SubtreeArena::by_id`] is derived from one of
-/// the N disjoint `&mut RenderNode` references returned by
-/// [`RenderTree::get_subtree_mut`].  The pointer is stable for the
-/// lifetime of the `SubtreeArena` instance because the underlying
-/// `&mut RenderTree` is held by the caller (`PipelineOwner` while
-/// `layout_dirty_root` runs) and the slab's slot allocation is
-/// position-stable (no moves during the borrow window).
+/// Each `NodePtr` comes from `TreeLease::node`, which derives it from the slab's one base pointer.
+/// It stays valid for the lifetime of the `SubtreeArena` because the lease holds the `&mut
+/// RenderTree` for the whole walk (`PipelineOwner` while `layout_dirty_root` runs), so nothing
+/// inserts, removes or reallocates a slot in that window.
 ///
 /// The wrapper is `Copy` so the layout-child closure can capture the
 /// pointer by value without `Arc` ceremony. `NodePtr` carries no manual
@@ -104,29 +100,23 @@ use super::poison::{FailedAttempt, LayoutFailureKind, LayoutPoison};
 struct NodePtr(*mut RenderNode);
 
 // ============================================================================
-// SubtreeArena — pre-acquired borrow pool (was SubtreeBorrows)
+// SubtreeArena — the layout walk's leased view of the tree
 // ============================================================================
 
-/// Pre-acquired set of N disjoint `&mut RenderNode` borrows on a
-/// subtree, indexed by [`RenderId`] for O(1) lookup.
+/// The layout walk's view of the render tree: a lease that acquires nodes by [`RenderId`] as the
+/// walk reaches them, plus the sinks the walk records into.
 ///
-/// Replaces the prior `TreePtr` + recursive-tree-reborrow scheme that
-/// surfaced as latent Stacked / Tree Borrows UB.  The new scheme acquires
-/// ALL subtree `&mut RenderNode` borrows in ONE call to
-/// [`RenderTree::get_subtree_mut`] (single `&mut Slab` reborrow scope),
-/// stores raw aliases in this map, and lets the recursive walk reborrow
-/// one slot at a time per call level.  No `&mut RenderTree` ever appears
-/// inside the layout-child callback chain — eliminates the UB.
+/// Replaces the prior `TreePtr` + recursive-tree-reborrow scheme that surfaced as latent Stacked /
+/// Tree Borrows UB, and then the scheme that borrowed every node of the dirty subtree before the
+/// first `perform_layout` (cost proportional to the subtree and the slab, not to the work). The
+/// walk reborrows one slot at a time per call level through the lease; no `&mut RenderTree` ever
+/// appears inside the layout-child callback chain.
 ///
 /// # Lifetime
 ///
-/// `'tree` ties `SubtreeArena` to the source `&mut RenderTree`
-/// borrow's lifetime via `PhantomData<&'tree mut ()>`.  Constructed via
-/// [`Self::new`] from a `Vec<&'tree mut RenderNode>` (the output of
-/// `get_subtree_mut`); the references are immediately converted to
-/// raw pointers and aggregated by id.  The `&mut RenderTree` source
-/// borrow keeps the slab's slots position-stable for the lifetime of
-/// every aliased `NodePtr`.
+/// `'tree` ties `SubtreeArena` to the source `&mut RenderTree` borrow's lifetime through the
+/// lease. Constructed via [`Self::from_tree`]; the lease keeps the slab's slots position-stable
+/// for the lifetime of every aliased `NodePtr`.
 ///
 /// # Thread affinity
 ///
@@ -141,28 +131,16 @@ struct NodePtr(*mut RenderNode);
 /// arena, or any `NodePtr` it hands out, to another thread — the compiler
 /// rejects it before any `unsafe` code would run.
 pub(super) struct SubtreeArena<'tree> {
-    /// Per-node raw-pointer index with a side in-flight flag.
-    ///
-    /// Each entry is `(NodePtr, AtomicBool)` where the `AtomicBool` is
-    /// the cycle-detection in-flight marker for that node.  The map is
-    /// structurally immutable after [`Self::new`] — only the atomic
-    /// *values* change, via interior mutability through `&self`.
-    ///
-    /// Having the in-flight bit here (a *side* structure that is never
-    /// reachable through a `NodePtr`) is the soundness invariant: reading
-    /// the flag never touches a node whose `&mut` may be live on the
-    /// call stack.  This is the same invariant the former separate
-    /// `Mutex<FxHashSet>` provided, now without the lock.
-    ///
-    /// `AtomicBool` is `Sync` and needs no new `unsafe impl` of its own
-    /// here -- `SubtreeArena` as a whole is `!Send + !Sync` regardless
-    /// (see the pin in `tests`), transitively via the raw `NodePtr`s this
-    /// map holds, not via this field. `Relaxed` ordering suffices because
-    /// the arena's structural `!Send + !Sync` already confines every
-    /// access to one thread; no cross-thread synchronisation is needed.
-    by_id: HashMap<RenderId, (NodePtr, AtomicBool)>,
+    /// The walk's lease on the render tree: slots are acquired as the walk reaches them, with
+    /// the in-flight bit and parent link in the slot headers, which are never reachable through
+    /// a `NodePtr`. Reading a header never touches a node whose `&mut` may be live on the call
+    /// stack, which is the soundness invariant the former per-walk side map provided.
+    lease: TreeLease<'tree>,
+    /// The node whose walk frame is innermost, the parent of whatever the next
+    /// [`LayoutCycleGuard::enter`] is asked to enter. `None` before the dirty root.
+    current: std::cell::Cell<Option<RenderId>>,
     #[cfg(any(test, feature = "testing"))]
-    parent_data_seeds: FxHashMap<RenderId, ParentDataSeed>,
+    parent_data_seeds: &'tree FxHashMap<RenderId, ParentDataSeed>,
     /// Child-build requests from `RenderSliverList`: `(sliver_id,
     /// logical_index)` pairs recorded when an absent in-band child is
     /// encountered.  No render object is pre-built here — the element tree
@@ -208,6 +186,9 @@ pub(super) struct SubtreeArena<'tree> {
     /// rather than the vector push `laid_out` avoids for non-boundaries.
     /// Drained into `PipelineCounters::nodes_laid_out` after the walk.
     laid_out_count: std::cell::Cell<u64>,
+    /// How many nodes this walk entered (a node served from its cache counts). Drained into
+    /// `PipelineCounters::nodes_acquired` after the walk.
+    acquired_count: std::cell::Cell<u64>,
     /// Read-only view of the owner's layout-poison table for the whole
     /// walk.  Consulted at the top of each recursion level: a node
     /// poisoned under the *same* constraints it is now offered is
@@ -265,52 +246,28 @@ pub(super) struct SubtreeArena<'tree> {
 }
 
 impl<'tree> SubtreeArena<'tree> {
-    /// Constructs a `SubtreeArena` from the output of
-    /// [`RenderTree::collect_subtree_ids`] paired with the matching
-    /// output of [`RenderTree::get_subtree_mut`].
-    ///
-    /// Precondition: `ids.len() == refs.len()` and each
-    /// `ids[i]` corresponds to `refs[i]` (in order).  Caller must
-    /// satisfy this — currently the only caller is
-    /// [`super::PipelineOwner::layout_dirty_root`] which feeds the two
-    /// methods' outputs directly to this constructor.
+    /// Constructs a `SubtreeArena` over a lease on the render tree, taken by
+    /// [`super::PipelineOwner::layout_dirty_root`], the only caller. No node is borrowed here:
+    /// the walk acquires each one when it reaches it.
     pub(super) fn new(
-        ids: &[RenderId],
-        refs: Vec<&'tree mut RenderNode>,
+        lease: TreeLease<'tree>,
         layout_poison: &'tree LayoutPoison,
         text: TextLender<'tree>,
-        #[cfg(any(test, feature = "testing"))] all_seeds: &FxHashMap<RenderId, ParentDataSeed>,
+        #[cfg(any(test, feature = "testing"))] parent_data_seeds: &'tree FxHashMap<
+            RenderId,
+            ParentDataSeed,
+        >,
     ) -> Self {
-        debug_assert_eq!(
-            ids.len(),
-            refs.len(),
-            "SubtreeArena::new precondition violated: ids and refs \
-             must have the same length",
-        );
-        let mut by_id = HashMap::with_capacity(ids.len());
-        for (&id, r) in ids.iter().zip(refs) {
-            // `AtomicBool::new(false)` — not in-flight at construction.
-            by_id.insert(
-                id,
-                (
-                    NodePtr(std::ptr::from_mut::<RenderNode>(r)),
-                    AtomicBool::new(false),
-                ),
-            );
-        }
-        #[cfg(any(test, feature = "testing"))]
-        let parent_data_seeds = ids
-            .iter()
-            .filter_map(|id| all_seeds.get(id).map(|seed| (*id, seed.clone())))
-            .collect();
         Self {
-            by_id,
+            lease,
+            current: std::cell::Cell::new(None),
             #[cfg(any(test, feature = "testing"))]
             parent_data_seeds,
             pending_child_requests: RefCell::new(Vec::new()),
             pending_retain_bands: RefCell::new(Vec::new()),
             laid_out: RefCell::new(Vec::new()),
             laid_out_count: std::cell::Cell::new(0),
+            acquired_count: std::cell::Cell::new(0),
             layout_poison,
             text,
             poison_retries: RefCell::new(FxHashSet::default()),
@@ -332,14 +289,14 @@ impl<'tree> SubtreeArena<'tree> {
         }
     }
 
-    /// Returns the [`NodePtr`] for `id` if present.
+    /// Returns the [`NodePtr`] for `id`, or `None` for a stale or vacant id.
     ///
-    /// No runtime thread check: confinement is structural (`SubtreeArena`
-    /// is `!Send + !Sync`, see the module and type docs), so there is no
-    /// cross-thread case left to detect at this call site.
+    /// The caller holds no live `&mut` to `id`'s node: it is not in flight, or it is the caller's
+    /// own walk frame. No runtime thread check: confinement is structural (`SubtreeArena` is
+    /// `!Send + !Sync`, see the module and type docs).
     #[inline]
     fn get(&self, id: RenderId) -> Option<NodePtr> {
-        self.by_id.get(&id).map(|(ptr, _)| *ptr)
+        self.lease.node(id).map(NodePtr)
     }
 
     /// Returns `true` if `id`'s in-flight flag is set, meaning its
@@ -351,17 +308,10 @@ impl<'tree> SubtreeArena<'tree> {
     /// invalidate the ancestor's `&mut` provenance under Stacked / Tree
     /// Borrows, producing UB even if the write is atomic.
     ///
-    /// The check is only meaningful on the layout thread (same atomic flag
-    /// set/cleared by [`LayoutCycleGuard`]).  Lock-free: reads the
-    /// `AtomicBool` in the arena's `by_id` map — a *side* structure that
-    /// never aliases any `NodePtr` slot.  `Relaxed` suffices because the
-    /// arena's structural `!Send + !Sync` confines every access to one
-    /// thread already.
+    /// The check reads the slot header, a *side* structure that never aliases any `NodePtr` slot.
     #[inline]
     fn is_in_flight(&self, id: RenderId) -> bool {
-        self.by_id
-            .get(&id)
-            .is_some_and(|(_, flag)| flag.load(Ordering::Relaxed))
+        self.lease.is_in_flight(id)
     }
 
     /// Takes the child-build requests recorded by request-strategy slivers
@@ -391,6 +341,11 @@ impl<'tree> SubtreeArena<'tree> {
     /// Drains the ids this walk actually laid out — see [`Self::laid_out`].
     pub(super) fn take_laid_out(&self) -> Vec<flui_foundation::RenderId> {
         std::mem::take(&mut *self.laid_out.borrow_mut())
+    }
+
+    /// Drains how many nodes this walk entered — see [`Self::acquired_count`].
+    pub(super) fn take_acquired_count(&self) -> u64 {
+        self.acquired_count.replace(0)
     }
 
     /// Drains how many nodes this walk laid out — see [`Self::laid_out_count`].
@@ -542,31 +497,28 @@ impl<'tree> SubtreeArena<'tree> {
         unsafe { box_intrinsic_query_borrowed(self, id, dimension, extent) }
     }
 
-    /// Constructs a `SubtreeArena` from a `RenderTree` for the subtree
-    /// rooted at `id`, returning `Err(NodeNotFound)` if the subtree is
-    /// empty or a slot disappeared between collect and acquire.
+    /// Constructs a `SubtreeArena` from a `RenderTree` for the walk rooted at `id`, returning
+    /// `Err(NodeNotFound)` if `id` is stale or vacant.
     ///
-    /// This is the one-stop safe constructor used by
-    /// [`super::PipelineOwner::layout_dirty_root`].  `layout_poison` is the
-    /// owner's poison table, borrowed for exactly the walk's lifetime so
-    /// each recursion level can skip poisoned nodes.
+    /// The one-stop safe constructor used by [`super::PipelineOwner::layout_dirty_root`]. It takes
+    /// the tree's lease and borrows no node. `layout_poison` is the owner's poison table, borrowed
+    /// for exactly the walk's lifetime so each recursion level can skip poisoned nodes.
     pub(super) fn from_tree(
         render_tree: &'tree mut RenderTree,
         id: RenderId,
         layout_poison: &'tree LayoutPoison,
         text: TextLender<'tree>,
-        #[cfg(any(test, feature = "testing"))] all_seeds: &FxHashMap<RenderId, ParentDataSeed>,
+        #[cfg(any(test, feature = "testing"))] all_seeds: &'tree FxHashMap<
+            RenderId,
+            ParentDataSeed,
+        >,
     ) -> crate::error::RenderResult<Self> {
-        let subtree_ids = render_tree.collect_subtree_ids(id);
-        if subtree_ids.is_empty() {
+        let lease = render_tree.lease();
+        if lease.node(id).is_none() {
             return Err(crate::error::RenderError::NodeNotFound(id));
         }
-        let node_refs = render_tree
-            .get_subtree_mut(&subtree_ids)
-            .ok_or(crate::error::RenderError::NodeNotFound(id))?;
         Ok(Self::new(
-            &subtree_ids,
-            node_refs,
+            lease,
             layout_poison,
             text,
             #[cfg(any(test, feature = "testing"))]
@@ -579,8 +531,8 @@ impl<'tree> SubtreeArena<'tree> {
 // RAII layout-cycle guard
 // ============================================================================
 
-/// RAII guard that sets `id`'s in-flight flag in [`SubtreeArena::by_id`]
-/// on construction and clears it on drop.
+/// RAII guard that sets `id`'s in-flight bit in its slot header on construction and clears it on
+/// drop, and keeps [`SubtreeArena::current`] on the innermost walk frame.
 ///
 /// Detects re-entry into a node's `layout_subtree_borrowed` call (the
 /// situation where a user `perform_layout` body calls `ctx.layout_child`
@@ -589,7 +541,8 @@ impl<'tree> SubtreeArena<'tree> {
 /// constructor returns [`crate::error::RenderError::LayoutCycle`]
 /// instead of attempting a second [`NodePtr`] reborrow (which would be
 /// UB under aliasing rules — the same slot's Unique tag is live up the
-/// recursion stack).
+/// recursion stack). It also refuses an id that is not a child of the frame that asks for it
+/// ([`crate::error::RenderError::NodeNotFound`]), reading the slot headers only.
 ///
 /// The guard's `Drop` impl unconditionally clears the in-flight flag,
 /// even on unwind (Rust's drop semantics guarantee this for any
@@ -601,34 +554,25 @@ impl<'tree> SubtreeArena<'tree> {
 struct LayoutCycleGuard<'arena, 'tree> {
     arena: &'arena SubtreeArena<'tree>,
     id: RenderId,
+    /// The frame this one was entered from, restored on drop.
+    parent: Option<RenderId>,
 }
 
 impl<'arena, 'tree> LayoutCycleGuard<'arena, 'tree> {
-    /// Registers `id` as currently-laying-out by atomically setting its
-    /// in-flight flag.  Returns `Err(RenderError::LayoutCycle(id))` if
-    /// the flag was already set (id already in flight at a parent call
-    /// level) — caller must propagate immediately.
+    /// Registers `id` as currently-laying-out by setting its in-flight bit.
     ///
-    /// Uses `swap(true, Relaxed)`: if the old value was `true` the node
-    /// was already in-flight (cycle); if `false` we atomically claim it.
-    /// Semantics are identical to the former `set.insert(id)` check —
-    /// re-entry is rejected, first entry proceeds.  No lock is taken.
+    /// - `Err(RenderError::LayoutCycle(id))` if the bit was already set (id already in flight at
+    ///   a parent call level) — caller must propagate immediately. Checked first, so a cyclic
+    ///   `children()` edge reports a cycle, not a missing node.
+    /// - `Err(RenderError::NodeNotFound(id))` if a parent frame exists and `id` is not its
+    ///   child. The dirty root has no parent frame and is validated by the arena's constructor.
+    ///
+    /// A stale or vacant id claims nothing; the `get` that follows reports `NodeNotFound`.
     fn enter(arena: &'arena SubtreeArena<'tree>, id: RenderId) -> crate::error::RenderResult<Self> {
         // No thread check here (or anywhere in this file): confinement is
         // structural, enforced by `SubtreeArena: !Send + !Sync` at the type
         // level, not by a runtime assert callers could bypass.
-        // Look up the side flag for `id`.  An id that is not in `by_id`
-        // cannot be in-flight (it was never seeded into the arena), so
-        // we treat it as not-in-flight and let the subsequent `get` call
-        // produce `NodeNotFound` — matching the former HashSet behaviour
-        // where an absent id was not in the set.
-        let Some((_, flag)) = arena.by_id.get(&id) else {
-            return Ok(Self { arena, id });
-        };
-        // swap returns the *previous* value.  If it was already `true`
-        // the node is in-flight → cycle.  If it was `false` we just
-        // claimed it.
-        if flag.swap(true, Ordering::Relaxed) {
+        if arena.lease.is_in_flight(id) {
             // Debug-level: the layout-child callback in
             // `layout_subtree_borrowed` already logs the propagated
             // Err at tracing::error when it collapses descendant Err
@@ -644,7 +588,17 @@ impl<'arena, 'tree> LayoutCycleGuard<'arena, 'tree> {
             );
             return Err(crate::error::RenderError::layout_cycle(id));
         }
-        Ok(Self { arena, id })
+        let parent = arena.current.get();
+        if let Some(parent) = parent
+            && !arena.lease.is_child_of(id, parent)
+        {
+            return Err(crate::error::RenderError::NodeNotFound(id));
+        }
+        if arena.lease.try_enter(id) {
+            arena.acquired_count.set(arena.acquired_count.get() + 1);
+        }
+        arena.current.set(Some(id));
+        Ok(Self { arena, id, parent })
     }
 }
 
@@ -652,11 +606,92 @@ impl Drop for LayoutCycleGuard<'_, '_> {
     fn drop(&mut self) {
         // Unconditional clear — runs on every exit path including unwind.
         // The in-flight flag stays consistent for the next frame.
-        // If the id is not in `by_id` (enter's early-return path for
-        // unknown ids), the store is a no-op.
-        if let Some((_, flag)) = self.arena.by_id.get(&self.id) {
-            flag.store(false, Ordering::Relaxed);
+        // For a stale id, `enter` claimed nothing and the leave is a no-op.
+        self.arena.lease.leave(self.id);
+        self.arena.current.set(self.parent);
+    }
+}
+
+// ============================================================================
+// QueryWalk — the dry intrinsic/layout/baseline query walks' view of the tree
+// ============================================================================
+
+/// Why [`QueryWalk::enter`] handed out no node.
+pub(super) enum QueryRefusal {
+    /// The id is stale, vacant or never existed.
+    Missing,
+    /// The node is already entered up the stack: only a cyclic child link produces this.
+    InFlight,
+}
+
+/// The memoizing query walks' lease on the render tree. Like [`SubtreeArena`] it acquires a node
+/// when the walk reaches it, so a query costs the nodes it visits and not the subtree it sits on.
+pub(super) struct QueryWalk<'tree> {
+    lease: TreeLease<'tree>,
+}
+
+impl<'tree> QueryWalk<'tree> {
+    pub(super) fn new(render_tree: &'tree mut RenderTree) -> Self {
+        Self {
+            lease: render_tree.lease(),
         }
+    }
+
+    /// Enters `id`: sets its in-flight bit and lends its node until the entry drops.
+    pub(super) fn enter(&self, id: RenderId) -> Result<QueryEntry<'_, 'tree>, QueryRefusal> {
+        // Claim the slot first: `node` projects a `&mut` to the payload, which is only sound once no
+        // other entry can hold one (a cyclic child link would re-enter an ancestor's node).
+        if !self.lease.try_enter(id) {
+            return Err(if self.lease.is_in_flight(id) {
+                QueryRefusal::InFlight
+            } else {
+                QueryRefusal::Missing
+            });
+        }
+        let Some(node) = self.lease.node(id) else {
+            self.lease.leave(id);
+            return Err(QueryRefusal::Missing);
+        };
+        Ok(QueryEntry {
+            walk: self,
+            id,
+            node,
+        })
+    }
+
+    /// A copy of `child`'s committed parent data, or `None` when it has none or is entered up the
+    /// stack (its node is then borrowed, and the query treats it as absent).
+    pub(super) fn child_parent_data(&self, child: RenderId) -> Option<Box<dyn ParentData>> {
+        if self.lease.is_in_flight(child) {
+            return None;
+        }
+        let node = self.lease.node(child)?;
+        // SAFETY: the slot is not in flight, so no `&mut` to it is live (lease invariant 3), and
+        // the walk is single-threaded; the shared reference ends with this expression.
+        unsafe { &*node }.parent_data().map(dyn_clone::clone_box)
+    }
+}
+
+/// One node entered by a query walk. Dropping it clears the in-flight bit, on unwind too.
+pub(super) struct QueryEntry<'walk, 'tree> {
+    walk: &'walk QueryWalk<'tree>,
+    id: RenderId,
+    node: *mut RenderNode,
+}
+
+impl QueryEntry<'_, '_> {
+    /// The entered node. The reference lasts as long as this borrow of the entry.
+    pub(super) fn node(&mut self) -> &mut RenderNode {
+        // SAFETY: `QueryWalk::enter` set this slot's in-flight bit and refuses a second entry
+        // until this entry drops, so this is the only `&mut` to the node (lease invariant 3); the
+        // pointer came from the lease whose tree borrow outlives `'tree`.
+        unsafe { &mut *self.node }
+    }
+}
+
+impl Drop for QueryEntry<'_, '_> {
+    fn drop(&mut self) {
+        self.walk.lease.leave(self.id);
     }
 }
 
@@ -1081,7 +1116,7 @@ unsafe fn layout_subtree_borrowed_impl(
         // `&mut` is live on P1's frame).  Reading that child's memory while
         // P1's Unique tag is live is a foreign read that can break P1's
         // provenance under Stacked / Tree Borrows.  We detect this via
-        // `is_in_flight` (reads the `AtomicBool` in `by_id`) and skip the seed for
+        // `is_in_flight` (reads the slot header) and skip the seed for
         // such children; their `ChildState` retains default values (zero
         // offset, None parent_data), which is safe since any positioning
         // decision for an in-flight ancestor that the callback yielded
@@ -1157,7 +1192,11 @@ unsafe fn layout_subtree_borrowed_impl(
 
             // Leaf path: delegate to layout_leaf_only.
             if is_leaf {
-                return entry.layout_leaf_only(constraints, arena.text.source(id));
+                return entry.layout_leaf_only(
+                    constraints,
+                    arena.text.source(id),
+                    arena.lease.parent(id).is_some(),
+                );
             }
 
             // Descendant-error tracking flag.  Closure flips to `true` on any
@@ -1239,7 +1278,7 @@ unsafe fn layout_subtree_borrowed_impl(
                     // This bounds malformed cycles without truncating deep valid trees.
                     let mut node_id = child_id;
                     let mut offset_y = 0.0;
-                    for hop in 0..arena_for_cb.by_id.len() {
+                    for hop in 0..arena_for_cb.lease.capacity() {
                         if arena_for_cb.is_in_flight(node_id) {
                             return Ok(None);
                         }
@@ -1456,7 +1495,7 @@ unsafe fn layout_subtree_borrowed_impl(
             entry.state_mut().set_constraints(constraints);
 
             // Bootstrap the relayout boundary now that constraints are populated.
-            let has_parent = entry.links().parent().is_some();
+            let has_parent = arena.lease.parent(id).is_some();
             let sized_by_parent = entry.render_object().sized_by_parent();
             <BoxProtocol as Protocol>::bootstrap_relayout_boundary(
                 entry.state(),
@@ -1663,7 +1702,7 @@ unsafe fn box_intrinsic_query_borrowed_impl(
             arena,
             &child_ids,
             #[cfg(any(test, feature = "testing"))]
-            &arena.parent_data_seeds,
+            arena.parent_data_seeds,
             #[cfg(not(any(test, feature = "testing")))]
             &(),
         )
@@ -2141,7 +2180,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
         entry.state_mut().set_geometry(geometry);
         entry.state_mut().set_constraints(constraints);
 
-        let has_parent = entry.links().parent().is_some();
+        let has_parent = arena.lease.parent(id).is_some();
         let sized_by_parent = entry.render_object().sized_by_parent();
         <SliverProtocol as Protocol>::bootstrap_relayout_boundary(
             entry.state(),
@@ -2219,6 +2258,60 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod query_walk {
+        use flui_foundation::{Leaf, geometry::Size};
+
+        use super::*;
+        use crate::{context::BoxLayoutContext, parent_data::BoxParentData, traits::RenderBox};
+
+        #[derive(Debug, Default)]
+        struct LeafStub;
+        impl flui_foundation::Diagnosticable for LeafStub {}
+        impl RenderBox for LeafStub {
+            type Arity = Leaf;
+            type ParentData = BoxParentData;
+            fn perform_layout(
+                &mut self,
+                _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+            ) -> crate::RenderResult<Size> {
+                Ok(Size::new(10.0, 10.0))
+            }
+            fn paint(&self, _ctx: &mut crate::context::PaintCx<'_, Leaf>) {}
+        }
+
+        #[test]
+        fn query_walk_refuses_a_second_entry_and_frees_the_node_on_drop() {
+            let mut tree = RenderTree::new();
+            let root = tree.insert_box(Box::new(LeafStub));
+            let child = tree
+                .insert_box_child(root, Box::new(LeafStub))
+                .expect("BUG: the root is live");
+            let stale = tree.insert_box(Box::new(LeafStub));
+            tree.remove_shallow(stale);
+
+            let walk = QueryWalk::new(&mut tree);
+            let mut held = walk
+                .enter(root)
+                .ok()
+                .expect("BUG: first entry of a live node");
+            assert!(held.node().children().contains(&child));
+            assert!(matches!(walk.enter(root), Err(QueryRefusal::InFlight)));
+            assert!(
+                walk.child_parent_data(root).is_none(),
+                "an entered node's parent data is not read"
+            );
+            assert!(matches!(walk.enter(stale), Err(QueryRefusal::Missing)));
+            // A different node is enterable beside the held one.
+            drop(walk.enter(child).ok().expect("BUG: a distinct node"));
+
+            drop(held);
+            assert!(
+                walk.enter(root).is_ok(),
+                "dropping the entry clears the in-flight bit"
+            );
+        }
+    }
 
     // There used to be a `check_thread_panics_on_wrong_thread` test proving
     // a runtime assert fired when `SubtreeArena` was moved to another

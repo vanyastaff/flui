@@ -1,0 +1,13 @@
+error[E0432]: unresolved import `flui::native::macos`
+ --> tests/ui/native/macos_extension_needs_macos.rs:3:19
+  |
+3 | use flui::native::macos::AppKitWindow;
+  |                   ^^^^^ could not find `macos` in `native`
+  |
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  |     #[cfg(target_os = "macos")]
+  |           ------------------- the item is gated behind the `macos` feature
+  |     pub use flui_app::native::macos;
+  |                               ^^^^^

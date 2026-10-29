@@ -46,9 +46,76 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use crate::error::{EngineError, EngineResult};
+use crate::frame_latency::FrameLatency;
 use crate::raster::PresentDisposition;
+use crate::surface_color::{ColorRequest, OutputEncoding, ResolvedSurfaceColor, SurfaceColor};
 use crate::surface_lease::SurfaceLease;
 use crate::window_target::WindowTarget;
+
+/// `DXGI_ERROR_FRAME_STATISTICS_DISJOINT`: the statistics broke off (a mode
+/// change, a move to another output), so what came before does not compare.
+#[cfg(windows)]
+const DXGI_ERROR_FRAME_STATISTICS_DISJOINT: u32 = 0x887A_000B;
+
+/// The frame statistics of the DXGI swap chain behind `surface`, when wgpu
+/// presents it through DX12: a shown present, a break in the statistics, or
+/// nothing (another backend, or nothing shown yet: DXGI then answers an
+/// error, not statistics).
+///
+/// The crate's one production `unsafe`: wgpu reaches its swap chain only
+/// through the hal escape (`Surface::as_hal`), and DXGI's statistics are COM
+/// calls on it.
+#[cfg(windows)]
+#[expect(
+    unsafe_code,
+    reason = "DXGI frame statistics are read from wgpu's swap chain, reachable only through the hal"
+)]
+#[expect(
+    clippy::default_trait_access,
+    reason = "`DXGI_FRAME_STATISTICS` is wgpu-hal's `windows` type, which this crate does not name"
+)]
+fn dxgi_frame_statistics(surface: &wgpu::Surface<'static>) -> flui_platform::SwapChainStatistics {
+    use flui_platform::{DxgiFrameStatistics, SwapChainStatistics};
+
+    // SAFETY: `as_hal` requires that the resource it hands out is not
+    // destroyed unless its guard is the last reference to it and the GPU no
+    // longer uses it, and that wgpu-hal's own rules hold. Nothing here
+    // destroys anything: the guard is only read for a counted reference to
+    // the swap chain (`swap_chain()` clones the COM pointer, an AddRef), and
+    // is dropped before any call on that reference; the swap chain stays
+    // wgpu's, alive while wgpu keeps it. The read runs on the thread that
+    // presents through this surface, between its presents, so no wgpu call on
+    // the surface overlaps it.
+    let Some(hal) = (unsafe { surface.as_hal::<wgpu::hal::api::Dx12>() }) else {
+        return SwapChainStatistics::None;
+    };
+    // Released at the end of this function: holding it past the present would
+    // keep a swap chain wgpu replaced alive against its window.
+    let Some(swap_chain) = hal.swap_chain() else {
+        return SwapChainStatistics::None;
+    };
+    drop(hal);
+    let mut statistics = Default::default();
+    // SAFETY: a read of the swap chain's counters through a reference this
+    // function holds, on the thread that presents through it; `statistics`
+    // is an initialized `DXGI_FRAME_STATISTICS` the call fills and outlives.
+    let read = unsafe { swap_chain.GetFrameStatistics(&raw mut statistics) };
+    match read {
+        Ok(()) => SwapChainStatistics::Dxgi(DxgiFrameStatistics::new(
+            statistics.PresentCount,
+            statistics.SyncRefreshCount,
+            statistics.SyncQPCTime,
+        )),
+        #[expect(
+            clippy::cast_sign_loss,
+            reason = "an HRESULT's bits, compared with the documented value"
+        )]
+        Err(error) if error.code().0 as u32 == DXGI_ERROR_FRAME_STATISTICS_DISJOINT => {
+            SwapChainStatistics::DxgiDisjoint
+        }
+        Err(_) => SwapChainStatistics::None,
+    }
+}
 
 /// What a frame's presentation became, from the two facts `render_scene`
 /// establishes before it paints anything.
@@ -718,6 +785,7 @@ struct WindowedGpuStack {
     queue: Arc<wgpu::Queue>,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
+    surface_color: ResolvedSurfaceColor,
     capabilities: GpuCapabilities,
     painter: crate::painter::WgpuPainter,
     offscreen: crate::offscreen::OffscreenRenderer,
@@ -774,6 +842,13 @@ pub struct Renderer {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     config: wgpu::SurfaceConfiguration,
+    /// What the current surface was given for the application's request.
+    surface_color: ResolvedSurfaceColor,
+    /// What the next surface configuration resolves: the application's
+    /// request and the newest colour reported for the window's display
+    /// ([`Renderer::set_display_color`]). A recreated surface and a recovered
+    /// device resolve this, never the report the current surface was given.
+    color: ColorRequest,
     capabilities: GpuCapabilities,
     painter: crate::painter::WgpuPainter,
     /// The newest frame of each live external texture, re-uploaded after the
@@ -791,6 +866,8 @@ pub struct Renderer {
     /// without waiting for a frame. One cell for the renderer's lifetime:
     /// every device `recover` builds reports into it.
     device_lost_hook: Arc<DeviceLostSlot>,
+    /// The swapchain's frame-latency bound, re-applied whenever the surface is configured anew.
+    frame_latency: FrameLatency,
     /// The damage owed, the retained last frame a partial frame repaints
     /// into, and the one-frame promotion to full — the protocol the headless
     /// retained capture runs too (see [`crate::frame_protocol`]).
@@ -929,13 +1006,37 @@ impl Renderer {
     /// this constructor is the one this crate ships; it is the advertised
     /// entry point, not a temporary beside an unwired shared value type.
     pub async fn new(target: impl WindowTarget) -> EngineResult<Self> {
-        // An `Arc<dyn PlatformWindow>` (the common caller shape) becomes an
-        // `Arc<Arc<dyn PlatformWindow>>` here — forced: `Arc<dyn
-        // PlatformWindow>` cannot upcast to `Arc<dyn WindowTarget>` without
-        // `PlatformWindow: WindowTarget`, which would invert the
-        // flui-native → flui-engine layer edge (`cargo xtask workspace`).
-        // One extra pointer chase per surface creation; documented, not
-        // fixed — see issue #1043.
+        Self::with_surface_color(target, SurfaceColor::default(), None).await
+    }
+
+    /// [`Self::new`] with a request for the surface's colour capability, on a
+    /// display whose colour the platform reports as `display`.
+    ///
+    /// The request is met as far as the surface, the adapter and the display
+    /// allow and falls back down `Hdr` → `WideGamut` → `Srgb8`;
+    /// [`Self::surface_color`] says what was granted. `display` is the
+    /// [`DisplayInfo::color`](flui_platform::DisplayInfo::color) of the
+    /// display the window is on, `None` where the platform reports none: an
+    /// extended-range surface is granted only on a display in high range, and
+    /// its tone mapping is bounded by the display's headroom (ADR-0256). A
+    /// surface recreated later is resolved against the same report. A request
+    /// other than [`SurfaceColor::Srgb8`] that is granted paints in an
+    /// `Rgba16Float` working target and converts it to the surface in the
+    /// presentation blit.
+    ///
+    /// # Errors
+    /// As [`Self::new`].
+    pub async fn with_surface_color(
+        target: impl WindowTarget,
+        requested: SurfaceColor,
+        display: Option<flui_platform::DisplayColor>,
+    ) -> EngineResult<Self> {
+        let color = ColorRequest { requested, display };
+        // An `Arc<dyn SurfaceTarget>` (the common caller shape, a window's
+        // surface target) becomes an `Arc<Arc<dyn SurfaceTarget>>` here:
+        // `Arc<dyn SurfaceTarget>` cannot upcast to `Arc<dyn WindowTarget>`:
+        // the contract's trait cannot name this crate's as a supertrait.
+        // One extra pointer chase per surface creation.
         let (w, h) = (800u32, 600u32); // Will be updated on first resize
         let device_lost_hook = Arc::default();
         let (target, stack) = Self::probe_then_build(Arc::new(target), |target| {
@@ -947,6 +1048,8 @@ impl Renderer {
                     w,
                     h,
                     &device_lost_hook,
+                    FrameLatency::default(),
+                    color,
                 )
                 .await?;
                 Ok((target, stack))
@@ -961,6 +1064,8 @@ impl Renderer {
             device: stack.device,
             queue: stack.queue,
             config: stack.config,
+            surface_color: stack.surface_color,
+            color,
             capabilities: stack.capabilities,
             painter: stack.painter,
             external_frames: std::collections::HashMap::new(),
@@ -968,6 +1073,7 @@ impl Renderer {
             supports_copy_src: stack.supports_copy_src,
             device_lost: stack.device_lost,
             device_lost_hook,
+            frame_latency: FrameLatency::default(),
             frame: crate::frame_protocol::FrameProtocol::new(),
             pre_present_hook: None,
             surface_recovery: SurfaceRecovery::default(),
@@ -1029,20 +1135,44 @@ impl Renderer {
     /// when this derivation returns a different one — see that method's own
     /// doc for why leaving them would blank the window rather than fail
     /// loudly. Keeping the derivation in one function is also what
-    /// keeps `desired_maximum_frame_latency`'s long comment below true, since
-    /// a second construction site would be a second place for that literal to
-    /// drift.
+    /// keeps the swapchain's frame-latency bound supplied in one place, since a second
+    /// construction site would be a second place for it to drift.
     fn derive_surface_config(
         surface: &wgpu::Surface<'_>,
         adapter: &wgpu::Adapter,
         width: u32,
         height: u32,
-    ) -> EngineResult<(wgpu::SurfaceConfiguration, bool)> {
+        latency: FrameLatency,
+        color: ColorRequest,
+    ) -> EngineResult<(wgpu::SurfaceConfiguration, bool, ResolvedSurfaceColor)> {
         let surface_caps = surface.get_capabilities(adapter);
-        let (surface_format, color_space) = Self::select_surface_format(&surface_caps)?;
+        let surface_color = ResolvedSurfaceColor::resolve(
+            color.requested,
+            &surface_caps,
+            color.display,
+            &surface.display_hdr_info(adapter),
+            crate::surface_color::working_format_renderable(adapter),
+        )?;
+        if surface_color.is_downgraded() {
+            tracing::warn!(
+                target: "flui.gpu",
+                event = "surface_color_downgraded",
+                requested = ?surface_color.requested(),
+                granted = ?surface_color.granted(),
+                "the surface cannot meet the requested colour capability"
+            );
+        }
+        tracing::debug!(
+            target: "flui.gpu",
+            format = ?surface_color.format(),
+            color_space = ?surface_color.color_space(),
+            working_format = ?surface_color.working_format(),
+            display = ?color.display,
+            "Selected surface color configuration"
+        );
 
         let supports_copy_src = surface_caps.usages.contains(wgpu::TextureUsages::COPY_SRC);
-        if !supports_copy_src {
+        if !supports_copy_src && surface_color.output() == OutputEncoding::Identity {
             tracing::warn!(
                 "Surface does not support COPY_SRC; backdrop blur will use fallback path"
             );
@@ -1054,74 +1184,24 @@ impl Renderer {
 
         let config = wgpu::SurfaceConfiguration {
             usage: surface_usage,
-            format: surface_format,
-            color_space,
+            format: surface_color.format(),
+            color_space: surface_color.color_space(),
             width,
             height,
             present_mode: Self::select_present_mode(&surface_caps),
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![],
-            // 2 (wgpu's own default), raised from 1 on 2026-09-22 on a
-            // measurement that settled a judgement call the other way.
-            //
-            // The literal sat at 1 for a live-resize argument: the tightest
-            // pool means the displayed frame tracks the window edge as closely
-            // as possible during a drag. The in-process half of that argument
-            // was refuted first (measured on macOS: the acquired
-            // texture never diverges from the configured size at either
-            // setting, four runs — `render_scene` acquires and presents
-            // inside one call and `resize` reconfigures before it, so no
-            // drawable is alive across a `Surface::configure`), leaving only
-            // an unmeasurable compositor-side lag of ~one display period after
-            // a resize as the reason to stay at 1. ADR-0058's AppKit
-            // subsection had already measured the cost of 1 on the tail —
-            // 3 % of frames stalling a full period in `get_current_texture()`
-            // — and judged it tolerable.
-            //
-            // It is not tolerable once the frame does real work. With two
-            // drawables (`maximum_frame_latency + 1`) the acquire for frame
-            // N+1 waits until frame N's drawable is released by scanout, so
-            // a frame whose own work is longer than what is left of the
-            // period after that release misses the next vsync EVERY time, not
-            // on a 3 % tail: a representative workload (a Scaffold with a
-            // 2,000-row ListView and a Material TextField, 900×700 logical
-            // on a 100 Hz panel) presented at a rock-steady 20.0 ms p50 —
-            // exactly two periods, 50 fps — through both its scrolling and
-            // its typing phases, while `flui-native`'s bare frame pump on
-            // the same display ran 100 fps. At 2 the same probe ran 10.0 ms
-            // p50 (p99 12.3 ms scrolling, 10.05 ms typing). Half the frame
-            // rate of every non-trivial app is a measured cost; a possible
-            // one-period edge lag during a live drag is a conjecture nothing
-            // in-process can observe. The pool is widened on that basis, and
-            // a macOS workload run is the regression gate: its scroll and
-            // type p99 budgets are stated in display periods. The
-            // measurement is AppKit/Metal on one 100 Hz panel; the literal
-            // is global to every wgpu backend, where 2 is wgpu's own default
-            // and the other backends are unmeasured either way.
-            //
-            // This field is the only in-flight bound FLUI sets: the frame clock
-            // throttles produces by interval, never by frames in flight. Two
-            // implementer notes worth having in one place: (a)
-            // wgpu ignores `desired_maximum_frame_latency` entirely on the GL
-            // backend (live here — `Backends::GL` is selectable via the `gles`
-            // feature), so on GL nothing bounds frames in flight beyond the
-            // driver's own queue, which `get_current_texture` blocks on; the
-            // raster lane runs inline on the owner thread and holds one frame
-            // in its mailbox, so the owner cannot run further ahead than that
-            // queue lets it; (b) this field only takes effect at
-            // `Surface::configure` — every reconfigure must resupply it. `resize`
-            // and `reconfigure_surface` below both mutate and re-`configure` THIS
-            // SAME `SurfaceConfiguration` value (so it never needs resupplying —
-            // it was never removed), and `recover` and `recreate_surface`
-            // rebuild through this exact function again rather than a second
-            // constructor — the first the whole stack, the second the surface
-            // plus whatever bakes its format — so the literal is written in
-            // exactly one place in the source, not scattered across call sites
-            // that could drift out of sync.
-            desired_maximum_frame_latency: 2,
+            // The caller's `FrameLatency` (ADR-0257), `Balanced` unless the window asked for
+            // `Low`. The value only takes effect at `Surface::configure`, and `resize` and
+            // `reconfigure_surface` re-configure this same value, while `recover` and
+            // `recreate_surface` rebuild through this function with the renderer's stored
+            // setting, so it is supplied in exactly one place. It is the only in-flight bound
+            // FLUI sets: the frame clock throttles by interval, never by frames in flight, and
+            // wgpu ignores it on GL, where the driver queue is the only bound.
+            desired_maximum_frame_latency: latency.frames(),
         };
 
-        Ok((config, supports_copy_src))
+        Ok((config, supports_copy_src, surface_color))
     }
 
     /// Build the two objects that bake a surface `format`: the painter (whose
@@ -1169,6 +1249,8 @@ impl Renderer {
         width: u32,
         height: u32,
         device_lost_hook: &Arc<DeviceLostSlot>,
+        latency: FrameLatency,
+        color: ColorRequest,
     ) -> EngineResult<WindowedGpuStack> {
         let backends = Self::select_backend();
         tracing::info!("Creating wgpu instance with backends: {:?}", backends);
@@ -1252,14 +1334,14 @@ impl Renderer {
         let device = Arc::new(device);
         let queue = Arc::new(queue);
 
-        let (config, supports_copy_src) =
-            Self::derive_surface_config(&surface, &adapter, width, height)?;
+        let (config, supports_copy_src, surface_color) =
+            Self::derive_surface_config(&surface, &adapter, width, height, latency, color)?;
         surface.configure(&device, &config);
 
         let (painter, offscreen) = Self::build_format_consumers(
             frame,
             crate::device_domain::DeviceDomain::new(Arc::clone(&device), Arc::clone(&queue)),
-            config.format,
+            surface_color.working_format(),
             (config.width, config.height),
         );
 
@@ -1295,6 +1377,7 @@ impl Renderer {
             queue,
             surface,
             config,
+            surface_color,
             capabilities,
             painter,
             offscreen,
@@ -1353,7 +1436,7 @@ impl Renderer {
         if self.force_intermediate {
             return true;
         }
-        !self.supports_copy_src
+        !self.supports_copy_src || self.surface_color.output() != OutputEncoding::Identity
     }
 
     /// Force the intermediate-texture present path on for this renderer
@@ -1430,6 +1513,8 @@ impl Renderer {
             width,
             height,
             &self.device_lost_hook,
+            self.frame_latency,
+            self.next_color_request(),
         )
         .await?;
 
@@ -1438,6 +1523,7 @@ impl Renderer {
         self.device = stack.device;
         self.queue = stack.queue;
         self.config = stack.config;
+        self.surface_color = stack.surface_color;
         self.capabilities = stack.capabilities;
         self.painter = stack.painter;
         Self::reupload_external_frames(&mut self.painter, &self.external_frames);
@@ -1651,33 +1737,6 @@ impl Renderer {
         limits
     }
 
-    /// Select a supported presentation pair for the shaders' encoded sRGB output.
-    fn select_surface_format(
-        surface_caps: &wgpu::SurfaceCapabilities,
-    ) -> EngineResult<(wgpu::TextureFormat, wgpu::SurfaceColorSpace)> {
-        // Color::to_rgba_f32_array and the shaders preserve encoded values. Plain
-        // UNorm stores those bytes without another transfer function; explicit
-        // Srgb tells the compositor how to interpret them. An FP16/Auto surface
-        // can instead select ExtendedSrgbLinear and brighten the same values.
-        // Keep the existing encoded-space blending contract until the entire
-        // pipeline deliberately adopts linear/HDR color management.
-        for format in [
-            wgpu::TextureFormat::Bgra8Unorm,
-            wgpu::TextureFormat::Rgba8Unorm,
-        ] {
-            if surface_caps
-                .color_spaces(format)
-                .contains(wgpu::SurfaceColorSpaces::SRGB)
-            {
-                tracing::debug!(?format, color_space = ?wgpu::SurfaceColorSpace::Srgb, "Selected surface color configuration");
-                return Ok((format, wgpu::SurfaceColorSpace::Srgb));
-            }
-        }
-        Err(EngineError::UnsupportedSurfaceColorConfiguration {
-            supported: surface_caps.format_capabilities.clone(),
-        })
-    }
-
     /// Select present mode based on capabilities.
     ///
     /// Fifo is the default. On the Vulkan/Wayland path `render_scene`'s
@@ -1718,6 +1777,48 @@ impl Renderer {
         self.pre_present_hook = hook;
     }
 
+    /// What the swap chain says about the frames it presented before the one
+    /// about to be: DXGI's frame statistics on DX12 — the newest present the
+    /// display showed and the refresh it began on — and nothing on the other
+    /// backends, nor before any present was shown (DXGI then answers an
+    /// error, not statistics).
+    #[cfg_attr(
+        not(windows),
+        expect(
+            clippy::unused_self,
+            reason = "only the DX12 swap chain reports statistics"
+        )
+    )]
+    fn swap_chain_statistics(&self) -> flui_platform::SwapChainStatistics {
+        #[cfg(windows)]
+        if let Some(surface) = self.lease.surface() {
+            return dxgi_frame_statistics(surface);
+        }
+        flui_platform::SwapChainStatistics::None
+    }
+
+    /// Set how many frames this window's swapchain holds ahead of the display (ADR-0257).
+    ///
+    /// Takes effect on the surface now, or when it is next configured while the surface is
+    /// released; every later recovery or recreation keeps it.
+    pub fn set_frame_latency(&mut self, latency: FrameLatency) {
+        self.frame_latency = latency;
+        if self.config.desired_maximum_frame_latency == latency.frames() {
+            return;
+        }
+        self.config.desired_maximum_frame_latency = latency.frames();
+        if let Some(surface) = self.lease.surface() {
+            surface.configure(&self.device, &self.config);
+            self.surface_recovery.configured();
+        }
+    }
+
+    /// The frame-latency setting the swapchain is configured with.
+    #[must_use]
+    pub const fn frame_latency(&self) -> FrameLatency {
+        self.frame_latency
+    }
+
     /// Resize the surface
     ///
     /// While the surface is released the size still lands in the configuration
@@ -1744,6 +1845,111 @@ impl Renderer {
         self.frame.surface_changed();
 
         tracing::debug!("Surface resized to {}x{}", width, height);
+    }
+
+    /// The colour configuration the surface was given for the request passed
+    /// to [`Self::with_surface_color`], and whether it fell short of it.
+    ///
+    /// It follows the surface: a recreated surface resolves the request again
+    /// (a display that left HDR mode answers `Srgb8` here afterwards).
+    #[must_use]
+    pub fn surface_color(&self) -> &ResolvedSurfaceColor {
+        &self.surface_color
+    }
+
+    /// The window's display now reports `display` as its colour (`None` where
+    /// the platform reports none): the profile changed, or the window moved to
+    /// another display (ADR-0256 §6).
+    ///
+    /// Every later surface configuration resolves against it: a recreated
+    /// surface and a recovered device, and, when the held surface was set up
+    /// for another report, the held surface right here, configured again from
+    /// its own capabilities and the display's live state. Returns whether that
+    /// reconfiguration happened; the caller then owes what a recreation owes
+    /// (a new surface generation and a full repaint). A released surface is not
+    /// touched: the next recreation picks the report up. The same report again
+    /// changes nothing and returns `false`.
+    ///
+    /// # Errors
+    /// [`EngineError::UnsupportedSurfaceColorConfiguration`] when the held
+    /// surface no longer offers an 8-bit sRGB pair; it keeps its old
+    /// configuration.
+    pub fn set_display_color(
+        &mut self,
+        display: Option<flui_platform::DisplayColor>,
+    ) -> EngineResult<bool> {
+        self.color.display = display;
+        if self.surface_color.request() == self.color {
+            return Ok(false);
+        }
+        let Some(surface) = self.lease.surface() else {
+            return Ok(false);
+        };
+        let (width, height) = (self.config.width, self.config.height);
+        let (config, supports_copy_src, surface_color) = Self::derive_surface_config(
+            surface,
+            &self.adapter,
+            width,
+            height,
+            self.frame_latency,
+            self.next_color_request(),
+        )?;
+        surface.configure(&self.device, &config);
+        self.adopt_working_format(surface_color.working_format(), (width, height));
+        self.config = config;
+        self.surface_color = surface_color;
+        self.supports_copy_src = supports_copy_src;
+        self.surface_recovery.reset();
+        self.frame.surface_changed();
+        tracing::debug!(
+            target: "flui.gpu",
+            event = "surface_color_followed_display",
+            granted = ?self.surface_color.granted(),
+            "surface configured again for its display's colour"
+        );
+        Ok(true)
+    }
+
+    /// The colour request the next surface configuration (a recreation, a
+    /// recovery) resolves: the newest display report, not the one the current
+    /// surface was given.
+    fn next_color_request(&self) -> ColorRequest {
+        self.color
+    }
+
+    /// Rebuild the pipelines and the offscreen pool for `working_format` when
+    /// the painter was built for another one; nothing when it was not.
+    ///
+    /// `format` is baked into every pipeline (`PipelineSet::new` is handed it
+    /// once) and into the offscreen pool's textures, while the per-frame
+    /// target format is read from `self.config`, so committing a new working
+    /// format without rebuilding these two would leave every pipeline
+    /// declaring a target format the render attachment does not have. wgpu
+    /// raises that as a validation error per frame and this backend's
+    /// `on_uncaptured_error` handler only logs it, so the window would stay
+    /// blank. The cost when the format did move is the startup cost again:
+    /// nine pipelines and a glyph atlas built synchronously, no GPU wait.
+    fn adopt_working_format(&mut self, working_format: wgpu::TextureFormat, size: (u32, u32)) {
+        let previous = self.painter.surface_format();
+        if previous == working_format {
+            return;
+        }
+        let (painter, offscreen) = Self::build_format_consumers(
+            &self.frame,
+            Arc::clone(self.painter.domain()),
+            working_format,
+            size,
+        );
+        self.painter = painter;
+        Self::reupload_external_frames(&mut self.painter, &self.external_frames);
+        self.offscreen = offscreen;
+        tracing::info!(
+            target: "flui.gpu",
+            event = "surface_format_changed",
+            previous = ?previous,
+            current = ?working_format,
+            "surface selected a different format; pipelines and offscreen pool rebuilt"
+        );
     }
 
     /// Get GPU capabilities
@@ -2024,6 +2230,7 @@ impl Renderer {
     /// right now) or [`EngineError::SurfaceCreation`] propagates, and the
     /// renderer is left released rather than holding a half-built surface.
     pub fn recreate_surface(&mut self) -> EngineResult<()> {
+        let color = self.next_color_request();
         let lease = &mut self.lease;
         let config = &self.config;
         let (width, height) = (config.width, config.height);
@@ -2066,64 +2273,31 @@ impl Renderer {
             .instance
             .create_surface(Arc::clone(released.target()))
             .map_err(EngineError::surface_creation)?;
-        let (fresh_config, supports_copy_src) =
-            Self::derive_surface_config(&surface, &self.adapter, width, height)?;
-
-        // Whether the fresh surface moved the format away from the one the
-        // pipelines and the offscreen pool were built with. Read off the
-        // painter rather than off the old `self.config`, because the painter
-        // is the consumer that bakes it: the two agree today (nothing but the
-        // two commit sites below ever writes `self.config.format`), and
-        // binding the condition to the thing that actually has to change is
-        // what keeps them agreeing.
-        let pipelines_format = Some(self.painter.surface_format());
+        let (fresh_config, supports_copy_src, fresh_color) = Self::derive_surface_config(
+            &surface,
+            &self.adapter,
+            width,
+            height,
+            self.frame_latency,
+            color,
+        )?;
 
         // Build FIRST, commit LAST (the lease's two-step protocol): a
         // configure that fails must leave the lease released rather than
         // holding a surface this call never finished preparing.
         surface.configure(&self.device, &fresh_config);
-
-        if pipelines_format != Some(fresh_config.format) {
-            // `format` is baked into every pipeline (`PipelineSet::new` is
-            // handed it once) and into the offscreen pool's textures, while
-            // the per-frame target format is read from `self.config` — so
-            // committing a fresh format without rebuilding these two would
-            // leave every pipeline declaring a target format the render
-            // attachment does not have. wgpu raises that as a validation
-            // error per frame and this backend's `on_uncaptured_error` handler
-            // only logs it (it does not set `device_lost`), so nothing here
-            // would self-heal: the window stays blank with one `error!` per
-            // frame, which is the defect class this whole path exists to
-            // remove. `recover` rebuilds both unconditionally; only the
-            // format actually moving obliges it here, so a resume that
-            // re-derives the format it already had pays nothing for this.
-            //
-            // What it costs when the format did move: this is the one
-            // mid-life path that constructs nine pipelines and a glyph atlas
-            // synchronously, on the callback thread, under the caller's held
-            // lane — the startup cost, paid again. It neither submits nor
-            // waits on the GPU; shader compilation is the whole of it.
-            let (painter, offscreen) = Self::build_format_consumers(
-                &self.frame,
-                Arc::clone(self.painter.domain()),
-                fresh_config.format,
-                (width, height),
-            );
-            self.painter = painter;
-            Self::reupload_external_frames(&mut self.painter, &self.external_frames);
-            self.offscreen = offscreen;
-            tracing::info!(
-                target: "flui.gpu",
-                event = "surface_format_changed",
-                previous = ?pipelines_format,
-                current = ?fresh_config.format,
-                "recreated surface selected a different format; pipelines and offscreen pool rebuilt"
-            );
-        }
-
         lease.replace_surface(released, surface);
 
+        // A fresh surface that moved the working format rebuilds the format
+        // consumers (`adopt_working_format`, which reads the format off the
+        // painter that bakes it); one that re-derived the format it already
+        // had pays nothing. The swapchain format alone moving needs no
+        // rebuild: only the presentation blit targets it, and its pipelines
+        // are keyed by it. `recover` rebuilds both unconditionally.
+        self.adopt_working_format(fresh_color.working_format(), (width, height));
+
         self.config = fresh_config;
+        self.surface_color = fresh_color;
         self.supports_copy_src = supports_copy_src;
         self.surface_recovery.reset();
         self.frame.surface_changed();
@@ -2260,7 +2434,7 @@ impl Renderer {
         // configured surface size (resize transient → stretched frame).
         self.warn_on_size_mismatch(&output.texture);
 
-        let surface_format = self.config.format;
+        let surface_format = self.surface_color.working_format();
 
         // Where this frame renders is `FrameProtocol::run`'s: the swapchain
         // image for a direct frame; otherwise the retained target, whose
@@ -2278,6 +2452,7 @@ impl Renderer {
         let mut steps = SwapchainFrame {
             painter: &mut self.painter,
             offscreen: &mut self.offscreen,
+            output: self.surface_color.output(),
             scene,
             #[cfg(feature = "gpu-profiler")]
             gpu_profiler: profile_frame.profiler(),
@@ -2297,8 +2472,14 @@ impl Renderer {
         // present that follows (see `RasterBackend::set_pre_present_hook`).
         // The trace event is an ordering oracle: every
         // `present_submitted` must be preceded by one of these.
+        // Nothing is read for a hook that is not there.
+        let statistics = if self.pre_present_hook.is_some() {
+            self.swap_chain_statistics()
+        } else {
+            flui_platform::SwapChainStatistics::None
+        };
         if let Some(hook) = self.pre_present_hook.as_mut() {
-            hook();
+            hook(statistics);
             tracing::trace!(
                 target: "flui.gpu",
                 event = "pre_present_notified",
@@ -2529,6 +2710,8 @@ impl Renderer {
 struct SwapchainFrame<'a> {
     painter: &'a mut crate::painter::WgpuPainter,
     offscreen: &'a mut crate::offscreen::OffscreenRenderer,
+    /// How the retained target reaches the swapchain.
+    output: OutputEncoding,
     scene: &'a flui_layer::Scene,
     #[cfg(feature = "gpu-profiler")]
     gpu_profiler: &'a mut Option<crate::profiler::GpuFrameProfiler>,
@@ -2641,7 +2824,7 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
         encoder: &mut wgpu::CommandEncoder,
     ) -> EngineResult<Arc<crate::device_domain::PreparedPermit>> {
         self.offscreen
-            .encode_presentation(retained, surface, view, encoder)
+            .encode_presentation(retained, surface, view, self.output, encoder)
     }
 
     fn submit(
@@ -2761,12 +2944,10 @@ mod tests {
         use wgpu::{SurfaceColorSpaces as Spaces, TextureFormat as Format};
         for pairs in [
             vec![],
-            vec![(Format::Bgra8UnormSrgb, Spaces::SRGB)],
-            vec![(Format::Rgba8UnormSrgb, Spaces::SRGB)],
             vec![(Format::Rgba16Float, Spaces::EXTENDED_SRGB_LINEAR)],
             vec![(Format::Bgra8Unorm, Spaces::EXTENDED_SRGB_LINEAR)],
         ] {
-            let error = Renderer::select_surface_format(&surface_caps(&pairs))
+            let error = crate::surface_color::select_sdr(&surface_caps(&pairs))
                 .expect_err("unsupported color contract");
             assert_eq!(
                 error.recoverability(),
@@ -2781,9 +2962,9 @@ mod tests {
             (Format::Rgba8Unorm, Spaces::SRGB),
         ]);
         assert_eq!(
-            Renderer::select_surface_format(&caps)
+            crate::surface_color::select_sdr(&caps)
                 .expect("RGBA alternative")
-                .0,
+                .format,
             Format::Rgba8Unorm
         );
     }
@@ -2801,8 +2982,9 @@ mod tests {
                 (Format::Rgba16Float, Spaces::EXTENDED_SRGB_LINEAR),
                 (alternative, Spaces::SRGB),
             ]);
-            let (format, space) = Renderer::select_surface_format(&caps).expect("SDR pair");
-            assert_eq!(space, wgpu::SurfaceColorSpace::Srgb);
+            let choice = crate::surface_color::select_sdr(&caps).expect("SDR pair");
+            let format = choice.format;
+            assert_eq!(choice.output, OutputEncoding::Identity);
             let size = 64;
             let (target, view) = crate::test_support::create_target(
                 &device,
@@ -3006,12 +3188,32 @@ mod tests {
                 view_formats: vec![],
                 desired_maximum_frame_latency: 2,
             },
+            surface_color: ResolvedSurfaceColor::resolve(
+                SurfaceColor::Srgb8,
+                &wgpu::SurfaceCapabilities {
+                    formats: vec![format],
+                    format_capabilities: vec![wgpu::SurfaceFormatCapabilities {
+                        format,
+                        color_spaces: wgpu::SurfaceColorSpaces::SRGB,
+                    }],
+                    ..Default::default()
+                },
+                None,
+                &wgpu::DisplayHdrInfo::default(),
+                false,
+            )
+            .expect("SDR pair"),
+            color: ColorRequest {
+                requested: SurfaceColor::Srgb8,
+                display: None,
+            },
             capabilities,
             painter,
             offscreen,
             supports_copy_src: false,
             device_lost: Arc::clone(&callback_flag),
             device_lost_hook: Arc::default(),
+            frame_latency: FrameLatency::default(),
             frame: crate::frame_protocol::FrameProtocol::new(),
             pre_present_hook: None,
             surface_recovery: SurfaceRecovery::default(),
@@ -3023,6 +3225,92 @@ mod tests {
             external_frames: std::collections::HashMap::new(),
         };
         (renderer, domain, callback_flag)
+    }
+
+    /// The frame-latency setting reaches the swapchain configuration, a repeat changes nothing,
+    /// and a released surface still takes it for the configure that recreates it.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_frame_latency_setting_reaches_the_configuration_and_survives_release() {
+        let (mut renderer, _domain, _flag) =
+            released_renderer(HandlelessWindow { supported: true });
+        assert_eq!(renderer.frame_latency(), FrameLatency::Balanced);
+        assert_eq!(renderer.config.desired_maximum_frame_latency, 2);
+        renderer.set_frame_latency(FrameLatency::Low);
+        assert_eq!(renderer.frame_latency(), FrameLatency::Low);
+        assert_eq!(renderer.config.desired_maximum_frame_latency, 1);
+        renderer.set_frame_latency(FrameLatency::Low);
+        assert_eq!(renderer.config.desired_maximum_frame_latency, 1);
+        renderer.set_frame_latency(FrameLatency::Balanced);
+        assert_eq!(renderer.config.desired_maximum_frame_latency, 2);
+    }
+
+    /// A window set up on an HDR monitor and moved to an SDR one: the next
+    /// recreation (and recovery) resolves the SDR display's colour, not the
+    /// HDR one the surface was given, so an `Hdr` request falls back; a
+    /// released surface is not reconfigured, and the same report again is no
+    /// change.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_recreation_after_the_display_changes_resolves_its_new_range() {
+        use flui_platform::{ColorGamut, DisplayColor, Headroom};
+        use wgpu::{SurfaceColorSpaces as Spaces, TextureFormat as Format};
+
+        let hdr_monitor = DisplayColor::high(
+            ColorGamut::Rec2020,
+            Ok(Headroom::try_new(4.0).expect("headroom")),
+        );
+        let sdr_monitor = DisplayColor::standard(ColorGamut::Srgb);
+        let caps = wgpu::SurfaceCapabilities {
+            formats: vec![Format::Bgra8Unorm, Format::Rgba16Float],
+            format_capabilities: vec![
+                wgpu::SurfaceFormatCapabilities {
+                    format: Format::Bgra8Unorm,
+                    color_spaces: Spaces::SRGB,
+                },
+                wgpu::SurfaceFormatCapabilities {
+                    format: Format::Rgba16Float,
+                    color_spaces: Spaces::EXTENDED_SRGB_LINEAR,
+                },
+            ],
+            ..Default::default()
+        };
+        let resolve = |request: ColorRequest| {
+            ResolvedSurfaceColor::resolve(
+                request.requested,
+                &caps,
+                request.display,
+                &wgpu::DisplayHdrInfo::default(),
+                true,
+            )
+            .expect("SDR pair")
+        };
+
+        let (mut renderer, _domain, _flag) =
+            released_renderer(HandlelessWindow { supported: true });
+        let on_hdr = ColorRequest {
+            requested: SurfaceColor::Hdr,
+            display: Some(hdr_monitor),
+        };
+        renderer.color = on_hdr;
+        renderer.surface_color = resolve(on_hdr);
+        assert_eq!(renderer.surface_color().granted(), SurfaceColor::Hdr);
+
+        let reconfigured = renderer
+            .set_display_color(Some(sdr_monitor))
+            .expect("a released surface takes the report");
+        assert!(!reconfigured, "a released surface is not touched");
+        let next = renderer.next_color_request();
+        assert_eq!(next.display, Some(sdr_monitor));
+        assert_eq!(
+            resolve(next).granted(),
+            SurfaceColor::Srgb8,
+            "the recreation on the SDR monitor must not keep HDR"
+        );
+        assert!(
+            !renderer
+                .set_display_color(Some(sdr_monitor))
+                .expect("same report"),
+            "the same report again is no change"
+        );
     }
 
     /// A recreation the acquire path owes runs through the public
@@ -3594,6 +3882,10 @@ mod tests {
         quarantined_domain_reaches_the_backend_recovery_predicate();
         #[cfg(not(target_arch = "wasm32"))]
         an_owed_surface_recreation_runs_through_the_backend_render_path();
+        #[cfg(not(target_arch = "wasm32"))]
+        a_frame_latency_setting_reaches_the_configuration_and_survives_release();
+        #[cfg(not(target_arch = "wasm32"))]
+        a_recreation_after_the_display_changes_resolves_its_new_range();
         #[cfg(not(target_arch = "wasm32"))]
         a_lost_device_reaches_the_installed_hook();
         a_refused_texture_frame_keeps_the_accepted_one_for_reupload();

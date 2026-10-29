@@ -3,6 +3,7 @@
 //! real owner turns. Declared in `owner_dispatch.rs` through `#[path]` because
 //! the host it exercises is private to the runner.
 
+use crate::app::runner::window_routes::OwnerOpenRouted as _;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -50,7 +51,7 @@ fn boot() -> Rig {
         .map(|display| display.id)
         .collect();
     Box::new(platform)
-        .run(Box::new(|owner| {
+        .run(crate::app::runner::app_handler(|owner| {
             install_owner_platform(owner)?;
             Ok(())
         }))
@@ -90,7 +91,7 @@ struct Win {
     native: MockWindow,
     /// The platform keeps its windows alive; the headless one does not, so the
     /// test does.
-    _window: Arc<dyn PlatformWindow>,
+    window: Rc<dyn PlatformWindow>,
     dispatcher: PresentationDispatcher,
     /// Redraws the window was asked for.
     redraws: Arc<AtomicUsize>,
@@ -120,7 +121,7 @@ fn install_window(
     deadlines: Option<Arc<super::super::desktop::DesktopWakeDeadlines>>,
 ) -> (Win, Option<super::super::frame_driver::FrameBinding>) {
     let host_window =
-        with_owner_platform(|owner| owner.open_window(flui_platform::WindowOptions::default()))
+        with_owner_platform(|owner| owner.open_routed(flui_platform::WindowOptions::default()))
             .expect("an installed owner")
             .and_then(flui_native::WindowOpen::try_ready)
             .expect("headless windows are ready");
@@ -129,7 +130,7 @@ fn install_window(
         .downcast_ref::<MockWindow>()
         .expect("headless window")
         .clone();
-    let window: Arc<dyn PlatformWindow> = host_window;
+    let window: Rc<dyn PlatformWindow> = host_window;
     if let Some(index) = display {
         native.simulate_move_to(rig.ids[index]).expect("move");
     }
@@ -137,17 +138,19 @@ fn install_window(
     let fail_redraw = Arc::new(AtomicBool::new(false));
     let counter = Arc::clone(&redraws);
     let failing = Arc::clone(&fail_redraw);
-    window.on_request_frame(Box::new(move || {
-        assert!(
-            !failing.load(Ordering::SeqCst),
-            "injected redraw wake failure"
-        );
-        counter.fetch_add(1, Ordering::SeqCst);
-    }));
-    let runtime = build_ui_runtime(Arc::clone(&window), 1.0).expect("runtime");
-    let mut installation = prepare_ui_runtime_alongside(runtime, Arc::clone(&window));
+    crate::app::runner::window_routes::WindowRoutes::of(&*window).route_frame_requested(
+        move |_| {
+            assert!(
+                !failing.load(Ordering::SeqCst),
+                "injected redraw wake failure"
+            );
+            counter.fetch_add(1, Ordering::SeqCst);
+        },
+    );
+    let runtime = build_ui_runtime(Rc::clone(&window), 1.0).expect("runtime");
+    let mut installation = prepare_ui_runtime_alongside(runtime, Rc::clone(&window));
     let dispatcher = installation.dispatcher();
-    installation.observe_display();
+    installation.observe_window();
     let binding = deadlines.map(|deadlines| {
         installation
             .frame_driver(super::super::frame_driver::FrameDriver::TestDeadlines(
@@ -164,7 +167,7 @@ fn install_window(
     (
         Win {
             native,
-            _window: window,
+            window,
             dispatcher,
             redraws,
             fail_redraw,
@@ -270,11 +273,14 @@ fn snapshot_is_committed_before_observers_run() {
     let win = open_window(&rig, None);
     let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
     let log = Arc::clone(&seen);
-    win.native.on_request_frame(Box::new(move || {
-        let accepted = APP_RUNTIME.with(|slot| slot.borrow().installed_host.displays().snapshot());
-        log.lock()
-            .push(accepted.map(|snapshot| snapshot.revision().get()));
-    }));
+    crate::app::runner::window_routes::WindowRoutes::of(&win.native).route_frame_requested(
+        move |_| {
+            let accepted =
+                APP_RUNTIME.with(|slot| slot.borrow().installed_host.displays().snapshot());
+            log.lock()
+                .push(accepted.map(|snapshot| snapshot.revision().get()));
+        },
+    );
     let before = Rig::accepted().expect("seed").revision().get();
 
     // One sample, taken directly: owner turns re-sample until they are idle, and
@@ -345,9 +351,11 @@ fn foreign_thread_invalidation_wakes_the_owner() {
     let owner_thread = std::thread::current().id();
     let ran_on = Arc::new(parking_lot::Mutex::new(Vec::new()));
     let log = Arc::clone(&ran_on);
-    win.native.on_request_frame(Box::new(move || {
-        log.lock().push(std::thread::current().id());
-    }));
+    crate::app::runner::window_routes::WindowRoutes::of(&win.native).route_frame_requested(
+        move |_| {
+            log.lock().push(std::thread::current().id());
+        },
+    );
 
     let controls = rig.controls.clone();
     let left = rig.ids[LEFT];
@@ -491,6 +499,52 @@ fn closed_window_receives_nothing() {
     assert_eq!(win.redraws(), before, "a closed window was notified");
 }
 
+/// A renderer is set up for the colour profile the accepted snapshot gives
+/// the window's display, and a profile change reaches the next one set up.
+fn a_surface_is_set_up_for_the_colour_of_its_window_s_display() {
+    use flui_platform::{CapabilityAbsence, ColorGamut, DisplayColor, Headroom};
+
+    let rig = boot();
+    let left = open_window(&rig, Some(LEFT));
+    let right = open_window(&rig, Some(RIGHT));
+    let colour_of = |win: &Win| super::super::host::display_color_of(win.window.as_ref());
+    assert_eq!(
+        colour_of(&left),
+        Some(DisplayColor::standard(ColorGamut::Srgb))
+    );
+
+    let hdr = DisplayColor::high(
+        ColorGamut::Rec2020,
+        Ok(Headroom::try_new(3.0).expect("headroom")),
+    );
+    rig.controls
+        .simulate_display_change(rig.ids[LEFT], DisplayChange::Color(Ok(hdr)))
+        .expect("HDR on");
+    rig.controls
+        .simulate_display_change(
+            rig.ids[RIGHT],
+            DisplayChange::Color(Err(CapabilityAbsence::NotOnThisDevice)),
+        )
+        .expect("colour gone");
+    rig.turns.drive();
+
+    assert_eq!(
+        colour_of(&left),
+        Some(hdr),
+        "the profile change was not accepted"
+    );
+    assert_eq!(
+        left.display().and_then(|display| display.color),
+        Some(hdr),
+        "the window's presentation was not told its display changed colour"
+    );
+    assert_eq!(
+        colour_of(&right),
+        None,
+        "a display without a colour leaves the surface's own report"
+    );
+}
+
 #[test]
 fn display_delivery_contract() {
     crate::table_test::run_table(
@@ -523,6 +577,10 @@ fn display_delivery_contract() {
             (
                 "foreign_thread_invalidation_wakes_the_owner",
                 foreign_thread_invalidation_wakes_the_owner as fn(),
+            ),
+            (
+                "a_surface_is_set_up_for_the_colour_of_its_window_s_display",
+                a_surface_is_set_up_for_the_colour_of_its_window_s_display as fn(),
             ),
         ],
     );
@@ -604,8 +662,11 @@ fn armed_gap(win: &Win, frame: super::super::frame_driver::FrameBinding) -> Dura
     (0..5)
         .map(|_| {
             let before = web_time::Instant::now();
-            dispatch_platform_ui_runtime(win.dispatcher, RuntimeTask::Frame(frame))
-                .expect("deliver a frame");
+            dispatch_platform_ui_runtime(
+                win.dispatcher,
+                RuntimeTask::Frame(frame, flui_native::frame_request_now()),
+            )
+            .expect("deliver a frame");
             frame_deadline()
                 .expect("the frame armed the fallback")
                 .saturating_duration_since(before)
@@ -700,7 +761,11 @@ fn a_deadline_unanswered_for_ten_ms_is_abandoned_after_a_move_to_an_8_ms_display
     rig.turns.drive();
     let deadlines = wake_deadlines();
     let (win, frame) = open_paced_window(&rig, Some(LEFT), &deadlines);
-    dispatch_platform_ui_runtime(win.dispatcher, RuntimeTask::Frame(frame)).expect("frame");
+    dispatch_platform_ui_runtime(
+        win.dispatcher,
+        RuntimeTask::Frame(frame, flui_native::frame_request_now()),
+    )
+    .expect("frame");
     let deadline = frame_deadline().expect("armed on the 16 ms display");
 
     // Let the deadline pass by 10 ms; the loop looks at it then, which reports

@@ -32,7 +32,7 @@
 //! returns, and `MainEvent::Pause` does not touch the window at all. A wgpu
 //! surface built from a handle into that window therefore has to be gone
 //! before the handle is, which is what the `false` edge of
-//! [`PlatformWindow::on_surface_status_change`] asks the presentation to do.
+//! [`WindowHandler::surface_changed`] asks the presentation to do.
 //!
 //! Both ends of the pair carry the signal: `Pause` and `TerminateWindow` emit
 //! `false`, `Resume` and `InitWindow` emit `true`. `Pause` alone would be the
@@ -49,6 +49,7 @@
 
 use std::{
     path::PathBuf,
+    rc::Rc,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -63,8 +64,11 @@ use parking_lot::Mutex;
 
 use crate::host;
 use crate::owner::android::java_view;
-use crate::owner::android::{ActivityInput, ActivityPreferences, AndroidHost, HostDisplays};
-use crate::owner::handlers::CallbackWindow;
+use crate::owner::android::{
+    ActivityInput, ActivityPreferences, ActivityWindowId, ActivityWindowIds, AndroidHost,
+    HostDisplays,
+};
+
 use crate::{
     error::BootstrapError,
     error::PlatformError,
@@ -79,14 +83,13 @@ use crate::{
     owner::android::ndk::SymbolSource,
     owner::android::poll::LoopTurn,
     owner::android::poll::poll_timeout,
-    owner::call_point::{Field, SharedField, call, install},
-    owner::handlers::{PlatformHandlers, SessionEndHook},
+    owner::app_delivery::AppDelivery,
     owner::notices::{LifecycleHooks, NoticeChannel},
     owner::redraw_poll::RedrawPoll,
     owner::signal::OwnerSignal,
+    platform::AppHandler,
     platform::Platform,
     platform::PlatformExecutor,
-    platform::PlatformReadyCallback,
     version::gate::android::AndroidApi,
     version::gate::android::StylusHandwriting,
 };
@@ -134,13 +137,50 @@ pub(crate) struct ActivityFlags {
     pub(crate) focused: AtomicBool,
 }
 
+/// One window of the Activity as its window-level positions are made for it
+/// (`host::Window::Ref`): the Activity it shows, `FluiView`, the device's API
+/// level, the owner thread that runs it and the signal that wakes it, and its
+/// identity. Public where it is defined, as the host's table names it, and
+/// nameable only inside the crate.
+#[derive(Clone)]
+pub struct ActivityRef {
+    /// The window's identity.
+    pub(crate) id: ActivityWindowId,
+    /// The Activity the window shows.
+    pub(crate) app: AndroidApp,
+    /// `FluiView`: the input method's editor, the drop target and the drag
+    /// source (ADR-0247).
+    pub(crate) view: Arc<java_view::JavaView>,
+    /// The device's API level.
+    pub(crate) api: AndroidApi,
+    /// The owner thread, the only one a window-level object acts on.
+    pub(crate) owner: std::thread::ThreadId,
+    /// Wakes the owner.
+    pub(crate) signal: std::sync::Weak<OwnerSignal>,
+}
+
+impl std::fmt::Debug for ActivityRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ActivityRef")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The Activity's window as the looper drives it: the window feature's, which
 /// the loop holds without naming it (ADR-0151 §10). The looper hands it what
 /// the Activity reports — a native window that comes or goes, a resize, a
 /// configuration change, the Java view's events — and asks it for a frame.
-pub(crate) trait ActivityWindow: CallbackWindow {
+pub(crate) trait ActivityWindow: crate::host_window::HostWindow + Send + Sync {
+    /// The window's identity, which what features keep of it is keyed by.
+    fn activity_id(&self) -> ActivityWindowId;
+
     /// Publishes the window's state if the Activity's changed it.
     fn publish_state(&self);
+
+    /// The ratio of device to logical pixels the window's display has, read
+    /// now: the input translation and the Java view take it.
+    fn scale(&self) -> f64;
 
     /// Reads the input capabilities again (the Java view became ready).
     fn refresh_capabilities(&self);
@@ -187,7 +227,9 @@ pub(crate) trait ActivityWindow: CallbackWindow {
 /// The platform over it is the one `android_platform` (the crate root) starts.
 pub struct AndroidLoop {
     pub(crate) app: AndroidApp,
-    handlers: Arc<Mutex<PlatformHandlers>>,
+    /// What the loop delivers to the application's handler, which `run`
+    /// binds at the first window.
+    app_delivery: Arc<AppDelivery>,
     running: Arc<AtomicBool>,
     pub(crate) activity: Arc<ActivityFlags>,
     /// What each of the Activity's lifecycle callbacks means, as the table
@@ -204,12 +246,14 @@ pub struct AndroidLoop {
     pub(crate) owner_signal: Arc<OwnerSignal>,
     /// The system preference source the table made
     /// ([`AndroidHost::preferences`]).
-    preferences: Box<dyn ActivityPreferences>,
+    pub(crate) preferences: Arc<dyn ActivityPreferences>,
     /// `FluiView`, installed on the Java main thread at start (ADR-0247).
     pub(crate) java_view: Arc<java_view::JavaView>,
     /// The displays, as the table made them; shared with the window.
     pub(crate) displays: Arc<dyn HostDisplays>,
     pub(crate) api: AndroidApi,
+    /// The identities of the windows it opens.
+    pub(crate) window_ids: ActivityWindowIds,
 }
 
 // Opaque on purpose, matching `HeadlessLoop` and `WinitLoop`. A
@@ -224,19 +268,12 @@ impl std::fmt::Debug for AndroidLoop {
 }
 
 impl AndroidLoop {
-    /// One of the application's handlers, as a slot of the handler set.
-    pub(crate) fn handler<H>(
-        &self,
-        project: fn(&mut PlatformHandlers) -> &mut Option<H>,
-    ) -> Field<'_, Mutex<PlatformHandlers>, H> {
-        Field::new(&*self.handlers, project)
-    }
-
-    /// Run the application's quit handler through the call point, with no
-    /// lock of the handler set held: it may install another handler or call
-    /// back into the platform.
+    /// Tell the application's handler the platform quits, through the call
+    /// point with no lock held: it may call back into the platform. The
+    /// handler is let go after.
     fn invoke_quit(&self) {
-        call(&self.handler(|handlers| &mut handlers.quit), |quit| quit()).or_resume(());
+        self.app_delivery.quit_requested().or_resume(());
+        self.app_delivery.release();
     }
 
     /// The loop of host `H`, whose table makes the displays, the preference
@@ -269,14 +306,15 @@ impl AndroidLoop {
         let owner = Arc::downgrade(&owner_signal);
         let preferences = H::preferences(&app, api, &owner_signal);
         let activity_callbacks = H::activity(&app);
+        let app_delivery = Arc::new(AppDelivery::new());
         Self {
             java_view,
             app,
-            handlers: Arc::new(Mutex::new(PlatformHandlers::new())),
+            notices: H::notices(&app_delivery),
+            app_delivery,
             running: Arc::new(AtomicBool::new(true)),
             activity: Arc::new(ActivityFlags::default()),
             activity_callbacks,
-            notices: H::notices(),
             window: Arc::new(Mutex::new(None)),
             background_executor: Arc::new(SimpleExecutor),
             clipboard: H::clipboard(),
@@ -285,21 +323,17 @@ impl AndroidLoop {
             preferences,
             displays: H::displays(api, library, owner),
             api,
+            window_ids: ActivityWindowIds::default(),
         }
     }
 
     /// Record one fact of the Activity's lifecycle and tell the window: its
     /// state is published first, so an observer reads the new value.
-    fn publish_activity_fact(
-        &self,
-        record: impl FnOnce(&ActivityFlags),
-        notify: impl FnOnce(&dyn ActivityWindow),
-    ) {
+    fn publish_activity_fact(&self, record: impl FnOnce(&ActivityFlags)) {
         record(&self.activity);
         let window = self.window.lock().clone();
         if let Some(window) = window {
             window.publish_state();
-            notify(window.as_ref());
         }
     }
 
@@ -344,7 +378,7 @@ impl AndroidLoop {
         let window = self.window.lock().clone();
         if let Some(window) = window {
             for event in events {
-                window.callbacks().dispatch_input(event);
+                window.delivery().dispatch_input(event);
             }
         }
     }
@@ -382,7 +416,7 @@ impl AndroidLoop {
                 java_view::ViewEvent::Drag(event) => match &window {
                     Some(window) => {
                         window
-                            .callbacks()
+                            .delivery()
                             .dispatch_input(flui_platform::PlatformInput::DragDrop(event));
                         window.request_redraw();
                     }
@@ -455,8 +489,8 @@ impl AndroidLoop {
 
         drop(window_guard);
 
-        let scale_factor = window.scale_factor();
-        let callbacks = window.callbacks();
+        let scale_factor = window.scale();
+        let delivery = window.delivery();
 
         match self.app.input_events_iter() {
             Ok(mut iter) => loop {
@@ -469,7 +503,7 @@ impl AndroidLoop {
                             let mut any_handled = false;
                             self.offer_handwriting(window.as_ref(), &events);
                             for platform_input in events {
-                                let result = callbacks.dispatch_input(platform_input);
+                                let result = delivery.dispatch_input(platform_input);
                                 if result.default_prevented {
                                     any_handled = true;
                                 }
@@ -484,7 +518,7 @@ impl AndroidLoop {
                             if let Some(platform_input) =
                                 self.input.key(&self.app, key, self.java_view.composing())
                             {
-                                let result = callbacks.dispatch_input(platform_input);
+                                let result = delivery.dispatch_input(platform_input);
                                 result.default_prevented
                             } else {
                                 false
@@ -511,54 +545,36 @@ impl AndroidLoop {
         // A hover exit no press continued in this drain was a leave.
         let held = self.input.finish_drain();
         for event in held {
-            callbacks.dispatch_input(event);
+            delivery.dispatch_input(event);
         }
     }
 }
 
 impl ActivityTarget for AndroidLoop {
     fn visibility_changed(&self, visible: bool) {
-        self.publish_activity_fact(
-            |flags| flags.visible.store(visible, Ordering::SeqCst),
-            |window| {
-                window
-                    .callbacks()
-                    .dispatch_visibility_status_change(visible);
-            },
-        );
+        self.publish_activity_fact(|flags| flags.visible.store(visible, Ordering::SeqCst));
     }
 
     fn execution_changed(&self, state: WindowExecutionState) {
-        self.publish_activity_fact(
-            |flags| {
-                flags
-                    .resumed
-                    .store(state == WindowExecutionState::Running, Ordering::SeqCst);
-            },
-            |window| {
-                window.callbacks().dispatch_execution_state_change(state);
-            },
-        );
+        self.publish_activity_fact(|flags| {
+            flags
+                .resumed
+                .store(state == WindowExecutionState::Running, Ordering::SeqCst);
+        });
     }
 
     fn focus_changed(&self, focused: bool) {
-        self.publish_activity_fact(
-            |flags| flags.focused.store(focused, Ordering::SeqCst),
-            |window| {
-                window.callbacks().dispatch_active_status_change(focused);
-            },
-        );
+        self.publish_activity_fact(|flags| flags.focused.store(focused, Ordering::SeqCst));
     }
 
     /// The system does not wait for an answer, so this is
     /// [`SessionEndPhase::Ending`] only: no query, no block.
     fn session_ended(&self) {
         // The system does not wait for an answer: there is nothing to veto.
-        let _answer = call(
-            &self.handler(|handlers| &mut handlers.session_end),
-            |hook| hook(SessionEndPhase::Ending),
-        )
-        .or_resume(flui_platform::SessionEndAnswer::Proceed);
+        let _answer = self
+            .app_delivery
+            .session_end(SessionEndPhase::Ending)
+            .or_resume(flui_platform::SessionEndAnswer::Proceed);
     }
 
     fn memory_pressure_raised(&self, level: MemoryPressureLevel) {
@@ -570,7 +586,7 @@ impl host::Loop for AndroidLoop {
     fn run(
         self: Arc<Self>,
         platform: Arc<dyn Platform>,
-        on_ready: PlatformReadyCallback,
+        handler: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError> {
         tracing::info!("Starting Android platform event loop");
 
@@ -587,7 +603,13 @@ impl host::Loop for AndroidLoop {
         // at the loop's exit.
         let refresh_rate = self.displays.observe();
 
-        let mut on_ready = Some(on_ready);
+        let mut handler = Some(handler);
+        // No owner lane on this backend: every `OwnerPlatform::open_window`
+        // call creates directly and is always `Ready`.
+        let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::with_signal(
+            Arc::clone(&platform),
+            Arc::clone(&self.owner_signal),
+        ));
         self.activity.resumed.store(false, Ordering::SeqCst);
         // Set when `on_ready` returns `Err`: a fallible bootstrap
         // failure (window creation, GPU init, root-widget attach) has no
@@ -640,19 +662,12 @@ impl host::Loop for AndroidLoop {
             }
 
             // Wall-clock wake (mirrors the winit backend's `about_to_wait`):
-            // consult the registered wake-deadline hook fresh on EVERY
+            // ask the application's handler for its deadline fresh on EVERY
             // iteration -- a deadline that fires, a new one getting armed,
-            // or every deadline clearing must all be reflected immediately,
-            // not stale from whenever the hook was installed. Lock
-            // discipline (ADR-0038 §5, the same rule winit's own
-            // `about_to_wait` follows): the hook itself re-enters
-            // `flui-app`, so it is called through the call point, never
-            // while `self.handlers` is held.
-            let wake_deadline = call(
-                &SharedField::new(&*self.handlers, |handlers| &mut handlers.wake_deadline),
-                |hook| hook(),
-            )
-            .or_resume(None);
+            // or every deadline clearing must all be reflected immediately.
+            // The handler re-enters `flui-app`, so it is asked through the
+            // call point with no lock held (ADR-0038 §5).
+            let wake_deadline = self.app_delivery.wake_deadline().or_resume(None);
             let deadline_due = is_deadline_due(wake_deadline, web_time::Instant::now());
             if deadline_due {
                 // Owner services remain deliverable while execution gates frames.
@@ -724,7 +739,7 @@ impl host::Loop for AndroidLoop {
                             // previous surface still released asks for one, and
                             // a `true` that finds a live surface simply
                             // replaces it — see
-                            // `PlatformWindow::on_surface_status_change`.
+                            // `WindowHandler::surface_changed`.
                             if let Some(signal) = reaction.signal.take() {
                                 signal.deliver(&*self);
                             }
@@ -733,7 +748,7 @@ impl host::Loop for AndroidLoop {
                             // into the platform.
                             let window = self.window.lock().clone();
                             if let Some(w) = window {
-                                w.callbacks().dispatch_surface_status_change(true);
+                                w.delivery().dispatch_surface_change(flui_platform::SurfaceChange::Rebuild);
                                 w.request_redraw();
                             }
                         }
@@ -754,7 +769,7 @@ impl host::Loop for AndroidLoop {
                             // code.
                             let window = self.window.lock().clone();
                             if let Some(w) = window {
-                                w.callbacks().dispatch_surface_status_change(false);
+                                w.delivery().dispatch_surface_change(flui_platform::SurfaceChange::Release);
                             }
                             if let Some(signal) = reaction.signal.take() {
                                 signal.deliver(&*self);
@@ -773,7 +788,7 @@ impl host::Loop for AndroidLoop {
                             // `InitWindow` no window exists yet, so the
                             // dispatch below finds no registrant — the
                             // bootstrap's own acquire is that acquire.
-                            if on_ready.is_some() {
+                            if handler.is_some() {
                                 should_call_ready = true;
                             }
 
@@ -787,7 +802,6 @@ impl host::Loop for AndroidLoop {
                                 // asked for, so the recreated surface is
                                 // configured at this size, not the old one.
                                 w.publish_state();
-                                w.callbacks().dispatch_logical_resize(w.logical_size(), w.scale_factor());
                                 w.request_safe_area();
                                 // The request rode on the window that is gone. The
                                 // host sends its demand again on
@@ -796,7 +810,7 @@ impl host::Loop for AndroidLoop {
                                 // noticing, that one covers hosts whose windows
                                 // do not remember. Sending twice is idempotent.
                                 w.apply_frame_rate_hint();
-                                w.callbacks().dispatch_surface_status_change(true);
+                                w.delivery().dispatch_surface_change(flui_platform::SurfaceChange::Rebuild);
                             }
                         }
                         MainEvent::TerminateWindow { .. } => {
@@ -813,7 +827,7 @@ impl host::Loop for AndroidLoop {
                             let window = self.window.lock().clone();
                             if let Some(w) = window {
                                 w.invalidate_text_sizing();
-                                w.callbacks().dispatch_surface_status_change(false);
+                                w.delivery().dispatch_surface_change(flui_platform::SurfaceChange::Release);
                             }
                         }
                         MainEvent::Destroy => {
@@ -824,7 +838,7 @@ impl host::Loop for AndroidLoop {
                             // A window that never arrived leaves `on_ready`
                             // untaken, and exiting clean here would report a
                             // presentation that never started as success.
-                            if on_ready.is_some() {
+                            if handler.is_some() {
                                 bootstrap_error = Some(
                                     "Android: the event loop shut down before any \
                                      MainEvent::InitWindow, so the presentation was never \
@@ -837,7 +851,7 @@ impl host::Loop for AndroidLoop {
                             let window = self.window.lock().clone();
                             if let Some(w) = window {
                                 w.revoke_geometry();
-                                w.callbacks().dispatch_close();
+                                w.delivery().dispatch_close();
                             }
 
                             self.running.store(false, Ordering::Relaxed);
@@ -849,7 +863,6 @@ impl host::Loop for AndroidLoop {
                             let window = self.window.lock().clone();
                             if let Some(w) = window {
                                 w.publish_state();
-                                w.callbacks().dispatch_logical_resize(w.logical_size(), w.scale_factor());
                                 // The insets of the old size no longer apply.
                                 w.request_safe_area();
                                 w.request_redraw();
@@ -879,7 +892,6 @@ impl host::Loop for AndroidLoop {
                             let window = self.window.lock().clone();
                             if let Some(window) = window {
                                 window.publish_state();
-                                window.callbacks().dispatch_logical_resize(window.logical_size(), window.scale_factor());
                                 window.request_safe_area();
                             }
                         }
@@ -904,13 +916,16 @@ impl host::Loop for AndroidLoop {
             // precedes it at startup. No owner lane on this backend: every
             // `OwnerPlatform::open_window` call creates directly and is
             // always `Ready`.
-            if should_call_ready && let Some(ready) = on_ready.take() {
-                let owner_platform = Arc::clone(&platform);
-                let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::with_signal(
-                    Arc::clone(&owner_platform),
-                    Arc::clone(&self.owner_signal),
+            if should_call_ready && let Some(handler) = handler.take() {
+                // The delivery holds the platform and the hooks weakly: they
+                // live in this frame until the loop ends.
+                self.app_delivery.bind(handler, &platform, &hooks);
+                self.app_delivery.resume_through_signal(&self.owner_signal);
+                let ready = self.app_delivery.ready(OwnerPlatform::new(
+                    Arc::clone(&platform),
+                    Arc::clone(&hooks),
                 ));
-                if let Err(error) = ready(OwnerPlatform::new(owner_platform, hooks)) {
+                if let Err(error) = ready {
                     tracing::error!(%error, "on_ready bootstrap failed; stopping the event loop");
                     bootstrap_error = Some(error);
                     self.running.store(false, Ordering::Relaxed);
@@ -929,7 +944,7 @@ impl host::Loop for AndroidLoop {
             }
             let window = self.window.lock().clone();
             if let Some(window) = window {
-                self.java_view.set_scale(window.scale_factor());
+                self.java_view.set_scale(window.scale());
             }
             self.deliver_view_events();
             let resumed = self.activity.resumed.load(Ordering::SeqCst);
@@ -947,7 +962,7 @@ impl host::Loop for AndroidLoop {
                 && redraw_after_poll
                     .take_if_deliverable(resumed, || w.take_deliverable_redraw_request())
             {
-                w.callbacks().dispatch_request_frame();
+                w.delivery().dispatch_request_frame();
             }
         }
 
@@ -1006,8 +1021,8 @@ impl host::Loop for AndroidLoop {
         let window = self.window.lock().take();
         if let Some(window) = window {
             window.revoke_geometry();
-            window.callbacks().clear();
-            tracing::debug!("Android: loop exited; window released and its callbacks cleared");
+            window.delivery().clear();
+            tracing::debug!("Android: loop exited; window released and its delivery cleared");
         }
 
         // The quit handler runs with no lock held: it may install another
@@ -1034,35 +1049,8 @@ impl host::Loop for AndroidLoop {
         let _ = self.owner_signal.request_quit();
     }
 
-    fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
-        install(&self.handler(|handlers| &mut handlers.quit), callback);
-    }
-
-    fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
-        // The Activity lifecycle decides when the loop ends; there is no exit
-        // policy to consult.
-        drop(hook);
-    }
-
     fn request_exit_policy_reevaluation(&self) {
         // No exit policy is consulted, so there is nothing to re-evaluate.
-    }
-
-    /// Unlike `winit`'s override (the trait's one other live implementor),
-    /// this backend has no `ControlFlow::WaitUntil` to hand the deadline
-    /// to — `run`'s own loop actuates it directly instead, by checking
-    /// `now >= deadline` once per iteration and forcing a dispatch when due
-    /// (see that loop's own comment). Storage is the identical
-    /// `PlatformHandlers::wake_deadline` slot winit uses, for the same
-    /// call-a-clone-outside-the-lock consultation discipline (ADR-0038 §5).
-    fn set_wake_deadline_hook(
-        &self,
-        hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
-    ) {
-        install(
-            &self.handler(|handlers| &mut handlers.wake_deadline),
-            Arc::from(hook),
-        );
     }
 }
 
@@ -1158,22 +1146,9 @@ impl host::Drag<AndroidLoop> for AndroidLoop {
 /// recreates an Activity itself rather than reopening one. The lifecycle
 /// feature's position reaches the hooks through this.
 impl LifecycleHooks for AndroidLoop {
-    fn notices(&self) -> &dyn NoticeChannel {
-        &*self.notices
-    }
-
-    fn set_session_end_hook(&self, hook: SessionEndHook) {
-        install(&self.handler(|handlers| &mut handlers.session_end), hook);
-    }
-
     fn release_session_end(&self) {
         // The system does not wait for an answer to a session end, so no end
         // is held open.
-    }
-
-    fn set_reopen_hook(&self, hook: Box<dyn FnMut() + Send>) {
-        // Android has no reopen signal.
-        drop(hook);
     }
 }
 

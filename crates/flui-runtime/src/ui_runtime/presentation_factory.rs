@@ -5,7 +5,7 @@ use std::sync::Arc;
 use flui_interaction::InteractionDispatchHandle;
 use flui_platform::{Clipboard, Storage};
 use flui_scheduler::{AsyncDriver, ClockSource, PresentationScopeFactory, WeakUpdateScheduler};
-use flui_view::GlobalKeyScope;
+use flui_view::{BuildInProgress, GlobalKeyScope};
 
 use super::{UiCommandSender, UiRuntime};
 use crate::presentation::{PresentationState, PresentationWindow, RuntimeCapabilities};
@@ -15,6 +15,7 @@ use crate::presentation::{PresentationState, PresentationWindow, RuntimeCapabili
 /// exact authorizing presentation after platform callbacks have returned.
 pub struct PresentationFactory {
     global_key_scope: GlobalKeyScope,
+    build_in_progress: BuildInProgress,
     async_driver: AsyncDriver,
     completion_factory: PresentationScopeFactory,
     interaction_dispatch_handle: InteractionDispatchHandle,
@@ -41,6 +42,7 @@ impl UiRuntime {
     pub fn presentation_factory(&self) -> PresentationFactory {
         PresentationFactory {
             global_key_scope: self.global_key_scope.clone(),
+            build_in_progress: self.build_in_progress.clone(),
             async_driver: self.owner_frame.async_driver(),
             completion_factory: self.owner_frame.presentation_scope_factory(),
             interaction_dispatch_handle: self.interaction_lane.dispatch_handle(),
@@ -81,7 +83,14 @@ impl PresentationFactory {
             return Err(window);
         };
         let (_, presentation_id) = crate::runtime_services::next_identity();
-        let device_pixel_ratio = window.window().scale_factor();
+        // A window that has reported no drawable area yet starts at the
+        // pipeline's own ratio; its first metrics observation sets the real
+        // one before anything is drawn.
+        let device_pixel_ratio = window
+            .window()
+            .state()
+            .metrics
+            .map_or(1.0, |metrics| metrics.scale().get());
         let Ok(completion_scope) = self.completion_factory.create() else {
             return Err(window);
         };
@@ -92,6 +101,7 @@ impl PresentationFactory {
             window,
             RuntimeCapabilities {
                 global_key_scope: self.global_key_scope.clone(),
+                build_in_progress: self.build_in_progress.clone(),
                 async_driver: self.async_driver.clone(),
                 completion_scope,
                 interaction_dispatch_handle: self.interaction_dispatch_handle.clone(),

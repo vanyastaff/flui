@@ -17,7 +17,7 @@
 //!
 //! # View focus state
 //!
-//! [`MacosAccessibility::update_view_focus_state`] is wired from the
+//! `WindowAccessibility::focus_changed` is wired from the
 //! window's key-status delegate path (`handle_focus_gained` /
 //! `handle_focus_lost` in `window.rs`), so VoiceOver's notion of the
 //! focused view tracks the key window — load-bearing in any multi-window
@@ -38,54 +38,15 @@
 
 use std::sync::Arc;
 
-use accesskit::{ActionHandler, ActionRequest, ActivationHandler, TreeUpdate};
+use accesskit::TreeUpdate;
 use accesskit_macos::SubclassingAdapter;
 use parking_lot::Mutex;
 
-use crate::accessibility::bridge::BridgeShared;
-use crate::owner::panic_boundary::{AfterPanic, os_entry};
+use crate::accessibility::bridge::{Action, Activation, BridgeShared};
 use flui_semantics::{
     platform::AccessibilityActionListener, platform::AccessibilityActivationListener,
     platform::PlatformAccessibility,
 };
-
-struct Activation(Arc<BridgeShared>);
-
-// Each handler runs the composition root's listener inside AccessKit's
-// NSAccessibility methods, which AppKit calls through `extern "C-unwind"`: a
-// panic in it is contained here and answers as if no listener ran.
-
-impl ActivationHandler for Activation {
-    fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
-        os_entry(
-            "AccessKit's activation",
-            (),
-            AfterPanic::Answer(|()| None),
-            || {
-                // Order matters: mark active and tell the composition root *before*
-                // reading the retained tree — see the Windows twin for the cold-start
-                // rationale.
-                self.0.notify_activation(true);
-                self.0.retained()
-            },
-        )
-    }
-}
-
-struct Action(Arc<BridgeShared>);
-
-impl ActionHandler for Action {
-    fn do_action(&mut self, request: ActionRequest) {
-        os_entry(
-            "an AccessKit action",
-            (),
-            AfterPanic::Answer(|()| ()),
-            || {
-                self.0.notify_action(request);
-            },
-        );
-    }
-}
 
 /// NSAccessibility for one window.
 pub struct MacosAccessibility {
@@ -93,7 +54,7 @@ pub struct MacosAccessibility {
     /// The adapter needs `&mut` to publish, and the capability is shared
     /// behind an `Arc`, so the mutability lives here rather than in the
     /// trait. `Option` because the adapter's lifetime is deliberately
-    /// shorter than the capability's: [`Self::shutdown`] (window teardown,
+    /// shorter than the capability's: `detach` (window teardown,
     /// **before** the content view is released) or a same-thread [`Drop`]
     /// takes it out, and every later call through a still-live `Arc` clone
     /// is a guarded no-op instead of a dereference of a dead view.
@@ -118,7 +79,7 @@ pub struct MacosAccessibility {
 // The remaining affinity + lifetime obligations — the destructor unhooks
 // the dynamic subclass, which dereferences the view and must happen on the
 // main thread while the view is alive — are ENFORCED, not merely
-// documented: the window's own teardown calls [`MacosAccessibility::shutdown`]
+// documented: the window's own teardown calls `detach`
 // before releasing the view, and `Self::drop` runs the destructor only on
 // `owner_thread`, otherwise leaking (with a warning) rather than touching
 // AppKit state cross-thread. Safe code can therefore move or drop the last
@@ -139,7 +100,7 @@ impl Drop for MacosAccessibility {
             // must happen on the main thread; leaking the hook is safe
             // (the view is on its way down with its window) and sound, so
             // it is the only acceptable fallback. Reaching here at all
-            // means the window's own teardown (which calls `shutdown`
+            // means the window's own teardown (which calls `detach`
             // first) was bypassed.
             crate::owner::panic_boundary::retain_off_owner_resource(adapter, || {
                 tracing::warn!(
@@ -159,12 +120,14 @@ impl MacosAccessibility {
     /// `view` must be a valid, live `NSView` pointer, and it must outlive
     /// the returned value — the adapter unhooks its dynamic subclass on
     /// drop, which dereferences the view. The window constructor satisfies
-    /// both: it passes the content view it just installed, and the window
-    /// owns this capability so drop order follows window teardown. Must be
-    /// called on the main thread (AppKit affinity), which the window
-    /// constructor also is.
+    /// both: it passes the content view it just installed, and the window's
+    /// `Drop` calls [`detach`](crate::host::WindowAccessibility::detach)
+    /// before it releases the view, and keeps the view if that detach fails;
+    /// the order the window's fields drop in plays no part. Must be called on
+    /// the main thread (AppKit affinity), which the window constructor also
+    /// is.
     #[must_use]
-    pub unsafe fn new(view: *mut std::ffi::c_void) -> Self {
+    unsafe fn new(view: *mut std::ffi::c_void) -> Self {
         let shared = Arc::new(BridgeShared::new());
         // SAFETY: forwarded contract — see this function's own `# Safety`.
         let adapter = unsafe {
@@ -181,13 +144,15 @@ impl MacosAccessibility {
             owner_thread: std::thread::current().id(),
         }
     }
+}
 
+impl crate::host::WindowAccessibility for MacosAccessibility {
     /// Unhook and drop the adapter now, on the caller's (main) thread —
     /// the deterministic half of teardown, called by the window's own
     /// `Drop` **before** it releases the window (and with it the content
     /// view the subclass dereferences on unhook). Every later call through
     /// a still-live capability `Arc` is a no-op. Idempotent.
-    pub(crate) fn shutdown(&self) {
+    fn detach(&self) {
         let adapter = self.adapter.lock().take();
         drop(adapter);
     }
@@ -197,16 +162,30 @@ impl MacosAccessibility {
     /// Called from the window's `windowDidBecomeKey:` /
     /// `windowDidResignKey:` delegate path (`handle_focus_gained` /
     /// `handle_focus_lost`), on the main thread.
-    pub fn update_view_focus_state(&self, is_focused: bool) {
+    fn focus_changed(&self, focused: bool) {
         let events = {
             let mut adapter = self.adapter.lock();
             adapter
                 .as_mut()
-                .and_then(|adapter| adapter.update_view_focus_state(is_focused))
+                .and_then(|adapter| adapter.update_view_focus_state(focused))
         };
         if let Some(events) = events {
             events.raise();
         }
+    }
+}
+
+/// Each AppKit window's content view is subclassed for VoiceOver as the
+/// window opens, on the main thread.
+impl crate::host::Accessibility<crate::owner::apple::macos::ContentViewRef> for MacosAccessibility {
+    fn for_window(
+        window: &crate::owner::apple::macos::ContentViewRef,
+    ) -> Arc<dyn crate::host::WindowAccessibility> {
+        // SAFETY: the window makes its part as it opens, on the main thread,
+        // after installing `window.view` as its content view; the view lives
+        // until the window's own teardown, which detaches the bridge (unhooking
+        // the subclass) before it releases the window and then the view.
+        Arc::new(unsafe { Self::new(window.view.cast::<std::ffi::c_void>()) })
     }
 }
 

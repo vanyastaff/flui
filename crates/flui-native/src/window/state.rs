@@ -7,19 +7,86 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use flui_platform::WindowState;
+use flui_foundation::geometry::{EdgeInsets, WindowMetrics};
+use flui_platform::{WindowAppearance, WindowCapabilities, WindowExecutionState, WindowState};
 use parking_lot::Mutex;
+
+/// The facts a window reports beyond its geometry, mode and flags, as each
+/// host reads them its own way, put onto a sample in one place
+/// ([`Self::onto`]): a fact the snapshot gains is added here, and every host
+/// that builds this value is then told by the compiler to read it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ReportedFacts {
+    /// The drawable area and scale; `None` for a report that is not one.
+    pub(crate) metrics: Option<WindowMetrics>,
+    /// The user's theme as applied to the window (ADR-0222).
+    pub(crate) appearance: WindowAppearance,
+    /// The safe-area insets in logical pixels.
+    pub(crate) safe_area: EdgeInsets,
+    /// Whether the platform lets the window run its UI (ADR-0035).
+    pub(crate) execution: WindowExecutionState,
+    /// Whether the window system says none of the window reaches the screen,
+    /// as it says it: the snapshot keeps it only for a shown, unminimized
+    /// window (`WindowState::successor`).
+    pub(crate) occluded: bool,
+    /// What the last hover report said.
+    pub(crate) hovered: bool,
+    /// Whether the window is the active window of its desktop; its focus where
+    /// the window system has no notion apart from it.
+    pub(crate) active: bool,
+    /// What the window honours now.
+    pub(crate) capabilities: WindowCapabilities,
+}
+
+impl ReportedFacts {
+    /// `state` with these facts.
+    pub(crate) fn onto(self, state: WindowState) -> WindowState {
+        state
+            .with_metrics(self.metrics)
+            .with_appearance(self.appearance)
+            .with_safe_area(self.safe_area)
+            .with_execution(self.execution)
+            .with_occluded(self.occluded)
+            .with_hovered(self.hovered)
+            .with_active(self.active)
+            .with_capabilities(self.capabilities)
+    }
+}
+
+/// The answer to a command a host has no way to carry out. `admit` refuses it
+/// first, through a capability the host names `Unavailable`, so a window
+/// reaches this only for a command the contract gained before the host learnt
+/// it: the window system cannot do it, and the caller hears so.
+#[cfg(any(windows, target_os = "macos", target_arch = "wasm32", linux_host))]
+pub(crate) fn not_carried_out(command: &flui_platform::WindowCommand) -> flui_platform::ApplyError {
+    flui_platform::ApplyError::failed(format!("this window system does not carry out {command:?}"))
+}
+
+/// `size` held to `constraints` the way a resize by the user is: raised to the
+/// minimum, then lowered to the maximum, each axis on its own, so a maximum
+/// below the minimum wins. A window system that applies a size as given
+/// (AppKit's `setContentSize:`, a headless model) is handed this instead.
+pub(crate) fn held_to(
+    size: flui_foundation::geometry::Size<f64>,
+    constraints: flui_platform::SizeConstraints,
+) -> flui_foundation::geometry::Size<f64> {
+    let mut size = size;
+    if let Some(min) = constraints.min {
+        size.width = size.width.max(min.width);
+        size.height = size.height.max(min.height);
+    }
+    if let Some(max) = constraints.max {
+        size.width = size.width.min(max.width);
+        size.height = size.height.min(max.height);
+    }
+    size
+}
 
 /// What a window system says of a window, as the three facts its mode is
 /// decided from. Each platform reads them from its own report (winit's
 /// queries, AppKit's style mask and flags, the X11 window manager's
 /// properties, the Win32 window's tracked mode) and [`mode_of`] decides.
-#[cfg(any(
-    windows,
-    target_os = "macos",
-    all(target_os = "linux", feature = "winit-backend"),
-    test
-))]
+#[cfg(any(windows, target_os = "macos", x11_host, winit_host, test))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct ModeFlags {
     /// The window is minimized: iconic, in the Dock or on the taskbar.
@@ -33,12 +100,7 @@ pub(crate) struct ModeFlags {
 /// The mode of a window with these flags. A minimized window is hidden
 /// whatever else is set; a fullscreen one often keeps its maximized flag, so
 /// fullscreen comes before maximized.
-#[cfg(any(
-    windows,
-    target_os = "macos",
-    all(target_os = "linux", feature = "winit-backend"),
-    test
-))]
+#[cfg(any(windows, target_os = "macos", x11_host, winit_host, test))]
 pub(crate) const fn mode_of(flags: ModeFlags) -> flui_platform::WindowMode {
     use flui_platform::WindowMode;
     if flags.minimized {
@@ -58,9 +120,20 @@ pub(crate) struct Published {
     /// The snapshot now published.
     pub(crate) state: WindowState,
     /// Whether this call published a higher revision. A backend raises
-    /// `on_state_changed` exactly when this is `true`, after the call returned
+    /// `WindowHandler::state_changed` exactly when this is `true`, after the call returned
     /// and so outside the cell's lock.
     pub(crate) changed: bool,
+}
+
+impl Published {
+    /// What a state publisher answers for this read.
+    pub(crate) const fn outcome(&self) -> crate::owner::window_delivery::Publication {
+        if self.changed {
+            crate::owner::window_delivery::Publication::Changed
+        } else {
+            crate::owner::window_delivery::Publication::Unchanged
+        }
+    }
 }
 
 struct Slot {
@@ -95,6 +168,22 @@ pub(crate) struct WindowStateCell {
     invalidations: AtomicU64,
 }
 
+/// The capabilities owners handed out so far, one per window cell.
+static NEXT_CAPABILITIES_OWNER: AtomicU64 = AtomicU64::new(1);
+
+/// A capabilities owner no window of this process had before. Advanced with a
+/// checked add, so the source refuses instead of reissuing a number.
+fn next_capabilities_owner() -> flui_platform::CapabilitiesOwner {
+    let number = NEXT_CAPABILITIES_OWNER
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+            next.checked_add(1)
+        })
+        .expect("BUG: 2^64 windows opened in one process");
+    flui_platform::CapabilitiesOwner::new(
+        std::num::NonZeroU64::new(number).expect("BUG: the owner source starts at one"),
+    )
+}
+
 impl crate::owner::notices::StaleOnWake for WindowStateCell {
     fn mark_stale(&self) {
         self.invalidate();
@@ -109,7 +198,12 @@ impl WindowStateCell {
     }
 
     /// A cell publishing `initial`, stale: the first `state_with` reads the OS.
-    pub(crate) fn new(initial: WindowState) -> Self {
+    /// Its capabilities are stamped with a capabilities owner no other window
+    /// of the process has, which every later snapshot keeps, so a command
+    /// admitted for another window, or against capabilities built by hand,
+    /// never opens on this one.
+    pub(crate) fn new(mut initial: WindowState) -> Self {
+        initial.capabilities = initial.capabilities.owned_by(next_capabilities_owner());
         Self {
             last: Mutex::new(Slot {
                 state: initial,
@@ -127,8 +221,17 @@ impl WindowStateCell {
         self.invalidations.fetch_add(1, Ordering::Release);
     }
 
+    /// The capabilities of the last published snapshot, without reading the
+    /// OS: what an admitted command is opened against
+    /// ([`AdmittedCommand::against`](flui_platform::AdmittedCommand::against)),
+    /// so a command admitted against the snapshot a caller read applies
+    /// unless what the window honours was published as changed since.
+    pub(crate) fn published_capabilities(&self) -> WindowCapabilities {
+        self.last.lock().state.capabilities
+    }
+
     /// The last published snapshot, without reading the OS.
-    #[cfg(windows)]
+    #[cfg(any(windows, x11_host, wayland_host))]
     pub(crate) fn published(&self) -> WindowState {
         self.last.lock().state.clone()
     }
@@ -200,7 +303,56 @@ mod tests {
     use flui_foundation::geometry::Size;
     use flui_platform::{WindowGeometry, WindowRevision, WindowState};
 
-    use super::WindowStateCell;
+    use super::{WindowStateCell, held_to};
+
+    /// A size is held to the window's limits on each axis alone, and a
+    /// maximum below the minimum wins, as the window systems that clamp a
+    /// resize themselves do.
+    #[test]
+    fn a_size_is_held_to_the_constraints() {
+        use flui_platform::SizeConstraints;
+
+        let size = Size::new;
+        let both = SizeConstraints::new(Some(size(400.0, 300.0)), Some(size(900.0, 700.0)));
+        let rows = [
+            ("inside", both, size(640.0, 480.0), size(640.0, 480.0)),
+            ("below", both, size(200.0, 100.0), size(400.0, 300.0)),
+            ("above", both, size(2000.0, 2000.0), size(900.0, 700.0)),
+            (
+                "one axis each way",
+                both,
+                size(200.0, 2000.0),
+                size(400.0, 700.0),
+            ),
+            (
+                "no limits",
+                SizeConstraints::NONE,
+                size(1.0, 1e9),
+                size(1.0, 1e9),
+            ),
+            (
+                "a minimum only",
+                SizeConstraints::new(Some(size(400.0, 300.0)), None),
+                size(200.0, 5000.0),
+                size(400.0, 5000.0),
+            ),
+            (
+                "a maximum only",
+                SizeConstraints::new(None, Some(size(900.0, 700.0))),
+                size(200.0, 5000.0),
+                size(200.0, 700.0),
+            ),
+            (
+                "a maximum below the minimum",
+                SizeConstraints::new(Some(size(500.0, 500.0)), Some(size(300.0, 300.0))),
+                size(400.0, 400.0),
+                size(300.0, 300.0),
+            ),
+        ];
+        for (case, constraints, asked, held) in rows {
+            assert_eq!(held_to(asked, constraints), held, "{case}");
+        }
+    }
 
     fn state(width: f64) -> WindowState {
         WindowState::new(
@@ -370,6 +522,7 @@ mod mapping {
     /// one.
     fn appkit(said: ModeFlags) -> ModeFlags {
         WindowFlags {
+            on_screen: !said.minimized,
             fullscreen: said.fullscreen,
             miniaturized: said.minimized,
             zoomed: said.maximized,

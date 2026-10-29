@@ -6,7 +6,10 @@
 - **Amended by:** ADR-0058 (§4, the Wayland row)
 - **Superseded-by:** [ADR-0199](ADR-0199-presentation-sampling-recovery.md), in
   part: the exclusion of due gesture deadlines while the UI runtime's
-  `frames_enabled` gate selects background work.
+  `frames_enabled` gate selects background work;
+  [ADR-0254](ADR-0254-window-contract.md) decision 4, in part: §7's registered
+  `Platform::set_wake_deadline_hook`, which is `AppHandler::wake_deadline`; the wall-clock wake
+  the loop computes from the answer stays.
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §1 (sanctioned leapfrog zone: runtime/scheduling topology is not Flutter-loyal by the Prime Directive's own carve-out); [ADR-0058](ADR-0058-the-platform-paces-production-not-a-sleep.md) (the pacing mechanism this record's "real pacer" column defers to on every platform)
 - **Issue:** #556 — Runtime `UpdateScheduler`, presentation `FrameClock`, raster backpressure
 

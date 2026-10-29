@@ -60,6 +60,7 @@ pub mod view {
 /// accessors return, the target platform (the one a gesture preset models),
 /// the window's state and mode, and the system notices the host delivers.
 pub mod platform {
+    pub use flui_platform::AdmissionError;
     pub use flui_platform::Brightness;
     pub use flui_platform::DurationScale;
     pub use flui_platform::GesturePreferences;
@@ -74,12 +75,14 @@ pub mod platform {
     pub use flui_platform::NativeTouchGeometry;
     pub use flui_platform::SessionEndBlock;
     pub use flui_platform::SessionEndRequest;
+    pub use flui_platform::SubmitError;
     pub use flui_platform::SystemPreferences;
     pub use flui_platform::TargetPlatform;
     pub use flui_platform::TextWeightPreference;
+    pub use flui_platform::Unsupported;
+    pub use flui_platform::UnsupportedReason;
     pub use flui_platform::WheelPreferences;
     pub use flui_platform::WheelStep;
-    pub use flui_platform::WindowCommandError;
     pub use flui_platform::WindowMode;
     pub use flui_platform::WindowState;
     pub use flui_platform::text_store::TextInputPurpose;
@@ -88,7 +91,7 @@ pub mod platform {
     /// under the additive `unstable-input` feature.
     #[cfg(feature = "unstable-input")]
     pub mod input_capabilities {
-        pub use flui_platform::input_capabilities::Availability;
+        pub use flui_platform::Availability;
         pub use flui_platform::input_capabilities::InputCapabilities;
         pub use flui_platform::input_capabilities::PointerKindSet;
     }

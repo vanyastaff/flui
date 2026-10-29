@@ -11,10 +11,12 @@ use flui_foundation::geometry::{
     DevicePixelRatio, DeviceSize, EdgeInsets, Point, Size, WindowMetrics,
 };
 use flui_interaction::GestureDisposition;
+use flui_platform::Availability;
+use flui_platform::PointerFrame;
 use flui_platform::data_transfer::{
     DataTransferOffer, Mime, RepresentationDescriptor, TransferActions, TransferFormat,
 };
-use flui_platform::input_capabilities::{Availability, InputCapabilities, PointerKindSet};
+use flui_platform::input_capabilities::{InputCapabilities, PointerKindSet};
 use flui_platform::keyboard::{
     Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Location, Modifiers, NamedKey,
 };
@@ -27,8 +29,8 @@ use flui_platform::pointer::{
     ScrollPrecision, ScrollUnit, TangentialPressure, Twist,
 };
 use flui_platform::{
-    Brightness, DragDropEvent, EventTime, GesturePreferences, ImeEvent, Locale, MotionPreference,
-    NativeMouseGeometry, NativeTouchGeometry, PlatformInput, SystemPreferences,
+    Brightness, DragDropEvent, EventTime, FramePresented, GesturePreferences, ImeEvent, Locale,
+    MotionPreference, NativeMouseGeometry, NativeTouchGeometry, PlatformInput, SystemPreferences,
     TextWeightPreference, WheelPreferences, WheelStep, WindowExecutionState, WindowId,
 };
 use flui_runtime::owner::{InputOutcome, WindowObservation};
@@ -341,6 +343,10 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
         ("HostInput", "Window") => one(window(WindowObservation::Moved)),
         ("HostInput", "Frame") => one(host(HostInput::Frame {
             vsync: at(16_666_667),
+            target_present: Some(at(33_333_334)),
+            presented: Some(
+                FramePresented::new(at(9_000_000)).with_refresh(Duration::from_nanos(16_666_667)),
+            ),
         })),
         ("HostInput", "Accessibility") => one(action(Action::Click, None)),
         ("RecordedSurface", "Window") => one(row(
@@ -362,7 +368,11 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
                 NonZeroU64::new(7).expect("nonzero"),
             ))),
         )),
-        ("InputOutcome", "Handled") => one(host(HostInput::Frame { vsync: at(1) })),
+        ("InputOutcome", "Handled") => one(host(HostInput::Frame {
+            vsync: at(1),
+            target_present: None,
+            presented: None,
+        })),
         ("InputOutcome", "Unhandled") => one(row(
             HostInput::Platform(PlatformInput::Keyboard(KeyEvent::new(
                 KeyState::Up,
@@ -393,6 +403,13 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
         ("WindowObservation", "Brightness") => {
             one(window(WindowObservation::Brightness(Brightness::Dark)))
         }
+        ("PlatformInput", "PointerFrame") => one(platform(PlatformInput::PointerFrame(
+            PointerFrame::new(vec![
+                PointerEvent::Down(press(touch())),
+                PointerEvent::Down(press(info(PointerKind::Touch, PointerRole::Additional))),
+            ])
+            .expect("not empty"),
+        ))),
         ("PlatformInput", "Keyboard") => one(plain_key(KeyState::Down)),
         ("PlatformInput", "Ime") => one(ime(ImeEvent::Enabled)),
         ("PlatformInput", "DragDrop") | ("DragDropEvent", "Entered") => {

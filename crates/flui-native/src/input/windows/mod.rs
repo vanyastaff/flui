@@ -24,7 +24,6 @@ pub mod direct_manipulation;
 #[cfg(windows)]
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
     rc::{Rc, Weak},
     sync::Arc,
 };
@@ -51,14 +50,14 @@ use crate::input::assembly::ContactRegistry;
 #[cfg(windows)]
 use crate::owner::call_point::{Field, call};
 #[cfg(windows)]
-use crate::owner::handlers::{PlatformHandlers, WindowCallbacks};
-#[cfg(windows)]
 use crate::owner::windows::control::OwnerPreferences;
 #[cfg(windows)]
 use crate::owner::windows::{
-    CreatedWindow, WindowIdentity, WindowInputs, WindowMessages, WindowRef, WindowStep,
-    WindowsLoop, dpi_scale, window_step,
+    CreatedWindow, WindowInputs, WindowMessages, WindowRef, WindowScale, WindowStep, WindowTable,
+    WindowsLoop, window_step,
 };
+#[cfg(windows)]
+use crate::owner::{window_delivery::WindowDelivery, windows::AppHooks};
 #[cfg(windows)]
 use flui_platform::Modifiers;
 
@@ -91,8 +90,8 @@ impl crate::host::Input<WindowsLoop> for WindowsLoop {
     }
 
     fn on_keyboard_layout_change(owner: &WindowsLoop, callback: Box<dyn FnMut() + Send>) {
-        owner.register_handler("on_keyboard_layout_change", callback, |handlers| {
-            &mut handlers.keyboard_layout_changed
+        owner.register_handler("on_keyboard_layout_change", callback, |hooks| {
+            &mut hooks.keyboard_layout_changed
         });
     }
 }
@@ -106,7 +105,7 @@ impl crate::host::Input<WindowsLoop> for WindowsLoop {
 #[cfg(windows)]
 #[derive(Default)]
 pub(crate) struct InputWindows {
-    windows: RefCell<HashMap<WindowIdentity, Rc<InputWindow>>>,
+    windows: WindowTable<Rc<InputWindow>>,
 }
 
 #[cfg(windows)]
@@ -123,20 +122,12 @@ impl InputWindows {
     /// that destroys the window drops the entry, not the input the message
     /// reaches.
     fn by_handle(&self, hwnd: HWND) -> Option<Rc<InputWindow>> {
-        self.windows
-            .borrow()
-            .values()
-            .find(|input| input.window.hwnd() == hwnd)
-            .cloned()
+        self.of(self.windows.window_of(hwnd)?)
     }
 
     /// The input of `window`, while its handle still names it.
     fn of(&self, window: WindowRef) -> Option<Rc<InputWindow>> {
-        self.windows
-            .borrow()
-            .get(&window.identity())
-            .filter(|input| input.window == window)
-            .cloned()
+        self.windows.read(window, Rc::clone)
     }
 
     /// Forget `input`'s window: it is destroyed. What the input still holds
@@ -145,7 +136,7 @@ impl InputWindows {
     fn forget(&self, input: &InputWindow) {
         input.gone.set(true);
         input.release_touchpad(input.window.hwnd());
-        let removed = self.windows.borrow_mut().remove(&input.window.identity());
+        let removed = self.windows.take(input.window.identity());
         drop(removed);
     }
 }
@@ -161,14 +152,16 @@ struct InputWindow {
     /// of them.
     hooks: Weak<[Rc<dyn WindowMessages>]>,
     /// Its callbacks, which its input is dispatched to.
-    callbacks: Arc<WindowCallbacks>,
-    /// The application's handlers: a keyboard layout change reaches theirs.
-    handlers: Rc<RefCell<PlatformHandlers>>,
+    delivery: Arc<WindowDelivery>,
+    /// What the application gave the loop: a keyboard layout change reaches
+    /// its callback.
+    app_hooks: Rc<RefCell<AppHooks>>,
     /// The system preferences, which give its double-click interval and
     /// rectangle.
     preferences: Rc<dyn OwnerPreferences>,
-    /// Its DPI: positions arrive in device pixels.
-    dpi: Cell<u32>,
+    /// Its scale, which its procedure changes: positions arrive in device
+    /// pixels.
+    scale: WindowScale,
     /// The clock its messages and readings are stamped on.
     message_clock: raw::MessageClock,
     /// Whether the mouse is over its client area.
@@ -189,7 +182,10 @@ struct InputWindow {
     pending_high_surrogate: Cell<Option<u16>>,
     /// Physical keys held down that were pressed as dead keys, so their
     /// release reports `Dead` like the press.
-    held_dead_keys: RefCell<raw::HeldDeadKeys>,
+    held_dead_keys: RefCell<raw::HeldKeys>,
+    /// Physical keys held down whose press an input method took
+    /// (`VK_PROCESSKEY`): their release is no key either.
+    keys_taken_by_input_method: RefCell<raw::HeldKeys>,
     /// Whether the window is destroyed: a callback can close it, and a later
     /// window can take its handle.
     gone: Cell<bool>,
@@ -200,14 +196,14 @@ impl InputWindow {
     /// The input of `window`, which its class just announced.
     fn new(window: &CreatedWindow) -> Self {
         let message_clock = raw::MessageClock::new();
-        let click_settings = raw::click_settings(&*window.preferences, window.dpi);
+        let click_settings = raw::click_settings(&*window.preferences, window.scale.dpi());
         Self {
             window: window.window(),
             hooks: Rc::downgrade(&window.hooks),
-            callbacks: Arc::clone(&window.callbacks),
-            handlers: Rc::clone(&window.handlers),
+            delivery: Arc::clone(&window.delivery),
+            app_hooks: Rc::clone(&window.app_hooks),
             preferences: Rc::clone(&window.preferences),
-            dpi: Cell::new(window.dpi),
+            scale: window.scale.clone(),
             registry: RefCell::new(raw::pointer_registry(
                 message_clock.native(),
                 click_settings,
@@ -218,13 +214,14 @@ impl InputWindow {
             touchpad: direct_manipulation::TouchpadSlot::default(),
             pending_high_surrogate: Cell::new(None),
             held_dead_keys: RefCell::default(),
+            keys_taken_by_input_method: RefCell::default(),
             gone: Cell::new(false),
         }
     }
 
     /// Its scale: its DPI over 96.
     fn scale_factor(&self) -> f64 {
-        dpi_scale(self.dpi.get())
+        self.scale.scale()
     }
 
     /// Whether the window is still the one this input was made for: a
@@ -236,17 +233,15 @@ impl InputWindow {
     /// The window's DPI changed or a system setting did: read the
     /// double-click interval and rectangle again at its DPI.
     fn measure_clicks(&self) {
-        let settings = raw::click_settings(&*self.preferences, self.dpi.get());
+        let settings = raw::click_settings(&*self.preferences, self.scale.dpi());
         self.registry.borrow_mut().set_click_settings(settings);
     }
 
     /// Dispatch a keyboard-layout change to the platform-level hook, through
-    /// the call point: no borrow of the handlers is held while it runs.
+    /// the call point: no borrow of the hooks is held while it runs.
     fn dispatch_keyboard_layout_change(&self) {
         call(
-            &Field::new(&*self.handlers, |handlers| {
-                &mut handlers.keyboard_layout_changed
-            }),
+            &Field::new(&*self.app_hooks, |hooks| &mut hooks.keyboard_layout_changed),
             |handler| handler(),
         )
         .or_resume(());
@@ -260,10 +255,7 @@ impl WindowMessages for InputWindows {
     /// (`input::availability::windows`).
     fn created(&self, window: &CreatedWindow) {
         let input = Rc::new(InputWindow::new(window));
-        let replaced = self
-            .windows
-            .borrow_mut()
-            .insert(window.identity, Rc::clone(&input));
+        let replaced = self.windows.put(window.window(), Rc::clone(&input));
         if let Some(replaced) = replaced {
             debug_assert!(false, "BUG: a window identity is announced once");
             tracing::error!("a window identity was announced twice; its earlier input is ended");
@@ -278,7 +270,7 @@ impl WindowMessages for InputWindows {
             input.touchpad.install(host);
         }
         input
-            .callbacks
+            .delivery
             .set_input_capabilities(crate::input::availability::windows(input.has_touchpad()));
     }
 
@@ -296,13 +288,13 @@ impl WindowMessages for InputWindows {
             WindowStep::Painting => input.pump_touchpad_for_frame(hwnd),
             WindowStep::SizeMoveStarted => input.pause_touchpad(hwnd),
             WindowStep::SizeMoveEnded => input.resume_touchpad(),
-            WindowStep::Rescaled { dpi } => {
-                input.dpi.set(dpi);
-                input.measure_clicks();
-            }
-            // Double-click time and size are settings too.
-            WindowStep::SettingChanged => input.measure_clicks(),
-            WindowStep::KeyLetThrough { .. } => {}
+            // The double-click rectangle is measured at the window's scale, and
+            // the double-click time and size are settings too.
+            WindowStep::Rescaled | WindowStep::SettingChanged => input.measure_clicks(),
+            WindowStep::KeyLetThrough { .. }
+            | WindowStep::ScaleApplied
+            | WindowStep::SessionLocked(_)
+            | WindowStep::Closed => {}
         }
     }
 
@@ -399,10 +391,6 @@ impl WindowInputs for InputWindows {
         Some(self.of(window)?.hovered.get())
     }
 
-    fn modifiers(&self, window: WindowRef) -> Option<Modifiers> {
-        Some(self.of(window)?.modifiers.get())
-    }
-
     /// `None` too while the registry is borrowed by a message being decoded.
     fn press_kind(
         &self,
@@ -474,7 +462,7 @@ impl InputWindows {
                         );
                         for event in events {
                             if ctx.registry.borrow().delivers(&event) {
-                                ctx.callbacks.dispatch_input(event);
+                                ctx.delivery.dispatch_input(event);
                             }
                         }
                     }
@@ -518,7 +506,7 @@ impl InputWindows {
                         );
                         for event in events {
                             if ctx.registry.borrow().delivers(&event) {
-                                ctx.callbacks.dispatch_input(event);
+                                ctx.delivery.dispatch_input(event);
                             }
                         }
                     }
@@ -562,7 +550,7 @@ impl InputWindows {
                             &ctx.registry,
                         );
                         for cancel in cancels {
-                            ctx.callbacks.dispatch_input(cancel);
+                            ctx.delivery.dispatch_input(cancel);
                         }
                     }
                     LRESULT(0)
@@ -587,15 +575,14 @@ impl InputWindows {
                             time,
                         );
                         if let Some(event) = event {
-                            ctx.callbacks.dispatch_input(event);
+                            ctx.delivery.dispatch_input(event);
                         }
                     }
                     LRESULT(0)
                 }
 
                 WM_KEYDOWN | WM_SYSKEYDOWN => {
-                    let vk = wparam.0 as u16;
-                    let is_repeat = (lparam.0 & (1 << 30)) != 0;
+                    let key = raw::KeyMessage::new(wparam, lparam);
 
                     if let Some(ctx) = ctx {
                         // Read before the character drain below retrieves
@@ -604,6 +591,22 @@ impl InputWindows {
 
                         // Track modifiers.
                         ctx.modifiers.set(raw::message_modifiers());
+
+                        // A key the input method took is its composition,
+                        // not a key: nothing is dispatched for it, and no
+                        // character is drained, so what a legacy input
+                        // method posts for its result arrives as text of
+                        // its own (the stray `WM_CHAR` arm).
+                        let mut taken = ctx.keys_taken_by_input_method.borrow_mut();
+                        if crate::input::keys::taken_by_input_method(key.vk) {
+                            taken.press(key.scan_code, key.extended);
+                            drop(taken);
+                            return Some(DefWindowProcW(hwnd, msg, wparam, lparam));
+                        }
+                        // A press the application gets is proof the key was
+                        // released where its release went unseen.
+                        taken.release(key.scan_code, key.extended);
+                        drop(taken);
 
                         // Merge the fully-translated character(s) for this
                         // keystroke into the keydown. The message loop runs
@@ -653,9 +656,9 @@ impl InputWindows {
                         use raw::key_down_event;
                         let event = {
                             let mut held = ctx.held_dead_keys.borrow_mut();
-                            key_down_event(wparam, lparam, stroke, &mut held, time)
+                            key_down_event(key, stroke, &mut held, time)
                         };
-                        let result = ctx.callbacks.dispatch_input(event);
+                        let result = ctx.delivery.dispatch_input(event);
                         // A callback can close this window and create another
                         // with a recycled HWND: only while the window is the
                         // one this input was made for does the native default
@@ -672,8 +675,8 @@ impl InputWindows {
                                 &hooks,
                                 ctx.window,
                                 WindowStep::KeyLetThrough {
-                                    virtual_key: vk,
-                                    repeat: is_repeat,
+                                    virtual_key: key.vk,
+                                    repeat: key.repeat,
                                 },
                             );
                         }
@@ -691,12 +694,26 @@ impl InputWindows {
                         // Track modifiers.
                         ctx.modifiers.set(raw::message_modifiers());
 
+                        // The release of a key whose press the input method
+                        // took is no key either, under `VK_PROCESSKEY` or its
+                        // own. A press the application got is released for it,
+                        // `VK_PROCESSKEY` included (the input method opened
+                        // while the key was held), so no key stays down.
+                        let key = raw::KeyMessage::new(wparam, lparam);
+                        let taken = ctx
+                            .keys_taken_by_input_method
+                            .borrow_mut()
+                            .release(key.scan_code, key.extended);
+                        if taken {
+                            return Some(DefWindowProcW(hwnd, msg, wparam, lparam));
+                        }
+
                         use raw::key_up_event;
                         let event = {
                             let mut held = ctx.held_dead_keys.borrow_mut();
-                            key_up_event(wparam, lparam, &mut held, time)
+                            key_up_event(key, &mut held, time)
                         };
-                        let result = ctx.callbacks.dispatch_input(event);
+                        let result = ctx.delivery.dispatch_input(event);
                         if result.default_prevented || !ctx.is_current() {
                             return Some(LRESULT(0));
                         }
@@ -724,7 +741,7 @@ impl InputWindows {
                         if let Some(text) = text {
                             use raw::stray_char_event;
                             let time = ctx.message_clock.message_time();
-                            ctx.callbacks.dispatch_input(stray_char_event(text, time));
+                            ctx.delivery.dispatch_input(stray_char_event(text, time));
                         }
                     }
                     LRESULT(0)
@@ -883,13 +900,16 @@ impl InputWindow {
     /// for a mouse under `EnableMouseInPointer`.
     fn set_hovered(&self, hovered: bool) {
         if self.hovered.replace(hovered) != hovered {
-            self.callbacks.dispatch_hover_status_change(hovered);
+            self.delivery.report_hover(hovered);
         }
     }
 
     /// A `WM_POINTER*` `message` for the pointer `wparam` names.
     fn pointer_message(&self, hwnd: HWND, message: u32, wparam: WPARAM) {
-        use windows::Win32::UI::WindowsAndMessaging::{WM_POINTERCAPTURECHANGED, WM_POINTERLEAVE};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            WM_POINTERCAPTURECHANGED, WM_POINTERDOWN, WM_POINTERLEAVE, WM_POINTERUP,
+            WM_POINTERUPDATE,
+        };
 
         let raw = (wparam.0 & 0xffff) as u32;
         let mouse = raw::is_mouse_pointer(raw);
@@ -899,14 +919,34 @@ impl InputWindow {
         // hover is read from the cursor once its input is delivered.
         let hover =
             (mouse && message != WM_POINTERCAPTURECHANGED).then_some(message != WM_POINTERLEAVE);
-        let inputs = raw::native_pointer_input(
-            hwnd,
-            message,
-            (raw, mouse),
-            self.scale_factor(),
-            &self.message_clock,
-            &self.registry,
-        );
+        let members = (!mouse
+            && matches!(message, WM_POINTERDOWN | WM_POINTERUP | WM_POINTERUPDATE))
+        .then(|| raw::pointer_frame_members(raw))
+        .flatten();
+        let inputs = if let Some(members) = members {
+            let contacts = members.into_iter().map(|(id, message)| {
+                raw::native_pointer_input(
+                    hwnd,
+                    message,
+                    (id, false),
+                    self.scale_factor(),
+                    &self.message_clock,
+                    &self.registry,
+                )
+            });
+            let frame = crate::input::assembly::framed(contacts.collect::<Vec<_>>());
+            raw::skip_frame_messages(raw);
+            frame
+        } else {
+            raw::native_pointer_input(
+                hwnd,
+                message,
+                (raw, mouse),
+                self.scale_factor(),
+                &self.message_clock,
+                &self.registry,
+            )
+        };
         // The hover is settled before any of the message's input reaches user
         // code: a callback that pumps messages may see the cursor come back,
         // and nothing written after it may undo that.
@@ -916,7 +956,7 @@ impl InputWindow {
         for input in inputs {
             let deliver = self.registry.borrow().delivers(&input);
             if deliver {
-                self.callbacks.dispatch_input(input);
+                self.delivery.dispatch_input(input);
             }
         }
         if mouse && message == WM_POINTERCAPTURECHANGED {
@@ -957,7 +997,7 @@ impl InputWindow {
             );
         }
         for input in inputs {
-            self.callbacks.dispatch_input(input);
+            self.delivery.dispatch_input(input);
         }
     }
 
@@ -977,7 +1017,7 @@ impl InputWindow {
                 .borrow_mut()
                 .cancel_surface(raw::SURFACE, time, NativeCancel::FocusLost);
         for cancel in cancels {
-            self.callbacks.dispatch_input(cancel);
+            self.delivery.dispatch_input(cancel);
         }
     }
 }
@@ -1577,6 +1617,58 @@ mod raw {
         assembled.unwrap_or_else(DecodeError::into_inputs)
     }
 
+    /// The pointers of the frame `raw` belongs to, each with the message its
+    /// own state change reads as, when the frame holds more than one. The
+    /// system sends one message per pointer of a frame; the others are
+    /// skipped once the frame is read ([`skip_frame_messages`]).
+    pub(super) fn pointer_frame_members(raw: u32) -> Option<Vec<(u32, u32)>> {
+        use windows::Win32::UI::{
+            Input::Pointer::{
+                GetPointerFrameInfo, POINTER_FLAG_DOWN, POINTER_FLAG_UP, POINTER_FLAG_UPDATE,
+            },
+            WindowsAndMessaging::{WM_POINTERDOWN, WM_POINTERUP, WM_POINTERUPDATE},
+        };
+        let mut count = 0u32;
+        // SAFETY: a null buffer asks only for the count, into a live local.
+        unsafe { GetPointerFrameInfo(raw, &raw mut count, None) }.ok()?;
+        if count < 2 {
+            return None;
+        }
+        let mut frame = read_history(count, |count, buffer: &mut [POINTER_INFO]| {
+            // SAFETY: `*count` is `buffer.len()` (`read_history`).
+            unsafe { GetPointerFrameInfo(raw, count, Some(buffer.as_mut_ptr())) }
+        })?;
+        // The system lists the frame newest first; deliver in sample order.
+        frame.reverse();
+        frame
+            .iter()
+            .map(|info| {
+                let flags = info.pointerFlags;
+                let message = if flags.contains(POINTER_FLAG_DOWN) {
+                    WM_POINTERDOWN
+                } else if flags.contains(POINTER_FLAG_UP) {
+                    WM_POINTERUP
+                } else if flags.contains(POINTER_FLAG_UPDATE) {
+                    WM_POINTERUPDATE
+                } else {
+                    return None;
+                };
+                Some((info.pointerId, message))
+            })
+            .collect()
+    }
+
+    /// The frame `raw` belongs to was read whole: the system sends no message
+    /// for its other pointers.
+    pub(super) fn skip_frame_messages(raw: u32) {
+        use windows::Win32::UI::Input::Pointer::SkipPointerFrameMessages;
+        // SAFETY: only the id of the message being handled is passed; a refused
+        // call leaves the other messages to arrive, each a frame of its own.
+        if unsafe { SkipPointerFrameMessages(raw) }.is_err() {
+            tracing::warn!(raw, "pointer frame messages could not be skipped");
+        }
+    }
+
     /// Whether the `WM_POINTER` id `raw` is the mouse's. A stale or invented id
     /// is not.
     pub(super) fn is_mouse_pointer(raw: u32) -> bool {
@@ -1933,6 +2025,33 @@ mod raw {
     // Keyboard events (simple wrappers)
     // ============================================================================
 
+    /// A key message's `WPARAM` and `LPARAM`, decoded once.
+    #[derive(Clone, Copy, Debug)]
+    pub struct KeyMessage {
+        /// The virtual key.
+        pub vk: u16,
+        /// The scancode, without its extended prefix.
+        pub scan_code: u16,
+        /// Whether the scancode has the `E0` prefix.
+        pub extended: bool,
+        /// Whether the key was already down (a keydown's auto-repeat).
+        pub repeat: bool,
+    }
+
+    impl KeyMessage {
+        /// The key message whose parameters are `wparam` and `lparam`; a key
+        /// message's `WPARAM` is a 16-bit virtual key.
+        pub fn new(wparam: WPARAM, lparam: LPARAM) -> Self {
+            let (scan_code, extended, repeat) = keys::parse_key_lparam(lparam.0);
+            Self {
+                vk: wparam.0 as u16,
+                scan_code,
+                extended,
+                repeat,
+            }
+        }
+    }
+
     /// Convert WM_KEYDOWN to W3C KeyboardEvent.
     ///
     /// `translated_text` is the drained `WM_CHAR` burst for this keydown (see
@@ -1943,14 +2062,17 @@ mod raw {
     /// ([`MessageClock::message_time`]), so a key and a click queued around it
     /// keep their order.
     pub fn key_down_event(
-        wparam: WPARAM,
-        lparam: LPARAM,
+        message: KeyMessage,
         stroke: Keystroke,
-        held_dead: &mut HeldDeadKeys,
+        held_dead: &mut HeldKeys,
         time: u64,
     ) -> PlatformInput {
-        let vk = wparam.0 as u16;
-        let (scan_code, extended, is_repeat) = keys::parse_key_lparam(lparam.0);
+        let KeyMessage {
+            vk,
+            scan_code,
+            extended,
+            repeat: is_repeat,
+        } = message;
         let (dead, translated_text) = match stroke {
             Keystroke::Dead => (true, None),
             Keystroke::Text(text) => (false, text),
@@ -2003,14 +2125,13 @@ mod raw {
     /// punctuation the US-layout position. Consumers that type text act on
     /// `KeyState::Down` only, so this asymmetry never reaches a text field.
     /// `time` is the message's, as for [`key_down_event`].
-    pub fn key_up_event(
-        wparam: WPARAM,
-        lparam: LPARAM,
-        held_dead: &mut HeldDeadKeys,
-        time: u64,
-    ) -> PlatformInput {
-        let vk = wparam.0 as u16;
-        let (scan_code, extended, _) = keys::parse_key_lparam(lparam.0);
+    pub fn key_up_event(message: KeyMessage, held_dead: &mut HeldKeys, time: u64) -> PlatformInput {
+        let KeyMessage {
+            vk,
+            scan_code,
+            extended,
+            ..
+        } = message;
 
         let modifiers = message_modifiers();
         // The release of a dead key is `Dead` too (W3C UI Events dead-key
@@ -2062,21 +2183,22 @@ mod raw {
         Dead,
     }
 
-    /// The physical keys currently held down that were pressed as dead keys, so
-    /// each one's release reports `Dead` like its press, even if the keyboard
+    /// Physical keys currently held down whose press was of one kind (a dead
+    /// key, a key an input method took), by scancode and extended flag, so
+    /// each one's release is reported like its press, even if the keyboard
     /// layout or the modifiers changed while it was held. Owned per window.
     #[derive(Debug, Default)]
-    pub struct HeldDeadKeys(Vec<(u16, bool)>);
+    pub struct HeldKeys(Vec<(u16, bool)>);
 
-    impl HeldDeadKeys {
-        fn press(&mut self, scan_code: u16, extended: bool) {
+    impl HeldKeys {
+        pub(super) fn press(&mut self, scan_code: u16, extended: bool) {
             if !self.0.contains(&(scan_code, extended)) {
                 self.0.push((scan_code, extended));
             }
         }
 
-        /// Whether the released key was pressed as a dead key; forgets it.
-        fn release(&mut self, scan_code: u16, extended: bool) -> bool {
+        /// Whether the released key was pressed as one of these; forgets it.
+        pub(super) fn release(&mut self, scan_code: u16, extended: bool) -> bool {
             let before = self.0.len();
             self.0.retain(|held| *held != (scan_code, extended));
             self.0.len() != before

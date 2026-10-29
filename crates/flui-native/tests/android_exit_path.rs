@@ -1,5 +1,5 @@
 //! The Android backend's loop exit must release the window it tracked and
-//! revoke its geometry, then clear the callbacks that pin the embedder's presentation.
+//! revoke its geometry, then let go of the handler that pins the embedder's presentation.
 //!
 //! # Why a source scan, and what it is *not* evidence of
 //!
@@ -51,8 +51,8 @@ const QUIT_CALL: &str = "invoke_quit()";
 /// The take that releases the platform's own window reference.
 const WINDOW_TAKE: &str = ".window.lock().take()";
 
-/// The clear the exit path owes the window's callback slots.
-const CALLBACKS_CLEAR: &str = ".callbacks().clear()";
+/// The clear the exit path owes the window's handler.
+const HANDLER_CLEAR: &str = ".delivery().clear()";
 
 /// The brace depth of `run`'s direct children, in [`line_start_depths`]'
 /// scale (where the line holding the body's opening brace is 0, so every line
@@ -352,7 +352,7 @@ fn assert_exit_region_has_no_early_exit(region: &[String]) {
         assert!(
             !region.iter().any(|line| line.contains(banned)),
             "the exit region contains `{banned}`, an early exit between the take and the clear: \
-             on the route it takes, the window's callbacks are never cleared and the quit hook \
+             on the route it takes, the window never lets go of its handler and the quit hook \
              never runs, so the registration cycle stays closed for the process's life. It \
              belongs after `invoke_quit()`, or the clear belongs before it"
         );
@@ -369,18 +369,18 @@ fn indices_containing(region: &[String], needle: &str) -> Vec<usize> {
         .collect()
 }
 
-/// The exit region's one `callbacks().clear()` line: its index and its
+/// The exit region's one `delivery().clear()` line: its index and its
 /// trimmed text.
 fn window_clear_line(region: &[String]) -> (usize, &str) {
-    let clear_lines = indices_containing(region, CALLBACKS_CLEAR);
+    let clear_lines = indices_containing(region, HANDLER_CLEAR);
     assert_eq!(
         clear_lines.len(),
         1,
         "missing exit-path clear: `AndroidLoop::run` has {} line(s) containing \
-         `{CALLBACKS_CLEAR}` between its `loop` and its `{QUIT_CALL}`, expected exactly one. The \
-         window's callback slots are the platform's only owning path into the embedder's \
-         presentation (window -> slot -> closure -> raster lane -> renderer -> the window's own \
-         `Arc`), so a loop that exits without clearing them strands a window, a raster lane and \
+         `{HANDLER_CLEAR}` between its `loop` and its `{QUIT_CALL}`, expected exactly one. The \
+         window's handler is the platform's only owning path into the embedder's \
+         presentation (window -> handler -> raster lane -> renderer -> the window's own \
+         `Arc`), so a loop that exits without letting go of it strands a window, a raster lane and \
          a renderer for the life of the process, one more of each per activity recreation",
         clear_lines.len()
     );
@@ -391,7 +391,7 @@ fn window_clear_line(region: &[String]) -> (usize, &str) {
 /// binds the platform's window to.
 ///
 /// The `let`-statement requirement refuses the fused
-/// `if let Some(w) = self.window.lock().take() { w.callbacks().clear(); }`
+/// `if let Some(w) = self.window.lock().take() { w.delivery().clear(); }`
 /// whose scrutinee guard lives through the body — on edition 2024 an `if let`
 /// drops its scrutinee's temporaries only after the whole `if let` — and
 /// would therefore run the clear under the `window` lock. Whether the clear
@@ -442,7 +442,7 @@ fn window_take_binding(region: &[String]) -> (usize, &str) {
     (take_index, binding)
 }
 
-/// The taken window's geometry is revoked exactly once, before clearing callbacks.
+/// The taken window's geometry is revoked exactly once, before its handler is let go of.
 fn window_revocation_line(
     region: &[String],
     take_index: usize,
@@ -464,7 +464,7 @@ fn window_revocation_line(
     );
     assert!(
         take_index < revoke_index && revoke_index < clear_index,
-        "the tracked window must be released, its geometry revoked, then its callbacks cleared"
+        "the tracked window must be released, its geometry revoked, then its handler let go of"
     );
     revoke_index
 }
@@ -530,7 +530,7 @@ fn names_binding(line: &str, binding: &str) -> bool {
 
 /// The identifier `clear()` is called on in `line`.
 fn clear_receiver(line: &str) -> &str {
-    let Some((receiver, _)) = line.split_once(".callbacks()") else {
+    let Some((receiver, _)) = line.split_once(".delivery()") else {
         panic!("could not read the exit region's clear statement: found `{line}`")
     };
     let receiver = receiver.trim_end();
@@ -548,7 +548,7 @@ fn clear_receiver(line: &str) -> &str {
 /// The clear count is asserted before the binding it is tied to, so a tree
 /// without the site goes red on "missing exit-path clear" rather than on the
 /// extraction that follows.
-fn android_run_clears_the_window_callbacks_between_its_loop_and_the_quit_hook() {
+fn android_run_lets_go_of_the_window_handler_between_its_loop_and_the_quit_hook() {
     let region = exit_region();
 
     let (clear_index, clear_line) = window_clear_line(&region);
@@ -559,7 +559,7 @@ fn android_run_clears_the_window_callbacks_between_its_loop_and_the_quit_hook() 
          `{clear_line}`. It drops embedder closures, which may re-enter platform code that \
          takes the same lock (ADR-0038 §5)"
     );
-    let own_statement = format!("{binding}.callbacks().clear();");
+    let own_statement = format!("{binding}.delivery().clear();");
     assert_eq!(
         clear_line,
         own_statement.as_str(),
@@ -592,7 +592,7 @@ fn android_run_releases_its_own_window_reference_before_clearing() {
 
     assert!(
         take_index < clear_index,
-        "the platform's own window reference must be released BEFORE the callbacks are cleared, \
+        "the platform's own window reference must be released BEFORE the handler is let go of, \
          in the order the winit and headless close bodies use (their `complete_window_close` / \
          `complete_close`: dispatch close, drop the platform's tracking entry, then clear)"
     );
@@ -607,9 +607,9 @@ fn android_run_releases_its_own_window_reference_before_clearing() {
 }
 
 /// The exit region of `run` releases the platform's window reference, revokes
-/// its geometry, then clears the callbacks, in the unfused shape.
+/// its geometry, then lets go of the handler, in the unfused shape.
 #[test]
 fn android_run_exit_region_releases_then_clears() {
-    android_run_clears_the_window_callbacks_between_its_loop_and_the_quit_hook();
+    android_run_lets_go_of_the_window_handler_between_its_loop_and_the_quit_hook();
     android_run_releases_its_own_window_reference_before_clearing();
 }

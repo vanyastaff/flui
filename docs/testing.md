@@ -151,7 +151,23 @@ The first three are `cargo xtask gate`, the non-test half. Locally, `checks`
 skips typos, taplo or lychee with a message when they are not installed; CI
 passes `--strict`, which makes a missing one a failure. The flui-native step
 of `test` needs `xvfb-run` on Linux (`apt install xvfb`), runs without it on
-Windows, and is skipped with a message on macOS.
+Windows, and is skipped with a message on macOS. Its `x11_window` harness, the
+native X11 host's window conformance, starts an Xvfb and an openbox of its own
+and needs `openbox` too (`apt install openbox`). On Linux the native Wayland
+host's tests (`wayland_window::`) run in a step of their own against the
+compositor `WAYLAND_DISPLAY` names, and skip themselves without one; CI starts a
+headless Weston (`weston --backend=headless --socket=…`) and sets
+`FLUI_REQUIRE_WAYLAND=1`, which makes a missing compositor a failure. The
+`wayland_input` harness, the Wayland host's input from a real seat, starts an
+Xvfb and a Weston on its X11 backend of its own and drives them through XTest;
+it skips itself without `Xvfb` or `weston`, and fails then under
+`FLUI_REQUIRE_WAYLAND`. Weston
+13 has no `xdg_activation_v1`, so there
+`an_activation_asks_the_compositor_with_a_token` checks only the refusal; the
+token's whole path (asked, answered, handed back, the window left behind its
+cover) runs only against a sway started by hand. On Windows the Win32 window
+tests and the contract's share the desktop's foreground and run one at a time
+(test group `desktop-foreground`).
 
 xtask does not schedule its commands. On a host shared by several agents and
 checkouts, [heli](https://github.com/vanyastaff/heli) does: every cargo, the
@@ -172,7 +188,7 @@ only runs when someone remembers to run it by hand.
 
 One scope for the whole local suite:
 `--workspace --exclude flui-native --lib --bins --tests
---features flui/material,flui/cupertino,flui-devtools/agent`, run as the two
+--features flui/material,flui/cupertino,flui/native,flui-devtools/agent`, run as the two
 stages below. Text-size tests measure on Parley because the default build does
 (ADR-0092 §10 step 4a); no feature selects another measurement.
 Two choices in it differ from CI on purpose:
@@ -917,8 +933,8 @@ moves, prints `CANNOT_VERIFY` and records nothing. A precision touchpad has no
 injector: its DirectManipulation viewport calls are journaled, but the golden
 that certifies them has to come from a `native-capture` run on that hardware,
 and keyboard and OLE drag-and-drop input have no native recording rows yet.
-On an Android device, the host test
-`native_recording::pulled_device_recordings_replay_to_what_they_delivered`
+On an Android device, the case
+`pulled_device_recordings_replay_to_what_they_delivered` of `native_recording::native_recording_contracts`
 requires each recording pulled into `FLUI_DEVICE_RECORDING_DIR` to replay to
 the delivered events exactly and holds it against its golden by event grammar,
 since the device resamples moves by its frame timing.
@@ -950,7 +966,7 @@ cargo check -p flui-native --locked --all-targets --target aarch64-apple-darwin 
 cargo xtask deps --strict --only policy                       # deps job: cargo-deny bans / licenses / sources + cargo-shear
 cargo xtask deps --strict --only advisories                   # same job: RustSec advisories, blocking in the wide and full lanes; advisories.yml runs it daily on main
 cargo xtask doc-strict                                        # doc job
-cargo xtask test --fast                                       # test job: nextest over the test scope, then flui-native under Xvfb (FLUI_HEADLESS=1)
+cargo xtask test --fast                                       # test job: nextest over the test scope, then flui-native under Xvfb (FLUI_HEADLESS=1), then its Wayland tests
 cargo xtask build-all-targets                                 # same job: links the examples and benches the test scope reaches
 cargo xtask test --nested --nested-group native               # test-nested: generated projects and facade consumers
 cargo xtask test --nested --nested-group trybuild             # test-trybuild: compile-fail suites
@@ -1040,7 +1056,7 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 |---|---|---|
 | `checks` | `cargo xtask checks` + `cargo test -p xtask`, then `actionlint` and `zizmor .` (`ci-full` runs both, skipping one that is not installed) | CI passes `--strict`: a missing typos, taplo or lychee fails there instead of being skipped with a message |
 | `plan` | `cargo xtask affected --worktree` | decides the lane and the affected packages; CI passes `--event` and the PR's base SHA, the local run diffs against `origin/main` (or `--base`) and `--worktree` adds uncommitted files |
-| `clippy` | `cargo xtask lint` (in `gate`) | — |
+| `clippy` | `cargo xtask lint` (in `gate`), then `cargo xtask native-features` | `native-features` lints flui-native with default features off, once each for none, `x11`, `wayland`, `winit-backend` and `testing`, with and without `--all-targets`: the part of `feature-matrix` that pull requests run; from a Windows or macOS checkout pass `--target x86_64-unknown-linux-gnu` |
 | `test` | `cargo xtask test --fast`, then `cargo xtask build-all-targets` | the same commands; the all-targets build uses the test scope's packages and features, so it links the examples and benches without rebuilding the rest (a target whose `required-features` it leaves off is compiled by `feature-matrix`, not linked) (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-native leg needs `xvfb-run` (Linux) and also links flui-native's examples, which the all-targets build leaves out with the rest of flui-native |
 | `test-nested` | `cargo xtask test --nested --nested-group native` | generated projects and facade consumers, beside `test` and `test-trybuild` |
 | `test-trybuild` | `cargo xtask test --nested --nested-group trybuild` | compile-fail suites; plain `--nested` still runs both groups |

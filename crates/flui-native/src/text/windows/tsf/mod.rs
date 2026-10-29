@@ -76,6 +76,7 @@ use windows_core::{IUnknown, Interface};
 
 use self::document::{DocumentState, TsfStore};
 use crate::owner::windows::WindowRef;
+use crate::owner::windows::WindowScale;
 use crate::owner::windows::com_apartment::ComApartment;
 
 #[cfg(test)]
@@ -150,6 +151,9 @@ pub struct TextServices {
     /// The window with its identity, for the documents, which TSF may keep
     /// past the window.
     window: WindowRef,
+    /// The window's scale, which a document answers an input method's layout
+    /// queries at: the window's own, which its procedure changes.
+    scale: WindowScale,
     thread_manager: ITfThreadMgr,
     client_id: u32,
     empty: ITfDocumentMgr,
@@ -235,9 +239,10 @@ fn same_object(a: &impl Interface, b: &impl Interface) -> bool {
 
 impl TextServices {
     /// Activate TSF for `window`'s thread and associate the empty document
-    /// with the window. The thread must be the window's owner thread, inside
-    /// the single-threaded COM apartment `apartment` holds, which these
-    /// services keep entered until they are dropped.
+    /// with the window, whose scale is `scale`. The thread must be the
+    /// window's owner thread, inside the single-threaded COM apartment
+    /// `apartment` holds, which these services keep entered until they are
+    /// dropped.
     ///
     /// # Errors
     ///
@@ -245,6 +250,7 @@ impl TextServices {
     /// `WM_CHAR` path.
     pub(crate) fn activate(
         window: WindowRef,
+        scale: WindowScale,
         apartment: Rc<ComApartment>,
     ) -> windows_core::Result<Rc<Self>> {
         let hwnd = window.hwnd();
@@ -272,6 +278,7 @@ impl TextServices {
         let services = Rc::new_cyclic(|me| Self {
             hwnd: window.hwnd(),
             window,
+            scale,
             thread_manager,
             client_id,
             empty,
@@ -389,6 +396,11 @@ impl TextServices {
         if let Some(payload) = calls.into_failure() {
             log_failure(payload);
         }
+    }
+
+    /// The window's scale, as the documents answer layout queries at it.
+    pub(crate) fn scale(&self) -> f64 {
+        self.scale.scale()
     }
 
     /// The window moved, or its DPI changed: the focused field's text sits
@@ -811,14 +823,6 @@ impl std::fmt::Debug for TextServices {
     }
 }
 
-impl crate::text::TextInput for Rc<TextServices> {
-    fn window_text_input(&self) -> Option<crate::text::WindowTextInput> {
-        Some(crate::text::WindowTextInput::Store(
-            Rc::clone(self) as Rc<dyn TextStoreHost>
-        ))
-    }
-}
-
 impl TextStoreHost for TextServices {
     /// Queued when called under a TSF call into a store.
     ///
@@ -840,7 +844,10 @@ impl TextStoreHost for TextServices {
         store: &Rc<dyn TextStore>,
     ) -> Result<CompositionEnd, TextStoreHostError> {
         if self.is_shut_down() {
-            return Err(TextStoreHostError::Unavailable);
+            return Err(flui_platform::Unsupported::new(
+                flui_platform::UnsupportedReason::NoWindow,
+            )
+            .into());
         }
         if !self
             .focused_store()

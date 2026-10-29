@@ -391,7 +391,9 @@ impl Ingress {
 fn control_error(error: flui_native::ProxySendError<()>) -> AppControlError {
     match error {
         flui_native::ProxySendError::OwnerGone { .. } => AppControlError::OwnerGone,
-        other => AppControlError::WakeFailed {
+        other @ (flui_native::ProxySendError::WakeFailed { .. }
+        | flui_native::ProxySendError::Full { .. }
+        | flui_native::ProxySendError::Unsupported { .. }) => AppControlError::WakeFailed {
             message: other.to_string(),
         },
     }
@@ -417,7 +419,7 @@ mod tests {
         let saved = Rc::new(RefCell::new(None));
         let returned = Rc::clone(&saved);
         Box::new(HeadlessPlatform::new())
-            .run(Box::new(move |owner| {
+            .run(crate::app::runner::app_handler(move |owner| {
                 returned.replace(Some(owner));
                 Ok(())
             }))

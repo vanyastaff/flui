@@ -180,7 +180,7 @@ const RECORDED: &[Recorded] = &[
     ),
     repo(
         "Availability",
-        "crates/flui-platform/src/input_capabilities/mod.rs",
+        "crates/flui-platform/src/unsupported.rs",
         "Availability",
     ),
     repo(

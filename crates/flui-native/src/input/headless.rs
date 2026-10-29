@@ -24,9 +24,10 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
     /// Report `availability` as what this backend implements (its device
     /// presence is ignored: attached devices come from
     /// [`input_devices`](Self::input_devices)). Without it the headless
-    /// backend reports pen, precise scrolling and trackpad gestures `Native`,
-    /// since a test can synthesize all of them, and input regions and outgoing
-    /// drags `Unavailable`.
+    /// backend reports pen, precise scrolling, trackpad gestures and input
+    /// regions `Native`, since a test can synthesize or record all of them,
+    /// and outgoing drags `Unavailable`. A window takes input regions exactly
+    /// while this says they are available.
     #[must_use]
     pub fn with_input_availability(
         self,
@@ -56,9 +57,7 @@ impl host::Input<HeadlessLoop> for HeadlessInputDevices {
 
     fn on_keyboard_layout_change(owner: &HeadlessLoop, callback: Box<dyn FnMut() + Send>) {
         install(
-            &Field::new(&*owner.state, |state| {
-                &mut state.handlers.keyboard_layout_changed
-            }),
+            &Field::new(&*owner.state, |state| &mut state.keyboard_layout_changed),
             callback,
         );
     }
@@ -90,7 +89,7 @@ impl HeadlessInputDevices {
             let mut state = state.lock();
             let time = EventTime::from_nanos(crate::input::event_timestamp_ns());
             let change = state.devices.attach(kind, time)?;
-            let windows = state.windows.callbacks_of_all();
+            let windows = state.windows.deliveries_of_all();
             (change, windows, state.devices.present())
         };
         for callbacks in windows {
@@ -116,7 +115,7 @@ impl HeadlessInputDevices {
             let Some(removed) = state.devices.remove(id, time) else {
                 return false;
             };
-            let windows = state.windows.callbacks_of_all();
+            let windows = state.windows.deliveries_of_all();
             (removed, windows, state.devices.present())
         };
         for callbacks in windows {

@@ -21,12 +21,15 @@ consumed by path (not published to crates.io).
 ## Surfaces
 
 ```text
-platform.rs      Platform, PlatformExecutor, and HostPlatform<H>, its one implementation
+platform.rs      Platform, AppHandler, PlatformExecutor, and HostPlatform<H>, its one
+                 implementation
 host_window.rs   HostWindow: a PlatformWindow plus its accessibility bridge
 host.rs, hosts/  a host's table of positions, one table per host
 owner/           OwnerPlatform, SharedPlatform, PlatformProxy; the owner-turn
                  signal, the owner-thread slot, the panic boundary, the
-                 PlatformHandlers / WindowCallbacks registries, and each
+                 delivery to the application's handler (AppDelivery), each
+                 window's delivery to its
+                 handler (WindowDelivery), and each
                  platform's loop
 version/         the OS version floors and the gates above them (ADR-0244)
 window/, input/, text/, display/, clipboard/, drag/, accessibility/,
@@ -39,14 +42,14 @@ error.rs         PlatformError, BootstrapError
 ```
 
 No public path names an OS type (ADR-0151 §8): each host's window is the
-`Arc<dyn HostWindow>` the platform opens, a raw window or display handle comes
-from `raw-window-handle`, and what one OS offers beyond the window contract is
+`Rc<dyn HostWindow>` the platform opens, a raw window or display handle comes
+from its `SurfaceTarget` through `raw-window-handle`, and what one OS offers beyond the window contract is
 an extension of `HostWindow` (`WindowsWindowExt`, `MacOSWindowExt`) that
 answers `None` for another host's window. The Android host starts over the
 Activity `android_main` is handed, through `android_platform(app)`.
 
-- **Windows** — creation, bounds, appearance, fullscreen, and `WindowEvent`
-  dispatch (`Resized`, `ScaleFactorChanged`, `RedrawRequested`, ...).
+- **Windows** — creation, bounds, appearance, fullscreen, each fact published
+  in the window's state snapshot and announced by `WindowHandler::state_changed`.
 - **Events** — native input converted to FLUI-owned pointer and keyboard values
   wrapped in `PlatformInput`. Named-key spellings and pointer fields map the
   applicable W3C vocabularies; native adapters keep their platform contracts

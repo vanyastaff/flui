@@ -6,13 +6,17 @@ use flui_platform::InMemoryClipboard;
 
 use crate::accessibility::headless::FakeAccessibility;
 use crate::display::headless::{DisplaySpec, laid_out};
-use crate::drag::headless::DragDouble;
+use crate::drag::headless::{DragDouble, HeadlessDragSource};
+use crate::drag::offers::OfferTable;
 use crate::haptics::headless::FakeHaptics;
 use crate::host::Host;
 use crate::input::headless::{AttachedDevices, HeadlessInputDevices};
 use crate::lifecycle::headless::HeadlessHostEvents;
 use crate::lifecycle::notice::SystemNotices;
-use crate::owner::headless::{HeadlessHost, HeadlessLoop, SimulatedDevices};
+use crate::owner::app_delivery::AppDelivery;
+use crate::owner::headless::{
+    HeadlessHost, HeadlessLoop, HeadlessState, SimulatedDevices, SimulatedOffers,
+};
 use crate::owner::notices::NoticeChannel;
 use crate::platform::HostPlatform;
 use crate::preferences::headless::HeadlessPreferences;
@@ -31,7 +35,7 @@ impl Host for Headless {
     type Window = MockWindow;
     type Displays = HeadlessLoop;
     type Input = HeadlessInputDevices;
-    type Text = std::sync::Arc<FakeTextInput>;
+    type Text = FakeTextInput;
     type Accessibility = FakeAccessibility;
     type Clipboard = InMemoryClipboard;
     type Drag = DragDouble;
@@ -48,12 +52,22 @@ impl HeadlessHost for Headless {
         laid_out(vec![DisplaySpec::default()])
     }
 
-    fn notices() -> Arc<dyn NoticeChannel> {
-        Arc::new(SystemNotices::default())
+    fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {
+        Arc::new(SystemNotices::new(Arc::clone(app)))
     }
 
     fn devices() -> Box<dyn SimulatedDevices> {
         Box::new(AttachedDevices::default())
+    }
+
+    fn offers() -> Box<dyn SimulatedOffers> {
+        Box::new(OfferTable::default())
+    }
+
+    fn drag_source(
+        state: &HeadlessState,
+    ) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        HeadlessDragSource::of(state)
     }
 }
 
@@ -65,7 +79,7 @@ impl HostPlatform<Headless> {
     /// A headless platform with one display and every window capability.
     #[must_use]
     pub fn new() -> Self {
-        Self::from_parts(HeadlessWindows::default(), |windows| {
+        Self::from_parts(HeadlessWindows::new, |windows| {
             HeadlessLoop::new::<Headless>(Arc::clone(windows) as _)
         })
     }

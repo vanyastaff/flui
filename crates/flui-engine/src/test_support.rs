@@ -183,7 +183,19 @@ pub(crate) fn readback_bytes(
     width: u32,
     height: u32,
 ) -> Vec<u8> {
-    let bytes_per_pixel = 4u32;
+    readback_texels(device, queue, texture, width, height, 4)
+}
+
+/// [`readback_bytes`] for a texture of `bytes_per_pixel` bytes per texel.
+#[cfg(feature = "testing")]
+pub(crate) fn readback_texels(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+    bytes_per_pixel: u32,
+) -> Vec<u8> {
     let unpadded_row_bytes = width * bytes_per_pixel;
     let row_alignment = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let padded_row_bytes = unpadded_row_bytes.div_ceil(row_alignment) * row_alignment;
@@ -242,7 +254,9 @@ pub(crate) fn readback_bytes(
     drop(raw_bytes);
     staging.unmap();
 
-    crate::readback_dump::dump_frame(width, height, &bytes);
+    if bytes_per_pixel == 4 {
+        crate::readback_dump::dump_frame(width, height, &bytes);
+    }
     bytes
 }
 

@@ -30,6 +30,22 @@ pub trait GestureRecognizer: GestureArenaMember {
     fn allowed_devices(&self) -> PointerKindSet {
         PointerKindSet::all()
     }
+    /// The pointer frame this recognizer joined
+    /// ([`GestureArena::join_pointer_frame`](crate::gesture::arena::GestureArena::join_pointer_frame))
+    /// has ended: every event of the frame was delivered, so a recognizer that
+    /// measures the relation between contacts settles on all of them now.
+    /// Called once per frame however many events joined; the default has
+    /// nothing to settle.
+    fn pointer_frame_end(&self) {}
+
+    /// Whether a touchpad pan feeds this recognizer (ADR-0251 §2): a
+    /// drag-family recognizer that admits a [`Trackpad`](crate::PointerKind::Trackpad)
+    /// contact. A listener whose recognizers feed declares so on its pointer
+    /// target; the recognizer a scroll view builds for its own touch drag
+    /// excludes trackpad contacts and does not.
+    fn feeds_scroll_contact(&self) -> bool {
+        false
+    }
 }
 
 /// Whether a recognizer allowing `devices` admits a contact of `kind`.

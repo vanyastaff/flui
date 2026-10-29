@@ -41,6 +41,7 @@ use crate::{
 
 pub(crate) use super::external_build_inbox::ExternalBuildInbox;
 use super::external_build_inbox::{BuildPremise, PendingBuilds};
+use super::presentation_capabilities::PresentationCapabilities;
 
 #[cfg(test)]
 thread_local! {
@@ -438,13 +439,6 @@ pub struct BuildOwner {
     /// returning or resuming the unwind. `pub(crate)` for the split-borrow.
     pub(crate) lifecycle_panic_handoff: Cell<LifecyclePanicHandoff>,
 
-    /// The factory that renders a recovered failure for this presentation, or
-    /// `None` for the default [`ErrorView`](crate::ErrorView). Configured by the
-    /// UI runtime that assembles the owner; copied into every
-    /// [`ElementOwner`](super::ElementOwner) so the recovery windows read it
-    /// without reaching a process global.
-    pub(crate) error_view_builder: Option<crate::view::ErrorViewBuilder>,
-
     /// Whether we're currently in a build phase.
     #[cfg(debug_assertions)]
     building: bool,
@@ -580,29 +574,9 @@ pub struct BuildOwner {
     /// separate handle rather than a second field on `PostFrameHandle`
     /// itself. `None` under the same conditions as `post_frame_handle`.
 
-    /// The binding's IME/text-input attach-detach capability. `None` when no
-    /// binding installed one, which makes `LifecycleContext::text_input_handle`
-    /// report the absence rather than a widget silently having no way to
-    /// attach an IME client.
-    pub(crate) text_input_handle: Option<flui_interaction::TextInputHandle>,
-
-    /// The presentation's plain-text clipboard. `None` only on a bare owner;
-    /// a UI runtime installs one over its platform's clipboard.
-    pub(crate) clipboard_handle: Option<flui_interaction::ClipboardHandle>,
-    /// The presentation's external textures. `None` only on a bare owner.
-    pub(crate) texture_registry: Option<flui_rendering::layer::TextureRegistry>,
-
-    /// The presentation's haptics. `None` only on a bare owner; a UI runtime
-    /// installs one over its presentation's haptics host.
-    pub(crate) haptics_handle: Option<flui_interaction::HapticsHandle>,
-
-    /// The presentation's drag-and-drop. `None` only on a bare owner; a UI
-    /// runtime installs one over its runtime's drag sessions.
-    pub(crate) drag_and_drop: Option<flui_interaction::drag::DragAndDrop>,
-
-    /// The UI runtime's byte storage. `None` on a bare owner and under a UI runtime
-    /// that has none, which `LifecycleContext::storage` reports as such.
-    pub(crate) storage: Option<std::sync::Arc<dyn flui_platform::Storage>>,
+    /// The presentation capabilities its UI runtime installed; the `Default`
+    /// (all absent) on a bare owner.
+    pub(crate) capabilities: PresentationCapabilities,
 
     /// The host's flush registry, which `Persisted` publishes into through
     /// the crate-private `LifecycleContext::flush_registry_in_crate`. `None`
@@ -755,7 +729,6 @@ impl BuildOwner {
             tree_observer: OwnerTreeObserverSlot(None),
             recovered_panics: Vec::new(),
             lifecycle_panic_handoff: Cell::new(LifecyclePanicHandoff::Disarmed),
-            error_view_builder: None,
             #[cfg(debug_assertions)]
             building: false,
             #[cfg(debug_assertions)]
@@ -775,12 +748,7 @@ impl BuildOwner {
             window_handle: None,
             async_driver: None,
             post_frame_handle: None,
-            text_input_handle: None,
-            clipboard_handle: None,
-            haptics_handle: None,
-            drag_and_drop: None,
-            texture_registry: None,
-            storage: None,
+            capabilities: PresentationCapabilities::default(),
             flush_registry: None,
             interaction_dispatch: None,
             hit_test_handle: None,
@@ -877,7 +845,7 @@ impl BuildOwner {
     /// Called once, at presentation-assembly time, before this owner's tree
     /// is mounted — the same post-construction wiring pattern as
     /// [`Self::set_async_driver`] / [`Self::set_post_frame_handle`] /
-    /// [`Self::set_text_input_handle`] / [`Self::set_interaction_dispatch_handle`].
+    /// [`Self::capabilities_mut`] / [`Self::set_interaction_dispatch_handle`].
     /// Every owner sharing one [`GlobalKeyScope`] participates in one
     /// cross-owner `GlobalKey` uniqueness domain: mounting a key that another
     /// owner sharing the same scope already holds fails eagerly — traced,
@@ -963,40 +931,6 @@ impl BuildOwner {
         self.hit_test_handle.as_ref()
     }
 
-    /// The binding's IME/text-input attach-detach capability, if one was
-    /// installed.
-    #[must_use]
-    pub fn text_input_handle(&self) -> Option<&flui_interaction::TextInputHandle> {
-        self.text_input_handle.as_ref()
-    }
-
-    /// The presentation's plain-text clipboard, if one was installed.
-    #[must_use]
-    pub fn clipboard_handle(&self) -> Option<&flui_interaction::ClipboardHandle> {
-        self.clipboard_handle.as_ref()
-    }
-
-    /// The presentation's haptics handle, if one was installed. Widgets
-    /// acquire it through `LifecycleContext::haptics`, which applies the
-    /// enclosing `HapticsMode`.
-    #[must_use]
-    pub fn haptics_handle(&self) -> Option<&flui_interaction::HapticsHandle> {
-        self.haptics_handle.as_ref()
-    }
-
-    /// The presentation's drag-and-drop, if one was installed. Widgets
-    /// acquire it through `LifecycleContext::drag_and_drop`.
-    #[must_use]
-    pub fn drag_and_drop(&self) -> Option<&flui_interaction::drag::DragAndDrop> {
-        self.drag_and_drop.as_ref()
-    }
-
-    /// The UI runtime's byte storage, if one was installed.
-    #[must_use]
-    pub fn storage(&self) -> Option<&std::sync::Arc<dyn flui_platform::Storage>> {
-        self.storage.as_ref()
-    }
-
     /// Set the callback for when a build is scheduled.
     ///
     /// This is called by `schedule_build_for` to notify the binding
@@ -1018,7 +952,39 @@ impl BuildOwner {
     /// The UI runtime's reactive graph (ADR-0074): signals and the
     /// reader registry that schedules exactly the elements that read a
     /// written signal.
-    pub fn reactive(&self) -> &crate::reactive::Reactive {
+    pub(crate) fn reactive(&self) -> &crate::reactive::Reactive {
+        &self.reactive
+    }
+
+    /// The write capability of this owner's graph, for host code that writes
+    /// a signal outside any widget: a cross-thread write delivered on the
+    /// owner thread, a test harness. Each [`WriterSource::write`] opens its
+    /// own [`EventCx`](crate::EventCx), and the build guard still refuses a
+    /// write made while an element of this owner is building.
+    ///
+    /// [`WriterSource::write`]: crate::WriterSource::write
+    #[must_use]
+    pub fn writer_source(&self) -> crate::WriterSource {
+        crate::WriterSource::new(self.reactive.clone())
+    }
+
+    /// [`writer_source`](Self::writer_source) when this owner's graph minted
+    /// `slot`, `None` otherwise: how a UI runtime with several presentations
+    /// finds the one a cross-thread write belongs to (ADR-0085 §1).
+    #[must_use]
+    pub fn writer_source_for(&self, slot: crate::SignalSlot) -> Option<crate::WriterSource> {
+        (slot.graph() == self.reactive.id()).then(|| self.writer_source())
+    }
+
+    /// The graph itself, for tests that mint signals outside an element (with
+    /// an explicit element owner where the test needs one) and inspect its
+    /// reader registry. It writes nothing: the graph is not a write target and
+    /// cannot mint a `WriterSource`, so a write still goes through
+    /// [`writer_source`](Self::writer_source). No build context reaches a
+    /// `BuildOwner`, so `build` reaches neither.
+    #[cfg(any(test, feature = "testing"))]
+    #[must_use]
+    pub fn signal_graph(&self) -> &crate::reactive::Reactive {
         &self.reactive
     }
 
@@ -1316,12 +1282,7 @@ impl BuildOwner {
             window_handle: &self.window_handle,
             async_driver: &self.async_driver,
             post_frame_handle: &self.post_frame_handle,
-            text_input_handle: &self.text_input_handle,
-            clipboard_handle: &self.clipboard_handle,
-            haptics_handle: &self.haptics_handle,
-            drag_and_drop: &self.drag_and_drop,
-            texture_registry: &self.texture_registry,
-            storage: &self.storage,
+            capabilities: &self.capabilities,
             flush_registry: &self.flush_registry,
             interaction_dispatch: &self.interaction_dispatch,
             hit_test_handle: &self.hit_test_handle,
@@ -1332,7 +1293,6 @@ impl BuildOwner {
             build_recovered: None,
             reactive: &self.reactive,
             lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
-            error_view_builder: self.error_view_builder,
         }
     }
 
@@ -1598,7 +1558,7 @@ impl BuildOwner {
             "running a stateful lifecycle hook during rebuild",
         );
         let recovery_view = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            crate::view::recovery_view_for(&error, self.error_view_builder)
+            crate::view::recovery_view_for(&error, self.capabilities.error_view_builder)
         })) {
             Ok(view) => view,
             Err(factory_payload) => {
@@ -1858,12 +1818,7 @@ impl BuildOwner {
                     window_handle: &self.window_handle,
                     async_driver: &self.async_driver,
                     post_frame_handle: &self.post_frame_handle,
-                    text_input_handle: &self.text_input_handle,
-                    clipboard_handle: &self.clipboard_handle,
-                    haptics_handle: &self.haptics_handle,
-                    drag_and_drop: &self.drag_and_drop,
-                    texture_registry: &self.texture_registry,
-                    storage: &self.storage,
+                    capabilities: &self.capabilities,
                     flush_registry: &self.flush_registry,
                     interaction_dispatch: &self.interaction_dispatch,
                     hit_test_handle: &self.hit_test_handle,
@@ -1874,7 +1829,6 @@ impl BuildOwner {
                     build_recovered: Some(&build_recovered),
                     reactive: &self.reactive,
                     lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
-                    error_view_builder: self.error_view_builder,
                 };
                 if needs_did_change {
                     if replacement_location.is_some() {
@@ -2084,12 +2038,7 @@ impl BuildOwner {
                     window_handle: &self.window_handle,
                     async_driver: &self.async_driver,
                     post_frame_handle: &self.post_frame_handle,
-                    text_input_handle: &self.text_input_handle,
-                    clipboard_handle: &self.clipboard_handle,
-                    haptics_handle: &self.haptics_handle,
-                    drag_and_drop: &self.drag_and_drop,
-                    texture_registry: &self.texture_registry,
-                    storage: &self.storage,
+                    capabilities: &self.capabilities,
                     flush_registry: &self.flush_registry,
                     interaction_dispatch: &self.interaction_dispatch,
                     hit_test_handle: &self.hit_test_handle,
@@ -2100,7 +2049,6 @@ impl BuildOwner {
                     build_recovered: None,
                     reactive: &self.reactive,
                     lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
-                    error_view_builder: self.error_view_builder,
                 };
                 crate::tree::id_reconcile::reconcile_children_by_id(
                     tree,
@@ -2515,12 +2463,7 @@ impl BuildOwner {
                 window_handle: &self.window_handle,
                 async_driver: &self.async_driver,
                 post_frame_handle: &self.post_frame_handle,
-                text_input_handle: &self.text_input_handle,
-                clipboard_handle: &self.clipboard_handle,
-                haptics_handle: &self.haptics_handle,
-                drag_and_drop: &self.drag_and_drop,
-                texture_registry: &self.texture_registry,
-                storage: &self.storage,
+                capabilities: &self.capabilities,
                 flush_registry: &self.flush_registry,
                 interaction_dispatch: &self.interaction_dispatch,
                 hit_test_handle: &self.hit_test_handle,
@@ -2531,7 +2474,6 @@ impl BuildOwner {
                 build_recovered: None,
                 reactive: &self.reactive,
                 lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
-                error_view_builder: self.error_view_builder,
             };
 
             let did_work = manager_arc.lock().service(
@@ -2730,12 +2672,7 @@ impl BuildOwner {
             window_handle: &self.window_handle,
             async_driver: &self.async_driver,
             post_frame_handle: &self.post_frame_handle,
-            text_input_handle: &self.text_input_handle,
-            clipboard_handle: &self.clipboard_handle,
-            haptics_handle: &self.haptics_handle,
-            drag_and_drop: &self.drag_and_drop,
-            texture_registry: &self.texture_registry,
-            storage: &self.storage,
+            capabilities: &self.capabilities,
             flush_registry: &self.flush_registry,
             interaction_dispatch: &self.interaction_dispatch,
             hit_test_handle: &self.hit_test_handle,
@@ -2746,7 +2683,6 @@ impl BuildOwner {
             build_recovered: None,
             reactive: &self.reactive,
             lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
-            error_view_builder: self.error_view_builder,
         };
 
         // Finalize all elements (deepest first - already sorted by collect order).

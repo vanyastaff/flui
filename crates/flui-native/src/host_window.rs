@@ -7,8 +7,8 @@
 //! [`Platform::open_window`](crate::Platform::open_window),
 //! [`WindowOpen::Ready`](crate::WindowOpen::Ready) and
 //! [`PendingWindow`](crate::PendingWindow) hand the runner an
-//! `Arc<dyn HostWindow>`, the runner reads [`HostWindow::accessibility`] once
-//! and passes the window on as an `Arc<dyn PlatformWindow>` (an upcast).
+//! `Rc<dyn HostWindow>`, the runner reads [`HostWindow::accessibility`] once
+//! and passes the window on as an `Rc<dyn PlatformWindow>` (an upcast).
 //!
 //! Every backend fixes its bridge when it builds the window, so reading it
 //! once at open time sees the same bridge a later read would.
@@ -28,12 +28,8 @@ use std::any::Any;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_platform::text_store::TextStoreHost;
-use raw_window_handle::{
-    DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,
-};
-
 use flui_platform::PlatformWindow;
+use flui_platform::text_store::TextStoreHost;
 use flui_semantics::platform::PlatformAccessibility;
 
 mod sealed {
@@ -68,6 +64,9 @@ mod sealed {
     pub trait Sealed {
         /// The window as its own type: [`HostWindow::as_any`](super::HostWindow::as_any).
         fn any(&self) -> &dyn std::any::Any;
+
+        /// What the window delivers to the handler it was opened with.
+        fn delivery(&self) -> &crate::owner::window_delivery::WindowDelivery;
     }
 
     /// A window a host in this crate builds; each implements it beside its
@@ -75,12 +74,19 @@ mod sealed {
     /// implementation rather than one per window, so the compiler's account
     /// of a refused outside `impl HostWindow` names the same implementations
     /// on every target and feature set, and the downcast is written once.
-    pub trait CoreHostWindow: 'static {}
+    pub trait CoreHostWindow: 'static {
+        /// What the window delivers to the handler it was opened with.
+        fn window_delivery(&self) -> &crate::owner::window_delivery::WindowDelivery;
+    }
 
     #[diagnostic::do_not_recommend]
     impl<W: CoreHostWindow> Sealed for W {
         fn any(&self) -> &dyn std::any::Any {
             self
+        }
+
+        fn delivery(&self) -> &crate::owner::window_delivery::WindowDelivery {
+            self.window_delivery()
         }
     }
 }
@@ -98,30 +104,27 @@ pub trait HostWindow: sealed::Sealed + PlatformWindow {
     /// Acquire this presentation's native numeric converter on the owner lane.
     /// Pending acquisition owns a completion wake obligation; no frame path waits.
     /// The hidden token is minted by `capture_text_sizing`, which takes the owner.
+    /// Every window answers what its table's text position answers.
     ///
     /// # Errors
     /// Refuses a closed presentation, wrong owner or failed native capture.
     fn capture_text_sizing(
         &self,
-        _owner: OwnerThreadToken,
-    ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
-        Ok(crate::TextSizingCaptureState::Unsupported)
-    }
+        owner: OwnerThreadToken,
+    ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError>;
 
-    /// This window's accessibility bridge, if the backend exposes one.
-    ///
-    /// `None` for a backend with no accessibility integration — which is
-    /// every backend until its per-OS adapter is wired, and permanently for
-    /// one with no such platform API. A composition root that gets `None`
-    /// never enables semantics assembly, so the cost is not paid either.
-    fn accessibility(&self) -> Option<Arc<dyn PlatformAccessibility>> {
-        None
-    }
+    /// This window's accessibility bridge: the one its table's accessibility
+    /// position made for it, which on a platform with no accessibility
+    /// integration is never active (`Absent`). `None` only from a window that
+    /// has no bridge at all; a composition root that gets `None` never
+    /// enables semantics assembly.
+    fn accessibility(&self) -> Option<Arc<dyn PlatformAccessibility>>;
 
     /// This window's text-store host (ADR-0135), for a backend whose input
     /// methods pull from the focused field's store; `None` for a push-model
     /// backend (it offers [`PlatformWindow::text_input`]) or one with no
-    /// input-method integration.
+    /// input-method integration. Every window answers what its table's text
+    /// position answers.
     ///
     /// The token proves the platform's owner thread; an implementation whose
     /// windows are bound to their creating thread checks that the caller is
@@ -144,9 +147,7 @@ pub trait HostWindow: sealed::Sealed + PlatformWindow {
     ///     let _ = window.text_store_host(Default::default());
     /// }
     /// ```
-    fn text_store_host(&self, _owner: OwnerThreadToken) -> Option<Rc<dyn TextStoreHost>> {
-        None
-    }
+    fn text_store_host(&self, owner: OwnerThreadToken) -> Option<Rc<dyn TextStoreHost>>;
 
     /// This window as its host's own type, which the crate's OS extensions
     /// (`WindowsWindowExt`, `MacOSWindowExt`) downcast to: a window of another
@@ -159,20 +160,5 @@ pub trait HostWindow: sealed::Sealed + PlatformWindow {
     /// controls). Every window gets this one body, through the seal.
     fn as_any(&self) -> &dyn Any {
         sealed::Sealed::any(self)
-    }
-}
-
-// Without these, `Arc<dyn HostWindow>` would not be a raw-handle target, and a
-// renderer built straight from an `open_window` result (before the upcast)
-// would not compile.
-impl HasWindowHandle for dyn HostWindow + '_ {
-    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
-        PlatformWindow::window_handle(self)
-    }
-}
-
-impl HasDisplayHandle for dyn HostWindow + '_ {
-    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
-        PlatformWindow::display_handle(self)
     }
 }

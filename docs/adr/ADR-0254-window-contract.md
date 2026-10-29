@@ -1,9 +1,42 @@
 # ADR-0254: One window truth: a state snapshot, admitted commands, one handler and an owner-local window
 
-- **Status:** Accepted (2026-10-20). Not implemented: the code changes land as separate changes
-  after this record, and a platform's row in `docs/platform-parity.md` moves only after a run on
-  that platform (Confirmation).
+- **Status:** Accepted (2026-10-20). Decisions 1 to 5 are implemented: the snapshot, admitted
+  commands, the per-frame verbs and the material command, the window handler and the
+  `AppHandler` passed to `Platform::run`, and the owner-local window with its surface target and
+  redraw requester. What remains of decisions 6 to 8 lands as separate changes, in the order of
+  the platform-layer feature's tasks. A platform's row in `docs/platform-parity.md` moves only
+  after a run on that platform (Confirmation): the AppKit and UIKit hosts of decision 5 are
+  type-checked here and run on a Mac separately.
 - **Date:** 2026-10-20
+- **Amended:** 2026-10-27 — decision 4, approved by the owner: (1) a `WindowHandler` method takes
+  no `&OwnerPlatform`, because `WindowHandler` is the contract's and `OwnerPlatform` is the host
+  crate's, which the contract cannot name without the edge ADR-0083 and the layers forbid; a
+  handler that drives the platform captures what it needs; (2) `frame_requested` answers a
+  `FrameOutcome { Produced, Declined }`, because without it the host cannot tell a frame that was
+  served from one nothing ran, and a wake deadline delivered to a handler with nothing to draw
+  with re-arms on every paint and spins the loop.
+- **Amended:** 2026-10-27 — decision 6, following the owner's decision of 2026-10-27 that adds
+  `NotYetOnThisHost` to the reasons (ADR-0152): a command's capability carries where it is
+  missing, a `CapabilityAbsence` (`NotOnThisPlatform`, `NotOnThisDevice`, `NotYetOnThisHost`),
+  set with `WindowCapabilities::unavailable(command, absence)`, and admission refuses the command
+  with that reason. The type admits no retryable reason, since a capability stays `Unavailable`
+  until the host publishes it again; an absence counts for equality only while its capability is
+  unavailable. The verbs outside the command queue (the frame-rate hint, the input regions) answer
+  their reason themselves: nothing admits them against the capabilities.
+- **Amended:** 2026-10-27 — decision 4, approved by the owner: `AppHandler::exit_policy` answers
+  an `ExitAnswer { End, KeepRunning, HostDecides }` instead of a `bool`. An application with no
+  exit policy of its own had to answer `false`, which silently changed the hosts' behaviour (the
+  Win32, AppKit and winit loops no longer ended with their last window); `HostDecides` keeps the
+  host's own default, as with no handler bound.
+- **Amended:** 2026-10-27 — decision 5, approved by the owner: (1) a thread that is not a window's
+  owner asks it for a frame through `PlatformWindow::redraw_requester()`, a `Send + Sync`
+  `RedrawRequester` (any `Fn() + Send + Sync` closure is one), not through a `PlatformProxy`
+  verb, because a verb naming a window would need a lookup from the window's identity to the
+  window in every transport, and `flui-runtime`, which asks for frames from signals written on
+  workers, has no edge to the host crate (ADR-0083); (2) a deferred open resolves to an
+  `OpenedWindow`, the window's identity on any thread and the window on its owner thread only;
+  (3) an AppKit window asked for a frame from another thread queues the redraw on its owner lane
+  and returns at once, where it used to block until the lane ran it.
 - **Supersedes:**
   - [ADR-0237](ADR-0237-window-state-and-host-notices.md), in part: the window-scoped getters and
     per-fact callbacks that sit beside the snapshot; decision 3's refusal inside `apply` (it moves
@@ -27,7 +60,15 @@
     `dyn PlatformWindow` and `dyn HostWindow` in §3's second change.
   - [ADR-0039](ADR-0039-event-loop-affinity-capability.md) §3, in part: the sentence that the
     owner lane never carries closures. The deferred window open carries one `Send` factory
-    (decision 4).
+    (decision 4). §1 and §6, in part: the one-shot `PlatformReadyCallback` (`on_ready`) `run`
+    took, which is `AppHandler::ready` (decision 4); the owner capability it hands over and its
+    loop scope stay.
+  - [ADR-0044](ADR-0044-driver-loop-hybrid.md) §7, in part: the registered
+    `Platform::set_wake_deadline_hook`, which is `AppHandler::wake_deadline` (decision 4); the
+    wall-clock wake the loop computes from its answer stays.
+  - [ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md), in part: the
+    `Platform::on_open_urls` registration it names as a deep link's source, deleted by decision
+    4; the opened URLs and files reach the handler with the activation feature.
   - [ADR-0222](ADR-0222-window-appearance-is-a-presentation-observation.md), the delivery shape
     only: the appearance is a field of the window state snapshot and its change arrives through
     the handler's state-changed obligation, not through `appearance()` and
@@ -266,14 +307,16 @@ false" to "a window's capabilities are honest".
 ### 4. One handler is passed at open
 
 `open_window(options, handler)` takes an `Rc<dyn WindowHandler>`. Its methods are called on the
-owner thread, and each takes `&OwnerPlatform`, so the handler reaches the platform without an
-ambient slot. It has one method per obligation, not per fact, and none has a default body:
+owner thread, the one that holds the handler's `Rc`. They take no platform argument: the owner's
+platform, `OwnerPlatform`, is a host type the contract cannot name (ADR-0083), so a handler that
+drives the platform captures what it needs. It has one method per obligation, not per fact, and
+none has a default body:
 
 | Method | Called when | Returns |
 |---|---|---|
 | `input` | A platform input event for this window arrives. The first is the capability snapshot, `PlatformInput::Capabilities` | `DispatchEventResult`, with its deferred forms for an event queued behind a reentrant callback (ADR-0207) |
 | `state_changed` | A new snapshot has been published, outside any lock or borrow of the host | Nothing; no payload, the handler re-reads the snapshot |
-| `frame_requested` | The platform wants a frame for this window | Nothing |
+| `frame_requested` | The platform wants a frame for this window | A `FrameOutcome`: `Produced` when a frame ran, `Declined` when the handler had nothing to run one with; only a produced frame counts as serving work due at one instant (a wake deadline) |
 | `close_requested` | The user, the OS or `WindowControl::request_close` asks the window to close | A `CloseDecision`: proceed, or veto and keep the window |
 | `closed` | The window has closed, once, after it left the host's tracking | Nothing |
 | `surface_changed` | The surface behind the window is about to become invalid, or a valid one must exist again; the two directions keep the asymmetry of ADR-0063 decision 6 | Nothing |
@@ -303,9 +346,13 @@ replaces the registrations `Platform` has today for application-level events and
 (`on_quit`, `on_reopen`, `on_session_end`, `on_host_notice`, `set_exit_policy_hook`,
 `set_wake_deadline_hook`) and the one-shot `PlatformReadyCallback`: one required method per
 obligation (`ready` with the `OwnerPlatform`, quit requested, reopened, session end with its
-answer, host notice, and the two queries `exit_policy` and `wake_deadline`), each receiving
-`&OwnerPlatform` where the platform exists. `AppHandler` is a trait of the host crate, not of the
-contract: it names `OwnerPlatform`, and only `flui-app` implements it (ADR-0151 §9). The other
+answer, host notice, and the two queries `exit_policy(&OwnerPlatform) -> ExitAnswer` and
+`wake_deadline(&OwnerPlatform) -> Option<Instant>`), each receiving `&OwnerPlatform` where the
+platform exists. `ExitAnswer` is `End`, `KeepRunning` or `HostDecides`; `HostDecides` leaves the
+exit to the host's own default, as with no handler bound (the Win32, AppKit and winit hosts end
+the loop, the headless host keeps it running). `AppHandler` is a trait of the host crate, not of the
+contract: it names `OwnerPlatform`, so only code that runs a host itself implements it — `flui-app`,
+and an example or a test that drives `flui-native` directly (ADR-0151 §9). The other
 registrations are not carried over.
 `on_window_event` is deleted below. `on_keyboard_layout_change` becomes `pub(crate)` in the host
 crate with `keyboard_layout`, which nothing above the host reads. `on_open_urls` is deleted now,
@@ -344,7 +391,8 @@ method stops compiling instead of being documented. The raster thread receives a
 the vocabulary of the window side too. It replaces the unit `Unsupported` and `Unavailable`
 variants of `WindowCommandError`, `WindowShowError`, `CursorError` and the other window-side enums,
 which embed it. The reasons are ADR-0152's: `NotOnThisPlatform`, `NotOnThisDevice` (the OS build
-or the hardware of this device lacks it), `NotDeclared`, `Unavailable` (temporary: trying again
+or the hardware of this device lacks it), `NotYetOnThisHost` (the OS has it and this host does not
+implement it yet; amended 2026-10-27), `NotDeclared`, `Unavailable` (temporary: trying again
 may succeed), `NotRegistered` and `NoWindow`. A window builds the value with
 `Unsupported::new(reason)`; `Unsupported::of::<C>(reason)`, which names a capability, is for the
 seam.

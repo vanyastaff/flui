@@ -41,11 +41,47 @@
 #![recursion_limit = "256"]
 // Ship bar (wave 4): every public item is documented; keep it that way.
 #![deny(missing_docs)]
+// A `_` arm must not absorb a variant added later; see the
+// `wildcard_enum_match_arm` entry in the workspace `Cargo.toml`.
+#![warn(clippy::wildcard_enum_match_arm)]
 
 // Modules
 pub mod app;
 pub mod bindings;
 pub mod embedder;
+
+/// What one operating system's windows offer beyond the window contract: the
+/// core host's per-system extensions of [`HostWindow`](native::HostWindow),
+/// which the facade publishes as `flui::native` behind its `native` feature
+/// (ADR-0254 §8). Each answers `None` for a window of another host.
+/// [`with_window`](native::with_window) reaches the window a presentation is
+/// drawn in. Requires the `native` feature.
+#[cfg(feature = "native")]
+pub mod native {
+    pub use flui_native::HostWindow;
+    #[cfg(target_os = "macos")]
+    pub use flui_native::os::macos;
+    #[cfg(windows)]
+    pub use flui_native::os::windows;
+
+    /// Run `f` on the window the presentation at `address` is drawn in, as
+    /// its host hands it out, and return what `f` returns.
+    ///
+    /// The address is the one a window request resolves to (`WindowRequest`)
+    /// or a close request names (`CloseRequest::address`), as for
+    /// `window_handle`. `f` runs on the calling
+    /// thread, outside every borrow of the runtime, so it may open or close
+    /// windows. `None`, and `f` does not run, on a thread other than the one
+    /// running the application, when nothing is presented at `address` and
+    /// once its window has closed.
+    pub fn with_window<R>(
+        address: flui_foundation::PresentationAddress,
+        f: impl FnOnce(&dyn HostWindow) -> R,
+    ) -> Option<R> {
+        let window = crate::app::runner::native_window(address)?;
+        Some(f(window.as_ref()))
+    }
+}
 
 #[cfg(test)]
 mod table_test;
@@ -55,6 +91,7 @@ pub use app::{
     AppConfig, DiagnosticsProfile, MotionOverride, PointerResampling, RootRenderElement,
     RootRenderView, run_app, run_app_with_config,
 };
+pub use flui_engine::FrameLatency;
 // The recording hook (ADR-0215 §1): `AppConfig::with_input_tap` installs a tap
 // per runtime; the serialiser for its records lives in `flui-testing`.
 pub use app::{

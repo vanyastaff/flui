@@ -62,8 +62,7 @@ pub fn project_ime_event(
             let text = text.clone();
             Box::new(move |session| commit(session, &text))
         }
-        // `Enabled`, and any variant a later winit adds: nothing to edit.
-        _ => return Ok(LockOutcome::Granted),
+        ImeEvent::Enabled => return Ok(LockOutcome::Granted),
     };
 
     let failure: Rc<Cell<Option<TextStoreError>>> = Rc::new(Cell::new(None));

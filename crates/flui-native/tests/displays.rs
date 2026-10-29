@@ -1,6 +1,7 @@
 //! The headless platform's injectable displays, driven through the public
 //! `Platform` surface the way a host test would.
 
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -117,28 +118,29 @@ fn window_move_names_the_new_display_and_hints_once() {
     let platform = two_displays();
     let snapshot = platform.display_snapshot().expect("snapshot");
     let (left, right) = (snapshot.displays()[0].id, snapshot.displays()[1].id);
+    let handler = flui_testing::window_handler::RecordingWindowHandler::new();
     let window = platform
-        .open_window(WindowOptions::default())
+        .open_window(WindowOptions::default(), handler.clone())
         .expect("window");
-    let window: Arc<dyn flui_native::HostWindow> = window;
+    let window: Rc<dyn flui_native::HostWindow> = window;
     let mock = window
         .as_any()
         .downcast_ref::<MockWindow>()
         .expect("headless window")
         .clone();
     assert_eq!(
-        window.display_id(),
+        window.state().display,
         Some(left),
         "a window opens on the primary"
     );
 
     let hints = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&hints);
-    window.on_display_changed(Box::new(move || {
+    handler.react_to_state_change(move || {
         counter.fetch_add(1, Ordering::SeqCst);
-    }));
+    });
     mock.simulate_move_to(right).expect("move");
-    assert_eq!(window.display_id(), Some(right));
+    assert_eq!(window.state().display, Some(right));
     assert_eq!(hints.load(Ordering::SeqCst), 1);
     mock.simulate_move_to(right)
         .expect("move to where it already is");
@@ -146,6 +148,96 @@ fn window_move_names_the_new_display_and_hints_once() {
         hints.load(Ordering::SeqCst),
         1,
         "staying on the same display is not a change"
+    );
+}
+
+fn a_move_to_a_display_the_platform_does_not_hold_is_refused() {
+    let platform = two_displays();
+    let window = platform
+        .open_window(
+            WindowOptions::default(),
+            flui_testing::window_handler::RecordingWindowHandler::new(),
+        )
+        .expect("window");
+    let window: Rc<dyn flui_native::HostWindow> = window;
+    let mock = window
+        .as_any()
+        .downcast_ref::<MockWindow>()
+        .expect("headless window")
+        .clone();
+    let before = window.state().display;
+    let unissued = {
+        let registry = flui_platform::DisplayRegistry::new();
+        let _ = registry.mint(&flui_platform::DisplayKey::Unkeyed);
+        let _ = registry.mint(&flui_platform::DisplayKey::Unkeyed);
+        registry
+            .mint(&flui_platform::DisplayKey::Unkeyed)
+            .expect("third id")
+    };
+    assert_eq!(
+        mock.simulate_move_to(unissued)
+            .map_err(|refused| refused.display),
+        Err(unissued),
+        "the window names the display it was refused"
+    );
+    assert_eq!(
+        window.state().display,
+        before,
+        "the window stays where it was"
+    );
+}
+
+fn a_profile_change_reaches_the_snapshot_as_a_new_revision() {
+    use flui_platform::{
+        CapabilityAbsence, ColorGamut, DisplayColor, DynamicRange, Headroom, UnsupportedReason,
+    };
+
+    let platform = HeadlessPlatform::new().with_displays(vec![
+        DisplaySpec::new("Panel", 1920, 1080),
+        DisplaySpec::new("Projector", 1280, 720)
+            .with_color(Err(CapabilityAbsence::NotOnThisDevice)),
+    ]);
+    let controls = platform.display_controls();
+    let before = platform.display_snapshot().expect("snapshot");
+    let [panel, projector] = before.displays() else {
+        panic!("two displays expected");
+    };
+    assert_eq!(panel.headroom(), Ok(Headroom::SDR), "a spec is SDR sRGB");
+    assert_eq!(
+        projector.color_space().map_err(|refused| refused.reason),
+        Err(UnsupportedReason::NotOnThisDevice)
+    );
+    let id = panel.id;
+
+    let hdr = DisplayColor::high(
+        ColorGamut::Rec2020,
+        Ok(Headroom::try_new(2.5).expect("headroom")),
+    );
+    controls
+        .simulate_display_change(id, DisplayChange::Color(Ok(hdr)))
+        .expect("HDR on");
+    let on = platform.display_snapshot().expect("snapshot");
+    assert_eq!(on.revision().get(), before.revision().get() + 1);
+    let shown = on.get(id).expect("panel");
+    assert_eq!(
+        shown.color_space().map(|space| space.dynamic_range),
+        Ok(DynamicRange::High)
+    );
+    assert_eq!(shown.headroom().map(Headroom::get), Ok(2.5));
+
+    // Switching HDR off again is the newer profile, and it wins: the snapshot
+    // never goes back to the HDR one it published before.
+    controls
+        .simulate_display_change(
+            id,
+            DisplayChange::Color(Ok(DisplayColor::standard(ColorGamut::Srgb))),
+        )
+        .expect("HDR off");
+    let off = platform.display_snapshot().expect("snapshot");
+    assert!(off.revision() > on.revision());
+    assert_eq!(
+        off.get(id).map(flui_platform::DisplayInfo::headroom),
+        Some(Ok(Headroom::SDR))
     );
 }
 
@@ -170,6 +262,46 @@ fn headless_displays_contract() {
                 "window_move_names_the_new_display_and_hints_once",
                 window_move_names_the_new_display_and_hints_once as fn(),
             ),
+            (
+                "a_move_to_a_display_the_platform_does_not_hold_is_refused",
+                a_move_to_a_display_the_platform_does_not_hold_is_refused as fn(),
+            ),
+            (
+                "a_profile_change_reaches_the_snapshot_as_a_new_revision",
+                a_profile_change_reaches_the_snapshot_as_a_new_revision as fn(),
+            ),
         ],
     );
+}
+
+/// Every display the native Windows host lists answers its colour: a colour
+/// space, or the device's lack of a DXGI report; never a colour space this
+/// host leaves unread, and a headroom only when it is finite and at least
+/// white.
+#[cfg(windows)]
+#[test]
+fn windows_displays_report_their_colour() {
+    use flui_platform::{CapabilityAbsence, DynamicRange};
+
+    let platform = flui_native::WindowsPlatform::new().expect("native Windows platform");
+    let snapshot = platform.display_snapshot().expect("snapshot");
+    assert!(!snapshot.displays().is_empty(), "a desktop has a display");
+    for display in snapshot.displays() {
+        match display.color {
+            Ok(color) => {
+                if let Ok(headroom) = color.headroom {
+                    assert!(headroom.get().is_finite() && headroom.get() >= 1.0);
+                }
+                if color.color_space.dynamic_range == DynamicRange::Standard {
+                    assert_eq!(color.headroom, Ok(flui_platform::Headroom::SDR));
+                }
+            }
+            Err(absence) => assert_eq!(
+                absence,
+                CapabilityAbsence::NotOnThisDevice,
+                "{}: an output's colour space went unread",
+                display.name
+            ),
+        }
+    }
 }

@@ -11,7 +11,7 @@ use std::time::Duration;
 use flui_foundation::geometry::Size;
 use flui_objects::RenderSizedBox;
 use flui_platform::{
-    HostNotice, WindowCapabilities, WindowCommand, WindowCommandError, WindowControl,
+    AdmissionError, HostNotice, SubmitError, WindowCapabilities, WindowCommand, WindowControl,
     WindowGeometry, WindowMode, WindowState,
 };
 use flui_rendering::protocol::BoxProtocol;
@@ -33,14 +33,13 @@ struct StubControl {
 impl WindowControl for StubControl {
     fn state(&self) -> WindowState {
         let size = Size::new(320.0, 240.0);
-        WindowState::new(WindowGeometry::new(None, size), size).with_title(Some("Stub".to_owned()))
+        WindowState::new(WindowGeometry::new(None, size), size)
+            .with_title(Some("Stub".to_owned()))
+            .with_capabilities(WindowCapabilities::ALL)
     }
-    fn capabilities(&self) -> WindowCapabilities {
-        WindowCapabilities::ALL
-    }
-    fn submit(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
-        command.admit(&self.capabilities())?;
-        self.submitted.borrow_mut().push(command);
+    fn submit(&self, command: WindowCommand) -> Result<(), SubmitError> {
+        let admitted = command.admit(&self.state().capabilities)?;
+        self.submitted.borrow_mut().push(admitted.command().clone());
         Ok(())
     }
     fn request_close(&self) {
@@ -130,7 +129,10 @@ fn a_lifecycle_hook_receives_the_window_it_is_presented_in() {
     let state = handle.state().expect("open");
     assert_eq!(state.title.as_deref(), Some("Stub"));
     assert_eq!(state.content_size, Size::new(320.0, 240.0));
-    assert_eq!(handle.capabilities(), Ok(WindowCapabilities::ALL));
+    assert_eq!(
+        handle.state().map(|state| state.capabilities),
+        Ok(WindowCapabilities::ALL)
+    );
 }
 
 #[test]
@@ -149,7 +151,7 @@ fn commands_reach_the_control_checked_and_in_order() {
     handle.set_mode(WindowMode::Maximized).expect("accepted");
     assert_eq!(
         handle.set_size(Size::new(0.0, 10.0)),
-        Err(WindowCommandError::InvalidGeometry),
+        Err(SubmitError::Admission(AdmissionError::InvalidGeometry)),
         "a size that describes no window is refused before the control"
     );
     handle.hide().expect("accepted");
@@ -188,7 +190,7 @@ fn the_handle_goes_closed_with_its_window_and_does_not_keep_it_alive() {
     let source = source.expect("source");
     source.close();
     assert_eq!(handle.state(), Err(WindowClosed));
-    assert_eq!(handle.set_title("late"), Err(WindowCommandError::Closed));
+    assert_eq!(handle.set_title("late"), Err(SubmitError::Closed));
     drop(subscription);
 
     let (source, handle) = mount(Some(StubControl::default()));
@@ -223,10 +225,7 @@ impl WindowControl for Overtaken {
         }
         first
     }
-    fn capabilities(&self) -> WindowCapabilities {
-        WindowCapabilities::ALL
-    }
-    fn submit(&self, _: WindowCommand) -> Result<(), WindowCommandError> {
+    fn submit(&self, _: WindowCommand) -> Result<(), SubmitError> {
         Ok(())
     }
     fn request_close(&self) {}

@@ -252,7 +252,7 @@ fn text_in_a_host_only_family_re_lays_out_when_the_feed_lands() {
 fn a_font_change_notice_requests_a_redraw_for_every_presentation() {
     let (wake, wakes) = counting_wake();
     let mut ui_runtime = new_runtime(wake).expect("ui_runtime constructs");
-    let window_b: Arc<dyn PlatformWindow> = Arc::new(crate::testing::TestWindow::new().with_id(42));
+    let window_b: Rc<dyn PlatformWindow> = Rc::new(crate::testing::TestWindow::new().with_id(42));
     let presentation_b = ui_runtime.assemble_presentation(window_b);
     let _b = ui_runtime.install_presentation(presentation_b);
     assert_eq!(ui_runtime.presentations.len(), 2);

@@ -3,7 +3,9 @@
 use std::future::Future;
 use std::path::PathBuf;
 
-use flui_platform::{StorageError, StorageName, Stored, StoredVersion, WriteMode};
+use flui_platform::{
+    StorageError, StorageName, Stored, StoredVersion, Unsupported, UnsupportedReason, WriteMode,
+};
 use js_sys::{Array, Function, Promise, Uint8Array};
 use tokio::sync::oneshot;
 use wasm_bindgen::{JsCast, prelude::*};
@@ -127,7 +129,8 @@ extern "C" {
 ///
 /// The calls answer in a later task of the page, so they return futures; each
 /// starts its transaction when called. Without IndexedDB (blocked by the
-/// user, an opaque origin) every call is [`StorageError::Unavailable`].
+/// user, an opaque origin) every call is [`StorageError::Unsupported`]
+/// (`Unavailable`).
 #[derive(Debug)]
 pub struct FileStore {
     roaming: PathBuf,
@@ -153,7 +156,7 @@ impl FileStore {
     ///
     /// # Errors
     ///
-    /// [`StorageError::Unavailable`] without IndexedDB;
+    /// [`StorageError::Unsupported`] (`Unavailable`) without IndexedDB;
     /// [`StorageError::TooLarge`] for a value over `limit` bytes;
     /// [`StorageError::Inaccessible`] for a record this store did not write.
     pub fn read(
@@ -198,7 +201,7 @@ impl FileStore {
     /// [`StorageError::Conflict`] when the stored version is not the base (a
     /// record this store did not write is never the base);
     /// [`StorageError::Full`] when the origin's quota refuses the value;
-    /// [`StorageError::Unavailable`] without IndexedDB.
+    /// [`StorageError::Unsupported`] (`Unavailable`) without IndexedDB.
     pub fn write(
         &self,
         name: &StorageName,
@@ -214,7 +217,7 @@ impl FileStore {
                 WriteMode::IfUnchanged(base) => Some(base),
                 // A mode this store does not know how to honour is refused
                 // rather than guessed at.
-                _ => return Err(StorageError::Unavailable),
+                _ => return Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform).into()),
             };
             // Lives until the transaction settles: the browser calls it from
             // inside the transaction, never after.
@@ -287,7 +290,7 @@ fn failure(reason: JsValue) -> StorageError {
     if reason.as_string().as_deref() == Some("full") {
         StorageError::Full
     } else {
-        StorageError::Unavailable
+        Unsupported::new(UnsupportedReason::Unavailable).into()
     }
 }
 

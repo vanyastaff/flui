@@ -37,7 +37,7 @@ pub mod linux {
             &self,
             namespace: &str,
             key: &str,
-        ) -> Result<zbus::zvariant::OwnedValue, SettingsError> {
+        ) -> Result<zbus::OwnedVariant, SettingsError> {
             if self.state.failing.load(Ordering::SeqCst) {
                 if namespace == "org.freedesktop.appearance" && key == "reduced-motion" {
                     self.state.failed.notify_one();
@@ -71,14 +71,10 @@ pub mod linux {
 
     #[zbus::interface(name = "org.freedesktop.portal.Settings")]
     impl LegacySettings {
-        fn read(
-            &self,
-            namespace: &str,
-            key: &str,
-        ) -> Result<zbus::zvariant::OwnedValue, SettingsError> {
+        fn read(&self, namespace: &str, key: &str) -> Result<zbus::OwnedVariant, SettingsError> {
             if namespace == "org.freedesktop.appearance" && key == "reduced-motion" {
                 Ok(
-                    zbus::zvariant::OwnedValue::try_from(zbus::zvariant::Value::Value(Box::new(
+                    zbus::OwnedVariant::try_from(zbus::Variant::Variant(Box::new(
                         self.value.into(),
                     )))
                     .expect("legacy double variant"),
@@ -89,11 +85,29 @@ pub mod linux {
         }
     }
 
+    /// A portal that answers a key it lacks with D-Bus's `UnknownProperty`
+    /// instead of its own `NotFound`, and has only GNOME's `enable-animations`.
+    struct UnknownPropertySettings {
+        value: u32,
+    }
+
+    #[zbus::interface(name = "org.freedesktop.portal.Settings")]
+    impl UnknownPropertySettings {
+        fn read_one(&self, namespace: &str, key: &str) -> zbus::fdo::Result<zbus::OwnedVariant> {
+            if namespace == "org.gnome.desktop.interface" && key == "enable-animations" {
+                Ok((self.value != 1).into())
+            } else {
+                Err(zbus::fdo::Error::UnknownProperty("unknown setting".into()))
+            }
+        }
+    }
+
     pub const CASES: &[&str] = &[
         "reduce",
         "full",
         "unknown-number",
         "gnome",
+        "gnome-unknown-property",
         "live",
         "recovery",
         "restart",
@@ -139,7 +153,7 @@ pub mod linux {
             &self,
             namespace: &str,
             key: &str,
-        ) -> Result<zbus::zvariant::OwnedValue, SettingsError> {
+        ) -> Result<zbus::OwnedVariant, SettingsError> {
             let scale = f64::from_bits(self.text_scale.load(Ordering::SeqCst));
             if key == "text-scaling-factor" {
                 self.scale_read.notify_waiters();
@@ -200,7 +214,7 @@ pub mod linux {
         connection: &zbus::Connection,
         namespace: &str,
         key: &str,
-        value: zbus::zvariant::Value<'_>,
+        value: zbus::Variant<'_>,
     ) {
         connection
             .emit_signal(
@@ -252,9 +266,9 @@ pub mod linux {
             .expect("fixture runtime");
         let service = runtime
             .block_on(async {
-                zbus::connection::Builder::session()?
-                    .name("org.freedesktop.portal.Desktop")?
-                    .serve_at("/org/freedesktop/portal/desktop", values)?
+                zbus::connection::Builder::session()
+                    .name("org.freedesktop.portal.Desktop")
+                    .serve_at("/org/freedesktop/portal/desktop", values)
                     .build()
                     .await
             })
@@ -289,7 +303,7 @@ pub mod linux {
                         &connection,
                         "org.gnome.desktop.interface",
                         "text-scaling-factor",
-                        zbus::zvariant::Value::from(refused),
+                        zbus::Variant::from(refused),
                     )
                     .await;
                     read.await;
@@ -312,13 +326,13 @@ pub mod linux {
                         (
                             "org.gnome.desktop.a11y.interface",
                             "high-contrast",
-                            zbus::zvariant::Value::from(high),
+                            zbus::Variant::from(high),
                         )
                     } else {
                         (
                             "org.freedesktop.appearance",
                             "contrast",
-                            zbus::zvariant::Value::from(u32::from(high)),
+                            zbus::Variant::from(u32::from(high)),
                         )
                     }
                 }
@@ -331,7 +345,7 @@ pub mod linux {
                     (
                         "org.gnome.desktop.interface",
                         "text-scaling-factor",
-                        zbus::zvariant::Value::from(scale),
+                        zbus::Variant::from(scale),
                     )
                 }
             };
@@ -348,7 +362,7 @@ pub mod linux {
         let witness = Arc::clone(&changed);
         let after = after.observation();
         platform
-            .run_event_loop(Box::new(move |owner| {
+            .run_event_loop(crate::app::on_ready(move |owner| {
                 let initial = owner.preferences().expect("initial owner observation");
                 assert!(
                     before.observed(&initial),
@@ -396,7 +410,7 @@ pub mod linux {
                 &(
                     "org.freedesktop.appearance",
                     key,
-                    zbus::zvariant::Value::from(value),
+                    zbus::Variant::from(value),
                 ),
             )
             .await
@@ -470,22 +484,31 @@ pub mod linux {
             .expect("fixture runtime");
         let service = runtime
             .block_on(async {
-                let builder = zbus::connection::Builder::session()?;
+                let builder = zbus::connection::Builder::session();
                 if case == "no-service" {
                     builder.build().await
                 } else if case == "legacy" {
                     builder
-                        .name("org.freedesktop.portal.Desktop")?
+                        .name("org.freedesktop.portal.Desktop")
                         .serve_at(
                             "/org/freedesktop/portal/desktop",
                             LegacySettings { value: 1 },
-                        )?
+                        )
+                        .build()
+                        .await
+                } else if case == "gnome-unknown-property" {
+                    builder
+                        .name("org.freedesktop.portal.Desktop")
+                        .serve_at(
+                            "/org/freedesktop/portal/desktop",
+                            UnknownPropertySettings { value: 1 },
+                        )
                         .build()
                         .await
                 } else {
                     builder
-                        .name("org.freedesktop.portal.Desktop")?
-                        .serve_at("/org/freedesktop/portal/desktop", settings)?
+                        .name("org.freedesktop.portal.Desktop")
+                        .serve_at("/org/freedesktop/portal/desktop", settings)
                         .build()
                         .await
                 }
@@ -519,9 +542,7 @@ pub mod linux {
                     .expect("release old owner");
                 return Some(
                     zbus::connection::Builder::session()
-                        .expect("replacement session")
                         .name("org.freedesktop.portal.Desktop")
-                        .expect("replacement name")
                         .serve_at(
                             "/org/freedesktop/portal/desktop",
                             Settings {
@@ -530,7 +551,6 @@ pub mod linux {
                                 absent: false,
                             },
                         )
-                        .expect("replacement service")
                         .build()
                         .await
                         .expect("replacement owner"),
@@ -575,7 +595,7 @@ pub mod linux {
             refused: Arc::clone(&refused),
         };
         platform
-            .run_event_loop(Box::new(move |owner| {
+            .run_event_loop(crate::app::on_ready(move |owner| {
                 let initial = owner.preferences().expect("initial owner observation");
                 assert_eq!(
                     initial.motion(),
@@ -606,26 +626,29 @@ pub mod linux {
                     "foreign reads cannot become a second source"
                 );
                 if scheme {
+                    let handler = flui_testing::window_handler::RecordingWindowHandler::new();
                     let window = owner
-                        .open_window(flui_platform::WindowOptions::default().with_visible(false))?
+                        .open_window(
+                            flui_platform::WindowOptions::default().with_visible(false),
+                            handler.clone(),
+                        )?
                         .try_ready()?;
                     assert_eq!(
-                        window.appearance(),
+                        window.state().appearance,
                         WindowAppearance::Dark,
                         "the first window must observe the portal's dark scheme"
                     );
                     let proxy = owner.proxy();
-                    let observed = Arc::downgrade(&window);
+                    let observed = std::rc::Rc::downgrade(&window);
                     let seen = Arc::clone(&scheme_witness);
-                    window.on_appearance_changed(Box::new(move || {
-                        if observed
-                            .upgrade()
-                            .is_some_and(|window| window.appearance() == WindowAppearance::Light)
+                    handler.react_to_state_change(move || {
+                        if observed.upgrade().is_some_and(|window| {
+                            window.state().appearance == WindowAppearance::Light
+                        }) && !seen.swap(true, Ordering::SeqCst)
                         {
-                            seen.store(true, Ordering::SeqCst);
                             proxy.request_quit().expect("color-scheme owner quit");
                         }
-                    }));
+                    });
                     start
                         .send(owner.proxy())
                         .expect("start color-scheme change");

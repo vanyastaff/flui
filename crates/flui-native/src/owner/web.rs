@@ -34,18 +34,15 @@ use wasm_bindgen::prelude::*;
 use flui_platform::{SessionEndAnswer, SessionEndPhase};
 
 use crate::host::{self, Loop as _};
-use crate::owner::call_point::{Field, Once, call, install};
+use crate::owner::app_delivery::AppDelivery;
 use crate::{
     error::PlatformError, owner::DirectOwnerHooks, owner::OwnerHooks, owner::OwnerPlatform,
-    owner::handlers::PlatformHandlers, owner::handlers::WindowCallbacks,
-    owner::signal::OwnerSignal, platform::Platform, platform::PlatformExecutor,
-    platform::PlatformReadyCallback,
+    owner::signal::OwnerSignal, owner::window_delivery::WindowDelivery, platform::AppHandler,
+    platform::Platform, platform::PlatformExecutor,
 };
 use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::drag::PlatformDragSource;
-use flui_platform::{
-    Clipboard, DisplayId, DisplaySnapshot, SystemNotice, SystemPreferences, WindowEvent, WindowId,
-};
+use flui_platform::{Clipboard, DisplayId, DisplaySnapshot, SystemPreferences};
 
 use crate::owner::sources::SystemPreferenceSource;
 use crate::owner::watch::Watch;
@@ -100,7 +97,7 @@ pub(crate) trait HostDrag: DataTransferSource {
     fn register(
         self: Arc<Self>,
         canvas: &web_sys::HtmlCanvasElement,
-        callbacks: &Arc<WindowCallbacks>,
+        delivery: &Arc<WindowDelivery>,
         registration: &mut dyn CanvasRegistration,
     ) -> Result<Box<dyn CanvasDrag>, crate::OpenWindowError>;
 }
@@ -123,7 +120,7 @@ pub(crate) trait HostInput {
     fn register(
         &self,
         canvas: &web_sys::HtmlCanvasElement,
-        callbacks: &Arc<WindowCallbacks>,
+        delivery: &Arc<WindowDelivery>,
         latency: flui_platform::InputLatency,
         registration: &mut dyn CanvasRegistration,
     ) -> Result<Rc<dyn CanvasKeys>, crate::OpenWindowError>;
@@ -206,6 +203,47 @@ impl Accepting {
 pub(crate) trait CanvasFocus {
     /// Whether the canvas, or the editor beside it, has the page's focus.
     fn has_focus(&self) -> bool;
+}
+
+/// Where a canvas's text input keeps its editor ([`CanvasRef::editor`]): the
+/// canvas's focus area, as the window follows it.
+pub(crate) trait CanvasEditor {
+    /// `editor` is now part of the canvas's focus area; `None` when none is.
+    fn set(&self, editor: Option<&web_sys::HtmlElement>);
+
+    /// Whether the canvas, or the editor beside it, has the page's focus.
+    fn has_focus(&self) -> bool;
+
+    /// Whether `event` only moves focus within the canvas's focus area
+    /// (between the canvas and its editor), which the window does not see as
+    /// a focus change.
+    fn is_handoff(&self, event: &web_sys::Event) -> bool;
+
+    /// The focus area's focus may have changed: the window reads it again.
+    fn sync(&self);
+}
+
+/// One canvas window as its window-level positions are made for it
+/// (`host::Window::Ref`): the canvas, whether its registration accepts, the
+/// key route its input keeps and the focus area its text input's editor
+/// joins. Public where it is defined, as the host's table names it, and
+/// nameable only inside the crate.
+pub struct CanvasRef {
+    /// The canvas.
+    pub(crate) canvas: web_sys::HtmlCanvasElement,
+    /// Whether the canvas's registration accepts.
+    pub(crate) accepting: Accepting,
+    /// The key route the canvas's input keeps, which a key the editor takes
+    /// reaches the window by.
+    pub(crate) keys: Rc<dyn CanvasKeys>,
+    /// The canvas's focus area, which the text input's editor joins.
+    pub(crate) editor: Rc<dyn CanvasEditor>,
+}
+
+impl std::fmt::Debug for CanvasRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CanvasRef").finish_non_exhaustive()
+    }
 }
 
 /// A deadline timer of a canvas's registration
@@ -319,6 +357,8 @@ type RafClosureSlot = Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>>;
 /// [`WebPlatform`](crate::WebPlatform) is its platform.
 pub struct WebLoop {
     pub(crate) state: Arc<Mutex<WebState>>,
+    /// What the page delivers to the application's handler, which `run` binds.
+    pub(crate) app: Arc<AppDelivery>,
     /// The one HTML drag-and-drop transport every canvas shares, as the table
     /// made it.
     pub(crate) drag: Arc<dyn HostDrag>,
@@ -342,13 +382,12 @@ pub struct WebLoop {
 }
 
 pub(crate) struct WebState {
-    pub(crate) handlers: PlatformHandlers,
     background_executor: Arc<WebExecutor>,
     pub(crate) clipboard: Arc<dyn Clipboard>,
     is_running: bool,
     /// Window callbacks for RAF loop frame dispatch.
     /// Set when `open_window` creates the single browser window.
-    pub(crate) window_callbacks: Option<Arc<WindowCallbacks>>,
+    pub(crate) window_delivery: Option<Arc<WindowDelivery>>,
     owner: Weak<WebLoop>,
 }
 
@@ -370,11 +409,10 @@ impl WebLoop {
         console_error_panic_hook::set_once();
 
         let state = WebState {
-            handlers: PlatformHandlers::new(),
             background_executor: Arc::new(WebExecutor::new()),
             clipboard: H::clipboard(),
             is_running: false,
-            window_callbacks: None,
+            window_delivery: None,
             owner: Weak::new(),
         };
         let state = Arc::new(Mutex::new(state));
@@ -384,9 +422,31 @@ impl WebLoop {
             // spawn_local posts a microtask even when the future is ready.
             // Admission stays committed before any owner callback can run.
             js_sys::futures::spawn_local(async move {
-                let owner = weak
-                    .upgrade()
-                    .and_then(|state| state.lock().owner.upgrade());
+                let Some(state) = weak.upgrade() else {
+                    return;
+                };
+                let (owner, window) = {
+                    let state = state.lock();
+                    (state.owner.upgrade(), state.window_delivery.clone())
+                };
+                // A wake is how a screen change reaches the page: the window
+                // reads which screen it is on again before the owner's turn, so
+                // the turn sees the display in the window's snapshot.
+                // Contained, as the session-end hook is: a state callback
+                // that panics must not cost the owner its turn.
+                if let Some(window) = window
+                    && let Err(payload) =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            window.publish_state();
+                        }))
+                {
+                    tracing::error!(
+                        panic = ?flui_foundation::panic::payload_text(payload.as_ref()),
+                        "the window's state callback panicked on a wake"
+                    );
+                    // An arbitrary payload's drop may panic again.
+                    std::mem::forget(payload);
+                }
                 if let Some(owner) = owner
                     && owner.signal.drive()
                 {
@@ -398,6 +458,7 @@ impl WebLoop {
         let preferences = H::preferences(&signal)?;
         Ok(Self {
             state,
+            app: Arc::new(AppDelivery::new()),
             drag: H::drag(),
             input: H::input(),
             signal,
@@ -416,40 +477,19 @@ impl WebLoop {
         f(&mut self.state.lock())
     }
 
-    /// One of the application's handlers, as a slot of the page state.
-    pub(crate) fn handler<H>(
-        state: &Mutex<WebState>,
-        project: fn(&mut WebState) -> &mut Option<H>,
-    ) -> Field<'_, Mutex<WebState>, H> {
-        Field::new(state, project)
-    }
-
-    /// Call the window-event handler through the call point, outside the
-    /// page state's lock; a replacement registered during the call wins.
-    pub(crate) fn dispatch_window_event(state: &Mutex<WebState>, event: WindowEvent) {
-        call(
-            &Self::handler(state, |state| &mut state.handlers.window_event),
-            |handler| handler(event),
-        )
-        .or_resume(());
-    }
-
-    /// The page was hidden or shown again: tell the session-end hook, so the
-    /// application saves what must survive.
+    /// The page was hidden or shown again: tell the application's handler, so
+    /// it saves what must survive.
     ///
     /// A page cannot be asked to wait, so the answer is not read. `pagehide`
     /// also precedes a move into the back/forward cache: a page that comes back
     /// reports `Cancelled`, and is hidden again later, which reports `Ending`
     /// again. The browser may stop the page before an asynchronous write
     /// started here finishes; only what the application hands over
-    /// synchronously is certain to be accepted. A hook registered while it
-    /// ran replaces this one.
-    fn report_session_phase(state: &Mutex<WebState>, phase: SessionEndPhase) {
-        call(
-            &Self::handler(state, |state| &mut state.handlers.session_end),
-            |hook| hook(phase),
-        )
-        .or_contain(SessionEndAnswer::Proceed, "the session-end hook");
+    /// synchronously is certain to be accepted.
+    fn report_session_phase(app: &AppDelivery, phase: SessionEndPhase) {
+        let _answer = app
+            .session_end(phase)
+            .or_contain(SessionEndAnswer::Proceed, "the session-end handler");
     }
 
     /// Start the requestAnimationFrame render loop
@@ -465,9 +505,9 @@ impl WebLoop {
         let window = web_sys::window().expect("no global window");
 
         *g.borrow_mut() = Some(Closure::new(move |timestamp: f64| {
-            let (is_running, callbacks) = {
+            let (is_running, delivery) = {
                 let s = state.lock();
-                (s.is_running, s.window_callbacks.clone())
+                (s.is_running, s.window_delivery.clone())
             };
             if !is_running {
                 return;
@@ -485,23 +525,8 @@ impl WebLoop {
             }
 
             // Dispatch frame request to window callbacks
-            if let Some(ref cbs) = callbacks {
-                cbs.dispatch_request_frame();
-                // The frame callback can close and reopen the canvas. An old
-                // frame receipt cannot produce a redraw for the newer slot.
-                let current = state
-                    .lock()
-                    .window_callbacks
-                    .as_ref()
-                    .is_some_and(|current| Arc::ptr_eq(current, cbs));
-                if current {
-                    Self::dispatch_window_event(
-                        &state,
-                        WindowEvent::RedrawRequested {
-                            window_id: WindowId(0),
-                        },
-                    );
-                }
+            if let Some(ref cbs) = delivery {
+                cbs.dispatch_frame(frame_request_for_animation_frame(timestamp));
             }
 
             // Request next frame after work (ensures smooth loop)
@@ -531,7 +556,7 @@ impl host::Loop for WebLoop {
     fn run(
         self: Arc<Self>,
         platform: Arc<dyn Platform>,
-        on_ready: PlatformReadyCallback,
+        handler: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError> {
         tracing::info!("Starting web platform");
 
@@ -549,10 +574,10 @@ impl host::Loop for WebLoop {
 
         // The page being hidden is the end of the session: the browser may
         // discard it without another event.
-        let state = Arc::downgrade(&self.state);
+        let app = Arc::downgrade(&self.app);
         *self.page_observers.borrow_mut() = Some(self.page.listen(Box::new(move |phase| {
-            if let Some(state) = state.upgrade() {
-                Self::report_session_phase(&state, phase);
+            if let Some(app) = app.upgrade() {
+                Self::report_session_phase(&app, phase);
             }
         })));
 
@@ -563,10 +588,16 @@ impl host::Loop for WebLoop {
             Arc::clone(&self.signal),
         ));
 
-        // Call on_ready synchronously — browser event loop is already
-        // running. On `Err`, do NOT install the RAF loop over a half-built
-        // page — return the failure instead.
-        on_ready(OwnerPlatform::new(Arc::clone(&platform), hooks))
+        // Run the bootstrap synchronously — the browser's event loop is
+        // already running. On `Err`, do NOT install the RAF loop over a
+        // half-built page — return the failure instead. The page outlives
+        // `run`: the handler stays bound, and the owner capability the
+        // bootstrap keeps holds the platform and hooks the delivery holds
+        // weakly.
+        self.app.bind(handler, &platform, &hooks);
+        self.app.resume_through_signal(&self.signal);
+        self.app
+            .ready(OwnerPlatform::new(Arc::clone(&platform), hooks))
             .inspect_err(|_| self.quit())
             .map_err(PlatformError::bootstrap)?;
 
@@ -587,39 +618,15 @@ impl host::Loop for WebLoop {
         let page_observers = self.page_observers.borrow_mut().take();
         drop(page_observers);
         self.with_state(|state| state.is_running = false);
-        // Shutdown is committed: the quit callback runs once, and its panic
-        // reaches the Rust boundary with its captures retained.
-        call(
-            &Once(Self::handler(&self.state, |state| &mut state.handlers.quit)),
-            |quit| quit(),
-        )
-        .or_resume(());
-    }
-
-    fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
-        install(
-            &Self::handler(&self.state, |state| &mut state.handlers.quit),
-            callback,
-        );
-    }
-
-    fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
-        // The page ends when its tab does; closing the canvas never exits the
-        // loop, so there is no exit to consult the hook about.
-        drop(hook);
+        // Shutdown is committed: the handler hears the quit once, and its
+        // panic reaches the Rust boundary. The handler is let go after.
+        self.app.quit_requested().or_resume(());
+        self.app.release();
     }
 
     fn request_exit_policy_reevaluation(&self) {
-        // With no exit policy hook to consult, there is nothing to re-evaluate.
-    }
-
-    fn set_wake_deadline_hook(
-        &self,
-        hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
-    ) {
-        // The browser's event loop idles the page and the animation-frame loop
-        // drives its frames; there is no idle wait to bound.
-        drop(hook);
+        // The page ends when its tab does: with no exit policy to ask, there
+        // is nothing to re-evaluate.
     }
 }
 
@@ -714,33 +721,25 @@ impl host::Preferences<WebLoop> for WebLoop {
 /// The lifecycle position is the loop's: the page reports the end of its
 /// session (`WebHost::page`) and nothing else.
 impl host::Lifecycle<WebLoop> for WebLoop {
-    fn on_session_end(
-        owner: &WebLoop,
-        callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
-    ) {
-        install(
-            &WebLoop::handler(&owner.state, |state| &mut state.handlers.session_end),
-            callback,
-        );
-    }
-
-    fn on_host_notice(_: &WebLoop, callback: Box<dyn FnMut(SystemNotice) + Send>) {
-        // A page is told of none of sleep, wake, session lock or memory
-        // pressure, so nothing calls the callback.
-        drop(callback);
-    }
-
     fn release_session_end(_: &WebLoop) {
-        // A page cannot be asked to wait, so the hook's answer is never read
-        // and no session end is held open.
-    }
-
-    fn on_reopen(_: &WebLoop, callback: Box<dyn FnMut() + Send>) {
-        // Only AppKit reports a reopen.
-        drop(callback);
+        // A page cannot be asked to wait, so the handler's answer is never
+        // read and no session end is held open.
     }
 
     fn activate(_: &WebLoop, _: bool) {
         // A page cannot bring its tab to the front.
     }
+}
+
+/// The frame request an animation-frame callback with `timestamp` (milliseconds on the page's
+/// high-resolution timeline) stands for: the vsync is the browser's own frame time, rebased by its
+/// age against `performance.now()`. A timestamp the page's clock cannot place (no `performance`,
+/// or one ahead of it) is the callback's own arrival.
+fn frame_request_for_animation_frame(timestamp: f64) -> flui_platform::FrameRequest {
+    let age_ms = web_sys::window()
+        .and_then(|window| window.performance())
+        .map(|performance| performance.now() - timestamp)
+        .filter(|age| age.is_finite() && *age >= 0.0)
+        .unwrap_or(0.0);
+    crate::frame_request_aged(std::time::Duration::from_secs_f64(age_ms / 1000.0))
 }

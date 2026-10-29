@@ -22,15 +22,20 @@
 //! type and build another. The window position has an object of its own,
 //! what the platform's windows share ([`Window::Shared`]): the platform holds
 //! it beside the loop, and the loop, which names no feature, reaches what it
-//! needs of it through a hook its own module declares. The window-level
-//! positions
-//! (text, accessibility, haptics, system chrome) are what every window of the
-//! host hands out; the table names their type, and a window that has none
-//! answers as the window contract says today (no object), until the absence
-//! vocabulary makes those answers total.
+//! needs of it through a hook its own module declares.
+//!
+//! The window-level positions (text, accessibility, haptics, system chrome)
+//! are what every window of the host hands out. Each is made for one window,
+//! from the platform's own reference to it ([`Window::Ref`]), by the type the
+//! table names ([`Text`], [`Accessibility`], [`Haptics`], [`Chrome`]); the
+//! platform turns the table into [`WindowPositions`] once and hands them to
+//! what its windows share, so a window holds exactly what its table names and
+//! names no feature's platform file. A table that leaves one of them
+//! [`Absent`] gets windows that hand out [`Absent`].
 
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::geometry::Size;
@@ -38,9 +43,8 @@ use flui_platform::data_transfer::{DataTransferSource, NullDataTransferSource};
 use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
 use flui_platform::{
     ClipboardItem, DeviceId, DisplaySnapshot, HapticFeedback, PlatformHaptics,
-    PlatformSystemChrome, SessionEndAnswer, SessionEndPhase, StorageName, SystemNotice,
-    SystemPreferences, SystemUiOverlayStyle, WindowCapabilities, WindowEvent, WindowId,
-    WindowOptions,
+    PlatformSystemChrome, StorageName, SystemPreferences, SystemUiOverlayStyle, Unsupported,
+    UnsupportedReason, WindowCapabilities, WindowHandler, WindowId, WindowOptions,
 };
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
@@ -49,7 +53,7 @@ use flui_semantics::platform::{
 use crate::error::PlatformError;
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
-use crate::platform::{PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback};
+use crate::platform::{AppHandler, PathPromptOptions, Platform, PlatformExecutor};
 use crate::storage::DataDirs;
 use crate::task::Task;
 use crate::text::TextInput;
@@ -72,29 +76,35 @@ pub trait Host: 'static {
     type Displays: Displays<Self::Loop>;
     /// What the keyboard layout is and when it changes.
     type Input: Input<Self::Loop>;
-    /// Text input a window hands out: the IME requests or the field's store.
-    type Text: TextInput;
+    /// Text input a window hands out: the IME requests or the field's store,
+    /// and the system text size.
+    type Text: Text<WindowRefOf<Self>>;
     /// The accessibility tree a window hands out.
-    type Accessibility: PlatformAccessibility;
+    type Accessibility: Accessibility<WindowRefOf<Self>>;
     /// The clipboard.
     type Clipboard: Clipboard<Self::Loop>;
     /// The drag-and-drop transport.
     type Drag: Drag<Self::Loop>;
     /// Haptic feedback a window hands out.
-    type Haptics: PlatformHaptics;
+    type Haptics: Haptics<WindowRefOf<Self>>;
     /// System preferences.
     type Preferences: Preferences<Self::Loop>;
     /// Session end, host notices, reopen and activation.
     type Lifecycle: Lifecycle<Self::Loop>;
     /// The system bars a window styles.
-    type Chrome: PlatformSystemChrome;
+    type Chrome: Chrome<WindowRefOf<Self>>;
     /// Where an application keeps its data.
     type Storage: Storage<Self::Loop>;
 }
 
-/// The owner thread's loop.
+/// What host `H`'s window-level positions are made for: its platform's
+/// reference to one window ([`Window::Ref`]).
+pub type WindowRefOf<H> = <<H as Host>::Window as Window<<H as Host>::Loop>>::Ref;
+
+/// The owner thread's loop. It keeps the application's handler for the run in
+/// the owner's delivery (`owner::app_delivery`), which its sources report to.
 pub trait Loop: Send + Sync + Sized + 'static {
-    /// Runs the loop on the calling thread, handing `on_ready` the owner
+    /// Runs the loop on the calling thread, handing `handler` the owner
     /// capability over `platform` once windows can open; see
     /// [`Platform::run`].
     ///
@@ -103,26 +113,14 @@ pub trait Loop: Send + Sync + Sized + 'static {
     fn run(
         self: Arc<Self>,
         platform: Arc<dyn Platform>,
-        on_ready: PlatformReadyCallback,
+        handler: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError>;
 
     /// [`Platform::quit`].
     fn quit(&self);
 
-    /// [`Platform::on_quit`].
-    fn on_quit(&self, callback: Box<dyn FnMut() + Send>);
-
-    /// [`Platform::set_exit_policy_hook`].
-    fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>);
-
     /// [`Platform::request_exit_policy_reevaluation`].
     fn request_exit_policy_reevaluation(&self);
-
-    /// [`Platform::set_wake_deadline_hook`].
-    fn set_wake_deadline_hook(
-        &self,
-        hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
-    );
 }
 
 /// What the host does for the application outside the closed list: the
@@ -176,10 +174,19 @@ pub trait Window<O> {
     /// window model), `()` where the loop keeps it all. The host's constructor
     /// builds one, hands it to the loop as the hook the loop declares and to
     /// the platform, which passes it to every call of this position: one
-    /// instance for both (`HostPlatform::from_parts`).
+    /// instance for both (`HostPlatform::from_parts`). It holds the
+    /// [`WindowPositions`] the platform made from the table.
     type Shared: Send + Sync + 'static;
 
-    /// [`Platform::open_window`].
+    /// The platform's own reference to one of its windows, which the
+    /// window-level positions are made for: the Win32 handle with its
+    /// identity, the content view, the winit window, what the Activity's
+    /// window is made of.
+    type Ref: ?Sized + 'static;
+
+    /// [`Platform::open_window`]: the window is built with `handler`, which
+    /// it delivers to from its first event on. The capability snapshot is
+    /// the platform's to deliver once this returns.
     ///
     /// # Errors
     /// What [`Platform::open_window`] reports.
@@ -187,7 +194,8 @@ pub trait Window<O> {
         owner: &O,
         shared: &Arc<Self::Shared>,
         options: WindowOptions,
-    ) -> Result<Arc<dyn HostWindow>, OpenWindowError>;
+        handler: Rc<dyn WindowHandler>,
+    ) -> Result<Rc<dyn HostWindow>, OpenWindowError>;
 
     /// [`Platform::active_window`].
     fn active(owner: &O, shared: &Self::Shared) -> Option<WindowId>;
@@ -197,9 +205,124 @@ pub trait Window<O> {
 
     /// [`Platform::window_frame_inset`].
     fn frame_inset(owner: &O, shared: &Self::Shared, scale_factor: f64) -> Size<f64>;
+}
 
-    /// [`Platform::on_window_event`].
-    fn on_event(owner: &O, callback: Box<dyn FnMut(WindowEvent) + Send>);
+/// The text position: what one window, `W`, holds of the text feature.
+///
+/// Made once as the window opens, on its owner thread; the window hands out
+/// what it answers and tells it when the window goes.
+pub trait Text<W: ?Sized> {
+    /// The text input `window` holds.
+    fn for_window(window: &W) -> Arc<dyn TextInput>;
+}
+
+/// The accessibility position: the bridge one window, `W`, holds.
+pub trait Accessibility<W: ?Sized> {
+    /// The bridge of `window`, made as it opens, on its owner thread.
+    fn for_window(window: &W) -> Arc<dyn WindowAccessibility>;
+}
+
+/// An accessibility bridge as the window that holds it reaches it: what it
+/// hands out, and what it lets go of before the window is destroyed.
+pub trait WindowAccessibility: PlatformAccessibility {
+    /// The window is about to be destroyed, on its owner thread: undo what
+    /// the bridge put on it (a subclass of its view or its procedure) while
+    /// the window still exists. A later call is a no-op.
+    fn detach(&self);
+
+    /// The window became the key window or stopped being it, on its owner
+    /// thread. A bridge whose adapter follows focus itself (through the
+    /// window procedure it subclasses) has nothing to do.
+    fn focus_changed(&self, focused: bool);
+}
+
+/// The haptics position: the actuator one window, `W`, hands out.
+pub trait Haptics<W: ?Sized> {
+    /// The actuator of `window`, made for it on its owner thread.
+    fn for_window(window: &W) -> Arc<dyn PlatformHaptics>;
+}
+
+/// The system chrome position: the system bars one window, `W`, styles.
+pub trait Chrome<W: ?Sized> {
+    /// The system chrome of `window`, made for it on its owner thread.
+    fn for_window(window: &W) -> Arc<dyn PlatformSystemChrome>;
+}
+
+/// What the windows of one platform hand out of the window-level positions,
+/// made from its host's table: each window asks for its own with its
+/// platform's reference to it, `W`.
+///
+/// Only the platform makes them, from the table it implements
+/// ([`HostPlatform::from_parts`](crate::HostPlatform) hands them to what the
+/// windows share), so a window holds exactly the types its table names and
+/// cannot build others.
+pub struct WindowPositions<W: ?Sized + 'static> {
+    text: fn(&W) -> Arc<dyn TextInput>,
+    accessibility: fn(&W) -> Arc<dyn WindowAccessibility>,
+    haptics: fn(&W) -> Arc<dyn PlatformHaptics>,
+    chrome: fn(&W) -> Arc<dyn PlatformSystemChrome>,
+}
+
+impl<W: ?Sized + 'static> WindowPositions<W> {
+    /// The positions host `H`'s table names, for the windows of its platform.
+    pub(crate) fn of<H>() -> Self
+    where
+        H: Host,
+        H::Window: Window<H::Loop, Ref = W>,
+    {
+        Self {
+            text: <H::Text as Text<W>>::for_window,
+            accessibility: <H::Accessibility as Accessibility<W>>::for_window,
+            haptics: <H::Haptics as Haptics<W>>::for_window,
+            chrome: <H::Chrome as Chrome<W>>::for_window,
+        }
+    }
+
+    /// What `window` holds of the positions, made for it together as it
+    /// opens.
+    pub(crate) fn for_window(&self, window: &W) -> WindowFacets {
+        WindowFacets {
+            text: (self.text)(window),
+            accessibility: (self.accessibility)(window),
+            haptics: (self.haptics)(window),
+            chrome: (self.chrome)(window),
+        }
+    }
+}
+
+/// What one window holds of the window-level positions, made together as it
+/// opens ([`WindowPositions::for_window`]) and handed out by the window as
+/// its own.
+#[derive(Clone)]
+pub(crate) struct WindowFacets {
+    /// Its text input.
+    pub(crate) text: Arc<dyn TextInput>,
+    /// Its accessibility bridge.
+    pub(crate) accessibility: Arc<dyn WindowAccessibility>,
+    /// Its haptic actuator.
+    pub(crate) haptics: Arc<dyn PlatformHaptics>,
+    /// The system chrome it styles.
+    pub(crate) chrome: Arc<dyn PlatformSystemChrome>,
+}
+
+impl std::fmt::Debug for WindowFacets {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WindowFacets").finish_non_exhaustive()
+    }
+}
+
+impl<W: ?Sized + 'static> Clone for WindowPositions<W> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<W: ?Sized + 'static> Copy for WindowPositions<W> {}
+
+impl<W: ?Sized + 'static> std::fmt::Debug for WindowPositions<W> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WindowPositions").finish_non_exhaustive()
+    }
 }
 
 /// The displays position.
@@ -259,20 +382,8 @@ pub trait Preferences<O> {
 
 /// The lifecycle position: session end, host notices, reopen and activation.
 pub trait Lifecycle<O> {
-    /// [`Platform::on_session_end`].
-    fn on_session_end(
-        owner: &O,
-        callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
-    );
-
-    /// [`Platform::on_host_notice`].
-    fn on_host_notice(owner: &O, callback: Box<dyn FnMut(SystemNotice) + Send>);
-
     /// [`Platform::release_session_end`].
     fn release_session_end(owner: &O);
-
-    /// [`Platform::on_reopen`].
-    fn on_reopen(owner: &O, callback: Box<dyn FnMut() + Send>);
 
     /// [`Platform::activate`].
     fn activate(owner: &O, ignoring_other_apps: bool);
@@ -324,13 +435,18 @@ pub mod position {
     pub enum Storage {}
 }
 
+/// What [`Absent`] answers wherever its position can say "not here".
+const NOT_ON_THIS_PLATFORM: Unsupported = Unsupported::new(UnsupportedReason::NotOnThisPlatform);
+
 /// Position `F` is not on this platform.
 ///
-/// The one type a table names for a missing position. It answers in the
-/// position's own words for "not here": no window opens, no display is read,
-/// a drag offers nothing, a haptic is [`HapticOutcome::Unavailable`], the
-/// preferences are unknown, the data has nowhere to go, and every registration
-/// is dropped unused because nothing will call it.
+/// The one type a table names for a missing position. Wherever its position
+/// can say "not here" it answers [`Unsupported`] with
+/// [`UnsupportedReason::NotOnThisPlatform`]: no window opens, no display is
+/// read, a haptic plays nothing. Where the position has no such answer, it
+/// answers as having nothing: a drag offers nothing, the preferences are
+/// unknown, the data has nowhere to go, and every registration is dropped
+/// unused because nothing will call it.
 pub struct Absent<F>(PhantomData<fn() -> F>);
 
 impl<F> Absent<F> {
@@ -346,12 +462,16 @@ impl<F> std::fmt::Debug for Absent<F> {
 impl<O> Window<O> for Absent<position::Window> {
     /// No window is ever opened, so nothing is shared.
     type Shared = ();
+    /// And none is referred to.
+    type Ref = ();
 
-    fn open(_: &O, _: &Arc<()>, _: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
-        // Not `Unavailable`, which promises a later call may succeed.
-        Err(OpenWindowError::Backend {
-            message: "this platform opens no windows".to_owned(),
-        })
+    fn open(
+        _: &O,
+        _: &Arc<()>,
+        _: WindowOptions,
+        _: Rc<dyn WindowHandler>,
+    ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
+        Err(NOT_ON_THIS_PLATFORM.into())
     }
 
     fn active(_: &O, (): &()) -> Option<WindowId> {
@@ -365,17 +485,11 @@ impl<O> Window<O> for Absent<position::Window> {
     fn frame_inset(_: &O, (): &(), _: f64) -> Size<f64> {
         Size::new(0.0, 0.0)
     }
-
-    fn on_event(_: &O, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        drop(callback);
-    }
 }
 
 impl<O> Displays<O> for Absent<position::Displays> {
     fn snapshot(_: &O) -> Result<DisplaySnapshot, PlatformError> {
-        Err(PlatformError::Displays {
-            message: "this platform has no display source".to_owned(),
-        })
+        Err(NOT_ON_THIS_PLATFORM.into())
     }
 }
 
@@ -407,6 +521,27 @@ impl PlatformAccessibility for Absent<position::Accessibility> {
     }
 }
 
+/// A bridge that put nothing on its window has nothing to let go of.
+impl WindowAccessibility for Absent<position::Accessibility> {
+    fn detach(&self) {}
+
+    fn focus_changed(&self, _: bool) {}
+}
+
+/// Every window hands out a bridge that is never active.
+impl<W: ?Sized> Accessibility<W> for Absent<position::Accessibility> {
+    fn for_window(_: &W) -> Arc<dyn WindowAccessibility> {
+        Arc::new(Self::NEW)
+    }
+}
+
+/// Every window holds a text input that hands out none.
+impl<W: ?Sized> Text<W> for Absent<position::Text> {
+    fn for_window(_: &W) -> Arc<dyn TextInput> {
+        Arc::new(Self::NEW)
+    }
+}
+
 impl flui_platform::Clipboard for Absent<position::Clipboard> {
     fn read_text(&self) -> Option<String> {
         None
@@ -433,11 +568,11 @@ impl PlatformHaptics for Absent<position::Haptics> {
     fn perform(&self, _: HapticFeedback) {}
 
     fn perform_with(&self, _: HapticFeedback, _: &HapticRequest) -> HapticOutcome {
-        HapticOutcome::Unavailable
+        NOT_ON_THIS_PLATFORM.into()
     }
 
     fn play(&self, _: &HapticPattern, _: HapticFeedback, _: &HapticRequest) -> HapticOutcome {
-        HapticOutcome::Unavailable
+        NOT_ON_THIS_PLATFORM.into()
     }
 
     fn capabilities(&self, _: Option<DeviceId>) -> HapticCapabilities {
@@ -446,6 +581,14 @@ impl PlatformHaptics for Absent<position::Haptics> {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+}
+
+/// Every window hands out an actuator that plays nothing, for want of the
+/// platform.
+impl<W: ?Sized> Haptics<W> for Absent<position::Haptics> {
+    fn for_window(_: &W) -> Arc<dyn PlatformHaptics> {
+        Arc::new(Self::NEW)
     }
 }
 
@@ -458,19 +601,7 @@ impl<O> Preferences<O> for Absent<position::Preferences> {
 }
 
 impl<O> Lifecycle<O> for Absent<position::Lifecycle> {
-    fn on_session_end(_: &O, callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>) {
-        drop(callback);
-    }
-
-    fn on_host_notice(_: &O, callback: Box<dyn FnMut(SystemNotice) + Send>) {
-        drop(callback);
-    }
-
     fn release_session_end(_: &O) {}
-
-    fn on_reopen(_: &O, callback: Box<dyn FnMut() + Send>) {
-        drop(callback);
-    }
 
     fn activate(_: &O, _: bool) {}
 }
@@ -480,6 +611,13 @@ impl PlatformSystemChrome for Absent<position::Chrome> {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+}
+
+/// Every window styles system bars that are not there.
+impl<W: ?Sized> Chrome<W> for Absent<position::Chrome> {
+    fn for_window(_: &W) -> Arc<dyn PlatformSystemChrome> {
+        Arc::new(Self::NEW)
     }
 }
 

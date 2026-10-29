@@ -24,7 +24,15 @@ use flui_platform::data_transfer::{
     DropFeedback, TransferActions, TransferFormat, TransferLimits, TransferPayload,
 };
 use flui_platform::drag::{DragError, OsDragRequest, OsDragStart, PlatformDragSource};
-use flui_platform::{DispatchEventResult, PlatformInput, PlatformWindow, WindowExecutionState};
+use flui_platform::{
+    DispatchEventResult, PlatformInput, PlatformWindow, Unsupported, UnsupportedReason,
+    WindowExecutionState,
+};
+use flui_testing::window_handler::RecordingWindowHandler;
+
+/// A drag the OS cannot take: the window has no drag source.
+const NO_OS_DRAG: DragError =
+    DragError::Unsupported(Unsupported::new(UnsupportedReason::NotOnThisPlatform));
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::protocol::BoxProtocol;
 use flui_runtime::owner::{OwnerEffects, OwnerHost, PresentationDispatcher, RuntimeOperation};
@@ -208,13 +216,31 @@ fn nonce() -> ProcessNonce {
     ProcessNonce::from_raw(NonZeroU64::new(0x000d_15c0).expect("nonzero"))
 }
 
-fn open(platform: &HeadlessPlatform) -> (Arc<dyn HostWindow>, PresentationWindow) {
+/// A headless window and the handler it was opened with.
+struct Window {
+    host: Rc<dyn HostWindow>,
+    handler: Rc<RecordingWindowHandler>,
+}
+
+impl std::ops::Deref for Window {
+    type Target = Rc<dyn HostWindow>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.host
+    }
+}
+
+fn open(platform: &HeadlessPlatform) -> (Window, PresentationWindow) {
+    let handler = RecordingWindowHandler::new();
     let window = platform
-        .open_window(WindowOptions::default())
+        .open_window(WindowOptions::default(), handler.clone())
         .expect("headless window");
     let accessibility = window.accessibility();
     (
-        Arc::clone(&window),
+        Window {
+            host: Rc::clone(&window),
+            handler,
+        },
         PresentationWindow::new(window, accessibility),
     )
 }
@@ -254,7 +280,7 @@ fn mount(runtime: &mut UiRuntime, presentation: PresentationId, root: &ReceiverA
 fn publish(
     owner: &OwnerHost,
     mut runtime: UiRuntime,
-    windows: &[(&Arc<dyn HostWindow>, PresentationId)],
+    windows: &[(&Window, PresentationId)],
 ) -> Vec<PresentationDispatcher> {
     let _ = runtime.pump(
         &mut flui_runtime::pump::SampledClock(web_time::Instant::now()),
@@ -275,10 +301,10 @@ fn publish(
                 })
                 .expect("input authority");
             let routed = dispatcher.clone();
-            window.on_input(Box::new(move |input: PlatformInput| {
+            window.handler.react_to_input(move |input: PlatformInput| {
                 let _ = routed.input(input, &Effects);
                 DispatchEventResult::resolved(false, false)
-            }));
+            });
             dispatcher
         })
         .collect()
@@ -291,8 +317,8 @@ struct World {
     runtime: flui_foundation::UiRuntimeId,
     primary: PresentationId,
     secondary: PresentationId,
-    first: Arc<dyn HostWindow>,
-    second: Arc<dyn HostWindow>,
+    first: Window,
+    second: Window,
     dispatchers: Vec<PresentationDispatcher>,
     _platform: HeadlessPlatform,
 }
@@ -316,7 +342,7 @@ fn side_by_side(first: &ReceiverAnchor, second: &ReceiverAnchor) -> World {
     world
 }
 
-fn headless(window: &Arc<dyn HostWindow>) -> &MockWindow {
+fn headless(window: &Rc<dyn HostWindow>) -> &MockWindow {
     window
         .as_any()
         .downcast_ref::<MockWindow>()
@@ -372,14 +398,14 @@ impl World {
     fn start_in(
         &self,
         presentation: PresentationId,
-        window: &Arc<dyn HostWindow>,
+        window: &Rc<dyn HostWindow>,
         items: Vec<DragItem>,
         allowed: AllowedActions,
     ) -> Rc<DragSession> {
         let window = as_platform(window);
         Rc::new(
             self.handle
-                .start(DragStart::new(presentation, items, allowed).window(Arc::downgrade(&window)))
+                .start(DragStart::new(presentation, items, allowed).window(Rc::downgrade(&window)))
                 .expect("a drag starts"),
         )
     }
@@ -427,7 +453,7 @@ impl World {
     }
 }
 
-fn as_platform(window: &Arc<dyn HostWindow>) -> Arc<dyn PlatformWindow> {
+fn as_platform(window: &Rc<dyn HostWindow>) -> Rc<dyn PlatformWindow> {
     window.clone()
 }
 
@@ -591,7 +617,7 @@ fn a_drag_between_runtimes_delivers_serialized_representations_only() {
                     vec![DragItem::new().with_value(7_i32).with_text("hello")],
                     AllowedActions::new(MOVE, COPY),
                 )
-                .window(Arc::downgrade(&window)),
+                .window(Rc::downgrade(&window)),
             )
             .expect("a drag starts"),
     );
@@ -652,7 +678,7 @@ fn a_window_that_cannot_start_the_session_keeps_the_drag_in_its_window() {
                 vec![DragItem::new().with_text("x")],
                 AllowedActions::new(MOVE, COPY),
             )
-            .window(Arc::downgrade(&as_platform(&window))),
+            .window(Rc::downgrade(&as_platform(&window))),
         )
         .expect("starts in the window");
     let outcome = runtime.enter(|_| {
@@ -660,7 +686,7 @@ fn a_window_that_cannot_start_the_session_keeps_the_drag_in_its_window() {
             .pointer_moved(Offset::new(100_000.0, 10.0), None)
             .expect("live")
     });
-    assert_eq!(outcome, MoveOutcome::Refused(DragError::Unavailable));
+    assert_eq!(outcome, MoveOutcome::Refused(NO_OS_DRAG));
     runtime.enter_pending_os_drags();
     assert_eq!(
         session.stage(),
@@ -854,6 +880,7 @@ fn drags_from_both_windows_cross_independently() {
 
 thread_local! {
     /// The requests [`FirstStartPanics`] accepted, held as the OS holds them.
+    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static ACCEPTED: RefCell<Vec<OsDragRequest>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -880,7 +907,7 @@ impl PlatformDragSource for FirstStartPanics {
 
 /// A headless window that starts OS drags through `source`.
 struct WithDragSource {
-    window: Arc<dyn PlatformWindow>,
+    window: Rc<dyn PlatformWindow>,
     source: Arc<dyn PlatformDragSource>,
 }
 
@@ -888,23 +915,14 @@ impl PlatformWindow for WithDragSource {
     fn id(&self) -> flui_platform::WindowId {
         self.window.id()
     }
-    fn physical_size(&self) -> flui_foundation::geometry::Size<i32> {
-        self.window.physical_size()
-    }
-    fn logical_size(&self) -> flui_foundation::geometry::Size<f64> {
-        self.window.logical_size()
-    }
-    fn scale_factor(&self) -> f64 {
-        self.window.scale_factor()
-    }
     fn request_redraw(&self) {
         self.window.request_redraw();
     }
-    fn is_focused(&self) -> bool {
-        self.window.is_focused()
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        self.window.redraw_requester()
     }
-    fn is_visible(&self) -> bool {
-        self.window.is_visible()
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        self.window.surface_target()
     }
     fn set_cursor(
         &self,
@@ -912,20 +930,38 @@ impl PlatformWindow for WithDragSource {
     ) -> Result<(), flui_platform::CursorError> {
         self.window.set_cursor(cursor)
     }
+    fn set_frame_rate_hint(
+        &self,
+        hint: flui_platform::FrameRateHint,
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.window.set_frame_rate_hint(hint)
+    }
+    fn set_input_regions(
+        &self,
+        regions: &[flui_platform::input_regions::InputRegion],
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.window.set_input_regions(regions)
+    }
     fn drag_source(&self) -> Option<Arc<dyn PlatformDragSource>> {
         Some(Arc::clone(&self.source))
     }
     fn state(&self) -> flui_platform::WindowState {
         self.window.state()
     }
-    fn capabilities(&self) -> flui_platform::WindowCapabilities {
-        self.window.capabilities()
-    }
     fn apply(
         &self,
-        command: flui_platform::WindowCommand,
-    ) -> Result<(), flui_platform::WindowCommandError> {
+        command: flui_platform::AdmittedCommand,
+    ) -> Result<(), flui_platform::ApplyError> {
         self.window.apply(command)
+    }
+    fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
+        self.window.text_input()
+    }
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+        self.window.haptics()
+    }
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
+        self.window.system_chrome()
     }
 }
 
@@ -935,13 +971,13 @@ impl PlatformWindow for WithDragSource {
 fn a_start_that_panics_is_a_refusal_and_the_next_still_starts() {
     let platform = HeadlessPlatform::new();
     let (host, _) = open(&platform);
-    let window: Arc<dyn PlatformWindow> = Arc::new(WithDragSource {
+    let window: Rc<dyn PlatformWindow> = Rc::new(WithDragSource {
         window: as_platform(&host),
         source: Arc::new(FirstStartPanics::default()),
     });
     let runtime = runtime_over(
         &platform,
-        PresentationWindow::new(Arc::clone(&window), None),
+        PresentationWindow::new(Rc::clone(&window), None),
         nonce(),
     );
     let start = || {
@@ -953,7 +989,7 @@ fn a_start_that_panics_is_a_refusal_and_the_next_still_starts() {
                     vec![DragItem::new().with_text("x")],
                     AllowedActions::new(MOVE, COPY),
                 )
-                .window(Arc::downgrade(&window)),
+                .window(Rc::downgrade(&window)),
             )
             .expect("starts in the window")
     };

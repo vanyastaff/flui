@@ -1,9 +1,10 @@
 //! The Win32 window, in its halves (ADR-0151 §10):
 //!
-//! - [`limits`], [`mode`] and [`surface`]: the pure half, compiled and tested
-//!   on every host: the size limits the system asks for, the mode the window
-//!   tracks with what its way back needs, and when its surface is seen, as
-//!   rules over plain values;
+//! - [`limits`] and [`mode`]: the pure half, compiled and tested on every
+//!   host: the size limits the system asks for and the mode the window
+//!   tracks with what its way back needs, as rules over plain values;
+//! - [`material`]: the pure half too: from which build the window draws a
+//!   material behind it;
 //! - `window`: [`WindowsWindow`], the handle a host hands out, how it opens
 //!   and what its commands ask of the OS;
 //! - `set`: [`WindowSet`], the windows of a platform, which the loop holds as
@@ -25,6 +26,7 @@
 
 #[cfg(windows)]
 pub(crate) mod backdrop;
+pub(crate) mod frame_timing;
 pub(crate) mod limits;
 #[cfg(windows)]
 pub(crate) mod proc;
@@ -32,6 +34,9 @@ pub(crate) mod proc;
 mod set;
 #[cfg(windows)]
 mod window;
+
+#[cfg(all(test, target_os = "windows"))]
+mod delivery_tests;
 
 #[cfg(windows)]
 pub(crate) use set::WindowSet;
@@ -151,151 +156,107 @@ pub(crate) mod mode {
     }
 }
 
-pub(crate) mod surface {
-    //! When a Win32 window's surface is seen, from its own messages.
-    //!
-    //! Win32 delivers no occlusion event; what it delivers is minimize and
-    //! restore (`WM_SIZE`) and the `WS_VISIBLE` bit changing
-    //! (`WM_SHOWWINDOW`), and a minimized or hidden window's surface is
-    //! exactly a hidden surface (the DWM stops composing it). These rules
-    //! say what each message implies, in the polarity of
-    //! `PlatformWindow::on_visibility_status_change` (`true`: the surface
-    //! became visible again); the window procedure keeps the plumbing and
-    //! reports through `window::visibility::ReportedVisibility`.
+pub(crate) mod material {
+    //! Which Windows builds draw a material behind a window: the one gate the
+    //! window's [`WindowCapabilities::material`](flui_platform::WindowCapabilities::material),
+    //! the `SetMaterial` command and `Win32Window::set_backdrop` all take, so
+    //! none of them can disagree with another.
 
     #![forbid(unsafe_code)]
 
-    /// `WM_SIZE` `wParam` values (`winuser.h`). Defined here — not imported
-    /// from the `windows` crate — so the rules over them need no Win32
-    /// binding; the window procedure reads `WM_SIZE` through these, so it
-    /// keeps the same single source of truth. `SIZE_MAXSHOW` (3) and
-    /// `SIZE_MAXHIDE` (4) report another window's change and imply nothing
-    /// here, which the tests pin.
-    pub(crate) const SIZE_RESTORED: u32 = 0;
-    /// See [`SIZE_RESTORED`].
-    pub(crate) const SIZE_MINIMIZED: u32 = 1;
-    /// See [`SIZE_RESTORED`].
-    pub(crate) const SIZE_MAXIMIZED: u32 = 2;
+    use flui_platform::{
+        Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand, WindowMaterial,
+    };
 
-    /// `WS_VISIBLE` (`winuser.h`: `0x1000_0000`) — defined here, like the
-    /// `SIZE_*` values above, so the seed rule below needs no Win32 binding.
-    pub(crate) const WS_VISIBLE_STYLE_BIT: u32 = 0x1000_0000;
+    use crate::version::gate::windows::WindowsBuild;
+    use crate::version::gate::{Gate, Since};
 
-    /// The initial value for the window's visibility edge filter, derived
-    /// from the window's ACTUAL style at context-install time — never a
-    /// constant default.
-    ///
-    /// Why a default is wrong: creation style depends on decoration. A
-    /// decorated window is created without `WS_VISIBLE` and shown afterwards,
-    /// so the creation-time `ShowWindow(SW_SHOW)` flips the bit and delivers
-    /// the `WM_SHOWWINDOW` edge that brings the filter to `true`. An
-    /// UNdecorated window is created `WS_POPUP | WS_VISIBLE` — already visible
-    /// before the context installs — and that same `ShowWindow(SW_SHOW)` is a
-    /// no-op on the bit, so no edge ever fires; a seed of `false` would then
-    /// swallow the window's FIRST minimize (the edge filter would see
-    /// false→false and dispatch nothing, leaving the runtime pumping frames
-    /// for a hidden surface). Seeding from the style is correct for every
-    /// creation-style combination.
-    #[must_use]
-    pub(crate) fn initial_visibility(style: u32) -> bool {
-        style & WS_VISIBLE_STYLE_BIT != 0
+    /// `DWMWA_SYSTEMBACKDROP_TYPE`, the desktop window manager attribute that
+    /// draws a system material behind a window, from Windows 11 22H2 (build
+    /// 22621). Without it a window draws no material: its capability is
+    /// `Unavailable` on this device, and admission refuses `SetMaterial` with
+    /// `NotOnThisDevice`.
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct SystemBackdrop;
+
+    impl Gate for SystemBackdrop {
+        type Version = WindowsBuild;
+        const SINCE: u64 = 22621;
     }
 
-    /// The visibility transition (if any) a `WM_SIZE` message implies.
-    ///
-    /// - `SIZE_MINIMIZED` while not already minimized → `Some(false)`;
-    /// - `SIZE_RESTORED`/`SIZE_MAXIMIZED` while minimized → `Some(true)`;
-    /// - everything else (plain resizes, repeated minimize messages,
-    ///   `SIZE_MAXSHOW`/`SIZE_MAXHIDE`, unknown values) → `None` — no
-    ///   dispatch, so a live-resize drag can never spam the runtime's
-    ///   lifecycle ladder.
-    ///
-    /// `was_minimized` is the window's own mode tracking *before* this
-    /// message (`WindowContext::mode`) — the edge filter that makes the rule
-    /// idempotent under Win32's repeated-message delivery.
-    #[must_use]
-    pub(crate) fn size_visibility(size_type: u32, was_minimized: bool) -> Option<bool> {
-        match size_type {
-            SIZE_MINIMIZED if !was_minimized => Some(false),
-            SIZE_RESTORED | SIZE_MAXIMIZED if was_minimized => Some(true),
-            _ => None,
-        }
+    /// What windows draw materials with on `build`: the proof it has the
+    /// attribute, or why not.
+    pub(crate) fn gate(build: WindowsBuild) -> Result<Since<SystemBackdrop>, Unsupported> {
+        build
+            .since::<SystemBackdrop>()
+            .ok_or(Unsupported::new(UnsupportedReason::NotOnThisDevice))
     }
 
-    /// The visibility transition (if any) a `WM_SHOWWINDOW` message implies.
-    ///
-    /// `WM_SHOWWINDOW` fires when the `WS_VISIBLE` style bit actually changes
-    /// (`ShowWindow(SW_HIDE)`/`SW_SHOW` and friends), so it is already
-    /// edge-triggered at the OS level; the one wrinkle is a `SW_SHOW`
-    /// delivered while the window is *minimized* — the style bit is set but
-    /// the surface is still not composed, so the show must not be reported
-    /// as visible (the later restore's `WM_SIZE` will report it, via
-    /// [`size_visibility`]).
-    ///
-    /// - `shown == false` → `Some(false)` (hide always hides the surface);
-    /// - `shown == true` while not minimized → `Some(true)`;
-    /// - `shown == true` while minimized → `None`.
-    #[must_use]
-    pub(crate) fn show_window_visibility(shown: bool, is_minimized: bool) -> Option<bool> {
-        match (shown, is_minimized) {
-            (false, _) => Some(false),
-            (true, false) => Some(true),
-            (true, true) => None,
+    /// `capabilities` as a window on a build that passed or failed the
+    /// [`gate`] has them: below it the material is `Unavailable` on this
+    /// device.
+    pub(crate) const fn below_the_gate(
+        capabilities: WindowCapabilities,
+        gate: &Result<Since<SystemBackdrop>, Unsupported>,
+    ) -> WindowCapabilities {
+        match gate {
+            Ok(_) => capabilities,
+            Err(_) => capabilities.unavailable(
+                &WindowCommand::SetMaterial(WindowMaterial::Opaque),
+                flui_platform::CapabilityAbsence::NotOnThisDevice,
+            ),
         }
     }
 
     #[cfg(test)]
     mod tests {
-        use super::{
-            SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED, WS_VISIBLE_STYLE_BIT,
-            initial_visibility, show_window_visibility, size_visibility,
+        use flui_platform::{
+            AdmissionError, Availability, UnsupportedReason, WindowCapabilities, WindowCommand,
+            WindowMaterial,
         };
 
-        /// `WM_SIZE` reports of another window's change (`winuser.h`).
-        const SIZE_MAXSHOW: u32 = 3;
-        const SIZE_MAXHIDE: u32 = 4;
+        use super::{SystemBackdrop, below_the_gate, gate};
+        use crate::version::gate::testing::row;
+        use crate::version::gate::windows::WindowsBuild;
 
-        /// A minimize hides the surface and a restore or maximize out of it
-        /// shows it again, once each; a plain resize, a repeat and another
-        /// window's change say nothing.
+        /// One row per build around the gate: below it a window has no
+        /// material and admission refuses one with `NotOnThisDevice`; from it
+        /// on, the material is admitted.
         #[test]
-        fn a_win32_size_message_reports_only_the_minimize_edges() {
+        fn system_backdrop_gate_table() {
+            let mut failures = row::<SystemBackdrop>(
+                "SystemBackdrop",
+                WindowsBuild::from_number(22620),
+                WindowsBuild::from_number(22621),
+                WindowsBuild::UNKNOWN,
+            );
             let cases = [
-                (SIZE_MINIMIZED, false, Some(false)),
-                (SIZE_MINIMIZED, true, None),
-                (SIZE_RESTORED, true, Some(true)),
-                (SIZE_MAXIMIZED, true, Some(true)),
-                (SIZE_RESTORED, false, None),
-                (SIZE_MAXIMIZED, false, None),
-                (SIZE_MAXSHOW, false, None),
-                (SIZE_MAXHIDE, true, None),
-                (99, true, None),
+                (WindowsBuild::from_number(19045), Availability::Unavailable),
+                (WindowsBuild::from_number(22000), Availability::Unavailable),
+                (WindowsBuild::from_number(22620), Availability::Unavailable),
+                (WindowsBuild::UNKNOWN, Availability::Unavailable),
+                (WindowsBuild::from_number(22621), Availability::Native),
+                (WindowsBuild::from_number(26100), Availability::Native),
             ];
-            for (size_type, was_minimized, expected) in cases {
-                assert_eq!(
-                    size_visibility(size_type, was_minimized),
-                    expected,
-                    "WM_SIZE {size_type} with the window minimized: {was_minimized}"
-                );
+            for (build, wanted) in cases {
+                let capabilities = below_the_gate(WindowCapabilities::ALL, &gate(build));
+                let admission =
+                    WindowCommand::SetMaterial(WindowMaterial::System).admit(&capabilities);
+                let answer_holds = match (&admission, wanted) {
+                    (Ok(_), Availability::Native) => true,
+                    (Err(AdmissionError::Unsupported(refused)), Availability::Unavailable) => {
+                        refused.reason == UnsupportedReason::NotOnThisDevice
+                    }
+                    _ => false,
+                };
+                if capabilities.material != wanted || !answer_holds {
+                    failures.push(format!(
+                        "{build}: material {:?}, admission {admission:?}, wanted {wanted:?}",
+                        capabilities.material
+                    ));
+                }
             }
-        }
-
-        /// A hide always hides; a show shows unless the window is minimized,
-        /// whose restore reports it.
-        #[test]
-        fn a_win32_show_message_reports_unless_the_window_is_minimized() {
-            assert_eq!(show_window_visibility(false, false), Some(false));
-            assert_eq!(show_window_visibility(false, true), Some(false));
-            assert_eq!(show_window_visibility(true, false), Some(true));
-            assert_eq!(show_window_visibility(true, true), None);
-        }
-
-        /// The edge filter starts from the style the window was created with.
-        #[test]
-        fn a_win32_window_starts_as_visible_as_its_style() {
-            assert!(initial_visibility(WS_VISIBLE_STYLE_BIT));
-            assert!(initial_visibility(WS_VISIBLE_STYLE_BIT | 0x00CF_0000));
-            assert!(!initial_visibility(0x00CF_0000));
+            assert!(failures.is_empty(), "{failures:#?}");
         }
     }
 }

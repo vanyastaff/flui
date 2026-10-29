@@ -45,7 +45,13 @@ impl StatelessView for Reader {
 fn graph_of(ui_runtime: &UiRuntime, id: PresentationId) -> Reactive {
     ui_runtime
         .presentation_widgets_for_test(id)
-        .with_build_owner(|owner| owner.reactive().clone())
+        .with_build_owner(|owner| owner.signal_graph().clone())
+}
+
+fn writer_of(ui_runtime: &UiRuntime, id: PresentationId) -> flui_view::WriterSource {
+    ui_runtime
+        .presentation_widgets_for_test(id)
+        .with_build_owner(flui_view::BuildOwner::writer_source)
 }
 
 pub(crate) fn a_write_to_a_secondary_presentations_signal_rebuilds_its_reader() {
@@ -107,6 +113,111 @@ pub(crate) fn a_write_to_a_secondary_presentations_signal_rebuilds_its_reader() 
         (count(&builds_a), count(&builds_b)),
         (1, 2),
         "the secondary's reader rebuilds; the primary is untouched"
+    );
+}
+
+/// The command's `EventCx` is opened by the minting presentation's writer
+/// source: it writes that graph, and it refuses a sibling presentation's
+/// handle as foreign rather than writing it in passing.
+pub(crate) fn cross_thread_signal_write_opens_the_owner_writer_source() {
+    let mut ui_runtime = UiRuntime::for_test();
+    let a = ui_runtime.presentation_id();
+    let b = ui_runtime.install_second_presentation_for_test();
+    let graph_a = graph_of(&ui_runtime, a);
+    let graph_b = graph_of(&ui_runtime, b);
+    let sig_a = graph_a.signal(1u32);
+    let sig_b = graph_b.signal(1u32);
+    let sibling = sig_a.detach();
+
+    let (tx, rx) = mpsc::channel();
+    ui_runtime
+        .command_sender()
+        .send_signal_write(sig_b.detach(), move |own, cx| {
+            let opened_on = flui_view::ReadGraph::graph_id(cx);
+            let own_write = own.set(cx, 7);
+            let sibling_write = sibling.attach().set(cx, 7);
+            tx.send((opened_on, own_write, sibling_write))
+                .expect("test receiver alive");
+        })
+        .expect("send");
+    let report = ui_runtime.drain_commands();
+    assert_eq!(report.invoked, 1);
+
+    let (opened_on, own_write, sibling_write) = rx.try_recv().expect("the write ran");
+    assert_eq!(
+        opened_on,
+        graph_b.id(),
+        "opened on the minting presentation"
+    );
+    assert_eq!(own_write, Ok(()));
+    assert!(
+        matches!(sibling_write, Err(SignalError::ForeignGraph { .. })),
+        "a sibling presentation's handle is foreign to this source, got {sibling_write:?}"
+    );
+    assert_eq!(sig_b.peek(&graph_b, |v| *v), Ok(7));
+    assert_eq!(sig_a.peek(&graph_a, |v| *v), Ok(1));
+}
+
+/// A command whose write panics inside its `EventCx` keeps its envelope:
+/// the captures are retained, never destroyed during the unwind (ADR-0086,
+/// revised 2026-09-28). The write before the panic stays applied, and the
+/// next command writes normally and disposes its own envelope.
+pub(crate) fn a_panicking_signal_write_keeps_its_envelope() {
+    struct Counted(Arc<AtomicUsize>);
+    impl Drop for Counted {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    let ui_runtime = UiRuntime::for_test();
+    let graph = graph_of(&ui_runtime, ui_runtime.presentation_id());
+    let signal = graph.signal(1u32);
+    let sender = ui_runtime.command_sender();
+    let panicking_drops = Arc::new(AtomicUsize::new(0));
+    let capture = Counted(Arc::clone(&panicking_drops));
+    sender
+        .send_signal_write(signal.detach(), move |signal, cx| {
+            let _ = &capture;
+            signal.set(cx, 7).expect("the owner's graph");
+            panic!("signal write command probe");
+        })
+        .expect("send");
+
+    let outcome = catch_unwind(AssertUnwindSafe(|| ui_runtime.drain_commands()));
+
+    let payload = outcome.expect_err("the command panic resumes");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"signal write command probe")
+    );
+    assert_eq!(
+        panicking_drops.load(Ordering::Relaxed),
+        0,
+        "the panicking envelope's captures are retained, not destroyed"
+    );
+    assert_eq!(signal.peek(&graph, |value| *value), Ok(7));
+
+    let next_drops = Arc::new(AtomicUsize::new(0));
+    let next_capture = Counted(Arc::clone(&next_drops));
+    sender
+        .send_signal_write(signal.detach(), move |signal, cx| {
+            let _ = &next_capture;
+            signal.set(cx, 9).expect("the owner's graph");
+        })
+        .expect("send after the panic");
+    assert_eq!(
+        ui_runtime.drain_commands(),
+        DrainReport {
+            invoked: 1,
+            dropped_stale: 0
+        }
+    );
+    assert_eq!(signal.peek(&graph, |value| *value), Ok(9));
+    assert_eq!(
+        next_drops.load(Ordering::Relaxed),
+        1,
+        "a completed envelope is disposed once"
     );
 }
 
@@ -298,5 +409,69 @@ pub(crate) fn an_older_overlapping_wake_cannot_clear_newer_failed_delivery_debt(
         wake_count.load(Ordering::SeqCst),
         3,
         "the successful retry clears the newer generation"
+    );
+}
+
+/// Writes `target` (another presentation's signal) from its own `build` and
+/// records the outcome.
+#[derive(Clone)]
+struct CrossWindowWriter {
+    target: Signal<u32>,
+    target_writer: flui_view::WriterSource,
+    outcome: std::rc::Rc<std::cell::RefCell<Vec<Result<(), SignalError>>>>,
+}
+
+impl flui_view::View for CrossWindowWriter {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+impl StatelessView for CrossWindowWriter {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.outcome
+            .borrow_mut()
+            .push(self.target_writer.write(|cx| self.target.set(cx, 9)));
+        SizedBox::square(1.0)
+    }
+}
+
+pub(crate) fn a_signal_of_one_window_is_not_writable_while_another_window_builds() {
+    let mut ui_runtime = UiRuntime::for_test();
+    let a = ui_runtime.presentation_id();
+    let b = ui_runtime.install_second_presentation_for_test();
+    let graph_a = graph_of(&ui_runtime, a);
+    let sig_a = graph_a.signal(1u32);
+    let outcome = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    ui_runtime
+        .attach_root_widget_to_for_test(
+            b,
+            &CrossWindowWriter {
+                target: sig_a,
+                target_writer: writer_of(&ui_runtime, a),
+                outcome: std::rc::Rc::clone(&outcome),
+            },
+        )
+        .expect("secondary root attaches");
+    let mut backend = ScriptedSink::always_presents();
+    ui_runtime.render_frame(&mut backend);
+
+    let recorded = outcome.borrow().clone();
+    assert!(
+        matches!(
+            recorded.as_slice(),
+            [Err(SignalError::WrittenDuringBuild { .. })]
+        ),
+        "a write to A's graph during B's build must be refused, got {recorded:?}"
+    );
+    assert_eq!(
+        sig_a.peek(&graph_a, |v| *v),
+        Ok(1),
+        "the refused write changed nothing"
+    );
+    assert_eq!(
+        writer_of(&ui_runtime, a).write(|cx| sig_a.set(cx, 2)),
+        Ok(()),
+        "the refusal ends with the build"
     );
 }

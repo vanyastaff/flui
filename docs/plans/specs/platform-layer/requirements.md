@@ -18,7 +18,7 @@
   крейты, нужные `flui`, поэтому имена и состав крейтов этой спеки — публикуемые)
 - **Смежные спеки:** [send-flip](../send-flip/), [text-ime](../text-ime/),
   [persistence](../persistence/), [teardown](../teardown/), [focus-keyboard](../focus-keyboard/),
-  [naming](../naming/), [window-lifecycle](../window-lifecycle/),
+  [naming](../naming/), [window-lifecycle](https://github.com/vanyastaff/flui/blob/01531550886e0ad4eefd4ee98fb9db4ab24e34c5/docs/plans/specs/window-lifecycle/) (сделана, удалена),
   [web-canvas-input-ownership](../web-canvas-input-ownership/),
   [display-pacing](../display-pacing/); на ветках: flui-animation reduce-motion, flui-interaction
   (pointer-vocabulary, matrix X1, X2)

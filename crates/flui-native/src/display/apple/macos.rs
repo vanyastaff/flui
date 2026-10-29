@@ -10,6 +10,11 @@
 //! `CGDirectDisplayID` of its current connection. A screen with no
 //! `NSScreenNumber`, or no UUID, is left out of the snapshot.
 //!
+//! A screen's colour is the gamut it can show (`canRepresentDisplayGamut:`)
+//! and, from macOS 10.15, the extended-dynamic-range headroom it can reach
+//! (`maximumPotentialExtendedDynamicRangeColorComponentValue`), which a
+//! `CAMetalLayer` with extended range is drawn up to.
+//!
 //! `display_snapshot` runs on every owner wake, so the last sample is kept and
 //! read again only after an event marked it stale: the screen-parameters
 //! notification, or a window learning its display or scale changed.
@@ -31,21 +36,24 @@ use core_foundation::{
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_app_kit::{NSApplicationDidChangeScreenParametersNotification, NSScreen};
+use objc2_app_kit::{NSApplicationDidChangeScreenParametersNotification, NSDisplayGamut, NSScreen};
 use objc2_foundation::{
     NSArray, NSDictionary, NSNotification, NSNotificationCenter, NSNumber, NSObjectProtocol,
-    NSRect, NSString,
+    NSString,
 };
 
-use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot, RefreshPeriod};
 
+#[cfg(not(target_arch = "aarch64"))]
+use super::screen::MacosPotentialHeadroom;
 use super::screen::device_bounds_of_screen;
-use super::screen::{macos_display_key, macos_display_persistent_key};
+use super::screen::{macos_display_key, macos_display_persistent_key, screen_color};
 use crate::display::source::DisplaySource;
 use crate::error::PlatformError;
+use crate::owner::apple::macos::bounds_of;
 use crate::owner::signal::OwnerSignal;
 use crate::owner::watch::Watch;
+use crate::version::gate::apple::MacOSVersion;
 
 // `CGDisplayCreateUUIDFromDisplayID` is declared by CoreGraphics but exported
 // by the ColorSync framework, which is why winit links the same one.
@@ -117,14 +125,6 @@ fn refresh_rate_of_screen(screen: &NSScreen) -> Option<f64> {
     Some(mode.refresh_rate())
 }
 
-/// An AppKit rectangle as the geometry type the shared rules take.
-pub(crate) fn bounds_of(rect: NSRect) -> Bounds<f64> {
-    Bounds {
-        origin: Point::new(rect.origin.x, rect.origin.y),
-        size: Size::new(rect.size.width, rect.size.height),
-    }
-}
-
 impl crate::owner::notices::StaleOnWake for MacosDisplays {
     fn mark_stale(&self) {
         self.source.invalidate();
@@ -132,9 +132,11 @@ impl crate::owner::notices::StaleOnWake for MacosDisplays {
 }
 
 /// The displays of one macOS platform: their ids and the last snapshot, which
-/// the [`DisplaySource`] keeps until an event invalidates it.
+/// the [`DisplaySource`] keeps until an event invalidates it, and the OS
+/// version, read once (ADR-0244).
 pub struct MacosDisplays {
     source: DisplaySource,
+    version: MacOSVersion,
 }
 
 impl std::fmt::Debug for MacosDisplays {
@@ -147,6 +149,7 @@ impl MacosDisplays {
     pub(crate) fn new() -> Self {
         Self {
             source: DisplaySource::new(),
+            version: MacOSVersion::read(),
         }
     }
 
@@ -173,14 +176,12 @@ impl MacosDisplays {
             let bounds = device_bounds_of_screen(bounds_of(screen.frame()), primary_height, scale);
             let usable_bounds =
                 device_bounds_of_screen(bounds_of(screen.visibleFrame()), primary_height, scale);
-            let mut display = DisplayInfo::new(
-                id,
-                format!("Display {}", display_id_of(&screen).unwrap_or_default()),
-                bounds,
-                scale,
-            )
-            .with_usable_bounds(usable_bounds)
-            .with_primary(index == 0);
+            // The name System Settings shows ("Built-in Retina Display", a
+            // monitor's model), macOS 10.15 and later.
+            let mut display =
+                DisplayInfo::new(id, screen.localizedName().to_string(), bounds, scale)
+                    .with_usable_bounds(usable_bounds)
+                    .with_primary(index == 0);
             if let Some(uuid) = display_id_of(&screen)
                 .and_then(|number| u32::try_from(number).ok())
                 .and_then(display_uuid)
@@ -189,6 +190,19 @@ impl MacosDisplays {
             }
             display.refresh_period = refresh_rate_of_screen(&screen)
                 .and_then(|hertz| RefreshPeriod::from_hz(hertz).ok());
+            // Every arm64 Mac runs macOS 11 or later, which has the report;
+            // x86_64 reaches back to 10.13 and asks the gate.
+            #[cfg(target_arch = "aarch64")]
+            let potential = Some(screen.maximumPotentialExtendedDynamicRangeColorComponentValue());
+            #[cfg(not(target_arch = "aarch64"))]
+            let potential = self
+                .version
+                .since::<MacosPotentialHeadroom>()
+                .map(|_| screen.maximumPotentialExtendedDynamicRangeColorComponentValue());
+            display = display.with_color(Ok(screen_color(
+                screen.canRepresentDisplayGamut(NSDisplayGamut::P3),
+                potential,
+            )));
             displays.push(display);
         }
         displays
@@ -266,6 +280,10 @@ impl Drop for ScreenObserver {
 }
 
 impl crate::owner::apple::macos::HostDisplays for MacosDisplays {
+    fn version(&self) -> MacOSVersion {
+        self.version
+    }
+
     /// The last sample while nothing has invalidated it, otherwise a fresh
     /// one.
     fn snapshot(&self, mtm: MainThreadMarker) -> Result<DisplaySnapshot, PlatformError> {
@@ -302,6 +320,10 @@ impl crate::owner::apple::macos::HostDisplays for MacosDisplays {
 /// starts on resume) and by a window whose screen is one the last sample lacks.
 #[cfg(feature = "winit-backend")]
 impl crate::owner::winit::HostDisplays for MacosDisplays {
+    fn version(&self) -> MacOSVersion {
+        self.version
+    }
+
     /// The current snapshot: the last sample unless something invalidated it.
     /// [`PlatformError::Displays`] off the main thread, where `NSScreen` is
     /// not read.

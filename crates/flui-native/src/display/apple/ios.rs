@@ -9,9 +9,16 @@
 //! and never by address (`ScreenLedger`).
 //!
 //! The refresh period of a screen is the cadence its window's `CADisplayLink`
-//! measures. The window reports it through [`IosDisplays::report_link_period`]
-//! when it leaves the publish band, and the snapshot carries it for that
-//! screen; a screen with no running link reports no period.
+//! measures. The window hands each tick's cadence to the loop's display hook
+//! (`HostDisplays::observe_link`), which keeps what every window's link
+//! measured and publishes a period when it leaves the publish band; the
+//! snapshot carries it for that screen, and a screen with no running link
+//! reports no period. A window that changes screen moves through the hook
+//! too (`HostDisplays::move_window`), which forgets what its link measured
+//! on the screen it left.
+//!
+//! A screen's colour is its trait collection's display gamut and, from
+//! iOS 16, its potential extended-dynamic-range headroom.
 //!
 //! `display_snapshot` runs on every owner wake, so the last sample is kept and
 //! read again only after an event marked it stale: a screen or scene
@@ -37,22 +44,22 @@ use objc2::runtime::ProtocolObject;
 use objc2::{MainThreadMarker, Message};
 use objc2_foundation::{NSNotification, NSNotificationCenter, NSObjectProtocol, NSRect};
 use objc2_ui_kit::{
-    UISceneDidDisconnectNotification, UISceneWillConnectNotification, UIScreen,
-    UIScreenDidConnectNotification, UIScreenDidDisconnectNotification,
-    UIScreenModeDidChangeNotification,
+    UIDevice, UIDisplayGamut, UISceneDidDisconnectNotification, UISceneWillConnectNotification,
+    UIScreen, UIScreenDidConnectNotification, UIScreenDidDisconnectNotification,
+    UIScreenModeDidChangeNotification, UITraitEnvironment, UIUserInterfaceIdiom,
 };
 use parking_lot::Mutex;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform::{DisplayInfo, DisplayKey, DisplaySnapshot, RefreshPeriod};
+use flui_platform::{DisplayInfo, DisplayKey, DisplaySnapshot, FrameRateHint};
 
 use objc2_quartz_core::{CADisplayLink, CAFrameRateRange};
 
 use super::link_rate::{
-    FrameRatePreference, FrameRateRange, FrameRateRangeProperty, ScreenPeriods,
+    FrameRatePreference, FrameRateRange, FrameRateRangeProperty, LinkPeriod, ScreenPeriods,
     frame_rate_preference,
 };
-use super::screen::{SameObject, ScreenLedger};
+use super::screen::{IosPotentialHeadroom, SameObject, ScreenLedger, change_screen, screen_color};
 use crate::display::source::DisplaySource;
 use crate::error::PlatformError;
 use crate::owner::apple::ios::{NativeOwner, ScreenIdentity, ScreenNumber};
@@ -76,11 +83,16 @@ impl SameObject for RetainedScreen {
 pub struct IosDisplays {
     source: DisplaySource,
     version: AppleVersion,
+    /// Whether the device shows a pointer for a trackpad or mouse: an iPad
+    /// (`UIUserInterfaceIdiom.pad`), read once.
+    shows_a_pointer: bool,
     /// The retained screens and their numbers. Main thread only: a
     /// `UIScreen` is retained and compared there.
     screens: NativeOwner<std::cell::RefCell<ScreenLedger<RetainedScreen>>>,
     /// The period each window's display link last published, by screen.
     link_periods: Mutex<ScreenPeriods<WindowId>>,
+    /// The cadence each window's display link shows, as it measures it.
+    cadences: Mutex<Vec<(WindowId, LinkPeriod)>>,
 }
 
 impl std::fmt::Debug for IosDisplays {
@@ -94,8 +106,11 @@ impl IosDisplays {
         Self {
             source: DisplaySource::new(),
             version: AppleVersion::read(),
+            shows_a_pointer: UIDevice::currentDevice(marker).userInterfaceIdiom()
+                == UIUserInterfaceIdiom::Pad,
             screens: NativeOwner::new(std::cell::RefCell::new(ScreenLedger::new()), marker),
             link_periods: Mutex::new(ScreenPeriods::new()),
+            cadences: Mutex::new(Vec::new()),
         }
     }
 
@@ -127,6 +142,14 @@ impl IosDisplays {
             // CONTENT, not for the display itself.
             let mut display = DisplayInfo::new(id, name, bounds, scale).with_primary(index == 0);
             display.refresh_period = self.link_periods.lock().period_of(number);
+            // SAFETY: `displayGamut` is read on the main thread, which
+            // `marker` proves, as UIKit's trait collections require.
+            let p3 = unsafe { screen.traitCollection().displayGamut() } == UIDisplayGamut::P3;
+            let potential = self
+                .version
+                .since::<IosPotentialHeadroom>()
+                .map(|_| screen.potentialEDRHeadroom());
+            display = display.with_color(Ok(screen_color(p3, potential)));
             displays.push(display);
         }
         ledger.release_unlisted(&live);
@@ -238,14 +261,17 @@ impl Drop for ScreenObserver {
 }
 
 impl crate::owner::apple::ios::HostDisplays for IosDisplays {
+    fn version(&self) -> AppleVersion {
+        self.version
+    }
+
+    fn shows_a_pointer(&self) -> bool {
+        self.shows_a_pointer
+    }
+
     /// The last sample while nothing has invalidated it, otherwise a fresh one.
     fn snapshot(&self, marker: MainThreadMarker) -> Result<DisplaySnapshot, PlatformError> {
         self.source.snapshot_with(|| Ok(self.read(marker)))
-    }
-
-    /// One atomic store, so any thread may call it.
-    fn invalidate(&self) {
-        self.source.invalidate();
     }
 
     /// A screen `UIScreen.screens` does not list is not numbered: it answers no
@@ -283,14 +309,62 @@ impl crate::owner::apple::ios::HostDisplays for IosDisplays {
         }
     }
 
-    fn report_link_period(&self, number: ScreenNumber, window: WindowId, period: RefreshPeriod) {
+    fn move_window(
+        &self,
+        window: WindowId,
+        slot: &Mutex<ScreenIdentity>,
+        next: ScreenIdentity,
+    ) -> bool {
+        let changed = change_screen(&mut *slot.lock(), next);
+        let Some(previous) = changed else {
+            return false;
+        };
+        // The link stays with the window: it starts measuring again, on the
+        // screen the window moved to.
+        if let Some((_, cadence)) = self
+            .cadences
+            .lock()
+            .iter_mut()
+            .find(|(held, _)| *held == window)
+        {
+            cadence.forget();
+        }
+        if let Some(number) = previous.number {
+            self.link_periods.lock().forget(number.0, window);
+        }
+        self.source.invalidate();
+        true
+    }
+
+    fn observe_link(
+        &self,
+        window: WindowId,
+        number: Option<ScreenNumber>,
+        interval_seconds: f64,
+    ) -> bool {
+        let published = {
+            let mut cadences = self.cadences.lock();
+            let index = cadences
+                .iter()
+                .position(|(held, _)| *held == window)
+                .unwrap_or_else(|| {
+                    cadences.push((window, LinkPeriod::default()));
+                    cadences.len() - 1
+                });
+            cadences[index].1.observe(interval_seconds)
+        };
+        let (Some(period), Some(number)) = (published, number) else {
+            return false;
+        };
         self.link_periods.lock().report(number.0, window, period);
         self.source.invalidate();
+        true
     }
 
     /// Other windows' periods on the screen stay.
-    fn forget_link_period(&self, number: ScreenNumber, window: WindowId) {
-        let forgot = self.link_periods.lock().forget(number.0, window);
+    fn forget_link(&self, window: WindowId, number: Option<ScreenNumber>) {
+        self.cadences.lock().retain(|(held, _)| *held != window);
+        let forgot = number.is_some_and(|number| self.link_periods.lock().forget(number.0, window));
         if forgot {
             self.source.invalidate();
         }
@@ -298,9 +372,9 @@ impl crate::owner::apple::ios::HostDisplays for IosDisplays {
 
     /// A frame-rate range on iOS 15 and later, `preferredFramesPerSecond`
     /// before it.
-    fn request_frame_rate(&self, link: &CADisplayLink, screen: &UIScreen) {
+    fn request_frame_rate(&self, link: &CADisplayLink, screen: &UIScreen, hint: FrameRateHint) {
         let maximum = i64::try_from(screen.maximumFramesPerSecond()).unwrap_or(0);
-        match frame_rate_preference(self.version, maximum) {
+        match frame_rate_preference(self.version, maximum, hint) {
             FrameRatePreference::Range(property, range) => {
                 set_frame_rate_range(link, property, range);
             }

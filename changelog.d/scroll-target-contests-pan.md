@@ -1,0 +1,2 @@
+### Added
+- `InteractionDispatchHandle::declare_scroll_target_axis` lets a scroll target compete with the recognizers that feed on a touchpad pan. While the contest is open the pan's packets are held back; the winner's verdict drops them (a feed won) or replays them to the scroll route in order (a scroll target won, or nobody crossed slop). Nothing declares an axis yet: `Scrollable` does in a follow-up.

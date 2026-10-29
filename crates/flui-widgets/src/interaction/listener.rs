@@ -7,6 +7,7 @@ use std::{
     rc::Rc,
 };
 
+use flui_foundation::geometry::Axis;
 use flui_interaction::events::ScrollEvent;
 use flui_interaction::pointer::{EventPropagation, PanZoomDispatch, PanZoomTarget, ScrollTarget};
 use flui_interaction::{
@@ -44,6 +45,14 @@ where
 /// An arbitrated scroll-signal handler: returns
 /// [`EventPropagation::Stop`] to claim the tick, ending the leaf-first walk.
 type ScrollClaimCallback = Rc<dyn Fn(&ScrollEvent) -> EventPropagation>;
+
+/// The axis a listener's scroll claim scrolls along and whether it has
+/// anywhere to go, for a touchpad pan to contest (ADR-0251).
+#[derive(Clone)]
+struct ScrollAxis {
+    axis: Axis,
+    can_scroll: Rc<dyn Fn() -> bool>,
+}
 
 /// An arbitrated trackpad pan-zoom handler: returns
 /// [`EventPropagation::Stop`] to claim the tick, ending the leaf-first walk.
@@ -113,6 +122,7 @@ pub struct Listener {
     on_pointer_signal: Option<PointerCallback>,
     on_pointer_revise: Option<PointerCallback>,
     on_scroll_claim: Option<ScrollClaimCallback>,
+    scroll_axis: Option<ScrollAxis>,
     on_pointer_pan_zoom_update: Option<PointerPanZoomCallback>,
     on_pointer_pan_zoom_claim: Option<PanZoomClaimCallback>,
     behavior: HitTestBehavior,
@@ -132,6 +142,7 @@ impl Default for Listener {
             on_pointer_signal: None,
             on_pointer_revise: None,
             on_scroll_claim: None,
+            scroll_axis: None,
             on_pointer_pan_zoom_update: None,
             on_pointer_pan_zoom_claim: None,
             behavior: HitTestBehavior::DeferToChild,
@@ -323,6 +334,23 @@ impl Listener {
         self
     }
 
+    /// Let this listener's scroll claim contend for a touchpad pan along
+    /// `axis` while `can_scroll` holds (ADR-0251). Without it, the claim
+    /// keeps every scroll packet and a pan beside a recognizer that feeds on
+    /// it goes to the recognizer alone.
+    #[must_use]
+    pub(crate) fn scroll_axis(
+        mut self,
+        axis: Axis,
+        can_scroll: impl Fn() -> bool + 'static,
+    ) -> Self {
+        self.scroll_axis = Some(ScrollAxis {
+            axis,
+            can_scroll: Rc::new(can_scroll),
+        });
+        self
+    }
+
     /// Called when a trackpad pan/zoom update reaches the listener.
     ///
     /// FLUI routing delivers owned [`PointerEvent::PanZoom`] events.
@@ -455,7 +483,10 @@ impl Listener {
     fn register(&self, ctx: &RenderObjectContext<'_>) -> Option<PointerTarget> {
         let handler = self.owner_handler(ctx)?;
         match ctx.register_pointer(handler) {
-            Ok(target) => Some(target),
+            Ok(target) => {
+                self.sync_scroll_contact_feed(ctx, target);
+                Some(target)
+            }
             Err(error) => {
                 tracing::debug!(
                     ?error,
@@ -473,7 +504,10 @@ impl Listener {
     fn register_scroll_claim(&self, ctx: &RenderObjectContext<'_>) -> Option<ScrollTarget> {
         let claim = self.on_scroll_claim.clone()?;
         match ctx.register_scroll(move |event| claim(event)) {
-            Ok(target) => Some(target),
+            Ok(target) => {
+                self.sync_scroll_axis(ctx, target);
+                Some(target)
+            }
             Err(error) => {
                 tracing::debug!(
                     ?error,
@@ -482,6 +516,34 @@ impl Listener {
                 );
                 None
             }
+        }
+    }
+
+    /// Mirror whether this configuration contends for a touchpad pan on the
+    /// scroll claim's lane entry.
+    fn sync_scroll_axis(&self, ctx: &RenderObjectContext<'_>, target: ScrollTarget) {
+        let outcome = match &self.scroll_axis {
+            Some(declared) => {
+                let can_scroll = Rc::clone(&declared.can_scroll);
+                ctx.declare_scroll_target_axis(target, declared.axis, move || can_scroll())
+            }
+            None => ctx.withdraw_scroll_target_axis(target),
+        };
+        if let Err(error) = outcome {
+            tracing::debug!(?error, "Listener scroll-axis declaration failed");
+        }
+    }
+
+    /// Mirror whether a touchpad pan feeds this listener's recognizers on its
+    /// pointer target.
+    fn sync_scroll_contact_feed(&self, ctx: &RenderObjectContext<'_>, target: PointerTarget) {
+        let outcome = if self.recognizers.feeds_scroll_contact() {
+            ctx.declare_scroll_contact_feed(target)
+        } else {
+            ctx.withdraw_scroll_contact_feed(target)
+        };
+        if let Err(error) = outcome {
+            tracing::debug!(?error, "Listener scroll-contact feed declaration failed");
         }
     }
 
@@ -495,6 +557,7 @@ impl Listener {
                 if let Err(error) = ctx.replace_scroll(target, move |event| claim(event)) {
                     tracing::warn!(?error, "Listener scroll-claim replacement failed");
                 }
+                self.sync_scroll_axis(ctx, target);
             }
             (Some(target), None) => {
                 if let Err(error) = ctx.unregister_scroll(target) {
@@ -584,6 +647,7 @@ impl RenderView for Listener {
                 {
                     tracing::warn!(?error, "Listener handler replacement failed");
                 }
+                self.sync_scroll_contact_feed(ctx, target);
             }
             None => render_object.set_target(self.register(ctx)),
         }

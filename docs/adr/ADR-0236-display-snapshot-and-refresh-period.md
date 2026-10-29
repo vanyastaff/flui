@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-17
+- **Superseded-by:** [ADR-0257](ADR-0257-frame-timing-and-latency.md), decision 8 only: the tick may be the
+  frame's vsync instant, a sampled time; it is still not shifted to the presentation time.
 - **Superseded-by:** [ADR-0244](ADR-0244-os-version-floors-and-gates.md), decision 9's version and
   capability check style only; the Android refresh-rate hint it describes remains in force.
 - **Superseded-by:** [ADR-0249](ADR-0249-the-android-loop-blocks-until-woken.md), decision 7's Android

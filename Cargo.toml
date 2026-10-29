@@ -180,7 +180,7 @@ repository = "https://github.com/vanyastaff/flui"
 [workspace.dependencies]
 # ASYNC RUNTIME — tokio 1.43 = LTS floor (lock resolves latest 1.x)
 tokio = { version = "1.43" }
-zbus = { version = "5.19", default-features = false, features = ["tokio"] }
+zbus = { version = "6", default-features = false, features = ["proxy", "tokio"] }
 # Structured cancellation for the runtime-owned execution services
 # (`CancellationToken`; adopted with the unified execution services,
 # ADR-0047, issue #557). `default-features = false` and no
@@ -209,7 +209,7 @@ crossbeam-channel = "0.5"
 interprocess = { version = "2.4", default-features = false }
 # OS random bytes: `flui run --agent`'s launch token (flui-cli). Already in the
 # graph through the networking and hashing crates, so no new copy.
-getrandom = "0.3"
+getrandom = "0.4"
 # The SDDL string of the agent endpoint's user-only pipe security descriptor
 # (Windows); `interprocess` already builds it.
 widestring = "1"
@@ -359,10 +359,16 @@ winit = "0.30.12"
 # winit's. The X11 and Wayland client versions are the ones winit already pulls
 # into the lock, so the tree gains no second copy. `x11rb` runs on its pure-Rust
 # connection (no libxcb) and needs RandR only; `wayland-protocols` carries
-# `zxdg_output_v1`, which lives under `unstable`.
+# `zxdg_output_v1`, `xdg-decoration` and `xdg-foreign` under `unstable`, and
+# `wp_fractional_scale_v1` and `wp_color_management_v1` under `staging`.
 x11rb = { version = "0.13", default-features = false, features = ["randr"] }
 wayland-client = "0.31"
-wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
+wayland-protocols = { version = "0.32", features = ["client", "unstable", "staging"] }
+# The native Wayland host's connection runs on libwayland-client, loaded at run
+# time (`dlopen`): a wgpu surface needs the `wl_display` and `wl_surface`
+# pointers, which only the system library has, and the GPU driver reads events
+# on the same display from its own thread. winit builds it the same way.
+wayland-backend = { version = "0.3", features = ["client_system", "dlopen"] }
 # Safe `poll` and `eventfd` for the display thread's connection and stop descriptors.
 rustix = { version = "1", default-features = false, features = ["std", "event"] }
 raw-window-handle = "0.6"
@@ -403,6 +409,10 @@ kurbo = "0.13"
 color = "0.3.3"
 # bytemuck: zero-copy Pod/Zeroable derives used by flui-engine.
 bytemuck = { version = "1.24", features = ["derive"] }
+
+# cfg_aliases: flui-native's build.rs names its compound `cfg` conditions once.
+# The version winit and wgpu already pull into the lock.
+cfg_aliases = "0.2"
 
 # === Engine build-script dependencies ===
 # wgsl_bindgen: WGSL → Rust binding codegen, used in flui-engine's build.rs only.
@@ -601,7 +611,30 @@ large_futures = "warn"
 imprecise_flops = "warn"
 # A mutating debug assertion changes behavior between debug and release builds.
 debug_assert_with_mut_call = "warn"
-# Allow reasonable exceptions
+# Already on through `pedantic` (the first three) and `all` (`unnecessary_unwrap`),
+# so CI holds them at zero sites on every target; pinned so a group change cannot
+# drop them. `is_some()` then `unwrap()` is a pattern match; `use x::*` hides which
+# name a rename breaks (`use super::*` in a test module stays allowed).
+match_wildcard_for_single_variants = "warn"
+wildcard_imports = "warn"
+needless_for_each = "warn"
+unnecessary_unwrap = "warn"
+# `missing_assert_message` — measured, kept off. It skips `#[test]` functions
+# only, not test helpers, table rows or `#[cfg(test)]` modules, and clippy has no
+# `allow-...-in-tests` option for it: 8,337 sites across Windows, macOS, Android
+# and wasm32, 158 of them in Windows lib/bin code (49 in flui-engine's
+# build.rs-generated pipeline bindings).
+# `wildcard_enum_match_arm` — measured, kept off workspace-wide. A `_` arm that
+# swallows a variant added later is the "accepted work dropped" defect, but the
+# measured count is 729 sites (Windows all-targets/all-features 701, of which
+# 407 in lib/bin code; macOS, Android and wasm32 add 28), mostly over our own
+# enums (`PointerEvent` 114, `DrawOp` 45, `Layer` 40), with a few over syn,
+# winit, serde_json and lyon. Too many for one change, so it is on per crate
+# instead (`#![warn(clippy::wildcard_enum_match_arm)]` in flui-platform and
+# flui-app, 21 sites fixed), widened crate by crate. Over a workspace enum that
+# is `#[non_exhaustive]` in another crate the `_` is mandatory: list the known
+# variants in its arm (`A | B | _`) so the next variant trips the lint again.
+# A foreign enum's site takes `#[expect(..., reason = "...")]`.
 cast_precision_loss = "allow"
 module_name_repetitions = "allow"
 too_many_lines = "allow"
@@ -689,7 +722,11 @@ edge-exceptions = [
 # cargo-shear reports these as unlinked: `tests/thread_boundary_ui.rs` hands the
 # trybuild inputs to rustc by glob.
 [package.metadata.cargo-shear]
-ignored-paths = ["tests/ui/thread_boundary/*.rs", "tests/ui/unstable_input/*.rs"]
+ignored-paths = [
+    "tests/ui/thread_boundary/*.rs",
+    "tests/ui/unstable_input/*.rs",
+    "tests/ui/native/*.rs",
+]
 
 [lints]
 workspace = true
@@ -804,6 +841,15 @@ gpu-readback-tests = []
 # feature for packages. The platform crates build the types regardless.
 unstable-input = []
 
+# === The escape hatch ===
+# Additive and Evolving (ADR-0089 §5, ADR-0254 §8). Publishes `flui::native`:
+# `HostWindow`, `with_window` (the window a presentation is drawn in) and, on
+# Windows and macOS, `flui::native::windows` and `flui::native::macos`, what one
+# operating system's windows offer beyond the window contract. It turns on
+# `flui-app`'s `native`, which keeps the list of host windows `with_window`
+# reads; the core host builds the extensions regardless.
+native = ["flui-app/native"]
+
 # Development-only reload machinery, off in an ordinary production graph. This
 # re-exports flui-hot-reload as `flui::hot_reload`; the application installs
 # its hook with `AppConfig::with_dev_reload` (ADR-0094 §1), and flui-app names
@@ -867,6 +913,13 @@ name = "agent_workflow"
 path = "tests/agent_workflow.rs"
 required-features = ["testing", "material"]
 
+# The escape hatch's surface: each `flui::native` item through its facade path,
+# and a window of each host narrowed through it.
+[[test]]
+name = "surface"
+path = "tests/surface.rs"
+required-features = ["native"]
+
 # UI-runtime-bound handles refuse `std::thread::spawn` (compile-fail fixtures under
 # `tests/ui/thread_boundary/`), and the facade hides the unstable input vocabulary
 # without `unstable-input` (`tests/ui/unstable_input/`). Its own binary, a member of nextest's
@@ -874,6 +927,21 @@ required-features = ["testing", "material"]
 [[test]]
 name = "thread_boundary_ui"
 path = "tests/thread_boundary_ui.rs"
+
+# The acceptance application in a window, for native runs through flui-driver.
+# Its tree is `tests/fixtures/acceptance_app/app.rs`, which uses the Material
+# catalog; `tests/facade_consumer.rs` runs its headless rows.
+[[example]]
+name = "acceptance_app"
+path = "examples/acceptance_app.rs"
+required-features = ["material"]
+
+# The same application with the fault its argument names (ADR-0258 §4), for
+# the native runs that check what a panic leaves behind.
+[[example]]
+name = "acceptance_app_faults"
+path = "examples/acceptance_app_faults.rs"
+required-features = ["material"]
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Build Profiles

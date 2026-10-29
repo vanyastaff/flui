@@ -291,7 +291,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             if node.is_repaint_boundary() {
                 return current;
             }
-            match node.parent() {
+            match self.render_tree.parent(current) {
                 Some(parent) => current = parent,
                 None => return current,
             }

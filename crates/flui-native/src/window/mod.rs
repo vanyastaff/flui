@@ -3,10 +3,10 @@
 //!
 //! The model is what two or more platforms share: the published state, its
 //! staleness and the mode decided from a window system's flags ([`state`]),
-//! the rule by which a window reports whether its surface is seen
-//! (`visibility`), the window configuration the Win32 and AppKit hosts are
-//! built with (`config`) and the acknowledgement a host waits for before it
-//! publishes a window it attached ([`installation`]). Each platform file
+//! what a desktop host decides about a window before it opens (`plan`, the
+//! winit and X11 hosts'), and the acknowledgement a host waits for before it
+//! publishes a window it attached ([`installation`]); beside it is the window
+//! configuration the Win32 host is built with (`config`). Each platform file
 //! implements the window position of its host's table, and its system chrome
 //! (the `Chrome` position) beside it.
 //!
@@ -14,29 +14,29 @@
 //! what it asks of the window feature, a platform file here implements it, and
 //! `hosts/<os>.rs` hands the loop the window feature's object.
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(windows)]
 pub(crate) mod config;
 pub(crate) mod installation;
+#[cfg(any(winit_host, x11_host))]
+pub(crate) mod plan;
 pub(crate) mod state;
-#[cfg(any(
-    windows,
-    target_os = "macos",
-    target_arch = "wasm32",
-    all(target_os = "linux", feature = "winit-backend"),
-    test
-))]
-pub(crate) mod visibility;
 
 #[cfg(target_os = "android")]
 pub(crate) mod android;
 #[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) mod apple;
+#[cfg(any(target_os = "android", target_os = "ios", target_os = "macos", test))]
+pub(crate) mod capabilities;
 pub(crate) mod headless;
-#[cfg(any(all(target_os = "linux", feature = "winit-backend"), test))]
+#[cfg(any(linux_host, test))]
 pub(crate) mod linux {
-    //! The live layer of the Linux windows, which the winit host uses until
-    //! the native Wayland and X11 hosts replace it.
+    //! The Linux windows: the native Wayland host's (`wayland`), and the native
+    //! X11 host's with what the winit host reads of an X11 window that winit
+    //! does not report (`x11`).
 
+    #[cfg(any(wayland_host, test))]
+    pub(crate) mod wayland;
+    #[cfg(any(x11_host, test))]
     pub(crate) mod x11;
 }
 #[cfg(target_arch = "wasm32")]

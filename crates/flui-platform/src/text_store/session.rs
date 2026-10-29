@@ -80,16 +80,40 @@ pub struct RangeRect {
     pub clipped: bool,
 }
 
-/// How [`TextStoreRead::index_at_point`] treats a point that falls between
-/// characters or outside the text.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PointMode {
-    /// The character whose box contains the point; a point outside the text
-    /// is [`TextStoreError::PointOutside`].
-    Exact,
-    /// The character boundary nearest the point, clamping one outside the
-    /// text to the nearer end.
-    Nearest,
+/// How [`TextStoreRead::index_at_point`] answers a point inside a
+/// character's box, and one outside every character's box: two independent
+/// choices, as TSF's two `GetACPFromPoint` flags are
+/// (<https://learn.microsoft.com/en-us/windows/win32/api/textstor/nf-textstor-itextstoreacp-getacpfrompoint>).
+///
+/// With neither, a point inside a box answers that character's start, and a
+/// point outside every box is [`TextStoreError::PointOutside`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[allow(
+    clippy::exhaustive_structs,
+    reason = "TSF's two `GetACPFromPoint` flags, each set or not"
+)]
+pub struct PointMode {
+    /// A point inside a character's box answers the box's edge nearer the
+    /// point, the character's start or end (`GXFPF_ROUND_NEAREST`).
+    pub round_to_nearest_edge: bool,
+    /// A point outside every character's box answers the position nearest
+    /// it instead of [`TextStoreError::PointOutside`] (`GXFPF_NEAREST`).
+    pub nearest_when_outside: bool,
+}
+
+impl PointMode {
+    /// The character whose box contains the point; a point outside every
+    /// box is [`TextStoreError::PointOutside`].
+    pub const EXACT: Self = Self {
+        round_to_nearest_edge: false,
+        nearest_when_outside: false,
+    };
+
+    /// The character boundary nearest the point, inside the text or out.
+    pub const NEAREST: Self = Self {
+        round_to_nearest_edge: true,
+        nearest_when_outside: true,
+    };
 }
 
 /// The store's standing properties, TSF's `TS_STATUS`.
@@ -194,8 +218,9 @@ pub trait TextStoreRead {
     ///
     /// # Errors
     ///
-    /// [`TextStoreError::PointOutside`] for [`PointMode::Exact`] when the
-    /// point misses the text, or [`TextStoreError::NoLayout`].
+    /// [`TextStoreError::PointOutside`] when the point misses every
+    /// character's box and `mode` does not ask for the nearest position
+    /// ([`PointMode::nearest_when_outside`]), or [`TextStoreError::NoLayout`].
     fn index_at_point(
         &self,
         point: Point<f64>,

@@ -56,12 +56,15 @@ mod crossing {
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    use flui_platform::UnsupportedReason;
     use flui_platform::data_transfer::{
         Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat,
-        TransferImage, TransferPayload, TransferUri,
+        TransferPayload,
     };
     use flui_platform::drag::IDENTITY_ESSENCE;
     use flui_platform::pointer::PointerKind;
+
+    use crate::drag::offers::{PathStyle, TransferUri};
 
     /// `DROPEFFECT_COPY`.
     pub(super) const EFFECT_COPY: u32 = 1;
@@ -236,7 +239,8 @@ mod crossing {
         match (native, payload) {
             (NativeFormat::UnicodeText, TransferPayload::Text(text)) => Some(encode_text(text)),
             (NativeFormat::Html, TransferPayload::Html(markup)) => Some(encode_html(markup)),
-            (NativeFormat::FileDrop, TransferPayload::UriList(uris)) => {
+            (NativeFormat::FileDrop, payload) => {
+                let uris = TransferUri::list_of(payload, PathStyle::Windows)?;
                 let paths: Vec<&std::path::Path> = uris
                     .iter()
                     .filter_map(|uri| match uri {
@@ -247,7 +251,6 @@ mod crossing {
                 (!paths.is_empty()).then(|| encode_file_drop(&paths))
             }
             (NativeFormat::Named(_), TransferPayload::Custom { bytes, .. }) => Some(bytes.to_vec()),
-            (NativeFormat::Named(_), TransferPayload::Image(image)) => Some(image.bytes.to_vec()),
             _ => None,
         }
     }
@@ -270,7 +273,10 @@ mod crossing {
             (NativeFormat::UnicodeText, _) => decode_text(bytes).map(TransferPayload::Text),
             (NativeFormat::Html, _) => decode_html(bytes).map(TransferPayload::Html),
             (NativeFormat::FileDrop, _) => decode_file_drop(bytes).map(|paths| {
-                TransferPayload::UriList(paths.into_iter().map(TransferUri::Path).collect())
+                TransferUri::list_payload(
+                    paths.into_iter().map(TransferUri::Path),
+                    PathStyle::Windows,
+                )
             }),
             // The identity is read from the descriptor; its payload is empty, as
             // the source runtime serves it.
@@ -279,10 +285,10 @@ mod crossing {
                 bytes: Arc::from(Vec::new()),
             }),
             (NativeFormat::Named(_), TransferFormat::Image { mime }) => {
-                Ok(TransferPayload::Image(TransferImage {
+                Ok(TransferPayload::Custom {
                     mime: mime.clone(),
                     bytes: Arc::from(bytes),
-                }))
+                })
             }
             (NativeFormat::Named(_), TransferFormat::Custom { mime }) => {
                 Ok(TransferPayload::Custom {
@@ -472,19 +478,27 @@ mod crossing {
 
     /// The mouse buttons (`MK_*`) whose release ends an OS session `DoDragDrop`
     /// would run for a drag of a `kind` contact, given the buttons `held` in the
-    /// thread's input state as it starts; `None` when OLE's loop cannot carry it.
+    /// thread's input state as it starts; why not when OLE's loop cannot carry
+    /// it.
     ///
     /// That loop follows the mouse alone. A pen or touch contact a window takes
     /// as `WM_POINTER` without `DefWindowProc` is never promoted to mouse input,
     /// so it sets no mouse button in the key state the loop reads; with no button
     /// held the loop could neither follow the contact nor see it lift, and the
-    /// drag stays in its window instead (ADR-0211 §11).
-    #[must_use]
-    pub(super) fn os_loop_buttons(kind: Option<PointerKind>, held: u32) -> Option<u32> {
+    /// drag stays in its window instead (ADR-0211 §11). A pen or touch contact
+    /// is never carried, on any Windows device: `NotOnThisPlatform` for that
+    /// contact, while a mouse drag is still taken. A mouse whose buttons are
+    /// already up is `Unavailable`: the next press may start one.
+    pub(super) fn os_loop_buttons(
+        kind: Option<PointerKind>,
+        held: u32,
+    ) -> Result<u32, UnsupportedReason> {
         if matches!(kind, Some(PointerKind::Touch | PointerKind::Pen { .. })) {
-            return None;
+            return Err(UnsupportedReason::NotOnThisPlatform);
         }
-        Some(held & MOUSE_BUTTONS).filter(|buttons| *buttons != 0)
+        Some(held & MOUSE_BUTTONS)
+            .filter(|buttons| *buttons != 0)
+            .ok_or(UnsupportedReason::Unavailable)
     }
 
     #[cfg(test)]
@@ -507,10 +521,10 @@ use std::{
 use flui_foundation::DataTransferId;
 #[cfg(windows)]
 use flui_platform::{
+    Unsupported, UnsupportedReason,
     data_transfer::{
-        DataTransferOffer, DataTransferSource, DropFeedback, OfferRecord, OfferTable,
-        RepresentationDescriptor, RepresentationIndex, TransferError, TransferLimits,
-        TransferRequest,
+        DataTransferOffer, DataTransferSource, DropFeedback, RepresentationDescriptor,
+        RepresentationIndex, TransferError, TransferLimits, TransferRequest,
     },
     drag::{DragError, OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource},
     pointer::PointerKind,
@@ -533,7 +547,7 @@ use windows::Win32::{
         Input::KeyboardAndMouse::GetKeyState,
         WindowsAndMessaging::{
             MSG, MsgWaitForMultipleObjects, PM_NOREMOVE, PM_QS_SENDMESSAGE, PeekMessageW,
-            QS_SENDMESSAGE, SMTO_NORMAL, SendMessageTimeoutW,
+            QS_SENDMESSAGE, SMTO_NORMAL, SendMessageTimeoutW, WM_NCDESTROY,
         },
     },
 };
@@ -542,12 +556,12 @@ use windows_core::{ComObject, HSTRING};
 
 #[cfg(windows)]
 use crate::{
+    drag::offers::OfferTable,
     owner::modal_pace::MODAL_FRAME_PACE_MS,
     owner::panic_boundary::{contain_owner_callback, owner_callback_panicked},
     owner::slot::OwnerSlot,
-    owner::windows::WindowRef,
     owner::windows::control::{OwnerMessages, OwnerPost, OwnerWindow},
-    owner::windows::{CreatedWindow, HostDrag, WindowMessages},
+    owner::windows::{CreatedWindow, DropTarget, HostDrag, WindowMessages, WindowRef, WindowTable},
 };
 #[cfg(windows)]
 use crossing::{
@@ -555,7 +569,7 @@ use crossing::{
 };
 
 #[cfg(windows)]
-pub(crate) use com::WindowDropTarget;
+use com::WindowDropTarget;
 
 /// The registered name of the `text/html` clipboard format (CF_HTML).
 #[cfg(windows)]
@@ -711,9 +725,7 @@ impl OleTransfer {
         let representations: Arc<[RepresentationDescriptor]> = Arc::from(representations);
         let id = {
             let mut offers = self.offers.lock();
-            let id = offers
-                .table
-                .mint(OfferRecord::new(Arc::clone(&representations)));
+            let id = offers.table.mint(Arc::clone(&representations));
             offers.feedback.insert(id, DropFeedback::default());
             id
         };
@@ -757,22 +769,24 @@ impl OleTransfer {
     /// Accept a session of a `kind` contact and post its start to the owner
     /// window.
     fn start(&self, request: OsDragRequest, kind: Option<PointerKind>) -> Result<(), DragError> {
-        let owner = self.owner().ok_or(DragError::Unavailable)?;
+        let not_now = DragError::from(Unsupported::new(UnsupportedReason::Unavailable));
+        let owner = self.owner().ok_or(not_now)?;
         if owner.running.get() || owner.pending.borrow().is_some() {
             // One OS session at a time, as the OS runs one modal loop.
-            return Err(DragError::Unavailable);
+            return Err(not_now);
         }
         // OLE's loop follows the mouse alone: a drag no mouse button holds
         // stays in its window rather than starting a session that cancels at
         // its first question (ADR-0211 §11).
-        let began = os_loop_buttons(kind, mouse_buttons_held()).ok_or(DragError::Unavailable)?;
+        let began = os_loop_buttons(kind, mouse_buttons_held())
+            .map_err(|reason| DragError::from(Unsupported::new(reason)))?;
         *owner.pending.borrow_mut() = Some(PendingStart { request, began });
         if self.post_start() {
             Ok(())
         } else {
             let refused = owner.pending.borrow_mut().take();
             drop(refused);
-            Err(DragError::Unavailable)
+            Err(not_now)
         }
     }
 
@@ -989,8 +1003,54 @@ impl HostDrag for OleTransfer {
         Win32DragSource::new(self, window)
     }
 
-    fn register_target(self: Arc<Self>, window: WindowRef) {
-        register_target(window, self);
+    fn register_target(self: Arc<Self>, window: &CreatedWindow) -> Option<Box<dyn DropTarget>> {
+        // Drop targets live on the owner thread, in its OLE apartment.
+        self.owner()?;
+        let hwnd = window.hwnd;
+        let target = ComObject::new(WindowDropTarget::new(window, self));
+        let interface: IDropTarget = target.to_interface();
+        // SAFETY: `hwnd` is the live window this thread just created, in the
+        // OLE apartment the platform entered on it; OLE keeps its own reference
+        // to `interface` until `RevokeDragDrop`.
+        if let Err(error) = unsafe { RegisterDragDrop(hwnd, &interface) } {
+            tracing::warn!(%error, "the window takes no drags: RegisterDragDrop failed");
+            return None;
+        }
+        Some(Box::new(RegisteredTarget {
+            window: window.window(),
+            target,
+        }))
+    }
+}
+
+/// One window's drop target as OLE holds it, until the window's class
+/// revokes it.
+#[cfg(windows)]
+struct RegisteredTarget {
+    window: WindowRef,
+    target: ComObject<WindowDropTarget>,
+}
+
+#[cfg(windows)]
+impl DropTarget for RegisteredTarget {
+    fn revoke(&self) {
+        // SAFETY: the window is live until its destruction ends, on its
+        // thread; the registration being revoked is the one
+        // `register_target` made.
+        if let Err(error) = unsafe { RevokeDragDrop(self.window.hwnd()) } {
+            tracing::debug!(%error, "RevokeDragDrop failed");
+        }
+        self.target.revoke();
+    }
+
+    #[cfg(test)]
+    fn interface(&self) -> IDropTarget {
+        self.target.to_interface()
+    }
+
+    #[cfg(test)]
+    fn scale(&self) -> f64 {
+        self.target.scale()
     }
 }
 
@@ -1102,60 +1162,110 @@ impl PlatformDragSource for Win32DragSource {
     }
 }
 
-/// The hook on FLUI's window class that registers each window it creates as
-/// an OLE drop target, from then on taking drags from this process or another
-/// (ADR-0211). The window's context holds the loop's transport; the host lists
-/// the hook after the text services and before the touchpad, so a window
-/// activates TSF, then takes drags, then gets its viewport.
+/// The hook on FLUI's window class that makes each window it creates an OLE
+/// drop target, from then on taking drags from this process or another
+/// (ADR-0211), through the transport of the loop that opened the window. It
+/// keeps each window's registration from the window's creation to its
+/// destruction (or `WM_NCDESTROY` for a window whose destruction was not
+/// announced), which revokes it; the target reads the window's scale from the
+/// window. The host lists it last, so a window activates TSF and gets its
+/// touchpad viewport before it takes drags.
 #[cfg(windows)]
-pub(crate) struct DropTargetRegistration;
+#[derive(Default)]
+pub(crate) struct DropTargetRegistration {
+    windows: WindowTable<Box<dyn DropTarget>>,
+}
 
 #[cfg(windows)]
-impl WindowMessages for DropTargetRegistration {
-    fn created(&self, window: &CreatedWindow) {
-        let this = WindowRef::new(window.hwnd, window.identity);
-        if let Some(transfer) =
-            this.with_context("drop target", |context| Arc::clone(&context.drag))
-        {
-            transfer.register_target(this);
+impl DropTargetRegistration {
+    /// The hook of a class on an owner thread, with no window yet.
+    pub(crate) fn new() -> Rc<Self> {
+        let hook = Rc::new(Self::default());
+        #[cfg(test)]
+        testing::made(&hook);
+        hook
+    }
+
+    /// Revoke a registration the table handed out, with no borrow held,
+    /// since leaving runs the window's callbacks.
+    fn revoke(taken: Option<(WindowRef, Box<dyn DropTarget>)>) {
+        if let Some((_, target)) = taken {
+            target.revoke();
         }
     }
 }
 
-/// Register the drop target of `window`, created on this thread, and keep it
-/// in the window's context. A window whose registration fails takes no drags.
 #[cfg(windows)]
-fn register_target(window: WindowRef, transfer: Arc<OleTransfer>) {
-    let hwnd = window.hwnd();
-    let target = ComObject::new(WindowDropTarget::new(window, transfer));
-    let interface: IDropTarget = target.to_interface();
-    // SAFETY: `hwnd` is the live window this thread just created, in the
-    // OLE apartment the platform entered on it; OLE keeps its own reference
-    // to `interface` until `RevokeDragDrop`.
-    if let Err(error) = unsafe { RegisterDragDrop(hwnd, &interface) } {
-        tracing::warn!(%error, "the window takes no drags: RegisterDragDrop failed");
-        return;
+impl WindowMessages for DropTargetRegistration {
+    fn created(&self, window: &CreatedWindow) {
+        if let Some(target) = Arc::clone(&window.drag).register_target(window) {
+            self.windows.put(window.window(), target);
+        }
     }
-    let kept = window.with_context("drop target", |context| {
-        context.drop_target.borrow_mut().replace(target)
-    });
-    drop(kept);
+
+    fn destroyed(&self, window: WindowRef) {
+        Self::revoke(self.windows.take(window.identity()));
+    }
+
+    unsafe fn message(
+        &self,
+        hwnd: HWND,
+        msg: u32,
+        _wparam: WPARAM,
+        _lparam: LPARAM,
+    ) -> Option<LRESULT> {
+        if msg == WM_NCDESTROY {
+            // The window's last message: the target of a window whose
+            // destruction was not announced goes with it. Heard, not
+            // answered.
+            Self::revoke(self.windows.take_handle(hwnd));
+        }
+        None
+    }
 }
 
-/// Revoke the window's drop target as it is destroyed: a drag over it is
-/// left first, while its callbacks still exist.
-#[cfg(windows)]
-pub(crate) fn revoke_target(hwnd: HWND, slot: &RefCell<Option<ComObject<WindowDropTarget>>>) {
-    let target = slot.borrow_mut().take();
-    let Some(target) = target else {
-        return;
-    };
-    // SAFETY: `hwnd` is the live window being destroyed, on its thread; the
-    // registration being revoked is the one `register_target` made.
-    if let Err(error) = unsafe { RevokeDragDrop(hwnd) } {
-        tracing::debug!(%error, "RevokeDragDrop failed");
+/// The hooks made on this thread, for the tests that reach a window's drop
+/// target as its class keeps it.
+#[cfg(all(windows, test))]
+pub(crate) mod testing {
+    use std::cell::RefCell;
+    use std::rc::{Rc, Weak};
+
+    use windows::Win32::System::Ole::IDropTarget;
+
+    use super::DropTargetRegistration;
+    use crate::owner::windows::WindowRef;
+
+    thread_local! {
+        /// The drop-target hook of every class made on this thread.
+        static MADE: RefCell<Vec<Weak<DropTargetRegistration>>> = const { RefCell::new(Vec::new()) };
     }
-    target.leave();
+
+    /// Record a class's hook, made on this thread.
+    pub(super) fn made(hook: &Rc<DropTargetRegistration>) {
+        MADE.with(|made| made.borrow_mut().push(Rc::downgrade(hook)));
+    }
+
+    /// What `read` makes of `window`'s registration, from any class made on
+    /// this thread.
+    fn read<R>(window: WindowRef, read: impl Fn(&dyn super::DropTarget) -> R) -> Option<R> {
+        MADE.with(|made| {
+            made.borrow()
+                .iter()
+                .filter_map(Weak::upgrade)
+                .find_map(|hook| hook.windows.read(window, |target| read(&**target)))
+        })
+    }
+
+    /// The drop target `window` registered, as OLE holds it.
+    pub(crate) fn target_of(window: WindowRef) -> Option<IDropTarget> {
+        read(window, |target| target.interface())
+    }
+
+    /// The scale `window`'s drop target reports positions at.
+    pub(crate) fn scale_of(window: WindowRef) -> Option<f64> {
+        read(window, |target| target.scale())
+    }
 }
 
 /// The `MK_*` bits of the mouse buttons held now, in this thread's input

@@ -341,7 +341,7 @@ impl WindowPlacement {
         let wanted = match self.mode {
             WindowMode::Minimized if self.maximized_before_minimize => WindowMode::Maximized,
             WindowMode::Minimized => WindowMode::Normal,
-            mode => mode,
+            mode @ (WindowMode::Normal | WindowMode::Maximized | WindowMode::Fullscreen) => mode,
         };
         let mode = if capabilities.permits(&WindowCommand::SetMode(wanted)) {
             wanted
@@ -374,7 +374,7 @@ impl WindowPlacement {
             (outer.width - frame.width).max(1.0),
             (outer.height - frame.height).max(1.0),
         );
-        let offset_in_display = if capabilities.places_at_open {
+        let offset_in_display = if capabilities.places_at_open.is_available() {
             self.offset.map(|at| {
                 Point::new(
                     at.x.min(area.size.width - outer.width).max(0.0),
@@ -463,9 +463,7 @@ fn mode_name(mode: WindowMode) -> &'static str {
         WindowMode::Minimized => "minimized",
         WindowMode::Maximized => "maximized",
         WindowMode::Fullscreen => "fullscreen",
-        // `Normal`, and a mode added later that this format does not know: it
-        // is remembered as the one every window has.
-        _ => "normal",
+        WindowMode::Normal => "normal",
     }
 }
 

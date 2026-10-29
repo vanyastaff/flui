@@ -8,22 +8,19 @@
 //! - [`RepresentationDescriptor`] / [`TransferFormat`] / [`Mime`] — stage 2
 //!   negotiation vocabulary, plus [`DropFeedback`], the DnD reply half;
 //! - [`TransferLimits`] — stage-3 resource bounds;
-//! - [`TransferRequest`] / [`TransferCompleter`] — stage 4, a request/reply pair using
-//!   the foundation claim slot polled on the frame-driven `AsyncDriver`
-//!   (no second async mechanism, no runtime dependency);
+//! - [`TransferRequest`] / [`TransferCompleter`] — stage 4, a request/reply
+//!   pair over the foundation claim slot, polled on the frame-driven
+//!   `AsyncDriver` (no second async mechanism, no runtime dependency);
 //! - [`TransferPayload`] / [`TransferError`] — stage 5 outcomes;
 //! - [`DataTransferSource`] — the platform-side trait tying the stages
 //!   together, with [`NullDataTransferSource`] as the honest inert
 //!   implementation for backends that have no transport yet.
 //!
-//! [`OfferTable`] is the single minting authority for [`DataTransferId`]s:
-//! each platform instance owns exactly one table inside its one
-//! [`DataTransferSource`], so every id the app can observe is redeemable at
-//! `Platform::data_transfer()` and stale ids fail the generation check
-//! instead of aliasing a later offer.
+//! Each platform instance mints [`DataTransferId`]s in one table inside its
+//! one [`DataTransferSource`], so every id the app can observe is redeemable
+//! at `Platform::data_transfer()` and a stale id fails the generation check
+//! instead of aliasing a later offer. The table is the host's.
 
-use std::num::NonZeroU32;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use flui_foundation::{ClaimHandle, ClaimOutcome, ClaimSlot, DataTransferId, claim_slot};
@@ -80,15 +77,23 @@ impl std::fmt::Display for Mime {
 
 /// The typed format of one representation a source offers.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "the transport names the formats it decodes; any other media type is `Custom`"
+)]
 pub enum TransferFormat {
     /// Plain UTF-8 text (`text/plain`).
     Text,
     /// HTML markup (`text/html`). Delivered raw; sanitization is the
     /// consumer's duty.
     Html,
-    /// URIs / file paths (`text/uri-list`).
+    /// URIs, a local file as a `file:` URI (`text/uri-list`, RFC 2483).
+    /// Delivered as [`TransferPayload::Custom`] of that type: one URI per
+    /// CRLF-terminated line.
     UriList,
     /// An encoded image in the container named by `mime` (e.g. `image/png`).
+    /// Delivered as [`TransferPayload::Custom`] of `mime`, the bytes as the
+    /// source provided them; pixel decoding is the consumer's.
     Image {
         /// Container format of the encoded bytes.
         mime: Mime,
@@ -191,8 +196,9 @@ pub struct DataTransferOffer {
 impl DataTransferOffer {
     /// Assemble an offer from its minted id and announced representations.
     ///
-    /// Backends call this right after [`OfferTable::mint`]; the offer shares
-    /// the record's representation slice, so the two can never disagree.
+    /// Backends call this right after minting `id` in their offer table; the
+    /// offer shares the table's representation slice, so the two can never
+    /// disagree.
     #[must_use]
     pub fn new(id: DataTransferId, representations: Arc<[RepresentationDescriptor]>) -> Self {
         Self {
@@ -237,44 +243,25 @@ impl DataTransferOffer {
 // Payload
 // ============================================================================
 
-/// One entry of a `text/uri-list` payload.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TransferUri {
-    /// A local filesystem path (`file://` URIs and platform-native drops).
-    Path(PathBuf),
-    /// Any other scheme, unparsed.
-    Uri(String),
-}
-
-/// An encoded image payload. The transport hands over *encoded* bytes; pixel
-/// decoding belongs to the consumer (flui-assets' decoders), not the
-/// transport.
-///
-/// A request for a representation announced as [`TransferFormat::Image`]
-/// resolves as this payload, with the bytes as the source provided them
-/// (ADR-0038 §5 protocol mapping).
-#[derive(Debug, Clone)]
-pub struct TransferImage {
-    /// Container format of `bytes` (e.g. `image/png`).
-    pub mime: Mime,
-    /// The encoded image bytes, exactly as the source provided them.
-    pub bytes: Arc<[u8]>,
-}
-
 /// Stage-5 artifact: a decoded, typed payload.
+///
+/// The transport decodes text and markup; a URI list, an image and any other
+/// media type arrive as the bytes of their type ([`TransferFormat::UriList`],
+/// [`TransferFormat::Image`]).
 #[derive(Debug, Clone)]
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "the transport decodes text and markup; every other media type is `Custom`"
+)]
 pub enum TransferPayload {
     /// Plain UTF-8 text.
     Text(String),
     /// Raw HTML markup (unsanitized — the consumer's duty).
     Html(String),
-    /// Entries of a `text/uri-list` representation.
-    UriList(Vec<TransferUri>),
-    /// An encoded image (see [`TransferImage`] for delivery status).
-    Image(TransferImage),
-    /// Raw bytes of any other MIME type.
+    /// The bytes of any other media type, undecoded.
     Custom {
-        /// The exact MIME type the source declared.
+        /// The media type of `bytes`: `text/uri-list` for a URI list, the
+        /// container of an image, the type the source declared otherwise.
         mime: Mime,
         /// The undecoded payload bytes.
         bytes: Arc<[u8]>,
@@ -288,14 +275,6 @@ impl TransferPayload {
     pub fn byte_len(&self) -> u64 {
         match self {
             Self::Text(text) | Self::Html(text) => text.len() as u64,
-            Self::UriList(uris) => uris
-                .iter()
-                .map(|uri| match uri {
-                    TransferUri::Path(path) => path.as_os_str().len() as u64,
-                    TransferUri::Uri(uri) => uri.len() as u64,
-                })
-                .sum(),
-            Self::Image(image) => image.bytes.len() as u64,
             Self::Custom { bytes, .. } => bytes.len() as u64,
         }
     }
@@ -378,162 +357,13 @@ pub enum TransferError {
 }
 
 // ============================================================================
-// OfferTable — the single minting authority
-// ============================================================================
-
-/// Source-side state for one live offer: the announced representations plus
-/// the payload once (and if) the source has it in memory.
-#[derive(Debug, Clone)]
-pub struct OfferRecord {
-    representations: Arc<[RepresentationDescriptor]>,
-    payload: Option<TransferPayload>,
-}
-
-impl OfferRecord {
-    /// A record announcing `representations`, with no payload yet.
-    #[must_use]
-    pub fn new(representations: Arc<[RepresentationDescriptor]>) -> Self {
-        Self {
-            representations,
-            payload: None,
-        }
-    }
-
-    /// The announced representations, in source-preference order.
-    #[must_use]
-    pub fn representations(&self) -> &Arc<[RepresentationDescriptor]> {
-        &self.representations
-    }
-
-    /// The in-memory payload, if the source has materialized one.
-    #[must_use]
-    pub fn payload(&self) -> Option<&TransferPayload> {
-        self.payload.as_ref()
-    }
-
-    /// Store the materialized payload (e.g. a frozen file-drop list).
-    pub fn set_payload(&mut self, payload: TransferPayload) {
-        self.payload = Some(payload);
-    }
-}
-
-/// One slot of the offer slab. The generation survives the record: retiring
-/// bumps it, so the next occupant of the slot mints a different id.
-#[derive(Debug)]
-struct OfferSlot {
-    generation: NonZeroU32,
-    record: Option<OfferRecord>,
-}
-
-/// Slab of live offers with generation-checked lookup. One per platform
-/// instance, private inside its [`DataTransferSource`]. Not a public-API
-/// lock: backends hold it behind their existing state lock (no guard
-/// escapes a public signature).
-///
-/// This is the **single minting authority** for [`DataTransferId`]s
-/// (ADR-0038 §2): a generational check is only a defense within one table,
-/// so a platform instance must never operate two of these.
-#[derive(Debug, Default)]
-pub struct OfferTable {
-    slots: Vec<OfferSlot>,
-    free: Vec<u32>,
-}
-
-impl OfferTable {
-    /// An empty table.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Mint a live offer, returning its generational id
-    /// (`new_gen(slot, generation)`).
-    pub fn mint(&mut self, record: OfferRecord) -> DataTransferId {
-        if let Some(index) = self.free.pop() {
-            let slot = &mut self.slots[index as usize];
-            debug_assert!(slot.record.is_none(), "free list held an occupied slot");
-            slot.record = Some(record);
-            return DataTransferId::new_gen(index, slot.generation);
-        }
-
-        let index =
-            u32::try_from(self.slots.len()).expect("BUG: offer table exceeds u32::MAX slots");
-        let generation = NonZeroU32::MIN;
-        self.slots.push(OfferSlot {
-            generation,
-            record: Some(record),
-        });
-        DataTransferId::new_gen(index, generation)
-    }
-
-    /// Generation-checked lookup: slot **and** generation must match, so a
-    /// retired id never addresses the slot's next occupant.
-    #[must_use]
-    pub fn get(&self, id: DataTransferId) -> Option<&OfferRecord> {
-        self.slot(id).and_then(|slot| slot.record.as_ref())
-    }
-
-    /// Generation-checked mutable lookup (same rules as [`Self::get`]).
-    pub fn get_mut(&mut self, id: DataTransferId) -> Option<&mut OfferRecord> {
-        let slot_index = id.index() as usize;
-        let slot = self.slots.get_mut(slot_index)?;
-        if slot.generation != id.generation() {
-            return None;
-        }
-        slot.record.as_mut()
-    }
-
-    /// Retire a live offer: free the slot and bump its generation so the id
-    /// is permanently stale. Returns the record, or `None` if `id` was
-    /// already stale (idempotent).
-    ///
-    /// A slot whose generation would overflow is never reused — it is
-    /// dropped from circulation rather than allowed to recycle generation 1.
-    pub fn retire(&mut self, id: DataTransferId) -> Option<OfferRecord> {
-        let slot_index = id.index() as usize;
-        let slot = self.slots.get_mut(slot_index)?;
-        if slot.generation != id.generation() || slot.record.is_none() {
-            return None;
-        }
-        let record = slot.record.take();
-        if let Some(next) = slot.generation.checked_add(1) {
-            slot.generation = next;
-            self.free.push(id.index());
-        }
-        // else: generation space exhausted for this slot — leave it out of
-        // the free list forever rather than risk ABA reuse.
-        record
-    }
-
-    /// Number of live offers.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.slots
-            .iter()
-            .filter(|slot| slot.record.is_some())
-            .count()
-    }
-
-    /// Whether the table holds no live offer.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    fn slot(&self, id: DataTransferId) -> Option<&OfferSlot> {
-        let slot = self.slots.get(id.index() as usize)?;
-        (slot.generation == id.generation()).then_some(slot)
-    }
-}
-
-// ============================================================================
-// TransferRequest / TransferCompleter — the stage-4 oneshot pair
+// TransferRequest — the stage-4 consumer half
 // ============================================================================
 
 #[derive(Debug)]
 enum RequestState {
     Ready(Option<Result<TransferPayload, TransferError>>),
-    Channel(ClaimHandle<Result<TransferPayload, TransferError>>),
+    Pending(ClaimHandle<Result<TransferPayload, TransferError>>),
 }
 
 /// Stage-4 artifact, consumer half: one in-flight delivery. A `Send` future
@@ -551,16 +381,24 @@ pub struct TransferRequest {
 }
 
 impl TransferRequest {
-    /// A connected pair: the backend keeps the completer and returns the
-    /// request from [`DataTransferSource::request`].
+    /// A pending delivery and the completer that resolves it: the backend
+    /// keeps the completer and returns the request from
+    /// [`DataTransferSource::request`]. The two are made together, so no
+    /// other party can claim the delivery first:
+    ///
+    /// ```compile_fail
+    /// let (_slot, handle) = flui_foundation::claim_slot(std::sync::Arc::new(|| {}));
+    /// let _ = flui_platform::data_transfer::TransferRequest::pending(handle);
+    /// ```
     #[must_use = "dropping the pair immediately resolves it as cancelled"]
-    pub fn channel() -> (TransferRequest, TransferCompleter) {
-        // Transport completion consumes its producer; unlike a window request,
-        // it has no owner-side resource registry to wake on abandonment.
+    pub fn pending() -> (Self, TransferCompleter) {
+        // A transfer's producer is consumed by completion; unlike a window
+        // request, it has no owner-side resource registry to wake on
+        // abandonment.
         let (slot, handle) = claim_slot(Arc::new(|| {}));
         (
-            TransferRequest {
-                state: RequestState::Channel(handle),
+            Self {
+                state: RequestState::Pending(handle),
                 resolved: false,
             },
             TransferCompleter { slot },
@@ -593,7 +431,7 @@ impl std::future::Future for TransferRequest {
             RequestState::Ready(result) => {
                 result.take().expect("BUG: ready transfer lost its result")
             }
-            RequestState::Channel(handle) => match std::pin::Pin::new(handle).poll(cx) {
+            RequestState::Pending(handle) => match std::pin::Pin::new(handle).poll(cx) {
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(ClaimOutcome::Delivered(result)) => result,
                 Poll::Ready(ClaimOutcome::OwnerGone) => Err(TransferError::SourceGone),
@@ -607,32 +445,31 @@ impl std::future::Future for TransferRequest {
     }
 }
 
-/// Stage-4 artifact, producer half, held by the backend. `Send` - complete
-/// from any thread. Completing after cancellation discards the result.
-/// Dropping the producer without completing resolves the request with
+/// Stage-4 artifact, producer half, which the source keeps while it reads the
+/// payload ([`TransferRequest::pending`]). `Send`: complete it from any
+/// thread. Completing after the consumer dropped its request discards the
+/// result; dropping it without completing resolves the request with
 /// [`TransferError::SourceGone`].
 ///
 /// The claim slot preserves an existing unwind if executor delivery also
 /// panics, retaining exceptional opaque ownership rather than dropping it
-/// during continuation. This does not contain arbitrary double panics during
-/// ordinary successful executor retirement.
+/// during continuation.
 #[derive(Debug)]
 pub struct TransferCompleter {
     slot: ClaimSlot<Result<TransferPayload, TransferError>>,
 }
 
 impl TransferCompleter {
-    /// Resolve the paired request. A no-op if the consumer already cancelled
-    /// (dropped its half).
+    /// Resolve the paired request; a no-op once the consumer dropped it.
     pub fn complete(self, result: Result<TransferPayload, TransferError>) {
-        // A rejected result contains only the concrete transport vocabulary,
-        // not a caller-supplied destructor. Consuming self retires the owner.
+        // A rejected result holds only the transport vocabulary, no
+        // caller-supplied destructor. Consuming self retires the producer.
         drop(self.slot.deliver(result));
     }
 
-    /// True once the consumer cancelled (dropped its half). A long-running
-    /// producer polls this to abandon work early. A blocking read already in
-    /// progress is not interrupted; its eventual result is discarded.
+    /// True once the consumer dropped its request. A long-running producer
+    /// checks it to abandon work early; a blocking read already in progress
+    /// is not interrupted, and its result is discarded.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.slot.is_abandoned()

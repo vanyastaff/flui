@@ -665,7 +665,10 @@ fn web_rows() {
 }
 
 fn linux_rows() {
-    assert_eq!(linux(), HapticOutcome::Unavailable);
+    assert_eq!(
+        linux().unsupported().map(|unsupported| unsupported.reason),
+        Some(flui_platform::UnsupportedReason::NotOnThisPlatform)
+    );
 }
 
 #[test]
@@ -697,14 +700,19 @@ fn the_headless_window_plays_a_stale_source_on_its_actuator() {
     let saved = std::rc::Rc::new(std::cell::RefCell::new(None));
     let installed = std::rc::Rc::clone(&saved);
     Box::new(HeadlessPlatform::new())
-        .run(Box::new(move |owner| {
-            *installed.borrow_mut() = Some(owner);
-            Ok(())
-        }))
+        .run(crate::owner::app_delivery::testing::on_ready(
+            move |owner| {
+                *installed.borrow_mut() = Some(owner);
+                Ok(())
+            },
+        ))
         .expect("headless owner");
     let owner: OwnerPlatform = saved.borrow_mut().take().expect("started owner");
     let window = owner
-        .open_window(WindowOptions::default())
+        .open_window(
+            WindowOptions::default(),
+            flui_testing::window_handler::RecordingWindowHandler::new(),
+        )
         .expect("open")
         .try_ready()
         .expect("ready");

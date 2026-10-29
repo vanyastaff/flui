@@ -11,8 +11,8 @@ use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::{Point, Size};
 use flui_platform::{
-    SizeConstraints, WindowCapabilities, WindowCommand, WindowCommandError, WindowControl,
-    WindowMode, WindowRevision, WindowState,
+    SizeConstraints, SubmitError, WindowCommand, WindowControl, WindowMode, WindowRevision,
+    WindowState,
 };
 
 use crate::observation::{Observation, Phase, Subscription, WeakObservation};
@@ -22,7 +22,7 @@ use crate::observation::{Observation, Phase, Subscription, WeakObservation};
 #[error("the window is closed")]
 pub struct WindowClosed;
 
-impl From<WindowClosed> for WindowCommandError {
+impl From<WindowClosed> for SubmitError {
     fn from(WindowClosed: WindowClosed) -> Self {
         Self::Closed
     }
@@ -36,10 +36,10 @@ struct Shared {
 /// Weak, owner-local capability for one window.
 ///
 /// Acquire it from `LifecycleContext::window` in `init_state` or
-/// `did_change_dependencies`, never in build/layout/paint. Commands are checked
-/// at once ([`WindowCommandError::InvalidGeometry`], [`WindowCommandError::Unsupported`])
-/// and applied on the owner's next turn, in the order they were made; their
-/// effect shows in the next [`WindowState`].
+/// `did_change_dependencies`, never in build/layout/paint. Commands are
+/// admitted at once against the window's capabilities
+/// ([`SubmitError::Admission`]) and applied on the owner's next turn, in the
+/// order they were made; their effect shows in the next [`WindowState`].
 #[derive(Clone)]
 pub struct WindowHandle {
     shared: Weak<Shared>,
@@ -60,11 +60,13 @@ impl WindowHandle {
             .ok_or(WindowClosed)
     }
 
-    fn submit(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+    fn submit(&self, command: WindowCommand) -> Result<(), SubmitError> {
         self.open()?.control.submit(command)
     }
 
-    /// The window's last published state.
+    /// The window's last published state, with the
+    /// [`capabilities`](WindowState::capabilities) that say which commands it
+    /// honours.
     ///
     /// # Errors
     /// [`WindowClosed`] once the window has closed.
@@ -72,20 +74,13 @@ impl WindowHandle {
         Ok(self.open()?.control.state())
     }
 
-    /// Which commands the window honours.
-    ///
-    /// # Errors
-    /// [`WindowClosed`] once the window has closed.
-    pub fn capabilities(&self) -> Result<WindowCapabilities, WindowClosed> {
-        Ok(self.open()?.control.capabilities())
-    }
-
     /// Set the title.
     ///
     /// # Errors
-    /// [`WindowCommandError::Unsupported`] where the window cannot,
-    /// [`WindowCommandError::Closed`] once it has closed.
-    pub fn set_title(&self, title: impl Into<String>) -> Result<(), WindowCommandError> {
+    /// [`SubmitError::Admission`] with
+    /// [`Unsupported`](flui_platform::AdmissionError::Unsupported) where the
+    /// window cannot, [`SubmitError::Closed`] once it has closed.
+    pub fn set_title(&self, title: impl Into<String>) -> Result<(), SubmitError> {
         self.submit(WindowCommand::SetTitle(title.into()))
     }
 
@@ -93,27 +88,29 @@ impl WindowHandle {
     /// pixels.
     ///
     /// # Errors
-    /// [`WindowCommandError::InvalidGeometry`] for a non-finite position;
-    /// otherwise as [`Self::set_title`].
-    pub fn set_position(&self, at: Point<f64>) -> Result<(), WindowCommandError> {
+    /// [`InvalidGeometry`](flui_platform::AdmissionError::InvalidGeometry) for
+    /// a non-finite position; otherwise as [`Self::set_title`].
+    pub fn set_position(&self, at: Point<f64>) -> Result<(), SubmitError> {
         self.submit(WindowCommand::SetPosition(at))
     }
 
     /// Resize the window's content area, in logical pixels.
     ///
     /// # Errors
-    /// [`WindowCommandError::InvalidGeometry`] for a size that is not finite
-    /// and positive; otherwise as [`Self::set_title`].
-    pub fn set_size(&self, size: Size<f64>) -> Result<(), WindowCommandError> {
+    /// [`InvalidGeometry`](flui_platform::AdmissionError::InvalidGeometry) for
+    /// a size that is not finite and positive; otherwise as
+    /// [`Self::set_title`].
+    pub fn set_size(&self, size: Size<f64>) -> Result<(), SubmitError> {
         self.submit(WindowCommand::SetSize(size))
     }
 
     /// Set the content-size limits.
     ///
     /// # Errors
-    /// [`WindowCommandError::InvalidGeometry`] for a bad bound or a minimum
-    /// above the maximum; otherwise as [`Self::set_title`].
-    pub fn set_constraints(&self, constraints: SizeConstraints) -> Result<(), WindowCommandError> {
+    /// [`InvalidGeometry`](flui_platform::AdmissionError::InvalidGeometry) for
+    /// a bad bound or a minimum above the maximum; otherwise as
+    /// [`Self::set_title`].
+    pub fn set_constraints(&self, constraints: SizeConstraints) -> Result<(), SubmitError> {
         self.submit(WindowCommand::SetConstraints(constraints))
     }
 
@@ -121,7 +118,7 @@ impl WindowHandle {
     ///
     /// # Errors
     /// As [`Self::set_title`].
-    pub fn set_resizable(&self, on: bool) -> Result<(), WindowCommandError> {
+    pub fn set_resizable(&self, on: bool) -> Result<(), SubmitError> {
         self.submit(WindowCommand::SetResizable(on))
     }
 
@@ -129,7 +126,7 @@ impl WindowHandle {
     ///
     /// # Errors
     /// As [`Self::set_title`].
-    pub fn set_decorated(&self, on: bool) -> Result<(), WindowCommandError> {
+    pub fn set_decorated(&self, on: bool) -> Result<(), SubmitError> {
         self.submit(WindowCommand::SetDecorated(on))
     }
 
@@ -137,7 +134,7 @@ impl WindowHandle {
     ///
     /// # Errors
     /// As [`Self::set_title`].
-    pub fn set_mode(&self, mode: WindowMode) -> Result<(), WindowCommandError> {
+    pub fn set_mode(&self, mode: WindowMode) -> Result<(), SubmitError> {
         self.submit(WindowCommand::SetMode(mode))
     }
 
@@ -145,7 +142,7 @@ impl WindowHandle {
     ///
     /// # Errors
     /// As [`Self::set_title`].
-    pub fn show(&self) -> Result<(), WindowCommandError> {
+    pub fn show(&self) -> Result<(), SubmitError> {
         self.submit(WindowCommand::Show)
     }
 
@@ -153,7 +150,7 @@ impl WindowHandle {
     ///
     /// # Errors
     /// As [`Self::set_title`].
-    pub fn hide(&self) -> Result<(), WindowCommandError> {
+    pub fn hide(&self) -> Result<(), SubmitError> {
         self.submit(WindowCommand::Hide)
     }
 
@@ -161,8 +158,20 @@ impl WindowHandle {
     ///
     /// # Errors
     /// As [`Self::set_title`].
-    pub fn activate(&self) -> Result<(), WindowCommandError> {
+    pub fn activate(&self) -> Result<(), SubmitError> {
         self.submit(WindowCommand::Activate)
+    }
+
+    /// Have the window system draw `material` behind the window's content
+    /// (ADR-0254 §3).
+    ///
+    /// # Errors
+    /// [`Unsupported`](flui_platform::AdmissionError::Unsupported) where the
+    /// window draws no material
+    /// ([`WindowCapabilities::material`](flui_platform::WindowCapabilities::material));
+    /// otherwise as [`Self::set_title`].
+    pub fn set_material(&self, material: flui_platform::WindowMaterial) -> Result<(), SubmitError> {
+        self.submit(WindowCommand::SetMaterial(material))
     }
 
     /// Ask the window to close through the vetoed close path; the window may

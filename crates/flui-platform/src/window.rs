@@ -8,7 +8,8 @@
 
 use flui_foundation::geometry::{Point, Size};
 
-use crate::{WindowGeometry, WindowMode};
+use crate::os_options::OsWindowOptions;
+use crate::{Unsupported, WindowGeometry, WindowMode};
 
 // ==================== Creation ====================
 
@@ -123,6 +124,10 @@ pub struct WindowOptions {
     pub normal_geometry: Option<WindowGeometry>,
     /// How early pointer samples reach the window; see [`InputLatency`].
     pub input_latency: InputLatency,
+    /// What the window is created with on each operating system that has
+    /// options of its own, each read only by that system's host; see
+    /// [`OsWindowOptions`].
+    pub os_options: OsWindowOptions,
 }
 
 impl WindowOptions {
@@ -216,6 +221,14 @@ impl WindowOptions {
         self.input_latency = input_latency;
         self
     }
+
+    /// Set what the window is created with on each operating system that has
+    /// options of its own.
+    #[must_use]
+    pub fn with_os_options(mut self, os_options: OsWindowOptions) -> Self {
+        self.os_options = os_options;
+        self
+    }
 }
 
 impl Default for WindowOptions {
@@ -234,6 +247,7 @@ impl Default for WindowOptions {
             mode: WindowMode::Normal,
             normal_geometry: None,
             input_latency: InputLatency::Balanced,
+            os_options: OsWindowOptions::default(),
         }
     }
 }
@@ -274,28 +288,11 @@ pub enum WindowExecutionState {
     Detached,
 }
 
-/// Failure to show an existing window without changing its display mode.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[non_exhaustive]
-pub enum WindowShowError {
-    /// This backend cannot show and request focus for an existing window.
-    #[error("showing an existing window is unsupported")]
-    Unsupported,
-    /// The native window has closed.
-    #[error("the window is closed")]
-    Closed,
-    /// A native operation failed.
-    #[error("could not show the window: {message}")]
-    Native {
-        /// Native failure description.
-        message: String,
-    },
-}
-
 // ==================== Value Types ====================
 
 /// Window appearance (light/dark theme)
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum WindowAppearance {
     /// Light appearance (default)
     #[default]
@@ -318,104 +315,50 @@ impl From<WindowAppearance> for crate::Brightness {
     }
 }
 
-/// Window background appearance (backdrop material)
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-pub enum WindowBackgroundAppearance {
-    /// Opaque background (default)
+/// The material the window system draws behind a window's content, which
+/// shows through the window's frame and wherever its content is transparent
+/// ([`WindowCommand::SetMaterial`](crate::WindowCommand::SetMaterial)).
+///
+/// The vocabulary every host shares: each material is one every window
+/// system that has materials at all can draw, so a host whose
+/// [`WindowCapabilities::material`](crate::WindowCapabilities::material) is
+/// not `Unavailable` draws each of them. A material only one operating system
+/// has (Mica Alt and Acrylic on Windows, the `NSVisualEffectView` materials
+/// and Liquid Glass on macOS) is reached through that system's extension
+/// (`flui::native::windows`, `flui::native::macos`).
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "every host maps every material: a new material is a change each host makes, not one it may skip"
+)]
+pub enum WindowMaterial {
+    /// No material: the window's own background, opaque.
     #[default]
     Opaque,
-    /// Transparent background
-    Transparent,
-    /// Blurred background
-    Blurred,
-    /// Windows 11 Mica backdrop
-    MicaBackdrop,
-    /// Windows 11 Mica Alt backdrop
-    MicaAltBackdrop,
+    /// The window system's material for a long-lived window's background,
+    /// tinted by the desktop behind it: Mica on Windows 11.
+    System,
 }
 
 /// Failure to apply a cursor to one exact platform window.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum CursorError {
     /// The backend has no pointer-cursor facility for this window.
-    #[error("this platform window does not support pointer cursors")]
-    Unsupported,
+    #[error("the window shows no pointer cursor: {0}")]
+    Unsupported(#[from] Unsupported),
     /// The backend rejected a concrete cursor update.
     #[error("platform cursor update failed: {0}")]
     Backend(String),
 }
 
-// ==================== Events ====================
-
-/// Window events that can be observed via `flui_native::Platform::on_window_event`
-#[derive(Debug, Clone)]
-pub enum WindowEvent {
-    /// Window was created
-    Created(WindowId),
-
-    /// A close was *asked for* and the window's should-close veto passed.
-    ///
-    /// The rule is the veto, not the caller: this event accompanies every
-    /// close that consults `on_should_close` and survives it. A refused close
-    /// emits nothing at all.
-    ///
-    /// In practice that means the user route — a close button or compositor
-    /// close on winit, `WM_CLOSE` on Win32, `simulate_close` on the headless
-    /// double. A programmatic [`PlatformWindow::close`](crate::PlatformWindow::close) on the
-    /// owning thread is a decision rather than a request, asks no veto, and
-    /// so reports only [`Closed`](Self::Closed). The one case where a
-    /// programmatic close does emit this is Win32's *cross-thread* route,
-    /// which cannot call `DestroyWindow` and posts `WM_CLOSE` instead — so
-    /// the veto is re-asked and the close becomes a request, exactly as that
-    /// impl documents.
-    ///
-    /// Ordering: emitted BEFORE the window's own `on_close` callback runs,
-    /// so a global handler observes the window still intact when told the
-    /// close is going ahead; [`Closed`](Self::Closed) follows once the
-    /// window has left the backend's tracking. (Earlier winit versions ran
-    /// `on_close` first — a deliberate change, made when both close routes
-    /// were unified into one teardown.)
-    CloseRequested {
-        /// The window whose close button was activated
-        window_id: WindowId,
-    },
-
-    /// Window was closed — left the backend's tracking, whichever route
-    /// (user-initiated or programmatic) took it there. Emitted after the
-    /// window's own `on_close` callback and before the exit-policy consult.
-    ///
-    /// Emitted for *every* window that closes, not only the last one: a
-    /// consumer tracking open windows by these events would otherwise believe
-    /// a closed window is still open whenever another remains.
-    Closed(WindowId),
-
-    /// Window focus changed
-    FocusChanged {
-        /// The window whose focus state changed
-        window_id: WindowId,
-        /// `true` if the window gained focus, `false` if it lost focus
-        focused: bool,
-    },
-
-    /// Window was resized (size in device pixels)
-    Resized {
-        /// The window that was resized
-        window_id: WindowId,
-        /// New client-area size in device pixels
-        size: Size<i32>,
-    },
-
-    /// Window scale factor (DPI) changed
-    ScaleFactorChanged {
-        /// The window whose scale factor changed
-        window_id: WindowId,
-        /// New device-pixel-per-logical-pixel ratio
-        scale_factor: f64,
-    },
-
-    /// Window needs to be redrawn
-    RedrawRequested {
-        /// The window that must be repainted
-        window_id: WindowId,
-    },
+impl CursorError {
+    /// What is not here, when that is why the cursor was not applied.
+    #[must_use]
+    pub const fn unsupported(&self) -> Option<Unsupported> {
+        match self {
+            Self::Unsupported(unsupported) => Some(*unsupported),
+            Self::Backend(_) => None,
+        }
+    }
 }

@@ -228,8 +228,8 @@ impl BuildContext for ElementBuildContext {
         }
     }
 
-    fn reactive(&self) -> crate::reactive::Reactive {
-        self.reads.graph().clone()
+    fn graph(&self, _: super::build_context::sealed::CrateToken) -> &crate::reactive::Reactive {
+        self.reads.graph()
     }
 
     fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
@@ -594,23 +594,23 @@ impl LifecycleContext for ElementBuildContext {
         self.owner.read().keep_alive.handle(self.element_id)
     }
     fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
-        self.owner.read().text_input_handle().cloned()
+        self.owner.read().capabilities().text_input.clone()
     }
     fn clipboard_handle(&self) -> Option<flui_interaction::ClipboardHandle> {
-        self.owner.read().clipboard_handle().cloned()
+        self.owner.read().capabilities().clipboard.clone()
     }
     fn haptics(&self) -> Option<flui_interaction::HapticsHandle> {
-        let handle = self.owner.read().haptics_handle().cloned()?;
+        let handle = self.owner.read().capabilities().haptics.clone()?;
         Some(crate::haptics_mode::scoped(self, handle))
     }
     fn drag_and_drop(&self) -> Option<flui_interaction::drag::DragAndDrop> {
-        self.owner.read().drag_and_drop().cloned()
+        self.owner.read().capabilities().drag_and_drop.clone()
     }
     fn texture_registry(&self) -> Option<flui_rendering::layer::TextureRegistry> {
-        self.owner.read().texture_registry().cloned()
+        self.owner.read().capabilities().textures.clone()
     }
     fn storage(&self) -> Option<std::sync::Arc<dyn flui_platform::Storage>> {
-        self.owner.read().storage().cloned()
+        self.owner.read().capabilities().storage.clone()
     }
     fn flush_registry_in_crate(
         &self,
@@ -699,19 +699,8 @@ pub(crate) struct BuildCapabilities {
     pub(crate) async_driver: Option<flui_scheduler::AsyncDriver>,
     /// The binding's post-frame capability.
     pub(crate) post_frame_handle: Option<flui_scheduler::PostFrameHandle>,
-    /// The binding's owner-local post-frame capability.
-    /// The binding's IME/text-input attach-detach capability.
-    pub(crate) text_input_handle: Option<flui_interaction::TextInputHandle>,
-    /// The presentation's plain-text clipboard.
-    pub(crate) clipboard_handle: Option<flui_interaction::ClipboardHandle>,
-    /// The presentation's haptics.
-    pub(crate) haptics_handle: Option<flui_interaction::HapticsHandle>,
-    /// The presentation's drag-and-drop.
-    pub(crate) drag_and_drop: Option<flui_interaction::drag::DragAndDrop>,
-    /// The presentation's external textures.
-    pub(crate) texture_registry: Option<flui_rendering::layer::TextureRegistry>,
-    /// The UI runtime's byte storage.
-    pub(crate) storage: Option<std::sync::Arc<dyn flui_platform::Storage>>,
+    /// The presentation capabilities `LifecycleContext` hands out.
+    pub(crate) presentation: crate::owner::PresentationCapabilities,
     /// The host's flush registry; crate-private, for `Persisted`.
     pub(crate) flush_registry: Option<crate::flush_registry::FlushRegistry>,
     /// The UI runtime's fresh-hit-test capability, narrowed from its interaction
@@ -827,8 +816,8 @@ impl BuildContext for BuildCtx<'_> {
         true
     }
 
-    fn reactive(&self) -> crate::reactive::Reactive {
-        self.capabilities.reads.graph().clone()
+    fn graph(&self, _: super::build_context::sealed::CrateToken) -> &crate::reactive::Reactive {
+        self.capabilities.reads.graph()
     }
 
     fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
@@ -1048,23 +1037,23 @@ impl LifecycleContext for BuildCtx<'_> {
         self.capabilities.post_frame_handle.clone()
     }
     fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
-        self.capabilities.text_input_handle.clone()
+        self.capabilities.presentation.text_input.clone()
     }
     fn clipboard_handle(&self) -> Option<flui_interaction::ClipboardHandle> {
-        self.capabilities.clipboard_handle.clone()
+        self.capabilities.presentation.clipboard.clone()
     }
     fn haptics(&self) -> Option<flui_interaction::HapticsHandle> {
-        let handle = self.capabilities.haptics_handle.clone()?;
+        let handle = self.capabilities.presentation.haptics.clone()?;
         Some(crate::haptics_mode::scoped(self, handle))
     }
     fn drag_and_drop(&self) -> Option<flui_interaction::drag::DragAndDrop> {
-        self.capabilities.drag_and_drop.clone()
+        self.capabilities.presentation.drag_and_drop.clone()
     }
     fn texture_registry(&self) -> Option<flui_rendering::layer::TextureRegistry> {
-        self.capabilities.texture_registry.clone()
+        self.capabilities.presentation.textures.clone()
     }
     fn storage(&self) -> Option<std::sync::Arc<dyn flui_platform::Storage>> {
-        self.capabilities.storage.clone()
+        self.capabilities.presentation.storage.clone()
     }
     fn flush_registry_in_crate(
         &self,

@@ -1583,11 +1583,11 @@ pub(crate) mod text_store {
                     from.origin.y + from.size.height / 2.0,
                 );
                 assert_eq!(
-                    session.index_at_point(point, PointMode::Exact),
+                    session.index_at_point(point, PointMode::EXACT),
                     Ok(at(scalar))
                 );
                 assert_eq!(
-                    session.index_at_point(from.origin, PointMode::Nearest),
+                    session.index_at_point(from.origin, PointMode::NEAREST),
                     Ok(at(scalar))
                 );
             }
@@ -1774,6 +1774,166 @@ pub(crate) mod text_store {
             ]
         );
         assert!(harness.active_text_store().is_none());
+    }
+
+    /// A field unmounted while an input method composes in it (a route
+    /// changed by the program) keeps the preedit it shows as committed text,
+    /// without `on_changed`; a conversion the input method queued in the
+    /// frame that unmounts it is dropped, and every later lock is refused
+    /// (ADR-0142 item 4).
+    ///
+    /// Red-check: have `dispose` only detach — the controller is still
+    /// composing.
+    pub(crate) fn a_conversion_queued_for_an_unmounted_field_is_dropped() {
+        let controller = TextEditingController::with_text("ab");
+        let changed = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&changed);
+        let focus_node = FocusNode::with_debug_label("unmounted mid-composition");
+        let mut harness = mount_with_ime(
+            EditableText::new(controller.clone(), Rc::clone(&focus_node))
+                .on_changed(move |_cx, text| sink.borrow_mut().push(text.to_owned())),
+        );
+        let _ = focus_node.request_focus();
+        harness.tick();
+        harness.dispatch_ime(&flui_platform::ImeEvent::Preedit {
+            text: "とうきょう".to_owned(),
+            cursor: Some(("とうきょう".len(), "とうきょう".len())),
+        });
+        assert!(controller.is_composing(), "precondition: composing");
+        let field = store(&harness);
+
+        // The input method converts at the start of the frame that removes
+        // the field, ahead of its build.
+        let outcome = Rc::new(RefCell::new(None));
+        let (queued, target) = (Rc::clone(&outcome), Rc::clone(&field));
+        let _ = harness
+            .scheduler()
+            .schedule_frame_callback(Box::new(move |_| {
+                *queued.borrow_mut() = Some(flui_platform::text_store::project_ime_event(
+                    &*target,
+                    &flui_platform::ImeEvent::Commit("東京".to_owned()),
+                ));
+            }));
+        harness.swap_root(flui_widgets::SizedBox::square(10.0));
+        harness.tick();
+
+        assert_eq!(
+            *outcome.borrow(),
+            Some(Ok(LockOutcome::Deferred)),
+            "the conversion was queued in the frame that unmounted the field"
+        );
+        assert!(!controller.is_composing(), "the composition is committed");
+        assert_eq!(
+            controller.text(),
+            "abとうきょう",
+            "the preedit it showed is the committed text; the queued conversion is dropped"
+        );
+        assert!(
+            changed.borrow().is_empty(),
+            "no on_changed once dispose began: {:?}",
+            changed.borrow()
+        );
+        assert_eq!(
+            field.request_lock(LockGrant::read(|_| {}), LockTiming::Sync),
+            Err(TextStoreError::Detached),
+            "a later lock is refused"
+        );
+    }
+
+    /// Unmounting a composing field commits its preedit into the controller
+    /// once, on a pull and on a push window: unmounted while focused, the
+    /// field commits in place; unmounted after a blur, the blur already
+    /// committed and the unmount commits nothing more; a field mounted again
+    /// on the same controller and unmounted unfocused commits nothing either.
+    ///
+    /// Red-check: have `dispose` only detach — the focused rows are still
+    /// composing.
+    pub(crate) fn unmounting_a_composing_field_commits_the_preedit_once() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use flui_foundation::Listenable as _;
+
+        use crate::common::harness::mount_with_push_ime;
+
+        fn field(
+            controller: &TextEditingController,
+            node: &Rc<FocusNode>,
+            changed: &Rc<RefCell<Vec<String>>>,
+        ) -> EditableText {
+            let sink = Rc::clone(changed);
+            EditableText::new(controller.clone(), Rc::clone(node))
+                .on_changed(move |_cx, text| sink.borrow_mut().push(text.to_owned()))
+        }
+
+        fn run(pull: bool, blur_first: bool) {
+            let controller = TextEditingController::with_text("ab");
+            let node = FocusNode::with_debug_label("composing field");
+            let changed = Rc::new(RefCell::new(Vec::new()));
+            let view = field(&controller, &node, &changed);
+            let mut harness = if pull {
+                mount_with_ime(view)
+            } else {
+                mount_with_push_ime(view)
+            };
+            let _ = node.request_focus();
+            harness.tick();
+            harness.dispatch_ime(&flui_platform::ImeEvent::Preedit {
+                text: "東京".to_owned(),
+                cursor: Some(("東京".len(), "東京".len())),
+            });
+            assert!(controller.is_composing(), "precondition: composing");
+            let notified = Arc::new(AtomicUsize::new(0));
+            let count = Arc::clone(&notified);
+            let listener = controller.add_listener(Rc::new(move || {
+                count.fetch_add(1, Ordering::SeqCst);
+            }));
+
+            if blur_first {
+                node.unfocus();
+                harness.tick();
+                assert!(!controller.is_composing(), "the blur committed");
+            }
+            harness.swap_root(flui_widgets::SizedBox::square(10.0));
+            harness.tick();
+            assert!(!controller.is_composing(), "the composition is committed");
+            assert_eq!(controller.text(), "ab東京", "keeping its text, once");
+            assert_eq!(
+                notified.load(Ordering::SeqCst),
+                1,
+                "the controller's listeners hear the commit once"
+            );
+            let expected: &[&str] = if blur_first { &["ab東京"] } else { &[] };
+            assert_eq!(
+                *changed.borrow(),
+                expected,
+                "only a blur reports the commit to on_changed"
+            );
+
+            let again = FocusNode::with_debug_label("mounted again");
+            harness.swap_root(field(&controller, &again, &changed));
+            harness.tick();
+            harness.swap_root(flui_widgets::SizedBox::square(10.0));
+            harness.tick();
+            controller.remove_listener(listener);
+            assert_eq!(controller.text(), "ab東京", "a second unmount adds nothing");
+            assert_eq!(
+                notified.load(Ordering::SeqCst),
+                1,
+                "a second unmount commits nothing"
+            );
+            assert_eq!(*changed.borrow(), expected);
+        }
+
+        crate::common::cases::run_cases(
+            "unmounting a composing field",
+            &[
+                ("pull, unmounted focused", (|| run(true, false)) as fn()),
+                ("pull, unmounted after a blur", || run(true, true)),
+                ("push, unmounted focused", || run(false, false)),
+                ("push, unmounted after a blur", || run(false, true)),
+            ],
+        );
     }
 
     thread_local! {
@@ -2312,7 +2472,7 @@ pub(crate) mod text_store {
                         hidden += 1;
                         let point = Point::new(x, from.origin.y + from.size.height / 2.0);
                         assert_eq!(
-                            session.index_at_point(point, PointMode::Exact),
+                            session.index_at_point(point, PointMode::EXACT),
                             Err(TextStoreError::PointOutside),
                             "an offscreen glyph must not answer an exact viewport query"
                         );

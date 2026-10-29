@@ -19,4 +19,24 @@ fn thread_boundary_ui() {
     } else {
         cases.compile_fail("tests/ui/unstable_input/*.rs");
     }
+    // The escape hatch exists exactly with the `native` feature, and each
+    // system's module exactly on that system (ADR-0254 §8, R3.9).
+    const HOST_WINDOW: &str = "tests/ui/native/host_window_needs_native.rs";
+    const WINDOWS: &str = "tests/ui/native/windows_extension_needs_windows.rs";
+    const MACOS: &str = "tests/ui/native/macos_extension_needs_macos.rs";
+    if cfg!(feature = "native") {
+        cases.pass(HOST_WINDOW);
+        if cfg!(windows) {
+            cases.pass(WINDOWS);
+        } else {
+            cases.compile_fail(WINDOWS);
+        }
+        if cfg!(target_os = "macos") {
+            cases.pass(MACOS);
+        } else {
+            cases.compile_fail(MACOS);
+        }
+    } else {
+        cases.compile_fail(HOST_WINDOW);
+    }
 }

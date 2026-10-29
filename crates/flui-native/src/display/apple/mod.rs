@@ -1,5 +1,5 @@
-//! The Apple displays: `NSScreen` on macOS ([`macos`]), `UIScreen` on iOS
-//! ([`ios`]), and how the two sources name a display, which is what they share.
+//! The Apple displays: `NSScreen` on macOS (`macos`), `UIScreen` on iOS
+//! (`ios`), and how the two sources name a display, which is what they share.
 //!
 //! macOS keys a screen by the UUID of the display behind it, and publishes its
 //! frame in device pixels from the top-left of the primary screen. iOS has no
@@ -8,7 +8,7 @@
 //!
 //! The pure half, which every host compiles and tests, is how a screen is keyed
 //! and placed ([`screen`]) and the iOS display link's frame-rate rules
-//! ([`link_rate`]). A macOS mode's rate and a link's tick become a period by
+//! (`link_rate`). A macOS mode's rate and a link's tick become a period by
 //! the one constructor in `display::source`.
 
 #[cfg(target_os = "ios")]
@@ -21,7 +21,10 @@ pub(crate) mod macos;
 pub(crate) mod screen {
     //! How the Apple sources key a screen and where they place it: a macOS
     //! screen by its display's UUID, its frame in device pixels; an iOS screen
-    //! by the number of the object a ledger retains.
+    //! by the number of the object a ledger retains; and the colour a screen
+    //! shows surfaces in.
+
+    use flui_platform::{DisplayColor, Headroom};
 
     /// The key of a macOS screen, from the `NSScreenNumber` of its
     /// `deviceDescription` and a lookup of the display UUID for a
@@ -75,6 +78,55 @@ pub(crate) mod screen {
         Bounds {
             origin: Point::new(device(frame.origin.x), device(top)),
             size: Size::new(device(frame.size.width), device(frame.size.height)),
+        }
+    }
+
+    /// `-[NSScreen maximumPotentialExtendedDynamicRangeColorComponentValue]`
+    /// (macOS 10.15). Before it a screen reports no extended-range headroom.
+    ///
+    /// Only the x86_64 floor (10.13) lies below it; arm64's floor (11.0) is
+    /// above it, so there the call is made directly and a gate would not
+    /// compile (ADR-0244).
+    #[cfg(all(any(target_os = "macos", test), not(target_arch = "aarch64")))]
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct MacosPotentialHeadroom;
+
+    #[cfg(all(any(target_os = "macos", test), not(target_arch = "aarch64")))]
+    impl crate::version::gate::Gate for MacosPotentialHeadroom {
+        type Version = crate::version::gate::apple::MacOSVersion;
+        const SINCE: u64 = crate::version::gate::apple::MacOSVersion::new(10, 15, 0).rank();
+    }
+
+    /// `UIScreen.potentialEDRHeadroom` (iOS 16). Before it a screen reports no
+    /// extended-range headroom.
+    #[cfg(any(target_os = "ios", test))]
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct IosPotentialHeadroom;
+
+    #[cfg(any(target_os = "ios", test))]
+    impl crate::version::gate::Gate for IosPotentialHeadroom {
+        type Version = crate::version::gate::apple::AppleVersion;
+        const SINCE: u64 = crate::version::gate::apple::AppleVersion::new(16, 0, 0).rank();
+    }
+
+    /// The colour of an Apple screen: whether it shows the Display P3 gamut,
+    /// and the extended-dynamic-range headroom it can reach
+    /// (`maximumPotentialExtendedDynamicRangeColorComponentValue` on macOS,
+    /// `potentialEDRHeadroom` on iOS), `None` where the system predates it.
+    ///
+    /// A screen whose potential headroom is over white is in high range at that
+    /// headroom. The potential, not the current value, because the current one
+    /// stays at white until a layer asks for extended range: reading it would
+    /// keep the surface that asks from ever being chosen. A screen without the
+    /// report, or with a potential at white or one that is not a finite multiple
+    /// of it, is standard range: no extended range is published from a value
+    /// that does not describe one.
+    pub(crate) fn screen_color(p3: bool, potential: Option<f64>) -> DisplayColor {
+        let gamut = crate::display::source::p3_or_srgb(p3);
+        // A finite `f64` beyond `f32` becomes infinite here, which `try_new` refuses.
+        match potential.and_then(|value| Headroom::try_new(value as f32).ok()) {
+            Some(headroom) if headroom > Headroom::SDR => DisplayColor::high(gamut, Ok(headroom)),
+            _ => DisplayColor::standard(gamut),
         }
     }
 
@@ -160,10 +212,76 @@ pub(crate) mod screen {
 
         use flui_foundation::geometry::{Bounds, Point, Size};
 
+        #[cfg(not(target_arch = "aarch64"))]
+        use super::MacosPotentialHeadroom;
         use super::{
-            SameObject, ScreenLedger, change_screen, device_bounds_of_screen, macos_display_key,
-            macos_display_persistent_key,
+            IosPotentialHeadroom, SameObject, ScreenLedger, change_screen, device_bounds_of_screen,
+            macos_display_key, macos_display_persistent_key, screen_color,
         };
+
+        /// Each screen report Apple gives, to the display colour it means.
+        #[test]
+        fn apple_screen_reports_map_to_the_display_colour() {
+            use flui_platform::{ColorGamut, DisplayColor, Headroom};
+
+            assert_eq!(
+                screen_color(true, Some(16.0)),
+                DisplayColor::high(
+                    ColorGamut::DisplayP3,
+                    Ok(Headroom::try_new(16.0).expect("headroom"))
+                ),
+                "an XDR panel"
+            );
+            assert_eq!(
+                screen_color(false, Some(1.0)),
+                DisplayColor::standard(ColorGamut::Srgb),
+                "an SDR monitor"
+            );
+            assert_eq!(
+                screen_color(true, None),
+                DisplayColor::standard(ColorGamut::DisplayP3),
+                "a system without the headroom report"
+            );
+            for broken in [f64::NAN, f64::INFINITY, 0.0, -3.0, f64::MAX] {
+                assert_eq!(
+                    screen_color(false, Some(broken)),
+                    DisplayColor::standard(ColorGamut::Srgb),
+                    "{broken} publishes no extended range"
+                );
+            }
+        }
+
+        /// The headroom reports' gates: none before the release that has them.
+        #[test]
+        fn potential_headroom_gate_table() {
+            use crate::version::gate::apple::AppleVersion;
+
+            #[cfg(not(target_arch = "aarch64"))]
+            {
+                use crate::version::gate::apple::MacOSVersion;
+
+                assert!(
+                    MacOSVersion::new(10, 14, 6)
+                        .since::<MacosPotentialHeadroom>()
+                        .is_none()
+                );
+                assert!(
+                    MacOSVersion::new(10, 15, 0)
+                        .since::<MacosPotentialHeadroom>()
+                        .is_some()
+                );
+            }
+            assert!(
+                AppleVersion::new(15, 7, 0)
+                    .since::<IosPotentialHeadroom>()
+                    .is_none()
+            );
+            assert!(
+                AppleVersion::new(16, 0, 0)
+                    .since::<IosPotentialHeadroom>()
+                    .is_some()
+            );
+        }
 
         const UUID_A: [u8; 16] = [0xA0; 16];
         const UUID_B: [u8; 16] = [0xB0; 16];
@@ -346,7 +464,7 @@ pub(crate) mod link_rate {
     //! measures becomes a new published refresh period, by the contract's
     //! constructor and the display model's one publisher.
 
-    use flui_platform::RefreshPeriod;
+    use flui_platform::{FrameRateHint, RefreshPeriod};
 
     use crate::display::source::MeasuredPeriod;
     use crate::version::gate::{Gate, Since, apple::AppleVersion};
@@ -389,33 +507,49 @@ pub(crate) mod link_rate {
         FramesPerSecond(u16),
     }
 
-    /// The request that runs a link at `maximum_frames_per_second` (the screen's
-    /// `maximumFramesPerSecond`) on `version`.
+    impl FrameRateRange {
+        /// No preference: the system picks the rate (`CAFrameRateRangeDefault`).
+        pub(crate) const NO_PREFERENCE: Self = Self {
+            minimum: 0.0,
+            maximum: 0.0,
+            preferred: 0.0,
+        };
+    }
+
+    /// The request a link gets on `version` for the window's `hint`, given the
+    /// screen's `maximumFramesPerSecond`.
     ///
-    /// A maximum below one is a screen that reports nothing and reads as 60; one
-    /// above 1000 is held at 1000. The range's minimum is 60, or the maximum when
-    /// that is lower, so the range is never inverted.
+    /// [`FrameRateHint::High`] runs the link at the screen's best rate: a maximum
+    /// below one is a screen that reports nothing and reads as 60; one above 1000
+    /// is held at 1000; the range's minimum is 60, or the maximum when that is
+    /// lower, so the range is never inverted. Any other hint withdraws the
+    /// request: the default range, or `preferredFramesPerSecond` zero before
+    /// iOS 15, both of which leave the rate to the system.
     pub(crate) fn frame_rate_preference(
         version: AppleVersion,
         maximum_frames_per_second: i64,
+        hint: FrameRateHint,
     ) -> FrameRatePreference {
-        let maximum = if maximum_frames_per_second < 1 {
-            ASSUMED_MAXIMUM
-        } else {
-            u16::try_from(maximum_frames_per_second)
-                .unwrap_or(MAXIMUM_CEILING)
-                .min(MAXIMUM_CEILING)
+        let wanted = match hint {
+            FrameRateHint::High => Some(if maximum_frames_per_second < 1 {
+                ASSUMED_MAXIMUM
+            } else {
+                u16::try_from(maximum_frames_per_second)
+                    .unwrap_or(MAXIMUM_CEILING)
+                    .min(MAXIMUM_CEILING)
+            }),
+            _ => None,
         };
         match version.since::<FrameRateRangeProperty>() {
             Some(proof) => FrameRatePreference::Range(
                 proof,
-                FrameRateRange {
+                wanted.map_or(FrameRateRange::NO_PREFERENCE, |maximum| FrameRateRange {
                     minimum: f32::from(RANGE_FLOOR.min(maximum)),
                     maximum: f32::from(maximum),
                     preferred: f32::from(maximum),
-                },
+                }),
             ),
-            None => FrameRatePreference::FramesPerSecond(maximum),
+            None => FrameRatePreference::FramesPerSecond(wanted.unwrap_or(0)),
         }
     }
 
@@ -504,7 +638,7 @@ pub(crate) mod link_rate {
 
     #[cfg(test)]
     mod tests {
-        use flui_platform::RefreshPeriod;
+        use flui_platform::{FrameRateHint, RefreshPeriod};
 
         use super::{
             AppleVersion, FrameRatePreference, FrameRateRange, LinkPeriod, ScreenPeriods,
@@ -532,7 +666,7 @@ pub(crate) mod link_rate {
                 (AppleVersion::new(14, 0, 0), 1_000_000, 1000),
             ] {
                 assert_eq!(
-                    frame_rate_preference(version, maximum),
+                    frame_rate_preference(version, maximum, FrameRateHint::High),
                     FrameRatePreference::FramesPerSecond(expected),
                     "{version:?} max {maximum}"
                 );
@@ -550,7 +684,7 @@ pub(crate) mod link_rate {
                 // A screen reporting nothing reads as 60.
                 (AppleVersion::new(16, 0, 0), 0, 60.0, 60.0),
             ] {
-                let range = range(frame_rate_preference(version, maximum))
+                let range = range(frame_rate_preference(version, maximum, FrameRateHint::High))
                     .unwrap_or_else(|| panic!("{version:?} has the range property"));
                 assert_eq!(
                     range,
@@ -562,6 +696,32 @@ pub(crate) mod link_rate {
                     "{version:?} max {maximum}"
                 );
             }
+        }
+
+        /// The window's hint is what the link asks for: `High` the screen's
+        /// best rate, the default no preference at all, on either side of the
+        /// range property's gate.
+        #[test]
+        fn the_link_asks_for_what_the_window_hints() {
+            let ios_15 = AppleVersion::new(15, 0, 0);
+            let ios_14 = AppleVersion::new(14, 0, 0);
+            assert_eq!(
+                range(frame_rate_preference(ios_15, 120, FrameRateHint::Default)),
+                Some(FrameRateRange::NO_PREFERENCE)
+            );
+            assert_eq!(
+                frame_rate_preference(ios_14, 120, FrameRateHint::Default),
+                FrameRatePreference::FramesPerSecond(0)
+            );
+            assert_eq!(
+                range(frame_rate_preference(ios_15, 120, FrameRateHint::High))
+                    .map(|range| range.preferred),
+                Some(120.0)
+            );
+            assert_eq!(
+                frame_rate_preference(ios_14, 120, FrameRateHint::High),
+                FrameRatePreference::FramesPerSecond(120)
+            );
         }
 
         /// The display link's gate, the row of `version::gate`'s table for the

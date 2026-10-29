@@ -12,6 +12,7 @@
 //! window is the foreground window. The probe types through the host the
 //! window itself offers (ADR-0135 §3), into a store of its own.
 
+use flui_testing::window_commands::AdmitAndApply as _;
 use std::cell::Cell;
 use std::io::Write as _;
 use std::ops::{Deref, DerefMut};
@@ -418,7 +419,12 @@ fn text_services_probe() {
     let options = WindowOptions::default()
         .with_title("flui tsf probe")
         .with_size(Size::new(640.0, 200.0));
-    let window = platform.open_window(options).expect("window");
+    let window = platform
+        .open_window(
+            options,
+            flui_testing::window_handler::RecordingWindowHandler::new(),
+        )
+        .expect("window");
     let hwnd = window
         .as_any()
         .downcast_ref::<crate::window::windows::WindowsWindow>()
@@ -452,11 +458,7 @@ fn text_services_probe() {
             .text_store_host(OwnerThreadToken::new())
             .expect("(1) the window offers its text-store host")
     };
-    let services: Rc<TextServices> =
-        crate::window::windows::proc::with_window_context(hwnd, "probe", |context| {
-            context.text_services.borrow().clone()
-        })
-        .flatten()
+    let services: Rc<TextServices> = crate::text::windows::testing::services_of(hwnd)
         .expect("(1) the window holds its text services");
     println!(
         "PROBE (1) the window's host is its TSF connection: {}; TfClientId = {:#x}",
@@ -573,7 +575,7 @@ fn text_services_probe() {
     println!("PROBE ja-JP profile for this thread: {ja:?}");
     if ja.is_err() {
         println!("PROBE SKIP: Microsoft IME ja-JP is not installed; points (2)-(7) need it");
-        window.close();
+        window.close_now();
         return;
     }
     let mut active = TF_INPUTPROCESSORPROFILE::default();
@@ -727,7 +729,7 @@ fn text_services_probe() {
         previous.hkl,
     );
     println!("PROBE previous profile restored: {restored:?}");
-    window.close();
+    window.close_now();
     pump(100, &probe);
     println!(
         "PROBE (8) after the window's WM_DESTROY the host answers {:?}",
@@ -778,7 +780,7 @@ fn activate_profile(
 /// The window's scale and client origin.
 fn frame(hwnd: HWND) -> (DevicePixelRatio, DevicePoint) {
     let scale =
-        crate::window::windows::proc::with_window_context(hwnd, "probe", |c| c.scale_factor.get())
+        crate::window::windows::proc::with_window_context(hwnd, "probe", |c| c.scale.scale())
             .and_then(DevicePixelRatio::new)
             .unwrap_or_default();
     let mut origin = POINT::default();

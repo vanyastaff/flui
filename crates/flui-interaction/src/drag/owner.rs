@@ -8,7 +8,6 @@
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
 
 use flui_foundation::geometry::Offset;
 use flui_foundation::{DataTransferId, DragSessionId, PresentationId, UiRuntimeId};
@@ -22,7 +21,9 @@ use flui_platform::drag::{
     validate_session,
 };
 use flui_platform::pointer::PointerInfo;
-use flui_platform::{DragDropEvent, EventTime, PlatformWindow, WindowAt, WindowId};
+use flui_platform::{
+    DragDropEvent, EventTime, PlatformWindow, Unsupported, UnsupportedReason, WindowAt, WindowId,
+};
 
 use super::cursor::{DragCursor, drag_cursor};
 use super::item::{DragItem, SessionData};
@@ -32,7 +33,7 @@ use super::sessions::{
     Shared, Surface, WeakShared, pointer_kind,
 };
 use super::tracker::{DropTracker, Dropped, single_action};
-use super::view::{DragScope, DragView};
+use super::view::{DragScope, DragView, InFlight, OwnerWake};
 use crate::close::ClosePanic;
 use crate::events::PointerKind;
 use crate::pointer::mouse_tracker::WeakMouseTracker;
@@ -114,7 +115,7 @@ pub struct DragStart {
     allowed: AllowedActions,
     reach: Option<DragReach>,
     pointer: Option<PointerInfo>,
-    window: Option<std::sync::Weak<dyn PlatformWindow>>,
+    window: Option<std::rc::Weak<dyn PlatformWindow>>,
     hit_test: Option<HitTestHandle>,
     capture: Option<PointerCapture>,
     observer: Option<Rc<dyn DragObserver>>,
@@ -154,7 +155,7 @@ impl DragStart {
 
     /// The window the drag starts in: it says when the pointer leaves, and
     /// starts the OS session.
-    pub fn window(mut self, window: std::sync::Weak<dyn PlatformWindow>) -> Self {
+    pub fn window(mut self, window: std::rc::Weak<dyn PlatformWindow>) -> Self {
         self.window = Some(window);
         self
     }
@@ -195,6 +196,7 @@ impl std::fmt::Debug for DragStart {
 pub struct DragOwner {
     shared: Shared,
     source: Arc<dyn DataTransferSource>,
+    wake: OwnerWake,
 }
 
 impl std::fmt::Debug for DragOwner {
@@ -206,15 +208,21 @@ impl std::fmt::Debug for DragOwner {
 impl DragOwner {
     /// The machinery of `runtime`, in the platform instance named by `nonce`,
     /// answering the OS through `source`.
+    ///
+    /// `wake` is called, from whichever thread it happens on, when the last
+    /// request a drop made resolves or is dropped: the owner then has a drop
+    /// to conclude ([`next_deadline`](Self::next_deadline)) and may be asleep.
     #[must_use]
     pub fn new(
         nonce: ProcessNonce,
         runtime: UiRuntimeId,
         source: Arc<dyn DataTransferSource>,
+        wake: OwnerWake,
     ) -> Self {
         Self {
             shared: Rc::new(std::cell::RefCell::new(DragSessions::new(nonce, runtime))),
             source,
+            wake,
         }
     }
 
@@ -662,7 +670,7 @@ impl DragOwner {
         let in_flight = if let Some(known) = state.offer_mut(offer.id()) {
             Arc::clone(&known.in_flight)
         } else {
-            let in_flight = Arc::new(AtomicUsize::new(0));
+            let in_flight = InFlight::new(Arc::clone(&self.wake));
             state.offers.push(OfferState {
                 id: offer.id(),
                 in_flight: Arc::clone(&in_flight),
@@ -849,7 +857,7 @@ struct ViewParts {
     key: Option<DragSessionKey>,
     scope: DragScope,
     allowed: TransferActions,
-    in_flight: Option<Arc<AtomicUsize>>,
+    in_flight: Option<Arc<InFlight>>,
     pointer: PointerKind,
 }
 
@@ -943,7 +951,7 @@ impl DragHandle {
         validate_session(allowed, reach, data.has_serialized())?;
         let (timing, available) = window
             .as_ref()
-            .and_then(std::sync::Weak::upgrade)
+            .and_then(std::rc::Weak::upgrade)
             .and_then(|window| window.drag_source())
             .map_or((OsDragStart::OnLeavingWindow, false), |drag_source| {
                 (drag_source.start_timing(), true)
@@ -1257,7 +1265,7 @@ struct Running {
     parts: ViewParts,
     hit_test: Option<HitTestHandle>,
     kind: PointerKind,
-    window: Option<std::sync::Weak<dyn PlatformWindow>>,
+    window: Option<std::rc::Weak<dyn PlatformWindow>>,
     observer: Option<Rc<dyn DragObserver>>,
     cursor: Option<Rc<DragCursor>>,
     stage_system: bool,
@@ -1336,11 +1344,11 @@ fn locate(shared: &Shared, running: &Running, global: Offset<f64>) -> Over {
         hit_test,
         position: global,
     };
-    let window = running.window.as_ref().and_then(std::sync::Weak::upgrade);
+    let window = running.window.as_ref().and_then(std::rc::Weak::upgrade);
     let Some(window) = window else {
         return here;
     };
-    let size = window.logical_size();
+    let size = window.state().content_size;
     let inside =
         global.dx >= 0.0 && global.dy >= 0.0 && global.dx <= size.width && global.dy <= size.height;
     if inside {
@@ -1788,7 +1796,8 @@ impl PendingOsDrag {
     ///
     /// # Errors
     ///
-    /// The backend's refusal, or [`DragError::Unavailable`] with no source.
+    /// The backend's refusal, or [`DragError::Unsupported`] with no source
+    /// ([`UnsupportedReason::NotOnThisPlatform`]).
     /// The host then sends the session back to its window with
     /// [`DragOwner::os_drag_refused`], as it does when the start panics.
     pub fn start(self, source: Option<&dyn PlatformDragSource>) -> Result<(), DragError> {
@@ -1800,7 +1809,7 @@ impl PendingOsDrag {
             source.start(request)
         } else {
             drop(request);
-            Err(DragError::Unavailable)
+            Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform).into())
         };
         let end_dropped = running.leave();
         if started.is_ok() && end_dropped {

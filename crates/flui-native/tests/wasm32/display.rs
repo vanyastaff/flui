@@ -39,6 +39,15 @@ let everScreens = [];
 let windowListeners = [];
 let lastCanvas;
 let resizeObservers = [];
+// The colour media queries: which state key each answers from, the state, and
+// the lists handed out.
+const colourKeys = {
+    '(dynamic-range: high)': 'high',
+    '(color-gamut: rec2020)': 'rec2020',
+    '(color-gamut: p3)': 'p3',
+};
+let colour = { high: false, rec2020: false, p3: false };
+let colourLists = [];
 
 // An event target that counts the listeners it really holds, and removes one
 // only when that very function was added.
@@ -163,7 +172,16 @@ export function installDisplayProbe(windowManagement) {
         return rafIds;
     });
     define('cancelAnimationFrame', id => { rafQueue = rafQueue.filter(entry => entry.id !== id); });
+    colour = { high: false, rec2020: false, p3: false };
+    colourLists = [];
     define('matchMedia', query => {
+        const key = colourKeys[query];
+        if (key) {
+            const list = track(new EventTarget());
+            Object.defineProperty(list, 'matches', { get: () => colour[key] });
+            colourLists.push({ key, list });
+            return list;
+        }
         const match = /^\(resolution: ([0-9.]+)dppx\)$/.exec(query);
         if (match && failQueries > 0) { failQueries -= 1; throw new Error('matchMedia refused'); }
         const target = track(new EventTarget());
@@ -391,6 +409,18 @@ export function changeSideScreen(width) {
     sideScreen.dispatchEvent(new Event('change'));
 }
 export function nextOwnerTask() { return new Promise(resolve => setImmediate(resolve)); }
+// The system switches the screen's colour: each list whose answer moved raises
+// `change`, as a browser's does.
+export function setColour(high, rec2020, p3) {
+    const before = colour;
+    colour = { high, rec2020, p3 };
+    for (const { key, list } of colourLists) {
+        if (before[key] !== colour[key]) list.dispatchEvent(new Event('change'));
+    }
+}
+export function colourListeners() {
+    return colourLists.reduce((sum, { list }) => sum + list.listenerCount(), 0);
+}
 "#)]
 extern "C" {
     #[wasm_bindgen(js_name = installDisplayProbe)]
@@ -470,6 +500,10 @@ extern "C" {
     fn change_side_screen(width: u32);
     #[wasm_bindgen(js_name = nextOwnerTask)]
     fn next_task() -> js_sys::Promise;
+    #[wasm_bindgen(js_name = setColour)]
+    fn set_colour(high: bool, rec2020: bool, p3: bool);
+    #[wasm_bindgen(js_name = colourListeners)]
+    fn colour_listeners() -> i32;
 }
 
 pub(super) struct Probe;
@@ -482,6 +516,8 @@ impl Drop for Probe {
 /// A running platform and the number of owner wakes it has delivered.
 pub(super) struct Running {
     pub(super) owner: Rc<RefCell<Option<OwnerPlatform>>>,
+    /// The application handler the page runs with.
+    pub(super) log: Rc<crate::app::AppLog>,
     wakes: Arc<AtomicUsize>,
 }
 
@@ -491,18 +527,20 @@ impl Running {
         let installed = Rc::clone(&owner);
         let wakes = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&wakes);
+        let log = crate::app::AppLog::new();
+        log.bootstrap(move |capability| {
+            capability
+                .on_wake(Box::new(move || {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                }))
+                .expect("wake hook");
+            installed.replace(Some(capability));
+            Ok(())
+        });
         Box::new(WebPlatform::new().expect("platform"))
-            .run(Box::new(move |capability| {
-                capability
-                    .on_wake(Box::new(move || {
-                        counted.fetch_add(1, Ordering::SeqCst);
-                    }))
-                    .expect("wake hook");
-                installed.replace(Some(capability));
-                Ok(())
-            }))
+            .run(Rc::clone(&log) as Rc<dyn flui_native::AppHandler>)
             .expect("run");
-        Self { owner, wakes }
+        Self { owner, log, wakes }
     }
 
     fn snapshot(&self) -> DisplaySnapshot {
@@ -564,6 +602,40 @@ fn has_period(snapshot: &DisplaySnapshot) -> Vec<bool> {
         .iter()
         .map(|display| display.refresh_period.is_some())
         .collect()
+}
+
+/// The screen's colour follows the `dynamic-range` and `color-gamut` queries:
+/// their change wakes the owner, and the snapshot after it carries the new
+/// colour, with a headroom the browser never exposes.
+#[wasm_bindgen_test]
+async fn web_colour_follows_the_media_queries() {
+    use flui_platform::{CapabilityAbsence, ColorGamut, DisplayColor};
+
+    install_probe("none");
+    let _probe = Probe;
+    let running = Running::start();
+    let colour = |snapshot: &DisplaySnapshot| snapshot.primary().map(|display| display.color);
+    let before = running.snapshot();
+    assert_eq!(
+        colour(&before),
+        Some(Ok(DisplayColor::standard(ColorGamut::Srgb)))
+    );
+    assert_eq!(colour_listeners(), 3, "each colour query is listened to");
+
+    set_colour(true, false, true);
+    settle().await;
+    assert_eq!(running.wakes(), 1, "the colour change wakes the owner once");
+    let after = running.snapshot();
+    assert!(after.revision() > before.revision());
+    assert_eq!(
+        colour(&after),
+        Some(Ok(DisplayColor::high(
+            ColorGamut::DisplayP3,
+            Err(CapabilityAbsence::NotOnThisPlatform)
+        )))
+    );
+    running.quit();
+    settle().await;
 }
 
 #[wasm_bindgen_test]
@@ -999,7 +1071,13 @@ async fn web_window_names_the_display_the_snapshot_describes() {
     let window = {
         let owner = running.owner.borrow();
         let owner = owner.as_ref().expect("owner");
-        match owner.open_window(WindowOptions::default()).expect("window") {
+        match owner
+            .open_window(
+                WindowOptions::default(),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
+            .expect("window")
+        {
             WindowOpen::Ready(window) => window,
             WindowOpen::Pending(_) => panic!("a Web window opens at once"),
         }
@@ -1007,22 +1085,24 @@ async fn web_window_names_the_display_the_snapshot_describes() {
     let snapshot = running.snapshot();
     let main = snapshot.displays()[0].id;
     let side = snapshot.displays()[1].id;
-    assert_eq!(window.display_id(), Some(main), "the current screen");
+    assert_eq!(window.state().display, Some(main), "the current screen");
     assert_eq!(
-        snapshot.window_display(window.display_id()).map(|d| d.id),
+        snapshot
+            .window_display(window.state().display)
+            .map(|d| d.id),
         Some(main)
     );
 
     move_window_to_side_screen();
     settle().await;
-    assert_eq!(window.display_id(), Some(side), "follows currentScreen");
+    assert_eq!(window.state().display, Some(side), "follows currentScreen");
 
     // The period reaches the window through the snapshot it names.
     run_frames(0.0, 8.333, 35);
     settle().await;
     let display = running
         .snapshot()
-        .window_display(window.display_id())
+        .window_display(window.state().display)
         .expect("window display");
     assert!(near(
         display
@@ -1108,7 +1188,10 @@ async fn web_granting_screen_access_keeps_the_window_display() {
         match owner
             .as_ref()
             .expect("owner")
-            .open_window(WindowOptions::default())
+            .open_window(
+                WindowOptions::default(),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
             .expect("window")
         {
             WindowOpen::Ready(window) => window,
@@ -1116,7 +1199,7 @@ async fn web_granting_screen_access_keeps_the_window_display() {
         }
     };
     let before = running.snapshot();
-    let id = window.display_id().expect("the one screen");
+    let id = window.state().display.expect("the one screen");
     assert_eq!(
         before.get(id).map(|d| d.name.as_str()),
         Some("Browser Screen")
@@ -1128,7 +1211,7 @@ async fn web_granting_screen_access_keeps_the_window_display() {
     settle().await;
     let after = running.snapshot();
     assert_eq!(
-        window.display_id(),
+        window.state().display,
         Some(id),
         "the window saw no display change"
     );
@@ -1138,7 +1221,11 @@ async fn web_granting_screen_access_keeps_the_window_display() {
 
     revoke_permission();
     settle().await;
-    assert_eq!(window.display_id(), Some(id), "and none when access ends");
+    assert_eq!(
+        window.state().display,
+        Some(id),
+        "and none when access ends"
+    );
     drop(window);
     running.quit();
     settle().await;
@@ -1248,13 +1335,14 @@ async fn web_screen_change_keeps_the_period_while_the_current_screen_is_known() 
 }
 
 /// A window opened on `running`, and the scale of every resize it reports.
-fn open_recorded_window(running: &Running) -> (Arc<dyn HostWindow>, Arc<Mutex<Vec<f64>>>) {
+fn open_recorded_window(running: &Running) -> (Rc<dyn HostWindow>, Arc<Mutex<Vec<f64>>>) {
+    let handler = flui_testing::window_handler::RecordingWindowHandler::new();
     let window = {
         let owner = running.owner.borrow();
         match owner
             .as_ref()
             .expect("owner")
-            .open_window(WindowOptions::default())
+            .open_window(WindowOptions::default(), handler.clone())
             .expect("window")
         {
             WindowOpen::Ready(window) => window,
@@ -1263,16 +1351,38 @@ fn open_recorded_window(running: &Running) -> (Arc<dyn HostWindow>, Arc<Mutex<Ve
     };
     let resized = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&resized);
-    window.on_resize(Box::new(move |metrics| {
-        let scale = metrics.scale().get();
-        seen.lock().expect("resizes").push(scale);
-    }));
+    let observed = std::rc::Rc::downgrade(&window);
+    let last = std::cell::Cell::new(window.state().metrics);
+    handler.react_to_state_change(move || {
+        let Some(window) = observed.upgrade() else {
+            return;
+        };
+        let metrics = window.state().metrics;
+        if metrics == last.replace(metrics) {
+            return;
+        }
+        if let Some(metrics) = metrics {
+            seen.lock().expect("resizes").push(metrics.scale().get());
+        }
+    });
     (window, resized)
 }
 
-fn physical_size(window: &Arc<dyn HostWindow>) -> [i32; 2] {
-    let size = window.physical_size();
+/// The drawable metrics the window's snapshot carries.
+fn metrics(window: &Rc<dyn HostWindow>) -> flui_foundation::geometry::WindowMetrics {
+    window
+        .state()
+        .metrics
+        .expect("an open canvas has drawable metrics")
+}
+
+fn physical_size(window: &Rc<dyn HostWindow>) -> [i32; 2] {
+    let size = metrics(window).physical();
     [size.width, size.height]
+}
+
+fn scale(window: &Rc<dyn HostWindow>) -> f64 {
+    metrics(window).scale().get()
 }
 
 #[wasm_bindgen_test]
@@ -1282,7 +1392,7 @@ async fn web_window_backing_store_follows_a_pixel_ratio_change_without_a_resize(
     let running = Running::start();
     settle().await;
     let (window, resized) = open_recorded_window(&running);
-    assert_eq!(window.scale_factor(), 1.0);
+    assert_eq!(scale(&window), 1.0);
     assert_eq!(canvas_backing_size(), [300, 150], "the 300×150 box at 1×");
     assert_eq!(
         pixel_ratio_listeners(),
@@ -1294,7 +1404,7 @@ async fn web_window_backing_store_follows_a_pixel_ratio_change_without_a_resize(
     // stays, so no `ResizeObserver` entry and no `resize` event arrive.
     set_pixel_ratio(2.0);
     settle().await;
-    assert_eq!(window.scale_factor(), 2.0, "the window follows the ratio");
+    assert_eq!(scale(&window), 2.0, "the window follows the ratio");
     assert_eq!(
         canvas_backing_size(),
         [600, 300],
@@ -1327,7 +1437,7 @@ async fn web_window_backing_store_is_the_device_pixel_size_the_browser_reports()
     // small canvas) brings no observer entry; the window's own watch sees it.
     set_pixel_ratio(1.5);
     settle().await;
-    assert_eq!(window.scale_factor(), 1.5, "the watch synced the window");
+    assert_eq!(scale(&window), 1.5, "the watch synced the window");
     assert_eq!(canvas_backing_size(), [450, 225]);
 
     // At 1.5× the browser snaps a 301×150 box to 451×225 device pixels,
@@ -1357,7 +1467,7 @@ async fn web_window_backing_store_is_the_device_pixel_size_the_browser_reports()
     // 1.501× would be 452.
     set_pixel_ratio(1.501);
     settle().await;
-    assert_eq!(window.scale_factor(), 1.501);
+    assert_eq!(scale(&window), 1.501);
     assert_eq!(
         canvas_backing_size(),
         [451, 225],
@@ -1372,7 +1482,7 @@ async fn web_window_backing_store_is_the_device_pixel_size_the_browser_reports()
     change_canvas_boxes(302, 150, 452, 225, 0.0, "content-box border-box");
     settle().await;
     assert_eq!(
-        window.logical_size().width,
+        window.state().content_size.width,
         302.0,
         "the window follows the reflow"
     );
@@ -1399,7 +1509,7 @@ async fn web_window_backing_store_is_the_device_pixel_size_the_browser_reports()
     change_canvas_boxes(322, 170, 452, 225, 10.0, "border-box");
     settle().await;
     assert_eq!(
-        window.logical_size().width,
+        window.state().content_size.width,
         322.0,
         "the window follows the padding"
     );
@@ -1538,8 +1648,16 @@ async fn web_window_backing_store_leaves_a_page_canvas_box_where_it_was() {
             [width * 2, height * 2],
             "{page}: the store at 2× did not move the box"
         );
-        assert_eq!(window.logical_size().width, f64::from(width), "{page}");
-        assert_eq!(window.logical_size().height, f64::from(height), "{page}");
+        assert_eq!(
+            window.state().content_size.width,
+            f64::from(width),
+            "{page}"
+        );
+        assert_eq!(
+            window.state().content_size.height,
+            f64::from(height),
+            "{page}"
+        );
         assert_eq!(canvas_size_writes(), pinned, "{page}");
 
         drop(window);
@@ -1573,7 +1691,7 @@ async fn web_window_backing_store_is_estimated_where_the_browser_reports_css_pix
 
     lay_out_canvas(301, 150, 451, 225);
     settle().await;
-    assert_eq!(window.scale_factor(), 1.5);
+    assert_eq!(scale(&window), 1.5);
     assert_eq!(
         canvas_backing_size(),
         [452, 225],
@@ -1586,7 +1704,7 @@ async fn web_window_backing_store_is_estimated_where_the_browser_reports_css_pix
     change_canvas_boxes(321, 170, 0, 0, 10.0, "border-box");
     settle().await;
     assert_eq!(
-        window.logical_size().width,
+        window.state().content_size.width,
         321.0,
         "the window follows the padding"
     );

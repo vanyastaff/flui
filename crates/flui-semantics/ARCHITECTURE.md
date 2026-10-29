@@ -717,6 +717,29 @@ is user code, under the pipeline's borrows.
 **Test.** `siblings_sharing_an_identifier_are_reported_and_published_as_written` and
 `debug_builds_queue_a_published_clash_once_per_shape` in `tests/identifier.rs`.
 
+### Locators and actionability are pure reads of the published tree
+
+**Rule.** A `Locator` resolves over the filtered tree the adapters see, reading the same wire
+`Node` as `semantics.read`, so a locator matches what the outline shows. `within` and `has` are
+scopes over that tree: an unlabelled container that is lifted away is no ancestor. A strict
+locator lists every match in `locate_wire`; `resolve_wire_locator` is where one element is needed
+and answers `Ambiguous` (the first ten outline lines) or `NotFound` (the ten nearest by held
+criteria, then name distance). Actionability is two calls with the caller's hit-test between them:
+`actionability_point` says where a pointer would land, `actionability_wire` takes the render
+objects the hit-test found there, most specific first. A path maps to the first render object
+whose node the filtered tree shows, because a published node's id is its render object's id.
+`SemanticsOwner::revision` grows with each publication that delivered something, and matches and
+facts carry it.
+
+**Why.** The hit-test is render-tree code and user code (a render object's hit test), so it must
+not run under a semantics borrow; splitting the check keeps the owner free of callbacks. Naming
+the node by its render object's id means there is no index to go stale, and a handle's generation
+makes an old handle detached after its slot is reused. `visible` leans on the clip the semantics
+assembly already applies and adds only the window region: a second clip computation here would be
+a second place to be wrong.
+
+**Test.** `locate.rs` and `actionability.rs` in `tests/`.
+
 ## Numeric and directional input
 
 ADR-0124 distinguishes expand/collapse from activation and numeric setters from

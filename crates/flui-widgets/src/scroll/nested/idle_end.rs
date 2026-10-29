@@ -28,6 +28,8 @@ use super::ScrollSequence;
 pub(crate) struct IdleEnd {
     lapse: Rc<Lapse>,
     registration: GestureDeadlineRegistration,
+    /// The arena the deadline is registered on.
+    arena: GestureArena,
 }
 
 impl IdleEnd {
@@ -44,6 +46,7 @@ impl IdleEnd {
             Ok(registration) => Some(Self {
                 lapse,
                 registration,
+                arena: arena.clone(),
             }),
             Err(error) => {
                 tracing::debug!(
@@ -53,6 +56,13 @@ impl IdleEnd {
                 None
             }
         }
+    }
+
+    /// Whether the deadline is registered on `arena`. A presentation that
+    /// swaps its gesture arena mid-sequence makes it stale: the old arena's
+    /// owner clock is the one that would wake for it.
+    pub(crate) fn is_on(&self, arena: &GestureArena) -> bool {
+        self.arena.admits_like(arena)
     }
 
     /// The sequence now ends at `due`, unless moved on again. The returned

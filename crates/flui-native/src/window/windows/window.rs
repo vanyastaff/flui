@@ -4,7 +4,7 @@
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::{Bounds, EdgeInsets, Point, Size, WindowMetrics};
+use flui_foundation::geometry::{Bounds, Point, Size};
 use parking_lot::Mutex;
 use raw_window_handle::{
     HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle, Win32WindowHandle,
@@ -19,11 +19,11 @@ use windows::{
             HiDpi::{GetDpiForSystem, GetDpiForWindow},
             WindowsAndMessaging::{
                 CW_USEDEFAULT, CreateWindowExW, DestroyWindow, GCLP_HBRBACKGROUND, GWL_EXSTYLE,
-                GWL_STYLE, GWLP_USERDATA, GetClientRect, GetCursorPos, GetForegroundWindow,
-                GetWindowLongPtrW, GetWindowRect, IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND,
-                IDC_IBEAM, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE,
-                IDC_WAIT, IsIconic, IsWindowVisible, IsZoomed, LoadCursorW, PostMessageW, SW_HIDE,
-                SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED,
+                GWL_STYLE, GWLP_USERDATA, GetClientRect, GetWindowLongPtrW, GetWindowRect,
+                IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_IBEAM, IDC_NO, IDC_SIZEALL,
+                IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT, IsIconic,
+                IsWindowVisible, IsZoomed, LoadCursorW, PostMessageW, SW_HIDE, SW_MAXIMIZE,
+                SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED,
                 SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
                 SetClassLongPtrW, SetCursor, SetForegroundWindow, SetWindowLongPtrW,
                 SetWindowPlacement, SetWindowPos, SetWindowTextW, ShowWindow, WM_CLOSE, WS_CAPTION,
@@ -35,26 +35,30 @@ use windows::{
 };
 
 use flui_platform::{
-    CursorError, DispatchEventResult, PlatformInput, PlatformWindow, SizeConstraints,
-    WindowAppearance, WindowBackgroundAppearance, WindowCapabilities, WindowCommand,
-    WindowCommandError, WindowExecutionState, WindowId, WindowMode, WindowOptions, WindowReveal,
-    WindowState,
+    AdmittedCommand, ApplyError, CursorError, PlatformFailure, PlatformWindow, SizeConstraints,
+    Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand, WindowId, WindowMaterial,
+    WindowMode, WindowOptions, WindowReveal, WindowState,
 };
 
+use flui_platform::os_options::WindowsCornerPreference;
+
+use super::material::SystemBackdrop;
 use super::mode::NativeMode;
 use super::proc::{
     FirstShow, OwnerTracking, REQUEST_FRAME, WindowRecord, first_show_command, frame_style,
     restyled, sample_state, to_screen, to_workspace,
 };
 use super::set::{
-    USER_DEFAULT_SCREEN_DPI, WindowSet, checked_logical_to_device, logical_to_device, open_spot,
-    outer_size, placement_of, restore_rectangle, workspace_origin,
+    USER_DEFAULT_SCREEN_DPI, WindowSet, checked_logical_to_device, open_spot, outer_size,
+    placement_of, restore_rectangle, workspace_origin,
 };
+use crate::host::WindowFacets;
 use crate::owner::windows::WINDOW_CLASS_NAME;
+use crate::text::WindowTextInput;
+use crate::version::gate::Since;
 use crate::window::state::WindowStateCell;
 use crate::{
-    owner::OpenWindowError, owner::call_point::install, owner::handlers::PlatformHandlers,
-    owner::handlers::WindowCallbacks, owner::hwnd_affinity::UserDataRefusal,
+    owner::OpenWindowError, owner::window_delivery::WindowDelivery, owner::windows::AppHooks,
 };
 
 /// Windows window wrapper
@@ -65,9 +69,7 @@ pub struct WindowsWindow {
     /// Window state
     state: Arc<Mutex<WindowRecord>>,
 
-    /// Which native window this wrapper was built for. The callbacks
-    /// themselves live in that window's owner-thread context, not here;
-    /// see [`Self::register`].
+    /// Which native window this wrapper was built for.
     pub(crate) identity: crate::owner::windows::WindowIdentity,
 
     /// The windows the platform tracks, which this one leaves when the last
@@ -92,66 +94,25 @@ pub struct WindowsWindow {
     /// exactly why it must never be dereferenced here.
     context: *const super::proc::WindowContext,
 
-    /// This window's UIA bridge, subclassed onto `hwnd` at construction so
-    /// a UI Automation client that asks at any later point is answered.
-    /// Inert until one does — see
-    /// [`WindowsAccessibility::new`](crate::accessibility::windows::WindowsAccessibility::new).
-    accessibility: Arc<crate::accessibility::windows::WindowsAccessibility>,
-
-    /// This window's haptic actuator: the pen in range of it.
-    haptics: Arc<crate::haptics::windows::WindowsHaptics>,
+    /// What the table's positions made for this window at construction: its
+    /// accessibility bridge (UIA subclasses `hwnd` then, so a client that
+    /// asks at any later point is answered; detached before the window is
+    /// destroyed), its actuator (the pen in range of it), its handle to its
+    /// TSF connection, and its system chrome (none on Windows).
+    facets: WindowFacets,
 
     /// Starts this window's OS drag sessions through OLE (ADR-0211).
     drag_source: Arc<dyn flui_platform::drag::PlatformDragSource>,
+
+    /// What the window delivers to its handler, shared with its owner-thread
+    /// context, which raises every delivery from the window procedure. The
+    /// handler itself lives in an owner-thread slot of it, so this field
+    /// reaches nothing off that thread.
+    delivery: Arc<WindowDelivery>,
 }
 
-// SAFETY, per field: `state` is an `Arc<Mutex<..>>` with its own
-// synchronization; `windows` is an `Arc` of a set behind its own lock;
-// `haptics` and `drag_source` are `Send + Sync` themselves;
-// `identity` is a plain integer. The struct carries no callback storage:
-// callbacks live in the owner-thread `WindowContext` and are installed only
-// through the context gate below, so a foreign thread can neither run nor
-// drop one. The non-`Sync`/non-`Send` members are `hwnd: HWND` and
-// `context: *const WindowContext`, both bare addresses that this type never
-// dereferences through these fields (`context` is an identity token for
-// value comparison only — see its field doc) — sending or sharing an
-// address itself aliases nothing, so `Send` and `Sync` are sound for the
-// struct.
-//
-// The HWND behind that address is thread-AFFINE, not "thread-safe by
-// design": its message queue belongs to the thread that created it, Win32
-// dispatches `window_proc` (including the `WM_DESTROY` arm that retires the
-// `WindowContext` stored in `GWLP_USERDATA`) on that thread, and
-// `DestroyWindow` refuses to run anywhere else. That obligation is
-// DISCHARGED — not merely documented — by routing every affine touch on
-// this type through two gates in `platform.rs`:
-//
-// - every dereference of the `GWLP_USERDATA` context goes through
-//   `with_window_context`, which refuses (safe fallback, traced) unless the
-//   calling thread is the window's owning thread and the window is live, of
-//   our class, with a non-null slot — on the owning thread the deref cannot
-//   race the free: the only retiring path (`WM_DESTROY`) is dispatched on
-//   that same thread, and the borrow-ledger (`ContextGuard`/`ContextLedger`)
-//   defers the actual free past every live borrow, including across
-//   reentrant dispatch;
-// - every teardown (`close()`, the last wrapper `Drop`) goes through
-//   `teardown_route`, which verifies the handle still names THIS wrapper's
-//   window (class + context identity, guarding against OS handle
-//   recycling), calls `DestroyWindow` only on the owning thread, and
-//   otherwise posts `WM_CLOSE` to the owner's queue (`PostMessageW`, the
-//   documented cross-thread mechanism).
-//
-// The decision rules are pure and Linux-tested (`owner::hwnd_affinity`);
-// the remaining Win32 calls on `&self` (`ShowWindow`, `SetWindowPos`,
-// `SetWindowTextW`, DWM attributes, ...) are documented by Win32 as legal
-// cross-thread and dereference nothing.
-unsafe impl Send for WindowsWindow {}
-// SAFETY: see `Send` above — shared access adds nothing beyond the same
-// gated paths.
-unsafe impl Sync for WindowsWindow {}
-
 impl std::fmt::Debug for WindowsWindow {
-    // Hand-written: `WindowCallbacks` is a callback payload with no meaningful
+    // Hand-written: the window's handler has no meaningful
     // Debug representation.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WindowsWindow")
@@ -161,40 +122,52 @@ impl std::fmt::Debug for WindowsWindow {
 }
 
 /// A Win32 call that failed, as the error of the command that made it.
-fn backend_error(what: &str, error: windows::core::Error) -> WindowCommandError {
-    WindowCommandError::Backend {
-        message: format!("{what} failed: {error}"),
-    }
+fn backend_error(what: &str, error: windows::core::Error) -> ApplyError {
+    ApplyError::failed(format!("{what} failed: {error}"))
 }
 
-/// A command's logical pair in device pixels, refused as invalid geometry
-/// when either value is beyond what Win32 can represent.
-fn device_pair(x: f64, y: f64, scale: f64) -> Result<(i32, i32), WindowCommandError> {
+/// A command's logical pair in device pixels, refused before any call when
+/// either value is beyond what Win32 can represent: admission held the numbers
+/// to being finite and positive, and the device range is Win32's own limit.
+fn device_pair(x: f64, y: f64, scale: f64) -> Result<(i32, i32), ApplyError> {
     checked_logical_to_device(x, scale)
         .zip(checked_logical_to_device(y, scale))
-        .ok_or(WindowCommandError::InvalidGeometry)
+        .ok_or(ApplyError::Platform(PlatformFailure::OutOfRange))
 }
 
 /// What every Win32 window honours and observes, known before one exists
-/// (`Platform::window_capabilities`).
-pub(crate) const fn window_capabilities() -> WindowCapabilities {
+/// (`Platform::window_capabilities`), on a build that passed or failed the
+/// material's `gate`. Win32 has no fullscreen of its own: the host makes one
+/// of a borderless window sized to its monitor. It takes no refresh-rate
+/// request: the display's rate is the user's setting. The material is
+/// `DWMWA_SYSTEMBACKDROP_TYPE`; a Win32 window opens with
+/// [`WindowMaterial::System`] where the build draws it.
+pub(crate) const fn window_capabilities(
+    gate: &Result<Since<SystemBackdrop>, Unsupported>,
+) -> WindowCapabilities {
+    use flui_platform::Availability::{Emulated, Native};
     let mut capabilities = WindowCapabilities::NONE;
-    capabilities.sets_title = true;
-    capabilities.sets_position = true;
-    capabilities.sets_size = true;
-    capabilities.sets_constraints = true;
-    capabilities.sets_resizable = true;
-    capabilities.sets_decorated = true;
-    capabilities.minimizes = true;
-    capabilities.maximizes = true;
-    capabilities.enters_fullscreen = true;
-    capabilities.shows = true;
-    capabilities.hides = true;
-    capabilities.activates = true;
-    capabilities.observes_position = true;
-    capabilities.observes_minimized = true;
-    capabilities.places_at_open = true;
-    capabilities
+    capabilities.sets_title = Native;
+    capabilities.sets_position = Native;
+    capabilities.sets_size = Native;
+    capabilities.sets_constraints = Native;
+    capabilities.sets_resizable = Native;
+    capabilities.sets_decorated = Native;
+    capabilities.minimizes = Native;
+    capabilities.maximizes = Native;
+    capabilities.enters_fullscreen = Emulated;
+    capabilities.shows = Native;
+    capabilities.hides = Native;
+    capabilities.activates = Native;
+    capabilities.closes = Native;
+    capabilities.observes_position = Native;
+    capabilities.observes_minimized = Native;
+    capabilities.places_at_open = Native;
+    capabilities.material = Native;
+    // From the frame statistics of the swap chain the renderer presents
+    // through, which it hands the surface target before each present.
+    capabilities.reports_presentation = Native;
+    super::material::below_the_gate(capabilities, gate)
 }
 
 impl WindowsWindow {
@@ -207,13 +180,14 @@ impl WindowsWindow {
     /// [`OpenWindowError::Backend`] when Win32 window creation fails.
     pub(crate) fn new(
         options: WindowOptions,
+        handler: Rc<dyn flui_platform::WindowHandler>,
         windows: Arc<WindowSet>,
         shares: crate::owner::windows::control::OwnerShares,
         apartment: Option<Rc<crate::owner::windows::com_apartment::ComApartment>>,
         drag: Arc<dyn crate::owner::windows::HostDrag>,
-    ) -> Result<Arc<Self>, OpenWindowError> {
+    ) -> Result<Rc<Self>, OpenWindowError> {
         let crate::owner::windows::control::OwnerShares {
-            handlers,
+            app_hooks,
             frames,
             exit_policy,
             displays,
@@ -231,8 +205,9 @@ impl WindowsWindow {
         let (hwnd, requested, scale_factor, normal) = created?;
         Self::install_native(
             options,
+            handler,
             windows,
-            handlers,
+            app_hooks,
             frames,
             exit_policy,
             displays,
@@ -334,8 +309,9 @@ impl WindowsWindow {
     )]
     fn install_native(
         options: WindowOptions,
+        handler: Rc<dyn flui_platform::WindowHandler>,
         windows: Arc<WindowSet>,
-        handlers: Rc<RefCell<PlatformHandlers>>,
+        app_hooks: Rc<RefCell<AppHooks>>,
         frames: Rc<crate::owner::windows::FrameCount>,
         exit_policy: crate::owner::windows::control::ExitPolicyRequest,
         displays: Arc<dyn crate::owner::windows::HostDisplays>,
@@ -349,7 +325,7 @@ impl WindowsWindow {
         drag: Arc<dyn crate::owner::windows::HostDrag>,
         window_hooks: crate::owner::windows::WindowHooks,
         preferences: Rc<dyn crate::owner::windows::control::OwnerPreferences>,
-    ) -> Result<Arc<Self>, OpenWindowError> {
+    ) -> Result<Rc<Self>, OpenWindowError> {
         let (width, height) = (requested.width, requested.height);
         // SAFETY: `hwnd` is the valid handle `create_native` just returned
         // on this thread. `SetClassLongPtrW` and `apply_windows_features`
@@ -366,12 +342,17 @@ impl WindowsWindow {
             // Remove background brush to allow Mica backdrop
             SetClassLongPtrW(hwnd, GCLP_HBRBACKGROUND, 0);
 
-            // Apply Windows 11 features automatically
-            Self::apply_windows_features(hwnd);
+            // What the window opens with on Windows: its own options, or
+            // what a window gets without them.
+            let os = options.os_options.windows.clone().unwrap_or_default();
+            Self::apply_windows_features(hwnd, windows.material, os.corner_preference);
             // One sample seeds both the chrome and the change filter, so the
             // first theme change after creation is never swallowed.
             let appearance = super::backdrop::system_appearance();
-            super::backdrop::apply_chrome(hwnd, appearance);
+            let (chrome, chrome_follows_system) = super::backdrop::opening_chrome(&os, appearance);
+            // A build before Windows 10 20H1 refuses the attribute and draws
+            // its own chrome; the window opens either way.
+            let _ = super::backdrop::apply_chrome(hwnd, chrome);
 
             tracing::info!(
                 "Created window HWND {:?} - {}x{} - scale: {}",
@@ -381,13 +362,12 @@ impl WindowsWindow {
                 scale_factor
             );
 
-            // Seed observations from the native client, not requested outer bounds.
-            let native_dpi = GetDpiForWindow(hwnd);
-            let scale_factor = if native_dpi == 0 {
-                scale_factor
-            } else {
-                native_dpi as f64 / USER_DEFAULT_SCREEN_DPI as f64
-            };
+            // Seed observations from the native client, not requested outer
+            // bounds. The window, and every hook of its class, reads its
+            // scale from this one value.
+            let scale =
+                crate::owner::windows::WindowScale::at_open(GetDpiForWindow(hwnd), scale_factor);
+            let scale_factor = scale.scale();
             let mut client = RECT::default();
             let initial_size = if GetClientRect(hwnd, &raw mut client).is_ok() {
                 Size::new(client.right - client.left, client.bottom - client.top)
@@ -397,7 +377,6 @@ impl WindowsWindow {
             let mut origin = POINT::default();
             let _ = ClientToScreen(hwnd, &raw mut origin);
 
-            let created_style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
             let deferred = options.visible && options.reveal == WindowReveal::AfterFirstFrame;
             let state = Arc::new(Mutex::new(WindowRecord {
                 bounds: Bounds {
@@ -424,6 +403,11 @@ impl WindowsWindow {
                     restore_style: 0,
                     constraints,
                     display: displays.display_of_window(hwnd),
+                    appearance,
+                    active: false,
+                    hovered: false,
+                    occluded: false,
+                    capabilities: windows.capabilities(),
                 },
             )));
 
@@ -439,26 +423,56 @@ impl WindowsWindow {
             use super::proc::WindowContext;
 
             let window_id = WindowId(hwnd.0 as u64);
-            // Seed the visibility edge filter from the window's ACTUAL
-            // style, not a default: a visible undecorated window is created
-            // `WS_POPUP | WS_VISIBLE` (already visible before this context
-            // installs), so the creation-time `ShowWindow(SW_SHOW)` below
-            // never delivers a `WM_SHOWWINDOW` edge for it — a `false`
-            // seed would swallow that window's first minimize. See
-            // `surface::initial_visibility`'s doc.
             let config = windows.config.clone();
-            let callbacks = Arc::new(WindowCallbacks::counting_frames(frames.counter()));
+            // The window class's input hook gives the capabilities of the
+            // devices attached before the handler hears its snapshot.
+            let delivery = Arc::new(WindowDelivery::counting_frames(
+                handler,
+                flui_platform::input_capabilities::InputCapabilities::UNAVAILABLE,
+                frames.counter(),
+            ));
+            // What another thread raises for the window is delivered in a
+            // turn of the window's own message queue.
+            delivery.resume_through(super::proc::deliver_queued_turn(hwnd, identity));
+            // Each fact the window reports, its input's hover included, is
+            // published from the owner context of this very window before its
+            // own callback runs: the context must carry this window's identity,
+            // so a handle Win32 recycled for another window publishes nothing
+            // of it. Every fact is dispatched from the window procedure, on the
+            // owner thread; a call the context refuses (another thread, a
+            // window already gone) still leaves the snapshot stale, so the
+            // owner's next read publishes what changed.
+            delivery.set_state_publisher({
+                let address = hwnd.0 as isize;
+                let cell = Arc::downgrade(&snapshot);
+                Arc::new(move || {
+                    let hwnd = HWND(address as *mut std::ffi::c_void);
+                    let read = super::proc::with_window_context(hwnd, "publish state", |ctx| {
+                        (ctx.identity == identity).then(|| ctx.read_window_state(hwnd))
+                    });
+                    match read {
+                        Some(Some(outcome)) => outcome,
+                        Some(None) => crate::owner::window_delivery::Publication::Unchanged,
+                        None => {
+                            if let Some(cell) = cell.upgrade() {
+                                cell.invalidate();
+                            }
+                            crate::owner::window_delivery::Publication::Unchanged
+                        }
+                    }
+                })
+            });
             let context = Box::new(WindowContext {
                 window_id,
+                capabilities: windows.capabilities(),
                 windows: Arc::downgrade(&windows),
                 window_state: Arc::downgrade(&state),
                 snapshot: Arc::clone(&snapshot),
-                handlers: Rc::clone(&handlers),
                 exit_policy,
-                callbacks: Arc::clone(&callbacks),
+                delivery: Arc::clone(&delivery),
                 hooks: Rc::clone(&window_hooks),
                 preferences: Rc::clone(&preferences),
-                scale_factor: std::cell::Cell::new(scale_factor),
+                scale: scale.clone(),
                 mode: std::cell::Cell::new(NativeMode::Normal),
                 last_size: std::cell::Cell::new(initial_size),
                 config,
@@ -473,39 +487,32 @@ impl WindowsWindow {
                 }),
                 publish_hold: std::cell::Cell::new(0),
                 limits_waived: std::cell::Cell::new(false),
-                visibility_muted: std::cell::Cell::new(false),
                 show_requests: std::cell::Cell::new(0),
-                // A window whose reveal waits for its first frame is visible to
-                // the runtime already: its frames must run to earn the reveal.
-                visibility: super::proc::Visibility::new(
-                    deferred || super::surface::initial_visibility(created_style),
-                ),
+                visibility: super::proc::Visibility::new(),
                 cloak_watch: super::proc::CloakWatch::start(),
                 in_size_move: std::cell::Cell::new(false),
                 last_resize: std::cell::Cell::new(None),
                 modal_pacing: crate::owner::windows::modal_loop::ModalPacing::new(
                     crate::owner::windows::modal_loop::ModalFrames::new(
-                        Rc::clone(&handlers),
+                        std::sync::Arc::clone(&app_hooks.borrow().app),
                         Arc::downgrade(&windows)
                             as std::sync::Weak<dyn crate::owner::windows::ClassWindows>,
                         Rc::clone(&frames),
                     ),
                 ),
-                text_services: std::cell::RefCell::new(None),
-                drop_target: std::cell::RefCell::new(None),
-                drag: Arc::clone(&drag),
                 ledger: std::cell::RefCell::new(crate::owner::hwnd_affinity::ContextLedger::new()),
                 identity,
                 displays: Arc::clone(&displays),
-                last_monitor: std::cell::Cell::new(None),
                 appearance: std::cell::Cell::new(appearance),
-                chrome_follows_system: std::cell::Cell::new(true),
+                active: std::cell::Cell::new(false),
+                chrome_follows_system: std::cell::Cell::new(chrome_follows_system),
             });
             let context_ptr = Box::into_raw(context);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, context_ptr as isize);
             let this = super::proc::WindowRef::new(hwnd, identity);
+            let positions = windows.positions;
 
-            let window = Arc::new(Self {
+            let window = Rc::new(Self {
                 hwnd,
                 state,
                 identity,
@@ -515,11 +522,9 @@ impl WindowsWindow {
                 context: context_ptr,
                 // On the creating (owning) thread, as Win32 subclassing
                 // requires; `hwnd` was validated just above.
-                accessibility: Arc::new(crate::accessibility::windows::WindowsAccessibility::new(
-                    hwnd,
-                )),
-                haptics: crate::haptics::windows::WindowsHaptics::new(this),
-                drag_source: drag.drag_source(this),
+                facets: positions.for_window(&this),
+                drag_source: Arc::clone(&drag).drag_source(this),
+                delivery: Arc::clone(&delivery),
             });
             // The wrapper owns the window from here: a panic out of a hook
             // (or anything after it) drops it, which destroys the window and
@@ -544,16 +549,13 @@ impl WindowsWindow {
                     hwnd,
                     identity,
                     client_size: size,
-                    dpi: if native_dpi == 0 {
-                        USER_DEFAULT_SCREEN_DPI
-                    } else {
-                        native_dpi
-                    },
-                    callbacks,
-                    handlers: Rc::clone(&handlers),
+                    scale,
+                    delivery,
+                    app_hooks: Rc::clone(&app_hooks),
                     preferences,
                     hooks: Rc::clone(&window_hooks),
                     apartment,
+                    drag,
                 },
                 || this.with_context("window_created", |_| ()).is_some(),
             )
@@ -625,10 +627,8 @@ impl WindowsWindow {
         if !self.owns_handle() {
             return;
         }
-        // SAFETY: plain queries and a plain call on this wrapper's live window.
-        let minimized = unsafe { IsIconic(self.hwnd) }.as_bool();
         super::proc::with_window_context(self.hwnd, "show_first", |ctx| {
-            ctx.end_first_show(minimized);
+            ctx.settle_shown();
         });
         // SAFETY: a plain call on this wrapper's window handle.
         if let Err(error) = unsafe { UpdateWindow(self.hwnd) }.ok() {
@@ -653,64 +653,36 @@ impl WindowsWindow {
             }) == Some(true)
     }
 
-    /// Apply Windows 11 features automatically
+    /// What the desktop window manager draws for a window as it opens: the
+    /// frame extended into the client area, so a material shows wherever the
+    /// content is transparent; [`WindowMaterial::System`] where the build
+    /// draws one (`material`), the material a Win32 window opens with; and the
+    /// corners `corners` asks for.
     ///
-    /// This applies modern Windows 11 visual features if running on Windows 11:
-    /// - Mica backdrop for translucent background with blur
-    /// - Rounded window corners
-    /// - DWM frame extension for proper backdrop rendering
-    fn apply_windows_features(hwnd: HWND) {
-        // SAFETY: every call here (`DwmExtendFrameIntoClientArea`,
-        // `DwmSetWindowAttribute` x2) takes `hwnd` and a pointer to a
-        // stack-local value whose `size_of` matches the `u32` byte-count
-        // argument passed alongside it (`MARGINS` by-reference for the first
-        // call; `&raw const <i32>` cast to `c_void` for the rest, each with
-        // `size_of::<i32>()`). Callers of this function (`WindowsWindow::new`)
-        // pass the `hwnd` just returned by `CreateWindowExW`, so it is valid
-        // for the duration of this call. Both `DwmSetWindowAttribute`
-        // results are discarded (`let _ =`) because every attribute here is a
-        // Windows-11-only cosmetic feature — failure on older Windows is
-        // expected and non-fatal, not evidence swallowed silently for an
-        // operation the caller depends on.
-        unsafe {
-            use windows::Win32::{
-                Graphics::Dwm::{
-                    DWMWINDOWATTRIBUTE, DwmExtendFrameIntoClientArea, DwmSetWindowAttribute,
-                },
-                UI::Controls::MARGINS,
-            };
+    /// Each is cosmetic and the window opens without it: a build that
+    /// refuses one keeps its own drawing, and the window's capabilities
+    /// already say whether it draws a material.
+    fn apply_windows_features(
+        hwnd: HWND,
+        material: Result<Since<SystemBackdrop>, Unsupported>,
+        corners: WindowsCornerPreference,
+    ) {
+        use windows::Win32::{Graphics::Dwm::DwmExtendFrameIntoClientArea, UI::Controls::MARGINS};
 
-            tracing::debug!("Applying Windows 11 features to HWND {:?}", hwnd);
-
-            // 1. Extend frame into client area (required for Mica backdrop)
-            let margins = MARGINS {
-                cxLeftWidth: -1,
-                cxRightWidth: -1,
-                cyTopHeight: -1,
-                cyBottomHeight: -1,
-            };
-            let _ = DwmExtendFrameIntoClientArea(hwnd, &raw const margins);
-
-            // 2. Enable Mica backdrop (Windows 11+)
-            let mica_value: i32 = 2; // DWMSBT_MAINWINDOW
-            let _ = DwmSetWindowAttribute(
-                hwnd,
-                DWMWINDOWATTRIBUTE(38), // DWMWA_SYSTEMBACKDROP_TYPE
-                (&raw const mica_value).cast::<std::ffi::c_void>(),
-                std::mem::size_of::<i32>() as u32,
-            );
-
-            // 3. Set rounded corners
-            let corner_value: i32 = 2; // DWMWCP_ROUND
-            let _ = DwmSetWindowAttribute(
-                hwnd,
-                DWMWINDOWATTRIBUTE(33), // DWMWA_WINDOW_CORNER_PREFERENCE
-                (&raw const corner_value).cast::<std::ffi::c_void>(),
-                std::mem::size_of::<i32>() as u32,
-            );
-
-            tracing::debug!("Windows 11 features applied");
+        let margins = MARGINS {
+            cxLeftWidth: -1,
+            cxRightWidth: -1,
+            cyTopHeight: -1,
+            cyBottomHeight: -1,
+        };
+        // SAFETY: `hwnd` is the window `CreateWindowExW` just returned on this
+        // thread (the caller, `WindowsWindow::new`); the call reads the
+        // stack-local `margins` through the typed pointer for its duration.
+        let _ = unsafe { DwmExtendFrameIntoClientArea(hwnd, &raw const margins) };
+        if let Ok(gate) = material {
+            let _ = super::backdrop::apply_material(hwnd, gate, WindowMaterial::System);
         }
+        let _ = super::backdrop::apply_corners(hwnd, corners);
     }
 
     /// Get the native HWND handle
@@ -718,47 +690,29 @@ impl WindowsWindow {
         self.hwnd
     }
 
+    /// What other threads hold of this window: its surface and its redraw
+    /// requests.
+    fn surface(&self) -> Win32Surface {
+        Win32Surface {
+            hwnd: self.hwnd.0 as isize,
+            context: self.context as isize,
+            retirement: self.delivery.retirement(),
+            presented: self.delivery.presentation_reports(),
+            tracker: Mutex::default(),
+        }
+    }
+
+    /// Whether the build the platform runs on draws a system backdrop: the
+    /// one gate every write of `DWMWA_SYSTEMBACKDROP_TYPE` takes.
+    pub(super) fn backdrop_gate(&self) -> Result<Since<SystemBackdrop>, Unsupported> {
+        self.windows.material
+    }
+
     /// Whether the mouse is over this window, as its input read it: `None`
     /// off its owner thread, or once it closed.
     fn hovered(&self) -> Option<bool> {
         crate::owner::windows::window_inputs()?
             .hovered(super::proc::WindowRef::new(self.hwnd, self.identity))
-    }
-
-    /// Installs a callback into this window's owner-thread context.
-    ///
-    /// `install` runs only on the window's owner thread, against the context
-    /// of the very window this wrapper was built for. Otherwise the
-    /// registration is refused and `install`, with the callback it carries,
-    /// is dropped right here — on the calling thread for a foreign-thread
-    /// registration, which is logged as an error because the caller has
-    /// just lost a callback; on the owner for a window that is already gone,
-    /// which is routine teardown ordering.
-    fn register(&self, op: &'static str, install: impl FnOnce(&WindowCallbacks)) {
-        let outcome = super::proc::with_window_context_checked(self.hwnd, op, |context| {
-            (context.identity == self.identity && context.callbacks.accepts_registration())
-                .then(|| install(&context.callbacks))
-        });
-        match outcome {
-            Ok(Some(())) => {}
-            Ok(None) => tracing::debug!(
-                hwnd = ?self.hwnd,
-                op,
-                "callback registration refused: the handle now names a different window"
-            ),
-            Err(UserDataRefusal::ForeignThread) => tracing::error!(
-                hwnd = ?self.hwnd,
-                op,
-                "callback registration refused: window callbacks are registered on the \
-                 window's owner thread; the callback was dropped on the calling thread"
-            ),
-            Err(reason) => tracing::debug!(
-                hwnd = ?self.hwnd,
-                op,
-                ?reason,
-                "callback registration refused: the native window is gone"
-            ),
-        }
     }
 
     /// Get current window bounds
@@ -807,10 +761,10 @@ impl WindowsWindow {
     /// - a fullscreen window takes the size for the bounds it returns to.
     ///
     /// # Errors
-    /// [`WindowCommandError::InvalidGeometry`] for a size beyond what Win32
-    /// can represent, before any call; [`WindowCommandError::Backend`] when
+    /// [`ApplyError::Platform`] for a size beyond what Win32
+    /// can represent, before any call; [`ApplyError::Platform`] when
     /// Win32 refuses or fails the resize.
-    fn set_inner_size(&self, size: Size<f64>) -> Result<(), WindowCommandError> {
+    fn set_inner_size(&self, size: Size<f64>) -> Result<(), ApplyError> {
         let scale = self.state.lock().scale_factor;
         let content = device_pair(size.width, size.height, scale)?;
         let fullscreen = super::proc::with_window_context(self.hwnd, "set_inner_size", |ctx| {
@@ -881,10 +835,10 @@ impl WindowsWindow {
     /// restored, and a fullscreen window takes it for the bounds it returns to.
     ///
     /// # Errors
-    /// [`WindowCommandError::InvalidGeometry`] for a position beyond what
-    /// Win32 can represent, before any call; [`WindowCommandError::Backend`]
+    /// [`ApplyError::Platform`] for a position beyond what
+    /// Win32 can represent, before any call; [`ApplyError::Platform`]
     /// when Win32 refuses or fails the move.
-    fn set_outer_position(&self, at: Point<f64>) -> Result<(), WindowCommandError> {
+    fn set_outer_position(&self, at: Point<f64>) -> Result<(), ApplyError> {
         let scale = self.state.lock().scale_factor;
         let (x, y) = device_pair(at.x, at.y, scale)?;
         let fullscreen = super::proc::with_window_context(self.hwnd, "set_outer_position", |ctx| {
@@ -949,8 +903,8 @@ impl WindowsWindow {
     /// changes instead, and it is the one the next sample reports.
     ///
     /// # Errors
-    /// [`WindowCommandError::Backend`] when Win32 refuses or fails the change.
-    fn restyle_frame(&self, decorated: bool, resizable: bool) -> Result<(), WindowCommandError> {
+    /// [`ApplyError::Platform`] when Win32 refuses or fails the change.
+    fn restyle_frame(&self, decorated: bool, resizable: bool) -> Result<(), ApplyError> {
         let fullscreen = super::proc::with_window_context(self.hwnd, "restyle_frame", |ctx| {
             ctx.resizable.set(resizable);
             let mode = ctx.mode.get();
@@ -1003,7 +957,7 @@ impl WindowsWindow {
         super::proc::with_window_context(
             self.hwnd,
             "restyle_frame",
-            |ctx| -> Result<(), WindowCommandError> {
+            |ctx| -> Result<(), ApplyError> {
                 // The frame changes in two steps; a subscriber sees the result only.
                 let _hold = ctx.hold_publishing();
                 unsafe {
@@ -1047,7 +1001,7 @@ impl WindowsWindow {
                 }
             },
         )
-        .unwrap_or(Err(WindowCommandError::Closed))
+        .unwrap_or(Err(ApplyError::Closed))
     }
 
     /// Whether the window waits for its first presented frame to be shown.
@@ -1064,8 +1018,8 @@ impl WindowsWindow {
     /// revealed in: setting a mode must not show it early.
     ///
     /// # Errors
-    /// [`WindowCommandError::Unsupported`] for a mode this backend does not know.
-    fn set_mode(&self, mode: WindowMode) -> Result<(), WindowCommandError> {
+    /// [`ApplyError::Platform`] for a mode this backend does not know.
+    fn set_mode(&self, mode: WindowMode) -> Result<(), ApplyError> {
         if !matches!(
             mode,
             WindowMode::Normal
@@ -1073,7 +1027,9 @@ impl WindowsWindow {
                 | WindowMode::Maximized
                 | WindowMode::Fullscreen
         ) {
-            return Err(WindowCommandError::Unsupported);
+            return Err(crate::window::state::not_carried_out(
+                &WindowCommand::SetMode(mode),
+            ));
         }
         if self.awaiting_reveal() {
             self.set_fullscreen(mode == WindowMode::Fullscreen);
@@ -1127,10 +1083,9 @@ impl WindowsWindow {
             // The first frame no longer shows it; an explicit show still does.
             ctx.first_show
                 .set(ctx.first_show.get().without_frame_wait());
-            // A window hidden before it was ever shown sends no `WM_SHOWWINDOW`;
-            // the runtime still has to hear that it is no longer visible.
-            ctx.report_surface_visibility(false);
         });
+        // A window hidden before it was ever shown sends no `WM_SHOWWINDOW`:
+        // the record above is what its snapshot reads.
     }
 
     /// Get current scale factor
@@ -1239,39 +1194,43 @@ impl WindowsWindow {
     }
 }
 
-impl crate::host_window::CoreHostWindow for WindowsWindow {}
+impl crate::host_window::CoreHostWindow for WindowsWindow {
+    fn window_delivery(&self) -> &WindowDelivery {
+        &self.delivery
+    }
+}
 
 impl crate::host_window::HostWindow for WindowsWindow {
-    /// The window's own UIA bridge — the capability the composition root's
-    /// accessibility wire discovers. Without this override the trait
-    /// default (`None`) leaves every real Windows window silently invisible
-    /// to UI Automation clients.
+    /// The window's own bridge — the capability the composition root's
+    /// accessibility wire discovers.
     fn accessibility(&self) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {
-        Some(Arc::clone(&self.accessibility) as _)
+        Some(Arc::clone(&self.facets.accessibility) as _)
+    }
+
+    fn capture_text_sizing(
+        &self,
+        _owner: crate::host_window::OwnerThreadToken,
+    ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
+        self.facets.text.capture_sizing()
     }
 
     /// The token proves the platform's owner thread, not this window's: an
-    /// HWND belongs to the thread that created it, and its text services
-    /// live in its `WindowContext` on that thread. So the host is read
-    /// through `with_window_context`, which refuses any other thread
-    /// (`owner::hwnd_affinity`), and a caller on one gets `None`. On the
-    /// creating thread it is the window's TSF connection (ADR-0135 §3):
+    /// HWND belongs to the thread that created it, and its text services live
+    /// on that thread, so the text position answers `None` on any other. On
+    /// the creating thread it is the window's TSF connection (ADR-0135 §3):
     /// `None` when TSF did not activate for it, or once the window is
     /// destroyed; a host read before that answers
-    /// [`TextStoreHostError::Unavailable`] from then on.
+    /// [`TextStoreHostError::Unsupported`] from then on.
     ///
-    /// [`TextStoreHostError::Unavailable`]: flui_platform::text_store::TextStoreHostError::Unavailable
+    /// [`TextStoreHostError::Unsupported`]: flui_platform::text_store::TextStoreHostError::Unsupported
     fn text_store_host(
         &self,
         _owner: crate::host_window::OwnerThreadToken,
     ) -> Option<Rc<dyn flui_platform::text_store::TextStoreHost>> {
-        use crate::text::{TextInput, WindowTextInput};
-        super::proc::with_window_context(self.hwnd, "text_store_host", |context| {
-            let services = context.text_services.borrow().clone();
-            services.as_ref().and_then(TextInput::window_text_input)
-        })
-        .flatten()
-        .and_then(WindowTextInput::store_host)
+        self.facets
+            .text
+            .window_text_input()
+            .and_then(WindowTextInput::store_host)
     }
 }
 
@@ -1280,8 +1239,19 @@ impl PlatformWindow for WindowsWindow {
         WindowId(self.hwnd.0 as u64)
     }
 
+    fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
+        self.facets
+            .text
+            .window_text_input()
+            .and_then(WindowTextInput::ime)
+    }
+
     fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
-        Some(Arc::clone(&self.haptics) as Arc<dyn flui_platform::PlatformHaptics>)
+        Some(Arc::clone(&self.facets.haptics))
+    }
+
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
+        Some(Arc::clone(&self.facets.chrome))
     }
 
     fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
@@ -1315,7 +1285,7 @@ impl PlatformWindow for WindowsWindow {
         // here; any other window under the point is another application's.
         let Some((window, target_scale)) =
             super::proc::with_window_context(root, "window_at", |context| {
-                (context.window_id, context.scale_factor.get())
+                (context.window_id, context.scale.scale())
             })
         else {
             return WindowAt::Outside;
@@ -1342,24 +1312,6 @@ impl PlatformWindow for WindowsWindow {
         }
     }
 
-    fn physical_size(&self) -> Size<i32> {
-        let state = self.state.lock();
-        let logical = state.bounds.size;
-        let scale = state.scale_factor;
-        Size::new(
-            logical_to_device(logical.width, scale),
-            logical_to_device(logical.height, scale),
-        )
-    }
-
-    fn logical_size(&self) -> Size<f64> {
-        self.state.lock().bounds.size
-    }
-
-    fn scale_factor(&self) -> f64 {
-        self.state.lock().scale_factor
-    }
-
     fn gesture_geometry(
         &self,
     ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
@@ -1374,35 +1326,29 @@ impl PlatformWindow for WindowsWindow {
                 .preferences
                 .mouse_gestures(dpi)?
                 .native_mouse_geometry()
-                .ok_or(PreferenceQueryError::Unavailable)?;
+                .ok_or(PreferenceQueryError::Unsupported(Unsupported::new(
+                    UnsupportedReason::Unavailable,
+                )))?;
             Ok(Some(GestureGeometry::from_native_mouse(&native)?))
         })
         .map_err(|refusal| match refusal {
             UserDataRefusal::ForeignThread => PreferenceQueryError::WrongThread,
-            _ => PreferenceQueryError::Unavailable,
+            _ => Unsupported::new(UnsupportedReason::NoWindow).into(),
         })?
     }
 
     fn request_redraw(&self) {
-        // A handle the OS has reused for another window is not this one.
-        if !handle_available(super::proc::teardown_route(self.hwnd, self.context)) {
-            return;
-        }
-        Self::redraw_native(self.hwnd);
+        // Retired, destroyed, or a handle the OS reused for another window:
+        // not this window, which asks for nothing.
+        flui_platform::RedrawRequester::request_redraw(&self.surface());
     }
 
-    fn is_focused(&self) -> bool {
-        self.state.lock().focused
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        Arc::new(self.surface())
     }
 
-    fn is_visible(&self) -> bool {
-        // A locked session or a cloak hides a shown window. Off the owner
-        // thread only the shown state is known.
-        self.state.lock().visible
-            && !super::proc::with_window_context(self.hwnd, "is_visible", |ctx| {
-                ctx.visibility.occluded()
-            })
-            .unwrap_or(false)
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        Arc::new(self.surface())
     }
 
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
@@ -1431,15 +1377,11 @@ impl PlatformWindow for WindowsWindow {
             .unwrap_or_else(|| self.snapshot.published())
     }
 
-    fn capabilities(&self) -> WindowCapabilities {
-        window_capabilities()
-    }
-
-    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+    fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
         if !handle_available(super::proc::teardown_route(self.hwnd, self.context)) {
-            return Err(WindowCommandError::Closed);
+            return Err(ApplyError::Closed);
         }
-        command.admit(&PlatformWindow::capabilities(self))?;
+        let command = command.against(&self.snapshot.published_capabilities())?;
         match command {
             WindowCommand::SetTitle(title) => self.set_native_title(&title),
             WindowCommand::SetPosition(at) => self.set_outer_position(at)?,
@@ -1471,17 +1413,25 @@ impl PlatformWindow for WindowsWindow {
             }
             WindowCommand::SetMode(mode) => self.set_mode(mode)?,
             WindowCommand::Hide => self.hide_native(),
-            WindowCommand::Show => self.show().map_err(|error| match error {
-                flui_platform::WindowShowError::Closed => WindowCommandError::Closed,
-                flui_platform::WindowShowError::Native { message } => {
-                    WindowCommandError::Backend { message }
-                }
-                _ => WindowCommandError::Unsupported,
-            })?,
-            WindowCommand::Activate => self.activate(),
-            // Every other command is refused by `admit` through a capability
-            // this backend leaves `false`.
-            _ => return Err(WindowCommandError::Unsupported),
+            WindowCommand::Show => self.show_window()?,
+            WindowCommand::Activate => self.activate_window(),
+            // A destroyed window has no state left to publish.
+            WindowCommand::Close => {
+                self.close_window();
+                return Ok(());
+            }
+            // The material is no fact of the snapshot: nothing to publish. A
+            // build below the gate has the capability `Unavailable`, so
+            // admission refused the command before it came here.
+            WindowCommand::SetMaterial(material) => {
+                let Ok(gate) = self.windows.material else {
+                    return Err(crate::window::state::not_carried_out(
+                        &WindowCommand::SetMaterial(material),
+                    ));
+                };
+                return super::backdrop::apply_material(self.hwnd, gate, material);
+            }
+            other => return Err(crate::window::state::not_carried_out(&other)),
         }
         super::proc::with_window_context(self.hwnd, "apply", |ctx| {
             ctx.publish_window_state(self.hwnd);
@@ -1489,64 +1439,42 @@ impl PlatformWindow for WindowsWindow {
         Ok(())
     }
 
-    fn is_active(&self) -> bool {
-        // SAFETY: `GetForegroundWindow` takes no arguments; comparing its
-        // result to `self.hwnd` is a plain integer/handle comparison.
-        unsafe { GetForegroundWindow() == self.hwnd }
-    }
-
-    /// `false` for a window its input does not hold (off its owner thread,
-    /// or closed).
-    fn is_hovered(&self) -> bool {
-        self.hovered() == Some(true)
-    }
-
-    fn mouse_position(&self) -> Point<f64> {
-        // SAFETY: `cursor_pos` is a stack-local `POINT`; `&raw mut
-        // cursor_pos` gives both `GetCursorPos` and `ScreenToClient` a
-        // valid, correctly-sized out-parameter. The `is_ok()`/`as_bool()`
-        // short-circuit means `cursor_pos` is only read after both calls
-        // reported success, so it is never read uninitialized.
-        unsafe {
-            let mut cursor_pos = POINT::default();
-            if GetCursorPos(&raw mut cursor_pos).is_ok()
-                && ScreenToClient(self.hwnd, &raw mut cursor_pos).as_bool()
-            {
-                let scale = self.state.lock().scale_factor;
-                Point::new(cursor_pos.x as f64 / scale, cursor_pos.y as f64 / scale)
-            } else {
-                Point::default()
-            }
+    fn reveal_after_first_frame(&self) {
+        // Only a window whose reveal was deferred waits for this call; one
+        // opened hidden, or already shown, ignores it.
+        let deferred = super::proc::with_window_context(self.hwnd, "reveal", |ctx| {
+            ctx.first_show.get().awaits_frame()
+        })
+        .unwrap_or(false);
+        if deferred {
+            self.show_first();
+            tracing::debug!("Windows: window revealed after its first presented frame");
         }
     }
 
-    /// None held for a window its input does not hold (off its owner thread,
-    /// or closed).
-    fn modifiers(&self) -> flui_platform::keyboard::Modifiers {
-        crate::owner::windows::window_inputs()
-            .and_then(|inputs| {
-                inputs.modifiers(super::proc::WindowRef::new(self.hwnd, self.identity))
-            })
-            .unwrap_or(flui_platform::Modifiers::NONE)
+    /// The display's rate is the user's setting: a Win32 window asks for none.
+    fn set_frame_rate_hint(&self, _hint: flui_platform::FrameRateHint) -> Result<(), Unsupported> {
+        Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
     }
 
-    fn appearance(&self) -> WindowAppearance {
-        // The user's theme, read from any thread without the window context.
-        // Not the DWM dark-mode flag: this backend sets that flag to match,
-        // so reading it back would report the backend's own choice.
-        super::backdrop::system_appearance()
+    /// The input regions keep the system's edge gestures out of a region
+    /// (`InputRegionKind::SystemGestureExclusion`). Windows starts its edge
+    /// swipes whatever a window says: `SetWindowRgn` and `HTTRANSPARENT` decide
+    /// where a window takes input, which is not that. The input capabilities
+    /// say `Unavailable`.
+    fn set_input_regions(
+        &self,
+        _regions: &[flui_platform::input_regions::InputRegion],
+    ) -> Result<(), Unsupported> {
+        Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
     }
+}
 
-    fn display_id(&self) -> Option<flui_platform::DisplayId> {
-        // A destroyed or recycled `HWND` names another window's monitor: refuse
-        // it with the identity probe `window_handle` uses.
-        if !handle_available(super::proc::teardown_route(self.hwnd, self.context)) {
-            return None;
-        }
-        self.displays.display_of_window(self.hwnd)
-    }
-
-    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
+/// The bodies of the show, activate and close commands.
+impl WindowsWindow {
+    /// Show the window, unminimizing it and requesting foreground focus; the
+    /// maximized or fullscreen mode is kept.
+    fn show_window(&self) -> Result<(), ApplyError> {
         use windows::Win32::UI::WindowsAndMessaging::{
             SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, WPF_RESTORETOMAXIMIZED,
         };
@@ -1578,11 +1506,8 @@ impl PlatformWindow for WindowsWindow {
                     // on its owner thread. The context guard pins userdata through
                     // ShowWindow reentry; placement is an initialized out pointer.
                     unsafe {
-                        let placement = placement_of(self.hwnd).map_err(|error| {
-                            flui_platform::WindowShowError::Native {
-                                message: error.to_string(),
-                            }
-                        })?;
+                        let placement = placement_of(self.hwnd)
+                            .map_err(|error| ApplyError::failed(error.to_string()))?;
                         if let Some(mode) = first {
                             ctx.begin_first_show(mode);
                         }
@@ -1600,50 +1525,41 @@ impl PlatformWindow for WindowsWindow {
                         // Return value describes previous visibility, not success.
                         let _ = ShowWindow(self.hwnd, command);
                         if first.is_some() && self.owns_handle() {
-                            ctx.end_first_show(IsIconic(self.hwnd).as_bool());
+                            ctx.settle_shown();
                         }
                         Ok(())
                     }
                 })
-                .unwrap_or(Err(flui_platform::WindowShowError::Closed))
+                .unwrap_or(Err(ApplyError::Closed))
             },
             || {
-                // SAFETY: the adapter rechecked wrapper identity after ShowWindow,
-                // on the same owner thread, before this callback-capable call.
-                // Foreground policy may deny the request without failing show.
-                unsafe {
-                    let _ = SetForegroundWindow(self.hwnd);
-                }
+                // The adapter rechecked wrapper identity after ShowWindow, on
+                // the same owner thread, before this callback-capable call.
+                // A show the foreground rules refuse is still a show: it asks
+                // for no attention.
+                let _ = request_foreground(self.hwnd);
             },
         )
     }
 
-    fn reveal_after_first_frame(&self) {
-        // Only a window whose reveal was deferred waits for this call; one
-        // opened hidden, or already shown, ignores it.
-        let deferred = super::proc::with_window_context(self.hwnd, "reveal", |ctx| {
-            ctx.first_show.get().awaits_frame()
-        })
-        .unwrap_or(false);
-        if deferred {
-            self.show_first();
-            tracing::debug!("Windows: window revealed after its first presented frame");
-        }
-    }
-
-    fn activate(&self) {
+    /// Bring the window to the foreground where Windows' foreground rules let
+    /// this process, and ask for the user's attention where they do not: the
+    /// window never takes the focus from the application the user works
+    /// with.
+    fn activate_window(&self) {
         // Activating a window that was never shown shows it.
         self.show_first();
-        // SAFETY: `SetForegroundWindow` takes `self.hwnd` by value, no
-        // pointer arguments.
-        unsafe {
-            if let Err(error) = SetForegroundWindow(self.hwnd).ok() {
-                tracing::warn!(hwnd = ?self.hwnd, ?error, "SetForegroundWindow failed");
-            }
+        // The show can have run user callbacks that closed this window and
+        // opened another on the same handle.
+        if !self.owns_handle() {
+            return;
+        }
+        if request_foreground(self.hwnd) == Foreground::Refused {
+            ask_attention(self.hwnd);
         }
     }
 
-    fn close(&self) {
+    fn close_window(&self) {
         use crate::owner::hwnd_affinity::TeardownRoute;
         match super::proc::teardown_route(self.hwnd, self.context) {
             TeardownRoute::DestroyDirect => {
@@ -1655,27 +1571,29 @@ impl PlatformWindow for WindowsWindow {
                 // returns.
                 unsafe {
                     if let Err(error) = DestroyWindow(self.hwnd) {
-                        tracing::warn!(hwnd = ?self.hwnd, ?error, "DestroyWindow (PlatformWindow::close) failed");
+                        tracing::warn!(hwnd = ?self.hwnd, ?error, "DestroyWindow (WindowCommand::Close) failed");
                     }
                 }
             }
             TeardownRoute::PostClose => {
                 // Cross-thread close cannot call `DestroyWindow` (Win32
-                // forbids it off the creating thread), so it goes through
-                // the documented mechanism instead: post `WM_CLOSE` to the
-                // owner thread's queue. Note the behavioral nuance: the
-                // owner-side `WM_CLOSE` arm consults the window's
-                // should-close veto before destroying, so a vetoing window
-                // treats a cross-thread `close()` as a close *request*.
-                //
+                // forbids it off the creating thread), so the owner thread
+                // destroys the window when it takes the posted message. Not
+                // `WM_CLOSE`: that asks the should-close veto, and a close
+                // command is not a request. The message names this window,
+                // so a handle reused before it arrives is left alone.
+                let (low, high) = self.identity.halves();
                 // SAFETY: `PostMessageW` takes the handle and plain
                 // integers by value — nothing dereferenced, delivery
                 // marshalled by the OS to the owning thread.
                 unsafe {
-                    if let Err(error) =
-                        PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0))
-                    {
-                        tracing::warn!(hwnd = ?self.hwnd, ?error, "PostMessageW(WM_CLOSE) (cross-thread PlatformWindow::close) failed");
+                    if let Err(error) = PostMessageW(
+                        Some(self.hwnd),
+                        super::proc::CLOSE_WINDOW,
+                        WPARAM(low),
+                        LPARAM(high),
+                    ) {
+                        tracing::warn!(hwnd = ?self.hwnd, ?error, "PostMessageW(WM_CLOSE) (cross-thread WindowCommand::Close) failed");
                     }
                 }
             }
@@ -1690,141 +1608,6 @@ impl PlatformWindow for WindowsWindow {
                 );
             }
         }
-    }
-
-    fn set_background_appearance(&self, appearance: WindowBackgroundAppearance) {
-        // SAFETY: `backdrop_value` is a stack-local `i32`; `DwmSetWindowAttribute`
-        // receives it via `&raw const` cast to `c_void`, sized with
-        // `size_of::<i32>()` matching the value pointed at.
-        unsafe {
-            use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute};
-
-            let backdrop_value: i32 = match appearance {
-                // DWMSBT_NONE — Windows has no native transparent backdrop,
-                // so Transparent also maps to NONE.
-                WindowBackgroundAppearance::Opaque | WindowBackgroundAppearance::Transparent => 1,
-                WindowBackgroundAppearance::Blurred => 3, // DWMSBT_TRANSIENTWINDOW (Acrylic)
-                WindowBackgroundAppearance::MicaBackdrop => 2, // DWMSBT_MAINWINDOW (Mica)
-                WindowBackgroundAppearance::MicaAltBackdrop => 4, // DWMSBT_TABBEDWINDOW (Mica Alt)
-            };
-
-            if let Err(error) = DwmSetWindowAttribute(
-                self.hwnd,
-                DWMWINDOWATTRIBUTE(38), // DWMWA_SYSTEMBACKDROP_TYPE
-                (&raw const backdrop_value).cast::<std::ffi::c_void>(),
-                std::mem::size_of::<i32>() as u32,
-            ) {
-                tracing::warn!(
-                    hwnd = ?self.hwnd,
-                    ?error,
-                    ?appearance,
-                    "DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE) failed"
-                );
-            }
-        }
-    }
-
-    // ==================== Per-Window Callbacks ====================
-    //
-    // Every setter goes through `Self::register`: it installs into the
-    // owner-thread context, or refuses and drops the callback on the calling
-    // thread. A replaced callback is retired through the call point after its
-    // slot's lock is released, since its destructor may re-enter this window.
-
-    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>) {
-        self.register("on_input", move |callbacks| {
-            callbacks.set_input_callback(callback);
-        });
-    }
-
-    fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
-        self.register("on_request_frame", move |callbacks| {
-            install(&callbacks.on_request_frame, callback);
-        });
-    }
-
-    fn on_resize(&self, callback: Box<dyn FnMut(WindowMetrics) + Send>) {
-        self.register("on_resize", move |callbacks| {
-            install(&callbacks.on_resize, callback);
-        });
-    }
-
-    fn on_state_changed(&self, callback: Box<dyn FnMut() + Send>) {
-        self.register("on_state_changed", move |callbacks| {
-            install(&callbacks.on_state_changed, callback);
-        });
-    }
-
-    fn on_close(&self, callback: Box<dyn FnOnce() + Send>) {
-        self.register("on_close", move |callbacks| {
-            install(&callbacks.on_close, callback);
-        });
-    }
-
-    fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
-        self.register("on_should_close", move |callbacks| {
-            install(&callbacks.on_should_close, callback);
-        });
-    }
-
-    fn on_safe_area_change(&self, callback: Box<dyn FnMut(EdgeInsets) + Send>) {
-        self.register("on_safe_area_change", move |callbacks| {
-            callbacks.set_safe_area_callback(callback);
-        });
-    }
-
-    fn on_execution_state_change(&self, callback: Box<dyn FnMut(WindowExecutionState) + Send>) {
-        self.register("on_execution_state_change", move |callbacks| {
-            callbacks.set_execution_state_callback(callback);
-        });
-    }
-
-    fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        self.register("on_active_status_change", move |callbacks| {
-            install(&callbacks.on_active_status_change, callback);
-        });
-    }
-
-    fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        self.register("on_visibility_status_change", move |callbacks| {
-            install(&callbacks.on_visibility_status_change, callback);
-        });
-    }
-
-    fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        self.register("on_hover_status_change", move |callbacks| {
-            install(&callbacks.on_hover_status_change, callback);
-        });
-    }
-
-    fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
-        self.register("on_appearance_changed", move |callbacks| {
-            install(&callbacks.on_appearance_changed, callback);
-        });
-    }
-
-    fn on_display_changed(&self, callback: Box<dyn FnMut() + Send>) {
-        self.register("on_display_changed", move |callbacks| {
-            install(&callbacks.on_display_changed, callback);
-        });
-    }
-
-    fn on_surface_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        self.register("on_surface_status_change", move |callbacks| {
-            install(&callbacks.on_surface_status_change, callback);
-        });
-    }
-
-    fn window_handle(
-        &self,
-    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
-        HasWindowHandle::window_handle(self)
-    }
-
-    fn display_handle(
-        &self,
-    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
-        HasDisplayHandle::display_handle(self)
     }
 }
 
@@ -1847,94 +1630,218 @@ fn handle_available(route: crate::owner::hwnd_affinity::TeardownRoute) -> bool {
     )
 }
 
-// Implement raw-window-handle for wgpu integration
-impl HasWindowHandle for WindowsWindow {
+/// What Windows answered a request for the foreground.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Foreground {
+    /// The window is in the foreground.
+    Granted,
+    /// The foreground stays where it is.
+    Refused,
+}
+
+/// Ask Windows to bring `hwnd` to the foreground. Windows grants it only to
+/// the process the user works with: the one in the foreground, one it
+/// started, the one that received the last input, or one the foreground
+/// process handed the right to (`AllowSetForegroundWindow`, which a second
+/// launch calls before it hands its arguments to the running instance).
+/// Every other request is refused and the foreground stays where it is.
+/// This is the only place a window asks for the foreground: nothing forces
+/// it past those rules (no attached input queue, no injected keystroke).
+fn request_foreground(hwnd: HWND) -> Foreground {
+    // SAFETY: an `HWND` is an opaque handle Win32 validates on every call;
+    // a stale one is refused, so no window this process does not own can be
+    // reached through it.
+    if unsafe { SetForegroundWindow(hwnd) }.as_bool() {
+        Foreground::Granted
+    } else {
+        Foreground::Refused
+    }
+}
+
+/// Ask for the user's attention to `hwnd`, which the foreground rules kept
+/// in the background: its taskbar button flashes until the window comes to
+/// the foreground.
+fn ask_attention(hwnd: HWND) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        FLASHW_TIMERNOFG, FLASHW_TRAY, FLASHWINFO, FlashWindowEx,
+    };
+
+    let flash = FLASHWINFO {
+        cbSize: u32::try_from(std::mem::size_of::<FLASHWINFO>())
+            .expect("BUG: FLASHWINFO is a few bytes"),
+        hwnd,
+        dwFlags: FLASHW_TRAY | FLASHW_TIMERNOFG,
+        uCount: 0,
+        dwTimeout: 0,
+    };
+    // SAFETY: the pointer is to a live, initialised `FLASHWINFO` whose
+    // `cbSize` matches its type, which Win32 reads only for the call. The
+    // return value is the caption's state before the call, not a failure.
+    let _ = unsafe { FlashWindowEx(&raw const flash) };
+}
+
+/// A Win32 window's surface target and redraw requester (ADR-0254 §5): what
+/// the thread presenting its frames and any thread that wants a frame hold
+/// of the window.
+///
+/// It holds the window's handle and the address of its context as plain
+/// integers, never dereferenced, and the window's [`Retirement`], so it is
+/// `Send + Sync` with no `unsafe impl` and keeps nothing of the window alive.
+/// The window is there while its retirement has not started (`WM_DESTROY`
+/// starts it) and the identity probe still finds this window behind the
+/// handle: a destroyed handle, or one the OS recycled for another window,
+/// is not this window.
+///
+/// [`Retirement`]: crate::owner::window_delivery::Retirement
+#[derive(Debug)]
+pub(crate) struct Win32Surface {
+    /// The window handle, only probed, wrapped and posted to.
+    hwnd: isize,
+    /// The address of the window's context, compared by the probe against
+    /// what the handle's `GWLP_USERDATA` holds now.
+    context: isize,
+    retirement: crate::owner::window_delivery::Retirement,
+    /// Where the presentations the renderer's swap chain reports go, for the
+    /// window's next frame request.
+    presented: crate::owner::handlers::PresentationReports,
+    /// What the statistics last reported, so each read reports only a new
+    /// present.
+    tracker: Mutex<super::frame_timing::PresentTracker>,
+}
+
+impl Win32Surface {
+    fn hwnd(&self) -> HWND {
+        HWND(self.hwnd as *mut std::ffi::c_void)
+    }
+
+    /// Whether the window this surface was made for is still there.
+    fn is_live(&self) -> bool {
+        !self.retirement.is_retired()
+            && handle_available(super::proc::teardown_route(
+                self.hwnd(),
+                self.context as *const super::proc::WindowContext,
+            ))
+    }
+}
+
+impl HasWindowHandle for Win32Surface {
     fn window_handle(
         &self,
     ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
         use std::num::NonZeroIsize;
 
-        // Refuse a destroyed or recycled `HWND` up front — the same
-        // identity probe `close()` uses to route teardown, reused here so a
-        // caller that re-queries this method (issue #1043's recovery path,
-        // which holds an `Arc<dyn PlatformWindow>` rather than a saved
-        // handle) never receives a handle whose pointee no longer exists.
-        if !handle_available(super::proc::teardown_route(self.hwnd, self.context)) {
+        if !self.is_live() {
             return Err(raw_window_handle::HandleError::Unavailable);
         }
-
-        let hwnd_value = self.hwnd.0 as isize;
         let mut handle = Win32WindowHandle::new(
-            NonZeroIsize::new(hwnd_value).ok_or(raw_window_handle::HandleError::Unavailable)?,
+            NonZeroIsize::new(self.hwnd).ok_or(raw_window_handle::HandleError::Unavailable)?,
         );
-
         // SAFETY: `GetModuleHandleW(None)` queries the current process
-        // image, no pointer arguments — always sound.
-        unsafe {
-            let hinstance =
-                GetModuleHandleW(None).map_err(|_| raw_window_handle::HandleError::Unavailable)?;
-            let hinstance_value = hinstance.0 as isize;
-            handle.hinstance = NonZeroIsize::new(hinstance_value);
-        }
-
-        // SAFETY: `raw_window_handle::WindowHandle::borrow_raw`'s contract
-        // requires the wrapped handle to stay valid for the returned
-        // `WindowHandle`'s lifetime, which this function ties only to
-        // `&self` — i.e. to the `Arc<WindowsWindow>` staying alive — not to
-        // the underlying native HWND staying valid for that whole span.
-        //
-        // What the `handle_available` check above closes: a caller that
-        // re-acquires a handle from a retained `Arc<dyn PlatformWindow>`
-        // (issue #1043's recovery path) never receives one for a window
-        // that is already destroyed or whose `HWND` value the OS already
-        // recycled for someone else's window — those routes are refused
-        // before `Win32WindowHandle::new` runs. And `WM_DESTROY` now calls
-        // `WindowCallbacks::clear()` (see `platform.rs`), which breaks the
-        // frame-callback → renderer → surface → `Arc<WindowsWindow>` cycle
-        // that used to orphan the whole chain forever after a native close
-        // — a surface is no longer pinned alive past the window it was
-        // created from.
-        //
-        // What stays open: the identity probe is a point-in-time check.
-        // `close()` on the owning thread (`TeardownRoute::DestroyDirect`)
-        // calls `DestroyWindow` synchronously, and Win32 dispatches
-        // `WM_DESTROY` — with it, `callbacks.clear()` — before that call
-        // returns. If that `close()` is itself invoked from inside a
-        // callback currently out of its slot in `WindowCallbacks` for its
-        // call (the restore hazard #919 identified), a surface built
-        // from a handle this method returned earlier in the same call chain
-        // can still be alive while `DestroyWindow` runs beneath it — rwh's
-        // own contract puts the burden of not outliving the native window
-        // on the caller holding the handle, not on this method. That is a
-        // logic-level ordering gap this comment records, not a memory-safety
-        // one: `WindowHandle::borrow_raw`'s own doc
-        // (raw-window-handle-0.6.2/src/borrowed.rs) states its non-null
-        // guarantee "only applies to *pointers*, and not any window ID
-        // types in the handle", explaining that "it is possible for safe
-        // code in the same process to delete the window" — `hwnd` here is
-        // exactly such an ID (`Win32WindowHandle::hwnd: NonZeroIsize`, not a
-        // pointer type), so a caller is required to handle `HandleError` on
-        // every subsequent use rather than assume a handle it already holds
-        // stays good.
+        // image, no pointer arguments.
+        let hinstance = unsafe { GetModuleHandleW(None) }
+            .map_err(|_| raw_window_handle::HandleError::Unavailable)?;
+        handle.hinstance = NonZeroIsize::new(hinstance.0 as isize);
+        // SAFETY: the handle names a window this target was made for, live
+        // when `is_live` probed it just above. An `HWND` is an identifier, not
+        // a pointer (`borrow_raw`'s guarantee covers only pointers): a window
+        // destroyed after the probe makes later calls with it fail, and the
+        // window's handler hears `surface_changed(Release)` before its
+        // `WM_DESTROY` runs.
         Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(RawWindowHandle::Win32(handle)) })
     }
 }
 
-impl HasDisplayHandle for WindowsWindow {
+impl HasDisplayHandle for Win32Surface {
     fn display_handle(
         &self,
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
-        // wgpu 29.x fix: For multi-monitor support, ensure we return a valid display handle.
-        // WindowsDisplayHandle::new() creates a valid default for Windows Display enumeration.
-        // This helps wgpu locate the correct adapter/surface for the window's monitor.
-        let handle = WindowsDisplayHandle::new();
-        // SAFETY: `WindowsDisplayHandle` carries no fields (Windows has no
-        // per-display native handle in this API) — there is nothing for
-        // `borrow_raw` to invalidate; the call only exists to satisfy the
-        // `raw-window-handle` trait's `unsafe fn` signature.
+        if !self.is_live() {
+            return Err(raw_window_handle::HandleError::Unavailable);
+        }
+        // SAFETY: `WindowsDisplayHandle` carries no fields: there is nothing
+        // for `borrow_raw` to keep valid.
         Ok(unsafe {
-            raw_window_handle::DisplayHandle::borrow_raw(RawDisplayHandle::Windows(handle))
+            raw_window_handle::DisplayHandle::borrow_raw(RawDisplayHandle::Windows(
+                WindowsDisplayHandle::new(),
+            ))
         })
+    }
+}
+
+impl flui_platform::SurfaceTarget for Win32Surface {
+    /// Win32 has no frame callback to arm before a present. DXGI frame
+    /// statistics the renderer read become the window's presentation report:
+    /// the newest present the display showed, at the refresh it began on,
+    /// rebased from the performance counter onto the event clock, with the
+    /// refresh period two reports measure. A read naming the present or the
+    /// refresh already reported reports nothing, and a disjoint read forgets
+    /// the last refresh ([`PresentTracker`](super::frame_timing::PresentTracker)).
+    fn pre_present_notify(&self, statistics: flui_platform::SwapChainStatistics) {
+        use std::num::NonZeroU64;
+        use windows::Win32::System::Performance::{
+            QueryPerformanceCounter, QueryPerformanceFrequency,
+        };
+
+        let read = match statistics {
+            flui_platform::SwapChainStatistics::Dxgi(read) => read,
+            flui_platform::SwapChainStatistics::DxgiDisjoint => {
+                self.tracker.lock().disjoint();
+                return;
+            }
+            _ => return,
+        };
+        if self.retirement.is_retired() {
+            return;
+        }
+        let (mut now, mut frequency) = (0_i64, 0_i64);
+        // SAFETY: each call writes one `i64` through a pointer to an
+        // initialized local that outlives it.
+        let read_counter = unsafe {
+            QueryPerformanceCounter(&raw mut now).is_ok()
+                && QueryPerformanceFrequency(&raw mut frequency).is_ok()
+        };
+        let (true, Ok(now), Some(frequency)) = (
+            read_counter,
+            u64::try_from(now),
+            u64::try_from(frequency).ok().and_then(NonZeroU64::new),
+        ) else {
+            return;
+        };
+        let shown = self.tracker.lock().read(
+            read.present_count,
+            read.sync_refresh_count,
+            read.sync_qpc_time,
+            now,
+            frequency,
+        );
+        let Some(shown) = shown else {
+            return;
+        };
+        let mut presented =
+            flui_platform::FramePresented::new(crate::owner::handlers::aged(shown.age));
+        if let Some(refresh) = shown.refresh {
+            presented = presented.with_refresh(refresh);
+        }
+        tracing::trace!(
+            target: "flui.present",
+            present = read.present_count,
+            sync_refresh = read.sync_refresh_count,
+            sync_qpc = read.sync_qpc_time,
+            at_ns = presented.at.as_nanos(),
+            refresh_ns = presented.refresh.map(|refresh| refresh.as_nanos()),
+            "DXGI reported a present shown"
+        );
+        self.presented.report(presented);
+    }
+}
+
+impl flui_platform::RedrawRequester for Win32Surface {
+    /// `InvalidateRect` and `PostMessageW` take a window handle from any
+    /// thread, so the request goes to the window system directly.
+    fn request_redraw(&self) {
+        if self.is_live() {
+            WindowsWindow::redraw_native(self.hwnd());
+        }
     }
 }
 
@@ -1949,13 +1856,13 @@ impl Clone for WindowsWindow {
             snapshot: Arc::clone(&self.snapshot),
             // Same window, same identity token.
             context: self.context,
-            // The clone shares the same window, so it shares the same UIA
-            // bridge — one subclass hook per HWND, never two.
-            accessibility: Arc::clone(&self.accessibility),
-            // And its actuator, so a newer request replaces an older one
+            // The clone shares the same window, so it shares what was made
+            // for it: one bridge (one subclass hook per HWND, never two), and
+            // one actuator, so a newer request replaces an older one
             // whichever wrapper made it.
-            haptics: Arc::clone(&self.haptics),
+            facets: self.facets.clone(),
             drag_source: Arc::clone(&self.drag_source),
+            delivery: Arc::clone(&self.delivery),
         }
     }
 }
@@ -1969,12 +1876,12 @@ impl Drop for WindowsWindow {
             use crate::owner::hwnd_affinity::TeardownRoute;
             match super::proc::teardown_route(self.hwnd, self.context) {
                 TeardownRoute::DestroyDirect => {
-                    // Unhook the UIA subclass BEFORE destroying the window —
-                    // Win32 wants subclasses removed while the window still
-                    // exists, and this is the owner-thread teardown path
-                    // subclassing requires. Any capability `Arc` still held
-                    // elsewhere degrades to a no-op.
-                    self.accessibility.shutdown();
+                    // Detach the bridge (UIA's subclass) BEFORE destroying
+                    // the window — Win32 wants subclasses removed while the
+                    // window still exists, and this is the owner-thread
+                    // teardown path subclassing requires. Any capability
+                    // `Arc` still held elsewhere degrades to a no-op.
+                    self.facets.accessibility.detach();
 
                     // SAFETY: `DestroyWindow` takes `self.hwnd` by value;
                     // the route just established this is the owning thread
@@ -1996,7 +1903,7 @@ impl Drop for WindowsWindow {
                     // unhooking the UIA subclass would race the owner's
                     // message dispatch, so neither runs here: the close is
                     // posted to the owner's queue, and the subclass adapter
-                    // is left for `WindowsAccessibility`'s own drop guard
+                    // is left for the bridge's own drop guard
                     // (which leaks it, with a warning, rather than unhook
                     // cross-thread).
                     //
@@ -2064,7 +1971,6 @@ impl WindowsWindow {
             super::proc::with_window_context(self.hwnd(), "restore_hidden", |ctx| {
                 let _hold = ctx.hold_publishing();
                 let requests = ctx.show_requests.get();
-                ctx.visibility_muted.set(true);
                 self.show_native(SW_RESTORE);
                 // The restore runs user callbacks. If one closed this window and
                 // opened another on the handle, or asked for this one to be shown,
@@ -2073,14 +1979,8 @@ impl WindowsWindow {
                 if !overtaken {
                     self.show_native(SW_HIDE);
                 }
-                ctx.visibility_muted.set(false);
-                if self.owns_handle() {
-                    // SAFETY: plain queries of this wrapper's live window.
-                    let visible = unsafe {
-                        IsWindowVisible(self.hwnd()).as_bool() && !IsIconic(self.hwnd()).as_bool()
-                    };
-                    ctx.reconcile_visibility(visible);
-                }
+                // The publishing held above goes out once, with what the
+                // window is after both: the command that asked publishes it.
             });
             return;
         }

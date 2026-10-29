@@ -22,6 +22,9 @@
   coordinate plane, a participant opts in to programmatic sequences with
   `accepts_programmatic`, and `FlingHandoff::Accepted` carries no future; §5: a wheel or
   trackpad sequence ends at its latch's idle deadline, without a further packet.
+  2026-10-26 — §1: the per-axis latch is kept in the leaf's plane, not the presentation's, so a
+  motion along one of the leaf's axes latches that axis alone under a rotated subtree; §5: the
+  idle deadline moves to the arena a packet is dispatched on when the presentation swaps it.
 - **Supersedes:** [ADR-0169](ADR-0169-nested-scroll-ballistic-handoff.md)
 - **Related:** [ADR-0051](ADR-0051-anchor-stationary-scroll-correction.md),
   [ADR-0157](ADR-0157-native-scroll-range-actions.md),
@@ -100,8 +103,9 @@ need their own channel ([followups](https://github.com/vanyastaff/flui/blob/083b
    projection a delta is the chord the focal point travels and a velocity maps through the
    projection's tangent at the focal point, not as a one-second chord. A conversion's
    rounding below 10⁻¹² of the step reads as zero, so a quarter turn keeps a delta on one
-   axis. The per-axis latch (§5) is kept in the presentation's axes; a leaf asks it about
-   its own axis through the axis it runs closest to on screen. A plane that cannot be
+   axis. The per-axis latch (§5) is kept in the leaf's plane: a remainder crosses into it to
+   be masked per axis and back, so a motion along one of the leaf's axes latches that axis
+   alone however the leaf is turned, and a leaf asks the latch about its own axes directly. A plane that cannot be
    crossed (a singular or non-finite transform, a focal point behind the camera) offers its
    participant nothing, and a runner whose plane maps no way back (a transform that
    squashes an axis) takes its step alone: no participant is offered a value that is not

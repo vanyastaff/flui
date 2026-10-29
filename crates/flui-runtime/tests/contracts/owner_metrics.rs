@@ -1728,8 +1728,8 @@ fn native_fling_profile_controls_real_scroll_inertia() {
     };
     let owner = OwnerHost::new();
     let clock = ManualClock::new();
-    let window = Arc::new(GeometryWindow {
-        inner: Arc::clone(crate::owner_publication::window().window()),
+    let window = Rc::new(GeometryWindow {
+        inner: Rc::clone(crate::owner_publication::window().window()),
         answer: Mutex::new(Ok(profile(50.0, 300.0))),
         calls: AtomicUsize::new(0),
         query_time: Mutex::new(None),
@@ -1881,9 +1881,11 @@ fn late_geometry_recovery_is_isolated_per_presentation() {
     let clock = ManualClock::new();
     let mut recipients = Vec::new();
     for ratio in [1.0, 2.0] {
-        let window = Arc::new(GeometryWindow {
-            inner: Arc::clone(crate::owner_publication::window().window()),
-            answer: Mutex::new(Err(PreferenceQueryError::Unavailable)),
+        let window = Rc::new(GeometryWindow {
+            inner: Rc::clone(crate::owner_publication::window().window()),
+            answer: Mutex::new(Err(PreferenceQueryError::Unsupported(
+                flui_platform::Unsupported::new(flui_platform::UnsupportedReason::Unavailable),
+            ))),
             calls: AtomicUsize::new(0),
             query_time: Mutex::new(None),
             panic_next: AtomicBool::new(false),
@@ -2042,7 +2044,7 @@ fn late_geometry_recovery_is_isolated_per_presentation() {
 }
 
 struct GeometryWindow {
-    inner: std::sync::Arc<dyn flui_platform::PlatformWindow>,
+    inner: Rc<dyn flui_platform::PlatformWindow>,
     answer: std::sync::Mutex<
         Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError>,
     >,
@@ -2087,8 +2089,8 @@ fn gesture_values_follow_the_presentation_display() {
     };
     let owner = OwnerHost::new();
     let clock = ManualClock::new();
-    let window = Arc::new(GeometryWindow {
-        inner: Arc::clone(crate::owner_publication::window().window()),
+    let window = Rc::new(GeometryWindow {
+        inner: Rc::clone(crate::owner_publication::window().window()),
         answer: Mutex::new(geometry(1.0, 2.0)),
         calls: AtomicUsize::new(0),
         query_time: Mutex::new(None),
@@ -2217,23 +2219,14 @@ impl flui_platform::PlatformWindow for GeometryWindow {
     fn id(&self) -> flui_platform::WindowId {
         self.inner.id()
     }
-    fn physical_size(&self) -> Size<i32> {
-        self.inner.physical_size()
-    }
-    fn logical_size(&self) -> Size<f64> {
-        self.inner.logical_size()
-    }
-    fn scale_factor(&self) -> f64 {
-        self.inner.scale_factor()
-    }
     fn request_redraw(&self) {
         self.inner.request_redraw();
     }
-    fn is_focused(&self) -> bool {
-        self.inner.is_focused()
+    fn redraw_requester(&self) -> std::sync::Arc<dyn flui_platform::RedrawRequester> {
+        self.inner.redraw_requester()
     }
-    fn is_visible(&self) -> bool {
-        self.inner.is_visible()
+    fn surface_target(&self) -> std::sync::Arc<dyn flui_platform::SurfaceTarget> {
+        self.inner.surface_target()
     }
     fn set_cursor(
         &self,
@@ -2241,26 +2234,48 @@ impl flui_platform::PlatformWindow for GeometryWindow {
     ) -> Result<(), flui_platform::CursorError> {
         self.inner.set_cursor(cursor)
     }
-    fn state(&self) -> flui_platform::WindowState {
-        let size = self.logical_size();
-        flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
+    fn set_frame_rate_hint(
+        &self,
+        hint: flui_platform::FrameRateHint,
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.inner.set_frame_rate_hint(hint)
     }
-
-    fn capabilities(&self) -> flui_platform::WindowCapabilities {
-        flui_platform::WindowCapabilities::NONE
+    fn set_input_regions(
+        &self,
+        regions: &[flui_platform::input_regions::InputRegion],
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.inner.set_input_regions(regions)
+    }
+    /// The display the test scripted, with what the wrapped window reports.
+    fn state(&self) -> flui_platform::WindowState {
+        self.inner
+            .state()
+            .with_display(*self.display.lock().expect("display script"))
     }
 
     fn apply(
         &self,
-        command: flui_platform::WindowCommand,
-    ) -> Result<(), flui_platform::WindowCommandError> {
-        command.admit(&flui_platform::WindowCapabilities::NONE)?;
+        command: flui_platform::AdmittedCommand,
+    ) -> Result<(), flui_platform::ApplyError> {
+        command.against(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
 
-    fn display_id(&self) -> Option<flui_platform::DisplayId> {
-        *self.display.lock().expect("display script")
+    fn text_input(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformTextInput>> {
+        None
     }
+
+    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformHaptics>> {
+        None
+    }
+
+    fn system_chrome(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformSystemChrome>> {
+        None
+    }
+    fn drag_source(&self) -> Option<std::sync::Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        None
+    }
+
     fn gesture_geometry(
         &self,
     ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
@@ -2283,7 +2298,7 @@ impl flui_platform::PlatformWindow for GeometryWindow {
 /// A window whose input-region backend, or display query, fails once on
 /// request.
 struct RegionWindow {
-    inner: std::sync::Arc<dyn flui_platform::PlatformWindow>,
+    inner: Rc<dyn flui_platform::PlatformWindow>,
     /// How many regions each call handed the backend.
     sent: std::sync::Mutex<Vec<usize>>,
     panic_next: std::sync::atomic::AtomicBool,
@@ -2295,23 +2310,14 @@ impl flui_platform::PlatformWindow for RegionWindow {
     fn id(&self) -> flui_platform::WindowId {
         self.inner.id()
     }
-    fn physical_size(&self) -> Size<i32> {
-        self.inner.physical_size()
-    }
-    fn logical_size(&self) -> Size<f64> {
-        self.inner.logical_size()
-    }
-    fn scale_factor(&self) -> f64 {
-        self.inner.scale_factor()
-    }
     fn request_redraw(&self) {
         self.inner.request_redraw();
     }
-    fn is_focused(&self) -> bool {
-        self.inner.is_focused()
+    fn redraw_requester(&self) -> std::sync::Arc<dyn flui_platform::RedrawRequester> {
+        self.inner.redraw_requester()
     }
-    fn is_visible(&self) -> bool {
-        self.inner.is_visible()
+    fn surface_target(&self) -> std::sync::Arc<dyn flui_platform::SurfaceTarget> {
+        self.inner.surface_target()
     }
     fn set_cursor(
         &self,
@@ -2320,28 +2326,37 @@ impl flui_platform::PlatformWindow for RegionWindow {
         self.inner.set_cursor(cursor)
     }
     fn state(&self) -> flui_platform::WindowState {
-        self.inner.state()
-    }
-    fn capabilities(&self) -> flui_platform::WindowCapabilities {
-        flui_platform::WindowCapabilities::NONE
-    }
-    fn apply(
-        &self,
-        command: flui_platform::WindowCommand,
-    ) -> Result<(), flui_platform::WindowCommandError> {
-        command.admit(&flui_platform::WindowCapabilities::NONE)?;
-        Ok(())
-    }
-    fn display_id(&self) -> Option<flui_platform::DisplayId> {
         if self
             .panic_display
             .swap(false, std::sync::atomic::Ordering::Relaxed)
         {
             panic!("scripted display query failure");
         }
+        self.inner.state()
+    }
+    fn apply(
+        &self,
+        command: flui_platform::AdmittedCommand,
+    ) -> Result<(), flui_platform::ApplyError> {
+        command.against(&flui_platform::WindowCapabilities::NONE)?;
+        Ok(())
+    }
+    fn text_input(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformTextInput>> {
         None
     }
-    fn set_input_regions(&self, regions: &[flui_platform::input_regions::InputRegion]) {
+    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformHaptics>> {
+        None
+    }
+    fn system_chrome(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformSystemChrome>> {
+        None
+    }
+    fn drag_source(&self) -> Option<std::sync::Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        None
+    }
+    fn set_input_regions(
+        &self,
+        regions: &[flui_platform::input_regions::InputRegion],
+    ) -> Result<(), flui_platform::Unsupported> {
         self.sent.lock().expect("sent regions").push(regions.len());
         if self
             .panic_next
@@ -2349,6 +2364,13 @@ impl flui_platform::PlatformWindow for RegionWindow {
         {
             panic!("scripted input-region failure");
         }
+        Ok(())
+    }
+    fn set_frame_rate_hint(
+        &self,
+        hint: flui_platform::FrameRateHint,
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.inner.set_frame_rate_hint(hint)
     }
 }
 
@@ -2374,14 +2396,13 @@ impl flui_platform::WindowControl for SharedControl {
         state.revision = revision;
         state
     }
-    fn capabilities(&self) -> flui_platform::WindowCapabilities {
-        flui_platform::WindowCapabilities::NONE
-    }
     fn submit(
         &self,
         command: flui_platform::WindowCommand,
-    ) -> Result<(), flui_platform::WindowCommandError> {
-        command.admit(&flui_platform::WindowCapabilities::NONE)?;
+    ) -> Result<(), flui_platform::SubmitError> {
+        command
+            .admit(&flui_platform::WindowCapabilities::NONE)
+            .map(drop)?;
         Ok(())
     }
     fn request_close(&self) {}
@@ -2397,8 +2418,8 @@ fn a_failed_move_keeps_its_regions_subscribers_and_row() {
     use flui_runtime::{HostInput, InputRecord};
     use std::sync::{Arc, Mutex, atomic::AtomicBool};
 
-    let window = Arc::new(RegionWindow {
-        inner: Arc::clone(crate::owner_publication::window().window()),
+    let window = Rc::new(RegionWindow {
+        inner: Rc::clone(crate::owner_publication::window().window()),
         sent: Mutex::new(Vec::new()),
         panic_next: AtomicBool::new(false),
         panic_display: AtomicBool::new(false),
@@ -2547,8 +2568,8 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
     };
     let owner = OwnerHost::new();
     let clock = ManualClock::new();
-    let window = Arc::new(GeometryWindow {
-        inner: Arc::clone(crate::owner_publication::window().window()),
+    let window = Rc::new(GeometryWindow {
+        inner: Rc::clone(crate::owner_publication::window().window()),
         answer: std::sync::Mutex::new(Ok(Some(
             GestureGeometry::new(DevicePixelRatio::new(1.0).expect("ratio"))
                 .with_touch_slop(Distance::new(2.0).expect("distance")),
@@ -2638,7 +2659,9 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
     owner
         .update_preferences(SystemPreferences::default(), &effects)
         .expect("preferences");
-    *window.answer.lock().expect("script") = Err(PreferenceQueryError::Unavailable);
+    *window.answer.lock().expect("script") = Err(PreferenceQueryError::Unsupported(
+        flui_platform::Unsupported::new(flui_platform::UnsupportedReason::Unavailable),
+    ));
     owner
         .update_preferences(
             SystemPreferences::default().with_high_contrast(true),
@@ -2692,7 +2715,9 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
             &effects,
         )
         .expect("retained contact");
-    *window.answer.lock().expect("script") = Err(PreferenceQueryError::Unavailable);
+    *window.answer.lock().expect("script") = Err(PreferenceQueryError::Unsupported(
+        flui_platform::Unsupported::new(flui_platform::UnsupportedReason::Unavailable),
+    ));
     target
         .observe(
             WindowObservation::Metrics(crate::window_metrics(800.0, 600.0, 2.0)),
@@ -2840,7 +2865,9 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
     );
 
     let submissions_before_retries = effects.sink.borrow().submitted;
-    *window.answer.lock().expect("script") = Err(PreferenceQueryError::Unavailable);
+    *window.answer.lock().expect("script") = Err(PreferenceQueryError::Unsupported(
+        flui_platform::Unsupported::new(flui_platform::UnsupportedReason::Unavailable),
+    ));
     owner
         .update_preferences(
             SystemPreferences::default().with_high_contrast(true),
@@ -2982,7 +3009,9 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
             })));
         }
         *window.answer.lock().expect("failed preparation script") =
-            Err(PreferenceQueryError::Unavailable);
+            Err(PreferenceQueryError::Unsupported(
+                flui_platform::Unsupported::new(flui_platform::UnsupportedReason::Unavailable),
+            ));
         owner
             .update_preferences(
                 SystemPreferences::default().with_high_contrast(!hook_present),
@@ -2994,7 +3023,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         let calls_before = window.calls.load(Ordering::Relaxed);
         let polls = Rc::new(Cell::new(0));
         let observed_polls = Rc::clone(&polls);
-        let observed_window = Arc::clone(&window);
+        let observed_window = Rc::clone(&window);
         let task = driver.spawn_local(Box::pin(std::future::poll_fn(move |cx| {
             assert_eq!(
                 observed_window.calls.load(Ordering::Relaxed),
@@ -3106,7 +3135,9 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
             "background progress does not enable visual frames"
         );
     }
-    *window.answer.lock().expect("pending before close") = Err(PreferenceQueryError::Unavailable);
+    *window.answer.lock().expect("pending before close") = Err(PreferenceQueryError::Unsupported(
+        flui_platform::Unsupported::new(flui_platform::UnsupportedReason::Unavailable),
+    ));
     owner
         .update_preferences(
             SystemPreferences::default().with_high_contrast(true),

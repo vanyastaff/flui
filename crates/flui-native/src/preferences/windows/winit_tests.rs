@@ -51,7 +51,8 @@ fn make_unactivated_offscreen(window: &dyn HostWindow) -> anyhow::Result<()> {
             SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos, ShowWindow,
         },
     };
-    let RawWindowHandle::Win32(handle) = window.window_handle()?.as_raw() else {
+    let surface = window.surface_target();
+    let RawWindowHandle::Win32(handle) = surface.window_handle()?.as_raw() else {
         panic!("Windows event loop must create a Win32 window");
     };
     let hwnd = HWND(handle.hwnd.get() as *mut std::ffi::c_void);
@@ -251,7 +252,7 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
     let wake_healthy = healthy_frame.clone();
     let frame_healthy = healthy_frame;
     let frame_sink = frames.clone();
-    let on_ready: crate::platform::PlatformReadyCallback = Box::new(move |owner| {
+    let on_ready = crate::owner::app_delivery::testing::on_ready(move |owner| {
         let mut lines = 0_u32;
         let mut characters = 0_u32;
         // SAFETY: writable scalar outputs; these getters do not mutate OS policy.
@@ -276,10 +277,11 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
         };
         let snapshot = owner.preferences()?;
         *observed.lock() = Some((snapshot.wheel().clone(), expected, characters));
+        let handler = flui_testing::window_handler::RecordingWindowHandler::new();
         let window = owner
-            .open_window(options("winit-wheel-policy"))?
+            .open_window(options("winit-wheel-policy"), handler.clone())?
             .try_ready()?;
-        let redraw_window = window.clone();
+        let redraw_window = window.redraw_requester();
         owner.on_wake(Box::new(move || match wake_platform.preferences() {
             Err(crate::PlatformError::PreferencesDeferred) => {
                 let _ = wake_deferred.lock().get_or_insert(*wake_frames.lock());
@@ -313,11 +315,12 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
             }
             Err(error) => panic!("unexpected owner preference result: {error}"),
         }))?;
-        let RawWindowHandle::Win32(handle) = window.window_handle()?.as_raw() else {
+        let surface = window.surface_target();
+        let RawWindowHandle::Win32(handle) = surface.window_handle()?.as_raw() else {
             panic!("Windows event loop must create a Win32 window");
         };
         let hwnd = HWND(handle.hwnd.get() as *mut std::ffi::c_void);
-        window.on_request_frame(Box::new(move || {
+        handler.react_to_frame(move |_| {
             let count = {
                 let mut frames = frame_sink.lock();
                 *frames += 1;
@@ -332,15 +335,15 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
                 callback_done.store(true, Ordering::Release);
                 quit.quit();
             }
-        }));
+        });
         make_unactivated_offscreen(window.as_ref())?;
         window.request_redraw();
-        window.on_input(Box::new(move |input| {
+        handler.react_to_input(move |input| {
             if let flui_platform::PlatformInput::Pointer(PointerEvent::Scroll(scroll)) = input {
                 sink.lock().push(scroll);
             }
             flui_platform::DispatchEventResult::default()
-        }));
+        });
         // SAFETY: this exact owned hidden HWND remains tracked until loop shutdown;
         // every queued message contains only by-value coordinates/wheel distance.
         unsafe {
@@ -535,16 +538,17 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
     let frame_done = done.clone();
     let frame_quit = host.clone();
     let frame_sink = frames.clone();
-    let on_ready: crate::platform::PlatformReadyCallback = Box::new(move |owner| {
+    let on_ready = crate::owner::app_delivery::testing::on_ready(move |owner| {
         assert!(matches!(
             owner.preferences(),
             Err(crate::PlatformError::PreferencesDeferred)
         ));
         bootstrap_deferred.store(true, Ordering::Release);
+        let handler = flui_testing::window_handler::RecordingWindowHandler::new();
         let window = owner
-            .open_window(options("cold-winit-preferences"))?
+            .open_window(options("cold-winit-preferences"), handler.clone())?
             .try_ready()?;
-        let redraw_window = window.clone();
+        let redraw_window = window.redraw_requester();
         owner.on_wake(Box::new(move || match wake_platform.preferences() {
             Err(crate::PlatformError::PreferencesDeferred) => {}
             Ok(snapshot) => {
@@ -574,7 +578,7 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
             }
             Err(error) => panic!("unexpected recovery result: {error}"),
         }))?;
-        window.on_request_frame(Box::new(move || {
+        handler.react_to_frame(move |_| {
             let count = {
                 let mut frames = frame_sink.lock();
                 *frames += 1;
@@ -589,7 +593,7 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
                 frame_done.store(true, Ordering::Release);
                 frame_quit.quit();
             }
-        }));
+        });
         make_unactivated_offscreen(window.as_ref())?;
         window.request_redraw();
         Ok(())

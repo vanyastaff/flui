@@ -9,9 +9,13 @@
     reason = "native Win32 calls against the real window system"
 )]
 
+use flui_testing::window_commands::AdmitAndApply as _;
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use flui_native::{Platform as _, WindowsPlatform};
+use crate::app::{AppCall, AppLog};
+use flui_native::{AppHandler, OwnerPlatform, Platform as _, WindowsPlatform};
 use flui_platform::{SessionEndAnswer, SessionEndPhase, SystemNotice};
 use windows::Win32::{
     Foundation::{HWND, LPARAM, WPARAM},
@@ -26,35 +30,55 @@ use windows::Win32::{
 };
 use windows::core::{BOOL, PWSTR};
 
-/// A platform with a session-end hook that records its phases and answers with
-/// `answer`, and a notice hook that records what it hears.
+/// A running platform whose application handler answers a session end with
+/// `answer` and records what it hears, and its receiver.
 struct Hosted {
-    platform: WindowsPlatform,
+    owner: OwnerPlatform,
     receiver: HWND,
-    phases: Arc<Mutex<Vec<SessionEndPhase>>>,
-    notices: Arc<Mutex<Vec<SystemNotice>>>,
+    log: Rc<AppLog>,
 }
 
-fn hosted(answer: impl Fn(SessionEndPhase) -> SessionEndAnswer + Send + 'static) -> Hosted {
-    let platform = WindowsPlatform::new().expect("native Windows platform");
-    let phases = Arc::new(Mutex::new(Vec::new()));
-    let recorded = Arc::clone(&phases);
-    platform.on_session_end(Box::new(move |phase| {
-        recorded.lock().expect("phase log").push(phase);
-        answer(phase)
-    }));
-    let notices = Arc::new(Mutex::new(Vec::new()));
-    let heard = Arc::clone(&notices);
-    platform.on_host_notice(Box::new(move |notice| {
-        heard.lock().expect("notice log").push(notice);
-    }));
-    let receiver = receiver_of_this_thread();
-    Hosted {
-        platform,
-        receiver,
-        phases,
-        notices,
-    }
+/// The case waiting for the owner turn it runs in.
+type Case = Box<dyn FnOnce(&Hosted)>;
+
+thread_local! {
+    /// The running case's host and the case, handed from the bootstrap to the
+    /// owner turn on the same thread.
+    static RUNNING: RefCell<Option<(Hosted, Case)>> = const { RefCell::new(None) };
+}
+
+/// Run a Win32 platform whose handler answers a session end with `answer`,
+/// and run `case` in an owner turn of its loop, where what the receiver
+/// reports reaches the handler at once; the loop then quits.
+fn hosted(
+    answer: impl Fn(SessionEndPhase) -> SessionEndAnswer + 'static,
+    case: impl FnOnce(&Hosted) + 'static,
+) {
+    let log = AppLog::new();
+    log.answer_session_end_with(answer);
+    let kept = Rc::downgrade(&log);
+    log.bootstrap(move |owner| {
+        let proxy = owner.proxy();
+        let quit = owner.proxy();
+        owner.on_wake(Box::new(move || {
+            if let Some((host, case)) = RUNNING.with(|running| running.borrow_mut().take()) {
+                case(&host);
+                drop(host);
+                quit.request_quit().expect("the loop takes a quit");
+            }
+        }))?;
+        let host = Hosted {
+            owner,
+            receiver: receiver_of_this_thread(),
+            log: kept.upgrade().expect("the log runs its bootstrap"),
+        };
+        RUNNING.with(|running| *running.borrow_mut() = Some((host, Box::new(case))));
+        proxy.wake().map_err(|error| error.to_string())?;
+        Ok(())
+    });
+    Box::new(WindowsPlatform::new().expect("native Windows platform"))
+        .run(log as Rc<dyn AppHandler>)
+        .expect("the Win32 loop");
 }
 
 impl Hosted {
@@ -78,11 +102,25 @@ impl Hosted {
     }
 
     fn phases(&self) -> Vec<SessionEndPhase> {
-        self.phases.lock().expect("phase log").clone()
+        self.log
+            .calls()
+            .into_iter()
+            .filter_map(|call| match call {
+                AppCall::SessionEnd(phase) => Some(phase),
+                _ => None,
+            })
+            .collect()
     }
 
     fn notices(&self) -> Vec<SystemNotice> {
-        self.notices.lock().expect("notice log").clone()
+        self.log
+            .calls()
+            .into_iter()
+            .filter_map(|call| match call {
+                AppCall::Notice(notice) => Some(notice),
+                _ => None,
+            })
+            .collect()
     }
 }
 
@@ -90,42 +128,54 @@ const FALSE: isize = 0;
 const TRUE: isize = 1;
 
 fn a_blocked_query_refuses_and_gives_the_system_a_reason() {
-    let host = hosted(|_| SessionEndAnswer::Block);
-    assert_eq!(
-        host.send(WM_QUERYENDSESSION, 0, ENDSESSION_LOGOFF as isize),
-        FALSE
-    );
-    assert_eq!(host.phases(), [SessionEndPhase::Query]);
-    let reason = host.block_reason().expect("the system holds a reason");
-    assert!(!reason.is_empty(), "a blank reason shows the user nothing");
+    hosted(
+        |_| SessionEndAnswer::Block,
+        |host| {
+            assert_eq!(
+                host.send(WM_QUERYENDSESSION, 0, ENDSESSION_LOGOFF as isize),
+                FALSE
+            );
+            assert_eq!(host.phases(), [SessionEndPhase::Query]);
+            let reason = host.block_reason().expect("the system holds a reason");
+            assert!(!reason.is_empty(), "a blank reason shows the user nothing");
 
-    // The end was cancelled (the system sends this after a refusal too): the
-    // reason stays until the host lets go, because its work is not done.
-    host.send(WM_ENDSESSION, 0, 0);
-    assert_eq!(
-        host.phases(),
-        [SessionEndPhase::Query, SessionEndPhase::Cancelled]
+            // The end was cancelled (the system sends this after a refusal too): the
+            // reason stays until the host lets go, because its work is not done.
+            host.send(WM_ENDSESSION, 0, 0);
+            assert_eq!(
+                host.phases(),
+                [SessionEndPhase::Query, SessionEndPhase::Cancelled]
+            );
+            assert!(host.block_reason().is_some());
+            host.owner.release_session_end();
+            assert_eq!(host.block_reason(), None);
+        },
     );
-    assert!(host.block_reason().is_some());
-    host.platform.release_session_end();
-    assert_eq!(host.block_reason(), None);
 }
 
 fn releasing_the_block_withdraws_the_reason() {
-    let host = hosted(|_| SessionEndAnswer::Block);
-    assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), FALSE);
-    assert!(host.block_reason().is_some());
-    host.platform.release_session_end();
-    assert_eq!(host.block_reason(), None, "the session may go on");
+    hosted(
+        |_| SessionEndAnswer::Block,
+        |host| {
+            assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), FALSE);
+            assert!(host.block_reason().is_some());
+            host.owner.release_session_end();
+            assert_eq!(host.block_reason(), None, "the session may go on");
+        },
+    );
 }
 
 fn a_query_the_host_lets_through_is_allowed() {
-    let host = hosted(|_| SessionEndAnswer::Proceed);
-    assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), TRUE);
-    assert_eq!(host.block_reason(), None);
+    hosted(
+        |_| SessionEndAnswer::Proceed,
+        |host| {
+            assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), TRUE);
+            assert_eq!(host.block_reason(), None);
+        },
+    );
 }
 
-fn without_a_hook_a_query_is_allowed() {
+fn without_a_handler_a_query_is_allowed() {
     let platform = WindowsPlatform::new().expect("native Windows platform");
     let receiver = receiver_of_this_thread();
     // SAFETY: a pointer-free message to this platform's own receiver.
@@ -135,118 +185,82 @@ fn without_a_hook_a_query_is_allowed() {
 }
 
 fn a_critical_session_end_cannot_be_blocked() {
-    let host = hosted(|_| SessionEndAnswer::Block);
-    assert_eq!(
-        host.send(
-            WM_QUERYENDSESSION,
-            0,
-            (ENDSESSION_CRITICAL | ENDSESSION_LOGOFF) as isize
-        ),
-        TRUE
+    hosted(
+        |_| SessionEndAnswer::Block,
+        |host| {
+            assert_eq!(
+                host.send(
+                    WM_QUERYENDSESSION,
+                    0,
+                    (ENDSESSION_CRITICAL | ENDSESSION_LOGOFF) as isize
+                ),
+                TRUE
+            );
+            assert_eq!(host.block_reason(), None);
+            assert_eq!(host.phases(), [SessionEndPhase::Query], "it is still asked");
+        },
     );
-    assert_eq!(host.block_reason(), None);
-    assert_eq!(host.phases(), [SessionEndPhase::Query], "it is still asked");
 }
 
 fn a_session_that_ends_reaches_the_hook() {
-    let host = hosted(|_| SessionEndAnswer::Proceed);
-    host.send(WM_QUERYENDSESSION, 0, 0);
-    host.send(WM_ENDSESSION, 1, ENDSESSION_LOGOFF as isize);
-    assert_eq!(
-        host.phases(),
-        [SessionEndPhase::Query, SessionEndPhase::Ending]
+    hosted(
+        |_| SessionEndAnswer::Proceed,
+        |host| {
+            host.send(WM_QUERYENDSESSION, 0, 0);
+            host.send(WM_ENDSESSION, 1, ENDSESSION_LOGOFF as isize);
+            assert_eq!(
+                host.phases(),
+                [SessionEndPhase::Query, SessionEndPhase::Ending]
+            );
+        },
     );
 }
 
 fn a_panicking_hook_does_not_hold_the_session_up() {
-    let host = hosted(|phase| {
-        assert_ne!(phase, SessionEndPhase::Query, "a broken subscriber");
-        SessionEndAnswer::Proceed
-    });
-    assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), TRUE);
-    assert_eq!(host.block_reason(), None);
-    host.send(WM_ENDSESSION, 1, 0);
-    assert_eq!(
-        host.phases(),
-        [SessionEndPhase::Query, SessionEndPhase::Ending],
-        "the hook is still installed after the panic"
-    );
-}
-
-/// A hook that installs its successor and then panics: the query proceeds,
-/// the failed hook's captures are retained rather than dropped after the
-/// failure, and the successor hears the next phase.
-fn a_hook_that_replaced_itself_and_failed_is_retained() {
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    struct Witness(Arc<AtomicBool>);
-    impl Drop for Witness {
-        fn drop(&mut self) {
-            self.0.store(true, Ordering::SeqCst);
-        }
-    }
-
-    let platform = Arc::new(WindowsPlatform::new().expect("native Windows platform"));
-    let dropped = Arc::new(AtomicBool::new(false));
-    let witness = Witness(Arc::clone(&dropped));
-    let phases = Arc::new(Mutex::new(Vec::new()));
-    let (weak, recorded) = (Arc::downgrade(&platform), Arc::clone(&phases));
-    platform.on_session_end(Box::new(move |_| {
-        let _ = &witness;
-        let recorded = Arc::clone(&recorded);
-        weak.upgrade()
-            .expect("the platform")
-            .on_session_end(Box::new(move |phase| {
-                recorded.lock().expect("phase log").push(phase);
-                SessionEndAnswer::Proceed
-            }));
-        panic!("first failure");
-    }));
-    let receiver = receiver_of_this_thread();
-    let send = |message, wparam, lparam| {
-        // SAFETY: a pointer-free message to this platform's own receiver.
-        unsafe {
-            SendMessageW(
-                receiver,
-                message,
-                Some(WPARAM(wparam)),
-                Some(LPARAM(lparam)),
-            )
-        }
-        .0
-    };
-
-    assert_eq!(send(WM_QUERYENDSESSION, 0, 0), TRUE);
-    assert!(
-        !dropped.load(Ordering::SeqCst),
-        "the failed hook's captures are retained, not dropped"
-    );
-    send(WM_ENDSESSION, 1, 0);
-    assert_eq!(
-        *phases.lock().expect("phase log"),
-        [SessionEndPhase::Ending],
-        "the successor hears the next phase"
+    hosted(
+        |phase| {
+            assert_ne!(phase, SessionEndPhase::Query, "a broken subscriber");
+            SessionEndAnswer::Proceed
+        },
+        |host| {
+            assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), TRUE);
+            assert_eq!(host.block_reason(), None);
+            host.send(WM_ENDSESSION, 1, 0);
+            assert_eq!(
+                host.phases(),
+                [SessionEndPhase::Query, SessionEndPhase::Ending],
+                "the hook is still installed after the panic"
+            );
+        },
     );
 }
 
 fn sleep_and_wake_reach_the_host_once_each() {
-    let host = hosted(|_| SessionEndAnswer::Proceed);
-    host.send(WM_POWERBROADCAST, PBT_APMSUSPEND as usize, 0);
-    host.send(WM_POWERBROADCAST, PBT_APMRESUMEAUTOMATIC as usize, 0);
-    // Sent after the automatic resume when the user caused it: not a second wake.
-    host.send(WM_POWERBROADCAST, PBT_APMRESUMESUSPEND as usize, 0);
-    assert_eq!(host.notices(), [SystemNotice::Sleep, SystemNotice::Wake]);
+    hosted(
+        |_| SessionEndAnswer::Proceed,
+        |host| {
+            host.send(WM_POWERBROADCAST, PBT_APMSUSPEND as usize, 0);
+            host.send(WM_POWERBROADCAST, PBT_APMRESUMEAUTOMATIC as usize, 0);
+            // Sent after the automatic resume when the user caused it: not a second wake.
+            host.send(WM_POWERBROADCAST, PBT_APMRESUMESUSPEND as usize, 0);
+            assert_eq!(host.notices(), [SystemNotice::Sleep, SystemNotice::Wake]);
+        },
+    );
 }
 
 fn locking_and_unlocking_the_session_reach_the_host() {
-    let host = hosted(|_| SessionEndAnswer::Proceed);
-    host.send(WM_WTSSESSION_CHANGE, WTS_SESSION_LOCK as usize, 1);
-    host.send(WM_WTSSESSION_CHANGE, WTS_SESSION_UNLOCK as usize, 1);
-    // Remote-session changes are not lock changes.
-    host.send(WM_WTSSESSION_CHANGE, 1, 1);
-    assert_eq!(
-        host.notices(),
-        [SystemNotice::SessionLocked, SystemNotice::SessionUnlocked]
+    hosted(
+        |_| SessionEndAnswer::Proceed,
+        |host| {
+            host.send(WM_WTSSESSION_CHANGE, WTS_SESSION_LOCK as usize, 1);
+            host.send(WM_WTSSESSION_CHANGE, WTS_SESSION_UNLOCK as usize, 1);
+            // Remote-session changes are not lock changes.
+            host.send(WM_WTSSESSION_CHANGE, 1, 1);
+            assert_eq!(
+                host.notices(),
+                [SystemNotice::SessionLocked, SystemNotice::SessionUnlocked]
+            );
+        },
     );
 }
 
@@ -278,8 +292,8 @@ fn native_host_events() {
             a_query_the_host_lets_through_is_allowed,
         ),
         (
-            "without_a_hook_a_query_is_allowed",
-            without_a_hook_a_query_is_allowed,
+            "without_a_handler_a_query_is_allowed",
+            without_a_handler_a_query_is_allowed,
         ),
         (
             "a_critical_session_end_cannot_be_blocked",
@@ -292,10 +306,6 @@ fn native_host_events() {
         (
             "a_panicking_hook_does_not_hold_the_session_up",
             a_panicking_hook_does_not_hold_the_session_up,
-        ),
-        (
-            "a_hook_that_replaced_itself_and_failed_is_retained",
-            a_hook_that_replaced_itself_and_failed_is_retained,
         ),
         (
             "sleep_and_wake_reach_the_host_once_each",
@@ -355,30 +365,43 @@ fn reason_held_for(window: HWND) -> Option<String> {
 }
 
 fn a_block_is_registered_on_the_visible_window() {
-    let host = hosted(|_| SessionEndAnswer::Block);
-    let window = host
-        .platform
-        .open_window(flui_platform::WindowOptions::default().with_visible(true))
-        .expect("a window");
-    let window_hwnd = crate::win32_handle(window.as_ref());
-    assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), FALSE);
-    assert!(
-        reason_held_for(window_hwnd).is_some(),
-        "the system lists the window the user can see"
+    hosted(
+        |_| SessionEndAnswer::Block,
+        |host| {
+            let window = host
+                .owner
+                .open_window(
+                    flui_platform::WindowOptions::default().with_visible(true),
+                    flui_testing::window_handler::RecordingWindowHandler::new(),
+                )
+                .expect("a window")
+                .try_ready()
+                .expect("the window opens at once");
+            let window_hwnd = crate::win32_handle(window.as_ref());
+            assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), FALSE);
+            assert!(
+                reason_held_for(window_hwnd).is_some(),
+                "the system lists the window the user can see"
+            );
+            assert_eq!(host.block_reason(), None, "not the hidden receiver");
+            host.owner.release_session_end();
+            assert_eq!(reason_held_for(window_hwnd), None);
+            // The window goes with the case: the next one must not find it visible.
+            window.close_now();
+        },
     );
-    assert_eq!(host.block_reason(), None, "not the hidden receiver");
-    host.platform.release_session_end();
-    assert_eq!(reason_held_for(window_hwnd), None);
-    // The window goes with the case: the next one must not find it visible.
-    window.close();
 }
 
 fn a_second_query_replaces_the_first_block() {
-    let host = hosted(|_| SessionEndAnswer::Block);
-    assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), FALSE);
-    assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), FALSE);
-    host.platform.release_session_end();
-    assert_eq!(host.block_reason(), None, "no reason is left behind");
+    hosted(
+        |_| SessionEndAnswer::Block,
+        |host| {
+            assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), FALSE);
+            assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), FALSE);
+            host.owner.release_session_end();
+            assert_eq!(host.block_reason(), None, "no reason is left behind");
+        },
+    );
 }
 
 fn the_block_is_held_while_the_host_saves_for_an_ending_session() {
@@ -387,20 +410,24 @@ fn the_block_is_held_while_the_host_saves_for_an_ending_session() {
     let receiver = Arc::new(AtomicIsize::new(0));
     let held_at_ending = Arc::new(Mutex::new(None));
     let (seen_receiver, seen_held) = (Arc::clone(&receiver), Arc::clone(&held_at_ending));
-    let host = hosted(move |phase| {
-        if phase == SessionEndPhase::Ending {
-            let window = HWND(seen_receiver.load(Ordering::SeqCst) as *mut _);
-            *seen_held.lock().expect("log") = Some(reason_held_for(window).is_some());
-        }
-        SessionEndAnswer::Block
-    });
-    receiver.store(host.receiver.0 as isize, Ordering::SeqCst);
-    assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), FALSE);
-    host.send(WM_ENDSESSION, 1, 0);
-    assert_eq!(
-        *held_at_ending.lock().expect("log"),
-        Some(true),
-        "the system waits for the hook; the reason goes after it"
+    hosted(
+        move |phase| {
+            if phase == SessionEndPhase::Ending {
+                let window = HWND(seen_receiver.load(Ordering::SeqCst) as *mut _);
+                *seen_held.lock().expect("log") = Some(reason_held_for(window).is_some());
+            }
+            SessionEndAnswer::Block
+        },
+        move |host| {
+            receiver.store(host.receiver.0 as isize, Ordering::SeqCst);
+            assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), FALSE);
+            host.send(WM_ENDSESSION, 1, 0);
+            assert_eq!(
+                *held_at_ending.lock().expect("log"),
+                Some(true),
+                "the system waits for the hook; the reason goes after it"
+            );
+            assert_eq!(host.block_reason(), None);
+        },
     );
-    assert_eq!(host.block_reason(), None);
 }

@@ -1,5 +1,6 @@
 use super::*;
 use crate::app::lifecycle::{ServiceDefinition, ServiceLifetime};
+use crate::app::runner::window_routes::OwnerOpenRouted as _;
 use crate::app::runtime::{ExitPolicy, WindowPolicy};
 use flui_native::{HeadlessPlatform, Platform};
 use std::sync::atomic::AtomicUsize;
@@ -121,38 +122,42 @@ fn runtime_frame_wake_reaches_its_window_after_sibling_installation() {
     let a_seen = Arc::clone(&a_calls);
     let b_seen = Arc::clone(&b_calls);
     Box::new(HeadlessPlatform::new())
-        .run(Box::new(move |owner| {
+        .run(crate::app::runner::app_handler(move |owner| {
             install_owner_platform(owner)?;
             let a_host = with_owner_platform(|owner| {
-                owner.open_window(flui_platform::WindowOptions::default())
+                owner.open_routed(flui_platform::WindowOptions::default())
             })
             .expect("owner")
             .expect("open A")
             .try_ready()
             .expect("ready A");
             let b_host = with_owner_platform(|owner| {
-                owner.open_window(flui_platform::WindowOptions::default())
+                owner.open_routed(flui_platform::WindowOptions::default())
             })
             .expect("owner")
             .expect("open B")
             .try_ready()
             .expect("ready B");
-            let a_window: Arc<dyn flui_platform::PlatformWindow> = a_host.clone();
-            let b_window: Arc<dyn flui_platform::PlatformWindow> = b_host.clone();
-            a_window.on_request_frame(Box::new(move || {
-                a_seen.fetch_add(1, Ordering::SeqCst);
-            }));
-            b_window.on_request_frame(Box::new(move || {
-                b_seen.fetch_add(1, Ordering::SeqCst);
-            }));
-            APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(Arc::clone(&a_window)));
+            let a_window: Rc<dyn flui_platform::PlatformWindow> = a_host.clone();
+            let b_window: Rc<dyn flui_platform::PlatformWindow> = b_host.clone();
+            crate::app::runner::window_routes::WindowRoutes::of(&*a_window).route_frame_requested(
+                move |_| {
+                    a_seen.fetch_add(1, Ordering::SeqCst);
+                },
+            );
+            crate::app::runner::window_routes::WindowRoutes::of(&*b_window).route_frame_requested(
+                move |_| {
+                    b_seen.fetch_add(1, Ordering::SeqCst);
+                },
+            );
+            APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(Rc::clone(&a_window)));
             let mut a = super::super::host::build_ui_runtime(
                 super::super::presentation_window(a_host),
                 1.0,
             )
             .expect("runtime A");
             a.pump_background();
-            APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(Arc::clone(&b_window)));
+            APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(Rc::clone(&b_window)));
             let mut b = super::super::host::build_ui_runtime(
                 super::super::presentation_window(b_host),
                 1.0,
@@ -229,7 +234,7 @@ fn service_factory_replacement_refuses_obsolete_work_and_preserves_the_new_owner
     let seen_spawned = Arc::clone(&spawned);
     let seen_retired = Arc::clone(&retired);
     Box::new(HeadlessPlatform::new())
-        .run(Box::new(move |owner| {
+        .run(crate::app::runner::app_handler(move |owner| {
             install_owner_platform(owner)?;
             APP_RUNTIME.with(|slot| {
                 let mut state = slot.borrow_mut();
@@ -247,7 +252,7 @@ fn service_factory_replacement_refuses_obsolete_work_and_preserves_the_new_owner
                     let previous =
                         APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
                     Box::new(HeadlessPlatform::new())
-                        .run(Box::new(|replacement| {
+                        .run(crate::app::runner::app_handler(|replacement| {
                             install_owner_platform(replacement)?;
                             Ok(())
                         }))

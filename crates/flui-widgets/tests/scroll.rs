@@ -948,6 +948,7 @@ pub(crate) fn retiring_scroll_curves_preserves_newer_reentrant_commands() {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     thread_local! {
+        #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
         static REENTRY: RefCell<Option<(ScrollController, bool)>> = const { RefCell::new(None) };
     }
     struct ReentrantCurve(Arc<AtomicUsize>);
@@ -3105,6 +3106,7 @@ pub(crate) fn a_rebuilt_run_keeps_the_physics_its_release_started_with() {
 struct JumpingPhysics;
 
 thread_local! {
+    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static JUMP: std::cell::RefCell<Option<(ScrollController, f64)>> =
         const { std::cell::RefCell::new(None) };
 }
@@ -4440,6 +4442,7 @@ pub(crate) fn show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers
     };
     use std::cell::RefCell;
     thread_local! {
+        #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
         static PENDING_REVEAL: RefCell<Option<SemanticsActionInvocation>> = const { RefCell::new(None) };
     }
     struct RestoreScope(Option<SemanticsActionInvocation>);
@@ -4509,6 +4512,7 @@ pub(crate) fn show_on_screen_sibling_reentry_delivers_last_target_without_stale_
     use std::cell::RefCell;
     use std::sync::atomic::{AtomicUsize, Ordering};
     thread_local! {
+        #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
         static PENDING_SIBLING: RefCell<Option<SemanticsActionInvocation>> = const { RefCell::new(None) };
     }
     struct RestoreScope(Option<SemanticsActionInvocation>);
@@ -4804,7 +4808,7 @@ pub(crate) fn a_command_queued_before_mount_is_serviced_outside_build() {
     let mut laid = lay_out(SizedBox::square(1.0), tight(300.0, 300.0));
     let vsync = Vsync::new();
     laid.adopt_vsync(vsync.clone()).expect("clock admission");
-    let reactive = laid.with_build_owner_mut(|owner| owner.reactive().clone());
+    let reactive = laid.with_build_owner_mut(|owner| owner.signal_graph().clone());
     let signal = reactive.signal(0u32);
     let controller = ScrollController::new();
     // Room to scroll, so the command moves something.
@@ -4813,11 +4817,11 @@ pub(crate) fn a_command_queued_before_mount_is_serviced_outside_build() {
         .expect("ordered extents");
     let outcome = Rc::new(Cell::new(None));
     let seen = Rc::clone(&outcome);
-    let writer = reactive;
+    let writer = laid.with_build_owner_mut(|owner| owner.writer_source());
     let _listener = controller
         .position()
         .add_activity_listener(Rc::new(move || {
-            seen.set(Some(signal.set(&writer, 1)));
+            seen.set(Some(writer.write(|cx| signal.set(cx, 1))));
         }));
     controller.animate_to(100.0, Duration::from_secs(1), ArcCurve::new(curves::LINEAR));
     assert_eq!(outcome.get(), None, "nothing serves the command yet");

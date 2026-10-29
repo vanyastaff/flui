@@ -42,14 +42,12 @@ use super::{OleTransfer, clipboard_format, describe, global_format, write_global
 use crate::drag::windows::crossing::{
     DragContinuation, NativeFormat, actions_of, continue_drag, effect_bits, encode, native_format,
 };
-use crate::owner::windows::WindowRef;
+use crate::owner::windows::CreatedWindow;
 
 pub(super) use objects::{
     DropSource, DropSource_Impl, FormatList, FormatList_Impl, SourceData, SourceData_Impl,
-    WindowDropTarget_Impl,
+    WindowDropTarget, WindowDropTarget_Impl,
 };
-// The window's context keeps its drop target.
-pub(crate) use objects::WindowDropTarget;
 
 /// Run one vtable method's body; a panic answers `E_UNEXPECTED`.
 fn com_method<R>(body: impl FnOnce() -> windows_core::Result<R>) -> windows_core::Result<R> {
@@ -93,7 +91,8 @@ mod objects {
 
     use super::super::OleTransfer;
     use super::SourceEntry;
-    use crate::owner::windows::WindowRef;
+    use crate::owner::window_delivery::WindowDelivery;
+    use crate::owner::windows::{WindowRef, WindowScale};
 
     // Every object here holds owner-thread state (`Rc`, `Cell`, `RefCell`, a
     // `!Send` provider): `Agile = false` withholds `IAgileObject` and the
@@ -125,9 +124,17 @@ mod objects {
 
     /// One window's drop target.
     #[implement(IDropTarget, Agile = false)]
-    pub(crate) struct WindowDropTarget {
+    pub(in crate::drag::windows) struct WindowDropTarget {
         pub(super) window: WindowRef,
         pub(super) transfer: Arc<OleTransfer>,
+        /// The window's callbacks, which its drag events are dispatched to.
+        pub(super) delivery: Arc<WindowDelivery>,
+        /// The window's scale, which its procedure changes: OLE reports
+        /// positions in device pixels.
+        pub(super) scale: WindowScale,
+        /// Set once the window is destroyed and the target revoked: a call
+        /// OLE still makes reaches nothing.
+        pub(super) revoked: Cell<bool>,
         /// The offer of the drag over the window, and what its source
         /// permitted at the last event.
         pub(super) over: Cell<Option<(DataTransferId, TransferActions)>>,
@@ -399,46 +406,50 @@ impl IDropSource_Impl for DropSource_Impl {
 }
 
 impl WindowDropTarget {
-    /// The drop target of `window`.
-    pub(super) fn new(window: WindowRef, transfer: Arc<OleTransfer>) -> Self {
+    /// The drop target of `window`, which its class just created.
+    pub(super) fn new(window: &CreatedWindow, transfer: Arc<OleTransfer>) -> Self {
         Self {
-            window,
+            window: window.window(),
             transfer,
+            delivery: Arc::clone(&window.delivery),
+            scale: window.scale.clone(),
+            revoked: Cell::new(false),
             over: Cell::new(None),
         }
     }
 
     /// Deliver `event` to the window, its position given in screen device
-    /// pixels and converted to the window's logical pixels.
+    /// pixels and converted to the window's logical pixels; nothing once the
+    /// window is destroyed.
     fn dispatch(
         &self,
         event: impl FnOnce(Option<Point<f64>>) -> Option<DragDropEvent>,
         screen: Option<&POINTL>,
     ) {
+        if self.revoked.get() {
+            return;
+        }
         let hwnd = self.window.hwnd();
-        let _ = self.window.with_context("drag and drop", |context| {
-            let position = screen.and_then(|screen| {
-                let mut point = POINT {
-                    x: screen.x,
-                    y: screen.y,
-                };
-                // SAFETY: the live window this context belongs to, on its
-                // thread; `point` is a live local the call rewrites.
-                unsafe { ScreenToClient(hwnd, &raw mut point) }
-                    .as_bool()
-                    .then(|| {
-                        let scale = context.scale_factor.get();
-                        Point::new(f64::from(point.x) / scale, f64::from(point.y) / scale)
-                    })
-            });
-            // Dispatch is the window's own: it queues behind a callback
-            // already running and contains the callback's panics.
-            if let Some(event) = event(position) {
-                context
-                    .callbacks
-                    .dispatch_input(PlatformInput::DragDrop(event));
-            }
+        let position = screen.and_then(|screen| {
+            let mut point = POINT {
+                x: screen.x,
+                y: screen.y,
+            };
+            // SAFETY: the window is live until its destruction revokes this
+            // target, and OLE calls the target on the window's thread; `point`
+            // is a live local the call rewrites.
+            unsafe { ScreenToClient(hwnd, &raw mut point) }
+                .as_bool()
+                .then(|| {
+                    let scale = self.scale.scale();
+                    Point::new(f64::from(point.x) / scale, f64::from(point.y) / scale)
+                })
         });
+        // Dispatch is the window's own: it queues behind a callback already
+        // running and contains the callback's panics.
+        if let Some(event) = event(position) {
+            self.delivery.dispatch_input(PlatformInput::DragDrop(event));
+        }
     }
 
     /// The effect to answer the OS with: the cached feedback, narrowed.
@@ -447,6 +458,20 @@ impl WindowDropTarget {
             .feedback(id)
             .resolve(allowed)
             .map_or(DROPEFFECT_NONE, |action| DROPEFFECT(effect_bits(action)))
+    }
+
+    /// The scale the target reports positions at.
+    #[cfg(test)]
+    pub(super) fn scale(&self) -> f64 {
+        self.scale.scale()
+    }
+
+    /// The window is destroyed and OLE no longer offers it drags: a drag
+    /// over it leaves it while its callbacks still exist, and a call OLE
+    /// still makes reaches nothing.
+    pub(super) fn revoke(&self) {
+        self.leave();
+        self.revoked.set(true);
     }
 
     /// The drag left the window (or its window is going): the offer is

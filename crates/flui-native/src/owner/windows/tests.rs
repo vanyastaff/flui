@@ -16,8 +16,8 @@ use super::broadcast::Subscriber;
 use super::control::{OwnerControl, OwnerMessages, OwnerPost, OwnerWindow};
 use super::testing::{ClassHooks, NoDisplays, NoPreferences, NoWindows, QuietHost};
 use super::{
-    CreatedWindow, WindowGone, WindowHooks, WindowIdentity, WindowMessages, WindowsHost,
-    WindowsLoop, dispatch_window_message, window_created,
+    CreatedWindow, WindowGone, WindowHooks, WindowIdentity, WindowMessages, WindowsLoop,
+    dispatch_window_message, window_created,
 };
 use crate::error::PlatformError;
 
@@ -174,12 +174,18 @@ fn created(hwnd: HWND) -> CreatedWindow {
         hwnd,
         identity: WindowIdentity::mint_from(&std::sync::atomic::AtomicU64::new(1)),
         client_size: (0, 0),
-        dpi: 96,
-        callbacks: Arc::new(crate::owner::handlers::WindowCallbacks::default()),
-        handlers: Rc::new(RefCell::new(crate::owner::handlers::PlatformHandlers::new())),
+        scale: super::WindowScale::new(96),
+        delivery: Arc::new(crate::owner::window_delivery::WindowDelivery::new(
+            flui_testing::window_handler::RecordingWindowHandler::new(),
+            flui_platform::input_capabilities::InputCapabilities::UNAVAILABLE,
+        )),
+        app_hooks: Rc::new(RefCell::new(super::AppHooks::new(Arc::new(
+            crate::owner::app_delivery::AppDelivery::new(),
+        )))),
         preferences: Rc::new(NoPreferences),
         hooks: test_hooks(),
         apartment: None,
+        drag: Arc::new(super::testing::NoDrag),
     }
 }
 
@@ -438,7 +444,8 @@ fn every_owner_hook_hears_the_window_go_after_one_panics() {
             }),
         ],
         Arc::new(NoDisplays),
-        TestHost::notices(),
+        Arc::new(crate::owner::notices::testing::NoNotices),
+        Arc::new(crate::owner::app_delivery::AppDelivery::new()),
     )
     .expect("the owner control");
     HEARD.with(|heard| heard.borrow_mut().clear());
@@ -464,4 +471,34 @@ fn a_second_host_is_refused_the_window_class() {
         Err(error) => panic!("refused for another reason: {error}"),
         Ok(_) => panic!("a second host was given the first host's window class"),
     }
+}
+
+/// A window opens at the DPI the system reports for it, and at the DPI of the
+/// scale it was placed at when the system reports none: never at 100% by
+/// default while the window itself sits at another scale. A hook reads the
+/// window's one value, so it never lags behind a new DPI.
+#[test]
+fn a_window_opens_at_one_dpi_its_hooks_share() {
+    for (reported, placed_at, dpi) in [
+        (144, 1.0, 144),
+        (0, 1.5, 144),
+        (0, 1.25, 120),
+        (0, 1.0, 96),
+        (0, f64::NAN, 96),
+        (0, 0.0, 96),
+    ] {
+        assert_eq!(
+            super::window_table::opening_dpi(reported, placed_at),
+            dpi,
+            "reported {reported}, placed at {placed_at}"
+        );
+    }
+    let scale = super::WindowScale::at_open(0, 1.5);
+    let read_by_a_hook = scale.clone();
+    assert_eq!(scale.rescale(192), 1.5);
+    assert_eq!(
+        read_by_a_hook.scale(),
+        2.0,
+        "a hook reads the window's new scale"
+    );
 }

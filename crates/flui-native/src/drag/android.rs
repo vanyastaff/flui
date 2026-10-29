@@ -41,9 +41,11 @@ mod clip {
 
     use flui_platform::data_transfer::{
         Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat,
-        TransferPayload, TransferUri,
+        TransferPayload,
     };
     use flui_platform::drag::{IDENTITY_ESSENCE, OsDragEnd};
+
+    use crate::drag::offers::{PathStyle, TransferUri};
 
     /// `View.DRAG_FLAG_GLOBAL`: the drag may leave the source's window.
     pub(super) const DRAG_FLAG_GLOBAL: i32 = 1 << 8;
@@ -185,8 +187,9 @@ mod clip {
                 Held::Payload(TransferPayload::Html(html))
             }),
             ClipSource::UriList if clip.uris.is_empty() => Held::Missing,
-            ClipSource::UriList => Held::Payload(TransferPayload::UriList(
-                clip.uris.iter().cloned().map(TransferUri::Uri).collect(),
+            ClipSource::UriList => Held::Payload(TransferUri::list_payload(
+                clip.uris.iter().cloned().map(TransferUri::Uri),
+                PathStyle::Posix,
             )),
             ClipSource::Identity => Held::Payload(TransferPayload::Custom {
                 mime: match &descriptor.format {
@@ -266,15 +269,20 @@ mod clip {
                     parts.html = Some(html.clone());
                     true
                 }
-                Some(TransferPayload::UriList(uris)) => {
-                    let before = parts.uris.len();
-                    parts.uris.extend(uris.iter().filter_map(|uri| match uri {
-                        TransferUri::Uri(uri) if !uri.starts_with("file:") => Some(uri.clone()),
-                        _ => None,
-                    }));
-                    parts.uris.len() > before
-                }
-                _ => false,
+                Some(payload) => match TransferUri::list_of(payload, PathStyle::Posix) {
+                    Some(uris) => {
+                        let before = parts.uris.len();
+                        parts
+                            .uris
+                            .extend(uris.into_iter().filter_map(|uri| match uri {
+                                TransferUri::Uri(uri) if !uri.starts_with("file:") => Some(uri),
+                                _ => None,
+                            }));
+                        parts.uris.len() > before
+                    }
+                    None => false,
+                },
+                None => false,
             };
             if carried {
                 parts.mime_types.push(mime_type(&descriptor.format));
@@ -336,11 +344,11 @@ use std::{
 use flui_foundation::{DataTransferId, geometry::Point};
 #[cfg(target_os = "android")]
 use flui_platform::{
-    DragDropEvent,
+    DragDropEvent, Unsupported, UnsupportedReason,
     data_transfer::{
-        DataTransferOffer, DataTransferSource, DropFeedback, OfferRecord, OfferTable,
-        RepresentationDescriptor, RepresentationIndex, TransferActions, TransferError,
-        TransferLimits, TransferPayload, TransferRequest,
+        DataTransferOffer, DataTransferSource, DropFeedback, RepresentationDescriptor,
+        RepresentationIndex, TransferActions, TransferError, TransferLimits, TransferPayload,
+        TransferRequest,
     },
     drag::{DragError, OsDragEndHook, OsDragRequest, OsDragStart, PlatformDragSource},
 };
@@ -354,7 +362,8 @@ use parking_lot::Mutex;
 
 #[cfg(target_os = "android")]
 use crate::{
-    owner::android::java_view::{JavaView, ViewEvent, ViewTransfer},
+    drag::offers::OfferTable,
+    owner::android::java_view::{ActivityDragSource, JavaView, ViewEvent, ViewTransfer},
     owner::panic_boundary::contain_owner_callback,
     owner::slot::OwnerSlot,
     version::gate::Since,
@@ -435,9 +444,7 @@ impl AndroidTransfer {
                 .into_iter()
                 .unzip();
         let representations: Arc<[RepresentationDescriptor]> = Arc::from(representations);
-        let id = offers
-            .table
-            .mint(OfferRecord::new(Arc::clone(&representations)));
+        let id = offers.table.mint(Arc::clone(&representations));
         offers.feedback.insert(id, DropFeedback::default());
         offers.sources.insert(id, sources);
         DataTransferOffer::new(id, representations)
@@ -556,6 +563,10 @@ impl ViewTransfer for AndroidTransfer {
     fn take_local_drop(&self) -> Option<TransferActions> {
         self.offers.lock().local_drop.take()
     }
+
+    fn drag_source(&self, view: Arc<JavaView>, api: AndroidApi) -> Arc<dyn ActivityDragSource> {
+        Arc::new(AndroidDragSource::new(view, api))
+    }
 }
 
 #[cfg(target_os = "android")]
@@ -588,10 +599,7 @@ impl AndroidTransfer {
                     (DragDropEvent::Exited { id }, None)
                 }
                 Some(action) => {
-                    let representations = offers
-                        .table
-                        .get(id)
-                        .map(|record| Arc::clone(record.representations()));
+                    let representations = offers.table.get(id).map(Arc::clone);
                     let sources = offers.sources.remove(&id).unwrap_or_default();
                     let values = representations
                         .iter()
@@ -669,7 +677,7 @@ impl DataTransferSource for AndroidTransfer {
                 let Some(view) = self.view.upgrade() else {
                     return TransferRequest::ready(Err(TransferError::SourceGone));
                 };
-                let (request, completer) = TransferRequest::channel();
+                let (request, completer) = TransferRequest::pending();
                 let spawned = std::thread::Builder::new()
                     .name("flui-drop-read".into())
                     .spawn(move || {
@@ -783,17 +791,20 @@ impl std::fmt::Debug for AndroidDragSource {
 
 #[cfg(target_os = "android")]
 impl AndroidDragSource {
-    pub(crate) fn new(view: Arc<JavaView>, api: AndroidApi) -> Self {
+    fn new(view: Arc<JavaView>, api: AndroidApi) -> Self {
         Self {
             view,
             start_drag: api.since::<DragSource>(),
             running: OwnerSlot::new(),
         }
     }
+}
 
+#[cfg(target_os = "android")]
+impl ActivityDragSource for AndroidDragSource {
     /// The system drag ended: `result` is whether a target took it. Owner
     /// thread.
-    pub(crate) fn finish(&self, result: bool) {
+    fn finish(&self, result: bool) {
         let Some(Running { allowed, on_end }) = self.running.take() else {
             return;
         };
@@ -804,7 +815,7 @@ impl AndroidDragSource {
     }
 
     /// The window closed: a running drag ends cancelled. Owner thread.
-    pub(crate) fn retire(&self) {
+    fn retire(&self) {
         if let Some(Running { on_end, .. }) = self.running.take() {
             self.view.transfer().set_own(None);
             contain_owner_callback(|| on_end(flui_platform::drag::OsDragEnd::Cancelled));
@@ -865,9 +876,15 @@ impl PlatformDragSource for AndroidDragSource {
     }
 
     fn start(&self, request: OsDragRequest) -> Result<(), DragError> {
-        let startable = self.start_drag.is_some()
-            && self.view.is_ready()
-            && self.running.is_occupied() == Some(false);
+        // A device whose Android cannot start a drag never will; a view not
+        // ready yet, or one running a drag, may later.
+        let refused = if self.start_drag.is_none() {
+            Some(UnsupportedReason::NotOnThisDevice)
+        } else if !self.view.is_ready() || self.running.is_occupied() != Some(false) {
+            Some(UnsupportedReason::Unavailable)
+        } else {
+            None
+        };
         let OsDragRequest {
             key,
             representations,
@@ -876,10 +893,10 @@ impl PlatformDragSource for AndroidDragSource {
             on_end,
             ..
         } = request;
-        if !startable {
+        if let Some(reason) = refused {
             contain_owner_callback(|| drop(provider));
             contain_owner_callback(|| drop(on_end));
-            return Err(DragError::Unavailable);
+            return Err(Unsupported::new(reason).into());
         }
         let payloads: Vec<Option<TransferPayload>> = (0..representations.len())
             .map(|index| serve(&mut provider, u16::try_from(index).unwrap_or(u16::MAX)))
@@ -890,7 +907,7 @@ impl PlatformDragSource for AndroidDragSource {
             self.running.replace(Running { allowed, on_end }).map(drop)
         {
             contain_owner_callback(|| drop(on_end));
-            return Err(DragError::Unavailable);
+            return Err(Unsupported::new(UnsupportedReason::Unavailable).into());
         }
         self.view.transfer().set_own(Some(allowed));
         let session = match key.representation().format {

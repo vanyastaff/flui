@@ -5,9 +5,11 @@
 // are not the reason. It is an `expect`, not an `allow`: if the last such
 // type gains `Debug`, the attribute must go with it.
 #![expect(missing_debug_implementations)]
-// No hand-written production `unsafe` in this crate: surfaces come from wgpu's safe
+// No hand-written production `unsafe` in this crate but one: surfaces come from wgpu's safe
 // `create_surface` over an owned `WindowTarget` (ADR-0063), and every GPU
-// handle is a wgpu value type. `deny` rather than `forbid` because
+// handle is a wgpu value type. The exception is the read of DXGI frame
+// statistics (`renderer::dxgi_frame_statistics`), whose swap chain wgpu hands
+// out only through its hal escape; it carries its own `expect`. `deny` rather than `forbid` because
 // wgsl_bindgen's generated wrappers (`*/generated.rs`) declare an
 // `unsafe fn from_raw` this crate never calls and `allow` it locally.
 // `fake_window_target` uses test-only raw-handle borrows for synthetic window
@@ -82,7 +84,7 @@
 //! // borrow: the renderer keeps it for as long as its surface lives, so it
 //! // outlives this stack frame. Almost anything that implements
 //! // `HasWindowHandle + HasDisplayHandle + Send + Sync + 'static` qualifies —
-//! // including `Arc<dyn PlatformWindow>` from `flui-native`.
+//! // including the `Arc<dyn SurfaceTarget>` a `flui-platform` window hands out.
 //! let mut renderer = Renderer::new(window).await?;
 //!
 //! // Render on every frame your event loop asks for; `render_scene` is sync
@@ -273,6 +275,7 @@ mod effects_pipeline;
 mod external_texture_registry;
 /// The frame protocol the windowed renderer and the headless retained
 /// capture share: damage, retained target, and the plan-to-GPU sequence.
+mod frame_latency;
 mod frame_protocol;
 /// Per-channel sRGB ↔ linear-light gamma transfer filter pass:
 /// [`gamma::apply_gamma`] applies a [`command_ir::LayerFilter::Gamma`] to a
@@ -358,6 +361,7 @@ pub(crate) mod state_stack;
 // own `//!` doc for details; no outer doc here to avoid duplicating it in a
 // scope where its intra-doc links resolve differently (rustdoc quirk).
 mod glyph_atlas;
+mod surface_color;
 mod surface_lease;
 mod tessellator;
 pub(crate) mod texture_cache;
@@ -484,7 +488,9 @@ pub use flui_foundation::GpuResourceGeneration;
 pub use headless::HeadlessRenderer;
 pub use painter::WgpuPainter;
 // Renderer (the one externally-consumed wgpu/* type)
+pub use frame_latency::FrameLatency;
 pub use renderer::{GpuCapabilities, Renderer};
+pub use surface_color::{ResolvedSurfaceColor, SurfaceColor};
 // What a windowed `Renderer` draws into (issue #1043); exported beside
 // `Renderer` here at `flui_engine::wgpu`.
 pub use window_target::WindowTarget;

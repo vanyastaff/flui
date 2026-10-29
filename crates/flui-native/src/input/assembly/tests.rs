@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use crate::input::assembly::{
     ClickSettings, ContactRegistry, CounterAnchor, DecodeFault, GestureComponent, GestureDelta,
-    GesturePhase, GestureReading, MoveBatch, NativeCancel, NativeClock, NativeContact,
+    GesturePhase, GestureReading, MAX_TOUCHES, MoveBatch, NativeCancel, NativeClock, NativeContact,
     NativeDevice, NativeReading, NativeSurface, NativeTime, QpcTicks, ReadingAction, ReadingTime,
     ScrollPhases, ScrollReading, decode,
 };
@@ -1262,4 +1262,65 @@ fn pointer_assembly_contracts() {
             ),
         ],
     );
+}
+
+#[test]
+fn two_contacts_reported_together_are_one_pointer_frame() {
+    let mut contacts = registry();
+    let first = decode(&mut contacts, &touch(1, PRESS, 1)).expect("valid");
+    let second = decode(&mut contacts, &touch(2, PRESS, 1)).expect("valid");
+
+    let framed = crate::input::assembly::framed([first, second]);
+
+    let [PlatformInput::PointerFrame(frame)] = framed.as_slice() else {
+        panic!("one frame, got {framed:?}")
+    };
+    assert_eq!(frame.len(), 2);
+    assert!(
+        frame
+            .events()
+            .iter()
+            .all(|event| matches!(event, PointerEvent::Down(_)))
+    );
+}
+
+#[test]
+fn a_lone_contact_stays_a_pointer_event() {
+    let mut contacts = registry();
+    let only = decode(&mut contacts, &touch(1, PRESS, 1)).expect("valid");
+
+    let framed = crate::input::assembly::framed([only]);
+
+    assert!(matches!(framed.as_slice(), [PlatformInput::Pointer(_)]));
+}
+
+#[test]
+/// A touch device that never lifts its touches holds `MAX_TOUCHES` open: each
+/// further press is refused, the other devices still press, and a lift frees
+/// room for the next touch.
+fn a_device_holds_a_bounded_number_of_touches() {
+    let mut contacts = registry();
+    let screen = NativeDevice(9);
+    let mut downs = 0;
+    for contact in 0..10_000 {
+        match decode(&mut contacts, &touch(contact, PRESS, 1).from_device(screen)) {
+            Ok(inputs) => {
+                downs += pointer_events(&inputs)
+                    .iter()
+                    .filter(|event| matches!(event, PointerEvent::Down(_)))
+                    .count();
+            }
+            Err(error) => assert_eq!(error.fault(), DecodeFault::Exhausted),
+        }
+    }
+    assert_eq!(downs, MAX_TOUCHES);
+
+    let other = decode(
+        &mut contacts,
+        &touch(0, PRESS, 2).from_device(NativeDevice(10)),
+    );
+    assert!(other.is_ok(), "another device still presses: {other:?}");
+    decode(&mut contacts, &touch(0, RELEASE, 3).from_device(screen)).expect("an open touch lifts");
+    let next = decode(&mut contacts, &touch(20_000, PRESS, 4).from_device(screen));
+    assert!(next.is_ok(), "a lift frees room: {next:?}");
 }

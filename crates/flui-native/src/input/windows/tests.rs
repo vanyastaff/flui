@@ -3,7 +3,8 @@
 //! announcement to its destruction, and read by the window's other features
 //! through `WindowInputs`.
 
-use std::sync::Arc;
+use flui_testing::window_commands::AdmitAndApply as _;
+use std::rc::Rc;
 use std::sync::atomic::AtomicU64;
 
 use flui_foundation::geometry::Size;
@@ -21,17 +22,18 @@ use crate::owner::windows::{
 use crate::platform::Platform as _;
 use crate::window::windows::WindowsWindow;
 
-fn open(platform: &WindowsPlatform, title: &str) -> Arc<dyn HostWindow> {
+fn open(platform: &WindowsPlatform, title: &str) -> Rc<dyn HostWindow> {
     platform
         .open_window(
             WindowOptions::default()
                 .with_title(title)
                 .with_size(Size::new(160.0, 120.0)),
+            flui_testing::window_handler::RecordingWindowHandler::new(),
         )
         .expect("window")
 }
 
-fn window_ref(window: &Arc<dyn HostWindow>) -> WindowRef {
+fn window_ref(window: &Rc<dyn HostWindow>) -> WindowRef {
     let window = window
         .as_any()
         .downcast_ref::<WindowsWindow>()
@@ -84,9 +86,8 @@ fn a_windows_input_is_gone_once_it_is_destroyed() {
     let kept =
         std::rc::Rc::downgrade(&testing::window_input(this.hwnd()).expect("the window's input"));
 
-    window.close();
+    window.close_now();
     assert_eq!(inputs.hovered(this), None);
-    assert_eq!(inputs.modifiers(this), None);
     assert!(kept.upgrade().is_none(), "the window's input is dropped");
 }
 
@@ -102,7 +103,6 @@ fn a_window_the_input_never_saw_has_no_input() {
     let stranger = InputWindows::new();
 
     assert_eq!(stranger.hovered(this), None);
-    assert_eq!(stranger.modifiers(this), None);
     assert_eq!(stranger.pen_in_range(this, None), None);
     // SAFETY: the arguments a window of this thread receives for the message.
     let answered = unsafe { stranger.message(this.hwnd(), WM_MOUSEMOVE, WPARAM(0), CLIENT_POINT) };

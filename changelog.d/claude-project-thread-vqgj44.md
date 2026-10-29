@@ -35,3 +35,11 @@
   `UiRuntime::set_error_view_builder` / `BuildOwner::set_error_view_builder`); it applies to every
   presentation of the runtime, including windows opened later, and two runtimes in one process no
   longer share it.
+- **Signal writes are refused while any window of the runtime builds** (`flui-view`,
+  `flui-runtime`): the build-time guard of a presentation's graph did not see another window's
+  build, so a signal handed to a second window's view could be written from its `build`. The UI
+  runtime now shares a `BuildInProgress` cell (`BuildOwner::set_build_in_progress`) with every
+  presentation's graph and the write fails with `SignalError::WrittenDuringBuild`.
+- **Window placement write no longer polled every 250 ms** (`flui-app`): while storage had a
+  placement write in flight the owner woke four times a second to look for the answer. Storage's
+  answer now wakes the owner, and a write still out sets no deadline.

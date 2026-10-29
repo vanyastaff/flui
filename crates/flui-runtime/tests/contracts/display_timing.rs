@@ -84,7 +84,7 @@ impl OwnerEffects for Effects {
 
 /// A window that counts how often the gesture geometry was re-read.
 struct CountingWindow {
-    inner: Arc<dyn PlatformWindow>,
+    inner: Rc<dyn PlatformWindow>,
     geometry_reads: Arc<std::sync::atomic::AtomicUsize>,
 }
 
@@ -92,23 +92,14 @@ impl PlatformWindow for CountingWindow {
     fn id(&self) -> flui_platform::WindowId {
         self.inner.id()
     }
-    fn physical_size(&self) -> flui_foundation::geometry::Size<i32> {
-        self.inner.physical_size()
-    }
-    fn logical_size(&self) -> flui_foundation::geometry::Size<f64> {
-        self.inner.logical_size()
-    }
-    fn scale_factor(&self) -> f64 {
-        self.inner.scale_factor()
-    }
     fn request_redraw(&self) {
         self.inner.request_redraw();
     }
-    fn is_focused(&self) -> bool {
-        self.inner.is_focused()
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        self.inner.redraw_requester()
     }
-    fn is_visible(&self) -> bool {
-        self.inner.is_visible()
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        self.inner.surface_target()
     }
     fn set_cursor(
         &self,
@@ -116,23 +107,44 @@ impl PlatformWindow for CountingWindow {
     ) -> Result<(), flui_platform::CursorError> {
         self.inner.set_cursor(cursor)
     }
-    fn state(&self) -> flui_platform::WindowState {
-        let size = self.logical_size();
-        flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
+    fn set_frame_rate_hint(
+        &self,
+        hint: flui_platform::FrameRateHint,
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.inner.set_frame_rate_hint(hint)
     }
-
-    fn capabilities(&self) -> flui_platform::WindowCapabilities {
-        flui_platform::WindowCapabilities::NONE
+    fn set_input_regions(
+        &self,
+        regions: &[flui_platform::input_regions::InputRegion],
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.inner.set_input_regions(regions)
+    }
+    fn state(&self) -> flui_platform::WindowState {
+        self.inner.state()
     }
 
     fn apply(
         &self,
-        command: flui_platform::WindowCommand,
-    ) -> Result<(), flui_platform::WindowCommandError> {
-        command.admit(&flui_platform::WindowCapabilities::NONE)?;
+        command: flui_platform::AdmittedCommand,
+    ) -> Result<(), flui_platform::ApplyError> {
+        command.against(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
 
+    fn text_input(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformTextInput>> {
+        None
+    }
+
+    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformHaptics>> {
+        None
+    }
+
+    fn system_chrome(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformSystemChrome>> {
+        None
+    }
+    fn drag_source(&self) -> Option<std::sync::Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        None
+    }
     fn gesture_geometry(&self) -> Result<Option<GestureGeometry>, PreferenceQueryError> {
         self.geometry_reads
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -394,7 +406,7 @@ fn haptic_frame_deadline_follows_the_display() {
             let before = runtime.next_wake();
             let handle = runtime
                 .widgets()
-                .with_build_owner(|owner| owner.haptics_handle().cloned())
+                .with_build_owner(|owner| owner.capabilities().haptics.clone())
                 .expect("the presentation installs its haptics");
             let queued = web_time::Instant::now();
             let outcome = handle.perform(
@@ -429,14 +441,17 @@ fn haptic_frame_deadline_follows_the_display() {
 
 fn display_change_runs_the_dpi_geometry_barrier() {
     let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let window: Arc<dyn PlatformWindow> = Arc::new(CountingWindow {
+    let window: Rc<dyn PlatformWindow> = Rc::new(CountingWindow {
         inner: flui_native::headless_platform()
-            .open_window(flui_platform::WindowOptions::default())
+            .open_window(
+                flui_platform::WindowOptions::default(),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
             .expect("headless window"),
         geometry_reads: Arc::clone(&reads),
     });
     // The presentation holds its window weakly; the platform keeps it alive.
-    let _platform_keeps_the_window = Arc::clone(&window);
+    let _platform_keeps_the_window = Rc::clone(&window);
     let rig = rig_with(PresentationWindow::new(window, None));
     let count = || reads.load(std::sync::atomic::Ordering::SeqCst);
     let before = count();

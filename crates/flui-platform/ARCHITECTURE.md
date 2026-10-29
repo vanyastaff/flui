@@ -21,9 +21,21 @@ this one path (ADR-0151 §9).
   is 1 ms to 1 s and every constructor refuses what does not describe a cadence, with
   rational rates converted in `u128` (`refresh_value_classification_table`). A snapshot
   never substitutes 60 Hz; that is a consumer's policy (ADR-0236).
+- **A headroom is finite and at least white; an absent colour says why.** A display's
+  colour profile is `DisplayInfo::color`: a `DisplayColor` (`SurfaceColorSpace` and
+  `Headroom`) or the `CapabilityAbsence` the platform gives, which `color_space()` and
+  `headroom()` answer as `Unsupported`. `Headroom` refuses a NaN, an infinity, a value
+  below 1 and a luminance ratio that overflows; `DisplayColor::standard` fixes the
+  headroom of a standard-range display at 1 (`display_colour_table`). A profile change
+  is a display change: a new revision of the same monotone snapshot, so an older sample
+  never replaces a newer profile.
 - **Flat root.** Every public item is re-exported at the crate root; the
-  modules are private except five whose many vocabulary types keep their module
-  path: `haptics`, the second haptic tier with its requests and outcomes, which
+  modules are private except seven whose types keep their module path:
+  `testing`, what a test double's window is written with (`NoNativeSurface`, and the
+  `window_takes_no_frame_verbs!` macro it defines, exported at the root as every
+  `macro_export` is), which production code has no use for;
+  `os_options`, one operating system's window creation options, which are not
+  everyone's vocabulary; `haptics`, the second haptic tier with its requests and outcomes, which
   the facade and `flui-sdk` re-export only under `unstable-input` (ADR-0210 §9)
   while `PlatformHaptics` and `HapticFeedback` stay at the root;
   `data_transfer`,
@@ -53,15 +65,140 @@ this one path (ADR-0151 §9).
 - **`PlatformWindow` has no `accessibility()` and no `as_winit`.** The
   accessibility bridge speaks AccessKit, so `flui-native`'s
   `HostWindow: PlatformWindow` carries it host-side: `open_window` returns an
-  `Arc<dyn HostWindow>`, and the runner reads the bridge once before handing
-  the UI runtime an `Arc<dyn PlatformWindow>`. A `compile_fail` doctest on the
+  `Rc<dyn HostWindow>`, and the runner reads the bridge once before handing
+  the UI runtime an `Rc<dyn PlatformWindow>`. A `compile_fail` doctest on the
   trait, paired with a twin that compiles, pins that the method is gone.
-- **The raw-handle impls live with the trait.** `HasWindowHandle` and
-  `HasDisplayHandle` for `dyn PlatformWindow` are here because the orphan rule
-  puts them next to the trait; `flui-native` repeats them for
-  `dyn HostWindow`, so an `open_window` result is a renderer target before its
-  upcast. `raw-window-handle` appears only through those traits and their
+- **A window fact has one source: the `WindowState` snapshot (ADR-0254 §1).**
+  `PlatformWindow` has no getter and no per-fact callback beside `state()`
+  and the handler's `state_changed`; its capabilities are a field of the
+  snapshot.
+  Showing, activating and closing are `WindowCommand`s (`Show`, `Activate`,
+  `Close`, the last admitted by `WindowCapabilities::closes`), with no method
+  twin. A `compile_fail` doctest on the trait pins that a getter does not
+  compile.
+- **Shown, minimized and occluded are three facts.** `visible` is the
+  window's show state (`Show`, `Hide`, the opening option), which minimizing
+  and covering leave `true`, as Win32's `WS_VISIBLE` and ICCCM's
+  Normal/Iconic do; `mode` says minimized; `occluded` says the window system
+  keeps a shown, unminimized window off the screen (a covering it reports, a
+  cloak, a locked session, a suspended toplevel, a background page or app).
+  `WindowState::successor` drops an occlusion reported for a hidden or
+  minimized window, so the three never overlap, and `WindowState::is_seen`
+  (shown, not minimized, not occluded) is the one reading of "the surface is
+  seen" that frame scheduling, haptics and the lifecycle aggregate
+  (ADR-0035 §4) take. Folding occlusion into `visible` made the hosts
+  disagree (X11 read a minimized window hidden, Win32 shown); a separate fact
+  is what winit (`Occluded`), AppKit (`occlusionState` beside `isVisible`)
+  and Chromium (`OcclusionState` visible/occluded/hidden) keep too.
+- **A window takes only an admitted command (ADR-0254 §2).**
+  `WindowCommand::admit(&WindowCapabilities)` is the one constructor of
+  `AdmittedCommand`, and `PlatformWindow::apply` takes nothing else
+  (`tests/compile_fail/{admitted_command_has_one_constructor,
+  apply_takes_only_an_admitted_command}.rs`). Admission refuses with
+  `AdmissionError::Unsupported` exactly when the capability is `Unavailable`
+  and with `InvalidGeometry` before that. The token carries the capabilities'
+  owner and revision, which `WindowState::successor` alone keeps: the owner is
+  the `CapabilitiesOwner` the host stamped on the window's first snapshot,
+  unique in the process, and the revision moves to the new snapshot's when
+  what the window honours changes, and not with any other fact. A window
+  opens the token with `AdmittedCommand::against` its published capabilities;
+  the contract is identity (same owner, same revision), so another window's
+  token, one admitted against capabilities built by hand, or one from an
+  earlier revision is `ApplyError::Superseded`, which gives the command back to
+  be admitted again. Equality of `WindowCapabilities` compares what is
+  honoured, not owner or revision. `ApplyError` is the world's (`Closed`,
+  `Superseded { command }`, `Platform(PlatformFailure)`, where
+  `PlatformFailure` tells `OutOfRange` from `Failed { message }`);
+  `WindowControl::submit` answers `SubmitError` (`Admission`, `Closed`).
+  `WindowCommand::admit_and_apply` is the one path that applies at once
+  (admit against the snapshot, apply, admit once more on `Superseded`), and
+  answers `CommandRefusal` (`Admission` or `Apply`).
+- **A window is opened with its handler (ADR-0254 §4).** `WindowHandler` has
+  one required method per obligation (`input`, `state_changed`,
+  `frame_requested`, `close_requested`, `closed`, `surface_changed`) and no
+  registration beside it, so nothing a window delivers can arrive before a
+  handler exists or fall into an inert default. The host holds it as an
+  `Rc<dyn WindowHandler>`, so it stays on the thread that opened the window
+  and every method runs there. A method takes no platform argument: the
+  owner's platform is a host type (`OwnerPlatform`), which this crate cannot
+  name, and a handler that drives the platform captures what it needs.
+  `close_requested` answers a `CloseDecision`;
+  `surface_changed` names its `SurfaceChange` (`Release` before the surface
+  goes, `Rebuild` when a valid one must exist again).
+- **"Not here" has one vocabulary.** Every error and outcome that can mean
+  absence carries an `Unsupported`, built with `Unsupported::new(reason)` and
+  never written as a literal, whose `UnsupportedReason` says why
+  (`NotOnThisPlatform`, `NotOnThisDevice`, `NotYetOnThisHost`, `NotDeclared { what }`,
+  `Unavailable`, `NotRegistered`, `NoWindow`); each answers
+  `unsupported() -> Option<Unsupported>`, and only `Unavailable` is worth
+  asking again (`is_retryable`). No reason names an operating-system version
+  (ADR-0244). The table test `every_error_carries_its_reason` holds every
+  carrier to it.
+- **A closed enum is a decision.** `#![deny(clippy::exhaustive_enums)]`: a
+  public enum is `#[non_exhaustive]` where a backend may report something new
+  to an application (`WindowAppearance`, `WindowCommand`, the errors), and
+  closed with an `allow` that says why where its set is fixed by what it
+  names (a key goes down or up, TSF's lock kinds, the W3C `location` values),
+  where `Custom` is its open end (`TransferFormat`), or where every consumer
+  must handle a new variant (`PlatformInput`; `WindowMaterial`, which every
+  host maps).
+- **What a window cannot always honour answers in the same type.** A
+  capability is `Unavailable` exactly when admission refuses its command as
+  `Unsupported`; a command admitted and then refused by the operating system
+  is `ApplyError::Platform`, a failure rather than a missing capability. A
+  command's capability carries where it is missing, a `CapabilityAbsence` a
+  host sets with `WindowCapabilities::unavailable(command, absence)`:
+  `NotOnThisDevice` where this device or its OS build lacks what its platform
+  has (a version gate that refused), `NotYetOnThisHost` where the OS has it
+  and the host does not implement it yet, `NotOnThisPlatform` otherwise. The
+  type holds no retryable reason, so the snapshot and the refusal agree; an
+  absence counts for equality only while its capability is unavailable, and
+  the slots come from one declaration that `WindowCapabilities::slot` matches
+  exhaustively. The window material
+  is such a command (`WindowCommand::SetMaterial`, `WindowCapabilities::material`);
+  its set is the vocabulary every host shares (`Opaque`, `System`), and a
+  material one OS alone has is that OS's extension. The frame-rate hint and
+  the input regions stay verbs, because they are sent every frame and
+  commands apply at the owner's next turn (ADR-0254 §3): each returns
+  `Result<(), Unsupported>` exactly when its capability
+  (`WindowCapabilities::frame_rate_hint`, `InputCapabilities::input_regions`)
+  is `Unavailable`, has no default body, and the window conformance checks
+  both. A verb answers its reason itself: nothing admits it against the
+  capabilities, so the capabilities keep no second copy of it. A test double whose window system takes neither writes them with
+  `window_takes_no_frame_verbs!`.
+- **The window stays on its owner thread; other threads get a target and a
+  requester (ADR-0254 §5).** `PlatformWindow` is neither `Send` nor `Sync`, so
+  no window, nor any `Rc`, `Arc` or borrow of one, crosses a thread
+  (`a_platform_window_cannot_cross_a_thread`, a compile-fail fixture, and
+  `assert_not_impl_any!` in `tests/surface_target.rs`). The thread that
+  presents frames takes `surface_target()`: a `SurfaceTarget`
+  (`HasWindowHandle + HasDisplayHandle + Send + Sync + 'static`) that answers
+  `HandleError::Unavailable` once the window is gone, does not keep the
+  window open (it may keep the native object its surface draws into alive,
+  as wgpu needs), and has the required `pre_present_notify` the raster side
+  calls before each present. The Apple targets hand out their view on the
+  main thread only, where AppKit and UIKit make a surface, and Android's on
+  its looper thread. A thread that wants a frame asks
+  `redraw_requester()`, a `RedrawRequester`; any `Fn() + Send + Sync` closure
+  is one, which is what a test double hands out. `testing::NoNativeSurface` is the
+  target of a window with no native surface. `raw-window-handle` appears only
+  through the two handle traits and their
   `WindowHandle`/`DisplayHandle`/`HandleError` (ADR-0089).
+- **A frame request carries when earlier frames reached the screen, on the
+  event timeline.** `FrameRequest::presented` is a `FramePresented { at,
+  refresh }`: the instant the display started showing the newest earlier
+  frame the platform reported since the window's last request, an `EventTime`
+  like every input stamp, so input-to-photon time is a subtraction; never a
+  prediction (a platform that names when a frame is due fills
+  `target_present`). Whether a window reports at all is a capability,
+  `WindowCapabilities::reports_presentation`, and
+  `presentation_feedback()` answers why not as `Unsupported`; no verb answers
+  for it, so the capabilities keep its reason. Where the platform reports
+  presentation only to whoever holds the swap chain (DXGI), the presenter
+  hands the surface target what it read before each present
+  (`pre_present_notify(SwapChainStatistics)`, `DxgiFrameStatistics` in the
+  platform's own units), and the host rebases it; a presenter that reads
+  nothing passes `SwapChainStatistics::None`.
 
 ## Mapping decisions
 
@@ -219,7 +356,7 @@ overlapping, equal-time sensor and future-reading cases through the public API.
 
 ### Data-transfer delivery shares the foundation claim slot
 
-`TransferRequest::channel` uses `ClaimSlot` for cancellation, executor
+`TransferRequest::pending` makes the pair over one `ClaimSlot` for cancellation, executor
 registration and delivery. A producer is consumed by completion, so no
 owner registry remains to wake on abandonment. Producer disconnection maps to
 `TransferError::SourceGone`; polling any resolved request again is a caller
@@ -251,3 +388,26 @@ only degrade, never fail. `PlatformHaptics` gained `perform_with`, `play` and
 keeps compiling; `FakeHaptics` records each request with the actuator that
 played it and the outcome it returned.
 **Tests:** `haptic_pattern_builder_rejects_invalid_patterns`.
+
+### Each operating system's creation options are one typed value of it
+
+What a window is created with on an operating system is a field of
+`WindowOptions::os_options`, an `os_options::OsWindowOptions` with one optional
+value per system that has options of its own, of that system's type:
+`windows: Option<Win32WindowOptions>` today (ADR-0254 §8). Options of every
+system as fields of the common struct (GPUI) would grow it per system; untyped
+keys (SDL) would lose the types; a single slot holding one system's value would
+make a cross-platform application choose one, so setting Windows options and
+then macOS ones would drop the first. The types live here because the slot is
+here; they are pure data, built on every target, so a cross-platform
+application sets every system's options without a `cfg` of its own. Only that
+system's host reads its field. Another host (the headless host, winit, another
+system's) opens the window without it, and the application sees that its
+options were not taken when that system's extension in `flui::native` has no
+view of the window. They sit in their own public module, `os_options`, not at
+the root: they are Stable like every item of this crate (ADR-0089 §1 gives no
+module a tier of its own), so they take the least committal shape, every
+struct and enum `#[non_exhaustive]` and no conversion to the system's own
+values, which stay with the host.
+**Tests:** `a_win32_window_opens_with_its_options` (`flui-native`),
+`config_to_options_keeps_every_field` (`flui-app`).

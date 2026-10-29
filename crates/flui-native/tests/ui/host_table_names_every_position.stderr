@@ -1,7 +1,7 @@
 error[E0046]: not all trait items implemented, missing: `Storage`
-  --> tests/ui/host_table_names_every_position.rs:72:1
+  --> tests/ui/host_table_names_every_position.rs:66:1
    |
-72 | impl Host for WithoutStorage {
+66 | impl Host for WithoutStorage {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ missing `Storage` in implementation
    |
    = help: implement the missing item: `type Storage = /* Type */;`

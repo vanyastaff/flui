@@ -2,13 +2,13 @@
 //!
 //! # Why this module exists
 //!
-//! `install_wake_deadline_hook` publishes the earliest wall-clock instant the
+//! The application's handler answers the earliest wall-clock instant the
 //! event loop should come back at. `winit` hands that to
 //! `ControlFlow::WaitUntil` and the Android backend checks it once per
 //! iteration of its own loop. AppKit has neither: `[NSApplication run]` is an
-//! opaque, unbounded run loop, so its default `set_wake_deadline_hook` (a
-//! no-op) dropped the deadline on the floor and the process parked in
-//! `_nextEventMatchingEventMask:untilDate:` with the hook never consulted.
+//! opaque, unbounded run loop, so a deadline nothing actuated was dropped
+//! on the floor and the process parked in
+//! `_nextEventMatchingEventMask:untilDate:` with the handler never asked.
 //! This module is that deadline's landing place.
 //!
 //! # The two things that make the shape what it is
@@ -19,11 +19,14 @@
 //!    [`owner_queue`] is that queue and `exec_after` schedules onto it without
 //!    an Objective-C target class, so `[NSApp run]` keeps draining it
 //!    unchanged.
-//! 2. **A frame arms its fallback deadline *after* the redraw request that
-//!    triggered it**, so a consult made at the request itself is always too
-//!    early to see the deadline that frame is about to arm. Hence
-//!    [`WakePump::arm`] schedules a second look ([`FOLLOW_UP`]) when the first
-//!    consult finds nothing — that second look is what picks the deadline up.
+//! 2. **A redraw request is not an idle point.** `request_redraw` runs inside
+//!    the owner's dispatch, while `flui-app` has a UI runtime checked out, and
+//!    the hook's contract is one consult per idle iteration. So
+//!    [`WakePump::arm`] never consults: it schedules the first look for the
+//!    next owner-queue turn. A frame also arms its fallback deadline *after*
+//!    the request that triggered it, so the first look schedules a second one
+//!    ([`FOLLOW_UP`]) when it finds nothing — that second look is what picks
+//!    the deadline up.
 //!
 //! The chain is self-limiting, which is what keeps it from being a busy poll:
 //! a firing that finds no deadline *and* requested no frame stops, and an idle
@@ -37,11 +40,9 @@ use std::{
     time::Duration,
 };
 
-use parking_lot::Mutex;
-
 use super::owner_lane::owner_queue;
-use crate::owner::call_point::{SharedField, call};
-use crate::owner::handlers::PlatformHandlers;
+
+use crate::owner::app_delivery::AppDelivery;
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 
 /// How long after a redraw request the pump looks at the hook a second time
@@ -61,10 +62,9 @@ const FOLLOW_UP: Duration = Duration::from_millis(8);
 /// Held as `Arc` by [`super::MacOSLoop`] and as `Weak` by each AppKit
 /// window, which arms it from `request_redraw`.
 pub(crate) struct WakePump {
-    /// Consulted through [`Self::consult`], which clones the hook out of the
-    /// lock and calls it with the lock released — the discipline
-    /// [`PlatformHandlers::wake_deadline`] documents for this field.
-    handlers: Arc<Mutex<PlatformHandlers>>,
+    /// The loop's delivery, whose handler [`Self::consult`] asks for its wake
+    /// deadline, with no lock held.
+    app: Arc<AppDelivery>,
 
     /// Asks this platform's windows for a frame. Set once at construction;
     /// never read under a lock (see [`Self::fire`]).
@@ -101,20 +101,23 @@ fn base() -> web_time::Instant {
 }
 
 /// Microseconds from [`base`] to `instant`, for [`WakePump::pending_at`].
+///
+/// Never `0`, which `pending_at` reserves for "no tick queued": a tick
+/// scheduled for the instant the base was fixed (the first `arm`) would
+/// otherwise read as none and be superseded by the next arm.
 fn micros_since_base(instant: web_time::Instant) -> u64 {
-    instant.saturating_duration_since(base()).as_micros() as u64
+    u64::try_from(instant.saturating_duration_since(base()).as_micros())
+        .unwrap_or(u64::MAX)
+        .max(1)
 }
 
 impl WakePump {
     /// Build the pump. `wake` is invoked on the owner thread when a deadline
     /// has come due; it must be safe to call from there (see
     /// [`super::MacOSLoop`]'s construction site).
-    pub(crate) fn new(
-        handlers: Arc<Mutex<PlatformHandlers>>,
-        wake: Box<dyn Fn() + Send + Sync>,
-    ) -> Arc<Self> {
+    pub(crate) fn new(app: Arc<AppDelivery>, wake: Box<dyn Fn() + Send + Sync>) -> Arc<Self> {
         Arc::new(Self {
-            handlers,
+            app,
             wake,
             generation: AtomicU64::new(0),
             pending_at: AtomicU64::new(0),
@@ -122,26 +125,24 @@ impl WakePump {
     }
 
     /// Ask the pump to make the loop come back. Called from `request_redraw`
-    /// (and once from `set_wake_deadline_hook`), i.e. whenever a frame is
+    /// (and once as the run binds the application's handler), i.e. whenever a frame is
     /// about to happen.
     pub(crate) fn arm(self: &Arc<Self>) {
-        let now = web_time::Instant::now();
-        // No deadline yet is the common case at a redraw request and is NOT
-        // "nothing to do": the frame this request triggers has not run yet,
-        // so the deadline it will arm is not visible here. Take the second
-        // look; a firing that still finds nothing stops the chain.
-        let target = self.consult().unwrap_or(now + FOLLOW_UP);
+        // The hook is not consulted here. The caller is inside the owner's
+        // dispatch (a runtime asking its own window for a frame), where the
+        // hook finds that runtime checked out; the first look runs on the
+        // next owner-queue turn instead, once the dispatch has returned.
+        let target = web_time::Instant::now();
 
         // Only ever move the tick EARLIER. Re-scheduling unconditionally
-        // looks harmless — the answer is absolute, so a second look at the
-        // same deadline computes the same instant — but it is not: while a
-        // frame is being asked for over and over (the redraw burst a cold
-        // start produces), each request would take a new generation and
-        // cancel the tick the previous one scheduled, so no tick would ever
-        // run and the pump would be starved by exactly the traffic it exists
-        // to survive. Measured: 241 arms, 0 firings, 238 superseded — the
-        // deadline armed mid-burst was never consulted at all. Leaving an
-        // already-earlier tick alone is what makes the burst harmless.
+        // looks harmless, but it is not: while a frame is being asked for
+        // over and over (the redraw burst a cold start produces), each
+        // request would take a new generation and cancel the tick the
+        // previous one scheduled, so no tick would ever run and the pump
+        // would be starved by exactly the traffic it exists to survive.
+        // Measured: 241 arms, 0 firings, 238 superseded — the deadline armed
+        // mid-burst was never consulted at all. Leaving an already-due tick
+        // alone is what makes the burst harmless.
         let pending = self.pending_at.load(Ordering::Acquire);
         if pending != 0 && base() + Duration::from_micros(pending) <= target {
             return;
@@ -150,26 +151,20 @@ impl WakePump {
         tracing::trace!(
             target: "flui.pace",
             event = "wake_pump_armed",
-            delay_us = target.saturating_duration_since(now).as_micros() as u64,
             "AppKit wake pump armed"
         );
-        self.schedule(target);
+        self.schedule(target, Look::First);
     }
 
-    /// Consult the installed hook through the call point, with the platform's
-    /// handler lock released, because the hook walks every hosted UI runtime
-    /// and takes gesture-arena locks — the exact re-entrancy
-    /// [`PlatformHandlers::wake_deadline`] warns about.
+    /// Ask the application's handler for its wake deadline through the call
+    /// point, with no lock held, because the handler walks every hosted UI
+    /// runtime and takes gesture-arena locks.
     fn consult(&self) -> Option<web_time::Instant> {
-        call(
-            &SharedField::new(&*self.handlers, |handlers| &mut handlers.wake_deadline),
-            |hook| hook(),
-        )
-        .or_resume(None)
+        self.app.wake_deadline().or_resume(None)
     }
 
     /// Schedule one tick for `target`, superseding any tick before it.
-    fn schedule(self: &Arc<Self>, target: web_time::Instant) {
+    fn schedule(self: &Arc<Self>, target: web_time::Instant, look: Look) {
         self.pending_at
             .store(micros_since_base(target), Ordering::Release);
         let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
@@ -181,7 +176,7 @@ impl WakePump {
                 (),
                 AfterPanic::Answer(|()| ()),
                 move || {
-                    pump.fire(generation);
+                    pump.fire(generation, look);
                 },
             );
         });
@@ -193,7 +188,7 @@ impl WakePump {
     /// [`TickPlan::Stop`] does, so the next `arm` schedules again instead of
     /// reading the failed tick as still queued; a newer tick the hook
     /// scheduled before it panicked stays queued.
-    fn fire(self: &Arc<Self>, generation: u64) {
+    fn fire(self: &Arc<Self>, generation: u64, look: Look) {
         if self.generation.load(Ordering::Acquire) != generation {
             // A later arm superseded this tick; it owns the deadline now.
             return;
@@ -203,13 +198,22 @@ impl WakePump {
             generation,
             pending_at: self.pending_at.load(Ordering::Acquire),
         }));
-        self.run_tick();
+        self.run_tick(look);
         unfinished.finish();
     }
 
     /// What a current tick does.
-    fn run_tick(self: &Arc<Self>) {
-        match tick_plan(self.consult(), web_time::Instant::now()) {
+    fn run_tick(self: &Arc<Self>, look: Look) {
+        let now = web_time::Instant::now();
+        let answer = match look {
+            // No deadline yet is the common case right after a redraw request
+            // and is NOT "nothing to do": the frame that request triggers may
+            // not have run, so the deadline it arms is not visible yet. Take
+            // the second look; a look that still finds nothing stops.
+            Look::First => self.consult().or(Some(now + FOLLOW_UP)),
+            Look::Again => self.consult(),
+        };
+        match tick_plan(answer, now) {
             TickPlan::Stop => {
                 // Nothing pending and this tick requested no frame, so there
                 // is nothing left to come back for. Stopping HERE is what
@@ -246,11 +250,21 @@ impl WakePump {
                 // (AppKit coalesces it into a display pass), so it may arm a
                 // deadline this consult could not have seen — look again
                 // shortly, the same reason `arm` does.
-                self.schedule(web_time::Instant::now() + FOLLOW_UP);
+                self.schedule(web_time::Instant::now() + FOLLOW_UP, Look::Again);
             }
-            TickPlan::Wait(deadline) => self.schedule(deadline),
+            TickPlan::Wait(deadline) => self.schedule(deadline, Look::Again),
         }
     }
+}
+
+/// Which look at the hook a tick is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Look {
+    /// The look an `arm` scheduled: finding nothing still looks once more.
+    First,
+    /// A look that found something before, or the second look: finding
+    /// nothing stops the chain.
+    Again,
 }
 
 /// The tick a [`StopUnlessFinished`] guards: its generation and the
@@ -289,7 +303,7 @@ impl Drop for StopUnlessFinished<'_> {
     }
 }
 
-/// Type-erased weak handle a window stores (see `MacOSWindow::install_wake_pump`).
+/// Weak handle a window's redraw requester stores (see `MacOSWindow::install_wake_pump`).
 pub(crate) type WeakWakePump = Weak<WakePump>;
 
 /// What a consult says the pump should do next.
@@ -324,11 +338,20 @@ fn tick_plan(answer: Option<web_time::Instant>, now: web_time::Instant) -> TickP
 mod tests {
     use super::*;
 
-    fn silent_pump() -> Arc<WakePump> {
-        WakePump::new(
-            Arc::new(Mutex::new(PlatformHandlers::default())),
+    use crate::owner::app_delivery::testing::{AppLog, Bound, bind};
+    use std::rc::Rc;
+
+    /// A pump whose loop's delivery is bound to a recording handler, which
+    /// answers no deadline until a test says otherwise.
+    fn silent_pump() -> (Arc<WakePump>, Rc<AppLog>, Bound) {
+        let app = Arc::new(AppDelivery::new());
+        let pump = WakePump::new(
+            Arc::clone(&app),
             Box::new(|| panic!("this pump must not request a frame")),
-        )
+        );
+        let handler = AppLog::new();
+        let run = bind(app, handler.clone());
+        (pump, handler, run)
     }
 
     #[test]
@@ -338,14 +361,18 @@ mod tests {
         // one scheduled never runs — measured as 241 arms, 0 firings, 238
         // superseded, with the deadline armed in the middle of the burst
         // never consulted at all.
-        let pump = silent_pump();
-        // A tick already scheduled a millisecond out. The hook answers
-        // nothing here, so this arm's own target is FOLLOW_UP (8 ms) — later
-        // than the pending tick, which must therefore be left alone.
-        pump.pending_at.store(
-            micros_since_base(web_time::Instant::now() + Duration::from_millis(1)),
-            Ordering::Release,
-        );
+        let (pump, _app, _run) = silent_pump();
+        // A tick already due: an earlier request of the burst scheduled it
+        // for its own turn. This arm's target is now, which is no earlier, so
+        // the pending tick must be left alone.
+        let due = micros_since_base(web_time::Instant::now());
+        pump.pending_at.store(due, Ordering::Release);
+        // `pending_at` is whole microseconds from the base and never 0, so
+        // the tick stored can lie up to a microsecond ahead of now: an arm
+        // inside that microsecond is earlier, and moves it. Let it come due.
+        while base().elapsed() <= Duration::from_micros(due) {
+            std::hint::spin_loop();
+        }
         let before = pump.generation.load(Ordering::Acquire);
         pump.arm();
         assert_eq!(
@@ -355,15 +382,74 @@ mod tests {
         );
     }
 
+    /// A redraw request runs inside the owner's dispatch, where `flui-app`
+    /// has the asking runtime checked out and its hook answers `Busy`; the
+    /// counter app aborted on start that way. The arm schedules the look
+    /// instead of taking it. Red-check: consult in `arm` again.
+    #[test]
+    fn an_arm_schedules_the_look_instead_of_consulting() {
+        use std::sync::atomic::AtomicUsize;
+
+        let (pump, app, _run) = silent_pump();
+        let consults = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&consults);
+        app.answer_deadline_with(move || -> Option<web_time::Instant> {
+            counted.fetch_add(1, Ordering::AcqRel);
+            None
+        });
+        let before = pump.generation.load(Ordering::Acquire);
+
+        pump.arm();
+
+        assert_eq!(
+            consults.load(Ordering::Acquire),
+            0,
+            "the arm consulted the hook inside the caller's dispatch"
+        );
+        assert_ne!(
+            pump.generation.load(Ordering::Acquire),
+            before,
+            "the arm scheduled no look"
+        );
+        assert_ne!(
+            pump.pending_at.load(Ordering::Acquire),
+            0,
+            "the scheduled look does not read as queued"
+        );
+    }
+
+    /// The first look finds no deadline yet — the frame the request triggered
+    /// arms it later — and looks once more instead of stopping. Red-check:
+    /// stop on an empty first look.
+    #[test]
+    fn an_empty_first_look_looks_again() {
+        let (pump, app, _run) = silent_pump();
+        app.answer_deadline_with(|| -> Option<web_time::Instant> { None });
+        let generation = pump.generation.load(Ordering::Acquire);
+
+        pump.fire(generation, Look::First);
+
+        assert_ne!(
+            pump.pending_at.load(Ordering::Acquire),
+            0,
+            "an empty first look stopped the chain"
+        );
+        let generation = pump.generation.load(Ordering::Acquire);
+        pump.fire(generation, Look::Again);
+        assert_eq!(
+            pump.pending_at.load(Ordering::Acquire),
+            0,
+            "an empty second look kept the chain going"
+        );
+    }
+
     /// A tick whose hook panics is contained by the GCD boundary, and must not
     /// leave the expired tick looking queued: `arm` would then refuse every
     /// later deadline. Red-check: drop the `StopUnlessFinished` guard.
     #[test]
     fn a_tick_whose_hook_panics_leaves_no_tick_queued() {
-        let pump = silent_pump();
-        pump.handlers.lock().wake_deadline = Some(Arc::new(|| -> Option<web_time::Instant> {
-            panic!("a failing wake hook")
-        }));
+        let (pump, app, _run) = silent_pump();
+        app.answer_deadline_with(|| -> Option<web_time::Instant> { panic!("a failing wake hook") });
         // The tick being fired: a nonzero instant, whatever the base.
         pump.pending_at.store(
             micros_since_base(web_time::Instant::now() + Duration::from_millis(5)),
@@ -372,7 +458,7 @@ mod tests {
         let generation = pump.generation.load(Ordering::Acquire);
 
         let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            pump.fire(generation);
+            pump.fire(generation, Look::Again);
         }));
 
         assert!(
@@ -393,18 +479,20 @@ mod tests {
     fn a_tick_whose_hook_rearms_then_panics_keeps_the_newer_tick() {
         use std::sync::atomic::AtomicBool;
 
-        let pump = silent_pump();
+        let (pump, app, _run) = silent_pump();
         let weak = Arc::downgrade(&pump);
         let rearmed = AtomicBool::new(false);
-        pump.handlers.lock().wake_deadline =
-            Some(Arc::new(move || -> Option<web_time::Instant> {
-                if !rearmed.swap(true, Ordering::AcqRel)
-                    && let Some(pump) = weak.upgrade()
-                {
-                    pump.schedule(web_time::Instant::now() + Duration::from_millis(50));
-                }
-                panic!("a wake hook that re-armed, then failed")
-            }));
+        app.answer_deadline_with(move || -> Option<web_time::Instant> {
+            if !rearmed.swap(true, Ordering::AcqRel)
+                && let Some(pump) = weak.upgrade()
+            {
+                pump.schedule(
+                    web_time::Instant::now() + Duration::from_millis(50),
+                    Look::Again,
+                );
+            }
+            panic!("a wake hook that re-armed, then failed")
+        });
         pump.pending_at.store(
             micros_since_base(web_time::Instant::now() + Duration::from_millis(5)),
             Ordering::Release,
@@ -412,7 +500,7 @@ mod tests {
         let generation = pump.generation.load(Ordering::Acquire);
 
         let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            pump.fire(generation);
+            pump.fire(generation, Look::Again);
         }));
 
         assert!(

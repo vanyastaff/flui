@@ -12,10 +12,10 @@
 //! derivation again on the next sample.
 
 use std::cell::RefCell;
-use std::sync::{Arc, Weak};
+use std::rc::Rc;
 
 use flui_platform::PlatformWindow;
-use flui_platform::{DisplaySnapshot, FrameRateHint};
+use flui_platform::{DisplayColor, DisplaySnapshot, FrameRateHint};
 use flui_runtime::frame_rate_demand::FrameRateDemand;
 use flui_runtime::owner::DisplayUpdate;
 
@@ -26,7 +26,7 @@ struct FollowedWindow {
     dispatcher: PresentationDispatcher,
     /// Weak: the window's own callback table holds the hint that reaches the
     /// host, so a strong reference here would keep a closed window alive.
-    window: Weak<dyn PlatformWindow>,
+    window: std::rc::Weak<dyn PlatformWindow>,
     /// The refresh rate the runtime last asked for on this window's behalf.
     demand: FrameRateDemand,
 }
@@ -73,11 +73,11 @@ impl DisplayHost {
     pub(super) fn follow(
         &self,
         dispatcher: PresentationDispatcher,
-        window: &Arc<dyn PlatformWindow>,
+        window: &Rc<dyn PlatformWindow>,
     ) {
         self.state.borrow_mut().windows.push(FollowedWindow {
             dispatcher,
-            window: Arc::downgrade(window),
+            window: Rc::downgrade(window),
             demand: FrameRateDemand::Idle,
         });
     }
@@ -104,7 +104,7 @@ impl DisplayHost {
         };
         // The window answers outside any host borrow: it is platform code.
         if let Some(window) = window {
-            window.set_frame_rate_hint(hint_for(demand));
+            request_rate(window.as_ref(), demand);
         }
     }
 
@@ -124,7 +124,7 @@ impl DisplayHost {
             (followed.window.upgrade(), followed.demand)
         };
         if let Some(window) = window {
-            window.set_frame_rate_hint(hint_for(demand));
+            request_rate(window.as_ref(), demand);
         }
     }
 
@@ -136,20 +136,27 @@ impl DisplayHost {
             .retain(|followed| followed.dispatcher.address != address);
     }
 
+    /// The colour profile of the display `window` is on, by the accepted
+    /// snapshot: what the window's surface is configured for (ADR-0256).
+    /// `None` before the first sample, and as [`color_on`] answers.
+    pub(super) fn color_of(&self, window: &dyn PlatformWindow) -> Option<DisplayColor> {
+        color_on(&self.snapshot()?, window)
+    }
+
     /// What `window` is on according to the accepted snapshot; unknown before
     /// the first sample, for a window naming no display, and for one the
     /// snapshot does not hold.
     pub(super) fn derive(&self, window: &dyn PlatformWindow) -> DisplayUpdate {
         let snapshot = self.snapshot();
         // The window answers outside any host borrow: it is platform code.
-        let id = window.display_id();
+        let id = window.state().display;
         DisplayUpdate::new(snapshot.and_then(|snapshot| snapshot.window_display(id)))
     }
 
     /// The derived display of every live followed window. Windows that are gone
     /// are forgotten.
     pub(super) fn updates(&self) -> Vec<(PresentationDispatcher, DisplayUpdate)> {
-        let live: Vec<(PresentationDispatcher, Arc<dyn PlatformWindow>)> = {
+        let live: Vec<(PresentationDispatcher, Rc<dyn PlatformWindow>)> = {
             let mut state = self.state.borrow_mut();
             state
                 .windows
@@ -166,11 +173,34 @@ impl DisplayHost {
     }
 }
 
+/// The colour `snapshot` gives the display `window` is on: `None` for a window
+/// naming no display or one the snapshot does not hold, and where the platform
+/// reports no colour for the display (the renderer then reads what the surface
+/// reports).
+pub(in crate::app) fn color_on(
+    snapshot: &DisplaySnapshot,
+    window: &dyn PlatformWindow,
+) -> Option<DisplayColor> {
+    // The window answers before the snapshot is searched: it is platform code.
+    let id = window.state().display?;
+    snapshot.get(id)?.color.ok()
+}
+
+/// Ask `window` for the rate `demand` names. A window whose capabilities
+/// leave the hint `Unavailable` refuses it: the system then picks the rate,
+/// as it would for no request, and the demand is kept for a surface that
+/// takes one.
+fn request_rate(window: &dyn PlatformWindow, demand: FrameRateDemand) {
+    if let Err(refused) = window.set_frame_rate_hint(hint_for(demand)) {
+        tracing::trace!(%refused, ?demand, "the window takes no refresh-rate request");
+    }
+}
+
 /// The window request for a runtime demand.
 fn hint_for(demand: FrameRateDemand) -> FrameRateHint {
     match demand {
         FrameRateDemand::Active => FrameRateHint::High,
         // The demand enum grows; an unknown one leaves the rate to the system.
-        _ => FrameRateHint::Default,
+        FrameRateDemand::Idle | _ => FrameRateHint::Default,
     }
 }

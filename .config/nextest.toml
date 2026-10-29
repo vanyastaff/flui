@@ -65,6 +65,18 @@ leak-timeout = "1s"
 # 64-265 s for a trybuild suite and ~180 s for each template build, varying
 # run to run with cache state -- a 4-minute global killed both template tests
 # once.
+#
+# One member gets a longer budget, set ahead of the groups (a setting comes
+# from the first override that matches and sets it) and setting no group:
+# the acceptance application's consumer is the only nested build with the
+# Material catalog, so no other nested test warms its graph, and it then runs
+# the application's rows at opt-level 0. It took 314 s cold on a 32-thread
+# Windows host (2026-10-28), past the 300 s period, and a cold 4-core runner
+# is slower.
+[[profile.default.overrides]]
+filter = 'binary_id(flui::facade_consumer) & test(=acceptance_app_runs_through_the_facade)'
+slow-timeout = { period = "600s", terminate-after = 3 }
+
 [[profile.default.overrides]]
 filter = 'binary_id(flui-engine::compile_fail) | binary_id(flui-rendering::compile_fail) | binary_id(flui-interaction::compile_fail) | binary_id(flui-platform::compile_fail) | binary_id(flui-widgets::routable_ui) | binary_id(flui-widgets::nested_scroll_ui) | binary_id(flui::thread_boundary_ui) | (binary_id(flui-painting::painting_it) & test(=compile_fail::trybuild_ui)) | test(=trybuild_ui::ui_tests)'
 slow-timeout = { period = "300s", terminate-after = 4 }
@@ -103,9 +115,15 @@ priority = 100
 [test-groups]
 gpu-readback = { max-threads = 1 }
 system-clipboard = { max-threads = 1 }
+# flui-native's Win32 window tests share the one desktop's foreground (see
+# `desktop-foreground` below).
+desktop-foreground = { max-threads = 1 }
 # xtask's binary test spawns the built `cargo xtask` binary, which runs
 # `cargo metadata`; one at a time keeps it off the other tests' timing.
 xtask-binary = { max-threads = 1 }
+# flui-native's X11 window tests share the one X server `xvfb-run` starts for
+# the run (see `x11-server` below).
+x11-server = { max-threads = 1 }
 # Named, not limited: see the trybuild and nested-cargo overrides at the top.
 nested-cargo = { max-threads = "num-cpus" }
 trybuild = { max-threads = "num-cpus" }
@@ -125,6 +143,29 @@ priority = 90
 [[profile.default.overrides]]
 filter = 'package(flui-native) & test(/clipboard/)'
 test-group = 'system-clipboard'
+
+# flui-native's Win32 window tests show real windows on the one desktop, and a
+# shown window asks for the foreground; the foreground cases
+# (`windows_foreground::`, which run a second process) read where the
+# foreground is, so another test's window shown meanwhile takes it from under
+# them. They are modules of `platform_it`, run one process each, so no
+# in-process lock can keep them apart: the group runs them one at a time, the
+# contract's Win32 cases with them.
+[[profile.default.overrides]]
+filter = 'package(flui-native) & binary(platform_it) & (test(/^windows_/) | test(/^contract::/))'
+test-group = 'desktop-foreground'
+
+# flui-native's X11 window tests map real windows on the one X server the run
+# shares and read back what the server holds (map state, position, stacking),
+# so another test's window opened or moved meanwhile makes a report not its
+# own: `x11_window_takes_commands_and_publishes_what_the_server_holds` failed
+# once in a full local run beside the other X tests and passes alone. They
+# keep to separate screen regions, but only a process-wide lock rules the
+# overlap out, and nextest's process per test cannot share an in-process one:
+# the group runs them one at a time.
+[[profile.default.overrides]]
+filter = 'package(flui-native) & test(/^window::linux::x11::/)'
+test-group = 'x11-server'
 
 # `cargo xtask` itself, spawned as a binary (see `xtask-binary`).
 [[profile.default.overrides]]

@@ -84,6 +84,27 @@ impl super::TextInput for Arc<FakeTextInput> {
             Arc::clone(self) as Arc<dyn PlatformTextInput>
         ))
     }
+
+    fn capture_sizing(
+        &self,
+    ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
+        Ok(crate::TextSizingCaptureState::Unsupported)
+    }
+
+    /// The headless text size is linear: nothing is captured.
+    fn invalidate_sizing(&self) {}
+
+    fn fence_sizing(&self) {}
+
+    /// The recorder put nothing on its window.
+    fn detach(&self) {}
+}
+
+/// Each headless window gets a recorder of its own.
+impl crate::host::Text<()> for FakeTextInput {
+    fn for_window((): &()) -> Arc<dyn super::TextInput> {
+        Arc::new(Arc::new(Self::new()))
+    }
 }
 
 /// The headless platform's text-store host: the pull model a window offers
@@ -138,15 +159,20 @@ mod tests {
         let offered = Rc::new(Cell::new(None));
         let observed = Rc::clone(&offered);
         Box::new(platform)
-            .run(Box::new(move |owner| {
-                let window = owner
-                    .open_window(WindowOptions::default())
-                    .expect("headless window")
-                    .try_ready()
-                    .expect("ready inside on_ready");
-                observed.set(Some(owner.text_store_host(&window).is_some()));
-                Ok(())
-            }))
+            .run(crate::owner::app_delivery::testing::on_ready(
+                move |owner| {
+                    let window = owner
+                        .open_window(
+                            WindowOptions::default(),
+                            flui_testing::window_handler::RecordingWindowHandler::new(),
+                        )
+                        .expect("headless window")
+                        .try_ready()
+                        .expect("ready inside on_ready");
+                    observed.set(Some(owner.text_store_host(&window).is_some()));
+                    Ok(())
+                },
+            ))
             .expect("headless run");
         offered.get().expect("on_ready ran")
     }

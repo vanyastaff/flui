@@ -809,8 +809,7 @@ pub(crate) fn anchored_drag_is_no_drop_autoscroll_target() {
     use flui_platform::DragDropEvent;
     use flui_platform::EventTime;
     use flui_platform::data_transfer::{
-        DataTransferOffer, OfferRecord, OfferTable, RepresentationDescriptor, TransferActions,
-        TransferFormat,
+        DataTransferOffer, RepresentationDescriptor, TransferActions, TransferFormat,
     };
     use flui_platform::pointer::PointerKind;
 
@@ -821,14 +820,15 @@ pub(crate) fn anchored_drag_is_no_drop_autoscroll_target() {
         ProcessNonce::from_raw(std::num::NonZeroU64::new(7).expect("nonzero")),
         UiRuntimeId::new(7),
         Arc::new(flui_platform::NullDataTransferSource),
+        Arc::new(|| {}),
     );
     let representations: Arc<[RepresentationDescriptor]> =
         Arc::from(vec![RepresentationDescriptor {
             format: TransferFormat::Text,
             declared_len: None,
         }]);
-    let mut offers = OfferTable::new();
-    let id = offers.mint(OfferRecord::new(Arc::clone(&representations)));
+    // The id a source minted for the offer.
+    let id = flui_foundation::DataTransferId::new_gen(0, std::num::NonZeroU32::MIN);
     let offer = DataTransferOffer::new(id, representations);
     let window = PresentationId::new(1);
     let time = |ms: u64| EventTime::from_nanos(1_000_000_000 + ms * 1_000_000);

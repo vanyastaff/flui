@@ -936,6 +936,10 @@ impl HitTestSnapshot {
     }
 }
 
+/// The axis a scroll target scrolls along and the probe that says whether it has
+/// anywhere to go (ADR-0251).
+type ScrollAxisDeclaration = (flui_foundation::geometry::Axis, Rc<dyn Fn() -> bool>);
+
 struct LocalLaneInner {
     owner: std::sync::Arc<DispatchOwner>,
     target_owners: RefCell<HashMap<TargetId, std::sync::Arc<DispatchOwner>>>,
@@ -952,6 +956,9 @@ struct LocalLaneInner {
     /// Pointer targets that declared they feed a drag-family recognizer
     /// (ADR-0251 §2).
     scroll_contact_feeds: RefCell<std::collections::HashSet<TargetId>>,
+    /// The axis each scroll target scrolls along, for targets that take part in
+    /// a scroll-fed contact as a competitor (ADR-0251 §2).
+    scroll_target_axes: RefCell<HashMap<TargetId, ScrollAxisDeclaration>>,
     routes: RefCell<HashMap<RouteId, Rc<ResolvedHitRoute>>>,
 }
 
@@ -1013,6 +1020,7 @@ impl InteractionLane {
             shader_mask_targets: RefCell::new(HashMap::new()),
             payload_targets: RefCell::new(HashMap::new()),
             scroll_contact_feeds: RefCell::new(std::collections::HashSet::new()),
+            scroll_target_axes: RefCell::new(HashMap::new()),
             routes: RefCell::new(HashMap::new()),
         });
         LOCAL_LANES.with(|registry| {
@@ -1676,6 +1684,20 @@ impl InteractionDispatchHandle {
         Ok(())
     }
 
+    /// Take back a [`declare_scroll_contact_feed`](Self::declare_scroll_contact_feed),
+    /// for a target whose recognizers no longer feed.
+    pub fn withdraw_scroll_contact_feed(
+        &self,
+        target: PointerTarget,
+    ) -> Result<(), InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
+        lane.scroll_contact_feeds
+            .borrow_mut()
+            .remove(&target.target_id);
+        Ok(())
+    }
+
     /// Whether `target` declared itself a scroll-contact feed.
     pub(crate) fn feeds_scroll_contacts(&self, target: PointerTarget) -> bool {
         self.active_lane().is_ok_and(|lane| {
@@ -1885,8 +1907,56 @@ impl InteractionDispatchHandle {
             .remove(&target.target_id)
             .ok_or(InteractionDispatchError::TargetGone)?;
         lane.target_owners.borrow_mut().remove(&target.target_id);
+        lane.scroll_target_axes
+            .borrow_mut()
+            .remove(&target.target_id);
         drop(removed);
         Ok(())
+    }
+
+    /// Declare the axis `target` scrolls along, so a touchpad pan that opens an
+    /// arena contact (ADR-0251) lets it compete with the recognizers that
+    /// feed on it. `can_scroll` says, when the pan begins, whether the target
+    /// has anywhere to go on that axis; a target that cannot sits the contest
+    /// out. A scroll target that never declares keeps receiving every scroll
+    /// packet, and a pan beside a feed goes to the feed alone.
+    ///
+    /// `can_scroll` runs inside the binding's dispatch: it reads state and
+    /// calls no user code that re-enters input.
+    pub fn declare_scroll_target_axis(
+        &self,
+        target: ScrollTarget,
+        axis: flui_foundation::geometry::Axis,
+        can_scroll: impl Fn() -> bool + 'static,
+    ) -> Result<(), InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
+        lane.scroll_target_axes
+            .borrow_mut()
+            .insert(target.target_id, (axis, Rc::new(can_scroll)));
+        Ok(())
+    }
+
+    /// Take back a [`declare_scroll_target_axis`](Self::declare_scroll_target_axis).
+    pub fn withdraw_scroll_target_axis(
+        &self,
+        target: ScrollTarget,
+    ) -> Result<(), InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
+        lane.scroll_target_axes
+            .borrow_mut()
+            .remove(&target.target_id);
+        Ok(())
+    }
+
+    /// The axis `target` declared and its probe, if it declared.
+    pub(crate) fn scroll_target_axis(&self, target: ScrollTarget) -> Option<ScrollAxisDeclaration> {
+        let lane = self.active_lane().ok()?;
+        self.validate_lane(target.lane_id).ok()?;
+        let declared = lane.scroll_target_axes.borrow();
+        let (axis, can_scroll) = declared.get(&target.target_id)?;
+        Some((*axis, Rc::clone(can_scroll)))
     }
 
     /// Invoke one registered scroll target synchronously.

@@ -31,18 +31,19 @@ mod tests;
 // The quiet host the loop's tests run over, and another host's tests name.
 #[cfg(test)]
 pub(crate) mod testing;
-mod wake_deadline;
+mod window_table;
 
 use std::{
     any::TypeId,
     cell::RefCell,
     rc::Rc,
-    sync::{Arc, OnceLock, Weak},
+    sync::{Arc, OnceLock},
 };
 
 use flui_platform::CursorError;
 use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::drag::PlatformDragSource;
+use flui_platform::text_store::TextStoreHost;
 use windows::{
     Win32::{
         Foundation::{
@@ -65,27 +66,23 @@ use windows::{
     core::{PCWSTR, w},
 };
 
-use crate::owner::call_point::{Field, Once, SharedField, call, install, retire};
+use crate::owner::app_delivery::AppDelivery;
+use crate::owner::call_point::{Field, install};
 use crate::owner::notices::{NoticeChannel, StaleOnWake};
 use crate::owner::panic_boundary::{self, AfterPanic};
+pub(crate) use crate::owner::wake_deadline::FrameCount;
+use crate::owner::wake_deadline::ModalDelivery;
+use crate::owner::wake_deadline::WakeDeadline;
 use crate::{
-    error::PlatformError,
-    executor::BackgroundExecutor,
-    host,
-    owner::OwnerHooks,
-    owner::OwnerPlatform,
-    owner::handlers::{OpenWindows, PlatformHandlers, WindowCallbacks},
-    owner::hwnd_affinity::UserDataRefusal,
-    platform::Platform,
+    error::PlatformError, executor::BackgroundExecutor, host, owner::OwnerHooks,
+    owner::OwnerPlatform, owner::handlers::OpenWindows, owner::hwnd_affinity::UserDataRefusal,
+    owner::window_delivery::WindowDelivery, platform::AppHandler, platform::Platform,
     platform::PlatformExecutor,
-    platform::PlatformReadyCallback,
 };
 use broadcast::Subscriber;
 use com_apartment::ComApartment;
 use flui_platform::{DisplayId, DisplaySnapshot};
-pub(crate) use wake_deadline::FrameCount;
-use wake_deadline::ModalDelivery;
-use wake_deadline::{DeadlineArm, DeadlineDelivery, WakeDeadlineHook};
+pub(crate) use window_table::{WindowScale, WindowTable};
 
 /// The name of FLUI's window class, which every window the host opens has.
 pub(crate) const WINDOW_CLASS_NAME: PCWSTR = w!("FluiWindowClass");
@@ -117,9 +114,9 @@ pub(crate) type WindowHooks = Rc<[Rc<dyn WindowMessages>]>;
 /// FLUI's window class on one owner thread, as the host's table makes it
 /// ([`WindowsHost::window_class`]): the hooks its procedure offers each
 /// message of a window to, and what those hooks tell the window's other
-/// features of its input. A hook keeps what it needs of a window as its own
-/// state, keyed by the window's identity, from the window's announcement
-/// ([`WindowMessages::created`]) to its destruction.
+/// features of its input and its text input. A hook keeps what it needs of a
+/// window as its own state, keyed by the window's identity, from the window's
+/// announcement ([`WindowMessages::created`]) to its destruction.
 #[derive(Clone)]
 pub(crate) struct WindowClass {
     /// The hooks, in the order a message reaches them.
@@ -127,6 +124,8 @@ pub(crate) struct WindowClass {
     /// The input those hooks keep, as the window, drag and drop and haptics
     /// read it.
     pub(crate) input: Rc<dyn WindowInputs>,
+    /// The text input those hooks keep, as the window hands it out.
+    pub(crate) text: Rc<dyn WindowTexts>,
 }
 
 thread_local! {
@@ -163,10 +162,9 @@ pub(crate) fn window_class<H: WindowsHost>() -> Option<WindowClass> {
     Some(class)
 }
 
-/// What the input of FLUI's window class on this thread tells the other
-/// features of a window, for the host the process registered the class for;
-/// `None` on a thread no owner of that host opened on.
-pub(crate) fn window_inputs() -> Option<Rc<dyn WindowInputs>> {
+/// FLUI's window class on this thread for the host the process registered
+/// the class for; `None` on a thread no owner of that host opened on.
+fn registered_class() -> Option<WindowClass> {
     let host = *WINDOW_CLASS.get()?.as_ref().ok()?;
     CLASS_ON_THREAD
         .try_with(|classes| {
@@ -174,10 +172,34 @@ pub(crate) fn window_inputs() -> Option<Rc<dyn WindowInputs>> {
                 .borrow()
                 .iter()
                 .find(|(made_for, _)| *made_for == host)
-                .map(|(_, class)| Rc::clone(&class.input))
+                .map(|(_, class)| class.clone())
         })
         .ok()
         .flatten()
+}
+
+/// What the input of FLUI's window class on this thread tells the other
+/// features of a window, for the host the process registered the class for;
+/// `None` on a thread no owner of that host opened on.
+pub(crate) fn window_inputs() -> Option<Rc<dyn WindowInputs>> {
+    registered_class().map(|class| class.input)
+}
+
+/// What the text input of FLUI's window class on this thread holds of a
+/// window, for the host the process registered the class for; `None` on a
+/// thread no owner of that host opened on.
+pub(crate) fn window_texts() -> Option<Rc<dyn WindowTexts>> {
+    registered_class().map(|class| class.text)
+}
+
+/// What the text input of FLUI's window class holds of a window, as the
+/// window hands it out. Answers `None` for a window it does not hold: one
+/// whose text input did not start, one already closed, or a reference whose
+/// handle now names another window.
+pub(crate) trait WindowTexts {
+    /// The text-store host the window's input methods read the focused
+    /// field's store through.
+    fn store_host(&self, window: WindowRef) -> Option<Rc<dyn TextStoreHost>>;
 }
 
 /// What the input of FLUI's window class tells the window's other features
@@ -188,9 +210,6 @@ pub(crate) fn window_inputs() -> Option<Rc<dyn WindowInputs>> {
 pub(crate) trait WindowInputs {
     /// Whether the mouse is over the window's client area.
     fn hovered(&self, window: WindowRef) -> Option<bool>;
-
-    /// The keyboard modifiers the window's last key message carried.
-    fn modifiers(&self, window: WindowRef) -> Option<flui_platform::Modifiers>;
 
     /// The kind of the contact whose press began `pointer`'s sequence in the
     /// window.
@@ -231,7 +250,7 @@ pub(crate) trait WindowsHost: 'static {
     ) -> Result<Rc<dyn control::OwnerPreferences>, PlatformError>;
 
     /// The channel the owner's system notices take to the application.
-    fn notices() -> Arc<dyn NoticeChannel>;
+    fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel>;
 
     /// The lifecycle the owner keeps for the table's lifecycle position.
     fn lifecycle(owner: &control::OwnerSeeds<'_>) -> Rc<dyn control::OwnerLifecycle>;
@@ -281,9 +300,12 @@ pub(crate) trait HostDisplays: StaleOnWake {
 /// recycles handles, so a handle alone can name a later window; the window
 /// feature's `with_context` reaches only the context this window was created
 /// with. Plain values, so an `Arc`-shared object can hold one on any thread,
-/// and the owner's, so a hook that is handed a window names no feature.
+/// and the owner's, so a hook that is handed a window names no feature. The
+/// window-level positions of the Windows table are made for one
+/// ([`host::Window::Ref`]), so it is public where it
+/// is defined, and nameable only inside the crate.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) struct WindowRef {
+pub struct WindowRef {
     hwnd: isize,
     identity: WindowIdentity,
 }
@@ -330,9 +352,28 @@ pub(crate) trait HostDrag: control::OwnerMessages + DataTransferSource {
     /// The drag source `window`, created on this thread, hands out.
     fn drag_source(self: Arc<Self>, window: WindowRef) -> Arc<dyn PlatformDragSource>;
 
-    /// Make `window`, created on this thread, a drop target until it is
-    /// destroyed.
-    fn register_target(self: Arc<Self>, window: WindowRef);
+    /// Make `window`, which FLUI's class just created on this thread, a drop
+    /// target, reporting at the window's scale as it changes. The caller keeps
+    /// the registration for the window and revokes it as the window is
+    /// destroyed; `None` when registration failed (or off the owner thread),
+    /// and the window takes no drags.
+    fn register_target(self: Arc<Self>, window: &CreatedWindow) -> Option<Box<dyn DropTarget>>;
+}
+
+/// One window's registration as an OLE drop target, which the window's
+/// class keeps until the window is destroyed.
+pub(crate) trait DropTarget {
+    /// The window is destroyed, on its thread, while its callbacks still
+    /// exist: a drag over it leaves it, and OLE no longer offers it one.
+    fn revoke(&self);
+
+    /// The target as OLE holds it.
+    #[cfg(test)]
+    fn interface(&self) -> windows::Win32::System::Ole::IDropTarget;
+
+    /// The scale the target reports positions at.
+    #[cfg(test)]
+    fn scale(&self) -> f64;
 }
 
 /// The drag position: the transport the host's [`WindowsHost::drag`] made,
@@ -380,11 +421,13 @@ pub(crate) trait ClassWindows: OpenWindows + std::fmt::Debug {
 /// A feature that answers a message whose handling is a step other features
 /// follow tells every hook of it ([`Self::step`]), and the window's own
 /// procedure tells them that the window is destroyed ([`Self::destroyed`]). A
-/// hook keeps what it needs of a window in itself, keyed by the window's
-/// identity: made when the window is announced, dropped when it is destroyed
-/// (and at `WM_NCDESTROY`, the window's last message, for one whose
-/// destruction was not announced), so no hook reaches another feature's state
-/// and a message for a window it does not hold finds none.
+/// hook keeps what it needs of a window in itself, in a [`WindowTable`] keyed
+/// by the window's identity: made when the window is announced, dropped when
+/// it is destroyed (and at `WM_NCDESTROY`, the window's last message, for one
+/// whose destruction was not announced), so no hook reaches another feature's
+/// state and a message for a window it does not hold finds none. What every
+/// hook reads of a window, its scale, the window holds once
+/// ([`CreatedWindow::scale`]).
 pub(crate) trait WindowMessages {
     /// `window` was created and its context installed, on its owner thread.
     fn created(&self, _window: &CreatedWindow) {}
@@ -425,6 +468,27 @@ pub(crate) trait WindowMessages {
     }
 }
 
+/// What the application gave the loop, shared on the owner thread with every
+/// window it opens: the delivery to the application's handler, and the
+/// keyboard layout callback, which stays a registration until nothing above
+/// the host reads it (`Platform::on_keyboard_layout_change`).
+pub(crate) struct AppHooks {
+    /// The loop's delivery to the application's handler.
+    pub(crate) app: Arc<AppDelivery>,
+    /// Called when the keyboard layout changes.
+    pub(crate) keyboard_layout_changed: Option<Box<dyn FnMut() + Send>>,
+}
+
+impl AppHooks {
+    /// The hooks over `app`, with no keyboard layout callback.
+    pub(crate) fn new(app: Arc<AppDelivery>) -> Self {
+        Self {
+            app,
+            keyboard_layout_changed: None,
+        }
+    }
+}
+
 /// A window of FLUI's class as the hooks see it once it is created.
 pub(crate) struct CreatedWindow {
     /// The window.
@@ -434,13 +498,15 @@ pub(crate) struct CreatedWindow {
     pub(crate) identity: WindowIdentity,
     /// Its client size in device pixels.
     pub(crate) client_size: (i32, i32),
-    /// Its DPI; a later change is a step ([`WindowStep::Rescaled`]).
-    pub(crate) dpi: u32,
+    /// Its DPI, which its procedure changes as the window moves to another
+    /// (and then tells the step, [`WindowStep::Rescaled`]): a hook reads the
+    /// window's scale here and keeps no copy of it.
+    pub(crate) scale: WindowScale,
     /// Its callbacks, which a feature dispatches what it hears for the window
     /// to.
-    pub(crate) callbacks: Arc<WindowCallbacks>,
-    /// The application's handlers, shared with every window of the loop.
-    pub(crate) handlers: Rc<RefCell<PlatformHandlers>>,
+    pub(crate) delivery: Arc<WindowDelivery>,
+    /// What the application gave the loop, shared with every window of it.
+    pub(crate) app_hooks: Rc<RefCell<AppHooks>>,
     /// The system preference source the loop keeps, which measures the
     /// system's mouse geometry at the window's scale.
     pub(crate) preferences: Rc<dyn control::OwnerPreferences>,
@@ -449,6 +515,9 @@ pub(crate) struct CreatedWindow {
     pub(crate) hooks: WindowHooks,
     /// The owner thread's COM apartment, when the window was opened with it.
     pub(crate) apartment: Option<Rc<ComApartment>>,
+    /// The loop's drag-and-drop transport, which makes the window a drop
+    /// target.
+    pub(crate) drag: Arc<dyn HostDrag>,
 }
 
 impl CreatedWindow {
@@ -465,8 +534,9 @@ pub(crate) fn dpi_scale(dpi: u32) -> f64 {
 
 /// A step of a window of FLUI's class that one feature handles and others
 /// follow, told to every hook ([`WindowMessages::step`]) where the step is
-/// complete: in the window's own procedure for its size, focus, paint, scale
-/// and settings, in the input's for a key the application let through.
+/// complete: in the window's own procedure for its size, focus, paint, scale,
+/// settings and close, in the input's for a key the application let through,
+/// in the lifecycle's for the session's lock.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum WindowStep {
     /// Its client area is now `(width, height)` device pixels; it is not
@@ -482,13 +552,19 @@ pub(crate) enum WindowStep {
     SizeMoveStarted,
     /// That loop ended.
     SizeMoveEnded,
-    /// It is now at this DPI.
-    Rescaled {
-        /// Its DPI.
-        dpi: u32,
-    },
+    /// It is now at another DPI, which its [`WindowScale`] holds.
+    Rescaled,
+    /// The rectangle its new DPI asks for is applied too: what it shows sits
+    /// where the new scale puts it on the screen.
+    ScaleApplied,
     /// A system setting changed.
     SettingChanged,
+    /// The user's session locked (`true`) or unlocked: a locked session
+    /// hides every window, whatever its surface.
+    SessionLocked(bool),
+    /// It is being destroyed and its close callbacks ran, so the presentation
+    /// that showed it is closed; its handle is still valid.
+    Closed,
     /// The application let a keydown through (did not prevent its default):
     /// the window's own keys follow it. `repeat` when the key auto-repeats.
     KeyLetThrough {
@@ -756,6 +832,9 @@ impl WindowsLoop {
 /// [`WindowsPlatform`](crate::WindowsPlatform) is its platform.
 pub struct WindowsLoop {
     pub(crate) owner_control: control::OwnerControl,
+    /// What the loop delivers to the application's handler, which `run`
+    /// binds; the owner context and every window share it.
+    pub(crate) app: Arc<AppDelivery>,
     /// The drag-and-drop transport, as the table made it: the platform's one
     /// data-transfer source, which every window it opens shares.
     pub(crate) drag: Arc<dyn HostDrag>,
@@ -894,7 +973,8 @@ impl WindowsLoop {
         // retires its preference subscriptions and receiver through the guard.
         let drag = drag();
         let displays = H::displays();
-        let notices = H::notices();
+        let app = Arc::new(AppDelivery::new());
+        let notices = H::notices(&app);
         notices.mark_held_stale_on_wake(Arc::downgrade(&displays) as _);
         let owner_control = control::OwnerControl::new::<H>(
             owner_identity,
@@ -902,6 +982,7 @@ impl WindowsLoop {
             vec![Arc::clone(&drag) as Arc<dyn control::OwnerMessages>],
             Arc::clone(&displays),
             notices,
+            Arc::clone(&app),
         )?;
 
         // SAFETY: `GetModuleHandleW(None)` queries the current process
@@ -943,6 +1024,7 @@ impl WindowsLoop {
 
         let platform = Self {
             owner_control,
+            app,
             drag,
             message_window,
             windows,
@@ -1063,8 +1145,7 @@ impl WindowsLoop {
     fn run_message_loop(&self) -> Result<(), PlatformError> {
         tracing::info!("Starting Windows message loop");
 
-        let mut armed: Option<DeadlineArm> = None;
-        let mut delivered: Option<DeadlineDelivery> = None;
+        let mut deadline = WakeDeadline::default();
         // Shared with every window this platform opens; without an owner
         // there are no windows, so the count never moves.
         let shares = self.owner_control.shares("run message loop").ok();
@@ -1099,22 +1180,14 @@ impl WindowsLoop {
                 }
                 // An admitted due wake is delivery debt. Actuate it before
                 // querying user code, which may abandon a late deadline.
-                if armed
-                    .as_ref()
-                    .is_some_and(|arm| arm.deadline <= web_time::Instant::now())
+                // A platform that quit asks for no frame: the deadline was the
+                // run's handler's, and the run is ending (its next answer is
+                // none, which forgets the delivery).
+                if deadline.take_due(web_time::Instant::now(), frame_count())
+                    && self.owner_control.signal.accepting()
+                    && self.app.is_bound_here()
                 {
-                    let arm = armed.take().expect("BUG: a due deadline is armed");
-                    if self
-                        .deadline_hook()
-                        .is_some_and(|hook| Weak::ptr_eq(&arm.hook, &Arc::downgrade(&hook)))
-                    {
-                        let before = frame_count();
-                        self.windows.redraw_for_deadline();
-                        delivered = Some(DeadlineDelivery {
-                            arm,
-                            frames: before,
-                        });
-                    }
+                    self.windows.redraw_for_deadline();
                 }
 
                 // Drain native input/paint/quit before another idle query.
@@ -1129,43 +1202,11 @@ impl WindowsLoop {
                     continue;
                 }
 
-                // A replaced hook's final captures may themselves replace
-                // registration or quit: the query retires its clone before
-                // the answer is validated below.
-                let next = self.query_wake_deadline();
-                armed = match next {
-                    Some((deadline, identity))
-                        if self.deadline_hook().is_some_and(|hook| {
-                            Weak::ptr_eq(&identity, &Arc::downgrade(&hook))
-                        }) =>
-                    {
-                        match deadline {
-                            Some(deadline)
-                                if delivered.as_ref().is_none_or(|last| {
-                                    last.admits(deadline, &identity, frame_count())
-                                }) =>
-                            {
-                                Some(DeadlineArm {
-                                    deadline,
-                                    hook: identity,
-                                })
-                            }
-                            Some(_) => None,
-                            None => {
-                                delivered = None;
-                                None
-                            }
-                        }
-                    }
-                    _ => {
-                        delivered = None;
-                        None
-                    }
-                };
+                // The handler is asked with no borrow of `msg` and no lock
+                // held: it may close windows or quit before it answers.
+                let armed = deadline.arm(self.query_wake_deadline(), frame_count());
 
                 let next_deadline = armed
-                    .as_ref()
-                    .map(|arm| arm.deadline)
                     .into_iter()
                     .chain(
                         preferences
@@ -1206,42 +1247,26 @@ impl WindowsLoop {
         Ok(())
     }
 
-    fn deadline_hook(&self) -> Option<Arc<WakeDeadlineHook>> {
-        if !self.owner_control.signal.accepting() {
-            return None;
-        }
-        let shares = self.owner_control.shares("query wake deadline").ok()?;
-        shares.handlers.borrow().wake_deadline.clone()
-    }
-
-    /// Ask the wake-deadline hook through the call point: its answer, and
-    /// the identity of the hook that gave it, so an answer is never credited
-    /// to a replacement. `None` when no hook is installed or the platform no
+    /// Ask the application's handler for its wake deadline. `None` when it
+    /// asks for none, when no handler is bound, or once the platform no
     /// longer accepts work. Its panic unwinds out of the loop.
-    fn query_wake_deadline(&self) -> Option<(Option<web_time::Instant>, Weak<WakeDeadlineHook>)> {
+    fn query_wake_deadline(&self) -> Option<web_time::Instant> {
         if !self.owner_control.signal.accepting() {
             return None;
         }
-        let shares = self.owner_control.shares("query wake deadline").ok()?;
-        Self::ask_wake_deadline(&shares.handlers)
+        Self::ask_wake_deadline(&self.app)
     }
 
-    /// [`Self::query_wake_deadline`] over a handler set.
-    fn ask_wake_deadline(
-        handlers: &RefCell<PlatformHandlers>,
-    ) -> Option<(Option<web_time::Instant>, Weak<WakeDeadlineHook>)> {
-        call(
-            &SharedField::new(handlers, |handlers| &mut handlers.wake_deadline),
-            |hook| Some((hook(), Arc::downgrade(hook))),
-        )
-        .or_resume(None)
+    /// The wake deadline `app`'s handler asks for, through the call point.
+    fn ask_wake_deadline(app: &AppDelivery) -> Option<web_time::Instant> {
+        app.wake_deadline().or_resume(None)
     }
 
-    /// Installs a platform-level handler into the owner-thread handler set.
+    /// Installs a platform-level callback into the owner-thread hooks.
     ///
     /// Off the owner thread, or once the platform has shut down, the
     /// registration is refused and `callback` is dropped here, on the
-    /// calling thread. A replaced handler is retired through the call point
+    /// calling thread. A replaced callback is retired through the call point
     /// after the `RefCell` borrow ends, since its destructor may re-enter the
     /// platform, in a boundary of its own: a capture that panics in `Drop`
     /// must not unwind into the host.
@@ -1249,14 +1274,14 @@ impl WindowsLoop {
         &self,
         op: &'static str,
         callback: H,
-        project: fn(&mut PlatformHandlers) -> &mut Option<H>,
+        project: fn(&mut AppHooks) -> &mut Option<H>,
     ) {
         match self.owner_control.shares(op) {
-            Ok(shares) => install(&Field::new(&*shares.handlers, project), callback),
+            Ok(shares) => install(&Field::new(&*shares.app_hooks, project), callback),
             Err(UserDataRefusal::ForeignThread) => {
                 tracing::error!(
                     op,
-                    "platform callback registration refused: platform callbacks are registered \
+                    "platform callback registration refused: platform delivery are registered \
                      on the owner thread; the callback was dropped on the calling thread"
                 );
                 drop(callback);
@@ -1277,7 +1302,7 @@ impl host::Loop for WindowsLoop {
     fn run(
         self: Arc<Self>,
         platform: Arc<dyn Platform>,
-        on_ready: PlatformReadyCallback,
+        handler: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError> {
         tracing::info!("Running Windows platform");
 
@@ -1289,37 +1314,36 @@ impl host::Loop for WindowsLoop {
         struct RunGuard(Arc<WindowsLoop>);
         impl Drop for RunGuard {
             fn drop(&mut self) {
-                // Hold the handler set while the owner context still exists,
-                // close (which frees that context on this thread), and only
-                // then run the quit callback: it still observes a closed
-                // platform. It runs once, and its panic is contained: this
-                // is a destructor, possibly of an unwind already under way.
-                let handlers = self
-                    .0
-                    .owner_control
-                    .shares("run teardown")
-                    .ok()
-                    .map(|shares| Rc::clone(&shares.handlers));
+                // Close (which frees the owner context on this thread), and
+                // only then tell the handler the platform quits: it still
+                // observes a closed platform. The delivery hears the quit once
+                // and contains its panic: this is a destructor, possibly of an
+                // unwind already under way. The handler is released last,
+                // contained, or kept while an unwind is under way.
                 self.0.owner_control.close();
-                if let Some(handlers) = handlers {
-                    call(
-                        &Once(Field::new(&*handlers, |handlers| &mut handlers.quit)),
-                        |quit| quit(),
-                    )
-                    .or_contain((), "the quit callback");
-                    // The last handle to the handler set when the owner context
-                    // is gone: its handlers' destructors are user code, dropped
-                    // contained, or kept while an unwind is under way.
-                    retire(handlers);
-                }
+                self.0
+                    .app
+                    .quit_requested()
+                    .or_contain((), "the application's quit");
+                self.0.app.release();
             }
         }
-        let _guard = RunGuard(Arc::clone(&self));
+        // The delivery holds the platform and the hooks weakly: they live in
+        // this frame until the loop ends, declared before the guard so they
+        // outlive it and the handler can still hear the quit.
         let hooks: Arc<dyn OwnerHooks> = Arc::new(control::WindowsOwnerHooks::new(
             Arc::clone(&platform),
             &self.owner_control,
         ));
-        on_ready(OwnerPlatform::new(platform, hooks)).map_err(PlatformError::bootstrap)?;
+        let _guard = RunGuard(Arc::clone(&self));
+        self.app.bind(handler, &platform, &hooks);
+        self.app.resume_through_signal(&self.owner_control.signal);
+        self.app
+            .ready(OwnerPlatform::new(
+                Arc::clone(&platform),
+                Arc::clone(&hooks),
+            ))
+            .map_err(PlatformError::bootstrap)?;
         self.owner_control
             .signal
             .start()
@@ -1343,34 +1367,6 @@ impl host::Loop for WindowsLoop {
         unsafe {
             PostQuitMessage(0);
         }
-    }
-
-    fn set_wake_deadline_hook(&self, hook: Box<WakeDeadlineHook>) {
-        if !self.owner_control.signal.accepting() {
-            drop(hook);
-            return;
-        }
-        let hook: Arc<WakeDeadlineHook> = Arc::from(hook);
-        self.register_handler("set_wake_deadline_hook", hook, |handlers| {
-            &mut handlers.wake_deadline
-        });
-        // Re-query after replacement even when the old query re-entered this
-        // setter. The existing owner signal coalesces these notifications.
-        if self.owner_control.signal.accepting()
-            && let Err(error) = self.owner_control.signal.wake()
-        {
-            tracing::warn!(%error, "failed to wake Win32 after deadline hook registration");
-        }
-    }
-
-    fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
-        self.register_handler("on_quit", callback, |handlers| &mut handlers.quit);
-    }
-
-    fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
-        self.register_handler("set_exit_policy_hook", hook, |handlers| {
-            &mut handlers.exit_policy
-        });
     }
 
     fn request_exit_policy_reevaluation(&self) {
@@ -1403,64 +1399,18 @@ impl host::Services for WindowsLoop {
     }
 
     fn open_url(&self, url: &str) {
-        use windows::Win32::UI::Shell::ShellExecuteW;
-        let wide_url: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
-        // SAFETY: `wide_url` is explicitly NUL-terminated
-        // (`.chain(std::iter::once(0))`), matching what `PCWSTR` requires,
-        // and stays alive for the duration of this call (it is not dropped
-        // or reallocated between `.as_ptr()` and the call).
-        unsafe {
-            ShellExecuteW(
-                None,
-                w!("open"),
-                PCWSTR(wide_url.as_ptr()),
-                None,
-                None,
-                SW_SHOWNORMAL,
-            );
-        }
+        shell_open(std::ffi::OsStr::new(url), None);
     }
 
     fn reveal_path(&self, path: &std::path::Path) {
-        use windows::Win32::UI::Shell::ShellExecuteW;
-        // Use "explorer /select,<path>" to reveal in Explorer
-        let path_str = path.to_string_lossy();
-        let arg = format!("/select,{path_str}");
-        let wide_arg: Vec<u16> = arg.encode_utf16().chain(std::iter::once(0)).collect();
-        let explorer: Vec<u16> = "explorer\0".encode_utf16().collect();
-        // SAFETY: see `open_url` above — both `wide_arg` and `explorer` are
-        // explicitly NUL-terminated and kept alive across the call.
-        unsafe {
-            ShellExecuteW(
-                None,
-                w!("open"),
-                PCWSTR(explorer.as_ptr()),
-                PCWSTR(wide_arg.as_ptr()),
-                None,
-                SW_SHOWNORMAL,
-            );
-        }
+        // "explorer /select,<path>" reveals the path in Explorer.
+        let mut select = std::ffi::OsString::from("/select,");
+        select.push(path.as_os_str());
+        shell_open(std::ffi::OsStr::new("explorer"), Some(&select));
     }
 
     fn open_path(&self, path: &std::path::Path) {
-        use windows::Win32::UI::Shell::ShellExecuteW;
-        let wide_path: Vec<u16> = path
-            .to_string_lossy()
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect();
-        // SAFETY: see `open_url` above — `wide_path` is explicitly
-        // NUL-terminated and kept alive across the call.
-        unsafe {
-            ShellExecuteW(
-                None,
-                w!("open"),
-                PCWSTR(wide_path.as_ptr()),
-                None,
-                None,
-                SW_SHOWNORMAL,
-            );
-        }
+        shell_open(path.as_os_str(), None);
     }
 
     fn prompt_for_paths(
@@ -1674,62 +1624,87 @@ impl host::Preferences<WindowsLoop> for WindowsLoop {
 
 /// The lifecycle position is the loop's: the broadcast receiver tells the
 /// lifecycle the table made ([`WindowsHost::lifecycle`]) of the session, power,
-/// lock and memory messages, and the loop keeps the application's hooks.
+/// lock and memory messages, and the lifecycle asks the application's handler.
 impl host::Lifecycle<WindowsLoop> for WindowsLoop {
-    fn on_session_end(
-        owner: &WindowsLoop,
-        callback: Box<
-            dyn FnMut(flui_platform::SessionEndPhase) -> flui_platform::SessionEndAnswer + Send,
-        >,
-    ) {
-        owner.register_handler("on_session_end", callback, |handlers| {
-            &mut handlers.session_end
-        });
-    }
-
-    fn on_host_notice(
-        owner: &WindowsLoop,
-        callback: Box<dyn FnMut(flui_platform::SystemNotice) + Send>,
-    ) {
-        match owner.owner_control.shares("on_host_notice") {
-            Ok(shares) => shares.notices.set_hook(callback),
-            Err(reason) => {
-                tracing::debug!(?reason, "host notice registration refused");
-                drop(callback);
-            }
-        }
-    }
-
     fn release_session_end(owner: &WindowsLoop) {
         if let Ok(shares) = owner.owner_control.shares("release_session_end") {
             shares.lifecycle.release_session_end();
         }
     }
 
-    fn on_reopen(_: &WindowsLoop, callback: Box<dyn FnMut() + Send>) {
-        // Windows sends no reopen signal; nothing will call the callback.
-        drop(callback);
+    /// Windows has no application to bring forward, only its windows: a
+    /// window comes forward through `WindowCommand::Activate`, under the
+    /// foreground rules. Nothing here touches the foreground, least of all
+    /// another application's window.
+    fn activate(_: &WindowsLoop, _ignoring_other_apps: bool) {}
+}
+
+/// Hand `file` (a URL, a path or a program) with `parameters` to the shell's
+/// `open`, and let the handler it starts come to the foreground.
+///
+/// The right goes to the one process the shell names as the handler it
+/// started ([`foreground_recipient`]), never to any process: where the shell
+/// started none (it handed the request to a handler already running, such as
+/// a browser or Explorer) or failed, nothing is handed over, and a running
+/// handler comes forward under the OS's own rules. Where this process holds
+/// no foreground right itself, Windows refuses the hand-over, and nothing
+/// that was not this process's to hand is given.
+fn shell_open(file: &std::ffi::OsStr, parameters: Option<&std::ffi::OsStr>) {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::GetProcessId;
+    use windows::Win32::UI::Shell::{SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW};
+    use windows::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow;
+
+    let wide = |text: &std::ffi::OsStr| -> Vec<u16> {
+        text.encode_wide().chain(std::iter::once(0)).collect()
+    };
+    let file = wide(file);
+    let parameters = parameters.map(wide);
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: u32::try_from(std::mem::size_of::<SHELLEXECUTEINFOW>())
+            .expect("BUG: SHELLEXECUTEINFOW is a few hundred bytes"),
+        fMask: SEE_MASK_NOCLOSEPROCESS,
+        lpVerb: w!("open"),
+        lpFile: PCWSTR(file.as_ptr()),
+        lpParameters: parameters
+            .as_ref()
+            .map_or(PCWSTR::null(), |parameters| PCWSTR(parameters.as_ptr())),
+        nShow: SW_SHOWNORMAL.0,
+        ..Default::default()
+    };
+    // SAFETY: `info` is a live, initialised `SHELLEXECUTEINFOW` whose
+    // `cbSize` matches its type; its strings are NUL-terminated buffers that
+    // outlive the call, and the shell writes only `hInstApp` and `hProcess`.
+    let opened = unsafe { ShellExecuteExW(&raw mut info) };
+    if let Err(error) = &opened {
+        tracing::warn!(%error, "the shell did not open the target");
     }
-
-    fn activate(_: &WindowsLoop, _ignoring_other_apps: bool) {
-        use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, SetForegroundWindow};
-
-        // SAFETY: `GetForegroundWindow`/`SetForegroundWindow` take no
-        // pointer arguments — `hwnd` is an opaque value, never dereferenced.
+    let process = info.hProcess;
+    let handler = (!process.is_invalid()).then(|| {
+        // SAFETY: `process` is the handle the shell returned for the handler
+        // it started, owned by this function and closed once only.
         unsafe {
-            // Bring the foreground window to front
-            let hwnd = GetForegroundWindow();
-            if !hwnd.is_invalid()
-                && let Err(error) = SetForegroundWindow(hwnd).ok()
-            {
-                tracing::warn!(
-                    ?hwnd,
-                    ?error,
-                    "SetForegroundWindow failed in Platform::activate"
-                );
-            }
+            let id = GetProcessId(process);
+            let _ = CloseHandle(process);
+            id
+        }
+    });
+    if let Some(id) = foreground_recipient(opened.is_ok(), handler.filter(|id| *id != 0)) {
+        // SAFETY: the call takes a process identifier by value and changes
+        // only which process may set the foreground next.
+        if let Err(error) = unsafe { AllowSetForegroundWindow(id) } {
+            tracing::debug!(%error, "the foreground was not this process's to hand over");
         }
     }
+}
+
+/// The process the foreground right goes to after a shell call: the handler
+/// the shell started, named by its process id, and only when the call
+/// succeeded. A handler the shell did not start (one already running) is
+/// given nothing: the type has no "any process" to name.
+fn foreground_recipient(opened: bool, handler: Option<u32>) -> Option<u32> {
+    handler.filter(|_| opened)
 }
 
 impl Drop for WindowsLoop {
@@ -1757,5 +1732,28 @@ impl Drop for WindowsLoop {
 
         // COM is left by the `apartment` field, after this body, or later by
         // the last window's text services if any still live.
+    }
+}
+
+#[cfg(test)]
+mod foreground_handover_tests {
+    use super::foreground_recipient;
+
+    /// The right goes to the handler the shell started, by its id; to no
+    /// process when the shell started none or failed.
+    #[test]
+    fn the_foreground_goes_only_to_the_handler_the_shell_started() {
+        assert_eq!(foreground_recipient(true, Some(4242)), Some(4242));
+        assert_eq!(
+            foreground_recipient(true, None),
+            None,
+            "a handler already running"
+        );
+        assert_eq!(
+            foreground_recipient(false, Some(4242)),
+            None,
+            "the shell failed"
+        );
+        assert_eq!(foreground_recipient(false, None), None);
     }
 }

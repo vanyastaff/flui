@@ -47,6 +47,9 @@ flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 # The text-store contract `text_store_kit` certifies stores against, and
 # `InMemoryTextStore`, the reference store its own fixture drives.
 flui-platform = { workspace = true }
+# The handle traits a window's surface target answers through, which the
+# window conformance checks query (ADR-0254 §5).
+raw-window-handle = { workspace = true }
 # Canonical hit-test positions accepted by the production input pipeline.
 # The element tree + build owner this binding drives each frame (`build_scope`
 # drains the external inbox an animation/listenable tick fills).

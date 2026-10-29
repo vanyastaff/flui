@@ -153,14 +153,18 @@ mod read_build {
     }
 }
 
-/// The Apple operating-system version.
-#[cfg(any(target_os = "ios", test))]
+/// The Apple operating-system versions: iOS's ([`AppleVersion`]) and macOS's
+/// ([`MacOSVersion`]), the same three components over separate floors.
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
 #[forbid(unsafe_code)]
 pub(crate) mod apple {
-    #[cfg(target_os = "ios")]
+    #[cfg(any(target_os = "ios", target_os = "macos"))]
     use objc2_foundation::NSProcessInfo;
 
+    #[cfg(any(target_os = "ios", test))]
     use crate::version::floor::IOS_FLOOR;
+    #[cfg(any(target_os = "macos", test))]
+    use crate::version::floor::MACOS_FLOOR;
 
     use super::{Gate, OsVersion, Since};
 
@@ -188,7 +192,7 @@ pub(crate) mod apple {
         /// The version the process runs on: `NSProcessInfo.operatingSystemVersion`. The
         /// platform reads it when it is built and keeps the value; a feature newer than the
         /// deployment target is then gated on a proof from [`since`](Self::since).
-        #[cfg(target_os = "ios")]
+        #[cfg(any(target_os = "ios", target_os = "macos"))]
         pub(crate) fn read() -> Self {
             let version = NSProcessInfo::processInfo().operatingSystemVersion();
             let component = |value: isize| i64::try_from(value).unwrap_or(0);
@@ -220,17 +224,72 @@ pub(crate) mod apple {
             (component(self.major) << 42) | (component(self.minor) << 21) | component(self.patch)
         }
 
-        /// The proof that this version has feature `F`, or `None`.
+        /// The proof that this iOS version has feature `F`, or `None`.
+        #[cfg(any(target_os = "ios", test))]
         pub(crate) fn since<F: Gate<Version = Self>>(self) -> Option<Since<F>> {
             super::since::<F>(self)
         }
     }
 
+    /// As an iOS version, over iOS's floor.
+    #[cfg(any(target_os = "ios", test))]
     impl OsVersion for AppleVersion {
         const FLOOR: u64 = AppleVersion::new(IOS_FLOOR.0, IOS_FLOOR.1, IOS_FLOOR.2).rank();
 
         fn ordinal(self) -> Option<u64> {
             (self != Self::UNKNOWN).then(|| self.rank())
+        }
+    }
+
+    /// A macOS version: [`AppleVersion`]'s components over macOS's floor, so a
+    /// gate written for one system cannot be asked of the other.
+    #[cfg(any(target_os = "macos", test))]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) struct MacOSVersion(AppleVersion);
+
+    #[cfg(any(target_os = "macos", test))]
+    impl MacOSVersion {
+        /// A version Foundation could not report, which unlocks nothing.
+        #[cfg(test)]
+        pub(crate) const UNKNOWN: Self = Self(AppleVersion::UNKNOWN);
+
+        pub(crate) const fn new(major: u32, minor: u32, patch: u32) -> Self {
+            Self(AppleVersion::new(major, minor, patch))
+        }
+
+        /// The version the process runs on, which the platform reads once and
+        /// keeps.
+        #[cfg(target_os = "macos")]
+        pub(crate) fn read() -> Self {
+            Self(AppleVersion::read())
+        }
+
+        /// The version's position in the order of [`OsVersion::ordinal`], for a
+        /// [`Gate::SINCE`].
+        pub(crate) const fn rank(self) -> u64 {
+            self.0.rank()
+        }
+
+        /// The proof that this macOS version has feature `F`, or `None`.
+        pub(crate) fn since<F: Gate<Version = Self>>(self) -> Option<Since<F>> {
+            super::since::<F>(self)
+        }
+    }
+
+    #[cfg(any(target_os = "macos", test))]
+    impl OsVersion for MacOSVersion {
+        const FLOOR: u64 = MacOSVersion::new(MACOS_FLOOR.0, MACOS_FLOOR.1, MACOS_FLOOR.2).rank();
+
+        fn ordinal(self) -> Option<u64> {
+            (self.0 != AppleVersion::UNKNOWN).then(|| self.rank())
+        }
+    }
+
+    /// Shown as `major.minor.patch`, for logs; carries no order.
+    #[cfg(any(target_os = "macos", test))]
+    impl std::fmt::Display for MacOSVersion {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            self.0.fmt(formatter)
         }
     }
 
@@ -406,6 +465,27 @@ pub(crate) mod android {
         const SINCE: u64 = 24;
     }
 
+    /// `PointerIcon` and `View.setPointerIcon` (API 24). Without them the system
+    /// draws its own pointer, which the window cannot change.
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct PointerIcons;
+
+    impl Gate for PointerIcons {
+        type Version = AndroidApi;
+        const SINCE: u64 = 24;
+    }
+
+    /// `Window.setBackgroundBlurRadius` and `WindowManager.isCrossWindowBlurEnabled`
+    /// (API 31). Without them the system blurs nothing behind a window, and the
+    /// window draws no material.
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct BackgroundBlur;
+
+    impl Gate for BackgroundBlur {
+        type Version = AndroidApi;
+        const SINCE: u64 = 31;
+    }
+
     /// `dalvik.system.InMemoryDexClassLoader` (API 26). Without it `FluiView`'s dex is loaded with
     /// a `DexClassLoader` over a read-only copy in the code cache.
     #[derive(Debug, Clone, Copy)]
@@ -551,10 +631,10 @@ pub(crate) mod testing {
 #[cfg(test)]
 mod tests {
     use super::android::{
-        AndroidApi, ContextDisplay, DisplayCutout, DragSource, EnvelopeEffects, GestureExclusion,
-        HapticComposition, InMemoryDex, InsetsByType, InsetsController, LocaleList,
-        RoundPrimitives, ScaledScrollFactor, SegmentFeedback, StylusHandwriting, SystemContrast,
-        TextWeight, TouchpadGestures, VibrationTouchUsage,
+        AndroidApi, BackgroundBlur, ContextDisplay, DisplayCutout, DragSource, EnvelopeEffects,
+        GestureExclusion, HapticComposition, InMemoryDex, InsetsByType, InsetsController,
+        LocaleList, PointerIcons, RoundPrimitives, ScaledScrollFactor, SegmentFeedback,
+        StylusHandwriting, SystemContrast, TextWeight, TouchpadGestures, VibrationTouchUsage,
     };
     use super::testing::row;
 
@@ -606,6 +686,18 @@ mod tests {
         ));
         failures.extend(row::<DragSource>("DragSource", api(23), api(24), unknown));
         failures.extend(row::<InMemoryDex>("InMemoryDex", api(25), api(26), unknown));
+        failures.extend(row::<PointerIcons>(
+            "PointerIcons",
+            api(23),
+            api(24),
+            unknown,
+        ));
+        failures.extend(row::<BackgroundBlur>(
+            "BackgroundBlur",
+            api(30),
+            api(31),
+            unknown,
+        ));
         failures.extend(row::<GestureExclusion>(
             "GestureExclusion",
             api(28),

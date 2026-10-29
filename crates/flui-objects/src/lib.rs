@@ -76,7 +76,8 @@ pub use proxy::{
     SubtreeAnchor, TransformMotion,
 };
 pub use proxy::{
-    RenderExcludeSemantics, RenderIndexedSemantics, RenderMergeSemantics, SemanticsActionRoute,
+    GatedCustomAction, RenderExcludeSemantics, RenderIndexedSemantics, RenderMergeSemantics,
+    SemanticsActionRoute,
 };
 pub use shimmer::{ShimmerBand, ShimmerSweep};
 

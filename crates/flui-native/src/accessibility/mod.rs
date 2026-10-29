@@ -8,26 +8,27 @@
 //!
 //! - `windows`: UI Automation (`accesskit_windows`);
 //! - `apple`: NSAccessibility on macOS (`accesskit_macos`);
-//! - `linux`: AT-SPI (`accesskit_unix`), which the winit host uses;
+//! - `linux`: AT-SPI (`accesskit_unix`), which every Linux host's windows
+//!   hand out (the Wayland, X11 and winit hosts');
 //! - `headless`: `FakeAccessibility`, which counts what was published while active.
 //!
 //! The adapters have no feature: every window of a host that has one hands it
-//! out. Android, iOS and the Web have none yet: their tables name
-//! `Absent<Accessibility>`. The Linux adapter comes with the Linux host
-//! (ADR-0151 §15); that host is the winit one until the native Wayland and X11
-//! host arrives, so the two gates below name `winit-backend`, and they are the
-//! only place that does.
+//! out, and each compiles wherever a host of its operating system does
+//! (ADR-0151 §15): on Linux, with any of the Wayland, X11 and winit hosts.
+//! Android and the Web have none yet: their tables name
+//! `Absent<Accessibility>`.
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) mod apple;
 #[cfg(any(
     target_os = "windows",
     target_os = "macos",
-    all(target_os = "linux", feature = "winit-backend")
+    target_os = "ios",
+    linux_host
 ))]
 mod bridge;
 pub(crate) mod headless;
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+#[cfg(linux_host)]
 pub(crate) mod linux;
 #[cfg(windows)]
 pub(crate) mod windows;
