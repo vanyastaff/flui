@@ -42,13 +42,13 @@ use windows::Win32::{
             GetActiveWindow, GetFocus, SetFocus, VK_ESCAPE, VK_F11, VK_RETURN, VK_RIGHT,
         },
         WindowsAndMessaging::{
-            DispatchMessageW, GWL_STYLE, GetClientRect, GetWindowLongPtrW, GetWindowRect, IsIconic,
-            IsWindowVisible, IsZoomed, MSG, PM_REMOVE, PeekMessageW, PostMessageW, SC_MOVE,
-            SC_SIZE, SW_MINIMIZE, SW_RESTORE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
-            SendMessageW, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
-            TranslateMessage, WA_ACTIVE, WA_INACTIVE, WM_ACTIVATE, WM_DPICHANGED, WM_KEYDOWN,
-            WM_SYSCOMMAND, WM_WTSSESSION_CHANGE, WS_CAPTION, WS_MAXIMIZEBOX, WS_THICKFRAME,
-            WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
+            DispatchMessageW, GWL_STYLE, GetClientRect, GetWindowLongPtrW, GetWindowRect,
+            HWND_TOPMOST, IsIconic, IsWindowVisible, IsZoomed, MSG, PM_REMOVE, PeekMessageW,
+            PostMessageW, SC_MOVE, SC_SIZE, SW_MINIMIZE, SW_RESTORE, SWP_NOACTIVATE, SWP_NOMOVE,
+            SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetWindowLongPtrW, SetWindowPos,
+            SetWindowTextW, ShowWindow, TranslateMessage, WA_ACTIVE, WA_INACTIVE, WM_ACTIVATE,
+            WM_DPICHANGED, WM_KEYDOWN, WM_SYSCOMMAND, WM_WTSSESSION_CHANGE, WS_CAPTION,
+            WS_MAXIMIZEBOX, WS_THICKFRAME, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
         },
     },
 };
@@ -1536,8 +1536,25 @@ impl WindowFixture for Win32Fixture {
     /// presents.
     fn present_and_request_frame(&mut self) -> Option<flui_platform::FrameRequest> {
         let presenting = open(&self.platform, options());
-        settle();
         let hwnd = hwnd_of(&presenting.window);
+        // The foreground rules open a test's window behind the window the user
+        // works with, and DWM composes no flip of a window a maximized one
+        // covers, so its statistics would name nothing shown: above every
+        // window that is not topmost, without taking the foreground.
+        // SAFETY: plain integers for this fixture's own live window.
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                Some(HWND_TOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )
+        }
+        .expect("a test window goes above the user's");
+        settle();
         let target = presenting.window.surface_target();
         {
             let presenter = DxgiPresenter::on(hwnd);
@@ -1578,8 +1595,12 @@ impl WindowFixture for Win32Fixture {
                 });
         if let Some(request) = request {
             eprintln!(
-                "the next frame request: vsync {:?}, presented {:?}",
-                request.vsync, request.presented
+                "the next frame request: vsync {:?}, target present {:?}, presented {:?}, \
+                 now {:?}",
+                request.vsync,
+                request.target_present,
+                request.presented,
+                flui_platform::EventTime::now()
             );
         }
         presenting
