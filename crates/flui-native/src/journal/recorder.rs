@@ -11,15 +11,16 @@ use parking_lot::Mutex;
 use super::capture::{CaptureGuard, CaptureSource, Captured, capture};
 use super::codec::{
     Backend, DisplayRead, Header, NativeRecording, PreferenceRead, ReadFailure, RecordedDisplay,
-    Row,
+    RecordedWindowState, Row,
 };
 
 /// Whether a recorder keeps the text it journals (ADR-0215 §5).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Privacy {
-    /// Input method text is replaced, and each row that lost text is marked
-    /// redacted, which its replay refuses. A display's name is replaced and
-    /// its persistent key pseudonymized, which keeps its row replayable.
+    /// Input method text and window titles are replaced, and each row that
+    /// lost text is marked redacted, which its replay refuses. A display's
+    /// name is replaced and its persistent key pseudonymized, which keeps its
+    /// row replayable.
     #[default]
     Redact,
     /// Keep all text and identifiers: the one explicit opt-in per recording.
@@ -224,6 +225,22 @@ fn journal(
                     read,
                     redacted: false,
                 },
+            }
+        }
+        Captured::WindowState(state) => {
+            let state = RecordedWindowState::of(state.clone());
+            match privacy {
+                Privacy::KeepText => Row::State {
+                    state,
+                    redacted: false,
+                },
+                Privacy::Redact => {
+                    let redacted = state.title().is_some();
+                    Row::State {
+                        state: state.retitled(|_| REDACTED.to_owned()),
+                        redacted,
+                    }
+                }
             }
         }
         Captured::Started { .. } | Captured::Opened(_) => {

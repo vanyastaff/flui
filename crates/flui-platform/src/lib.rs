@@ -200,8 +200,8 @@ pub use window::{
 };
 pub use window_handler::{CloseDecision, FrameOutcome, SurfaceChange, WindowHandler};
 pub use window_state::{
-    AdmissionError, AdmittedCommand, ApplyError, CapabilitiesOwner, CommandRefusal,
-    PlatformFailure, SizeConstraints, SubmitError, WindowCapabilities, WindowCommand,
-    WindowControl, WindowGeometry, WindowMode, WindowRevision, WindowRevisionExhausted,
-    WindowState,
+    AdmissionError, AdmittedCommand, ApplyError, CapabilitiesOwner, CapabilityParts,
+    CommandRefusal, PlatformFailure, SizeConstraints, SubmitError, WindowCapabilities,
+    WindowCommand, WindowControl, WindowGeometry, WindowMode, WindowRevision,
+    WindowRevisionExhausted, WindowState, WindowStateParts,
 };

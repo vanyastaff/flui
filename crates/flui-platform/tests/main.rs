@@ -18,6 +18,9 @@ mod host_notice;
 #[path = "input_vocabulary.rs"]
 mod input_vocabulary;
 
+#[path = "parts.rs"]
+mod parts;
+
 #[path = "placement_resolve.rs"]
 mod placement_resolve;
 

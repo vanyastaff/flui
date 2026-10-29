@@ -11,3 +11,9 @@
 - **`flui-native`**: `HeadlessDisplayControls::replace` reports a whole new set of displays, and
   `HeadlessDisplayControls::fail_next_read` fails the next display read, as a native display
   source does.
+- **`flui-platform`**: `WindowStateParts` and `CapabilityParts`, the public fields of `WindowState`
+  (apart from its revision) and of `WindowCapabilities` (apart from its owner and revision), for
+  the same reason (`WindowState::into_parts`, `WindowStateParts::into_state`,
+  `WindowCapabilities::into_parts`, `CapabilityParts::into_capabilities`).
+- **`flui-native`**: `MockWindow::simulate_state` publishes a whole snapshot as the window system's
+  report, through the window's successor rules.
