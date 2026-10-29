@@ -212,7 +212,7 @@ struct ReentrantCapture {
 impl Drop for ReentrantCapture {
     fn drop(&mut self) {
         self.drops.set(self.drops.get() + 1);
-        self.controller.set_value(0.5).expect("no build is running");
+        let _ = self.controller.set_value(0.5);
     }
 }
 

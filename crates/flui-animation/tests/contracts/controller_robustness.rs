@@ -408,7 +408,10 @@ fn disposed_controller_ignores_set_value() {
     }));
     owner.dispose();
 
-    controller.set_value(0.8).expect("no build is running");
+    assert_eq!(
+        controller.set_value(0.8),
+        Err(flui_animation::AnimationError::Disposed)
+    );
 
     assert_eq!(
         controller.value(),

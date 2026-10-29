@@ -187,7 +187,7 @@ fn exhausted_disposed_value_identities_refuse_outside_the_state_borrow() {
                 "healthy refusal retires; failed refusal retains opaque captures"
             );
             assert!(!c.is_animating());
-            c.set_value(0.5).expect("no build is running");
+            assert_eq!(c.set_value(0.5), Err(AnimationError::Disposed));
             assert_eq!(
                 c.value(),
                 0.0,

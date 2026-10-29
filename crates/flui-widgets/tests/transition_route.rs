@@ -353,9 +353,9 @@ pub(crate) fn replacement_retains_near_zero_secondary_progress_until_crossing() 
             progress * 2.0,
             "the replacement now drives the secondary"
         );
-        middle_controller
-            .set_value(0.8)
-            .expect("no build is running");
+        // The replaced route may already be disposed: either way it must not
+        // drive the output.
+        let _ = middle_controller.set_value(0.8);
         assert_eq!(
             secondary.value(),
             progress * 2.0,

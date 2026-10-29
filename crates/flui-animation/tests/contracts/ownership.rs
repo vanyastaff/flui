@@ -1748,7 +1748,10 @@ fn wrapper_over_a_disposed_source(wrap: fn(AnimationHandle) -> AnimationHandle) 
             panic!("a disposed source cannot send a new status");
         }))
         .detach();
-    parent.set_value(1.0).expect("no build is running");
+    assert_eq!(
+        parent.set_value(1.0),
+        Err(flui_animation::AnimationError::Disposed)
+    );
     drop(wrapper);
     assert_eq!(
         drops.load(Ordering::SeqCst),
