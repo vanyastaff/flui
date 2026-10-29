@@ -1348,6 +1348,14 @@ impl SemanticsOwner {
         Ok(())
     }
 
+    /// Whether an accepted announcement waits for a flush that can deliver
+    /// it: the owner is enabled and has a root to publish under. A frame
+    /// scheduler reads it to produce the frame an idle presentation needs.
+    #[must_use]
+    pub fn has_undelivered_announcements(&self) -> bool {
+        self.enabled && self.tree.root().is_some() && self.has_pending_announcements()
+    }
+
     fn has_pending_announcements(&self) -> bool {
         self.announcements
             .as_ref()

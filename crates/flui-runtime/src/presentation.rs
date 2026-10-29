@@ -1645,6 +1645,7 @@ impl PresentationState {
                 .try_with(|owner| {
                     owner.has_pending_invalidations()
                         || owner.has_dirty_nodes() && !owner.layout_waits_for_input()
+                        || owner.has_pending_announcements()
                 })
                 .unwrap_or(true)
     }
@@ -1673,6 +1674,7 @@ impl PresentationState {
                 // scope; `run_frame` drains again before its first phase.
                 owner.drain_pending_dirty_with_recovery(recovery);
                 owner.has_dirty_nodes() && !owner.layout_waits_for_input()
+                    || owner.has_pending_announcements()
             })
     }
 

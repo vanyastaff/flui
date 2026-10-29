@@ -2003,6 +2003,15 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         Some(announcements)
     }
 
+    /// Whether the semantics owner holds an announcement that the next
+    /// frame's semantics phase publishes, though no node is dirty.
+    #[must_use]
+    pub fn has_pending_announcements(&self) -> bool {
+        self.semantics_owner
+            .as_ref()
+            .is_some_and(flui_semantics::SemanticsOwner::has_undelivered_announcements)
+    }
+
     /// Returns the semantics owner, if semantics is currently enabled.
     ///
     /// `None` until [`Self::set_semantics_enabled`]`(true)` lazily creates
