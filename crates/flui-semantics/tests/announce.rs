@@ -232,3 +232,38 @@ fn an_announcer_queues_then_requests_a_frame() {
         Err(AnnounceError::PresentationClosed)
     );
 }
+
+/// An agent reads and locates the interface, not the announcer nodes: they
+/// are published to assistive technology alone.
+#[test]
+fn an_agent_neither_reads_nor_locates_the_announcer_nodes() {
+    let announcements = announcements();
+    let (mut owner, _, _) = owner_with(&announcements);
+    owner
+        .announce("Message sent", Urgency::Polite)
+        .expect("an installed queue accepts");
+    owner.flush();
+    let tree = owner
+        .read_wire(
+            &flui_protocol::ReadQuery::new(),
+            crate::fixture::placement(),
+        )
+        .expect("the tree reads");
+    assert_eq!(tree.roots.len(), 1);
+    assert!(
+        tree.roots[0].children.is_empty(),
+        "the window shows no announcer node"
+    );
+    let announcer = owner
+        .locate_wire(
+            &flui_protocol::LocateParams::new(flui_protocol::Locator::identifier(
+                Urgency::Polite.announcer_identifier(),
+            )),
+            crate::fixture::placement(),
+        )
+        .expect("the tree reads");
+    assert!(
+        announcer.matches.is_empty(),
+        "no locator reaches an announcer node"
+    );
+}

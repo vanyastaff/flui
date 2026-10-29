@@ -1356,6 +1356,15 @@ impl SemanticsOwner {
         self.enabled && self.tree.root().is_some() && self.has_pending_announcements()
     }
 
+    /// The announcer nodes' identities, when an announcement queue is
+    /// installed: published for assistive technology, which speaks their
+    /// value changes, and not part of the interface an agent reads.
+    pub(crate) fn announcer_node_ids(&self) -> Option<[AccessibilityNodeId; 2]> {
+        self.announcements.as_ref().map(|announcements| {
+            [crate::Urgency::Polite, crate::Urgency::Assertive]
+                .map(|urgency| announcements.node_id(urgency))
+        })
+    }
     fn has_pending_announcements(&self) -> bool {
         self.announcements
             .as_ref()
@@ -1363,7 +1372,8 @@ impl SemanticsOwner {
     }
 
     /// The announcer nodes for `prepared`, polite then assertive: static text
-    /// whose value is the message, live at its urgency, with no area.
+    /// whose value is the message, live at its urgency, with no area, named
+    /// by [`Urgency::announcer_identifier`](crate::Urgency::announcer_identifier).
     fn announcer_nodes(
         announcements: &crate::Announcements,
         prepared: &crate::announce::PreparedAnnouncements,
@@ -1377,6 +1387,7 @@ impl SemanticsOwner {
             node.set_live_atomic();
             node.set_value(value);
             node.set_bounds(accesskit::Rect::ZERO);
+            node.set_author_id(urgency.announcer_identifier());
             (
                 accesskit::NodeId(announcements.node_id(urgency).as_u64()),
                 node,

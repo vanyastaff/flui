@@ -112,3 +112,16 @@ pub enum Urgency {
     /// Interrupts what is being read.
     Assertive,
 }
+
+impl Urgency {
+    /// The `author_id` the announcer node of this urgency publishes under,
+    /// which tests and agents read announcements by (ADR-0240). It is in a
+    /// namespace no widget identifier uses.
+    #[must_use]
+    pub const fn announcer_identifier(self) -> &'static str {
+        match self {
+            Self::Polite => "flui:announcer:polite",
+            Self::Assertive => "flui:announcer:assertive",
+        }
+    }
+}
