@@ -1385,7 +1385,7 @@ pub(crate) fn a_secondary_layout_refreshes_its_stationary_hover() {
     let secondary = install_secondary(&mut realm);
     let graph = realm
         .presentation_widgets_for_test(secondary)
-        .with_build_owner(|owner| owner.reactive().clone());
+        .with_build_owner(|owner| owner.signal_graph().clone());
     let enters = Rc::new(Cell::new(0));
     let exits = Rc::new(Cell::new(0));
     realm

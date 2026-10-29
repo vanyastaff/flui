@@ -12,8 +12,15 @@
 //! the owed removal; the flush notes the route id in
 //! [`FlushOutcome::local_history_popped`](super::history::FlushOutcome), and
 //! `NavigatorShared::apply` drains [`take_owed`](LocalHistoryRegistry::take_owed)
-//! with no lock held. `entry_handle.remove()` outside a flush fires directly —
-//! the same callback runs in the same lock-free context either way.
+//! with no lock held and hands each owed callback to the navigator's
+//! post-frame queue ([`deliver_on_remove`]). A flush can run inside `build`
+//! (a route command or a page update applied there), where a signal write the
+//! callback makes through its captured `WriterSource` is refused; after the
+//! frame it lands, and each callback runs in its own post-frame entry, so one
+//! that panics does not lose the next. A navigator that is no longer mounted
+//! has no queue: its owed callbacks are severed like a disposed route's.
+//! `entry_handle.remove()` is called from application code outside a flush and
+//! fires directly, outside the lock.
 //!
 //! The registry mutex is a **leaf**: mutate under it, release, then fire. The
 //! exactly-once linearization for `remove()` racing `did_pop` is the entry's
@@ -47,6 +54,39 @@ use parking_lot::Mutex;
 /// Fired when its entry leaves the local history — by a pop or an explicit
 /// [`remove`](LocalHistoryEntryHandle::remove).
 pub(crate) type OnRemoveCallback = Rc<dyn Fn()>;
+
+/// Deliver the `on_remove`s owed by pops inside one flush, each on its own:
+///
+/// - a mounted navigator queues each on its post-frame queue, so it runs
+///   after the frame, outside any `build`, in its own entry;
+/// - a queue that closed healthily hands the callback back and it runs here,
+///   contained alone, since no frame will come; a queue that closed with a
+///   caught failure in custody retains it, unrun (ADR-0182);
+/// - an unmounted navigator (no queue) severs it, as route dispose does: its
+///   page subtree is gone, and running it now would run inside whatever
+///   element is building (ADR-0025).
+///
+/// A panic in one callback, or in one capture's drop, does not keep the next
+/// from being delivered; the first is resumed by the caller's `recovery`.
+pub(crate) fn deliver_on_remove(
+    post_frame: Option<&flui_scheduler::PostFrameHandle>,
+    callbacks: Vec<OnRemoveCallback>,
+    recovery: &mut flui_foundation::panic::PanicRecovery,
+) {
+    for callback in callbacks {
+        let Some(post_frame) = post_frame else {
+            recovery.retire(callback);
+            continue;
+        };
+        match post_frame.schedule_or_return(callback, |callback, _timing| callback()) {
+            Ok(()) | Err(flui_scheduler::PostFrameRejection::Retained) => {}
+            Err(flui_scheduler::PostFrameRejection::Returned(callback)) => {
+                recovery.run(|| callback());
+                recovery.retire(callback);
+            }
+        }
+    }
+}
 
 /// One live entry, with no app-bar-dismissal flag (no `AppBar`; ADR-0025).
 struct EntryInner {
@@ -419,3 +459,86 @@ impl InheritedView for LocalHistoryScope {
 }
 
 impl_inherited_view!(LocalHistoryScope);
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    use flui_foundation::panic::PanicRecovery;
+    use flui_scheduler::{OwnerFrame, UpdateScheduler};
+
+    use super::*;
+
+    struct Dropped(Rc<Cell<u32>>);
+    impl Drop for Dropped {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+
+    /// Deliver `callbacks` the way `NavigatorShared::apply` does, and return
+    /// the text of the first panic, if any.
+    fn deliver(
+        post_frame: Option<&flui_scheduler::PostFrameHandle>,
+        callbacks: Vec<OnRemoveCallback>,
+    ) -> Option<String> {
+        catch_unwind(AssertUnwindSafe(|| {
+            let mut recovery = PanicRecovery::new();
+            deliver_on_remove(post_frame, callbacks, &mut recovery);
+            recovery.finish();
+        }))
+        .err()
+        .map(|payload| {
+            flui_foundation::panic::payload_text(payload.as_ref())
+                .unwrap_or_default()
+                .to_owned()
+        })
+    }
+
+    /// A queue that closed healthily hands each owed callback back, and each
+    /// runs at once, contained on its own: the first panic does not keep the
+    /// second from running, and it is the one reported.
+    ///
+    /// Red-check: run the returned callbacks inside one `recovery.run` — the
+    /// second never runs.
+    #[test]
+    fn a_closed_queue_runs_each_owed_removal_contained_alone() {
+        let scheduler = UpdateScheduler::new();
+        let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+        let handle = owner.post_frame_handle();
+        assert!(owner.retire().is_none(), "a healthy close");
+        let ran = Rc::new(Cell::new(0));
+        let second_ran = Rc::clone(&ran);
+        let callbacks: Vec<OnRemoveCallback> = vec![
+            Rc::new(|| panic!("first owed removal")),
+            Rc::new(move || second_ran.set(second_ran.get() + 1)),
+        ];
+
+        let panic = deliver(Some(&handle), callbacks);
+
+        assert_eq!(panic.as_deref(), Some("first owed removal"));
+        assert_eq!(ran.get(), 1, "the second removal still ran");
+    }
+
+    /// An unmounted navigator has no queue: its owed callbacks are severed,
+    /// never run, and their captures dropped once.
+    ///
+    /// Red-check: run the callback when there is no queue — `ran` is 1.
+    #[test]
+    fn no_queue_severs_the_owed_removal() {
+        let ran = Rc::new(Cell::new(0));
+        let drops = Rc::new(Cell::new(0));
+        let capture = Dropped(Rc::clone(&drops));
+        let ran_in_callback = Rc::clone(&ran);
+        let callback: OnRemoveCallback = Rc::new(move || {
+            let _ = &capture;
+            ran_in_callback.set(ran_in_callback.get() + 1);
+        });
+
+        assert_eq!(deliver(None, vec![callback]), None);
+
+        assert_eq!(ran.get(), 0, "a severed removal never runs");
+        assert_eq!(drops.get(), 1, "its captures are dropped once");
+    }
+}

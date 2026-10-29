@@ -4808,7 +4808,7 @@ pub(crate) fn a_command_queued_before_mount_is_serviced_outside_build() {
     let mut laid = lay_out(SizedBox::square(1.0), tight(300.0, 300.0));
     let vsync = Vsync::new();
     laid.adopt_vsync(vsync.clone()).expect("clock admission");
-    let reactive = laid.with_build_owner_mut(|owner| owner.reactive().clone());
+    let reactive = laid.with_build_owner_mut(|owner| owner.signal_graph().clone());
     let signal = reactive.signal(0u32);
     let controller = ScrollController::new();
     // Room to scroll, so the command moves something.
@@ -4817,11 +4817,11 @@ pub(crate) fn a_command_queued_before_mount_is_serviced_outside_build() {
         .expect("ordered extents");
     let outcome = Rc::new(Cell::new(None));
     let seen = Rc::clone(&outcome);
-    let writer = reactive;
+    let writer = laid.with_build_owner_mut(|owner| owner.writer_source());
     let _listener = controller
         .position()
         .add_activity_listener(Rc::new(move || {
-            seen.set(Some(signal.set(&writer, 1)));
+            seen.set(Some(writer.write(|cx| signal.set(cx, 1))));
         }));
     controller.animate_to(100.0, Duration::from_secs(1), ArcCurve::new(curves::LINEAR));
     assert_eq!(outcome.get(), None, "nothing serves the command yet");
