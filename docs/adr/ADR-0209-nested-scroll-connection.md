@@ -9,9 +9,9 @@
   in place, as a snap policy is), and a change that does close it on the same position hands the
   contact, the run and the sequences in progress to the successor. 2026-10-17 — §3 and §7: a
   programmatic request made during a pass waits for the pass instead of being refused
-  ([research](../research/2026-10-17-scroll-jump-during-dispatch.md)); §6a: a remainder catches
+  ([research](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-17-scroll-jump-during-dispatch.md)); §6a: a remainder catches
   an ancestor's own motion, and the sequence settles every scrollable it moved
-  ([research](../research/2026-10-17-nested-scroll-spring-remainder.md)). 2026-10-18 — §1:
+  ([research](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-17-nested-scroll-spring-remainder.md)). 2026-10-18 — §1:
   a step says whether a contact drives it; §5: a leaf at its extent still carries a wheel or
   trackpad packet to the connections below the nearest enclosing scrollable. 2026-10-18 — §3:
   a reveal moves each scroll ancestor by its own geometry in a programmatic sequence of its
@@ -22,6 +22,9 @@
   coordinate plane, a participant opts in to programmatic sequences with
   `accepts_programmatic`, and `FlingHandoff::Accepted` carries no future; §5: a wheel or
   trackpad sequence ends at its latch's idle deadline, without a further packet.
+  2026-10-26 — §1: the per-axis latch is kept in the leaf's plane, not the presentation's, so a
+  motion along one of the leaf's axes latches that axis alone under a rotated subtree; §5: the
+  idle deadline moves to the arena a packet is dispatched on when the presentation swaps it.
 - **Supersedes:** [ADR-0169](ADR-0169-nested-scroll-ballistic-handoff.md)
 - **Related:** [ADR-0051](ADR-0051-anchor-stationary-scroll-correction.md),
   [ADR-0157](ADR-0157-native-scroll-range-actions.md),
@@ -39,7 +42,7 @@ in a pager cannot share a delta. Its
 `Arc<FlingEndpoint>` with an `AtomicBool` rests on "the Send completion callback", which is wrong:
 `AnimationRunFuture::when_complete_or_cancel` takes `FnMut(..) + 'static` without `Send`
 (`crates/flui-animation/src/run_future.rs`). The arena owns contacts (ADR-0208); continuous deltas
-need their own channel ([followups](../research/2026-10-12-interaction-input-followups.md) §5).
+need their own channel ([followups](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-12-interaction-input-followups.md) §5).
 
 ## Decision
 
@@ -100,8 +103,9 @@ need their own channel ([followups](../research/2026-10-12-interaction-input-fol
    projection a delta is the chord the focal point travels and a velocity maps through the
    projection's tangent at the focal point, not as a one-second chord. A conversion's
    rounding below 10⁻¹² of the step reads as zero, so a quarter turn keeps a delta on one
-   axis. The per-axis latch (§5) is kept in the presentation's axes; a leaf asks it about
-   its own axis through the axis it runs closest to on screen. A plane that cannot be
+   axis. The per-axis latch (§5) is kept in the leaf's plane: a remainder crosses into it to
+   be masked per axis and back, so a motion along one of the leaf's axes latches that axis
+   alone however the leaf is turned, and a leaf asks the latch about its own axes directly. A plane that cannot be
    crossed (a singular or non-finite transform, a focal point behind the camera) offers its
    participant nothing, and a runner whose plane maps no way back (a transform that
    squashes an axis) takes its step alone: no participant is offered a value that is not
@@ -322,7 +326,7 @@ need their own channel ([followups](../research/2026-10-12-interaction-input-fol
     and snap types and the built-in fling curves stay `Send` data; the connection gains no `Send`
     bound. A future compositor-side scroller hooks into the dispatcher, admits only chains without
     user connections and reports a typed reason for the rest
-    ([threading](../research/2026-10-13-interaction-threading-model.md) Q3).
+    ([threading](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-13-interaction-threading-model.md) Q3).
 
 ## Consequences and verification
 

@@ -1,6 +1,6 @@
 ### Added
 
-- **`flui-platform-api`**: a window publishes an immutable `WindowState` snapshot with a
+- **`flui-platform`**: a window publishes an immutable `WindowState` snapshot with a
   `WindowRevision` (`PlatformWindow::state`, `on_state_changed`) and takes `WindowCommand`s
   through `PlatformWindow::apply`. `WindowCapabilities` (`sets_title`, `sets_position`,
   `sets_size`, `sets_constraints`, `sets_resizable`, `sets_decorated`, `minimizes`, `maximizes`,
@@ -25,7 +25,7 @@
 - **`flui-app`**: `AppConfig::with_position` and `AppConfig::with_mode`, and `window_handle` to turn
   the address a `WindowRequest` delivers into the window's handle. Commands apply on the owner's
   next turn, before its frame, in the order they were queued.
-- **`flui-platform-api`**: `WindowPlacement` remembers where a window was (the display by its
+- **`flui-platform`**: `WindowPlacement` remembers where a window was (the display by its
   `persistent_key`, the outer offset from its usable area in that display's logical pixels, the
   content size, the mode) as a versioned text encoding (`to_bytes`, `from_bytes`, `from_state`),
   and `resolve` fits it to the displays, capabilities and window frame of the next run, by the
@@ -33,7 +33,7 @@
   area is skipped, a window too large is cut to the usable area, one off the edge is moved back, a
   minimized one opens normal or maximized, and without `places_at_open` the size and mode stay but
   the position does not. `ResolvedPlacement` stays relative to its display.
-- **`flui-platform`**: `Platform::window_capabilities` and `Platform::window_frame_inset` say what
+- **`flui-native`**: `Platform::window_capabilities` and `Platform::window_frame_inset` say what
   a platform's windows can do and how large their frame is before one exists;
   `Platform::release_session_end`; `Platform::on_host_notice` takes a `SystemNotice` (the notices
   without a session end), and a `Wake` first marks the platform's displays and every window's state
@@ -59,7 +59,7 @@
   `#[non_exhaustive]` and is built with `with_*` methods, and its `size` is the content size;
   **`DisplayInfo`** gains `persistent_key` (`with_persistent_key`), a string that names a display
   across restarts.
-- **`flui-platform`**: the headless platform takes `with_window_capabilities` and
+- **`flui-native`**: the headless platform takes `with_window_capabilities` and
   `with_window_policy` (`HeadlessWindowPolicy`: a largest window size, a host that declines to
   maximize via `refusing_maximize`), and its windows gain `simulate_move`.
 
@@ -70,8 +70,8 @@
   window with the size it last reported no longer shrinks it by its frame on Win32.
 - **`WindowMode`** is now `Normal`, `Minimized`, `Maximized` or `Fullscreen`, without the saved
   bounds the old enum carried.
-- **`flui-platform`**: `OpenWindowError::LaneFull` and `OwnerGone` carry the rejected
-  `WindowOptions` boxed, and `SessionEndPhase` and `SessionEndAnswer` live in `flui-platform-api`.
+- **`flui-native`**: `OpenWindowError::LaneFull` and `OwnerGone` carry the rejected
+  `WindowOptions` boxed, and `SessionEndPhase` and `SessionEndAnswer` live in `flui-platform`.
   The session-end and notice callbacks are registered on `OwnerPlatform` and `SharedPlatform`
   (`on_session_end`, `on_host_notice`), and `AppConfig` converts to `WindowOptions` with its
   position and mode and without choosing `visible` or `reveal`.
@@ -83,7 +83,7 @@
   `is_fullscreen` and `on_moved`; `WindowEvent` loses `Moved`, `Minimized`, `Maximized`,
   `Restored`, `Fullscreen` and `ExitFullscreen`. Read the snapshot and apply a `WindowCommand`
   instead.
-- **`flui-platform`**: the second window trait `flui_platform::window::Window` with
+- **`flui-native`**: the second window trait `flui_native::window::Window` with
   `WindowBuilder` and `WindowManager`, the macOS `WindowManager`, and `WindowBounds`.
 - **`flui-view`**: `WidgetsBindingObserver::did_have_memory_pressure` and `did_request_app_exit`,
   `WidgetsBinding::handle_memory_pressure` and `handle_request_app_exit`, and `AppExitResponse`.

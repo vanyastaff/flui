@@ -52,7 +52,7 @@ flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
 flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
 # `InputRegionKind` and `InputRegion`: the contract `PlatformWindow::set_input_regions`
 # takes the collected regions in (ADR-0217 §5).
-flui-platform-api = { workspace = true }
+flui-platform = { workspace = true }
 
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
@@ -61,7 +61,6 @@ bitflags = { workspace = true }
 smallvec = { workspace = true }
 downcast-rs = { workspace = true }
 dyn-clone = { workspace = true }
-slab = { workspace = true }              # For RenderTree storage
 crossbeam-channel = { workspace = true } # Private bounded render-invalidation channel
 rustc-hash = { workspace = true }        # FxHashSet for layout cycle guard
 
@@ -101,13 +100,6 @@ harness = false
 [[bench]]
 name = "semantics_assembly"
 harness = false
-
-# Headless render-object inspection runner. Gated on `testing` so the
-# example only builds when the harness module is compiled in. Run with
-# `cargo run -p flui-rendering --example render_inspector --features testing`.
-[[example]]
-name = "render_inspector"
-required-features = ["testing"]
 
 [dev-dependencies]
 criterion.workspace = true

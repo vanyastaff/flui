@@ -10,20 +10,20 @@ use flui_animation::Vsync;
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point};
 use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
-use flui_platform_api::keyboard::{Code, Key, KeyEvent, KeyState, NamedKey};
-use flui_platform_api::pointer::{
+use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, NamedKey};
+use flui_platform::pointer::{
     DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerInfo,
     PointerKind, PointerPosition, PointerRole, ScrollDelta, ScrollEvent, ScrollUnit,
 };
-use flui_platform_api::{EventTime, keyboard::Modifiers};
+use flui_platform::{EventTime, keyboard::Modifiers};
 use flui_testing::a11y::{Action, ActionData, ActionRequest, TreeId};
 use flui_testing::{MouseScript, PointerScript, TouchScript};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, Signal, SignalWriteExt, View, ViewExt};
 use flui_widgets::{
     ColoredBox, Directionality, InteractiveViewer, NestedScroll, PageController, PageView,
-    ScrollCause, ScrollController, ScrollEndReason, Scrollable, SizedBox, TransformationController,
-    VsyncScope, WheelScaleGate,
+    ScrollCause, ScrollController, ScrollEndReason, Scrollable, SizedBox, Transform,
+    TransformationController, VsyncScope, WheelScaleGate,
 };
 
 use crate::common::{LaidOut, lay_out, tight, viewer_alternatives};
@@ -104,6 +104,59 @@ fn assert_finite(controller: &TransformationController, case: &str) {
             .all(|value| value.is_finite()),
         "{case}: the published transform is finite: {:?}",
         controller.value()
+    );
+}
+
+/// The latch lives in the leaf's plane (ADR-0209 §3): a photo turned 30° on
+/// its page, zoomed to its own horizontal edge, takes the vertical share of a
+/// pan along its own axes and leaves its horizontal share free, so the pager
+/// follows the finger as it does for an upright photo. Latched in the
+/// screen's axes, the photo's motion would show on both and keep the whole
+/// contact.
+pub(crate) fn a_turned_photo_at_its_edge_frees_the_axis_it_cannot_pan() {
+    let angle = std::f64::consts::FRAC_PI_6;
+    let (sin, cos) = angle.sin_cos();
+    let (pager, transform, vsync) = (
+        PageController::new(),
+        TransformationController::new(),
+        Vsync::new(),
+    );
+    // At the photo's far horizontal edge, mid-way vertically.
+    transform
+        .set_value(Matrix4::translation(-PAGE, -PAGE / 2.0, 0.0) * Matrix4::scaling(2.0, 2.0, 1.0));
+    let pages: Vec<BoxedView> = vec![
+        Transform::rotation(angle).child(photo(&transform)).boxed(),
+        SizedBox::new(PAGE, PAGE).boxed(),
+        SizedBox::new(PAGE, PAGE).boxed(),
+    ];
+    let tree = VsyncScope::new(
+        vsync.clone(),
+        PageView::new(pages, crate::common::pager_alternatives()).controller(pager.clone()),
+    )
+    .boxed();
+    let mut laid = mounted(tree, vsync);
+
+    // The finger moves 100 along the photo's horizontal axis, past its edge,
+    // and 60 along its vertical, which it can pan.
+    let (across, down) = (-100.0, 60.0);
+    let from = at(180.0, 150.0);
+    let to = at(
+        from.dx + across * cos - down * sin,
+        from.dy + across * sin + down * cos,
+    );
+    let before = transform.value();
+    let mut moved = 0.0_f64;
+    laid.replay_with(&slow(Device::Touch, from, to), |_, _| {
+        moved = moved.max(page_of(&pager));
+    });
+    assert_ne!(
+        transform.value(),
+        before,
+        "the photo panned along its vertical axis"
+    );
+    assert!(
+        moved > 0.05,
+        "the pager followed the share the photo could not pan, to {moved}"
     );
 }
 

@@ -9,8 +9,8 @@ use std::time::Duration;
 use flui_foundation::geometry::Offset;
 use flui_interaction::PointerId;
 use flui_interaction::events::PointerEvent;
-use flui_platform_api::pointer::DeviceId;
-use flui_platform_api::{GesturePreferences, SystemPreferences};
+use flui_platform::pointer::DeviceId;
+use flui_platform::{GesturePreferences, SystemPreferences};
 use flui_runtime::HostInput;
 use flui_testing::replay::{
     MouseScript, PenScript, PointerScript, ScriptError, TouchScript, TrackpadScript, VirtualScript,
@@ -143,12 +143,12 @@ fn a_script_is_host_input_on_virtual_time_with_a_readable_form() {
         .inputs()
         .iter()
         .map(|input| match input {
-            HostInput::Platform(flui_platform_api::PlatformInput::Pointer(event)) => {
+            HostInput::Platform(flui_platform::PlatformInput::Pointer(event)) => {
                 flui_interaction::PointerEventExt::time(event)
                     .expect("a contact event carries its time")
                     .as_nanos()
             }
-            HostInput::Frame { vsync } => vsync.as_nanos(),
+            HostInput::Frame { vsync, .. } => vsync.as_nanos(),
             other => panic!("a touch script delivers pointer input and frames: {other:?}"),
         })
         .collect();
@@ -164,7 +164,7 @@ fn a_script_is_host_input_on_virtual_time_with_a_readable_form() {
         .release()
         .build()
         .expect("paired");
-    let HostInput::Platform(flui_platform_api::PlatformInput::Pointer(PointerEvent::Down(press))) =
+    let HostInput::Platform(flui_platform::PlatformInput::Pointer(PointerEvent::Down(press))) =
         &virtual_pointer.inputs()[0]
     else {
         panic!("a press is a down");
@@ -177,7 +177,7 @@ fn a_script_is_host_input_on_virtual_time_with_a_readable_form() {
 
     // The JSON Lines form beside it is a complete recording.
     let bytes = script
-        .write_recording(Vec::new(), flui_platform_api::WindowId(1))
+        .write_recording(Vec::new(), flui_platform::WindowId(1))
         .expect("written");
     let recording = flui_testing::recording::ReplayableRecording::read(
         flui_testing::recording::RecordingReader::new(&bytes[..]).expect("header"),

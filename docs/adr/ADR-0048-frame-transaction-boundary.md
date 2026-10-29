@@ -12,9 +12,9 @@
   (`PresentationState` bundles the trees this boundary scopes);
   [`docs/PANIC-POLICY.md`](../PANIC-POLICY.md) (the `BUG:` convention this
   boundary classifies rather than overrides); the Win32 wndproc panic boundary
-  (`crates/flui-platform/src/shared/panic_boundary.rs`) — a DIFFERENT seam with
+  (`crates/flui-native/src/shared/panic_boundary.rs`) — a DIFFERENT seam with
   the opposite verdict, compared below; [Runtime Architecture Execution
-  Plan](../research/2026-08-01-runtime-architecture-execution-plan.md) ("Make
+  Plan](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-08-01-runtime-architecture-execution-plan.md) ("Make
   frame failure recovery transactional")
 - **Issue:** [#561](https://github.com/vanyastaff/flui/issues/561)
 

@@ -94,7 +94,7 @@ impl GestureArenaMember for Extension {
         self.log.borrow_mut().push("rejected");
     }
 
-    fn deadline(&self) -> Option<flui_platform_api::EventTime> {
+    fn deadline(&self) -> Option<flui_platform::EventTime> {
         self.contact.deadline()
     }
 }

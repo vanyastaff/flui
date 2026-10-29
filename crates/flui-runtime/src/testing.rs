@@ -6,37 +6,34 @@
 //! - [`TestWindow`]: a [`PlatformWindow`] value with every knob the UI runtime
 //!   tests vary (id, scale factor, sizes, focus, visibility, an injected
 //!   text-input capability) and recorders for what the UI runtime asked of it
-//!   (redraws, pre-present notifications, the cursor).
+//!   (redraws and the cursor).
 //! - [`ScriptedSink`]: a [`FrameSink`] whose submit verdicts a test scripts.
 //!
-//! Neither the window nor the sink is `flui_platform`'s `MockWindow` or a raster backend: those are
+//! Neither the window nor the sink is `flui_native`'s `MockWindow` or a raster backend: those are
 //! minted by a live headless platform or a GPU device, and a state-level
 //! UI runtime test wants a value with no platform or device ceremony. A test that
 //! needs the real headless window's capabilities opens one from
-//! `flui_platform::headless_platform()` (a dev dependency here).
+//! `flui_native::headless_platform()` (a dev dependency here).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use flui_foundation::geometry::Size;
 use flui_layer::Scene;
-use flui_platform_api::{
-    CursorError, CursorIcon, PlatformTextInput, PlatformWindow, WindowId, WindowShowError,
-};
+use flui_platform::{CursorError, CursorIcon, PlatformTextInput, PlatformWindow, WindowId};
 use flui_semantics::platform::PlatformAccessibility;
 
 use crate::sink::{FrameSink, SubmitVerdict};
 
 /// Configurable [`PlatformWindow`] double. Construct with [`TestWindow::new`],
 /// adjust via the builder-style setters, then `Arc::new` it where an
-/// `Arc<dyn PlatformWindow>` is needed.
+/// `Rc<dyn PlatformWindow>` is needed.
 pub struct TestWindow {
     id: WindowId,
     scale_factor: f64,
     physical_size: Size<i32>,
     logical_size: Size<f64>,
     focused: bool,
-    on_show: Option<Arc<dyn Fn() + Send + Sync>>,
     visible: bool,
     /// Incremented by every [`PlatformWindow::request_redraw`]; hand the
     /// [`Self::redraw_calls_handle`] to the asserting side.
@@ -52,12 +49,9 @@ pub struct TestWindow {
     /// already hold (an `Arc<AtomicU32>` readable without a lock). They cannot
     /// drift: both are written in the single `request_redraw` body below.
     redraw_threads: Arc<parking_lot::Mutex<Vec<std::thread::ThreadId>>>,
-    /// How many times `pre_present_notify` ran — see
-    /// [`TestWindow::pre_present_notifies_handle`].
-    pre_present_notifies: Arc<AtomicU32>,
     text_input: Option<Arc<dyn PlatformTextInput>>,
     /// Reported from [`PlatformWindow::system_chrome`].
-    system_chrome: Option<Arc<dyn flui_platform_api::PlatformSystemChrome>>,
+    system_chrome: Option<Arc<dyn flui_platform::PlatformSystemChrome>>,
     /// The bridge a host-side wrapper reports for this window. A
     /// `PlatformWindow` names no accessibility type (ADR-0082 §1), so the
     /// double only carries it for a test that builds a presentation from it
@@ -94,11 +88,9 @@ impl TestWindow {
             physical_size: Size::default(),
             logical_size: Size::default(),
             focused: false,
-            on_show: None,
             visible: true,
             redraw_calls: Arc::new(AtomicU32::new(0)),
             redraw_threads: Arc::new(parking_lot::Mutex::new(Vec::new())),
-            pre_present_notifies: Arc::new(AtomicU32::new(0)),
             text_input: None,
             system_chrome: None,
             accessibility: None,
@@ -113,14 +105,15 @@ impl TestWindow {
         self
     }
 
-    /// Report `scale_factor` from [`PlatformWindow::scale_factor`].
+    /// Report the scale `scale_factor` in the snapshot's metrics.
     #[must_use]
     pub fn with_scale_factor(mut self, scale_factor: f64) -> Self {
         self.scale_factor = scale_factor;
         self
     }
 
-    /// Report these physical and logical sizes.
+    /// Report these physical and logical sizes in the snapshot: the metrics'
+    /// drawable area and the content size.
     #[must_use]
     pub fn with_sizes(mut self, physical: Size<i32>, logical: Size<f64>) -> Self {
         self.physical_size = physical;
@@ -128,21 +121,14 @@ impl TestWindow {
         self
     }
 
-    /// Run `callback` from [`PlatformWindow::show`].
-    #[must_use]
-    pub fn with_show_callback(mut self, callback: Arc<dyn Fn() + Send + Sync>) -> Self {
-        self.on_show = Some(callback);
-        self
-    }
-
-    /// Report `visible` from [`PlatformWindow::is_visible`].
+    /// Report `visible` in the snapshot.
     #[must_use]
     pub fn visible(mut self, visible: bool) -> Self {
         self.visible = visible;
         self
     }
 
-    /// Report `focused` from [`PlatformWindow::is_focused`].
+    /// Report `focused` in the snapshot.
     #[must_use]
     pub fn focused(mut self, focused: bool) -> Self {
         self.focused = focused;
@@ -160,7 +146,7 @@ impl TestWindow {
     #[must_use]
     pub fn with_system_chrome(
         mut self,
-        system_chrome: Arc<dyn flui_platform_api::PlatformSystemChrome>,
+        system_chrome: Arc<dyn flui_platform::PlatformSystemChrome>,
     ) -> Self {
         self.system_chrome = Some(system_chrome);
         self
@@ -180,14 +166,6 @@ impl TestWindow {
     #[must_use]
     pub fn accessibility(&self) -> Option<Arc<dyn PlatformAccessibility>> {
         self.accessibility.clone()
-    }
-
-    /// A handle on the pre-present-notify counter, for a test that must
-    /// observe the count from inside a sink script (at the moment of the
-    /// submit) rather than after the fact.
-    #[must_use]
-    pub fn pre_present_notifies_handle(&self) -> Arc<AtomicU32> {
-        Arc::clone(&self.pre_present_notifies)
     }
 
     /// The counter [`PlatformWindow::request_redraw`] bumps — clone it out
@@ -211,82 +189,78 @@ impl TestWindow {
     }
 }
 
-impl PlatformWindow for TestWindow {
-    fn show(&self) -> Result<(), WindowShowError> {
-        if let Some(callback) = &self.on_show {
-            callback();
-        }
-        Ok(())
-    }
+fn record_redraw(calls: &AtomicU32, threads: &parking_lot::Mutex<Vec<std::thread::ThreadId>>) {
+    calls.fetch_add(1, Ordering::Relaxed);
+    threads.lock().push(std::thread::current().id());
+}
 
+impl PlatformWindow for TestWindow {
     fn id(&self) -> WindowId {
         self.id
     }
 
-    fn physical_size(&self) -> Size<i32> {
-        self.physical_size
-    }
-
-    fn logical_size(&self) -> Size<f64> {
-        self.logical_size
-    }
-
-    fn scale_factor(&self) -> f64 {
-        self.scale_factor
-    }
-
-    fn pre_present_notify(&self) {
-        self.pre_present_notifies.fetch_add(1, Ordering::Relaxed);
-    }
-
     fn request_redraw(&self) {
-        self.redraw_calls.fetch_add(1, Ordering::Relaxed);
-        self.redraw_threads.lock().push(std::thread::current().id());
+        record_redraw(&self.redraw_calls, &self.redraw_threads);
     }
 
-    fn is_focused(&self) -> bool {
-        self.focused
+    /// Records into the same counter and thread list as
+    /// [`Self::request_redraw`], from whichever thread asks.
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        let calls = Arc::clone(&self.redraw_calls);
+        let threads = Arc::clone(&self.redraw_threads);
+        Arc::new(move || record_redraw(&calls, &threads))
     }
 
-    fn is_visible(&self) -> bool {
-        self.visible
+    /// No native window: [`flui_platform::testing::NoNativeSurface`].
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        Arc::new(flui_platform::testing::NoNativeSurface)
     }
 
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
         self.text_input.clone()
     }
 
-    fn system_chrome(&self) -> Option<Arc<dyn flui_platform_api::PlatformSystemChrome>> {
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
         self.system_chrome.clone()
     }
+
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        None
+    }
+
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+        None
+    }
+
+    flui_platform::window_takes_no_frame_verbs!();
 
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
         *self.cursor.lock() = cursor;
         Ok(())
     }
 
-    fn state(&self) -> flui_platform_api::WindowState {
-        let size = self.logical_size();
-        flui_platform_api::WindowState::new(
-            flui_platform_api::WindowGeometry::new(None, size),
-            size,
-        )
-    }
-
-    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
-        flui_platform_api::WindowCapabilities::NONE
+    /// What the builder set, honouring no command; a size or scale that is
+    /// not a drawable area reports no metrics.
+    fn state(&self) -> flui_platform::WindowState {
+        let size = self.logical_size;
+        flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
+            .with_visible(self.visible)
+            .with_focused(self.focused)
+            .with_metrics(
+                flui_foundation::geometry::WindowMetrics::new(
+                    self.physical_size,
+                    self.scale_factor,
+                )
+                .ok(),
+            )
     }
 
     fn apply(
         &self,
-        command: flui_platform_api::WindowCommand,
-    ) -> Result<(), flui_platform_api::WindowCommandError> {
-        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        command: flui_platform::AdmittedCommand,
+    ) -> Result<(), flui_platform::ApplyError> {
+        command.against(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 

@@ -7,10 +7,10 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_interaction::{HapticObserver, HapticsHandle};
-use flui_platform_api::haptics::{
+use flui_platform::haptics::{
     HapticOutcome, HapticPattern, HapticRequest, HapticTicket, HapticTiming,
 };
-use flui_platform_api::{HapticFeedback, SystemPreferences};
+use flui_platform::{HapticFeedback, SystemPreferences};
 use flui_view::element::ElementKind;
 use flui_view::{
     BuildContext, IntoView, LifecycleContext, StatefulView, View, ViewExt as _, ViewState,

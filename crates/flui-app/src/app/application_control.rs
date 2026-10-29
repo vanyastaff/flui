@@ -1,6 +1,6 @@
 //! Closed cross-thread application commands. UI factories never enter this state.
 use flui_foundation::{ClaimHandle, ClaimOutcome, ClaimSlot, PresentationAddress, claim_slot};
-use flui_platform::PlatformProxy;
+use flui_native::PlatformProxy;
 use parking_lot::Mutex;
 use std::{
     future::Future,
@@ -388,10 +388,12 @@ impl Ingress {
         Self::deliver(replies, Err(AppWindowError::Cancelled));
     }
 }
-fn control_error(error: flui_platform::ProxySendError<()>) -> AppControlError {
+fn control_error(error: flui_native::ProxySendError<()>) -> AppControlError {
     match error {
-        flui_platform::ProxySendError::OwnerGone { .. } => AppControlError::OwnerGone,
-        other => AppControlError::WakeFailed {
+        flui_native::ProxySendError::OwnerGone { .. } => AppControlError::OwnerGone,
+        other @ (flui_native::ProxySendError::WakeFailed { .. }
+        | flui_native::ProxySendError::Full { .. }
+        | flui_native::ProxySendError::Unsupported { .. }) => AppControlError::WakeFailed {
             message: other.to_string(),
         },
     }
@@ -410,14 +412,14 @@ pub(crate) fn contain(body: impl FnOnce()) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_platform::{HeadlessPlatform, Platform};
+    use flui_native::{HeadlessPlatform, Platform};
     use std::{cell::RefCell, rc::Rc};
 
-    fn ingress() -> (Arc<Ingress>, flui_platform::OwnerPlatform) {
+    fn ingress() -> (Arc<Ingress>, flui_native::OwnerPlatform) {
         let saved = Rc::new(RefCell::new(None));
         let returned = Rc::clone(&saved);
         Box::new(HeadlessPlatform::new())
-            .run(Box::new(move |owner| {
+            .run(crate::app::runner::app_handler(move |owner| {
                 returned.replace(Some(owner));
                 Ok(())
             }))

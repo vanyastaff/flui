@@ -13,9 +13,7 @@
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
-use flui_platform_api::keyboard::{
-    Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, NamedKey,
-};
+use flui_platform::keyboard::{Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, NamedKey};
 
 use super::FocusNode;
 use crate::ids::FocusNodeId;

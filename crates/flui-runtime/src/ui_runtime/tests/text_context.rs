@@ -66,7 +66,7 @@ fn a_second_presentation_adds_no_text_context() {
     let mut ui_runtime = ui_runtime_over(&fonts);
     assert_eq!(font_collection_holders(&fonts), 2);
 
-    let window_b: Arc<dyn PlatformWindow> = Arc::new(crate::testing::TestWindow::new().with_id(42));
+    let window_b: Rc<dyn PlatformWindow> = Rc::new(crate::testing::TestWindow::new().with_id(42));
     let presentation_b = ui_runtime.assemble_presentation(window_b);
     let _b = ui_runtime.install_presentation(presentation_b);
 
@@ -140,7 +140,7 @@ fn two_ui_runtimes_measure_text_through_their_own_contexts() {
 fn every_presentation_pipeline_holds_the_ui_runtimes_text_context() {
     let fonts = FontCollection::new();
     let mut ui_runtime = ui_runtime_over(&fonts);
-    let window_b: Arc<dyn PlatformWindow> = Arc::new(crate::testing::TestWindow::new().with_id(42));
+    let window_b: Rc<dyn PlatformWindow> = Rc::new(crate::testing::TestWindow::new().with_id(42));
     let presentation_b = ui_runtime.assemble_presentation(window_b);
     let _b = ui_runtime.install_presentation(presentation_b);
 

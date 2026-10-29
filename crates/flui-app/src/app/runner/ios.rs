@@ -9,11 +9,11 @@
 //! # Lifecycle
 //!
 //! The backend already translates UIKit's transitions into the framework's
-//! independent observations (`platforms/ios/platform.rs`):
+//! independent observations (`owner/apple/ios.rs`):
 //!
 //! - focus and visibility → addressed presentation facts.
 //! - execution → a per-presentation suspension cap, independent of host lifecycle.
-//! - `on_surface_status_change` → drop/rebuild the wgpu surface, so a
+//! - the window's `surface_changed` → drop/rebuild the wgpu surface, so a
 //!   `CAMetalLayer`-backed surface is never alive across a suspension.
 //!
 //! # Hot-reload
@@ -26,9 +26,10 @@
 //! inert. See [`super::hot_reload`] for the seam and `docs/hot-reload.md` for
 //! the two-layer model.
 
-use flui_platform::HostWindow;
-use flui_platform::platforms::ios::{IOSSceneEvent, IOSSceneSessionId};
+use flui_native::HostWindow;
+use flui_native::{IOSSceneEvent, IOSSceneSessionId};
 use flui_view::{StatelessView, View};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use super::device_recovery::{new_device_recovery_backoff, pump_with_device_recovery};
@@ -118,7 +119,7 @@ fn lease_controller() -> Option<ControllerLease> {
     })
 }
 
-fn scene_event(event: IOSSceneEvent) -> Result<(), flui_platform::BootstrapError> {
+fn scene_event(event: IOSSceneEvent) -> Result<(), flui_native::BootstrapError> {
     let mut lease = lease_controller()
         .ok_or_else(|| anyhow::anyhow!("iOS process controller is unavailable"))?;
     let controller = lease
@@ -203,7 +204,7 @@ fn run_ios<V>(root: V, config: AppConfig)
 where
     V: View + StatelessView + Clone + 'static,
 {
-    use flui_platform::{IOSPlatform, Platform};
+    use flui_native::{IOSPlatform, Platform};
     let platform = match IOSPlatform::new() {
         Ok(platform) => platform,
         Err(error) => {
@@ -211,19 +212,44 @@ where
             return;
         }
     };
-    if let Err(error) = platform.on_scene_event(Box::new(scene_event)) {
+    // The loop makes a session's window, with its handler, before the
+    // session connects; the connection names the session and its window, so
+    // the routes made for that session are adopted for that window, whatever
+    // order sessions are made and connected in.
+    let made = Rc::new(std::cell::RefCell::new(std::collections::HashMap::<
+        flui_native::IOSSceneSessionId,
+        Rc<super::window_routes::WindowRoutes>,
+    >::new()));
+    let adopting = Rc::clone(&made);
+    let handlers = Box::new(move |session: &flui_native::IOSSceneSessionId| {
+        let routes = super::window_routes::WindowRoutes::new();
+        made.borrow_mut()
+            .insert(session.clone(), Rc::clone(&routes));
+        routes as Rc<dyn flui_platform::WindowHandler>
+    });
+    let events = Box::new(move |event: IOSSceneEvent| {
+        if let IOSSceneEvent::Connected {
+            session, window, ..
+        } = &event
+            && let Some(routes) = adopting.borrow_mut().remove(session)
+        {
+            routes.adopt(window.id());
+        }
+        if let IOSSceneEvent::Discarded { session } = &event {
+            adopting.borrow_mut().remove(session);
+        }
+        scene_event(event)
+    });
+    if let Err(error) = platform.on_scene_event(events, handlers) {
         tracing::error!(%error, "iOS scene registration failed");
         return;
     }
     let _owner_host_clear_guard = OwnerHostClearGuard::arm();
-    let result = Box::new(platform).run(Box::new(move |owner| {
+    let result = Box::new(platform).run(crate::app::runner::app_handler(move |owner| {
         install_owner_platform(owner)?;
-        with_owner_platform(|owner| {
-            owner.on_wake(Box::new(drive_owner))?;
-            owner.shared().on_quit(Box::new(stop_process));
-            Ok::<_, flui_platform::WakeRegistrationError>(())
-        })
-        .expect("BUG: owner installed above")?;
+        with_owner_platform(|owner| owner.on_wake(Box::new(drive_owner)))
+            .expect("BUG: owner installed above")?;
+        super::host::route_quit(stop_process);
         APP_RUNTIME.with(|slot| {
             let mut runtime = slot.borrow_mut();
             runtime.ios_running = true;
@@ -264,7 +290,7 @@ fn bootstrap_ios<V>(
     root: V,
     config: AppConfig,
     worker_reload: WorkerReload,
-    host: Arc<dyn HostWindow>,
+    host: Rc<dyn HostWindow>,
 ) -> anyhow::Result<super::installed_host::Installation>
 where
     V: View + StatelessView + Clone + 'static,
@@ -274,13 +300,9 @@ where
     use flui_engine::Renderer;
     use parking_lot::Mutex;
 
-    fn owner_platform_installed<R>(f: impl FnOnce(&flui_platform::OwnerPlatform) -> R) -> R {
-        with_owner_platform(f).expect("BUG: bootstrap_ios runs only after install_owner_platform")
-    }
-
-    let presentation_window = super::presentation_window(Arc::clone(&host))
+    let presentation_window = super::presentation_window(Rc::clone(&host))
         .with_pointer_resampling(config.pointer_resampling);
-    let window = Arc::clone(presentation_window.window());
+    let window = Rc::clone(presentation_window.window());
 
     // 0b. This window's device-recovery backoff, constructed before the
     // wake-deadline hook below so the hook can carry its deadline.
@@ -300,23 +322,29 @@ where
     // 0c. Wire the wall-clock-wake hook to runtime/native-service deadlines and
     // both recovery backoffs. CADisplayLink drives visible frames; owner wakes
     // also keep native service and recovery deliverable between those frames.
-    owner_platform_installed(|owner| {
+    {
         let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
         let surface_recreation_retry = Arc::clone(&surface_recreation_retry);
-        owner.shared().set_wake_deadline_hook(Box::new(move || {
+        super::host::route_wake_deadline(move || {
             let device = device_recovery_backoff.next_attempt_at();
             let surface = surface_recreation_retry.next_attempt_at();
             super::host::merge_wake_deadlines(
                 APP_RUNTIME.with(|slot| slot.borrow().next_wake()),
                 super::host::merge_wake_deadlines(device, surface),
             )
-        }));
-    });
+        });
+    }
 
-    // 2. Create the GPU renderer (Metal on iOS). `Renderer::new` takes its own
-    // strong `Arc` of the window as the surface target (issue #1043).
-    let phys_size = window.physical_size();
-    let renderer = pollster::block_on(Renderer::new(Arc::clone(&window)));
+    // 2. Create the GPU renderer (Metal on iOS). `Renderer::new` takes
+    // ownership of a `WindowTarget`: the window's surface
+    // target, never the window (ADR-0254 §5).
+    let geometry = super::window_install::SurfaceGeometry::of(window.as_ref());
+    let phys_size = geometry.physical;
+    let renderer = pollster::block_on(Renderer::with_surface_color(
+        window.surface_target(),
+        config.surface_color,
+        super::host::display_color_of(window.as_ref()),
+    ));
     let mut renderer = match renderer {
         Ok(r) => r,
         Err(e) => {
@@ -325,10 +353,11 @@ where
         }
     };
     renderer.resize(phys_size.width as u32, phys_size.height as u32);
+    renderer.set_frame_latency(config.frame_latency);
 
     // 3. Mount the root widget at the LOGICAL size; the paint root's DPR
     // transform maps to physical.
-    let scale_factor = window.scale_factor();
+    let scale_factor = geometry.scale;
     let ui_runtime = match super::host::build_ui_runtime(presentation_window, scale_factor) {
         Ok(ui_runtime) => ui_runtime,
         Err(error) => {
@@ -344,7 +373,7 @@ where
     config.install_input_tap(&ui_runtime);
     config.install_error_view_builder(&ui_runtime);
 
-    let logical = window.logical_size();
+    let logical = geometry.logical;
     let owner = APP_RUNTIME
         .with(|slot| slot.borrow().owner_platform.clone())
         .expect("BUG: UIKit owner installed before scene bootstrap");
@@ -373,7 +402,7 @@ where
         .as_ref()
         .and_then(|agent| agent.vend(&ui_runtime, ui_runtime.presentation_id()));
     let textures = ui_runtime.texture_registry(ui_runtime.presentation_id());
-    let mut installation = prepare_ui_runtime_alongside(ui_runtime, Arc::clone(&window));
+    let mut installation = prepare_ui_runtime_alongside(ui_runtime, Rc::clone(&window));
     installation.text_sizing(native_sizing);
     let owner_dispatch = installation.dispatcher();
 
@@ -402,27 +431,10 @@ where
             surface_recreation_retry,
         }))?;
     let binding = frame.binding;
-    window.on_request_frame(Box::new(move || {
-        let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding));
-    }));
-
-    // 7. Resize -> typed Resized event; the applier installed above touches
-    // the renderer.
-    window.on_resize(Box::new(move |metrics| {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::Resized(metrics)),
-        );
-    }));
-
-    // Safe-area intrusions: addressed to this window's presentation, which
-    // republishes the root `MediaQuery` without touching renderer geometry.
-    window.on_safe_area_change(Box::new(move |insets| {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::SafeAreaChanged(insets)),
-        );
-    }));
+    let routes = super::window_routes::WindowRoutes::of(&*window);
+    routes.route_frame_requested(move |request| {
+        let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding, request));
+    });
 
     // 8. Lifecycle.
     //
@@ -431,13 +443,14 @@ where
     // The same shape Android uses — the engine's tracker mark runs inside
     // the lane lock with the mint, and only the ui_runtime half is dispatched.
     let lane_surface = Arc::clone(&lane);
-    window.on_surface_status_change(Box::new(move |has_surface| {
+    routes.route_surface_changed(move |change| {
+        let has_surface = change == flui_platform::SurfaceChange::Rebuild;
         let now = web_time::Instant::now();
         let mut lane = lane_surface.lock();
         let outcome =
             settle_surface_availability(&mut lane, &surface_retry_for_callback, has_surface, now);
         // The guard ends before the ui_runtime dispatch — see Android's matching
-        // registration for the same-thread hazard that puts the `drop` here.
+        // route for the same-thread hazard that puts the `drop` here.
         drop(lane);
         if matches!(outcome, SurfaceLifecycleOutcome::Recreated) {
             // The ui_runtime half is deferrable, so it goes through the ui_runtime
@@ -448,42 +461,15 @@ where
             );
         }
         report_surface_settlement("iOS", &outcome);
-    }));
-
-    window.on_active_status_change(Box::new(move |focused| {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::WindowFocus(focused)),
-        );
-    }));
-    window.on_visibility_status_change(Box::new(move |visible| {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::WindowVisibility(visible)),
-        );
-    }));
-    window.on_execution_state_change(Box::new(move |state| {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::WindowExecution(state)),
-        );
-    }));
-    installation.observe_appearance();
-    installation.observe_display();
-    installation.observe_window_state();
-    // Register before sampling, so native facts changed during renderer bootstrap
-    // cannot be replaced by a synthetic Resumed observation.
-    let execution = window.execution_state();
-    let focused = window.is_focused();
-    let visible = window.is_visible();
-    installation.observe(flui_runtime::owner::WindowObservation::Snapshot {
-        execution,
-        focused,
-        visible,
     });
-    if let Ok(metrics) = window.metrics() {
-        installation.observe(flui_runtime::owner::WindowObservation::Metrics(metrics));
-    }
+
+    // The scene's facts — metrics, safe area, lifecycle, appearance and
+    // display — reach the presentation through the window's one snapshot
+    // subscription; the resize applier installed above touches the renderer.
+    // Registered before the seed is read, so native facts changed during
+    // renderer bootstrap cannot be replaced by a synthetic Resumed
+    // observation.
+    installation.observe_window();
 
     installation.on_close(move || {
         close_this_window(owner_dispatch);
@@ -520,14 +506,18 @@ impl IosFrameDriver {
             physical.height.unsigned_abs(),
         );
     }
-    pub(super) fn wake(&mut self, ui_runtime: &mut crate::app::ui_runtime::UiRuntime) {
+    pub(super) fn wake(
+        &mut self,
+        ui_runtime: &mut crate::app::ui_runtime::UiRuntime,
+        presentation: flui_foundation::PresentationId,
+    ) {
         let lane_frame = &self.lane;
         let worker_reload_frame = &self.worker_reload;
         let device_recovery_backoff = &self.device_recovery_backoff;
         let surface_recreation_retry = &self.surface_recreation_retry;
         // The gate half of the wake runs inside one ui_runtime entry and
         // decides; the pump below enters the ui_runtime itself.
-        let (action, now) = ui_runtime.enter(|ui_runtime| {
+        let (action, now, display_color) = ui_runtime.enter(|ui_runtime| {
             let now = web_time::Instant::now();
             // Development reload: applies a queued rebuild at the frame
             // boundary (the `dlopen` stays owner-thread), exactly as the
@@ -561,7 +551,7 @@ impl IosFrameDriver {
                 FallbackGate::default(),
             );
             if action != WakeAction::Render {
-                return (action, now);
+                return (action, now, None);
             }
 
             // A retry owed by a genuine surface-recreation failure gets
@@ -586,7 +576,13 @@ impl IosFrameDriver {
                 }
                 Some(SurfaceLifecycleOutcome::Released) | None => {}
             }
-            (action, now)
+            (
+                action,
+                now,
+                ui_runtime
+                    .window_display(presentation)
+                    .and_then(|display| display.color),
+            )
         });
 
         match action {
@@ -602,7 +598,12 @@ impl IosFrameDriver {
         }
 
         // The frame: `UiRuntime::pump` at `now`, with device-loss
-        // recovery around it (`pump_with_device_recovery`).
+        // recovery around it (`pump_with_device_recovery`). A changed colour
+        // profile of the window's display sets the surface up again before
+        // this frame paints (ADR-0256 §6).
+        if super::surface_lifecycle::follow_display_color(lane_frame, display_color) {
+            ui_runtime.mark_primary_needs_full_repaint();
+        }
         if pump_with_device_recovery(ui_runtime, lane_frame, device_recovery_backoff, now).is_none()
         {
             tracing::error!("frame skipped: raster lane busy at frame admission");

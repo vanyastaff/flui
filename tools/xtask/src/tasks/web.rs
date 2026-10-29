@@ -26,9 +26,11 @@ static TEST_RESULT: LazyLock<Regex> =
 
 /// Check and clippy of the wasm-capable workspace, then the facade's
 /// hot-reload feature. `no_wasm` are the packages that cannot target wasm32.
-/// The clippy pass is lib/bin targets only (test targets pull native-only
-/// dev-dependencies such as tokio), and it is the only lint pass over
-/// flui-platform's wasm32-only web backend.
+/// The workspace clippy pass is lib/bin targets only (test targets pull
+/// native-only dev-dependencies such as tokio), and it is the only lint pass
+/// over flui-native's wasm32-only web backend. flui-native's test targets
+/// (`tests/web_browser.rs`, `tests/wasm32/`) compile only here, so they get a
+/// pass of their own.
 fn check_plan(no_wasm: &BTreeSet<String>) -> Vec<Step> {
     let excludes: Vec<String> = no_wasm
         .iter()
@@ -50,6 +52,16 @@ fn check_plan(no_wasm: &BTreeSet<String>) -> Vec<Step> {
             ])
             .args(excludes),
         )
+        .into(),
+        deny_warnings(Cmd::cargo([
+            "clippy",
+            "-p",
+            "flui-native",
+            "--all-targets",
+            "--locked",
+            "--target",
+            WASM_TARGET,
+        ]))
         .into(),
         wasm_facade_check().into(),
     ]

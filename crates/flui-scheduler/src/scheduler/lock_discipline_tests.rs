@@ -253,6 +253,7 @@ fn transient_callback_runs_with_no_scheduler_lock_held() {
 /// lock-across-`wake()` regression would land.
 fn completion_waker_runs_with_no_scheduler_lock_held() {
     thread_local! {
+        #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
         static PROBE: RefCell<Option<WeakUpdateScheduler>> = const { RefCell::new(None) };
     }
     struct ProbingWaker {

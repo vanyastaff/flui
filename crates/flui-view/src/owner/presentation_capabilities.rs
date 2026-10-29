@@ -4,74 +4,75 @@
 
 use super::BuildOwner;
 
+/// What a presentation hands its widgets beyond the build itself: the
+/// handles `LifecycleContext` exposes from `init_state` and
+/// `did_change_dependencies` (ADR-0078).
+///
+/// One structure, so a new capability is a field here, a `LifecycleContext`
+/// method, and the installer in the UI runtime. A bare owner holds the
+/// `Default`: every capability absent, which widgets observe as `None`
+/// rather than as a silent no-op.
+///
+/// The UI runtime installs it through [`BuildOwner::capabilities_mut`]
+/// while it assembles a presentation; every handle is a cheap clone of a
+/// shared one.
+#[derive(Clone, Default)]
+#[non_exhaustive]
+pub struct PresentationCapabilities {
+    /// The presentation's IME/text-input attach-detach capability, minted by
+    /// its `TextInputOwner`. Absent on a headless tree, which has nothing
+    /// to deliver IME events to.
+    pub text_input: Option<flui_interaction::TextInputHandle>,
+    /// The presentation's plain-text clipboard, over its platform's clipboard.
+    pub clipboard: Option<flui_interaction::ClipboardHandle>,
+    /// The presentation's haptics host. Widgets acquire it through
+    /// `LifecycleContext::haptics`, which applies the enclosing `HapticsMode`.
+    pub haptics: Option<flui_interaction::HapticsHandle>,
+    /// The presentation's drag-and-drop over its runtime's drag sessions.
+    pub drag_and_drop: Option<flui_interaction::drag::DragAndDrop>,
+    /// The presentation's external-texture registry.
+    pub textures: Option<flui_rendering::layer::TextureRegistry>,
+    /// The UI runtime's byte storage; absent where the platform has no files
+    /// or the application configured none.
+    pub storage: Option<std::sync::Arc<dyn flui_platform::Storage>>,
+    /// The factory that renders a recovered failure in this presentation's
+    /// tree, or `None` for the default [`ErrorView`](crate::ErrorView). It
+    /// applies from the next recovery on.
+    pub error_view_builder: Option<crate::view::ErrorViewBuilder>,
+}
+
 impl BuildOwner {
-    /// Install the binding's IME/text-input attach-detach capability.
-    ///
-    /// Called during `UiRuntime` construction with the weak handle minted by that
-    /// presentation's `TextInputOwner`. `HeadlessBinding` installs none, so
-    /// headless-tree tests observe `LifecycleContext::text_input_handle() == None`
-    /// honestly rather than accepting attaches nobody delivers events to.
-    pub fn set_text_input_handle(&mut self, handle: flui_interaction::TextInputHandle) {
-        self.text_input_handle = Some(handle);
+    /// Join the UI runtime's [`BuildInProgress`](crate::BuildInProgress) cell, so
+    /// a write that reaches this owner's graph while another presentation of
+    /// the same runtime builds is refused (ADR-0074). Called once, at
+    /// presentation assembly, before any element builds.
+    pub fn set_build_in_progress(&mut self, shared: crate::BuildInProgress) {
+        self.reactive().share_build_in_progress(shared);
     }
 
-    /// Install the presentation's plain-text clipboard.
-    ///
-    /// Called during presentation construction with a handle over the
-    /// UI runtime's platform clipboard, so `LifecycleContext::clipboard_handle`
-    /// answers `Some` under every UI runtime.
-    pub fn set_clipboard_handle(&mut self, handle: flui_interaction::ClipboardHandle) {
-        self.clipboard_handle = Some(handle);
-    }
-
-    /// Install the presentation's haptics handle.
-    ///
-    /// Called during presentation construction with a handle over the
-    /// presentation's haptics host, so `LifecycleContext::haptics` answers
-    /// `Some` under every UI runtime.
-    pub fn set_haptics_handle(&mut self, handle: flui_interaction::HapticsHandle) {
-        self.haptics_handle = Some(handle);
-    }
-
-    /// Install the presentation's drag-and-drop.
-    ///
-    /// Called during presentation construction, so
-    /// `LifecycleContext::drag_and_drop` answers `Some` under every UI runtime.
-    pub fn set_drag_and_drop(&mut self, drag_and_drop: flui_interaction::drag::DragAndDrop) {
-        self.drag_and_drop = Some(drag_and_drop);
-    }
-
-    /// Install the presentation's external-texture registry, which
-    /// `LifecycleContext::texture_registry` hands to widgets.
-    pub fn set_texture_registry(&mut self, registry: flui_rendering::layer::TextureRegistry) {
-        self.texture_registry = Some(registry);
-    }
-
-    /// The presentation's external-texture registry, if one was installed.
+    /// The presentation capabilities installed on this owner.
     #[must_use]
-    pub fn texture_registry(&self) -> Option<&flui_rendering::layer::TextureRegistry> {
-        self.texture_registry.as_ref()
+    pub fn capabilities(&self) -> &PresentationCapabilities {
+        &self.capabilities
     }
 
-    /// Install the UI runtime's byte storage.
-    ///
-    /// Called during presentation construction when the UI runtime has storage,
-    /// so `LifecycleContext::storage` answers `Some` under it.
-    pub fn set_storage(&mut self, storage: std::sync::Arc<dyn flui_platform_api::Storage>) {
-        self.storage = Some(storage);
+    /// The presentation capabilities, for the UI runtime that assembles this
+    /// owner's presentation to install them.
+    pub fn capabilities_mut(&mut self) -> &mut PresentationCapabilities {
+        &mut self.capabilities
     }
+}
 
-    /// Set the factory that renders a recovered failure in this owner's tree,
-    /// or `None` for the default [`ErrorView`](crate::ErrorView). A UI runtime
-    /// sets it on every presentation it assembles; it applies from the next
-    /// recovery on.
-    pub fn set_error_view_builder(&mut self, builder: Option<crate::view::ErrorViewBuilder>) {
-        self.error_view_builder = builder;
-    }
-
-    /// The factory set by [`Self::set_error_view_builder`].
-    #[must_use]
-    pub fn error_view_builder(&self) -> Option<crate::view::ErrorViewBuilder> {
-        self.error_view_builder
+impl std::fmt::Debug for PresentationCapabilities {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PresentationCapabilities")
+            .field("text_input", &self.text_input.is_some())
+            .field("clipboard", &self.clipboard.is_some())
+            .field("haptics", &self.haptics.is_some())
+            .field("drag_and_drop", &self.drag_and_drop.is_some())
+            .field("textures", &self.textures.is_some())
+            .field("storage", &self.storage.is_some())
+            .field("error_view_builder", &self.error_view_builder.is_some())
+            .finish()
     }
 }

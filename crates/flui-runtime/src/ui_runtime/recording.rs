@@ -20,7 +20,7 @@ use flui_interaction::gesture::{
     GestureContest, GestureObservation, ObservedMember, ObserverHandle,
 };
 use flui_interaction::{GestureDisposition, InputSurface};
-use flui_platform_api::{EventTime, WindowId};
+use flui_platform::{EventTime, WindowId};
 
 use super::UiRuntime;
 use crate::input_record::{
@@ -98,14 +98,18 @@ impl UiRuntime {
     /// What a recording of this runtime starts from now: every open window,
     /// the primary first, with its scale and the gesture values its contacts
     /// are admitted with, and the system-preference revision in effect. A
-    /// window whose platform window is gone is left out.
+    /// window whose platform window is gone, or has reported no drawable area
+    /// yet, is left out.
     #[must_use]
     pub fn recording_start(&self) -> RecordingStart {
         let windows = self
             .presentations
             .iter()
             .filter_map(|presentation| {
-                let scale_factor = presentation.with_window(|window| window.scale_factor())?;
+                let scale_factor = presentation
+                    .with_window(|window| window.state().metrics)??
+                    .scale()
+                    .get();
                 Some(RecordingWindow {
                     window: presentation.window_id(),
                     scale_factor,
@@ -281,7 +285,7 @@ impl UiRuntime {
         event: &flui_interaction::PointerEvent,
     ) -> HeldInputRow {
         let arrival = self.event_now();
-        let input = HostInput::Platform(flui_platform_api::PlatformInput::Pointer(event.clone()));
+        let input = HostInput::Platform(flui_platform::PlatformInput::Pointer(event.clone()));
         let t = input_time(&input).unwrap_or(arrival);
         HeldInputRow::new(
             self.input_taps.clone(),
@@ -300,7 +304,7 @@ impl UiRuntime {
     pub(crate) fn record_preferences(
         &self,
         revision: u64,
-        values: std::sync::Arc<flui_platform_api::SystemPreferences>,
+        values: std::sync::Arc<flui_platform::SystemPreferences>,
     ) {
         self.input_taps
             .admit(InputRecord::Preferences(PreferencesRow::new(

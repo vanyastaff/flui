@@ -5,7 +5,7 @@
 //! [`TextEditingController`] and the laid-out `RenderEditable` — until the
 //! per-UI runtime editing state of ADR-0092 replaces them behind the same trait.
 //! The controller's UTF-8 offsets are converted at this boundary with
-//! `flui_platform_api::text_store::utf16`, and nowhere else.
+//! `flui_platform::text_store::utf16`, and nowhere else.
 //!
 //! # Sessions
 //!
@@ -57,7 +57,7 @@ use flui_foundation::geometry::{Matrix4, Offset, Rect};
 use flui_interaction::TextInputHandle;
 use flui_objects::{RenderEditable, SubtreeAnchor};
 use flui_painting::text_boundaries::graphemes;
-use flui_platform_api::text_store::{
+use flui_platform::text_store::{
     CommitGate, Composition, CompositionLedger, EditGeneration, LockArbiter, LockGrant,
     LockOutcome, LockTiming, OwnerCalls, PointMode, RangeRect, RetainOnFailure, Selection,
     TextChange, TextInputPurpose, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver,
@@ -898,22 +898,25 @@ impl TextStoreRead for Session<'_> {
                 .try_inverse()
                 .ok_or(TextStoreError::NoLayout)?
                 .transform_point(point.x, point.y);
-            if mode == PointMode::Exact && !viewport.contains(Point::new(x, y)) {
-                return Err(TextStoreError::PointOutside);
-            }
-            rendered_offset_at(editable, Offset::new(x, y), mode)
+            let visible = viewport.contains(Point::new(x, y));
+            rendered_offset_at(editable, Offset::new(x, y), visible, mode)
         })?;
         let source = self.store.source_offset(&self.doc.text, rendered);
         Ok(self.doc.units(source))
     }
 }
 
-/// The rendered byte offset at a local point: the scalar whose caret-to-caret
-/// span contains it (`Exact`), or the nearest scalar boundary (`Nearest`).
+/// The rendered byte offset at a local point. A point inside a scalar's box
+/// (its caret-to-caret span on the line, where the field shows it:
+/// `visible`) answers the scalar's start, or with
+/// [`PointMode::round_to_nearest_edge`] the nearer of its two boundaries; a
+/// point outside every box answers the nearest scalar boundary with
+/// [`PointMode::nearest_when_outside`], and is outside the text otherwise.
 /// Always a scalar boundary of the rendered text.
 fn rendered_offset_at(
     editable: &RenderEditable,
     point: Offset<f64>,
+    visible: bool,
     mode: PointMode,
 ) -> Result<usize, TextStoreError> {
     let text = editable.plain_text();
@@ -934,20 +937,22 @@ fn rendered_offset_at(
         .or_else(|| editable.local_rect_for_range(0..0))
         .ok_or(TextStoreError::NoLayout)?;
     let (x, y) = (point.dx, point.dy);
-    match mode {
-        PointMode::Exact => {
-            let inside_line = line.top() <= y && y < line.bottom();
-            boundaries
-                .windows(2)
-                .find(|pair| pair[0].1.min(pair[1].1) <= x && x < pair[0].1.max(pair[1].1))
-                .filter(|_| inside_line)
-                .map(|pair| pair[0].0)
-                .ok_or(TextStoreError::PointOutside)
-        }
-        PointMode::Nearest => Ok(boundaries
+    let nearest = |candidates: &[(usize, f64)]| {
+        candidates
             .iter()
             .min_by(|a, b| (a.1 - x).abs().total_cmp(&(b.1 - x).abs()))
-            .map_or(0, |&(byte, _)| byte)),
+            .map_or(0, |&(byte, _)| byte)
+    };
+    let inside_line = visible && line.top() <= y && y < line.bottom();
+    let containing = boundaries
+        .windows(2)
+        .find(|pair| pair[0].1.min(pair[1].1) <= x && x < pair[0].1.max(pair[1].1))
+        .filter(|_| inside_line);
+    match containing {
+        Some(pair) if mode.round_to_nearest_edge => Ok(nearest(pair)),
+        Some(pair) => Ok(pair[0].0),
+        None if mode.nearest_when_outside => Ok(nearest(&boundaries)),
+        None => Err(TextStoreError::PointOutside),
     }
 }
 

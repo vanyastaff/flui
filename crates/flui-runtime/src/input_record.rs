@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use flui_foundation::InputSequenceId;
 use flui_interaction::{GestureDisposition, InputSurface, PointerId};
-use flui_platform_api::{EventTime, PlatformInput, SystemPreferences, WindowId};
+use flui_platform::{EventTime, PlatformInput, SystemPreferences, WindowId};
 
 use crate::HostInput;
 use crate::owner::InputOutcome;
@@ -391,8 +391,12 @@ pub(crate) fn input_time(input: &HostInput) -> Option<EventTime> {
         HostInput::Platform(PlatformInput::Pointer(event)) => {
             flui_interaction::PointerEventExt::time(event)
         }
+        HostInput::Platform(PlatformInput::PointerFrame(frame)) => {
+            // The frame is stamped by its first event.
+            flui_interaction::PointerEventExt::time(&frame.events()[0])
+        }
         HostInput::Platform(PlatformInput::Keyboard(event)) => Some(event.time),
-        HostInput::Frame { vsync } => Some(*vsync),
+        HostInput::Frame { vsync, .. } => Some(*vsync),
         HostInput::Platform(_) | HostInput::Window(_) | HostInput::Accessibility(_) => None,
     }
 }

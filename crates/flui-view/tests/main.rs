@@ -47,6 +47,8 @@ mod lifecycle_recovery;
 mod lifecycle_tests;
 #[path = "notifications.rs"]
 mod notifications;
+#[path = "presentation_capabilities.rs"]
+mod presentation_capabilities;
 // Its one test is the debug-only refusal; release builds compile it out.
 #[cfg(debug_assertions)]
 #[path = "orphaned_render_mount.rs"]

@@ -1,7 +1,6 @@
 ### Added
 
 - The web runner drives an installed development agent hook (`AppConfig::with_dev_agent`): it attaches the hook before the page's window opens and hands it that window once it is installed, as the desktop and iOS runners do. The page's loop never ends, so the hook is never detached.
-- `cargo xtask device web-gallery`: drives every interaction gallery screen in a headless Chrome over WebDriver BiDi with trusted mouse, wheel, key and touch input and Chrome's input method, and checks each outcome through the gallery's semantics tree and the page's pixels. The gallery's `agent` feature serves that tree to the page as `globalThis.__flui_agent`.
 
 ### Fixed
 

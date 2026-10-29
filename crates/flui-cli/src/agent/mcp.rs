@@ -30,7 +30,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::client::{Connection, Failure};
-use super::{Credentials, ENDPOINT_ENV, TOKEN_ENV, find_session_file};
+use super::{Credentials, ENDPOINT_ENV, TOKEN_ENV, find_session_file, target_dir_override};
 
 /// The MCP revisions this server speaks, newest first. A client that asks for
 /// another gets the newest; the tools are plain and the same in each.
@@ -316,7 +316,7 @@ impl Live {
             return Ok(credentials);
         }
         let cwd = std::env::current_dir().map_err(|e| format!("no working directory: {e}"))?;
-        match find_session_file(&cwd) {
+        match find_session_file(&cwd, target_dir_override().as_deref()) {
             Some(path) => Credentials::read(&path),
             None => Err(format!(
                 "no running FLUI app found from {}. Start one with `flui run --agent`, \

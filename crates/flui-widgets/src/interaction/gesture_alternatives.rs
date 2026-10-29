@@ -31,7 +31,7 @@ use flui_interaction::{
     LongPressGestureRecognizer, LongPressMoveUpdateDetails, LongPressStartDetails, PointerEvent,
     PointerEventExt, PointerId, PointerKindSet, TapGestureRecognizer, TapUpDetails,
 };
-use flui_platform_api::TargetPlatform;
+use flui_platform::TargetPlatform;
 use flui_view::prelude::*;
 use flui_view::{InheritedView, RebuildHandle, RebuildReason, WriterSource, impl_inherited_view};
 use smallvec::SmallVec;

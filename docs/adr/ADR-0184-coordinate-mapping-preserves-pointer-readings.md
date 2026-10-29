@@ -17,7 +17,7 @@ readings, changing history cardinality solely because the coordinate space chang
 
 ## Decision
 
-`flui-platform-api::PointerMove::try_map_positions` converts only checked positions
+`flui-platform::PointerMove::try_map_positions` converts only checked positions
 and returns an owned movement. It preserves pointer metadata, buttons, modifiers,
 sample times, sensors, and measured/predicted membership and ordering. A mapper
 error returns no partial movement and leaves the borrowed source unchanged.

@@ -53,6 +53,42 @@ when the painter keeps its existing glyph layout. The mounted widget row
 published labels, nested overrides, empty labels, replacement identity and
 unchanged text geometry.
 
+### A paragraph's links are parts of its hit and nodes of their own
+
+A span's link and cursor cover its children unless a child sets its own.
+`RenderParagraph` cuts its text into runs where either changes and answers a
+pointer from the layout it committed, so it follows the text scale (ADR-0183):
+`TextPainter::get_position_for_offset` names the run, and the run answers only
+when one of its glyph boxes holds the position. Over a link with a
+`TextLinkRoute` the hit routes to the link's pointer target and asks for the
+span's cursor or a pointing hand; over a span with a cursor it asks for that
+cursor. A link without a route is plain text: no target, no default cursor, no
+link node, because nothing could run it.
+
+With a routed link the paragraph stops labelling itself with its whole text. It
+is a semantics boundary with explicit child nodes, and its regions publish, in
+reading order, one `Link` node per link (with a `Click` action through the
+route) and one node per stretch of text between links, each bounded by the
+union of its glyph boxes, so nothing is read twice. A stretch that `max_lines`
+or an ellipsis cut has no glyphs and publishes nothing. Link nodes are
+focusable, focused while their link holds the primary focus
+(`set_link_focus`), and take a `Focus` action through the route; with a
+visible focus the paragraph paints the `FocusRingStyle` bands just outside
+each of the link's glyph boxes. A link's node is keyed by its route's
+`TextLinkKey`, which the router keeps for a link across rebuilds, so
+assistive technology keeps its place when links before it come and go; a
+link that encloses another is cut in two by it, and the later part is counted
+in a key space of its own. After each layout that changes it, the paragraph
+tells its `ShownLinksListener` which links have glyphs, so a link `max_lines`
+or an ellipsis cut can stop taking focus. A link whose children all set their own links covers no text
+(`TextSpan::link_covers_text`): it is no link at all, neither numbered nor
+routed. A textless span's semantics label has no glyphs of its own, so its
+node is bounded by the paragraph and still read in its place. The widget rows
+`a_tap_on_a_link_reaches_on_link_at_the_current_text_scale`,
+`a_link_shows_a_pointing_hand_and_a_span_its_own_cursor` and
+`a_handled_link_is_a_link_node_assistive_technology_clicks` check taps, cursors
+and link nodes at a non-1.0 text scale.
+
 ### Stack intrinsic sizing uses only non-positioned content
 
 Positioned overlays do not contribute to Stack's allocated size, so they do not

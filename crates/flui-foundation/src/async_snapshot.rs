@@ -14,7 +14,7 @@
 //! |---|---|---|
 //! | `error: Object?` + `stackTrace: StackTrace` | generic `E`, **no stack trace** | Rust has no ambient stack traces on error values. `E` comes from `Future<Output = Result<T, E>>` — errors are in the type, not thrown. An infallible future uses `E = Infallible`. |
 //! | `T get requireData` throws | **absent** | It only makes sense where `data` is nullable and there is no `Option`. Use [`AsyncSnapshot::data`] → `Option<&T>` and `expect` at the call site. `docs/PANIC-POLICY.md` reserves panics for internal invariants. |
-//! | `AsyncSnapshot` handed to `builder` by value | handed by **reference** | Avoids `T: Clone`. `FOUNDATIONS.md`: "Application state carries no trait bound beyond `'static` — the Druid mistake is the one most dangerous trap." |
+//! | `AsyncSnapshot` handed to `builder` by value | handed by **reference** | Avoids `T: Clone`: application state carries no trait bound beyond `'static`. |
 //! | `AsyncSnapshot.waiting()` | [`AsyncSnapshot::waiting`] | Same, kept for symmetry even though the folds never need it. |
 //!
 //! # The data/error invariant

@@ -3,12 +3,16 @@
 - **Status:** Accepted
 - **Date:** 2026-07-18
 - **Related:** ADR-0027 (UI runtime ownership), ADR-0058 (pacing; the backgrounded pump)
+- **Superseded-by:**
+  [ADR-0258](ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md) §1–§2, for §5's sentence
+  "the first panic resumes after restoration and notification" only: a quit observer's panic is
+  contained and reported, and resumes only when it is terminal. The rest of §5 stands.
 
 ## Context
 
 The workspace had three app-lifecycle representations at once: `flui_scheduler`'s
 `AppLifecycleState` (a faithful port, the only one wired to `frames_enabled`), a duplicate enum
-in `flui-view` that nothing fed, and a `flui-platform` state machine with different variants
+in `flui-view` that nothing fed, and a `flui-native` state machine with different variants
 (`Starting`/`Active`/`Background`/`Terminating`) that the runner drove and nothing read. Platform
 quit and window focus updated a state machine that could not affect frame scheduling.
 
@@ -22,7 +26,7 @@ calls `scheduleFrame()` on that edge.
 ### 1. One lifecycle type: `flui_scheduler::AppLifecycleState`
 
 It is canonical because it is the one tied to behavior. `flui-view` re-exports it; the
-`flui-platform` lifecycle traits and the app-binding lifecycle state machine are deleted, not
+`flui-native` lifecycle traits and the app-binding lifecycle state machine are deleted, not
 deprecated. Two names for one concept had already drifted, and would again.
 `should_schedule_frame()` is an alias of `frames_enabled()` — one source of truth.
 `should_run_animations()` is deleted: it had no caller, and Flutter gates tickers through

@@ -72,6 +72,7 @@ await its returned request or poll `try_result` to obtain the window result."
 //! | `localizations` | off | nothing; deprecated, kept so existing feature lists resolve |
 //! | `hot-reload` | off | re-exports `flui-hot-reload` as `hot_reload`; install its hook with `AppConfig::with_dev_reload` |
 //! | `dev-agent` | off | re-exports `flui-devtools` as `devtools`, with its agent server; install it with `AppConfig::with_dev_agent` (`flui run --agent`) |
+//! | `native` | off | `flui::native`, the operating systems' window extensions (Evolving) |
 //!
 //! Nothing is on by default (ADR-0088 §6): an application names the catalog it
 //! uses, e.g. `features = ["material"]`; with no feature the facade still gives
@@ -86,10 +87,20 @@ await its returned request or poll `try_result` to obtain the window result."
 //! an otherwise supported cross-target build.
 //!
 //! Additional opt-in capabilities are `testing` (the `flui::testing` headless
-//! harness, normally enabled in a development dependency), `a11y` (native
-//! accessibility adapters on supported platforms), and `serde` (serialization
-//! for framework value types). Emitting widget semantics alone does not enable
-//! a native accessibility adapter; select `a11y` for that integration.
+//! harness, normally enabled in a development dependency) and `serde`
+//! (serialization for framework value types). Native accessibility is not a
+//! feature: on Windows, macOS and Linux every window offers its semantics tree
+//! to the operating system's assistive technology through AccessKit.
+//!
+//! `native` publishes the escape hatch, `flui::native`: what one operating
+//! system's windows offer beyond the window contract, in `flui::native::windows`
+//! and `flui::native::macos`. It is Evolving rather than Stable (ADR-0089 §5),
+//! so it is off by default and absent without the feature:
+//!
+#![cfg_attr(not(feature = "native"), doc = "```compile_fail,E0432")]
+#![cfg_attr(feature = "native", doc = "```")]
+//! use flui::native::HostWindow;
+//! ```
 //!
 //! # Using a design system
 //!
@@ -127,20 +138,21 @@ fn main() {
 //! # Layers
 //!
 //! Each re-exported module is one workspace crate; the layering (no upward
-//! edges) is documented in `docs/FOUNDATIONS.md`:
+//! edges) is documented in `docs/architecture.md`:
 //!
 //! | Module | Crate | Feature | Layer |
 //! |---|---|---|---|
 //! | [`geometry`] | `flui-foundation` | — | geometry values (`f64` logical pixels) |
 //! | [`foundation`] | `flui-foundation` | — | keys, listenables, diagnostics |
 //! | [`painting`] | `flui-painting` | — | custom painting; paint, style and text values |
-//! | [`platform`] | `flui-platform-api` | — | platform contracts and values (brightness, locale, IME) |
+//! | [`platform`] | `flui-platform` | — | platform contracts and values (brightness, locale, IME) |
 //! | [`view`] | `flui-view` | — | View/Element tree |
 //! | [`widgets`] | `flui-widgets` | — | user-facing widget catalog |
 //! | [`animation`] | `flui-animation` | — | curves, tweens, tickers |
 //! | `material` | `flui-material` | `material` | Material Design theming + widget catalog |
 //! | `cupertino` | `flui-cupertino` | `cupertino` | iOS-style theming + widget catalog |
 //! | [`app`] | `flui-app` | — | `run_app` + bindings |
+//! | `native` | `flui-native`, through `flui-app` | `native` | one operating system's window extensions |
 //!
 //! [`painting`], [`rendering`], and [`interaction`] expose selected authoring
 //! contracts for custom drawing, render objects, and gestures. Arena storage,
@@ -183,10 +195,38 @@ pub use flui_macros::Diagnosticable;
 /// feature.
 #[cfg(feature = "material")]
 pub use flui_material as material;
-/// The platform contracts and input vocabulary (`flui-platform-api`).
+/// What one operating system's windows offer beyond the window contract
+/// (ADR-0254 §8). Requires the `native` feature; Evolving, not Stable
+/// (ADR-0089 §5).
 ///
-/// [`input_capabilities`](flui_platform_api::input_capabilities) and
-/// [`haptics`](flui_platform_api::haptics), the second haptic tier with its
+/// [`with_window`](native::with_window) runs a closure on the window a
+/// presentation is drawn in, by the address a window request resolves to or a
+/// close request names; a widget that holds only its `WindowHandle` has no
+/// address to give it yet (that path comes with the window handler passed at
+/// open, ADR-0254 §4). Each system's module has an extension trait
+/// implemented for `dyn HostWindow`, the window as the core host hands it out.
+/// Its one method narrows the window to that system's view of it (`win32()`,
+/// `appkit()`) and answers `None` for a window of any other host (headless,
+/// winit, another system), so nothing is asked of a window that cannot take it
+/// and nothing panics. The views take and return FLUI types; a raw window or
+/// display handle leaves only through `raw-window-handle`'s `HasWindowHandle`
+/// and `HasDisplayHandle`, which every window implements.
+///
+/// What a window is created with on one system is a value of that system's
+/// type in [`platform::os_options::OsWindowOptions`], given to
+/// [`AppConfig::with_os_options`].
+#[cfg(feature = "native")]
+pub mod native {
+    #[cfg(target_os = "macos")]
+    pub use flui_app::native::macos;
+    #[cfg(windows)]
+    pub use flui_app::native::windows;
+    pub use flui_app::native::{HostWindow, with_window};
+}
+/// The platform contracts and input vocabulary (`flui-platform`).
+///
+/// [`input_capabilities`](flui_platform::input_capabilities) and
+/// [`haptics`](flui_platform::haptics), the second haptic tier with its
 /// requests and outcomes, are unstable and present only under the additive
 /// `unstable-input` feature (ADR-0213 §5, ADR-0210 §9). Without it the modules
 /// are private, not merely undocumented:
@@ -201,13 +241,11 @@ pub use flui_material as material;
 /// use flui::platform::haptics::HapticPattern;
 /// ```
 pub mod platform {
-    pub use flui_platform_api::*;
+    pub use flui_platform::*;
     /// Handle-less input capabilities (ADR-0213); unstable.
     #[cfg(feature = "unstable-input")]
     pub mod input_capabilities {
-        pub use flui_platform_api::input_capabilities::{
-            Availability, InputCapabilities, PointerKindSet,
-        };
+        pub use flui_platform::input_capabilities::{InputCapabilities, PointerKindSet};
     }
     // Shadows the glob's module of the same name, so the unstable types are
     // unreachable through the facade without the feature.
@@ -220,7 +258,7 @@ pub mod platform {
     /// Haptic patterns, requests and outcomes (ADR-0210); unstable.
     #[cfg(feature = "unstable-input")]
     pub mod haptics {
-        pub use flui_platform_api::haptics::{
+        pub use flui_platform::haptics::{
             ControlPoint, HapticCapabilities, HapticEvent, HapticOutcome, HapticPattern,
             HapticPatternBuilder, HapticPatternError, HapticRequest, HapticTicket, HapticTiming,
             Intensity, ParameterCurve, PatternPlayback, Sharpness, UnitRangeError,

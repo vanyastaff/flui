@@ -321,7 +321,7 @@ fn late_font_diagnostic_case(change_on_report: bool) {
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            Arc::new(flui_platform::InMemoryClipboard::new()),
             &fonts,
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),
@@ -511,7 +511,7 @@ fn late_font_diagnostic_case(change_on_report: bool) {
 }
 
 struct BackgroundDeadline {
-    due: Cell<Option<flui_platform_api::EventTime>>,
+    due: Cell<Option<flui_platform::EventTime>>,
     effects: Rc<Cell<usize>>,
     panic_after_effect: bool,
 }
@@ -521,11 +521,11 @@ impl flui_interaction::gesture::GestureArenaMember for BackgroundDeadline {
 
     fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
 
-    fn deadline(&self) -> Option<flui_platform_api::EventTime> {
+    fn deadline(&self) -> Option<flui_platform::EventTime> {
         self.due.get()
     }
 
-    fn poll_deadline(&self, _: flui_platform_api::EventTime) {
+    fn poll_deadline(&self, _: flui_platform::EventTime) {
         self.effects.set(self.effects.get() + 1);
         if self.panic_after_effect {
             std::panic::panic_any("unknown background deadline progress");
@@ -567,7 +567,7 @@ fn background_deadline_case(unknown: bool) {
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),
@@ -654,9 +654,8 @@ fn background_deadline_case(unknown: bool) {
         effects: Rc::clone(&unknown_effects),
         panic_after_effect: true,
     });
-    let contact = |value| {
-        flui_platform_api::PointerId::new(std::num::NonZeroU64::new(value).expect("contact"))
-    };
+    let contact =
+        |value| flui_platform::PointerId::new(std::num::NonZeroU64::new(value).expect("contact"));
     if unknown {
         let _ = primary.arena.add(contact(71), &unknown_timer);
     }
@@ -754,7 +753,7 @@ fn delivery_case(delivery: Delivery) {
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),
@@ -850,16 +849,16 @@ fn delivery_case(delivery: Delivery) {
     }
     if delivery == Delivery::Deadline {
         let down = flui_interaction::events::make_down_event_for_id_with_button(
-            flui_platform_api::PointerId::new(std::num::NonZeroU64::MIN),
+            flui_platform::PointerId::new(std::num::NonZeroU64::MIN),
             flui_foundation::geometry::Offset::new(5.0, 5.0),
-            flui_platform_api::PointerKind::Touch,
-            flui_platform_api::PointerButton::PRIMARY,
+            flui_platform::PointerKind::Touch,
+            flui_platform::PointerButton::PRIMARY,
         )
         .expect("finite touch");
         runtime.enter(|runtime| {
             runtime.handle_input_addressed(
                 runtime.presentation_id(),
-                flui_platform_api::PlatformInput::Pointer(down),
+                flui_platform::PlatformInput::Pointer(down),
             );
         });
     }
@@ -1098,7 +1097,7 @@ fn source_failure_case(failure: SourceFailure) {
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),
@@ -1303,7 +1302,7 @@ fn one_pump_shares_its_selected_time_across_parent_and_child() {
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(host.clone()),
         ),
@@ -1361,4 +1360,218 @@ fn one_pump_shares_its_selected_time_across_parent_and_child() {
     assert!((parent_owner.controller().value() - 0.5).abs() < 1e-9);
     assert!((child_owner.controller().value() - 0.5).abs() < 1e-9);
     child_owner.controller().remove_listener(listener);
+}
+
+fn manual_frame_runtime(host: &ManualClock) -> UiRuntime {
+    let runtime = UiRuntime::new(
+        crate::owner_publication::window(),
+        1.0,
+        RuntimeHostServices::new(
+            Arc::new(|| {}),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(flui_platform::InMemoryClipboard::new()),
+            &flui_painting::FontCollection::new(),
+            flui_scheduler::ClockSource::Manual(host.clone()),
+        ),
+    )
+    .expect("manual-clock runtime");
+    runtime
+        .attach_root_widget_with_size(&flui_widgets::SizedBox::square(10.0), 800.0, 600.0)
+        .expect("mounted root");
+    runtime
+}
+
+/// Pump `runtime` at `sampled` after the host delivered a frame with `vsync`, and read the
+/// progress of its one-second animation.
+fn animation_after_vsync(
+    host: &ManualClock,
+    vsync: web_time::Instant,
+    sampled: web_time::Instant,
+    runtime: &mut UiRuntime,
+    controller: &AnimationController,
+) -> f64 {
+    let request = flui_platform::FrameRequest::new(crate::event_at(host, vsync));
+    runtime.note_frame_request(runtime.presentation_id(), request);
+    let _ = runtime.pump(&mut SampledClock(sampled), &mut Sink);
+    controller.value()
+}
+
+#[test]
+fn a_delivered_vsync_is_the_frames_time_held_between_the_last_frame_and_the_wake() {
+    let host = ManualClock::new();
+    let mut runtime = manual_frame_runtime(&host);
+    let owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&runtime.vsync()));
+    let controller = owner.controller();
+    let _run = controller.forward().expect("run");
+    let start = host.now();
+    let _ = runtime.pump(&mut SampledClock(start), &mut Sink);
+
+    // The wake ran 50 ms after its vsync: the animation samples the vsync.
+    let at = |millis: u64| start + Duration::from_millis(millis);
+    let value = animation_after_vsync(&host, at(200), at(250), &mut runtime, controller);
+    assert!(
+        (value - 0.2).abs() < 1e-9,
+        "the frame samples its vsync, not the wake: {value}"
+    );
+
+    // A vsync ahead of the wake's own reading is a defect, not a time.
+    let value = animation_after_vsync(&host, at(900), at(300), &mut runtime, controller);
+    assert!(
+        (value - 0.3).abs() < 1e-9,
+        "a vsync past the wake is held at the wake: {value}"
+    );
+
+    // A vsync behind the previous frame cannot run the clock backwards.
+    let value = animation_after_vsync(&host, at(100), at(400), &mut runtime, controller);
+    assert!(
+        (value - 0.3).abs() < 1e-9,
+        "a vsync before the last frame is held at it: {value}"
+    );
+
+    // A pump with no delivered frame samples the host's reading, as before.
+    let _ = runtime.pump(&mut SampledClock(at(500)), &mut Sink);
+    assert!((controller.value() - 0.5).abs() < 1e-9);
+}
+
+struct ObservedIdleDeadline {
+    sampled: web_time::Instant,
+    asked: bool,
+}
+
+impl FrameClockSource for ObservedIdleDeadline {
+    fn frame_time(&mut self) -> web_time::Instant {
+        self.sampled
+    }
+
+    fn idle_deadline(&mut self, frame_time: web_time::Instant) -> flui_scheduler::IdleDeadline {
+        self.asked = true;
+        flui_scheduler::IdleDeadline::far_future(frame_time)
+    }
+}
+
+/// How many of two idle tasks run in one frame, the first taking 20 ms of host time, when the
+/// frame was delivered with `target_present` (10 ms after the frame) or without one.
+fn idle_tasks_run(target_present: Option<u64>) -> (usize, bool) {
+    let host = ManualClock::new();
+    let runtime = manual_frame_runtime(&host);
+    let start = host.now();
+    let ran = Rc::new(Cell::new(0_usize));
+    for _ in 0..2 {
+        let (ran, host) = (Rc::clone(&ran), host.clone());
+        runtime
+            .scheduler()
+            .add_task(flui_scheduler::Priority::Idle, move || {
+                ran.set(ran.get() + 1);
+                host.advance(Duration::from_millis(20));
+            });
+    }
+    let mut request = flui_platform::FrameRequest::new(crate::event_at(&host, start));
+    if let Some(millis) = target_present {
+        let shown = crate::event_at(&host, start + Duration::from_millis(millis));
+        request = request.with_target_present(shown);
+    }
+    runtime.note_frame_request(runtime.presentation_id(), request);
+    let mut clock = ObservedIdleDeadline {
+        sampled: start,
+        asked: false,
+    };
+    let mut runtime = runtime;
+    let _ = runtime.pump(&mut clock, &mut Sink);
+    (ran.get(), clock.asked)
+}
+
+/// How many of two idle tasks, each taking 20 ms of host time, run in a frame whose request names
+/// no present time, delivered 16 ms after an earlier frame whose request carried a report
+/// where `reported_ago` names one: a frame shown that long before the earlier frame's vsync, at
+/// `refresh` where the platform named one.
+fn idle_tasks_after_a_presentation(
+    reported_ago: Option<Duration>,
+    refresh: Option<Duration>,
+) -> (usize, bool) {
+    let host = ManualClock::new();
+    host.advance(Duration::from_secs(1));
+    let mut runtime = manual_frame_runtime(&host);
+    let earlier = host.now();
+    let mut request = flui_platform::FrameRequest::new(crate::event_at(&host, earlier));
+    if let Some(ago) = reported_ago {
+        let at = crate::event_at(&host, earlier).as_nanos()
+            - u64::try_from(ago.as_nanos()).expect("a test age fits");
+        let mut shown =
+            flui_platform::FramePresented::new(flui_platform::EventTime::from_nanos(at));
+        if let Some(refresh) = refresh {
+            shown = shown.with_refresh(refresh);
+        }
+        request = request.with_presented(shown);
+    }
+    runtime.note_frame_request(runtime.presentation_id(), request);
+    let _ = runtime.pump(&mut SampledClock(earlier), &mut Sink);
+    host.advance(Duration::from_millis(16));
+    let start = host.now();
+
+    let ran = Rc::new(Cell::new(0_usize));
+    for _ in 0..2 {
+        let (ran, host) = (Rc::clone(&ran), host.clone());
+        runtime
+            .scheduler()
+            .add_task(flui_scheduler::Priority::Idle, move || {
+                ran.set(ran.get() + 1);
+                host.advance(Duration::from_millis(20));
+            });
+    }
+    let request = flui_platform::FrameRequest::new(crate::event_at(&host, start));
+    runtime.note_frame_request(runtime.presentation_id(), request);
+    let mut clock = ObservedIdleDeadline {
+        sampled: start,
+        asked: false,
+    };
+    let _ = runtime.pump(&mut clock, &mut Sink);
+    (ran.get(), clock.asked)
+}
+
+#[test]
+fn a_presentation_report_bounds_the_idle_work_of_a_later_frame() {
+    assert_eq!(
+        idle_tasks_after_a_presentation(
+            Some(Duration::from_millis(5)),
+            Some(Duration::from_millis(10))
+        ),
+        (1, false),
+        "the frame's idle work ends at the next refresh the earlier report places (9 ms after \
+         the vsync), and the host's own deadline is not asked"
+    );
+    assert_eq!(
+        idle_tasks_after_a_presentation(Some(Duration::from_millis(5)), None),
+        (2, true),
+        "a report with no refresh interval places no refresh"
+    );
+    assert_eq!(
+        idle_tasks_after_a_presentation(None, None),
+        (2, true),
+        "without a report the host's deadline stands"
+    );
+    assert_eq!(
+        idle_tasks_after_a_presentation(
+            Some(Duration::from_millis(200)),
+            Some(Duration::from_millis(10))
+        ),
+        (2, true),
+        "a report from twenty refreshes back bounds nothing: the window was idle, and the host's \
+         deadline stands"
+    );
+}
+
+#[test]
+fn a_target_present_time_bounds_the_idle_work_of_its_frame() {
+    assert_eq!(
+        idle_tasks_run(Some(10)),
+        (1, false),
+        "the second idle task waits once the frame's present time has passed, and the host's own \
+         deadline is not asked"
+    );
+    assert_eq!(
+        idle_tasks_run(None),
+        (2, true),
+        "a frame that names no present time keeps the host's deadline"
+    );
 }

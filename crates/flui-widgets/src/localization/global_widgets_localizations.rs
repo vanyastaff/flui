@@ -2,7 +2,7 @@
 //! for any locale.
 
 use flui_painting::typography::TextDirection;
-use flui_platform_api::Locale;
+use flui_platform::Locale;
 
 use super::{
     BoxedWidgetsLocalizations, DefaultWidgetsLocalizations, LocalizationsDelegate,

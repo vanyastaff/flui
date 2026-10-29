@@ -1,5 +1,5 @@
 // ============================================================================
-// Desktop frame-pacing gate (App.1 vsync pacing)
+// Desktop frame-pacing gate
 // ============================================================================
 //
 // Extracted as free functions — pure, no ui_runtime/window/GPU state — so the
@@ -15,8 +15,9 @@
 // one display period after the last present, never a sleep on the loop).
 
 /// Hands the window's frame-pacing signal to the raster backend: the
-/// backend calls [`PlatformWindow::pre_present_notify`](flui_platform::traits::PlatformWindow::pre_present_notify) immediately before
-/// every present, and only then. On Wayland this is what makes a running
+/// backend calls the surface target's
+/// [`pre_present_notify`](flui_platform::SurfaceTarget::pre_present_notify)
+/// immediately before every present, and only then. On Wayland this is what makes a running
 /// animation compositor-paced (winit withholds the next `RedrawRequested`
 /// until the surface's frame callback) and an occluded window silent; on
 /// every other backend the notify is a no-op. A named function rather than
@@ -31,10 +32,11 @@
 ))]
 pub(super) fn install_pre_present_hook(
     backend: &mut impl flui_engine::RasterBackend,
-    window: &std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
+    surface: std::sync::Arc<dyn flui_platform::SurfaceTarget>,
 ) {
-    let window = std::sync::Arc::clone(window);
-    backend.set_pre_present_hook(Some(Box::new(move || window.pre_present_notify())));
+    backend.set_pre_present_hook(Some(Box::new(move |statistics| {
+        surface.pre_present_notify(statistics);
+    })));
 }
 
 /// What a platform wake should do: run the full frame pipeline, service
@@ -466,7 +468,7 @@ impl FallbackWake {
     }
 }
 
-/// App.1 vsync-pacing gate tests.
+/// Frame-pacing gate tests.
 ///
 /// `run_desktop` itself opens a real window and GPU device, so it cannot
 /// run headlessly; `wake_action` and `FallbackWake` were pulled

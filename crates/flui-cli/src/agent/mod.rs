@@ -91,11 +91,11 @@ impl Credentials {
 
 /// Where `start` or a directory above it keeps its session file.
 ///
-/// `CARGO_TARGET_DIR` wins; otherwise the nearest ancestor's `target/` that
-/// holds one is the answer for a reader, and `start`'s own workspace root for
-/// a writer ([`session_file_for_writing`]).
-pub(crate) fn find_session_file(start: &Path) -> Option<PathBuf> {
-    if let Some(dir) = target_dir_override() {
+/// `target_dir` (the command's [`target_dir_override`]) wins; otherwise the
+/// nearest ancestor's `target/` that holds one is the answer for a reader, and
+/// `start`'s own workspace root for a writer ([`session_file_for_writing`]).
+pub(crate) fn find_session_file(start: &Path, target_dir: Option<&Path>) -> Option<PathBuf> {
+    if let Some(dir) = target_dir {
         let file = dir.join(SESSION_FILE);
         return file.is_file().then_some(file);
     }
@@ -106,14 +106,24 @@ pub(crate) fn find_session_file(start: &Path) -> Option<PathBuf> {
 }
 
 /// Where a session started in `start` writes its file: beside the build
-/// output of the workspace `start` belongs to.
-fn session_file_for_writing(start: &Path, workspace_root: Option<&Path>) -> PathBuf {
-    let target =
-        target_dir_override().unwrap_or_else(|| workspace_root.unwrap_or(start).join("target"));
+/// output of the workspace `start` belongs to, or in `target_dir` when the
+/// command builds into one.
+fn session_file_for_writing(
+    start: &Path,
+    workspace_root: Option<&Path>,
+    target_dir: Option<&Path>,
+) -> PathBuf {
+    let target = target_dir.map_or_else(
+        || workspace_root.unwrap_or(start).join("target"),
+        Path::to_path_buf,
+    );
     target.join(SESSION_FILE)
 }
 
-fn target_dir_override() -> Option<PathBuf> {
+/// The target directory `CARGO_TARGET_DIR` names, which every project builds
+/// into and keeps its session file in. Each command reads it once and passes
+/// it on, so nothing above reads the environment.
+pub(crate) fn target_dir_override() -> Option<PathBuf> {
     std::env::var_os("CARGO_TARGET_DIR")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
@@ -131,8 +141,13 @@ pub(crate) struct Session {
 
 impl Session {
     /// A new session for the project at `start` (`workspace_root` is the
-    /// workspace it belongs to, when it has one).
-    pub(crate) fn create(start: &Path, workspace_root: Option<&Path>) -> CliResult<Self> {
+    /// workspace it belongs to, when it has one; `target_dir` the
+    /// command's [`target_dir_override`]).
+    pub(crate) fn create(
+        start: &Path,
+        workspace_root: Option<&Path>,
+        target_dir: Option<&Path>,
+    ) -> CliResult<Self> {
         let dir = tempfile::Builder::new()
             .prefix("flui-agent-")
             .tempdir()
@@ -152,7 +167,7 @@ impl Session {
             token,
             pid: std::process::id(),
         };
-        let file = session_file_for_writing(start, workspace_root);
+        let file = session_file_for_writing(start, workspace_root, target_dir);
         write_private(&file, &credentials).context("could not write the agent session file")?;
         Ok(Self {
             credentials,
@@ -273,19 +288,23 @@ fn write_private(path: &Path, credentials: &Credentials) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    //! Each test's project keeps its session file in its own `target/`: no
+    //! target-dir override goes in, so a `CARGO_TARGET_DIR` the test runner
+    //! inherited cannot put every test's file in one place.
+
     use super::*;
 
     #[test]
     fn a_session_names_a_fresh_endpoint_and_a_token_the_app_accepts() {
         let project = tempfile::tempdir().unwrap();
-        let session = Session::create(project.path(), None).unwrap();
+        let session = Session::create(project.path(), None, None).unwrap();
         let credentials = session.credentials();
         // flui-devtools refuses a token shorter than this.
         assert!(credentials.token.len() >= 32);
         assert!(credentials.token.chars().all(|c| c.is_ascii_hexdigit()));
         assert_eq!(credentials.pid, std::process::id());
 
-        let other = Session::create(project.path(), None).unwrap();
+        let other = Session::create(project.path(), None, None).unwrap();
         assert_ne!(credentials.token, other.credentials().token);
         assert_ne!(credentials.endpoint, other.credentials().endpoint);
     }
@@ -295,9 +314,9 @@ mod tests {
         let project = tempfile::tempdir().unwrap();
         let nested = project.path().join("src").join("deep");
         fs::create_dir_all(&nested).unwrap();
-        let session = Session::create(project.path(), None).unwrap();
+        let session = Session::create(project.path(), None, None).unwrap();
 
-        let found = find_session_file(&nested).expect("found from a nested directory");
+        let found = find_session_file(&nested, None).expect("found from a nested directory");
         assert_eq!(found, session.file());
         assert_eq!(Credentials::read(&found).unwrap(), *session.credentials());
 
@@ -311,7 +330,7 @@ mod tests {
     fn the_session_file_and_its_socket_directory_are_private() {
         use std::os::unix::fs::PermissionsExt as _;
         let project = tempfile::tempdir().unwrap();
-        let session = Session::create(project.path(), None).unwrap();
+        let session = Session::create(project.path(), None, None).unwrap();
         let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(session.file()), 0o600);
         let socket_dir = Path::new(&session.credentials().endpoint).parent().unwrap();
@@ -325,7 +344,7 @@ mod tests {
     #[test]
     fn a_newer_session_keeps_its_file_when_an_older_one_ends() {
         let project = tempfile::tempdir().unwrap();
-        let older = Session::create(project.path(), None).unwrap();
+        let older = Session::create(project.path(), None, None).unwrap();
         let file = older.file().to_owned();
         // Another `flui run` in the same project replaced the file.
         let replacement = Credentials {

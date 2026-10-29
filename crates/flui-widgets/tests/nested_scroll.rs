@@ -13,7 +13,7 @@ use flui_interaction::{
     GestureProfiles, GestureSettings, GestureSettingsSource, GestureValues, InputSequenceId,
     RemainderHandoff,
 };
-use flui_platform_api::{EventTime, TargetPlatform};
+use flui_platform::{EventTime, TargetPlatform};
 use flui_testing::{MouseScript, PointerScript, ScriptStep, TouchScript, TrackpadScript};
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::{
@@ -3146,7 +3146,7 @@ pub(crate) fn connection_defaults_take_nothing() {
     );
     let devices = [
         ScrollDevice::Pointer {
-            kind: flui_platform_api::pointer::PointerKind::Touch,
+            kind: flui_platform::pointer::PointerKind::Touch,
             device: None,
         },
         ScrollDevice::Keyboard,
@@ -3632,24 +3632,24 @@ impl HoveringDrag {
         use flui_foundation::geometry::Point;
         use flui_foundation::{PresentationId, UiRuntimeId};
         use flui_interaction::drag::{DragOwner, ProcessNonce};
-        use flui_platform_api::DragDropEvent;
-        use flui_platform_api::data_transfer::{
-            DataTransferOffer, OfferRecord, OfferTable, RepresentationDescriptor, TransferActions,
-            TransferFormat,
+        use flui_platform::DragDropEvent;
+        use flui_platform::data_transfer::{
+            DataTransferOffer, RepresentationDescriptor, TransferActions, TransferFormat,
         };
 
         let owner = DragOwner::new(
             ProcessNonce::from_raw(std::num::NonZeroU64::new(7).expect("nonzero")),
             UiRuntimeId::new(7),
-            Arc::new(flui_platform_api::NullDataTransferSource),
+            Arc::new(flui_platform::NullDataTransferSource),
+            Arc::new(|| {}),
         );
         let representations: Arc<[RepresentationDescriptor]> =
             Arc::from(vec![RepresentationDescriptor {
                 format: TransferFormat::Text,
                 declared_len: None,
             }]);
-        let mut offers = OfferTable::new();
-        let id = offers.mint(OfferRecord::new(Arc::clone(&representations)));
+        // The id a source minted for the offer.
+        let id = flui_foundation::DataTransferId::new_gen(0, std::num::NonZeroU32::MIN);
         let offer = DataTransferOffer::new(id, representations);
         let drag = Self {
             owner,
@@ -3672,7 +3672,7 @@ impl HoveringDrag {
     }
 
     fn path_at(laid: &LaidOut, y: f64) -> Vec<flui_interaction::HitTestEntry> {
-        laid.hit_test_pointer(at(150.0, y), flui_platform_api::pointer::PointerKind::Mouse)
+        laid.hit_test_pointer(at(150.0, y), flui_platform::pointer::PointerKind::Mouse)
             .path()
             .to_vec()
     }
@@ -3680,8 +3680,8 @@ impl HoveringDrag {
     /// The drag moves to height `y`.
     fn move_to(&self, laid: &LaidOut, y: f64) {
         use flui_foundation::geometry::Point;
-        use flui_platform_api::DragDropEvent;
-        use flui_platform_api::data_transfer::TransferActions;
+        use flui_platform::DragDropEvent;
+        use flui_platform::data_transfer::TransferActions;
 
         let path = Self::path_at(laid, y);
         laid.enter_owner_scope(|| {
@@ -3710,7 +3710,7 @@ impl HoveringDrag {
         laid.enter_owner_scope(|| {
             self.owner.deliver(
                 self.window,
-                flui_platform_api::DragDropEvent::Exited { id },
+                flui_platform::DragDropEvent::Exited { id },
                 &mut |_, _| None,
             );
         });
@@ -3722,7 +3722,7 @@ impl HoveringDrag {
 /// (ADR-0211 §8): steady while the drag holds still, ended when it moves out
 /// of the band, the other way at the other edge, and nothing at an extent.
 pub(crate) fn drag_autoscroll_dispatches_side_effect_deltas() {
-    use flui_platform_api::pointer::PointerKind;
+    use flui_platform::pointer::PointerKind;
 
     let (controller, probe, vsync) = (ScrollController::new(), Probe::new(), Vsync::new());
     let tree = VsyncScope::new(

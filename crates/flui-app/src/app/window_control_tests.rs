@@ -6,14 +6,16 @@
     reason = "clippy asks for `const` on the Android target even though the initializer already is"
 )]
 
-use std::any::Any;
-use std::sync::Mutex;
+use crate::app::runner::window_routes::OpenRouted as _;
+use std::sync::{Arc, Mutex};
 
 use flui_foundation::geometry::{Point, Size};
 use flui_foundation::{PresentationId, UiRuntimeId};
-use flui_platform::traits::WindowId;
-use flui_platform::{HeadlessPlatform, Platform as _, WindowMode, WindowOptions};
-use flui_platform_api::{CursorError, CursorIcon};
+use flui_native::HeadlessPlatform;
+use flui_platform::WindowId;
+use flui_platform::{CursorError, CursorIcon};
+use flui_platform::{Unsupported, UnsupportedReason};
+use flui_platform::{WindowCapabilities, WindowMode, WindowOptions};
 use flui_view::{WindowClosed, WindowHandle};
 
 use super::*;
@@ -26,12 +28,17 @@ fn address(n: usize) -> PresentationAddress {
 }
 
 /// A window the headless platform opened, with the capabilities given.
-fn headless_window(capabilities: WindowCapabilities) -> Arc<dyn PlatformWindow> {
-    let window: Arc<dyn PlatformWindow> = HeadlessPlatform::new()
+fn headless_window(capabilities: WindowCapabilities) -> Rc<dyn PlatformWindow> {
+    headless_host_window(capabilities)
+}
+
+/// The same, as the host hands it out, so a test can reach the headless
+/// window's own controls.
+fn headless_host_window(capabilities: WindowCapabilities) -> Rc<dyn flui_native::HostWindow> {
+    HeadlessPlatform::new()
         .with_window_capabilities(capabilities)
-        .open_window(WindowOptions::default())
-        .expect("a headless window opens");
-    window
+        .open_routed(WindowOptions::default())
+        .expect("a headless window opens")
 }
 
 struct Rig {
@@ -41,7 +48,7 @@ struct Rig {
     wakes: Rc<Cell<usize>>,
 }
 
-fn rig(window: &Arc<dyn PlatformWindow>, n: usize) -> Rig {
+fn rig(window: &Rc<dyn PlatformWindow>, n: usize) -> Rig {
     rig_with(
         window,
         n,
@@ -51,7 +58,7 @@ fn rig(window: &Arc<dyn PlatformWindow>, n: usize) -> Rig {
 }
 
 fn rig_with(
-    window: &Arc<dyn PlatformWindow>,
+    window: &Rc<dyn PlatformWindow>,
     n: usize,
     queues: WindowCommandQueues,
     router: CloseRequestRouter,
@@ -66,7 +73,7 @@ fn rig_with(
             counted.set(counted.get() + 1);
             true
         }),
-        Arc::new(router),
+        Rc::new(router),
     );
     let handle = source.handle();
     Rig {
@@ -79,7 +86,7 @@ fn rig_with(
 
 /// A router that knows the window at `address(n)`, answering with `handler`.
 fn router_for(
-    window: &Arc<dyn PlatformWindow>,
+    window: &Rc<dyn PlatformWindow>,
     n: usize,
     handler: Option<crate::app::CloseRequestHandler>,
 ) -> CloseRequestRouter {
@@ -121,17 +128,19 @@ fn a_refused_command_is_never_queued() {
     let rig_none = rig(&none, 2);
     assert_eq!(
         rig_none.handle.set_title("x"),
-        Err(WindowCommandError::Unsupported)
+        Err(SubmitError::Admission(AdmissionError::Unsupported(
+            Unsupported::new(UnsupportedReason::NotOnThisPlatform)
+        )))
     );
     let all = headless_window(WindowCapabilities::ALL);
     let rig_all = rig(&all, 3);
     assert_eq!(
         rig_all.handle.set_size(Size::new(f64::NAN, 10.0)),
-        Err(WindowCommandError::InvalidGeometry)
+        Err(SubmitError::Admission(AdmissionError::InvalidGeometry))
     );
     assert_eq!(
         rig_all.handle.set_position(Point::new(f64::INFINITY, 0.0)),
-        Err(WindowCommandError::InvalidGeometry)
+        Err(SubmitError::Admission(AdmissionError::InvalidGeometry))
     );
     assert_eq!(
         rig_none.wakes.get() + rig_all.wakes.get(),
@@ -143,17 +152,122 @@ fn a_refused_command_is_never_queued() {
     assert_eq!(all.state(), before);
 }
 
+/// A material is a command like the others: a window that draws one takes it
+/// through the queue at the owner's next turn, and one that draws none
+/// refuses it at the submit.
+fn a_material_goes_through_the_window_queue() {
+    let host = headless_host_window(WindowCapabilities::ALL);
+    let window: Rc<dyn PlatformWindow> = host.clone();
+    let rig_all = rig(&window, 21);
+    let mock = host
+        .as_any()
+        .downcast_ref::<flui_native::MockWindow>()
+        .expect("headless window");
+    rig_all
+        .handle
+        .set_material(flui_platform::WindowMaterial::System)
+        .expect("accepted");
+    assert_eq!(mock.materials(), [], "nothing is applied inline");
+    rig_all.queues.apply_pending();
+    assert_eq!(mock.materials(), [flui_platform::WindowMaterial::System]);
+
+    let mut without = WindowCapabilities::ALL;
+    without.material = flui_platform::Availability::Unavailable;
+    let none = headless_window(without);
+    let rig_none = rig(&none, 22);
+    assert_eq!(
+        rig_none
+            .handle
+            .set_material(flui_platform::WindowMaterial::System),
+        Err(SubmitError::Admission(AdmissionError::Unsupported(
+            Unsupported::new(UnsupportedReason::NotOnThisPlatform)
+        )))
+    );
+}
+
+/// The window system revises what the window honours between a submit and
+/// the turn that applies it: the queue, the command's caller, admits each
+/// queued command again against the snapshot then. What the window still
+/// honours applies, in submission order; what it lost is refused and changes
+/// nothing; neither is applied under the capabilities it was checked against.
+fn a_command_superseded_in_the_queue_is_admitted_again() {
+    let host = headless_host_window(WindowCapabilities::ALL);
+    let window: Rc<dyn PlatformWindow> = host.clone();
+    let rig = rig(&window, 20);
+    rig.handle.set_title("kept").expect("accepted");
+    rig.handle
+        .set_mode(WindowMode::Maximized)
+        .expect("accepted while the window maximizes");
+    rig.handle
+        .set_size(Size::new(300.0, 200.0))
+        .expect("accepted");
+
+    let mut revised = WindowCapabilities::ALL;
+    revised.maximizes = flui_platform::Availability::Unavailable;
+    host.as_any()
+        .downcast_ref::<flui_native::MockWindow>()
+        .expect("headless window")
+        .simulate_capabilities(revised);
+    let before = window.state();
+    assert_ne!(
+        before.capabilities.revision(),
+        WindowCapabilities::ALL.revision(),
+        "the change is published at a new capabilities revision"
+    );
+
+    rig.queues.apply_pending();
+    let after = window.state();
+    assert_eq!(after.title.as_deref(), Some("kept"));
+    assert_eq!(
+        after.mode,
+        WindowMode::Normal,
+        "the maximize the window lost"
+    );
+    assert_eq!(after.content_size, Size::new(300.0, 200.0));
+    assert_eq!(
+        after.revision.get(),
+        before.revision.get() + 2,
+        "the title and the size, nothing for the refused maximize"
+    );
+}
+
+/// A close the window refuses (its window system lets the application close
+/// none of its windows) leaves the window open, so what was queued behind it
+/// still applies; only a close that goes ahead, or finds the window closed,
+/// ends the batch.
+fn a_refused_close_keeps_the_work_queued_behind_it() {
+    let mut cannot_close = WindowCapabilities::ALL;
+    cannot_close.closes = flui_platform::Availability::Unavailable;
+    let window = headless_window(cannot_close);
+    let rig = rig_with(
+        &window,
+        21,
+        WindowCommandQueues::default(),
+        router_for(&window, 21, None),
+    );
+    rig.handle.request_close().expect("accepted");
+    rig.handle
+        .set_title("after the refused close")
+        .expect("accepted");
+    rig.queues.apply_pending();
+    assert_eq!(
+        window.state().title.as_deref(),
+        Some("after the refused close"),
+        "the window stayed, and so did its queue"
+    );
+}
+
 fn the_handles_of_two_windows_do_not_mix() {
     let first = headless_window(WindowCapabilities::ALL);
     let second = headless_window(WindowCapabilities::ALL);
     let queues = WindowCommandQueues::default();
-    let source = |window: &Arc<dyn PlatformWindow>, n| {
+    let source = |window: &Rc<dyn PlatformWindow>, n| {
         window_source(
             window,
             address(n),
             &queues,
             Rc::new(|| true),
-            Arc::new(CloseRequestRouter::new()),
+            Rc::new(CloseRequestRouter::new()),
         )
     };
     let (a, b) = (source(&first, 4), source(&second, 5));
@@ -189,10 +303,7 @@ fn a_closed_window_answers_closed() {
         .subscribe(move |_| counted.set(counted.get() + 1))
         .expect("open window accepts subscriptions");
     rig.source.close();
-    assert_eq!(
-        rig.handle.set_title("late"),
-        Err(WindowCommandError::Closed)
-    );
+    assert_eq!(rig.handle.set_title("late"), Err(SubmitError::Closed));
     assert_eq!(rig.handle.request_close(), Err(WindowClosed));
     assert!(rig.handle.state().is_err());
     assert!(rig.handle.subscribe(|_| {}).is_err());
@@ -217,22 +328,15 @@ impl PlatformWindow for RecordingWindow {
     fn id(&self) -> WindowId {
         WindowId(900)
     }
-    fn physical_size(&self) -> Size<i32> {
-        Size::new(10, 10)
-    }
-    fn logical_size(&self) -> Size<f64> {
-        Size::new(10.0, 10.0)
-    }
-    fn scale_factor(&self) -> f64 {
-        1.0
-    }
     fn request_redraw(&self) {}
-    fn is_focused(&self) -> bool {
-        true
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        Arc::new(|| {})
     }
-    fn is_visible(&self) -> bool {
-        true
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        Arc::new(flui_platform::testing::NoNativeSurface)
     }
+    flui_platform::window_takes_no_frame_verbs!();
+
     fn set_cursor(&self, _: CursorIcon) -> Result<(), CursorError> {
         Ok(())
     }
@@ -241,15 +345,14 @@ impl PlatformWindow for RecordingWindow {
             flui_platform::WindowGeometry::new(None, Size::new(10.0, 10.0)),
             Size::new(10.0, 10.0),
         )
+        .with_visible(true)
+        .with_focused(true)
+        .with_capabilities(WindowCapabilities::ALL)
     }
-    fn capabilities(&self) -> WindowCapabilities {
-        WindowCapabilities::ALL
-    }
-    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+    fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
+        let command = command.against(&self.state().capabilities)?;
         if self.fail_titles && matches!(command, WindowCommand::SetTitle(_)) {
-            return Err(WindowCommandError::Backend {
-                message: "the system said no".into(),
-            });
+            return Err(ApplyError::failed("the system said no".into()));
         }
         self.applied.lock().expect("log").push(command);
         if let Some(during) = self.during_apply {
@@ -257,13 +360,22 @@ impl PlatformWindow for RecordingWindow {
         }
         Ok(())
     }
-    fn as_any(&self) -> &dyn Any {
-        self
+    fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
+        None
+    }
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+        None
+    }
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
+        None
+    }
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        None
     }
 }
 
-fn recording(fail_titles: bool, during_apply: Option<fn()>) -> Arc<RecordingWindow> {
-    Arc::new(RecordingWindow {
+fn recording(fail_titles: bool, during_apply: Option<fn()>) -> Rc<RecordingWindow> {
+    Rc::new(RecordingWindow {
         applied: Mutex::new(Vec::new()),
         fail_titles,
         during_apply,
@@ -276,7 +388,7 @@ fn applied(window: &RecordingWindow) -> Vec<WindowCommand> {
 
 fn a_backend_failure_does_not_stop_the_rest_of_the_queue() {
     let window = recording(true, None);
-    let as_platform: Arc<dyn PlatformWindow> = window.clone();
+    let as_platform: Rc<dyn PlatformWindow> = window.clone();
     let rig = rig(&as_platform, 7);
     rig.handle.set_title("fails").expect("accepted at submit");
     rig.handle.set_resizable(false).expect("accepted");
@@ -304,7 +416,7 @@ fn a_command_submitted_while_applying_runs_on_the_following_turn() {
         });
     }
     let window = recording(false, Some(ask_again));
-    let as_platform: Arc<dyn PlatformWindow> = window.clone();
+    let as_platform: Rc<dyn PlatformWindow> = window.clone();
     let rig = rig(&as_platform, 8);
     REENTRANT.with(|slot| *slot.borrow_mut() = Some(rig.handle.clone()));
     rig.handle.set_decorated(false).expect("accepted");
@@ -327,7 +439,7 @@ fn a_command_submitted_while_applying_runs_on_the_following_turn() {
 
 fn a_nested_turn_leaves_the_queue_to_the_walk_in_progress() {
     let window = recording(false, None);
-    let as_platform: Arc<dyn PlatformWindow> = window.clone();
+    let as_platform: Rc<dyn PlatformWindow> = window.clone();
     let rig = rig(&as_platform, 9);
     rig.queues.applying.set(true);
     rig.handle.set_title("held").expect("accepted");
@@ -347,7 +459,7 @@ fn a_panic_while_applying_neither_wedges_the_walk_nor_loses_the_rest() {
     }
     ARMED.set(true);
     let window = recording(false, Some(explode_once));
-    let as_platform: Arc<dyn PlatformWindow> = window.clone();
+    let as_platform: Rc<dyn PlatformWindow> = window.clone();
     let rig = rig(&as_platform, 12);
     rig.handle.set_resizable(false).expect("accepted");
     rig.handle.set_decorated(false).expect("accepted");
@@ -392,7 +504,7 @@ fn a_window_closed_between_the_request_and_the_lookup_has_no_handle() {
 
 fn a_dead_window_takes_its_queued_commands_with_it() {
     let window = recording(false, None);
-    let as_platform: Arc<dyn PlatformWindow> = window.clone();
+    let as_platform: Rc<dyn PlatformWindow> = window.clone();
     let rig = rig(&as_platform, 13);
     rig.handle.set_title("never applied").expect("accepted");
     rig.handle.request_close().expect("accepted");
@@ -410,7 +522,8 @@ fn a_dead_window_takes_its_queued_commands_with_it() {
 }
 
 fn subscribers_hear_a_new_state_in_order_and_what_they_ask_waits() {
-    let window = headless_window(WindowCapabilities::ALL);
+    let host = headless_host_window(WindowCapabilities::ALL);
+    let window: Rc<dyn PlatformWindow> = host.clone();
     let rig = rig(&window, 10);
     let log = Rc::new(RefCell::new(Vec::new()));
     let seen = Rc::clone(&log);
@@ -424,9 +537,9 @@ fn subscribers_hear_a_new_state_in_order_and_what_they_ask_waits() {
         .expect("open window accepts subscriptions");
     assert!(log.borrow().is_empty(), "subscribing calls nothing");
 
-    let native = window
+    let native = host
         .as_any()
-        .downcast_ref::<flui_platform::MockWindow>()
+        .downcast_ref::<flui_native::MockWindow>()
         .expect("headless window");
     native.simulate_move(Point::new(5.0, 6.0));
     rig.source.publish_current();
@@ -448,7 +561,7 @@ fn subscribers_hear_a_new_state_in_order_and_what_they_ask_waits() {
 
 fn closing_is_queued_with_the_commands_and_never_applied_inline() {
     let window = recording(false, None);
-    let as_platform: Arc<dyn PlatformWindow> = window.clone();
+    let as_platform: Rc<dyn PlatformWindow> = window.clone();
     let rig = rig(&as_platform, 11);
     rig.handle.set_resizable(false).expect("accepted");
     rig.handle.request_close().expect("accepted");
@@ -473,7 +586,7 @@ fn a_panic_in_one_window_still_applies_the_others_and_asks_for_a_turn() {
     let healthy = recording(false, None);
     let queues = WindowCommandQueues::default();
     let wakes = Rc::new(Cell::new(0));
-    let source = |window: &Arc<dyn PlatformWindow>, n| {
+    let source = |window: &Rc<dyn PlatformWindow>, n| {
         let counted = Rc::clone(&wakes);
         window_source(
             window,
@@ -483,10 +596,10 @@ fn a_panic_in_one_window_still_applies_the_others_and_asks_for_a_turn() {
                 counted.set(counted.get() + 1);
                 true
             }),
-            Arc::new(CloseRequestRouter::new()),
+            Rc::new(CloseRequestRouter::new()),
         )
     };
-    let (failing_platform, healthy_platform): (Arc<dyn PlatformWindow>, Arc<dyn PlatformWindow>) =
+    let (failing_platform, healthy_platform): (Rc<dyn PlatformWindow>, Rc<dyn PlatformWindow>) =
         (failing.clone(), healthy.clone());
     let (a, b) = (source(&failing_platform, 15), source(&healthy_platform, 16));
     a.handle().set_resizable(false).expect("accepted");
@@ -528,7 +641,7 @@ fn a_panic_in_one_window_still_applies_the_others_and_asks_for_a_turn() {
 
 fn commands_after_a_close_that_goes_ahead_are_dropped_and_after_a_veto_apply() {
     let closing = recording(false, None);
-    let as_platform: Arc<dyn PlatformWindow> = closing.clone();
+    let as_platform: Rc<dyn PlatformWindow> = closing.clone();
     let rig = rig_with(
         &as_platform,
         18,
@@ -541,18 +654,21 @@ fn commands_after_a_close_that_goes_ahead_are_dropped_and_after_a_veto_apply() {
     rig.queues.apply_pending();
     assert_eq!(
         applied(&closing),
-        [WindowCommand::SetTitle("before".into())],
-        "nothing is applied to a window that was just closed"
+        [
+            WindowCommand::SetTitle("before".into()),
+            WindowCommand::Close
+        ],
+        "nothing is applied to a window after its close"
     );
     rig.queues.apply_pending();
     assert_eq!(
         applied(&closing).len(),
-        1,
+        2,
         "nor given back for a later turn"
     );
 
     let kept = recording(false, None);
-    let as_platform: Arc<dyn PlatformWindow> = kept.clone();
+    let as_platform: Rc<dyn PlatformWindow> = kept.clone();
     let veto = crate::app::CloseRequestHandler::new(|_| CloseResponse::KeepOpen);
     let rig = rig_with(
         &as_platform,
@@ -580,8 +696,20 @@ fn window_handle_contract() {
                 commands_wait_for_the_next_turn_and_apply_in_order as fn(),
             ),
             (
+                "a_material_goes_through_the_window_queue",
+                a_material_goes_through_the_window_queue as fn(),
+            ),
+            (
                 "a_refused_command_is_never_queued",
                 a_refused_command_is_never_queued as fn(),
+            ),
+            (
+                "a_command_superseded_in_the_queue_is_admitted_again",
+                a_command_superseded_in_the_queue_is_admitted_again as fn(),
+            ),
+            (
+                "a_refused_close_keeps_the_work_queued_behind_it",
+                a_refused_close_keeps_the_work_queued_behind_it as fn(),
             ),
             (
                 "the_handles_of_two_windows_do_not_mix",

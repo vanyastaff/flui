@@ -23,7 +23,7 @@ use flui_interaction::{
     TransformLock, cancel_all,
 };
 use flui_interaction::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerInfo, PointerKindSet};
-use flui_platform_api::EventTime;
+use flui_platform::EventTime;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
 

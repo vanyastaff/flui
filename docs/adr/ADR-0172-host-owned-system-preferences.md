@@ -1,8 +1,12 @@
 # ADR-0172: Host-owned system preferences and ordered runtime delivery
 
-- **Status:** Accepted architecture; gesture/wheel consumers implemented with local acceptance; broader implementation and acceptance pending.
+- **Status:** Accepted; implemented on Windows, macOS, iOS, Android, the web, Linux (winit) and
+  the headless host, with text, motion, contrast, language, gesture and wheel consumers. Updates
+  are never coalesced (point 3 allows it; no host needs it).
 - **Date:** 2026-10-08
-- **Supersedes:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §4 only.
+- **Supersedes:** the system-preferences section of the 2026-10-06 proposal of
+  [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md); the accepted ADR-0151 (2026-10-20)
+  leaves system preferences to this ADR.
 - **Amended by:** [ADR-0212](ADR-0212-system-preferences-for-input.md) (haptics preference,
   per-display gesture values, accessibility timing floors, preset order)
 - **Related:** [ADR-0082](ADR-0082-platform-api-contract-crate.md),
@@ -18,7 +22,7 @@ each consumer derives its representation from the same accepted state.
 
 ## Scope and ownership
 
-The contract remains in `flui-platform-api`, native producers in `flui-platform`,
+The contract remains in `flui-platform`, native producers in `flui-native`,
 and host composition in `flui-app`. This decision authorizes system-preference
 production, delivery and consumer integration with those existing crate names.
 The other decisions proposed in ADR-0151 through ADR-0154 retain their own status.
@@ -223,12 +227,12 @@ successful-query acknowledgement when projection is unrepresentable, preserving
 same-context geometry or a safe baseline. Independent inverses of the geometry
 repairs failed these affected contracts; restored implementations passed.
 
-Windows [`preferences_contract`](../../crates/flui-platform/tests/preferences.rs)
+Windows [`preferences_contract`](../../crates/flui-native/tests/preferences.rs)
 executes native queries and cold-cache recovery through
 `windows_reads_preferences_before_a_user_window_exists`. The direct child rows
 `native_mouse_wheels_keep_hover_identity_and_signed_units` and
 `fractional_native_wheel_packets_preserve_observed_precision_and_source` in
-[`test_window_lifecycle_contract`](../../crates/flui-platform/tests/contract.rs)
+[`test_window_lifecycle_contract`](../../crates/flui-native/tests/contract.rs)
 also executed successfully, without `CANNOT_VERIFY`: actual injected and queued
 native packets preserve source, precision, signed Detents and DPI conversion.
 Interaction all-target/all-feature clippy and all 12 compiler fixtures passed.

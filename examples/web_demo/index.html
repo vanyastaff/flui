@@ -25,7 +25,12 @@
             font-size: 14px;
             opacity: 0.7;
         }
+        /* The canvas's CSS box is the window. Without a CSS size the box is
+           the backing store FLUI writes to width/height, and at a pixel ratio
+           above 1 each write grows it. */
         #flui-canvas {
+            width: min(800px, 90vw);
+            height: min(600px, 60vh);
             border: 2px solid #333;
             border-radius: 8px;
             cursor: crosshair;

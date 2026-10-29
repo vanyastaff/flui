@@ -55,7 +55,7 @@ env:
   # (see the `test` job). Cache sharing: rust-cache hashes CARGO_* env
   # into its key, and the artifacts themselves carry the profile, so
   # every job's cache key and contents depend on it. Set per job it had
-  # drifted (clippy had none, live-smoke half of it); set once here, it
+  # drifted (clippy had none); set once here, it
   # cannot, and a change to it is visibly a change to every key at once.
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
@@ -99,7 +99,7 @@ jobs:
           components: rustfmt
 
       - name: Install CI tools (typos, taplo, zizmor)
-        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           # Pin versions — unpinned tools surface unrelated breakage on
           # release day. Bump deliberately.
@@ -308,9 +308,16 @@ jobs:
       - name: cargo clippy flui-engine --features testing
         run: cargo clippy -p flui-engine --all-targets --locked --features testing -- -D warnings
 
+      # The slice of `feature-matrix` (main only) that a pull request can break
+      # most cheaply: the workspace pass above builds flui-native with `desktop`
+      # (Wayland and X11 together), which hides a `cfg` gap in any one backend.
+      - name: cargo xtask native-features
+        run: cargo xtask native-features
+
   # ─────────────────────────────────────────────────────────────────────────
   # test — the workspace suite on Linux (`cargo xtask test --fast`: nextest
-  # over TEST_SCOPE, then flui-platform under Xvfb), then the build that
+  # over TEST_SCOPE, then flui-native under Xvfb, then its Wayland tests
+  # against a headless Weston), then the build that
   # links the examples and benches with the same packages and features, so it compiles
   # nothing twice (a target whose `required-features` the test scope leaves
   # off is compiled per feature by `feature-matrix`, not linked). The nested-cargo group runs beside it in `test-nested`.
@@ -351,19 +358,45 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-nextest@0.9
 
-      # flui-platform's suite runs under Xvfb (see `cargo xtask test`):
+      # flui-native's suite runs under Xvfb (see `cargo xtask test`):
       # `--all-features` compiles its winit backend, `FLUI_HEADLESS=1` routes
       # `current_platform()` to the headless mock, and the winit-internals
       # tests that construct `WinitPlatform::new()` need a real (if virtual)
       # X11 connection. Unconditional install: a preinstalled xvfb-run must
       # not short-circuit the library install — winit's keyboard layer
-      # dlopens libxkbcommon-x11, which the hosted runners do not ship.
-      - name: Ensure Xvfb + xkbcommon are available (flui-platform winit-backend X11 tests)
-        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends xvfb libxkbcommon-x11-0 libxkbcommon0
+      # dlopens libxkbcommon-x11, which the hosted runners do not ship. The
+      # native X11 host's window conformance (`tests/x11_window.rs`) starts an
+      # Xvfb and an openbox of its own, and its host loads libxcb at run time.
+      - name: Ensure Xvfb, openbox, libxcb + xkbcommon are available (flui-native X11 tests)
+        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends xvfb openbox libxcb1 libxkbcommon-x11-0 libxkbcommon0
+
+      # The native Wayland host's tests (`cargo xtask test` runs them apart
+      # from the Xvfb suite) need a compositor: a headless Weston on a socket
+      # of its own. `FLUI_REQUIRE_WAYLAND` turns a missing compositor into a
+      # failure instead of a skip, as `FLUI_REQUIRE_GPU` does for the GPU
+      # suites. Weston loads libwayland, which the host dlopens too.
+      - name: Start a headless Weston (flui-native Wayland tests)
+        run: |
+          sudo apt-get install -y --no-install-recommends weston libwayland-client0
+          runtime_dir="$RUNNER_TEMP/xdg-runtime"
+          mkdir -p "$runtime_dir"
+          chmod 700 "$runtime_dir"
+          XDG_RUNTIME_DIR="$runtime_dir" nohup weston --backend=headless --socket=flui-weston \
+            --idle-time=0 --log="$RUNNER_TEMP/weston.log" > /dev/null 2>&1 &
+          for _ in $(seq 1 100); do
+            [ -S "$runtime_dir/flui-weston" ] && break
+            sleep 0.1
+          done
+          [ -S "$runtime_dir/flui-weston" ] || { cat "$RUNNER_TEMP/weston.log"; exit 1; }
+          {
+            echo "XDG_RUNTIME_DIR=$runtime_dir"
+            echo "WAYLAND_DISPLAY=flui-weston"
+            echo "FLUI_REQUIRE_WAYLAND=1"
+          } >> "$GITHUB_ENV"
 
       # The local command, so CI and a local run cannot drift. nextest gives
       # each test its own process, so a test that mutates a genuinely
@@ -387,7 +420,7 @@ jobs:
       # snapshot artifacts).
       - name: Upload insta snapshot candidates on failure
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: insta-snap-new
           path: "**/*.snap.new"
@@ -425,7 +458,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-nextest@0.9
 
@@ -464,7 +497,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-nextest@0.9
 
@@ -473,7 +506,7 @@ jobs:
 
       - name: Upload trybuild output on failure
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: trybuild-wip
           path: "**/wip/*.stderr"
@@ -511,7 +544,7 @@ jobs:
 
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-nextest@0.9
 
@@ -547,91 +580,19 @@ jobs:
       - name: cargo nextest run (flui-widgets images only, Image tests)
         run: cargo nextest run -p flui-widgets --locked --no-fail-fast --features images --test image
 
-      # The facade's non-default catalogs (`tests/cupertino_demo.rs`, the
-      # smoke test's localizations assertions) need no run here: the `test`
-      # job's TEST_SCOPE turns `flui/cupertino,flui/localizations` on.
+      # The facade's non-default catalogs and localizations need no run here:
+      # the `test` job's TEST_SCOPE turns `flui/cupertino,flui/localizations` on.
 
       # A snapshot assertion in these suites fails with a `.snap.new` beside
       # it; upload them as `test` does, or the diff is only a log tail.
       - name: Upload insta snapshot candidates on failure
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: insta-snap-new-features
           path: "**/*.snap.new"
           if-no-files-found: ignore
           retention-days: 7
-
-  # ─────────────────────────────────────────────────────────────────────────
-  # live-smoke — the real-window smoke suites, split out of `test` for the
-  # same reason: they need only the demo example and the harness binary, not
-  # the workspace's test targets, so they were serialising ~100 s behind a
-  # build they do not use. Both variants stay in ONE job because the Wayland
-  # run reuses the binaries the X11 run builds.
-  # ─────────────────────────────────────────────────────────────────────────
-  live-smoke:
-    name: live-smoke
-    needs: [checks, plan]
-    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
-    runs-on: ubuntu-26.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Install pinned Rust
-        uses: ./.github/actions/rust-toolchain
-
-      - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          cache-bin: false
-          cache-on-failure: true
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-
-      # xvfb for the virtual display; libxkbcommon-x11 because winit's X11
-      # backend dlopens it at startup (`xkbcommon-dl` panics without it, so
-      # the demo dies before a window exists — the first run of this split
-      # job proved it). Same pair the `test` job installs for flui-platform.
-      - name: Ensure Xvfb + xkbcommon are available
-        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends xvfb libxkbcommon-x11-0 libxkbcommon0
-
-      # The hosted runner has no GPU: mesa-vulkan-drivers provides the
-      # lavapipe software Vulkan adapter the demo's wgpu init needs (without
-      # it the app panics before a window ever exists). Weston is installed
-      # explicitly so the Wayland harness's weston-absent SKIP path can never
-      # silently fire here.
-      - name: Install lavapipe and weston
-        run: sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers weston
-
-      # A REAL windowed demo binary driven by REAL X11 input (XTEST fake
-      # pointer), asserting on captured pixels and the process's exit code:
-      # the only place the band ABOVE synthetic event dispatch is executed at
-      # all. The winit translation layer, the event-loop wake chain, and
-      # window-close teardown each shipped broken while every synthetic
-      # gesture test stayed green. `cargo xtask live-smoke` builds the demo
-      # and the harness and runs it under Xvfb (tools/xtask/src/tasks.rs,
-      # `live_smoke_plan`).
-      - name: live-smoke (real window, real input, real teardown)
-        run: cargo xtask live-smoke
-
-      # Wayland variant of the live smoke: the ONLY executing coverage of
-      # the Wayland close-path teardown ordering, which segfaulted post-quit
-      # (a wgpu swapchain destroyed after its wl_surface — issue #713) while
-      # the X11 close check above stayed green, because Xlib tolerates the
-      # same out-of-order teardown that is a use-after-free on Wayland's
-      # client-side proxies. Runs the demo under a headless weston
-      # compositor; the app closes itself via the platform's harness
-      # self-close hook (FLUI_SELF_CLOSE_AFTER_MS): five cycles on the
-      # compositor route (the exact CloseRequested arm a compositor close
-      # takes) and two on the programmatic PlatformWindow::close route
-      # (FLUI_SELF_CLOSE_ROUTE=programmatic, issue #919); each must exit 0
-      # AND log the route it took. Reuses the demo and harness binaries the
-      # X11 step built (the same build commands, already fresh).
-      - name: live-smoke-wayland (teardown ordering under headless weston)
-        run: cargo xtask live-smoke --wayland
 
   # ─────────────────────────────────────────────────────────────────────────
   # doc — RUSTDOCFLAGS=-D warnings enforces zero new doc warnings. Gated on
@@ -653,6 +614,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The contract's semver report builds its baseline from the base commit.
+          fetch-depth: 0
 
       - name: Install pinned Rust
         uses: ./.github/actions/rust-toolchain
@@ -660,6 +623,46 @@ jobs:
 
       - name: cargo doc --no-deps (every `testing` feature on)
         run: cargo xtask doc-strict
+
+      # rustdoc's JSON output is nightly-only. The gate runs it through
+      # `rustup run nightly`, so the committed rust-toolchain.toml pin stays the
+      # toolchain of every other step.
+      - name: Install Rust nightly (rustdoc JSON)
+        uses: dtolnay/rust-toolchain@4fd1da8b0805d2d2e936788875a7d65dbd677dc2 # nightly
+        with:
+          # The core host's API is documented as each target it builds a host
+          # for builds it (`targets` in flui-native's api-closure table).
+          targets: x86_64-pc-windows-msvc,aarch64-apple-darwin,aarch64-apple-ios,aarch64-linux-android,wasm32-unknown-unknown
+
+      # What a Stable crate's public API names from upstream crates (ADR-0089
+      # §2), and that the core host's names only its allow list on every target
+      # it builds a host for (ADR-0151 §8), then the same rules over planted
+      # violations. Nightly
+      # adds lints ahead of stable; lints are the stable jobs' business, so its
+      # warnings do not fail this step.
+      - name: cargo xtask api-closure (+ --self-test)
+        env:
+          CARGO_BUILD_WARNINGS: warn
+        run: |
+          set -euo pipefail
+          cargo xtask api-closure
+          cargo xtask api-closure --self-test
+
+      # The contract rides the release train until cargo-semver-checks shows it
+      # stable for two trains in a row (ADR-0153). A report, not a gate: before
+      # the first publication every change to the contract is a break.
+      - name: Install cargo-semver-checks
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-semver-checks@0.51
+
+      - name: cargo semver-checks flui-platform (report)
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        continue-on-error: true
+        env:
+          BASELINE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: cargo semver-checks check-release -p flui-platform --baseline-rev "$BASELINE"
 
   # ─────────────────────────────────────────────────────────────────────────
   # deps — `cargo xtask deps`: cargo-deny over every workspace member (bans,
@@ -699,7 +702,7 @@ jobs:
         uses: ./.github/actions/rust-toolchain
 
       - name: Install cargo-deny and cargo-shear
-        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           # cargo-shear 1.13: the newest this install-action release has a
           # prebuilt binary for; a later pin falls back to compiling it.
@@ -723,7 +726,7 @@ jobs:
   # doc-test — run every rustdoc example as a test. nextest does NOT execute
   # doctests (cargo-nextest#16), so the `test` job above never covers them;
   # without this job the 700+ doc code fences in the workspace are unverified
-  # prose. Unlike the `test` job, flui-platform is NOT excluded here: its
+  # prose. Unlike the `test` job, flui-native is NOT excluded here: its
   # doctests need neither `--all-features` nor a display server (verified
   # locally with and without DISPLAY set — identical 12 passed/0 failed
   # either way), so there is no green-by-construction reason to carve it out.
@@ -784,6 +787,14 @@ jobs:
       # miri component (first run failed exactly there).
       - name: cargo miri test (pipeline::owner)
         run: cargo +nightly miri test -p flui-rendering --lib --locked pipeline::owner
+
+      # The layout walk's lease (ADR-0252): double enter, non-child edge and
+      # header reads beside a live node, then the cycle, panic and poison paths
+      # through the real walk.
+      - name: cargo miri test (layout lease)
+        run: cargo +nightly miri test -p flui-rendering --lib --locked lease_
+      - name: cargo miri test (layout_failure_matrix)
+        run: cargo +nightly miri test -p flui-rendering --features testing --test rendering_it --locked layout_failure_matrix
 
       # Public GlobalKey behavior (ADR-0050): state migration, duplicate-parent
       # grafting and frame-boundary diagnostics run a real `ElementTree` through
@@ -852,7 +863,7 @@ jobs:
 
 
       - name: Install cargo-hack
-        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-hack@0.6.45
 
@@ -868,7 +879,7 @@ jobs:
   #                wasm32 (a package opts out with `[package.metadata.flui]
   #                wasm = false`, a reason beside it), plus the facade's
   #                hot-reload feature. The clippy pass is the only lint over
-  #                flui-platform's wasm32-only web backend.
+  #                flui-native's wasm32-only web backend.
   #   wasm-link  — really links the two web demos and checks their import
   #                surface against tools/xtask/fixtures/wasm/import-allowlist.txt:
   #                on wasm32 an undefined symbol becomes an import, not a link
@@ -917,7 +928,7 @@ jobs:
           echo "locked wasm-bindgen: $version"
 
       - name: Install wasm-bindgen-cli (matching the lockfile)
-        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: wasm-bindgen-cli@${{ steps.wasm_bindgen_version.outputs.version }}
 
@@ -989,7 +1000,7 @@ jobs:
       # the MSVC SDK/CRT for clang-cl while retaining the shipped MSVC triple.
       - name: Install cargo-xwin
         if: matrix.target == 'x86_64-pc-windows-msvc'
-        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-xwin@0.23.1
 
@@ -1030,7 +1041,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [checks, plan, clippy, feature-matrix, wasm-check, cross-typecheck, test, test-nested, test-trybuild, test-features, live-smoke, doc, deps, doc-test, miri]
+    needs: [checks, plan, clippy, feature-matrix, wasm-check, cross-typecheck, test, test-nested, test-trybuild, test-features, doc, deps, doc-test, miri]
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
@@ -1074,7 +1085,6 @@ jobs:
           NEEDS: ${{ toJSON(needs) }}
           HEAVY_JOBS: >-
             clippy wasm-check cross-typecheck test test-nested doc test-features
-            live-smoke
           FULL_JOBS: >-
             feature-matrix doc-test miri test-trybuild
           LANE: ${{ needs.plan.outputs.lane }}

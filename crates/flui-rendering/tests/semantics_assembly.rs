@@ -872,3 +872,56 @@ pub(crate) fn a_semantics_clip_drops_a_child_that_falls_entirely_outside_it() {
         "only the walk root survives; the clipped-away child contributes nothing",
     );
 }
+
+/// A table shape the node's role does not support is dropped from the
+/// published node, so it bounds no cell below it: a list that declares one
+/// does not clear a cell the published tree has no table for. An application
+/// only logs the dropped shape, so the cell must still reach the platform.
+pub(crate) fn a_table_shape_the_role_drops_bounds_no_cell() {
+    use std::num::NonZeroUsize;
+
+    use flui_rendering::semantics::{CellPosition, SetSize, TableShape};
+
+    let mut list = SemanticsConfiguration::new();
+    list.set_role(SemanticsRole::List);
+    list.set_table_shape(TableShape::new(SetSize::Known(1), SetSize::Known(1)));
+    let mut cell = SemanticsConfiguration::new();
+    cell.set_role(SemanticsRole::Cell);
+    cell.set_label("cell");
+    let two = NonZeroUsize::new(2).expect("two is non-zero");
+    cell.set_cell_position(CellPosition::new(two, two));
+    let run = RenderTester::mount(
+        box_node(SemanticsContainer::default()).label("root").child(
+            box_node(
+                SemanticsContainer::default()
+                    .with_boundary()
+                    .with_configuration(list),
+            )
+            .child(
+                box_node(SemanticsLeaf {
+                    configuration: Some(cell),
+                    ..SemanticsLeaf::new(20.0).with_boundary()
+                })
+                .label("cell"),
+            ),
+        ),
+    )
+    .with_constraints(constraints())
+    .with_semantics_enabled()
+    .run_frame();
+
+    let id = accessibility_id(run.id("cell"));
+    let owner = run
+        .owner()
+        .semantics_owner()
+        .expect("semantics must remain enabled");
+    let (_, node) = owner
+        .tree()
+        .iter()
+        .find(|(_, node)| node.accessibility_id() == Some(id))
+        .expect("the cell is published");
+    assert_eq!(
+        node.config().cell_position(),
+        Some(CellPosition::new(two, two))
+    );
+}

@@ -15,6 +15,14 @@
   `FluiView.startDragAndDrop` (API 24) with the whole clip at the start; a drag from another app
   permits a copy; `OnReceiveContentListener` receives only pasted and keyboard text.
 - **Date:** 2026-10-13
+- **Amended:** 2026-10-22 — following [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md)
+  §4: a start that cannot reach the OS fails with `DragError::Unsupported`, which says why
+  (`NotOnThisPlatform` with no drag source or for a contact the OS loop cannot carry,
+  `Unavailable` while another session runs or after the press the browser offered).
+- **Superseded-by:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §5, for decision
+  12's type only: `TransferActions` is the contract's own flag set, not a `bitflags` type,
+  because a Stable signature names no upstream type outside ADR-0089 §2; `COPY`, `MOVE`, `LINK`
+  and the set algebra stay.
 - **Amends:** [ADR-0038](ADR-0038-data-transfer-architecture.md) §2 (several concurrent offers
   and sessions where the platform delivers them), §5 (DnD gains a source side and in-window
   sessions) and §8 (the Web gets an HTML DnD target and source)
@@ -33,8 +41,8 @@ Desktop OS drags are modal or callback-driven sessions (`DoDragDrop`, AppKit dra
 that would take touch, pen and a second finger away from the arena if every drag ran there.
 Platforms also differ: Web data must be in the store at `dragstart`, X11 reports the action only
 at the drop, and winit 0.31 has no outgoing DnD on X11
-([best practices](../research/2026-10-12-interaction-input-best-practices.md) §5.2,
-[dependency selection](../research/2026-10-13-interaction-dependency-selection.md) §4).
+([best practices](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-12-interaction-input-best-practices.md) §5.2,
+[dependency selection](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-13-interaction-dependency-selection.md) §4).
 
 ## Decision
 
@@ -86,7 +94,7 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
    not how to reach the value. Apps that share values across windows use `WindowPolicy::Shared`,
    whose windows share one runtime. A cross-runtime value would need a `Send + Sync` payload bound
    that no single-runtime drag needs; redeeming through the source runtime would stall the Win32
-   drop loop ([threading](../research/2026-10-13-interaction-threading-model.md) Q4).
+   drop loop ([threading](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-13-interaction-threading-model.md) Q4).
 5. **Actions and sessions.** `AllowedActions { within_app, outside_app }`, each a `TransferActions`
    set. Several sessions can be live at once (one per contact, as `UIDragSession` allows); each is
    keyed by its own id. This amends ADR-0038 §2: where a platform delivers several incoming OS
@@ -142,7 +150,7 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
    session never becomes an OS session on any platform, Web and iOS included, so the decision
    reads the type, never widget provenance. `AnchoredDrag` stays a one-dimensional offset
    widget, not DnD.
-10. **Native originating event.** Pointer assembly in `flui-platform` keeps the native event that
+10. **Native originating event.** Pointer assembly in `flui-native` keeps the native event that
     began each contact, because the OS start calls need it (AppKit's dragging-session event,
     the Wayland grab serial). It is dropped when the contact ends.
 11. **Platform limits are types.** On the Web and on iOS and iPadOS the OS-session decision is
@@ -156,10 +164,10 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
     that never escalates mid-drag; UIKit keeps other touches flowing during it. On X11
     `InputCapabilities::outgoing_drag()` reports `Unavailable`
     ([ADR-0213](ADR-0213-input-capabilities.md)), the one authoritative availability path; an
-    escalation that needs the OS fails with `DragError::Unavailable` (winit's `NotSupported` maps
+    escalation that needs the OS fails with `DragError::Unsupported` (winit's `NotSupported` maps
     to it) and the session stays in-window; incoming drags work. The drop action is read at the
     drop, never assumed from hover, so X11's late action fits.
-12. **Flag sets.** `TransferActions` becomes a `bitflags` 2 type in `flui-platform-api` with the
+12. **Flag sets.** `TransferActions` becomes a `bitflags` 2 type in `flui-platform` with the
     same `COPY`, `MOVE` and `LINK`, replacing the hand-rolled `u8` with its own set algebra.
 13. **Escape and the cursor.** Escape cancels the drags that run in its presentation's window,
     and a held transfer, before focus sees the key, as an OS drag loop does; with nothing to
@@ -222,8 +230,8 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
   the owner window's next turn, since the host's quiescent point is still inside the window's
   callback, and paces frames from a thread, since `DoDragDrop`'s loop dispatches no timer or paint
   while the pointer rests. AppKit, UIKit, Android, Wayland and Web sessions run only on native
-  hosts or the browser through `cargo xtask device`; CI type-checks them. `assert_backend_conforms` has typed rows for the X11 refusal
-  (`outgoing_drag()` is `Unavailable`, a start fails with `DragError::Unavailable`), for the iOS
+  hosts or the browser through [`cargo xtask device`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs); CI type-checks them. `assert_backend_conforms` has typed rows for the X11 refusal
+  (`outgoing_drag()` is `Unavailable`, a start fails with `DragError::Unsupported`), for the iOS
   session that starts at lift and never escalates, and, on Web and iOS,
   `start_decision_includes_sibling_presentation_with_identity_only_offer`.
 

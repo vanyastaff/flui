@@ -54,6 +54,9 @@ pub(crate) struct BuildTools {
 
 // The floor (ADR-0244); `View.getRootWindowInsets`, the safe-area read, is one of what sets it.
 const MIN_SDK: u32 = super::platform_floor::ANDROID_MIN_SDK;
+/// The oldest `android.jar` the scaffolded manifest links against: its
+/// `configChanges` names `fontWeightAdjustment`, a flag from API 31.
+const MIN_COMPILE_SDK: u32 = 31;
 const DEBUG_ALIAS: &str = "androiddebugkey";
 const DEBUG_PASSWORD: &str = "android";
 
@@ -67,12 +70,13 @@ impl BuildTools {
             tool: "Android build-tools (aapt2, zipalign, apksigner)".into(),
             install_hint: "sdkmanager \"build-tools;35.0.0\"".into(),
         })?;
-        let (platform, api_level) =
-            newest_platform(&sdk_root.join("platforms")).ok_or_else(|| {
-                BuildError::ToolNotFound {
-                    tool: "an Android platform (android.jar)".into(),
-                    install_hint: "sdkmanager \"platforms;android-35\"".into(),
-                }
+        let (platform, api_level) = newest_platform(&sdk_root.join("platforms"))
+            .filter(|(_, level)| *level >= MIN_COMPILE_SDK)
+            .ok_or_else(|| BuildError::ToolNotFound {
+                tool: format!(
+                    "an Android platform (android.jar) at API {MIN_COMPILE_SDK} or later"
+                ),
+                install_hint: "sdkmanager \"platforms;android-35\"".into(),
             })?;
         let exe = |name: &str| {
             let candidates = if cfg!(windows) {
@@ -329,6 +333,21 @@ mod tests {
             args.windows(2)
                 .any(|pair| pair == ["--min-sdk-version", "23"])
         );
+    }
+
+    #[test]
+    fn a_platform_older_than_the_manifest_flags_is_refused() {
+        let sdk = tempfile::tempdir().expect("temp");
+        std::fs::create_dir_all(sdk.path().join("build-tools").join("35.0.0"))
+            .expect("build-tools");
+        let platform = sdk.path().join("platforms").join("android-30");
+        std::fs::create_dir_all(&platform).expect("platform");
+        std::fs::write(platform.join("android.jar"), b"").expect("android.jar");
+        let Err(BuildError::ToolNotFound { tool, .. }) = BuildTools::locate(sdk.path(), None)
+        else {
+            panic!("an API 30 android.jar was accepted for the manifest's API 31 flags");
+        };
+        assert!(tool.contains("API 31"), "{tool}");
     }
 
     #[test]

@@ -170,6 +170,7 @@ fn text_editing() {
             ("editable_text::text_store::rtl_scalar_rect_midpoints_resolve_to_the_source_scalar", crate::editable_text::text_store::rtl_scalar_rect_midpoints_resolve_to_the_source_scalar),
             ("editable_text::the_store_reports_the_purpose_the_field_was_built_with", crate::editable_text::the_store_reports_the_purpose_the_field_was_built_with),
             ("editable_text::a_tap_places_the_caret_where_it_landed", crate::editable_text::a_tap_places_the_caret_where_it_landed),
+            ("editable_text::a_field_measures_and_hit_tests_the_current_text_scale", crate::editable_text::a_field_measures_and_hit_tests_the_current_text_scale),
             ("editable_text::a_pointer_down_and_a_paste_commit_the_composition_first", crate::editable_text::a_pointer_down_and_a_paste_commit_the_composition_first),
             ("editable_text::moving_focus_off_a_composing_field_commits_it_in_either_mount_order", crate::editable_text::moving_focus_off_a_composing_field_commits_it_in_either_mount_order),
             ("editable_text::a_press_reentered_by_its_commit_is_not_a_second_contact", crate::editable_text::a_press_reentered_by_its_commit_is_not_a_second_contact),
@@ -200,9 +201,22 @@ fn text_editing() {
             ("text_field_widget::a_press_on_a_field_takes_no_focus_back_once_focus_moves_on", crate::text_field_widget::a_press_on_a_field_takes_no_focus_back_once_focus_moves_on),
             ("text_field::unfocused_field_does_not_receive_key_events", crate::text_field::unfocused_field_does_not_receive_key_events),
             ("text::an_enclosing_default_text_style_styles_a_bare_run", crate::text::an_enclosing_default_text_style_styles_a_bare_run),
+            ("text::the_system_text_scale_grows_each_span_once", crate::text::the_system_text_scale_grows_each_span_once),
             ("text::media_text_scaling_changes_the_laid_out_text", crate::text::media_text_scaling_changes_the_laid_out_text),
             ("text::icon_text_sizing_keeps_box_and_glyph_together", crate::text::icon_text_sizing_keeps_box_and_glyph_together),
             ("text::icon_labels_reach_the_assembled_accessibility_tree", crate::text::icon_labels_reach_the_assembled_accessibility_tree),
+            ("text::a_tap_on_a_link_reaches_on_link_at_the_current_text_scale", crate::text::a_tap_on_a_link_reaches_on_link_at_the_current_text_scale),
+            ("text::a_link_shows_a_pointing_hand_and_a_span_its_own_cursor", crate::text::a_link_shows_a_pointing_hand_and_a_span_its_own_cursor),
+            ("text::a_handled_link_is_a_link_node_assistive_technology_clicks", crate::text::a_handled_link_is_a_link_node_assistive_technology_clicks),
+            ("text::tab_stops_on_each_link_and_enter_opens_it", crate::text::tab_stops_on_each_link_and_enter_opens_it),
+            ("text::a_focused_link_rings_each_line_of_its_glyphs", crate::text::a_focused_link_rings_each_line_of_its_glyphs),
+            ("text::assistive_technology_focuses_a_link", crate::text::assistive_technology_focuses_a_link),
+            ("text::tab_to_a_link_below_the_view_scrolls_it_into_view", crate::text::tab_to_a_link_below_the_view_scrolls_it_into_view),
+            ("text::a_shadowed_link_takes_no_stop_and_a_textless_label_is_still_read", crate::text::a_shadowed_link_takes_no_stop_and_a_textless_label_is_still_read),
+            ("text::select_opens_a_link_and_space_activates_nothing_around_it", crate::text::select_opens_a_link_and_space_activates_nothing_around_it),
+            ("text::a_link_the_layout_cut_takes_no_focus", crate::text::a_link_the_layout_cut_takes_no_focus),
+            ("text::links_keep_their_focus_and_presses_when_links_before_them_change", crate::text::links_keep_their_focus_and_presses_when_links_before_them_change),
+            ("text::unmounting_a_linked_paragraph_releases_its_links", crate::text::unmounting_a_linked_paragraph_releases_its_links),
         ],
     );
 }
@@ -241,6 +255,11 @@ fn pointer_and_gesture_recognition() {
             ("pointer_vocabulary::viewer_extreme_finite_pan_preserves_the_boundary_result", crate::pointer_vocabulary::viewer_extreme_finite_pan_preserves_the_boundary_result),
             ("pointer_vocabulary::viewer_focal_fling_advances_then_stops_on_new_input", crate::pointer_vocabulary::viewer_focal_fling_advances_then_stops_on_new_input),
             ("pointer_vocabulary::viewer_reports_scale_velocity_separately_from_focal_velocity", crate::pointer_vocabulary::viewer_reports_scale_velocity_separately_from_focal_velocity),
+            ("touchpad_pan::a_touchpad_pan_drives_a_pan_only_gesture_detector", crate::touchpad_pan::a_touchpad_pan_drives_a_pan_only_gesture_detector as fn()),
+            ("touchpad_pan::a_scrollable_inside_a_horizontal_drag_wins_a_vertical_pan", crate::touchpad_pan::a_scrollable_inside_a_horizontal_drag_wins_a_vertical_pan),
+            ("touchpad_pan::a_horizontal_pan_beside_a_vertical_list_goes_to_the_drag", crate::touchpad_pan::a_horizontal_pan_beside_a_vertical_list_goes_to_the_drag),
+            ("touchpad_pan::a_list_with_nowhere_to_go_leaves_the_pan_to_the_drag", crate::touchpad_pan::a_list_with_nowhere_to_go_leaves_the_pan_to_the_drag),
+            ("touchpad_pan::a_plain_list_scrolls_with_a_touchpad_pan_as_before", crate::touchpad_pan::a_plain_list_scrolls_with_a_touchpad_pan_as_before),
             ("listener::presentation_resampling_uses_the_owner_frame_clock", crate::listener::presentation_resampling_uses_the_owner_frame_clock as fn()),
             ("gesture_detector::pan_claim_region_keeps_the_pan_from_an_enclosing_drag", crate::gesture_detector::pan_claim_region_keeps_the_pan_from_an_enclosing_drag),
             ("gesture_detector::recognizers_follow_a_changed_arena_scope", crate::gesture_detector::recognizers_follow_a_changed_arena_scope),
@@ -500,6 +519,32 @@ fn semantics_translation_and_routing() {
     run_cases(
         "semantics_translation_and_routing",
         &[
+            ("collection_semantics::a_lazy_list_item_reads_its_position_and_its_containers_size", crate::collection_semantics::a_lazy_list_item_reads_its_position_and_its_containers_size as fn()),
+            ("collection_semantics::a_virtualized_list_publishes_its_full_size_and_true_positions", crate::collection_semantics::a_virtualized_list_publishes_its_full_size_and_true_positions),
+            ("collection_semantics::an_unknown_length_publishes_no_size", crate::collection_semantics::an_unknown_length_publishes_no_size),
+            ("collection_semantics::separators_are_not_members_of_the_set", crate::collection_semantics::separators_are_not_members_of_the_set),
+            ("collection_semantics::an_unknown_set_inside_a_known_one_withholds_the_outer_size", crate::collection_semantics::an_unknown_set_inside_a_known_one_withholds_the_outer_size),
+            ("collection_semantics::a_known_set_inside_a_known_one_reads_its_own_size", crate::collection_semantics::a_known_set_inside_a_known_one_reads_its_own_size),
+            ("collection_semantics::slivers_composed_into_one_set_continue_its_positions", crate::collection_semantics::slivers_composed_into_one_set_continue_its_positions),
+            ("collection_semantics::two_sets_in_one_scroll_view_do_not_share_a_container", crate::collection_semantics::two_sets_in_one_scroll_view_do_not_share_a_container),
+            ("collection_semantics::an_explicitly_indexed_row_keeps_its_own_position", crate::collection_semantics::an_explicitly_indexed_row_keeps_its_own_position),
+            ("collection_semantics::a_table_publishes_its_shape_cells_and_sort", crate::collection_semantics::a_table_publishes_its_shape_cells_and_sort),
+            ("collection_semantics::a_table_of_unknown_length_publishes_no_row_count", crate::collection_semantics::a_table_of_unknown_length_publishes_no_row_count),
+            ("collection_semantics::a_tree_publishes_its_levels_and_selection_rule", crate::collection_semantics::a_tree_publishes_its_levels_and_selection_rule),
+            ("collection_semantics::a_hand_built_list_declares_its_size_and_positions", crate::collection_semantics::a_hand_built_list_declares_its_size_and_positions),
+            ("collection_semantics::a_position_beyond_its_set_is_not_announced", crate::collection_semantics::a_position_beyond_its_set_is_not_announced),
+            ("collection_semantics::a_declared_unknown_set_inside_a_known_one_withholds_the_outer_size", crate::collection_semantics::a_declared_unknown_set_inside_a_known_one_withholds_the_outer_size),
+            ("collection_semantics::a_window_with_no_member_resident_keeps_the_sets_size", crate::collection_semantics::a_window_with_no_member_resident_keeps_the_sets_size),
+            ("collection_semantics::a_row_publishes_its_own_index", crate::collection_semantics::a_row_publishes_its_own_index),
+            ("collection_semantics::a_row_of_several_controls_is_one_member", crate::collection_semantics::a_row_of_several_controls_is_one_member),
+            ("collection_semantics::a_lone_member_sits_below_its_container", crate::collection_semantics::a_lone_member_sits_below_its_container),
+            ("collection_semantics::an_explicit_position_in_a_descendant_suppresses_the_stamp", crate::collection_semantics::an_explicit_position_in_a_descendant_suppresses_the_stamp),
+            ("collection_semantics::an_unpublishable_position_withholds_no_total", crate::collection_semantics::an_unpublishable_position_withholds_no_total),
+            ("collection_semantics::a_set_declared_by_size_keeps_its_lone_member", crate::collection_semantics::a_set_declared_by_size_keeps_its_lone_member),
+            ("collection_semantics::a_shapeless_table_bounds_its_own_cells", crate::collection_semantics::a_shapeless_table_bounds_its_own_cells),
+            ("collection_semantics::an_empty_unknown_set_keeps_the_outer_size", crate::collection_semantics::an_empty_unknown_set_keeps_the_outer_size),
+            ("collection_semantics::a_cell_beyond_its_table_is_not_announced", crate::collection_semantics::a_cell_beyond_its_table_is_not_announced),
+            ("collection_semantics::a_size_the_adapters_cannot_convert_counts_as_unknown", crate::collection_semantics::a_size_the_adapters_cannot_convert_counts_as_unknown),
             ("semantics::sliver_fade_keeps_geometry_and_retargets_paint_and_semantics", crate::semantics::sliver_fade_keeps_geometry_and_retargets_paint_and_semantics),
             ("semantics::sliver_annotations_update_and_exclude_without_adapting_geometry", crate::semantics::sliver_annotations_update_and_exclude_without_adapting_geometry),
             ("semantics::lazy_collection_totals_reach_the_real_consumer_after_incremental_updates", crate::semantics::lazy_collection_totals_reach_the_real_consumer_after_incremental_updates),
@@ -751,6 +796,13 @@ fn router_and_widgets_app() {
             ("router::router_go_preserves_its_commit_after_an_observer_panic", crate::router::router_go_preserves_its_commit_after_an_observer_panic),
             ("router::removing_a_router_value_retires_it_after_releasing_the_stack_borrow", crate::router::removing_a_router_value_retires_it_after_releasing_the_stack_borrow),
             ("router::empty_stack_is_refused", crate::router::empty_stack_is_refused),
+            ("router::from_stack_restores_back_order", crate::router::from_stack_restores_back_order),
+            ("router::stack_reads_every_committed_edit", crate::router::stack_reads_every_committed_edit),
+            ("router::from_stack_opens_without_a_transition", crate::router::from_stack_opens_without_a_transition),
+            ("router::stack_leaves_out_popups", crate::router::stack_leaves_out_popups),
+            ("router::debug_prints_the_whole_stack", crate::router::debug_prints_the_whole_stack),
+            ("router::a_route_clone_may_drive_its_router", crate::router::a_route_clone_may_drive_its_router),
+            ("router::a_route_eq_may_drive_its_router_during_go", crate::router::a_route_eq_may_drive_its_router_during_go),
             ("widgets_app::builder_only_app_receives_no_routing_and_supplies_the_subtree", crate::widgets_app::builder_only_app_receives_no_routing_and_supplies_the_subtree),
             ("widgets_app::home_is_seeded_once_as_the_root_route", crate::widgets_app::home_is_seeded_once_as_the_root_route),
             ("widgets_app::observers_attach_at_mount_and_see_the_home_route", crate::widgets_app::observers_attach_at_mount_and_see_the_home_route),
@@ -759,22 +811,6 @@ fn router_and_widgets_app() {
             ("widgets_app_router::widgets_app_router_navigates_by_handle_and_the_url_follows", crate::widgets_app_router::widgets_app_router_navigates_by_handle_and_the_url_follows),
         ],
     );
-}
-
-/// A router reopened on a saved stack keeps its Back order. Joins
-/// `router_and_widgets_app` once `Router::from_stack` places the whole stack.
-#[test]
-#[ignore = "contract: Router::from_stack places every saved route"]
-fn from_stack_restores_back_order() {
-    crate::router::from_stack_restores_back_order();
-}
-
-/// `RouterHandle::stack` reads the whole stack. Joins
-/// `router_and_widgets_app` once it does.
-#[test]
-#[ignore = "contract: RouterHandle::stack reads every page on the stack"]
-fn stack_reads_every_committed_edit() {
-    crate::router::stack_reads_every_committed_edit();
 }
 
 /// An adopted page-transition builder may reach its navigator; each row runs
@@ -1192,6 +1228,7 @@ fn nested_scroll_channel() {
             ("nested_scroll::contained_scrollable_keeps_its_remainder", crate::nested_scroll::contained_scrollable_keeps_its_remainder),
             ("nested_scroll::snap_policy_targets", crate::nested_scroll::snap_policy_targets),
             ("interactive_viewer::photo_in_pager_hands_pan_remainder_to_pager", crate::interactive_viewer::photo_in_pager_hands_pan_remainder_to_pager),
+            ("interactive_viewer::a_turned_photo_at_its_edge_frees_the_axis_it_cannot_pan", crate::interactive_viewer::a_turned_photo_at_its_edge_frees_the_axis_it_cannot_pan),
             ("interactive_viewer::photo_in_rtl_pager_turns_toward_the_reading_end", crate::interactive_viewer::photo_in_rtl_pager_turns_toward_the_reading_end),
             ("interactive_viewer::viewer_inertia_is_a_side_effect_of_the_releasing_sequence", crate::interactive_viewer::viewer_inertia_is_a_side_effect_of_the_releasing_sequence),
             ("interactive_viewer::viewer_release_failure_still_ends_the_sequence", crate::interactive_viewer::viewer_release_failure_still_ends_the_sequence),

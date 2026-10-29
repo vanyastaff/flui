@@ -1,0 +1,13 @@
+error[E0432]: unresolved import `flui::native`
+ --> tests/ui/native/host_window_needs_native.rs:3:11
+  |
+3 | use flui::native::HostWindow;
+  |           ^^^^^^ could not find `native` in `flui`
+  |
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  | #[cfg(feature = "native")]
+  |       ------------------ the item is gated behind the `native` feature
+  | pub mod native {
+  |         ^^^^^^

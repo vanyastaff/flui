@@ -15,10 +15,9 @@ pub(crate) mod facade;
 mod native;
 mod web;
 
-use std::path::Path;
 use std::process::ExitCode;
 
-use exec::{Cmd, Host, NO_ARGS, Runner, Step, host_binary, installed, parsed, target_dir};
+use exec::{Cmd, Host, NO_ARGS, Runner, Step, installed, parsed, target_dir};
 
 use crate::doc_strict;
 use crate::util::{human_size, tree_size};
@@ -27,11 +26,11 @@ const WINDOWS_TARGET: &str = "x86_64-pc-windows-msvc";
 const MACOS_TARGET: &str = "aarch64-apple-darwin";
 const ANDROID_TARGET: &str = "aarch64-linux-android";
 /// The device triple, not `-sim`: the two differ in the slice, not in the API
-/// surface a lint sees (`cargo xtask device ios-sim` executes the simulator one).
+/// surface a lint sees.
 const IOS_TARGET: &str = "aarch64-apple-ios";
 const WASM_TARGET: &str = "wasm32-unknown-unknown";
 
-/// flui-platform's backends as they ship: MSVC (what `gpu-test` runs on), not
+/// flui-native's backends as they ship: MSVC (what `gpu-test` runs on), not
 /// the GNU ABI, and aarch64 for macOS, Android and iOS.
 const PLATFORM_TARGETS: [&str; 4] = [WINDOWS_TARGET, MACOS_TARGET, ANDROID_TARGET, IOS_TARGET];
 
@@ -48,16 +47,20 @@ const PLATFORM_TARGETS: [&str; 4] = [WINDOWS_TARGET, MACOS_TARGET, ANDROID_TARGE
 /// - `flui-devtools/agent`: the development agent server, off by default
 ///   because it opens an endpoint; on here so its `agent_endpoint` test runs
 ///   in the same jobs.
+/// - `flui/native`: the escape hatch, off by default because it is Evolving;
+///   on here so the facade's `surface` test and the `native` fixtures of its
+///   compile-fail suite run in the same jobs (ADR-0254 §8). The doctests run
+///   the facade without it, which pins that `flui::native` is absent then.
 /// - `--lib --bins --tests`: build and run what has tests without LINKING the
 ///   ~60 examples, which `cargo nextest run` otherwise links on every run.
 ///   Examples still compile in `lint` (`--all-targets`);
 ///   [`build_all_targets`] links them with the same features, so after a test
 ///   run it rebuilds nothing but the example and bench targets.
-/// - flui-platform is excluded: it runs on its own (see [`platform_suite`]).
+/// - flui-native is excluded: it runs on its own (see [`platform_suite`]).
 pub(crate) const TEST_SCOPE: [&str; 10] = [
     "--workspace",
     "--exclude",
-    "flui-platform",
+    "flui-native",
     "--locked",
     "--no-fail-fast",
     "--lib",
@@ -68,28 +71,28 @@ pub(crate) const TEST_SCOPE: [&str; 10] = [
 ];
 
 /// The features [`TEST_SCOPE`] turns on (see there for each one's reason).
-const TEST_FEATURES: &str = "flui/material,flui/cupertino,flui-devtools/agent";
+const TEST_FEATURES: &str = "flui/material,flui/cupertino,flui/native,flui-devtools/agent";
 
 /// The build that links the examples and benches: `--all-targets` over the
 /// packages and features of the test run on `host` ([`scoped_nextest`]), so
 /// it reuses what that run built and compiles only the example and bench
 /// targets. Any other package set resolves features differently, and every
 /// workspace crate above the changed dependency is built a second time:
-/// selecting flui-platform turns on its dev-dependency serde_json's
+/// selecting flui-native turns on its dev-dependency serde_json's
 /// `float_roundtrip`, and leaving out the driver drops its proc-macro2
 /// `span-locations`. On Windows the test run leaves the driver out, since
 /// Windows cannot replace its running executable, and so does this build.
-/// flui-platform's examples link in its own suite on Linux and Windows,
+/// flui-native's examples link in its own suite on Linux and Windows,
 /// which builds them under `--all-features` ([`platform_suite`]). Cargo skips
-/// a target whose `required-features` the test features leave off (devtools'
-/// `profiler_demo`, the engine's `testing` benches): `feature-matrix`
+/// a target whose `required-features` the test features leave off (the
+/// engine's `testing` benches): `feature-matrix`
 /// compiles them per feature, and nothing links them.
 fn build_all_targets(host: Host) -> Cmd {
     let command = Cmd::cargo([
         "build",
         "--workspace",
         "--exclude",
-        "flui-platform",
+        "flui-native",
         "--all-targets",
         "--locked",
         "--features",
@@ -174,17 +177,52 @@ fn hack_passes(packages: &str) -> [Cmd; 2] {
     ]
 }
 
-/// flui-platform's suite on Linux. `--all-features` is needed just to compile
+/// flui-native's suite on Linux. `--all-features` is needed just to compile
 /// the winit backend (invisible under `default = ["desktop"]`);
 /// `FLUI_HEADLESS=1` routes `current_platform()` to the `HeadlessPlatform`
 /// mock, so most of the suite needs no display server; the few winit-internals
 /// tests that construct `WinitPlatform::new()` need a real (if virtual) X11
-/// connection for clipboard init, which `xvfb-run` supplies.
+/// connection for clipboard init, which `xvfb-run` supplies. The server runs
+/// with `-noreset`: by default Xvfb resets when its last client leaves and
+/// drops a client still in its connection handshake, and with one process per
+/// test that is a test failing with `ECONNRESET` when another test's process
+/// exits. The screen is `xvfb-run`'s default, which the X11 tests lay their
+/// windows out on.
+/// `WAYLAND_DISPLAY` is cleared, so the winit tests take Xvfb's X11 display
+/// even where a compositor runs beside it; the native Wayland host's tests
+/// run apart ([`wayland_suite_linux`]).
 fn platform_suite_linux() -> Cmd {
     Cmd::new("xvfb-run")
-        .args(["-a", "cargo", "nextest", "run", "-p", "flui-platform"])
+        .args(["-a", "-s", "-screen 0 1280x1024x24 -noreset"])
+        .args(["cargo", "nextest", "run", "-p", "flui-native"])
         .args(["--locked", "--all-features", "--no-fail-fast"])
         .env("FLUI_HEADLESS", "1")
+        .env("WAYLAND_DISPLAY", "")
+}
+
+/// The native Wayland host's tests, against the compositor `WAYLAND_DISPLAY`
+/// names. CI starts a headless Weston and sets `FLUI_REQUIRE_WAYLAND`, so a
+/// missing compositor fails them; elsewhere they skip themselves without one.
+const WAYLAND_TESTS: &str = "test(/^wayland_window::/)";
+
+/// [`WAYLAND_TESTS`] with every feature, as the X11 suite builds them.
+fn wayland_suite_linux() -> Cmd {
+    Cmd::cargo(["nextest", "run", "-p", "flui-native"]).args([
+        "--locked",
+        "--all-features",
+        "--no-fail-fast",
+        "-E",
+        WAYLAND_TESTS,
+    ])
+}
+
+/// The X11 and headless suite, which leaves the Wayland tests to their own
+/// run.
+fn platform_suite_linux_filtered() -> Cmd {
+    platform_suite_linux().args([
+        "-E".to_owned(),
+        format!("not (group(trybuild) | {WAYLAND_TESTS})"),
+    ])
 }
 
 /// Portable external compiler checks; no native window or event loop runs.
@@ -193,28 +231,31 @@ fn platform_compiler_tests() -> Cmd {
         "nextest",
         "run",
         "-p",
-        "flui-platform",
+        "flui-native",
         "--test",
         "compiler_guards",
     ])
     .args(["--locked", "--no-fail-fast"])
 }
 
-/// flui-platform's suite on `host`: under Xvfb on Linux, directly on Windows
+/// flui-native's suite on `host`: under Xvfb on Linux, directly on Windows
 /// (native Windows needs neither), skipped elsewhere. Compiler checks run
 /// separately in the nested stage.
-fn platform_suite(host: Host) -> Step {
+fn platform_suite(host: Host) -> Vec<Step> {
     match host {
-        Host::Linux => platform_suite_linux()
-            .args(["-E", "not (group(trybuild))"])
-            .into(),
-        Host::Windows => Cmd::cargo(["nextest", "run", "-p", "flui-platform"])
-            .args(["--locked", "--all-features", "--no-fail-fast", "-E", "not (group(trybuild))"])
-            .into(),
-        Host::MacOs | Host::Other => Step::Note(
-            "Skipping native flui-platform tests on this host: the CI-mirroring invocation needs xvfb-run (Linux-only) for the winit backend X11-dependent tests; see docs/testing.md."
+        Host::Linux => vec![
+            platform_suite_linux_filtered().into(),
+            wayland_suite_linux().into(),
+        ],
+        Host::Windows => vec![
+            Cmd::cargo(["nextest", "run", "-p", "flui-native"])
+                .args(["--locked", "--all-features", "--no-fail-fast", "-E", "not (group(trybuild))"])
+                .into(),
+        ],
+        Host::MacOs | Host::Other => vec![Step::Note(
+            "Skipping native flui-native tests on this host: the CI-mirroring invocation needs xvfb-run (Linux-only) for the winit backend X11-dependent tests; see docs/testing.md."
                 .to_owned(),
-        ),
+        )],
     }
 }
 
@@ -227,7 +268,7 @@ fn native_platform_plan(host: Host) -> Vec<Step> {
                     "nextest",
                     "run",
                     "-p",
-                    "flui-platform",
+                    "flui-native",
                     "--locked",
                     "--no-fail-fast",
                 ]);
@@ -244,9 +285,8 @@ fn native_platform_plan(host: Host) -> Vec<Step> {
             })
             .collect(),
         Host::Linux => vec![
-            platform_suite_linux()
-                .args(["-E", "not (group(trybuild))"])
-                .into(),
+            platform_suite_linux_filtered().into(),
+            wayland_suite_linux().into(),
         ],
         Host::Other => vec![Step::Note("platform-test: unsupported host".to_owned())],
     }
@@ -329,7 +369,7 @@ enum Stages {
     NoTrybuild,
 }
 
-/// The test suite: everything outside the nested tests, flui-platform on its
+/// The test suite: everything outside the nested tests, flui-native on its
 /// own, then the nested tests (they run a `cargo` or `rustc` of their own and
 /// dominate the wall-clock, so they run last). Same scope in every stage, so
 /// nothing is rebuilt, and the filtersets are complements, so together they
@@ -338,20 +378,17 @@ enum Stages {
 fn test_plan(host: Host, stages: Stages) -> Vec<Step> {
     let base = || scoped_nextest(host, &format!("not ({NESTED})"));
     let nested = scoped_nextest(host, NESTED);
+    let with_platform = |rest: Vec<Step>| {
+        let mut steps = vec![base().into()];
+        steps.extend(platform_suite(host));
+        steps.extend(rest);
+        steps
+    };
     let mut steps = match stages {
-        Stages::All => vec![
-            base().into(),
-            platform_suite(host),
-            nested.into(),
-            platform_compiler_tests().into(),
-        ],
-        Stages::Fast => vec![
-            base().into(),
-            platform_suite(host),
-            Step::Note(
+        Stages::All => with_platform(vec![nested.into(), platform_compiler_tests().into()]),
+        Stages::Fast => with_platform(vec![Step::Note(
                 "test --fast: SKIPPED the nested tests (trybuild compile_fail suites, flui-cli cli_create::generated_* and ios_cargo_artifact_fixtures, flui::facade_consumer; groups in .config/nextest.toml). Run them with: cargo xtask test --nested".to_owned(),
-            ),
-        ],
+            )]),
         Stages::Nested => vec![nested.into(), platform_compiler_tests().into()],
         Stages::NestedGroup(group) => {
             let mut steps = vec![scoped_nextest(host, group.filterset()).into()];
@@ -360,14 +397,12 @@ fn test_plan(host: Host, stages: Stages) -> Vec<Step> {
             }
             steps
         }
-        Stages::NoTrybuild => vec![
-            base().into(),
-            platform_suite(host),
+        Stages::NoTrybuild => with_platform(vec![
             scoped_nextest(host, "group(nested-cargo)").into(),
             Step::Note(
                 "test --no-trybuild: SKIPPED the trybuild suites. Run them with: cargo xtask test --nested --nested-group trybuild".to_owned(),
             ),
-        ],
+        ]),
     };
     if matches!(stages, Stages::All | Stages::Fast | Stages::NoTrybuild) {
         steps.insert(0, reload_fixture_build().into());
@@ -507,6 +542,43 @@ fn feature_matrix_plan(slice: Slice) -> Vec<Step> {
     hack_passes(&packages).map(Step::from).into()
 }
 
+/// The single-feature builds of flui-native that pull requests lint. The
+/// default build and the workspace pass enable `desktop` (Wayland and X11)
+/// together, so a `cfg` that is wrong with only one backend, or with none,
+/// compiles there and breaks only in the full `feature-matrix` on main.
+const NATIVE_FEATURE_SLICES: [&[&str]; 5] = [
+    &[],
+    &["x11"],
+    &["wayland"],
+    &["winit-backend"],
+    &["testing"],
+];
+
+/// `-D warnings` clippy of flui-native for each of [`NATIVE_FEATURE_SLICES`]
+/// with default features off: libs and bins as a downstream crate builds them,
+/// then every target (a dev-dependency can enable a feature the library lacks).
+/// `target` is a triple, or the host when `None`.
+fn native_feature_slice_plan(target: Option<&str>) -> Vec<Step> {
+    let mut steps = Vec::new();
+    for features in NATIVE_FEATURE_SLICES {
+        for all_targets in [false, true] {
+            let mut cmd = Cmd::cargo(["clippy", "-p", "flui-native", "--locked"])
+                .args(["--no-default-features"]);
+            if !features.is_empty() {
+                cmd = cmd.args(["--features", &features.join(",")]);
+            }
+            if all_targets {
+                cmd = cmd.args(["--all-targets"]);
+            }
+            if let Some(target) = target {
+                cmd = cmd.args(["--target", target]);
+            }
+            steps.push(deny_warnings(cmd).into());
+        }
+    }
+    steps
+}
+
 /// Local `gpu-test` gate: engine readbacks and path-recording allocations, then the facade's
 /// composited-layer update readback (it needs the render pipeline and the
 /// headless renderer, which only the facade depends on together).
@@ -540,6 +612,9 @@ fn gpu_test_plan() -> Vec<Step> {
 /// CI's `miri` job: selected ownership and containment contracts under Miri.
 /// - flui-rendering `pipeline::owner`: owner failure and semantics publishing
 ///   families, including retirement of caught text panic payloads.
+/// - flui-rendering `lease_` and `rendering_it::layout_failure_matrix`: the layout walk's lease
+///   (double enter, non-child edge, header reads beside a live node) and its cycle, panic and
+///   poison paths through the real walk (ADR-0252).
 /// - flui-view `view_it::global_key_contract_matrix`: public GlobalKey migration
 ///   and duplicate-parent behavior (ADR-0050).
 /// - flui-engine `surface_lease` and `cancelling_renderer_new`: the
@@ -552,6 +627,12 @@ fn gpu_test_plan() -> Vec<Step> {
 fn miri_plan() -> Vec<Step> {
     [
         ("flui-rendering", "--lib", "pipeline::owner"),
+        ("flui-rendering", "--lib", "lease_"),
+        (
+            "flui-rendering",
+            "--test rendering_it --features testing",
+            "layout_failure_matrix",
+        ),
         ("flui-view", "--test view_it", "global_key_contract_matrix"),
         ("flui-engine", "--lib", "surface_lease"),
         ("flui-engine", "--lib", "cancelling_renderer_new"),
@@ -587,33 +668,6 @@ fn workflow_lint_plan(installed: impl Fn(&str) -> bool) -> Vec<Step> {
         .collect()
 }
 
-/// The live smoke: a real windowed demo (built with `--locked`, as CI builds
-/// it) driven by the `flui-live-smoke` harness. X11: real XTEST input under
-/// Xvfb (launch, mid-drag tracking, scroll, a clean WM_DELETE close, then a
-/// programmatic `PlatformWindow::close`, issue #919). Wayland: close-path
-/// teardown ordering under a headless weston, the post-quit `wl_proxy`
-/// use-after-free class (issue #713) X11 cannot see; the harness skips with a
-/// message when weston is absent. Linux only (see [`live_smoke_stage`]).
-fn live_smoke_plan(wayland: bool, target_dir: &Path) -> Vec<Step> {
-    let harness = host_binary(target_dir, &["debug"], "flui-live-smoke");
-    let demo = host_binary(target_dir, &["debug", "examples"], "sliver_demo");
-    let (harness, demo) = (harness.display().to_string(), demo.display().to_string());
-    let run = if wayland {
-        Cmd::new(harness).args([demo, "wayland".to_owned()])
-    } else {
-        Cmd::new("xvfb-run")
-            .args(["-a", "-s", "-screen 0 1200x800x24"])
-            .args([harness, demo])
-    };
-    vec![
-        Cmd::cargo(["build", "-p", "flui", "--features", "material"])
-            .args(["--example", "sliver_demo", "--locked"])
-            .into(),
-        Cmd::cargo(["build", "-p", "flui-live-smoke", "--locked"]).into(),
-        run.into(),
-    ]
-}
-
 /// The nested-cargo tests' build caches, relative to the target directory:
 /// separate target roots that `cargo sweep` cannot see.
 const NESTED_CACHES: [&[&str]; 3] = [
@@ -634,7 +688,7 @@ fn gate_stage(runner: Runner) -> anyhow::Result<()> {
 fn ci_stage(runner: Runner) -> anyhow::Result<()> {
     gate_stage(runner)?;
     runner.steps(&test_plan(Host::current(), Stages::All))?;
-    // nextest executes no doctests; flui-platform's need neither
+    // nextest executes no doctests; flui-native's need neither
     // `--all-features` nor a display server, so it is not carved out
     runner.run(&Cmd::cargo(["test", "--workspace", "--locked", "--doc"]))
 }
@@ -648,16 +702,6 @@ fn feature_matrix_stage(runner: Runner, slice: Slice) -> anyhow::Result<()> {
     };
     let passes = runner.every(&feature_matrix_plan(slice));
     combos.and(passes)
-}
-
-fn live_smoke_stage(runner: Runner, wayland: bool) -> anyhow::Result<()> {
-    if Host::current() != Host::Linux {
-        println!(
-            "live-smoke: skipped on this host: it needs xvfb-run (X11) and weston (Wayland), Linux only; CI runs it"
-        );
-        return Ok(());
-    }
-    runner.steps(&live_smoke_plan(wayland, &target_dir()?))
 }
 
 /// `Ok(ExitCode::SUCCESS)` once `stage` succeeded.
@@ -826,8 +870,7 @@ pub(crate) struct CiFullArgs {
 /// Then: the all-targets build (the only step that links the examples and
 /// benches), test-features, feature-matrix, wasm-check, wasm-link, wasm-test,
 /// cross-typecheck, `deps` (each tool when installed), the
-/// workflow linters (each when installed), miri, gpu-test, and on Linux
-/// live-smoke under X11 and Wayland. Slow on purpose:
+/// workflow linters (each when installed), miri and gpu-test. Slow on purpose:
 /// cargo-hack's per-feature matrix dominates; `cargo xtask doctor full` names
 /// any tool it needs first. What stays CI-only is the table in docs/testing.md.
 pub(crate) fn ci_full(args: &CiFullArgs) -> anyhow::Result<ExitCode> {
@@ -846,14 +889,6 @@ pub(crate) fn ci_full(args: &CiFullArgs) -> anyhow::Result<ExitCode> {
     }))?;
     runner.steps(&miri_plan())?;
     runner.steps(&gpu_test_plan())?;
-    if Host::current() == Host::Linux {
-        live_smoke_stage(runner, false)?;
-        live_smoke_stage(runner, true)?;
-    } else {
-        println!(
-            "ci-full: live-smoke (X11 and Wayland) skipped on this host: it needs xvfb-run and weston (Linux); CI runs it"
-        );
-    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -909,6 +944,29 @@ pub(crate) struct FeatureMatrixArgs {
 /// CI runner does. Needs cargo-hack.
 pub(crate) fn feature_matrix(args: &FeatureMatrixArgs) -> anyhow::Result<ExitCode> {
     done(feature_matrix_stage(args.run.runner(), args.slice))
+}
+
+/// Arguments for `cargo xtask native-features`.
+#[derive(Debug, clap::Args)]
+pub(crate) struct NativeFeaturesArgs {
+    /// Lint for this triple instead of the host (a Windows or macOS checkout
+    /// takes `x86_64-unknown-linux-gnu` to see the Linux backends).
+    #[arg(long)]
+    target: Option<String>,
+    #[command(flatten)]
+    pub(crate) run: RunOpts,
+}
+
+/// `cargo xtask native-features`: clippy flui-native once per single feature.
+///
+/// The slice of `feature-matrix` that pull requests run; it fails only after
+/// every build ran, so one run reports each broken configuration.
+pub(crate) fn native_features(args: &NativeFeaturesArgs) -> anyhow::Result<ExitCode> {
+    done(
+        args.run
+            .runner()
+            .every(&native_feature_slice_plan(args.target.as_deref())),
+    )
 }
 
 /// Arguments for `cargo xtask facade-combos`.
@@ -992,21 +1050,6 @@ pub(crate) fn wasm_test(args: &WasmTestArgs) -> anyhow::Result<ExitCode> {
     done(web::test(args.run.runner()))
 }
 
-/// Arguments for `cargo xtask live-smoke`.
-#[derive(Debug, clap::Args)]
-pub(crate) struct LiveSmokeArgs {
-    /// Run the Wayland variant (headless weston) instead of X11.
-    #[arg(long)]
-    wayland: bool,
-    #[command(flatten)]
-    pub(crate) run: RunOpts,
-}
-
-/// `cargo xtask live-smoke`: real-window smoke test under X11 (or Wayland).
-pub(crate) fn live_smoke(args: &LiveSmokeArgs) -> anyhow::Result<ExitCode> {
-    done(live_smoke_stage(args.run.runner(), args.wayland))
-}
-
 /// Arguments for `cargo xtask gpu-test`.
 #[derive(Debug, clap::Args)]
 pub(crate) struct GpuTestArgs {
@@ -1035,34 +1078,6 @@ pub(crate) struct MiriArgs {
 /// Needs the nightly toolchain with the miri component.
 pub(crate) fn miri(args: &MiriArgs) -> anyhow::Result<ExitCode> {
     done(args.run.runner().steps(&miri_plan()))
-}
-
-/// Arguments for `cargo xtask demo-snapshots`.
-#[derive(Debug, clap::Args)]
-pub(crate) struct DemoSnapshotsArgs {
-    #[command(flatten)]
-    pub(crate) run: RunOpts,
-}
-
-/// `cargo xtask demo-snapshots`: the demo layer snapshot suite.
-///
-/// Structural snapshots of the demo trees' painted layer trees, no GPU. With
-/// `material` and `cupertino` on: the suite snapshots the Material and the
-/// Cupertino demo, and the facade turns neither on by default. Review changed snapshots with
-/// `cargo insta review`, one diff at a time: a snapshot diff is the regression
-/// report, so it is read before it is accepted.
-pub(crate) fn demo_snapshots(args: &DemoSnapshotsArgs) -> anyhow::Result<ExitCode> {
-    done(args.run.runner().run(&Cmd::cargo([
-        "nextest",
-        "run",
-        "-p",
-        "flui",
-        "--locked",
-        "--features",
-        "material,cupertino",
-        "--test",
-        "demo_layer_snapshots",
-    ])))
 }
 
 /// Arguments for `cargo xtask clean-nested`.
@@ -1121,28 +1136,32 @@ mod tests {
         steps.iter().map(ToString::to_string).collect()
     }
 
-    const SCOPE: &str = "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/material,flui/cupertino,flui-devtools/agent";
+    /// flui-native under Xvfb, with the Wayland tests left to their own run.
+    const LINUX_PLATFORM_SUITE: &str = "$ FLUI_HEADLESS=1 WAYLAND_DISPLAY='' xvfb-run -a -s '-screen 0 1280x1024x24 -noreset' cargo nextest run -p flui-native --locked --all-features --no-fail-fast -E 'not (group(trybuild) | test(/^wayland_window::/))'";
+
+    /// The native Wayland host's tests, against the compositor CI starts.
+    const LINUX_WAYLAND_SUITE: &str = "$ cargo nextest run -p flui-native --locked --all-features --no-fail-fast -E 'test(/^wayland_window::/)'";
+
+    const SCOPE: &str = "--workspace --exclude flui-native --locked --no-fail-fast --lib --bins --tests --features flui/material,flui/cupertino,flui/native,flui-devtools/agent";
 
     fn native_host_suites_only_build_their_packages() {
         assert_eq!(
             lines(&native_platform_plan(Host::Windows)),
             [
-                "$ cargo nextest run -p flui-platform --locked --no-fail-fast -E 'not (group(trybuild))'",
-                "$ cargo nextest run -p flui-platform --locked --no-fail-fast --all-features -E 'not (group(trybuild))'",
+                "$ cargo nextest run -p flui-native --locked --no-fail-fast -E 'not (group(trybuild))'",
+                "$ cargo nextest run -p flui-native --locked --no-fail-fast --all-features -E 'not (group(trybuild))'",
             ]
         );
         assert_eq!(
             lines(&native_platform_plan(Host::MacOs)),
             [
-                "$ FLUI_HEADLESS=1 cargo nextest run -p flui-platform --locked --no-fail-fast -E 'not (group(trybuild))'",
-                "$ FLUI_HEADLESS=1 cargo nextest run -p flui-platform --locked --no-fail-fast --all-features -E 'not (group(trybuild))'",
+                "$ FLUI_HEADLESS=1 cargo nextest run -p flui-native --locked --no-fail-fast -E 'not (group(trybuild))'",
+                "$ FLUI_HEADLESS=1 cargo nextest run -p flui-native --locked --no-fail-fast --all-features -E 'not (group(trybuild))'",
             ]
         );
         assert_eq!(
             lines(&native_platform_plan(Host::Linux)),
-            [
-                "$ FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast -E 'not (group(trybuild))'"
-            ]
+            [LINUX_PLATFORM_SUITE, LINUX_WAYLAND_SUITE]
         );
         assert_eq!(
             lines(&cli_test_plan()),
@@ -1174,7 +1193,7 @@ mod tests {
                 assert_eq!(
                     commands
                         .iter()
-                        .filter(|line| line.contains("-p flui-platform --test compiler_guards"))
+                        .filter(|line| line.contains("-p flui-native --test compiler_guards"))
                         .count(),
                     expected,
                     "{host:?} {stage:?}: {commands:?}"
@@ -1201,34 +1220,39 @@ mod tests {
             lines(&test_plan(Host::Linux, Stages::All)),
             [
                 "$ cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked".to_owned(),
-                format!("$ cargo nextest run {SCOPE} -E 'not (group(nested-cargo) | group(trybuild))'"),
-                "$ FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast -E 'not (group(trybuild))'".to_owned(),
+                format!(
+                    "$ cargo nextest run {SCOPE} -E 'not (group(nested-cargo) | group(trybuild))'"
+                ),
+                LINUX_PLATFORM_SUITE.to_owned(),
+                LINUX_WAYLAND_SUITE.to_owned(),
                 format!("$ cargo nextest run {SCOPE} -E 'group(nested-cargo) | group(trybuild)'"),
-                "$ cargo nextest run -p flui-platform --test compiler_guards --locked --no-fail-fast".to_owned(),
+                "$ cargo nextest run -p flui-native --test compiler_guards --locked --no-fail-fast"
+                    .to_owned(),
             ]
         );
         assert_eq!(
             lines(&test_plan(Host::Windows, Stages::All))[3],
-            "$ cargo nextest run -p flui-platform --locked --all-features --no-fail-fast -E 'not (group(trybuild))'"
+            "$ cargo nextest run -p flui-native --locked --all-features --no-fail-fast -E 'not (group(trybuild))'"
         );
         assert!(
             lines(&test_plan(Host::MacOs, Stages::All))[2]
-                .starts_with("Skipping native flui-platform")
+                .starts_with("Skipping native flui-native")
         );
         let fast = lines(&test_plan(Host::Linux, Stages::Fast));
-        assert_eq!(fast.len(), 4);
-        assert!(fast[3].starts_with("test --fast: SKIPPED the nested tests"));
+        assert_eq!(fast.len(), 5);
+        assert!(fast[4].starts_with("test --fast: SKIPPED the nested tests"));
         assert!(
-            fast[3].ends_with("cargo xtask test --nested"),
+            fast[4].ends_with("cargo xtask test --nested"),
             "{}",
-            fast[3]
+            fast[4]
         );
         // Nested stages include the portable platform compiler leg.
         assert_eq!(
             lines(&test_plan(Host::Linux, Stages::Nested)),
             [
                 format!("$ cargo nextest run {SCOPE} -E 'group(nested-cargo) | group(trybuild)'"),
-                "$ cargo nextest run -p flui-platform --test compiler_guards --locked --no-fail-fast".to_owned(),
+                "$ cargo nextest run -p flui-native --test compiler_guards --locked --no-fail-fast"
+                    .to_owned(),
             ]
         );
         for (group, filter) in [
@@ -1237,7 +1261,7 @@ mod tests {
         ] {
             let mut expected = vec![format!("$ cargo nextest run {SCOPE} -E '{filter}'")];
             if group == NestedGroup::Trybuild {
-                expected.push("$ cargo nextest run -p flui-platform --test compiler_guards --locked --no-fail-fast".to_owned());
+                expected.push("$ cargo nextest run -p flui-native --test compiler_guards --locked --no-fail-fast".to_owned());
             }
             assert_eq!(
                 lines(&test_plan(Host::Linux, Stages::NestedGroup(group))),
@@ -1261,13 +1285,13 @@ mod tests {
         assert_eq!(
             lines(&[build_all_targets(Host::Linux).into()]),
             [format!(
-                "$ cargo build --workspace --exclude flui-platform --all-targets --locked --features {TEST_FEATURES}"
+                "$ cargo build --workspace --exclude flui-native --all-targets --locked --features {TEST_FEATURES}"
             )]
         );
         assert_eq!(
             lines(&[build_all_targets(Host::Windows).into()]),
             [format!(
-                "$ cargo build --workspace --exclude flui-platform --all-targets --locked --features {TEST_FEATURES} --exclude xtask"
+                "$ cargo build --workspace --exclude flui-native --all-targets --locked --features {TEST_FEATURES} --exclude xtask"
             )]
         );
         assert!(SCOPE.ends_with(&format!("--features {TEST_FEATURES}")));
@@ -1319,6 +1343,32 @@ mod tests {
         }
     }
 
+    fn native_feature_slices_lint_each_feature_alone_with_and_without_all_targets() {
+        let plan = lines(&native_feature_slice_plan(None));
+        assert_eq!(plan.len(), 10);
+        let command = |features: &str, all_targets: &str| {
+            format!(
+                "$ cargo clippy -p flui-native --locked --no-default-features{features}{all_targets} -- -D warnings"
+            )
+        };
+        for (pair, features) in plan.chunks(2).zip([
+            "",
+            " --features x11",
+            " --features wayland",
+            " --features winit-backend",
+            " --features testing",
+        ]) {
+            assert_eq!(pair[0], command(features, ""));
+            assert_eq!(pair[1], command(features, " --all-targets"));
+        }
+        for line in lines(&native_feature_slice_plan(Some("x86_64-unknown-linux-gnu"))) {
+            assert!(
+                line.contains(" --target x86_64-unknown-linux-gnu -- -D warnings"),
+                "{line}"
+            );
+        }
+    }
+
     #[test]
     fn task_plans_contract() {
         crate::table_test::run_table(
@@ -1351,6 +1401,11 @@ mod tests {
                 (
                     "feature_matrix_slices_parse",
                     feature_matrix_slices_parse as fn(),
+                ),
+                (
+                    "native_feature_slices_lint_each_feature_alone_with_and_without_all_targets",
+                    native_feature_slices_lint_each_feature_alone_with_and_without_all_targets
+                        as fn(),
                 ),
             ],
         );

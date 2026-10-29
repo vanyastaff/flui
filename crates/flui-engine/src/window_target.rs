@@ -24,7 +24,7 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 ///   `SurfaceLease`) for as long as it needs a surface, which may outlive the
 ///   stack frame that constructed the renderer. A borrowed target
 ///   (`Renderer<'w>`) was considered and rejected (see the issue's ADR): it
-///   forbids `drop(window)` but not `window.close()`, and is incompatible
+///   forbids `drop(window)` but not a `WindowCommand::Close`, and is incompatible
 ///   with a `thread_local!` runtime registry and `spawn_local` futures on
 ///   web, both of which need `'static`.
 /// - `Send + Sync` — wgpu's own `WindowHandle` marker trait (the bound its

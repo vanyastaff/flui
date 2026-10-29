@@ -6,6 +6,7 @@ use std::num::NonZeroU64;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use flui_foundation::DataTransferId;
@@ -25,13 +26,18 @@ use flui_interaction::{
     InteractionDispatchError, InteractionDispatchHandle, InteractionLane, LocalPayloadTarget,
     PenTool, PointerEvent, PointerId, PointerInfo,
 };
-use flui_platform_api::data_transfer::{
-    DataTransferOffer, DataTransferSource, DropFeedback, OfferRecord, OfferTable,
-    RepresentationIndex, TransferActions, TransferCompleter, TransferFormat, TransferLimits,
-    TransferPayload, TransferRequest,
+use flui_platform::data_transfer::{
+    DataTransferOffer, DataTransferSource, DropFeedback, RepresentationIndex, TransferActions,
+    TransferCompleter, TransferFormat, TransferLimits, TransferPayload, TransferRequest,
 };
-use flui_platform_api::drag::{OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource};
-use flui_platform_api::{DragDropEvent, EventTime, PlatformWindow, WindowId};
+use flui_platform::drag::{OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource};
+use flui_platform::{
+    DragDropEvent, EventTime, PlatformWindow, Unsupported, UnsupportedReason, WindowId,
+};
+
+/// A drag the OS cannot take: the window has no drag source.
+const NO_OS_DRAG: DragError =
+    DragError::Unsupported(Unsupported::new(UnsupportedReason::NotOnThisPlatform));
 use parking_lot::Mutex;
 
 const COPY: TransferActions = TransferActions::COPY;
@@ -83,7 +89,7 @@ impl DataTransferSource for RecordingSource {
         representation: RepresentationIndex,
         _limits: TransferLimits,
     ) -> TransferRequest {
-        let (request, completer) = TransferRequest::channel();
+        let (request, completer) = TransferRequest::pending();
         self.requests.lock().push((id, representation, completer));
         request
     }
@@ -102,6 +108,7 @@ impl DataTransferSource for RecordingSource {
 }
 
 thread_local! {
+    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static STARTED: RefCell<Vec<OsDragRequest>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -127,61 +134,56 @@ impl PlatformWindow for DragWindow {
     fn id(&self) -> WindowId {
         WindowId(1)
     }
-    fn physical_size(&self) -> Size<i32> {
-        Size::new(100, 100)
-    }
-    fn logical_size(&self) -> Size<f64> {
-        self.size
-    }
-    fn scale_factor(&self) -> f64 {
-        1.0
-    }
     fn request_redraw(&self) {}
-    fn is_focused(&self) -> bool {
-        true
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        Arc::new(|| {})
     }
-    fn is_visible(&self) -> bool {
-        true
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        Arc::new(flui_platform::testing::NoNativeSurface)
     }
-    fn set_cursor(
-        &self,
-        _: flui_platform_api::CursorIcon,
-    ) -> Result<(), flui_platform_api::CursorError> {
+    flui_platform::window_takes_no_frame_verbs!();
+
+    fn set_cursor(&self, _: flui_platform::CursorIcon) -> Result<(), flui_platform::CursorError> {
         Ok(())
     }
     fn drag_source(&self) -> Option<Arc<dyn PlatformDragSource>> {
         self.source.clone()
     }
-    fn state(&self) -> flui_platform_api::WindowState {
-        flui_platform_api::WindowState::new(
-            flui_platform_api::WindowGeometry::new(None, self.size),
+    fn state(&self) -> flui_platform::WindowState {
+        flui_platform::WindowState::new(
+            flui_platform::WindowGeometry::new(None, self.size),
             self.size,
         )
     }
-    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
-        flui_platform_api::WindowCapabilities::NONE
-    }
     fn apply(
         &self,
-        command: flui_platform_api::WindowCommand,
-    ) -> Result<(), flui_platform_api::WindowCommandError> {
-        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        command: flui_platform::AdmittedCommand,
+    ) -> Result<(), flui_platform::ApplyError> {
+        command.against(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+    fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
+        None
+    }
+
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+        None
+    }
+
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
+        None
     }
 }
 
-fn window(source: Option<OsDragStart>) -> Arc<dyn PlatformWindow> {
-    Arc::new(DragWindow {
+fn window(source: Option<OsDragStart>) -> Rc<dyn PlatformWindow> {
+    Rc::new(DragWindow {
         size: Size::new(100.0, 100.0),
         source: source
             .map(|timing| Arc::new(FakeDragSource(timing)) as Arc<dyn PlatformDragSource>),
     })
 }
 
-fn desktop() -> Arc<dyn PlatformWindow> {
+fn desktop() -> Rc<dyn PlatformWindow> {
     window(Some(OsDragStart::OnLeavingWindow))
 }
 
@@ -326,11 +328,14 @@ struct Fixture {
     source: Arc<RecordingSource>,
     probe: Rc<Probe>,
     hit: HitTestHandle,
-    offers: RefCell<OfferTable>,
+    /// How many offers the simulated OS minted: the next one's slot.
+    offers: Cell<u32>,
     presentation: PresentationId,
-    windows: RefCell<Vec<Arc<dyn PlatformWindow>>>,
+    windows: RefCell<Vec<Rc<dyn PlatformWindow>>>,
     /// The pointer kinds an OS drag's hit tests asked for, in order.
     hit_kinds: Rc<RefCell<Vec<PointerKind>>>,
+    /// How many times the owner was woken for a drop it can now conclude.
+    wakes: Arc<AtomicUsize>,
 }
 
 fn presentation(n: usize) -> PresentationId {
@@ -349,7 +354,16 @@ impl Fixture {
     fn in_runtime(lane: &InteractionLane, runtime: usize, nonce: ProcessNonce) -> Self {
         let dispatch = lane.dispatch_handle();
         let source = Arc::new(RecordingSource::default());
-        let owner = DragOwner::new(nonce, UiRuntimeId::new(runtime), source.clone());
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let wake = Arc::clone(&wakes);
+        let owner = DragOwner::new(
+            nonce,
+            UiRuntimeId::new(runtime),
+            source.clone(),
+            Arc::new(move || {
+                wake.fetch_add(1, Ordering::SeqCst);
+            }),
+        );
         let probe = Rc::new(Probe {
             spots: RefCell::new(Vec::new()),
         });
@@ -364,10 +378,11 @@ impl Fixture {
             source,
             probe,
             hit,
-            offers: RefCell::new(OfferTable::new()),
+            offers: Cell::new(0),
             presentation: presentation(1),
             windows: RefCell::default(),
             hit_kinds: Rc::default(),
+            wakes,
         }
     }
 
@@ -431,18 +446,16 @@ impl Fixture {
 
     /// An OS offer of plain text, as another application would make it.
     fn text_offer(&self) -> DataTransferOffer {
-        let mut table = self.offers.borrow_mut();
         let representations: Arc<[_]> = Arc::from(vec![
-            flui_platform_api::data_transfer::RepresentationDescriptor {
+            flui_platform::data_transfer::RepresentationDescriptor {
                 format: TransferFormat::Text,
                 declared_len: None,
             },
         ]);
-        let id = table.mint(OfferRecord::new(Arc::clone(&representations)));
-        DataTransferOffer::new(id, representations)
+        DataTransferOffer::new(self.mint(), representations)
     }
 
-    fn start(&self, window: Arc<dyn PlatformWindow>, allowed: AllowedActions) -> DragSession {
+    fn start(&self, window: Rc<dyn PlatformWindow>, allowed: AllowedActions) -> DragSession {
         self.start_with(
             window,
             allowed,
@@ -453,7 +466,7 @@ impl Fixture {
 
     fn start_with(
         &self,
-        window: Arc<dyn PlatformWindow>,
+        window: Rc<dyn PlatformWindow>,
         allowed: AllowedActions,
         reach: Option<DragReach>,
         items: Vec<DragItem>,
@@ -463,7 +476,7 @@ impl Fixture {
                 PointerId::try_from(1_u64).expect("pointer"),
                 PointerKind::Touch,
             ))
-            .window(Arc::downgrade(&window))
+            .window(Rc::downgrade(&window))
             .hit_test(self.hit.clone())
             .observer(Rc::new(Observer(Rc::clone(&self.log))));
         if let Some(reach) = reach {
@@ -475,12 +488,16 @@ impl Fixture {
     }
 
     fn offer_for(&self, request: &OsDragRequest) -> DataTransferOffer {
-        let mut table = self.offers.borrow_mut();
-        let id = table.mint(OfferRecord::new(Arc::from(request.representations.clone())));
-        DataTransferOffer::new(
-            id,
-            Arc::clone(table.get(id).expect("live").representations()),
-        )
+        DataTransferOffer::new(self.mint(), Arc::from(request.representations.clone()))
+    }
+
+    /// A fresh offer id, as the OS's one table mints it: never one minted
+    /// before.
+    fn mint(&self) -> DataTransferId {
+        let slot = self.offers.get();
+        self.offers
+            .set(slot.checked_add(1).expect("the test mints few offers"));
+        DataTransferId::new_gen(slot, std::num::NonZeroU32::MIN)
     }
 
     fn deliver(&self, presentation: PresentationId, event: DragDropEvent) {
@@ -539,7 +556,7 @@ fn drop_reaches_only_last_accepting_target() {
         let a = f.spot("A", 0.0, 50.0, Some(COPY));
         let _b = f.spot("B", 50.0, 100.0, Some(COPY));
         let w = desktop();
-        let session = f.start(Arc::clone(&w), AllowedActions::within(COPY));
+        let session = f.start(Rc::clone(&w), AllowedActions::within(COPY));
         assert_eq!(moved(&session, 10.0), MoveOutcome::Tracking(Some(COPY)));
         assert_eq!(moved(&session, 80.0), MoveOutcome::Tracking(Some(COPY)));
         let outcome = session.pointer_released(at(80.0), None).expect("live");
@@ -567,7 +584,7 @@ fn a_receiver_that_accepted_and_then_declined_gets_no_drop() {
     in_lane(|f| {
         let w = desktop();
         let c = f.spot("C", 0.0, 50.0, Some(COPY));
-        let session = f.start(Arc::clone(&w), AllowedActions::within(COPY));
+        let session = f.start(Rc::clone(&w), AllowedActions::within(COPY));
         moved(&session, 10.0);
         c.answer.set(None);
         assert_eq!(moved(&session, 20.0), MoveOutcome::Tracking(None));
@@ -590,7 +607,7 @@ fn declined_target_under_pointer_receives_leave() {
         let declining = f.spot("D", 0.0, 100.0, None);
         let accepting = f.spot("E", 0.0, 100.0, Some(MOVE));
         let w = desktop();
-        let session = f.start(Arc::clone(&w), AllowedActions::within(MOVE));
+        let session = f.start(Rc::clone(&w), AllowedActions::within(MOVE));
         moved(&session, 10.0);
         session.pointer_released(at(10.0), None).expect("live");
         let log = logged(&f.log);
@@ -607,7 +624,7 @@ fn declined_target_under_pointer_receives_leave() {
         // Nothing accepts: every entered receiver leaves exactly once, none is dropped on.
         f.log.borrow_mut().clear();
         let g = f.spot("G", 0.0, 100.0, None);
-        let session = f.start(Arc::clone(&w), AllowedActions::within(MOVE));
+        let session = f.start(Rc::clone(&w), AllowedActions::within(MOVE));
         moved(&session, 10.0);
         moved(&session, 11.0);
         session.cancel().expect("live");
@@ -629,8 +646,8 @@ fn concurrent_sessions_are_independent() {
         let _a = f.spot("A", 0.0, 50.0, Some(COPY));
         let _b = f.spot("B", 50.0, 100.0, Some(COPY));
         let w = desktop();
-        let first = f.start(Arc::clone(&w), AllowedActions::within(COPY));
-        let second = f.start(Arc::clone(&w), AllowedActions::within(COPY));
+        let first = f.start(Rc::clone(&w), AllowedActions::within(COPY));
+        let second = f.start(Rc::clone(&w), AllowedActions::within(COPY));
         assert_ne!(first.id(), second.id());
         moved(&first, 10.0);
         moved(&second, 80.0);
@@ -658,8 +675,13 @@ fn concurrent_sessions_are_independent() {
 fn session_id_exhaustion_refuses_permanently() {
     let lane = InteractionLane::try_new().expect("lane");
     let f = Fixture::new(&lane);
-    let owner = DragOwner::new(nonce(), UiRuntimeId::new(1), f.source.clone())
-        .with_session_mint(IdMint::<DragSessionId>::starting_after(u64::MAX - 1));
+    let owner = DragOwner::new(
+        nonce(),
+        UiRuntimeId::new(1),
+        f.source.clone(),
+        Arc::new(|| {}),
+    )
+    .with_session_mint(IdMint::<DragSessionId>::starting_after(u64::MAX - 1));
     let handle = owner.handle();
     let begin = || {
         handle.start(DragStart::new(
@@ -741,7 +763,7 @@ fn refusals_at_start() {
 fn escalates_only_outside_window_with_outside_actions_or_sibling_presentation() {
     struct Case {
         name: &'static str,
-        window: fn() -> Arc<dyn PlatformWindow>,
+        window: fn() -> Rc<dyn PlatformWindow>,
         allowed: AllowedActions,
         reach: Option<DragReach>,
         sibling: bool,
@@ -820,7 +842,7 @@ fn escalates_only_outside_window_with_outside_actions_or_sibling_presentation() 
                     .attach_presentation(presentation(2), WindowId(2), f.hit.clone());
             }
             let w = (case.window)();
-            let session = f.start_with(Arc::clone(&w), case.allowed, case.reach, text());
+            let session = f.start_with(Rc::clone(&w), case.allowed, case.reach, text());
             let x = if case.outside { 150.0 } else { 50.0 };
             let outcome = moved(&session, x);
             let mut pending = f.owner.take_pending_os_drags();
@@ -833,11 +855,7 @@ fn escalates_only_outside_window_with_outside_actions_or_sibling_presentation() 
                 }
                 Expect::Refused => {
                     assert!(pending.is_empty(), "{name}");
-                    assert_eq!(
-                        outcome,
-                        MoveOutcome::Refused(DragError::Unavailable),
-                        "{name}"
-                    );
+                    assert_eq!(outcome, MoveOutcome::Refused(NO_OS_DRAG), "{name}");
                     assert_eq!(session.stage(), Ok(DragStage::InWindow), "{name}");
                     assert_eq!(
                         logged(&f.log)
@@ -871,18 +889,18 @@ fn escalates_only_outside_window_with_outside_actions_or_sibling_presentation() 
                     // A refusal names the session by its full identity: the same session
                     // number in another runtime is not this drag.
                     let key = session.key().expect("live");
-                    let foreign = flui_platform_api::drag::DragSessionKey::new(
+                    let foreign = flui_platform::drag::DragSessionKey::new(
                         key.nonce(),
                         UiRuntimeId::new(9),
                         key.session(),
                     );
-                    f.owner.os_drag_refused(foreign, DragError::Unavailable);
+                    f.owner.os_drag_refused(foreign, NO_OS_DRAG);
                     assert_eq!(
                         session.stage(),
                         Ok(DragStage::System),
                         "{name}: foreign refusal"
                     );
-                    f.owner.os_drag_refused(key, DragError::Unavailable);
+                    f.owner.os_drag_refused(key, NO_OS_DRAG);
                     assert_eq!(session.stage(), Ok(DragStage::InWindow), "{name}: refused");
                 }
                 Expect::IdentityOnly => {
@@ -906,7 +924,7 @@ fn a_refused_os_drag_still_drops_in_its_window() {
         let _target = f.spot("T", 0.0, 50.0, Some(COPY));
         let w = desktop();
         let session = f.start_with(
-            Arc::clone(&w),
+            Rc::clone(&w),
             AllowedActions::new(COPY, COPY),
             None,
             vec![DragItem::new().with_text("payload")],
@@ -918,7 +936,7 @@ fn a_refused_os_drag_still_drops_in_its_window() {
         let key = pending.key();
         assert_eq!(
             pending.start(None),
-            Err(DragError::Unavailable),
+            Err(NO_OS_DRAG),
             "a window with no drag source refuses"
         );
         assert_eq!(
@@ -926,16 +944,13 @@ fn a_refused_os_drag_still_drops_in_its_window() {
             Ok(DragStage::System),
             "until the host says so"
         );
-        f.owner.os_drag_refused(key, DragError::Unavailable);
+        f.owner.os_drag_refused(key, NO_OS_DRAG);
         assert_eq!(
             moved(&session, 10.0),
             MoveOutcome::Tracking(Some(COPY)),
             "the receiver under the pointer is entered again"
         );
-        assert_eq!(
-            moved(&session, 150.0),
-            MoveOutcome::Refused(DragError::Unavailable)
-        );
+        assert_eq!(moved(&session, 150.0), MoveOutcome::Refused(NO_OS_DRAG));
         assert!(
             !f.owner.has_pending_os_drags(),
             "the refused start is not asked for again"
@@ -957,12 +972,7 @@ fn an_at_start_backend_decides_at_the_start_and_never_escalates_later() {
             .attach_presentation(presentation(2), WindowId(2), f.hit.clone());
         let ios = window(Some(OsDragStart::AtStart { eager_data: false }));
         let items = || vec![DragItem::new().with_value(1_u8)];
-        let session = f.start_with(
-            Arc::clone(&ios),
-            AllowedActions::within(MOVE),
-            None,
-            items(),
-        );
+        let session = f.start_with(Rc::clone(&ios), AllowedActions::within(MOVE), None, items());
         assert_eq!(
             session.stage(),
             Ok(DragStage::EscalationPending),
@@ -972,7 +982,7 @@ fn an_at_start_backend_decides_at_the_start_and_never_escalates_later() {
 
         // Window reach is not an OS session even at the start.
         let reorder = f.start_with(
-            Arc::clone(&ios),
+            Rc::clone(&ios),
             AllowedActions::within(MOVE),
             Some(DragReach::Window),
             items(),
@@ -987,12 +997,7 @@ fn an_at_start_backend_decides_at_the_start_and_never_escalates_later() {
 
         // No sibling: nothing at the start, nothing later.
         let lone = Fixture::new(&InteractionLane::try_new().expect("lane"));
-        let session = lone.start_with(
-            Arc::clone(&ios),
-            AllowedActions::within(MOVE),
-            None,
-            items(),
-        );
+        let session = lone.start_with(Rc::clone(&ios), AllowedActions::within(MOVE), None, items());
         assert_eq!(session.stage(), Ok(DragStage::Armed));
         // An unavailable backend refuses a start that needs the OS.
         let none = window(None);
@@ -1002,7 +1007,7 @@ fn an_at_start_backend_decides_at_the_start_and_never_escalates_later() {
                 vec![DragItem::new().with_text("x")],
                 AllowedActions::new(MOVE, COPY),
             )
-            .window(Arc::downgrade(&none)),
+            .window(Rc::downgrade(&none)),
         );
         assert!(
             refused.is_ok(),
@@ -1023,7 +1028,7 @@ fn drag_between_presentations_of_one_runtime_redeems_the_value() {
             .attach_presentation(sibling, WindowId(2), f.hit.clone());
         let target = f.spot("S", 0.0, 100.0, Some(MOVE));
         let w = desktop();
-        let session = f.start(Arc::clone(&w), AllowedActions::within(MOVE));
+        let session = f.start(Rc::clone(&w), AllowedActions::within(MOVE));
         assert_eq!(moved(&session, 150.0), MoveOutcome::Escalating);
         let request = enter_one(&f);
         assert_eq!(
@@ -1110,17 +1115,7 @@ fn a_drop_is_concluded_once_its_requests_resolve() {
             on_drop: RefCell::new(None),
         });
         f.register(&target, 0.0, 100.0);
-        let offer = {
-            let mut table = f.offers.borrow_mut();
-            let representations: Arc<[_]> = Arc::from(vec![
-                flui_platform_api::data_transfer::RepresentationDescriptor {
-                    format: TransferFormat::Text,
-                    declared_len: None,
-                },
-            ]);
-            let id = table.mint(OfferRecord::new(Arc::clone(&representations)));
-            DataTransferOffer::new(id, representations)
-        };
+        let offer = f.text_offer();
         let id = offer.id();
         let here = Some(Point::new(5.0, 5.0));
         f.deliver(
@@ -1209,7 +1204,7 @@ fn a_paste_whose_receiver_panics_ends_the_held_cut() {
         let drag_and_drop = flui_interaction::drag::DragAndDrop::new(
             f.handle.clone(),
             f.presentation,
-            Arc::downgrade(&w),
+            Rc::downgrade(&w),
             &tracker,
         );
         let start = drag_and_drop
@@ -1259,7 +1254,7 @@ fn a_cancel_whose_observer_panics_keeps_the_first_failure() {
         let spot = f.spot("P", 0.0, 100.0, Some(COPY));
         *spot.on_leave.borrow_mut() = Some(Box::new(|| panic!("receiver leave failure")));
         let w = desktop();
-        f.windows.borrow_mut().push(Arc::clone(&w));
+        f.windows.borrow_mut().push(Rc::clone(&w));
         let session = f
             .handle
             .start(
@@ -1268,7 +1263,7 @@ fn a_cancel_whose_observer_panics_keeps_the_first_failure() {
                     vec![DragItem::new().with_value("payload".to_owned())],
                     AllowedActions::within(COPY),
                 )
-                .window(Arc::downgrade(&w))
+                .window(Rc::downgrade(&w))
                 .hit_test(f.hit.clone())
                 .observer(Rc::new(FailingObserver)),
             )
@@ -1365,7 +1360,7 @@ fn value_is_redeemed_only_in_source_runtime() {
     let (request, session) = lane_a.enter(|| {
         let w = desktop();
         let session = a.start_with(
-            Arc::clone(&w),
+            Rc::clone(&w),
             AllowedActions::new(MOVE, COPY),
             None,
             vec![
@@ -1461,7 +1456,7 @@ fn a_receiver_that_cancels_the_session_while_entered_still_leaves_once() {
     in_lane(|f| {
         let spot = f.spot("R", 0.0, 100.0, Some(COPY));
         let w = desktop();
-        let session = Rc::new(f.start(Arc::clone(&w), AllowedActions::within(COPY)));
+        let session = Rc::new(f.start(Rc::clone(&w), AllowedActions::within(COPY)));
         let again = Rc::clone(&session);
         *spot.on_enter.borrow_mut() = Some(Box::new(move || {
             again.cancel().expect("live while it runs");
@@ -1525,7 +1520,7 @@ fn a_panicking_receiver_does_not_strand_the_others() {
         let first = f.spot("P", 0.0, 100.0, Some(COPY));
         let _second = f.spot("Q", 0.0, 100.0, Some(COPY));
         let w = desktop();
-        let session = f.start(Arc::clone(&w), AllowedActions::within(COPY));
+        let session = f.start(Rc::clone(&w), AllowedActions::within(COPY));
         moved(&session, 10.0);
         *first.on_leave.borrow_mut() = Some(Box::new(|| panic!("receiver leave failure")));
         let result = catch_unwind(AssertUnwindSafe(|| session.cancel()));
@@ -1562,7 +1557,7 @@ fn spring_loading_hook_fires_once_per_hover() {
         });
         f.register(&spot, 0.0, 50.0);
         let w = desktop();
-        let session = f.start(Arc::clone(&w), AllowedActions::within(COPY));
+        let session = f.start(Rc::clone(&w), AllowedActions::within(COPY));
         let t = |ms: u64| EventTime::from_nanos(1_000_000_000 + ms * 1_000_000);
         session.pointer_moved(at(10.0), Some(t(0))).expect("live");
         assert_eq!(f.owner.next_deadline(), Some(t(100)));
@@ -1595,7 +1590,7 @@ fn in_window_drag_keeps_second_finger_and_pen() {
         let seen: Rc<RefCell<Vec<String>>> = Rc::default();
 
         let (starter, held, ses) = (f.handle.clone(), Rc::clone(&captured), Rc::clone(&session));
-        let (hit, window, presentation) = (f.hit.clone(), Arc::clone(&w), f.presentation);
+        let (hit, window, presentation) = (f.hit.clone(), Rc::clone(&w), f.presentation);
         let source = f
             .dispatch
             .register_pointer(move |dispatch| match dispatch.global {
@@ -1608,7 +1603,7 @@ fn in_window_drag_keeps_second_finger_and_pen() {
                             AllowedActions::within(MOVE),
                         )
                         .pointer(press.pointer)
-                        .window(Arc::downgrade(&window))
+                        .window(Rc::downgrade(&window))
                         .hit_test(hit.clone())
                         .capture(capture),
                     );
@@ -1865,13 +1860,13 @@ fn two_sessions_competing_for_one_target() {
         let w = desktop();
         let value = |name: &str| vec![DragItem::new().with_value(name.to_owned())];
         let first = f.start_with(
-            Arc::clone(&w),
+            Rc::clone(&w),
             AllowedActions::within(COPY),
             None,
             value("first"),
         );
         let second = f.start_with(
-            Arc::clone(&w),
+            Rc::clone(&w),
             AllowedActions::within(COPY),
             None,
             value("second"),
@@ -2110,7 +2105,7 @@ impl PlatformDragSource for HoardingDragSource {
 
     fn start(&self, request: OsDragRequest) -> Result<(), DragError> {
         STARTED.with(|started| started.borrow_mut().push(request));
-        Err(DragError::Unavailable)
+        Err(NO_OS_DRAG)
     }
 }
 
@@ -2179,15 +2174,15 @@ fn an_os_session_ends_however_its_end_hook_goes() {
         let pending = the_one_pending(f);
         let key = pending.key();
         assert_eq!(
-            pending.start(Some(&ForgetfulDragSource(Err(DragError::Unavailable)))),
-            Err(DragError::Unavailable)
+            pending.start(Some(&ForgetfulDragSource(Err(NO_OS_DRAG)))),
+            Err(NO_OS_DRAG)
         );
         assert_eq!(
             session.stage(),
             Ok(DragStage::System),
             "a refusal, not an end"
         );
-        f.owner.os_drag_refused(key, DragError::Unavailable);
+        f.owner.os_drag_refused(key, NO_OS_DRAG);
         assert_eq!(session.stage(), Ok(DragStage::InWindow));
         assert_eq!(count(&f.log, ENDED_CANCELLED), 0);
     });
@@ -2195,11 +2190,8 @@ fn an_os_session_ends_however_its_end_hook_goes() {
         let session = escalated(f);
         let pending = the_one_pending(f);
         let key = pending.key();
-        assert_eq!(
-            pending.start(Some(&HoardingDragSource)),
-            Err(DragError::Unavailable)
-        );
-        f.owner.os_drag_refused(key, DragError::Unavailable);
+        assert_eq!(pending.start(Some(&HoardingDragSource)), Err(NO_OS_DRAG));
+        f.owner.os_drag_refused(key, NO_OS_DRAG);
         let kept = take_started().pop().expect("kept");
         (kept.on_end)(OsDragEnd::Dropped(COPY));
         assert_eq!(
@@ -2515,6 +2507,65 @@ fn fetched_over_a_window_that_left(f: &Fixture, stay: bool) -> (DataTransferOffe
     (offer, fetch)
 }
 
+/// The last fetch of a dropped offer ends on another thread while the owner's
+/// loop sleeps: releasing it wakes the owner, which then has the drop to
+/// conclude. Without the wake nothing would tick the owner until unrelated
+/// input arrived, and the OS would wait on the target all that time.
+fn the_last_fetch_resolved_off_thread_wakes_the_owner() {
+    in_lane(|f| {
+        let (id, fetch) = dropped_while_fetching_elsewhere(f);
+        let (_, index, completer) = f
+            .source
+            .requests
+            .lock()
+            .pop()
+            .expect("the receiver's request reached the source");
+        assert_eq!(index, RepresentationIndex(0));
+        assert_eq!(
+            f.wakes.load(Ordering::SeqCst),
+            0,
+            "the fetch is outstanding"
+        );
+        assert_eq!(f.owner.next_deadline(), None, "nothing to conclude yet");
+
+        completer.complete(Ok(TransferPayload::Text("hello".into())));
+        std::thread::spawn(move || {
+            let mut fetch = std::pin::pin!(fetch);
+            let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+            assert!(matches!(
+                fetch.as_mut().poll(&mut context),
+                std::task::Poll::Ready(Ok(_))
+            ));
+        })
+        .join()
+        .expect("the fetch resolves off the owner's thread");
+
+        assert_eq!(
+            f.wakes.load(Ordering::SeqCst),
+            1,
+            "the owner is woken when the last request of the drop resolves"
+        );
+        assert_eq!(f.owner.next_deadline(), Some(EventTime::from_nanos(0)));
+        f.owner.tick(time_at(0));
+        assert_eq!(*f.source.concluded.lock(), [id]);
+    });
+}
+
+/// A fetch dropped on another thread before it resolves releases the drop the
+/// same way.
+fn the_last_fetch_dropped_off_thread_wakes_the_owner() {
+    in_lane(|f| {
+        let (id, fetch) = dropped_while_fetching_elsewhere(f);
+        std::thread::spawn(move || drop(fetch))
+            .join()
+            .expect("the fetch is dropped off the owner's thread");
+
+        assert_eq!(f.wakes.load(Ordering::SeqCst), 1);
+        f.owner.tick(time_at(0));
+        assert_eq!(*f.source.concluded.lock(), [id]);
+    });
+}
+
 /// An offer over two windows, a receiver over the second fetching from it,
 /// dropped over the first: the drop and the outstanding fetch.
 fn dropped_while_fetching_elsewhere(f: &Fixture) -> (DataTransferId, DragFetch) {
@@ -2636,7 +2687,7 @@ fn a_receiver_under_perspective_sees_its_own_plane() {
                     PointerId::try_from(1_u64).expect("pointer"),
                     PointerKind::Touch,
                 ))
-                .window(Arc::downgrade(&window))
+                .window(Rc::downgrade(&window))
                 .hit_test(hit),
             )
             .expect("a valid drag starts");
@@ -2670,6 +2721,14 @@ fn drag_sessions() {
             (
                 "a_drop_waits_for_a_fetch_made_over_another_window",
                 a_drop_waits_for_a_fetch_made_over_another_window,
+            ),
+            (
+                "the_last_fetch_resolved_off_thread_wakes_the_owner",
+                the_last_fetch_resolved_off_thread_wakes_the_owner,
+            ),
+            (
+                "the_last_fetch_dropped_off_thread_wakes_the_owner",
+                the_last_fetch_dropped_off_thread_wakes_the_owner,
             ),
             (
                 "a_fetch_from_a_hover_that_left_holds_the_drop_open",

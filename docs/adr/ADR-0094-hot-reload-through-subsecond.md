@@ -11,7 +11,7 @@
 - **Supersedes (on acceptance, after the spike below passes):** the three-crate dlopen worker
   design described in [`docs/hot-reload.md`](../hot-reload.md),
   [`crates/flui-hot-reload/ARCHITECTURE.md`](../../crates/flui-hot-reload/ARCHITECTURE.md) and
-  [the Flutter-parity hot reload design](../designs/2026-06-28-hot-reload-runtime-protocol.md). No
+  [the Flutter-parity hot reload design](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/designs/2026-06-28-hot-reload-runtime-protocol.md). No
   ADR is superseded.
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §9 (owner-queued hot reload stays
   in the closed command vocabulary), [ADR-0039](ADR-0039-event-loop-affinity-capability.md) §6
@@ -22,8 +22,8 @@
   [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md),
   [ADR-0096](ADR-0096-dev-build-dynamic-linking.md),
   [ADR-0097](ADR-0097-no-process-global-state-gate.md)
-- **Refs:** decision D15 in the [decision index](../../design/decisions.md); the dynamic linking
-  study in [`design/dynamic-linking.md`](../../design/dynamic-linking.md)
+- **Refs:** decision D15 in the [decision index](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md); the dynamic linking
+  study in [`design/dynamic-linking.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/dynamic-linking.md)
 
 ## Context
 
@@ -76,7 +76,7 @@ package's. They are not a dependency cycle: the package depends on `flui-layer`,
 `flui-view` and `flui-rendering` today (`crates/flui-hot-reload/Cargo.toml:33-38`) and on
 `flui-sdk` after ADR-0088, never on `flui-app` or the facade, and the review's probe found a cycle
 only when a package depends on the crate that holds the optional edge
-([`judges-and-verification.md`](../research/2026-09-25-architecture-review/judges-and-verification.md)).
+([`judges-and-verification.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/judges-and-verification.md)).
 
 **The user pays a project shape for it.** Code that should reload must live in the worker
 crate, and the state it keeps must live in the host.
@@ -235,7 +235,7 @@ The hook is split so the edge from `flui-app` could go before Subsecond exists.
   `edge-exceptions` entry are gone; the reach facts say `flui-hot-reload` is absent from
   `flui-app`'s graph under every feature, that the facade's feature brings it in, and that the
   first-party host enables its `app-plugin`. What still blocks §2 is tracked in ADR-0088's
-  move-4 row and the migration plan.
+  move-4 row and [the migration plan](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/2026-09-25-architecture-migration-plan.md).
 - **The per-call seam is not built yet.** `call(entry, data)` and `ReloadEvent::RestartRequired`
   land with the Subsecond implementation, their first producer; until then they would be
   surface nothing reaches.
@@ -335,7 +335,7 @@ into `flui-hot-reload`'s crate docs.
   dynamic linking study found them compatible after
   [dioxus#4174](https://github.com/DioxusLabs/dioxus/pull/4174) but did not test the pair on
   Windows.
-- The macOS device check of the worker loop (`cargo xtask device`, `MacosHotReloadLoop`, `tools/xtask/src/device.rs:201-212`)
+- The macOS device check of the worker loop ([`cargo xtask device`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs), `MacosHotReloadLoop`, [`tools/xtask/src/device.rs:201-212`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs#L201-L212))
   is rewritten for the Subsecond loop when the dlopen path is deleted.
 - Web keeps no in-process hot reload (`docs/hot-reload.md`, "WASM / Web"). iOS support depends on
   the spike.

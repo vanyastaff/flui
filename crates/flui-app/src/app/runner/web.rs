@@ -21,13 +21,13 @@ where
     use flui_platform::WindowOptions;
     use parking_lot::Mutex;
 
-    tracing::info!("Starting web platform via flui-platform");
+    tracing::info!("Starting web platform via flui-native");
 
     // Platform init is an environment failure (unsupported browser, missing
     // wasm feature, driver problem), not a `BUG:` invariant — see the
     // matching comment in `run_desktop` above for why this is a `match` +
     // `panic!` with a full error log instead of a bare `.expect()`.
-    let platform = match flui_platform::current_platform() {
+    let platform = match flui_native::current_platform() {
         Ok(platform) => platform,
         Err(error) => {
             tracing::error!(%error, "Failed to initialize platform");
@@ -48,7 +48,7 @@ where
     where
         V: View + StatelessView + Clone + 'static,
     {
-        fn owner_platform_installed<R>(f: impl FnOnce(&flui_platform::OwnerPlatform) -> R) -> R {
+        fn owner_platform_installed<R>(f: impl FnOnce(&flui_native::OwnerPlatform) -> R) -> R {
             with_owner_platform(f)
                 .expect("BUG: bootstrap_web runs only after install_owner_platform")
         }
@@ -59,18 +59,23 @@ where
         // 1. Open window (creates canvas). `Ready` is guaranteed inside
         // `on_ready` (ADR-0039 §1).
         let options: WindowOptions = (&config).into();
-        let host = match owner_platform_installed(|owner| owner.open_window(options))
-            .and_then(flui_platform::WindowOpen::try_ready)
-        {
-            Ok(window) => window,
-            Err(error) => {
-                tracing::error!(%error, "Failed to create canvas window");
-                return Err(anyhow::Error::from(error).context("Failed to create canvas window"));
-            }
-        };
+        let routes = super::window_routes::WindowRoutes::new();
+        let host =
+            match owner_platform_installed(|owner| owner.open_window(options, routes.clone()))
+                .and_then(flui_native::WindowOpen::try_ready)
+            {
+                Ok(window) => window,
+                Err(error) => {
+                    tracing::error!(%error, "Failed to create canvas window");
+                    return Err(
+                        anyhow::Error::from(error).context("Failed to create canvas window")
+                    );
+                }
+            };
+        routes.adopt(host.id());
         let presentation_window =
             super::presentation_window(host).with_pointer_resampling(config.pointer_resampling);
-        let window = Arc::clone(presentation_window.window());
+        let window = std::rc::Rc::clone(presentation_window.window());
 
         // 2. Shared renderer slot — starts as None, filled async once the WebGPU
         //    adapter is available. `Option` lets the frame callback skip frames that
@@ -80,7 +85,8 @@ where
         // 3. Mount root widget at the LOGICAL size; the paint root's DPR
         // transform maps to the physical canvas. `UiRuntime::new` applies the
         // DPR to the freshly built pipeline before returning.
-        let scale_factor = window.scale_factor() as f64;
+        let geometry = super::window_install::SurfaceGeometry::of(window.as_ref());
+        let scale_factor = geometry.scale;
         let ui_runtime = match super::host::build_ui_runtime(presentation_window, scale_factor) {
             Ok(ui_runtime) => ui_runtime,
             Err(error) => {
@@ -101,7 +107,7 @@ where
         config.install_input_tap(&ui_runtime);
         config.install_error_view_builder(&ui_runtime);
 
-        let logical = window.logical_size();
+        let logical = geometry.logical;
         let attach = ui_runtime.enter(|ui_runtime| {
             ui_runtime.attach_root_widget_with_size(
                 &root,
@@ -129,28 +135,25 @@ where
         let wake = ui_runtime.wake_handle();
         {
             let (gpu_loss, wake) = (Arc::clone(&gpu_loss), Arc::clone(&wake));
-            window.on_surface_status_change(Box::new(move |available| {
-                if available {
+            routes.route_surface_changed(move |change| {
+                if change == flui_platform::SurfaceChange::Rebuild {
                     gpu_loss.record_context_restore();
                 } else {
                     gpu_loss.record_context_loss();
                 }
                 wake();
-            }));
+            });
         }
-        let mut installation = prepare_platform_ui_runtime(ui_runtime, Arc::clone(&window));
+        let mut installation = prepare_platform_ui_runtime(ui_runtime, std::rc::Rc::clone(&window));
         installation.dev_agent(config.dev_agent.zip(agent_window));
-        owner_platform_installed(|owner| {
-            installation.submit_web(
-                super::frame_driver::FrameDriver::Web(WebFrameDriver {
-                    renderer,
-                    window,
-                    gpu_loss,
-                    owner_wake: wake,
-                }),
-                &owner.shared(),
-            )
-        })?;
+        installation.submit_web(super::frame_driver::FrameDriver::Web(WebFrameDriver {
+            renderer,
+            window,
+            gpu_loss,
+            owner_wake: wake,
+            surface_color: config.surface_color,
+            frame_latency: config.frame_latency,
+        }))?;
 
         tracing::info!("Web platform initialized with callbacks");
         Ok(())
@@ -164,7 +167,7 @@ where
     // (ADR-0039 §6/§7 "wasm posture"). An explicit web detach/quit
     // ownership hook is deferred until the platform exposes a callback
     // whose lifetime encloses the RAF registration.
-    let result = platform.run(Box::new(move |owner| {
+    let result = platform.run(crate::app::runner::app_handler(move |owner| {
         install_owner_platform(owner)?;
         super::host::install_configured_executors(&config);
         super::host::install_host_storage(&config);
@@ -194,11 +197,15 @@ where
 
 pub(super) struct WebFrameDriver {
     renderer: std::sync::Arc<parking_lot::Mutex<Option<flui_engine::Renderer>>>,
-    window: std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
+    window: std::rc::Rc<dyn flui_platform::PlatformWindow>,
     /// What the browser or the renderer reported lost, and not yet rebuilt.
     gpu_loss: std::sync::Arc<GpuLossLedger>,
     /// Wakes the owner: the next turn rebuilds without waiting for a frame.
     owner_wake: std::sync::Arc<dyn Fn() + Send + Sync>,
+    /// The colour capability the window asked of its surface.
+    surface_color: flui_engine::SurfaceColor,
+    /// The swapchain latency a first-built renderer is given; a rebuilt one keeps its own.
+    frame_latency: flui_engine::FrameLatency,
 }
 
 impl WebFrameDriver {
@@ -218,7 +225,7 @@ impl WebFrameDriver {
         if let Some(renderer) = self.renderer.lock().as_mut() {
             // The canvas's backing store, which the browser may have sized
             // from its device-pixel layout rather than `size × scale`.
-            let size = self.window.physical_size();
+            let size = super::window_install::SurfaceGeometry::of(self.window.as_ref()).physical;
             renderer.resize(size.width as u32, size.height as u32);
         }
     }
@@ -266,7 +273,7 @@ impl WebFrameDriver {
         // services commands, tasks and input without a frame.
         let action = match action {
             WakeAction::Render if !gpu_loss.can_draw() => WakeAction::PumpBackground,
-            other => other,
+            other @ (WakeAction::Render | WakeAction::PumpBackground | WakeAction::Skip) => other,
         };
         match action {
             WakeAction::Skip => return,
@@ -278,7 +285,7 @@ impl WebFrameDriver {
                 // No `NO_PRESENT_FALLBACK_PACE` sleep here, unlike
                 // desktop/Android: this callback is driven by the
                 // browser's `requestAnimationFrame` loop
-                // (`start_raf_loop`, `flui-platform`'s web backend),
+                // (`start_raf_loop`, `flui-native`'s web backend),
                 // which fires unconditionally once per animation
                 // frame regardless of whether a redraw was
                 // requested — the browser's own vsync-paced RAF
@@ -303,6 +310,19 @@ impl WebFrameDriver {
             let Some(r) = slot.as_mut() else {
                 return;
             };
+
+            // A changed colour of the page's screen sets the canvas surface up
+            // again before this frame paints (ADR-0256 §6).
+            let display = ui_runtime
+                .window_display(ui_runtime.presentation_id())
+                .and_then(|display| display.color);
+            match r.set_display_color(display) {
+                Ok(true) => ui_runtime.mark_primary_needs_full_repaint(),
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "the surface could not be set up for its display's colour");
+                }
+            }
 
             let textures = ui_runtime.texture_registry(ui_runtime.presentation_id());
             let mut sink = DirectSink::new(r).with_textures(textures);
@@ -356,8 +376,13 @@ impl WebFrameDriver {
     ) {
         use std::sync::Arc;
         let renderer_slot = Arc::clone(&self.renderer);
-        let window = Arc::clone(&self.window);
+        let surface_color = self.surface_color;
+        let window = std::rc::Rc::clone(&self.window);
+        let surface = window.surface_target();
+        // Read on the owner before the build leaves it.
+        let display = super::host::display_color_of(window.as_ref());
         let (gpu_loss, wake) = (Arc::clone(&self.gpu_loss), Arc::clone(&self.owner_wake));
+        let frame_latency = self.frame_latency;
         wasm_bindgen_futures::spawn_local(async move {
             if !authority.is_live() {
                 return;
@@ -368,10 +393,17 @@ impl WebFrameDriver {
                     let built = renderer.recover().await;
                     (Some(renderer), built)
                 }
-                None => match flui_engine::Renderer::new(Arc::clone(&window)).await {
-                    Ok(renderer) => (Some(renderer), Ok(())),
-                    Err(error) => (None, Err(error)),
-                },
+                None => {
+                    match flui_engine::Renderer::with_surface_color(surface, surface_color, display)
+                        .await
+                    {
+                        Ok(mut renderer) => {
+                            renderer.set_frame_latency(frame_latency);
+                            (Some(renderer), Ok(()))
+                        }
+                        Err(error) => (None, Err(error)),
+                    }
+                }
             };
             if !authority.is_live() {
                 return;
@@ -417,7 +449,7 @@ impl WebFrameDriver {
                 gpu_loss.record_device_loss();
             }
             // The adapter and device may take many native resizes to arrive.
-            let size = window.physical_size();
+            let size = super::window_install::SurfaceGeometry::of(window.as_ref()).physical;
             renderer.resize(size.width as u32, size.height as u32);
             match authority.publish(&renderer_slot, renderer) {
                 Ok(previous) => drop(previous),

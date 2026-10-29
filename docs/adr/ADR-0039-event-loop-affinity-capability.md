@@ -4,7 +4,12 @@
 - **Date:** 2026-07-28
 - **Superseded-by:** [ADR-0196](ADR-0196-browser-host-motion-delivery.md) for §7's browser registration posture only;
   [ADR-0222](ADR-0222-window-appearance-is-a-presentation-observation.md) for §1's
-  `window_appearance` entry only.
+  `window_appearance` entry only;
+  [ADR-0254](ADR-0254-window-contract.md) for §3's sentence that the owner lane carries no closures
+  only (the deferred window open carries a `Send` factory that builds the window's handler on the
+  owner); and [ADR-0254](ADR-0254-window-contract.md) decision 4 for the one-shot
+  `PlatformReadyCallback` of §1 and §6 only (`run` takes an `AppHandler`, whose `ready` receives
+  the capability; the capability and its loop scope stay).
 
 ## Context
 
@@ -43,7 +48,7 @@ the reference.
 
 ### 1. `OwnerPlatform` is the owner-thread capability
 
-`OwnerPlatform` (`flui-platform`, `traits/owner.rs`) is minted **only by a
+`OwnerPlatform` (`flui-native`, `traits/owner.rs`) is minted **only by a
 backend**, on the thread that owns — or, before the loop starts, will own —
 its event loop, and handed to `on_ready`. It is `!Send + !Sync`, so possession
 proves the thread at compile time. Loop liveness stays a runtime `Result`
@@ -93,7 +98,7 @@ delivery is owner-thread by construction), `clipboard()` and `data_transfer()`
 
 `prompt_for_paths`/`prompt_for_new_path` keep their seat unchanged. The one
 real implementation (Windows) already runs its dialog on a dedicated STA
-thread, and it returns `flui_platform::Task`, whose drop does not cancel; that
+thread, and it returns `flui_native::Task`, whose drop does not cancel; that
 type must not spread onto a new capability. Consolidating prompts onto the
 framework's async mechanism, with the macOS main-thread panel story, is its own
 ADR.

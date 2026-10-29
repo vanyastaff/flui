@@ -8,7 +8,7 @@
 //! [`frame_failure`], which `flui-app` and the `flui` facade re-export and
 //! which therefore carry the Stable promise (ADR-0089 §1). It names no
 //! platform backend, windowing, GPU or engine type: a window is a
-//! `flui_platform_api::PlatformWindow`, and a frame leaves through a
+//! `flui_platform::PlatformWindow`, and a frame leaves through a
 //! [`FrameSink`](sink::FrameSink) the host implements.
 //!
 //! - [`dev_agent`]: the host half of the development-agent seam — attaches

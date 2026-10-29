@@ -1,7 +1,9 @@
 //! Application runner - entry points for running FLUI apps.
 //!
 //! This module provides platform-agnostic entry points that delegate
-//! to platform-specific implementations via flui-platform.
+//! to platform-specific implementations via flui-native.
+
+use std::rc::Rc;
 
 use flui_view::{StatelessView, View};
 
@@ -42,6 +44,7 @@ mod native_text_sizing;
 ))]
 mod placement;
 mod window_install;
+pub(in crate::app) mod window_routes;
 
 mod owner_dispatch;
 // Unconditional, like `device_recovery` above: the backoff's trait and
@@ -70,8 +73,12 @@ pub use android::{run_app_android, run_app_android_with_config};
     not(target_arch = "wasm32")
 ))]
 use desktop::run_desktop;
+pub(in crate::app) use display_host::color_on as display_color_on;
 pub use fonts::{FontRegistrationError, register_font};
-pub(crate) use host::{OwnerHostClearGuard, install_owner_platform, with_owner_platform};
+pub(crate) use host::{
+    AppRoutes, OwnerHostClearGuard, app_handler, install_owner_platform, route_exit_policy,
+    route_quit, with_owner_platform,
+};
 pub(in crate::app) use installed_host::InstalledHost;
 #[cfg(target_os = "ios")]
 pub use ios::{run_app_ios, run_app_ios_with_config};
@@ -99,11 +106,13 @@ use web::run_web;
 /// constructor takes. Reading the bridge and the host here, once, is sound
 /// because every backend sets both at construction and never swaps them.
 /// The host is owner-thread state, so it is read through the loop's
-/// [`OwnerPlatform`](flui_platform::OwnerPlatform); without one installed
+/// [`OwnerPlatform`](flui_native::OwnerPlatform); without one installed
 /// (no loop on this thread) the window has none.
 pub(crate) fn presentation_window(
-    host: std::sync::Arc<dyn flui_platform::traits::HostWindow>,
+    host: Rc<dyn flui_native::HostWindow>,
 ) -> crate::app::presentation::PresentationWindow {
+    #[cfg(feature = "native")]
+    keep_native_window(&host);
     let accessibility = host.accessibility();
     let text_store_host = text_store_host_of(&host);
     crate::app::presentation::PresentationWindow::new(host, accessibility)
@@ -111,13 +120,92 @@ pub(crate) fn presentation_window(
         // The runner names the platform it was built for; host observations
         // then replace the values the OS publishes (ADR-0212 §4).
         .with_gesture_profiles(flui_interaction::GestureProfiles::preset(
-            flui_platform_api::TargetPlatform::current(),
+            flui_platform::TargetPlatform::current(),
         ))
 }
 
+/// The window a deferred open built, taken on the owner thread, which is the
+/// only one that reaches it (ADR-0254 §4): one that closed before it could be
+/// installed is a failure of its open.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(super) fn opened_window(
+    opened: flui_native::OpenedWindow,
+) -> Result<Rc<dyn flui_native::HostWindow>, flui_native::OpenWindowError> {
+    match opened.window() {
+        flui_native::OpenedWindowReach::Open(window) => Ok(window),
+        flui_native::OpenedWindowReach::Closed => Err(flui_native::OpenWindowError::Backend {
+            message: "the window closed before it was installed".to_owned(),
+        }),
+        flui_native::OpenedWindowReach::OtherThread => {
+            Err(flui_native::OpenWindowError::Unavailable {
+                message: "a deferred window is installed on the thread that owns it".to_owned(),
+            })
+        }
+    }
+}
+
+/// Close a window the runner is discarding: one whose installation failed or
+/// was cancelled, or whose open nobody waits for any more. No caller is left
+/// to hear a refusal (Android's one window does not close) or a failure, and
+/// the presentation behind it is already torn down, so it is logged.
+pub(super) fn discard_window(window: &dyn flui_platform::PlatformWindow, why: &'static str) {
+    if let Err(error) = flui_platform::WindowCommand::Close.admit_and_apply(window) {
+        tracing::warn!(%error, why, "a discarded window did not close");
+    }
+}
+
+/// Close a window whose close request, held until its presentation could be
+/// asked, the presentation granted: the window system's request was answered
+/// already, so the close is the application's command.
+pub(crate) fn close_granted_request(window: &dyn flui_platform::PlatformWindow) {
+    if let Err(error) = flui_platform::WindowCommand::Close.admit_and_apply(window) {
+        tracing::warn!(%error, "a granted close request did not close its window");
+    }
+}
+
+/// Keep a weak reference to a window the runner is about to present, so the
+/// escape hatch finds the host's window behind a presentation's command queue.
+/// Windows already dropped leave the list here.
+#[cfg(feature = "native")]
+fn keep_native_window(host: &Rc<dyn flui_native::HostWindow>) {
+    host::APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        let mut windows = state.native_windows.borrow_mut();
+        windows.retain(|window| window.strong_count() > 0);
+        windows.push(Rc::downgrade(host));
+    });
+}
+
+/// The host's window presented at `address`, on the thread that runs the
+/// application: `None` on any other thread, when nothing is presented at
+/// `address` and once its window has closed. The window is found by the
+/// allocation the presentation's command queue holds, not by an id.
+#[cfg(feature = "native")]
+pub(crate) fn native_window(
+    address: flui_foundation::PresentationAddress,
+) -> Option<Rc<dyn flui_native::HostWindow>> {
+    host::APP_RUNTIME.with(|slot| {
+        let state = slot.try_borrow().ok()?;
+        if state.owner_thread != Some(std::thread::current().id()) {
+            return None;
+        }
+        let presented = state.window_commands.window_for(address)?;
+        let presented = Rc::as_ptr(&presented).cast::<()>();
+        state.native_windows.borrow().iter().find_map(|window| {
+            (std::rc::Weak::as_ptr(window).cast::<()>() == presented)
+                .then(|| window.upgrade())
+                .flatten()
+        })
+    })
+}
+
 fn text_store_host_of(
-    window: &std::sync::Arc<dyn flui_platform::traits::HostWindow>,
-) -> Option<std::rc::Rc<dyn flui_platform_api::TextStoreHost>> {
+    window: &Rc<dyn flui_native::HostWindow>,
+) -> Option<std::rc::Rc<dyn flui_platform::TextStoreHost>> {
     host::with_owner_platform(|owner| owner.text_store_host(window)).flatten()
 }
 
@@ -152,7 +240,7 @@ pub fn window_handle(
 /// and then the exit-policy question if this was the last window.
 ///
 /// The handler is deliberately not asked again: every backend's own
-/// `PlatformWindow::close` bypasses its native close-request path for the
+/// `WindowCommand::Close` bypasses its native close-request path for the
 /// same reason (AppKit's `-close` does not send `windowShouldClose:`;
 /// Win32's `DestroyWindow` does not send `WM_CLOSE`).
 ///
@@ -174,14 +262,15 @@ pub fn window_handle(
 /// # Backend behaviour
 ///
 /// This resolves the close fully on the **headless**, **winit**, **Win32**
-/// and **AppKit** backends, whose `PlatformWindow::close` performs a real
+/// and **AppKit** backends, whose `WindowCommand::Close` performs a real
 /// close. Timing differs: on **winit** the teardown (`on_close`, window-map
 /// removal, exit-policy consult) runs on the event-loop owner's next turn,
 /// after this call returns — never synchronously inside it (issue #919's
 /// fix) — while the **headless** double runs `on_close` synchronously
-/// inside `close()`. On **web** and **Android** the veto itself is inert
+/// inside the command. On **web** and **Android** the veto itself is inert
 /// (neither backend consults `dispatch_should_close`), so there is nothing
-/// to resolve.
+/// to resolve; an Android window refuses the close
+/// ([`CloseRequestError::Refused`](crate::CloseRequestError::Refused)).
 ///
 /// # Errors
 ///
@@ -200,7 +289,7 @@ pub fn request_presentation_close(
     use crate::app::close_request::CloseRequestError;
 
     // Read the owner thread and the router in ONE visit, then leave the
-    // thread-local: `PlatformWindow::close` fires the window's own
+    // thread-local: `WindowCommand::Close` fires the window's own
     // `on_close`, which re-enters `APP_RUNTIME` through
     // `close_this_window`. A thread that hosts no loop has `owner_thread`
     // unset — that, not an empty router, is what distinguishes "you are on
@@ -290,6 +379,7 @@ where
 mod tests {
 
     use super::host::APP_RUNTIME;
+    use super::window_routes::{OpenRouted as _, OwnerOpenRouted as _};
 
     // `teardown_platform_ui_runtime` is `cfg(all(not(ios), not(wasm32)))` -- neither
     // platform runs the desktop teardown path it exercises.
@@ -307,9 +397,9 @@ mod tests {
     /// (`ActiveEventLoop` is unreachable outside `Platform::run`) and creates a
     /// real GPU `Renderer`, gated behind the separate `testing` CI job
     /// (WARP), not this one. This instead drives the exact ordering invariant
-    /// headlessly: `HeadlessWindow::request_redraw` (flui-platform's headless
+    /// headlessly: `HeadlessWindow::request_redraw` (flui-native's headless
     /// backend, used elsewhere in this crate's tests) dispatches its
-    /// `on_request_frame` callback SYNCHRONOUSLY — unlike a real winit window,
+    /// `WindowHandler::frame_requested` callback SYNCHRONOUSLY — unlike a real winit window,
     /// where a queued `RedrawRequested` would not fire until `on_ready` (and
     /// this reordering) has already returned. That is exactly why the ordering
     /// bug was invisible in a real window's actual first frame but is directly
@@ -346,12 +436,12 @@ mod tests {
 
         let marker_size = flui_foundation::geometry::Size::new(4001.0, 4002.0);
 
-        let platform = flui_platform::headless_platform();
+        let platform = flui_native::headless_platform();
         let window = platform
-            .open_window(flui_platform::traits::WindowOptions::default().with_size(marker_size))
+            .open_routed(flui_platform::WindowOptions::default().with_size(marker_size))
             .expect("headless platform always opens a window");
 
-        // `on_request_frame` requires `Send` on the callback; `AppRuntime` is
+        // `WindowHandler::frame_requested` requires `Send` on the callback; `AppRuntime` is
         // not `Send` (it holds owner-thread-affine ui_runtime state), so the
         // closure below cannot capture a specific `&AppRuntime`. Resolving
         // `APP_RUNTIME` fresh inside the closure (zero captures for the
@@ -364,15 +454,17 @@ mod tests {
         // stack) would deadlock on the slot's own non-reentrant lock.
         let saw_marker_window = Arc::new(AtomicBool::new(false));
         let saw_marker_window_cb = Arc::clone(&saw_marker_window);
-        window.on_request_frame(Box::new(move || {
-            let matches_marker = APP_RUNTIME
-                .with(|slot| {
-                    slot.borrow()
-                        .with_redraw_window(|w| w.state().outer.size == marker_size)
-                })
-                .unwrap_or(false);
-            saw_marker_window_cb.store(matches_marker, Ordering::SeqCst);
-        }));
+        crate::app::runner::window_routes::WindowRoutes::of(&*window).route_frame_requested(
+            move |_| {
+                let matches_marker = APP_RUNTIME
+                    .with(|slot| {
+                        slot.borrow()
+                            .with_redraw_window(|w| w.state().outer.size == marker_size)
+                    })
+                    .unwrap_or(false);
+                saw_marker_window_cb.store(matches_marker, Ordering::SeqCst);
+            },
+        );
 
         // Mirrors the FIXED order in `bootstrap_desktop`/`run_android`:
         // store the window BEFORE requesting the initial redraw. `wake_frame`
@@ -402,12 +494,12 @@ mod tests {
     // ========================================================================
 
     fn owner_platform_host_panic_in_on_ready_still_clears() {
-        use flui_platform::headless_platform;
+        use flui_native::headless_platform;
 
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _clear_guard = OwnerHostClearGuard::arm();
             let platform = headless_platform();
-            let _ = platform.run(Box::new(|owner| {
+            let _ = platform.run(crate::app::runner::app_handler(|owner| {
                 install_owner_platform(owner).expect("install owner wake transport");
                 panic!("exercise on_ready panic cleanup");
             }));
@@ -426,19 +518,19 @@ mod tests {
     /// headless platform's factory built it.
     struct FocusLog(std::sync::Arc<parking_lot::Mutex<Vec<bool>>>);
 
-    impl flui_platform_api::text_store::TextStoreHost for FocusLog {
-        fn focus_store(&self, store: Option<std::rc::Rc<dyn flui_platform_api::TextStore>>) {
+    impl flui_platform::text_store::TextStoreHost for FocusLog {
+        fn focus_store(&self, store: Option<std::rc::Rc<dyn flui_platform::TextStore>>) {
             self.0.lock().push(store.is_some());
         }
 
         fn complete_composition(
             &self,
-            _: &std::rc::Rc<dyn flui_platform_api::TextStore>,
+            _: &std::rc::Rc<dyn flui_platform::TextStore>,
         ) -> Result<
-            flui_platform_api::text_store::CompositionEnd,
-            flui_platform_api::text_store::TextStoreHostError,
+            flui_platform::text_store::CompositionEnd,
+            flui_platform::text_store::TextStoreHostError,
         > {
-            Ok(flui_platform_api::text_store::CompositionEnd::Committed)
+            Ok(flui_platform::text_store::CompositionEnd::Committed)
         }
     }
 
@@ -452,25 +544,25 @@ mod tests {
     fn presentation_window_hands_a_pull_window_s_host_to_its_presentation() {
         use std::sync::Arc;
 
-        use flui_platform::Platform as _;
+        use flui_native::Platform as _;
 
         let heard = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let log = Arc::clone(&heard);
-        let platform = flui_platform::HeadlessPlatform::new()
+        let platform = flui_native::HeadlessPlatform::new()
             .with_text_store_host(move || std::rc::Rc::new(FocusLog(Arc::clone(&log))));
         let _clear_guard = OwnerHostClearGuard::arm();
         Box::new(platform)
-            .run(Box::new(|owner| {
+            .run(crate::app::runner::app_handler(|owner| {
                 install_owner_platform(owner).expect("install owner wake transport");
                 let window = with_owner_platform(|owner| {
-                    owner.open_window(flui_platform::WindowOptions::default())
+                    owner.open_routed(flui_platform::WindowOptions::default())
                 })
                 .expect("BUG: install_owner_platform just ran above")
-                .and_then(flui_platform::WindowOpen::try_ready)
+                .and_then(flui_native::WindowOpen::try_ready)
                 .expect("headless open_window is always Ready");
                 let ui_runtime =
                     host::build_ui_runtime(presentation_window(window), 1.0).expect("ui_runtime");
-                let store = flui_platform_api::text_store::InMemoryTextStore::new("");
+                let store = flui_platform::text_store::InMemoryTextStore::new("");
                 let _token = ui_runtime
                     .text_input_handle()
                     .attach(flui_interaction::TextInputClient::new(store))

@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use super::path::{RouteParseError, RoutePath};
 use super::routable::Routable;
-use super::router::{RouterEntry, RouterRetiredValues, RouterShared};
+use super::router::{RouterEntry, RouterRetiredValues, RouterShared, clone_routes, paths};
 use crate::navigator::RouteId;
 
 /// An owned, cloneable capability to drive the nearest
@@ -30,8 +30,9 @@ impl<R: Routable> Clone for RouterHandle<R> {
 
 impl<R: Routable> fmt::Debug for RouterHandle<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let routes = self.shared.routes();
         f.debug_struct("RouterHandle")
-            .field("location", &self.shared.location().map(|p| p.to_string()))
+            .field("stack", &paths(routes.0.iter().map(|route| &**route)))
             .field("mounted", &self.shared.mounted.get())
             .finish()
     }
@@ -79,7 +80,7 @@ impl<R: Routable> RouterHandle<R> {
             self.shared
                 .stack
                 .borrow_mut()
-                .push(RouterEntry { id, route });
+                .push(RouterEntry::new(id, route));
         });
         Ok(())
     }
@@ -104,7 +105,7 @@ impl<R: Routable> RouterHandle<R> {
                     .iter()
                     .position(|entry| entry.id == target)
                     .map(|index| stack.remove(index));
-                stack.push(RouterEntry { id, route });
+                stack.push(RouterEntry::new(id, route));
                 RouterRetiredValues(retired.into_iter().collect())
             });
         drop(retired);
@@ -149,12 +150,21 @@ impl<R: Routable> RouterHandle<R> {
         // Parsed values can own arbitrary destructors, including values in the
         // retained prefix. Protect them before popup dismissal delivers effects.
         let mut target = RouterRetiredValues(R::back_stack(&RoutePath::parse(location)?)?);
+        // The routes' `==` runs on a snapshot, outside the stack's borrow, and
+        // may navigate: only the matching pages still in place are kept.
         let common_prefix = || {
+            let pages = self.shared.pages();
+            let equal = pages
+                .0
+                .iter()
+                .zip(&target.0)
+                .take_while(|((_, route), target)| **route == **target)
+                .count();
             let stack = self.shared.stack.borrow();
             let shared_len = stack
                 .iter()
-                .zip(&target.0)
-                .take_while(|(entry, route)| entry.route == **route)
+                .zip(&pages.0[..equal])
+                .take_while(|(entry, (id, _))| entry.id == *id)
                 .count();
             (shared_len, stack.len())
         };
@@ -200,7 +210,7 @@ impl<R: Routable> RouterHandle<R> {
                 stack.extend(
                     ids.into_iter()
                         .zip(std::mem::take(&mut added.0))
-                        .map(|(id, route)| RouterEntry { id, route }),
+                        .map(|(id, route)| RouterEntry::new(id, route)),
                 );
                 RouterRetiredValues(retired)
             });
@@ -211,28 +221,34 @@ impl<R: Routable> RouterHandle<R> {
     /// The current location: the top route's path.
     #[must_use]
     pub fn location(&self) -> RoutePath {
-        self.current().to_path()
+        self.shared
+            .location()
+            .expect("BUG: a Router's stack always holds a page once it is built")
     }
 
-    /// The top route.
+    /// The top route. Its `Clone` runs after the router's stack is released,
+    /// so it may drive this router.
     #[must_use]
     pub fn current(&self) -> R {
-        self.shared
-            .stack
-            .borrow()
+        let routes = self.shared.routes();
+        let top = routes
+            .0
             .last()
-            .map(|entry| entry.route.clone())
-            .expect("BUG: a Router's stack always holds a page once it is built")
+            .expect("BUG: a Router's stack always holds a page once it is built");
+        R::clone(top)
     }
 
     /// The route stack, bottom to top, as every committed edit left it: what
     /// an application saves to reopen with
     /// [`Router::from_stack`](super::Router::from_stack).
     ///
-    /// Not yet the whole stack: it holds the top route alone.
+    /// Popups are not on it: they belong to the page beneath them. The routes
+    /// are cloned after the router's stack is released, so a route's `Clone`
+    /// may drive this router; the result is the stack as it was when read.
     #[must_use]
     pub fn stack(&self) -> Vec<R> {
-        vec![self.current()]
+        let routes = self.shared.routes();
+        clone_routes(routes.0.iter().map(|route| &**route))
     }
 
     /// Whether a [`pop`](Self::pop) would remove a page: more than one page is

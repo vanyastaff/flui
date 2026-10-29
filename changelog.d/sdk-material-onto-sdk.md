@@ -4,7 +4,7 @@
   [ADR-0081](/docs/adr/ADR-0081-workspace-tiers-and-reach-facts.md) §3. A crate that is neither
   an official package nor an application names an official package in no dependency kind (dev
   and optional included), and an official package's normal and build dependencies are
-  `flui-sdk`, `flui-platform-api` and `flui-protocol`; an edge between official packages is
+  `flui-sdk`, `flui-platform` and `flui-protocol`; an edge between official packages is
   refused in every dependency kind, dev included; each refused edge needs the dependent's
   `edge-exceptions` entry. A member under `packages/` must be official and list no exception.
 

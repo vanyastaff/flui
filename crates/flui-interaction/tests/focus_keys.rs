@@ -13,7 +13,7 @@ use flui_interaction::focus::{
     FocusRequestOutcome, FocusScopeNode, FocusTreeError, KeyEventResult,
 };
 use flui_interaction::ids::FocusNodeId;
-use flui_platform_api::{
+use flui_platform::{
     EventTime,
     keyboard::{Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, NamedKey},
 };

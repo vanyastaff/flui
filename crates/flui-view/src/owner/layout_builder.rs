@@ -414,24 +414,7 @@ impl BuildOwner {
         pipeline: &PipelineCell,
     ) -> flui_rendering::error::RenderResult<Option<flui_rendering::layer::LayerTree>> {
         self.settle_layout_with_builders(tree, pipeline)?;
-        Self::run_settled_frame(pipeline)
-    }
-
-    /// The rest of a frame after [`Self::settle_layout_with_builders`]:
-    /// layout of whatever is still dirty, compositing, paint and semantics,
-    /// with no further build-during-layout servicing.
-    ///
-    /// # Errors
-    ///
-    /// The pipeline's first error.
-    pub fn run_settled_frame(
-        pipeline: &PipelineCell,
-    ) -> flui_rendering::error::RenderResult<Option<flui_rendering::layer::LayerTree>> {
-        pipeline.with_mut(|pipeline_owner| {
-            let (owner, result) = pipeline_owner.take_idle().run_frame();
-            *pipeline_owner = owner;
-            result
-        })
+        pipeline.run_frame()
     }
 
     /// The build-during-layout fixpoint of
@@ -441,7 +424,7 @@ impl BuildOwner {
     ///
     /// A frame that must act on the settled tree before paint — move focus off
     /// a node the build removed — runs this, does its work, and then
-    /// [`Self::run_settled_frame`].
+    /// [`PipelineCell::run_frame`].
     ///
     /// # Errors
     ///

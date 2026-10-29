@@ -7,7 +7,7 @@ use std::{
 
 use flui_foundation::{RenderId, geometry::Point};
 use flui_interaction::{GestureBinding, HitTestEntry, HitTestResult, InteractionLane};
-use flui_platform_api::{
+use flui_platform::{
     EventTime,
     pointer::{
         ButtonChange, CancelReason, DeviceId, PenTool, PointerButton, PointerButtons,
@@ -304,8 +304,8 @@ fn metadata_boundary_reentry_does_not_restore_a_stale_newer_packet() {
         // packet it was owed and one cancellation, never the replacement's.
         let superseded = PointerEvent::Cancel(PointerCancel::new(
             changed,
-            flui_platform_api::EventTime::from_nanos(30),
-            flui_platform_api::pointer::CancelReason::Superseded,
+            flui_platform::EventTime::from_nanos(30),
+            flui_platform::pointer::CancelReason::Superseded,
         ));
         assert_eq!(
             seen.borrow().as_slice(),

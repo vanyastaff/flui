@@ -10,7 +10,7 @@ use flui_foundation::geometry::Axis;
 use flui_interaction::events::{Code, Key, NamedKey};
 use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
-use flui_platform_api::HapticFeedback;
+use flui_platform::HapticFeedback;
 use flui_view::{BoxedView, IntoView, ViewExt};
 use flui_widgets::{
     Alternative, AnchorIntent, AnchoredDrag, AnchoredDragController, AnchorsError, ColoredBox,
@@ -806,13 +806,12 @@ pub(crate) fn anchored_drag_is_no_drop_autoscroll_target() {
     use flui_foundation::geometry::Point;
     use flui_foundation::{PresentationId, UiRuntimeId};
     use flui_interaction::drag::{DragOwner, ProcessNonce};
-    use flui_platform_api::DragDropEvent;
-    use flui_platform_api::EventTime;
-    use flui_platform_api::data_transfer::{
-        DataTransferOffer, OfferRecord, OfferTable, RepresentationDescriptor, TransferActions,
-        TransferFormat,
+    use flui_platform::DragDropEvent;
+    use flui_platform::EventTime;
+    use flui_platform::data_transfer::{
+        DataTransferOffer, RepresentationDescriptor, TransferActions, TransferFormat,
     };
-    use flui_platform_api::pointer::PointerKind;
+    use flui_platform::pointer::PointerKind;
 
     let vsync = Vsync::new();
     let sheet = controller(stops(&[(Stop::Closed, 0.0), (Stop::Open, 200.0)]));
@@ -820,15 +819,16 @@ pub(crate) fn anchored_drag_is_no_drop_autoscroll_target() {
     let owner = DragOwner::new(
         ProcessNonce::from_raw(std::num::NonZeroU64::new(7).expect("nonzero")),
         UiRuntimeId::new(7),
-        Arc::new(flui_platform_api::NullDataTransferSource),
+        Arc::new(flui_platform::NullDataTransferSource),
+        Arc::new(|| {}),
     );
     let representations: Arc<[RepresentationDescriptor]> =
         Arc::from(vec![RepresentationDescriptor {
             format: TransferFormat::Text,
             declared_len: None,
         }]);
-    let mut offers = OfferTable::new();
-    let id = offers.mint(OfferRecord::new(Arc::clone(&representations)));
+    // The id a source minted for the offer.
+    let id = flui_foundation::DataTransferId::new_gen(0, std::num::NonZeroU32::MIN);
     let offer = DataTransferOffer::new(id, representations);
     let window = PresentationId::new(1);
     let time = |ms: u64| EventTime::from_nanos(1_000_000_000 + ms * 1_000_000);

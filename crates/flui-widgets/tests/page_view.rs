@@ -518,7 +518,7 @@ fn assistive_technology_reads_the_page_showing() {
 
 #[test]
 fn the_page_label_comes_from_the_widgets_localizations() {
-    use flui_platform_api::Locale;
+    use flui_platform::Locale;
     use flui_widgets::localization::{
         BoxedLocalizationsDelegate, BoxedWidgetsLocalizations, DefaultWidgetsLocalizations,
         Localizations, LocalizationsDelegate, WidgetsLocalizations,

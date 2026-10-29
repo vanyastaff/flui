@@ -200,24 +200,6 @@ server logs carries operation names (an unknown one as `unknown`), window and
 element ids, error codes and timings, never a label, a value or a request
 line.
 
-**Try it.** On Linux and macOS the socket goes in a directory of its own with
-mode `0700` (a socket in the working directory, usually `0755`, is refused):
-
-```sh
-mkdir -m 700 /tmp/flui-agent-demo
-FLUI_AGENT_ENDPOINT=/tmp/flui-agent-demo/agent.sock \
-FLUI_AGENT_TOKEN=0123456789abcdef0123456789abcdef \
-  cargo run -p flui-devtools --example agent_counter --features agent
-```
-
-On Windows the endpoint is a pipe name (PowerShell):
-
-```powershell
-$env:FLUI_AGENT_ENDPOINT = 'flui-agent-demo'
-$env:FLUI_AGENT_TOKEN = '0123456789abcdef0123456789abcdef'
-cargo run -p flui-devtools --example agent_counter --features agent
-```
-
 The endpoint is pinned by `tests/agent_endpoint.rs`, which serves a headless
 counter over a real pipe or socket.
 

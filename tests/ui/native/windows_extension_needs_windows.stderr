@@ -1,0 +1,13 @@
+error[E0432]: unresolved import `flui::native::windows`
+ --> tests/ui/native/windows_extension_needs_windows.rs:3:19
+  |
+3 | use flui::native::windows::Win32Window;
+  |                   ^^^^^^^ could not find `windows` in `native`
+  |
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  |     #[cfg(windows)]
+  |           ------- the item is gated here
+  |     pub use flui_app::native::windows;
+  |                               ^^^^^^^

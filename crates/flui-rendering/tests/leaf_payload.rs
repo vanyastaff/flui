@@ -68,7 +68,7 @@ fn failure_then_replacement(failure: u8) {
         drops: Arc::clone(&drops),
     }));
     let error = entry
-        .layout_leaf_only(constraints, text.source())
+        .layout_leaf_only(constraints, text.source(), false)
         .expect_err("source must refuse layout");
     assert!(
         matches!(
@@ -88,7 +88,7 @@ fn failure_then_replacement(failure: u8) {
     entry = RenderEntry::<BoxProtocol>::new(Box::new(Source { failure: 0, drops }));
     assert_eq!(
         entry
-            .layout_leaf_only(constraints, text.source())
+            .layout_leaf_only(constraints, text.source(), false)
             .expect("replacement layout"),
         Size::new(10.0, 20.0)
     );

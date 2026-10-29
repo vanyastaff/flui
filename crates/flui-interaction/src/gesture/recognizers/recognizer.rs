@@ -6,7 +6,7 @@ use crate::{
     pointer::PointerDispatch,
 };
 use flui_foundation::geometry::Offset;
-use flui_platform_api::input_capabilities::PointerKindSet;
+use flui_platform::input_capabilities::PointerKindSet;
 use web_time::{Duration, Instant};
 
 /// A recognizer admits Down and receives the remaining pointer stream.
@@ -29,6 +29,22 @@ pub trait GestureRecognizer: GestureArenaMember {
     /// one whose kind the platform does not say included.
     fn allowed_devices(&self) -> PointerKindSet {
         PointerKindSet::all()
+    }
+    /// The pointer frame this recognizer joined
+    /// ([`GestureArena::join_pointer_frame`](crate::gesture::arena::GestureArena::join_pointer_frame))
+    /// has ended: every event of the frame was delivered, so a recognizer that
+    /// measures the relation between contacts settles on all of them now.
+    /// Called once per frame however many events joined; the default has
+    /// nothing to settle.
+    fn pointer_frame_end(&self) {}
+
+    /// Whether a touchpad pan feeds this recognizer (ADR-0251 §2): a
+    /// drag-family recognizer that admits a [`Trackpad`](crate::PointerKind::Trackpad)
+    /// contact. A listener whose recognizers feed declares so on its pointer
+    /// target; the recognizer a scroll view builds for its own touch drag
+    /// excludes trackpad contacts and does not.
+    fn feeds_scroll_contact(&self) -> bool {
+        false
     }
 }
 
@@ -81,7 +97,7 @@ pub(crate) fn admission_kind(event: &PointerEvent) -> crate::events::PointerKind
 }
 
 pub(crate) fn event_time(event: &PointerEvent) -> Option<u64> {
-    crate::events::event_time(event).map(flui_platform_api::EventTime::as_nanos)
+    crate::events::event_time(event).map(flui_platform::EventTime::as_nanos)
 }
 
 /// Historical local positions only. Geometry and callbacks still publish the

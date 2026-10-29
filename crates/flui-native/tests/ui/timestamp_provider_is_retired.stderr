@@ -1,0 +1,7 @@
+error[E0432]: unresolved import `flui_native::TimestampProvider`
+ --> tests/ui/timestamp_provider_is_retired.rs:1:5
+  |
+1 | use flui_native::TimestampProvider;
+  |     ^^^^^^^^^^^^^-----------------
+  |                  |
+  |                  no `TimestampProvider` in the root

@@ -206,7 +206,7 @@ fn listener_ui_runtime(hold_input: bool) -> (UiRuntime, PresentationId, Rc<Conta
         .expect("root attaches");
     ui_runtime.synchronize_window_snapshot(
         id,
-        flui_platform_api::WindowExecutionState::Running,
+        flui_platform::WindowExecutionState::Running,
         true,
         true,
     );
@@ -403,7 +403,7 @@ fn keyboard_ui_runtime() -> (UiRuntime, PresentationId, Rc<FocusNode>, KeyLog) {
         .expect("root attaches");
     ui_runtime.synchronize_window_snapshot(
         id,
-        flui_platform_api::WindowExecutionState::Running,
+        flui_platform::WindowExecutionState::Running,
         true,
         true,
     );
@@ -522,7 +522,7 @@ pub(crate) fn deactivation_forgets_held_keys() {
 /// The same, when the host reports the loss as a whole-window snapshot.
 pub(crate) fn an_unfocused_snapshot_forgets_held_keys() {
     held_enter_after(|ui_runtime, id| {
-        let running = flui_platform_api::WindowExecutionState::Running;
+        let running = flui_platform::WindowExecutionState::Running;
         ui_runtime.synchronize_window_snapshot(id, running, false, true);
         ui_runtime.synchronize_window_snapshot(id, running, true, true);
     });
@@ -541,7 +541,7 @@ pub(crate) fn a_sibling_gaining_focus_forgets_held_keys() {
 pub(crate) fn a_sibling_snapshot_forgets_held_keys() {
     held_enter_after(|ui_runtime, id| {
         let sibling = ui_runtime.install_second_presentation_for_test();
-        let running = flui_platform_api::WindowExecutionState::Running;
+        let running = flui_platform::WindowExecutionState::Running;
         ui_runtime.synchronize_window_snapshot(sibling, running, true, true);
         ui_runtime.synchronize_window_snapshot(id, running, true, true);
     });

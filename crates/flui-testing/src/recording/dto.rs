@@ -18,14 +18,15 @@ use flui_interaction::gesture::{OneEuroTuning, VelocityEstimator};
 use flui_interaction::{
     GestureDisposition, GestureProfiles, GestureSettings, GestureValues, RemainderHandoff,
 };
-use flui_platform_api::data_transfer::{
+use flui_platform::Availability;
+use flui_platform::data_transfer::{
     DataTransferOffer, Mime, RepresentationDescriptor, TransferActions, TransferFormat,
 };
-use flui_platform_api::input_capabilities::{Availability, InputCapabilities, PointerKindSet};
-use flui_platform_api::keyboard::{
+use flui_platform::input_capabilities::{InputCapabilities, PointerKindSet};
+use flui_platform::keyboard::{
     Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Location, Modifiers, NamedKey,
 };
-use flui_platform_api::pointer::{
+use flui_platform::pointer::{
     ButtonChange, CancelReason, ContactSize, DeviceId, HoverDistance, PanZoomEvent, PanZoomPhase,
     PanZoomTransform, PenOrientation, PenSqueeze, PenSqueezePhase, PenTool, PointerButton,
     PointerButtonEvent, PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent,
@@ -33,9 +34,9 @@ use flui_platform_api::pointer::{
     PointerRole, PointerSample, PointerSignal, Pressure, ScrollDelta, ScrollEvent, ScrollPhase,
     ScrollPrecision, ScrollUnit, TangentialPressure, Twist,
 };
-use flui_platform_api::{
-    Brightness, DragDropEvent, EventTime, GesturePreferences, ImeEvent, Locale, MotionPreference,
-    NativeMouseGeometry, NativeTouchGeometry, PlatformInput, SystemPreferences,
+use flui_platform::{
+    Brightness, DragDropEvent, EventTime, FramePresented, GesturePreferences, ImeEvent, Locale,
+    MotionPreference, NativeMouseGeometry, NativeTouchGeometry, PlatformInput, SystemPreferences,
     TextWeightPreference, WheelPreferences, WheelStep, WindowExecutionState, WindowId,
 };
 use flui_runtime::owner::{InputOutcome, WindowObservation};
@@ -291,7 +292,13 @@ enum HostInputDto {
     #[serde(rename = "window")]
     Window(WindowObservationDto),
     #[serde(rename = "frame")]
-    Frame { vsync: u64 },
+    Frame {
+        vsync: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_present: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        presented: Option<FramePresentedDto>,
+    },
     #[serde(rename = "accessibility")]
     Accessibility(ActionRequestDto),
 }
@@ -313,8 +320,17 @@ impl TryFrom<&HostInput> for HostInputDto {
         Ok(match input {
             HostInput::Platform(input) => Self::Platform(input.try_into()?),
             HostInput::Window(observation) => Self::Window(observation.try_into()?),
-            HostInput::Frame { vsync } => Self::Frame {
+            HostInput::Frame {
+                vsync,
+                target_present,
+                presented,
+            } => Self::Frame {
                 vsync: vsync.as_nanos(),
+                target_present: target_present.map(EventTime::as_nanos),
+                presented: presented.map(|presented| FramePresentedDto {
+                    at: presented.at.as_nanos(),
+                    refresh: presented.refresh.map(nanos),
+                }),
             },
             HostInput::Accessibility(request) => Self::Accessibility(request.try_into()?),
             _ => return Err(unmirrored("HostInput")),
@@ -329,18 +345,42 @@ impl TryFrom<HostInputDto> for HostInput {
         Ok(match input {
             HostInputDto::Platform(input) => Self::Platform(input.try_into()?),
             HostInputDto::Window(observation) => Self::Window(observation.try_into()?),
-            HostInputDto::Frame { vsync } => Self::Frame {
+            HostInputDto::Frame {
+                vsync,
+                target_present,
+                presented,
+            } => Self::Frame {
                 vsync: EventTime::from_nanos(vsync),
+                target_present: target_present.map(EventTime::from_nanos),
+                presented: presented.map(|presented| {
+                    let shown = FramePresented::new(EventTime::from_nanos(presented.at));
+                    match presented.refresh {
+                        Some(refresh) => {
+                            shown.with_refresh(std::time::Duration::from_nanos(refresh))
+                        }
+                        None => shown,
+                    }
+                }),
             },
             HostInputDto::Accessibility(request) => Self::Accessibility(request.try_into()?),
         })
     }
 }
 
+/// A frame's report that an earlier frame reached the screen.
+#[derive(Debug, Serialize, Deserialize)]
+struct FramePresentedDto {
+    at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    refresh: Option<u64>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 enum PlatformInputDto {
     #[serde(rename = "pointer")]
     Pointer(PointerEventDto),
+    #[serde(rename = "pointer_frame")]
+    PointerFrame(Vec<PointerEventDto>),
     #[serde(rename = "keyboard")]
     Keyboard(KeyEventDto),
     #[serde(rename = "ime")]
@@ -356,7 +396,10 @@ impl PlatformInputDto {
         match self {
             Self::Keyboard(event) => event.key.redact(),
             Self::Ime(event) => event.redact(),
-            Self::Pointer(_) | Self::DragDrop(_) | Self::Capabilities(_) => false,
+            Self::Pointer(_)
+            | Self::PointerFrame(_)
+            | Self::DragDrop(_)
+            | Self::Capabilities(_) => false,
         }
     }
 }
@@ -367,6 +410,13 @@ impl TryFrom<&PlatformInput> for PlatformInputDto {
     fn try_from(input: &PlatformInput) -> Result<Self> {
         Ok(match input {
             PlatformInput::Pointer(event) => Self::Pointer(event.try_into()?),
+            PlatformInput::PointerFrame(frame) => Self::PointerFrame(
+                frame
+                    .events()
+                    .iter()
+                    .map(PointerEventDto::try_from)
+                    .collect::<Result<_>>()?,
+            ),
             PlatformInput::Keyboard(event) => Self::Keyboard(event.try_into()?),
             PlatformInput::Ime(event) => Self::Ime(event.try_into()?),
             PlatformInput::DragDrop(event) => Self::DragDrop(event.into()),
@@ -381,6 +431,15 @@ impl TryFrom<PlatformInputDto> for PlatformInput {
     fn try_from(input: PlatformInputDto) -> Result<Self> {
         Ok(match input {
             PlatformInputDto::Pointer(event) => Self::Pointer(event.try_into()?),
+            PlatformInputDto::PointerFrame(events) => Self::PointerFrame(
+                flui_platform::PointerFrame::new(
+                    events
+                        .into_iter()
+                        .map(PointerEvent::try_from)
+                        .collect::<Result<_>>()?,
+                )
+                .map_err(|_| invalid("empty pointer frame"))?,
+            ),
             PlatformInputDto::Keyboard(event) => Self::Keyboard(event.try_into()?),
             PlatformInputDto::Ime(event) => Self::Ime(event.into()),
             PlatformInputDto::DragDrop(event) => Self::DragDrop(event.try_into()?),
@@ -659,7 +718,7 @@ struct ButtonEventDto {
     sample: SampleDto,
 }
 
-impl<D: flui_platform_api::pointer::ButtonDirection> TryFrom<&PointerButtonEvent<D>>
+impl<D: flui_platform::pointer::ButtonDirection> TryFrom<&PointerButtonEvent<D>>
     for ButtonEventDto
 {
     type Error = DtoError;
@@ -677,7 +736,7 @@ impl<D: flui_platform_api::pointer::ButtonDirection> TryFrom<&PointerButtonEvent
 }
 
 impl ButtonEventDto {
-    fn into_event<D: flui_platform_api::pointer::ButtonDirection>(
+    fn into_event<D: flui_platform::pointer::ButtonDirection>(
         self,
     ) -> Result<PointerButtonEvent<D>> {
         let mut event = PointerButtonEvent::<D>::new(

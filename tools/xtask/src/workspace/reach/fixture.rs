@@ -136,7 +136,7 @@ impl Fixture {
                 { "name": "windows_*", "reason": "import libraries" },
             ],
             "tier": {
-                "K": { "forbid": ["flui-platform", "winit", "windows", "wgpu", "flui-engine"] },
+                "K": { "forbid": ["flui-native", "winit", "windows", "wgpu", "flui-engine"] },
                 "S": { "extends": "K" },
                 "C": { "extends": "S" },
                 "V": { "extends": "S", "forbid": ["tokio"] },

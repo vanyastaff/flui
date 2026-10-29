@@ -18,7 +18,7 @@ use flui_interaction::pointer::{
 use flui_interaction::{
     CursorIcon, DeviceId, EventPropagation, HitTestEntry, HitTestResult, PointerId,
 };
-use flui_platform_api::pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool};
+use flui_platform::pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool};
 
 const MOUSE: u64 = 2;
 const PEN: u64 = 3;
@@ -33,7 +33,7 @@ fn hover(pointer: u64, pointer_type: PointerKind, position: Offset, time_ms: u64
         update.pointer = update.pointer.with_device(device(pointer));
         {
             let mut sample = *update.current();
-            sample.time = flui_platform_api::EventTime::from_nanos(time_ms * 1_000_000);
+            sample.time = flui_platform::EventTime::from_nanos(time_ms * 1_000_000);
             *update =
                 flui_interaction::events::PointerMove::new(update.pointer, update.buttons, sample)
                     .with_modifiers(update.modifiers)
@@ -204,7 +204,7 @@ enum Departure {
 /// only it hovered.
 fn departure_exits_once_and_releases_the_region(departure: Departure) {
     use flui_interaction::GestureBinding;
-    use flui_platform_api::{
+    use flui_platform::{
         EventTime,
         pointer::{PointerDeviceChange, PointerSignal},
     };
@@ -1554,7 +1554,7 @@ fn scroll_delta_is_localized_as_a_vector() {
             PointerId::new(std::num::NonZeroU64::MIN),
             PointerKind::Mouse,
         ),
-        flui_platform_api::EventTime::from_nanos(0),
+        flui_platform::EventTime::from_nanos(0),
         PointerPosition::try_new(flui_foundation::geometry::Point::new(80.0, 70.0))
             .expect("finite scroll position"),
         ScrollDelta::try_new(ScrollUnit::Pixels, 0.0, 30.0).expect("finite pixel delta"),
@@ -1606,7 +1606,7 @@ fn scroll_target_delta_is_localized_as_a_vector() {
                 PointerId::new(std::num::NonZeroU64::MIN),
                 PointerKind::Mouse,
             ),
-            flui_platform_api::EventTime::from_nanos(1_000),
+            flui_platform::EventTime::from_nanos(1_000),
             PointerPosition::try_new(flui_foundation::geometry::Point::new(80.0, 70.0))
                 .expect("finite scroll position"),
             ScrollDelta::try_new(ScrollUnit::Pixels, 12.0, 0.0).expect("finite scroll delta"),
@@ -1629,14 +1629,14 @@ fn scroll_target_delta_is_localized_as_a_vector() {
         "delta",
     );
     assert_eq!(local.delta.unit(), ScrollUnit::Pixels);
-    assert_eq!(local.time, flui_platform_api::EventTime::from_nanos(1_000));
+    assert_eq!(local.time, flui_platform::EventTime::from_nanos(1_000));
     assert_eq!(local.modifiers, Modifiers::NONE);
     assert_eq!(local.pointer.kind, PointerKind::Mouse);
 }
 
 fn perspective_vectors_follow_the_current_focal_and_preserve_counts() {
     use flui_foundation::geometry::Point;
-    use flui_platform_api::{
+    use flui_platform::{
         EventTime,
         pointer::{ScrollPhase, ScrollPrecision},
     };

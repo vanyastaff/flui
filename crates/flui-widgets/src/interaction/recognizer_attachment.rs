@@ -63,4 +63,9 @@ impl<R: GestureRecognizer> GestureRecognizer for RecognizerAttachment<R> {
                 owner.allowed_devices()
             })
     }
+
+    fn feeds_scroll_contact(&self) -> bool {
+        self.owner()
+            .is_some_and(|owner| owner.feeds_scroll_contact())
+    }
 }

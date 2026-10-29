@@ -13,7 +13,7 @@
 //!
 //! # Platform Support
 //!
-//! - **Desktop**: Windows, macOS, Linux via flui-platform + wgpu
+//! - **Desktop**: Windows, macOS, Linux via flui-native + wgpu
 //! - **Android**: (future) android-activity integration
 //! - **iOS**: (future) UIKit integration
 //! - **Web**: (future) wasm-bindgen integration

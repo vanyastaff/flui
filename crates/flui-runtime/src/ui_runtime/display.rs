@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use flui_foundation::PresentationId;
 use flui_interaction::pointer::SamplingClock;
-use flui_platform_api::WindowDisplay;
+use flui_platform::WindowDisplay;
 
 use super::UiRuntime;
 use crate::presentation::PresentationState;
@@ -39,10 +39,9 @@ pub const DEFAULT_REFRESH_PERIOD: Duration = Duration::from_micros(16_667);
 
 /// The period a presentation on `display` paces by.
 fn interval_of(display: Option<WindowDisplay>) -> Duration {
-    display.and_then(|display| display.refresh_period).map_or(
-        DEFAULT_REFRESH_PERIOD,
-        flui_platform_api::RefreshPeriod::get,
-    )
+    display
+        .and_then(|display| display.refresh_period)
+        .map_or(DEFAULT_REFRESH_PERIOD, flui_platform::RefreshPeriod::get)
 }
 
 impl UiRuntime {
@@ -125,7 +124,7 @@ impl UiRuntime {
 mod tests {
     use std::time::Duration;
 
-    use flui_platform_api::{DisplayKey, DisplayRegistry, RefreshPeriod, WindowDisplay};
+    use flui_platform::{DisplayKey, DisplayRegistry, RefreshPeriod, WindowDisplay};
 
     use super::*;
 

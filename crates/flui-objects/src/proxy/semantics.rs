@@ -480,8 +480,12 @@ impl RenderBox for RenderSemanticsAnnotations {
                 );
             }
         }
-        config.set_semantics_boundary(self.container);
-        config.set_explicit_child_nodes(self.explicit_child_nodes);
+        // A configuration that declares itself a boundary (a set, by its size
+        // or its collection) stays one whatever the widget's `container`.
+        config.set_semantics_boundary(self.container || self.configuration.is_semantics_boundary());
+        config.set_explicit_child_nodes(
+            self.explicit_child_nodes || self.configuration.explicit_child_nodes(),
+        );
         config.set_blocks_user_actions(self.block_user_actions);
         if let Some((position, axis, reversed)) = &self.scroll {
             let min = position.min_scroll_extent();
@@ -541,14 +545,14 @@ impl RenderBox for RenderSemanticsAnnotations {
 /// add one when they hand it to a screen reader.
 #[derive(Debug, Clone)]
 pub struct RenderIndexedSemantics {
-    index: i32,
+    index: usize,
     has_child: bool,
 }
 
 impl RenderIndexedSemantics {
     /// Creates an indexed-semantics render object.
     #[must_use]
-    pub const fn new(index: i32) -> Self {
+    pub const fn new(index: usize) -> Self {
         Self {
             index,
             has_child: false,
@@ -557,7 +561,7 @@ impl RenderIndexedSemantics {
 
     /// The zero-based index this node reports.
     #[must_use]
-    pub const fn index(&self) -> i32 {
+    pub const fn index(&self) -> usize {
         self.index
     }
 
@@ -567,7 +571,7 @@ impl RenderIndexedSemantics {
     /// a scrolling list (every item's wrapper is rebuilt as the band moves),
     /// so a setter that always marked would republish the whole subtree's
     /// semantics on every frame of a scroll.
-    pub fn set_index(&mut self, index: i32) -> flui_rendering::RenderUpdateImpact {
+    pub fn set_index(&mut self, index: usize) -> flui_rendering::RenderUpdateImpact {
         if self.index == index {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
@@ -578,7 +582,7 @@ impl RenderIndexedSemantics {
 
 impl flui_foundation::Diagnosticable for RenderIndexedSemantics {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add("index", i64::from(self.index));
+        builder.add("index", u64::try_from(self.index).unwrap_or(u64::MAX));
     }
 }
 
@@ -593,7 +597,7 @@ impl RenderBox for RenderIndexedSemantics {
     flui_rendering::forward_single_child_box_hit_test!();
 
     fn describe_semantics_configuration(&self, config: &mut SemanticsConfiguration) {
-        config.set_index_in_parent(self.index);
+        config.set_position_in_set(self.index);
     }
 }
 

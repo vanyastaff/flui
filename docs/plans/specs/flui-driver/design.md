@@ -8,10 +8,10 @@
   [ADR-0240](../../../adr/ADR-0240-semantics-identifier.md),
   [ADR-0241](../../../adr/ADR-0241-driver-trace-format.md),
   [ADR-0242](../../../adr/ADR-0242-typed-inspect-and-tracing-conventions.md)
-- **Market survey:** [2026-10-18](../../../research/2026-10-18-flui-driver-market-survey.md). It
+- **Market survey:** [2026-10-18](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-18-flui-driver-market-survey.md). It
   covers AI design agents, layout and visual verification, automation tools, computer-use and MCP
   servers, and performance and exploration tooling; its corrections are folded in here.
-- **Prior art read** ([checklist](../../../research/2026-10-17-flui-driver-prior-art.md); primary
+- **Prior art read** ([checklist](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-17-flui-driver-prior-art.md); primary
   sources, 2026-10-17): Playwright (locators,
   actionability, web-first assertions, `toHaveScreenshot`, trace, wire protocol), W3C WebDriver BiDi
   (Editor's Draft 2026-10-08), Flutter `flutter_driver` and `integration_test`, Appium with
@@ -276,8 +276,10 @@ Gesture-arena `Decision` rows from the same tap feed the inspector timeline.
 ### Trees
 
 - `semantics.read` / `semantics.locate`: `flui-semantics::agent` resolves a `Locator` over the
-  published `SemanticsOwner` tree. Strictness and `pick` are applied there, and it answers matches
-  with their tree revision. `TextMatch` is exact/contains/prefix only, so no regex engine enters the app.
+  published `SemanticsOwner` tree. `semantics.locate` lists every match of a strict locator and
+  narrows to the one match `first`, `last` or `nth` names; strictness bites where one element is
+  needed (an action, an expectation about one element), which answers `ambiguous`. Matches carry
+  the tree revision. `TextMatch` is exact/contains/prefix only, so no regex engine enters the app.
 All three trees are walked through ADR-0242's `InspectTree` and answer the owned `Inspect`
 snapshot, so every property arrives typed:
 
@@ -298,18 +300,23 @@ own ID (`ElementId`, `RenderId`, `LayerId`), so identity follows the "Identity i
 
 - `attached`;
 - `rect` (surface logical);
-- `visible`: non-empty and intersecting the window's visible region and every clipping ancestor;
+- `visible`: shown by the filtered tree, non-empty and intersecting the window's visible region
+  (the semantics assembly has already narrowed a node to its clipping ancestors, so a node clipped
+  out is not published);
 - `stable`: rect equal to the previous frame's;
 - `enabled`: not `disabled`, no disabled ancestor;
 - `receives`: whether the render hit-test at `point` (default: the rect's centre, clamped inside
   the visible part) resolves to a semantics node equal to or under the target. When it does not,
   the answer is `covered_by` (that node's outline).
 
-The hit-test reuses `PipelineOwner`'s pointer hit-test and maps the topmost hit render object to
-its nearest semantics owner. This mapping is new in `flui-semantics`, with the owner keeping a
-render-to-semantics index already built at publish time. The driver polls `stable` across two
-frames and repeats until the action timeout (Playwright's actionability, XCUI `isHittable`, Masonry's
-interactive check).
+The hit-test is the caller's: `actionability_point` says where the pointer lands, the agent runs
+`PipelineOwner`'s pointer hit-test there and hands the path to `actionability_wire`, so no render
+code runs under a semantics borrow. The path's render objects map to semantics nodes by identity:
+a published node's id is its render object's id, so there is no separate index to keep in step.
+The first render object of the path the filtered tree shows is the node reached; one with no node
+of its own passes the pointer up the path. The agent polls `stable` across two frames, passing the
+earlier bounds, and repeats until the action timeout (Playwright's actionability, XCUI
+`isHittable`, Masonry's interactive check).
 
 ### Presented-frame capture
 
@@ -841,7 +848,7 @@ The driver is only as good as what the framework can describe about itself. This
 framework's own description and instrumentation, so the driver, the inspector, devtools, tests and
 logs all read one model. The full signatures, the current-state audit and the accept or reject
 verdict for each idea are in the
-[introspection and tracing survey](../../../research/2026-10-18-flui-introspection-and-tracing.md).
+[introspection and tracing survey](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-18-flui-introspection-and-tracing.md).
 What the driver relies on:
 
 | Piece | Where | Driver consumer |

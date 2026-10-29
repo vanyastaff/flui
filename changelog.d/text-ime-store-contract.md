@@ -4,12 +4,12 @@
   composition replaced by what it stands for (nothing for a new preedit, the original words for a
   reconversion), the text a field's owner works with
   ([ADR-0142](/docs/adr/ADR-0142-text-store-commit-gate-and-owner-code-containment.md)).
-- **`CommitGate::defer_failure` and `take_failure`** (`flui-platform-api`): a panic caught while
+- **`CommitGate::defer_failure` and `take_failure`** (`flui-platform`): a panic caught while
   a text store settled a grant waits at its presentation's gate for the owner to report; the
   first is kept, later ones are retained.
-- **`InMemoryTextStore::set_owner_listener`** (`flui-platform-api`): run code in the reference
+- **`InMemoryTextStore::set_owner_listener`** (`flui-platform`): run code in the reference
   store's owner notification, as a field's `on_changed` runs.
-- **`text_store::EditGeneration`** (`flui-platform-api`): the count of application edits a
+- **`text_store::EditGeneration`** (`flui-platform`): the count of application edits a
   platform session is checked against before it writes back. It never wraps, and once
   exhausted it admits no session; `TextEditingController` and `InMemoryTextStore` both use it.
 - **Text-store kit version 2** (`flui_testing::text_store_kit::KIT_VERSION` is 2):
@@ -19,17 +19,17 @@
   `reconverting_committed_text_notifies_only_on_commit`, with
   `TextStoreFixture::set_owner_hook` (a provided method; a fixture keeping its default fails
   the owner case). A suite pinned to version 1 is unchanged.
-- **`text_store::CompositionLedger` and `text_store::committed_text`** (`flui-platform-api`):
+- **`text_store::CompositionLedger` and `text_store::committed_text`** (`flui-platform`):
   how a store keeps what its composition stands for through a session's edits. The ledger opens
   on the document's text (`open(text, composition)`), records each edit with the text before
   it and the inserted text (`replace(text, edit, inserted)`), and reads the text it is given
   for `origin(text)` and `committed(text)`.
-- **`text_store::OwnerCalls` and `RetainOnFailure`** (`flui-platform-api`): the one
+- **`text_store::OwnerCalls` and `RetainOnFailure`** (`flui-platform`): the one
   containment a store, its arbiter and its presentation run owner code in: each call contained,
   the first failure in time authoritative, snapshots retired or retained (ADR-0127).
   `OwnerCalls::parking_gate` names the gate a settle scope parks in, so a store's flush after
   its grants runs behind the gate the last grant settled under.
-- **`LockArbiter::owner_gate`** (`flui-platform-api`): the gate an owner installed, which a
+- **`LockArbiter::owner_gate`** (`flui-platform`): the gate an owner installed, which a
   store reads before owner code runs.
 
 ### Changed

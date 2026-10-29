@@ -330,6 +330,25 @@ empty/repopulate, separators, composition, independent and nested sets, explicit
 index precedence and authored collections. The isolated render-object row
 `harness_indexed_semantics_reports_its_index_and_only_republishes_on_change`
 continues to cover direct index replacement.
+
+A stamped item whose own node forms none (a `Padding` over a `Column`) hands
+its position to the fragments it forwards. One logical item is one member: only
+the first fragment carries it, so a row that forms two controls does not
+announce both as "item 1", and a position declared anywhere in the item, a
+descendant boundary included, is that member's and suppresses the stamp.
+
+The same post-assembly pass (`reconcile_collections`) holds every place to the
+set and table it actually sits in once the tree is built, so a node the clip
+dropped imposes no scope. A position past its known set's size, and a cell, its
+spans or a row outside its known table, is not published: the consumer would
+read "item 8 of 3" or "row 5 of 3". A set is any node that declares a size, a
+lazy host, an authored `SemanticsCollection` or a `Semantics` with
+`size_of_set`; a role-less one publishes as a List.
+
+`collection_semantics` in `crates/flui-widgets/tests` reads tables, trees,
+levels, sorted headers, hand-built lists and these limits the way an adapter
+does.
+
 ### A layout stamps the children it laid out; paint and hit-test skip the rest
 
 **Rule:** a multi-child render object that lays out a *subset* of its children — a lazy sliver's
@@ -427,7 +446,7 @@ size zero and paints nothing regardless, so a single-frame version passes with t
 require the object to BE a repaint boundary and require ref-counting plus
 explicit disposal to manage that layer's lifetime.
 
-FLUI does neither. `RetainedSubtree` is a flat `Vec<RetainedNode>`, so a node's
+FLUI does neither. `RetainedSubtree` is a flat stream of entries (layers and slots for nested boundaries), so a node's
 own effect layers are addressable by index inside the ENCLOSING boundary's
 capture (`effect_slots`). An alpha change rebuilds those entries through the
 same `own_effect_layers` constructor the paint walk uses, patches them into the
@@ -470,22 +489,25 @@ never whether the frame is correct.
    pushed because `PaintEffects` has no field for either effect yet. Re-run
    the command before trusting this sentence; "Deferred producers" below
    records why each is out for now.
-2. **A boundary declines to graft while any boundary nested inside it has
-   pending work of any kind, including a layer update.** Serving a nested
-   boundary's update from an enclosing capture is possible — the layers are
-   flattened into it — but it patches only that capture and clears the flag,
-   leaving the nested boundary's own capture at the old value for the next
-   frame that grafts it to replay. Declining costs the outer boundary's reuse
-   on those frames and keeps both captures consistent, because the outer
-   re-captures the patched result on its way back out.
-   **Unasserted:** no test pins this.
-3. **The root boundary is never retained, so an effect whose only enclosing
-   boundary is the root gets no fast path.** `run_paint` enters through
-   `paint_subtree(root)` directly rather than the boundary-child arm that
-   creates captures, so `RenderView` — which declares itself a boundary — has
-   none. The mark still degrades correctly (the frame repaints), it is simply
-   not accelerated. A tree with any `RepaintBoundary` above the effect, which
-   includes every per-item boundary in a list, is unaffected.
+2. **A nested boundary's update is served from its own capture
+   ([ADR-0253](../../docs/adr/ADR-0253-retained-paint-captures-hold-slots-for-nested-boundaries.md)).**
+   An enclosing capture holds a slot where the nested boundary sits, not a
+   copy of its layers, so a layer update patches the one capture that owns the
+   node and the enclosing boundary is replayed whatever is nested in it. There
+   is no second copy that could stay at the old value.
+   **Asserted by:** `retained_frames_match_a_full_repaint_over_random_trees_and_marks`
+   (`tests/nested_boundary_capture.rs`), which updates alphas under nested
+   boundaries between frames.
+3. **A root that is a repaint boundary is retained like any other; a root
+   that is not one repaints every frame it is dirty.** `run_paint` serves the
+   root through `serve_boundary` when `RenderView`-style roots declare
+   themselves boundaries, so a nested mark replays the root's capture and a
+   layer update under it patches that capture. The next paint after a pixel-ratio change evicts
+   every capture, since the recorded output was made for the old ratio.
+   **Asserted by:** `a_root_boundary_is_replayed_when_only_a_nested_boundary_repaints`,
+   `a_layer_update_under_the_root_boundary_patches_the_retained_root` and
+   `a_pixel_ratio_change_drops_the_retained_output`
+   (`tests/nested_boundary_capture.rs`).
 
 **Replacement tests:** `an_alpha_change_updates_the_layer_without_repainting_the_subtree`
 and `a_failed_pass_does_not_downgrade_a_real_repaint_to_an_update`
@@ -912,12 +934,13 @@ commit with the frame; an errored frame drops them, and the retry, still
 queued, mints again. Nested boundaries keep their stamp (token included)
 through an enclosing boundary's graft.
 
-**Why not pointer identity of the pictures:** `run_paint` always descends from
-the root, and an outer boundary refuses reuse while anything nested in it is
-dirty, re-recording its inline pictures. Their `Arc`s change on every such
-frame although the content did not, so `Arc::ptr_eq` would report the root
-changed on every real frame (`an_outer_boundary_redescended_for_a_nested_repaint_keeps_its_token`
-pins the re-recording as well as the kept token).
+**Why not pointer identity of the pictures:** a boundary re-records its inline
+pictures whenever it repaints, and it can repaint without its content changing
+(its capture was evicted or refused, so the frame descends into it again). Their
+`Arc`s change on such a frame, so `Arc::ptr_eq` would report the boundary
+changed. A boundary replayed because only something nested in it repainted
+keeps both its token and its own pictures
+(`an_outer_boundary_keeps_its_token_and_pictures_when_a_nested_one_repaints`).
 
 **Accepted trade-off:** a clean node that paints differently breaks this rule
 exactly as it already breaks grafting. A boundary whose capture was refused
@@ -1028,7 +1051,9 @@ they were removed rather than adapted: they could not fail for a reason a user w
 
 **Accepted trade-off:** the pinned 'inaccurate scroll offset' windows differ from a boundary-only correction by exactly the growth it shows as a jump (192 px in that scene); the pinned test stays `#[ignore]`d as the statement of the declined behaviour and a FLUI test stands beside it. Items above a jump that were never resident stay hinted until they enter the band (O(band) layout, ADR-0003), where an O(distance) walk would be exact.
 
-### Render-tree storage uses a `Slab<RenderNode>` with `RenderId` (NonZeroUsize) keys
+### Render-tree storage uses a `NodeSlab` with generational `RenderId` keys
+
+**Amended by [ADR-0252](../../docs/adr/ADR-0252-layout-walk-leases-nodes-on-demand.md):** the tree stores nodes in its own `NodeSlab` (`storage/node_slab.rs`), a `Vec` of slots with a free list. Each slot carries an in-flight bit and the parent link, its only copy, outside the `UnsafeCell` that holds the node, and a layout walk takes one `TreeLease` and acquires nodes on demand. The paragraphs below describe the original `Slab<RenderNode>` choice; the reasons for an arena with generational ids still stand.
 
 **Rule:** strategy clause "Behavior as floor, everything else designed for Rust"; constitution Anti-Patterns list ("`Arc<Mutex<>>` for tree structures — use arena/slotmap"); the ID-offset pattern documented in [`docs/architecture.md`](../../docs/architecture.md).
 
@@ -1063,7 +1088,7 @@ they were removed rather than adapted: they could not fail for a reason a user w
 **Accepted trade-off:** subclasses that wanted to override `set_was_repaint_boundary` (none currently do) lose the hook. The flag's owner is now framework code, not user code.
 ### `unsafe impl Send + Sync for RenderTree` removed
 
-**Rule:** constitution Principle III ("zero unsafe in widget/app layer; `unsafe` only in `flui-platform`, `flui-painting`, `flui-engine`"); the prior `unsafe impl` was a soundness carve-out documented in [`docs/plans/2026-03-31-core-crates-hardening.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-core-crates-hardening.md) Task 7.
+**Rule:** constitution Principle III ("zero unsafe in widget/app layer; `unsafe` only in `flui-native`, `flui-painting`, `flui-engine`"); the prior `unsafe impl` was a soundness carve-out documented in [`docs/plans/2026-03-31-core-crates-hardening.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-core-crates-hardening.md) Task 7.
 
 **Choice:** removed the `unsafe impl Send for RenderTree {}` / `unsafe impl Sync for RenderTree {}` block at the bottom of [`src/storage/tree.rs`](src/storage/tree.rs). The transitive Send+Sync chain still holds via auto-derivation: `Slab<RenderNode>` is auto-`Send + Sync` because `RenderNode` is; `RenderEntry<P>` holds `Box<dyn RenderObject<P>>` and the trait requires `Send + Sync + 'static`; `RenderState<P>` is built on atomics and `Option<T>` fields for geometry/constraints; `NodeLinks` is POD.
 
@@ -1265,7 +1290,7 @@ with a `flui_rendering::input_regions` warning, never clamped from infinity; so 
 with a corner at or behind the perspective horizon (`w <= 1e-9`), whose corner quotients
 can be finite yet describe a mirrored or unbounded shape. An unmappable clip refuses
 coverage. Device-pixel projection, `i32` checks and the OS diff are the backend's
-(`flui_platform_api::input_regions::ProjectedInputRegions`).
+(the core host's `input::regions::ProjectedInputRegions`).
 
 **Delivery.** The runtime collects the set when it builds a scene and hands it to
 `PlatformWindow::set_input_regions` when the sink accepts that scene, and again on a scale

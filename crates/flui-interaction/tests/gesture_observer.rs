@@ -24,7 +24,7 @@ use flui_interaction::{
     GestureObservation, HitTestEntry, HitTestResult, IdExhausted, InputSurface, InteractionLane,
     ManualClock, ObserverHandle, PointerId, RenderId,
 };
-use flui_platform_api::EventTime;
+use flui_platform::EventTime;
 
 fn run_rows(rows: &[(&str, fn())]) {
     for &(name, row) in rows {

@@ -5,7 +5,7 @@
 
 use std::rc::Rc;
 
-use flui_platform_api::keyboard::Modifiers;
+use flui_platform::keyboard::Modifiers;
 use flui_view::{EventCx, EventOutcome};
 
 #[cfg(test)]

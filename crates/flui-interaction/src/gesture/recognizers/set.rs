@@ -89,6 +89,16 @@ impl RecognizerSet {
         }
         finish_containment(first, incoming_failure);
     }
+    /// Whether a touchpad pan feeds any live recognizer here (ADR-0251 §2).
+    #[must_use]
+    pub fn feeds_scroll_contact(&self) -> bool {
+        self.entries.iter().any(|entry| {
+            entry
+                .recognizer
+                .upgrade()
+                .is_some_and(|recognizer| recognizer.feeds_scroll_contact())
+        })
+    }
     /// Whether no recognizers have been attached.
     #[must_use]
     pub fn is_empty(&self) -> bool {

@@ -1,5 +1,6 @@
 //! Application configuration.
 
+use flui_engine::FrameLatency;
 use flui_foundation::geometry::{Point, Size};
 use flui_log::AppIdentity;
 pub use flui_runtime::MotionOverride;
@@ -110,6 +111,11 @@ pub struct AppConfig {
     /// Whether to show the window decorations.
     pub decorations: bool,
 
+    /// What the window is created with on each operating system that has
+    /// options of its own, each read only by that system's host (ADR-0254
+    /// §8); see [`OsWindowOptions`](flui_platform::os_options::OsWindowOptions).
+    pub os_options: flui_platform::os_options::OsWindowOptions,
+
     /// Whether to show the performance overlay — FPS, average frame time, and
     /// runtime tail-latency/counter telemetry drawn over the app's own content.
     ///
@@ -132,6 +138,23 @@ pub struct AppConfig {
     /// `From<&AppConfig> for flui_platform::WindowOptions` drops this field —
     /// it is a compositing concern, not a window-creation one.
     pub show_performance_overlay: bool,
+
+    /// How many frames a window's swapchain holds ahead of the display (ADR-0257).
+    ///
+    /// [`FrameLatency::Balanced`] by default; [`FrameLatency::Low`] trades throughput for the
+    /// newest frame on screen, for drawing and games. Every window the application opens starts
+    /// with it.
+    pub frame_latency: FrameLatency,
+
+    /// How early pointer samples reach every window the application opens.
+    ///
+    /// [`InputLatency::Balanced`](flui_platform::InputLatency::Balanced) by
+    /// default: the system's per-frame batches.
+    /// [`InputLatency::Low`](flui_platform::InputLatency::Low) asks for every
+    /// sample as soon as the system has it, for live ink and drawing: the web
+    /// host listens to `pointerrawupdate`; a host that cannot deliver earlier
+    /// ignores it.
+    pub input_latency: flui_platform::InputLatency,
 
     /// The development reload driver, if the application installed one with
     /// [`Self::with_dev_reload`] (ADR-0094 §1).
@@ -211,6 +234,10 @@ pub struct AppConfig {
     pub frame_failure_detail: FrameFailureDetail,
     /// Pointer interpolation for this window's presentation; disabled by default.
     pub pointer_resampling: PointerResampling,
+    /// The colour capability requested of this window's surface; `Srgb8` by default.
+    /// The renderer grants as much as the surface and display allow and reports
+    /// the rest through `Renderer::surface_color`.
+    pub surface_color: flui_engine::SurfaceColor,
 
     /// Optional per-window close-request veto (issue #558): asked, for
     /// each window opened with this config, whether that window may
@@ -253,11 +280,11 @@ pub struct AppConfig {
 
     /// The application's directory name under the per-user data roots, set
     /// with [`Self::with_storage_dir`].
-    pub(crate) storage_dir: Option<flui_platform_api::StorageName>,
+    pub(crate) storage_dir: Option<flui_platform::StorageName>,
 
     /// The storage name a window's placement is kept under, set with
     /// [`Self::restore_placement`].
-    pub(crate) placement: Option<flui_platform_api::StorageName>,
+    pub(crate) placement: Option<flui_platform::StorageName>,
 
     /// The receivers registered with [`Self::with_memory_reclaim`].
     pub(crate) memory_reclaimers: MemoryReceivers,
@@ -291,7 +318,10 @@ impl Default for AppConfig {
             mode: WindowMode::Normal,
             resizable: true,
             decorations: true,
+            os_options: flui_platform::os_options::OsWindowOptions::default(),
             show_performance_overlay: false,
+            frame_latency: FrameLatency::Balanced,
+            input_latency: flui_platform::InputLatency::Balanced,
             dev_reload: None,
             dev_agent: None,
             exit_policy: ExitPolicy::default(),
@@ -301,6 +331,7 @@ impl Default for AppConfig {
             error_view_builder: None,
             frame_failure_detail: FrameFailureDetail::default(),
             pointer_resampling: PointerResampling::Disabled,
+            surface_color: flui_engine::SurfaceColor::Srgb8,
             close_request_handler: None,
             #[cfg(not(target_arch = "wasm32"))]
             services: Vec::new(),
@@ -339,6 +370,15 @@ impl AppConfig {
     #[must_use]
     pub fn with_pointer_resampling(mut self, policy: PointerResampling) -> Self {
         self.pointer_resampling = policy;
+        self
+    }
+
+    /// Ask for a wider or brighter surface than 8-bit sRGB. The request is met
+    /// as far as the surface and the display allow; read what was granted from
+    /// `Renderer::surface_color`.
+    #[must_use]
+    pub fn with_surface_color(mut self, color: flui_engine::SurfaceColor) -> Self {
+        self.surface_color = color;
         self
     }
 
@@ -393,7 +433,7 @@ impl AppConfig {
     /// Set the initial outer position, in global logical pixels.
     ///
     /// Applied where the backend places a window at open
-    /// ([`WindowCapabilities::places_at_open`](flui_platform_api::WindowCapabilities::places_at_open)):
+    /// ([`WindowCapabilities::places_at_open`](flui_platform::WindowCapabilities::places_at_open)):
     /// Win32 today. The winit and AppKit backends do not yet read it and leave
     /// the place to the system.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
@@ -425,6 +465,32 @@ impl AppConfig {
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_decorations(mut self, decorations: bool) -> Self {
         self.decorations = decorations;
+        self
+    }
+
+    /// Set how many frames each window's swapchain holds ahead of the display.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
+    pub fn with_frame_latency(mut self, latency: FrameLatency) -> Self {
+        self.frame_latency = latency;
+        self
+    }
+
+    /// Set how early pointer samples reach every window the application
+    /// opens; see [`Self::input_latency`].
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
+    pub fn with_input_latency(mut self, latency: flui_platform::InputLatency) -> Self {
+        self.input_latency = latency;
+        self
+    }
+
+    /// Set what the window is created with on each operating system that has
+    /// options of its own.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
+    pub fn with_os_options(
+        mut self,
+        os_options: flui_platform::os_options::OsWindowOptions,
+    ) -> Self {
+        self.os_options = os_options;
         self
     }
 
@@ -548,7 +614,7 @@ impl AppConfig {
     /// application of the user, so pick a name only this application uses
     /// (`acme-notes`, not `notes`).
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_storage_dir(mut self, name: flui_platform_api::StorageName) -> Self {
+    pub fn with_storage_dir(mut self, name: flui_platform::StorageName) -> Self {
         self.storage_dir = Some(name);
         self
     }
@@ -576,13 +642,13 @@ impl AppConfig {
     /// Where it is applied: Win32 opens the window at the remembered position,
     /// size and mode, and matches the display it was on. The winit and AppKit
     /// backends do not yet place a window at open (they report so through
-    /// [`WindowCapabilities::places_at_open`](flui_platform_api::WindowCapabilities::places_at_open)),
+    /// [`WindowCapabilities::places_at_open`](flui_platform::WindowCapabilities::places_at_open)),
     /// so there only the size is restored and the position is left to the
     /// system; see `docs/platform-parity.md`.
     ///
-    /// [`WindowPlacement::resolve`]: flui_platform_api::WindowPlacement::resolve
+    /// [`WindowPlacement::resolve`]: flui_platform::WindowPlacement::resolve
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn restore_placement(mut self, name: flui_platform_api::StorageName) -> Self {
+    pub fn restore_placement(mut self, name: flui_platform::StorageName) -> Self {
         self.placement = Some(name);
         self
     }
@@ -595,7 +661,7 @@ impl AppConfig {
     /// through, which keeps their decoded pixels (an `Arc` of a receiver is a
     /// receiver). Receivers are reclaimed once per notice, in the
     /// order registered, before any subscriber of
-    /// [`HostNotice::MemoryPressure`](flui_platform_api::HostNotice::MemoryPressure)
+    /// [`HostNotice::MemoryPressure`](flui_platform::HostNotice::MemoryPressure)
     /// hears the notice. The host has one set of receivers, read from the
     /// configuration the run starts with.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
@@ -628,7 +694,32 @@ impl From<&AppConfig> for flui_platform::WindowOptions {
             .with_max_size(config.max_size)
             .with_position(config.position)
             .with_mode(config.mode)
+            .with_input_latency(config.input_latency)
+            .with_os_options(os_options_for(config))
     }
+}
+
+/// The application's per-system window options, with the Android window's
+/// colour mode following the surface colour it asks for where the
+/// application set no Android options of its own: Android composes a window
+/// in a wide gamut or in HDR only when the window asks.
+fn os_options_for(config: &AppConfig) -> flui_platform::os_options::OsWindowOptions {
+    use flui_platform::os_options::{AndroidColorMode, AndroidWindowOptions};
+
+    let mut options = config.os_options.clone();
+    let color_mode = match config.surface_color {
+        flui_engine::SurfaceColor::WideGamut => Some(AndroidColorMode::WideColorGamut),
+        flui_engine::SurfaceColor::Hdr => Some(AndroidColorMode::Hdr),
+        // `Srgb8` is the window's default and needs no options; a request a
+        // later engine adds asks for nothing either.
+        flui_engine::SurfaceColor::Srgb8 | _ => None,
+    };
+    if options.android.is_none()
+        && let Some(color_mode) = color_mode
+    {
+        options.android = Some(AndroidWindowOptions::default().with_color_mode(color_mode));
+    }
+    options
 }
 
 #[cfg(test)]
@@ -637,11 +728,46 @@ mod tests {
 
     use flui_interaction::events::Code;
     use flui_interaction::testing::input::KeyEventBuilder;
-    use flui_platform_api::PlatformInput;
+    use flui_platform::PlatformInput;
     use flui_runtime::ui_runtime::UiRuntime;
     use flui_runtime::{HostInput, InputRecord, InputTapFactory};
 
     use super::AppConfig;
+
+    /// The Android window asks for the colour mode the surface is requested
+    /// in, and an application's own Android options are kept as they are.
+    #[test]
+    fn the_android_colour_mode_follows_the_requested_surface_colour() {
+        use flui_platform::WindowOptions;
+        use flui_platform::os_options::{AndroidColorMode, AndroidWindowOptions, OsWindowOptions};
+
+        let mode = |config: &AppConfig| {
+            WindowOptions::from(config)
+                .os_options
+                .android
+                .map(|android| android.color_mode)
+        };
+        for (requested, expected) in [
+            (flui_engine::SurfaceColor::Srgb8, None),
+            (
+                flui_engine::SurfaceColor::WideGamut,
+                Some(AndroidColorMode::WideColorGamut),
+            ),
+            (flui_engine::SurfaceColor::Hdr, Some(AndroidColorMode::Hdr)),
+        ] {
+            assert_eq!(
+                mode(&AppConfig::new().with_surface_color(requested)),
+                expected,
+                "{requested:?}"
+            );
+        }
+        let own = AppConfig::new()
+            .with_surface_color(flui_engine::SurfaceColor::Hdr)
+            .with_os_options(OsWindowOptions::default().with_android(
+                AndroidWindowOptions::default().with_color_mode(AndroidColorMode::WideColorGamut),
+            ));
+        assert_eq!(mode(&own), Some(AndroidColorMode::WideColorGamut));
+    }
 
     /// Each runtime the app builds records through a fresh tap from the
     /// configured factory, and only its own input.

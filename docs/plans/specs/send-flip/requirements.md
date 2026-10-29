@@ -4,9 +4,9 @@
 - **Дата:** 2026-10-05
 - **База:** `main` @ `4915054c8`
 - **Уровень 0:** [../release/requirements.md](../release/requirements.md) R2, D3 уровня 0
-- **Связанные:** [migration plan](../../2026-09-25-architecture-migration-plan.md) W5-A1..W5-A5;
+- **Связанные:** [migration plan](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/2026-09-25-architecture-migration-plan.md) W5-A1..W5-A5;
   ADR-0027 §2, §9; ADR-0074; ADR-0075; ADR-0083; ADR-0086; ADR-0089; ADR-0091 §1;
-  `design/decisions.md` D9, O7, A1, A3; `design/open-questions.md` №4, №8.
+  [`design/decisions.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md) D9, O7, A1, A3; [`design/open-questions.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/open-questions.md) №4, №8.
 
 ## Зачем
 
@@ -70,7 +70,7 @@ Pilot прошёл (ADR-0086 §9); ADR-0086 — Proposed. Gesture arena уже `
 | `LocalHistoryEntry::on_remove(impl Fn() + 'static)` | `crates/flui-widgets/src/navigator/local_history.rs:102` | путь записи (R7) |
 
 `ScrollPhysics`, `ViewKey` и `BuildDuringLayoutCell` к flip относит и
-`docs/research/2026-09-25-architecture-review/designs/performance_first.md:376`. **`Send` по замыслу (keep):** `SignalSender<T>` (`crates/flui-foundation/src/read_scope.rs:665`),
+[`docs/research/2026-09-25-architecture-review/designs/performance_first.md:376`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/designs/performance_first.md#L376). **`Send` по замыслу (keep):** `SignalSender<T>` (`crates/flui-foundation/src/read_scope.rs:665`),
 `RebuildHandle` (`crates/flui-view/src/owner/rebuild_handle.rs:90`, ADR-0018), `IoFuture`
 (`crates/flui-runtime/src/execution.rs:69`), wakes кадров и build, platform hooks (ADR-0082),
 платформенный шов accessibility.
@@ -82,14 +82,14 @@ Pilot прошёл (ADR-0086 §9); ADR-0086 — Proposed. Gesture arena уже `
 **Расхождения документации.** `crates/flui-rendering/ARCHITECTURE.md:854` пишет, что trait
 `RenderObject` требует `Send + Sync` (в коде такого bound нет, `render_object.rs:176`), и что
 `RenderTree` автоматически `Send + Sync` (это противоречит `tree.rs:23`). На устаревшую строку
-`render.rs:451` (сейчас `:511`) ссылаются ADR-0091, `design/decisions.md:297`,
-`design/architecture.md:666` и `design/open-questions.md:136`.
+`render.rs:451` (сейчас `:511`) ссылаются ADR-0091, [`design/decisions.md:297`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md#L297),
+[`design/architecture.md:666`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/architecture.md#L666) и [`design/open-questions.md:136`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/open-questions.md#L136).
 
 ## Решения спеки
 
-- **Полный flip до 0.2.0, с отсечкой (владелец, 2026-10-05; D3 уровня 0).** Весь класс flip
-  из таблицы выходит до публикации 0.2.0. Если `send-flip` не слит к 2026-11-24, 0.2.0
-  выходит без flip, а ломающий шаг объявляется для 0.3. RC — 2026-12-15.
+- **Полный flip до 0.2.0 (владелец, 2026-10-05; D3 уровня 0).** Весь класс flip из таблицы
+  выходит до публикации 0.2.0. Отсечка 2026-11-24, go/no-go и ветка ядра сняты решением
+  владельца 2026-10-28: остаток идёт шестью PR прямо в `main` (tasks.md).
 - **Частичный flip не выпускается никогда (владелец, 2026-10-05).** Вариант «только listener,
   status, post-frame и ticker, а render-слой спрятать за ADR-0089» отклонён:
   `CustomPainter: Send + Sync` не может держать `!Send` `AnimationController` как источник
@@ -110,7 +110,9 @@ Pilot прошёл (ADR-0086 §9); ADR-0086 — Proposed. Gesture arena уже `
   для design.md: показать, как после 0.2.0 добавить параллельную раскладку независимых
   поддеревьев без ломки опубликованного API. Например, opt-in маркер для render objects,
   который требует `Send` только от тех, кто его реализует. И перечислить, какие решения
-  этого перехода были бы необратимы для такого пути.
+  этого перехода были бы необратимы для такого пути. **Снято (владелец, 2026-10-28):**
+  непринятые части ADR-0136 — ledger и opt-in `IndependentLayout` — отброшены; design (e)
+  остаётся заметкой без обязательства.
 
 - **Порядок (оркестратор, 2026-10-05).** Разделение `AsyncDriver`/`FutureBuilder` (`Send`
   waker и owner-local очередь `!Send` задач) — первая задача перехода. Она мержится в октябре,
@@ -121,7 +123,7 @@ Pilot прошёл (ADR-0086 §9); ADR-0086 — Proposed. Gesture arena уже `
 
 **Регрессионный guard** проходит на сегодняшнем коде; **новый контракт** сегодня падает.
 Consumer-проверка — внешний крейт только на `flui` или только на `flui-sdk`, как
-`external_notes_showcase_runs_through_the_facade`.
+`external_consumers_extend_and_test_through_the_facade` (`tests/facade_consumer.rs`).
 
 ### Граница потока
 
@@ -137,12 +139,12 @@ Consumer-проверка — внешний крейт только на `flui`
   `flui-sdk`, по одному `!Send` реализатору или замыканию на строку таблицы. Новый контракт.
 - **R3.** КОГДА меняется публичная поверхность `flui` или `flui-sdk`, СИСТЕМА ДОЛЖНА
   перечислять каждое вхождение `Send`/`Sync` в ней (supertrait, alias, bound параметра,
-  поле публичного типа; по rustdoc JSON) и сверять его с таблицей классификации
-  (flip/keep с причиной). Gate падает на вхождение, которого нет в таблице, и на возвращённый
-  flip. Allowlist keep только сокращается. Проверка: ledger внутри `cargo xtask doc-strict`
-  (уже шаг job `doc` в CI; новой правки workflow не нужно), его `--self-test` — в
-  `cargo test -p xtask`, то есть в `checks`; дешёвый скан `unsafe impl Send/Sync` — в `checks`.
-  Новый контракт.
+  поле публичного типа; по rustdoc JSON) и сверять его со списком разрешённых позиций.
+  Gate падает на вхождение, которого нет в списке, и на запись списка, которой больше нет в
+  коде: список только сокращается. Проверка: gate на загрузчике rustdoc JSON
+  `tools/xtask/src/api_closure.rs`, в том же CI-джобе `doc`, что и `api-closure`; его
+  `--self-test` — в `cargo test -p xtask`, то есть в `checks`; дешёвый скан
+  `unsafe impl Send/Sync` — в `checks`. Новый контракт.
 - **R4.** КОГДА тип по замыслу пересекает поток (`SignalSender<T>`, `RebuildHandle`,
   `IoFuture`, wake-handle планировщика, platform hooks), СИСТЕМА ДОЛЖНА сохранять его
   `Send` (и `Sync`, где он есть сейчас). Проверка: consumer-проверка, которая отправляет
@@ -177,7 +179,7 @@ Consumer-проверка — внешний крейт только на `flui`
   контракт.
 - **R9.** КОГДА результат приходит с другого потока (IO-future, worker через `SignalSender`),
   СИСТЕМА ДОЛЖНА доставлять его в realm-владелец и применять до следующего кадра.
-  Поведение загрузки в Notes задаёт спека `persistence`. Проверка: nextest headless — worker
+  Поведение загрузки в приложении приёмки задаёт спека `persistence` (P10). Проверка: nextest headless — worker
   пишет, следующий `pump` показывает значение. Регрессионный guard.
 
 ### Сценарии отказа
@@ -203,9 +205,10 @@ Consumer-проверка — внешний крейт только на `flui`
 ### Миграция и платформы
 
 - **R14.** КОГДА изменение слито, СИСТЕМА ДОЛЖНА собирать и проходить тесты на новых
-  сигнатурах для Notes (`notes_public_input_flow_matrix` через внешний consumer),
+  сигнатурах для приложения приёмки (persistence P10, внешний consumer только на `flui`),
   `flui-material`, `flui-cupertino`, `flui-devtools`, всех `examples/` и шаблона `flui create`.
-  Проверка: `cargo xtask check-changed`, `cli_create::generated_*`, уровень 0 R1.
+  Проверка: clippy и nextest через heli на изменённых крейтах и зависимых,
+  `cli_create::generated_*`, уровень 0 R1.
 - **R15.** КОГДА собирается wasm32, СИСТЕМА ДОЛЖНА проходить `cargo xtask wasm-check` и
   собирать wasm32 consumer, который захватывает `Rc` в listener и в post-frame callback.
   Проверка: wasm32 consumer-проверка; `cargo xtask cross-typecheck` для Win32, AppKit,

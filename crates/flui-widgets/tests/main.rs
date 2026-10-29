@@ -22,6 +22,7 @@ mod keyboard_modifiers;
 mod nested_scroll;
 mod pointer_vocabulary;
 mod refresh_indicator;
+mod touchpad_pan;
 
 #[path = "absorb_pointer.rs"]
 mod absorb_pointer;
@@ -40,6 +41,8 @@ mod back_gesture;
 mod binding_animation;
 #[path = "child_type_swap.rs"]
 mod child_type_swap;
+#[path = "collection_semantics.rs"]
+mod collection_semantics;
 #[path = "component_child_ordering.rs"]
 mod component_child_ordering;
 #[path = "composition.rs"]

@@ -191,6 +191,27 @@ impl PipelineCell {
         f(&mut owner)
     }
 
+    /// Runs one frame of the owner: layout of whatever is dirty,
+    /// compositing, paint and semantics ([`PipelineOwner::run_frame`]), and
+    /// puts the owner back for the next one, on the success and the error
+    /// path alike.
+    ///
+    /// # Errors
+    ///
+    /// The frame's first [`RenderError`](crate::error::RenderError).
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::with_mut`]: when a `with`/`with_mut` borrow from this cell
+    /// is live.
+    pub fn run_frame(&self) -> crate::error::RenderResult<Option<flui_layer::LayerTree>> {
+        self.with_mut(|owner| {
+            let (idle, result) = owner.take_idle().run_frame();
+            *owner = idle;
+            result
+        })
+    }
+
     /// Reports the semantics diagnostics the last frames queued, as
     /// `tracing` warnings.
     ///

@@ -6,12 +6,15 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_platform_api::{Storage, StorageError};
+use flui_platform::{Storage, Unsupported, UnsupportedReason};
 
 use super::{Document, PersistError, Revision, SaveStatus};
 use crate::LifecycleContext;
 use crate::context::CrateToken;
 use crate::flush_registry::FlushRegistry;
+
+/// What a document asks of storage while nothing provides it.
+const NOT_WIRED: Unsupported = Unsupported::new(UnsupportedReason::NotRegistered);
 
 /// One [`Document`] kept for a widget: loaded from the UI runtime's storage,
 /// written on every [`set`](Self::set), with its [`SaveStatus`].
@@ -22,7 +25,8 @@ use crate::flush_registry::FlushRegistry;
 /// that does the IO.
 ///
 /// Not yet wired to storage: [`load`](Self::load) resolves to
-/// [`PersistError::Storage`] with [`StorageError::Unavailable`],
+/// [`PersistError::Storage`] with [`StorageError::Unsupported`](flui_platform::StorageError::Unsupported)
+/// ([`UnsupportedReason::NotRegistered`]),
 /// [`set`](Self::set) refuses every value, and nothing is ever
 /// [`committed`](Self::committed).
 pub struct Persisted<D: Document> {
@@ -87,8 +91,7 @@ impl<D: Document> Persisted<D> {
     pub fn load(&self) -> impl Future<Output = Result<Rc<D>, PersistError>> + 'static {
         // An async block, so the future is `!Unpin` like the owner-local load
         // that replaces it; the captured value keeps it `!Send`.
-        let failed: Result<Rc<D>, PersistError> =
-            Err(PersistError::Storage(StorageError::Unavailable));
+        let failed: Result<Rc<D>, PersistError> = Err(PersistError::Storage(NOT_WIRED.into()));
         async move { failed }
     }
 
@@ -104,7 +107,7 @@ impl<D: Document> Persisted<D> {
     /// revision counter is exhausted, or [`Document::encode`] panicked.
     pub fn set(&self, value: D) -> Result<Revision, PersistError> {
         drop(value);
-        Err(PersistError::Storage(StorageError::Unavailable))
+        Err(PersistError::Storage(NOT_WIRED.into()))
     }
 
     /// The latest revision the storage confirmed, if any.

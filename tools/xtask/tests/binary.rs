@@ -43,7 +43,7 @@ fn native_typecheck_selects_target_gated_workspace_targets() {
             ("flui-engine", "aarch64-apple-darwin"),
             ("flui-widgets", "aarch64-apple-darwin"),
             ("flui-hot-reload", "x86_64-pc-windows-msvc"),
-            ("flui-platform", "aarch64-linux-android"),
+            ("flui-native", "aarch64-linux-android"),
         ] {
             if only.is_some_and(|only| only != target) {
                 continue;

@@ -455,6 +455,17 @@ impl Intent for ButtonActivateIntent {}
 pub struct ActivationPressIntent;
 impl Intent for ActivationPressIntent {}
 
+/// "Open the focused link" — what a paragraph with links binds Enter and
+/// Select to on key-down, around its links (ADR-0079, amendment for links).
+///
+/// A link answers it with its paragraph's link handler
+/// ([`RichText::on_link`](crate::RichText::on_link)). Space is not bound: its
+/// release is [`ActivateIntent`], which a link declines, because a link is
+/// not a button.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ActivateLinkIntent;
+impl Intent for ActivateLinkIntent {}
+
 /// "Go back one page" — Alt+Left and `BrowserBack` (Cmd+[ and `BrowserBack`
 /// on Apple platforms), and the mouse's back button.
 ///

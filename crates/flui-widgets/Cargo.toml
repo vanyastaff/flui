@@ -80,7 +80,7 @@ flui-assets = { path = "../flui-assets", version = "=0.2.0-dev", optional = true
 # `EditableText` is a text store an input method pulls from: it implements
 # the `TextStore` contract and converts offsets with its `utf16` helper
 # (ADR-0090). The contract crate, so this links no OS backend (ADR-0082).
-flui-platform-api = { workspace = true }
+flui-platform = { workspace = true }
 
 [dev-dependencies]
 accesskit_consumer = { workspace = true }

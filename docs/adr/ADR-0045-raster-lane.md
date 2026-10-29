@@ -4,6 +4,9 @@
   a CI frame-pacing budget stays within budget.
 - **Date:** 2026-08-07
 - **Amended by:** ADR-0058 (decision 3), ADR-0063 (decision 1, §7)
+- **Superseded-by:** [ADR-0254](ADR-0254-window-contract.md), in part: decision 5's relay as a new
+  `PlatformProxy` verb. A thread that is not a window's owner asks it for a frame through the
+  window's `RedrawRequester` (ADR-0254 §5); the rule that the raster side never asks stays.
 - **Related:** ADR-0027 §5–§6, ADR-0037, ADR-0039 §3, ADR-0044 §7 and §9; issue #559
 
 ## Context
@@ -212,12 +215,13 @@ stamped with the pre-resize generation and requires it rejected.
 ### 5. The wake never crosses to the platform on the raster thread
 
 The raster side never calls `PlatformWindow::request_redraw`. Its wake hook pushes onto a channel
-and pokes a relay; the platform's event-loop waker drains it on the owner thread. Either ground is
-sufficient: a raster-thread call would falsify `MacOSWindow`'s `unsafe impl Send` precondition
-(decision 1's rule), and the wake hook is `Send + Sync`-bound while UI runtime state is `!Send`, so
-capturing owner state in it does not compile.
+and pokes a relay; the platform's event-loop waker drains it on the owner thread. The wake hook is
+`Send + Sync`-bound while a window and UI runtime state are not `Send` (ADR-0254 §5), so capturing
+either in it does not compile.
 
-The relay is a new verb on ADR-0039 §3's `PlatformProxy` lane, not a second wake path. Only winit
+*Superseded by ADR-0254 §5:* a window's frame is asked from another thread through its
+`RedrawRequester`, not through a `PlatformProxy` verb. The relay is a new verb on ADR-0039 §3's
+`PlatformProxy` lane, not a second wake path. Only winit
 implements a real transport today; Win32 (`PostMessageW` to a message-only HWND), AppKit
 (`CFRunLoopSource` in a common run-loop mode) and headless (flag plus pump) install
 `ClosedTransport` and need real work. Web runs inline.
@@ -258,13 +262,13 @@ owner and `submit` returns `OwnerGone` (corroborated by `JoinHandle::is_finished
 **Teardown is bounded.** `JoinHandle::join` has no timeout, so the lane's `Drop` sends shutdown and
 waits on the one-shot with a deadline. On timeout it detaches with a loud error, and **the window is
 quarantined, not closed**: the presentation leaves the runtime and its
-`(JoinHandle, Arc<dyn PlatformWindow>)` moves into a process-lifetime quarantine; `close()` is never
+`(JoinHandle, Arc<dyn SurfaceTarget>)` moves into a process-lifetime quarantine; `close()` is never
 called on it and the OS reclaims both at exit. `ExitPolicy::OnLastWindowClosed` keys on UI runtime slots,
 so exit is unaffected. A best-effort `minimize()` is cosmetic.
 
 Why quarantine is the only sound outcome: a wedged thread is typically blocked inside
 `get_current_texture()` on a surface built from that window, and on Win32 and AppKit the
-`Arc<dyn PlatformWindow>` does **not** own the native lifetime — `DestroyWindow` / `[NSWindow close]`
+window's surface target (ADR-0254 §5) does **not** own the native lifetime — `DestroyWindow` / `[NSWindow close]`
 run regardless of Rust owners — so the surface must never see its window closed. The surface cannot
 be dropped first (the thread is blocked on it; wgpu offers no cancellation), and the raster thread
 cannot destroy the window later (window destruction is thread-affine on Win32 and AppKit).
@@ -295,7 +299,7 @@ leaks a native window as well as a thread.
 - The Android hot-reload plugin path requires the inline lane: its `Scene` would drop on the raster
   thread while the dylib may unload on the owner thread. Un-gating needs an unsafe audit.
 - Web runs inline, with no pacing feedback (no visibility signal, no compositor tick).
-- `flui-platform`'s window `Send`/`Sync` wrappers, `MacOSWindow` first, need an unsafe audit before
+- `flui-native`'s window `Send`/`Sync` wrappers, `MacOSWindow` first, need an unsafe audit before
   the relay ships.
 
 ## Alternatives considered

@@ -1,9 +1,11 @@
 use crate::app::hot_reload::WorkerReload;
 use flui_engine::Renderer;
-use flui_platform::traits::{HostWindow, PlatformWindow};
+use flui_native::HostWindow;
+use flui_platform::PlatformWindow;
 use flui_scheduler::AppLifecycleState;
 use flui_view::{StatelessView, View};
 use parking_lot::Mutex;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use super::device_recovery::{
@@ -16,19 +18,19 @@ use super::frame_pacing::{
 };
 use super::host::{APP_RUNTIME, desktop_secondary_wake_deadline, merge_wake_deadlines};
 use super::owner_dispatch::{
-    PresentationDispatcher, RuntimeEvent, RuntimeTask, close_this_window,
-    dispatch_platform_ui_runtime, install_input_wiring, prepare_ui_runtime_alongside,
+    PresentationDispatcher, RuntimeTask, close_this_window, dispatch_platform_ui_runtime,
+    install_input_wiring, prepare_ui_runtime_alongside,
 };
 use crate::app::AppConfig;
 
 pub(super) struct RenderedMain {
-    pub(super) window: Arc<dyn PlatformWindow>,
+    pub(super) window: Rc<dyn PlatformWindow>,
     pub(super) address: flui_foundation::PresentationAddress,
     pub(super) installation: super::installed_host::Installation,
 }
 
 struct InstallRollback {
-    window: Arc<dyn PlatformWindow>,
+    window: Rc<dyn PlatformWindow>,
     dispatcher: Option<PresentationDispatcher>,
     committed: bool,
 }
@@ -40,7 +42,9 @@ impl Drop for InstallRollback {
         if let Some(dispatcher) = self.dispatcher {
             crate::app::application_control::contain(|| close_this_window(dispatcher));
         }
-        crate::app::application_control::contain(|| self.window.close());
+        crate::app::application_control::contain(|| {
+            super::discard_window(self.window.as_ref(), "a rolled-back main window");
+        });
     }
 }
 
@@ -65,7 +69,7 @@ pub(super) fn install_desktop_window<V>(
     root: V,
     config: &AppConfig,
     worker_reload: WorkerReload,
-    host: Arc<dyn HostWindow>,
+    host: Rc<dyn HostWindow>,
     host_lifecycle: AppLifecycleState,
 ) -> Result<RenderedMain, crate::app::AppWindowError>
 where
@@ -73,9 +77,9 @@ where
 {
     let presentation_window =
         super::presentation_window(host).with_pointer_resampling(config.pointer_resampling);
-    let window = Arc::clone(presentation_window.window());
+    let window = Rc::clone(presentation_window.window());
     let mut rollback = InstallRollback {
-        window: Arc::clone(&window),
+        window: Rc::clone(&window),
         dispatcher: None,
         committed: false,
     };
@@ -91,10 +95,17 @@ where
     let first_reveal = Arc::new(FirstReveal::new());
 
     // 2. Create GPU renderer directly (no DesktopEmbedder). `Renderer::new`
-    // takes ownership of a `WindowTarget` (issue #1043) — `Arc::clone`
-    // gives it its own strong ref rather than a borrow of `window`.
-    let phys_size = window.physical_size();
-    let renderer = pollster::block_on(Renderer::new(Arc::clone(&window)));
+    // takes ownership of a `WindowTarget`: the window's
+    // surface target, which the raster side may hold on any thread, never
+    // the window itself (ADR-0254 §5).
+    let geometry = super::window_install::SurfaceGeometry::of(window.as_ref());
+    let phys_size = geometry.physical;
+    let surface = window.surface_target();
+    let renderer = pollster::block_on(Renderer::with_surface_color(
+        Arc::clone(&surface),
+        config.surface_color,
+        super::host::display_color_of(window.as_ref()),
+    ));
     let mut renderer = match renderer {
         Ok(r) => r,
         Err(e) => {
@@ -105,17 +116,18 @@ where
         }
     };
     renderer.resize(phys_size.width as u32, phys_size.height as u32);
+    renderer.set_frame_latency(config.frame_latency);
     // The platform's frame-pacing signal (Wayland frame callbacks) is
     // armed by the renderer right before each present — see
     // `install_pre_present_hook`'s own doc and ADR-0058.
-    install_pre_present_hook(&mut renderer, &window);
+    install_pre_present_hook(&mut renderer, surface);
 
     // 3. Mount root widget at the LOGICAL size; the framework lays out
     // in logical pixels and the paint root's DPR transform maps to the
     // physical surface. `UiRuntime::new` applies the DPR to the freshly
     // built pipeline before returning, so the RenderView configuration
     // and the first frame agree on the scale from construction.
-    let scale_factor = window.scale_factor();
+    let scale_factor = geometry.scale;
     let ui_runtime = match super::host::build_ui_runtime(presentation_window, scale_factor) {
         Ok(ui_runtime) => ui_runtime,
         Err(e) => {
@@ -140,7 +152,7 @@ where
     config.install_error_view_builder(&ui_runtime);
 
     ui_runtime.enter(|ui_runtime| ui_runtime.update_host_lifecycle(host_lifecycle));
-    let logical = window.logical_size();
+    let logical = geometry.logical;
     let attach = ui_runtime.enter(|ui_runtime| {
         ui_runtime.attach_root_widget_with_size(&root, logical.width, logical.height)
     });
@@ -170,7 +182,7 @@ where
         "UiRuntime constructed"
     );
     let textures = ui_runtime.texture_registry(ui_runtime.presentation_id());
-    let mut installation = prepare_ui_runtime_alongside(ui_runtime, Arc::clone(&window));
+    let mut installation = prepare_ui_runtime_alongside(ui_runtime, Rc::clone(&window));
     let owner_dispatch = installation.dispatcher();
     rollback.dispatcher = Some(owner_dispatch);
 
@@ -247,25 +259,16 @@ where
                 lane: Arc::clone(&lane),
                 worker_reload,
                 deadlines,
-                reveal_window: Arc::downgrade(&window),
+                reveal_window: Rc::downgrade(&window),
             },
         ))
         .map_err(|error| crate::app::AppWindowError::Mount {
             source: Arc::new(error),
         })?;
     let binding = frame.binding;
-    window.on_request_frame(Box::new(move || {
-        let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding));
-    }));
-
-    // 7. Register resize callback -> typed Resized event; the applier
-    // installed above (not this closure) actually touches the renderer.
-    window.on_resize(Box::new(move |metrics| {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::Resized(metrics)),
-        );
-    }));
+    super::window_routes::WindowRoutes::of(&*window).route_frame_requested(move |request| {
+        let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding, request));
+    });
 
     // 8. Lifecycle callbacks
     //
@@ -280,7 +283,7 @@ where
     // Window close -> close THIS window's own presentation before the
     // platform decides whether to exit. Load-bearing ordering, not just
     // bookkeeping hygiene: the winit backend's `CloseRequested` handling
-    // calls a window's `on_close` (this callback) BEFORE it consults the
+    // delivers a window's `closed` (this route) BEFORE it consults the
     // exit-policy hook `install_exit_policy_hook` installs above
     // (`AppRuntime::should_exit`, which decides purely from
     // `AppRuntime`'s own ui_runtime registry, never this backend's native
@@ -326,61 +329,16 @@ where
         }
     });
 
-    // No `on_should_close` registration here: step 3c1 above installed
+    // No `WindowHandler::close_requested` registration here: step 3c1 above installed
     // it, together with the router entry it consults, so the two can
     // never be wired apart.
 
-    // Window focus/visibility -> the `(visible, focused)`
-    // `AppLifecycleState` derivation. `on_visibility_status_change`
-    // rides winit's `Occluded` event, which winit 0.30 only emits on
-    // X11/macOS/iOS/Web (see that callback's own doc, verified against
-    // winit's source) — winit has NO Wayland emitter for this event at
-    // all, so on this workspace's own Wayland desktop reference the
-    // window is always treated as visible (the same as before this
-    // callback existed).
-    window.on_active_status_change(Box::new(move |focused| {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::WindowFocus(focused)),
-        );
-    }));
-    window.on_execution_state_change(Box::new(move |state| {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::WindowExecution(state)),
-        );
-    }));
-    window.on_visibility_status_change(Box::new(move |visible| {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::WindowVisibility(visible)),
-        );
-    }));
-    let execution = window.execution_state();
-    let focused = window.is_focused();
-    let visible = window.is_visible();
-    installation.observe(flui_runtime::owner::WindowObservation::Snapshot {
-        execution,
-        focused,
-        visible,
-    });
-
-    window.on_hover_status_change(Box::new(move |is_hovered| {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::WindowHover(is_hovered)),
-        );
-    }));
-    installation.observe_appearance();
-    installation.observe_display();
-    installation.observe_window_state();
-    // Seed the initial size and device-pixel ratio the same way: the
-    // source must not sit on defaults until the first live resize —
-    // on the web backend no resize observer exists, so a default
-    // would be permanent there.
-    if let Ok(metrics) = window.metrics() {
-        installation.observe(flui_runtime::owner::WindowObservation::Metrics(metrics));
-    }
+    // 7. The window's facts — metrics, focus, visibility, execution, hover,
+    // appearance, safe area and display — reach the presentation from its
+    // one snapshot subscription, seeded from the snapshot read right after
+    // it; the resize applier installed above (not the subscription) touches
+    // the renderer.
+    installation.observe_window();
 
     // 9. Store the window in AppRuntime's redraw-poke slot — BEFORE
     // marking the lifecycle Resumed or requesting the initial redraw.
@@ -388,7 +346,7 @@ where
     // `dispatch_platform_ui_runtime`; if the slot were still empty at that
     // point, anything resolving it during that frame would silently
     // no-op instead of waking the loop.
-    APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(Arc::clone(&window)));
+    APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(Rc::clone(&window)));
 
     // Start the host through the shared lifecycle dispatch. Each
     // presentation derives its initial state from observed native facts,
@@ -428,7 +386,7 @@ pub(super) struct DesktopFrameDriver {
     pub(super) deadlines: Arc<DesktopWakeDeadlines>,
     lane: Arc<Mutex<crate::app::raster_lane::RasterLane<Renderer>>>,
     worker_reload: WorkerReload,
-    reveal_window: std::sync::Weak<dyn PlatformWindow>,
+    reveal_window: std::rc::Weak<dyn PlatformWindow>,
 }
 
 /// Presentation-owned pacing sources, retained even while its driver is leased.
@@ -502,7 +460,7 @@ impl DesktopFrameDriver {
         let reveal_window = &self.reveal_window;
         // The gate half of the wake runs inside one ui_runtime entry and
         // decides; the pump below enters the ui_runtime itself.
-        let (action, now) = ui_runtime.enter(|ui_runtime| {
+        let (action, now, display_color) = ui_runtime.enter(|ui_runtime| {
             worker_reload_frame.poll_and_apply(ui_runtime);
 
             let scheduler = ui_runtime.scheduler();
@@ -577,7 +535,13 @@ impl DesktopFrameDriver {
                 scheduler.is_frame_scheduled(),
                 fallback_gate,
             );
-            (action, now)
+            (
+                action,
+                now,
+                ui_runtime
+                    .window_display(presentation)
+                    .and_then(|display| display.color),
+            )
         });
 
         match action {
@@ -601,6 +565,12 @@ impl DesktopFrameDriver {
         // the frame (the frame runs anyway, see
         // `pump_with_device_recovery`'s doc for why), and AFTER when
         // the wgpu device-lost callback fired mid-frame.
+        // The display the window is on, as the host last delivered it: a
+        // changed colour profile (HDR switched, a move to another monitor)
+        // sets the surface up again before this frame paints (ADR-0256 §6).
+        if super::surface_lifecycle::follow_display_color(lane_frame, display_color) {
+            ui_runtime.mark_primary_needs_full_repaint();
+        }
         let outcome = if let Some(outcome) =
             pump_with_device_recovery(ui_runtime, lane_frame, device_recovery_backoff, now)
         {

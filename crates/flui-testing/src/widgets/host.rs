@@ -16,7 +16,7 @@ use std::time::Duration;
 use flui_animation::{Vsync, VsyncRegistration, VsyncRegistrationError};
 use flui_foundation::{ElementId, ManualClock};
 use flui_interaction::events::PointerEvent;
-use flui_platform_api::PlatformInput;
+use flui_platform::PlatformInput;
 use flui_rendering::pipeline::PipelineCell;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, ElementTree};
@@ -52,7 +52,7 @@ impl WidgetHost {
     pub(super) fn mount(
         tree: BoxedView,
         window: HeadlessWindow,
-        storage: Option<Arc<dyn flui_platform_api::Storage>>,
+        storage: Option<Arc<dyn flui_platform::Storage>>,
     ) -> Self {
         let ui_runtime = HeadlessHost::with_storage(window, storage);
         let slot = Rc::new(RefCell::new(tree));
@@ -115,7 +115,7 @@ impl WidgetHost {
     }
 
     /// Deliver a key event through the UI runtime's input path.
-    pub(super) fn dispatch_key(&self, event: flui_platform_api::keyboard::KeyEvent) {
+    pub(super) fn dispatch_key(&self, event: flui_platform::keyboard::KeyEvent) {
         self.ui_runtime.dispatch(PlatformInput::Keyboard(event));
     }
 

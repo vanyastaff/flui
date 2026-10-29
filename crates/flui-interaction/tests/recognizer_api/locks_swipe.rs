@@ -11,7 +11,7 @@ use flui_interaction::{
     AxisLock, DragAxis, DragGestureRecognizer, GestureRecognizer, PointerId,
     ScaleGestureRecognizer, TransformLock, gesture::ScaleStartMode,
 };
-use flui_platform_api::EventTime;
+use flui_platform::EventTime;
 
 fn pointer(raw: u64) -> PointerId {
     PointerId::new(std::num::NonZeroU64::new(raw).expect("nonzero pointer"))
@@ -163,7 +163,7 @@ fn rails_keep_a_one_finger_scale_pan_on_its_axis() {
 fn rails_keep_a_near_axial_trackpad_pan_on_its_axis() {
     use flui_foundation::geometry::Point;
     use flui_interaction::pointer::PanZoomDispatch;
-    use flui_platform_api::pointer::{
+    use flui_platform::pointer::{
         PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerInfo, PointerPosition,
     };
     for (lock, railed) in [(AxisLock::Rails, true), (AxisLock::Free, false)] {
@@ -199,7 +199,7 @@ fn rails_keep_a_near_axial_trackpad_pan_on_its_axis() {
 fn a_trackpad_rail_waits_for_the_pan_slop() {
     use flui_foundation::geometry::Point;
     use flui_interaction::pointer::PanZoomDispatch;
-    use flui_platform_api::pointer::{
+    use flui_platform::pointer::{
         PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerInfo, PointerPosition,
     };
     let published = Rc::new(RefCell::new(Offset::ZERO));

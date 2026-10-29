@@ -4,10 +4,13 @@
 - **Date:** 2026-07-28
 - **Absorbs:** ADR-0034
 - **Amended by:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (§4: the transport and its
-  vocabulary live in `flui-platform-api`, re-exported at `flui_platform::data_transfer`; §9: the
+  vocabulary live in `flui-platform`, re-exported at `flui_native::data_transfer`; §9: the
   `Clipboard` trait moves there too, while the required `Platform::clipboard()` stays on
-  `Platform` in `flui-platform`); [ADR-0211](ADR-0211-unified-drag-and-drop.md) (§2: several concurrent offers and sessions; §5: the source
-  side, sessions and escalation from in-window drags; §8: the Web target)
+  `Platform` in `flui-native`); [ADR-0211](ADR-0211-unified-drag-and-drop.md) (§2: several concurrent offers and sessions; §5: the source
+  side, sessions and escalation from in-window drags; §8: the Web target);
+  [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) (§7: `OfferTable` is the core host's;
+  a URI list and an image arrive as `TransferPayload::Custom` of their type, the typed
+  `UriList` and `Image` payloads removed; §2, §3 and §4 below follow it)
 
 ## Context
 
@@ -30,7 +33,7 @@ needs `wl_data_offer.accept`/`set_actions` during motion. A design without a
 target→OS feedback channel during hover cannot be implemented on any of them.
 
 Flutter is not the reference: its `Clipboard` is a `services` method channel
-and it has no core DnD contract. `services` is dissolved into `flui-platform`
+and it has no core DnD contract. `services` is dissolved into `flui-native`
 capability traits, and thread/window topology is a leapfrog zone (ADR-0027).
 
 ## Decision
@@ -69,9 +72,10 @@ slot 0 produce ids that pass each other's checks — so:
 > `DataTransferSource`. Every `DataTransferId` the app can observe, clipboard
 > or DnD, is minted there and redeemable at `Platform::data_transfer()`.
 
-`OfferTable` (mint / generation-checked get / retire-and-bump) is one shared
-type in `flui_platform::data_transfer`, not reimplemented per backend. A
-request for a mismatched id is `TransferError::StaleOffer`.
+`OfferTable` (mint / generation-checked get / retire-and-bump) is one type
+of the core host (`flui-native`'s drag model, `pub(crate)` since ADR-0151 §7),
+not reimplemented per backend. A request for a mismatched id is
+`TransferError::StaleOffer`.
 
 Offer lifecycle:
 
@@ -87,7 +91,7 @@ Offer lifecycle:
   single drop-conclusion authority. Letting any consumer retire an offer would
   cancel every other consumer's fetch.
 
-`flui-platform` depends on `flui-foundation` for the ID — a downward edge.
+`flui-native` depends on `flui-foundation` for the ID — a downward edge.
 
 ### 3. Vocabulary
 
@@ -103,9 +107,12 @@ signature:
   convention treats them.
 - `TransferActions` (COPY/MOVE/LINK bitset), `DropFeedback { accept }`
   (`None` = reject).
-- `TransferPayload` — `Text`, `Html`, `UriList(Vec<TransferUri>)`,
-  `Image(TransferImage)` (encoded bytes; pixel decoding belongs to the
-  consumer), `Custom`.
+- `TransferPayload` — `Text`, `Html`, and `Custom { mime, bytes }` for every
+  other type: a URI list arrives as the bytes of `text/uri-list` (RFC 2483,
+  local paths as `file:` URIs), an image as the encoded bytes of its container
+  (pixel decoding belongs to the consumer). The typed `UriList` and `Image`
+  payloads left with ADR-0151 §7, which nothing above the host read; a
+  consumer that needs them brings them back with it.
 - `TransferLimits { max_bytes }` (16 MiB default; `#[non_exhaustive]`), checked
   against the declared length at request time and the accumulated length
   during delivery.
@@ -122,17 +129,18 @@ feedback)` and `conclude_drop(id)`. None blocks and none is `async fn`.
 `NullDataTransferSource` is the honest inert source for backends without a
 transport.
 
-`TransferRequest::channel()` returns a connected pair. The request is a `Send`
-future; dropping it cancels, which the producer sees through
-`TransferCompleter::is_cancelled()`. Completing after cancellation is a no-op;
-dropping the completer without completing resolves the request with
-`SourceGone`, so a crashed producer never leaves a consumer pending.
-`TransferRequest::ready(..)` serves data already in memory.
+`TransferRequest::pending()` returns a connected pair, made together over one
+`flui_foundation::claim_slot`, so nothing can claim the delivery before the
+request exists. The request is a `Send` future; dropping it cancels, which the
+producer sees through `TransferCompleter::is_cancelled()`. Completing after
+cancellation is a no-op; dropping the completer without completing resolves
+the request with `SourceGone`, so a crashed producer never leaves a consumer
+pending. `TransferRequest::ready(..)` serves data already in memory.
 
 The consumer spawns the request on the UI runtime scheduler and holds the house
 `TaskToken`; it is polled by the frame-driven async driver, and the
 completer's wake requests a frame. This is the only delivery mechanism — not
-`flui_platform::Task`, not the tokio background executor.
+`flui_native::Task`, not the tokio background executor.
 
 ### 5. DnD enters as `PlatformInput::DragDrop`
 
@@ -290,7 +298,7 @@ transports; image/HTML representations; write-side offers and drag sources.
   the UI thread for drops the target may reject.
 - **Separate clipboard and DnD transports.** Duplicates negotiation, limits,
   staleness and cancellation; the semantics differ only at the facades.
-- **A plain `u64` id inside `flui-platform`.** Forfeits the tested ABA
+- **A plain `u64` id inside `flui-native`.** Forfeits the tested ABA
   defense to avoid a cheap, legal dependency edge.
 - **Post-drop accept/reject.** Unimplementable on Win32, AppKit and Wayland,
   which all decide during hover.

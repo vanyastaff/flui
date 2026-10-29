@@ -8,8 +8,8 @@ pub(crate) mod requests;
 pub(crate) mod routes;
 
 use flui_interaction::FocusManager;
-use flui_platform_api::EventTime;
-use flui_platform_api::keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey};
+use flui_platform::EventTime;
+use flui_platform::keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey};
 
 /// One key event, as a platform delivers it.
 pub(crate) fn key(state: KeyState, key: Key, repeat: KeyRepeat) -> KeyEvent {

@@ -75,12 +75,13 @@ where
     use std::sync::Arc;
 
     use flui_engine::Renderer;
-    use flui_platform::{AndroidPlatform, Platform, WindowOptions};
+    use flui_native::Platform;
+    use flui_platform::WindowOptions;
     use parking_lot::Mutex;
 
     use crate::app::hot_reload::ScenePlugin;
 
-    tracing::info!("Starting Android platform via flui-platform");
+    tracing::info!("Starting Android platform via flui-native");
 
     // The application's development reload hook may own frames with a scene
     // plugin (`flui run --scene`); inert unless one is installed.
@@ -92,20 +93,20 @@ where
         .as_ref()
         .and_then(crate::app::dev_agent::DevAgent::attach);
 
-    let platform: Box<dyn Platform> = Box::new(AndroidPlatform::new(app));
+    let platform: Box<dyn Platform> = flui_native::android_platform(app);
 
     /// The actual Android bootstrap: window, GPU, UI runtime, and callback
     /// wiring. Runs once, synchronously, inside `on_ready` — which this
     /// backend delivers at the first `MainEvent::InitWindow`, not at the
-    /// first `Resume` (module doc, `platforms/android/mod.rs`'s
+    /// first `Resume` (module doc, `owner/android/looper.rs`'s
     /// "# Surface Lifecycle": `Resume` arrives before any window exists, so
     /// only `InitWindow` can carry a presentation). Migrated here from
     /// before `run()` (ADR-0039 §1): `on_ready` is `FnOnce` and fires
     /// exactly once, matching the once-only pre-run bootstrap semantics it
     /// replaced. **The surface-recreation path is no longer untouched**: this
-    /// bootstrap registers `on_surface_status_change`, which releases the
+    /// bootstrap routes the window's `surface_changed`, which releases the
     /// renderer's surface on `Pause`/`TerminateWindow` and rebuilds it when a
-    /// window returns — see that registration below. **Unvalidated
+    /// window returns — see that route below. **Unvalidated
     /// on-device**: no device and no CI compile target for
     /// `target_os = "android"` verify this; stated here and in the registry
     /// rather than assumed.
@@ -122,7 +123,7 @@ where
     where
         V: View + StatelessView + Clone + 'static,
     {
-        fn owner_platform_installed<R>(f: impl FnOnce(&flui_platform::OwnerPlatform) -> R) -> R {
+        fn owner_platform_installed<R>(f: impl FnOnce(&flui_native::OwnerPlatform) -> R) -> R {
             with_owner_platform(f)
                 .expect("BUG: bootstrap_android runs only after install_owner_platform")
         }
@@ -152,11 +153,11 @@ where
         // The existing owner wake carries runtime deadlines as well as device
         // and surface recovery and the background pace. Geometry refresh is
         // owner work even while a hidden presentation cannot produce frames.
-        owner_platform_installed(|owner| {
+        {
             let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
             let surface_recreation_retry = Arc::clone(&surface_recreation_retry);
             let background_pace = Arc::clone(&background_pace);
-            owner.shared().set_wake_deadline_hook(Box::new(move || {
+            super::host::route_wake_deadline(move || {
                 [
                     APP_RUNTIME.with(|slot| slot.borrow().next_wake()),
                     device_recovery_backoff.next_attempt_at(),
@@ -166,30 +167,40 @@ where
                 .into_iter()
                 .flatten()
                 .min()
-            }));
-        });
+            });
+        }
 
         // 1. Open window (wraps the existing ANativeWindow). `Ready` is
         // guaranteed inside `on_ready` (ADR-0039 §1).
         let options: WindowOptions = (&config).into();
-        let host = match owner_platform_installed(|owner| owner.open_window(options))
-            .and_then(flui_platform::WindowOpen::try_ready)
-        {
-            Ok(window) => window,
-            Err(error) => {
-                tracing::error!(%error, "Failed to create Android window");
-                return Err(anyhow::Error::from(error).context("Failed to create Android window"));
-            }
-        };
-        let presentation_window = super::presentation_window(Arc::clone(&host))
+        let routes = super::window_routes::WindowRoutes::new();
+        let host =
+            match owner_platform_installed(|owner| owner.open_window(options, routes.clone()))
+                .and_then(flui_native::WindowOpen::try_ready)
+            {
+                Ok(window) => window,
+                Err(error) => {
+                    tracing::error!(%error, "Failed to create Android window");
+                    return Err(
+                        anyhow::Error::from(error).context("Failed to create Android window")
+                    );
+                }
+            };
+        routes.adopt(host.id());
+        let presentation_window = super::presentation_window(std::rc::Rc::clone(&host))
             .with_pointer_resampling(config.pointer_resampling);
-        let window = Arc::clone(presentation_window.window());
+        let window = std::rc::Rc::clone(presentation_window.window());
 
         // 2. Create GPU renderer (Vulkan backend on Android). `Renderer::new`
-        // takes ownership of a `WindowTarget` (issue #1043) — `Arc::clone`
-        // gives it its own strong ref rather than a borrow of `window`.
-        let phys_size = window.physical_size();
-        let renderer = pollster::block_on(Renderer::new(Arc::clone(&window)));
+        // takes ownership of a `WindowTarget`: the window's
+        // surface target, never the window (ADR-0254 §5).
+        let geometry = super::window_install::SurfaceGeometry::of(window.as_ref());
+        let phys_size = geometry.physical;
+        let renderer = pollster::block_on(Renderer::with_surface_color(
+            window.surface_target(),
+            config.surface_color,
+            super::host::display_color_of(window.as_ref()),
+        ));
         let mut renderer = match renderer {
             Ok(r) => r,
             Err(e) => {
@@ -198,12 +209,13 @@ where
             }
         };
         renderer.resize(phys_size.width as u32, phys_size.height as u32);
+        renderer.set_frame_latency(config.frame_latency);
 
         // 3. Mount root widget (used when no plugin is active) at the
         // LOGICAL size; the paint root's DPR transform maps to physical.
         // `UiRuntime::new` applies the DPR to the freshly built pipeline
         // before returning.
-        let scale_factor = window.scale_factor() as f64;
+        let scale_factor = geometry.scale;
         let ui_runtime = match super::host::build_ui_runtime(presentation_window, scale_factor) {
             Ok(ui_runtime) => ui_runtime,
             Err(error) => {
@@ -224,7 +236,7 @@ where
         config.install_input_tap(&ui_runtime);
         config.install_error_view_builder(&ui_runtime);
 
-        let logical = window.logical_size();
+        let logical = geometry.logical;
         let owner = APP_RUNTIME
             .with(|slot| slot.borrow().owner_platform.clone())
             .expect("BUG: Android owner installed before bootstrap");
@@ -256,7 +268,7 @@ where
             .as_ref()
             .and_then(|agent| agent.vend(&ui_runtime, ui_runtime.presentation_id()));
         let textures = ui_runtime.texture_registry(ui_runtime.presentation_id());
-        let mut installation = prepare_platform_ui_runtime(ui_runtime, Arc::clone(&window));
+        let mut installation = prepare_platform_ui_runtime(ui_runtime, std::rc::Rc::clone(&window));
         installation.text_sizing(native_sizing);
         installation.dev_agent(config.dev_agent.clone().zip(agent_window));
         let owner_dispatch = installation.dispatcher();
@@ -312,35 +324,18 @@ where
             },
         ))?;
         let binding = frame.binding;
-        window.on_request_frame(Box::new(move || {
+        routes.route_frame_requested(move |request| {
             // The frame is the turn a window command's wake asks for: it starts
             // with the queued commands, before the callback guard would leave
             // them waiting.
             super::owner_dispatch::apply_queued_window_commands(std::thread::current().id());
             super::owner_dispatch::with_owner_callback(|_| {
-                let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding));
+                let _ = dispatch_platform_ui_runtime(
+                    owner_dispatch,
+                    RuntimeTask::Frame(binding, request),
+                );
             });
-        }));
-
-        // 7. Register resize callback -> typed Resized event; the applier
-        // installed above (not this closure) actually touches the renderer.
-        window.on_resize(Box::new(move |metrics| {
-            let _ = dispatch_platform_ui_runtime(
-                owner_dispatch,
-                RuntimeTask::Event(RuntimeEvent::Resized(metrics)),
-            );
-        }));
-
-        window.on_safe_area_change(Box::new(move |insets| {
-            let _ = dispatch_platform_ui_runtime(
-                owner_dispatch,
-                RuntimeTask::Event(RuntimeEvent::SafeAreaChanged(insets)),
-            );
-        }));
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::SafeAreaChanged(window.safe_area_insets())),
-        );
+        });
 
         // 8. Lifecycle callbacks
         //
@@ -348,42 +343,15 @@ where
         // before lifecycle observers run.
 
         // Native close and quit both revoke this binding before observers run.
-        owner_platform_installed(|owner| {
-            installation.terminal_callbacks(&owner.shared());
-        });
-
-        // The Activity's three lifecycle facts reach the runtime as they are,
-        // and `derive_lifecycle_state` builds the application state from them:
-        // on screen (`onStart`/`onStop`), allowed to run (`onResume`/`onPause`)
-        // and holding input focus. Focus alone must not stand for the other two
-        // (a dialog or the notification shade takes focus from a running
-        // Activity), so no callback here sets the lifecycle itself.
-        window.on_active_status_change(Box::new(move |focused| {
-            let _ = dispatch_platform_ui_runtime(
-                owner_dispatch,
-                RuntimeTask::Event(RuntimeEvent::WindowFocus(focused)),
-            );
-        }));
-        window.on_visibility_status_change(Box::new(move |visible| {
-            let _ = dispatch_platform_ui_runtime(
-                owner_dispatch,
-                RuntimeTask::Event(RuntimeEvent::WindowVisibility(visible)),
-            );
-        }));
-        window.on_execution_state_change(Box::new(move |state| {
-            let _ = dispatch_platform_ui_runtime(
-                owner_dispatch,
-                RuntimeTask::Event(RuntimeEvent::WindowExecution(state)),
-            );
-        }));
+        installation.terminal_callbacks();
 
         // 8b. Surface availability (issue #1146): the release that has to
         // happen before the native window behind the surface dies, and the
-        // rebuild for the window that replaces it. `flui-platform` reports
+        // rebuild for the window that replaces it. `flui-native` reports
         // both as one bool out of its own event loop — `false` on
         // `Pause`/`TerminateWindow`, `true` on `Resume`/`InitWindow`, with
-        // the mapping and its reason in `flui-platform`'s
-        // `platforms/android/mod.rs`, "# Surface Lifecycle".
+        // the mapping and its reason in `flui-native`'s
+        // `owner/android/looper.rs`, "# Surface Lifecycle".
         //
         // The lock below is BLOCKING, unlike the frame closure's `try_lock`
         // above, and the difference is the failure mode: a skipped frame
@@ -408,7 +376,7 @@ where
         // Blocking here is only safe while ONE invariant holds: **nothing
         // off-thread ever holds this lane**. Today that follows from this
         // backend's shape — the lane is taken inside `dispatch_request_frame`,
-        // which `AndroidPlatform::run`'s loop calls after `poll_events`
+        // which the Android platform's `run` loop calls after `poll_events`
         // returns, on this same thread, and no event arm drives a frame. A
         // second lane consumer on another thread (a worker service, a
         // pipelined presentation) would make this lock a real deadlock, which
@@ -426,27 +394,26 @@ where
         // ends at the mint and the dispatch runs outside it; the ui_runtime half is
         // documented as deferrable below, so the ordering does not change.
         //
-        // Two more invariants this registration rests on, stated where it is
-        // made rather than assumed:
+        // Two more invariants this route rests on, stated where it is set
+        // rather than assumed:
         //
-        // * The slots are cleared exactly once, on `AndroidPlatform::run`'s
-        //   exit path (`flui-platform`'s `platforms/android/mod.rs`, after the
-        //   loop and before the quit hook), on the loop's three returning
-        //   routes: `MainEvent::Destroy`, a `quit()`, a bootstrap that failed,
-        //   plus one named exception, a panic that unwinds out of `run` and
-        //   skips the clear by decision (ADR-0063 decision 5). The clear drops
-        //   this closure and the frame closure above, which are the only
-        //   owners of `lane`, so the renderer and its surface lease go with
-        //   them and the window's `Arc` is released.
-        // * Nothing registers on the cleared set afterwards. `on_ready` is
-        //   `FnOnce`, so this bootstrap runs once per platform, and a recreated
-        //   activity is a new `android_main` with a new `AndroidApp`, a new
-        //   platform and a new window (`android-activity` 0.6.1,
-        //   `native_activity/glue.rs`'s `ANativeActivity_onCreate`); the
-        //   once-then-discarded rule `WindowCallbacks::clear` documents is
-        //   never reached by this runner.
+        // * The window lets go of its handler exactly once, on the Android
+        //   platform's `run` exit path (`flui-native`'s `owner/android/looper.rs`,
+        //   after the loop and before the quit hook), on the loop's three
+        //   returning routes: `MainEvent::Destroy`, a `quit()`, a bootstrap
+        //   that failed, plus one named exception, a panic that unwinds out of
+        //   `run` and skips the release by decision (ADR-0063 decision 5). The
+        //   handler owns this route and the frame route above, which are the
+        //   only owners of `lane`, so the renderer and its surface lease go
+        //   with them and the window's `Arc` is released.
+        // * One window, one handler: `on_ready` is `FnOnce`, so this bootstrap
+        //   runs once per platform, and a recreated activity is a new
+        //   `android_main` with a new `AndroidApp`, a new platform and a new
+        //   window (`android-activity` 0.6.1, `native_activity/glue.rs`'s
+        //   `ANativeActivity_onCreate`).
         let lane_surface = Arc::clone(&lane);
-        window.on_surface_status_change(Box::new(move |has_surface| {
+        routes.route_surface_changed(move |change| {
+            let has_surface = change == flui_platform::SurfaceChange::Rebuild;
             let now = web_time::Instant::now();
             let mut lane = lane_surface.lock();
             // The engine's tracker mark, the generation mint and the retry's
@@ -481,7 +448,7 @@ where
             // `Resume` independently of the window — and is traced; a genuine
             // failure warns, and the frame-path retry above now polls it.
             report_surface_settlement("Android", &outcome);
-        }));
+        });
 
         // 9. Store the window in AppRuntime's redraw-poke slot — BEFORE
         // marking the lifecycle Resumed or requesting the initial redraw.
@@ -489,19 +456,17 @@ where
         // `dispatch_platform_ui_runtime`; if the slot were still empty at that
         // point, anything resolving it during that frame would silently
         // no-op instead of waking the loop.
-        installation.observe_appearance();
-        installation.observe_display();
-        installation.observe_window_state();
-        // Registered above, so a fact that changed during bootstrap is not lost
-        // between this sample and the first callback.
-        installation.observe(flui_runtime::owner::WindowObservation::Snapshot {
-            execution: window.execution_state(),
-            focused: window.is_focused(),
-            visible: window.is_visible(),
-        });
-        if let Ok(metrics) = window.metrics() {
-            installation.observe(flui_runtime::owner::WindowObservation::Metrics(metrics));
-        }
+        //
+        // The Activity's three lifecycle facts reach the runtime as they are,
+        // and `derive_lifecycle_state` builds the application state from them:
+        // on screen (`onStart`/`onStop`), allowed to run (`onResume`/`onPause`)
+        // and holding input focus. Focus alone must not stand for the other two
+        // (a dialog or the notification shade takes focus from a running
+        // Activity). They arrive with the metrics, the insets, the night mode
+        // and the display through the window's one snapshot subscription,
+        // seeded from the snapshot read right after it, so a fact that changed
+        // during bootstrap is not lost.
+        installation.observe_window();
         APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(window));
 
         // Seed the host's own lifecycle as Resumed. It does not decide what a
@@ -525,7 +490,7 @@ where
     // Owner-host clear guard armed BEFORE `run(...)`, not inside `on_ready`
     // (ADR-0039 §6) — see `run_desktop`'s matching comment.
     let _owner_host_clear_guard = OwnerHostClearGuard::arm();
-    let result = platform.run(Box::new(move |owner| {
+    let result = platform.run(crate::app::runner::app_handler(move |owner| {
         install_owner_platform(owner)?;
         with_owner_platform(|owner| owner.on_wake(Box::new(super::host::drive_native_text_sizing)))
             .expect("BUG: Android owner was just installed")?;
@@ -567,14 +532,18 @@ impl AndroidFrameDriver {
             physical.height.unsigned_abs(),
         );
     }
-    pub(super) fn wake(&mut self, ui_runtime: &mut crate::app::ui_runtime::UiRuntime) {
+    pub(super) fn wake(
+        &mut self,
+        ui_runtime: &mut crate::app::ui_runtime::UiRuntime,
+        presentation: flui_foundation::PresentationId,
+    ) {
         let lane_frame = &self.lane;
         let hot_reload_frame = &self.hot_reload;
         let device_recovery_backoff = &self.device_recovery_backoff;
         let surface_recreation_retry = &self.surface_recreation_retry;
         // The gate half of the wake runs inside one ui_runtime entry
         // and decides; the pump below enters the ui_runtime itself.
-        let (action, now) = ui_runtime.enter(|ui_runtime| {
+        let (action, now, display_color) = ui_runtime.enter(|ui_runtime| {
             let now = web_time::Instant::now();
             // Owner-inbox drain: commands and worker results commit HERE,
             // at the frame boundary while the scheduler phase is Idle —
@@ -599,22 +568,22 @@ impl AndroidFrameDriver {
                         "frame skipped: raster lane already held by an outer \
                                  frame dispatch"
                     );
-                    return (WakeAction::Skip, now);
+                    return (WakeAction::Skip, now, None);
                 };
                 let plugin_rendered = lane.with_backend(|r| {
                     let (w, h) = r.size();
                     hot_reload_frame.try_render_frame(r, w as f64, h as f64)
                 });
                 if plugin_rendered {
-                    return (WakeAction::Skip, now);
+                    return (WakeAction::Skip, now, None);
                 }
             }
 
             let has_pending = ui_runtime.has_pending_work();
             // See the desktop closure's matching comment: a wake-
-            // deadline source (here, `set_wake_deadline_hook` forces
-            // a dispatch once due — `flui-platform`'s
-            // `platforms/android/mod.rs`'s own `run` loop) that is
+            // deadline source (here, the routed wake deadline forces
+            // a dispatch once due — `flui-native`'s
+            // `owner/android/looper.rs`'s own `run` loop) that is
             // absent from `dirty` reaches `WakeAction::Skip` and
             // returns before this closure ever calls
             // `pump_with_device_recovery`, no matter how faithfully the
@@ -646,7 +615,7 @@ impl AndroidFrameDriver {
                 FallbackGate::default(),
             );
             if action != WakeAction::Render {
-                return (action, now);
+                return (action, now, None);
             }
 
             // A retry owed by a genuine surface-recreation failure gets
@@ -671,7 +640,13 @@ impl AndroidFrameDriver {
                 }
                 Some(SurfaceLifecycleOutcome::Released) | None => {}
             }
-            (action, now)
+            (
+                action,
+                now,
+                ui_runtime
+                    .window_display(presentation)
+                    .and_then(|display| display.color),
+            )
         });
 
         if action != WakeAction::PumpBackground {
@@ -713,7 +688,7 @@ impl AndroidFrameDriver {
         // closure: both retries pace their ATTEMPT via a
         // non-blocking deadline check (see `RetryBackoff`'s
         // doc), never by blocking this thread.
-        // `AndroidPlatform::run`'s poll loop calls
+        // The Android platform's `run` poll loop calls
         // `process_input_events`/`dispatch_request_frame`
         // inline on this SAME thread, so a sleep here — even
         // one bounded to the backoff's own growing interval —
@@ -722,10 +697,16 @@ impl AndroidFrameDriver {
         // territory at the backoff's one-second cap. The
         // deadline is carried by the wake hook wired at step 0c
         // instead: this backend has no `ControlFlow::WaitUntil`,
-        // so `AndroidPlatform::run`'s poll blocks no longer than
+        // so the Android platform's `run` poll blocks no longer than
         // the hook's deadline and forces a
-        // dispatch once the deadline is due (`flui-platform`'s
-        // `platforms/android/mod.rs`).
+        // dispatch once the deadline is due (`flui-native`'s
+        // `owner/android/looper.rs`).
+        //
+        // A changed colour profile of the window's display sets the surface
+        // up again before this frame paints (ADR-0256 §6).
+        if super::surface_lifecycle::follow_display_color(lane_frame, display_color) {
+            ui_runtime.mark_primary_needs_full_repaint();
+        }
         if pump_with_device_recovery(ui_runtime, lane_frame, device_recovery_backoff, now).is_none()
         {
             tracing::error!("frame skipped: raster lane busy at frame admission");

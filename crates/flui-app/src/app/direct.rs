@@ -48,10 +48,7 @@ use std::sync::Arc;
 
 use flui_engine::{EngineError, Recoverability, Renderer};
 use flui_layer::{Scene, SceneBuilder};
-use flui_platform::{
-    WindowOptions,
-    traits::{DispatchEventResult, PlatformInput},
-};
+use flui_platform::{DispatchEventResult, PlatformInput, WindowOptions};
 use parking_lot::Mutex;
 
 use super::AppConfig;
@@ -85,7 +82,7 @@ use super::AppConfig;
 /// Runs on every backend, including winit (Linux) — bootstrap moved inside
 /// `on_ready` (ADR-0039 §1), so the winit backend's requirement of a
 /// running event loop before window creation is satisfied on every target.
-/// Uses `flui_platform::current_platform()` for platform selection.
+/// Uses `flui_native::current_platform()` for platform selection.
 ///
 /// **Experimental**: this is a direct-engine escape hatch, not a supported
 /// application entry point — see the module docs.
@@ -105,7 +102,7 @@ pub fn run_direct(
         "Starting FLUI direct render mode"
     );
 
-    let platform = flui_platform::current_platform()?;
+    let platform = flui_native::current_platform()?;
 
     /// The actual direct-mode bootstrap: window, GPU renderer, and callback
     /// wiring. Runs once, synchronously, inside `on_ready` (ADR-0039
@@ -124,7 +121,7 @@ pub fn run_direct(
     where
         F: FnMut(&mut SceneBuilder, f64, f64) + Send + 'static,
     {
-        fn owner_platform_installed<R>(f: impl FnOnce(&flui_platform::OwnerPlatform) -> R) -> R {
+        fn owner_platform_installed<R>(f: impl FnOnce(&flui_native::OwnerPlatform) -> R) -> R {
             crate::app::runner::with_owner_platform(f)
                 .expect("BUG: bootstrap_direct runs only after install_owner_platform")
         }
@@ -132,22 +129,37 @@ pub fn run_direct(
         // 1. Open window. `Ready` is guaranteed inside `on_ready`
         // (ADR-0039 §1).
         let options: WindowOptions = (&config).into();
-        let window = match owner_platform_installed(|owner| owner.open_window(options))
-            .and_then(flui_platform::WindowOpen::try_ready)
-        {
-            Ok(window) => window,
-            Err(error) => {
-                tracing::error!(%error, "Window creation failed");
-                return Err(anyhow::Error::from(error).context("Failed to create window"));
-            }
-        };
+        let routes = crate::app::runner::window_routes::WindowRoutes::new();
+        let window =
+            match owner_platform_installed(|owner| owner.open_window(options, routes.clone()))
+                .and_then(flui_native::WindowOpen::try_ready)
+            {
+                Ok(window) => window,
+                Err(error) => {
+                    tracing::error!(%error, "Window creation failed");
+                    return Err(anyhow::Error::from(error).context("Failed to create window"));
+                }
+            };
 
         // 2. Create GPU renderer. `Renderer::new` takes ownership of a
-        // `WindowTarget` (issue #1043) — `Arc::clone(&window)` gives it its
-        // own strong ref rather than a borrow, so the renderer stays sound
+        // `WindowTarget`: the window's surface target, which it
+        // owns rather than borrows, so the renderer stays sound
         // even if this scope's `window` binding is dropped first.
-        let phys_size = window.physical_size();
-        let renderer = pollster::block_on(Renderer::new(Arc::clone(&window)));
+        let phys_size = window
+            .state()
+            .metrics
+            .map_or_else(flui_foundation::geometry::Size::default, |metrics| {
+                metrics.physical()
+            });
+        // Direct mode has no installed host, so the display is sampled here.
+        let display = owner_platform_installed(flui_native::OwnerPlatform::display_snapshot)
+            .ok()
+            .and_then(|snapshot| crate::app::runner::display_color_on(&snapshot, window.as_ref()));
+        let renderer = pollster::block_on(Renderer::with_surface_color(
+            window.surface_target(),
+            config.surface_color,
+            display,
+        ));
         let mut renderer = match renderer {
             Ok(r) => r,
             Err(e) => {
@@ -156,6 +168,7 @@ pub fn run_direct(
             }
         };
         renderer.resize(phys_size.width as u32, phys_size.height as u32);
+        renderer.set_frame_latency(config.frame_latency);
 
         tracing::info!(
             gpu = %renderer.capabilities().adapter_name,
@@ -170,7 +183,7 @@ pub fn run_direct(
         // 4. Register frame callback
         let renderer_frame = Arc::clone(&renderer);
         let render_fn_frame = Arc::clone(&render_fn);
-        window.on_request_frame(Box::new(move || {
+        routes.route_frame_requested(move |_| {
             let mut r = renderer_frame.lock();
             let (w, h) = r.size();
 
@@ -208,7 +221,7 @@ pub fn run_direct(
                     }
                     Err(e @ EngineError::SurfaceTargetUnavailable { .. }) => {
                         // The window owner reports its native handle is gone
-                        // or suspended (issue #1043). `HandleError::Unavailable`
+                        // or suspended. `HandleError::Unavailable`
                         // is `Recoverability::Recoverable` (worth waiting out);
                         // `HandleError::NotSupported` is `Fatal` (the owner can
                         // never answer this handle kind) — but this frame loop
@@ -225,11 +238,26 @@ pub fn run_direct(
                     }
                 }
             }
-        }));
+        });
 
-        // 5. Register resize callback
+        // 5. Follow the window's snapshot: a change of its drawable metrics
+        // resizes the surface. Weak: the route lives in the window's
+        // own handler.
         let renderer_resize = Arc::clone(&renderer);
-        window.on_resize(Box::new(move |metrics| {
+        let observed = std::rc::Rc::downgrade(&window);
+        let sized = std::cell::Cell::new(window.state().metrics);
+        routes.route_state_changed(move || {
+            let Some(window) = observed.upgrade() else {
+                return;
+            };
+            let metrics = window.state().metrics;
+            if metrics == sized.get() {
+                return;
+            }
+            sized.set(metrics);
+            let Some(metrics) = metrics else {
+                return;
+            };
             let physical = metrics.physical();
             let (w, h) = (
                 physical.width.unsigned_abs(),
@@ -242,20 +270,19 @@ pub fn run_direct(
                 h,
                 metrics.scale().get()
             );
-        }));
+        });
 
         // 6. Register input callback. This is a no-op stub: it neither inspects
         // the input nor requests a redraw (`resolved(false, false)`). Direct mode
         // has no widget tree to dispatch input into; a caller who needs input
         // handling drives it from inside `render_fn` via its own state.
-        window.on_input(Box::new(move |_input: PlatformInput| {
-            DispatchEventResult::resolved(false, false)
-        }));
+        routes
+            .route_input(move |_input: PlatformInput| DispatchEventResult::resolved(false, false));
 
         // 7. Lifecycle callbacks
-        window.on_close(Box::new(|| {
+        routes.route_closed(|| {
             tracing::info!("Window closed");
-        }));
+        });
 
         // Deliberately unconditional, unlike `run_desktop`'s and
         // `open_secondary_window`'s windows, which route this through the
@@ -263,19 +290,28 @@ pub fn run_direct(
         // `UiRuntime` at all (see step 6 above and `run_direct`'s own doc), so
         // there is no presentation for a veto to be addressed to and no
         // widget tree that could be holding unsaved work. An embedder that
-        // wants to refuse a close here owns the loop already and registers
-        // its own `on_should_close` on the window it was handed — the
+        // wants to refuse a close here owns the loop already and opens
+        // its window with a handler of its own — the
         // presentation-addressed API would have nothing to key on.
-        window.on_should_close(Box::new(|| {
-            tracing::debug!("Window close requested, allowing (direct mode hosts no ui_runtime)");
-            true
-        }));
+        let closing = std::rc::Rc::downgrade(&window);
+        routes.route_close_requested(
+            || {
+                tracing::debug!(
+                    "Window close requested, allowing (direct mode hosts no ui_runtime)"
+                );
+                flui_platform::CloseDecision::Close
+            },
+            move || {
+                if let Some(window) = closing.upgrade() {
+                    crate::app::runner::close_granted_request(&*window);
+                }
+            },
+        );
 
-        owner_platform_installed(|owner| {
-            owner.shared().on_quit(Box::new(|| {
-                tracing::info!("Platform quit");
-            }));
-        });
+        // Direct mode hosts no runtime to keep the loop alive: its last
+        // window closing ends it, and the quit is only logged.
+        crate::app::runner::route_quit(|| tracing::info!("Platform quit"));
+        crate::app::runner::route_exit_policy(|| true);
 
         // 8. Request initial redraw
         window.request_redraw();
@@ -287,7 +323,7 @@ pub fn run_direct(
     // Owner-host clear guard armed BEFORE `run(...)`, not inside `on_ready`
     // (ADR-0039 §6/§7) — see `run_desktop`'s matching comment.
     let _owner_host_clear_guard = crate::app::runner::OwnerHostClearGuard::arm();
-    platform.run(Box::new(move |owner| {
+    platform.run(crate::app::runner::app_handler(move |owner| {
         crate::app::runner::install_owner_platform(owner)?;
         bootstrap_direct(config, render_fn)?;
         tracing::info!("FLUI direct render mode ready");

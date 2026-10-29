@@ -77,7 +77,7 @@ pins controller transfer and retained phase. Cupertino's family also checks
 disabled/detached feedback, binding, resumption and unmount.
 `refresh_indicator_spins_while_refreshing`
 checks visible feedback and cleanup under both policies.
-`motion_lab_buttons_drive_independent_property_deadlines_and_reduce` drives the
+[`motion_lab_buttons_drive_independent_property_deadlines_and_reduce`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/examples/motion_lab.rs) drives the
 actual example's Tab/Enter control, retained focus, persistent pause and resumption.
 These headless producer observations do not establish native assistive-technology
 announcements, platform preference delivery on every backend, or visual GPU output.

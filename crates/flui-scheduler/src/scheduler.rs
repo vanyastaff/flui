@@ -1866,16 +1866,10 @@ impl UpdateScheduler {
     /// "Whichever thread" is not a formality: a task waker (through the owner
     /// frame's [`FrameWaker`]) fires this from whatever thread completed the
     /// future, which for a job on
-    /// `ExecutionServices`' IO lane is a pool worker. This doc used to offer
-    /// `request_redraw` as the example of acceptable wake machinery, and
-    /// `flui-app`'s `FrameWakeHandle` — the hook production installs — calls it
-    /// directly. On macOS that messages the NSWindow's content view, while
-    /// `MacOSWindow`'s `unsafe impl Send` justifies itself with "the NSWindow
-    /// pointer is only messaged from the main thread"; that backend is compiled
-    /// by CI and never executed, so nothing disagrees. Issue #949 carries the
-    /// chain and the fix. Until it lands, a NEW hook should set a flag or push
-    /// onto a channel the owner thread drains rather than reach a platform API
-    /// from here.
+    /// `ExecutionServices`' IO lane is a pool worker. A hook that wants a frame
+    /// from the platform asks through a window's `RedrawRequester`, which any
+    /// thread may hold (ADR-0254 §5); a platform window itself is not `Send`
+    /// and cannot be reached from here.
     ///
     /// The *previous* hook is dropped only once this lock is released: if
     /// its `Arc` is the last reference, `Drop` runs whatever the captured

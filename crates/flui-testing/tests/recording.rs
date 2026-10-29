@@ -10,7 +10,9 @@ use flui_foundation::geometry::Offset;
 use flui_interaction::GestureDisposition;
 use flui_interaction::PointerId;
 use flui_interaction::events::{PointerKind, make_down_event_for_id, make_up_event_for_id};
-use flui_platform_api::{GesturePreferences, PlatformInput, SystemPreferences};
+use flui_platform::{
+    EventTime, FramePresented, GesturePreferences, PlatformInput, SystemPreferences,
+};
 use flui_runtime::owner::InputOutcome;
 use flui_runtime::{DecisionRow, HostInput, InputRecord, InputRow};
 use flui_testing::recording::{
@@ -25,6 +27,17 @@ fn host(log: &Rc<RefCell<Vec<&'static str>>>) -> HeadlessHost {
 }
 
 /// [`host`] presenting into `window`.
+/// The scale the window's snapshot reports.
+fn scale(window: &HeadlessWindow) -> f64 {
+    use flui_platform::PlatformWindow as _;
+    window
+        .state()
+        .metrics
+        .expect("a headless window has drawable metrics")
+        .scale()
+        .get()
+}
+
 fn host_on(window: HeadlessWindow, log: &Rc<RefCell<Vec<&'static str>>>) -> HeadlessHost {
     let mut host = attached(window, log);
     let _ = host.pump(Duration::from_millis(16));
@@ -149,7 +162,6 @@ fn a_recording_replays_to_the_decisions_it_recorded() {
 /// a `Metrics` row at its position, and the replay applies it there.
 #[test]
 fn a_scale_change_mid_recording_replays_to_the_same_decisions() {
-    use flui_platform_api::PlatformWindow as _;
     use flui_runtime::owner::WindowObservation;
 
     let (bytes, fired) = recorded(Privacy::Redact, |host| {
@@ -185,7 +197,7 @@ fn a_scale_change_mid_recording_replays_to_the_same_decisions() {
     assert_eq!(fresh.replay(&recording), recording.decisions());
     assert_eq!(*log.borrow(), ["tap", "long_press"]);
     assert!(
-        (fresh.window().scale_factor() - 1.5).abs() < f64::EPSILON,
+        (scale(fresh.window()) - 1.5).abs() < f64::EPSILON,
         "the replay moved the window to the recorded scale"
     );
 }
@@ -198,9 +210,9 @@ fn a_scale_change_mid_recording_replays_to_the_same_decisions() {
 fn a_move_through_the_window_state_records_the_move() {
     use flui_runtime::owner::WindowObservation;
 
-    let registry = flui_platform_api::DisplayRegistry::new();
+    let registry = flui_platform::DisplayRegistry::new();
     let display = registry
-        .mint(&flui_platform_api::DisplayKey::Injected(1))
+        .mint(&flui_platform::DisplayKey::Injected(1))
         .expect("display id");
     let (bytes, _) = recorded(Privacy::Redact, |host| {
         let window = host.primary_window();
@@ -232,8 +244,6 @@ fn a_move_through_the_window_state_records_the_move() {
 /// that scale before the first row, as the header says it started.
 #[test]
 fn a_replay_starts_at_the_recorded_scale() {
-    use flui_platform_api::PlatformWindow as _;
-
     let log = Rc::new(RefCell::new(Vec::new()));
     let mut recorder = host(&log);
     recorder.set_scale_factor(recorder.primary_window(), 2.0);
@@ -247,10 +257,10 @@ fn a_replay_starts_at_the_recorded_scale() {
     assert!((recording.header().windows[0].scale_factor - 2.0).abs() < f64::EPSILON);
 
     let mut fresh = host(&Rc::new(RefCell::new(Vec::new())));
-    assert!((fresh.window().scale_factor() - 1.0).abs() < f64::EPSILON);
+    assert!((scale(fresh.window()) - 1.0).abs() < f64::EPSILON);
     assert_eq!(fresh.replay(&recording), recording.decisions());
     assert!(
-        (fresh.window().scale_factor() - 2.0).abs() < f64::EPSILON,
+        (scale(fresh.window()) - 2.0).abs() < f64::EPSILON,
         "the replay started the window at the recorded scale"
     );
 }
@@ -278,7 +288,7 @@ fn a_decision_row_carries_its_commit_time() {
     let recording = record(host.input_taps(), writer).expect("first tap registration");
     touch(&host, 1, true);
     host.clock().advance(Duration::from_millis(30));
-    let committed = flui_platform_api::EventTime::from_nanos(
+    let committed = flui_platform::EventTime::from_nanos(
         u64::try_from(host.clock().elapsed().as_nanos()).expect("small"),
     );
     touch(&host, 1, false);
@@ -423,8 +433,8 @@ fn a_truncated_recording_dispatches_nothing() {
 
 /// Rows carrying text in each place a recording redacts it.
 fn text_rows() -> Vec<InputRecord> {
-    use flui_platform_api::keyboard::{Code, Key, KeyEvent, KeyState};
-    use flui_platform_api::{EventTime, ImeEvent, WindowId};
+    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState};
+    use flui_platform::{EventTime, ImeEvent, WindowId};
 
     let at = EventTime::from_nanos(1_000);
     let request = |action, text: &str| accesskit::ActionRequest {
@@ -473,8 +483,8 @@ const SECRETS: [&str; 7] = [
 ];
 
 fn written(privacy: Privacy) -> Vec<u8> {
-    use flui_platform_api::WindowId;
-    use flui_platform_api::pointer::{DeviceId, PenTool};
+    use flui_platform::WindowId;
+    use flui_platform::pointer::{DeviceId, PenTool};
     use flui_testing::recording::{RecordedWindow, RecordingClock, RecordingHeader};
 
     let mut header = RecordingHeader::new(RecordingClock::Virtual)
@@ -673,6 +683,79 @@ fn a_factory_tap_ends_its_recording_when_the_runtime_goes_away() {
         accepted(&recording.decisions()),
         [(1, "TapArenaMember".to_owned())]
     );
+}
+
+/// [`host`] on a window whose platform reports when frames reached the screen.
+fn reporting_host(log: &Rc<RefCell<Vec<&'static str>>>) -> HeadlessHost {
+    host_on(
+        HeadlessWindow::new(200, 200).with_presentation_reports(),
+        log,
+    )
+}
+
+const REFRESH: Duration = Duration::from_millis(16);
+
+/// A touch, the frame that draws it, a report that the frame was shown 24 ms after the touch,
+/// and two more frames, recorded on the host `make` builds: the touch's arrival and the
+/// presentation report a frame carried, if any did.
+fn touch_and_presentation(
+    make: fn(&Rc<RefCell<Vec<&'static str>>>) -> HeadlessHost,
+) -> (EventTime, Option<FramePresented>) {
+    let (bytes, _) = recorded_on(make, Privacy::Redact, |host| {
+        let touched = EventTime::from_nanos(
+            u64::try_from(host.clock().elapsed().as_nanos()).expect("test time fits"),
+        );
+        touch(host, 1, true);
+        let _ = host.pump(REFRESH);
+        // The frame that drew the touch is shown at the refresh after it.
+        host.report_presented(
+            FramePresented::new(touched + Duration::from_millis(24)).with_refresh(REFRESH),
+        );
+        let _ = host.pump(REFRESH);
+        touch(host, 1, false);
+        let _ = host.pump(REFRESH);
+    });
+    let recording = replayable(&bytes).expect("a whole recording");
+    let rows = recording.rows();
+    let touch = pointer_rows(rows)
+        .first()
+        .map(|(_, row)| row.arrival)
+        .expect("the touch was recorded");
+    let presented = rows.iter().find_map(|row| match row {
+        InputRecord::Input(InputRow {
+            input:
+                HostInput::Frame {
+                    presented: Some(presented),
+                    ..
+                },
+            ..
+        }) => Some(*presented),
+        _ => None,
+    });
+    (touch, presented)
+}
+
+/// One timeline for input, frames and presentation: a report that a
+/// frame reached the screen, injected on the headless host, is recorded with
+/// the frame that carried it, and the time from a touch to that frame's
+/// showing is a subtraction of the two recorded stamps, with no conversion.
+#[test]
+fn a_presentation_and_the_input_before_it_are_on_one_timeline() {
+    let (touch, presented) = touch_and_presentation(reporting_host);
+    let presented = presented.expect("a frame carried the presentation report");
+    assert_eq!(
+        presented.at.saturating_duration_since(touch),
+        Duration::from_millis(24),
+        "the touch's stamp and the presentation's are on one timeline"
+    );
+    assert_eq!(presented.refresh, Some(REFRESH));
+}
+
+/// A headless window whose capabilities say it reports no presentation
+/// carries none, whatever a test injects.
+#[test]
+fn a_window_that_reports_no_presentation_carries_none() {
+    assert_eq!(touch_and_presentation(host).1, None);
 }
 
 /// The pointer rows of `rows`, with their positions.
@@ -880,11 +963,15 @@ fn focused_beside(log: &Rc<RefCell<Vec<&'static str>>>) -> HeadlessHost {
 
 /// A key a surface of window A reported after window B gained focus goes to
 /// B, and its row names B's window, not the surface that reported it: the
-/// row says where the key went, and a replay delivers it there again.
+/// row says where the key went.
+///
+/// A replay delivers keys by the replaying host's focus, as the recorded host
+/// did, so it cannot tell the right row from the wrong one; only the row's
+/// window is asserted.
 fn a_key_records_the_window_focus_dispatched_it_to() {
     use flui_interaction::testing::input::KeyEventBuilder;
-    use flui_platform_api::WindowId;
-    use flui_platform_api::keyboard::Code;
+    use flui_platform::PlatformWindow;
+    use flui_platform::keyboard::Code;
     use flui_runtime::RecordedSurface;
 
     let (bytes, fired) = recorded_on(focused_beside, Privacy::KeepText, |host| {
@@ -896,6 +983,19 @@ fn a_key_records_the_window_focus_dispatched_it_to() {
     });
     assert_eq!(fired, ["key on b"]);
     let recording = replayable(&bytes).expect("a whole recording");
+    let a = focused_beside(&Rc::new(RefCell::new(Vec::new())))
+        .window()
+        .id();
+    let [b] = recording
+        .header()
+        .windows
+        .iter()
+        .map(|window| window.window)
+        .filter(|window| *window != a)
+        .collect::<Vec<_>>()[..]
+    else {
+        panic!("the recording names window A and one other");
+    };
     let keys: Vec<_> = recording
         .rows()
         .iter()
@@ -908,17 +1008,11 @@ fn a_key_records_the_window_focus_dispatched_it_to() {
             _ => None,
         })
         .collect();
-    // `open_window` gives the first window it opens the identity after the
-    // primary's.
     assert_eq!(
         keys,
-        [(WindowId(2), RecordedSurface::Window, InputOutcome::Handled)],
-        "the row names the window the key was dispatched to"
+        [(b, RecordedSurface::Window, InputOutcome::Handled)],
+        "the row names the window the key was dispatched to, not window {a:?}"
     );
-
-    let log = Rc::new(RefCell::new(Vec::new()));
-    let _ = focused_beside(&log).replay(&recording);
-    assert_eq!(*log.borrow(), ["key on b"]);
 }
 
 /// Every input row names where its dispatch placed it: a pointer row the
@@ -1165,7 +1259,7 @@ fn a_recording_replays_under_its_recorded_gesture_values() {
 fn header_gesture_values_read_back_exactly() {
     use flui_interaction::gesture::{OneEuroTuning, VelocityEstimator};
     use flui_interaction::{GestureProfiles, GestureSettings, RemainderHandoff};
-    use flui_platform_api::{TargetPlatform, WindowId};
+    use flui_platform::{TargetPlatform, WindowId};
     use flui_testing::recording::{RecordedWindow, RecordingClock, RecordingHeader};
 
     let estimators = [

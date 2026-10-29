@@ -3,16 +3,18 @@
 //! the platform's own `simulate_*` entry points. Declared in `owner_dispatch.rs`
 //! through `#[path]` because the host it exercises is private to the runner.
 
+use crate::app::runner::window_routes::OwnerOpenRouted as _;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::memory::{MemoryPressureLevel, ReclaimMemory};
-use flui_platform::traits::PlatformWindow;
+use flui_native::{HeadlessHostEvents, HeadlessPlatform, Platform as _};
+use flui_platform::PlatformWindow;
 use flui_platform::{
-    HeadlessHostEvents, HeadlessPlatform, HostNotice, Platform as _, SessionEndAnswer,
-    SessionEndBlock, SessionEndBlockError, SessionEndPhase, SystemNotice,
+    HostNotice, SessionEndAnswer, SessionEndBlock, SessionEndBlockError, SessionEndPhase,
+    SystemNotice,
 };
 use flui_view::__runtime::BindingRuntime as _;
 use flui_view::LifecycleHandle;
@@ -33,7 +35,7 @@ fn boot() -> Rig {
     let platform = HeadlessPlatform::new();
     let events = platform.host_events();
     Box::new(platform)
-        .run(Box::new(|owner| {
+        .run(crate::app::runner::app_handler(|owner| {
             install_owner_platform(owner)?;
             Ok(())
         }))
@@ -52,20 +54,20 @@ impl Drop for Rig {
 
 /// An installed window and the lifecycle handle its widgets hear notices from.
 struct Win {
-    _window: Arc<dyn PlatformWindow>,
+    _window: Rc<dyn PlatformWindow>,
     dispatcher: PresentationDispatcher,
     lifecycle: LifecycleHandle,
 }
 
 fn open_window() -> Win {
     let host_window =
-        with_owner_platform(|owner| owner.open_window(flui_platform::WindowOptions::default()))
+        with_owner_platform(|owner| owner.open_routed(flui_platform::WindowOptions::default()))
             .expect("an installed owner")
-            .and_then(flui_platform::WindowOpen::try_ready)
+            .and_then(flui_native::WindowOpen::try_ready)
             .expect("headless windows are ready");
-    let window: Arc<dyn PlatformWindow> = host_window;
-    let runtime = build_ui_runtime(Arc::clone(&window), 1.0).expect("runtime");
-    let installation = prepare_ui_runtime_alongside(runtime, Arc::clone(&window));
+    let window: Rc<dyn PlatformWindow> = host_window;
+    let runtime = build_ui_runtime(Rc::clone(&window), 1.0).expect("runtime");
+    let installation = prepare_ui_runtime_alongside(runtime, Rc::clone(&window));
     let dispatcher = installation.dispatcher();
     installation
         .submit()

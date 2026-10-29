@@ -231,13 +231,14 @@ pub use test_only_global_key_registry::{
 // Tree management
 pub use owner::{
     BuildOwner, BuildPremise, DuplicateGlobalKey, ElementOwner, FrameBuildReport, GlobalKeyScope,
-    LifecycleHook, RebuildHandle, RebuildReason, RebuildReasons, RecoveredAt, RecoveredPanic,
+    LifecycleHook, PresentationCapabilities, RebuildHandle, RebuildReason, RebuildReasons,
+    RecoveredAt, RecoveredPanic,
 };
 // Ergonomic local-state cells built on `RebuildHandle` (see `state_cell.rs`).
 pub use reactive::{
-    EventContextError, EventCx, EventError, EventOutcome, Reactive, ReadGraph, ReadScope,
-    ReaderSink, ScopeRef, Signal, SignalError, SignalSender, SignalSlot, SignalWriteExt, SlotInfo,
-    WriteTarget, Writer, WriterSource, callback, callback_ref, callback_with,
+    BuildInProgress, EventContextError, EventCx, EventError, EventOutcome, Reactive, ReadGraph,
+    ReadScope, ReaderSink, ScopeRef, Signal, SignalError, SignalSender, SignalSlot, SignalWriteExt,
+    SlotInfo, WriteTarget, Writer, WriterSource, callback, callback_ref, callback_with,
 };
 pub use state_cell::{StateCell, StateHandle};
 pub use tree::{ElementNode, ElementTree};

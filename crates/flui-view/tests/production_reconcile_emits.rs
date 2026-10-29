@@ -345,7 +345,7 @@ pub(crate) fn active_global_key_move_through_build_scope_updates_render_parent_l
             "new render parent must list the moved render child",
         );
         assert_eq!(
-            render_tree.get(moved_render).unwrap().parent(),
+            render_tree.parent(moved_render),
             Some(destination_render),
             "moved render child parent pointer must follow the element reparent",
         );

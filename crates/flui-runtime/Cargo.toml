@@ -46,7 +46,7 @@ flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
 flui-protocol = { workspace = true }
 # `PlatformWindow` and its capability traits, the window contract a
 # presentation drives; no backend (ADR-0082).
-flui-platform-api = { workspace = true }
+flui-platform = { workspace = true }
 # Window sizes and geometry; `FontCollection`/`TextContext`, the text service
 # each UI runtime owns over the app's font collection (ADR-0092 §3).
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
@@ -92,11 +92,11 @@ flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", featu
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-testing = { path = "../flui-testing" }
 # The UI runtime tests: the headless platform's windows and capability fakes
-# (`headless_platform`, `FakeTextInput`, `FakeHaptics`, `FakeAccessibility`),
+# (`headless_platform`, `FakeTextInput`, `FakeAccessibility`),
 # a dev edge only, so the shipped crate still links no backend; the concrete
 # render objects some tests mount; AccessKit action requests driven the way
 # an adapter would; and `!Send` pins on the UI runtime.
-flui-platform = { path = "../flui-platform", version = "=0.2.0-dev" }
+flui-native = { path = "../flui-native", version = "=0.2.0-dev" }
 flui-objects = { path = "../flui-objects", version = "=0.2.0-dev" }
 static_assertions = { workspace = true }
 # Exact diagnostics for owner-thread and frame-entry boundaries.

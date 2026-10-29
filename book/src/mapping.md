@@ -21,7 +21,7 @@ struct in `crates/`.
   with one `#[route("…")]` pattern per variant, and a `Router<R>` that keeps the stack of route
   values, which a page pushes and pops through the `RouterHandle<R>` it takes in `init_state`
   ([ADR-0093](https://github.com/vanyastaff/flui/blob/main/docs/adr/ADR-0093-router-is-the-primary-navigation-api.md),
-  still Proposed; `examples/two_screens.rs` shows the shape). `Navigator` remains underneath
+  still Proposed). `Navigator` remains underneath
   ([ADR-0019](https://github.com/vanyastaff/flui/blob/main/docs/adr/ADR-0019-navigator-routing-seam.md));
   the string-named routes of
   [ADR-0024](https://github.com/vanyastaff/flui/blob/main/docs/adr/ADR-0024-named-routes-seam.md)
@@ -29,8 +29,8 @@ struct in `crates/`.
 - **`MaterialApp` is `WidgetsApp` plus theming.** `MaterialApp` wraps a `WidgetsApp`, resolves
   `ThemeMode` against the platform brightness, publishes the resolved `ThemeData` through
   `Theme`, and installs a `ScaffoldMessenger`. `run_app(MaterialApp::new(home))` is the usual
-  root; `Theme::new(ThemeData::light(), <root view>)` passed to `run_app` (see
-  `examples/form.rs`) still works for an app that wants only the theme.
+  root; `Theme::new(ThemeData::light(), <root view>)` passed to `run_app`
+  still works for an app that wants only the theme.
 - **`Layer` is a closed `enum`, not a class hierarchy** — see
   [View, Element, RenderObject](concepts/view-element-render.md).
 

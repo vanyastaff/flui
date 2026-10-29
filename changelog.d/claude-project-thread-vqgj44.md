@@ -7,7 +7,7 @@
 
 ### Changed
 
-- **Window resizes carry `WindowMetrics`** (`flui-platform-api`, `flui-platform`, `flui-runtime`):
+- **Window resizes carry `WindowMetrics`** (`flui-platform`, `flui-native`, `flui-runtime`):
   `PlatformWindow::on_resize`, `WindowObservation::Metrics` and `OwnerEffects::resize_surface`
   take the metrics instead of a logical size and a scale. The recording format is version 2: its `metrics` row
   holds the device-pixel size.
@@ -17,7 +17,7 @@
 - **Swapchain one pixel short of the window** (`flui-app`): the native runners rebuilt the surface
   size as `logical × scale` truncated to pixels (115 px at 1.75 became 114). They configure it
   with the device pixels the platform reported.
-- **Invalid window sizes reach layout** (`flui-platform`, `flui-runtime`): a zero, negative or
+- **Invalid window sizes reach layout** (`flui-native`, `flui-runtime`): a zero, negative or
   non-finite size or scale is dropped where the backend reports it.
 - **Animation frozen on a second window's late wake** (`flui-app`): the desktop fallback deadline
   was dropped when the loop first read it more than a display period late, for instance while
@@ -35,3 +35,11 @@
   `UiRuntime::set_error_view_builder` / `BuildOwner::set_error_view_builder`); it applies to every
   presentation of the runtime, including windows opened later, and two runtimes in one process no
   longer share it.
+- **Signal writes are refused while any window of the runtime builds** (`flui-view`,
+  `flui-runtime`): the build-time guard of a presentation's graph did not see another window's
+  build, so a signal handed to a second window's view could be written from its `build`. The UI
+  runtime now shares a `BuildInProgress` cell (`BuildOwner::set_build_in_progress`) with every
+  presentation's graph and the write fails with `SignalError::WrittenDuringBuild`.
+- **Window placement write no longer polled every 250 ms** (`flui-app`): while storage had a
+  placement write in flight the owner woke four times a second to look for the answer. Storage's
+  answer now wakes the owner, and a write still out sets no deadline.

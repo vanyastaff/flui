@@ -2,11 +2,15 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-18
+- **Amended:** 2026-10-22 — following [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md)
+  §10: `FLUIContentView` is the owner's (`owner::apple::macos::content_view`) and registers
+  every method itself, the `NSTextInputClient` ones included, dispatching them to the input and
+  the text input each view keeps.
 - **Absorbs:** ADR-0070
 
 ## Context
 
-`flui-platform`'s macOS backend was built on `cocoa` 0.27 / `objc` 0.2, and its
+`flui-native`'s macOS backend was built on `cocoa` 0.27 / `objc` 0.2, and its
 iOS backend was a stub whose module doc planned `objc`, `block`,
 `cocoa-foundation` and `icrate`. None of those could carry the work:
 
@@ -48,9 +52,10 @@ retain/release tail stay structurally identical, and the
 `setReleasedWhenClosed:NO` lifetime rule (ADR-0063) is preserved.
 
 `FLUIContentView` and `FLUIWindowDelegate` are built with `ClassBuilder`, not
-`define_class!`: the content view's eleven `NSTextInputClient` methods
-(ADR-0069) are registered from a separate module, which the declarative macro
-cannot express across files.
+`define_class!`, kept like the raw `msg_send!` shape above: the content view's
+eleven `NSTextInputClient` methods (ADR-0069) were first registered from a
+separate module, which the declarative macro cannot express across files, and
+moving the classes to the macro is a migration of its own.
 
 ### 3. iOS: `applicationWillTerminate:` is the loop-exit signal
 
@@ -91,14 +96,14 @@ Native execution state (inactive vs background) is ADR-0072.
   generations remain in the lockfile until those dependencies move.
 - The `OwnerLaneId`/`unsafe impl Send`/`Drop` machinery on macOS is unchanged —
   the migration swapped types, not lifetime rules.
-- iOS runs on the simulator (`cargo xtask device ios-sim`); device builds need signing no CI
+- iOS runs on the simulator ([`cargo xtask device ios-sim`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs)); device builds need signing no CI
   runner has, and CI type-checks `aarch64-apple-ios` without executing it.
 - Running iOS for real exposed that `Renderer::required_limits` started from
   desktop defaults the simulator's Metal adapter rejects; requested limits are
   now clamped to the adapter's.
 - The macOS behavior is exercised on a real Mac by the bundled `.app` probes
-  (`cargo xtask device macos-frame-pump`, `macos-close-path`, `macos-ime`,
-  `macos-resize-jitter`); iOS by `cargo xtask device ios-sim`, which asserts from the unified
+  ([`cargo xtask device macos-frame-pump`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs), `macos-close-path`, `macos-ime`,
+  `macos-resize-jitter`); iOS by [`cargo xtask device ios-sim`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs), which asserts from the unified
   log that a Metal device was created and a frame rendered.
 
 ## Alternatives rejected

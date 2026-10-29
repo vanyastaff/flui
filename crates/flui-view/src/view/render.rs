@@ -139,7 +139,7 @@ impl<'a> RenderObjectContext<'a> {
     pub fn register_scroll(
         &self,
         handler: impl Fn(
-            &flui_platform_api::pointer::ScrollEvent,
+            &flui_platform::pointer::ScrollEvent,
         ) -> flui_interaction::pointer::EventPropagation
         + 'static,
     ) -> Result<flui_interaction::pointer::ScrollTarget, RenderObjectContextError> {
@@ -157,7 +157,7 @@ impl<'a> RenderObjectContext<'a> {
         &self,
         target: flui_interaction::pointer::ScrollTarget,
         handler: impl Fn(
-            &flui_platform_api::pointer::ScrollEvent,
+            &flui_platform::pointer::ScrollEvent,
         ) -> flui_interaction::pointer::EventPropagation
         + 'static,
     ) -> Result<(), RenderObjectContextError> {
@@ -175,6 +175,70 @@ impl<'a> RenderObjectContext<'a> {
         target: flui_interaction::pointer::ScrollTarget,
     ) -> Result<(), RenderObjectContextError> {
         Ok(self.dispatch_handle()?.unregister_scroll(target)?)
+    }
+
+    /// Declare that `target` feeds a drag-family recognizer, so a touchpad pan
+    /// delivers its contact to it (ADR-0251). See
+    /// [`InteractionDispatchHandle::declare_scroll_contact_feed`](flui_interaction::InteractionDispatchHandle::declare_scroll_contact_feed).
+    ///
+    /// # Errors
+    ///
+    /// Returns the lane's typed dispatch error for wrong/detached owner state
+    /// or for a target that no longer belongs to the active owner lane.
+    pub fn declare_scroll_contact_feed(
+        &self,
+        target: flui_interaction::PointerTarget,
+    ) -> Result<(), RenderObjectContextError> {
+        Ok(self
+            .dispatch_handle()?
+            .declare_scroll_contact_feed(target)?)
+    }
+
+    /// Take back [`declare_scroll_contact_feed`](Self::declare_scroll_contact_feed).
+    ///
+    /// # Errors
+    ///
+    /// As [`declare_scroll_contact_feed`](Self::declare_scroll_contact_feed).
+    pub fn withdraw_scroll_contact_feed(
+        &self,
+        target: flui_interaction::PointerTarget,
+    ) -> Result<(), RenderObjectContextError> {
+        Ok(self
+            .dispatch_handle()?
+            .withdraw_scroll_contact_feed(target)?)
+    }
+
+    /// Declare the axis a scroll target scrolls along and whether it has
+    /// anywhere to go, so it competes for a touchpad pan (ADR-0251). See
+    /// [`InteractionDispatchHandle::declare_scroll_target_axis`](flui_interaction::InteractionDispatchHandle::declare_scroll_target_axis).
+    ///
+    /// # Errors
+    ///
+    /// Returns the lane's typed dispatch error for wrong/detached owner state
+    /// or for a target that no longer belongs to the active owner lane.
+    pub fn declare_scroll_target_axis(
+        &self,
+        target: flui_interaction::pointer::ScrollTarget,
+        axis: flui_foundation::geometry::Axis,
+        can_scroll: impl Fn() -> bool + 'static,
+    ) -> Result<(), RenderObjectContextError> {
+        Ok(self
+            .dispatch_handle()?
+            .declare_scroll_target_axis(target, axis, can_scroll)?)
+    }
+
+    /// Take back [`declare_scroll_target_axis`](Self::declare_scroll_target_axis).
+    ///
+    /// # Errors
+    ///
+    /// As [`declare_scroll_target_axis`](Self::declare_scroll_target_axis).
+    pub fn withdraw_scroll_target_axis(
+        &self,
+        target: flui_interaction::pointer::ScrollTarget,
+    ) -> Result<(), RenderObjectContextError> {
+        Ok(self
+            .dispatch_handle()?
+            .withdraw_scroll_target_axis(target)?)
     }
 
     /// Register an arbitrated trackpad pan-zoom handler in the active owner

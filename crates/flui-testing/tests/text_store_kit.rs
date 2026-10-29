@@ -7,7 +7,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use flui_foundation::geometry::{Bounds, Point};
-use flui_platform_api::text_store::{
+use flui_platform::text_store::{
     CommitGate, Composition, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, PointMode,
     RangeRect, Selection, TextChange, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver,
     TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range, utf16,
@@ -38,6 +38,9 @@ enum Fault {
     /// Answers a point in the right half of a supplementary scalar with the
     /// offset between its surrogates.
     SplitsSurrogatesOnHitTest,
+    /// Hit-tests with one choice for both of `PointMode`'s: either flag set
+    /// rounds inside a box and clamps outside the text.
+    CouplesPointChoices,
     /// Notifies its owner once per edit rather than once per session.
     NotifiesPerEdit,
     /// Tells the observer of an app edit at once, inside a frame
@@ -175,6 +178,13 @@ fn faulty_index(
     point: Point<f64>,
     mode: PointMode,
 ) -> Result<Utf16Offset, TextStoreError> {
+    let mode = if fault == Fault::CouplesPointChoices
+        && (mode.round_to_nearest_edge || mode.nearest_when_outside)
+    {
+        PointMode::NEAREST
+    } else {
+        mode
+    };
     let found = session.index_at_point(point, mode)?;
     if fault != Fault::SplitsSurrogatesOnHitTest {
         return Ok(found);
@@ -433,6 +443,17 @@ fn conformance_fails_a_store_that_notifies_its_owner_under_the_lock() {
     );
 }
 
+/// A store reading `GXFPF_ROUND_NEAREST` as `GXFPF_NEAREST` passes kit
+/// version 2 and fails version 3.
+fn kit_fails_a_store_that_couples_its_point_choices() {
+    assert_kit_catches(
+        Fault::CouplesPointChoices,
+        "index_at_point_reads_its_two_choices_apart",
+    );
+    let failures = text_store_kit::run(&mut FaultyFixture::new(Fault::CouplesPointChoices), 2);
+    assert!(failures.is_empty(), "kit v2 grew: {failures:#?}");
+}
+
 /// A kit version names the cases a downstream suite certified against: the
 /// version 2 cases fail a store that predates them, and a suite pinned to
 /// version 1 still passes it.
@@ -636,6 +657,10 @@ fn text_store_kit_matrix() {
             (
                 "conformance_fails_a_store_that_notifies_its_owner_under_the_lock",
                 conformance_fails_a_store_that_notifies_its_owner_under_the_lock as fn(),
+            ),
+            (
+                "kit_fails_a_store_that_couples_its_point_choices",
+                kit_fails_a_store_that_couples_its_point_choices as fn(),
             ),
             (
                 "a_pinned_conformance_version_does_not_grow",

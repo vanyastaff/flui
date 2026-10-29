@@ -33,8 +33,8 @@
   [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md),
   [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md),
   [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md)
-- **Refs:** decision D16 in the [decision index](../../design/decisions.md); the
-  [architecture review](../research/2026-09-25-architecture-review/report-architecture.ru.md)
+- **Refs:** decision D16 in the [decision index](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md); the
+  [architecture review](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/report-architecture.ru.md)
 
 The accepted part added `crates/flui-protocol` (tier C, order 2, `stable`), moved
 `SemanticsRole` and `SemanticsAction` into it (`flui-semantics` re-exports them), and made
@@ -188,7 +188,7 @@ This settles ADR-0080's open item:
   the endpoint's JSON as text; a failure carries ADR-0080's error object whole.
 - *Not built.* The handle table across windows (handles stay window-scoped and a call names its
   window), the Android, web and iOS runtime check, the lazy vend on the first client, and the
-  live-smoke run of `agent_counter` under Xvfb.
+  [live-smoke](https://github.com/vanyastaff/flui/tree/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/live-smoke) run of `agent_counter` under Xvfb.
 
 ### 4. A normalized outline projection is the cross-backend contract
 
@@ -256,7 +256,7 @@ rather than a misplaced one.
 - `flui-devtools` gains a real server and a security boundary: debug-only, local endpoint,
   launch token.
 - The CLI's `--json` event stream (`crates/flui-cli/src/commands/run.rs:420`, consumed by
-  `cargo xtask device`) is a candidate for the event-log schema; moving it is a separate,
+  [`cargo xtask device`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs)) is a candidate for the event-log schema; moving it is a separate,
   additive change.
 - Bounded reads, action replies that return the post-action outline, and a catalog index for
   agents are follow-ups that fit this crate; they are not decided here.
@@ -348,7 +348,7 @@ Not yet built:
 
 - **Round trip against the wire, the rest.** The desktop server switches its replies to the
   lifted types and its existing reply tests pass unchanged.
-- **Projection equality.** On Windows, `cargo xtask device windows-a11y` runs a FLUI example,
+- **Projection equality.** On Windows, [`cargo xtask device windows-a11y`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs) runs a FLUI example,
   reads it through the UIA backend and through the in-process backend, and asserts the two
   normalized outlines are equal. A deliberately broken mapping (one role swapped) must make the
   check fail.

@@ -1,7 +1,7 @@
 # The lowest version of each environment FLUI runs on (ADR-0244).
 #
 # This is the only place a floor is written by hand. `cargo xtask platform-floor --write`
-# generates from it the floors `flui-platform` and `flui-cli` compile in and the version map
+# generates from it the floors `flui-native` and `flui-cli` compile in and the version map
 # (`docs/version-map.md`); `cargo xtask platform-floor` fails when any of them, or a template
 # that states a floor, disagrees with this file.
 #

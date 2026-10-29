@@ -127,18 +127,6 @@ criterion = { workspace = true }
 # global subscriber that records what the server traces.
 tempfile = { workspace = true }
 tracing-subscriber = { workspace = true }
-# The agent example runs the counter in a real window.
-flui-app = { path = "../../crates/flui-app", version = "=0.2.0-dev" }
-
-# The profiler demo exercises the `profiling`-gated `profiler` module.
-[[example]]
-name = "profiler_demo"
-required-features = ["profiling"]
-
-# The counter, served to an agent over the endpoint.
-[[example]]
-name = "agent_counter"
-required-features = ["agent"]
 
 # The inspector integration tests, as modules of one binary (tests/main.rs).
 [[test]]

@@ -14,7 +14,7 @@
 //! use std::pin::pin;
 //! use std::task::{Context, Poll, Waker};
 //!
-//! use flui_platform_api::{Storage, StorageName, WriteMode};
+//! use flui_platform::{Storage, StorageName, WriteMode};
 //! use flui_testing::storage::MemoryStorage;
 //!
 //! const NOTES: StorageName = StorageName::from_static("notes");
@@ -38,7 +38,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
-use flui_platform_api::{
+use flui_platform::{
     Storage, StorageError, StorageFuture, StorageName, Stored, StoredVersion, WriteMode,
 };
 use parking_lot::Mutex;
@@ -163,7 +163,7 @@ impl MemoryStorage {
     /// use std::pin::pin;
     /// use std::task::{Context, Poll, Waker};
     ///
-    /// use flui_platform_api::{Storage, StorageError, StorageName, WriteMode};
+    /// use flui_platform::{Storage, StorageError, StorageName, WriteMode};
     /// use flui_testing::storage::MemoryStorage;
     ///
     /// const NOTES: StorageName = StorageName::from_static("notes");

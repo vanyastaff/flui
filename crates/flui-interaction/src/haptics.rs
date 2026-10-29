@@ -39,10 +39,12 @@ use std::time::Duration;
 
 use flui_foundation::panic::{FailureClass, RecoveryScope};
 use flui_foundation::{IdMint, MonotonicClock};
-use flui_platform_api::haptics::{
+use flui_platform::haptics::{
     HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, HapticTicket, HapticTiming,
 };
-use flui_platform_api::{DeviceId, EventTime, HapticFeedback, PlatformHaptics};
+use flui_platform::{
+    DeviceId, EventTime, HapticFeedback, PlatformHaptics, Unsupported, UnsupportedReason,
+};
 
 use crate::gesture::arena::{DispatchedInput, DispatchedInputCell};
 
@@ -256,7 +258,7 @@ impl State {
 
     fn play_now(&self, play: &Play, request: &HapticRequest) -> HapticOutcome {
         let Some(actuator) = (self.actuator)() else {
-            return HapticOutcome::Unavailable;
+            return Unsupported::new(UnsupportedReason::NoWindow).into();
         };
         // Reaching the actuator may have hidden the window or turned haptics off.
         if self.suppressed() {
@@ -808,7 +810,7 @@ impl HapticsHandle {
         }
         match self.state.upgrade() {
             Some(state) => state.submit(play, request),
-            None => HapticOutcome::Unavailable,
+            None => Unsupported::new(UnsupportedReason::NoWindow).into(),
         }
     }
 

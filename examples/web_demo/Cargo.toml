@@ -14,11 +14,12 @@ wasm-opt = false
 
 [dependencies]
 flui-foundation = { path = "../../crates/flui-foundation" }
-flui-platform = { path = "../../crates/flui-platform", default-features = false }
-flui-platform-api.workspace = true
+flui-native = { path = "../../crates/flui-native", default-features = false }
+flui-platform.workspace = true
 wasm-bindgen = "0.2"
 web-sys = { version = "0.3", features = ["console"] }
 console_error_panic_hook = "0.1"
+web-time.workspace = true
 
 [lints]
 workspace = true

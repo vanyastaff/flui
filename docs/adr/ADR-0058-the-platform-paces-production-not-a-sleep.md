@@ -3,6 +3,8 @@
 - **Status:** Accepted
 - **Date:** 2026-09-05
 - **Amended:** 2026-10-11 — removed the self-referential absorption label; platform pacing and fallback-deadline decisions are unchanged.
+- **Superseded-by:** [ADR-0257](ADR-0257-frame-timing-and-latency.md), decision 0 only: the swapchain's frame
+  latency is a setting whose default is 2.
 - **Superseded-by:** [ADR-0249](ADR-0249-the-android-loop-blocks-until-woken.md), decision 5 for Android
   only: its backgrounded pump is paced by a deadline, not a sleep.
 - **Amended-by:** [ADR-0236](ADR-0236-display-snapshot-and-refresh-period.md) — decision 2 only: where the
@@ -48,13 +50,14 @@ whole extra period in the acquire, which halved the frame rate of a realistic wo
 AppKit/Metal.
 
 **1. The platform's own frame-pacing signal is armed before every present.**
-`PlatformWindow::pre_present_notify` (default no-op) is called by the raster backend
+`SurfaceTarget::pre_present_notify` (the window's surface target, ADR-0254 §5; a host
+without a frame callback returns at once) is called by the raster backend
 immediately before `queue.present`, through `RasterBackend::set_pre_present_hook`. The engine
 owns the *when* (only for a frame that will present, never on a skip path — a Wayland frame
 callback requested with no commit behind it withholds every later redraw); the app layer owns
 the *what*, wiring the window's notify into the backend at bootstrap
 (`install_pre_present_hook`). The hook is a backend capability rather than a direct call
-because `flui-engine` does not depend on `flui-platform`: the raster side takes an owned scene
+because `flui-engine` does not depend on `flui-native`: the raster side takes an owned scene
 and a closure, never a window.
 
 **2. No sleep. What replaces it is a deadline.** `FallbackWake` defers the next ticker-only
@@ -116,7 +119,7 @@ frozen. That belongs to a wall-clock timer service, not to pacing.
   timer.
 - The pacing path is traced: `flui.gpu`'s `surface_acquired` (with the acquire duration),
   `pre_present_notified`, and `flui.pace`'s `fallback_armed` / `fallback_abandoned` /
-  `segment_poll`. The live-smoke harness asserts one `pre_present_notified` per
+  `segment_poll`. The [live-smoke harness](https://github.com/vanyastaff/flui/tree/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/live-smoke) asserts one `pre_present_notified` per
   `present_submitted`.
 
 ## Alternatives rejected

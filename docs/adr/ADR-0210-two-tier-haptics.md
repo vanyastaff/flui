@@ -25,12 +25,12 @@ align feedback with the frame that shows the change (AppKit's `drawCompleted`, U
 test nothing to assert. AppKit (`alignment`, `levelChange`), Android `HapticFeedbackConstants`
 (`CONFIRM`, `REJECT`, `DRAG_START`) and SwiftUI `SensoryFeedback` name kinds Flutter lacks.
 Android API 36 envelopes and Core Haptics share one model: normalized intensity and sharpness
-with control points ([followups §3.1](../research/2026-10-12-interaction-input-followups.md)).
+with control points ([followups §3.1](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-12-interaction-input-followups.md)).
 No widget can reach haptics today.
 
 ## Decision
 
-1. **Tier 1, semantic.** `HapticFeedback` (Stable, `flui-platform-api`) keeps its variants and
+1. **Tier 1, semantic.** `HapticFeedback` (Stable, `flui-platform`) keeps its variants and
    gains `Alignment`, `LevelChange`, `DragLift`, `Drop`, `Confirm` and `Reject`. A kind the
    device lacks maps to the nearest one the backend has and reports `Approximated`.
 2. **Tier 2, patterns.** `HapticPattern` is an ordered list of `HapticEvent`s, built only by a
@@ -159,7 +159,7 @@ No widget can reach haptics today.
 8. **Platform notes.** Windows `InputHapticsManager` (touchpad and mouse haptics) is in no
    published `windows` crate (0.62.2 has only `SimpleHapticsController`), so it is
    `Unavailable` until a release ships it or a narrow `windows-bindgen` binding is generated
-   ([dependency selection](../research/2026-10-13-interaction-dependency-selection.md)). It routes
+   ([dependency selection](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-13-interaction-dependency-selection.md)). It routes
    per thread, so requests run on the owner thread of the window that received the input.
    The pen's `SimpleHapticsController` (from `PenDevice::GetFromPointerId`) plays one waveform at a
    time, so a pattern's calls are made at their times off the owner thread, a newer request
@@ -173,7 +173,7 @@ No widget can reach haptics today.
    (`stoppedHandler`) and after a haptic-server error (`resetHandler`). Both handlers only
    record a restart obligation and wake the owner, which restarts the engine before the next
    play; a pattern requested while it is down falls back to tier 1.
-9. **Gate.** `flui-platform-api` always builds `HapticPattern` and its parts, `HapticRequest`,
+9. **Gate.** `flui-platform` always builds `HapticPattern` and its parts, `HapticRequest`,
    `HapticOutcome`, `HapticTicket`, `HapticCapabilities` and the `PlatformHaptics` methods that
    take them (with default bodies, so a new method never breaks an implementor), so Cargo's
    feature unification cannot change them. The user-facing gate is the additive
@@ -198,7 +198,7 @@ No widget can reach haptics today.
   set per backend over its pure mapping functions; haptics rows in `assert_backend_conforms`.
 - CI executes the headless backend, the queue, the builder and every backend's mapping table
   (pure functions). Actual vibration runs on a native host only: Windows pen, iOS Core Haptics
-  (including reset), Android, macOS and Web, each through `cargo xtask device <os>-input`, and a
+  (including reset), Android, macOS and Web, each through [`cargo xtask device <os>-input`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs), and a
   PR touching them shows that run.
 - `FakeHaptics` records requests and the outcomes it returned.
 

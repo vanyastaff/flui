@@ -94,7 +94,7 @@
 //! ```rust
 //! use flui_interaction::{GestureBinding, HitTestResult};
 //! use flui_foundation::geometry::Point;
-//! use flui_platform_api::{EventTime, pointer::{PointerButton, PointerButtons,
+//! use flui_platform::{EventTime, pointer::{PointerButton, PointerButtons,
 //!     PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition,
 //!     PointerPress, PointerSample}};
 //!
@@ -118,7 +118,9 @@ mod arena_driver;
 mod close_coordinator;
 mod move_coalescer;
 mod pan_zoom_sequences;
+mod pointer_frame;
 mod pointer_sequences;
+mod scroll_contact;
 mod scroll_sequences;
 
 use std::{
@@ -130,7 +132,7 @@ use std::{
 
 use flui_foundation::geometry::Offset;
 use flui_foundation::{IdExhausted, IdMint, InputSequenceId, MonotonicClock};
-use flui_platform_api::pointer::{PanZoomEvent, ScrollEvent};
+use flui_platform::pointer::{PanZoomEvent, ScrollEvent};
 use smallvec::SmallVec;
 
 use self::{
@@ -318,7 +320,7 @@ pub struct InvalidSamplingWindow;
 /// render hit-test entries and route tokens remain on the separate data plane.
 pub struct GestureBinding {
     close: CloseCoordinator,
-    capture_wake: RefCell<Option<std::sync::Weak<dyn flui_platform_api::PlatformWindow>>>,
+    capture_wake: RefCell<Option<std::rc::Weak<dyn flui_platform::PlatformWindow>>>,
     contacts: PointerSequences,
     moves: MoveCoalescer,
     scrolls: ScrollSequences,
@@ -581,7 +583,7 @@ impl GestureBinding {
             .capture_wake
             .borrow()
             .as_ref()
-            .and_then(std::sync::Weak::upgrade);
+            .and_then(std::rc::Weak::upgrade);
         if let Some(window) = window {
             window.request_redraw();
         }
@@ -623,7 +625,7 @@ impl GestureBinding {
 
     pub(crate) fn set_pointer_capture_wake(
         &self,
-        window: std::sync::Weak<dyn flui_platform_api::PlatformWindow>,
+        window: std::rc::Weak<dyn flui_platform::PlatformWindow>,
     ) {
         self.arena.arena().set_deadline_wake(window.clone());
         *self.capture_wake.borrow_mut() = Some(window);
@@ -1001,7 +1003,7 @@ impl GestureBinding {
         }))
     }
 
-    fn flush_pending_moves_kernel(&self, mode: MotionFlush) -> usize {
+    fn deliver_pending_moves(&self, mode: MotionFlush) -> usize {
         if self.contacts.is_retiring_any() {
             return 0;
         }
@@ -1501,16 +1503,13 @@ impl GestureBinding {
     /// animation) still wakes at the right instant to resolve an in-flight
     /// long-press/double-tap deadline, rather than only lazily on the next
     /// unrelated event.
-    pub fn next_deadline(&self) -> Option<flui_platform_api::EventTime> {
+    pub fn next_deadline(&self) -> Option<flui_platform::EventTime> {
         self.arena.arena().next_deadline()
     }
 
     /// The instant `time` names on this binding's clock, so a host can turn a
     /// deadline into a native wake; `None` past the last representable one.
-    pub(crate) fn instant_at(
-        &self,
-        time: flui_platform_api::EventTime,
-    ) -> Option<web_time::Instant> {
+    pub(crate) fn instant_at(&self, time: flui_platform::EventTime) -> Option<web_time::Instant> {
         crate::events::instant_at(self.clock.as_ref(), time)
     }
 
@@ -1544,7 +1543,8 @@ impl GestureBinding {
         }
         if let PointerEvent::Cancel(cancel) = event {
             let source = SignalSource::from(cancel.pointer);
-            self.scrolls.withdraw_source(source);
+            let orphans = self.scrolls.withdraw_source(source);
+            self.cancel_orphaned_scroll_contacts(orphans, cancel.time, first);
             let native = self.pan_zooms.withdraw_source(source);
             pan_zoom_sequences::retire_sequences(native, first);
         }
@@ -1578,7 +1578,8 @@ impl GestureBinding {
                 });
                 RoutePanic::preserve_first(&mut first_panic, dropped, "removed-device hover moves");
                 let source = SignalSource::Device(device.device);
-                self.scrolls.withdraw_source(source);
+                let orphans = self.scrolls.withdraw_source(source);
+                self.cancel_orphaned_scroll_contacts(orphans, device.time, &mut first_panic);
                 let native = self.pan_zooms.withdraw_source(source);
                 pan_zoom_sequences::retire_sequences(native, &mut first_panic);
                 for contact in self.contacts.contacts(Some(device.device)) {
@@ -2108,13 +2109,16 @@ impl GestureBinding {
     {
         // Commit source admission (or terminal withdrawal) before
         // hit testing and observers, which may reenter this binding.
+        let mut orphans = Vec::new();
         let sequence = self.scrolls.prepare(
             surface,
             scroll,
             crate::events::interaction_now(self.clock.as_ref()),
             self.default_profiles.latch_idle(scroll.pointer.kind),
             &self.sequences,
+            &mut orphans,
         );
+        let momentum_dropped = self.scrolls.drops_momentum(surface, scroll);
         let dispatched = match &sequence {
             ScrollAdmission::Active(latch) => {
                 Some((latch, latch.lapses_at().map(ScrollLatchEnd::IdleAt)))
@@ -2139,33 +2143,22 @@ impl GestureBinding {
         // the consumptive channel stays with the first scroll claimant.
         let fresh_result = hit_test_fn(position);
         let mut first_panic = self.dispatch_ephemeral(event, &fresh_result);
+        self.cancel_orphaned_scroll_contacts(orphans, scroll.time, &mut first_panic);
+        let contact =
+            self.drive_scroll_contact(surface, scroll, &sequence, &fresh_result, &mut first_panic);
         let claim = RoutePanic::capture(|| {
-            let claimed = match &sequence {
-                ScrollAdmission::Terminal(ended) => {
-                    match ended.as_ref().and_then(|s| s.route.get()) {
-                        Some(route) => route.dispatch(scroll, || {}),
-                        // A final delta may be the first meaningful packet.
-                        // It is deliverable, but cannot publish a lasting lease.
-                        None => fresh_result.dispatch_scroll(scroll),
-                    }
-                }
-                ScrollAdmission::Refused => false,
-                ScrollAdmission::Active(sequence) => {
-                    if let Some(route) = sequence.route.get() {
-                        // A gone target stays inert until the sequence ends;
-                        // it never hands this gesture to a new hit path.
-                        route.dispatch(scroll, || {})
-                    } else if self.scrolls.is_current(surface, scroll.pointer, sequence) {
-                        fresh_result.dispatch_scroll_with_claim(scroll, |route| {
-                            if self.scrolls.is_current(surface, scroll.pointer, sequence) {
-                                sequence.route.set(Some(route));
-                            }
-                        })
-                    } else {
-                        false
-                    }
-                }
+            let replay = match contact {
+                scroll_contact::ContactOutcome::Consumed => return,
+                scroll_contact::ContactOutcome::None if momentum_dropped => return,
+                scroll_contact::ContactOutcome::None => Vec::new(),
+                scroll_contact::ContactOutcome::Replay(earlier) => earlier,
             };
+            // The packets the contact kept back reach the scroll route first,
+            // in order, so the wait for the verdict loses no motion.
+            for earlier in &replay {
+                self.deliver_scroll(surface, earlier, &sequence, &fresh_result);
+            }
+            let claimed = self.deliver_scroll(surface, scroll, &sequence, &fresh_result);
             tracing::trace!(
                 claimed,
                 scroll_targets = fresh_result.entries_with_scroll_targets().count(),
@@ -2179,6 +2172,43 @@ impl GestureBinding {
         );
         if let Some(panic) = first_panic {
             panic.resume();
+        }
+    }
+
+    /// Offer one packet of a scroll sequence to the consumptive channel: the
+    /// route its latch holds, or the first scroll target that claims it.
+    fn deliver_scroll(
+        &self,
+        surface: InputSurface,
+        scroll: &ScrollEvent,
+        sequence: &ScrollAdmission,
+        fresh_result: &HitTestResult,
+    ) -> bool {
+        match sequence {
+            ScrollAdmission::Terminal(ended) => {
+                match ended.as_ref().and_then(|s| s.route.get()) {
+                    Some(route) => route.dispatch(scroll, || {}),
+                    // A final delta may be the first meaningful packet.
+                    // It is deliverable, but cannot publish a lasting lease.
+                    None => fresh_result.dispatch_scroll(scroll),
+                }
+            }
+            ScrollAdmission::Refused => false,
+            ScrollAdmission::Active(sequence) => {
+                if let Some(route) = sequence.route.get() {
+                    // A gone target stays inert until the sequence ends;
+                    // it never hands this gesture to a new hit path.
+                    route.dispatch(scroll, || {})
+                } else if self.scrolls.is_current(surface, scroll.pointer, sequence) {
+                    fresh_result.dispatch_scroll_with_claim(scroll, |route| {
+                        if self.scrolls.is_current(surface, scroll.pointer, sequence) {
+                            sequence.route.set(Some(route));
+                        }
+                    })
+                } else {
+                    false
+                }
+            }
         }
     }
 
@@ -2461,7 +2491,7 @@ impl GestureBinding {
     fn cancel_claimed(
         &self,
         pointer: PointerInfo,
-        time: flui_platform_api::EventTime,
+        time: flui_platform::EventTime,
         token: ResolvedRouteToken,
         owner: crate::pointer::PointerTarget,
     ) -> Option<RoutePanic> {
@@ -2495,17 +2525,15 @@ impl GestureBinding {
     /// Returns whether the pointer identities matched; a refusal changes
     /// neither move.
     ///
-    /// [`PointerMove::COALESCED_HISTORY_LIMIT`]: flui_platform_api::pointer::PointerMove::COALESCED_HISTORY_LIMIT
+    /// [`PointerMove::COALESCED_HISTORY_LIMIT`]: flui_platform::pointer::PointerMove::COALESCED_HISTORY_LIMIT
     fn fold_history(
-        newer: &mut flui_platform_api::pointer::PointerMove,
-        older: &mut flui_platform_api::pointer::PointerMove,
+        newer: &mut flui_platform::pointer::PointerMove,
+        older: &mut flui_platform::pointer::PointerMove,
     ) -> bool {
         if newer.try_coalesce_from(older).is_err() {
             return false;
         }
-        newer.retain_latest_coalesced(
-            flui_platform_api::pointer::PointerMove::COALESCED_HISTORY_LIMIT,
-        );
+        newer.retain_latest_coalesced(flui_platform::pointer::PointerMove::COALESCED_HISTORY_LIMIT);
         true
     }
 

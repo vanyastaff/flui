@@ -2,7 +2,7 @@
 
 # Hot Reload
 
-FLUI targets **hot reload** (state preserved, `build()` re-run). The operational two-layer model below is the dev-time/build side; the runtime protocol is in the [hot-reload design](designs/2026-06-28-hot-reload-runtime-protocol.md).
+FLUI targets **hot reload** (state preserved, `build()` re-run). The operational two-layer model below is the dev-time/build side; the runtime hook and the planned move to Subsecond are in [ADR-0094](adr/ADR-0094-hot-reload-through-subsecond.md), and the plugin boundary's invariants in [`crates/flui-hot-reload/ARCHITECTURE.md`](../crates/flui-hot-reload/ARCHITECTURE.md).
 
 ## Target vs today
 
@@ -12,7 +12,7 @@ FLUI targets **hot reload** (state preserved, `build()` re-run). The operational
 | Hot restart | Partial (types change → process restart; in-process remount not wired) | `HotReloadTier::HotRestart` |
 | Scene plugin reload | Yes | Keep for GPU demos |
 
-**Critical insight:** state must live in the **host binary** (Element tree), not in the reloadable `.so`. See the design doc §2.
+**Critical insight:** state must live in the **host binary** (Element tree), not in the reloadable `.so`.
 
 ## Getting a hot-reload project
 

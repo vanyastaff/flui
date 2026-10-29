@@ -300,3 +300,67 @@ pub(crate) fn an_older_overlapping_wake_cannot_clear_newer_failed_delivery_debt(
         "the successful retry clears the newer generation"
     );
 }
+
+/// Writes `target` (another presentation's signal) from its own `build` and
+/// records the outcome.
+#[derive(Clone)]
+struct CrossWindowWriter {
+    target: Signal<u32>,
+    graph: Reactive,
+    outcome: std::rc::Rc<std::cell::RefCell<Vec<Result<(), SignalError>>>>,
+}
+
+impl flui_view::View for CrossWindowWriter {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+impl StatelessView for CrossWindowWriter {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.outcome
+            .borrow_mut()
+            .push(self.target.set(&self.graph, 9));
+        SizedBox::square(1.0)
+    }
+}
+
+pub(crate) fn a_signal_of_one_window_is_not_writable_while_another_window_builds() {
+    let mut ui_runtime = UiRuntime::for_test();
+    let a = ui_runtime.presentation_id();
+    let b = ui_runtime.install_second_presentation_for_test();
+    let graph_a = graph_of(&ui_runtime, a);
+    let sig_a = graph_a.signal(1u32);
+    let outcome = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    ui_runtime
+        .attach_root_widget_to_for_test(
+            b,
+            &CrossWindowWriter {
+                target: sig_a,
+                graph: graph_a.clone(),
+                outcome: std::rc::Rc::clone(&outcome),
+            },
+        )
+        .expect("secondary root attaches");
+    let mut backend = ScriptedSink::always_presents();
+    ui_runtime.render_frame(&mut backend);
+
+    let recorded = outcome.borrow().clone();
+    assert!(
+        matches!(
+            recorded.as_slice(),
+            [Err(SignalError::WrittenDuringBuild { .. })]
+        ),
+        "a write to A's graph during B's build must be refused, got {recorded:?}"
+    );
+    assert_eq!(
+        sig_a.peek(&graph_a, |v| *v),
+        Ok(1),
+        "the refused write changed nothing"
+    );
+    assert_eq!(
+        sig_a.set(&graph_a, 2),
+        Ok(()),
+        "the refusal ends with the build"
+    );
+}

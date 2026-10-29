@@ -63,6 +63,10 @@ fn main() {
         "adb" => println!("x86_64,arm64-v8a"),
         "rustup" => println!("{}", env::var("FLUI_FIXTURE_INSTALLED_TARGETS").expect("installed targets")),
         "java" => println!("openjdk version 21"),
+        "google-chrome" => {
+            std::fs::write(env::var("FLUI_FIXTURE_BROWSER_STARTED").expect("browser mark"), "").expect("browser mark");
+            println!("Google Chrome 1.0");
+        }
         "cargo" if args.first().is_some_and(|arg| arg == "ndk") => {
             if args.iter().any(|arg| arg == "--version") { println!("cargo-ndk 4.1.2"); }
             else { eprintln!("ANDROID_NATIVE_BUILD_ARGS={args:?}"); exit(31); }
@@ -89,7 +93,9 @@ fn main() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    for tool in ["adb", "cargo", "rustup", "java"] {
+    // A browser on the PATH, which the Linux discovery would start to read its
+    // version; it records that it was started.
+    for tool in ["adb", "cargo", "rustup", "java", "google-chrome"] {
         std::fs::copy(
             &shim,
             tools.join(format!("{tool}{}", std::env::consts::EXE_SUFFIX)),
@@ -103,9 +109,11 @@ fn main() {
         &std::env::var_os("PATH").expect("PATH"),
     )))
     .expect("fixture PATH");
+    let browser_started = root.join("browser-started");
     let mut cli = cargo_bin_cmd!("flui");
     cli.current_dir(&app)
         .env("PATH", path)
+        .env("FLUI_FIXTURE_BROWSER_STARTED", &browser_started)
         // Metadata uses only local path dependencies. Keep its Cargo locks and
         // outputs independent of concurrent CLI fixtures on the CI runner.
         .env("CARGO_HOME", root.join("cargo-home"))
@@ -135,6 +143,10 @@ fn main() {
     assert!(
         command.contains("\"-t\", \"x86_64\""),
         "the emulator's first native ABI must win over its ARM translation compatibility: {command}"
+    );
+    assert!(
+        !browser_started.exists(),
+        "a device named by its serial is found without starting the installed browsers"
     );
 
     let output = cli

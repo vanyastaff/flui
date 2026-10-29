@@ -17,7 +17,7 @@ use super::traversal::{FocusTraversalOverrides, GroupConfig, GroupOrderCache, Gr
 use flui_foundation::ListenerId;
 use flui_foundation::geometry::Rect;
 use flui_painting::typography::TextDirection;
-use flui_platform_api::keyboard::KeyEvent;
+use flui_platform::keyboard::KeyEvent;
 use thiserror::Error;
 
 use super::manager::FocusClosePanic;

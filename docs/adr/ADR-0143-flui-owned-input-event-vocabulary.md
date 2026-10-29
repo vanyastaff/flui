@@ -13,16 +13,16 @@
 
 ## Context
 
-Before the migration, `flui_platform_api::PlatformInput` carried `ui_events::pointer::PointerEvent` and
+Before the migration, `flui_platform::PlatformInput` carried `ui_events::pointer::PointerEvent` and
 `ui_events::keyboard::KeyboardEvent`, and the crate re-exported them with `ScrollDelta`, `Key`
-and `Modifiers` (`crates/flui-platform-api/src/input.rs:28-38`). `flui-platform-api` is a
+and `Modifiers` (`crates/flui-platform/src/input.rs:28-38`). `flui-platform` is a
 Stable crate; ADR-0089 forbids upstream types in its signatures and names this vocabulary as
 the first thing to replace (§4). The replacement also has to carry what the upstream shape
 cannot, which the interaction audit's market matrix lists against the code:
 
 - **Units and sensors lie.** Positions travel in `dpi::PhysicalPosition` holding logical pixels
   (`input.rs:94-106` documents the trap); a mouse reports pressure 0.5 while pressed
-  (`flui-platform/src/platforms/windows/events.rs:182`), indistinguishable from a real
+  (`flui-native/src/platforms/windows/events.rs:182`), indistinguishable from a real
   half-pressure; an untilted pen and a pen without tilt sensing read the same default.
 - **Missing fields.** No eraser tool distinct from a button, no twist, no persistent device
   id with an accessor, no keyboard timestamp, no scroll phase or momentum, no inertia cancel,
@@ -35,7 +35,7 @@ cannot, which the interaction audit's market matrix lists against the code:
 
 ### 1. Where and what
 
-`flui-platform-api` defines the vocabulary in two public modules and one root type:
+`flui-platform` defines the vocabulary in two public modules and one root type:
 
 - `pointer`: `PointerEvent` (`Down`, `ButtonChange`, `Up`, `Move`, `Cancel`, `Enter`, `Leave`,
   `Scroll`, `ScrollInertiaCancel`, `PanZoom`, `DeviceAdded`, `DeviceRemoved`), `PointerInfo`
@@ -160,7 +160,7 @@ and zero packets remain `Unknown`. Both retain their signed line unit and actual
 hover source. An integral packet alone cannot identify a notched device.
 
 Winit's complete keyboard-event mapping and Android's native keycode tables remain in
-their maintained ecosystem adapters. `flui-platform`'s private `shared::keyboard_adapter`
+their maintained ecosystem adapters. `flui-native`'s private `input::keys::adapter`
 converts those results to owned key events without leaking upstream types through Stable
 signatures. Win32 and AppKit key tables return owned enums directly; Web resolves DOM W3C
 spellings against the generated owned tables. The dependency retention is deliberate:
@@ -218,15 +218,15 @@ adapters; their removal or target-feature selection cannot change the authoritat
 ## Verification
 
 The source audit for the pointer bridge uses
-`rg -n 'ui_events::pointer|ui_events::ScrollDelta|input_vocabulary' crates/flui-platform/src crates/flui-interaction/src`.
-Runtime dependency inspection uses `cargo tree -p flui-platform-api -e normal`;
+`rg -n 'ui_events::pointer|ui_events::ScrollDelta|input_vocabulary' crates/flui-native/src crates/flui-interaction/src`.
+Runtime dependency inspection uses `cargo tree -p flui-platform -e normal`;
 backend adapters are inspected separately so a legitimate keyboard mapping or
 Winit physical geometry dependency is not mistaken for a Stable signature leak.
 
-- `flui-platform-api`'s `input_vocabulary_contract`: sanitization, "no sensor", clamping and
+- `flui-platform`'s `input_vocabulary_contract`: sanitization, "no sensor", clamping and
   wrapping, button sets, coalesced ordering, scroll units and phases, pan-zoom transform
   validity, key events, generated spellings.
-- `flui-platform`'s `keyboard_adapter_contract`: every generated `NamedKey` and `Code`,
+- `flui-native`'s `keyboard_adapter_contract`: every generated `NamedKey` and `Code`,
   legacy Meta aliases and preservation of keyboard event fields. Its private placement is
   documented in the crate's mapping decision: Winit's complete native `KeyEvent` contains
   inaccessible platform state.
@@ -249,7 +249,7 @@ Winit physical geometry dependency is not mistaken for a Stable signature leak.
   `synthetic_touch_and_pen_reach_native_pointer_dispatch` exercises native injection
   only when the host admits it: foreground refusal, an occluded target or unavailable
   injection capability reports `CANNOT_VERIFY`, which is not proof of touch/pen
-  delivery. `cargo xtask device windows-input` is an application mouse/keyboard
+  delivery. [`cargo xtask device windows-input`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs) is an application mouse/keyboard
   smoke check, not a replacement for that touch/pen path. The browser input probe's
   `owned-wheel-check`, `owned-keyboard-check`, fractional, sensor, capture and reentry
   checks exercise its DOM producer separately. These references describe available

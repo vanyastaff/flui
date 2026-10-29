@@ -17,49 +17,9 @@ use super::focus::Focus;
 use crate::DecoratedBox;
 
 /// The colors and widths of a [`FocusRing`]: two bands drawn inside the
-/// child's bounds, `outer` along the edge and `inner` just within it.
-///
-/// Two contrasting bands keep the ring visible on any background: against a
-/// dark surface the light band carries the contrast, against a light one the
-/// dark band does. A width that is negative or not finite draws no band.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct FocusRingStyle {
-    /// The band along the child's edge.
-    pub outer: Color,
-    /// The band just inside the outer one.
-    pub inner: Color,
-    /// Width of the outer band, in logical pixels.
-    pub outer_width: f64,
-    /// Width of the inner band, in logical pixels.
-    pub inner_width: f64,
-}
-
-impl FocusRingStyle {
-    /// The style a [`FocusRing`] uses when neither it nor an enclosing
-    /// [`DefaultFocusRingStyle`] names one: a 2 px black band and a 1 px
-    /// white band inside it, the shape of the WinUI focus visual.
-    pub const BUILT_IN: Self = Self {
-        outer: Color::BLACK,
-        inner: Color::WHITE,
-        outer_width: 2.0,
-        inner_width: 1.0,
-    };
-}
-
-impl Default for FocusRingStyle {
-    fn default() -> Self {
-        Self::BUILT_IN
-    }
-}
-
-/// A band width that paints: finite and positive, else none.
-fn band(width: f64) -> f64 {
-    if width.is_finite() && width > 0.0 {
-        width
-    } else {
-        0.0
-    }
-}
+/// child's bounds, `outer` along the edge and `inner` just within it. A
+/// focused link draws the same bands just outside its glyphs.
+pub use flui_objects::FocusRingStyle;
 
 /// A uniform `width` border in `color`, or no border for a zero width.
 fn ring_band(color: Color, width: f64) -> BoxDecoration<f64> {
@@ -132,8 +92,8 @@ impl StatelessView for FocusRing {
         let visible = Focus::maybe_of(ctx).is_some_and(|node| node.has_visible_focus());
         let style = self.style.unwrap_or_else(|| DefaultFocusRingStyle::of(ctx));
         let (outer, inner) = if visible {
-            let outer_width = band(style.outer_width);
-            let inner_width = band(style.inner_width);
+            let outer_width = style.outer_band();
+            let inner_width = style.inner_band();
             // The inner band is drawn as far in as both bands reach; the
             // outer band is then drawn over its outer part.
             let inner = if inner_width > 0.0 {

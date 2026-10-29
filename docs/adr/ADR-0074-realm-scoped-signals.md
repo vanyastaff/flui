@@ -8,7 +8,9 @@
   `FnMut` values invoked at most once. Their opaque capture bundles are destroyed after successful
   framework finalization but deliberately leaked after callback panic, because aggregate drop glue
   cannot be made safe by an outer unwind boundary.
-- **Supersedes:** the signals clause of FOUNDATIONS C1 (now §7's wording) and ADR-0008's
+- **Revised:** 2026-10-21 — §5.2: the build-time refusal holds across the presentations of one UI
+  runtime, through a shared `BuildInProgress` cell.
+- **Supersedes:** the signals clause of [FOUNDATIONS](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/FOUNDATIONS.md) C1 (now §7's wording) and ADR-0008's
   "signals-as-default are rejected" (ADR-0008 has since been retired).
 - **Amended-by:** [ADR-0085](ADR-0085-reactive-core-placement-and-phase-subscribers.md)
   (Proposed; its §1, §2 and §5 ship ahead of acceptance) — its §1 routes a cross-thread write by
@@ -70,7 +72,7 @@ one thing: a **precise reader set** per signal.
 That composes with `Memo<V>`/`can_update`: signals decide *which* elements enter the drain;
 memoisation decides how far a drain propagates.
 
-## 2. Market (sources in `docs/research/state-model-2026.md`)
+## 2. Market (sources in [`docs/research/state-model-2026.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/state-model-2026.md))
 
 | System | Node ownership | Write → what re-runs | Take-away |
 |---|---|---|---|
@@ -165,6 +167,15 @@ impl<T> Signal<T> {
   (`SignalError::WrittenDuringBuild` / `CreatedDuringBuild`): a write during build is the
   unbounded-rebuild-loop hazard. The run-time guard is authoritative (ADR-0078). `peek` is allowed
   anywhere.
+- **The guard spans the presentations of a UI runtime.** Every presentation has its own graph, so
+  a graph's own `building` cannot see another window's build. The UI runtime owns one
+  `BuildInProgress` cell, hands it to each `BuildOwner` at assembly
+  (`BuildOwner::set_build_in_progress`), and every graph publishes its builds there and consults it
+  before a write or a slot creation. A write that reaches window A's graph (through §5.8's routing,
+  or a handle passed to B's view) while window B builds is refused with the same
+  `WrittenDuringBuild`. Closing a presentation clears a build it left published. A read of a slot
+  minted by another graph is `ForeignGraph`, so it is refused, not left untracked; state shared
+  by several windows has to be a runtime-scoped signal, not another window's.
 - Reads outside build subscribe nothing — there is no building element — and go through `peek`.
 
 ### 5.3 Write → dirty exactly the readers
@@ -414,7 +425,7 @@ the Save cell) measured 4 elements / 17.9 µs against 44 / 39.2 µs.
 
 ## References
 
-- FOUNDATIONS C1, C5, C8; ADR-0018; ADR-0027 (`UiRuntime`, `UiCommandSender`);
+- [FOUNDATIONS](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/FOUNDATIONS.md) C1, C5, C8; ADR-0018; ADR-0027 (`UiRuntime`, `UiCommandSender`);
   ADR-0078 (capability and build-phase rules); issue #1090.
-- `docs/research/state-model-2026.md` — market survey with sources.
+- [`docs/research/state-model-2026.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/state-model-2026.md) — market survey with sources.
 - ADR-0075 — derived values and effects; follow-ups #1248–#1254.

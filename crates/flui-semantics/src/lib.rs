@@ -11,7 +11,7 @@
 //! SemanticsTree / SemanticsOwner                    (this crate)
 //!     │  flush(): one validated AccessKit TreeUpdate, full or incremental
 //!     ▼
-//! PlatformAccessibility → AccessKit adapters        (flui-platform)
+//! PlatformAccessibility → AccessKit adapters        (flui-native)
 //! ```
 //!
 //! ## Key types
@@ -77,7 +77,7 @@ pub use numeric_range::{NumericRange, NumericRangeError};
 // ============================================================================
 // RE-EXPORTS - Agent read and act (ADR-0095)
 // ============================================================================
-pub use agent::{Placement, WireActionError, WireReadError};
+pub use agent::{Placement, WireActionError, WireLocateError, WireReadError};
 // `SemanticsUpdateCallback` names `TreeUpdate` in its signature, so a consumer
 // implementing that callback must be able to name it without adding accesskit
 // itself at a version that must match ours. `NodeId` comes along because
@@ -90,6 +90,10 @@ pub use accesskit::{NodeId, TreeUpdate};
 // ============================================================================
 pub use applicability::RoleAttribute;
 pub use configuration::{DeclaredCustomAction, SemanticsConfiguration};
+// ============================================================================
+// RE-EXPORTS - Collections
+// ============================================================================
+pub use collection::{CellPosition, SetSize, SortDirection, TableShape};
 // ============================================================================
 // RE-EXPORTS - Event Types
 // ============================================================================

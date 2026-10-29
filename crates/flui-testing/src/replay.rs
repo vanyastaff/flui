@@ -51,13 +51,13 @@ use flui_interaction::events::{
     make_up_event_for_id,
 };
 use flui_interaction::{HitTestResult, PointerEvent, PointerId};
-use flui_platform_api::pointer::{
+use flui_platform::pointer::{
     CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool, PointerButton,
     PointerButtons, PointerCancel, PointerInfo, PointerMove, PointerPosition, PointerPress,
     PointerRelease, PointerRole, PointerSample, Pressure, ScrollDelta, ScrollEvent, ScrollPhase,
     ScrollPrecision, ScrollUnit,
 };
-use flui_platform_api::{EventTime, PlatformInput, WindowId};
+use flui_platform::{EventTime, PlatformInput, WindowId};
 use flui_runtime::HostInput;
 
 use crate::HeadlessBinding;
@@ -330,7 +330,11 @@ impl ScriptStep {
                     ),
                 )))
             }
-            Self::Frame { at } => HostInput::Frame { vsync: base + at },
+            Self::Frame { at } => HostInput::Frame {
+                vsync: base + at,
+                target_present: None,
+                presented: None,
+            },
         }
     }
 }

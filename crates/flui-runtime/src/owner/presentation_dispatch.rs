@@ -8,7 +8,7 @@ use flui_foundation::{
     geometry::{EdgeInsets, WindowMetrics},
 };
 use flui_interaction::InputSurface;
-use flui_platform_api::{Brightness, PlatformInput, WindowDisplay, WindowExecutionState};
+use flui_platform::{Brightness, PlatformInput, WindowDisplay, WindowExecutionState};
 
 use crate::HostInput;
 
@@ -491,8 +491,19 @@ impl PresentationDispatcher {
                 };
                 core.deliver(work, effects)?
             }
-            HostInput::Frame { vsync } => {
-                core.deliver(RuntimeWork::Frame(self.address, vsync), effects)?
+            HostInput::Frame {
+                vsync,
+                target_present,
+                presented,
+            } => {
+                let mut request = flui_platform::FrameRequest::new(vsync);
+                if let Some(shown) = target_present {
+                    request = request.with_target_present(shown);
+                }
+                if let Some(presented) = presented {
+                    request = request.with_presented(presented);
+                }
+                core.deliver(RuntimeWork::Frame(self.address, request), effects)?
             }
             HostInput::Accessibility(request) => {
                 return self.queue_accessibility(&core, request);
@@ -597,7 +608,7 @@ impl OwnerHost {
 #[cfg(test)]
 mod tests {
     use flui_foundation::PresentationAddress;
-    use flui_platform_api::Brightness;
+    use flui_platform::Brightness;
 
     use super::{PendingWindowState, WindowObservation};
     use crate::ui_runtime::UiRuntime;

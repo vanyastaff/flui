@@ -26,8 +26,8 @@
 //! A striped debug-paint warning (and a diagnostic error) when the child
 //! overflows AND `clip_behavior == Clip::None` would be the usual affordance.
 //! FLUI has no debug-paint/diagnostic-error machinery anywhere in
-//! `flui-rendering`/`flui-objects` (confirmed repo-wide, not just here) — see
-//! `docs/ROADMAP.md` Cross.H. [`RenderConstraintsTransformBox::has_visual_overflow`] is exposed as a
+//! `flui-rendering`/`flui-objects` (confirmed repo-wide, not just here).
+//! [`RenderConstraintsTransformBox::has_visual_overflow`] is exposed as a
 //! plain queryable flag instead, matching the precedent already established
 //! by [`super::fitted_box::RenderFittedBox::has_visual_overflow`].
 

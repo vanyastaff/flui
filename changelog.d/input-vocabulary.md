@@ -1,7 +1,7 @@
 ### Added
 
 - `PlatformInput::Capabilities` carries a window's handle-less input capabilities
-  (`flui_platform_api::input_capabilities`: `InputCapabilities`, `Availability`,
+  (`flui_platform::input_capabilities`: `InputCapabilities`, `Availability`,
   `PointerKindSet`): a snapshot before any other input once `on_input` is
   installed, then each change in order with the input around it (ADR-0213). The
   SDK and the facade re-export them behind the additive `unstable-input` feature.
@@ -18,7 +18,7 @@
   the focal point (`PanZoomEvent::position`), refreshed on every update. A two-finger
   trackpad pan is a phased `Scroll` on every backend, winit's `PanGesture` included
   (ADR-0217 §4).
-- `TransferActions` is a `bitflags` set; its `NONE` constant is `empty()`.
+- `TransferActions`' `NONE` constant is `empty()`.
 - Input admitted before a window's input callback is installed is held and delivered
   after the capability snapshot instead of being dropped.
 

@@ -206,7 +206,7 @@ fn reduced_policy_source_failure_preserves_the_run_and_healthy_peer() {
     let mut clock = MotionClock::new();
     vsync.tick_all(&clock.frame(Duration::ZERO));
     armed.set(true);
-    clock.set_system_motion(flui_platform_api::MotionPreference::Reduce);
+    clock.set_system_motion(flui_platform::MotionPreference::Reduce);
     let mut recovery = PanicRecovery::new();
     vsync.tick_all_with_recovery(
         &clock.frame(Duration::from_millis(250)),

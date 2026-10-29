@@ -118,9 +118,6 @@ charged through completion. Native admission first polls nonblockingly so reject
 frames cannot starve completion callbacks; browser progress uses its event loop.
 Recoverable failure publishes reliable retry debt to the application and UI runtime
 (ADR-0101), while an impossible frame footprint remains a terminal error.
-`examples/embedded_gpu_scene.rs` exercises the public lifecycle with an external
-GPU texture, a depth-tested producer pass and foreground 2D drawing on the same
-device; its `--capture` mode asserts fixed-angle pixels after two frames.
 
 ## One frame
 
@@ -299,8 +296,16 @@ shared handle is a wgpu ref-count.
 | `TexturePool` | inventory + mpsc return channel | Single-mutator by construction; `Send` only (the receiver is `!Sync`) |
 | `RasterOwner` mailbox | `parking_lot::Mutex` + condvar + two atomics + bounded crossbeam channels | The one module with its own memory model; its orderings are argued in `InFlightAccounting`'s doc |
 
-**Unsafe.** There is no hand-written production `unsafe` in the crate:
-`#![cfg_attr(not(test), deny(unsafe_code))]` in `lib.rs`. Surfaces come from
+**Unsafe.** `#![cfg_attr(not(test), deny(unsafe_code))]` in `lib.rs`, and one
+production exception with its own `expect`: `renderer::dxgi_frame_statistics`
+(Windows only), which reads DXGI frame statistics from wgpu's DX12 swap chain
+before each present, for the window's presentation report. wgpu hands the swap
+chain out only through `Surface::as_hal`, whose precondition is that the
+resource it exposes is not destroyed unless its guard is the last reference
+and the GPU is done with it; the function destroys nothing, takes a counted
+reference to the swap chain (`swap_chain()`), drops the guard before calling
+`GetFrameStatistics` on it, and runs on the presenting thread between
+presents, so no wgpu call on the surface overlaps it. Surfaces come from
 wgpu's safe `create_surface` over an owned `WindowTarget`
 ([ADR-0063](../../docs/adr/ADR-0063-the-renderer-owns-its-surface-target.md)),
 and there is no manual `Send`/`Sync` impl. `deny` rather than `forbid` because
@@ -452,7 +457,7 @@ and recovery after a failed lookup.
 Bindings reuse the actual pipeline layout within a frame and retain their quota
 charge through cache ownership and submitted work. Imported GPU allocation bytes
 are excluded from prepared-resource quotas; a managed producer factory and the
-whole-engine ledger remain follow-ups in the resource migration plan.
+whole-engine ledger remain follow-ups.
 
 ### Decoded image source filters
 
@@ -596,7 +601,15 @@ would likewise encode those values a second time on storage.
 This follows [wgpu's per-format surface capabilities](https://docs.rs/wgpu/30.0.1/wgpu/struct.SurfaceCapabilities.html)
 and [explicit presentation color-space contract](https://docs.rs/wgpu/30.0.1/wgpu/enum.SurfaceColorSpace.html).
 A backend name is not evidence of display HDR support. `GpuCapabilities::supports_hdr`
-is removed; actual HDR requires a future end-to-end color-management contract.
+is removed. Whether the display is in high range, and its headroom, come from the
+`flui_platform::DisplayColor` the platform reports for the window's display; only without
+one does it read wgpu's `DisplayHdrInfo` (ADR-0256 §2,
+`the_platform_colour_decides_the_display_state_over_the_surface_report`). A high-range
+display whose headroom is no more than white is SDR, and one reported in sRGB gets no
+wide-gamut surface. The renderer keeps the newest report apart from the one its surface was
+given (`set_display_color`): when they differ the held surface is configured again, and every
+recreation and recovery resolves the newest, never the report captured at construction
+(`a_recreation_after_the_display_changes_resolves_its_new_range`).
 There is no arbitrary format fallback: incompatible capabilities produce
 `UnsupportedSurfaceColorConfiguration` before configuration or recreation commits.
 The error is nonretryable; failed recreation retains the released surface lease.
@@ -1030,7 +1043,7 @@ translucent full-surface layers, 128 px damage, one desktop adapter): full
 direct 343 µs / 1.07 ms / 3.39 ms at 4 / 16 / 64 layers against partial plus
 blit 340 µs / 262 µs / 301 µs; the blit alone 144 µs. The blit's bandwidth on
 tile-based mobile GPUs is not measured. Those figures exclude candidate allocation
-and copy; see the [measurement record](../../docs/research/engine-foundation-measurements.ru.md)
+and copy; see the [measurement record](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/engine-foundation-measurements.ru.md)
 for the current comparison and its limits. Locked by `damage_readback_tests.rs`
 (through the crate-private `RetainedCapture`, which runs the renderer's own
 `FrameProtocol` and `record_frame_content`; only the clear, the content
@@ -1217,7 +1230,7 @@ Reference check: Skia's `getInputBounds` and `getOutputBounds` deliberately answ
 different questions; Impeller's entity pass reads its current pass texture before
 rendering backdrop-filter children. These support separate footprints and ordered
 execution, without adopting their APIs or scene models. Sources and limits are in
-[the effect research](../../docs/research/engine-effect-footprints-research.ru.md).
+[the effect research](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/engine-effect-footprints-research.ru.md).
 `layer_effects_capture_as_specified` reads back nested masks and backdrop groups,
 shader source/child destination order, followers, fractional DPR, affine linear/
 radial/sweep gradients, both blur axes, attachment-edge decal and whole-target

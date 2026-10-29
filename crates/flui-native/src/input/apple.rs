@@ -1,0 +1,1337 @@
+//! The Apple hosts' input: AppKit's events at the window's content view
+//! (`macos`) and UIKit's touches and Pencil (`ios`), each copied into plain
+//! readings for the pointer assembly.
+//!
+//! - [`keys`]: the AppKit keyboard tables; built on every target and public,
+//!   hidden from the documentation, for the backend conformance table in
+//!   `tests/`;
+//! - `wheel`: AppKit's wheel step; pure, built for macOS and for tests on
+//!   every host;
+//! - `macos`: each content view's input (the owner's content view is the
+//!   responder its window's input arrives at), and the translation of its
+//!   `NSEvent`s (`events`);
+//! - `ios`: the translation of a view's `UITouch`es.
+
+#[doc(hidden)]
+pub mod keys {
+    //! macOS (AppKit) keyboard translation decisions.
+    //!
+    //! Everything the AppKit backend decides about a keystroke from its virtual
+    //! keycode — which W3C `code` names the physical key, and which named `Key`
+    //! intercepts the `NSEvent.characters` text path — lives here as pure
+    //! functions over the raw `NSEvent.keyCode` value.
+    //!
+    //! Like [`super::keys`] (the Win32 twin this module's shape follows), it is
+    //! deliberately free of `cfg` gates and platform types so the tables compile
+    //! — and their tests execute — on any host, even though the AppKit caller
+    //! (`macos::events`) itself is only ever clippy-linted in CI,
+    //! never linked or run.
+    //!
+    //! # References
+    //!
+    //! macOS virtual keycodes are position-based (they name the physical key,
+    //! not the character it types) and are defined once, as the `kVK_*` constants
+    //! in Apple's Carbon `HIToolbox/Events.h` — still the canonical source; the
+    //! [`kvk`] module transcribes it. The `Code` each keycode maps to follows the
+    //! W3C uievents-code registry (<https://www.w3.org/TR/uievents-code/>) as
+    //! implemented by Firefox (`NativeKeyToDOMCodeName.h`, the `CODE_MAP_MAC`
+    //! rows) and the winit macOS backend (winit 0.30
+    //! `platform_impl/macos/event.rs`, `scancode_to_physicalkey`). Where those
+    //! two disagree the table follows Apple's header and Firefox, and the
+    //! divergence is commented at the arm.
+    //!
+    //! # What never reaches these tables
+    //!
+    //! AppKit reports modifier keys through `flagsChanged:`, not
+    //! `keyDown:`/`keyUp:` — the modifier rows below (`kVK_Shift` …
+    //! `kVK_Function`) are complete for the table's own sake, but the backend
+    //! does not receive plain key events for them, and it does not translate
+    //! `flagsChanged:` today; modifier *state* rides every event's
+    //! `modifierFlags` instead.
+
+    #![forbid(unsafe_code)]
+
+    use flui_platform::keyboard::{Code, Key, NamedKey};
+
+    /// Apple's `kVK_*` virtual keycodes, from Carbon `HIToolbox/Events.h`.
+    ///
+    /// `ANSI_*` names mean "the key in this position on a US (ANSI) keyboard" —
+    /// the keycode itself is layout-independent. Raw `u16` (the width of
+    /// `NSEvent.keyCode`) rather than a binding crate's type so this module
+    /// compiles on every host.
+    #[expect(missing_docs)]
+    pub mod kvk {
+        pub const ANSI_A: u16 = 0x00;
+        pub const ANSI_S: u16 = 0x01;
+        pub const ANSI_D: u16 = 0x02;
+        pub const ANSI_F: u16 = 0x03;
+        pub const ANSI_H: u16 = 0x04;
+        pub const ANSI_G: u16 = 0x05;
+        pub const ANSI_Z: u16 = 0x06;
+        pub const ANSI_X: u16 = 0x07;
+        pub const ANSI_C: u16 = 0x08;
+        pub const ANSI_V: u16 = 0x09;
+        pub const ISO_SECTION: u16 = 0x0A;
+        pub const ANSI_B: u16 = 0x0B;
+        pub const ANSI_Q: u16 = 0x0C;
+        pub const ANSI_W: u16 = 0x0D;
+        pub const ANSI_E: u16 = 0x0E;
+        pub const ANSI_R: u16 = 0x0F;
+        pub const ANSI_Y: u16 = 0x10;
+        pub const ANSI_T: u16 = 0x11;
+        pub const ANSI_1: u16 = 0x12;
+        pub const ANSI_2: u16 = 0x13;
+        pub const ANSI_3: u16 = 0x14;
+        pub const ANSI_4: u16 = 0x15;
+        pub const ANSI_6: u16 = 0x16;
+        pub const ANSI_5: u16 = 0x17;
+        pub const ANSI_EQUAL: u16 = 0x18;
+        pub const ANSI_9: u16 = 0x19;
+        pub const ANSI_7: u16 = 0x1A;
+        pub const ANSI_MINUS: u16 = 0x1B;
+        pub const ANSI_8: u16 = 0x1C;
+        pub const ANSI_0: u16 = 0x1D;
+        pub const ANSI_RIGHT_BRACKET: u16 = 0x1E;
+        pub const ANSI_O: u16 = 0x1F;
+        pub const ANSI_U: u16 = 0x20;
+        pub const ANSI_LEFT_BRACKET: u16 = 0x21;
+        pub const ANSI_I: u16 = 0x22;
+        pub const ANSI_P: u16 = 0x23;
+        pub const RETURN: u16 = 0x24;
+        pub const ANSI_L: u16 = 0x25;
+        pub const ANSI_J: u16 = 0x26;
+        pub const ANSI_QUOTE: u16 = 0x27;
+        pub const ANSI_K: u16 = 0x28;
+        pub const ANSI_SEMICOLON: u16 = 0x29;
+        pub const ANSI_BACKSLASH: u16 = 0x2A;
+        pub const ANSI_COMMA: u16 = 0x2B;
+        pub const ANSI_SLASH: u16 = 0x2C;
+        pub const ANSI_N: u16 = 0x2D;
+        pub const ANSI_M: u16 = 0x2E;
+        pub const ANSI_PERIOD: u16 = 0x2F;
+        pub const TAB: u16 = 0x30;
+        pub const SPACE: u16 = 0x31;
+        pub const ANSI_GRAVE: u16 = 0x32;
+        /// `kVK_Delete` is the key labeled "delete" on Apple keyboards — the
+        /// BACKSPACE position; forward delete is [`FORWARD_DELETE`].
+        pub const DELETE: u16 = 0x33;
+        pub const ESCAPE: u16 = 0x35;
+        pub const RIGHT_COMMAND: u16 = 0x36;
+        pub const COMMAND: u16 = 0x37;
+        pub const SHIFT: u16 = 0x38;
+        pub const CAPS_LOCK: u16 = 0x39;
+        pub const OPTION: u16 = 0x3A;
+        pub const CONTROL: u16 = 0x3B;
+        pub const RIGHT_SHIFT: u16 = 0x3C;
+        pub const RIGHT_OPTION: u16 = 0x3D;
+        pub const RIGHT_CONTROL: u16 = 0x3E;
+        pub const FUNCTION: u16 = 0x3F;
+        pub const F17: u16 = 0x40;
+        pub const ANSI_KEYPAD_DECIMAL: u16 = 0x41;
+        pub const ANSI_KEYPAD_MULTIPLY: u16 = 0x43;
+        pub const ANSI_KEYPAD_PLUS: u16 = 0x45;
+        /// The numpad "clear" key — the NumLock position of a PC numpad.
+        pub const ANSI_KEYPAD_CLEAR: u16 = 0x47;
+        pub const VOLUME_UP: u16 = 0x48;
+        pub const VOLUME_DOWN: u16 = 0x49;
+        pub const MUTE: u16 = 0x4A;
+        pub const ANSI_KEYPAD_DIVIDE: u16 = 0x4B;
+        pub const ANSI_KEYPAD_ENTER: u16 = 0x4C;
+        pub const ANSI_KEYPAD_MINUS: u16 = 0x4E;
+        pub const F18: u16 = 0x4F;
+        pub const F19: u16 = 0x50;
+        pub const ANSI_KEYPAD_EQUALS: u16 = 0x51;
+        pub const ANSI_KEYPAD_0: u16 = 0x52;
+        pub const ANSI_KEYPAD_1: u16 = 0x53;
+        pub const ANSI_KEYPAD_2: u16 = 0x54;
+        pub const ANSI_KEYPAD_3: u16 = 0x55;
+        pub const ANSI_KEYPAD_4: u16 = 0x56;
+        pub const ANSI_KEYPAD_5: u16 = 0x57;
+        pub const ANSI_KEYPAD_6: u16 = 0x58;
+        pub const ANSI_KEYPAD_7: u16 = 0x59;
+        pub const F20: u16 = 0x5A;
+        pub const ANSI_KEYPAD_8: u16 = 0x5B;
+        pub const ANSI_KEYPAD_9: u16 = 0x5C;
+        pub const JIS_YEN: u16 = 0x5D;
+        pub const JIS_UNDERSCORE: u16 = 0x5E;
+        pub const JIS_KEYPAD_COMMA: u16 = 0x5F;
+        pub const F5: u16 = 0x60;
+        pub const F6: u16 = 0x61;
+        pub const F7: u16 = 0x62;
+        pub const F3: u16 = 0x63;
+        pub const F8: u16 = 0x64;
+        pub const F9: u16 = 0x65;
+        pub const JIS_EISU: u16 = 0x66;
+        pub const F11: u16 = 0x67;
+        pub const JIS_KANA: u16 = 0x68;
+        pub const F13: u16 = 0x69;
+        pub const F16: u16 = 0x6A;
+        pub const F14: u16 = 0x6B;
+        pub const F10: u16 = 0x6D;
+        /// The PC-keyboard Menu key. `Events.h` defines no constant for `0x6E`;
+        /// Firefox and Chromium both map it to `ContextMenu`.
+        pub const PC_MENU: u16 = 0x6E;
+        pub const F12: u16 = 0x6F;
+        pub const F15: u16 = 0x71;
+        /// The Help key on Apple pro keyboards — the Insert position of a PC
+        /// keyboard, and `Insert` is what the winit backend and Chromium call
+        /// it (Firefox says `Help`); this table sides with the winit wire so
+        /// FLUI's two macOS backends agree.
+        pub const HELP: u16 = 0x72;
+        pub const HOME: u16 = 0x73;
+        pub const PAGE_UP: u16 = 0x74;
+        pub const FORWARD_DELETE: u16 = 0x75;
+        pub const F4: u16 = 0x76;
+        pub const END: u16 = 0x77;
+        pub const F2: u16 = 0x78;
+        pub const PAGE_DOWN: u16 = 0x79;
+        pub const F1: u16 = 0x7A;
+        pub const LEFT_ARROW: u16 = 0x7B;
+        pub const RIGHT_ARROW: u16 = 0x7C;
+        pub const DOWN_ARROW: u16 = 0x7D;
+        pub const UP_ARROW: u16 = 0x7E;
+    }
+
+    /// Map an `NSEvent.keyCode` (a `kVK_*` virtual keycode) to the W3C `code`
+    /// value naming the physical key.
+    ///
+    /// Two arms deliberately diverge from the winit macOS backend's table, both
+    /// toward Apple's `Events.h` and Firefox:
+    ///
+    /// - **Volume keys.** `Events.h` says `kVK_VolumeUp`/`Down`/`Mute` are
+    ///   `0x48`/`0x49`/`0x4A`; winit maps `0x49 → VolumeUp` and `0x4A →
+    ///   VolumeDown` (dropping Mute), one code off, with a `TODO` in its own
+    ///   source questioning the choice.
+    /// - **The ISO section key** (`0x0A`, between Left Shift and Z on ISO
+    ///   boards). The registry and Firefox name that position `IntlBackslash`;
+    ///   winit maps it to `Backquote` because German QWERTZ prints `^` there.
+    pub fn keycode_to_code(key_code: u16) -> Code {
+        match key_code {
+            kvk::ANSI_A => Code::KeyA,
+            kvk::ANSI_S => Code::KeyS,
+            kvk::ANSI_D => Code::KeyD,
+            kvk::ANSI_F => Code::KeyF,
+            kvk::ANSI_H => Code::KeyH,
+            kvk::ANSI_G => Code::KeyG,
+            kvk::ANSI_Z => Code::KeyZ,
+            kvk::ANSI_X => Code::KeyX,
+            kvk::ANSI_C => Code::KeyC,
+            kvk::ANSI_V => Code::KeyV,
+            kvk::ISO_SECTION => Code::IntlBackslash,
+            kvk::ANSI_B => Code::KeyB,
+            kvk::ANSI_Q => Code::KeyQ,
+            kvk::ANSI_W => Code::KeyW,
+            kvk::ANSI_E => Code::KeyE,
+            kvk::ANSI_R => Code::KeyR,
+            kvk::ANSI_Y => Code::KeyY,
+            kvk::ANSI_T => Code::KeyT,
+            kvk::ANSI_1 => Code::Digit1,
+            kvk::ANSI_2 => Code::Digit2,
+            kvk::ANSI_3 => Code::Digit3,
+            kvk::ANSI_4 => Code::Digit4,
+            kvk::ANSI_6 => Code::Digit6,
+            kvk::ANSI_5 => Code::Digit5,
+            kvk::ANSI_EQUAL => Code::Equal,
+            kvk::ANSI_9 => Code::Digit9,
+            kvk::ANSI_7 => Code::Digit7,
+            kvk::ANSI_MINUS => Code::Minus,
+            kvk::ANSI_8 => Code::Digit8,
+            kvk::ANSI_0 => Code::Digit0,
+            kvk::ANSI_RIGHT_BRACKET => Code::BracketRight,
+            kvk::ANSI_O => Code::KeyO,
+            kvk::ANSI_U => Code::KeyU,
+            kvk::ANSI_LEFT_BRACKET => Code::BracketLeft,
+            kvk::ANSI_I => Code::KeyI,
+            kvk::ANSI_P => Code::KeyP,
+            kvk::RETURN => Code::Enter,
+            kvk::ANSI_L => Code::KeyL,
+            kvk::ANSI_J => Code::KeyJ,
+            kvk::ANSI_QUOTE => Code::Quote,
+            kvk::ANSI_K => Code::KeyK,
+            kvk::ANSI_SEMICOLON => Code::Semicolon,
+            kvk::ANSI_BACKSLASH => Code::Backslash,
+            kvk::ANSI_COMMA => Code::Comma,
+            kvk::ANSI_SLASH => Code::Slash,
+            kvk::ANSI_N => Code::KeyN,
+            kvk::ANSI_M => Code::KeyM,
+            kvk::ANSI_PERIOD => Code::Period,
+            kvk::TAB => Code::Tab,
+            kvk::SPACE => Code::Space,
+            kvk::ANSI_GRAVE => Code::Backquote,
+            kvk::DELETE => Code::Backspace,
+            kvk::ESCAPE => Code::Escape,
+            kvk::RIGHT_COMMAND => Code::MetaRight,
+            kvk::COMMAND => Code::MetaLeft,
+            kvk::SHIFT => Code::ShiftLeft,
+            kvk::CAPS_LOCK => Code::CapsLock,
+            kvk::OPTION => Code::AltLeft,
+            kvk::CONTROL => Code::ControlLeft,
+            kvk::RIGHT_SHIFT => Code::ShiftRight,
+            kvk::RIGHT_OPTION => Code::AltRight,
+            kvk::RIGHT_CONTROL => Code::ControlRight,
+            kvk::FUNCTION => Code::Fn,
+            kvk::F17 => Code::F17,
+            kvk::ANSI_KEYPAD_DECIMAL => Code::NumpadDecimal,
+            kvk::ANSI_KEYPAD_MULTIPLY => Code::NumpadMultiply,
+            kvk::ANSI_KEYPAD_PLUS => Code::NumpadAdd,
+            // The registry names the numpad-clear position NumLock (it IS the
+            // NumLock key of a PC numpad).
+            kvk::ANSI_KEYPAD_CLEAR => Code::NumLock,
+            kvk::VOLUME_UP => Code::AudioVolumeUp,
+            kvk::VOLUME_DOWN => Code::AudioVolumeDown,
+            kvk::MUTE => Code::AudioVolumeMute,
+            kvk::ANSI_KEYPAD_DIVIDE => Code::NumpadDivide,
+            kvk::ANSI_KEYPAD_ENTER => Code::NumpadEnter,
+            kvk::ANSI_KEYPAD_MINUS => Code::NumpadSubtract,
+            kvk::F18 => Code::F18,
+            kvk::F19 => Code::F19,
+            kvk::ANSI_KEYPAD_EQUALS => Code::NumpadEqual,
+            kvk::ANSI_KEYPAD_0 => Code::Numpad0,
+            kvk::ANSI_KEYPAD_1 => Code::Numpad1,
+            kvk::ANSI_KEYPAD_2 => Code::Numpad2,
+            kvk::ANSI_KEYPAD_3 => Code::Numpad3,
+            kvk::ANSI_KEYPAD_4 => Code::Numpad4,
+            kvk::ANSI_KEYPAD_5 => Code::Numpad5,
+            kvk::ANSI_KEYPAD_6 => Code::Numpad6,
+            kvk::ANSI_KEYPAD_7 => Code::Numpad7,
+            kvk::F20 => Code::F20,
+            kvk::ANSI_KEYPAD_8 => Code::Numpad8,
+            kvk::ANSI_KEYPAD_9 => Code::Numpad9,
+            kvk::JIS_YEN => Code::IntlYen,
+            kvk::JIS_UNDERSCORE => Code::IntlRo,
+            kvk::JIS_KEYPAD_COMMA => Code::NumpadComma,
+            kvk::F5 => Code::F5,
+            kvk::F6 => Code::F6,
+            kvk::F7 => Code::F7,
+            kvk::F3 => Code::F3,
+            kvk::F8 => Code::F8,
+            kvk::F9 => Code::F9,
+            kvk::JIS_EISU => Code::Lang2,
+            kvk::F11 => Code::F11,
+            kvk::JIS_KANA => Code::Lang1,
+            kvk::F13 => Code::F13,
+            kvk::F16 => Code::F16,
+            kvk::F14 => Code::F14,
+            kvk::F10 => Code::F10,
+            kvk::PC_MENU => Code::ContextMenu,
+            kvk::F12 => Code::F12,
+            kvk::F15 => Code::F15,
+            kvk::HELP => Code::Insert,
+            kvk::HOME => Code::Home,
+            kvk::PAGE_UP => Code::PageUp,
+            kvk::FORWARD_DELETE => Code::Delete,
+            kvk::F4 => Code::F4,
+            kvk::END => Code::End,
+            kvk::F2 => Code::F2,
+            kvk::PAGE_DOWN => Code::PageDown,
+            kvk::F1 => Code::F1,
+            kvk::LEFT_ARROW => Code::ArrowLeft,
+            kvk::RIGHT_ARROW => Code::ArrowRight,
+            kvk::DOWN_ARROW => Code::ArrowDown,
+            kvk::UP_ARROW => Code::ArrowUp,
+            _ => Code::Unidentified,
+        }
+    }
+
+    /// The named `Key` a keycode resolves to *before* the backend consults
+    /// `NSEvent.characters` — `None` means "let the characters text decide".
+    ///
+    /// This intercept exists because for these keys `characters` is not typeable
+    /// text: editing/navigation/function keys deliver control characters or
+    /// Unicode private-use-area codepoints (`NSUpArrowFunctionKey` is `U+F700`,
+    /// `NSF13FunctionKey` is `U+F70A`, …), which would otherwise ship as
+    /// garbage `Key::Character` values. Letters, digits, and punctuation return
+    /// `None` on purpose: their `characters` string is the layout- and
+    /// modifier-aware translation (the macOS analogue of the Win32 `WM_CHAR`
+    /// merge in [`super::keys`]) and must keep winning.
+    pub fn keycode_to_key(key_code: u16) -> Option<Key> {
+        let named = match key_code {
+            kvk::LEFT_ARROW => NamedKey::ArrowLeft,
+            kvk::RIGHT_ARROW => NamedKey::ArrowRight,
+            kvk::DOWN_ARROW => NamedKey::ArrowDown,
+            kvk::UP_ARROW => NamedKey::ArrowUp,
+
+            kvk::F1 => NamedKey::F1,
+            kvk::F2 => NamedKey::F2,
+            kvk::F3 => NamedKey::F3,
+            kvk::F4 => NamedKey::F4,
+            kvk::F5 => NamedKey::F5,
+            kvk::F6 => NamedKey::F6,
+            kvk::F7 => NamedKey::F7,
+            kvk::F8 => NamedKey::F8,
+            kvk::F9 => NamedKey::F9,
+            kvk::F10 => NamedKey::F10,
+            kvk::F11 => NamedKey::F11,
+            kvk::F12 => NamedKey::F12,
+            kvk::F13 => NamedKey::F13,
+            kvk::F14 => NamedKey::F14,
+            kvk::F15 => NamedKey::F15,
+            kvk::F16 => NamedKey::F16,
+            kvk::F17 => NamedKey::F17,
+            kvk::F18 => NamedKey::F18,
+            kvk::F19 => NamedKey::F19,
+            kvk::F20 => NamedKey::F20,
+
+            // Both Enter keys report the same logical key; the numpad one is
+            // distinguished by its `code`/`location`.
+            kvk::RETURN | kvk::ANSI_KEYPAD_ENTER => NamedKey::Enter,
+            kvk::TAB => NamedKey::Tab,
+            kvk::DELETE => NamedKey::Backspace,
+            kvk::ESCAPE => NamedKey::Escape,
+            kvk::FORWARD_DELETE => NamedKey::Delete,
+            kvk::HOME => NamedKey::Home,
+            kvk::END => NamedKey::End,
+            kvk::PAGE_UP => NamedKey::PageUp,
+            kvk::PAGE_DOWN => NamedKey::PageDown,
+            // Insert, matching this key's `Code` (see [`kvk::HELP`]).
+            kvk::HELP => NamedKey::Insert,
+            kvk::PC_MENU => NamedKey::ContextMenu,
+            // Keypad Clear delivers the PUA scalar `NSClearLineFunctionKey`
+            // (U+F739, AppKit `NSEvent.h`) as its `characters`; its W3C `key`
+            // value is `Clear` (Firefox maps `kVK_ANSI_KeypadClear` so), even
+            // though its physical `code` is the registry's NumLock position.
+            kvk::ANSI_KEYPAD_CLEAR => NamedKey::Clear,
+
+            // Modifiers arrive via `flagsChanged:`, not `keyDown:` — mapped for
+            // table completeness (see the module doc).
+            kvk::SHIFT | kvk::RIGHT_SHIFT => NamedKey::Shift,
+            kvk::CONTROL | kvk::RIGHT_CONTROL => NamedKey::Control,
+            kvk::OPTION | kvk::RIGHT_OPTION => NamedKey::Alt,
+            kvk::COMMAND | kvk::RIGHT_COMMAND => NamedKey::Meta,
+            kvk::CAPS_LOCK => NamedKey::CapsLock,
+            kvk::FUNCTION => NamedKey::Fn,
+
+            kvk::VOLUME_UP => NamedKey::AudioVolumeUp,
+            kvk::VOLUME_DOWN => NamedKey::AudioVolumeDown,
+            kvk::MUTE => NamedKey::AudioVolumeMute,
+
+            kvk::JIS_EISU => NamedKey::Eisu,
+            kvk::JIS_KANA => NamedKey::KanaMode,
+
+            // Space types text but its `characters` IS the space — still, keep
+            // the historical intercept so the key never depends on the
+            // characters path.
+            kvk::SPACE => return Some(Key::character(" ")),
+
+            _ => return None,
+        };
+        Some(Key::Named(named))
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+pub(crate) mod wheel {
+    //! AppKit's wheel step. An `NSEvent`'s `scrollingDeltaX` and
+    //! `scrollingDeltaY` move the content, in points when the device reports
+    //! `hasPreciseScrollingDeltas` (a trackpad, a precise mouse) and in lines
+    //! otherwise; they go through the one wheel rule, and a step it refuses is
+    //! zero in its unit.
+
+    #![forbid(unsafe_code)]
+
+    use flui_platform::pointer::{ScrollDelta, ScrollPrecision, ScrollUnit};
+
+    use crate::input::scroll::{WheelAmount, wheel_step};
+
+    /// The step and precision of a scroll event whose deltas are
+    /// `scrolling_delta_x` and `scrolling_delta_y`, precise or not.
+    pub(crate) fn step(
+        precise: bool,
+        scrolling_delta_x: f64,
+        scrolling_delta_y: f64,
+    ) -> (ScrollDelta, ScrollPrecision) {
+        let (unit, precision) = if precise {
+            (ScrollUnit::Pixels, ScrollPrecision::Precise)
+        } else {
+            (ScrollUnit::Lines, ScrollPrecision::Notched)
+        };
+        let delta = wheel_step(
+            unit,
+            WheelAmount::content(scrolling_delta_x),
+            WheelAmount::content(scrolling_delta_y),
+        )
+        .unwrap_or_else(|_| ScrollDelta::zero(unit));
+        (delta, precision)
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) mod macos {
+    //! The macOS input: the mouse, trackpad and keyboard events each window's
+    //! content view (the owner's `content_view`) hands its input, translated
+    //! into the owned pointer vocabulary (`events`).
+
+    use std::cell::RefCell;
+
+    use objc2_app_kit::NSEvent;
+
+    use crate::owner::apple::macos::content_view::{ContentView, ViewInput};
+    use events::MacInputState;
+
+    /// The input of one content view: its pointer contacts, its trackpad
+    /// gesture session and its scrolling, made with the view and dropped with
+    /// it.
+    #[derive(Default)]
+    pub(crate) struct ViewInputs(RefCell<MacInputState>);
+
+    impl ViewInput for ViewInputs {
+        fn event(&self, view: &ContentView<'_>, event: &NSEvent) {
+            let height = view.height();
+            // Converted before anything is dispatched, with the borrow
+            // released: a callback may re-enter the view.
+            let inputs = self.0.borrow_mut().convert(event, height);
+            for input in inputs {
+                view.dispatch_input(input);
+            }
+        }
+    }
+
+    /// The input position of the macOS table: the loop answers it.
+    impl crate::host::Input<crate::owner::apple::MacOSLoop> for crate::owner::apple::MacOSLoop {
+        fn keyboard_layout(_: &Self) -> String {
+            // The host does not read AppKit's input source: the layout is unknown.
+            String::new()
+        }
+
+        fn on_keyboard_layout_change(_: &Self, callback: Box<dyn FnMut() + Send>) {
+            // No layout is read, so no change is ever reported.
+            drop(callback);
+        }
+    }
+
+    mod events {
+        //! AppKit input translated into the owned pointer vocabulary.
+        //!
+        //! Each `NSEvent` is copied into a plain [`NativeReading`] and assembled by
+        //! the shared [`pointer_assembly`](crate::input::assembly): mouse
+        //! chords belong to the receiving view; trackpad magnify and rotate components
+        //! share one cumulative session. Two-finger scroll remains scroll, retaining
+        //! the native finger/momentum phase and delta precision.
+
+        use std::num::{NonZeroU8, NonZeroU64};
+        use std::time::Duration;
+
+        use flui_platform::EventTime;
+        use flui_platform::keyboard::{Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey};
+        use flui_platform::pointer::{
+            PanZoomEvent, PointerButton, PointerEvent, PointerId, PointerInfo, PointerKind,
+            PointerPosition, PointerRole, ScrollEvent, ScrollPhase,
+        };
+        use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventPhase, NSEventType};
+        use objc2_foundation::NSProcessInfo;
+
+        use crate::input::assembly::{
+            ClockChoice, ContactRegistry, DecodeError, GestureComponent, GestureDelta,
+            GesturePhase, GestureReading, NativeCancel, NativeClock, NativeContact, NativeReading,
+            NativeSurface, NativeTime, RawSensors, ReadingAction, ReadingTime, ScrollPhases,
+            ScrollReading, decode,
+        };
+        use flui_platform::PlatformInput;
+
+        /// The view's cursor.
+        const MOUSE: NativeContact = NativeContact(0);
+        /// The view's trackpad gesture session.
+        const GESTURE: NativeContact = NativeContact(1);
+
+        /// Owner-local AppKit input state, committed before callbacks run.
+        pub(super) struct MacInputState {
+            contacts: ContactRegistry,
+            scrolling: ScrollPhases,
+        }
+
+        impl Default for MacInputState {
+            fn default() -> Self {
+                // The uptime and the epoch are read back to back: AppKit timestamps
+                // and `Instant` both count the same monotonic uptime.
+                let uptime = NSProcessInfo::processInfo().systemUptime();
+                let clock = NativeClock::new(
+                    EventTime::from_nanos(crate::input::event_timestamp_ns()),
+                    Duration::try_from_secs_f64(uptime).unwrap_or_default(),
+                    None,
+                );
+                Self {
+                    contacts: ContactRegistry::new(clock).with_reserved_contact(MOUSE),
+                    scrolling: ScrollPhases::default(),
+                }
+            }
+        }
+
+        impl MacInputState {
+            /// What `event`, delivered to a view `view_height` points tall,
+            /// carries.
+            pub(super) fn convert(
+                &mut self,
+                event: &NSEvent,
+                view_height: f64,
+            ) -> Vec<PlatformInput> {
+                let reading_time =
+                    ReadingTime::coarse(NativeTime::UptimeSeconds(event.timestamp()));
+                let time = self
+                    .contacts
+                    .clock()
+                    .stamp(reading_time, ClockChoice::Coarse)
+                    .unwrap_or_else(|| EventTime::from_nanos(crate::input::event_timestamp_ns()));
+                let event_type = event.r#type();
+                if event_type == NSEventType::KeyDown || event_type == NSEventType::KeyUp {
+                    let key_code = event.keyCode();
+                    let code = crate::input::apple::keys::keycode_to_code(key_code);
+                    return vec![PlatformInput::Keyboard(
+                        KeyEvent::new(
+                            if event_type == NSEventType::KeyDown {
+                                KeyState::Down
+                            } else {
+                                KeyState::Up
+                            },
+                            extract_key(event, key_code),
+                            code,
+                            time,
+                        )
+                        .with_location(crate::input::keys::location_for_code(code))
+                        .with_modifiers(extract_modifiers(event))
+                        .with_repeat(
+                            if event_type == NSEventType::KeyDown && event.isARepeat() {
+                                KeyRepeat::AutoRepeat
+                            } else {
+                                KeyRepeat::First
+                            },
+                        ),
+                    )];
+                }
+                let modifiers = extract_modifiers(event);
+                let location = event.locationInWindow();
+                let (x, y) = (location.x, view_height - location.y);
+                let placed = |reading: NativeReading| {
+                    if x.is_finite() && y.is_finite() {
+                        reading.at(x, y, 1.0)
+                    } else {
+                        reading
+                    }
+                };
+                let mouse = |action| {
+                    placed(
+                        NativeReading::new(MOUSE, PointerKind::Mouse, action, reading_time)
+                            .with_primary(true)
+                            .with_modifiers(modifiers),
+                    )
+                };
+                let reading = if event_type == NSEventType::MouseEntered {
+                    mouse(ReadingAction::Enter)
+                } else if event_type == NSEventType::MouseExited {
+                    mouse(ReadingAction::Leave)
+                } else if event_type == NSEventType::MouseCancelled {
+                    mouse(ReadingAction::Cancel(NativeCancel::Platform))
+                } else if matches!(
+                    event_type,
+                    NSEventType::LeftMouseDown
+                        | NSEventType::RightMouseDown
+                        | NSEventType::OtherMouseDown
+                ) {
+                    let Some(button) = mouse_button(event.buttonNumber()) else {
+                        return Vec::new();
+                    };
+                    let mut press = mouse(ReadingAction::Press(button));
+                    if let Ok(count) = u8::try_from(event.clickCount())
+                        && let Some(count) = NonZeroU8::new(count)
+                    {
+                        press = press.with_click_count(count);
+                    }
+                    press
+                } else if matches!(
+                    event_type,
+                    NSEventType::LeftMouseUp
+                        | NSEventType::RightMouseUp
+                        | NSEventType::OtherMouseUp
+                ) {
+                    let Some(button) = mouse_button(event.buttonNumber()) else {
+                        return Vec::new();
+                    };
+                    mouse(ReadingAction::Release(button))
+                } else if matches!(
+                    event_type,
+                    NSEventType::MouseMoved
+                        | NSEventType::LeftMouseDragged
+                        | NSEventType::RightMouseDragged
+                        | NSEventType::OtherMouseDragged
+                        | NSEventType::Pressure
+                ) {
+                    // AppKit pressure stages have separate normalized curves. Keep the
+                    // first-stage reading; summing stages would invent a pressure range.
+                    let pressure = (event_type == NSEventType::Pressure && event.stage() == 1)
+                        .then(|| f64::from(event.pressure()))
+                        .filter(|pressure| (0.0..=1.0).contains(pressure));
+                    mouse(ReadingAction::Move).with_sensors(RawSensors {
+                        pressure,
+                        ..RawSensors::default()
+                    })
+                } else if event_type == NSEventType::ScrollWheel {
+                    return self.scroll(event, time, x, y, modifiers);
+                } else if let Some((component, delta)) = gesture_component(event, event_type) {
+                    let phase = if event_type == NSEventType::BeginGesture {
+                        NSEventPhase::Began
+                    } else if event_type == NSEventType::EndGesture {
+                        NSEventPhase::Ended
+                    } else {
+                        event.phase()
+                    };
+                    return self
+                        .gesture(component, phase, delta, (x, y), reading_time, modifiers)
+                        .into_iter()
+                        .map(|event| PlatformInput::Pointer(PointerEvent::PanZoom(event)))
+                        .collect();
+                } else {
+                    return Vec::new();
+                };
+                decode(&mut self.contacts, &reading)
+                    .unwrap_or_else(DecodeError::into_inputs)
+                    .into_vec()
+            }
+
+            fn scroll(
+                &mut self,
+                event: &NSEvent,
+                time: EventTime,
+                x: f64,
+                y: f64,
+                modifiers: Modifiers,
+            ) -> Vec<PlatformInput> {
+                let Ok(position) =
+                    PointerPosition::try_new(flui_foundation::geometry::Point::new(x, y))
+                else {
+                    return Vec::new();
+                };
+                let pointer = self
+                    .contacts
+                    .pointer(NativeSurface::default(), None, MOUSE)
+                    .unwrap_or_else(mouse_info);
+                let precise = event.hasPreciseScrollingDeltas();
+                let (delta, precision) = crate::input::apple::wheel::step(
+                    precise,
+                    event.scrollingDeltaX(),
+                    event.scrollingDeltaY(),
+                );
+                let mut scroll = ScrollEvent::new(pointer, time, position, delta)
+                    .with_modifiers(modifiers)
+                    .with_precision(precision);
+                if let Some(phase) = scroll_phase(
+                    &mut self.scrolling,
+                    event.phase(),
+                    event.momentumPhase(),
+                    precise,
+                ) {
+                    scroll = scroll.with_phase(phase);
+                }
+                vec![PlatformInput::Pointer(PointerEvent::Scroll(scroll))]
+            }
+
+            /// One trackpad gesture component at view point `(x, y)`; a non-finite
+            /// point keeps the gesture's last one.
+            fn gesture(
+                &mut self,
+                component: GestureComponent,
+                phase: NSEventPhase,
+                delta: GestureDelta,
+                (x, y): (f64, f64),
+                time: ReadingTime,
+                modifiers: Modifiers,
+            ) -> Vec<PanZoomEvent> {
+                let phase = if phase.contains(NSEventPhase::Cancelled) {
+                    GesturePhase::Cancelled
+                } else if phase.contains(NSEventPhase::Began) {
+                    GesturePhase::Began
+                } else if phase.contains(NSEventPhase::Ended) {
+                    GesturePhase::Ended
+                } else {
+                    GesturePhase::Changed
+                };
+                let mut reading = NativeReading::new(
+                    GESTURE,
+                    PointerKind::Trackpad,
+                    ReadingAction::Gesture(GestureReading {
+                        component,
+                        phase,
+                        delta,
+                    }),
+                    time,
+                )
+                .with_primary(true)
+                .with_modifiers(modifiers);
+                if x.is_finite() && y.is_finite() {
+                    reading = reading.at(x, y, 1.0);
+                }
+                decode(&mut self.contacts, &reading)
+                    .unwrap_or_else(DecodeError::into_inputs)
+                    .into_iter()
+                    .filter_map(|input| match input {
+                        PlatformInput::Pointer(PointerEvent::PanZoom(event)) => Some(event),
+                        _ => None,
+                    })
+                    .collect()
+            }
+        }
+
+        /// The gesture component an AppKit gesture event reports, with its change.
+        fn gesture_component(
+            event: &NSEvent,
+            event_type: NSEventType,
+        ) -> Option<(GestureComponent, GestureDelta)> {
+            if event_type == NSEventType::BeginGesture || event_type == NSEventType::EndGesture {
+                Some((GestureComponent::Session, GestureDelta::None))
+            } else if event_type == NSEventType::Magnify {
+                Some((
+                    GestureComponent::Scale,
+                    GestureDelta::Scale(1.0 + event.magnification()),
+                ))
+            } else if event_type == NSEventType::Rotate {
+                // AppKit reports counterclockwise degrees; owned rotation is clockwise radians.
+                Some((
+                    GestureComponent::Rotation,
+                    GestureDelta::Rotation(-f64::from(event.rotation()).to_radians()),
+                ))
+            } else {
+                None
+            }
+        }
+
+        fn mouse_info() -> PointerInfo {
+            PointerInfo::new(PointerId::new(NonZeroU64::MIN), PointerKind::Mouse)
+                .with_role(PointerRole::Primary)
+        }
+
+        fn mouse_button(number: isize) -> Option<PointerButton> {
+            // Native numbers are zero-based; FLUI reserves six for the pen eraser tool.
+            let number = match number {
+                0..=4 => number + 1,
+                5..=30 => number + 2,
+                _ => return None,
+            };
+            PointerButton::try_from(u8::try_from(number).ok()?).ok()
+        }
+
+        /// An AppKit phase as the shared grammar's plain phase; `None` for
+        /// `MayBegin` and no phase.
+        fn native_phase(phase: NSEventPhase) -> Option<GesturePhase> {
+            if phase.contains(NSEventPhase::Cancelled) {
+                Some(GesturePhase::Cancelled)
+            } else if phase.contains(NSEventPhase::Ended) {
+                Some(GesturePhase::Ended)
+            } else if phase.contains(NSEventPhase::Began) {
+                Some(GesturePhase::Began)
+            } else if phase.contains(NSEventPhase::Changed)
+                || phase.contains(NSEventPhase::Stationary)
+            {
+                Some(GesturePhase::Changed)
+            } else {
+                None
+            }
+        }
+
+        /// The owned phase of an AppKit scroll through the shared grammar
+        /// (ADR-0217 §4): a two-finger pan is a phased scroll, momentum is
+        /// `Momentum*`.
+        fn scroll_phase(
+            phases: &mut ScrollPhases,
+            phase: NSEventPhase,
+            momentum: NSEventPhase,
+            precise: bool,
+        ) -> Option<ScrollPhase> {
+            let reading = ScrollReading {
+                fingers: native_phase(phase),
+                momentum: native_phase(momentum),
+                precise,
+            };
+            phases.phase(NativeSurface::default(), None, reading)
+        }
+
+        fn extract_key(event: &NSEvent, key_code: u16) -> Key {
+            // Check for special keys via key code first.
+            if let Some(special_key) = crate::input::apple::keys::keycode_to_key(key_code) {
+                return special_key;
+            }
+
+            // `characters` is `None` only when the event has no character mapping;
+            // objc2 models the NSString as retained, so there is no null to test.
+            let Some(chars) = event.characters() else {
+                return Key::Named(NamedKey::Unidentified);
+            };
+
+            let chars_str = chars.to_string();
+            if chars_str.is_empty() {
+                return Key::Named(NamedKey::Unidentified);
+            }
+            Key::character(chars_str)
+        }
+
+        /// Extract modifiers from NSEvent
+        ///
+        /// # Safety
+        ///
+        /// `ns_event` must be a valid, live `NSEvent*`.
+        fn extract_modifiers(event: &NSEvent) -> Modifiers {
+            let flags = event.modifierFlags();
+
+            let mut modifiers = Modifiers::NONE;
+            if flags.contains(NSEventModifierFlags::Shift) {
+                modifiers |= Modifiers::SHIFT;
+            }
+            if flags.contains(NSEventModifierFlags::Control) {
+                modifiers |= Modifiers::CONTROL;
+            }
+            if flags.contains(NSEventModifierFlags::Option) {
+                modifiers |= Modifiers::ALT;
+            }
+            if flags.contains(NSEventModifierFlags::Command) {
+                modifiers |= Modifiers::META; // Command = Meta
+            }
+            modifiers
+        }
+
+        #[cfg(test)]
+        mod tests {
+            use super::*;
+
+            #[test]
+            fn native_scroll_phases_preserve_momentum_and_unphased_wheels() {
+                for (phase, momentum, expected) in [
+                    (NSEventPhase::None, NSEventPhase::None, None),
+                    (NSEventPhase::MayBegin, NSEventPhase::None, None),
+                    (
+                        NSEventPhase::Began,
+                        NSEventPhase::None,
+                        Some(ScrollPhase::Began),
+                    ),
+                    (
+                        NSEventPhase::Changed,
+                        NSEventPhase::None,
+                        Some(ScrollPhase::Changed),
+                    ),
+                    (
+                        NSEventPhase::Ended,
+                        NSEventPhase::None,
+                        Some(ScrollPhase::Ended),
+                    ),
+                    (
+                        NSEventPhase::Cancelled,
+                        NSEventPhase::None,
+                        Some(ScrollPhase::Cancelled),
+                    ),
+                    (
+                        NSEventPhase::None,
+                        NSEventPhase::Began,
+                        Some(ScrollPhase::MomentumBegan),
+                    ),
+                    (
+                        NSEventPhase::None,
+                        NSEventPhase::Changed,
+                        Some(ScrollPhase::MomentumChanged),
+                    ),
+                    (
+                        NSEventPhase::Ended,
+                        NSEventPhase::Ended,
+                        Some(ScrollPhase::MomentumEnded),
+                    ),
+                ] {
+                    assert_eq!(
+                        scroll_phase(&mut ScrollPhases::default(), phase, momentum, true),
+                        expected
+                    );
+                }
+            }
+
+            #[test]
+            fn native_pinch_and_rotation_share_one_cumulative_gesture() {
+                use GestureComponent::{Rotation, Scale, Session};
+                use flui_platform::pointer::PanZoomPhase;
+                let mut state = MacInputState::default();
+                let at = (10.25, 20.5);
+                let time = ReadingTime::coarse(NativeTime::UptimeSeconds(1.0));
+                let modifiers = Modifiers::NONE;
+                let mut gesture = |component, phase, delta| {
+                    state.gesture(component, phase, delta, at, time, modifiers)
+                };
+                assert_eq!(
+                    gesture(Scale, NSEventPhase::Changed, GestureDelta::Scale(1.1)),
+                    []
+                );
+                let first = gesture(Scale, NSEventPhase::Began, GestureDelta::Scale(1.1));
+                assert_eq!(first.len(), 2);
+                assert_eq!(first[0].phase, PanZoomPhase::Start);
+                assert_eq!(
+                    first[0].position.get(),
+                    flui_foundation::geometry::Point::new(10.25, 20.5)
+                );
+                let id = first[0].pointer().id;
+                let joined = gesture(
+                    Rotation,
+                    NSEventPhase::Began,
+                    GestureDelta::Rotation(-std::f64::consts::FRAC_PI_6),
+                );
+                assert_eq!(joined.len(), 1);
+                let PanZoomPhase::Update(transform) = joined[0].phase else {
+                    panic!("update")
+                };
+                assert_eq!(joined[0].pointer().id, id);
+                assert_eq!(transform.scale(), 1.1);
+                assert_eq!(transform.rotation(), -std::f64::consts::FRAC_PI_6);
+                let ended_component = gesture(Scale, NSEventPhase::Ended, GestureDelta::Scale(1.2));
+                assert_eq!(ended_component.len(), 1);
+                let last = gesture(
+                    Rotation,
+                    NSEventPhase::Ended,
+                    GestureDelta::Rotation(-std::f64::consts::FRAC_PI_6),
+                );
+                assert_eq!(last.len(), 2);
+                let PanZoomPhase::Update(transform) = last[0].phase else {
+                    panic!("update")
+                };
+                assert!((transform.scale() - 1.32).abs() < 1e-12);
+                assert_eq!(transform.rotation(), -std::f64::consts::FRAC_PI_3);
+                assert_eq!(last[1].phase, PanZoomPhase::End);
+                assert_eq!(last[1].pointer().id, id);
+                let next = gesture(Scale, NSEventPhase::Began, GestureDelta::Scale(1.0));
+                assert_ne!(next[0].pointer().id, id);
+                let cancelled = gesture(
+                    Scale,
+                    NSEventPhase::Cancelled,
+                    GestureDelta::Scale(f64::NAN),
+                );
+                assert_eq!(cancelled.len(), 1);
+                assert_eq!(cancelled[0].phase, PanZoomPhase::Cancelled);
+                assert_eq!(
+                    gesture(Scale, NSEventPhase::Changed, GestureDelta::Scale(1.1)),
+                    []
+                );
+                let outer = gesture(Session, NSEventPhase::Began, GestureDelta::None);
+                assert_eq!(outer.len(), 1);
+                let outer_id = outer[0].pointer().id;
+                gesture(Scale, NSEventPhase::Began, GestureDelta::Scale(1.1));
+                assert_eq!(
+                    gesture(Scale, NSEventPhase::Ended, GestureDelta::Scale(1.0)),
+                    []
+                );
+                let rotation = gesture(Rotation, NSEventPhase::Began, GestureDelta::Rotation(0.1));
+                assert_eq!(rotation.len(), 1);
+                assert_eq!(rotation[0].pointer().id, outer_id);
+                gesture(Rotation, NSEventPhase::Ended, GestureDelta::None);
+                let end = gesture(Session, NSEventPhase::Ended, GestureDelta::None);
+                assert_eq!(end.len(), 1);
+                assert_eq!(end[0].phase, PanZoomPhase::End);
+                assert_eq!(end[0].pointer().id, outer_id);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "ios")]
+pub(crate) mod ios {
+    //! UIKit touch and Pencil readings in the owned input vocabulary.
+    //!
+    //! Each `UITouch` is copied into a plain [`NativeReading`] and assembled by the
+    //! shared [`pointer_assembly`](crate::input::assembly); touch identity
+    //! and primary admission belong to the receiving view. UIKit reports force
+    //! only for Pencil or a force-capable trait environment; unsupported force
+    //! remains absent. Native timestamps keep their uptime on the process
+    //! timeline.
+
+    // A gesture recognizer's state is read through an Objective-C message,
+    // which has no safe wrapper.
+    #![expect(unsafe_code)]
+
+    use std::time::Duration;
+
+    use flui_platform::EventTime;
+    use flui_platform::pointer::{PenOrientation, PenTool, PointerButton, PointerKind};
+    use objc2::{msg_send, sel};
+    use objc2_foundation::NSObjectProtocol;
+    use objc2_foundation::NSProcessInfo;
+    use objc2_ui_kit::{
+        UIForceTouchCapability, UIGestureRecognizerState, UIHoverGestureRecognizer, UITouch,
+        UITouchType, UITraitEnvironment, UIView,
+    };
+
+    use crate::input::assembly::{
+        ContactRegistry, DecodeError, NativeCancel, NativeClock, NativeContact, NativeReading,
+        NativeTime, PenAngles, RawSensors, ReadingAction, ReadingTime, decode,
+    };
+    use crate::owner::apple::ios::{TouchPhase, ViewTouches};
+    use flui_platform::PlatformInput;
+
+    /// The view's touches are its input's: each view keeps its own contacts.
+    impl ViewTouches for TouchInputState {
+        fn touch(&mut self, touch: &UITouch, phase: TouchPhase) -> Vec<PlatformInput> {
+            self.convert(touch, phase)
+        }
+
+        fn hover(
+            &mut self,
+            recognizer: &UIHoverGestureRecognizer,
+            view: &UIView,
+        ) -> Vec<PlatformInput> {
+            TouchInputState::hover(self, recognizer, view)
+        }
+    }
+
+    /// The primary Pencil: its hover and its contact are one contact, which keeps
+    /// the reserved identity one.
+    const PENCIL: NativeContact = NativeContact(0);
+    /// The indirect pointer (a trackpad or mouse cursor): one contact for every
+    /// `UITouch` UIKit makes for it.
+    const CURSOR: NativeContact = NativeContact(1);
+
+    /// Contacts admitted by one UIKit view; no address arithmetic mints identities.
+    pub(crate) struct TouchInputState {
+        contacts: ContactRegistry,
+        /// The touch the primary Pencil's contact is, while its tip is down.
+        pencil_touch: Option<usize>,
+    }
+
+    impl Default for TouchInputState {
+        fn default() -> Self {
+            // The uptime and the epoch are read back to back: UIKit timestamps and
+            // `Instant` both count the same monotonic uptime.
+            let uptime = NSProcessInfo::processInfo().systemUptime();
+            let clock = NativeClock::new(
+                EventTime::from_nanos(crate::input::event_timestamp_ns()),
+                Duration::try_from_secs_f64(uptime).unwrap_or_default(),
+                None,
+            );
+            Self {
+                contacts: ContactRegistry::new(clock).with_reserved_contact(PENCIL),
+                pencil_touch: None,
+            }
+        }
+    }
+
+    impl TouchInputState {
+        /// The recognizer is restricted to Stylus at registration; a mouse cannot
+        /// acquire Pencil sensors through this path.
+        pub(crate) fn hover(
+            &mut self,
+            recognizer: &UIHoverGestureRecognizer,
+            view: &UIView,
+        ) -> Vec<PlatformInput> {
+            if self.pencil_touch.is_some() {
+                // Contact samples own this Pencil while its tip is down.
+                return Vec::new();
+            }
+            // SAFETY: UIKit invokes this target with a live gesture recognizer;
+            // `state` is its documented enum-valued getter (omitted by the bindings).
+            let state: UIGestureRecognizerState = unsafe { msg_send![recognizer, state] };
+            let time =
+                ReadingTime::epoch(EventTime::from_nanos(crate::input::event_timestamp_ns()));
+            let pencil = |action| {
+                NativeReading::new(
+                    PENCIL,
+                    PointerKind::Pen { tool: PenTool::Tip },
+                    action,
+                    time,
+                )
+                .with_primary(true)
+            };
+            if state == UIGestureRecognizerState::Ended
+                || state == UIGestureRecognizerState::Cancelled
+                || state == UIGestureRecognizerState::Failed
+            {
+                return self.assemble(&pencil(ReadingAction::Leave));
+            }
+            if state != UIGestureRecognizerState::Began
+                && state != UIGestureRecognizerState::Changed
+            {
+                return Vec::new();
+            }
+            let location = recognizer.locationInView(Some(view));
+            let mut sensors = RawSensors::default();
+            // Pencil hover angles were added after UIHoverGestureRecognizer itself.
+            if recognizer.respondsToSelector(sel!(altitudeAngle))
+                && recognizer.respondsToSelector(sel!(azimuthAngleInView:))
+            {
+                sensors.angles = pen_angles(
+                    recognizer.altitudeAngle(),
+                    recognizer.azimuthAngleInView(Some(view)),
+                );
+            }
+            let moved = pencil(ReadingAction::Move)
+                .at(location.x, location.y, 1.0)
+                .with_sensors(sensors);
+            let mut events = Vec::new();
+            if state == UIGestureRecognizerState::Began {
+                events.extend(self.assemble(&NativeReading {
+                    action: ReadingAction::Enter,
+                    ..moved
+                }));
+            }
+            events.extend(self.assemble(&moved));
+            events
+        }
+
+        pub(crate) fn convert(&mut self, touch: &UITouch, phase: TouchPhase) -> Vec<PlatformInput> {
+            let address = std::ptr::from_ref(touch) as usize;
+            let kind = pointer_kind(touch);
+            let contact = if kind == PointerKind::Mouse {
+                CURSOR
+            } else if self.pencil_touch == Some(address)
+                || (phase == TouchPhase::Down
+                    && matches!(kind, PointerKind::Pen { .. })
+                    && self.pencil_touch.is_none())
+            {
+                self.pencil_touch = Some(address);
+                PENCIL
+            } else {
+                NativeContact(address as u64)
+            };
+            if contact == PENCIL && matches!(phase, TouchPhase::Up | TouchPhase::Cancel) {
+                self.pencil_touch = None;
+            }
+            let action = match phase {
+                TouchPhase::Down => ReadingAction::Press(PointerButton::PRIMARY),
+                TouchPhase::Move => ReadingAction::Move,
+                TouchPhase::Up => ReadingAction::Release(PointerButton::PRIMARY),
+                TouchPhase::Cancel => ReadingAction::Cancel(NativeCancel::Platform),
+            };
+            let view = touch.view();
+            let location = touch.locationInView(view.as_deref());
+            let is_pen = matches!(kind, PointerKind::Pen { .. });
+            let has_force = is_pen
+                || view.as_ref().is_some_and(|view| {
+                    view.traitCollection().forceTouchCapability()
+                        == UIForceTouchCapability::Available
+                });
+            let mut sensors = touch_sensors(
+                has_force,
+                touch.force(),
+                touch.maximumPossibleForce(),
+                touch.majorRadius(),
+            );
+            if is_pen {
+                sensors.angles = pen_angles(
+                    touch.altitudeAngle(),
+                    touch.azimuthAngleInView(view.as_deref()),
+                );
+            }
+            let reading = NativeReading::new(
+                contact,
+                kind,
+                action,
+                ReadingTime::coarse(NativeTime::UptimeSeconds(touch.timestamp())),
+            )
+            .at(location.x, location.y, 1.0)
+            .with_sensors(sensors);
+            let reading = if contact == PENCIL || contact == CURSOR {
+                reading.with_primary(true)
+            } else {
+                reading
+            };
+            self.assemble(&reading)
+        }
+
+        fn assemble(&mut self, reading: &NativeReading) -> Vec<PlatformInput> {
+            decode(&mut self.contacts, reading)
+                .unwrap_or_else(DecodeError::into_inputs)
+                .into_vec()
+        }
+    }
+
+    fn pointer_kind(touch: &UITouch) -> PointerKind {
+        let kind = touch.r#type();
+        if kind == UITouchType::Stylus {
+            PointerKind::Pen { tool: PenTool::Tip }
+        } else if kind == UITouchType::IndirectPointer {
+            PointerKind::Mouse
+        } else {
+            PointerKind::Touch
+        }
+    }
+
+    /// Pencil angles, kept only when UIKit reports a valid pair.
+    fn pen_angles(altitude: f64, azimuth: f64) -> Option<PenAngles> {
+        PenOrientation::try_new(altitude, azimuth)
+            .is_ok()
+            .then_some(PenAngles::Spherical {
+                altitude: Some(altitude),
+                azimuth: Some(azimuth),
+            })
+    }
+
+    /// A touch's force, normalized by its maximum when the environment reports
+    /// force, and its contact diameter in points when UIKit measures a radius.
+    fn touch_sensors(has_force: bool, force: f64, maximum_force: f64, radius: f64) -> RawSensors {
+        let normalized_force = force / maximum_force;
+        RawSensors {
+            pressure: (has_force
+                && maximum_force.is_finite()
+                && maximum_force > 0.0
+                && (0.0..=1.0).contains(&normalized_force))
+            .then_some(normalized_force),
+            contact_size: (radius > 0.0 && radius.is_finite())
+                .then_some((radius * 2.0, radius * 2.0)),
+            ..RawSensors::default()
+        }
+    }
+
+    /// The input position of the iOS table: the loop answers it.
+    impl crate::host::Input<crate::owner::apple::IOSLoop> for crate::owner::apple::IOSLoop {
+        fn keyboard_layout(_: &Self) -> String {
+            // The host does not read the active keyboard: the layout is unknown.
+            String::new()
+        }
+
+        fn on_keyboard_layout_change(_: &Self, callback: Box<dyn FnMut() + Send>) {
+            // No layout is read, so no change is ever reported.
+            drop(callback);
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use flui_platform::pointer::{PointerEvent, Pressure};
+
+        /// The Down a Pencil-less touch with `sensors` assembles into.
+        fn down(sensors: RawSensors) -> flui_platform::pointer::PointerSample {
+            let mut contacts = ContactRegistry::new(NativeClock::epoch_only());
+            let reading = NativeReading::new(
+                NativeContact(9),
+                PointerKind::Touch,
+                ReadingAction::Press(PointerButton::PRIMARY),
+                ReadingTime::epoch(EventTime::from_nanos(10)),
+            )
+            .at(1.25, 2.5, 1.0)
+            .with_sensors(sensors);
+            decode(&mut contacts, &reading)
+                .expect("valid touch")
+                .iter()
+                .find_map(|input| match input.as_pointer() {
+                    Some(PointerEvent::Down(press)) => Some(press.sample),
+                    _ => None,
+                })
+                .expect("down")
+        }
+
+        #[test]
+        fn native_touch_readings_keep_sensor_presence_and_pen_angles() {
+            for (has_force, force, maximum, expected) in [
+                (false, 1.0, 1.0, None),
+                (true, 0.0, 4.0, Some(0.0)),
+                (true, 2.0, 4.0, Some(0.5)),
+                (true, 2.0, 0.0, None),
+                (true, f64::INFINITY, 4.0, None),
+            ] {
+                let sample = down(touch_sensors(has_force, force, maximum, 3.25));
+                assert_eq!(sample.pressure.map(Pressure::get), expected);
+                let extent = sample.contact_size.expect("reported radius");
+                assert_eq!((extent.get().width, extent.get().height), (6.5, 6.5));
+                assert_eq!(sample.orientation, None);
+                assert_eq!(sample.tangential_pressure, None);
+                assert_eq!(sample.twist, None);
+            }
+            let pen = down(RawSensors {
+                angles: pen_angles(std::f64::consts::FRAC_PI_4, std::f64::consts::FRAC_PI_2),
+                ..touch_sensors(true, 1.0, 4.0, 0.0)
+            });
+            let orientation = pen.orientation.expect("reported Pencil angles");
+            assert_eq!(orientation.altitude(), Some(std::f64::consts::FRAC_PI_4));
+            assert_eq!(orientation.azimuth(), Some(std::f64::consts::FRAC_PI_2));
+            assert_eq!(pen.contact_size, None);
+            assert_eq!(pen_angles(f64::NAN, 0.0), None);
+        }
+    }
+}

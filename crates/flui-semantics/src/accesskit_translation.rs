@@ -28,6 +28,7 @@ use crate::action::{
 };
 use crate::applicability::prohibits_name;
 use crate::attributes::SemanticsAttributes;
+use crate::collection::{Collection, SetSize, SortDirection};
 use crate::identity::AccessibilityNodeId;
 use crate::node::SemanticsNode;
 use crate::properties::AttributedString;
@@ -58,20 +59,23 @@ fn has_action(bits: u64, action: SemanticsAction) -> bool {
 
 /// The AccessKit role for one node.
 ///
-/// The node's role when it declares one. Otherwise a node that carries a label
-/// (a plain `Text`, a labelled `Semantics` wrapper) is a [`Role::Label`] —
-/// static text — and a node with neither becomes [`Role::GenericContainer`],
-/// present in the tree for structure but making no claim about what it is.
+/// The node's role when it declares one. Otherwise a node that contains a set
+/// whose size is declared (a lazy list's scroll container) is a [`Role::List`]:
+/// the size is read from the nearest ancestor the consumer keeps, and it keeps
+/// no [`Role::GenericContainer`]. A node that carries a label (a plain `Text`,
+/// a labelled `Semantics` wrapper) is a [`Role::Label`] — static text — and a
+/// node with neither becomes [`Role::GenericContainer`], present in the tree
+/// for structure but making no claim about what it is.
 ///
 /// The distinction is load-bearing at the OS boundary: AccessKit's consumer
 /// filter (`accesskit_consumer::common_filter`) drops `GenericContainer` nodes
 /// from what an assistive technology sees, so a labelled text that resolved to
 /// it was invisible to VoiceOver — observed on 2026-09-22 through
-/// `cargo xtask device macos-a11y`, where the counter's two `Text`s were absent from the
+/// a macOS accessibility client, where the counter's two `Text`s were absent from the
 /// `AXUIElement` tree while its button was present.
 #[must_use]
 pub(crate) fn resolve_role(data: &PublishView<'_>) -> Role {
-    if let Some(role) = explicit_role(data.attrs.role) {
+    if let Some(role) = explicit_role(data.attrs.effective_role()) {
         return role;
     }
     if data
@@ -577,8 +581,8 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         scroll_axis: _,
         scroll_extent_max: _,
         scroll_extent_min: _,
-        index_in_parent: _,
-        scroll_child_count: _,
+        // Published by `apply_collection`.
+        collection: _,
         // Resolved against the anchor index by `to_published_node`.
         anchors: _,
         relations: _,
@@ -714,26 +718,7 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         }
     }
 
-    // AccessKit's set-position pair, which a screen reader reads out as
-    // "item 12 of 100". `position_in_set` is zero-based like the framework
-    // index (the adapters add one: `accesskit_windows` `node.rs`), so it is
-    // published as is; a negative index (a caller's own arithmetic
-    // underflowing an offset) is dropped, and so is `i32::MAX`, whose one-based
-    // form the adapters compute as an `i32` and cannot represent, rather than
-    // published as a nonsensical position. The set total belongs to its actual
-    // List/Grid container; lazy membership never stamps a total on the item.
-    // Assembly withholds unrelated ancestor totals for unknown/alternate sets
-    // because AccessKit's lookup walks every included ancestor.
-    if let Some(index) = data.attrs.index_in_parent
-        && (0..i32::MAX).contains(&index)
-    {
-        node.set_position_in_set(index as usize);
-    }
-    if let Some(count) = data.attrs.scroll_child_count
-        && count >= 0
-    {
-        node.set_size_of_set(count as usize);
-    }
+    apply_collection(&mut node, &data.attrs.collection);
 
     apply_state(&mut node, data.attrs);
     // Custom actions are offered with their ids and labels while user actions
@@ -777,7 +762,7 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
 /// Automation element is the root node. With a container root, the first Tab
 /// that moved the focus off the root took the root out of the tree a screen
 /// reader walks, and navigation from the window stopped at its first child —
-/// found through `cargo xtask device windows-input`. The AppKit adapter reads
+/// found through a UI Automation client. The AppKit adapter reads
 /// a `Window` root the same way (`accesskit_macos`, `NodeWrapper::title`).
 ///
 /// The root also carries the window's device pixel ratio as a scale
@@ -866,6 +851,90 @@ pub(crate) fn anchor_index<'a>(nodes: impl IntoIterator<Item = &'a SemanticsNode
         }
     }
     index
+}
+
+/// AccessKit's names for where a node sits in a set, a tree or a table.
+///
+/// A screen reader reads "item 12 of 100" from `position_in_set` on the item
+/// and `size_of_set` on its container (`size_of_set_from_container`).
+/// `position_in_set` is zero-based as the framework's is (the adapters add one:
+/// `accesskit_windows` `node.rs`); AccessKit's level, row and column are
+/// zero-based where the framework's are the one-based numbers ARIA gives.
+///
+/// A position the adapters would convert to an `i32` that overflows
+/// (`i32::MAX` and up) is dropped rather than published as a nonsensical one,
+/// and so are the sizes, counts and spans that do not fit an `i32`. An unknown
+/// size, count or row is *not published*: AccessKit has no way to say
+/// "unknown", and a number would claim the set ends where the built members do.
+fn apply_collection(node: &mut Node, collection: &Collection) {
+    let fits = |count: usize| i32::try_from(count).is_ok();
+    if let Some(index) = collection.position_in_set
+        && fits(index)
+        && index != i32::MAX as usize
+    {
+        node.set_position_in_set(index);
+    }
+    if let Some(SetSize::Known(count)) = collection.set_size
+        && fits(count)
+    {
+        node.set_size_of_set(count);
+    }
+    if let Some(level) = collection.level
+        && fits(level.get() as usize)
+    {
+        node.set_level(level.get() as usize - 1);
+    }
+    if let Some(row) = collection.row
+        && fits(row.get())
+    {
+        node.set_row_index(row.get() - 1);
+    }
+    if let Some(shape) = collection.table {
+        if let SetSize::Known(rows) = shape.rows()
+            && fits(rows)
+        {
+            node.set_row_count(rows);
+        }
+        if let SetSize::Known(columns) = shape.columns()
+            && fits(columns)
+        {
+            node.set_column_count(columns);
+        }
+    }
+    if let Some(cell) = collection.cell
+        && [
+            cell.row(),
+            cell.column(),
+            cell.row_span(),
+            cell.column_span(),
+        ]
+        .iter()
+        .all(|value| fits(value.get()))
+    {
+        // A cell is published whole or not at all: an omitted span reads as
+        // AccessKit's default of one, which would misplace a cell whose span
+        // cannot be converted. AccessKit counts rows and columns from zero
+        // where the framework, like `aria-rowindex`, counts from one.
+        node.set_row_index(cell.row().get() - 1);
+        node.set_column_index(cell.column().get() - 1);
+        // One is AccessKit's default, so it is not published.
+        if cell.row_span().get() > 1 {
+            node.set_row_span(cell.row_span().get());
+        }
+        if cell.column_span().get() > 1 {
+            node.set_column_span(cell.column_span().get());
+        }
+    }
+    if let Some(direction) = collection.sort {
+        node.set_sort_direction(match direction {
+            SortDirection::Ascending => accesskit::SortDirection::Ascending,
+            SortDirection::Descending => accesskit::SortDirection::Descending,
+            SortDirection::Other => accesskit::SortDirection::Other,
+        });
+    }
+    if collection.multiselectable == Some(true) {
+        node.set_multiselectable();
+    }
 }
 
 /// Publishes each relation to the nodes its anchor names. A relation whose

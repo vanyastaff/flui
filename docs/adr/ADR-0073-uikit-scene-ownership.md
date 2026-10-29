@@ -115,7 +115,7 @@ work across threads or claims OS-driven scene reclamation. What changed is that
 the inset is now a value the presentation can publish rather than one it
 discards. Verified on the iPhone 16e simulator in portrait against the view's own
 `safeAreaInsets`; the acceptance record and its stated limits are in
-[docs/BETA.md](../BETA.md) § "iOS safe-area layout".
+[docs/BETA.md](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/BETA.md) § "iOS safe-area layout".
 
 Background execution grants, unrestricted multiple-scene UI, the termination
 callbacks after an OS kill, and any SDK 27 claim remain exactly as limited as

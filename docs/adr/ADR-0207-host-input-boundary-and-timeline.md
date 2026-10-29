@@ -15,8 +15,8 @@
   [ADR-0163](ADR-0163-presentation-owned-pointer-resampling.md),
   [ADR-0199](ADR-0199-presentation-sampling-recovery.md); spec
   [docs/plans/specs/flui-interaction/completeness/](../plans/specs/flui-interaction/completeness/design.md);
-  research [threading model](../research/2026-10-13-interaction-threading-model.md),
-  [trace format](../research/2026-10-12-interaction-input-followups.md).
+  research [threading model](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-13-interaction-threading-model.md),
+  [trace format](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-12-interaction-input-followups.md).
 
 ## Context
 
@@ -54,7 +54,7 @@ gestures on its UI thread; the ones that scroll off-thread make chaining declara
    (`dispatch_pointer_on`, which returns a `#[must_use]` `DispatchOutcome` naming the input's
    sequence), the window observation and the frame tick — and it passes `Accessibility` to the
    semantics owner (`flui-semantics` already depends on accesskit). The `Window` payload is the
-   runtime's normalized `WindowObservation` (`flui_platform_api::WindowEvent` keys raw window
+   runtime's normalized `WindowObservation` (`flui_platform::WindowEvent` keys raw window
    events by native id). No `flui-interaction` signature names
    `HostInput`. That variant couples
    `HostInput` to accesskit's 0.x `ActionRequest`: an accesskit bump that changes it is a
@@ -77,7 +77,7 @@ gestures on its UI thread; the ones that scroll off-thread make chaining declara
    results, timers in application code) is outside the recording: a worker result that rebuilds
    the hit-test tree between Down and Move is not replayable from `HostInput`. No order between
    runtimes is promised: Win32 queues input per thread.
-4. **`InputSequenceId`.** The type lives in `flui-foundation` (beside `DataTransferId`) so contract crates such as `flui-platform-api` can name it; `GestureBinding` mints one per contact at Down and per wheel, keyboard,
+4. **`InputSequenceId`.** The type lives in `flui-foundation` (beside `DataTransferId`) so contract crates such as `flui-platform` can name it; `GestureBinding` mints one per contact at Down and per wheel, keyboard,
    assistive, programmatic and auto-scroll sequence; the runtime requests assistive and
    programmatic ones from the binding rather than minting its own. A contactless source gets a
    `DeviceId` from the binding too: assistive sequences use the accessibility bridge's device id
@@ -94,7 +94,7 @@ gestures on its UI thread; the ones that scroll off-thread make chaining declara
    recording format. A host routes platform input to a surface through
    `UiRuntime::handle_input_on`; the runtime holds an embedded surface's input with the window's
    until the tree is committed.
-6. **`PointerKind::Virtual`.** `PointerKind` in `flui-platform-api` is `#[non_exhaustive]` and
+6. **`PointerKind::Virtual`.** `PointerKind` in `flui-platform` is `#[non_exhaustive]` and
    gains a fieldless virtual kind (gamepad cursor, automation, later XR) before the recording
    format is frozen. Its device is the event's `DeviceId`: a field would be a second identity, and
    `PointerKindSet` cannot hold a data-carrying variant. Hit testing stays a point query;

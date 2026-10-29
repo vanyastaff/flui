@@ -21,9 +21,6 @@ use flui_foundation::RenderId;
 /// ```
 #[derive(Debug, Clone)]
 pub struct NodeLinks {
-    /// Parent node ID (None for root).
-    parent: Option<RenderId>,
-
     /// Child node IDs in insertion order.
     children: Vec<RenderId>,
 
@@ -43,48 +40,20 @@ impl Default for NodeLinks {
 }
 
 impl NodeLinks {
-    /// Creates new links with no parent (root node).
+    /// Creates new links at depth 0 (root node).
     #[inline]
     pub fn new() -> Self {
-        Self {
-            parent: None,
-            children: Vec::new(),
-            depth: 0,
-            layout_walk: 0,
-        }
+        Self::with_depth(0)
     }
 
-    /// Creates new links with a parent.
+    /// Creates new links at `depth`.
     #[inline]
-    pub fn with_parent(parent: RenderId, depth: u16) -> Self {
+    pub fn with_depth(depth: u16) -> Self {
         Self {
-            parent: Some(parent),
             children: Vec::new(),
             depth,
             layout_walk: 0,
         }
-    }
-
-    // ========================================================================
-    // Parent Access
-    // ========================================================================
-
-    /// Returns the parent ID.
-    #[inline]
-    pub fn parent(&self) -> Option<RenderId> {
-        self.parent
-    }
-
-    /// Sets the parent ID.
-    #[inline]
-    pub(crate) fn set_parent(&mut self, parent: Option<RenderId>) {
-        self.parent = parent;
-    }
-
-    /// Returns true if this is a root node (no parent).
-    #[inline]
-    pub fn is_root(&self) -> bool {
-        self.parent.is_none()
     }
 
     // ========================================================================

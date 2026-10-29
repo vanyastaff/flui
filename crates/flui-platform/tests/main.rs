@@ -1,89 +1,46 @@
-//! Single-binary consolidation of flui-platform's root integration tests.
-//!
-//! Each former standalone test target linked the full dependency stack
-//! separately; compiling them as modules of one `platform_it` binary cuts
-//! link time and `target/` disk. Source files stay in place (see
-//! `autotests = false` + `[[test]]` in `Cargo.toml`), so file-relative
-//! and manifest-relative paths keep working unchanged.
-//!
-//! Convention: tests that WRITE process-global state (e.g. the
-//! `FLUI_HEADLESS` env var) live in their own [[test]] target instead —
-//! process isolation beats opt-in locking. See headless.
-//!
-//! macOS invariant: any `platform_it` test that constructs the platform
-//! through `current_platform()` (or a helper reaching it) must carry
-//! `#[cfg_attr(target_os = "macos", ignore = "requires an AppKit-run-loop-
-//! pumping test process (ADR-0039): …")]` — the macOS platform surface
-//! asserts the AppKit main thread, which a bare `cargo test` cannot host
-//! unbundled (ADR-0039; unbundled NSWindow construction aborts the process).
+//! flui-platform's integration tests, compiled as modules of one binary.
 
-#[path = "android_drag.rs"]
-mod android_drag;
-#[path = "android_exit_path.rs"]
-mod android_exit_path;
-#[path = "android_ime.rs"]
-mod android_ime;
-#[path = "android_keys.rs"]
-mod android_keys;
-#[path = "android_motion.rs"]
-mod android_motion;
-#[path = "backend_conformance.rs"]
-mod backend_conformance;
-#[path = "contract.rs"]
-mod contract;
-#[path = "direct_manipulation.rs"]
-mod direct_manipulation;
-#[path = "displays.rs"]
-mod displays;
-#[cfg(not(target_arch = "wasm32"))]
-#[path = "executor.rs"]
-mod executor;
-#[path = "file_store.rs"]
-mod file_store;
-#[path = "haptic_degradation.rs"]
-mod haptic_degradation;
-#[path = "headless_drag.rs"]
-#[cfg(not(target_arch = "wasm32"))]
-mod headless_drag;
-#[path = "headless_redraw.rs"]
-#[cfg(not(target_arch = "wasm32"))]
-mod headless_redraw;
-#[path = "html_drag_drop.rs"]
-mod html_drag_drop;
-#[path = "input_capabilities.rs"]
-mod input_capabilities;
-#[path = "input_regions.rs"]
-mod input_regions;
-#[path = "native_recording/mod.rs"]
-mod native_recording;
-#[path = "ole_drag_drop.rs"]
-mod ole_drag_drop;
-#[path = "panic_boundary.rs"]
-#[cfg(not(target_arch = "wasm32"))]
-mod panic_boundary;
-#[path = "pointer_assembly.rs"]
-mod pointer_assembly;
+#[path = "composition_ledger.rs"]
+mod composition_ledger;
+
+#[path = "drag_plan.rs"]
+mod drag_plan;
+
+#[path = "flag_sets.rs"]
+mod flag_sets;
+
+#[path = "haptics.rs"]
+mod haptics;
+
+#[path = "display.rs"]
+mod display;
+
+#[path = "host_notice.rs"]
+mod host_notice;
+
+#[path = "input_vocabulary.rs"]
+mod input_vocabulary;
+
+#[path = "placement_resolve.rs"]
+mod placement_resolve;
+
 #[path = "preferences.rs"]
 mod preferences;
-#[path = "text_input_mapping.rs"]
-mod text_input_mapping;
-#[path = "web_pinch.rs"]
-mod web_pinch;
-#[path = "web_text.rs"]
-mod web_text;
-#[path = "window_callback_unwind.rs"]
-#[cfg(not(target_arch = "wasm32"))]
-mod window_callback_unwind;
-#[path = "window_installation.rs"]
-mod window_installation;
-#[path = "window_state.rs"]
-mod window_state;
-#[path = "windows_host_events.rs"]
-#[cfg(target_os = "windows")]
-mod windows_host_events;
-#[path = "windows_window_commands.rs"]
-#[cfg(target_os = "windows")]
-mod windows_window_commands;
+
+#[path = "lock_gate.rs"]
+mod lock_gate;
+
+#[path = "window_command_validate.rs"]
+mod window_command_validate;
+
+#[path = "unsupported.rs"]
+mod unsupported;
+
+#[path = "surface_target.rs"]
+mod surface_target;
+
+#[path = "transfer_request.rs"]
+mod transfer_request;
 
 /// Runs every case even after one fails, then panics listing the failing case names.
 fn run_table(table: &str, cases: &[(&str, fn())]) {

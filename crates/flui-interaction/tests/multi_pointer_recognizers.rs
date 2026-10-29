@@ -129,7 +129,7 @@ impl Rig {
             .expect("valid fixture sample");
         if let PointerEvent::Down(data) = &mut event {
             data.sample.pressure = Some(
-                flui_platform_api::pointer::Pressure::try_new(pressure)
+                flui_platform::pointer::Pressure::try_new(pressure)
                     .expect("valid pressure fixture"),
             );
         }
@@ -146,7 +146,7 @@ impl Rig {
         if let PointerEvent::Move(data) = &mut event {
             {
                 let sample = data.current().with_pressure(
-                    flui_platform_api::pointer::Pressure::try_new(pressure)
+                    flui_platform::pointer::Pressure::try_new(pressure)
                         .expect("valid pressure fixture"),
                 );
                 *data =
@@ -267,7 +267,7 @@ fn scale_on(rig: &Rig) -> (Rc<ScaleGestureRecognizer>, Rc<ScaleLog>) {
 /// The binding's native stream reaches the same Scale actor without fake Downs.
 pub(crate) fn scale_recognizes_native_pan_zoom_source_lifecycle() {
     use flui_foundation::geometry::Point;
-    use flui_platform_api::{
+    use flui_platform::{
         EventTime,
         pointer::{
             DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerInfo, PointerPosition,
@@ -664,6 +664,75 @@ fn scale_disposed_from_its_update() {
     assert_eq!(updates.get(), 1, "a disposed scale publishes nothing more");
 }
 
+fn queue_move(rig: &Rig, pointer: u64, x: f64, y: f64) {
+    rig.send(
+        &make_move_event_for_id(id(pointer), Offset::new(x, y), PointerKind::Touch)
+            .expect("valid fixture sample"),
+    );
+}
+
+/// Both fingers of a pinch move between two frames: the pinch is measured
+/// once, with both where they went, not once with only the first moved.
+fn a_flush_measures_a_pinch_once_with_every_contact_moved() {
+    let rig = Rig::new();
+    let (_scale, log) = scale_on(&rig);
+    pinch_out(&rig, 1, 2);
+    let before = log.updates.borrow().len();
+    queue_move(&rig, 1, 20.0, 200.0);
+    queue_move(&rig, 2, 380.0, 200.0);
+    rig.frame();
+    let updates = log.updates.borrow();
+    assert_eq!(
+        updates.len(),
+        before + 1,
+        "one update for the two fingers of the frame"
+    );
+    let scale = updates.last().expect("an update").scale;
+    assert!(
+        (scale - 1.8).abs() < 1e-9,
+        "the scale of the final spread, not of the first finger alone (1.65): {scale}"
+    );
+}
+
+/// A frame the platform reported delivers every event in order, with the
+/// frame open for each, and ends once however many events panic.
+fn a_pointer_frame_delivers_every_event_and_closes_after_a_failure() {
+    let rig = Rig::new();
+    let arena = rig.binding.arena().clone();
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let log = Rc::clone(&seen);
+    let inside = arena.clone();
+    rig.binding
+        .pointer_router()
+        .add_global_handler(Rc::new(move |event: &PointerEvent| {
+            let pointer = pointer_of(event).expect("a contact event");
+            log.borrow_mut().push((pointer, inside.in_pointer_frame()));
+            assert!(pointer != 1, "the first contact's handler fails");
+        }));
+    let frame = [
+        make_down_event_for_id(id(1), Offset::new(10.0, 10.0), PointerKind::Touch)
+            .expect("valid fixture sample"),
+        make_down_event_for_id(id(2), Offset::new(90.0, 10.0), PointerKind::Touch)
+            .expect("valid fixture sample"),
+    ];
+    expect_panic("a frame event", || {
+        rig.binding.dispatch_pointer_frame_on(
+            flui_interaction::InputSurface::Window,
+            &frame,
+            |_| HitTestResult::new(),
+        );
+    });
+    assert_eq!(
+        *seen.borrow(),
+        [(1, true), (2, true)],
+        "the second event of the frame is delivered after the first failed"
+    );
+    assert!(
+        !arena.in_pointer_frame(),
+        "the frame ended with the failure"
+    );
+}
+
 #[test]
 fn scale_publishes_finite_continuous_values_and_owns_its_contacts() {
     run_rows(
@@ -728,6 +797,14 @@ fn scale_publishes_finite_continuous_values_and_owns_its_contacts() {
                 "ended from its start",
                 scale_ended_from_its_start_publishes_no_update,
             ),
+            (
+                "a flush measures a pinch once",
+                a_flush_measures_a_pinch_once_with_every_contact_moved,
+            ),
+            (
+                "a pointer frame delivers every event",
+                a_pointer_frame_delivers_every_event_and_closes_after_a_failure,
+            ),
         ],
     );
 }
@@ -767,7 +844,7 @@ fn press(rig: &Rig, pointer: u64, pressures: &[f32]) {
         100.0,
         100.0,
         PointerKind::Pen {
-            tool: flui_platform_api::pointer::PenTool::Tip,
+            tool: flui_platform::pointer::PenTool::Tip,
         },
         0.2,
     );
@@ -778,7 +855,7 @@ fn press(rig: &Rig, pointer: u64, pressures: &[f32]) {
             100.0,
             100.0,
             PointerKind::Pen {
-                tool: flui_platform_api::pointer::PenTool::Tip,
+                tool: flui_platform::pointer::PenTool::Tip,
             },
             pressure,
         );
@@ -788,7 +865,7 @@ fn press(rig: &Rig, pointer: u64, pressures: &[f32]) {
         100.0,
         100.0,
         PointerKind::Pen {
-            tool: flui_platform_api::pointer::PenTool::Tip,
+            tool: flui_platform::pointer::PenTool::Tip,
         },
     );
 }
@@ -845,7 +922,7 @@ fn force_press_start_panic_then_next_press() {
         100.0,
         100.0,
         PointerKind::Pen {
-            tool: flui_platform_api::pointer::PenTool::Tip,
+            tool: flui_platform::pointer::PenTool::Tip,
         },
         0.2,
     );
@@ -856,7 +933,7 @@ fn force_press_start_panic_then_next_press() {
             100.0,
             100.0,
             PointerKind::Pen {
-                tool: flui_platform_api::pointer::PenTool::Tip,
+                tool: flui_platform::pointer::PenTool::Tip,
             },
             0.7,
         );
@@ -866,7 +943,7 @@ fn force_press_start_panic_then_next_press() {
         100.0,
         100.0,
         PointerKind::Pen {
-            tool: flui_platform_api::pointer::PenTool::Tip,
+            tool: flui_platform::pointer::PenTool::Tip,
         },
     );
     press(&rig, 2, &[0.7]);
@@ -884,7 +961,7 @@ fn force_press_start_panic_still_delivers_peak_and_end() {
         100.0,
         100.0,
         PointerKind::Pen {
-            tool: flui_platform_api::pointer::PenTool::Tip,
+            tool: flui_platform::pointer::PenTool::Tip,
         },
         0.2,
     );
@@ -896,7 +973,7 @@ fn force_press_start_panic_still_delivers_peak_and_end() {
             100.0,
             100.0,
             PointerKind::Pen {
-                tool: flui_platform_api::pointer::PenTool::Tip,
+                tool: flui_platform::pointer::PenTool::Tip,
             },
             0.9,
         );
@@ -906,7 +983,7 @@ fn force_press_start_panic_still_delivers_peak_and_end() {
         100.0,
         100.0,
         PointerKind::Pen {
-            tool: flui_platform_api::pointer::PenTool::Tip,
+            tool: flui_platform::pointer::PenTool::Tip,
         },
     );
     assert_eq!(
@@ -924,7 +1001,7 @@ fn force_press_cancel_ends_once() {
         100.0,
         100.0,
         PointerKind::Pen {
-            tool: flui_platform_api::pointer::PenTool::Tip,
+            tool: flui_platform::pointer::PenTool::Tip,
         },
         0.2,
     );
@@ -934,7 +1011,7 @@ fn force_press_cancel_ends_once() {
         100.0,
         100.0,
         PointerKind::Pen {
-            tool: flui_platform_api::pointer::PenTool::Tip,
+            tool: flui_platform::pointer::PenTool::Tip,
         },
         0.7,
     );
@@ -962,7 +1039,7 @@ fn force_press_released_from_its_start_publishes_no_peak() {
                     id(1),
                     at,
                     PointerKind::Pen {
-                        tool: flui_platform_api::pointer::PenTool::Tip,
+                        tool: flui_platform::pointer::PenTool::Tip,
                     },
                 )
                 .expect("valid fixture sample");
@@ -979,7 +1056,7 @@ fn force_press_released_from_its_start_publishes_no_peak() {
         100.0,
         100.0,
         PointerKind::Pen {
-            tool: flui_platform_api::pointer::PenTool::Tip,
+            tool: flui_platform::pointer::PenTool::Tip,
         },
         0.2,
     );
@@ -990,7 +1067,7 @@ fn force_press_released_from_its_start_publishes_no_peak() {
         100.0,
         100.0,
         PointerKind::Pen {
-            tool: flui_platform_api::pointer::PenTool::Tip,
+            tool: flui_platform::pointer::PenTool::Tip,
         },
         0.9,
     );
@@ -1688,7 +1765,7 @@ fn prediction_does_not_admit_drag() {
     let PointerEvent::Move(movement) = &mut current else {
         unreachable!()
     };
-    future.time = flui_platform_api::EventTime::from_nanos(movement.current().time.as_nanos() + 1);
+    future.time = flui_platform::EventTime::from_nanos(movement.current().time.as_nanos() + 1);
     *movement = movement.clone().with_predicted(vec![future]);
     assert_eq!(
         movement.predicted().len(),
@@ -2239,7 +2316,7 @@ fn route<R: GestureRecognizer>(recognizer: &R, event: &PointerEvent) {
 /// publish an update or peak from a stale pressure paired with a new position.
 fn force_press_ignores_a_non_finite_pressure_sample() {
     assert!(
-        flui_platform_api::pointer::Pressure::try_new(f32::NAN).is_err(),
+        flui_platform::pointer::Pressure::try_new(f32::NAN).is_err(),
         "the checked sensor boundary refuses NaN before dispatch"
     );
     let updates_after = |pressures: &[f32]| {
@@ -2377,7 +2454,7 @@ fn declared_constant_pressure_sensor_force_presses() {
         PointerKind::Mouse,
         PointerKind::Touch,
         PointerKind::Pen {
-            tool: flui_platform_api::pointer::PenTool::Tip,
+            tool: flui_platform::pointer::PenTool::Tip,
         },
     ] {
         let rig = Rig::new();

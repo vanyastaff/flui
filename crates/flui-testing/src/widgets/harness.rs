@@ -31,7 +31,7 @@ use flui_interaction::events::{
     make_up_event_for_id,
 };
 use flui_painting::Alignment;
-use flui_platform_api::PlatformInput;
+use flui_platform::PlatformInput;
 use flui_rendering::pipeline::PipelineCell;
 use flui_view::{ElementNode, View, ViewExt};
 use flui_widgets::Align;
@@ -123,7 +123,7 @@ impl Harness {
 
     /// The clipboard this tree's widgets reach through
     /// `LifecycleContext::clipboard_handle`.
-    pub fn clipboard(&self) -> Arc<flui_platform_api::InMemoryClipboard> {
+    pub fn clipboard(&self) -> Arc<flui_platform::InMemoryClipboard> {
         self.host.ui_runtime().clipboard()
     }
 
@@ -269,7 +269,7 @@ impl Harness {
 
     /// Deliver an IME event to the UI runtime's primary presentation, as the
     /// platform delivers one between frames.
-    pub fn dispatch_ime(&self, event: &flui_platform_api::ImeEvent) {
+    pub fn dispatch_ime(&self, event: &flui_platform::ImeEvent) {
         self.host
             .ui_runtime()
             .dispatch(PlatformInput::Ime(event.clone()));
@@ -290,7 +290,7 @@ impl Harness {
     /// # Panics
     ///
     /// As [`Self::store_host_calls`].
-    pub fn active_text_store(&self) -> Option<Rc<dyn flui_platform_api::TextStore>> {
+    pub fn active_text_store(&self) -> Option<Rc<dyn flui_platform::TextStore>> {
         self.store_host().focused_store()
     }
 
@@ -347,7 +347,7 @@ impl Harness {
 
     /// Apply `values` as the host's next system-preference revision; see
     /// [`HeadlessHost::set_system_preferences`](crate::HeadlessHost::set_system_preferences).
-    pub fn set_system_preferences(&self, values: flui_platform_api::SystemPreferences) {
+    pub fn set_system_preferences(&self, values: flui_platform::SystemPreferences) {
         self.host.ui_runtime().set_system_preferences(values);
     }
 

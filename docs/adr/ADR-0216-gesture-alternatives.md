@@ -24,7 +24,7 @@ gestures. Today nothing makes a widget that reacts to them also publish a semant
 key or a single-pointer path. `flui-semantics` publishes custom actions to
 `accesskit::Node::custom_actions`, but no locked adapter (`accesskit_windows` 0.35.1,
 `accesskit_macos` 0.27.1, `accesskit_atspi_common` 0.21.0) routes them or `ShowContextMenu`
-([follow-ups](../research/2026-10-12-interaction-input-followups.md) §4). In WCAG 2.2, 2.5.1
+([follow-ups](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-12-interaction-input-followups.md) §4). In WCAG 2.2, 2.5.1
 Pointer Gestures and 2.5.7 Dragging Movements require single-pointer alternatives; this record
 also addresses the related 2.5.2 Pointer Cancellation (activation on release), 2.5.8 Target Size
 (Minimum), 2.4.11 Focus Not Obscured (Minimum) and 2.1.1 Keyboard
@@ -216,7 +216,7 @@ GestureAlternatives::handle(&self, &dyn BuildContext) -> CommandHandle   // the 
   `flui-widgets` (`gesture_key_collision_table`).
 - CI runs all of this headless against the in-process semantics tree and the produced AccessKit
   nodes. Delivery through UIA, NSAccessibility, AT-SPI, UIAccessibility and Android adapters runs
-  only on native hosts (`cargo xtask device`), and the adapter-version check gates dropping the
+  only on native hosts ([`cargo xtask device`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs)), and the adapter-version check gates dropping the
   focus-revealed control slot. Upstream AccessKit support for custom actions is a contribution,
   not a dependency.
 

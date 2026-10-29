@@ -5,6 +5,10 @@
 - **База:** `main` @ `4915054c8`
 - **Требования:** [requirements.md](requirements.md) (R1–R24, F1–F8, D1–D5); уровень 0 —
   [../release/requirements.md](../release/requirements.md) R7, R14
+- **Решения владельца 2026-10-28:** Notes, `notes_flow` и `cargo xtask device` удалены. Строки,
+  которые шли на Notes (W8), идут на приложении приёмки (persistence P10) через facade; нативные
+  шаги (W9, W11: R7, R22, R24) — под лейном `os` flui-driver, когда он появится (FD11).
+  Календарь и go/no-go ниже — история; порядок — в [tasks.md](tasks.md).
 - **Общие решения lifecycle (владелец — `teardown`):** пользовательский код выполняется только
   в realm, который стоит в своём слоте; у realm, извлечённого из слота в момент конца сессии,
   callback'и не выполняются и preedit отбрасывается (документированный предел); guard закрытия
@@ -322,7 +326,7 @@ impl TextInputHandle {
   `OnStatusChange` только по маске sink, не во время уведомления и не под блокировкой.
 - **Клавиши.** `VK_PROCESSKEY` не становится ни символом, ни клавишей (`shared::keys`,
   ADR-0069); `WM_IME_*` → `DefWindowProcW`; `Win32_UI_Input_Ime` не включается (R19).
-- **D2.** `on_changed`, автовалидация, `TextFormField::validate/save`, черновик Notes читают
+- **D2.** `on_changed`, автовалидация, `TextFormField::validate/save`, черновик приложения читают
   `committed_text()`; сессия, менявшая только preedit, владельца не уведомляет.
 
 ## Ошибки и отказы
@@ -355,20 +359,20 @@ impl TextInputHandle {
 фокуса; CI — clippy, прогон на Windows прикладывается к PR; пишется до кода (test-first, W6);
 **виджет** — `crates/flui-widgets/tests/editable_text.rs`, модуль `text_store`
 (`common::cases::run_cases`); **material** — `packages/flui-material/tests`; **kit** — v2;
-**Notes** — `notes_public_input_flow_matrix`; **runtime** — таблица с
+**приложение приёмки** — строки на приложении приёмки (persistence P10) у внешнего consumer; **runtime** — таблица с
 `a_text_store_lock_requested_during_a_frame_is_granted_after_the_drive_returns`;
-**нативный** — `cargo xtask device windows-ime`.
+**нативный** — прогон приложения приёмки под лейном `os` flui-driver.
 
 | R/F | Тест (строка) | Уровень | Без изменения падает, потому что |
 |---|---|---|---|
-| R1 | `ime_preedit_is_underlined_at_the_caret_and_hides_it_on_request` | Notes | закрепляет поведение через facade для R23 |
+| R1 | `ime_preedit_is_underlined_at_the_caret_and_hides_it_on_request` | приложение приёмки | закрепляет поведение через facade для R23 |
 | R2 | `a_composition_update_replaces_the_whole_preedit_and_places_the_caret` | Win32-unit | без `OnUpdateComposition` composing range старый — хвост |
-| R3 | `ime_commit_inserts_the_conversion_and_notifies_once` | Notes | `on_changed` на каждый preedit, валидатор видит кану |
+| R3 | `ime_commit_inserts_the_conversion_and_notifies_once` | приложение приёмки | `on_changed` на каждый preedit, валидатор видит кану |
 | R4 | `cancelled_composition_keeps_the_committed_text_without_on_changed` | виджет | сравнение полного текста даёт `on_changed` |
 | R5 | `composition_over_a_selection_replaces_the_selection` | kit v2 | выделение остаётся |
-| R6 | `pointer_down_mid_composition_commits_before_the_save_handler`; `pointer_down_inside_the_composing_field_commits` | Notes; виджет | Save читает committed text без preedit |
+| R6 | `pointer_down_mid_composition_commits_before_the_save_handler`; `pointer_down_inside_the_composing_field_commits` | приложение приёмки; виджет | Save читает committed text без preedit |
 | R7 | шаг `alt_tab_mid_composition` | нативный | — |
-| R8 | `route_change_mid_composition_commits_the_preedit_into_the_draft`; `a_conversion_queued_for_an_unmounted_field_is_dropped` | Notes; виджет | dispose отсоединяет без подтверждения; грант после dispose доходит до контроллера |
+| R8 | `route_change_mid_composition_commits_the_preedit_into_the_draft`; `a_conversion_queued_for_an_unmounted_field_is_dropped` | приложение приёмки; виджет | dispose отсоединяет без подтверждения; грант после dispose доходит до контроллера |
 | R9 | `autovalidation_ignores_a_whitespace_preedit_until_commit` | material | валидатор видит preedit |
 | R10 | `paste_and_undo_mid_composition_commit_first`; `a_refused_termination_still_commits_before_paste`; `the_enter_that_commits_does_not_submit` | виджет | paste отказывает; при отказе TSF preedit остаётся подчёркнутым |
 | R11 | `a_processkey_keydown_produces_no_key` | Linux | `Unidentified` доходит до обработчиков |
@@ -383,8 +387,8 @@ impl TextInputHandle {
 | R20 | `reconversion_requests_leave_the_document_unchanged`; `query_only_insert_answers_from_the_selection` (Linux) | Win32-unit (после go/no-go); Linux | правка при `TF_IAS_QUERYONLY` |
 | R21 | `failed_activation_falls_back_to_wm_char_and_warns_once` | Win32-unit | двойной `warn!`, потеря пары суррогатов |
 | R22 | шаг `title_copy_paste_round_trips_through_the_clipboard` | нативный | — |
-| R23 | строки R1, R3, R4, R6, R8 + `flui::facade_consumer` | Notes | — |
-| R24 | `cargo xtask device windows-ime`; отрицательный контроль на `4915054c8` | нативный | гейт окна кандидатов на старом SHA падает |
+| R23 | строки R1, R3, R4, R6, R8 через `acceptance_app_runs_through_the_facade` | приложение приёмки | — |
+| R24 | прогон под лейном `os` flui-driver; отрицательный контроль на `4915054c8` | нативный | гейт окна кандидатов на старом SHA падает |
 | F1 | `a_grant_for_a_replaced_document_answers_unexpected` | Win32-unit + виджет | грант A попадает в store B |
 | F2 | `set_text_from_on_changed_lands_after_the_commit`; `on_changed_runs_after_the_lock_is_released` | виджет | `on_changed` под `Held`: вложенный sync-лок отказан |
 | F3 | `a_panicking_on_changed_keeps_the_commit_and_reports_through_the_realm`; `a_panic_after_the_grant_returns_ok_and_the_queue_drains` | виджет; Win32-unit | `E_FAIL`, пропуск очереди |
@@ -462,7 +466,7 @@ ja-JP (новый) и, если есть, «previous version», 100 % и 150 %:
 
 **FAIL** — нет (1)–(4) к 10-26: эскалация с журналом; решение D3 на 2026-11-20.
 **Выживает:** модуль, обе чистые функции с таблицами, правило `VK_PROCESSKEY`, список классов
-окон IME (переходит в `device windows-ime`). **Выбрасывается:** тест-зонд и обёртка store
+окон IME (переходит в нативный прогон под лейном `os` flui-driver). **Выбрасывается:** тест-зонд и обёртка store
 (~200 строк). Если (5) — окно в углу: store получает запасной rect (состояние store, строка в
 виджетной таблице).
 
@@ -477,16 +481,16 @@ ja-JP (новый) и, если есть, «previous version», 100 % и 150 %:
 | W5 | Виджет: blur/paste/undo/unmount, вынос `take()` в blur и dispose, `Abandoned`-путь, R4/R9/R10/R15/F2/F3 | W2, W3 | B | 1,0 |
 | W6a | `shared::tsf_acp` + Linux-таблица | W1 | B | 0,5 |
 | W6 | Win32 production test-first (бывшие W6+W7): маппинг §3, документ, B1, отравление, R2, R16–R18, R21, F1, F3, F5, F7 | W1, W2, W6a | A | 2,4 |
-| W8 | Notes-строки R1, R3, R4, R6, R8 + consumer (R23); teardown R21 | W4, W5 | B | 0,75 |
-| W9 | `cargo xtask device windows-ime` + шаг R22 в `windows-notes` | W1 (классы окон) | C (или B после 11-20) | 1,5 |
+| W8 | Строки R1, R3, R4, R6, R8 на приложении приёмки + consumer (R23); teardown R21 (было: строки Notes) | W4, W5 | B | 0,75 |
+| W9 | Нативный прогон под лейном `os` flui-driver: R24, шаг R22 (было: `cargo xtask device windows-ime`, удалён) | W1 (классы окон) | C (или B после 11-20) | 1,5 |
 | W10 | После go/no-go: R13, R14 (Win32), R19, R20, F4 | W6 | A | 0,7 |
-| W11 | Нативный прогон R24 на SHA, `docs/BETA.md` | все | A | 0,5 |
+| W11 | Нативный прогон R24 на SHA, `docs/platform-parity.md` | все | A | 0,5 |
 
 Итого ≈ 11,85 нед (≈12).
 
 **Критический путь до go/no-go (2026-11-20, 6,6 нед от 10-06):** W1 (10-06 → 10-16) → W2
 (10-16 → 10-23) → W6 (10-23 → ~11-09) = **4,9 нед**, запас ≈1,7 нед на ручной прогон
-`toukyou` и правки. Нужна R3 (Notes) к go/no-go — путь исполнителя B: W3 (10-06 → 10-14) →
+`toukyou` и правки. Нужна R3 к go/no-go — путь исполнителя B: W3 (10-06 → 10-14) →
 W6a (10-14 → 10-17) → [ждёт W2 10-23] W4 + W5 (10-23 → 11-04) → W8 (11-04 → 11-07). **Второй
 исполнитель обязателен** (B: W3, W4, W5, W6a, W8 ≈ 4,25 нед); W9 — третий исполнитель или B
 после 11-20 (для go/no-go хватает ручного `toukyou`, для релиза — нет).
@@ -527,8 +531,8 @@ W6a (10-14 → 10-17) → [ждёт W2 10-23] W4 + W5 (10-23 → 11-04) → W8 (
 - Пункты 1, 2, 3, 5, 6, 7 и 8 прошли. Пункт 4 прошёл при 100 %; прогон при 150 % ждёт ручного
   переключения масштаба владельцем.
 - Новый IME Win11 рисует кандидатов внутри одного полноэкранного cloaked-окна `TextInputHost.exe`
-  (`Windows.UI.Core.CoreWindow`). Перечисление top-level окон его не находит. Гейт R24 и `device
-  windows-ime` поэтому — скриншот-дифф около поля (GDI) или UI Automation по элементам
+  (`Windows.UI.Core.CoreWindow`). Перечисление top-level окон его не находит. Гейт R24 и нативный
+  прогон поэтому — скриншот-дифф около поля (GDI) или UI Automation по элементам
   TextInputHost, а не прямоугольник окна.
 - Compartment open/close не включает MS-IME, включает клавиша `VK_IME_ON`. `ActivateProfile`
   требует `TF_IPPMF_DONTCARECURRENTINPUTLANGUAGE`, флаги `0` дают `E_INVALIDARG`.

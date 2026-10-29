@@ -352,7 +352,7 @@ fn gestures_follow_the_named_preset_on_every_host() {
         events::PointerKind,
         testing::input::{pointer_down, pointer_move, pointer_up},
     };
-    use flui_platform_api::{PlatformInput, TargetPlatform};
+    use flui_platform::{PlatformInput, TargetPlatform};
 
     for (preset, taps) in [
         (Some(TargetPlatform::Android), 0),
@@ -402,7 +402,7 @@ fn a_mouse_and_a_touch_get_their_own_preset_and_min_target() {
             PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
         },
     };
-    use flui_platform_api::{PlatformInput, TargetPlatform};
+    use flui_platform::{PlatformInput, TargetPlatform};
 
     let window = HeadlessWindow::new(200, 200)
         .with_gesture_preset(GestureProfiles::preset(TargetPlatform::Windows));
@@ -460,4 +460,31 @@ fn a_mouse_and_a_touch_get_their_own_preset_and_min_target() {
     let (on, drifted) = (Offset::new(100.0, 100.0), Offset::new(105.0, 100.0));
     assert_eq!(contact(PointerKind::Touch, on, drifted), 1, "touch slop");
     assert_eq!(contact(PointerKind::Mouse, on, drifted), 0, "mouse slop");
+}
+
+/// The headless window hands its OS what a real host would: a region whose device edges do
+/// not fit in `i32` is dropped, not saturated, and one that is not finite too.
+#[test]
+fn the_headless_window_drops_input_regions_no_host_could_send() {
+    use flui_foundation::geometry::{DevicePoint, DeviceRect, Rect};
+    use flui_platform::PlatformWindow as _;
+    use flui_platform::input_regions::{DeviceInputRegion, InputRegion, InputRegionKind};
+
+    const EXCLUSION: InputRegionKind = InputRegionKind::SystemGestureExclusion;
+    let window = HeadlessWindow::new(40, 24);
+    let beyond_i32 = f64::from(i32::MAX) + 10.0;
+    window
+        .set_input_regions(&[
+            InputRegion::new(EXCLUSION, Rect::from_ltrb(0.0, 0.0, beyond_i32, 4.0)),
+            InputRegion::new(EXCLUSION, Rect::from_ltrb(0.0, 0.0, f64::INFINITY, 4.0)),
+            InputRegion::new(EXCLUSION, Rect::from_ltrb(1.0, 2.0, 3.0, 4.0)),
+        ])
+        .expect("the test host takes input regions");
+    assert_eq!(
+        window.input_region_updates(),
+        vec![vec![DeviceInputRegion::new(
+            EXCLUSION,
+            DeviceRect::from_min_max(DevicePoint::new(1, 2), DevicePoint::new(3, 4)),
+        )]]
+    );
 }

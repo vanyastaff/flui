@@ -12,7 +12,7 @@ use flui_animation::AnimationController;
 use flui_foundation::geometry::Offset;
 use flui_foundation::{ManualClock, MonotonicClock, PresentationAddress};
 use flui_interaction::events::{PointerKind, make_down_event, make_up_event};
-use flui_platform_api::PlatformInput;
+use flui_platform::PlatformInput;
 use flui_runtime::frame_rate_demand::{FRAME_RATE_HOLD, FrameRateDemand};
 use flui_runtime::owner::{OwnerEffects, OwnerHost, PresentationDispatcher, WindowObservation};
 
@@ -102,7 +102,7 @@ struct Rig {
     effects: Effects,
     window: PresentationDispatcher,
     controller: flui_animation::DrivenController,
-    _native_window: Arc<dyn flui_platform_api::PlatformWindow>,
+    _native_window: Rc<dyn flui_platform::PlatformWindow>,
 }
 
 impl Rig {
@@ -116,14 +116,14 @@ impl Rig {
         let clock = ManualClock::new();
         let window = crate::owner_publication::window();
         // A native host owns the window; the runtime holds it weakly.
-        let native_window = Arc::clone(window.window());
+        let native_window = Rc::clone(window.window());
         let runtime = UiRuntime::new(
             window,
             1.0,
             RuntimeHostServices::new(
                 Arc::new(|| {}),
                 Arc::new(AtomicBool::new(false)),
-                Arc::new(flui_platform_api::InMemoryClipboard::new()),
+                Arc::new(flui_platform::InMemoryClipboard::new()),
                 &flui_painting::FontCollection::new(),
                 flui_scheduler::ClockSource::Manual(clock.clone()),
             ),
@@ -131,7 +131,7 @@ impl Rig {
         .expect("manual-clock runtime");
         runtime.synchronize_window_snapshot(
             runtime.presentation_id(),
-            flui_platform_api::WindowExecutionState::Running,
+            flui_platform::WindowExecutionState::Running,
             true,
             true,
         );

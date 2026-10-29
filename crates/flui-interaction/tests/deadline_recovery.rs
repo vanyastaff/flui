@@ -18,10 +18,18 @@ use flui_interaction::{
     GestureBinding, GestureDeadlineError, GestureDeadlineUpdate, ManualClock, PointerId,
     gesture::GestureArenaMember,
 };
-use flui_platform_api::EventTime;
+use flui_platform::EventTime;
 
 thread_local! {
     static WAKE_ACTION: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+}
+
+/// Runs the wake action this thread armed, once.
+fn wake() {
+    let action = WAKE_ACTION.with(|action| action.borrow_mut().take());
+    if let Some(action) = action {
+        action();
+    }
 }
 
 struct WakeWindow {
@@ -29,59 +37,52 @@ struct WakeWindow {
     panic_on_drop: bool,
 }
 
-impl flui_platform_api::PlatformWindow for WakeWindow {
-    fn id(&self) -> flui_platform_api::WindowId {
-        flui_platform_api::WindowId(1)
-    }
-    fn physical_size(&self) -> flui_foundation::geometry::Size<i32> {
-        flui_foundation::geometry::Size::new(1, 1)
-    }
-    fn logical_size(&self) -> flui_foundation::geometry::Size<f64> {
-        flui_foundation::geometry::Size::new(1.0, 1.0)
-    }
-    fn scale_factor(&self) -> f64 {
-        1.0
+impl flui_platform::PlatformWindow for WakeWindow {
+    fn id(&self) -> flui_platform::WindowId {
+        flui_platform::WindowId(1)
     }
     fn request_redraw(&self) {
-        let action = WAKE_ACTION.with(|action| action.borrow_mut().take());
-        if let Some(action) = action {
-            action();
-        }
+        wake();
     }
-    fn is_focused(&self) -> bool {
-        true
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        Arc::new(wake)
     }
-    fn is_visible(&self) -> bool {
-        true
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        Arc::new(flui_platform::testing::NoNativeSurface)
     }
-    fn set_cursor(
-        &self,
-        _: flui_platform_api::CursorIcon,
-    ) -> Result<(), flui_platform_api::CursorError> {
+    flui_platform::window_takes_no_frame_verbs!();
+
+    fn set_cursor(&self, _: flui_platform::CursorIcon) -> Result<(), flui_platform::CursorError> {
         Ok(())
     }
-    fn state(&self) -> flui_platform_api::WindowState {
-        let size = self.logical_size();
-        flui_platform_api::WindowState::new(
-            flui_platform_api::WindowGeometry::new(None, size),
-            size,
-        )
-    }
-
-    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
-        flui_platform_api::WindowCapabilities::NONE
+    fn state(&self) -> flui_platform::WindowState {
+        let size = flui_foundation::geometry::Size::new(1.0, 1.0);
+        flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
+            .with_focused(true)
+            .with_metrics(flui_foundation::geometry::WindowMetrics::from_logical(size, 1.0).ok())
     }
 
     fn apply(
         &self,
-        command: flui_platform_api::WindowCommand,
-    ) -> Result<(), flui_platform_api::WindowCommandError> {
-        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        command: flui_platform::AdmittedCommand,
+    ) -> Result<(), flui_platform::ApplyError> {
+        command.against(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+    fn text_input(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformTextInput>> {
+        None
+    }
+
+    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformHaptics>> {
+        None
+    }
+
+    fn system_chrome(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformSystemChrome>> {
+        None
+    }
+    fn drag_source(&self) -> Option<std::sync::Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        None
     }
 }
 
@@ -690,11 +691,11 @@ fn disarm_wake_cannot_make_an_old_up_retire_a_replacement_contact() {
     use flui_interaction::{GestureRecognizer as _, LongPressGestureRecognizer};
     let clock = ManualClock::new();
     let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
-    let window: Arc<dyn flui_platform_api::PlatformWindow> = Arc::new(WakeWindow {
+    let window: Rc<dyn flui_platform::PlatformWindow> = Rc::new(WakeWindow {
         drops: Arc::default(),
         panic_on_drop: false,
     });
-    flui_interaction::__runtime::set_pointer_capture_wake(&binding, Arc::downgrade(&window));
+    flui_interaction::__runtime::set_pointer_capture_wake(&binding, Rc::downgrade(&window));
     let notices = Rc::new(Cell::new(0));
     let captured = Rc::clone(&notices);
     let recognizer = LongPressGestureRecognizer::builder(binding.arena().clone())
@@ -729,16 +730,16 @@ fn a_wake_failure_retains_the_last_backend_owner_before_unwind() {
         let clock = ManualClock::new();
         let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
         let drops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let window: Arc<dyn flui_platform_api::PlatformWindow> = Arc::new(WakeWindow {
+        let window: Rc<dyn flui_platform::PlatformWindow> = Rc::new(WakeWindow {
             drops: Arc::clone(&drops),
             panic_on_drop: true,
         });
-        flui_interaction::__runtime::set_pointer_capture_wake(&binding, Arc::downgrade(&window));
-        let owner = Arc::new(std::sync::Mutex::new(Some(window)));
-        let released = Arc::clone(&owner);
+        flui_interaction::__runtime::set_pointer_capture_wake(&binding, Rc::downgrade(&window));
+        let owner = Rc::new(RefCell::new(Some(window)));
+        let released = Rc::clone(&owner);
         WAKE_ACTION.with(|action| {
             *action.borrow_mut() = Some(Box::new(move || {
-                drop(released.lock().expect("backend owner fixture").take());
+                drop(released.borrow_mut().take());
                 panic!("wake delivery first failure");
             }));
         });
@@ -761,7 +762,7 @@ fn a_wake_failure_retains_the_last_backend_owner_before_unwind() {
             0,
             "last backend ownership retained before propagation"
         );
-        assert!(owner.lock().expect("fixture owner").is_none());
+        assert!(owner.borrow().is_none());
         assert_eq!(
             flui_interaction::__runtime::next_deadline_snapshot(&binding),
             Some(at(&clock)),

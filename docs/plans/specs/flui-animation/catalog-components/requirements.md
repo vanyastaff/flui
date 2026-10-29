@@ -5,7 +5,7 @@
 - **Дата:** 2026-10-17
 - **База:** `main` 4967778a1.
 - **Связанные:** [design.md](design.md), [tasks.md](tasks.md); предыдущий раунд
-  [catalog](../catalog/requirements.md) (его «Вне объёма» — исходный список этого раунда);
+  [catalog](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/specs/flui-animation/catalog/requirements.md) (его «Вне объёма» — исходный список этого раунда);
   ADR-0088 (поверхность SDK), ADR-0192 (индикаторы под reduce motion), ADR-0195/ADR-0218
   (политика движения), ADR-0013 (движение из layout).
 

@@ -10,21 +10,20 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::{DataTransferId, DragSessionId, IdMint, PresentationId, UiRuntimeId};
-use flui_platform_api::data_transfer::{DataTransferOffer, TransferActions};
-use flui_platform_api::drag::{
+use flui_platform::data_transfer::{DataTransferOffer, TransferActions};
+use flui_platform::drag::{
     AllowedActions, DragReach, DragSessionKey, OsDragRequest, OsDragStart, ProcessNonce,
 };
-use flui_platform_api::{PlatformWindow, WindowId};
+use flui_platform::{PlatformWindow, WindowId};
 use slab::Slab;
 
 use super::cursor::DragCursor;
 use super::item::SessionData;
 use super::owner::{DragObserver, DragOutcome};
 use super::tracker::DropTracker;
-use super::view::DragScope;
+use super::view::{DragScope, InFlight};
 use crate::events::PointerKind;
 use crate::pointer::{HitTestHandle, PointerCapture};
 
@@ -61,8 +60,8 @@ pub(crate) struct Entry {
     pub(crate) allowed: AllowedActions,
     pub(crate) reach: DragReach,
     pub(crate) source: PresentationId,
-    pub(crate) pointer: Option<flui_platform_api::pointer::PointerInfo>,
-    pub(crate) window: Option<std::sync::Weak<dyn PlatformWindow>>,
+    pub(crate) pointer: Option<flui_platform::pointer::PointerInfo>,
+    pub(crate) window: Option<std::rc::Weak<dyn PlatformWindow>>,
     pub(crate) hit_test: Option<HitTestHandle>,
     pub(crate) capture: Option<PointerCapture>,
     pub(crate) observer: Option<Rc<dyn DragObserver>>,
@@ -133,7 +132,7 @@ pub(crate) struct Incoming {
     pub(crate) tracker: DropTracker,
     /// The offer's count of requests in flight ([`OfferState::in_flight`]),
     /// which a request made here bumps.
-    pub(crate) in_flight: Arc<AtomicUsize>,
+    pub(crate) in_flight: Arc<InFlight>,
     /// This hover took the drop and its target's callbacks are done; its
     /// offer's [`OfferState`] says when the OS is told.
     pub(crate) dropped: bool,
@@ -149,7 +148,7 @@ pub(crate) struct OfferState {
     pub(crate) id: DataTransferId,
     /// Requests made from the offer, over any window, that have not resolved.
     /// Each hover holds a clone; a request outlives the hover that made it.
-    pub(crate) in_flight: Arc<AtomicUsize>,
+    pub(crate) in_flight: Arc<InFlight>,
     /// A hover took the drop. The OS is told the target is done once no
     /// request of the offer is in flight, whichever windows its hovers have
     /// left or closed.
@@ -163,7 +162,7 @@ impl OfferState {
     /// Whether the offer dropped and no request of it is in flight: the OS is
     /// owed its conclusion.
     pub(crate) fn concludable(&self) -> bool {
-        self.dropped && self.in_flight.load(Ordering::Acquire) == 0
+        self.dropped && self.in_flight.is_idle()
     }
 }
 
@@ -245,7 +244,7 @@ impl DragSessions {
     /// it, it was not dropped, and no request of it is in flight.
     pub(crate) fn abandoned(&self, offer: &OfferState) -> bool {
         !offer.dropped
-            && offer.in_flight.load(Ordering::Acquire) == 0
+            && offer.in_flight.is_idle()
             && !self
                 .incoming
                 .iter()
@@ -269,8 +268,6 @@ pub(crate) type Shared = Rc<RefCell<DragSessions>>;
 pub(crate) type WeakShared = Weak<RefCell<DragSessions>>;
 
 /// The pointer kind hit tests ask with when a session knows none.
-pub(crate) fn pointer_kind(
-    pointer: Option<flui_platform_api::pointer::PointerInfo>,
-) -> PointerKind {
+pub(crate) fn pointer_kind(pointer: Option<flui_platform::pointer::PointerInfo>) -> PointerKind {
     pointer.map_or(PointerKind::Unknown, |info| info.kind)
 }

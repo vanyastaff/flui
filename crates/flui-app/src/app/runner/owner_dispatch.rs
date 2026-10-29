@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use flui_runtime::HostInput;
 use flui_runtime::owner::RuntimeOperation;
 #[cfg(all(test, not(target_os = "android")))]
@@ -104,7 +106,12 @@ impl From<flui_runtime::owner::DispatchError> for DispatchError {
             OwnerError::UnknownRuntime => Self::StaleRuntime,
             OwnerError::UnknownPresentation => Self::StalePresentation,
             OwnerError::PresentationClosing => Self::PresentationClosing,
-            _ => Self::RuntimeUnavailable,
+            OwnerError::PreferenceRevisionExhausted
+            | OwnerError::OwnerGone
+            | OwnerError::Closed
+            | OwnerError::Busy
+            | OwnerError::InboxFull
+            | _ => Self::RuntimeUnavailable,
         }
     }
 }
@@ -113,84 +120,50 @@ impl From<flui_runtime::owner::DispatchError> for DispatchError {
 /// lifecycle and surface restoration. The payload is
 /// `Send` (ADR-0037 §3); execution still goes through exact-address admission
 /// on the owner thread, never through an arbitrary cross-thread callback.
+///
+/// The window facts among them are read from the window's snapshot: its one
+/// `WindowHandler::state_changed` subscription compares each new snapshot with the one it
+/// saw before and delivers what differs ([`Self::of_state_change`]).
 // `pub(in crate::app)` because `RuntimeTask::Event` (also `pub(in crate::app)`, for
 // `AppRuntime`'s sake) carries this type in a field the compiler considers
 // reachable at that same visibility.
-// Every runner produces `AppearanceChanged`
-// (`WindowInstall::observe_appearance`). `WindowHover` has no mobile producer,
-// and Android drives focus, visibility and execution from its activity
-// callbacks instead of these variants, so mobile targets leave some unconstructed.
-#[cfg_attr(
-    all(
-        // Only android and iOS drop the window-event variants: the web runner
-        // constructs `WindowFocus`/`WindowHover` through the browser's
-        // visibility/focus signals, so on wasm32 they are live.
-        any(target_os = "android", target_os = "ios")
-    ),
-    expect(
-        dead_code,
-        reason = "mobile runners have no pointer-hover producer"
-    )
-)]
 pub(in crate::app) enum RuntimeEvent {
+    /// The drawable area or its scale changed.
     Resized(flui_foundation::geometry::WindowMetrics),
-    /// Window focus changed (winit's `WindowEvent::Focused`, or the
-    /// equivalent per-backend signal; same source as the deleted `Active`
-    /// variant this one replaces). Feeds the `(visible, focused)` ->
-    /// `AppLifecycleState` derivation below, alongside
+    /// Window focus changed. Feeds the `(visible, focused)` ->
+    /// `AppLifecycleState` derivation, alongside
     /// [`WindowVisibility`](Self::WindowVisibility).
     WindowFocus(bool),
     /// Reversible native execution eligibility for one presentation.
     WindowExecution(flui_platform::WindowExecutionState),
-    /// Addressed logical content-view safe area.
-    ///
-    /// Android and iOS runners produce this report; this module's own tests construct
-    /// it directly to pin the addressed-write contract (a report for a
-    /// presentation closed before delivery is dropped, not a panic).
-    #[cfg_attr(
-        not(any(target_os = "ios", target_os = "android")),
-        expect(
-            dead_code,
-            reason = "safe-area reports are produced by the Android and UIKit runners"
-        )
-    )]
+    /// Addressed logical content-view safe area. A report for a presentation
+    /// closed before delivery is dropped, not a panic.
     SafeAreaChanged(flui_foundation::geometry::EdgeInsets),
-    /// Window visibility/occlusion changed (winit's `WindowEvent::Occluded`,
-    /// negated — see `PlatformWindow::on_visibility_status_change`).
+    /// Whether the window's content can be seen changed
+    /// ([`WindowState::is_seen`](flui_platform::WindowState::is_seen)).
     ///
     /// Combined with [`WindowFocus`](Self::WindowFocus) via
     /// the addressed presentation's lifecycle reconciliation. The UI runtime
     /// scheduler derives its aggregate from all live presentations.
-    // Not yet constructed on wasm32: `run_web` only wires `WindowFocus` —
-    // no occlusion signal for the web backend yet (see run_web's comment at
-    // its `on_active_status_change` registration).
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     WindowVisibility(bool),
-    /// The window's system light/dark appearance changed
-    /// (`PlatformWindow::on_appearance_changed`). Republishes
+    /// The window's system light/dark appearance changed. Republishes
     /// `MediaQueryData::platform_brightness` through the root media query.
-    AppearanceChanged(flui_platform_api::Brightness),
+    AppearanceChanged(flui_platform::Brightness),
     /// The host derived a new display for this window from the platform's
     /// snapshot (`display_host`): which display it is on and that display's
     /// refresh period, possibly "unknown". Delivered after every sample and
     /// acted on only when it differs from what the presentation holds.
     DisplayChanged(flui_runtime::owner::DisplayUpdate),
-    /// The window's published state may have changed
-    /// (`PlatformWindow::on_state_changed`); the owner reads it when it
-    /// delivers this.
+    /// The window's published state changed; the owner reads it when it
+    /// delivers this, for the window's `WindowHandle` subscribers and the
+    /// content's placement.
     WindowStateChanged,
-    /// The pointer entered (`true`) or left (`false`) the window (winit's
-    /// `CursorEntered`/`CursorLeft`, via
-    /// `PlatformWindow::on_hover_status_change`). Leave sweeps the addressed
-    /// presentation's hover state — `MouseRegion::on_exit` fires and the
-    /// cursor resets; without this a widget hovered at the moment the cursor
-    /// crosses the window edge keeps its hover visuals forever. Enter is a
-    /// no-op today: the next `CursorMoved` re-primes hover from a fresh hit
+    /// The pointer entered (`true`) or left (`false`) the window. Leave sweeps
+    /// the addressed presentation's hover state — `MouseRegion::on_exit` fires
+    /// and the cursor resets; without this a widget hovered at the moment the
+    /// cursor crosses the window edge keeps its hover visuals forever. Enter is
+    /// a no-op today: the next `CursorMoved` re-primes hover from a fresh hit
     /// test on its own.
-    // Constructed by both the desktop and web bootstraps' registrations, so
-    // every backend whose `PlatformWindow` dispatches
-    // `on_hover_status_change` routes here; a backend that never fires the
-    // callback simply never constructs the event.
     WindowHover(bool),
     /// A recreated native surface has no previous scene to display. Surface
     /// recovery still belongs to the primary presentation, not every sibling.
@@ -212,11 +185,113 @@ pub(in crate::app) enum RuntimeTask {
     Event(RuntimeEvent),
     #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
     TestCallback(Box<dyn FnOnce(&crate::app::ui_runtime::UiRuntime)>),
-    Frame(super::frame_driver::FrameBinding),
+    Frame(
+        super::frame_driver::FrameBinding,
+        flui_platform::FrameRequest,
+    ),
     ClosePresentation(flui_foundation::PresentationId),
 }
 
+/// What one snapshot of a window brought ([`RuntimeEvent::follow`]).
+#[derive(Default)]
+pub(in crate::app) struct StateFollow {
+    /// The facts that changed, in the order the presentation applies them.
+    pub(in crate::app) events: Vec<RuntimeEvent>,
+    /// The window moved to another display, or its display now gives it
+    /// another scale: the platform's display snapshot needs a new sample.
+    pub(in crate::app) display_moved: bool,
+}
+
 impl RuntimeEvent {
+    /// What a window's new snapshot `next` says that `previous` did not, as
+    /// the events its presentation applies, in that order: the state
+    /// notification first, then each fact that differs — the metrics, the
+    /// safe area, the appearance, then the execution state, focus and whether
+    /// the content can be seen (each its own lifecycle step, as a host
+    /// reports them), and the hover. A snapshot without drawable metrics keeps
+    /// the ones before it, so it brings no resize.
+    pub(in crate::app) fn of_state_change(
+        previous: &flui_platform::WindowState,
+        next: &flui_platform::WindowState,
+    ) -> Vec<Self> {
+        let mut events = vec![Self::WindowStateChanged];
+        if next.metrics != previous.metrics
+            && let Some(metrics) = next.metrics
+        {
+            events.push(Self::Resized(metrics));
+        }
+        if next.safe_area != previous.safe_area {
+            events.push(Self::SafeAreaChanged(next.safe_area));
+        }
+        let brightness = flui_platform::Brightness::from(next.appearance);
+        if brightness != flui_platform::Brightness::from(previous.appearance) {
+            events.push(Self::AppearanceChanged(brightness));
+        }
+        if next.execution != previous.execution {
+            events.push(Self::WindowExecution(next.execution));
+        }
+        if next.focused != previous.focused {
+            events.push(Self::WindowFocus(next.focused));
+        }
+        if next.is_seen() != previous.is_seen() {
+            events.push(Self::WindowVisibility(next.is_seen()));
+        }
+        if next.hovered != previous.hovered {
+            events.push(Self::WindowHover(next.hovered));
+        }
+        events
+    }
+
+    /// Follow one window's snapshots: what `next` brings against `seen`, the
+    /// snapshot the window's presentation saw last, which `next` then
+    /// replaces. Before the seed (`seen` empty) it brings nothing: the seed
+    /// reads `next` or a newer one. A snapshot without drawable metrics keeps
+    /// the last ones as seen, so a later one that has them brings a resize
+    /// only when they differ.
+    pub(in crate::app) fn follow(
+        seen: &mut Option<flui_platform::WindowState>,
+        mut next: flui_platform::WindowState,
+    ) -> StateFollow {
+        let Some(previous) = seen.take() else {
+            *seen = Some(next);
+            return StateFollow::default();
+        };
+        let events = Self::of_state_change(&previous, &next);
+        let scale = |state: &flui_platform::WindowState| {
+            state
+                .metrics
+                .map(flui_foundation::geometry::WindowMetrics::scale)
+        };
+        if next.metrics.is_none() {
+            next.metrics = previous.metrics;
+        }
+        let display_moved = previous.display != next.display || scale(&previous) != scale(&next);
+        *seen = Some(next);
+        StateFollow {
+            events,
+            display_moved,
+        }
+    }
+
+    /// Deliver every event, each on its own: a panic in one (a `WindowHandle`
+    /// subscriber's, say) does not keep the facts after it from their
+    /// presentation. The first panic resumes once all were delivered.
+    pub(in crate::app) fn deliver_each(events: Vec<Self>, mut deliver: impl FnMut(Self)) {
+        let mut first = None;
+        for event in events {
+            let failure =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| deliver(event))).err();
+            crate::app::lifecycle_state::preserve_first_lifecycle_panic(
+                &mut first,
+                failure,
+                "window state delivery",
+            );
+        }
+        if let Some(payload) = first {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
     fn deliver(
         self,
         host: &super::InstalledHost,
@@ -259,9 +334,9 @@ impl RuntimeEvent {
 #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
 pub(super) fn install_platform_ui_runtime(
     ui_runtime: crate::app::ui_runtime::UiRuntime,
-    window: &std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
+    window: &Rc<dyn flui_platform::PlatformWindow>,
 ) -> PresentationDispatcher {
-    let prepared = prepare_replacement_ui_runtime(ui_runtime, std::sync::Arc::clone(window));
+    let prepared = prepare_replacement_ui_runtime(ui_runtime, Rc::clone(window));
     let dispatcher = prepared.dispatcher();
     prepared
         .submit()
@@ -274,7 +349,7 @@ pub(super) fn install_platform_ui_runtime(
 #[cfg(any(test, target_os = "android", target_arch = "wasm32"))]
 pub(super) fn prepare_platform_ui_runtime(
     ui_runtime: crate::app::ui_runtime::UiRuntime,
-    window: std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
+    window: Rc<dyn flui_platform::PlatformWindow>,
 ) -> super::window_install::WindowInstall {
     APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
@@ -292,7 +367,7 @@ pub(super) fn prepare_platform_ui_runtime(
 #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
 pub(super) fn prepare_replacement_ui_runtime(
     ui_runtime: crate::app::ui_runtime::UiRuntime,
-    window: std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
+    window: Rc<dyn flui_platform::PlatformWindow>,
 ) -> super::window_install::WindowInstall {
     let host = super::InstalledHost::new();
     let prepared = host.logical().prepare_runtime(ui_runtime);
@@ -314,9 +389,9 @@ pub(super) fn prepare_replacement_ui_runtime(
 #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
 pub(super) fn install_ui_runtime_alongside(
     ui_runtime: crate::app::ui_runtime::UiRuntime,
-    window: &std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
+    window: &Rc<dyn flui_platform::PlatformWindow>,
 ) -> Result<PresentationDispatcher, super::installed_host::InstallError> {
-    let prepared = prepare_ui_runtime_alongside(ui_runtime, std::sync::Arc::clone(window));
+    let prepared = prepare_ui_runtime_alongside(ui_runtime, Rc::clone(window));
     let dispatcher = prepared.dispatcher();
     prepared
         .submit()
@@ -327,7 +402,7 @@ pub(super) fn install_ui_runtime_alongside(
 
 pub(super) fn prepare_ui_runtime_alongside(
     ui_runtime: crate::app::ui_runtime::UiRuntime,
-    window: std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
+    window: Rc<dyn flui_platform::PlatformWindow>,
 ) -> super::window_install::WindowInstall {
     let host = APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
@@ -357,7 +432,7 @@ pub(super) fn prepare_presentation_alongside(
         return Err(InstallPresentationError::RuntimeUnavailable);
     }
     let host = APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
-    let native = std::sync::Arc::clone(window.window());
+    let native = Rc::clone(window.window());
     let prepared = host
         .logical()
         .prepare_presentation(dispatcher.address, window)
@@ -439,7 +514,10 @@ impl From<flui_runtime::owner::PublicationError> for InstallPresentationError {
             PublicationError::PresentationClosing => Self::PresentationClosing,
             PublicationError::UnknownPresentation => Self::StalePresentation,
             PublicationError::Busy => Self::DispatchInFlight,
-            _ => Self::RuntimeUnavailable,
+            PublicationError::ForeignOwner
+            | PublicationError::UnknownRuntime
+            | PublicationError::Closed
+            | _ => Self::RuntimeUnavailable,
         }
     }
 }
@@ -503,11 +581,10 @@ pub(super) fn close_this_window(dispatcher: PresentationDispatcher) {
 /// each runner installs.
 pub(super) fn install_input_wiring(
     dispatcher: PresentationDispatcher,
-    window: &(impl flui_platform::traits::PlatformWindow + ?Sized),
+    window: &(impl flui_platform::PlatformWindow + ?Sized),
 ) {
-    window.on_input(Box::new(move |input| {
-        dispatch_platform_input(dispatcher, input)
-    }));
+    super::window_routes::WindowRoutes::of(window)
+        .route_input(move |input| dispatch_platform_input(dispatcher, input));
 }
 
 /// Deliver a window's platform input to its UI runtime and answer the platform
@@ -521,7 +598,7 @@ pub(super) fn install_input_wiring(
 /// doing so.
 fn dispatch_platform_input(
     dispatcher: PresentationDispatcher,
-    input: flui_platform::traits::PlatformInput,
+    input: flui_platform::PlatformInput,
 ) -> flui_platform::DispatchEventResult {
     let outcome = current_host(dispatcher.owner_thread).and_then(|host| {
         let _callback = host
@@ -538,13 +615,6 @@ fn dispatch_platform_input(
     });
     let default_prevented = !matches!(outcome, Ok(flui_runtime::owner::InputOutcome::Unhandled));
     flui_platform::DispatchEventResult::resolved(false, default_prevented)
-}
-
-/// A delivered frame's vsync on the event timeline: the host's reading of the
-/// process event epoch when the frame is admitted. No backend reports the
-/// display's own vsync timestamp yet.
-pub(super) fn frame_vsync() -> flui_platform_api::EventTime {
-    flui_platform_api::EventTime::from_nanos(flui_platform::shared::events::event_timestamp_ns())
 }
 
 pub(super) fn dispatch_platform_ui_runtime(
@@ -681,7 +751,7 @@ fn dispatch_owner_turn_delivery(
     #[cfg(any(target_os = "android", target_os = "ios"))]
     let after_frame = false;
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    let after_frame = matches!(turn, OwnerTurn::Presentation(_, RuntimeTask::Frame(_)));
+    let after_frame = matches!(turn, OwnerTurn::Presentation(_, RuntimeTask::Frame(..)));
     if !after_frame {
         apply_queued_window_commands(owner_thread);
     }
@@ -713,13 +783,13 @@ fn deliver_owner_turn(turn: OwnerTurn) -> Result<flui_runtime::owner::Delivery, 
                 .presentation_dispatcher(dispatcher.address)
                 .map_err(DispatchError::from)?;
             match task {
-                RuntimeTask::Frame(binding) => {
+                RuntimeTask::Frame(binding, request) => {
                     if binding.address() != dispatcher.address {
                         return Err(DispatchError::StalePresentation);
                     }
                     host.logical()
                         .frame_dispatcher(dispatcher.address)
-                        .and_then(|frame| frame.deliver(frame_vsync(), host.effects()))
+                        .and_then(|frame| frame.deliver(request, host.effects()))
                 }
                 RuntimeTask::ClosePresentation(id) => {
                     let address = flui_foundation::PresentationAddress {
@@ -981,6 +1051,15 @@ pub(super) fn teardown_platform_ui_runtime() {
     not(target_arch = "wasm32")
 ))]
 mod display_tests;
+#[path = "owner_dispatch/native_window_tests.rs"]
+#[cfg(all(
+    test,
+    feature = "native",
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+mod native_window_tests;
 #[path = "owner_dispatch/notice_tests.rs"]
 #[cfg(all(
     test,
@@ -992,3 +1071,6 @@ mod notice_tests;
 #[path = "owner_dispatch/tests.rs"]
 #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
 mod owner_dispatch_tests;
+#[path = "owner_dispatch/state_follow_tests.rs"]
+#[cfg(test)]
+mod state_follow_tests;

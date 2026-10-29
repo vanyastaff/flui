@@ -34,8 +34,8 @@ mod cases;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
-use flui_platform_api::TextStore;
-use flui_platform_api::text_store::InMemoryTextStore;
+use flui_platform::TextStore;
+use flui_platform::text_store::InMemoryTextStore;
 
 /// The newest kit version.
 ///
@@ -43,7 +43,11 @@ use flui_platform_api::text_store::InMemoryTextStore;
 /// the owner hears only of committed-text changes, after the session's lock
 /// is released, a composition may start over a selection, and a grant that
 /// panics leaves no composition without what it stands for.
-pub const KIT_VERSION: u32 = 2;
+///
+/// Version 3 adds hit-testing's two independent choices: rounding to the
+/// nearer edge inside a character's box, and the nearest position for a
+/// point outside every box (TSF's `GXFPF_ROUND_NEAREST` and `GXFPF_NEAREST`).
+pub const KIT_VERSION: u32 = 3;
 
 /// A text field under test, as the kit drives it.
 pub trait TextStoreFixture {
@@ -276,9 +280,9 @@ impl TextStoreFixture for InMemoryFixture {
     }
 
     fn app_replace_all(&mut self, text: &str) {
-        let whole = flui_platform_api::text_store::Utf16Range::new(
-            flui_platform_api::text_store::Utf16Offset::ZERO,
-            flui_platform_api::text_store::utf16::utf16_len(&self.store.text()),
+        let whole = flui_platform::text_store::Utf16Range::new(
+            flui_platform::text_store::Utf16Offset::ZERO,
+            flui_platform::text_store::utf16::utf16_len(&self.store.text()),
         )
         .expect("BUG: zero precedes every length");
         self.store.app_replace(whole, text);

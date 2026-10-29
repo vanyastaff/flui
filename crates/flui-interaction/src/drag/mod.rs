@@ -6,7 +6,7 @@
 //! session follows the contact in its window, and over another window of its
 //! runtime on the same capture; when the pointer leaves for anything else, and
 //! the session may reach beyond it, it asks the host for an OS session. The target side is a [`DropReceiver`], found by hit test, that
-//! answers each enter and move with the [`DropFeedback`](flui_platform_api::data_transfer::DropFeedback) the OS wants, and may
+//! answers each enter and move with the [`DropFeedback`](flui_platform::data_transfer::DropFeedback) the OS wants, and may
 //! spring-load ([`SpringLoading`]) or scroll toward a drag near its edge
 //! ([`Autoscroll`]) while the drag hovers.
 //!
@@ -31,7 +31,7 @@ mod tracker;
 mod view;
 
 pub use context::DragAndDrop;
-pub use flui_platform_api::drag::{
+pub use flui_platform::drag::{
     AllowedActions, DragError, DragReach, DragSessionKey, OsSessionPlan, ProcessNonce,
 };
 pub use item::{DragItem, DragRepresentation, LazyPayload};
@@ -41,7 +41,7 @@ pub use owner::{
 };
 pub use receiver::{Autoscroll, DragPoint, DropReceiver, DropReceiverSlot, SpringLoading};
 pub use sessions::PendingOsDrag;
-pub use view::{DragFetch, DragIdentity, DragScope, DragView};
+pub use view::{DragFetch, DragIdentity, DragScope, DragView, OwnerWake};
 
 /// What starts a drag from a press: at once, or after the contact holds still
 /// for a long press. The `Draggable` widget turns it into an arena branch

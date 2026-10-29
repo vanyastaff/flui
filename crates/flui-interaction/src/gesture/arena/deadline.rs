@@ -3,15 +3,14 @@
 use std::{
     cell::{Cell, RefCell},
     rc::{Rc, Weak},
-    sync::Weak as SyncWeak,
 };
 
 use core::time::Duration;
 use flui_foundation::panic::{FailureClass, PanicRecovery, RecoveryScope};
-use flui_platform_api::PlatformWindow;
+use flui_platform::PlatformWindow;
 use smallvec::SmallVec;
 
-use flui_platform_api::EventTime;
+use flui_platform::EventTime;
 
 use super::{ArenaGeneration, GestureArenaMember, recovery::ArenaRecovery};
 use crate::gesture::observer::{GestureContest, GestureObservation, ObservedMember, ObserverHub};
@@ -213,7 +212,7 @@ pub(super) struct DeadlineRegistry {
     next_id: Cell<u64>,
     closed: Cell<bool>,
     sources: RefCell<Vec<Rc<DeadlineSource>>>,
-    wake: RefCell<Option<SyncWeak<dyn PlatformWindow>>>,
+    wake: RefCell<Option<Weak<dyn PlatformWindow>>>,
     recovery: Rc<ArenaRecovery>,
 }
 
@@ -337,7 +336,7 @@ impl DeadlineRegistry {
             .collect()
     }
 
-    pub(super) fn set_wake(&self, window: SyncWeak<dyn PlatformWindow>) {
+    pub(super) fn set_wake(&self, window: Weak<dyn PlatformWindow>) {
         *self.wake.borrow_mut() = Some(window);
     }
 

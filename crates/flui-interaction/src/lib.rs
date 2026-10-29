@@ -19,7 +19,7 @@
 //! - **Open gesture traits**: external recognizers implement the same
 //!   dyn-compatible arbitration and event-delivery contracts as built-ins
 //! - **Canonical pointer id**: [`PointerId`] is re-exported from the
-//!   `flui-platform-api` crate (`NonZeroU64`-backed). [`FocusNodeId`] is a
+//!   `flui-platform` crate (`NonZeroU64`-backed). [`FocusNodeId`] is a
 //!   crate-local `NonZeroU64` newtype that prevents
 //!   mixing up different ID types at compile time
 //! - **Niche optimization**: `Option<FocusNodeId>` is the same size as
@@ -190,7 +190,7 @@ pub use flui_foundation::{ManualClock, MonotonicClock, SystemClock};
 // Re-export commonly used event types at crate root
 pub use events::{CursorIcon, KeyEvent, PointerEvent, PointerEventExt};
 // Re-export observability surface — typed event names + span constants.
-pub use flui_platform_api::pointer::{
+pub use flui_platform::pointer::{
     ButtonChange, CancelReason, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,
     PointerButton, PointerButtons, PointerInfo, PointerKind, PointerMove, PointerPosition,
     PointerPress, PointerRelease, PointerRole, PointerSample, ScrollDelta, ScrollEvent,
@@ -202,9 +202,9 @@ pub use gesture::{GestureEvent, SPAN_ARENA, SPAN_RECOGNIZER, pointer_event_kind}
 // Re-exports: geometry from flui_foundation
 // ============================================================================
 pub use flui_foundation::geometry::{Offset, Rect};
-pub use flui_platform_api::ImeEvent;
+pub use flui_platform::ImeEvent;
 /// The device kinds a recognizer admits ([`GestureRecognizer::allowed_devices`]).
-pub use flui_platform_api::input_capabilities::PointerKindSet;
+pub use flui_platform::input_capabilities::PointerKindSet;
 pub use ids::{
     DeviceId, EmbeddedSurfaceId, FocusNodeId, InputSurface, PointerId, SurfaceIdsExhausted,
 };
@@ -305,7 +305,7 @@ pub mod prelude {
     pub use crate::gesture::*;
     // Owned input contracts
     pub use crate::events::{CursorIcon, KeyEvent, PointerEvent, PointerEventExt};
-    pub use flui_platform_api::pointer::{PanZoomEvent, PanZoomPhase, PointerKind};
+    pub use flui_platform::pointer::{PanZoomEvent, PanZoomPhase, PointerKind};
     // Pointer delivery and hover tracking
     pub use crate::pointer::{
         EventPropagation, HitTestBehavior, HitTestEntry, HitTestResult, MouseTracker,

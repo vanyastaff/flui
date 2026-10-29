@@ -12,12 +12,12 @@
   pinch is carried by the focal point, updated on every `Update`.
 - **Related:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) (layers between crates;
   this record layers inside one), [ADR-0082](ADR-0082-platform-api-contract-crate.md) (platform
-  types stay inside `flui-platform`), [ADR-0143](ADR-0143-flui-owned-input-event-vocabulary.md)
+  types stay inside `flui-native`), [ADR-0143](ADR-0143-flui-owned-input-event-vocabulary.md)
   (the `Scroll` and `PanZoom` vocabulary), [ADR-0098](ADR-0098-owned-f64-geometry-values.md)
   (logical geometry of input regions), [ADR-0207](ADR-0207-host-input-boundary-and-timeline.md);
   spec [docs/plans/specs/flui-interaction/completeness/](../plans/specs/flui-interaction/completeness/design.md);
-  research [best practices](../research/2026-10-12-interaction-input-best-practices.md),
-  [dependency selection](../research/2026-10-13-interaction-dependency-selection.md).
+  research [best practices](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-12-interaction-input-best-practices.md),
+  [dependency selection](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-13-interaction-dependency-selection.md).
 
 ## Context
 
@@ -56,8 +56,8 @@ gestures (Android `setSystemGestureExclusionRects`, iOS deferred screen edges).
    and are keyed by `InputSurface` from their first version. Closing sets a flag; on leaving
    dispatch each service yields its retired state through `drain(&self)` (`RefCell::take`), and
    user code runs only after every borrow is released.
-3. **Shared pointer assembly.** `crates/flui-platform/src/shared/` gains a `pointer_assembly`
-   module beside `events.rs`: `ContactRegistry`, `DeviceRegistry`, `HeldButtons`,
+3. **Shared pointer assembly.** The input feature of `flui-native` (`src/input/`) has an `assembly`
+   model beside its platform files: `ContactRegistry`, `DeviceRegistry`, `HeldButtons`,
    `ClickCounter` (thresholds from OS settings), `PanZoomAccumulator`, `MoveBatch`. They are
    plain structs driven by pure functions over plain readings:
 
@@ -135,7 +135,7 @@ assembly path that Linux CI executes, and gesture consumers see one trackpad gra
 - `cargo xtask module-dag` with no exceptions, in `checks`.
 - `binding_services_are_keyed_by_surface` and `a_closed_binding_drains_services_after_dispatch`
   through the public binding.
-- `pointer_assembly` rows in `flui-platform`'s tests: contact reuse after Up, device hot-plug,
+- `pointer_assembly` rows in `flui-native`'s tests: contact reuse after Up, device hot-plug,
   click count across the OS double-click interval, pan-zoom accumulation, move batching, a
   reading that fails to decode; plus a counting-allocator row for the per-event budget.
 - `two_finger_pan_is_phased_scroll_on_every_backend` and

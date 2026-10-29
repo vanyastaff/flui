@@ -4,10 +4,11 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use flui_platform_api::text_store::{
+use flui_platform::text_store::{
     CompositionEnd, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreHost,
     TextStoreHostError,
 };
+use flui_platform::{Unsupported, UnsupportedReason};
 
 /// One call a presentation made on its [`RecordingTextStoreHost`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,7 +75,7 @@ impl RecordingTextStoreHost {
     }
 
     /// From now on, answer completions with
-    /// [`TextStoreHostError::Unavailable`], as a window whose text services
+    /// [`TextStoreHostError::Unsupported`] (`NoWindow`), as a window whose text services
     /// shut down does.
     pub fn shut_down(&self) {
         self.unavailable.set(true);
@@ -116,7 +117,7 @@ impl TextStoreHost for RecordingTextStoreHost {
     ) -> Result<CompositionEnd, TextStoreHostError> {
         let _depth = self.enter(StoreHostCall::CompleteComposition);
         if self.unavailable.get() {
-            return Err(TextStoreHostError::Unavailable);
+            return Err(Unsupported::new(UnsupportedReason::NoWindow).into());
         }
         let focused = self
             .focused

@@ -3,13 +3,14 @@
 //!
 //! # The seam this fills
 //!
-//! [`flui_platform::traits::PlatformWindow::on_should_close`] is a real
+//! [`flui_platform::WindowHandler::close_requested`] is a real
 //! per-window veto: the winit, Win32 and AppKit backends all consult it
-//! synchronously when the *user* asks a window to close, and a `false`
-//! answer stops the close before anything else in the arm runs — no
-//! `on_close`, no UI runtime teardown, no exit-policy consultation. Until this
-//! module existed every `flui-app` registration hard-coded `true`, so the
-//! mechanism shipped and no application could reach it.
+//! synchronously when the *user* asks a window to close, and a
+//! [`KeepOpen`](flui_platform::CloseDecision::KeepOpen) answer stops the
+//! close before anything else in the arm runs — no `closed`, no UI runtime
+//! teardown, no exit-policy consultation. Until this module existed every
+//! `flui-app` window answered `Close`, so the mechanism shipped and no
+//! application could reach it.
 //!
 //! # Presentation-addressed, because the question is per window
 //!
@@ -67,29 +68,31 @@
 //!   pair is how a seam ends up unreachable. Same deliberate remainder
 //!   [`TaskSpawner`](crate::TaskSpawner) carries in
 //!   [`lifecycle`](super::lifecycle).
-//! - **Backends that never consult the seam.** The web and Android
-//!   backends implement the callback *setter* (through the shared
-//!   `impl_window_callback_setters!` macro) but no code path in either
-//!   calls `dispatch_should_close`, so a handler registered there is inert.
-//!   That is a property of those backends, not of this module.
+//! - **Backends that never consult the seam.** No code path in the web or
+//!   Android backend asks a window's handler `close_requested`: neither
+//!   system lets the application refuse a close, so a handler registered
+//!   there is never asked. That is a property of those backends, not of
+//!   this module.
 //! - **Resolving a deferred close on winit completes on the owner's next
-//!   turn, not inside the call** (issue #919, fixed). `WinitWindow::close`
-//!   posts the close to that backend's owner lane and the owner runs the
+//!   turn, not inside the call** (issue #919, fixed). A winit window's
+//!   `WindowCommand::Close` posts the close to that backend's owner lane and the owner runs the
 //!   same teardown a compositor close takes — `on_close`, window-map
 //!   removal, callback clear, exit-policy consult — so the process exits
 //!   when that was the last window. What this module inherits from it: on
 //!   winit the presentation is torn down AFTER
 //!   [`request_presentation_close`](crate::request_presentation_close)
 //!   returns, on the owner turn; the headless double still runs `on_close`
-//!   synchronously inside `close()`, so a test that asserts right after the
+//!   synchronously inside the command, so a test that asserts right after the
 //!   call pins the double, not the winit contract.
 
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 use std::thread::ThreadId;
 
 use flui_foundation::PresentationAddress;
 use flui_foundation::panic::payload_text;
-use flui_platform::traits::PlatformWindow;
+use flui_platform::PlatformWindow;
+
+use flui_platform::CommandRefusal;
 pub use flui_view::CloseReason;
 use parking_lot::Mutex;
 
@@ -179,8 +182,8 @@ pub enum CloseResponse {
 /// mutability.
 ///
 /// Two failure modes are answered with [`CloseResponse::KeepOpen`] — the
-/// same conservative veto `WindowCallbacks::dispatch_should_close` already
-/// applies to a reentrant query — because neither can produce a trustworthy
+/// same conservative veto a host's window delivery already applies to a
+/// close request raised inside a handler method — because neither can produce a trustworthy
 /// answer and closing on a wrong answer destroys data:
 ///
 /// - a handler that **panics** (contained here, logged at error level; the
@@ -210,7 +213,7 @@ impl std::fmt::Debug for CloseRequestHandler {
 }
 
 /// Why a programmatic close could not be delivered.
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Debug, thiserror::Error, PartialEq)]
 #[non_exhaustive]
 pub enum CloseRequestError {
     /// No presentation is registered at this address — it was never
@@ -251,6 +254,28 @@ pub enum CloseRequestError {
          presentation's event loop"
     )]
     NoHostedRuntime,
+    /// The window does not close: its window system lets the application
+    /// close none of its windows (Android's one window, whose `closes`
+    /// capability is `Unavailable`).
+    #[error("the window at {address:?} refused to close")]
+    Refused {
+        /// The address that was asked for.
+        address: PresentationAddress,
+        /// Why admitting [`WindowCommand::Close`](flui_platform::WindowCommand::Close)
+        /// failed.
+        #[source]
+        error: flui_platform::AdmissionError,
+    },
+    /// The window took the close, and its window system failed it or the
+    /// window was already gone.
+    #[error("the window at {address:?} failed to close")]
+    Failed {
+        /// The address that was asked for.
+        address: PresentationAddress,
+        /// The window's answer to the admitted close.
+        #[source]
+        error: flui_platform::ApplyError,
+    },
 }
 
 // ============================================================================
@@ -265,7 +290,7 @@ struct PresentationCloseEntry {
     /// resources — and, through the callbacks it owns, its GPU surface —
     /// alive past the teardown ordering issue #713's Wayland crash
     /// established.
-    window: Weak<dyn PlatformWindow>,
+    window: std::rc::Weak<dyn PlatformWindow>,
     handler: Option<CloseRequestHandler>,
     /// The thread that registered this entry. Every `PlatformWindow`
     /// callback must be invoked on the thread that registered it (see the
@@ -278,7 +303,7 @@ struct PresentationCloseEntry {
 /// Loop-scoped registry of per-presentation close-request handlers.
 ///
 /// Held by [`AppRuntime`](super::runtime::AppRuntime) as an `Arc` rather
-/// than inline, so the `on_should_close` closure each window registers can
+/// than inline, so the close-request route each window is opened with can
 /// hold its own clone and answer **without** re-entering the `APP_RUNTIME`
 /// thread-local at all. That matters: a close request can arrive while a
 /// UI runtime is checked out for dispatch, and a router reached through the
@@ -312,12 +337,12 @@ impl PreparedCloseRequest {
     ))]
     pub(crate) fn new(
         address: PresentationAddress,
-        window: &Arc<dyn PlatformWindow>,
+        window: &std::rc::Rc<dyn PlatformWindow>,
         handler: Option<CloseRequestHandler>,
     ) -> Self {
         Self(PresentationCloseEntry {
             address,
-            window: Arc::downgrade(window),
+            window: std::rc::Rc::downgrade(window),
             handler,
             owner_thread: std::thread::current().id(),
         })
@@ -463,15 +488,17 @@ impl CloseRequestRouter {
     /// This is how a [`CloseResponse::KeepOpen`] answer is finished: the
     /// application saved its work and now wants the close it deferred.
     ///
-    /// **Completes on every backend whose `close()` performs a real close**
-    /// (headless, winit, Win32, AppKit). On winit the teardown — `on_close`,
+    /// **Completes on every backend whose `WindowCommand::Close` performs a
+    /// real close** (headless, winit, Win32, AppKit); a window that refuses
+    /// it (Android) answers [`CloseRequestError::Refused`]. On winit the
+    /// teardown — `on_close`,
     /// window-map removal, exit-policy consult — runs on the owner's next
     /// turn, not inside this call (issue #919's fix); the headless double
     /// runs it synchronously. See
     /// [`request_presentation_close`](crate::request_presentation_close)
     /// for the per-backend statement.
     /// Bypassing the handler is the point — every backend's own
-    /// `PlatformWindow::close` bypasses its native close-request path for
+    /// `WindowCommand::Close` bypasses its native close-request path for
     /// the same reason (AppKit's `-close` does not send
     /// `windowShouldClose:`; Win32's `DestroyWindow` does not send
     /// `WM_CLOSE`), because asking again would either loop forever or
@@ -494,16 +521,21 @@ impl CloseRequestRouter {
                 .upgrade()
                 .ok_or(CloseRequestError::WindowGone { address })?
         };
-        // Outside the lock: `close()` fires the window's own `on_close`,
+        // Outside the lock: closing fires the window's own `on_close`,
         // which re-enters flui-app (`close_this_window`) and may re-enter
         // this router.
-        window.close();
-        Ok(())
+        flui_platform::WindowCommand::Close
+            .admit_and_apply(&*window)
+            .map_err(|refusal| match refusal {
+                CommandRefusal::Admission(error) => CloseRequestError::Refused { address, error },
+                CommandRefusal::Apply(error) => CloseRequestError::Failed { address, error },
+            })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::rc::Rc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use flui_foundation::{PresentationId, UiRuntimeId};
@@ -518,14 +550,14 @@ mod tests {
         }
     }
 
-    fn window(id: u64) -> Arc<dyn PlatformWindow> {
-        Arc::new(TestWindow::new().with_id(id)) as Arc<dyn PlatformWindow>
+    fn window(id: u64) -> Rc<dyn PlatformWindow> {
+        Rc::new(TestWindow::new().with_id(id)) as Rc<dyn PlatformWindow>
     }
 
     fn register(
         router: &CloseRequestRouter,
         address: PresentationAddress,
-        window: &Arc<dyn PlatformWindow>,
+        window: &Rc<dyn PlatformWindow>,
         handler: Option<CloseRequestHandler>,
     ) {
         let prepared = PreparedCloseRequest::new(address, window, handler);
@@ -586,7 +618,7 @@ mod tests {
 
     /// A panicking handler cannot be read as consent to discard unsaved
     /// work, so it vetoes -- the same conservative answer
-    /// `WindowCallbacks::dispatch_should_close` gives a reentrant query --
+    /// a host's window delivery gives a close request raised inside a handler method --
     /// and stays registered, so a handler that stops panicking works again.
     fn a_panicking_handler_vetoes_and_stays_registered() {
         let router = CloseRequestRouter::new();
@@ -687,23 +719,61 @@ mod tests {
                     "a_panicking_handler_vetoes_and_stays_registered",
                     a_panicking_handler_vetoes_and_stays_registered as fn(),
                 ),
+                (
+                    "a_window_that_cannot_close_says_so",
+                    a_window_that_cannot_close_says_so as fn(),
+                ),
             ],
         );
     }
 
+    /// A window whose window system lets the application close none of its
+    /// windows (Android's) refuses the programmatic close, and the caller
+    /// hears why instead of an `Ok` for a window that stays.
+    fn a_window_that_cannot_close_says_so() {
+        let router = CloseRequestRouter::new();
+        let at = address(1, 1);
+        // The double honours no command, `Close` included.
+        let window = window(1);
+        register(&router, at, &window, None);
+        let refused = router.request_close(at);
+        assert!(
+            matches!(
+                refused,
+                Err(CloseRequestError::Refused {
+                    address,
+                    error: flui_platform::AdmissionError::Unsupported(_),
+                }) if address == at
+            ),
+            "{refused:?}"
+        );
+    }
+
+    thread_local! {
+        /// The router a [`RegisterOnDrop`] registers on: a handler is `Send`,
+        /// the router, which holds windows, is not.
+        #[allow(
+            clippy::missing_const_for_thread_local,
+            reason = "the initializer is `const`; clippy for the Android target reports it anyway"
+        )]
+        static ROUTER: std::cell::RefCell<std::rc::Weak<CloseRequestRouter>> =
+            const { std::cell::RefCell::new(std::rc::Weak::new()) };
+    }
+
     struct RegisterOnDrop {
-        router: Weak<CloseRequestRouter>,
-        window: Arc<dyn PlatformWindow>,
+        window_id: u64,
         address: PresentationAddress,
     }
 
     impl Drop for RegisterOnDrop {
         fn drop(&mut self) {
-            let router = self.router.upgrade().expect("router still owned");
+            let router = ROUTER
+                .with_borrow(std::rc::Weak::upgrade)
+                .expect("router still owned");
             register(
                 &router,
                 self.address,
-                &self.window,
+                &window(self.window_id),
                 Some(CloseRequestHandler::new(|_| CloseResponse::KeepOpen)),
             );
         }
@@ -711,12 +781,12 @@ mod tests {
 
     fn retiring_a_handler_preserves_its_reentrant_registration() {
         for whole_runtime in [false, true] {
-            let router = Arc::new(CloseRequestRouter::new());
+            let router = Rc::new(CloseRequestRouter::new());
             let old = address(1, 1);
             let next = address(2, 2);
+            ROUTER.set(Rc::downgrade(&router));
             let capture = RegisterOnDrop {
-                router: Arc::downgrade(&router),
-                window: window(2),
+                window_id: 2,
                 address: next,
             };
             register(

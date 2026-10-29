@@ -5,6 +5,14 @@
   Navigator, and `WidgetsApp::router`; in `flui-macros`, `#[derive(Routable)]`. The later steps
   are not implemented.
 - **Date:** 2026-09-25
+- **Superseded-by:** [ADR-0254](ADR-0254-window-contract.md) decision 4, in part: the
+  `Platform::on_open_urls` registration named here as a deep link's source is deleted; the
+  opened URLs and files reach `AppHandler` with the activation feature.
+- **Superseded-by (on acceptance):**
+  [ADR-0262](ADR-0262-persisted-documents-over-a-byte-storage-capability.md) §6, for step 8's
+  "stack restoration as a list of paths" only: `Router::from_stack` and `RouterHandle::stack` carry
+  the whole typed stack, and the application stores it as paths in its own document. Web history,
+  query and fragment stay in step 8.
 - **Supersedes (on acceptance):** [ADR-0024](ADR-0024-named-routes-seam.md) (string-named
   routes; `RouteKey<T>` of its §3 carries over)
 - **Supersedes in part (on acceptance):** [ADR-0019](ADR-0019-navigator-routing-seam.md) (the
@@ -17,8 +25,8 @@
   [ADR-0076](ADR-0076-public-overlay-mutation-api.md),
   [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md),
   [ADR-0097](ADR-0097-no-process-global-state-gate.md)
-- **Refs:** decision D14 in the [decision index](../../design/decisions.md); the
-  [architecture review](../research/2026-09-25-architecture-review/report-architecture.ru.md)
+- **Refs:** decision D14 in the [decision index](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md); the
+  [architecture review](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/report-architecture.ru.md)
 
 This record changed nothing in `crates/` when it was written. Steps one and two of the
 [implementation series](#implementation-series) are in `crates/flui-widgets/src/router/`,
@@ -40,7 +48,7 @@ Navigator those two records describe:
 - **No addressable state.** A pushed route is a `Box<dyn ErasedRoute>` (ADR-0019 §3); nothing in
   `crates/flui-widgets/src/navigator/` turns the stack into a URL or back. The platform already
   delivers URLs the OS opens — `Platform::on_open_urls`
-  (`crates/flui-platform/src/traits/platform.rs:550`) — and nothing in `crates/flui-app/src`
+  (`crates/flui-native/src/traits/platform.rs:550`) — and nothing in `crates/flui-app/src`
   registers for them (`grep -rn on_open_urls crates/flui-app/src` is empty). A deep link has
   nowhere to go.
 - **Lookup from `build`.** `NavigatorHandle::maybe_of(ctx: &dyn BuildContext)`
@@ -62,7 +70,7 @@ customise deep-link handling or support the browser's forward button, and page-b
 and are silently removed with the page below them. SwiftUI made the same correction when it
 replaced `NavigationView` with `NavigationStack`/`NavigationPath`. Both converged on "the
 navigation state is a value" (review survey
-[`market/flutter_compose_swiftui.md`](../research/2026-09-25-architecture-review/market/flutter_compose_swiftui.md)).
+[`market/flutter_compose_swiftui.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/market/flutter_compose_swiftui.md)).
 
 ## Decision
 
@@ -226,7 +234,7 @@ agent protocol from naming a widget-catalog type.
    which has no `navigator` or `observer` builder, so the configuration Flutter asserts against
    does not compile. That Router is the one that will own the presentation's URL once step 3
    gives the outermost Router its `RouterScope` (§2); nothing marks it outermost yet.
-   `examples/two_screens.rs` is the program of `design/architecture.md` §13.3 on that root.
+   [`examples/two_screens.rs`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/examples/two_screens.rs) is the program of [`design/architecture.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/architecture.md) §13.3 on that root.
 3. **Nested routes.** `#[nest("/settings")] Settings(SettingsRoute)` composes a child enum into
    the parent's path: one stack, one URL. A nested `Router` widget is a local stack saved with
    its page (§2); a `RouterScope` marker gives the outermost Router per presentation the URL.
@@ -278,7 +286,7 @@ agent protocol from naming a widget-catalog type.
   (ADR-0097).
 - A saveable-state contract shared by the back stack, lazy-list eviction and hot reload (the
   Compose `rememberSaveable` lesson) is not decided here; page state is kept alive while the
-  page is on the stack, as today. See [open questions](../../design/open-questions.md).
+  page is on the stack, as today. See [open questions](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/open-questions.md).
 
 ## Verification
 

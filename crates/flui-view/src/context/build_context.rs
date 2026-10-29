@@ -503,9 +503,7 @@ pub trait LifecycleContext: BuildContext {
     ///
     /// Acquire it in `init_state`/`did_change_dependencies`. `None` on a
     /// bare owner with no presentation behind it.
-    fn texture_registry(&self) -> Option<flui_rendering::layer::TextureRegistry> {
-        None
-    }
+    fn texture_registry(&self) -> Option<flui_rendering::layer::TextureRegistry>;
 
     /// The UI runtime's byte storage, which a
     /// [`Persisted`](crate::persist::Persisted) document reads and writes
@@ -520,9 +518,7 @@ pub trait LifecycleContext: BuildContext {
     /// the session ends: a write still in flight then may be lost. Only what
     /// a [`Persisted`](crate::persist::Persisted) document publishes goes
     /// through the host's flush registry, which the host writes at teardown.
-    fn storage(&self) -> Option<std::sync::Arc<dyn flui_platform_api::Storage>> {
-        None
-    }
+    fn storage(&self) -> Option<std::sync::Arc<dyn flui_platform::Storage>>;
 
     /// The presentation's close guard: hold the window's close while work
     /// that must not be lost finishes.

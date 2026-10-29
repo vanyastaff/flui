@@ -1,7 +1,7 @@
 use super::*;
 
 use flui_interaction::{FocusManager, FocusNode, TextInputError, TextInputHandle};
-use flui_platform_api::{PlatformTextInput, TextStore};
+use flui_platform::{PlatformTextInput, TextStore};
 
 fn close_frame_reports(ui_runtime: &UiRuntime) -> Arc<parking_lot::Mutex<Vec<String>>> {
     let reports = Arc::new(parking_lot::Mutex::new(Vec::new()));
@@ -121,7 +121,7 @@ impl View for CloseObserver {
 /// Exercise the platform capability the presentation actually calls; the
 /// headless recorder remains the oracle even when disable itself panics.
 struct CloseTextInput {
-    recorder: flui_platform::FakeTextInput,
+    recorder: flui_native::FakeTextInput,
     fail_disable: bool,
     reenter_disable: bool,
 }
@@ -481,69 +481,74 @@ fn run_ui_runtime_sibling_child() {
 
 struct OwnershipWindow {
     delegate: crate::testing::TestWindow,
-    external:
-        std::sync::Weak<parking_lot::Mutex<Option<Arc<dyn flui_platform_api::PlatformWindow>>>>,
+    external: std::rc::Weak<RefCell<Option<Rc<dyn flui_platform::PlatformWindow>>>>,
     armed: AtomicBool,
     fail_callback: bool,
     _captures: DropCompetition,
 }
 
-impl flui_platform_api::PlatformWindow for OwnershipWindow {
-    fn id(&self) -> flui_platform_api::WindowId {
+impl flui_platform::PlatformWindow for OwnershipWindow {
+    fn id(&self) -> flui_platform::WindowId {
         self.delegate.id()
-    }
-    fn physical_size(&self) -> flui_foundation::geometry::Size<i32> {
-        self.delegate.physical_size()
-    }
-    fn logical_size(&self) -> flui_foundation::geometry::Size<f64> {
-        self.delegate.logical_size()
-    }
-    fn scale_factor(&self) -> f64 {
-        self.delegate.scale_factor()
     }
     fn request_redraw(&self) {
         self.delegate.request_redraw();
     }
-    fn is_focused(&self) -> bool {
-        true
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        self.delegate.redraw_requester()
     }
-    fn is_visible(&self) -> bool {
-        true
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        self.delegate.surface_target()
     }
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
         self.delegate.text_input()
     }
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+        self.delegate.haptics()
+    }
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
+        self.delegate.system_chrome()
+    }
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        self.delegate.drag_source()
+    }
+    fn set_frame_rate_hint(
+        &self,
+        hint: flui_platform::FrameRateHint,
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.delegate.set_frame_rate_hint(hint)
+    }
+    fn set_input_regions(
+        &self,
+        regions: &[flui_platform::input_regions::InputRegion],
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.delegate.set_input_regions(regions)
+    }
     fn set_cursor(
         &self,
-        cursor: flui_platform_api::CursorIcon,
-    ) -> Result<(), flui_platform_api::CursorError> {
+        cursor: flui_platform::CursorIcon,
+    ) -> Result<(), flui_platform::CursorError> {
         if self.armed.load(Ordering::Relaxed) {
             if let Some(external) = self.external.upgrade() {
-                external.lock().take();
+                external.borrow_mut().take();
             }
             assert!(!self.fail_callback, "window cursor failure");
         }
         self.delegate.set_cursor(cursor)
     }
-    fn state(&self) -> flui_platform_api::WindowState {
+    fn state(&self) -> flui_platform::WindowState {
         self.delegate.state()
-    }
-    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
-        self.delegate.capabilities()
     }
     fn apply(
         &self,
-        command: flui_platform_api::WindowCommand,
-    ) -> Result<(), flui_platform_api::WindowCommandError> {
+        command: flui_platform::AdmittedCommand,
+    ) -> Result<(), flui_platform::ApplyError> {
         self.delegate.apply(command)
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 
 struct OwnershipBridge {
-    delegate: flui_platform::FakeAccessibility,
+    delegate: flui_native::FakeAccessibility,
     external: std::sync::Weak<
         parking_lot::Mutex<Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>>>,
     >,
@@ -583,7 +588,7 @@ fn run_platform_ownership_child(kind: &str) {
     let cursor_first = kind == "cursor-platform";
     let window_drops = Arc::new(AtomicUsize::new(0));
     let bridge_drops = Arc::new(AtomicUsize::new(0));
-    let external_window = Arc::new(parking_lot::Mutex::new(None));
+    let external_window = Rc::new(RefCell::new(None));
     let external_bridge = Arc::new(parking_lot::Mutex::new(None));
     // The window and the bridge are framework-owned (ADR-0127): close
     // releases them even after a failure, so their captures must drop.
@@ -597,21 +602,21 @@ fn run_platform_ownership_child(kind: &str) {
             drops: Arc::clone(counts),
         },
     };
-    let window = Arc::new(OwnershipWindow {
+    let window = Rc::new(OwnershipWindow {
         delegate: crate::testing::TestWindow::new().focused(true),
-        external: Arc::downgrade(&external_window),
+        external: Rc::downgrade(&external_window),
         armed: AtomicBool::new(false),
         fail_callback: fail_window || cursor_first,
         _captures: bundle(&window_drops),
     });
     let bridge = Arc::new(OwnershipBridge {
-        delegate: flui_platform::FakeAccessibility::new(),
+        delegate: flui_native::FakeAccessibility::new(),
         external: Arc::downgrade(&external_bridge),
         armed: AtomicBool::new(false),
         fail_callback: fail_bridge || cursor_first,
         _captures: bundle(&bridge_drops),
     });
-    *external_window.lock() = Some(window.clone() as Arc<dyn flui_platform_api::PlatformWindow>);
+    *external_window.borrow_mut() = Some(window.clone() as Rc<dyn flui_platform::PlatformWindow>);
     *external_bridge.lock() =
         Some(bridge.clone() as Arc<dyn flui_semantics::platform::PlatformAccessibility>);
     let mut ui_runtime = UiRuntime::new(
@@ -673,7 +678,7 @@ fn run_platform_ownership_child(kind: &str) {
         2,
         "close releases the accessibility bridge"
     );
-    assert!(external_window.lock().is_none());
+    assert!(external_window.borrow().is_none());
     assert!(external_bridge.lock().is_none());
     assert!(!ui_runtime.close_presentation_entered(a));
 }
@@ -1014,7 +1019,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
     ));
 
     let platform = Arc::new(CloseTextInput {
-        recorder: flui_platform::FakeTextInput::new(),
+        recorder: flui_native::FakeTextInput::new(),
         fail_disable: ime_failure,
         reenter_disable: reentry,
     });
@@ -1033,7 +1038,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
     assert!(focused.has_primary_focus());
 
     let input = ui_runtime.text_input_handle();
-    let store: Rc<dyn TextStore> = flui_platform_api::text_store::InMemoryTextStore::new("editing");
+    let store: Rc<dyn TextStore> = flui_platform::text_store::InMemoryTextStore::new("editing");
     let opaque_drops = Arc::new(AtomicUsize::new(0));
     let bundle = DropCompetition {
         first: CursorCapture {
@@ -1194,7 +1199,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
                     },
                 };
                 let store: Rc<dyn TextStore> =
-                    flui_platform_api::text_store::InMemoryTextStore::new("rejected");
+                    flui_platform::text_store::InMemoryTextStore::new("rejected");
                 let client =
                     flui_interaction::TextInputClient::new(store).on_session_start(move || {
                         let _ = (&bundle.first, &bundle.second);

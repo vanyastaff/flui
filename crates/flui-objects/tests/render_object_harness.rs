@@ -4879,6 +4879,7 @@ fn harness_animated_align_retries_a_failed_delivery_before_a_failing_read() {
 /// leaves nothing owed: later notifications of that sample request no frames.
 fn harness_animated_align_settles_after_a_same_sample_reentry() {
     thread_local! {
+        #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
         static NOTIFIED: std::cell::RefCell<Option<AnimationController>> =
             const { std::cell::RefCell::new(None) };
     }
@@ -4924,6 +4925,7 @@ fn harness_animated_align_settles_after_a_same_sample_reentry() {
 /// would recurse through the wake without bound.
 fn harness_animated_align_does_not_retry_a_delivery_already_running() {
     thread_local! {
+        #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
         static TOGGLED: std::cell::RefCell<Option<AnimationController>> =
             const { std::cell::RefCell::new(None) };
     }
@@ -4979,6 +4981,7 @@ fn harness_animated_align_does_not_retry_a_delivery_already_running() {
 /// the running request's frame reads the newest one, and nothing recurses.
 fn harness_animated_align_nested_publication_rides_the_running_request() {
     thread_local! {
+        #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
         static REENTERED: std::cell::RefCell<Option<AnimationController>> =
             const { std::cell::RefCell::new(None) };
     }
@@ -6438,7 +6441,7 @@ fn harness_indexed_semantics_reports_its_index_and_only_republishes_on_change() 
     let root_id = owner.root().expect("indexed semantics root");
     let node = owner.get(root_id).expect("root id must resolve");
     assert_eq!(
-        node.config().index_in_parent(),
+        node.config().position_in_set(),
         Some(11),
         "the index reaches the semantics configuration zero-based, as the \
          reference carries it",

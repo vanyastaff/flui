@@ -9,11 +9,11 @@ use std::sync::Arc;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_interaction::{TextInputBackend, TextInputClient, TextInputError, TextInputOwner};
-use flui_platform_api::text_store::{
+use flui_platform::text_store::{
     CompositionEnd, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore,
     TextStoreHost, TextStoreHostError, project_ime_event,
 };
-use flui_platform_api::{ImeEvent, PlatformTextInput};
+use flui_platform::{ImeEvent, PlatformTextInput, Unsupported, UnsupportedReason};
 
 type Log = Rc<RefCell<Vec<&'static str>>>;
 
@@ -135,7 +135,7 @@ fn client(store: &Rc<InMemoryTextStore>) -> TextInputClient {
 /// Type "かな" after "ab" through the push projection, leaving it composing.
 fn composing_store() -> Rc<InMemoryTextStore> {
     let store = InMemoryTextStore::new("ab");
-    store.set_commit_gate(flui_platform_api::text_store::CommitGate::new());
+    store.set_commit_gate(flui_platform::text_store::CommitGate::new());
     let applied = project_ime_event(
         &*store,
         &ImeEvent::Preedit {
@@ -198,7 +198,9 @@ fn host_operations_in_a_frame_wait_for_the_anchor_and_run_first() {
 fn an_abandoned_completion_commits_the_composition_in_place() {
     for answer in [
         Ok(CompositionEnd::Abandoned),
-        Err(TextStoreHostError::Unavailable),
+        Err(TextStoreHostError::Unsupported(Unsupported::new(
+            UnsupportedReason::NoWindow,
+        ))),
     ] {
         let (owner, host, log) = pull_owner();
         let store = composing_store();

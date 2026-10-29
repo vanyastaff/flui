@@ -1,7 +1,7 @@
 ### Added
 
 - **Android reports the Activity's visibility, execution state and memory pressure**
-  (`flui-platform`, `flui-app`): `onStart`/`onStop` reach `on_visibility_status_change`,
+  (`flui-native`, `flui-app`): `onStart`/`onStop` reach `on_visibility_status_change`,
   `onResume`/`onPause` reach `on_execution_state_change`, and window focus reaches only
   `on_active_status_change`. `onLowMemory` delivers `MemoryPressureLevel::Critical`; the
   process's `ActivityManager` trim level is read through JNI on `LowMemory`, `Pause`, `Stop`

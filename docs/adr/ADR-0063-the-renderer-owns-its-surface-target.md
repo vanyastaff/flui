@@ -3,6 +3,15 @@
 - **Status:** Accepted
 - **Date:** 2026-09-14
 - **Amends:** ADR-0045 decision 1 and §7 (see the end of this record)
+- **Superseded-by:** [ADR-0254](ADR-0254-window-contract.md), in part: the window itself as the
+  `Send + Sync` surface target (decision 1's `Arc<dyn PlatformWindow>` handed to
+  `Renderer::new`, and decision 5's `Unavailable` obligation on every `PlatformWindow`, which
+  moves to the separate surface target the window hands out; and its `WindowCallbacks::clear()`
+  latch, since a window that lets go of its one handler cannot have a callback return to a slot)
+  and decision 6's
+  `on_surface_status_change` registration (it becomes the window handler's `surface_changed`; the
+  signal's release-and-rebuild semantics stay). The `WindowTarget` bound, the lease, probing
+  before creating and the engine side stay.
 
 *A `wgpu::Surface<'static>` is sound only while the window behind it exists. The engine used to
 prove that with another crate's convention; now it proves it with ownership, and recovery asks
@@ -21,10 +30,11 @@ Two shipped defects sat behind the same assumption:
 
 - **Android.** `MainEvent::Pause` does not touch the window; the `ANativeWindow` pointer is cleared
   only by `AppCmd::TermWindow`, applied after the `TerminateWindow` callback returns.
-  `window_handle()` re-queries `native_window()` on every call — what holds a stale handle is the
-  `wgpu::Surface` built once from it. The fix is releasing the surface at the right moment.
-- **Win32.** The handle `window_handle()` hands out is tied to the `Arc<WindowsWindow>`, not to
-  the HWND, which `close()` destroys synchronously.
+  The window's `window_handle()` (now its surface target's) re-queried `native_window()` on every
+  call — what held a stale handle was the `wgpu::Surface` built once from it. The fix is releasing
+  the surface at the right moment.
+- **Win32.** The handle the window's `window_handle()` handed out was tied to the
+  `Arc<WindowsWindow>`, not to the HWND, which `close()` destroys synchronously.
 
 The unsafe path was not load-bearing: wgpu's safe
 `create_surface(SurfaceTarget::DisplayAndWindow(Box<dyn _>))` queries both handles itself and keeps
@@ -62,16 +72,19 @@ borrowed-safe `create_surface(&W)` that #1043 names, sound only by GPUI's owners
    moves there unchanged.
 5. **Every `PlatformWindow` backend owes `Err(HandleError::Unavailable)` once its native window is
    destroyed or suspended, and native backends release the renderer on close.**
+   *(Superseded-by ADR-0254 §4 and §5 in part: see the header.)*
    - winit: inherits winit's contract — the `Arc<winit::Window>` the surface holds *is* the native
      lifetime.
-   - Win32: `window_handle()` consults the `hwnd_affinity::teardown_route` identity probe
-     (`AlreadyGone`/`StaleHandle` → `Unavailable`). `WM_DESTROY` clears the window's callback slots
-     after `on_close`, while the HWND is still valid.
-   - AppKit: `setReleasedWhenClosed:NO` (the +1 is released once, in `Drop`), a `closed` flag set
-     from `windowWillClose:` before callbacks are cleared, `window_handle()` → `Unavailable` when
-     closed.
-   - `WindowCallbacks::clear()` latches: a `CallbackLease` returning after the clear drops its
-     callback instead of restoring it. That closes the #919 frame-closure → lane → renderer →
+   - Win32: the surface target's `window_handle()` answers `Unavailable` once the window's
+     delivery is retired, and otherwise consults the `hwnd_affinity::teardown_route` identity
+     probe (`AlreadyGone`/`StaleHandle` → `Unavailable`). `WM_DESTROY` retires the window's
+     delivery after `on_close`, while the HWND is still valid.
+   - AppKit: `setReleasedWhenClosed:NO` (the +1 is released once, in `Drop`); the surface target
+     keeps its own retained reference to the view, released on the main thread, and its
+     `window_handle()` answers `Unavailable` once `windowWillClose:` has retired the window's
+     delivery, and on any thread but the main one.
+   - `WindowCallbacks::clear()` latches: a callback that returns to its slot after the clear is
+     dropped instead of restored. That closes the #919 frame-closure → lane → renderer →
      surface → window cycle structurally on every backend with a clear site — android, macos,
      windows, winit and headless all have one.
    - Android reports `Unavailable` only for a *terminated* window (`native_window()` is `Some`
@@ -94,7 +107,7 @@ borrowed-safe `create_surface(&W)` that #1043 names, sound only by GPUI's owners
 6. **The renderer releases its surface on a signal and rebuilds unconditionally when a window
    returns.** `Renderer::release_surface()` and `Renderer::recreate_surface() -> EngineResult<()>`;
    a frame acquired while released sees `SurfaceAcquireOutcome::Released` (a skip, distinct from
-   `Lost`, which would churn generations through a deliberately absent surface). `flui-platform`
+   `Lost`, which would churn generations through a deliberately absent surface). `flui-native`
    carries the signal as the per-window `on_surface_status_change(Box<dyn FnMut(bool) + Send>)`:
    `false` before the handle dies, `true` when one is available again. It defaults to a no-op, so a
    backend that never emits it conforms by absence (the surface is never released). `flui-app`
@@ -134,7 +147,7 @@ borrowed-safe `create_surface(&W)` that #1043 names, sound only by GPUI's owners
      unit tests; the Android arms that emit the signal are type-checked only; the renderer-side
      mechanics need a GPU. Release and rebuild emit their own trace events
      (`surface_released_by_owner`, `surface_recreated`), separate from the lease-drop line the
-     desktop live-smoke harnesses assert at window close.
+     desktop [live-smoke harnesses](https://github.com/vanyastaff/flui/tree/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/live-smoke) assert at window close.
 
 ## Alternatives rejected
 

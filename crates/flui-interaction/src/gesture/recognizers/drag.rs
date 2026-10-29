@@ -20,7 +20,7 @@ use crate::{
     pointer::PointerDispatch,
 };
 use flui_foundation::geometry::{Axis, Offset};
-use flui_platform_api::input_capabilities::PointerKindSet;
+use flui_platform::input_capabilities::PointerKindSet;
 use std::{
     cell::{Cell, RefCell},
     rc::{Rc, Weak},
@@ -60,7 +60,7 @@ pub struct DragDownDetails {
     /// Device kind captured at admission.
     pub kind: PointerKind,
     /// The hardware behind the contact, when the platform reports it.
-    pub device: Option<flui_platform_api::pointer::DeviceId>,
+    pub device: Option<flui_platform::pointer::DeviceId>,
     /// The input sequence the binding minted at this Down; `None` in an
     /// arena no binding drives.
     pub sequence: Option<flui_foundation::InputSequenceId>,
@@ -76,7 +76,7 @@ pub struct DragStartDetails {
     /// Admitted device kind.
     pub kind: PointerKind,
     /// The hardware behind the contact, when the platform reports it.
-    pub device: Option<flui_platform_api::pointer::DeviceId>,
+    pub device: Option<flui_platform::pointer::DeviceId>,
     /// The input sequence of the contact that started the drag: the one a
     /// binding minted at its Down; `None` in an arena no binding drives. A
     /// scroll consumer names its deltas by it (ADR-0209 §1).
@@ -348,7 +348,7 @@ struct DragContact {
     owner: Weak<DragGestureRecognizer>,
     id: ContactId,
     pointer: PointerId,
-    device: Option<flui_platform_api::pointer::DeviceId>,
+    device: Option<flui_platform::pointer::DeviceId>,
     contact: PrimaryContact,
     state: RefCell<DragState>,
 }
@@ -917,6 +917,9 @@ fn to_root(local_vector: Offset<f64>, local: Offset<f64>, root: Offset<f64>) -> 
 impl GestureRecognizer for DragGestureRecognizer {
     fn allowed_devices(&self) -> PointerKindSet {
         self.allowed_devices
+    }
+    fn feeds_scroll_contact(&self) -> bool {
+        self.allowed_devices.contains_kind(PointerKind::Trackpad)
     }
     fn add_pointer(&self, dispatch: PointerDispatch<'_>) {
         if !is_primary_down(dispatch.local) {

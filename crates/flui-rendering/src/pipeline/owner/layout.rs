@@ -147,7 +147,7 @@ impl PipelineOwner<Layout> {
                     //      it once per launch and a scrolling
                     //      ListView::builder once per frame, so it is
                     //      a debug line, not a warning (measured
-                    //      2026-09-22, docs/BETA.md's lifecycle run).
+                    //      2026-09-22 in the macOS lifecycle run).
                     // Case 1 stays at warn: the root having no
                     // constraints is a binding bug, and a launch that
                     // draws nothing is what it looks like.
@@ -325,24 +325,20 @@ impl PipelineOwner<Layout> {
     /// layout — see the audit comment in that method). The
     /// pipeline-side `run_layout` outer loop is wired to this method.
     ///
-    /// # Mechanism (pre-acquired subtree borrows)
+    /// # Mechanism (a lease, nodes acquired on demand)
     ///
-    /// 1. **Collect ids**: `RenderTree::collect_subtree_ids(id)` walks
-    ///    the subtree in DFS pre-order producing
-    ///    `Vec<RenderId>` covering root + all descendants.
-    /// 2. **Pre-acquire borrows in ONE scope**:
-    ///    `RenderTree::get_subtree_mut(&ids)` materialises N disjoint
-    ///    `&mut RenderNode` references in a single function body via
-    ///    the proven `*mut Slab` reborrow pattern that already powers
-    ///    `RenderTree::get_two_mut` and
-    ///    `RenderTree::get_parent_and_children_mut`.
-    /// 3. **Index by id**: the N borrows are wrapped in a private
-    ///    `SubtreeArena` as a `HashMap<RenderId, (NodePtr, AtomicBool)>`
-    ///    (raw pointer alias of the still-live `&mut RenderNode` borrows,
-    ///    paired with a per-slot in-flight flag). Lookup is O(1) by id.
-    /// 4. **Recursive walk**: a private `layout_subtree_borrowed`
-    ///    helper indexes into `SubtreeArena` to acquire one node's
-    ///    reborrow at each call level. The leaf path delegates to
+    /// 1. **Lease**: `RenderTree::lease` takes the exclusive borrow of the
+    ///    tree once, with the slab's base pointer (ADR-0252). Nothing is
+    ///    collected or borrowed up front, so the cost of preparing a walk is
+    ///    constant.
+    /// 2. **Wrap**: the lease goes into a private `SubtreeArena`, which
+    ///    resolves an id with the tree's generation check and hands out a
+    ///    raw `NodePtr` for it. The in-flight bit and the parent link live in
+    ///    the slot headers, never behind a `NodePtr`.
+    /// 3. **Recursive walk**: a private `layout_subtree_borrowed`
+    ///    helper acquires one node's reborrow at each call level, after
+    ///    `LayoutCycleGuard::enter` has refused a cycle or an id that is not a
+    ///    child of the frame asking. The leaf path delegates to
     ///    [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only).
     ///    The non-leaf path constructs a Direct-storage `BoxLayoutCtx`
     ///    via the erased driver context ([`crate::protocol::ErasedBoxLayoutCtx`]) with a closure
@@ -353,8 +349,8 @@ impl PipelineOwner<Layout> {
     ///    variant) and forwards to `RenderBox::perform_layout`.
     ///    Synchronous `ctx.layout_child(i, c)` calls dispatch through
     ///    the callback, recursing into the child's subtree via its
-    ///    pre-acquired `NodePtr`.
-    /// 5. **Per-level cleanup**: on success **AND when no descendant
+    ///    `NodePtr`.
+    /// 4. **Per-level cleanup**: on success **AND when no descendant
     ///    errored**, updates `state.set_geometry` /
     ///    `state.set_constraints`, bootstraps `IS_RELAYOUT_BOUNDARY`,
     ///    clears `NEEDS_LAYOUT`. When a descendant errored
@@ -376,12 +372,10 @@ impl PipelineOwner<Layout> {
     /// the outer tag (latent UB; Miri flagged the 2-level and 3-level
     /// happy paths).
     ///
-    /// This redesign eliminates the inner reborrow entirely. All
-    /// N disjoint `&mut RenderNode` borrows are acquired in ONE call to
-    /// `get_subtree_mut` (single `&mut Slab` reborrow scope, mirroring
-    /// `get_parent_and_children_mut`). The callback then acquires one
-    /// node's reborrow per call level by dereferencing the pre-acquired
-    /// `NodePtr` for that slot — no `&mut RenderTree` ever appears
+    /// This design eliminates the inner reborrow entirely. The lease holds the
+    /// one `&mut RenderTree` for the walk, and the callback acquires one
+    /// node's reborrow per call level by dereferencing a `NodePtr` derived
+    /// from the slab's base pointer — no `&mut RenderTree` ever appears
     /// inside the callback chain.
     ///
     /// At any given moment during the walk, the per-slot reborrows in
@@ -441,20 +435,12 @@ impl PipelineOwner<Layout> {
     ///
     /// # Cycle / depth safety
     ///
-    /// Three-layer cycle protection:
+    /// Cycle protection:
     ///
-    /// 1. `collect_subtree_ids` terminates safely on cycles via its
-    ///    `visited` `HashSet<RenderId>` short-circuit —
-    ///    the cyclic id is visited at most once, the cycle edge is
-    ///    silently dropped from the collected subtree, deduplicated
-    ///    `Vec<RenderId>` returns. No hang / OOM at the collect
-    ///    phase.
-    /// 2. `get_subtree_mut` receives the deduplicated id list →
-    ///    uniqueness precondition satisfied → returns `Some(refs)`.
-    ///    No double-borrow attempt at acquisition.
-    /// 3. `layout_subtree_borrowed` marks each `id`'s in-flight flag in
-    ///    `SubtreeArena::by_id` via the
-    ///    `LayoutCycleGuard` RAII on entry. A `perform_layout`
+    /// 1. Nothing is collected up front, so a cyclic `children()` edge
+    ///    cannot hang or exhaust memory in a preparation phase.
+    /// 2. `layout_subtree_borrowed` marks each `id`'s in-flight bit in its
+    ///    slot header via the `LayoutCycleGuard` RAII on entry. A `perform_layout`
     ///    body that calls `layout_child` for an ancestor id already
     ///    in flight hits the guard's `enter` collision check →
     ///    returns [`crate::error::RenderError::LayoutCycle`]
@@ -485,9 +471,8 @@ impl PipelineOwner<Layout> {
     ) -> crate::error::RenderResult<Size> {
         // Layout clears flags and fills caches under any stamped walk path.
         self.scheduler.forget_layout_walks();
-        // Steps 1–3: collect subtree ids, pre-acquire disjoint &mut borrows,
-        // and wrap them in a SubtreeArena for O(1) by-id lookup during the
-        // recursive walk.  The unsafe aliasing machinery lives entirely inside
+        // Steps 1–2: lease the tree and wrap the lease in a SubtreeArena, which
+        // acquires nodes by id as the recursive walk reaches them.  The unsafe aliasing machinery lives entirely inside
         // `subtree_arena::SubtreeArena`; this call site is safe.  The arena
         // also borrows the poison table read-only for the walk so poisoned
         // nodes are skipped in place.
@@ -519,8 +504,10 @@ impl PipelineOwner<Layout> {
         let layout_successes = arena.take_layout_successes();
         let laid_out = arena.take_laid_out();
         let laid_out_count = arena.take_laid_out_count();
+        let acquired_count = arena.take_acquired_count();
         drop(arena);
         self.counters.nodes_laid_out += laid_out_count;
+        self.counters.nodes_acquired += acquired_count;
 
         // Needs-paint is marked per object that laid out, applied once per
         // walk to exactly the boundaries that reached layout. Anything else is

@@ -1,0 +1,750 @@
+//! What AppKit tells a window: its `NSWindowDelegate` class, built once per
+//! process, and the handlers of what the delegate reports (resize, move,
+//! focus, occlusion, close, backing scale and screen changes).
+
+use std::rc::{Rc, Weak};
+use std::sync::atomic::Ordering;
+
+use flui_foundation::geometry::{Point, Size};
+use flui_platform::DisplayId;
+use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
+use objc2::{ClassType, class, msg_send, sel};
+use objc2_app_kit::NSWindowStyleMask;
+use objc2_foundation::NSRect;
+
+use super::{BObjC, Class, MacOSWindow, NIL, NO, ObjcId, Object, YES};
+use crate::owner::apple::macos::HostDisplays;
+use crate::owner::panic_boundary::{AfterPanic, os_entry};
+use crate::window::apple::geometry::mode::HeldCommand;
+
+/// The display a raw `NSScreen*` names, or `None` when the pointer is nil (a
+/// window not on any screen) or the source leaves that screen out.
+///
+/// # Safety
+///
+/// `screen` must be null or a live `NSScreen*`, and the call must run on the
+/// owner lane (this messages the screen).
+pub(super) unsafe fn display_of_screen(
+    displays: &dyn HostDisplays,
+    screen: ObjcId,
+) -> Option<DisplayId> {
+    // SAFETY: the caller's contract — nil or a live `NSScreen*` on the owner
+    // lane; the borrow is scoped to the `and_then` closure.
+    let screen = unsafe { screen.as_ref() }?;
+    // SAFETY: `NSScreen` and `AnyObject` share the Objective-C object layout,
+    // and the caller guarantees the pointee really is an `NSScreen`.
+    let screen: &objc2_app_kit::NSScreen =
+        unsafe { &*std::ptr::from_ref::<AnyObject>(screen).cast() };
+    displays.id_of(screen)
+}
+
+/// Create a window delegate for lifecycle events
+pub(super) fn create_window_delegate(window: Weak<MacOSWindow>) -> ObjcId {
+    // SAFETY: the delegate class is registered before alloc/init; the boxed
+    // Weak pointer stored in the ivar is reclaimed in the delegate's
+    // `dealloc`, so it lives exactly as long as the delegate. AppKit sends
+    // the delegate's methods, `dealloc` among them, on the main thread, where
+    // the window and its reference counts live.
+    unsafe {
+        // Get or create delegate class
+        let class = get_or_create_delegate_class();
+        let delegate: ObjcId = msg_send![class, alloc];
+        let delegate: ObjcId = msg_send![delegate, init];
+
+        // Store weak pointer to window
+        let window_ptr = Box::into_raw(Box::new(window)).cast::<std::ffi::c_void>();
+        let ivar = class
+            .instance_variable(c"window_ptr")
+            .expect("BUG: FLUIWindowDelegate declares the window_ptr ivar");
+        let slot: *mut *mut std::ffi::c_void = ivar.load_ptr(&*delegate);
+        *slot = window_ptr;
+
+        delegate
+    }
+}
+
+/// Get or create the NSWindowDelegate class
+fn get_or_create_delegate_class() -> &'static Class {
+    use std::sync::Once;
+    static INIT: Once = Once::new();
+
+    INIT.call_once(|| {
+        let superclass = objc2_foundation::NSObject::class();
+        let mut decl = ClassBuilder::new(c"FLUIWindowDelegate", superclass)
+            .expect("FLUIWindowDelegate must be registered exactly once (guarded by Once)");
+
+        // Add ivar to store window pointer
+        decl.add_ivar::<*mut std::ffi::c_void>(c"window_ptr");
+
+        // windowDidResize:
+        // Each method runs its body in the panic boundary: a panic answers
+        // AppKit as if the window were gone (`()`, or the default of a
+        // `windowShould…:` question) rather than unwinding through it.
+
+        extern "C-unwind" fn window_did_resize(this: &Object, _sel: Sel, _notification: ObjcId) {
+            os_entry("windowDidResize:", (), AfterPanic::Answer(|()| ()), || {
+                // SAFETY: AppKit invokes delegate methods on live delegate objects.
+                if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                    window.handle_resize();
+                }
+            });
+        }
+
+        // windowDidMove:
+        extern "C-unwind" fn window_did_move(this: &Object, _sel: Sel, _notification: ObjcId) {
+            os_entry("windowDidMove:", (), AfterPanic::Answer(|()| ()), || {
+                // SAFETY: AppKit invokes delegate methods on live delegate objects.
+                if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                    window.handle_move();
+                }
+            });
+        }
+
+        // windowDidBecomeKey:
+        extern "C-unwind" fn window_did_become_key(
+            this: &Object,
+            _sel: Sel,
+            _notification: ObjcId,
+        ) {
+            os_entry(
+                "windowDidBecomeKey:",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || {
+                    // SAFETY: AppKit invokes delegate methods on live delegate objects.
+                    if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                        window.handle_focus_gained();
+                    }
+                },
+            );
+        }
+
+        // windowDidResignKey:
+        extern "C-unwind" fn window_did_resign_key(
+            this: &Object,
+            _sel: Sel,
+            _notification: ObjcId,
+        ) {
+            os_entry(
+                "windowDidResignKey:",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || {
+                    // SAFETY: AppKit invokes delegate methods on live delegate objects.
+                    if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                        window.handle_focus_lost();
+                    }
+                },
+            );
+        }
+
+        // The delegate callbacks below share one invariant: they run on the
+        // main thread, where the window lives, on a live `FLUIWindowDelegate`
+        // whose `window_ptr` ivar holds the `Box<Weak<MacOSWindow>>` that
+        // `create_window_delegate` stored, which is what
+        // `get_window_from_delegate` requires.
+
+        // windowWillMiniaturize: comes before the window leaves normal mode,
+        // while its frame is still the one it returns to.
+        extern "C-unwind" fn window_will_miniaturize(
+            this: &Object,
+            _sel: Sel,
+            _notification: ObjcId,
+        ) {
+            os_entry(
+                "windowWillMiniaturize:",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || {
+                    // SAFETY: see the shared invariant above.
+                    if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                        window.record_normal();
+                        window.handle_transition_started();
+                    }
+                },
+            );
+        }
+
+        // windowWillEnterFullScreen: likewise; the full-screen bit may already
+        // be set while the frame is still the normal one.
+        extern "C-unwind" fn window_will_enter_fullscreen(
+            this: &Object,
+            _sel: Sel,
+            _notification: ObjcId,
+        ) {
+            os_entry(
+                "windowWillEnterFullScreen:",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || {
+                    // SAFETY: see the shared invariant above.
+                    if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                        window.record_normal_entering_fullscreen();
+                        window.handle_transition_started();
+                    }
+                },
+            );
+        }
+
+        // windowWillExitFullScreen:
+        extern "C-unwind" fn window_will_exit_fullscreen(
+            this: &Object,
+            _sel: Sel,
+            _notification: ObjcId,
+        ) {
+            os_entry(
+                "windowWillExitFullScreen:",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || {
+                    // SAFETY: see the shared invariant above.
+                    if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                        window.handle_transition_started();
+                    }
+                },
+            );
+        }
+
+        // windowShouldZoom:toFrame: is asked before a zoom, and a programmatic
+        // `zoom:` asks it too. It never vetoes.
+        extern "C-unwind" fn window_should_zoom(
+            this: &Object,
+            _sel: Sel,
+            _window: ObjcId,
+            _new_frame: NSRect,
+        ) -> BObjC {
+            os_entry(
+                "windowShouldZoom:toFrame:",
+                (),
+                AfterPanic::Answer(|()| YES),
+                || {
+                    // SAFETY: see the shared invariant above.
+                    if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                        window.record_normal();
+                    }
+                    YES
+                },
+            )
+        }
+
+        // windowDidMiniaturize:, windowDidDeminiaturize:,
+        // windowDidEnterFullScreen:, windowDidExitFullScreen: and the two
+        // windowDidFailTo…FullScreen: end the step that was animating.
+        extern "C-unwind" fn window_transition_ended(
+            this: &Object,
+            _sel: Sel,
+            _notification: ObjcId,
+        ) {
+            os_entry(
+                "a window transition's end",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || {
+                    // SAFETY: see the shared invariant above.
+                    if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                        window.handle_transition_ended();
+                    }
+                },
+            );
+        }
+
+        // windowShouldClose: — a close request whose handling panicked is
+        // refused: the window stays, and the next request asks again.
+        extern "C-unwind" fn window_should_close(
+            this: &Object,
+            _sel: Sel,
+            _sender: ObjcId,
+        ) -> BObjC {
+            os_entry(
+                "windowShouldClose:",
+                (),
+                AfterPanic::Answer(|()| NO),
+                || {
+                    // SAFETY: AppKit invokes delegate methods on live delegate objects.
+                    if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                        if window.handle_close_request() {
+                            YES
+                        } else {
+                            NO
+                        }
+                    } else {
+                        YES
+                    }
+                },
+            )
+        }
+
+        // windowWillClose:
+        extern "C-unwind" fn window_will_close(this: &Object, _sel: Sel, _notification: ObjcId) {
+            os_entry("windowWillClose:", (), AfterPanic::Answer(|()| ()), || {
+                // SAFETY: AppKit invokes delegate methods on live delegate objects.
+                if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                    // SAFETY: the wrapper retains this live NSWindow. Pin it before
+                    // user callbacks can drop the final wrapper; transferring that
+                    // extra retain to AppKit's surrounding autorelease pool keeps
+                    // the receiver alive until the native close stack has returned.
+                    // Nested callback pools cannot drain this already-enqueued pin.
+                    if let Some(pin) = unsafe { objc2::rc::Retained::retain(window.ns_window) } {
+                        let _ = objc2::rc::Retained::autorelease_ptr(pin);
+                    }
+                    window.handle_close();
+                }
+            });
+        }
+
+        // windowDidChangeBackingProperties: (Retina/DPI change)
+        extern "C-unwind" fn window_did_change_backing_properties(
+            this: &Object,
+            _sel: Sel,
+            _notification: ObjcId,
+        ) {
+            os_entry(
+                "windowDidChangeBackingProperties:",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || {
+                    // SAFETY: AppKit invokes delegate methods on live delegate
+                    // objects.
+                    if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                        window.handle_backing_properties_changed();
+                    }
+                },
+            );
+        }
+
+        // windowDidChangeScreen: (moved to different monitor)
+        extern "C-unwind" fn window_did_change_screen(
+            this: &Object,
+            _sel: Sel,
+            _notification: ObjcId,
+        ) {
+            os_entry(
+                "windowDidChangeScreen:",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || {
+                    // SAFETY: AppKit invokes delegate methods on live delegate objects.
+                    if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                        window.handle_screen_changed();
+                    }
+                },
+            );
+        }
+
+        // windowDidChangeOcclusionState: (hidden-surface gating — fires on
+        // full occlusion by other windows, miniaturization, hide/unhide,
+        // and space switches; the visible bit is the surface-composed
+        // claim the runtime's FrameClock gate consumes)
+        extern "C-unwind" fn window_did_change_occlusion_state(
+            this: &Object,
+            _sel: Sel,
+            _notification: ObjcId,
+        ) {
+            os_entry(
+                "windowDidChangeOcclusionState:",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || {
+                    // SAFETY: AppKit invokes delegate methods on live delegate
+                    // objects.
+                    if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                        window.handle_occlusion_state_changed();
+                    }
+                },
+            );
+        }
+
+        // dealloc — reclaim the boxed Weak<MacOSWindow>
+        extern "C-unwind" fn delegate_dealloc(this: &Object, _sel: Sel) {
+            os_entry(
+                "FLUIWindowDelegate's dealloc",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || {
+                    // SAFETY: the ivar holds either null or a Box<Weak<MacOSWindow>>
+                    // leaked in `create_window_delegate`; reclaiming it exactly once
+                    // on dealloc is the matching release. The super dealloc message
+                    // is the mandatory NSObject teardown.
+                    unsafe {
+                        let window_ptr: *mut std::ffi::c_void = *this.get_ivar("window_ptr");
+                        if !window_ptr.is_null() {
+                            drop(Box::from_raw(window_ptr.cast::<Weak<MacOSWindow>>()));
+                        }
+                        let superclass = class!(NSObject);
+                        let _: () = msg_send![super(this, superclass), dealloc];
+                    }
+                },
+            );
+        }
+
+        // Add methods
+        // SAFETY: every registered function pointer matches the Objective-C
+        // method signature of its selector, as required by
+        // `ClassDecl::add_method`.
+        unsafe {
+            decl.add_method(
+                sel!(windowDidResize:),
+                window_did_resize as extern "C-unwind" fn(_, _, _),
+            );
+            decl.add_method(
+                sel!(windowDidMove:),
+                window_did_move as extern "C-unwind" fn(_, _, _),
+            );
+            decl.add_method(
+                sel!(windowDidBecomeKey:),
+                window_did_become_key as extern "C-unwind" fn(_, _, _),
+            );
+            decl.add_method(
+                sel!(windowDidResignKey:),
+                window_did_resign_key as extern "C-unwind" fn(_, _, _),
+            );
+            decl.add_method(
+                sel!(windowWillMiniaturize:),
+                window_will_miniaturize as extern "C-unwind" fn(_, _, _),
+            );
+            decl.add_method(
+                sel!(windowWillEnterFullScreen:),
+                window_will_enter_fullscreen as extern "C-unwind" fn(_, _, _),
+            );
+            decl.add_method(
+                sel!(windowWillExitFullScreen:),
+                window_will_exit_fullscreen as extern "C-unwind" fn(_, _, _),
+            );
+            decl.add_method(
+                sel!(windowShouldZoom:toFrame:),
+                window_should_zoom as extern "C-unwind" fn(_, _, _, _) -> Bool,
+            );
+            for selector in [
+                sel!(windowDidMiniaturize:),
+                sel!(windowDidDeminiaturize:),
+                sel!(windowDidEnterFullScreen:),
+                sel!(windowDidExitFullScreen:),
+                sel!(windowDidFailToEnterFullScreen:),
+                sel!(windowDidFailToExitFullScreen:),
+            ] {
+                decl.add_method(
+                    selector,
+                    window_transition_ended as extern "C-unwind" fn(_, _, _),
+                );
+            }
+            decl.add_method(
+                sel!(windowShouldClose:),
+                window_should_close as extern "C-unwind" fn(_, _, _) -> Bool,
+            );
+            decl.add_method(
+                sel!(windowWillClose:),
+                window_will_close as extern "C-unwind" fn(_, _, _),
+            );
+            decl.add_method(
+                sel!(windowDidChangeBackingProperties:),
+                window_did_change_backing_properties as extern "C-unwind" fn(_, _, _),
+            );
+            decl.add_method(
+                sel!(windowDidChangeScreen:),
+                window_did_change_screen as extern "C-unwind" fn(_, _, _),
+            );
+            decl.add_method(
+                sel!(windowDidChangeOcclusionState:),
+                window_did_change_occlusion_state as extern "C-unwind" fn(_, _, _),
+            );
+            decl.add_method(
+                sel!(dealloc),
+                delegate_dealloc as extern "C-unwind" fn(_, _),
+            );
+        }
+
+        decl.register();
+    });
+
+    AnyClass::get(c"FLUIWindowDelegate")
+        .expect("FLUIWindowDelegate was registered by the Once block above")
+}
+
+/// Get window from delegate
+///
+/// # Safety
+///
+/// `delegate` must be a live FLUIWindowDelegate whose `window_ptr` ivar is
+/// either null or points to a `Weak<MacOSWindow>` owned by that delegate, and
+/// the call must run on the main thread, where the window and its reference
+/// counts live.
+unsafe fn get_window_from_delegate(delegate: &Object) -> Option<Rc<MacOSWindow>> {
+    // SAFETY: per the function contract the ivar is null or a valid
+    // Box<Weak<MacOSWindow>> pointer owned by the delegate.
+    unsafe {
+        let window_ptr: *mut std::ffi::c_void = *delegate.get_ivar("window_ptr");
+        let weak_ptr = window_ptr.cast::<Weak<MacOSWindow>>();
+        if weak_ptr.is_null() {
+            return None;
+        }
+        (*weak_ptr).upgrade()
+    }
+}
+
+// ============================================================================
+// Window Event Handlers
+// ============================================================================
+
+impl MacOSWindow {
+    /// A step that animates has started, from this backend or from the user.
+    fn handle_transition_started(&self) {
+        self.state
+            .lock()
+            .sequence
+            .step_started(std::time::Instant::now());
+    }
+
+    /// A step that animates is over (or failed): publish the window, then send
+    /// the mode held back for it, if there is one.
+    ///
+    /// The held mode is planned on the owner lane's next turn. AppKit puts back
+    /// the frame a window had before full screen only after
+    /// `windowDidExitFullScreen:` returns, so inside it a window that went full
+    /// screen zoomed still reads as unzoomed, and a held `Normal` would plan no
+    /// un-zoom and leave it maximized. It is also taken after the publish,
+    /// since a subscriber that runs in it may command a newer one. A window
+    /// dropped before that turn has no mode left to take.
+    fn handle_transition_ended(self: &Rc<Self>) {
+        self.state.lock().sequence.step_ended();
+        self.publish_state();
+        let window = crate::owner::slot::OwnerWeak::new(self);
+        crate::owner::apple::macos::exec_async_on_owner(self.owner, move || {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
+            // The held mode first, then the held commands in arrival order: a
+            // fixed size meant for the normal window the held mode leads to
+            // lands after it, held again if that mode set off another step.
+            let after = window.state.lock().sequence.take_after_step();
+            if let Some(mode) = after.mode
+                && let Err(error) = window.change_mode(mode)
+            {
+                tracing::debug!(%error, "a window could not finish changing mode");
+            }
+            for command in after.commands {
+                match command {
+                    HeldCommand::FixedSize => {
+                        match window.set_style_bit(NSWindowStyleMask::Resizable, false) {
+                            Ok(()) => window.publish_state(),
+                            Err(error) => {
+                                tracing::debug!(%error, "a window could not be made fixed-size");
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    /// Handle window resize event
+    fn handle_resize(&self) {
+        // SAFETY: `ns_window` is alive for the lifetime of `self`.
+        unsafe {
+            let frame: NSRect = msg_send![self.ns_window, frame];
+            let content_rect: NSRect = msg_send![self.ns_window, contentRectForFrameRect: frame];
+
+            let new_size = Size::new(
+                content_rect.size.width as f64,
+                content_rect.size.height as f64,
+            );
+
+            self.state.lock().bounds.size = new_size;
+            self.publish_state();
+
+            tracing::debug!("Window resized to {}x{}", new_size.width, new_size.height);
+        }
+    }
+
+    /// Handle window move event
+    fn handle_move(&self) {
+        // SAFETY: `ns_window` is alive for the lifetime of `self`.
+        unsafe {
+            let frame: NSRect = msg_send![self.ns_window, frame];
+
+            let new_origin = Point::new(frame.origin.x as f64, frame.origin.y as f64);
+
+            // Update state
+            {
+                let mut state = self.state.lock();
+                state.bounds.origin = new_origin;
+            }
+
+            self.publish_state();
+
+            tracing::debug!("Window moved to ({}, {})", new_origin.x, new_origin.y);
+        }
+    }
+
+    /// Handle focus gained event
+    fn handle_focus_gained(&self) {
+        self.publish_state();
+        // Key-window status is what VoiceOver treats as view focus; the
+        // delegate delivers this on the main thread.
+        self.facets.accessibility.focus_changed(true);
+        tracing::debug!("Window gained focus");
+    }
+
+    /// Handle focus lost event
+    fn handle_focus_lost(&self) {
+        self.publish_state();
+        self.facets.accessibility.focus_changed(false);
+        tracing::debug!("Window lost focus");
+    }
+
+    /// Handle occlusion state change (hidden-surface gating).
+    ///
+    /// Reads the window's current `occlusionState` into the snapshot's
+    /// visibility — what the runtime's per-presentation `FrameClock` gate and
+    /// `AppLifecycleState` derivation read. The bit test and its polarity are
+    /// host-tested in `crate::window::apple::geometry::surface`; only the
+    /// `occlusionState` read is AppKit-bound. AppKit may post the notification
+    /// for reasons other than the visible bit flipping: an unchanged snapshot
+    /// publishes nothing.
+    fn handle_occlusion_state_changed(&self) {
+        // SAFETY: `ns_window` is alive for the lifetime of `self`;
+        // `occlusionState` returns a plain NSUInteger bitmask.
+        let raw: u64 = unsafe {
+            let state: usize = msg_send![self.ns_window, occlusionState];
+            state as u64
+        };
+        let visible = crate::window::apple::geometry::surface::occlusion_state_is_visible(raw);
+        self.state.lock().occlusion_visible = visible;
+        // Published outside the state lock, like every other handler here.
+        self.publish_state();
+    }
+
+    /// Handle close request event
+    ///
+    /// Returns true to allow close, false to prevent. Asked behind a running
+    /// handler method (a `performClose:` sent from inside `input`), the
+    /// window is kept for now and closed later if the handler grants it.
+    fn handle_close_request(self: &Rc<Self>) -> bool {
+        let window = crate::owner::slot::OwnerWeak::new(self);
+        let decision = self.delivery.dispatch_close_request(move || {
+            if let Some(window) = window.upgrade() {
+                window.close_window();
+            }
+        });
+        tracing::debug!(?decision, "Window close requested");
+        decision == flui_platform::CloseDecision::Close
+    }
+
+    /// Handle window close event
+    ///
+    /// Fires from `windowWillClose:` while `ns_window` is still valid — the
+    /// delegate notification AppKit posts for every route through
+    /// `-[NSWindow close]`, vetoed or not (see the comment in
+    /// [`close_window`](Self::close_window)). Order matters: `closed` is set BEFORE `dispatch_close` so that
+    /// a frame callback the close dispatch itself triggers observes the
+    /// window as already gone, and the delivery's `clear()` runs AFTER, so
+    /// the handler's `closed` is still called before the window lets go of
+    /// the handler.
+    fn handle_close(&self) {
+        if self.closed.swap(true, Ordering::SeqCst) {
+            return;
+        }
+
+        // Untrack from the platform's window map here, on the owner thread the
+        // delegate notification runs on: the map holds the window strongly, so
+        // removing the entry lets the window drop (and so release its NSWindow
+        // and detach its bridge) as soon as the application drops its last
+        // handle; without it, every closed window stays pinned for the process
+        // lifetime.
+        //
+        // Removal precedes `dispatch_close()` so the closing window is already
+        // untracked when user close callbacks run. Unlike the repo's winit
+        // backend — which removes from tracking only AFTER its own close
+        // callbacks (owner/winit.rs dispatch_close before windows.remove) —
+        // this ordering is safe here because the macOS map is private with no
+        // content readers: the early removal is observable only as the intended
+        // lifetime change. The removed entry drops at the end of this
+        // statement's scope, and the delegate holds the window meanwhile.
+        let _prev = self.windows_map.remove(&(self.ns_window as u64));
+
+        self.delivery.dispatch_close();
+        tracing::debug!("Window closed");
+
+        // Release every remaining registered callback now, while
+        // `ns_window` is still valid (this delegate method runs before
+        // AppKit tears the window down further): the handler owns, in
+        // `flui-app`'s wiring, this window's GPU renderer, whose
+        // `wgpu::Surface` is built from the window's surface target, and that
+        // surface goes while the window's view is still there (ADR-0063).
+        // The clear also retires the delivery, so the surface target answers
+        // `Unavailable` from here on.
+        self.delivery.clear();
+
+        // Match winit's own `windowWillClose:` handling: NIL the delegate
+        // so no further delegate method can fire against a window this
+        // wrapper now treats as closed. Harmless even without this today
+        // (the delegate holds only a weak reference to the window), but this
+        // is the documented AppKit-recommended cleanup, not just a FLUI habit.
+        //
+        // SAFETY: `ns_window` is alive for the lifetime of `self`.
+        unsafe {
+            let _: () = msg_send![self.ns_window, setDelegate: NIL];
+        }
+        if let Some(control) = self.loop_control.get().and_then(std::sync::Weak::upgrade) {
+            control.request(false);
+        }
+    }
+
+    /// Handle backing properties changed (Retina/DPI change)
+    fn handle_backing_properties_changed(&self) {
+        // SAFETY: `ns_window` is alive for the lifetime of `self`; the
+        // content view is NIL-checked before use.
+        unsafe {
+            let new_scale: f64 = msg_send![self.ns_window, backingScaleFactor];
+
+            // Update window state
+            let changed = {
+                let mut state = self.state.lock();
+                let changed = (state.scale_factor - new_scale).abs() > 0.01;
+                if changed {
+                    state.scale_factor = new_scale;
+                    tracing::info!("Window scale factor changed to {}", new_scale);
+                }
+                changed
+            };
+
+            // Re-read the display in the same pass: this handler is reached on
+            // both a backing-properties change and a screen change
+            // (`handle_screen_changed` delegates here), and the display belongs
+            // to the window exactly as the scale does.
+            let moved = self.refresh_display();
+            if moved || changed {
+                // The display snapshot carries each display's scale, and a
+                // window that moved may sit on a display the last sample did
+                // not hold. Invalidated before the window's snapshot is
+                // published, so a consumer it wakes reads the displays again.
+                if let Some(displays) = self.displays.get() {
+                    displays.invalidate();
+                }
+            }
+            // After the invalidation, so the snapshot read is the one with the
+            // display the window moved to.
+            self.sync_layer_refresh();
+            self.publish_state();
+        }
+    }
+
+    /// Handle screen changed (moved to different monitor)
+    fn handle_screen_changed(&self) {
+        // SAFETY: `ns_window` is alive for the lifetime of `self`; the
+        // screen object is NIL-checked before messaging.
+        unsafe {
+            let screen: ObjcId = msg_send![self.ns_window, screen];
+            if screen != NIL {
+                let scale: f64 = msg_send![screen, backingScaleFactor];
+                tracing::debug!("Window moved to screen with scale factor {}", scale);
+
+                // Update scale factor (will trigger backing properties changed)
+                self.handle_backing_properties_changed();
+            } else if self.refresh_display() {
+                // Off every screen: the window names no display until it is
+                // on one again, and its scale is left as it was.
+                self.publish_state();
+            }
+        }
+    }
+}

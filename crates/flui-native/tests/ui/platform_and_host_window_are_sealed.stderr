@@ -1,0 +1,55 @@
+error[E0277]: `OutsidePlatform` cannot implement `Platform`: the trait is sealed
+  --> tests/ui/platform_and_host_window_are_sealed.rs:28:19
+   |
+28 | impl Platform for OutsidePlatform {
+   |                   ^^^^^^^^^^^^^^^ not the platform of a host in `flui-native`
+   |
+help: the trait `flui_native::platform::sealed::Sealed` is not implemented for `OutsidePlatform`
+  --> tests/ui/platform_and_host_window_are_sealed.rs:26:1
+   |
+26 | struct OutsidePlatform;
+   | ^^^^^^^^^^^^^^^^^^^^^^
+   = note: `HostPlatform<H>` over a host's table is the one implementation of `Platform`; a new platform is a host table in `flui-native` (ADR-0151 §5, §10)
+help: the trait `flui_native::platform::sealed::Sealed` is implemented for `HostPlatform<H>`
+  --> src/platform.rs
+   |
+   | impl<H: Host> sealed::Sealed for HostPlatform<H> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `flui_native::Platform`
+  --> src/platform.rs
+   |
+   | pub trait Platform: sealed::Sealed + Send + Sync + 'static {
+   |                     ^^^^^^^^^^^^^^ required by this bound in `Platform`
+   = note: `Platform` is a "sealed trait", because to implement it you also need to implement `flui_native::platform::sealed::Sealed`, which is not accessible; this is usually done to force you to use one of the provided types that already implement it
+   = help: the following type implements the trait:
+             flui_native::HostPlatform<H>
+
+error[E0046]: not all trait items implemented, missing: `capture_text_sizing`, `text_store_host`
+   --> tests/ui/platform_and_host_window_are_sealed.rs:180:1
+    |
+180 | impl HostWindow for OutsideWindow {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ missing `capture_text_sizing`, `text_store_host` in implementation
+    |
+    = help: implement the missing item: `fn capture_text_sizing(&self, _: flui_native::host_window::sealed::OwnerThreadToken) -> Result<TextSizingCaptureState, TextSizingCaptureError> { todo!() }`
+    = help: implement the missing item: `fn text_store_host(&self, _: flui_native::host_window::sealed::OwnerThreadToken) -> Option<Rc<(dyn TextStoreHost + 'static)>> { todo!() }`
+
+error[E0277]: `OutsideWindow` cannot implement `HostWindow`: the trait is sealed
+   --> tests/ui/platform_and_host_window_are_sealed.rs:180:21
+    |
+180 | impl HostWindow for OutsideWindow {
+    |                     ^^^^^^^^^^^^^ not a window of a host in `flui-native`
+    |
+help: the trait `flui_native::host_window::sealed::Sealed` is not implemented for `OutsideWindow`
+   --> tests/ui/platform_and_host_window_are_sealed.rs:131:1
+    |
+131 | struct OutsideWindow;
+    | ^^^^^^^^^^^^^^^^^^^^
+    = note: only the windows the core host builds implement `HostWindow` (inside `flui-native`, a new window adds `impl CoreHostWindow for` it); a test double implements `PlatformWindow`, which stays open (ADR-0151 §5)
+note: required by a bound in `HostWindow`
+   --> src/host_window.rs
+    |
+    | pub trait HostWindow: sealed::Sealed + PlatformWindow {
+    |                       ^^^^^^^^^^^^^^ required by this bound in `HostWindow`
+    = note: `HostWindow` is a "sealed trait", because to implement it you also need to implement `flui_native::host_window::sealed::Sealed`, which is not accessible; this is usually done to force you to use one of the provided types that already implement it
+    = help: the following type implements the trait:
+              W

@@ -209,10 +209,6 @@ pub struct ElementOwner<'a> {
     /// the handoff and therefore neither record nor leave state behind.
     pub(crate) lifecycle_panic_handoff: &'a Cell<LifecyclePanicHandoff>,
 
-    /// `BuildOwner::error_view_builder`: the factory the recovery windows
-    /// substitute failed children with, `None` for the default `ErrorView`.
-    pub(crate) error_view_builder: Option<crate::view::ErrorViewBuilder>,
-
     /// Reference to `BuildOwner::on_build_scheduled` as the shareable `Arc`
     /// (the [`Self::on_build_scheduled`] field above is the `&dyn Fn` view used
     /// for the in-frame fire). An [`ExternalBuildScheduler`] clones this so a
@@ -258,29 +254,13 @@ pub struct ElementOwner<'a> {
     /// The binding's owner-local post-frame capability, threaded into every
     /// `BuildCtx` the same way `post_frame_handle` is.
 
-    /// The binding's IME/text-input attach-detach capability, threaded into
-    /// every `BuildCtx` the same way `post_frame_handle` is.
-    pub(crate) text_input_handle: &'a Option<flui_interaction::TextInputHandle>,
-
-    /// The presentation's plain-text clipboard, threaded into every
-    /// `BuildCtx` the same way `text_input_handle` is.
-    pub(crate) clipboard_handle: &'a Option<flui_interaction::ClipboardHandle>,
-
-    /// The presentation's haptics, threaded the same way.
-    pub(crate) haptics_handle: &'a Option<flui_interaction::HapticsHandle>,
-
-    /// The presentation's drag-and-drop, threaded the same way.
-    pub(crate) drag_and_drop: &'a Option<flui_interaction::drag::DragAndDrop>,
-
-    /// The presentation's external textures, threaded the same way.
-    pub(crate) texture_registry: &'a Option<flui_rendering::layer::TextureRegistry>,
-
-    /// The UI runtime's byte storage, threaded into every `BuildCtx` the same way
-    /// `clipboard_handle` is.
-    pub(crate) storage: &'a Option<std::sync::Arc<dyn flui_platform_api::Storage>>,
+    /// The presentation capabilities, threaded into every `BuildCtx` the same
+    /// way `post_frame_handle` is; the recovery windows read the error view
+    /// factory from it.
+    pub(crate) capabilities: &'a super::PresentationCapabilities,
 
     /// The host's flush registry, threaded into every `BuildCtx` the same way
-    /// `storage` is; crate-private, for `Persisted`.
+    /// `capabilities` is; crate-private, for `Persisted`.
     pub(crate) flush_registry: &'a Option<crate::flush_registry::FlushRegistry>,
 
     /// The binding's owner-local interaction dispatch capability (ADR-0027),

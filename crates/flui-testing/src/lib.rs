@@ -69,8 +69,8 @@
 //! use flui_interaction::{GestureRecognizer, LongPressGestureRecognizer, PointerId};
 //! use flui_interaction::pointer::PointerDispatch;
 //! use flui_foundation::geometry::Point;
-//! use flui_platform_api::EventTime;
-//! use flui_platform_api::pointer::{
+//! use flui_platform::EventTime;
+//! use flui_platform::pointer::{
 //!     PointerButton, PointerButtons, PointerEvent, PointerInfo, PointerKind,
 //!     PointerPosition, PointerPress, PointerSample,
 //! };
@@ -126,7 +126,9 @@ pub mod storage;
 pub mod text_store_host;
 pub mod text_store_kit;
 pub mod widgets;
+pub mod window_commands;
 pub mod window_conformance;
+pub mod window_handler;
 
 pub use a11y::{
     A11yNode, A11yQuery, A11yQueryError, A11yTree, Action, ActionData, ActionRequest,

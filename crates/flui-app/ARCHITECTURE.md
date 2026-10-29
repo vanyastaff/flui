@@ -29,7 +29,7 @@ the dispatch layer moves there too.
   posts the shared owner signal rather than entering the runtime directly;
   source values reach the ADR-0195 projection through the existing host path.
   WASM platform adapter acceptance uses the controlled JS boundary described
-  in `flui-platform/ARCHITECTURE.md`; rendered browser live-update acceptance
+  in `flui-native/ARCHITECTURE.md`; rendered browser live-update acceptance
   remains separate.
 
 - **Window delivery retains its address.** Runtime wakes and redraw debt are
@@ -77,9 +77,21 @@ the dispatch layer moves there too.
   changing OS settings. Read failure leaves observations unknown and does not
   skip outgoing resource retirement. Desktop owner wakes refresh through the
   same identity-fenced path before window completions; source caches avoid native
-  reads when no invalidation is pending. `owner_wake_refreshes_installed_preference_consumers`
-  drives the registered headless owner hook and verifies the retained widget's
-  next rendered scale. This is delivery evidence, not an actual OS settings change.
+  reads when no invalidation is pending. `the_platform_preference_source_reaches_installed_consumers`
+  drives the headless platform's preference source (`HeadlessPreferences`): the
+  first build reads the value reported before any window, a change reaches the
+  retained widget, a failed read keeps the accepted value and an unknown scale
+  restores the consumer's baseline. This is delivery evidence, not an actual OS
+  settings change. The same source pins what the owner's wake hook owes a
+  change: `a_change_before_the_first_owner_turn_reaches_consumers_once` and
+  `a_change_before_the_wake_hook_exists_reaches_consumers_once` report it before
+  the loop starts (the second before any hook is installed, with the installation's
+  own sample failing, so only the signal's retained wake can deliver it) and see it
+  delivered once. `a_replaced_wake_hook_is_the_only_one_later_changes_reach`
+  replaces the hook mid-run and sees later changes reach only the replacement.
+  `a_panicking_preference_delivery_does_not_stop_later_changes` panics once in a
+  consumer's wake or in the hook itself; the owner turn contains it and the next
+  change still reaches the consumer.
   Windows retries native read failures through its window-independent loop wait;
   deferred reads retain the accepted snapshot without another failure diagnostic.
   `deferred_native_reads_preserve_accepted_preferences` checks the next build and

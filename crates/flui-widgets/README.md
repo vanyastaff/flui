@@ -24,9 +24,6 @@ Container::new()
 # ;
 ```
 
-See [`examples/widgets_gallery.rs`](../../examples/widgets_gallery.rs) for a
-runnable demo (`cargo run -p flui --example widgets_gallery`).
-
 ## What's in the box
 
 | Family | Widgets |
@@ -68,7 +65,7 @@ schedules the same in-place update.
 
 ## Status
 
-This is the [Core.1 vertical slice](../../docs/ROADMAP.md) — it proves the whole
+The catalog is a vertical slice — it proves the whole
 `build → layout → paint → composite → reconcile` pipeline on live widget code,
 including parent-data layout (`Flexible`/`Expanded`/`Positioned`), scrolling
 (`ListView`/`SingleChildScrollView` over slivers), and animation

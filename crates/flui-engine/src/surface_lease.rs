@@ -183,12 +183,8 @@ pub(crate) fn probe_target(target: &Arc<dyn WindowTarget>) -> EngineResult<()> {
 
 impl<S> Drop for SurfaceLease<S> {
     fn drop(&mut self) {
-        // Both live-smoke harnesses assert this line: `cargo xtask
-        // live-smoke` (X11) and `cargo xtask live-smoke --wayland` both check
-        // `tools/live-smoke/src/self_close.rs`'s
-        // `assert_surface_released_before_window_close`, which requires
-        // this line to precede the winit backend's "Quitting event loop"
-        // line, on BOTH close routes (compositor/`WM_DELETE` and
+        // Harnesses assert this line: it must precede the winit backend's
+        // "Quitting event loop" line, on BOTH close routes (compositor/`WM_DELETE` and
         // `FLUI_SELF_CLOSE_ROUTE=programmatic`). It is the only executed
         // witness that the surface — and this lease's `Arc` clone of the
         // target — was actually released rather than orphaned by the
@@ -198,8 +194,7 @@ impl<S> Drop for SurfaceLease<S> {
         // `debug`, not `trace`: a lease is released far less often than a
         // surface is acquired (once per window life, not once per frame),
         // so it does not need `surface_acquired`'s per-frame trace budget —
-        // both live-smoke harnesses filter `flui.gpu` broadly enough to
-        // capture it either way.
+        // a harness filtering `flui.gpu` broadly captures it either way.
         tracing::debug!(
             target: "flui.gpu",
             event = "surface_released",

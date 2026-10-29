@@ -1,10 +1,10 @@
-[← Getting Started](getting-started.md) · [Back to README](../README.md) · [Foundations](FOUNDATIONS.md) · [Roadmap](ROADMAP.md) · [Crates →](crates.md)
+[← Getting Started](getting-started.md) · [Back to README](../README.md) · [Crates →](crates.md)
 
 # Architecture
 
 FLUI combines two patterns: a **Layered Modular Workspace** (workspace structure) and a **tree pipeline** (runtime data flow: View → Element → RenderObject → Layer, with Semantics alongside). The first tells you *what may depend on what*; the second tells you *how a frame is built, laid out, and painted*.
 
-For the deep, rule-by-rule guide (anti-patterns, code examples, dependency rules), read [`FOUNDATIONS.md`](FOUNDATIONS.md). This page is the high-level orientation.
+The decision behind each part is an ADR in [`adr/`](adr/), and each crate's `ARCHITECTURE.md` holds its invariants. This page is the high-level orientation.
 
 Input observation belongs to the resolved presentation. Before Keyboard or IME
 dispatch, the runtime delivers that presentation's frozen measured pointer
@@ -14,7 +14,7 @@ input round ([ADR-0163](adr/ADR-0163-presentation-owned-pointer-resampling.md)).
 Keyboard keeps its admitted active presentation through callback focus changes;
 layout and paint retain their ordinary frame transaction.
 
-This page describes the architecture as it is. The target architecture and its decisions (ADR-0081 to ADR-0098) are in [`design/README.md`](../design/README.md); some of those ADRs are accepted in part and the rest are Proposed, and each ADR's `Status` line says which.
+This page describes the architecture as it is. The decisions that set the target (ADR-0081 to ADR-0098) are in [`adr/`](adr/); some of those ADRs are accepted in part and the rest are Proposed, and each ADR's `Status` line says which.
 
 ## Layered Modular Workspace
 
@@ -39,19 +39,19 @@ Layer 5  ── flui-view [K]
 Layer 4  ── flui-rendering [R], flui-objects [R], flui-engine [R]
                 │   (objects → rendering, never the reverse)
 Layer 3  ── flui-layer [R], flui-semantics [S], flui-animation [S],
-                │  flui-platform [H]
-                │  (flui-platform = OS backends; only flui-app depends on it)
+                │  flui-native [H]
+                │  (flui-native = the core host; only flui-app depends on it)
 Layer 2  ── flui-log [S], flui-scheduler [S], flui-painting [S],
                 │  flui-interaction [S], flui-assets [S]
                 │  (flui-log = the subscriber backend; flui-app depends on
                 │   it, and its allowed-dependents also admit flui-cli and
                 │   the facade)
 Layer 1  ── flui-foundation [V], flui-macros [V],
-                │  flui-platform-api [C], flui-protocol [C]
+                │  flui-platform [C], flui-protocol [C]
                 │   (flui-foundation = framework primitives:
                 │    ChangeNotifier, Id system, Key, diagnostics, and the
                 │    plain-f64 geometry values in flui_foundation::geometry;
-                │    flui-platform-api = platform contracts, no OS code;
+                │    flui-platform = platform contracts, no OS code;
                 │    interaction → platform-api, platform → platform-api;
                 │    flui-protocol = semantics and agent-protocol vocabulary,
                 │    semantics → protocol)
@@ -60,7 +60,7 @@ Layer 0  ── (empty: each value type lives with its owner, ADR-0098)
 
 **This is not enforced by convention.** Each crate declares its layer in its manifest (`[package.metadata.flui] layer`, named in the root `[workspace.metadata.flui] layers`), and `cargo xtask workspace` (part of `cargo xtask checks` and the CI `checks` job) validates every **normal** and build Cargo edge against it: same layer or lower, and a lower tier or a smaller `order` in the same tier, never an example or tool, and every crate layered. Cargo rejects cycles itself. See [ADR-0041](adr/ADR-0041-workspace-topology-contract.md). Dev-dependencies may cross layers — a test fixture is not an architectural claim — except where the kind rule reads them ([ADR-0081](adr/ADR-0081-workspace-tiers-and-reach-facts.md) §3, [ADR-0088](adr/ADR-0088-official-packages-sdk-and-facade.md) §2): only applications name an official package (`tier-kind = "official"`: `flui-material`, `flui-cupertino`, `flui-devtools`, `flui-hot-reload`), in any dependency kind; any other crate that does lists the edge in its `edge-exceptions` (today only the facade), and one official package names another only through such an entry, so the two design systems name each other in no kind ([ADR-0028](adr/ADR-0028-design-system-decoupling-contract.md)).
 
-Note on value types: there is no value-types crate. Geometry (`Point`, `Offset`, `Size`, `Rect`, `Matrix4`, the device-grid types, `DevicePixelRatio`) lives in `flui_foundation::geometry`, a leaf crate with no internal-crate runtime deps; paint, styling and typography values in `flui-painting`; constraints in `flui-rendering`; gesture details in `flui-interaction`; and platform values in `flui-platform-api`. Logical lengths are plain `f64`, with no unit wrapper ([ADR-0098](adr/ADR-0098-owned-f64-geometry-values.md)).
+Note on value types: there is no value-types crate. Geometry (`Point`, `Offset`, `Size`, `Rect`, `Matrix4`, the device-grid types, `DevicePixelRatio`) lives in `flui_foundation::geometry`, a leaf crate with no internal-crate runtime deps; paint, styling and typography values in `flui-painting`; constraints in `flui-rendering`; gesture details in `flui-interaction`; and platform values in `flui-platform`. Logical lengths are plain `f64`, with no unit wrapper ([ADR-0098](adr/ADR-0098-owned-f64-geometry-values.md)).
 
 See [`crates.md`](crates.md) for the full inventory and current status of each crate.
 
@@ -129,43 +129,51 @@ self.nodes.get(id.get() - 1);
 
 ## Platform Abstraction
 
-`flui-platform` exposes a unified `Platform` trait with native and headless backends:
+`flui-native`, the core host, exposes one `Platform` trait over its native and headless hosts:
 
 ```rust
-pub trait Platform: Send + Sync + 'static {
+// Sealed: `HostPlatform<H>` over a host's table is its one implementation.
+pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     // Core
     fn background_executor(&self) -> Arc<dyn PlatformExecutor>;
 
     // Lifecycle
-    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> Result<(), PlatformError>;
+    // The handler hears and answers what the platform has for the application:
+    // its bootstrap, the quit, a reopen, a session end, a notice, the exit
+    // policy and the wake deadline.
+    fn run(self: Box<Self>, handler: Rc<dyn AppHandler>) -> Result<(), PlatformError>;
     fn quit(&self);
 
     // Windows + displays
-    fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError>;
+    // The handler hears everything the window delivers, from its first event on.
+    fn open_window(
+        &self,
+        options: WindowOptions,
+        handler: Rc<dyn WindowHandler>,
+    ) -> Result<Rc<dyn HostWindow>, OpenWindowError>;
     fn active_window(&self) -> Option<WindowId>;
     fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError>;
 
     // Input
     fn clipboard(&self) -> Arc<dyn Clipboard>;
 
-    // Callbacks + metadata
-    fn on_quit(&self, callback: Box<dyn FnMut() + Send>);
-    fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>);
+    // Metadata
     fn name(&self) -> &'static str;
-    // ... plus optional methods for cursor, file pickers, app activation, etc.
+    // ... plus file pickers, app activation, exit re-evaluation, preferences and data dirs
 }
 
-// PlatformReadyCallback = Box<dyn FnOnce(OwnerPlatform) -> Result<(), BootstrapError>>
+// AppHandler, the core host's trait, implemented by flui-app and by code that drives a host directly: ready(OwnerPlatform),
+// quit_requested, reopen, session_end, host_notice, exit_policy (an ExitAnswer), wake_deadline (ADR-0254 §4).
 let platform = current_platform()?; // Result<Box<dyn Platform>, PlatformError>
 ```
 
-Backends: `WindowsPlatform` (Win32), `MacOSPlatform` (AppKit), `WebPlatform`, `AndroidPlatform`, `IOSPlatform` (UIKit), `HeadlessPlatform` (CI / tests), and `WinitPlatform` (the `winit-backend` feature), which is the Linux backend: with that feature on (as `flui-app` enables it) `current_platform()` returns it on Linux, and without it the call fails with `PlatformError::Init`. `LinuxPlatform` is an unimplemented placeholder whose constructor panics. The platform backends' types (`windows::*`, `objc2::*`/`objc2-app-kit::*`/`objc2-ui-kit::*`, `winit::*`) stay inside this crate. Three narrow Windows FFI sites live elsewhere: `flui-hot-reload`'s library loading (`LoadLibraryW`/`GetProcAddress`, `src/dynlib.rs`), `flui-cli`'s handle-inheritance call (`SetHandleInformation`, `src/proc.rs`), and `flui-devtools`' agent endpoint, which reads the current user's SID (`OpenProcessToken`/`GetTokenInformation`/`ConvertSidToStringSidW`, `src/agent/endpoint.rs`). The Apple backends both use the `objc2` binding family — macOS/AppKit and iOS/UIKit alike; the older `cocoa`/`objc` crates this backend used are gone (ADR-0071).
+Each host is a table (`flui_native::host::Host`: one type per position of the closed list, `Absent<F>` where a platform has none), and `HostPlatform<H>` is the one implementation of `Platform` over it (ADR-0151 §10). The crate is laid out by feature: `hosts/` (the tables), `owner/` (the owner thread and each platform's loop), `version/` (the OS version floors and the gates above them, ADR-0244), `storage/`, and one directory per feature of the closed list (`window`, `input`, `text`, `display`, `clipboard`, `drag`, `accessibility`, `haptics`, `preferences`, `lifecycle`), each its model beside one file per platform; `cargo xtask module-dag` checks which of them may name which. Hosts: `WindowsPlatform` (Win32), `MacOSPlatform` (AppKit), `WebPlatform`, the Android host (started over the Activity by `android_platform(app)`), `IOSPlatform` (UIKit), `HeadlessPlatform` (CI / tests), and `WinitPlatform` (the `winit-backend` feature), which is the Linux backend: with that feature on (as `flui-app` enables it) `current_platform()` returns it on Linux, and without it the call fails with `PlatformError::Init`. The native Linux host (Wayland and X11) replaces winit later (ADR-0151 section 11); the Linux code that already runs natively serves the winit host from the Linux files of its features: the displays (`crates/flui-native/src/display/linux/`), the login-manager and memory-pressure notices (`lifecycle/linux.rs`), the X11 window probe (`window/linux/x11.rs`) and AT-SPI (`accessibility/linux.rs`). The platform backends' types (`windows::*`, `objc2::*`/`objc2-app-kit::*`/`objc2-ui-kit::*`, `winit::*`) stay inside this crate: no public path names one (ADR-0151 §8, `cargo xtask api-closure` on every host target), a raw handle leaves through `raw-window-handle`, and an OS's extras are extensions of `HostWindow`. Three narrow Windows FFI sites live elsewhere: `flui-hot-reload`'s library loading (`LoadLibraryW`/`GetProcAddress`, `src/dynlib.rs`), `flui-cli`'s handle-inheritance call (`SetHandleInformation`, `src/proc.rs`), and `flui-devtools`' agent endpoint, which reads the current user's SID (`OpenProcessToken`/`GetTokenInformation`/`ConvertSidToStringSidW`, `src/agent/endpoint.rs`). The Apple backends both use the `objc2` binding family — macOS/AppKit and iOS/UIKit alike; the older `cocoa`/`objc` crates this backend used are gone (ADR-0071).
 
 Text shaping is **not** a `Platform` method — a platform text-system binding (`PlatformTextSystem`) is deliberately absent. `flui-painting` shapes text with Parley over a per-UI runtime `TextContext`: `TextPainter` measures a paragraph, paints the runs of the same layout and answers carets and selection from it ([ADR-0092](adr/ADR-0092-per-realm-text-over-parley.md)); `flui-engine` rasterizes the runs' glyphs through `flui-painting`'s `SwashRasterizer` into its own glyph atlas.
 
 ## Confinement of `unsafe`
 
-The workspace sets `unsafe_code = "warn"`; `flui-painting` and `flui-platform-api` forbid it outright, and `flui-platform` allows it for its OS bindings. Outside `flui-platform`, compiled production code uses `unsafe` at a few narrow sites: `flui-rendering`'s subtree arena, `flui-foundation`'s unchecked id constructor, `flui-log`'s subscriber backends, `flui-hot-reload`'s dynamic-library loading, `flui-cli`'s Windows std-handle inheritance call (`src/proc.rs`), and `flui-devtools`' Windows user-SID lookup for its agent endpoint (`src/agent/endpoint.rs`). `flui-engine` denies `unsafe` in its hand-written production code; its `*/generated.rs` bridges allow it for the included `wgsl_bindgen` output (its `unsafe impl` of `Pod` and `Zeroable`), and its test code has a fake window target and an allocation-counting `GlobalAlloc`; the `transmute` in `flui-cli`'s hot-reload template is source text emitted into a generated project, not code the CLI runs. Each `unsafe` block carries a `// SAFETY:` comment naming the invariant it relies on. The widget catalog, the design systems and application code are `unsafe`-free.
+The workspace sets `unsafe_code = "warn"`; `flui-painting` and `flui-platform` forbid it outright, and `flui-native` allows it for its OS bindings. Outside `flui-native`, compiled production code uses `unsafe` at a few narrow sites: `flui-rendering`'s subtree arena, `flui-foundation`'s unchecked id constructor, `flui-log`'s subscriber backends, `flui-hot-reload`'s dynamic-library loading, `flui-cli`'s Windows std-handle inheritance call (`src/proc.rs`), and `flui-devtools`' Windows user-SID lookup for its agent endpoint (`src/agent/endpoint.rs`). `flui-engine` denies `unsafe` in its hand-written production code; its `*/generated.rs` bridges allow it for the included `wgsl_bindgen` output (its `unsafe impl` of `Pod` and `Zeroable`), and its test code has a fake window target and an allocation-counting `GlobalAlloc`; the `transmute` in `flui-cli`'s hot-reload template is source text emitted into a generated project, not code the CLI runs. Each `unsafe` block carries a `// SAFETY:` comment naming the invariant it relies on. The widget catalog, the design systems and application code are `unsafe`-free.
 
 ## Logging and Errors
 
@@ -193,8 +201,7 @@ See [Hot Reload](hot-reload.md) for workflows, `ReloadStrategy`, and integration
 ## See Also
 
 - [Hot Reload](hot-reload.md) — two-layer dev model, plugin workflows
-- [Foundations](FOUNDATIONS.md) — architecture contract, target crate graph, full anti-pattern list
+- [ADRs](adr/) — the cross-crate decisions the code follows
 - [`AGENTS.md`](../AGENTS.md) — the current cross-tool rules
-- [Roadmap](ROADMAP.md) — construction phases from current to target
 - [Crates Map](crates.md) — per-layer crate inventory
 - [Contributing](../CONTRIBUTING.md) — workflow and conventions

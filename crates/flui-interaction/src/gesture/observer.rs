@@ -9,11 +9,11 @@ use std::{
     num::NonZeroU64,
     panic::{AssertUnwindSafe, catch_unwind},
     rc::{Rc, Weak},
-    sync::{Arc, Weak as SyncWeak},
+    sync::Arc,
 };
 
 use flui_foundation::{IdExhausted, IdMint, InputSequenceId, MonotonicClock};
-use flui_platform_api::{EventTime, PlatformWindow};
+use flui_platform::{EventTime, PlatformWindow};
 use smallvec::SmallVec;
 
 use crate::events::CancelReason;
@@ -394,7 +394,7 @@ pub(crate) struct ObserverHub {
     /// Observers replaced or removed during a pass, destroyed after the call
     /// in flight.
     outgoing: RefCell<Vec<Rc<dyn GestureObserver>>>,
-    wake: RefCell<Option<SyncWeak<dyn PlatformWindow>>>,
+    wake: RefCell<Option<Weak<dyn PlatformWindow>>>,
     /// The arena's clock, read when a verdict is committed.
     clock: Option<Arc<dyn MonotonicClock>>,
     /// The first failure of that clock, raised by the arena operation once
@@ -453,7 +453,7 @@ impl ObserverHub {
         self.queue.borrow_mut().push_back(observation);
     }
 
-    pub(crate) fn set_wake(&self, window: SyncWeak<dyn PlatformWindow>) {
+    pub(crate) fn set_wake(&self, window: Weak<dyn PlatformWindow>) {
         *self.wake.borrow_mut() = Some(window);
     }
 
@@ -550,7 +550,7 @@ impl ObserverHub {
     }
 
     fn request_wake(&self) {
-        let window = self.wake.borrow().as_ref().and_then(SyncWeak::upgrade);
+        let window = self.wake.borrow().as_ref().and_then(Weak::upgrade);
         if let Some(window) = window {
             let woke = catch_unwind(AssertUnwindSafe(|| window.request_redraw()));
             match woke {

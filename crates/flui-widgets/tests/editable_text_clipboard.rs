@@ -10,7 +10,7 @@ use std::rc::Rc;
 use flui_interaction::events::{Code, Key, KeyEvent, KeyState, Modifiers};
 use flui_interaction::focus::FocusNode;
 use flui_interaction::testing::input::KeyEventBuilder;
-use flui_platform_api::Clipboard as _;
+use flui_platform::Clipboard as _;
 use flui_widgets::{EditableText, TextEditingController};
 
 /// The platform's command modifier, as `DefaultFocusTraversal` binds it.
@@ -205,7 +205,7 @@ pub(crate) fn select_all_defers_to_an_active_composition_and_recovers_after_comm
         Rc::clone(&node),
     ));
     let _ = node.request_focus();
-    harness.dispatch_ime(&flui_platform_api::ImeEvent::Preedit {
+    harness.dispatch_ime(&flui_platform::ImeEvent::Preedit {
         text: "東京".to_owned(),
         cursor: Some(("東京".len(), "東京".len())),
     });
@@ -219,7 +219,7 @@ pub(crate) fn select_all_defers_to_an_active_composition_and_recovers_after_comm
     );
     assert_eq!(controller.selection(), before, "IME retains its selection");
     assert_eq!(controller.text(), "東京");
-    harness.dispatch_ime(&flui_platform_api::ImeEvent::Commit("東京".to_owned()));
+    harness.dispatch_ime(&flui_platform::ImeEvent::Commit("東京".to_owned()));
     assert!(!controller.is_composing());
     assert!(
         harness
@@ -244,7 +244,7 @@ pub(crate) fn paste_rechecks_focus_after_committing_composition() {
     );
     let _ = node.request_focus();
     harness.clipboard().write_text("paste".into());
-    harness.dispatch_ime(&flui_platform_api::ImeEvent::Preedit {
+    harness.dispatch_ime(&flui_platform::ImeEvent::Preedit {
         text: "composition".into(),
         cursor: None,
     });

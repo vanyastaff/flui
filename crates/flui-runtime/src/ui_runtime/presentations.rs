@@ -10,8 +10,6 @@ use flui_view::__runtime::GlobalKeyRegistryComposite;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 #[cfg(any(test, feature = "testing"))]
 use std::rc::Rc;
-#[cfg(test)]
-use std::sync::Arc;
 
 impl UiRuntime {
     pub(crate) fn presentation_ids(&self) -> impl Iterator<Item = PresentationId> + '_ {
@@ -148,7 +146,7 @@ impl UiRuntime {
     ///
     /// `window` becomes this presentation's own native window (cursor,
     /// haptics, redraw-poke — see `PresentationState::new`'s wiring).
-    /// Its pipeline is seeded with `window.scale_factor()` before
+    /// Its pipeline is seeded with the scale of the window's snapshot before
     /// construction — the same DPR-before-first-frame ordering
     /// the UI runtime's constructor uses for its own primary presentation
     /// (there, the caller reads the window's scale factor and passes it in
@@ -157,7 +155,7 @@ impl UiRuntime {
     /// remember to). Without this, a non-primary presentation's
     /// `RenderView` and first frame would disagree with its OWN window's
     /// actual scale — silently defaulting to `1.0` regardless of what
-    /// `window.scale_factor()` actually reports.
+    /// the window's snapshot actually reports.
     #[must_use]
     pub fn assemble_presentation(
         &self,
@@ -186,7 +184,7 @@ impl UiRuntime {
     pub fn install_presentation(&mut self, presentation: PresentationState) -> PresentationId {
         let presentation_id = presentation.id();
         let snapshot = self.preferences.borrow().clone();
-        let unknown = flui_platform_api::SystemPreferences::default();
+        let unknown = flui_platform::SystemPreferences::default();
         presentation.set_motion_override(self.motion_override.get());
         presentation.set_error_view_builder(self.error_view_builder.get());
         super::preferences::publish(
@@ -309,8 +307,8 @@ impl UiRuntime {
     /// forest membership, never registry routing, can still use it.
     #[cfg(test)]
     pub(crate) fn install_second_presentation_for_test(&mut self) -> PresentationId {
-        let window: Arc<dyn flui_platform_api::PlatformWindow> =
-            Arc::new(crate::testing::TestWindow::new().focused(false));
+        let window: Rc<dyn flui_platform::PlatformWindow> =
+            Rc::new(crate::testing::TestWindow::new().focused(false));
         let presentation = self.assemble_presentation(window);
         self.install_presentation(presentation)
     }
@@ -803,14 +801,14 @@ impl UiRuntime {
 
 /// One OS drag session to start, with the drag source of the window it starts in.
 pub(crate) struct OsDragEntry {
-    source: Option<std::sync::Arc<dyn flui_platform_api::drag::PlatformDragSource>>,
+    source: Option<std::sync::Arc<dyn flui_platform::drag::PlatformDragSource>>,
     pending: flui_interaction::drag::PendingOsDrag,
 }
 
 /// A drag whose OS session could not start, to send back to its window.
 pub(crate) type OsDragRefusal = (
-    flui_platform_api::drag::DragSessionKey,
-    flui_platform_api::drag::DragError,
+    flui_platform::drag::DragSessionKey,
+    flui_platform::drag::DragError,
 );
 
 /// Start every one of `entries`, with the runtime released, so the OS loop a
@@ -829,7 +827,11 @@ pub(crate) fn start_os_drags(
             Ok(Ok(())) => {}
             Ok(Err(error)) => refused.push((key, error)),
             Err(failure) => {
-                refused.push((key, flui_platform_api::drag::DragError::Unavailable));
+                // The start never answered: the drag goes back to its window,
+                // and a later one may start.
+                let not_now =
+                    flui_platform::Unsupported::new(flui_platform::UnsupportedReason::Unavailable);
+                refused.push((key, not_now.into()));
                 crate::lifecycle_state::preserve_first_lifecycle_panic(
                     first,
                     Some(failure),

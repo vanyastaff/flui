@@ -377,7 +377,7 @@ pub(crate) fn scrollable_drag_up_increases_scroll_offset() {
 }
 
 pub(crate) fn a_remaining_touch_continues_scroll_without_an_intermediate_fling() {
-    use flui_platform_api::{
+    use flui_platform::{
         EventTime,
         pointer::{
             PointerButton, PointerButtons, PointerEvent, PointerInfo, PointerKind, PointerMove,
@@ -948,6 +948,7 @@ pub(crate) fn retiring_scroll_curves_preserves_newer_reentrant_commands() {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     thread_local! {
+        #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
         static REENTRY: RefCell<Option<(ScrollController, bool)>> = const { RefCell::new(None) };
     }
     struct ReentrantCurve(Arc<AtomicUsize>);
@@ -1324,7 +1325,7 @@ fn phased_scroll(
     .with_device(DeviceId::try_from(device).expect("actual source"));
     let mut event = ScrollEvent::new(
         pointer,
-        flui_platform_api::EventTime::from_nanos(0),
+        flui_platform::EventTime::from_nanos(0),
         PointerPosition::try_new(flui_foundation::geometry::Point::new(150.0, y))
             .expect("finite focal point"),
         ScrollDelta::try_new(ScrollUnit::Pixels, 0.0, dy).expect("finite scroll"),
@@ -1439,7 +1440,7 @@ pub(crate) fn scroll_latches_are_source_local_and_device_removal_releases() {
     scoped.dispatch_pointer_event(&PointerEvent::DeviceRemoved(PointerDeviceChange::new(
         DeviceId::try_from(1_u64).expect("device"),
         PointerKind::Mouse,
-        flui_platform_api::EventTime::from_nanos(0),
+        flui_platform::EventTime::from_nanos(0),
     )));
     scoped.dispatch_pointer_event(&phased_scroll(250.0, 30.0, Some(ScrollPhase::Changed), 1));
     assert_eq!(
@@ -1836,12 +1837,12 @@ pub(crate) fn replacing_a_scroll_position_cancels_its_contact_and_recovers() {
 
 fn dispatch_typed_wheel(
     laid: &LaidOut,
-    precision: flui_platform_api::pointer::ScrollPrecision,
+    precision: flui_platform::pointer::ScrollPrecision,
     dy: f64,
 ) {
     use flui_foundation::geometry::Point;
-    use flui_platform_api::EventTime;
-    use flui_platform_api::pointer::{
+    use flui_platform::EventTime;
+    use flui_platform::pointer::{
         PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition, ScrollDelta,
         ScrollEvent, ScrollUnit,
     };
@@ -1883,12 +1884,12 @@ impl flui_view::StatelessView for AuthoredWheelContent {
 
 fn dispatch_wheel_distance(
     laid: &LaidOut,
-    unit: flui_platform_api::pointer::ScrollUnit,
+    unit: flui_platform::pointer::ScrollUnit,
     x: f64,
     y: f64,
-    modifiers: flui_platform_api::keyboard::Modifiers,
+    modifiers: flui_platform::keyboard::Modifiers,
 ) {
-    use flui_platform_api::pointer::{
+    use flui_platform::pointer::{
         PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition, ScrollDelta,
         ScrollEvent,
     };
@@ -1898,7 +1899,7 @@ fn dispatch_wheel_distance(
                 PointerId::try_from(1_u64).expect("pointer"),
                 PointerKind::Mouse,
             ),
-            flui_platform_api::EventTime::from_nanos(1),
+            flui_platform::EventTime::from_nanos(1),
             PointerPosition::try_new(flui_foundation::geometry::Point::new(150.0, 100.0))
                 .expect("point"),
             ScrollDelta::try_new(unit, x, y).expect("finite wheel distance"),
@@ -1910,9 +1911,7 @@ fn dispatch_wheel_distance(
 pub(crate) fn wheel_policy_resolves_authored_axes_and_provider_replacement() {
     use flui_foundation::geometry::Axis;
     use flui_interaction::WheelPreferencesSource;
-    use flui_platform_api::{
-        WheelPreferences, WheelStep, keyboard::Modifiers, pointer::ScrollUnit,
-    };
+    use flui_platform::{WheelPreferences, WheelStep, keyboard::Modifiers, pointer::ScrollUnit};
     use flui_widgets::WheelScrollDistances;
 
     for axis in [Axis::Vertical, Axis::Horizontal] {
@@ -2076,9 +2075,7 @@ pub(crate) fn wheel_policy_resolves_authored_axes_and_provider_replacement() {
 pub(crate) fn wheel_distances_refuse_overflow_and_the_next_packet_recovers() {
     use flui_foundation::geometry::Axis;
     use flui_interaction::WheelPreferencesSource;
-    use flui_platform_api::{
-        WheelPreferences, WheelStep, keyboard::Modifiers, pointer::ScrollUnit,
-    };
+    use flui_platform::{WheelPreferences, WheelStep, keyboard::Modifiers, pointer::ScrollUnit};
     use flui_widgets::{InvalidWheelScrollDistance, WheelScrollDistances};
 
     for invalid in [0.0, -0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
@@ -2164,7 +2161,7 @@ pub(crate) fn wheel_distances_refuse_overflow_and_the_next_packet_recovers() {
 }
 
 pub(crate) fn notched_wheel_accumulates_distance_and_eases_out_in_150ms() {
-    use flui_platform_api::pointer::ScrollPrecision::Notched;
+    use flui_platform::pointer::ScrollPrecision::Notched;
     let scroll = ScrollController::new();
     let vsync = Vsync::new();
     let mut laid = crate::common::lay_out_animated(
@@ -2214,7 +2211,7 @@ pub(crate) fn notched_wheel_accumulates_distance_and_eases_out_in_150ms() {
 /// fling coasts catches it instead: the fling stops and the content sees no
 /// tap (ADR-0208 rule 4).
 pub(crate) fn a_click_during_wheel_easing_taps_and_a_press_on_a_fling_catches_it() {
-    use flui_platform_api::pointer::ScrollPrecision::Notched;
+    use flui_platform::pointer::ScrollPrecision::Notched;
     use flui_widgets::GestureDetector;
     let scroll = ScrollController::new();
     let vsync = Vsync::new();
@@ -2269,7 +2266,7 @@ pub(crate) fn a_click_during_wheel_easing_taps_and_a_press_on_a_fling_catches_it
 }
 
 pub(crate) fn a_notched_wheel_run_migrates_with_its_accepted_destination() {
-    use flui_platform_api::pointer::ScrollPrecision::Notched;
+    use flui_platform::pointer::ScrollPrecision::Notched;
     let scroll = ScrollController::new();
     let old = Vsync::new();
     let next = Vsync::new();
@@ -2304,7 +2301,7 @@ pub(crate) fn a_notched_wheel_run_migrates_with_its_accepted_destination() {
 }
 
 pub(crate) fn precise_and_unknown_wheels_interrupt_synthetic_motion_once() {
-    use flui_platform_api::pointer::ScrollPrecision::{Notched, Precise, Unknown};
+    use flui_platform::pointer::ScrollPrecision::{Notched, Precise, Unknown};
     for precision in [Precise, Unknown] {
         let scroll = ScrollController::new();
         let vsync = Vsync::new();
@@ -2349,7 +2346,7 @@ pub(crate) fn precise_and_unknown_wheels_interrupt_synthetic_motion_once() {
 }
 
 pub(crate) fn replacing_or_unmounting_a_scrollable_retires_its_notched_motion() {
-    use flui_platform_api::pointer::ScrollPrecision::Notched;
+    use flui_platform::pointer::ScrollPrecision::Notched;
     let old = ScrollController::new();
     let new = ScrollController::new();
     let vsync = Vsync::new();
@@ -2394,7 +2391,7 @@ pub(crate) fn replacing_or_unmounting_a_scrollable_retires_its_notched_motion() 
 }
 
 pub(crate) fn dragging_interrupts_notched_motion_and_windows_progress_independently() {
-    use flui_platform_api::pointer::ScrollPrecision::Notched;
+    use flui_platform::pointer::ScrollPrecision::Notched;
     let scroll = ScrollController::new();
     let other = ScrollController::new();
     let vsync = Vsync::new();
@@ -3109,6 +3106,7 @@ pub(crate) fn a_rebuilt_run_keeps_the_physics_its_release_started_with() {
 struct JumpingPhysics;
 
 thread_local! {
+    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static JUMP: std::cell::RefCell<Option<(ScrollController, f64)>> =
         const { std::cell::RefCell::new(None) };
 }
@@ -3508,7 +3506,7 @@ pub(crate) fn nested_fling_hands_remaining_velocity_to_matching_parent_axes() {
 
 pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ratio() {
     use flui_animation::Simulation;
-    use flui_platform_api::{
+    use flui_platform::{
         EventTime, PlatformInput,
         pointer::{
             PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind,
@@ -4444,6 +4442,7 @@ pub(crate) fn show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers
     };
     use std::cell::RefCell;
     thread_local! {
+        #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
         static PENDING_REVEAL: RefCell<Option<SemanticsActionInvocation>> = const { RefCell::new(None) };
     }
     struct RestoreScope(Option<SemanticsActionInvocation>);
@@ -4513,6 +4512,7 @@ pub(crate) fn show_on_screen_sibling_reentry_delivers_last_target_without_stale_
     use std::cell::RefCell;
     use std::sync::atomic::{AtomicUsize, Ordering};
     thread_local! {
+        #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
         static PENDING_SIBLING: RefCell<Option<SemanticsActionInvocation>> = const { RefCell::new(None) };
     }
     struct RestoreScope(Option<SemanticsActionInvocation>);

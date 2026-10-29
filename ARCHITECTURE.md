@@ -58,9 +58,7 @@ because each corrected a real flaw in the one before it:
    made `pub` and exported from `flui-widgets` so `flui_material::TextField`
    reuses the same type instead of declaring its own copy.
 
-The codebase's every real caller of `flui::material::TextField`
-(`examples/material_demo`, `examples/workload_probe.rs`, and `examples/todo.rs` until it moved
-to the widgets catalog)
+Every real caller of `flui::material::TextField` in the codebase
 already imported it explicitly under all three revisions and needed no
 changes across any of them — every fix here was about what an *unqualified*
 `TextField` resolves to for code that hasn't been written yet, never about
@@ -133,4 +131,5 @@ and [package command](https://doc.rust-lang.org/cargo/commands/cargo-package.htm
 are the source contracts. Fixture tests inspect actual tiny archives and preserve
 a separate regression for fresh dev-cycle resolution failure. Closure validity
 is not an assertion that every selected version can already be packaged against
-a registry. See [the beta release record](docs/BETA.md) for remaining blockers.
+a registry. The [release requirements](docs/plans/specs/release/requirements.md) cover the
+remaining distribution work.

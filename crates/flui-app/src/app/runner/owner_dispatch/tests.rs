@@ -1,6 +1,8 @@
 //! Unit tests for `owner_dispatch.rs`, declared there as its child module `owner_dispatch_tests`
 //! through `#[path]`, so `super::*` still reaches the dispatcher's private items.
 
+use crate::app::runner::window_routes::{OpenRouted as _, OwnerOpenRouted as _};
+use flui_testing::window_commands::AdmitAndApply as _;
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -12,7 +14,7 @@ use flui_foundation::geometry::Offset;
 use flui_interaction::HitTestResult;
 use flui_interaction::events::{PointerKind, make_down_event};
 use flui_painting::TextSizing;
-use flui_platform::traits::{PlatformInput, PlatformWindow};
+use flui_platform::{PlatformInput, PlatformWindow};
 
 use super::super::host::{
     OwnerHostClearGuard, install_exit_policy_hook, install_owner_platform, with_owner_platform,
@@ -56,7 +58,7 @@ struct ReentrantIdentityWindow {
 }
 
 impl PlatformWindow for ReentrantIdentityWindow {
-    fn id(&self) -> flui_platform::traits::WindowId {
+    fn id(&self) -> flui_platform::WindowId {
         self.queried
             .store(true, std::sync::atomic::Ordering::SeqCst);
         assert!(matches!(
@@ -67,55 +69,62 @@ impl PlatformWindow for ReentrantIdentityWindow {
         self.inner.id()
     }
 
-    fn physical_size(&self) -> flui_foundation::geometry::Size<i32> {
-        self.inner.physical_size()
-    }
-    fn logical_size(&self) -> flui_foundation::geometry::Size<f64> {
-        self.inner.logical_size()
-    }
-    fn scale_factor(&self) -> f64 {
-        if let Some(on_scale) = &self.on_scale {
-            on_scale();
-        }
-        self.inner.scale_factor()
-    }
     fn request_redraw(&self) {
         self.inner.request_redraw();
     }
-    fn is_focused(&self) -> bool {
-        self.inner.is_focused()
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        self.inner.redraw_requester()
     }
-    fn is_visible(&self) -> bool {
-        self.inner.is_visible()
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        self.inner.surface_target()
     }
     fn set_cursor(
         &self,
-        cursor: flui_platform_api::CursorIcon,
-    ) -> Result<(), flui_platform_api::CursorError> {
+        cursor: flui_platform::CursorIcon,
+    ) -> Result<(), flui_platform::CursorError> {
         self.inner.set_cursor(cursor)
     }
-    fn state(&self) -> flui_platform_api::WindowState {
-        let size = self.logical_size();
-        flui_platform_api::WindowState::new(
-            flui_platform_api::WindowGeometry::new(None, size),
-            size,
-        )
+    fn set_frame_rate_hint(
+        &self,
+        hint: flui_platform::FrameRateHint,
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.inner.set_frame_rate_hint(hint)
     }
-
-    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
-        flui_platform_api::WindowCapabilities::NONE
+    fn set_input_regions(
+        &self,
+        regions: &[flui_platform::input_regions::InputRegion],
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.inner.set_input_regions(regions)
+    }
+    /// Assembly reads the window's scale from here: the hook runs inside it.
+    fn state(&self) -> flui_platform::WindowState {
+        if let Some(on_scale) = &self.on_scale {
+            on_scale();
+        }
+        self.inner.state()
     }
 
     fn apply(
         &self,
-        command: flui_platform_api::WindowCommand,
-    ) -> Result<(), flui_platform_api::WindowCommandError> {
-        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        command: flui_platform::AdmittedCommand,
+    ) -> Result<(), flui_platform::ApplyError> {
+        command.against(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+    fn text_input(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformTextInput>> {
+        None
+    }
+
+    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformHaptics>> {
+        None
+    }
+
+    fn system_chrome(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformSystemChrome>> {
+        None
+    }
+    fn drag_source(&self) -> Option<std::sync::Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        None
     }
 }
 
@@ -140,7 +149,7 @@ fn native_identity_is_observed_before_registry_publication() {
         };
         drop(uninstalled);
         let queried = Arc::new(AtomicBool::new(false));
-        let window: Arc<dyn PlatformWindow> = Arc::new(ReentrantIdentityWindow {
+        let window: Rc<dyn PlatformWindow> = Rc::new(ReentrantIdentityWindow {
             inner: crate::app::window_test_support::TestWindow::new().with_id(100),
             probe,
             queried: Arc::clone(&queried),
@@ -175,7 +184,7 @@ fn native_identity_is_observed_before_registry_publication() {
 /// publication use the complete production phase called by `bootstrap_web`.
 #[cfg(not(target_os = "ios"))]
 fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
-    use flui_platform_api::WindowExecutionState;
+    use flui_platform::WindowExecutionState;
     use flui_runtime::ui_runtime::RuntimeHostServices;
     use std::sync::atomic::AtomicBool;
 
@@ -215,30 +224,30 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
         ),
     ] {
         let _clear = OwnerHostClearGuard::arm();
-        flui_platform::headless_platform()
-            .run(Box::new(move |owner| {
-                let shared = owner.shared();
+        flui_native::headless_platform()
+            .run(crate::app::runner::app_handler(move |owner| {
                 install_owner_platform(owner)?;
-                let window: Arc<dyn PlatformWindow> = with_owner_platform(|owner| {
-                    owner.open_window(flui_platform::WindowOptions::default())
+                let host = with_owner_platform(|owner| {
+                    owner.open_routed(flui_platform::WindowOptions::default())
                 })
                 .expect("installed owner")
-                .and_then(flui_platform::WindowOpen::try_ready)
+                .and_then(flui_native::WindowOpen::try_ready)
                 .expect("headless native window");
-                let native = window
+                let window: Rc<dyn PlatformWindow> = host.clone();
+                let native = host
                     .as_any()
-                    .downcast_ref::<flui_platform::MockWindow>()
+                    .downcast_ref::<flui_native::MockWindow>()
                     .expect("headless window");
                 if matches!(change, NativeChange::InitiallyUnfocused) {
                     native.simulate_focus(false);
                 }
                 let runtime = crate::app::ui_runtime::UiRuntime::new(
-                    Arc::clone(&window),
+                    Rc::clone(&window),
                     1.0,
                     RuntimeHostServices::new(
                         Arc::new(|| {}),
                         Arc::new(AtomicBool::new(false)),
-                        Arc::new(flui_platform_api::InMemoryClipboard::new()),
+                        Arc::new(flui_platform::InMemoryClipboard::new()),
                         &flui_painting::FontCollection::new(),
                         flui_scheduler::ClockSource::Platform,
                     ),
@@ -251,16 +260,16 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
                 // before the application's subscriptions and therefore have no callback.
                 match change {
                     NativeChange::FocusLost => native.simulate_focus(false),
-                    NativeChange::Hidden => native.simulate_visibility(false),
+                    NativeChange::Hidden => native.simulate_occlusion(true),
                     NativeChange::Suspended => {
                         native.simulate_execution_state(WindowExecutionState::Suspended);
                     }
                     NativeChange::InitiallyUnfocused | NativeChange::Unchanged => {}
                 }
-                let installation = prepare_platform_ui_runtime(runtime, Arc::clone(&window));
+                let installation = prepare_platform_ui_runtime(runtime, Rc::clone(&window));
                 let dispatcher = installation.dispatcher();
                 installation
-                    .submit_web(test_resize_driver(|_| {}), &shared)
+                    .submit_web(test_resize_driver(|_| {}))
                     .expect("publish initialization");
                 assert_eq!(
                     observe_runtime(dispatcher, |runtime| runtime.scheduler().lifecycle_state()),
@@ -276,7 +285,7 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
                         "an unfocused visible running canvas remains eligible for rendering"
                     );
                 }
-                native.simulate_visibility(false);
+                native.simulate_occlusion(true);
                 assert_eq!(
                     observe_runtime(dispatcher, |runtime| runtime.scheduler().lifecycle_state()),
                     if matches!(change, NativeChange::Suspended) {
@@ -290,7 +299,7 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
                     !observe_runtime(dispatcher, |runtime| runtime.scheduler().frames_enabled()),
                     "a hidden window stops rendering"
                 );
-                native.simulate_visibility(true);
+                native.simulate_occlusion(false);
                 assert_eq!(
                     observe_runtime(dispatcher, |runtime| runtime.scheduler().lifecycle_state()),
                     match change {
@@ -353,8 +362,8 @@ fn presentation_assembly_reentry_revalidates_its_authorizer() {
         let _clear = OwnerHostClearGuard::arm();
         let primary = install_test_ui_runtime();
         let sibling = keep_sibling.then(|| {
-            let window: Arc<dyn PlatformWindow> =
-                Arc::new(crate::app::window_test_support::TestWindow::new().with_id(99));
+            let window: Rc<dyn PlatformWindow> =
+                Rc::new(crate::app::window_test_support::TestWindow::new().with_id(99));
             install_presentation_alongside(primary, window).expect("initial sibling installs")
         });
         let uninstalled = crate::app::ui_runtime::UiRuntime::for_test();
@@ -365,7 +374,7 @@ fn presentation_assembly_reentry_revalidates_its_authorizer() {
         drop(uninstalled);
         let assembled = Arc::new(AtomicBool::new(false));
         let observed = Arc::clone(&assembled);
-        let window: Arc<dyn PlatformWindow> = Arc::new(ReentrantIdentityWindow {
+        let window: Rc<dyn PlatformWindow> = Rc::new(ReentrantIdentityWindow {
             inner: crate::app::window_test_support::TestWindow::new().with_id(100),
             probe,
             queried: Arc::new(AtomicBool::new(false)),
@@ -383,7 +392,7 @@ fn presentation_assembly_reentry_revalidates_its_authorizer() {
                 }
             })),
         });
-        let result = install_presentation_alongside(primary, Arc::clone(&window));
+        let result = install_presentation_alongside(primary, Rc::clone(&window));
         assert!(
             assembled.load(Ordering::SeqCst),
             "assembly called the window"
@@ -433,8 +442,16 @@ fn down_input(offset: f64) -> PlatformInput {
     )
 }
 
-fn test_window() -> std::sync::Arc<dyn flui_platform::traits::PlatformWindow> {
+fn test_window() -> Rc<dyn flui_platform::PlatformWindow> {
     crate::app::window_test_support::headless_test_window()
+}
+
+/// A headless window as the host hands it out, and the same window as the
+/// runner holds it: the first reaches the headless window's own controls.
+fn test_host_window() -> (Rc<dyn flui_native::HostWindow>, Rc<dyn PlatformWindow>) {
+    let host = crate::app::window_test_support::headless_test_host_window();
+    let window: Rc<dyn PlatformWindow> = host.clone();
+    (host, window)
 }
 
 fn install_test_ui_runtime() -> PresentationDispatcher {
@@ -513,11 +530,15 @@ fn background_owner_pump_drains_before_polling_without_a_frame() {
 #[cfg(not(target_os = "ios"))]
 fn explicit_platform_quit_detaches_every_installed_ui_runtime() {
     let _clear = OwnerHostClearGuard::arm();
-    let platform = flui_platform::HeadlessPlatform::new();
+    let platform = flui_native::HeadlessPlatform::new();
     let reevaluation = platform.exit_reevaluation();
-    let platform: Box<dyn flui_platform::Platform> = Box::new(platform);
+    let platform: Box<dyn flui_native::Platform> = Box::new(platform);
+    let installed = Rc::new(RefCell::new(Vec::new()));
+    let kept = Rc::clone(&installed);
+    // The quit the re-evaluation decides is a report: the handler hears it
+    // once the bootstrap returned.
     platform
-        .run(Box::new(move |owner| {
+        .run(crate::app::runner::app_handler(move |owner| {
             let shared = owner.shared();
             install_owner_platform(owner).expect("install owner wake transport");
             let primary = install_test_ui_runtime();
@@ -533,23 +554,24 @@ fn explicit_platform_quit_detaches_every_installed_ui_runtime() {
                     .expect("resume ui_runtime");
             }
             super::super::host::install_platform_quit_hook();
-            shared.set_exit_policy_hook(Box::new(|| true));
+            super::super::host::route_exit_policy(|| true);
             shared.request_exit_policy_reevaluation();
-            assert!(reevaluation.drive(), "registered on_quit callback ran");
-            for dispatcher in [primary, secondary] {
-                observe_runtime(dispatcher, |ui_runtime| {
-                    assert_eq!(
-                        ui_runtime.scheduler().lifecycle_state(),
-                        AppLifecycleState::Detached,
-                        "every ui_runtime must detach through the installed quit callback"
-                    );
-                    assert!(!ui_runtime.scheduler().frames_enabled());
-                });
-            }
-            teardown_platform_ui_runtime();
+            assert!(reevaluation.drive(), "the exit policy allowed the quit");
+            kept.borrow_mut().extend([primary, secondary]);
             Ok(())
         }))
         .expect("headless run");
+    for dispatcher in installed.take() {
+        observe_runtime(dispatcher, |ui_runtime| {
+            assert_eq!(
+                ui_runtime.scheduler().lifecycle_state(),
+                AppLifecycleState::Detached,
+                "every ui_runtime must detach through the routed quit"
+            );
+            assert!(!ui_runtime.scheduler().frames_enabled());
+        });
+    }
+    teardown_platform_ui_runtime();
 }
 
 /// Installing a UI runtime resolves the loop-scoped execution services
@@ -636,13 +658,13 @@ fn system_key_default_follows_the_ui_runtimes_decision() {
     use flui_interaction::events::{Code, Modifiers};
     use flui_interaction::testing::input::KeyEventBuilder;
 
-    let window = test_window();
+    let (host, window) = test_host_window();
     let dispatcher =
         install_platform_ui_runtime(crate::app::ui_runtime::UiRuntime::for_test(), &window);
     install_input_wiring(dispatcher, window.as_ref());
-    let native = window
+    let native = host
         .as_any()
-        .downcast_ref::<flui_platform::MockWindow>()
+        .downcast_ref::<flui_native::MockWindow>()
         .expect("headless test window");
     let alt_f4 = || {
         PlatformInput::Keyboard(
@@ -671,7 +693,7 @@ fn system_key_default_follows_the_ui_runtimes_decision() {
         Rc::clone(&delivered),
         Rc::clone(&in_turn),
     );
-    let turn_window = std::sync::Arc::clone(&window);
+    let turn_window = Rc::clone(&host);
     dispatch_platform_ui_runtime(
         dispatcher,
         RuntimeTask::TestCallback(Box::new(move |ui_runtime| {
@@ -683,7 +705,7 @@ fn system_key_default_follows_the_ui_runtimes_decision() {
             ));
             let native = turn_window
                 .as_any()
-                .downcast_ref::<flui_platform::MockWindow>()
+                .downcast_ref::<flui_native::MockWindow>()
                 .expect("headless test window");
             in_turn_result.set(Some((
                 native.inject_event(alt_f4()).default_prevented,
@@ -788,12 +810,12 @@ fn panic_restores_dispatch_host_for_next_event() {
 /// register` REPLACES on a matching id, silently dropping ui_runtime
 /// A's window mapping the moment UI runtime B's aliased-id window installs.
 fn install_two_test_ui_runtimes() -> (PresentationDispatcher, PresentationDispatcher) {
-    let platform = flui_platform::headless_platform();
-    let window_a: Arc<dyn PlatformWindow> = platform
-        .open_window(flui_platform::WindowOptions::default())
+    let platform = flui_native::headless_platform();
+    let window_a: Rc<dyn PlatformWindow> = platform
+        .open_routed(flui_platform::WindowOptions::default())
         .expect("headless platform should create window a");
-    let window_b: Arc<dyn PlatformWindow> = platform
-        .open_window(flui_platform::WindowOptions::default())
+    let window_b: Rc<dyn PlatformWindow> = platform
+        .open_routed(flui_platform::WindowOptions::default())
         .expect("headless platform should create window b");
     let dispatcher_a =
         install_platform_ui_runtime(crate::app::ui_runtime::UiRuntime::for_test(), &window_a);
@@ -884,7 +906,7 @@ fn native_keyboard_cannot_overtake_queued_window_changes_and_keys() {
 
     for posted in [false, true] {
         let _clear = OwnerHostClearGuard::arm();
-        let window = test_window();
+        let (host, window) = test_host_window();
         let runtime = crate::app::ui_runtime::UiRuntime::for_test();
         let trace = Rc::new(RefCell::new(Vec::new()));
         let key_trace = Rc::clone(&trace);
@@ -898,7 +920,7 @@ fn native_keyboard_cannot_overtake_queued_window_changes_and_keys() {
                 });
                 flui_interaction::KeyEventResult::Ignored
             }));
-        let mut installation = prepare_replacement_ui_runtime(runtime, Arc::clone(&window));
+        let mut installation = prepare_replacement_ui_runtime(runtime, Rc::clone(&window));
         let dispatcher = installation.dispatcher();
         install_input_wiring(dispatcher, window.as_ref());
         let resize_trace = Rc::clone(&trace);
@@ -943,9 +965,9 @@ fn native_keyboard_cannot_overtake_queued_window_changes_and_keys() {
         .expect("first callback");
         assert!(trace.borrow().is_empty());
         with_owner_callback(|_| {
-            let native = window
+            let native = host
                 .as_any()
-                .downcast_ref::<flui_platform::MockWindow>()
+                .downcast_ref::<flui_native::MockWindow>()
                 .expect("native mock");
             let result = native.inject_event(PlatformInput::Keyboard(
                 KeyEventBuilder::new(Code::F5).build(),
@@ -1017,15 +1039,15 @@ fn install_ui_runtime_a_with_driver(
     use std::{cell::Cell, rc::Rc};
 
     let clear_guard = OwnerHostClearGuard::arm();
-    let platform = flui_platform::headless_platform();
+    let platform = flui_native::headless_platform();
     let dispatcher_a_slot: Rc<Cell<Option<PresentationDispatcher>>> = Rc::new(Cell::new(None));
     let dispatcher_a_slot_for_on_ready = Rc::clone(&dispatcher_a_slot);
-    let ready = platform.run(Box::new(move |owner| {
+    let ready = platform.run(crate::app::runner::app_handler(move |owner| {
         install_owner_platform(owner).expect("install owner wake transport");
-        let window_a: Arc<dyn PlatformWindow> =
-            with_owner_platform(|owner| owner.open_window(flui_platform::WindowOptions::default()))
+        let window_a: Rc<dyn PlatformWindow> =
+            with_owner_platform(|owner| owner.open_routed(flui_platform::WindowOptions::default()))
                 .expect("BUG: install_owner_platform just ran above")
-                .and_then(flui_platform::WindowOpen::try_ready)
+                .and_then(flui_native::WindowOpen::try_ready)
                 .expect("headless open_window is always Ready");
         let mut installation =
             prepare_replacement_ui_runtime(crate::app::ui_runtime::UiRuntime::for_test(), window_a);
@@ -1154,16 +1176,16 @@ fn first_build_text_sizing(runtime: &mut crate::app::ui_runtime::UiRuntime) -> T
 
 fn deferred_native_reads_preserve_accepted_preferences() {
     let _clear = OwnerHostClearGuard::arm();
-    flui_platform::headless_platform()
-        .run(Box::new(|owner| {
+    flui_native::headless_platform()
+        .run(crate::app::runner::app_handler(|owner| {
             install_owner_platform(owner)?;
             super::super::host::refresh_preferences_with(|_| {
-                Ok(flui_platform_api::SystemPreferences::default()
+                Ok(flui_platform::SystemPreferences::default()
                     .with_text_scale(2.0)
                     .expect("valid scale"))
             })?;
             super::super::host::refresh_preferences_with(|_| {
-                Err(flui_platform::PlatformError::PreferencesDeferred)
+                Err(flui_native::PlatformError::PreferencesDeferred)
             })
             .expect("deferred observation is not a new read failure");
             let mut runtime = super::super::host::build_ui_runtime(test_window(), 1.0)?;
@@ -1173,7 +1195,7 @@ fn deferred_native_reads_preserve_accepted_preferences() {
                 "deferred read replaced accepted preferences"
             );
             super::super::host::refresh_preferences_with(|_| {
-                Ok(flui_platform_api::SystemPreferences::default()
+                Ok(flui_platform::SystemPreferences::default()
                     .with_text_scale(3.0)
                     .expect("valid scale"))
             })?;
@@ -1191,7 +1213,7 @@ fn deferred_native_reads_preserve_accepted_preferences() {
 
 fn preferences_wake_each_isolated_window() {
     use super::super::frame_driver::{FrameDriver, TestFrameDriver};
-    use flui_platform::{HeadlessPlatform, Platform};
+    use flui_native::{HeadlessPlatform, Platform};
     use flui_view::prelude::*;
     use std::sync::atomic::Ordering;
 
@@ -1208,20 +1230,20 @@ fn preferences_wake_each_isolated_window() {
     let outputs = Rc::new(RefCell::new(Vec::new()));
     let installed = Rc::clone(&outputs);
     Box::new(HeadlessPlatform::new())
-        .run(Box::new(move |owner| {
+        .run(crate::app::runner::app_handler(move |owner| {
             install_owner_platform(owner)?;
             for id in [101, 102] {
                 let window = crate::app::window_test_support::TestWindow::new().with_id(id);
                 let redraws = window.redraw_calls_handle();
-                let window: Arc<dyn PlatformWindow> = Arc::new(window);
+                let window: Rc<dyn PlatformWindow> = Rc::new(window);
                 let observed = Rc::new(RefCell::new(Vec::new()));
-                let runtime = super::super::host::build_ui_runtime(Arc::clone(&window), 1.0)?;
+                let runtime = super::super::host::build_ui_runtime(Rc::clone(&window), 1.0)?;
                 runtime.attach_root_widget_with_size(
                     &Reader(Rc::clone(&observed)),
                     800.0,
                     600.0,
                 )?;
-                let mut installation = prepare_ui_runtime_alongside(runtime, Arc::clone(&window));
+                let mut installation = prepare_ui_runtime_alongside(runtime, Rc::clone(&window));
                 let dispatcher = installation.dispatcher();
                 let frame = installation
                     .frame_driver(FrameDriver::Test(TestFrameDriver {
@@ -1231,14 +1253,17 @@ fn preferences_wake_each_isolated_window() {
                         resize: None,
                     }))
                     .expect("driver");
-                APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(Arc::clone(&window)));
+                APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(Rc::clone(&window)));
                 installation
                     .submit()
                     .outcome()
                     .expect("publication")
                     .expect("installed");
-                dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame.binding))
-                    .expect("initial frame");
+                dispatch_platform_ui_runtime(
+                    dispatcher,
+                    RuntimeTask::Frame(frame.binding, flui_native::frame_request_now()),
+                )
+                .expect("initial frame");
                 installed
                     .borrow_mut()
                     .push((dispatcher, frame.binding, window, redraws, observed));
@@ -1252,7 +1277,7 @@ fn preferences_wake_each_isolated_window() {
     let host = APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
     host.logical()
         .update_preferences(
-            flui_platform_api::SystemPreferences::default()
+            flui_platform::SystemPreferences::default()
                 .with_text_scale(2.0)
                 .expect("scale"),
             host.effects(),
@@ -1263,8 +1288,11 @@ fn preferences_wake_each_isolated_window() {
             redraws.load(Ordering::SeqCst) > 0,
             "each isolated native window must be woken"
         );
-        dispatch_platform_ui_runtime(*dispatcher, RuntimeTask::Frame(*frame))
-            .expect("requested frame");
+        dispatch_platform_ui_runtime(
+            *dispatcher,
+            RuntimeTask::Frame(*frame, flui_native::frame_request_now()),
+        )
+        .expect("requested frame");
         assert_eq!(
             &*observed.borrow(),
             &[
@@ -1276,13 +1304,37 @@ fn preferences_wake_each_isolated_window() {
     teardown_platform_ui_runtime();
 }
 
-fn owner_wake_refreshes_installed_preference_consumers() {
+/// What a mounted reader of the system text sizing built with, one entry per build.
+type SizingLog = Rc<RefCell<Vec<TextSizing>>>;
+
+fn text_scale_preferences(scale: f64) -> flui_platform::SystemPreferences {
+    flui_platform::SystemPreferences::default()
+        .with_text_scale(scale)
+        .expect("valid scale")
+}
+
+fn linear_sizing(scale: f64) -> TextSizing {
+    TextSizing::linear(scale).expect("valid scale")
+}
+
+/// What a frame turn of an installed presentation needs.
+struct Presented {
+    dispatcher: PresentationDispatcher,
+    frame: super::super::frame_driver::FrameBinding,
+}
+
+/// Mounts a reader of the system text sizing over `runtime` and installs it as the
+/// primary presentation.
+fn present_sizing_reader(
+    runtime: crate::app::ui_runtime::UiRuntime,
+    window: Rc<dyn PlatformWindow>,
+    log: &SizingLog,
+) -> Presented {
     use super::super::frame_driver::{FrameDriver, TestFrameDriver};
-    use flui_platform::{HeadlessPlatform, Platform};
     use flui_view::prelude::*;
 
     #[derive(Clone, StatelessView)]
-    struct Reader(Rc<RefCell<Vec<TextSizing>>>);
+    struct Reader(SizingLog);
     impl StatelessView for Reader {
         fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
             let sizing = flui_widgets::MediaQuery::text_sizing_of(ctx).expect("preferences");
@@ -1290,82 +1342,417 @@ fn owner_wake_refreshes_installed_preference_consumers() {
             flui_widgets::Text::new("Preference")
         }
     }
-    let _clear = OwnerHostClearGuard::arm();
-    let platform = HeadlessPlatform::new();
-    let turns = platform.owner_turns();
-    let observed = Rc::new(RefCell::new(Vec::new()));
-    let reader = Rc::clone(&observed);
-    let frame = Rc::new(RefCell::new(None));
-    let output = Rc::clone(&frame);
-    Box::new(platform)
-        .run(Box::new(move |owner| {
-            install_owner_platform(owner)?;
-            let host = APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
-            host.logical().update_preferences(
-                flui_platform_api::SystemPreferences::default().with_text_scale(2.0)?,
-                host.effects(),
-            )?;
-            let runtime = super::super::host::build_ui_runtime(test_window(), 1.0)?;
-            runtime.attach_root_widget_with_size(&Reader(reader), 800.0, 600.0)?;
-            let mut installation = prepare_platform_ui_runtime(runtime, test_window());
-            let dispatcher = installation.dispatcher();
-            let frame = installation
-                .frame_driver(FrameDriver::Test(TestFrameDriver {
-                    installed: None,
-                    sink: flui_runtime::testing::ScriptedSink::always_presents(),
-                    prelude: None,
-                    resize: None,
-                }))
-                .expect("prepare driver");
-            installation
-                .submit()
-                .outcome()
-                .expect("idle publication")
-                .expect("installed");
-            output.replace(Some((dispatcher, frame.binding)));
-            Ok(())
+    runtime
+        .attach_root_widget_with_size(&Reader(Rc::clone(log)), 800.0, 600.0)
+        .expect("mount the reader");
+    let mut installation = prepare_platform_ui_runtime(runtime, window);
+    let dispatcher = installation.dispatcher();
+    let frame = installation
+        .frame_driver(FrameDriver::Test(TestFrameDriver {
+            installed: None,
+            sink: flui_runtime::testing::ScriptedSink::always_presents(),
+            prelude: None,
+            resize: None,
         }))
-        .expect("headless bootstrap");
-    let (dispatcher, frame) = frame.borrow().expect("installed frame");
-    dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame)).expect("initial frame");
-    assert_eq!(
-        &*observed.borrow(),
-        &[TextSizing::linear(2.0).expect("valid scale")]
+        .expect("prepare driver");
+    installation
+        .submit()
+        .outcome()
+        .expect("idle publication")
+        .expect("installed");
+    Presented {
+        dispatcher,
+        frame: frame.binding,
+    }
+}
+
+/// [`present_sizing_reader`] over the runtime the runner builds, seeded from the
+/// preferences the installed host has accepted so far.
+fn present_built_sizing_reader(
+    log: &SizingLog,
+) -> Result<Presented, super::super::host::HostServicesError> {
+    let window = test_window();
+    let runtime = super::super::host::build_ui_runtime(Rc::clone(&window), 1.0)?;
+    Ok(present_sizing_reader(runtime, window, log))
+}
+
+/// A headless owner whose preference source feeds a mounted text-sizing reader. The
+/// owner turns the source asks for run only when a row drives them.
+struct SourceDrivenReader {
+    source: flui_native::HeadlessPreferences,
+    turns: flui_native::HeadlessOwnerTurns,
+    presented: Presented,
+    log: SizingLog,
+}
+
+impl SourceDrivenReader {
+    /// Runs `platform`; `bootstrap` receives the loop's owner, the platform's
+    /// preference source and the log, and installs the owner and presents the reader.
+    fn boot(
+        platform: flui_native::HeadlessPlatform,
+        bootstrap: impl FnOnce(
+            flui_native::OwnerPlatform,
+            &flui_native::HeadlessPreferences,
+            &SizingLog,
+        ) -> Result<Presented, flui_native::BootstrapError>
+        + 'static,
+    ) -> Self {
+        use flui_native::Platform;
+
+        let source = platform.preference_source();
+        let turns = platform.owner_turns();
+        let log = SizingLog::default();
+        let mounted = Rc::new(RefCell::new(None));
+        let (output, mounted_log, bootstrap_source) =
+            (Rc::clone(&mounted), Rc::clone(&log), source.clone());
+        Box::new(platform)
+            .run(crate::app::runner::app_handler(move |owner| {
+                output.replace(Some(bootstrap(owner, &bootstrap_source, &mounted_log)?));
+                Ok(())
+            }))
+            .expect("headless bootstrap");
+        let presented = mounted.take().expect("presented reader");
+        Self {
+            source,
+            turns,
+            presented,
+            log,
+        }
+    }
+
+    fn frame(&self) {
+        dispatch_platform_ui_runtime(
+            self.presented.dispatcher,
+            RuntimeTask::Frame(self.presented.frame, flui_native::frame_request_now()),
+        )
+        .expect("frame");
+    }
+
+    /// The owner turn the source's wake asked for, then the frame it requested.
+    fn next_frame(&self) {
+        self.turns.drive();
+        self.frame();
+    }
+
+    fn sizings(&self) -> Vec<TextSizing> {
+        self.log.borrow().clone()
+    }
+}
+
+fn the_platform_preference_source_reaches_installed_consumers() {
+    let _clear = OwnerHostClearGuard::arm();
+    let reader = SourceDrivenReader::boot(
+        flui_native::HeadlessPlatform::new().with_preferences(text_scale_preferences(2.0)),
+        |owner, _, log| {
+            install_owner_platform(owner)?;
+            Ok(present_built_sizing_reader(log)?)
+        },
     );
-    with_owner_platform(|owner| owner.proxy().wake())
-        .expect("owner")
-        .expect("wake");
-    turns.drive();
-    dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame)).expect("refreshed frame");
+    reader.frame();
     assert_eq!(
-        &*observed.borrow(),
-        &[
-            TextSizing::linear(2.0).expect("valid scale"),
-            TextSizing::linear(1.0).expect("valid scale")
-        ],
-        "owner wake did not deliver the headless source's absent text-scale observation"
+        reader.sizings(),
+        [linear_sizing(2.0)],
+        "the first build did not read the value the source reported before any window"
+    );
+    reader.source.set(text_scale_preferences(3.0));
+    reader.next_frame();
+    assert_eq!(reader.sizings(), [linear_sizing(2.0), linear_sizing(3.0)]);
+    reader
+        .source
+        .fail_next_read("the settings service went away");
+    reader.next_frame();
+    assert_eq!(
+        reader.sizings(),
+        [linear_sizing(2.0), linear_sizing(3.0)],
+        "a failed read replaced the accepted value"
+    );
+    reader
+        .source
+        .set(flui_platform::SystemPreferences::default());
+    reader.next_frame();
+    assert_eq!(
+        reader.sizings(),
+        [linear_sizing(2.0), linear_sizing(3.0), linear_sizing(1.0)],
+        "an unknown text scale did not restore the consumer's baseline"
     );
     teardown_platform_ui_runtime();
+}
+
+fn a_change_before_the_first_owner_turn_reaches_consumers_once() {
+    let _clear = OwnerHostClearGuard::arm();
+    let reader = SourceDrivenReader::boot(
+        flui_native::HeadlessPlatform::new().with_preferences(text_scale_preferences(2.0)),
+        |owner, source, log| {
+            install_owner_platform(owner)?;
+            // The hook is installed and the first value accepted, but the loop has
+            // not started: this change is owed to a turn that has not run.
+            source.set(text_scale_preferences(3.0));
+            Ok(present_built_sizing_reader(log)?)
+        },
+    );
+    reader.frame();
+    assert_eq!(
+        reader.sizings(),
+        [linear_sizing(2.0)],
+        "the first build read a value no turn had delivered"
+    );
+    reader.next_frame();
+    assert_eq!(
+        reader.sizings(),
+        [linear_sizing(2.0), linear_sizing(3.0)],
+        "the change reported before the first owner turn was lost"
+    );
+    reader.next_frame();
+    assert_eq!(
+        reader.sizings(),
+        [linear_sizing(2.0), linear_sizing(3.0)],
+        "a later turn rebuilt the consumer with the same change"
+    );
+    teardown_platform_ui_runtime();
+}
+
+fn a_change_before_the_wake_hook_exists_reaches_consumers_once() {
+    let _clear = OwnerHostClearGuard::arm();
+    let reader = SourceDrivenReader::boot(
+        flui_native::HeadlessPlatform::new(),
+        |owner, source, log| {
+            // Both wakes are raised with no hook to receive them. The failed read is
+            // the installation's own sample, so only the debt they leave can bring
+            // the value.
+            source.fail_next_read("the settings service was not up yet");
+            source.set(text_scale_preferences(3.0));
+            install_owner_platform(owner)?;
+            Ok(present_built_sizing_reader(log)?)
+        },
+    );
+    reader.frame();
+    assert_eq!(
+        reader.sizings(),
+        [linear_sizing(1.0)],
+        "a failed first read must leave the consumer at its baseline"
+    );
+    reader.next_frame();
+    assert_eq!(
+        reader.sizings(),
+        [linear_sizing(1.0), linear_sizing(3.0)],
+        "the change reported before any hook was installed was lost"
+    );
+    reader.next_frame();
+    assert_eq!(
+        reader.sizings(),
+        [linear_sizing(1.0), linear_sizing(3.0)],
+        "a later turn rebuilt the consumer with the same change"
+    );
+    teardown_platform_ui_runtime();
+}
+
+fn a_replaced_wake_hook_is_the_only_one_later_changes_reach() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    let _clear = OwnerHostClearGuard::arm();
+    let reader = SourceDrivenReader::boot(
+        flui_native::HeadlessPlatform::new().with_preferences(text_scale_preferences(2.0)),
+        |owner, _, log| {
+            install_owner_platform(owner)?;
+            Ok(present_built_sizing_reader(log)?)
+        },
+    );
+    reader.frame();
+    reader.source.set(text_scale_preferences(3.0));
+    reader.next_frame();
+    assert_eq!(
+        reader.sizings(),
+        [linear_sizing(2.0), linear_sizing(3.0)],
+        "the installed hook did not deliver"
+    );
+
+    /// Wakes the owner when the hook holding it is dropped: a hook retired under
+    /// the signal's lock would deadlock here.
+    struct WakesOnRetire {
+        proxy: flui_native::PlatformProxy,
+        woke: Arc<AtomicBool>,
+    }
+    impl Drop for WakesOnRetire {
+        fn drop(&mut self) {
+            self.woke.store(self.proxy.wake().is_ok(), Ordering::SeqCst);
+        }
+    }
+
+    // The replacement only counts its turns: if the installed hook still ran,
+    // the change would reach the consumers.
+    let runs = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&runs);
+    let retired = Arc::new(AtomicBool::new(false));
+    let retire = WakesOnRetire {
+        proxy: with_owner_platform(flui_native::OwnerPlatform::proxy).expect("owner installed"),
+        woke: Arc::clone(&retired),
+    };
+    with_owner_platform(|owner| {
+        owner.on_wake(Box::new(move || {
+            let _ = &retire;
+            counted.fetch_add(1, Ordering::SeqCst);
+        }))
+    })
+    .expect("owner installed")
+    .expect("the loop accepts a replacement hook");
+    for (turn, scale) in [4.0, 5.0].into_iter().enumerate() {
+        reader.source.set(text_scale_preferences(scale));
+        reader.next_frame();
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            turn + 1,
+            "the replacement runs once per change"
+        );
+        assert_eq!(
+            reader.sizings(),
+            [linear_sizing(2.0), linear_sizing(3.0)],
+            "the replaced hook ran again"
+        );
+    }
+    with_owner_platform(|owner| owner.on_wake(Box::new(|| {})))
+        .expect("owner installed")
+        .expect("the loop accepts a replacement hook");
+    assert!(
+        retired.load(Ordering::SeqCst),
+        "the replaced hook's captures were kept, or retired where they could not re-enter"
+    );
+    teardown_platform_ui_runtime();
+}
+
+fn a_panicking_preference_delivery_does_not_stop_later_changes() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[derive(Clone, Copy, Debug)]
+    enum Failure {
+        /// The mounted presentation's wake panics while the host publishes the change.
+        Consumer,
+        /// The owner's wake hook panics before it reads the change. The turn is not
+        /// retried, which a hook that always panics would turn into an endless loop;
+        /// the source keeps the value it accepted, and the next owner turn, for
+        /// whatever reason it runs, delivers it.
+        WakeHook,
+    }
+    for failure in [Failure::Consumer, Failure::WakeHook] {
+        let _clear = OwnerHostClearGuard::arm();
+        let armed = Arc::new(AtomicBool::new(false));
+        let consumer_armed = Arc::clone(&armed);
+        // Set by the presentation's wake each time the host asks it for a frame.
+        let redraw = Arc::new(AtomicBool::new(false));
+        let woken = Arc::clone(&redraw);
+        let reader = SourceDrivenReader::boot(
+            flui_native::HeadlessPlatform::new().with_preferences(text_scale_preferences(2.0)),
+            move |owner, _, log| {
+                install_owner_platform(owner)?;
+                if matches!(failure, Failure::WakeHook) {
+                    return Ok(present_built_sizing_reader(log)?);
+                }
+                let window = test_window();
+                let pending = Arc::clone(&woken);
+                let fonts = super::super::host::runtime_font_collection();
+                let mut services = crate::app::ui_runtime::RuntimeHostServices::new(
+                    Arc::new(move || {
+                        pending.store(true, Ordering::Release);
+                        assert!(
+                            !consumer_armed.swap(false, Ordering::SeqCst),
+                            "injected consumer failure"
+                        );
+                    }),
+                    woken,
+                    super::super::host::runtime_clipboard(),
+                    &fonts,
+                    flui_scheduler::ClockSource::Platform,
+                );
+                if let Some(accepted) =
+                    APP_RUNTIME.with(|slot| slot.borrow().installed_host.logical().preferences())?
+                {
+                    services = services.with_preferences(accepted);
+                }
+                let runtime =
+                    crate::app::ui_runtime::UiRuntime::new(Rc::clone(&window), 1.0, services)?;
+                Ok(present_sizing_reader(runtime, window, log))
+            },
+        );
+        if matches!(failure, Failure::WakeHook) {
+            let hook_armed = Arc::clone(&armed);
+            with_owner_platform(|owner| {
+                owner.on_wake(Box::new(move || {
+                    assert!(
+                        !hook_armed.swap(false, Ordering::SeqCst),
+                        "injected wake hook failure"
+                    );
+                    super::super::host::refresh_preferences_with(
+                        flui_native::OwnerPlatform::preferences,
+                    )
+                    .expect("a healthy hook reads the source");
+                }))
+            })
+            .expect("owner installed")
+            .expect("the loop accepts a replacement hook");
+        }
+        reader.frame();
+        assert_eq!(reader.sizings(), [linear_sizing(2.0)]);
+        armed.store(true, Ordering::SeqCst);
+        reader.source.set(text_scale_preferences(3.0));
+        reader.next_frame();
+        // Disarmed even when it never ran, so a failing row leaves no later wake to panic.
+        assert!(
+            !armed.swap(false, Ordering::SeqCst),
+            "{failure:?}: the injected failure never ran, so nothing was contained"
+        );
+        if matches!(failure, Failure::WakeHook) {
+            assert_eq!(
+                reader.sizings(),
+                [linear_sizing(2.0)],
+                "the turn whose hook panicked delivered a value it never read"
+            );
+            // A turn with no new change: only the value the source accepted can arrive.
+            with_owner_platform(|owner| owner.proxy().wake())
+                .expect("owner installed")
+                .expect("the owner accepts a wake");
+            reader.next_frame();
+        }
+        assert_eq!(
+            reader.sizings(),
+            [linear_sizing(2.0), linear_sizing(3.0)],
+            "{failure:?}: the change the contained panic interrupted never reached the consumer"
+        );
+        redraw.store(false, Ordering::SeqCst);
+        reader.source.set(text_scale_preferences(4.0));
+        reader.turns.drive();
+        if matches!(failure, Failure::Consumer) {
+            assert!(
+                redraw.load(Ordering::SeqCst),
+                "the contained panic left the presentation's wake dead"
+            );
+        }
+        reader.frame();
+        assert_eq!(
+            reader.sizings(),
+            [linear_sizing(2.0), linear_sizing(3.0), linear_sizing(4.0)],
+            "{failure:?}: a change after the contained panic did not reach the consumer once"
+        );
+        teardown_platform_ui_runtime();
+    }
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn a_frame_turn_applies_queued_window_commands_after_its_frame() {
     use super::super::frame_driver::{FrameDriver, TestFrameDriver};
-    use flui_platform::{HeadlessPlatform, Platform};
+    use flui_native::{HeadlessPlatform, Platform};
 
     let _clear = OwnerHostClearGuard::arm();
     let platform = HeadlessPlatform::new();
     let window = test_window();
-    let native = Arc::clone(&window);
+    let native = Rc::clone(&window);
     let drawn = Rc::new(RefCell::new(Vec::new()));
     let seen = Rc::clone(&drawn);
-    let observed = Arc::clone(&window);
+    let observed = Rc::clone(&window);
     let installed = Rc::new(RefCell::new(None));
     let output = Rc::clone(&installed);
     Box::new(platform)
-        .run(Box::new(move |owner| {
+        .run(crate::app::runner::app_handler(move |owner| {
             install_owner_platform(owner)?;
-            let runtime = super::super::host::build_ui_runtime(Arc::clone(&native), 1.0)?;
+            let runtime = super::super::host::build_ui_runtime(Rc::clone(&native), 1.0)?;
             let address = flui_foundation::PresentationAddress {
                 ui_runtime_id: runtime.id(),
                 presentation_id: runtime.presentation_id(),
@@ -1399,7 +1786,11 @@ fn a_frame_turn_applies_queued_window_commands_after_its_frame() {
     // The frame turn comes first, as a paint does, and it is the only turn:
     // its frame must not see the command, and the command must not wait for
     // another turn (the one its wake asked for may never come).
-    dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame)).expect("frame");
+    dispatch_platform_ui_runtime(
+        dispatcher,
+        RuntimeTask::Frame(frame, flui_native::frame_request_now()),
+    )
+    .expect("frame");
     assert!(
         drawn
             .borrow()
@@ -1418,8 +1809,9 @@ fn a_frame_turn_applies_queued_window_commands_after_its_frame() {
 
 fn platform_brightness_follows_the_window_appearance() {
     use super::super::frame_driver::{FrameDriver, TestFrameDriver};
-    use flui_platform::{HeadlessPlatform, Platform, WindowAppearance};
-    use flui_platform_api::Brightness;
+    use flui_native::{HeadlessPlatform, Platform};
+    use flui_platform::Brightness;
+    use flui_platform::WindowAppearance;
     use flui_view::prelude::*;
 
     #[derive(Clone, StatelessView)]
@@ -1433,24 +1825,24 @@ fn platform_brightness_follows_the_window_appearance() {
         }
     }
     let _clear = OwnerHostClearGuard::arm();
-    let window = test_window();
-    let native = window
+    let (host, window) = test_host_window();
+    let native = host
         .as_any()
-        .downcast_ref::<flui_platform::MockWindow>()
+        .downcast_ref::<flui_native::MockWindow>()
         .expect("headless window")
         .clone();
     // The desktop is already dark when the window opens.
     native.simulate_appearance(WindowAppearance::Dark);
     // The window registry owns a live window; this test stands in for it.
-    let live = Arc::clone(&window);
+    let live = Rc::clone(&window);
     let observed = Rc::new(RefCell::new(Vec::new()));
     let reader = Rc::clone(&observed);
     let installed = Rc::new(RefCell::new(None));
     let output = Rc::clone(&installed);
     Box::new(HeadlessPlatform::new())
-        .run(Box::new(move |owner| {
+        .run(crate::app::runner::app_handler(move |owner| {
             install_owner_platform(owner)?;
-            let runtime = super::super::host::build_ui_runtime(Arc::clone(&window), 1.0)?;
+            let runtime = super::super::host::build_ui_runtime(Rc::clone(&window), 1.0)?;
             runtime.attach_root_widget_with_size(&Reader(reader), 800.0, 600.0)?;
             let mut installation = prepare_platform_ui_runtime(runtime, window);
             let dispatcher = installation.dispatcher();
@@ -1462,7 +1854,7 @@ fn platform_brightness_follows_the_window_appearance() {
                     resize: None,
                 }))
                 .expect("prepare driver");
-            installation.observe_appearance();
+            installation.observe_window();
             installation
                 .submit()
                 .outcome()
@@ -1473,14 +1865,22 @@ fn platform_brightness_follows_the_window_appearance() {
         }))
         .expect("headless bootstrap");
     let (dispatcher, frame) = installed.borrow().expect("installed frame");
-    dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame)).expect("initial frame");
+    dispatch_platform_ui_runtime(
+        dispatcher,
+        RuntimeTask::Frame(frame, flui_native::frame_request_now()),
+    )
+    .expect("initial frame");
     assert_eq!(
         &*observed.borrow(),
         &[Some(Brightness::Dark)],
         "the first build saw a light theme on a dark desktop"
     );
     native.simulate_appearance(WindowAppearance::Light);
-    dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame)).expect("changed frame");
+    dispatch_platform_ui_runtime(
+        dispatcher,
+        RuntimeTask::Frame(frame, flui_native::frame_request_now()),
+    )
+    .expect("changed frame");
     assert_eq!(
         &*observed.borrow(),
         &[Some(Brightness::Dark), Some(Brightness::Light)],
@@ -1494,13 +1894,13 @@ fn obsolete_native_observation_cannot_update_a_replacement_host() {
     for replace_platform in [false, true] {
         for read_fails in [false, true] {
             let _clear = OwnerHostClearGuard::arm();
-            flui_platform::headless_platform()
-                .run(Box::new(move |owner| {
+            flui_native::headless_platform()
+                .run(crate::app::runner::app_handler(move |owner| {
                     install_owner_platform(owner)?;
                     let result = super::super::host::refresh_preferences_with(|_| {
                         if replace_platform {
-                            flui_platform::headless_platform()
-                                .run(Box::new(|owner| {
+                            flui_native::headless_platform()
+                                .run(crate::app::runner::app_handler(|owner| {
                                     install_owner_platform(owner)?;
                                     Ok(())
                                 }))
@@ -1517,18 +1917,18 @@ fn obsolete_native_observation_cannot_update_a_replacement_host() {
                         let host = APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
                         host.logical()
                             .update_preferences(
-                                flui_platform_api::SystemPreferences::default()
+                                flui_platform::SystemPreferences::default()
                                     .with_text_scale(3.0)
                                     .expect("valid scale"),
                                 host.effects(),
                             )
                             .expect("new host accepts its observation");
                         if read_fails {
-                            Err(flui_platform::PlatformError::Preferences {
+                            Err(flui_native::PlatformError::Preferences {
                                 message: "obsolete native read failed".into(),
                             })
                         } else {
-                            Ok(flui_platform_api::SystemPreferences::default()
+                            Ok(flui_platform::SystemPreferences::default()
                                 .with_text_scale(2.0)
                                 .expect("valid scale"))
                         }
@@ -1553,11 +1953,11 @@ fn obsolete_native_observation_cannot_update_a_replacement_host() {
 
 #[cfg(target_os = "windows")]
 fn windows_bootstrap_accepts_preferences_before_the_first_window() {
-    use flui_platform::Platform;
+    use flui_native::Platform;
 
     let _clear = OwnerHostClearGuard::arm();
-    Box::new(flui_platform::WindowsPlatform::new().expect("native platform"))
-        .run(Box::new(|owner| {
+    Box::new(flui_native::WindowsPlatform::new().expect("native platform"))
+        .run(crate::app::runner::app_handler(|owner| {
             let expected = owner
                 .preferences()?
                 .text_scale()
@@ -1583,20 +1983,20 @@ fn windows_bootstrap_accepts_preferences_before_the_first_window() {
 
 fn bootstrap_keeps_the_host_that_seeded_the_first_build() {
     let _clear = OwnerHostClearGuard::arm();
-    flui_platform::headless_platform()
-        .run(Box::new(|owner| {
+    flui_native::headless_platform()
+        .run(crate::app::runner::app_handler(|owner| {
             install_owner_platform(owner)?;
             let host = APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
             host.logical().update_preferences(
-                flui_platform_api::SystemPreferences::default().with_text_scale(2.0)?,
+                flui_platform::SystemPreferences::default().with_text_scale(2.0)?,
                 host.effects(),
             )?;
-            let window: Arc<dyn PlatformWindow> = with_owner_platform(|owner| {
-                owner.open_window(flui_platform::WindowOptions::default())
+            let window: Rc<dyn PlatformWindow> = with_owner_platform(|owner| {
+                owner.open_routed(flui_platform::WindowOptions::default())
             })
             .expect("owner installed")?
             .try_ready()?;
-            let mut runtime = super::super::host::build_ui_runtime(Arc::clone(&window), 1.0)?;
+            let mut runtime = super::super::host::build_ui_runtime(Rc::clone(&window), 1.0)?;
             assert_eq!(
                 first_build_text_sizing(&mut runtime),
                 TextSizing::linear(2.0).expect("valid scale"),
@@ -1625,12 +2025,12 @@ fn a_replacement_platform_starts_a_new_preference_owner() {
     let _first_clear = OwnerHostClearGuard::arm();
     let previous = Rc::new(RefCell::new(None));
     let captured = Rc::clone(&previous);
-    flui_platform::headless_platform()
-        .run(Box::new(move |owner| {
+    flui_native::headless_platform()
+        .run(crate::app::runner::app_handler(move |owner| {
             install_owner_platform(owner)?;
             let host = APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
             host.logical().update_preferences(
-                flui_platform_api::SystemPreferences::default().with_text_scale(2.0)?,
+                flui_platform::SystemPreferences::default().with_text_scale(2.0)?,
                 host.effects(),
             )?;
             *captured.borrow_mut() = Some(host);
@@ -1638,8 +2038,8 @@ fn a_replacement_platform_starts_a_new_preference_owner() {
         }))
         .expect("first native owner");
     let _second_clear = OwnerHostClearGuard::arm();
-    flui_platform::headless_platform()
-        .run(Box::new(move |owner| {
+    flui_native::headless_platform()
+        .run(crate::app::runner::app_handler(move |owner| {
             install_owner_platform(owner)?;
             let previous = previous.borrow_mut().take().expect("first host retained");
             assert!(
@@ -1670,7 +2070,7 @@ fn platform_replacement_contains_reentrant_retirement() {
         scale: f64,
         failure: Option<&'static str>,
     }
-    impl flui_platform_api::Clipboard for RetiredProducer {
+    impl flui_platform::Clipboard for RetiredProducer {
         fn read_text(&self) -> Option<String> {
             None
         }
@@ -1682,7 +2082,7 @@ fn platform_replacement_contains_reentrant_retirement() {
             current
                 .logical()
                 .update_preferences(
-                    flui_platform_api::SystemPreferences::default()
+                    flui_platform::SystemPreferences::default()
                         .with_text_scale(self.scale)
                         .expect("valid observation"),
                     current.effects(),
@@ -1701,8 +2101,8 @@ fn platform_replacement_contains_reentrant_retirement() {
         let _first_clear = OwnerHostClearGuard::arm();
         let retired = Arc::new(AtomicUsize::new(0));
         let first_retired = Arc::clone(&retired);
-        flui_platform::headless_platform()
-            .run(Box::new(move |owner| {
+        flui_native::headless_platform()
+            .run(crate::app::runner::app_handler(move |owner| {
                 install_owner_platform(owner)?;
                 let hook = RetiredProducer {
                     retired: Arc::clone(&first_retired),
@@ -1728,8 +2128,8 @@ fn platform_replacement_contains_reentrant_retirement() {
             }))
             .expect("first owner");
         let _second_clear = OwnerHostClearGuard::arm();
-        flui_platform::headless_platform()
-            .run(Box::new(move |owner| {
+        flui_native::headless_platform()
+            .run(crate::app::runner::app_handler(move |owner| {
                 let result = catch_unwind(AssertUnwindSafe(|| install_owner_platform(owner)));
                 if wake_fails || clipboard_fails {
                     let failure = result.expect_err("retirement failure escapes after cleanup");
@@ -2037,50 +2437,48 @@ fn resize_reaches_the_surface_in_the_pixels_the_platform_reported() {
 /// re-evaluation produces therefore needs the handle.
 fn install_ui_runtime_a_with_exit_policy_quit_counter_and_reevaluation() -> (
     PresentationDispatcher,
-    std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
+    Rc<dyn flui_platform::PlatformWindow>,
     Arc<std::sync::atomic::AtomicUsize>,
     OwnerHostClearGuard,
-    flui_platform::HeadlessExitReevaluation,
+    flui_native::HeadlessExitReevaluation,
 ) {
     use std::{cell::RefCell, rc::Rc, sync::atomic::AtomicUsize};
 
     type Installed = (
         PresentationDispatcher,
-        std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
+        Rc<dyn flui_platform::PlatformWindow>,
     );
 
     let clear_guard = OwnerHostClearGuard::arm();
-    let platform = flui_platform::HeadlessPlatform::new();
+    let platform = flui_native::HeadlessPlatform::new();
     let reevaluation = platform.exit_reevaluation();
-    let platform: Box<dyn flui_platform::Platform> = Box::new(platform);
+    let platform: Box<dyn flui_native::Platform> = Box::new(platform);
     let quit_calls = Arc::new(AtomicUsize::new(0));
     let quit_calls_for_on_ready = Arc::clone(&quit_calls);
     let installed_slot: Rc<RefCell<Option<Installed>>> = Rc::new(RefCell::new(None));
     let installed_slot_for_on_ready = Rc::clone(&installed_slot);
-    let ready = platform.run(Box::new(move |owner| {
+    let ready = platform.run(crate::app::runner::app_handler(move |owner| {
         install_owner_platform(owner).expect("install owner wake transport");
         install_exit_policy_hook(ExitPolicy::OnLastWindowClosed);
 
         let quit_calls_for_handler = Arc::clone(&quit_calls_for_on_ready);
-        with_owner_platform(|owner| {
-            owner.shared().on_quit(Box::new(move || {
-                quit_calls_for_handler.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            }));
+        super::super::host::route_quit(move || {
+            quit_calls_for_handler.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         });
 
-        let window_a: Arc<dyn PlatformWindow> =
-            with_owner_platform(|owner| owner.open_window(flui_platform::WindowOptions::default()))
+        let window_a: Rc<dyn PlatformWindow> =
+            with_owner_platform(|owner| owner.open_routed(flui_platform::WindowOptions::default()))
                 .expect("owner installed above")
-                .and_then(flui_platform::WindowOpen::try_ready)
+                .and_then(flui_native::WindowOpen::try_ready)
                 .expect("headless open_window is always Ready");
         let dispatcher_a =
             install_platform_ui_runtime(crate::app::ui_runtime::UiRuntime::for_test(), &window_a);
         // Mirror `run_desktop`'s own `on_close` wiring exactly, so a
-        // real `window_a.close()` in a test drives the SAME production
+        // real `WindowCommand::Close` in a test drives the SAME production
         // path a real desktop bootstrap would.
-        window_a.on_close(Box::new(move || {
+        crate::app::runner::window_routes::WindowRoutes::of(&*window_a).route_closed(move || {
             close_this_window(dispatcher_a);
-        }));
+        });
         let _prev = installed_slot_for_on_ready
             .borrow_mut()
             .replace((dispatcher_a, window_a));
@@ -2107,7 +2505,7 @@ fn install_ui_runtime_a_with_exit_policy_quit_counter_and_reevaluation() -> (
 /// `RuntimeTask::ClosePresentation` is a same-runtime reentrant dispatch, so
 /// it only enqueues onto the already-checked-out UI runtime's queue; the
 /// uninstall applies at the OUTER dispatch's tail, strictly after
-/// `window.close()`'s own `notify_closed` — and the exit-policy hook it
+/// `WindowCommand::Close`'s own `notify_closed` — and the exit-policy hook it
 /// consulted — has already returned "don't exit". Nothing re-checked
 /// afterwards, so the exit was missed rather than delayed.
 ///
@@ -2137,7 +2535,7 @@ fn closing_the_last_window_reentrantly_from_inside_a_dispatch_still_exits() {
             // `close_this_window(dispatcher)` -> `close_presentation` ->
             // a nested `dispatch_platform_ui_runtime` on the SAME ui_runtime this
             // Frame task's own dispatch already checked out.
-            window_a.close();
+            window_a.close_now();
         })),
     )
     .expect("the outer Frame dispatch itself must not be refused");
@@ -2324,8 +2722,11 @@ fn recovered_surface_notification_resubmits_the_scene() {
         .expect("idle host")
         .expect("published recovery window");
     let pump = || {
-        dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame.binding))
-            .expect("frame dispatches");
+        dispatch_platform_ui_runtime(
+            dispatcher,
+            RuntimeTask::Frame(frame.binding, flui_native::frame_request_now()),
+        )
+        .expect("frame dispatches");
     };
     pump();
     assert_eq!(submits.load(Ordering::SeqCst), 1, "initial scene submitted");
@@ -2620,8 +3021,24 @@ fn owner_dispatch_matrix() {
                 preferences_wake_each_isolated_window as fn(),
             ),
             (
-                "owner_wake_refreshes_installed_preference_consumers",
-                owner_wake_refreshes_installed_preference_consumers as fn(),
+                "the_platform_preference_source_reaches_installed_consumers",
+                the_platform_preference_source_reaches_installed_consumers as fn(),
+            ),
+            (
+                "a_change_before_the_first_owner_turn_reaches_consumers_once",
+                a_change_before_the_first_owner_turn_reaches_consumers_once as fn(),
+            ),
+            (
+                "a_change_before_the_wake_hook_exists_reaches_consumers_once",
+                a_change_before_the_wake_hook_exists_reaches_consumers_once as fn(),
+            ),
+            (
+                "a_replaced_wake_hook_is_the_only_one_later_changes_reach",
+                a_replaced_wake_hook_is_the_only_one_later_changes_reach as fn(),
+            ),
+            (
+                "a_panicking_preference_delivery_does_not_stop_later_changes",
+                a_panicking_preference_delivery_does_not_stop_later_changes as fn(),
             ),
             (
                 "platform_brightness_follows_the_window_appearance",

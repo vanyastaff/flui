@@ -4,10 +4,9 @@ use std::{
     cell::Cell,
     fmt,
     rc::{Rc, Weak},
-    sync::Weak as SharedWeak,
 };
 
-use flui_platform_api::{PlatformWindow, pointer::PointerInfo};
+use flui_platform::{PlatformWindow, pointer::PointerInfo};
 
 use super::PointerTarget;
 
@@ -48,7 +47,7 @@ pub(crate) struct ContactCapture {
     sequence: u64,
     status: Cell<CaptureStatus>,
     deliveries: Cell<usize>,
-    wake: Option<SharedWeak<dyn PlatformWindow>>,
+    wake: Option<Weak<dyn PlatformWindow>>,
     /// The target feeding the arena member that won the continuing contact
     /// (ADR-0208 rule 5). Later packets reach it alone.
     owner: Cell<Option<PointerTarget>>,
@@ -77,7 +76,7 @@ impl ContactCapture {
     pub(crate) fn new(
         pointer: PointerInfo,
         sequence: u64,
-        wake: Option<SharedWeak<dyn PlatformWindow>>,
+        wake: Option<Weak<dyn PlatformWindow>>,
     ) -> Rc<Self> {
         Rc::new(Self {
             pointer,
@@ -189,7 +188,7 @@ impl ContactCapture {
         // Debt is committed before platform code can reenter or fail. There
         // is no contact-map borrow and no handler ownership in this state.
         self.status.set(CaptureStatus::Released(target));
-        let Some(window) = self.wake.as_ref().and_then(SharedWeak::upgrade) else {
+        let Some(window) = self.wake.as_ref().and_then(Weak::upgrade) else {
             return;
         };
         let mut failure = crate::close::ClosePanic::new();

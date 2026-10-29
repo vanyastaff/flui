@@ -117,8 +117,8 @@ presentation's frame history) are computed in `flui-runtime`, beside the present
 composited; `PerformanceOverlayLayer::record` composes the numbers it is handed through the
 caller's `TextContext` into the display list the layer carries, so the engine replays shaped
 labels and shapes nothing (ADR-0092). `record` stays here, beside the layer, because it is the
-one recorder of the layer's readout and `examples/screenshot.rs` records one with no runtime
-behind it; it holds no state, and the numbers stay with their owner. `PerformanceOverlayOption`
+one recorder of the layer's readout; it holds no state.
+`PerformanceOverlayOption`
 crosses the engine boundary as itself rather than as a `u32`
 (`performance_overlay_readout_rows`).
 
@@ -151,8 +151,8 @@ twice) or above `DamageMode::On::full_above`, `Unchanged` for nothing, and other
 `DamageRect` in whole pixels, rounded outward with a 1 px anti-aliasing margin. `DamageMode::Off`
 retains nothing and does not walk.
 
-Why a token rather than `Arc::ptr_eq` on pictures: an outer boundary re-records its inline
-pictures whenever a nested boundary is dirty, so pointer identity reports it changed on frames
+Why a token rather than `Arc::ptr_eq` on pictures: a boundary that repaints for any reason re-records its inline
+pictures, so pointer identity reports it changed on frames
 whose content did not. Why an `Arc<()>` rather than a counter: a counter restarts with each
 `PipelineOwner`, and the differ, holding the previous frame's clones, makes an allocation
 address impossible to reuse while compared. The differ pairs by the boundary `RenderId` and decides "unchanged" by the token, and

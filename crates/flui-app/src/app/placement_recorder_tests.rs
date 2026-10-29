@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::WindowOptions;
-use flui_platform_api::{
+use flui_platform::{
     DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot, StorageError, StorageName,
     WindowCapabilities, WindowGeometry, WindowMode, WindowPlacement, WindowState,
 };
@@ -53,7 +53,8 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let storage = MemoryStorage::new();
-        let recorder = PlacementRecorder::new(Arc::new(storage.clone()), NAME, None);
+        let recorder =
+            PlacementRecorder::new(Arc::new(storage.clone()), NAME, None, Arc::new(|| {}));
         Self {
             storage,
             recorder,
@@ -167,7 +168,7 @@ fn restore_asks_the_platform_for_what_it_can_place() {
         1.0,
     );
     let mut capabilities = WindowCapabilities::ALL;
-    capabilities.places_at_open = false;
+    capabilities.places_at_open = flui_platform::Availability::Unavailable;
     restore_into(&mut options, &placement, &displays(), &capabilities, |_| {
         NO_FRAME
     });
@@ -239,6 +240,48 @@ fn a_refused_write_is_owed_again_and_not_counted_as_stored() {
     assert_eq!(fixture.stored_offset(), Some(Point::new(100.0, 80.0)));
 }
 
+fn a_write_in_flight_waits_for_storage_to_wake_the_owner() {
+    let storage = MemoryStorage::new();
+    let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&wakes);
+    let recorder = PlacementRecorder::new(
+        Arc::new(storage.clone()),
+        NAME,
+        None,
+        Arc::new(move || {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }),
+    );
+    let now = Instant::now();
+    let barrier = storage.hold_commits();
+    recorder.observe(&at(100.0, 80.0), &displays(), now);
+    assert_eq!(
+        recorder.next_due(now),
+        None,
+        "a write out has no deadline: the answer wakes the owner"
+    );
+    assert_eq!(wakes.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+    barrier.commit();
+    assert_eq!(
+        wakes.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "storage's answer wakes the owner"
+    );
+    assert_eq!(
+        recorder.next_due(now),
+        Some(now),
+        "the owner is asked to take the answer at once"
+    );
+
+    recorder.tick(now);
+    assert_eq!(
+        recorder.next_due(now),
+        None,
+        "nothing is owed once answered"
+    );
+}
+
 fn a_write_in_flight_is_not_doubled_and_counts_once_storage_answers() {
     let fixture = Fixture::new();
     let barrier = fixture.storage.hold_commits();
@@ -271,7 +314,12 @@ fn a_placement_already_stored_is_not_written_again() {
     );
     // A sentinel in place of the stored placement: any write replaces it.
     storage.put(&NAME, b"sentinel".to_vec());
-    let recorder = PlacementRecorder::new(Arc::new(storage.clone()), NAME, Some(&placement));
+    let recorder = PlacementRecorder::new(
+        Arc::new(storage.clone()),
+        NAME,
+        Some(&placement),
+        Arc::new(|| {}),
+    );
     let now = Instant::now();
     recorder.observe(&at(100.0, 80.0), &displays(), now);
     assert_eq!(storage.contents(&NAME).as_deref(), Some(&b"sentinel"[..]));
@@ -370,6 +418,7 @@ fn several_windows_share_one_budget_when_the_session_ends() {
                 Arc::new(storage.clone()),
                 *name,
                 None,
+                Arc::new(|| {}),
             ))
         })
         .collect();
@@ -397,11 +446,13 @@ fn the_earliest_due_of_several_recorders_is_what_the_owner_wakes_for() {
         Arc::new(storage.clone()),
         NAME,
         None,
+        Arc::new(|| {}),
     ));
     let second = Rc::new(PlacementRecorder::new(
         Arc::new(storage),
         StorageName::machine_local("window-two"),
         None,
+        Arc::new(|| {}),
     ));
     let now = Instant::now();
     first.observe(&at(1.0, 1.0), &displays(), now);
@@ -448,6 +499,10 @@ fn placement_recorder() {
             (
                 "a_refused_write_is_owed_again_and_not_counted_as_stored",
                 a_refused_write_is_owed_again_and_not_counted_as_stored as fn(),
+            ),
+            (
+                "a_write_in_flight_waits_for_storage_to_wake_the_owner",
+                a_write_in_flight_waits_for_storage_to_wake_the_owner as fn(),
             ),
             (
                 "a_write_in_flight_is_not_doubled_and_counts_once_storage_answers",
