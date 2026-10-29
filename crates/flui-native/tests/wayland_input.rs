@@ -32,9 +32,11 @@ mod native_recording {
 }
 
 #[cfg(target_os = "linux")]
+#[path = "support/weston_x11.rs"]
+mod weston_x11;
+
+#[cfg(target_os = "linux")]
 mod cases {
-    use std::path::PathBuf;
-    use std::process::{Child, Command, Stdio};
     use std::rc::Rc;
     use std::time::{Duration, Instant};
 
@@ -48,11 +50,12 @@ mod cases {
     use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
     use x11rb::connection::Connection as _;
     use x11rb::protocol::xproto::{
-        BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, ConnectionExt as _, InputFocus, KEY_PRESS_EVENT,
-        KEY_RELEASE_EVENT, MOTION_NOTIFY_EVENT, MapState,
+        BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, KEY_PRESS_EVENT, KEY_RELEASE_EVENT,
+        MOTION_NOTIFY_EVENT,
     };
     use x11rb::protocol::xtest::ConnectionExt as _;
-    use x11rb::rust_connection::RustConnection;
+
+    use super::weston_x11::Session;
 
     /// The output's size, which the kiosk shell gives every window.
     const OUTPUT: (u16, u16) = (640, 480);
@@ -67,7 +70,9 @@ mod cases {
             .with_writer(std::io::stderr)
             .try_init();
         let arguments = libtest_mimic::Arguments::from_args();
-        let session = (!arguments.list).then(Session::start).flatten();
+        let session = (!arguments.list)
+            .then(|| Session::start("kiosk-shell.so", OUTPUT, "flui-wayland-input"))
+            .flatten();
         let trials = vec![libtest_mimic::Trial::test(
             "a_compositor_seat_reaches_the_window",
             move || {
@@ -79,182 +84,6 @@ mod cases {
             },
         )];
         libtest_mimic::run(&arguments, trials).exit();
-    }
-
-    /// Xvfb, and a Weston on it whose socket `WAYLAND_DISPLAY` names.
-    struct Session {
-        server: Child,
-        weston: Child,
-        display: String,
-        _runtime: TempDir,
-    }
-
-    /// A directory removed with its contents when dropped.
-    struct TempDir(PathBuf);
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    impl Drop for Session {
-        fn drop(&mut self) {
-            for child in [&mut self.weston, &mut self.server] {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
-        }
-    }
-
-    fn available(program: &str) -> bool {
-        Command::new(program)
-            .arg("--help")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok()
-    }
-
-    impl Session {
-        fn start() -> Option<Self> {
-            if !available("Xvfb") || !available("weston") {
-                assert!(
-                    std::env::var_os("FLUI_REQUIRE_WAYLAND").is_none(),
-                    "FLUI_REQUIRE_WAYLAND is set and Xvfb or Weston is missing"
-                );
-                return None;
-            }
-            let (server, display) = x_server();
-            let runtime =
-                std::env::temp_dir().join(format!("flui-wayland-input-{}", std::process::id()));
-            std::fs::create_dir_all(&runtime).expect("a runtime directory");
-            std::fs::set_permissions(
-                &runtime,
-                <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o700),
-            )
-            .expect("the runtime directory is private");
-            let socket = "flui-wayland-input";
-            let weston = Command::new("weston")
-                .args([
-                    "--backend=x11",
-                    "--renderer=pixman",
-                    "--shell=kiosk-shell.so",
-                    &format!("--socket={socket}"),
-                    &format!("--width={}", OUTPUT.0),
-                    &format!("--height={}", OUTPUT.1),
-                    "--idle-time=0",
-                ])
-                .env("DISPLAY", &display)
-                .env("XDG_RUNTIME_DIR", &runtime)
-                .env_remove("WAYLAND_DISPLAY")
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .expect("Weston starts");
-            until("Weston's socket", || runtime.join(socket).exists());
-            // SAFETY: no thread has started; nothing reads the environment
-            // while it is set.
-            #[expect(
-                unsafe_code,
-                reason = "the environment is set before any thread exists"
-            )]
-            unsafe {
-                std::env::set_var("XDG_RUNTIME_DIR", &runtime);
-                std::env::set_var("WAYLAND_DISPLAY", socket);
-                std::env::remove_var("DISPLAY");
-            }
-            Some(Self {
-                server,
-                weston,
-                display,
-                _runtime: TempDir(runtime),
-            })
-        }
-
-        /// The X connection the harness drives the input with, and Weston's
-        /// output window on it.
-        fn x(&self) -> (RustConnection, u32, (i16, i16)) {
-            let (connection, screen) =
-                RustConnection::connect(Some(&self.display)).expect("the X server answers");
-            let root = connection.setup().roots[screen].root;
-            let mut found = None;
-            until("Weston's output window", || {
-                let tree = connection
-                    .query_tree(root)
-                    .expect("request")
-                    .reply()
-                    .expect("reply");
-                found = tree.children.iter().copied().find(|window| {
-                    let mapped = connection
-                        .get_window_attributes(*window)
-                        .ok()
-                        .and_then(|cookie| cookie.reply().ok())
-                        .is_some_and(|attributes| attributes.map_state == MapState::VIEWABLE);
-                    let geometry = connection
-                        .get_geometry(*window)
-                        .ok()
-                        .and_then(|cookie| cookie.reply().ok());
-                    mapped
-                        && geometry
-                            .is_some_and(|geometry| (geometry.width, geometry.height) == OUTPUT)
-                });
-                found.is_some()
-            });
-            let window = found.expect("found above");
-            let origin = connection
-                .translate_coordinates(window, root, 0, 0)
-                .expect("request")
-                .reply()
-                .expect("reply");
-            // Weston's X11 backend gives its seat's keyboard to a client
-            // while its window has the X focus.
-            connection
-                .set_input_focus(InputFocus::PARENT, window, x11rb::CURRENT_TIME)
-                .expect("request");
-            connection.flush().expect("flush");
-            (connection, root, (origin.dst_x, origin.dst_y))
-        }
-    }
-
-    /// Start Xvfb on a display number no other server holds (see
-    /// `x11_window.rs`).
-    fn x_server() -> (Child, String) {
-        let first = 100 + std::process::id() % 800;
-        for number in (first..first + 200).map(|number| 100 + number % 900) {
-            let display = format!(":{number}");
-            let mut server = Command::new("Xvfb")
-                .args([&display, "-screen", "0", "1024x768x24", "-nolisten", "tcp"])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .expect("Xvfb starts");
-            let deadline = Instant::now() + Duration::from_secs(10);
-            loop {
-                if server.try_wait().ok().flatten().is_some() {
-                    break;
-                }
-                if RustConnection::connect(Some(&display)).is_ok() {
-                    std::thread::sleep(Duration::from_millis(200));
-                    if server.try_wait().ok().flatten().is_none() {
-                        return (server, display);
-                    }
-                    break;
-                }
-                assert!(Instant::now() < deadline, "timed out waiting for Xvfb");
-                std::thread::sleep(Duration::from_millis(10));
-            }
-        }
-        panic!("no free X display number");
-    }
-
-    /// Wait, bounded at 10 s, until `done` holds.
-    fn until(what: &str, mut done: impl FnMut() -> bool) {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !done() {
-            assert!(Instant::now() < deadline, "timed out waiting for {what}");
-            std::thread::sleep(Duration::from_millis(10));
-        }
     }
 
     /// Turn the loop until `done` holds over what the handler heard,
@@ -328,7 +157,8 @@ mod cases {
         };
         assert_eq!(capabilities.precise_scroll(), Availability::Native);
 
-        let (x, root, origin) = session.x();
+        let screen = session.screen();
+        let (x, root, origin) = (&screen.connection, screen.root, screen.origin);
         let fake = |kind: u8, detail: u8, at: Option<(i16, i16)>| {
             let (px, py) = at.unwrap_or((0, 0));
             x.xtest_fake_input(kind, detail, x11rb::CURRENT_TIME, root, px, py, 0)
