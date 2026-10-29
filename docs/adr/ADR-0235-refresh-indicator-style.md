@@ -53,7 +53,7 @@ optimisation for the previous implementation, which drew nothing while pulling.
 
 **D4 — Policy lives in packages.** `flui-material`'s `MaterialApp` installs a style that shows a
 determinate `CircularProgressIndicator` while pulling and an indeterminate one while
-refreshing. An Expressive theme switches it to `LoadingIndicator` when that indicator lands.
+refreshing. A theme with `MaterialStyle::Expressive` switches it to `LoadingIndicator`.
 
 **D5 — Reduced motion is the indicator's own.** The style does not branch on the motion policy;
 the indicator it returns settles or stands still under `MotionPolicy::Reduce` as it would

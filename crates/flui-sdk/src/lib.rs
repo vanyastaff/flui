@@ -225,9 +225,13 @@ pub mod painting {
     pub use flui_painting::TextSizing;
     pub use flui_painting::paint::Clip;
     pub use flui_painting::paint::ClipOp;
+    pub use flui_painting::paint::Morph;
     pub use flui_painting::paint::Paint;
     pub use flui_painting::paint::Path;
+    pub use flui_painting::paint::PathCommand;
+    pub use flui_painting::paint::RoundedPolygon;
     pub use flui_painting::paint::StrokeCap;
+    pub use flui_painting::paint::shapes::material_shapes;
     pub use flui_painting::styling::Border;
     pub use flui_painting::styling::BorderRadius;
     pub use flui_painting::styling::BorderRadiusExt;

@@ -1,6 +1,7 @@
 //! Material 3 progress indicators: [`LinearProgressIndicator`],
-//! [`CircularProgressIndicator`], and their Material 3 Expressive wavy variants
-//! [`LinearWavyProgressIndicator`] and [`CircularWavyProgressIndicator`].
+//! [`CircularProgressIndicator`], their Material 3 Expressive wavy variants
+//! [`LinearWavyProgressIndicator`] and [`CircularWavyProgressIndicator`], and the Expressive
+//! loading indicators [`LoadingIndicator`] and [`ContainedLoadingIndicator`].
 //!
 //! Every variant is determinate with a value and indeterminate without one, and they share
 //! three rules:
@@ -18,10 +19,15 @@
 
 mod circular;
 mod linear;
+mod loading;
 mod wavy;
 
 pub use circular::{CircularProgressIndicator, CircularProgressIndicatorState};
 pub use linear::{LinearProgressIndicator, LinearProgressIndicatorState};
+pub use loading::{
+    ContainedLoadingIndicator, ContainedLoadingIndicatorState, LoadingIndicator,
+    LoadingIndicatorState,
+};
 pub use wavy::{
     CircularWavyProgressIndicator, CircularWavyProgressIndicatorState, LinearWavyProgressIndicator,
     LinearWavyProgressIndicatorState,

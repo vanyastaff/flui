@@ -771,6 +771,26 @@ fn progress_indicator_variants() {
             "material app refresh shows the circular indicator",
             progress_variants::material_app_refresh_shows_the_circular_indicator,
         ),
+        (
+            "loading indicator morphs on a spring",
+            progress_variants::loading_indicator_morphs_on_a_spring,
+        ),
+        (
+            "loading indicator stands still",
+            progress_variants::loading_indicator_stands_still,
+        ),
+        (
+            "loading indicator follows its value",
+            progress_variants::loading_indicator_follows_its_value,
+        ),
+        (
+            "contained loading indicator has its container",
+            progress_variants::contained_loading_indicator_has_its_container,
+        ),
+        (
+            "expressive material app refresh shows the loading indicator",
+            progress_variants::expressive_material_app_refresh_shows_the_loading_indicator,
+        ),
     ]);
 }
 

@@ -679,6 +679,21 @@ pub struct DataTableThemeData {
     pub checkbox_horizontal_margin: Option<f64>,
 }
 
+/// Which Material design a [`ThemeData`] follows.
+///
+/// One choice that components read rather than a flag per component, so an app switches
+/// to Material 3 Expressive in one place and each component that has an Expressive form
+/// follows it. `#[non_exhaustive]`: a later Material design is a new variant.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum MaterialStyle {
+    /// The Material 3 baseline.
+    #[default]
+    Baseline,
+    /// Material 3 Expressive.
+    Expressive,
+}
+
 /// Visual-style configuration provided to descendants by a
 /// [`Theme`](crate::Theme) ancestor.
 ///
@@ -789,6 +804,12 @@ pub struct ThemeData {
     /// baselines use the platform the app was built for.
     pub platform: TargetPlatform,
 
+    /// Which Material design the components follow: the M3 baseline, or Material 3
+    /// Expressive. Today it picks the indicator [`MaterialApp`](crate::MaterialApp) gives
+    /// every `RefreshIndicator`: a circular progress indicator for the baseline, a
+    /// [`LoadingIndicator`](crate::LoadingIndicator) for Expressive.
+    pub style: MaterialStyle,
+
     /// Which transition page routes run, per platform (ADR-0221 D3).
     /// [`MaterialApp`](crate::MaterialApp) installs the one for
     /// [`platform`](Self::platform).
@@ -824,6 +845,7 @@ impl ThemeData {
             navigation_bar_theme: None,
             tab_bar_theme: None,
             data_table_theme: None,
+            style: MaterialStyle::default(),
             platform: TargetPlatform::current(),
             page_transitions_theme: PageTransitionsTheme::default(),
         }
@@ -857,6 +879,7 @@ impl ThemeData {
             navigation_bar_theme: None,
             tab_bar_theme: None,
             data_table_theme: None,
+            style: MaterialStyle::default(),
             platform: TargetPlatform::current(),
             page_transitions_theme: PageTransitionsTheme::default(),
         }
@@ -954,6 +977,7 @@ impl ThemeData {
             data_table_theme: overrides
                 .data_table_theme
                 .or_else(|| self.data_table_theme.clone()),
+            style: overrides.style.unwrap_or(self.style),
             platform: overrides.platform.unwrap_or(self.platform),
             page_transitions_theme: overrides
                 .page_transitions_theme
@@ -1021,6 +1045,8 @@ pub struct ThemeDataOverrides {
     pub tab_bar_theme: Option<TabBarThemeData>,
     /// Replaces [`ThemeData::data_table_theme`] wholesale when `Some`.
     pub data_table_theme: Option<DataTableThemeData>,
+    /// Overrides [`ThemeData::style`].
+    pub style: Option<MaterialStyle>,
     /// Overrides [`ThemeData::platform`].
     pub platform: Option<TargetPlatform>,
     /// Overrides [`ThemeData::page_transitions_theme`].
