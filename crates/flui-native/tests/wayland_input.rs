@@ -299,7 +299,13 @@ mod cases {
     /// blessed.
     #[cfg(all(debug_assertions, feature = "native-capture"))]
     fn hold_recording(recorder: flui_native::journal::recorder::Recorder, heard: &[PointerEvent]) {
-        let recordings = recorder.finish();
+        let recordings: Vec<_> = recorder
+            .finish()
+            .into_iter()
+            .filter(|recording| {
+                recording.header.stream == flui_native::journal::codec::Stream::Registry
+            })
+            .collect();
         let [recording] = recordings.as_slice() else {
             panic!("one registry, the seats': {}", recordings.len());
         };

@@ -16,17 +16,22 @@ use flui_platform::EventTime;
 use flui_platform::pointer::{PointerButton, PointerEvent, PointerKind};
 use parking_lot::Mutex;
 
-use super::codec::{Backend, NativeRecording, Row};
+use super::codec::{Backend, NativeRecording, Row, Stream};
 use super::{RECORDINGS, recording};
 use flui_native::journal::recorder::Recorder;
 
 /// Run `session` with a capture installed on this thread, and return its
 /// result with the recording of every registry created during it, in
-/// creation order.
+/// creation order; the other streams the session journals are left out.
 pub fn record<T>(backend: Backend, session: impl FnOnce() -> T) -> (T, Vec<NativeRecording>) {
     let recorder = Recorder::start(backend);
     let result = session();
-    (result, recorder.finish())
+    let registries = recorder
+        .finish()
+        .into_iter()
+        .filter(|recording| recording.header.stream == Stream::Registry)
+        .collect();
+    (result, registries)
 }
 
 /// Where the checked-in recordings live.
