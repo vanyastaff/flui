@@ -1,4 +1,4 @@
-# ADR-0263: A pinned lazy child is laid out and announced outside the band, and a focusable list is one Tab stop that pins its row
+# ADR-0264: A pinned lazy child is laid out and announced outside the band, and a focusable list is one Tab stop that pins its row
 
 - **Status:** Accepted (2026-10-29). Not implemented: §3, the focusable list.
 - **Date:** 2026-10-29

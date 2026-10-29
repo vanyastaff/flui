@@ -569,7 +569,7 @@ and that same stamp is why paint and hit testing skip it by slot explicitly: a
 viewport clip would hide it only under a clipping viewport, and `Clip::None`
 has none. Its extent feeds none of the geometry, the anchor correction or the
 measured extents, so the sliver reports the same result pinned or not
-(ADR-0263). `harness_lazy_slivers_keep_a_pinned_child_out_of_band` pins all
+(ADR-0264). `harness_lazy_slivers_keep_a_pinned_child_out_of_band` pins all
 three slivers under both clips.
 
 ### Editable text scrolls its content within the allocated viewport
