@@ -133,7 +133,7 @@ impl ViewState<AnimatedIcon> for AnimatedIconState {
         };
         let paint = CustomPaint::new()
             .size(Size::new(size, size))
-            .painter(Rc::new(painter));
+            .painter(painter);
         let mut semantics = Semantics::new();
         if let Some(label) = &view.semantic_label {
             semantics = semantics
