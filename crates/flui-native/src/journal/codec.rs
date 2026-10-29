@@ -51,7 +51,7 @@ pub enum CodecError {
         /// The 1-based line, the header being line 1.
         line: u64,
         /// What the parser refused.
-        source: serde_json::Error,
+        source: MalformedJson,
     },
     /// The header's major version is not this reader's.
     #[error("native recording version {found} is not supported (this reader reads {supported})")]
@@ -96,6 +96,13 @@ pub enum CodecError {
         what: &'static str,
     },
 }
+
+/// What the JSON parser or writer refused on a line of a native recording.
+/// Its message and [`source`](std::error::Error::source) are the parser's; the
+/// parser's own type stays out of this crate's API.
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub struct MalformedJson(serde_json::Error);
 
 /// The clock and setup a registry started with.
 #[derive(Debug, Clone, PartialEq)]
@@ -256,7 +263,10 @@ impl NativeRecording {
         let mut buffer = String::new();
         input.read_line(&mut buffer)?;
         let value: serde_json::Value =
-            serde_json::from_str(&buffer).map_err(|source| CodecError::Json { line: 1, source })?;
+            serde_json::from_str(&buffer).map_err(|source| CodecError::Json {
+                line: 1,
+                source: MalformedJson(source),
+            })?;
         let found = value
             .get(wire::VERSION_KEY)
             .and_then(serde_json::Value::as_u64)
@@ -478,7 +488,10 @@ fn json_error(line: u64, source: serde_json::Error) -> CodecError {
             tag: tag.to_owned(),
         };
     }
-    CodecError::Json { line, source }
+    CodecError::Json {
+        line,
+        source: MalformedJson(source),
+    }
 }
 
 fn write_line(out: &mut impl Write, line: u64, value: &impl Serialize) -> Result<(), CodecError> {
@@ -486,7 +499,10 @@ fn write_line(out: &mut impl Write, line: u64, value: &impl Serialize) -> Result
         if source.is_io() {
             CodecError::Io(source.into())
         } else {
-            CodecError::Json { line, source }
+            CodecError::Json {
+                line,
+                source: MalformedJson(source),
+            }
         }
     })?;
     out.write_all(b"\n")?;
