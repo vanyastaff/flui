@@ -4,10 +4,10 @@
 //! A recording is JSON Lines: one [`Header`] object, which names the [`Stream`] it journals,
 //! then one [`Row`] object per call — a reading, a coalesced batch, a device hot-plug, a
 //! capture loss; a system notice, a session end, a reopen; an input method's event; a read of
-//! the system preferences. Rows hold the plain fields a backend copies out of its native event,
-//! so a Win32 or Apple recording replays through the shared decoder on any host. The header
-//! names the format's major version under [`VERSION_KEY`]; a reader skips unknown fields, and
-//! an unknown variant is a refusal, never a skipped row.
+//! the system preferences or the displays. Rows hold the plain fields a backend copies out of
+//! its native event, so a Win32 or Apple recording replays through the shared decoder on any
+//! host. The header names the format's major version under [`VERSION_KEY`]; a reader skips
+//! unknown fields, and an unknown variant is a refusal, never a skipped row.
 //!
 //! `flui-native` writes and replays these records; this module only declares them, so a
 //! reader such as the driver reads a recording without the core. The format is versioned by
@@ -288,7 +288,7 @@ vocabulary! {
         App => "app",
         /// A window's delivery: its input method's events.
         Window => "window",
-        /// A platform's reads of the system: its preferences.
+        /// A platform's reads of the system: its preferences and displays.
         Platform => "platform",
     }
 }
@@ -818,6 +818,132 @@ pub enum PreferenceRead {
     Failed(Failure),
 }
 
+vocabulary! {
+    /// Why the platform reports no value for a capability.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum Absence {
+        /// The platform has no such capability.
+        NotOnThisPlatform => "not_on_this_platform",
+        /// The platform has it, this device does not.
+        NotOnThisDevice => "not_on_this_device",
+        /// The platform has it, the host does not read it yet.
+        NotYetOnThisHost => "not_yet_on_this_host",
+    }
+}
+
+vocabulary! {
+    /// The primaries a display shows surfaces in.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum Gamut {
+        /// sRGB.
+        Srgb => "srgb",
+        /// Display P3.
+        DisplayP3 => "display_p3",
+        /// Rec. 2020.
+        Rec2020 => "rec2020",
+    }
+}
+
+vocabulary! {
+    /// The range a display shows surfaces in.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum DynamicRange {
+        /// Standard dynamic range.
+        Standard => "standard",
+        /// High dynamic range.
+        High => "high",
+    }
+}
+
+/// How far above SDR white a display can drive a surface, or why the platform does not say.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum Headroom {
+    /// A finite multiple of SDR white, at least 1.
+    Multiple(f32),
+    /// The platform gives none.
+    Absent(Absence),
+}
+
+/// A display's colour: its colour space and headroom.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct Color {
+    /// The primaries.
+    pub gamut: Gamut,
+    /// The range.
+    pub dynamic_range: DynamicRange,
+    /// The headroom over SDR white.
+    pub headroom: Headroom,
+}
+
+/// A display's colour, or why the platform gives none.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum DisplayColor {
+    /// The colour the platform reports.
+    Known(Color),
+    /// The platform gives none.
+    Absent(Absence),
+}
+
+/// One display as a read of the system reported it.
+///
+/// `label` is the display's id as its platform issued it: it names the display within this
+/// recording and nowhere else, so a replay issues its own id for each label.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct Display {
+    /// The display within this recording.
+    pub label: u64,
+    /// Its name, a label, never an identity.
+    pub name: String,
+    /// Its bounds in global device pixels: x, y, width, height.
+    pub bounds: [i32; 4],
+    /// The area windows can occupy: x, y, width, height.
+    pub usable_bounds: [i32; 4],
+    /// Device pixels per logical pixel.
+    pub scale_factor: f64,
+    /// The period of its mode, in nanoseconds, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_period_ns: Option<u64>,
+    /// Whether it is the primary display.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub primary: bool,
+    /// The string that names it again after a restart, when the platform has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persistent_key: Option<String>,
+    /// Its colour.
+    pub color: DisplayColor,
+}
+
+/// What one read of the displays returned.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum DisplayRead {
+    /// The displays the system reported, at the platform's snapshot revision.
+    Observed {
+        /// The snapshot's revision, as the platform counted it.
+        revision: u64,
+        /// The displays.
+        displays: Vec<Display>,
+    },
+    /// The read failed.
+    Failed(Failure),
+}
+
 /// One registry call, after the header.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "row", rename_all = "snake_case")]
@@ -933,6 +1059,11 @@ pub enum Row {
     Preferences {
         /// What the read returned.
         read: PreferenceRead,
+    },
+    /// The application read the displays (a `platform` recording).
+    Displays {
+        /// What the read returned.
+        read: DisplayRead,
     },
 }
 

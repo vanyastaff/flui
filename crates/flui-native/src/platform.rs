@@ -618,7 +618,11 @@ impl<H: Host> Platform for HostPlatform<H> {
     }
 
     fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
-        H::Displays::snapshot(&self.owner)
+        let read = H::Displays::snapshot(&self.owner);
+        #[cfg(all(debug_assertions, feature = "native-capture"))]
+        self.journal
+            .record(crate::journal::capture::Captured::Displays(read.as_ref()));
+        read
     }
 
     fn clipboard(&self) -> Arc<dyn flui_platform::Clipboard> {

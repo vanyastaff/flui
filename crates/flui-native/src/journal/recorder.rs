@@ -8,7 +8,10 @@ use flui_platform::ImeEvent;
 use parking_lot::Mutex;
 
 use super::capture::{CaptureGuard, CaptureSource, Captured, capture};
-use super::codec::{Backend, Header, NativeRecording, PreferenceRead, ReadFailure, Row};
+use super::codec::{
+    Backend, DisplayRead, Header, NativeRecording, PreferenceRead, ReadFailure, RecordedDisplay,
+    Row,
+};
 
 /// Whether a recorder keeps the text it journals (ADR-0215 §5).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -177,6 +180,18 @@ fn journal(
         Captured::Preferences(read) => Row::Preferences(match read {
             Ok(values) => PreferenceRead::Observed(values.clone()),
             Err(error) => PreferenceRead::Failed(ReadFailure::of(error)),
+        }),
+        Captured::Displays(read) => Row::Displays(match read {
+            Ok(snapshot) => DisplayRead::Observed {
+                revision: snapshot.revision().get(),
+                displays: snapshot
+                    .displays()
+                    .iter()
+                    .cloned()
+                    .map(RecordedDisplay::of)
+                    .collect(),
+            },
+            Err(error) => DisplayRead::Failed(ReadFailure::of(error)),
         }),
         Captured::Started { .. } | Captured::Opened(_) => {
             unreachable!("BUG: a source opens once, handled above")
