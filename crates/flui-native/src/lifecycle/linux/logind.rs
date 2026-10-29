@@ -18,10 +18,7 @@ use flui_platform::SystemNotice;
 #[cfg(linux_host)]
 use futures_util::StreamExt;
 #[cfg(linux_host)]
-use zbus::{
-    Proxy,
-    zvariant::{OwnedFd, OwnedObjectPath},
-};
+use zbus::{OwnedFd, OwnedObjectPath, Proxy};
 
 #[cfg(linux_host)]
 use super::{HostEvent, Inbox};
@@ -69,7 +66,7 @@ pub(super) async fn watch(inbox: Arc<Inbox>) {
 #[cfg(linux_host)]
 async fn watch_connection(inbox: &Inbox) -> zbus::Result<()> {
     let connection = tokio::time::timeout(CONNECT_TIMEOUT, async {
-        zbus::connection::Builder::system()?.build().await
+        zbus::connection::Builder::system().build().await
     })
     .await
     .map_err(|_| zbus::Error::Failure("system bus connection timed out".into()))??;
