@@ -693,6 +693,15 @@ impl HeadlessOwnerTurns {
             failure.store(true, Ordering::Release);
         }
     }
+    /// Whether the platform still runs: `false` once it quit, or once it is
+    /// gone.
+    #[must_use]
+    pub fn is_running(&self) -> bool {
+        self.state
+            .upgrade()
+            .is_some_and(|state| state.lock().is_running)
+    }
+
     /// Perform one owner turn, including a pending explicit quit. No worker callback execution.
     pub fn drive(&self) {
         let Some(signal) = self.signal.upgrade() else {

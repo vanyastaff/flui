@@ -116,7 +116,7 @@ fn executor_refusal_retires_service_future_outside_host_borrow() {
 
 fn runtime_frame_wake_reaches_its_window_after_sibling_installation() {
     let _owner = OwnerHostClearGuard::arm();
-    let _teardown = LoopTeardown;
+    let _teardown = LoopTeardown::default();
     let a_calls = Arc::new(AtomicUsize::new(0));
     let b_calls = Arc::new(AtomicUsize::new(0));
     let a_seen = Arc::clone(&a_calls);
@@ -228,7 +228,7 @@ fn service_factory_replacement_refuses_obsolete_work_and_preserves_the_new_owner
         }
     }
     let _owner = OwnerHostClearGuard::arm();
-    let _teardown = LoopTeardown;
+    let _teardown = LoopTeardown::default();
     let spawned = Arc::new(AtomicUsize::new(0));
     let retired = Arc::new(AtomicUsize::new(0));
     let seen_spawned = Arc::clone(&spawned);

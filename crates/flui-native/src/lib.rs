@@ -286,7 +286,7 @@ pub use owner::headless::{
 pub use preferences::headless::HeadlessPreferences;
 pub use text::headless::FakeTextInput;
 pub use window::headless::{
-    HeadlessWindowPolicy, HeadlessWindowSystem, MockWindow, UnknownDisplay,
+    HeadlessOpenWindows, HeadlessWindowPolicy, HeadlessWindowSystem, MockWindow, UnknownDisplay,
 };
 // What a UIKit scene tells the composition root.
 #[cfg(target_os = "ios")]

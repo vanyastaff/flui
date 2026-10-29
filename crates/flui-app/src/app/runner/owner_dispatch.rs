@@ -938,15 +938,46 @@ const EXECUTION_SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_
 #[cfg(not(target_arch = "wasm32"))]
 const SERVICE_SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// One step of the loop's exit teardown, in the order it runs.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TeardownStep {
+    /// The main window's intents were refused and its window retired.
+    #[cfg_attr(
+        any(target_os = "android", target_os = "ios"),
+        allow(dead_code, reason = "only the desktop runner has a main window")
+    )]
+    MainWindow,
+    /// Every hosted UI runtime was shut down and dropped.
+    UiRuntimes,
+    /// The application services were cancelled and joined.
+    Services,
+    /// The background execution pools were closed.
+    Execution,
+    /// The platform clipboard and the redraw window were released.
+    NativeResources,
+}
+
+/// [`teardown_platform_ui_runtime_logged`] for a loop that keeps no log.
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(test, target_os = "android", target_os = "ios")
+))]
+pub(super) fn teardown_platform_ui_runtime() {
+    teardown_platform_ui_runtime_logged(&mut |_| {});
+}
+
 /// Full loop-exit teardown: drop every hosted UI runtime, close-request
-/// registration, service and execution pool, and the platform clipboard.
+/// registration, service and execution pool, and the platform clipboard,
+/// telling `log` each step as it ends.
 ///
 /// Reached from each backend's loop exit — `run_desktop`/`run_android` after
 /// `Platform::run` returns, and iOS from `applicationWillTerminate:`, which is
 /// the only pre-exit signal a `UIApplicationMain` loop that never returns can
 /// offer.
 #[cfg(not(target_arch = "wasm32"))]
-pub(super) fn teardown_platform_ui_runtime() {
+pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownStep)) {
     let displaced = APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
         state.owner_thread = None;
@@ -958,6 +989,7 @@ pub(super) fn teardown_platform_ui_runtime() {
     .err();
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(displaced))).err();
     preserve_first_lifecycle_panic(&mut first_panic, failure, "installed host retirement");
+    log(TeardownStep::UiRuntimes);
 
     // Service-lifecycle shutdown (issue #558) BEFORE the pools close: the
     // registry cancels every application service cooperatively and joins
@@ -994,6 +1026,7 @@ pub(super) fn teardown_platform_ui_runtime() {
     }))
     .err();
     preserve_first_lifecycle_panic(&mut first_panic, failure, "service shutdown");
+    log(TeardownStep::Services);
 
     // Execution-services shutdown (issue #557): the whole loop is exiting,
     // so stop background admission, cancel outstanding work, join running
@@ -1014,6 +1047,7 @@ pub(super) fn teardown_platform_ui_runtime() {
     }))
     .err();
     preserve_first_lifecycle_panic(&mut first_panic, failure, "execution shutdown");
+    log(TeardownStep::Execution);
 
     // ADR-0038 §9's install/teardown symmetry: the event loop has exited (this
     // runs from both `run_desktop` and `run_android`, after their respective
@@ -1038,6 +1072,7 @@ pub(super) fn teardown_platform_ui_runtime() {
     }))
     .err();
     preserve_first_lifecycle_panic(&mut first_panic, failure, "native shutdown");
+    log(TeardownStep::NativeResources);
     if let Some(payload) = first_panic {
         std::panic::resume_unwind(payload);
     }

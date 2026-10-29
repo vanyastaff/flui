@@ -602,3 +602,17 @@ pub(in crate::app) mod main_window;
     not(target_arch = "wasm32")
 ))]
 pub(in crate::app) use main_window::run_application;
+#[cfg(all(
+    feature = "testing",
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(crate) use main_window::{StartedLoop, start_loop};
+#[cfg(all(
+    feature = "testing",
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub use owner_dispatch::TeardownStep;

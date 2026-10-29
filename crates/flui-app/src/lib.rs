@@ -49,6 +49,13 @@
 pub mod app;
 pub mod bindings;
 pub mod embedder;
+#[cfg(all(
+    feature = "testing",
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub mod testing;
 
 /// What one operating system's windows offer beyond the window contract: the
 /// core host's per-system extensions of [`HostWindow`](native::HostWindow),

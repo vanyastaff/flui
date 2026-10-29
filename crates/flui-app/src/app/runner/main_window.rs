@@ -8,7 +8,7 @@ use super::{
         APP_RUNTIME, OwnerHostClearGuard, install_exit_policy_hook, install_owner_platform,
         install_platform_quit_hook, runtime_wake_callback, with_owner_platform,
     },
-    owner_dispatch::teardown_platform_ui_runtime,
+    owner_dispatch::{TeardownStep, teardown_platform_ui_runtime_logged},
 };
 use crate::app::{
     AppConfig, AppRunError, Application, StartupWindow,
@@ -617,16 +617,24 @@ pub(super) fn shutdown_main_window() {
 /// the [`OwnerHostClearGuard`], so the windows go before the owner platform
 /// that created them. On unwind each step is contained, so a second panic
 /// cannot abort the first one's unwind; that first panic stays the one raised.
-struct LoopTeardown;
+/// Each step that ends is written to its log.
+#[derive(Default)]
+struct LoopTeardown {
+    log: Rc<RefCell<Vec<TeardownStep>>>,
+}
 
 impl Drop for LoopTeardown {
     fn drop(&mut self) {
+        let log = Rc::clone(&self.log);
+        let mut record = move |step| log.borrow_mut().push(step);
         if std::thread::panicking() {
             contain(shutdown_main_window);
-            contain(teardown_platform_ui_runtime);
+            record(TeardownStep::MainWindow);
+            contain(|| teardown_platform_ui_runtime_logged(&mut record));
         } else {
             shutdown_main_window();
-            teardown_platform_ui_runtime();
+            record(TeardownStep::MainWindow);
+            teardown_platform_ui_runtime_logged(&mut record);
         }
     }
 }
@@ -665,15 +673,67 @@ where
     V: View + Clone + 'static,
     F: FnMut(&AppHandle) -> V + 'static,
 {
+    start_loop(application, platform, Rc::default())?.finish()
+}
+
+/// A loop whose [`Platform::run`](flui_native::Platform::run) returned, with
+/// its teardown still owed: a desktop loop's `run` returns when the loop
+/// ends, the headless platform's once it has bootstrapped, so a test drives
+/// the application between [`start_loop`] and [`StartedLoop::finish`].
+/// Dropped unfinished, it tears the loop down all the same.
+pub(crate) struct StartedLoop {
+    // Fields drop in this order: the main window and the ui_runtimes (and the
+    // native windows they own) are retired while the owner platform still
+    // lives.
+    teardown: LoopTeardown,
+    owner_guard: OwnerHostClearGuard,
+    fatal: Rc<RefCell<Option<AppRunError>>>,
+    result: Result<(), flui_native::PlatformError>,
+}
+
+impl StartedLoop {
+    /// Tear the loop down, then report the first fatal failure the loop
+    /// recorded, else what `run` returned.
+    pub(crate) fn finish(self) -> Result<(), AppRunError> {
+        let Self {
+            teardown,
+            owner_guard,
+            fatal,
+            result,
+        } = self;
+        drop(teardown);
+        drop(owner_guard);
+        let failure = fatal.borrow_mut().take();
+        if let Some(error) = failure {
+            return Err(error);
+        }
+        result.map_err(|error| AppRunError::Platform {
+            source: Arc::new(error),
+        })
+    }
+}
+
+/// Run `application` on the platform `platform` makes, up to the point
+/// [`Platform::run`](flui_native::Platform::run) returns, writing each
+/// teardown step that ends to `teardown_log`, on unwind too.
+pub(crate) fn start_loop<V, F>(
+    application: Application<V, F>,
+    platform: impl FnOnce() -> Result<Box<dyn flui_native::Platform>, AppRunError>,
+    teardown_log: Rc<RefCell<Vec<TeardownStep>>>,
+) -> Result<StartedLoop, AppRunError>
+where
+    V: View + Clone + 'static,
+    F: FnMut(&AppHandle) -> V + 'static,
+{
     let _logging = super::super::logging::init_managed_logging(&application.config);
     let platform = platform()?;
     let fatal = Rc::new(RefCell::new(None));
     let recorded = Rc::clone(&fatal);
-    let _owner_guard = OwnerHostClearGuard::arm();
+    let owner_guard = OwnerHostClearGuard::arm();
     // Declared after the owner guard, so it drops first: the main window and
     // the ui_runtimes (and the native windows they own) are retired while the
     // owner platform still lives, on unwind too.
-    let teardown = LoopTeardown;
+    let teardown = LoopTeardown { log: teardown_log };
     let result = platform.run(crate::app::runner::app_handler(move |owner| {
         let Application {
             mut factory,
@@ -785,13 +845,11 @@ where
         with_owner_platform(|owner| owner.shared().request_exit_policy_reevaluation());
         Ok(())
     }));
-    drop(teardown);
-    let failure = fatal.borrow_mut().take();
-    if let Some(error) = failure {
-        return Err(error);
-    }
-    result.map_err(|error| AppRunError::Platform {
-        source: Arc::new(error),
+    Ok(StartedLoop {
+        teardown,
+        owner_guard,
+        fatal,
+        result,
     })
 }
 
@@ -841,7 +899,7 @@ mod tests {
     }
     fn main_window_pending_coalesces_and_recovers_after_installer_panic() {
         let _owner = OwnerHostClearGuard::arm();
-        let _cleanup = LoopTeardown;
+        let _cleanup = LoopTeardown::default();
         let platform = HeadlessPlatform::new();
         let deferred = platform.enable_deferred_window_open();
         let turns = platform.owner_turns();
@@ -903,7 +961,7 @@ mod tests {
 
         for close_before_publication in [false, true] {
             let _owner = OwnerHostClearGuard::arm();
-            let _cleanup = LoopTeardown;
+            let _cleanup = LoopTeardown::default();
             Box::new(HeadlessPlatform::new())
                 .run(crate::app::runner::app_handler(move |owner| {
                     let handle = install_test_controller(
@@ -988,7 +1046,7 @@ mod tests {
             RuntimeTask, dispatch_platform_ui_runtime, install_platform_ui_runtime,
         };
         let _owner = OwnerHostClearGuard::arm();
-        let _cleanup = LoopTeardown;
+        let _cleanup = LoopTeardown::default();
         Box::new(HeadlessPlatform::new())
             .run(crate::app::runner::app_handler(move |owner| {
                 let calls = Rc::new(Cell::new(0));
