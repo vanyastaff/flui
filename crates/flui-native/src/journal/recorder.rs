@@ -8,7 +8,7 @@ use flui_platform::ImeEvent;
 use parking_lot::Mutex;
 
 use super::capture::{CaptureGuard, CaptureSource, Captured, capture};
-use super::codec::{Backend, Header, NativeRecording, Row};
+use super::codec::{Backend, Header, NativeRecording, PreferenceRead, ReadFailure, Row};
 
 /// Whether a recorder keeps the text it journals (ADR-0215 §5).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -25,8 +25,8 @@ pub enum Privacy {
 const REDACTED: &str = "\u{fffd}";
 
 /// A capture installed on this thread, journalling every registry, loop
-/// delivery and window delivery created on it while it lives, in creation
-/// order.
+/// delivery, window delivery and platform created on it while it lives, in
+/// creation order.
 #[derive(Debug)]
 #[must_use = "the capture ends when the recorder is finished or dropped"]
 pub struct Recorder {
@@ -174,6 +174,10 @@ fn journal(
                 Row::Ime { event, redacted }
             }
         },
+        Captured::Preferences(read) => Row::Preferences(match read {
+            Ok(values) => PreferenceRead::Observed(values.clone()),
+            Err(error) => PreferenceRead::Failed(ReadFailure::of(error)),
+        }),
         Captured::Started { .. } | Captured::Opened(_) => {
             unreachable!("BUG: a source opens once, handled above")
         }

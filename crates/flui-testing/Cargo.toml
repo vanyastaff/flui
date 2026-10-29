@@ -107,6 +107,9 @@ tracing = { workspace = true }
 # serialiser stays out of every production graph.
 serde = { workspace = true }
 serde_json = { workspace = true }
+# The preferences row shares the native recording's schema, so the two never
+# spell a preference differently.
+flui-protocol = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 static_assertions.workspace = true

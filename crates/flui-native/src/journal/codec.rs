@@ -16,15 +16,21 @@
 
 use std::io::{BufRead, Write};
 use std::num::{NonZeroU8, NonZeroU64};
+use std::sync::Arc;
 use std::time::Duration;
 
+use flui_foundation::geometry::{DevicePixelRatio, Size};
 use flui_platform::EventTime;
 use flui_platform::keyboard::Modifiers;
 use flui_platform::pointer::{
     PenTool, PointerButton, PointerButtons, PointerEvent, PointerKind, ScrollDelta, ScrollPhase,
     ScrollPrecision, ScrollUnit,
 };
-use flui_platform::{ImeEvent, MemoryPressureLevel, PlatformInput, SessionEndPhase, SystemNotice};
+use flui_platform::{
+    GestureParts, ImeEvent, InvalidPreference, Locale, MemoryPressureLevel, MotionPreference,
+    NativeMouseGeometry, NativeTouchGeometry, PlatformInput, PreferenceParts, SessionEndPhase,
+    SystemNotice, SystemPreferences, TextWeightPreference, WheelParts, WheelStep,
+};
 use flui_protocol::native_recording as wire;
 use serde::Serialize;
 
@@ -37,7 +43,9 @@ use crate::input::assembly::{
 };
 use crate::input::windows::direct_manipulation::manipulation::TouchpadAssembler;
 
-pub use wire::{Backend, FORMAT_VERSION, Stream};
+pub use wire::{Backend, FORMAT_VERSION, FailureKind, Stream};
+
+use crate::error::PlatformError;
 
 /// Why a native recording could not be read or written.
 #[derive(Debug, thiserror::Error)]
@@ -269,6 +277,48 @@ pub enum Row {
         /// refuses the row.
         redacted: bool,
     },
+    /// The application read the system preferences (a `platform` stream).
+    Preferences(PreferenceRead),
+}
+
+/// What one read of the system preferences returned.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum PreferenceRead {
+    /// The preferences the system reported.
+    Observed(SystemPreferences),
+    /// The read failed; a failure is not an observation.
+    Failed(ReadFailure),
+}
+
+/// Why a read of the system failed: which [`PlatformError`] it returned, and
+/// its message when it has one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadFailure {
+    /// Which error.
+    pub kind: FailureKind,
+    /// What failed, in the host's words.
+    pub message: Option<String>,
+}
+
+impl ReadFailure {
+    /// The failure `error` describes. An error with no kind of its own is
+    /// [`FailureKind::Other`], with its text as the message.
+    pub fn of(error: &PlatformError) -> Self {
+        let (kind, message) = match error {
+            PlatformError::PreferencesDeferred => (FailureKind::Deferred, None),
+            PlatformError::Preferences { message } => {
+                (FailureKind::Preferences, Some(message.clone()))
+            }
+            PlatformError::Displays { message } => (FailureKind::Displays, Some(message.clone())),
+            PlatformError::Unsupported(unsupported) => {
+                (FailureKind::Unsupported, Some(unsupported.to_string()))
+            }
+            PlatformError::EventLoop { message } => (FailureKind::EventLoop, Some(message.clone())),
+            other => (FailureKind::Other, Some(other.to_string())),
+        };
+        Self { kind, message }
+    }
 }
 
 impl Row {
@@ -290,6 +340,7 @@ impl Row {
             Self::SessionEnd(_) => "session_end",
             Self::Reopen => "reopen",
             Self::Ime { .. } => "ime",
+            Self::Preferences(_) => "preferences",
         }
     }
 }
@@ -351,6 +402,13 @@ pub trait ReplayTarget {
     /// An input method's event.
     fn ime(&mut self, event: &ImeEvent) -> Result<(), Unsupported> {
         let _ = event;
+        Err(Unsupported)
+    }
+
+    /// What a read of the system preferences returned: the target answers
+    /// the application's next read with it.
+    fn preferences(&mut self, read: &PreferenceRead) -> Result<(), Unsupported> {
+        let _ = read;
         Err(Unsupported)
     }
 }
@@ -565,6 +623,7 @@ impl NativeRecording {
                     });
                 }
                 Row::Ime { event, .. } => target.ime(event).map_err(unsupported)?,
+                Row::Preferences(read) => target.preferences(read).map_err(unsupported)?,
             }
             for input in out {
                 target.input(input).map_err(unsupported)?;
@@ -599,7 +658,8 @@ fn row_devices(row: &Row) -> Vec<(NativeDevice, PointerKind)> {
         | Row::Notice(_)
         | Row::SessionEnd(_)
         | Row::Reopen
-        | Row::Ime { .. } => Vec::new(),
+        | Row::Ime { .. }
+        | Row::Preferences(_) => Vec::new(),
     };
     readings
         .into_iter()
@@ -754,10 +814,10 @@ fn header_from_wire(header: wire::Header) -> DtoResult<Header> {
                     "a registry's recording without its epoch and uptime",
                 ));
             }
-            (Stream::App | Stream::Window, None, None) if counter.is_none() => {
+            (Stream::App | Stream::Window | Stream::Platform, None, None) if counter.is_none() => {
                 Header::for_stream(header.backend, header.stream)
             }
-            (Stream::App | Stream::Window, _, _) => {
+            (Stream::App | Stream::Window | Stream::Platform, _, _) => {
                 return Err(invalid("a clock on a recording that is not a registry's"));
             }
             (other, _, _) => return Err(unread(other.name())),
@@ -1294,6 +1354,9 @@ fn row_to_wire(row: &Row) -> DtoResult<wire::Row> {
             ime: wire::Ime::Event(ime_to_wire(event)?),
             redacted: *redacted,
         },
+        Row::Preferences(read) => wire::Row::Preferences {
+            read: read_to_wire(read)?,
+        },
     })
 }
 
@@ -1444,6 +1507,219 @@ fn row_from_wire(row: wire::Row) -> DtoResult<Row> {
             event: ime_from_wire(ime)?,
             redacted,
         },
+        wire::Row::Preferences { read } => Row::Preferences(read_from_wire(read)?),
         _ => return Err(unread("Row")),
     })
+}
+fn read_to_wire(read: &PreferenceRead) -> DtoResult<wire::PreferenceRead> {
+    Ok(match read {
+        PreferenceRead::Observed(values) => {
+            wire::PreferenceRead::Observed(preferences_to_wire(values.clone())?)
+        }
+        PreferenceRead::Failed(failure) => wire::PreferenceRead::Failed(wire::Failure {
+            kind: failure.kind,
+            message: failure.message.clone(),
+        }),
+    })
+}
+
+fn read_from_wire(read: wire::PreferenceRead) -> DtoResult<PreferenceRead> {
+    Ok(match read {
+        wire::PreferenceRead::Observed(values) => {
+            PreferenceRead::Observed(preferences_from_wire(values)?)
+        }
+        wire::PreferenceRead::Failed(wire::Failure { kind, message }) => {
+            PreferenceRead::Failed(ReadFailure { kind, message })
+        }
+        _ => return Err(unread("PreferenceRead")),
+    })
+}
+
+/// `values` in the schema, through [`PreferenceParts`]: a field added there
+/// fails to compile here until it is mirrored.
+fn preferences_to_wire(values: SystemPreferences) -> DtoResult<wire::Preferences> {
+    let PreferenceParts {
+        text_scale,
+        motion,
+        high_contrast,
+        haptics,
+        text_weight,
+        locales,
+        gestures:
+            GestureParts {
+                double_click_interval,
+                double_tap_interval,
+                long_press_timeout,
+                native_mouse_geometry,
+                native_touch_geometry,
+            },
+        wheel: WheelParts {
+            vertical,
+            horizontal_characters,
+        },
+    } = values.into_parts();
+    Ok(wire::Preferences {
+        text_scale,
+        motion: motion
+            .map(|motion| {
+                Ok(match motion {
+                    MotionPreference::NoPreference => wire::Motion::NoPreference,
+                    MotionPreference::Reduce => wire::Motion::Reduce,
+                    MotionPreference::Scaled(scale) => wire::Motion::Scaled(scale.get()),
+                    _ => return Err(DtoError::Unmirrored("MotionPreference")),
+                })
+            })
+            .transpose()?,
+        high_contrast,
+        haptics,
+        text_weight: text_weight
+            .map(|weight| {
+                Ok(match weight {
+                    TextWeightPreference::NoPreference => wire::TextWeight::NoPreference,
+                    TextWeightPreference::Bold => wire::TextWeight::Bold,
+                    TextWeightPreference::Adjustment(value) => {
+                        wire::TextWeight::Adjustment(value.get())
+                    }
+                    _ => return Err(DtoError::Unmirrored("TextWeightPreference")),
+                })
+            })
+            .transpose()?,
+        locales: locales.map(|locales| locales.iter().map(Locale::to_language_tag).collect()),
+        gestures: wire::Gestures {
+            double_click_interval_ns: double_click_interval.map(duration_nanos).transpose()?,
+            double_tap_interval_ns: double_tap_interval.map(duration_nanos).transpose()?,
+            long_press_timeout_ns: long_press_timeout.map(duration_nanos).transpose()?,
+            native_mouse_geometry: native_mouse_geometry.map(|geometry| {
+                let area = geometry.double_click_area();
+                let tolerance = geometry.drag_tolerance();
+                wire::MouseGeometry {
+                    double_click_area: [area.width, area.height],
+                    drag_tolerance: [tolerance.width, tolerance.height],
+                    pixel_ratio: geometry.pixel_ratio().get(),
+                }
+            }),
+            native_touch_geometry: native_touch_geometry.map(|geometry| wire::TouchGeometry {
+                touch_slop: geometry.touch_slop(),
+                double_tap_slop: geometry.double_tap_slop(),
+                min_fling: geometry.min_fling(),
+                max_fling: geometry.max_fling(),
+                pixel_ratio: geometry.pixel_ratio().get(),
+            }),
+        },
+        wheel_vertical: vertical
+            .map(|step| {
+                Ok(match step {
+                    WheelStep::Lines(lines) => wire::WheelStep::Lines(lines),
+                    WheelStep::Page => wire::WheelStep::Page,
+                    _ => return Err(DtoError::Unmirrored("WheelStep")),
+                })
+            })
+            .transpose()?,
+        wheel_horizontal_characters: horizontal_characters,
+    })
+}
+
+fn pixel_ratio(value: f64) -> DtoResult<DevicePixelRatio> {
+    DevicePixelRatio::new(value).ok_or_else(|| invalid(format!("pixel ratio {value}")))
+}
+
+/// The preferences `wire` describes, validated as the `with_*` methods
+/// validate them.
+fn preferences_from_wire(wire: wire::Preferences) -> DtoResult<SystemPreferences> {
+    let wire::Preferences {
+        text_scale,
+        motion,
+        high_contrast,
+        haptics,
+        text_weight,
+        locales,
+        gestures,
+        wheel_vertical,
+        wheel_horizontal_characters,
+    } = wire;
+    let rejected = |error: InvalidPreference| invalid(error.to_string());
+    PreferenceParts {
+        text_scale,
+        motion: motion
+            .map(|motion| {
+                Ok(match motion {
+                    wire::Motion::NoPreference => MotionPreference::NoPreference,
+                    wire::Motion::Reduce => MotionPreference::Reduce,
+                    wire::Motion::Scaled(scale) => {
+                        MotionPreference::from_duration_scale(scale).map_err(rejected)?
+                    }
+                    _ => return Err(unread("Motion")),
+                })
+            })
+            .transpose()?,
+        high_contrast,
+        haptics,
+        text_weight: text_weight
+            .map(|weight| {
+                Ok(match weight {
+                    wire::TextWeight::NoPreference => TextWeightPreference::NoPreference,
+                    wire::TextWeight::Bold => TextWeightPreference::Bold,
+                    wire::TextWeight::Adjustment(value) => {
+                        TextWeightPreference::from_adjustment(value)
+                    }
+                    _ => return Err(unread("TextWeight")),
+                })
+            })
+            .transpose()?,
+        locales: locales
+            .map(|tags| {
+                tags.iter()
+                    .map(|tag| {
+                        Locale::from_language_tag(tag)
+                            .ok_or_else(|| invalid(format!("locale {tag}")))
+                    })
+                    .collect::<DtoResult<Arc<[Locale]>>>()
+            })
+            .transpose()?,
+        gestures: GestureParts {
+            double_click_interval: gestures.double_click_interval_ns.map(Duration::from_nanos),
+            double_tap_interval: gestures.double_tap_interval_ns.map(Duration::from_nanos),
+            long_press_timeout: gestures.long_press_timeout_ns.map(Duration::from_nanos),
+            native_mouse_geometry: gestures
+                .native_mouse_geometry
+                .map(|geometry| {
+                    let [area_w, area_h] = geometry.double_click_area;
+                    let [drag_w, drag_h] = geometry.drag_tolerance;
+                    NativeMouseGeometry::new(
+                        Size::new(area_w, area_h),
+                        Size::new(drag_w, drag_h),
+                        pixel_ratio(geometry.pixel_ratio)?,
+                    )
+                    .map_err(rejected)
+                })
+                .transpose()?,
+            native_touch_geometry: gestures
+                .native_touch_geometry
+                .map(|geometry| {
+                    NativeTouchGeometry::new(
+                        geometry.touch_slop,
+                        geometry.double_tap_slop,
+                        geometry.min_fling,
+                        geometry.max_fling,
+                        pixel_ratio(geometry.pixel_ratio)?,
+                    )
+                    .map_err(rejected)
+                })
+                .transpose()?,
+        },
+        wheel: WheelParts {
+            vertical: wheel_vertical
+                .map(|step| {
+                    Ok(match step {
+                        wire::WheelStep::Lines(lines) => WheelStep::Lines(lines),
+                        wire::WheelStep::Page => WheelStep::Page,
+                        _ => return Err(unread("WheelStep")),
+                    })
+                })
+                .transpose()?,
+            horizontal_characters: wheel_horizontal_characters,
+        },
+    }
+    .try_into_preferences()
+    .map_err(rejected)
 }
