@@ -100,6 +100,26 @@ pub enum UiCommand {
         /// Where the answer goes.
         reply: super::agent::ReplySender<()>,
     },
+    /// Resolve a locator over the addressed presentation's committed tree
+    /// and answer on `reply`.
+    SemanticsLocate {
+        /// The presentation the agent was vended for.
+        presentation_id: PresentationId,
+        /// What to look for.
+        params: Box<flui_protocol::LocateParams>,
+        /// Where the answer goes.
+        reply: super::agent::ReplySender<flui_protocol::Matches>,
+    },
+    /// Read the facts that decide whether input reaches an element: the
+    /// committed tree's, and the render hit-test's at the action point.
+    ElementActionability {
+        /// The presentation the agent was vended for.
+        presentation_id: PresentationId,
+        /// The element, and where the action would land.
+        params: flui_protocol::ActionabilityParams,
+        /// Where the answer goes.
+        reply: super::agent::ReplySender<flui_protocol::Actionability>,
+    },
     /// Apply playback to the exact presentation's animation clock.
     Motion {
         /// The window addressed by the agent port.
@@ -158,6 +178,22 @@ impl std::fmt::Debug for UiCommand {
                 .field("presentation_id", presentation_id)
                 .field("element", &request.element)
                 .field("action", &request.action)
+                .finish_non_exhaustive(),
+            // The locator's text stays out: it may be a label the app shows.
+            UiCommand::SemanticsLocate {
+                presentation_id, ..
+            } => f
+                .debug_struct("UiCommand::SemanticsLocate")
+                .field("presentation_id", presentation_id)
+                .finish_non_exhaustive(),
+            UiCommand::ElementActionability {
+                presentation_id,
+                params,
+                ..
+            } => f
+                .debug_struct("UiCommand::ElementActionability")
+                .field("presentation_id", presentation_id)
+                .field("element", &params.element)
                 .finish_non_exhaustive(),
             UiCommand::Motion {
                 presentation_id,
@@ -498,6 +534,33 @@ impl UiRuntime {
         self.redraw_pending.swap(false, Ordering::AcqRel)
     }
 
+    /// An agent job's user code panicked with `payload`. The reply fails
+    /// first, so the agent learns of it whatever happens next; then a queued
+    /// tail gets a future owner turn, since this one is unwinding; then the
+    /// original panic resumes, never replaced by a later one.
+    fn fail_agent_job<T>(
+        &self,
+        reply: &super::agent::ReplySender<T>,
+        element: flui_protocol::ElementId,
+        failure: super::AgentError,
+        payload: Box<dyn std::any::Any + Send>,
+    ) -> ! {
+        let answered = catch_unwind(AssertUnwindSafe(|| {
+            super::agent::send_reply(reply, Some(element), Err(failure));
+        }))
+        .err();
+        let mut first_panic = Some(payload);
+        preserve_first_input_panic(&mut first_panic, answered, "semantics agent reply");
+        if !self.rx.is_empty() {
+            let wake_panic = catch_unwind(AssertUnwindSafe(|| {
+                self.sender_prototype.wake_owner();
+            }))
+            .err();
+            preserve_first_input_panic(&mut first_panic, wake_panic, "semantics agent action wake");
+        }
+        resume_unwind(first_panic.expect("BUG: the semantics agent job panic must be preserved"));
+    }
+
     fn rearm_after_command_panic(&self, payload: Box<dyn std::any::Any + Send>) -> ! {
         let wake_panic = catch_unwind(AssertUnwindSafe(|| {
             self.sender_prototype.wake_owner();
@@ -668,43 +731,69 @@ impl UiRuntime {
                             super::agent::send_reply(&reply, Some(element), result);
                         }
                         Err(payload) => {
-                            // The handler, or the owner before reaching it,
-                            // panicked. The reply fails first, so the agent
-                            // learns of it whatever happens next; then a
-                            // queued tail gets a future owner turn, since this
-                            // one is unwinding; then the original panic
-                            // resumes, never replaced by a later one.
                             let failure = if reached_handler.get() {
                                 super::AgentError::HandlerPanicked { element }
                             } else {
                                 super::AgentError::ResolvePanicked { element }
                             };
-                            let answered = catch_unwind(AssertUnwindSafe(|| {
-                                super::agent::send_reply(&reply, Some(element), Err(failure));
-                            }))
-                            .err();
-                            let mut first_panic = Some(payload);
-                            preserve_first_input_panic(
-                                &mut first_panic,
-                                answered,
-                                "semantics agent reply",
-                            );
-                            if !self.rx.is_empty() {
-                                let wake_panic = catch_unwind(AssertUnwindSafe(|| {
-                                    self.sender_prototype.wake_owner();
-                                }))
-                                .err();
-                                preserve_first_input_panic(
-                                    &mut first_panic,
-                                    wake_panic,
-                                    "semantics agent action wake",
-                                );
-                            }
-                            resume_unwind(first_panic.expect(
-                                "BUG: the semantics agent handler panic must be preserved",
-                            ));
+                            self.fail_agent_job(&reply, element, failure, payload);
                         }
                     }
+                }
+                UiCommand::SemanticsLocate {
+                    presentation_id,
+                    params,
+                    reply,
+                } => {
+                    let result = self.serve_semantics_locate(presentation_id, &params);
+                    if result == Err(super::AgentError::PresentationGone) {
+                        report.dropped_stale += 1;
+                    } else {
+                        report.invoked += 1;
+                    }
+                    super::agent::send_reply(&reply, None, result);
+                }
+                UiCommand::ElementActionability {
+                    presentation_id,
+                    params,
+                    reply,
+                } => {
+                    let element = params.element.element;
+                    let mut hit_panic = None;
+                    let served = catch_unwind(AssertUnwindSafe(|| {
+                        self.serve_element_actionability(presentation_id, &params, &mut hit_panic)
+                    }));
+                    // A render object that panicked in the hit-test is the
+                    // first failure; a panic while resolving, after it, is
+                    // traced and not the one that continues.
+                    let mut first_panic = hit_panic;
+                    let hit_failed = first_panic.is_some();
+                    let result = match served {
+                        Ok(result) => Some(result),
+                        Err(payload) => {
+                            preserve_first_input_panic(
+                                &mut first_panic,
+                                Some(payload),
+                                "element actionability resolve",
+                            );
+                            None
+                        }
+                    };
+                    if let Some(payload) = first_panic {
+                        let failure = if hit_failed {
+                            super::AgentError::HitTestPanicked { element }
+                        } else {
+                            super::AgentError::ResolvePanicked { element }
+                        };
+                        self.fail_agent_job(&reply, element, failure, payload);
+                    }
+                    let result = result.expect("BUG: no panic leaves the served result");
+                    if result == Err(super::AgentError::PresentationGone) {
+                        report.dropped_stale += 1;
+                    } else {
+                        report.invoked += 1;
+                    }
+                    super::agent::send_reply(&reply, Some(element), result);
                 }
                 UiCommand::Navigation(command) => match command.apply_on_owner() {
                     Ok(_) => {
