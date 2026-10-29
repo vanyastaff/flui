@@ -328,7 +328,7 @@ impl PendingClose {
     /// example after the user chose "Close without saving".
     ///
     /// On success the close becomes due: the owner is signalled
-    /// ([`LifecycleEvent::CloseDue`](crate::__runtime::LifecycleEvent::CloseDue)),
+    /// ([`LifecycleEvent::CloseDue`]),
     /// its next [`CloseGuardSource::settle`] returns this reason, and the
     /// owner carries the close out. Closes recorded for other reasons are
     /// carried out with it.
