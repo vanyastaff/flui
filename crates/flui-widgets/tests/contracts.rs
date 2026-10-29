@@ -565,6 +565,7 @@ fn semantics_translation_and_routing() {
             ("semantics::a_set_value_request_without_its_text_is_refused_rather_than_emptied", crate::semantics::a_set_value_request_without_its_text_is_refused_rather_than_emptied as fn()),
             ("semantics::a_tap_handler_round_trips_from_a_platform_click_to_the_callback", crate::semantics::a_tap_handler_round_trips_from_a_platform_click_to_the_callback),
             ("semantics::controls_publish_their_identifier_on_the_node_they_form", crate::semantics::controls_publish_their_identifier_on_the_node_they_form),
+            ("semantics::authored_properties_and_relations_reach_the_published_node", crate::semantics::authored_properties_and_relations_reach_the_published_node),
             ("semantics::a_diagnostic_is_reported_outside_the_pipeline_checkout", crate::semantics::a_diagnostic_is_reported_outside_the_pipeline_checkout),
             ("semantics::merged_custom_actions_each_reach_their_own_handler", crate::semantics::merged_custom_actions_each_reach_their_own_handler),
             ("semantics::a_repeated_custom_action_label_replaces_the_action", crate::semantics::a_repeated_custom_action_label_replaces_the_action),

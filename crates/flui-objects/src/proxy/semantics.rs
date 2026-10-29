@@ -496,7 +496,7 @@ impl RenderBox for RenderSemanticsAnnotations {
             config.set_scroll_extent_min(min);
             config.set_scroll_extent_max(max);
             if config.has_action(SemanticsAction::SetNumericValue)
-                && let Ok(range) = NumericRange::new(
+                && let Ok(range) = NumericRange::try_new(
                     pixels.clamp(min, max),
                     min,
                     max,

@@ -2762,7 +2762,7 @@ fn build_field_view(
         })
         .enabled(enabled)
         .focused(focused)
-        .invalid(appearance.semantics.invalid)
+        .invalid(crate::Invalid::from_bool(appearance.semantics.invalid))
         .required(appearance.semantics.required)
         .identifier_if(appearance.semantics.identifier.as_ref())
         .value(text.clone());

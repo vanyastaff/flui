@@ -23,7 +23,7 @@ use flui::widgets::column;
 
 let volume = self.volume;
 let expansion = self.expansion;
-let range = match NumericRange::new(volume.get(ctx), 0.0, 100.0, 5.0) {
+let range = match NumericRange::try_new(volume.get(ctx), 0.0, 100.0, 5.0) {
     Ok(range) => range,
     Err(error) => return Text::new(format!("Invalid volume range: {error}")).boxed(),
 };
@@ -42,7 +42,7 @@ Column::new(column![
 .boxed()
 ```
 
-`NumericRange::new(value, min, max, step)` returns a `Result`: every argument must be
+`NumericRange::try_new(value, min, max, step)` returns a `Result`: every argument must be
 finite, the bounds must admit the current value, and `step` must be positive. The step
 governs keyboard and increment/decrement proposals; an admitted exact numeric value from
 an assistive setter is not rounded to a step boundary. A zero-span range is valid but inert

@@ -34,7 +34,8 @@ use crate::node::SemanticsNode;
 use crate::properties::AttributedString;
 use crate::relation::{SemanticsAnchor, SemanticsRelation};
 use crate::role::{Assertiveness, SemanticsRole};
-use crate::states::{States, Toggled};
+use crate::states::{AutoComplete, Current, HasPopup, Invalid, States, Toggled};
+use flui_foundation::geometry::Axis;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
@@ -186,6 +187,9 @@ fn explicit_role(role: SemanticsRole) -> Option<Role> {
         SemanticsRole::Window => Role::Window,
         SemanticsRole::Pane => Role::Pane,
         SemanticsRole::ScrollView => Role::ScrollView,
+        // Declared to mean nothing: a structural container, never static
+        // text, whatever label it carries.
+        SemanticsRole::Generic | SemanticsRole::Presentation => Role::GenericContainer,
         // `SemanticsRole::None`, which declares no role. SemanticsRole is
         // non_exhaustive, so this arm would also take a role added later; the
         // pin is `every_role_maps_to_accesskit`, not this match.
@@ -227,6 +231,10 @@ fn apply_state(node: &mut Node, attrs: &SemanticsAttributes) {
         modal,
         required,
         invalid,
+        current,
+        has_popup,
+        auto_complete,
+        orientation,
         scopes_route: _,
         names_route: _,
     } = attrs.states;
@@ -266,8 +274,45 @@ fn apply_state(node: &mut Node, attrs: &SemanticsAttributes) {
     if required == Some(true) {
         node.set_required();
     }
-    if invalid == Some(true) {
-        node.set_invalid(accesskit::Invalid::True);
+    // A declared `False` publishes nothing: AccessKit's absence is ARIA's
+    // `false`. The declaration still decided merging.
+    match invalid {
+        Some(Invalid::True) => node.set_invalid(accesskit::Invalid::True),
+        Some(Invalid::Grammar) => node.set_invalid(accesskit::Invalid::Grammar),
+        Some(Invalid::Spelling) => node.set_invalid(accesskit::Invalid::Spelling),
+        Some(Invalid::False) | None => {}
+    }
+    if let Some(current) = current {
+        node.set_aria_current(match current {
+            Current::Page => accesskit::AriaCurrent::Page,
+            Current::Step => accesskit::AriaCurrent::Step,
+            Current::Location => accesskit::AriaCurrent::Location,
+            Current::Date => accesskit::AriaCurrent::Date,
+            Current::Time => accesskit::AriaCurrent::Time,
+            Current::True => accesskit::AriaCurrent::True,
+        });
+    }
+    if let Some(popup) = has_popup {
+        node.set_has_popup(match popup {
+            HasPopup::Menu => accesskit::HasPopup::Menu,
+            HasPopup::ListBox => accesskit::HasPopup::Listbox,
+            HasPopup::Tree => accesskit::HasPopup::Tree,
+            HasPopup::Grid => accesskit::HasPopup::Grid,
+            HasPopup::Dialog => accesskit::HasPopup::Dialog,
+        });
+    }
+    if let Some(auto_complete) = auto_complete {
+        node.set_auto_complete(match auto_complete {
+            AutoComplete::Inline => accesskit::AutoComplete::Inline,
+            AutoComplete::List => accesskit::AutoComplete::List,
+            AutoComplete::Both => accesskit::AutoComplete::Both,
+        });
+    }
+    if let Some(orientation) = orientation {
+        node.set_orientation(match orientation {
+            Axis::Horizontal => accesskit::Orientation::Horizontal,
+            Axis::Vertical => accesskit::Orientation::Vertical,
+        });
     }
 }
 
@@ -574,6 +619,10 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         hint: _,
         tooltip: _,
         placeholder: _,
+        keyboard_shortcut: _,
+        language: _,
+        url: _,
+        role_description: _,
         identifier: _,
         heading_level: _,
         text_direction: _,
@@ -636,6 +685,9 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         node.set_min_numeric_value(range.min());
         node.set_max_numeric_value(range.max());
         node.set_numeric_value_step(range.step());
+        if let Some(jump) = range.jump() {
+            node.set_numeric_value_jump(jump);
+        }
         // AccessKit reports a slider writable unless told otherwise
         // (`accesskit_consumer` 0.39, `Node::is_read_only`): a range no write
         // can reach is marked read-only, so a platform write is refused
@@ -664,6 +716,18 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
     }
     if let Some(placeholder) = &data.attrs.placeholder {
         node.set_placeholder(placeholder.as_str());
+    }
+    if let Some(shortcut) = &data.attrs.keyboard_shortcut {
+        node.set_keyboard_shortcut(shortcut.as_str());
+    }
+    if let Some(language) = &data.attrs.language {
+        node.set_language(language.as_str());
+    }
+    if let Some(url) = &data.attrs.url {
+        node.set_url(url.as_str());
+    }
+    if let Some(description) = &data.attrs.role_description {
+        node.set_role_description(description.as_str());
     }
     // The author's identifier (ADR-0240): adapters map `author_id` to UI
     // Automation's `AutomationId`, `AXIdentifier` and AT-SPI's accessible id,
@@ -988,6 +1052,26 @@ fn apply_relations(node: &mut Node, data: &PublishView<'_>, anchors: &AnchorInde
     if !controls.is_empty() {
         node.set_controls(controls);
     }
+    let described_by = ids(targets(SemanticsRelation::DescribedBy));
+    if !described_by.is_empty() {
+        node.set_described_by(described_by);
+    }
+    let details = ids(targets(SemanticsRelation::Details));
+    if !details.is_empty() {
+        node.set_details(details);
+    }
+    let flow_to = ids(targets(SemanticsRelation::FlowTo));
+    if !flow_to.is_empty() {
+        node.set_flow_to(flow_to);
+    }
+    // AccessKit takes one node for these: the first in identity order, so
+    // the choice does not depend on declaration or index iteration order.
+    if let Some(target) = targets(SemanticsRelation::ErrorMessage).first() {
+        node.set_error_message(target.id);
+    }
+    if let Some(target) = targets(SemanticsRelation::ActiveDescendant).first() {
+        node.set_active_descendant(target.id);
+    }
 }
 
 /// The text of the nodes labelling another, in order, joined by spaces as an
@@ -1215,8 +1299,9 @@ mod tests {
                 SemanticsAction::Expand => attrs.states.expanded = Some(false),
                 SemanticsAction::Collapse => attrs.states.expanded = Some(true),
                 SemanticsAction::SetNumericValue => {
-                    attrs.numeric_range =
-                        Some(crate::NumericRange::new(0.0, 0.0, 1.0, 0.1).expect("finite fixture"));
+                    attrs.numeric_range = Some(
+                        crate::NumericRange::try_new(0.0, 0.0, 1.0, 0.1).expect("finite fixture"),
+                    );
                 }
                 SemanticsAction::CustomAction => {
                     attrs.custom_actions = smallvec::smallvec!["Archive".into()];
@@ -1457,7 +1542,7 @@ mod tests {
     /// refused rather than reported and dropped.
     #[test]
     fn a_numeric_range_is_writable_only_through_the_handler_a_write_reaches() {
-        let range = crate::NumericRange::new(5.0, 0.0, 10.0, 1.0).expect("finite fixture");
+        let range = crate::NumericRange::try_new(5.0, 0.0, 10.0, 1.0).expect("finite fixture");
         let set_text = SemanticsAction::SetValue.value();
         let set_number = SemanticsAction::SetNumericValue.value();
         // (row, text value, actions, writable)
@@ -1527,6 +1612,12 @@ mod tests {
                 assert_eq!(mapped, None, "`none` declares no role");
                 continue;
             }
+            // Declared to mean nothing: a container the consumer lifts its
+            // children out of, which no other role publishes.
+            if matches!(role, SemanticsRole::Generic | SemanticsRole::Presentation) {
+                assert_eq!(mapped, Some(Role::GenericContainer), "{role}");
+                continue;
+            }
             let mapped = mapped.unwrap_or_else(|| panic!("{role} maps to no AccessKit role"));
             assert_ne!(
                 mapped,
@@ -1581,7 +1672,7 @@ mod tests {
             role: SemanticsRole::TextInput,
             states: States {
                 required: Some(true),
-                invalid: Some(true),
+                invalid: Some(Invalid::True),
                 ..States::default()
             },
             placeholder: Some("name@example.com".into()),
