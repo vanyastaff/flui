@@ -411,6 +411,13 @@ code parked in a presentation's gate after a grant the platform asked for
 directly, outside any dispatch or frame, makes the anchor owed too, so it is
 reported at that next turn.
 
+While an owner lease holds the runtime, every presentation's commit gate is
+checked out (ADR-0142 item 6): it admits only the `TextInputOwner`'s own calls
+(`CommitGate::owner_entry`), so a text service reaching a store from a message
+loop nested in a handler gets no synchronous lock and its asynchronous one
+waits. The lease runs the commit anchor before the runtime returns to its
+slot, and that grant runs there.
+
 `rejected_nested_pump_preserves_outer_commits_and_animation_time` observes queued
 store grants, synchronous lock exclusion, retained command delivery and animation
 progress after refusal.

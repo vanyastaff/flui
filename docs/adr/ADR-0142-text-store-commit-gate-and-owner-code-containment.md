@@ -1,8 +1,8 @@
 # ADR-0142: Text store owner notification, commit gate and owner-code containment
 
-- **Status:** Accepted (2026-10-06). Items 1–3, 5, 7 and 8 are implemented; items 4 and 6 land
-  with the widget's composition handling and the runtime's gate rule. Of those, the host contract,
-  the owner's `complete_composition` with the `Abandoned` path, the removal of `active_store`
+- **Status:** Accepted (2026-10-06). Items 1–3 and 5–8 are implemented; item 4 lands with the
+  widget's composition handling. Of it, the host contract, the owner's `complete_composition`
+  with the `Abandoned` path, the removal of `active_store`
   ([ADR-0135](ADR-0135-win32-text-services-hold-the-text-store-on-the-owner-thread.md)), the
   field's commit on blur, on a pointer-down on it and on a paste, and the runtime's commit on a
   pointer-down anywhere in the presentation are in the code.
@@ -118,8 +118,13 @@ framework does not control is contained.
    turn (a drained inbox, a background pump or a pump), not at the next frame, and a failed wake
    does not clear it.
 6. **The commit gate is open only while the UI runtime is in its slot and not driving a frame.** A
-   platform entry while the UI runtime is checked out (a frame, the end of a session) is refused a
-   synchronous lock and queues an asynchronous one; no user code runs. A presentation's close is
+   platform entry while the UI runtime is checked out (its owner's `RuntimeLease` for an owner
+   turn: input, a frame, the end of a session) is refused a synchronous lock and queues an
+   asynchronous one; no user code runs. The owner's own calls in that turn pass: the presentation's
+   `TextInputOwner` runs each of its entry points inside `CommitGate::owner_entry`, which a text
+   service the owner called (its composition ended for a press) shares, so only a platform entry
+   from elsewhere (a message loop nested in a handler) is held. What it queued runs at the anchor
+   that ends the turn, before the runtime returns to its slot. A presentation's close is
    its last turn and opens the gate for good: no anchor follows it, so a completion queued in a
    frame the close cuts short commits (item 4) before its store is retired. An accepted
    composition commit is completed and the rest of the queued tail is cancelled: a pull host's
@@ -226,8 +231,13 @@ In place:
   background pump, and a pump before its frame each pay the debt),
   `a_failed_anchor_stays_owed_and_asks_for_a_wake` and
   `a_failure_parked_by_a_platform_grant_reaches_the_next_owner_turn`.
+- Item 6: `flui-platform` `a_checked_out_gate_admits_only_owner_calls` (the gate itself, owner
+  calls nested and unwound) and `flui-runtime`
+  `a_platform_entry_while_the_runtime_is_checked_out_runs_no_owner_code` (a text store reached
+  from a press's handler during the owner turn: the synchronous lock refused, the asynchronous one
+  run at the turn's end, the press's own commit served).
 
 Outstanding:
 
-- Items 4 and 6, with their tests: undo (the field has none yet), unmount committing a
-  composition and the accepted-close hook (item 4), and the gate's UI runtime rule (item 6).
+- Item 4, with its tests: undo (the field has none yet), unmount committing a composition and
+  the accepted-close hook.

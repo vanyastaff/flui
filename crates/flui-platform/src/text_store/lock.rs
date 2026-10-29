@@ -204,10 +204,29 @@ pub enum TextStoreError {
 /// fails outside any frame: a panic caught while a store settled a grant
 /// waits here ([`Self::defer_failure`]) until the owner takes it
 /// ([`Self::take_failure`]) and reports it.
+///
+/// While its UI runtime is checked out of its owner's slot
+/// ([`Self::set_checked_out`]), the gate is open only inside its owner's own
+/// calls ([`Self::owner_entry`]): a platform entry that reaches the store then
+/// (a nested message loop, a text service called back from inside a handler)
+/// is refused a synchronous lock and queues an asynchronous one, and no owner
+/// code runs (ADR-0142 item 6). A text service the owner itself called (its
+/// composition ended for a press) runs inside the owner's call and is served.
 #[derive(Clone, Default)]
 pub struct CommitGate {
     shut: Rc<Cell<bool>>,
+    checked_out: Rc<Cell<bool>>,
+    owner_depth: Rc<Cell<u32>>,
     failure: Rc<ParkedFailure>,
+}
+
+/// Leaves an owner call when dropped, unwinding included.
+struct OwnerEntry<'a>(&'a Cell<u32>);
+
+impl Drop for OwnerEntry<'_> {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() - 1);
+    }
 }
 
 impl std::fmt::Debug for CommitGate {
@@ -226,15 +245,43 @@ impl CommitGate {
         Self::default()
     }
 
-    /// Whether commits are allowed now.
+    /// Whether commits are allowed now: the gate is not shut, and its UI
+    /// runtime is in its slot or the caller is inside an owner call.
     #[must_use]
     pub fn is_open(&self) -> bool {
-        !self.shut.get()
+        !self.shut.get() && (!self.checked_out.get() || self.owner_depth.get() > 0)
     }
 
     /// Open or shut the gate for every store holding a clone of it.
     pub fn set_open(&self, open: bool) {
         self.shut.set(!open);
+    }
+
+    /// Whether the gate is shut ([`Self::set_open`]), whatever the
+    /// checkout: a frame transaction is open.
+    #[must_use]
+    pub fn is_shut(&self) -> bool {
+        self.shut.get()
+    }
+
+    /// Record whether the gate's UI runtime is checked out of its owner's
+    /// slot: while it is, only [`Self::owner_entry`] opens the gate.
+    pub fn set_checked_out(&self, checked_out: bool) {
+        self.checked_out.set(checked_out);
+    }
+
+    /// Run `f` as the owner's own call: the gate admits what it reaches while
+    /// the UI runtime is checked out, a text service the owner called
+    /// included. Nested calls nest.
+    pub fn owner_entry<R>(&self, f: impl FnOnce() -> R) -> R {
+        let depth = self
+            .owner_depth
+            .get()
+            .checked_add(1)
+            .expect("BUG: owner calls nest fewer than u32::MAX deep");
+        self.owner_depth.set(depth);
+        let _entry = OwnerEntry(&self.owner_depth);
+        f()
     }
 
     /// Hold `payload`, a panic caught after a grant had already run, for

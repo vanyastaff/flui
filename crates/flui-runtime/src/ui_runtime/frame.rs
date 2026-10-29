@@ -454,6 +454,27 @@ impl UiRuntime {
         self.anchor_owed.get()
     }
 
+    /// Record whether this UI runtime is checked out of its owner's slot:
+    /// while it is, every presentation's stores admit only their owner's own
+    /// calls (ADR-0142 item 6). A platform entry from elsewhere queues its
+    /// grant for [`Self::finish_checkout`].
+    pub(crate) fn set_text_commits_checked_out(&self, checked_out: bool) {
+        for presentation in self.presentations.iter() {
+            presentation.text_input().set_checked_out(checked_out);
+        }
+    }
+
+    /// The end of an owner turn, before the runtime returns to its slot:
+    /// the commit anchor runs, so a grant a platform entry queued while the
+    /// runtime was checked out runs at the end of the turn it came in.
+    ///
+    /// # Panics
+    ///
+    /// Resumes the anchor's first failure, as [`Self::run_commit_anchor`].
+    pub(crate) fn finish_checkout(&self) {
+        self.enter(UiRuntime::run_commit_anchor);
+    }
+
     /// One presentation's build+layout+paint segment — moves VERBATIM from
     /// the retired `AppBinding::draw_frame_entered`'s Phase 1–4, now
     /// parameterized by `presentation` instead of hard-wired to
