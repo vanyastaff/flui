@@ -804,11 +804,10 @@ impl flui_sdk::view::ViewState<SelectionReader> for SelectionReaderState {
 /// borrow held, so its listener reads the controller and writes a signal
 /// through a captured writer source, and the reader rebuilds reading both.
 pub(crate) fn tab_controller_listener_writes_from_an_event_callback() {
-    let controller = TabController::new(2, 0);
     let seen = Rc::new(Cell::new(None));
     let mut laid = lay_out(
         SelectionReader {
-            controller: controller.clone(),
+            controller: TabController::new(2, 0),
             seen: Rc::clone(&seen),
         },
         tight(200.0, 48.0),
