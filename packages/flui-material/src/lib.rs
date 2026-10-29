@@ -133,8 +133,9 @@ pub use outlined_button::OutlinedButton;
 pub use page_transitions::{PageTransition, PageTransitionsTheme, SharedAxis};
 pub use progress_indicator::{
     CircularProgressIndicator, CircularProgressIndicatorState, CircularWavyProgressIndicator,
-    CircularWavyProgressIndicatorState, LinearProgressIndicator, LinearProgressIndicatorState,
-    LinearWavyProgressIndicator, LinearWavyProgressIndicatorState,
+    CircularWavyProgressIndicatorState, ContainedLoadingIndicator, ContainedLoadingIndicatorState,
+    LinearProgressIndicator, LinearProgressIndicatorState, LinearWavyProgressIndicator,
+    LinearWavyProgressIndicatorState, LoadingIndicator, LoadingIndicatorState,
 };
 pub use radio::{Radio, RadioState};
 pub use ripple::{RippleConfiguration, RippleScope, StateLayerAlpha};
@@ -161,7 +162,7 @@ pub use theme_data::{
     AppBarThemeData, CardThemeData, CheckboxThemeData, ChipThemeData, DataTableThemeData,
     DialogThemeData, DividerThemeData, ElevatedButtonThemeData, FabThemeData,
     FilledButtonThemeData, IconButtonThemeData, InputDecorationThemeData, ListTileThemeData,
-    NavigationBarThemeData, OutlinedButtonThemeData, RadioThemeData, SwitchThemeData,
-    TabBarThemeData, TextButtonThemeData, ThemeData, ThemeDataOverrides,
+    MaterialStyle, NavigationBarThemeData, OutlinedButtonThemeData, RadioThemeData,
+    SwitchThemeData, TabBarThemeData, TextButtonThemeData, ThemeData, ThemeDataOverrides,
 };
 pub use typography::english_like_2021;

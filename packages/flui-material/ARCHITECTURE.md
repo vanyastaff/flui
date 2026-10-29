@@ -654,7 +654,23 @@ indicator of any kind draws a still frame that reads as activity, never as a per
 determinate value jumps. `MaterialApp` installs the circular indicator as the refresh
 indicator style (ADR-0235).
 
+`LoadingIndicator` and `ContainedLoadingIndicator` take the same value policy and the same
+progress-bar semantics. Indeterminate, they morph through seven `material_shapes` in a fixed
+order, a new morph every 650 ms on a spring (damping ratio 0.6, stiffness 200) that adds a
+quarter turn, over a steady turn every 4666 ms. The morph cycle runs 28 morphs, four rounds of
+the shapes, so the quarter turns add up to whole revolutions and the shape does not jump when
+the cycle repeats. Every shape is scaled by one factor, from the farthest point of any of them,
+so that no shape turned any way leaves the 38 dp square. Determinate, the circle morphs into
+the soft burst. Under reduced motion, a disabled ticker or without a ticking scope an
+indeterminate one shows the soft burst standing still and releases its controllers.
+`ThemeData::style` chooses between the Material 3 baseline and Expressive in one place;
+`MaterialApp`'s refresh indicator style shows `LoadingIndicator` for `MaterialStyle::Expressive`
+and `CircularProgressIndicator` otherwise.
+
 `progress_indicator_variants` pins each rule: `linear gap and stop`, `circular determinate
 arcs` (including the jump under reduced motion), `determinate values stay finite`, `circular
 indeterminate is the activity arc`, `waves rise, lie flat and travel`, `wave amplitude eases
-in`, and `material app refresh shows the circular indicator`.
+in`, `material app refresh shows the circular indicator`, `loading indicator morphs on a
+spring`, `loading indicator stands still`, `loading indicator follows its value`, `contained
+loading indicator has its container` and `expressive material app refresh shows the loading
+indicator`.

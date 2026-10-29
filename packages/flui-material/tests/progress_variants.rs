@@ -6,8 +6,9 @@ use std::f64::consts::{FRAC_PI_2, TAU};
 use std::time::Duration;
 
 use flui_material::{
-    CircularProgressIndicator, CircularWavyProgressIndicator, LinearProgressIndicator,
-    LinearWavyProgressIndicator, MaterialApp, Theme, ThemeData,
+    CircularProgressIndicator, CircularWavyProgressIndicator, ContainedLoadingIndicator,
+    LinearProgressIndicator, LinearWavyProgressIndicator, LoadingIndicator, MaterialApp,
+    MaterialStyle, Theme, ThemeData, ThemeDataOverrides,
 };
 use flui_painting::paint::PathCommand;
 use flui_sdk::animation::{MotionOverride, Vsync};
@@ -614,4 +615,262 @@ pub fn huge_layouts_stay_bounded() {
         );
         check(&laid, &format!("linear {side}"));
     }
+}
+
+/// The outline points of every path painted in `color`, control points left out.
+fn outlines(laid: &LaidOut, color: Color) -> Vec<Vec<Point<f64>>> {
+    laid.draw_ops()
+        .into_iter()
+        .filter_map(|command| match command.op {
+            DrawOp::Path { path, paint } if paint.color == color => Some(
+                path.commands()
+                    .filter_map(|command| match command {
+                        PathCommand::MoveTo(p)
+                        | PathCommand::LineTo(p)
+                        | PathCommand::QuadraticTo(_, p)
+                        | PathCommand::CubicTo(_, _, p) => Some(p),
+                        PathCommand::Close => None,
+                    })
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The one shape a loading indicator paints in `color`.
+fn loading_shape(laid: &LaidOut, color: Color) -> Vec<Point<f64>> {
+    let mut shapes = outlines(laid, color);
+    assert_eq!(shapes.len(), 1, "one shape: {shapes:?}");
+    shapes.pop().expect("one shape")
+}
+
+/// The area the outline's points enclose: the same for a shape however it is turned.
+fn area(points: &[Point<f64>]) -> f64 {
+    let n = points.len();
+    (0..n)
+        .map(|i| {
+            let (a, b) = (points[i], points[(i + 1) % n]);
+            a.x * b.y - b.x * a.y
+        })
+        .sum::<f64>()
+        .abs()
+        / 2.0
+}
+
+/// How far the shape's points reach from the indicator's centre.
+fn extent(points: &[Point<f64>]) -> f64 {
+    points
+        .iter()
+        .map(|p| (p.x - 24.0).hypot(p.y - 24.0))
+        .fold(0.0, f64::max)
+}
+
+/// An indeterminate loading indicator morphs from the soft burst into the nine-sided cookie on
+/// a spring: 100 ms in the area is strictly between the two, at 325 ms the spring has
+/// overshot past the cookie, the next morph starts from the cookie at 650 ms, and every frame
+/// stays inside the 38 dp square.
+pub fn loading_indicator_morphs_on_a_spring() {
+    let (primary, _) = colors();
+    let (mut laid, vsync) = mount(LoadingIndicator::new(), 48.0, 48.0, TextDirection::Ltr);
+    let burst = loading_shape(&laid, primary);
+    laid.pump_for(ms(100));
+    let early = loading_shape(&laid, primary);
+    laid.pump_for(ms(225));
+    let overshoot = loading_shape(&laid, primary);
+    laid.pump_for(ms(325));
+    let cookie = loading_shape(&laid, primary);
+    for (shape, what) in [
+        (&burst, "burst"),
+        (&early, "early"),
+        (&overshoot, "overshoot"),
+        (&cookie, "cookie"),
+    ] {
+        assert!(
+            extent(shape) <= 19.0 + 1e-9,
+            "{what} leaves the 38 dp square: {}",
+            extent(shape)
+        );
+    }
+    let (a, e, o, c) = (area(&burst), area(&early), area(&overshoot), area(&cookie));
+    assert!(a < c, "the cookie is the larger shape: {a} and {c}");
+    assert!(
+        e > a && e < c,
+        "100 ms into the morph the area is strictly between: {a}, {e}, {c}"
+    );
+    assert!(
+        o > c,
+        "the spring overshoots the cookie at 325 ms: {o}, {c}"
+    );
+    assert!(vsync.has_running(), "the motion runs");
+    assert_eq!(announced(&mut laid), None, "busy, without a value");
+}
+
+/// Reduced motion and a missing ticking scope show the soft burst standing still,
+/// and request no frames.
+pub fn loading_indicator_stands_still() {
+    let (primary, _) = colors();
+    let (moving, _) = mount(LoadingIndicator::new(), 48.0, 48.0, TextDirection::Ltr);
+    let burst = loading_shape(&moving, primary);
+
+    let (mut laid, vsync) = mount(LoadingIndicator::new(), 48.0, 48.0, TextDirection::Ltr);
+    laid.pump_for(ms(200));
+    laid.set_motion_override(MotionOverride::Reduce);
+    laid.pump_for(ms(16));
+    let still = loading_shape(&laid, primary);
+    close(
+        area(&still),
+        area(&burst),
+        "one still shape: the soft burst",
+    );
+    laid.pump_for(ms(500));
+    assert_eq!(loading_shape(&laid, primary), still, "it stays still");
+    assert!(!vsync.has_running(), "a still indicator requests no frames");
+
+    let mut unticked = lay_out_animated(
+        themed(LoadingIndicator::new(), TextDirection::Ltr),
+        tight(48.0, 48.0),
+        Vsync::new(),
+    );
+    unticked.pump_for(ms(300));
+    assert_eq!(
+        loading_shape(&unticked, primary),
+        burst,
+        "without a ticking scope"
+    );
+}
+
+/// A determinate loading indicator morphs the circle into the soft burst with the value:
+/// clamped into [0, 1], a non-finite value keeping the last finite shape (the circle before
+/// the first), and the percentage announced.
+pub fn loading_indicator_follows_its_value() {
+    let (primary, _) = colors();
+    let shape = |value: f64| {
+        let (laid, _) = mount(
+            LoadingIndicator::new().value(Some(value)),
+            48.0,
+            48.0,
+            TextDirection::Ltr,
+        );
+        loading_shape(&laid, primary)
+    };
+    let (circle, burst) = (shape(0.0), shape(1.0));
+    let half = area(&shape(0.5));
+    assert!(
+        half > area(&circle).min(area(&burst)) && half < area(&circle).max(area(&burst)),
+        "half way is between the circle and the burst"
+    );
+    assert_eq!(shape(1.5), burst, "clamped to the burst");
+    assert_eq!(shape(-2.0), circle, "clamped to the circle");
+    assert_eq!(
+        shape(f64::NAN),
+        circle,
+        "the circle before any finite value"
+    );
+
+    let (mut laid, vsync) = mount(
+        LoadingIndicator::new().value(Some(1.0)),
+        48.0,
+        48.0,
+        TextDirection::Ltr,
+    );
+    assert!(
+        !vsync.has_running(),
+        "a determinate indicator needs no frames"
+    );
+    for value in [f64::NAN, f64::INFINITY] {
+        laid.pump_widget(VsyncScope::new(
+            vsync.clone(),
+            themed(
+                LoadingIndicator::new().value(Some(value)),
+                TextDirection::Ltr,
+            ),
+        ));
+        assert_eq!(
+            loading_shape(&laid, primary),
+            burst,
+            "{value} keeps the burst"
+        );
+    }
+    assert_eq!(announced(&mut laid).as_deref(), Some("100%"));
+}
+
+/// A contained loading indicator paints the 48 dp primary container behind a shape in the
+/// on-primary-container color.
+pub fn contained_loading_indicator_has_its_container() {
+    let scheme = ThemeData::light().color_scheme;
+    let (laid, _) = mount(
+        ContainedLoadingIndicator::new(),
+        48.0,
+        48.0,
+        TextDirection::Ltr,
+    );
+    assert_eq!(
+        circles(&laid, scheme.primary_container),
+        [(24.0, 24.0, 24.0)]
+    );
+    let shape = loading_shape(&laid, scheme.on_primary_container);
+    assert!(extent(&shape) <= 19.0 + 1e-9);
+    assert_eq!(
+        outlines(&laid, scheme.primary),
+        Vec::<Vec<Point<f64>>>::new()
+    );
+}
+
+/// Under a Material 3 Expressive `MaterialApp` a `RefreshIndicator` shows a loading indicator:
+/// the circle morphing toward the burst with the pull, then the indeterminate morph.
+pub fn expressive_material_app_refresh_shows_the_loading_indicator() {
+    let (primary, _) = colors();
+    let refresh = RefreshController::new();
+    let vsync = Vsync::new();
+    let alternatives = GestureAlternatives::new(Alternative::VisibleControl(ControlSpec::new(
+        RefreshIntent::command("Refresh"),
+        SizedBox::new(24.0, 24.0),
+    )))
+    .expect("one labelled command");
+    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
+        style: Some(MaterialStyle::Expressive),
+        ..Default::default()
+    });
+    let mut laid = lay_out_animated(
+        VsyncScope::new(
+            vsync.clone(),
+            MaterialApp::new(
+                RefreshIndicator::new(
+                    Scrollable::new()
+                        .controller(ScrollController::new())
+                        .child(SizedBox::new(300.0, 5000.0)),
+                    alternatives,
+                )
+                .controller(refresh.clone())
+                .on_refresh(|_cx| std::future::pending::<()>()),
+            )
+            .theme(theme),
+        ),
+        tight(300.0, 300.0),
+        vsync,
+    );
+    laid.pump_for(Duration::ZERO);
+    assert!(outlines(&laid, primary).is_empty(), "nothing while idle");
+
+    laid.dispatch_pointer_down(150.0, 40.0);
+    laid.dispatch_pointer_move(150.0, 100.0);
+    laid.pump();
+    assert_eq!(outlines(&laid, primary).len(), 1, "the pull shows a shape");
+    assert!(
+        arcs(&laid, primary).is_empty(),
+        "not the circular indicator"
+    );
+
+    laid.dispatch_pointer_move(150.0, 200.0);
+    laid.dispatch_pointer_up(150.0, 200.0);
+    laid.pump();
+    assert!(refresh.is_refreshing());
+    laid.pump_for(Duration::ZERO);
+    let first = outlines(&laid, primary);
+    assert_eq!(first.len(), 1, "{first:?}");
+    for _ in 0..12 {
+        laid.pump_for(ms(16));
+    }
+    assert_ne!(outlines(&laid, primary), first, "it morphs");
 }

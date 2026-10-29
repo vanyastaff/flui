@@ -22,7 +22,8 @@
 //!    their own adopt when the navigator installs them (ADR-0221). Material
 //!    page pushes therefore animate.
 //! 3. [`RefreshIndicatorStyle`] — so every `RefreshIndicator` below shows a
-//!    [`CircularProgressIndicator`]: determinate with the pull's progress while
+//!    [`CircularProgressIndicator`], or a [`LoadingIndicator`] under a
+//!    [`MaterialStyle::Expressive`] theme: determinate with the pull's progress while
 //!    pulling, indeterminate while refreshing (ADR-0235).
 //! 4. [`ScaffoldMessenger`] — so `Scaffold`s anywhere below share one
 //!    snack-bar rail.
@@ -69,9 +70,10 @@ use flui_sdk::widgets::{
 };
 
 use crate::page_transitions::dialog_transition;
-use crate::progress_indicator::CircularProgressIndicator;
+use crate::progress_indicator::{CircularProgressIndicator, LoadingIndicator};
 use crate::scaffold_messenger::ScaffoldMessenger;
 use crate::theme::AnimatedTheme;
+use crate::theme_data::MaterialStyle;
 use crate::theme_data::ThemeData;
 
 /// Which theme a [`MaterialApp`] uses.
@@ -394,8 +396,12 @@ impl StatelessView for MaterialApp {
             let routes = PageTransitions::new(ScaffoldMessenger::new(inner))
                 .page(page)
                 .popup(dialog_transition());
-            // Every `RefreshIndicator` below shows the Material circular indicator.
-            let routes = RefreshIndicatorStyle::new(material_refresh_indicator, routes);
+            // Every `RefreshIndicator` below shows the theme's Material indicator.
+            let style = resolved.style;
+            let routes = RefreshIndicatorStyle::new(
+                move |phase| material_refresh_indicator(style, phase),
+                routes,
+            );
             AnimatedTheme::new(resolved, routes).boxed()
         };
 
@@ -444,16 +450,20 @@ impl StatelessView for MaterialBuilderScope {
     }
 }
 
-/// The indicator a [`RefreshIndicatorStyle`] under [`MaterialApp`] shows: a
-/// [`CircularProgressIndicator`] that fills with the pull, then spins while refreshing.
-fn material_refresh_indicator(phase: RefreshIndicatorPhase) -> Option<BoxedView> {
-    match phase {
-        RefreshIndicatorPhase::Pulling { progress } => Some(
-            CircularProgressIndicator::new()
-                .value(Some(progress))
-                .boxed(),
-        ),
-        RefreshIndicatorPhase::Refreshing => Some(CircularProgressIndicator::new().boxed()),
-        _ => None,
-    }
+/// The indicator a [`RefreshIndicatorStyle`] under [`MaterialApp`] shows: for the baseline a
+/// [`CircularProgressIndicator`], for Material 3 Expressive a [`LoadingIndicator`], each
+/// filling with the pull, then running while refreshing.
+fn material_refresh_indicator(
+    style: MaterialStyle,
+    phase: RefreshIndicatorPhase,
+) -> Option<BoxedView> {
+    let value = match phase {
+        RefreshIndicatorPhase::Pulling { progress } => Some(progress),
+        RefreshIndicatorPhase::Refreshing => None,
+        _ => return None,
+    };
+    Some(match style {
+        MaterialStyle::Expressive => LoadingIndicator::new().value(value).boxed(),
+        _ => CircularProgressIndicator::new().value(value).boxed(),
+    })
 }
