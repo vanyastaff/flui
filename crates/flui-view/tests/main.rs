@@ -307,6 +307,58 @@ fn element_lifecycle_and_dependency_matrix() {
             ("build_owner_tests::build_owners_have_isolated_focus_managers", build_owner_tests::build_owners_have_isolated_focus_managers as fn()),
             ("build_owner_tests::test_build_scope_processes_in_depth_order", build_owner_tests::test_build_scope_processes_in_depth_order as fn()),
             ("build_owner_tests::clean_binding_frames_report_no_builds", build_owner_tests::clean_binding_frames_report_no_builds as fn()),
+            ("build_owner_tests::dropping_an_owner_with_an_observer_detaches_it_once", build_owner_tests::dropping_an_owner_with_an_observer_detaches_it_once as fn()),
+        ],
+    );
+}
+
+#[test]
+fn close_guard_matrix() {
+    run_table(
+        "close_guard_matrix",
+        &[
+            (
+                "lifecycle_tests::releasing_the_last_hold_queues_one_close",
+                lifecycle_tests::releasing_the_last_hold_queues_one_close as fn(),
+            ),
+            (
+                "lifecycle_tests::a_repeated_request_records_one_close",
+                lifecycle_tests::a_repeated_request_records_one_close as fn(),
+            ),
+            (
+                "lifecycle_tests::a_hold_and_a_decision_refuse_by_reason",
+                lifecycle_tests::a_hold_and_a_decision_refuse_by_reason as fn(),
+            ),
+            (
+                "lifecycle_tests::a_recorded_close_runs_when_the_last_hold_goes_unless_kept_open",
+                lifecycle_tests::a_recorded_close_runs_when_the_last_hold_goes_unless_kept_open
+                    as fn(),
+            ),
+            (
+                "lifecycle_tests::a_cancelled_logoff_withdraws_only_the_session_entry",
+                lifecycle_tests::a_cancelled_logoff_withdraws_only_the_session_entry as fn(),
+            ),
+            (
+                "lifecycle_tests::an_undelivered_signal_keeps_the_due_close",
+                lifecycle_tests::an_undelivered_signal_keeps_the_due_close as fn(),
+            ),
+            (
+                "lifecycle_tests::a_change_recorded_under_a_hold_wakes_on_the_owner_turn",
+                lifecycle_tests::a_change_recorded_under_a_hold_wakes_on_the_owner_turn as fn(),
+            ),
+            (
+                "lifecycle_tests::a_change_taken_across_the_release_wakes_on_the_owner_turn",
+                lifecycle_tests::a_change_taken_across_the_release_wakes_on_the_owner_turn
+                    as fn(),
+            ),
+            (
+                "lifecycle_tests::discarding_a_recorded_close_makes_it_due",
+                lifecycle_tests::discarding_a_recorded_close_makes_it_due as fn(),
+            ),
+            (
+                "lifecycle_tests::an_older_resolution_leaves_a_newer_record",
+                lifecycle_tests::an_older_resolution_leaves_a_newer_record as fn(),
+            ),
         ],
     );
 }

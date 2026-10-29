@@ -50,7 +50,7 @@ use super::{TextServices, input_scope};
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::owner::windows::WindowRef;
 use crate::text::windows::acp::{
-    self, AcpChange, AcpSelection, Hresult, Session, SessionSlot, acp, store_error,
+    self, AcpChange, AcpSelection, Hresult, SelectionInsert, Session, SessionSlot, acp, store_error,
 };
 use crate::text::windows::geometry::{ScreenRect, range_rect_to_screen, screen_point_to_client};
 
@@ -70,6 +70,7 @@ const _: () = {
     assert!(acp::TS_LF_READWRITE == TS_LF_READWRITE.0);
     assert!(acp::GXFPF_ROUND_NEAREST == GXFPF_ROUND_NEAREST);
     assert!(acp::GXFPF_NEAREST == GXFPF_NEAREST);
+    assert!(acp::TS_IAS_QUERYONLY == TS_IAS_QUERYONLY);
 };
 
 impl From<Hresult> for HRESULT {
@@ -625,25 +626,22 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         pchange: *mut TS_TEXTCHANGE,
     ) -> windows_core::Result<()> {
         TsfStore::document_method(self, "InsertTextAtSelection", |state| {
-            if dwflags & TS_IAS_QUERYONLY != 0 {
-                let selection = state
-                    .slot
-                    .read(|session| Ok::<_, Hresult>(acp::selection(session)))?;
-                put(pacpstart, selection.start);
-                put(pacpend, selection.end);
-                return Ok(());
-            }
-            let text = wide_text(pchtext, cch)?;
-            tracing::debug!(target: "flui_native::tsf", text, "InsertTextAtSelection");
-            let change = state.slot.write(|session| {
-                session
-                    .insert_at_selection(&text)
-                    .map(acp::text_change)
-                    .map_err(store_error)
+            let answer = acp::insert_at_selection(&state.slot, dwflags, || {
+                let text = wide_text(pchtext, cch).map_err(|error| Hresult::new(error.code().0))?;
+                tracing::debug!(target: "flui_native::tsf", text, "InsertTextAtSelection");
+                Ok(text)
             })?;
-            put(pacpstart, change.start);
-            put(pacpend, change.new_end);
-            put(pchange, ts_change(change));
+            match answer {
+                SelectionInsert::Query { start, end } => {
+                    put(pacpstart, start);
+                    put(pacpend, end);
+                }
+                SelectionInsert::Inserted(change) => {
+                    put(pacpstart, change.start);
+                    put(pacpend, change.new_end);
+                    put(pchange, ts_change(change));
+                }
+            }
             Ok(())
         })
     }
