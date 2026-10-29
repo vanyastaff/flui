@@ -76,8 +76,8 @@ pub(crate) fn aged(age: std::time::Duration) -> EventTime {
     rebased(age, std::time::Duration::ZERO)
 }
 
-#[cfg(any(windows, wayland_host, test))]
-fn rebased_at(
+#[cfg(any(windows, wayland_host, target_os = "macos", test))]
+pub(crate) fn rebased_at(
     event_now: u64,
     platform_now: std::time::Duration,
     stamp: std::time::Duration,

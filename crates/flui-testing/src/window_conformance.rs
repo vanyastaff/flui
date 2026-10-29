@@ -16,7 +16,9 @@
 //! - **State converges.** A command the window accepted shows in its
 //!   [`state`](PlatformWindow::state) once the window system has settled: the
 //!   title, size, position, mode, visibility, flags and constraints it asked for,
-//!   and the window system draws the material it asked for.
+//!   and the window system draws the material it asked for. A minimized
+//!   window is still shown: minimizing is a mode, not a hide, whatever the
+//!   window system's own reading of "visible" says.
 //! - **Revisions mean change.** Reading the state twice with nothing between
 //!   keeps its revision; a command that changed something raises it.
 //! - **Bad numbers never reach the window system.** A size that is not finite
@@ -38,7 +40,8 @@
 //!   the way the window system closes it — is [`Closed`](ApplyError::Closed).
 //! - **The snapshot agrees with the window system.** Once the window system
 //!   has settled, each fact the fixture reads back by its own means (the
-//!   drawable metrics and scale, focus, visibility) is the snapshot's
+//!   drawable metrics and scale, focus, visibility, occlusion where it can be
+//!   asked) is the snapshot's
 //!   (ADR-0254 §1). The capabilities the checks read are the snapshot's.
 //!
 //! [`check`] returns each violated promise by name; [`assert_conforms`] panics
@@ -69,9 +72,17 @@ pub struct Readback {
     pub focused: bool,
     /// Whether the window is the active window of its desktop.
     pub active: bool,
-    /// Whether the window is shown and nothing (a cloak, a locked session)
-    /// hides it.
+    /// Whether the window is shown: Win32's `IsWindowVisible`, an X11 window
+    /// mapped or iconic, AppKit's `isVisible` or `isMiniaturized`. Minimizing
+    /// and covering leave it shown.
     pub visible: bool,
+    /// Whether the window system says none of the window reaches the screen
+    /// (a cloak, a covering, a suspended toplevel), as it says it; `None`
+    /// where it answers no query for it (X11 and winit report occlusion only
+    /// as an event). The checks compare it with the snapshot only for a
+    /// shown window in another mode than minimized, which is when the
+    /// snapshot keeps it.
+    pub occluded: Option<bool>,
     /// The material the window system draws behind the window; `None` where
     /// it draws one the contract has no name for, or none can be read. Not a
     /// fact of the snapshot: the checks compare it with the
@@ -306,8 +317,12 @@ fn accepted_commands_converge(fixture: &mut dyn WindowFixture) -> Result<(), Str
             WindowCommand::SetDecorated(on) => (state.decorated == *on)
                 .then_some(())
                 .ok_or_else(|| format!("decorated is {}, not {on}", state.decorated)),
+            // Minimizing is a mode, not a hide: the window stays shown, and
+            // `is_seen` is what leaves it out.
             WindowCommand::SetMode(WindowMode::Minimized) => {
-                if capabilities.observes_minimized.is_available() {
+                if !state.visible {
+                    Err("the window is no longer shown".to_owned())
+                } else if capabilities.observes_minimized.is_available() {
                     (state.mode == WindowMode::Minimized)
                         .then_some(())
                         .ok_or_else(|| format!("the mode is {:?}, not Minimized", state.mode))
@@ -398,11 +413,18 @@ fn disagreements(step: &str, state: &WindowState, readback: Readback) -> Vec<Str
             state.metrics
         ));
     }
+    let occlusion = readback
+        .occluded
+        .map(|read| read && readback.visible && state.mode != WindowMode::Minimized)
+        .map(|read| ("occluded", state.occluded, read));
     for (fact, published, read) in [
         ("focused", state.focused, readback.focused),
         ("active", state.active, readback.active),
         ("visible", state.visible, readback.visible),
-    ] {
+    ]
+    .into_iter()
+    .chain(occlusion)
+    {
         if published != read {
             broken.push(format!(
                 "{step}: the snapshot says {fact} {published}, the window system {read}"

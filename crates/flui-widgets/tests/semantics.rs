@@ -2185,6 +2185,7 @@ pub(crate) fn a_diagnostic_is_reported_outside_the_pipeline_checkout() {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     thread_local! {
+        #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
         static PIPELINE: RefCell<Option<flui_rendering::pipeline::PipelineCell>> =
             const { RefCell::new(None) };
     }

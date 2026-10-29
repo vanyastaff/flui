@@ -52,15 +52,6 @@ impl Journals {
     }
 }
 
-/// Run `session` with a capture installed on this thread, and return its
-/// result with the recording of every registry created during it, in
-/// creation order.
-pub fn record<T>(backend: Backend, session: impl FnOnce() -> T) -> (T, Vec<NativeRecording>) {
-    let recorder = Recorder::start(backend);
-    let result = session();
-    (result, recorder.finish())
-}
-
 /// Fold one captured call into the recording of its registry.
 fn journal(
     recordings: &mut Vec<NativeRecording>,

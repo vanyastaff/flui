@@ -1258,7 +1258,7 @@ impl IOSLoop {
                 });
             if can_publish
                 && self.signal.accepting()
-                && window.state().visible
+                && window.state().is_seen()
                 && window.state().execution == flui_platform::WindowExecutionState::Running
             {
                 window.publish(origin.attachment, marker);
@@ -1392,7 +1392,7 @@ impl IOSLoop {
                 });
                 if retiring
                     || (window.resource_generation() != resource_generation
-                        && !window.state().visible)
+                        && !window.state().is_seen())
                 {
                     // Keep the acknowledged ui_runtime, but do not publish a native
                     // attachment already superseded by a queued detach intent.

@@ -1,9 +1,10 @@
 //! The Windows host's text input: the Text Services Framework reads the
 //! focused field's store (ADR-0135).
 //!
-//! - `geometry`: the pure half, a text range's logical rect as the physical
-//!   screen rect an input method places its windows against, checked on every
-//!   host;
+//! - `geometry` and `acp`: the pure half, checked on every host. `geometry`
+//!   gives a text range's logical rect as the physical screen rect an input
+//!   method places its windows against; `acp` answers TSF's `ITextStoreACP`
+//!   calls over the field's store: positions, locks and error codes;
 //! - `tsf`: each window's TSF connection, its documents and their store, the
 //!   window's `TextStoreHost`;
 //! - [`Tsf`]: the text services' hook on FLUI's window class and the table's
@@ -169,6 +170,9 @@ pub(crate) mod geometry {
     #[cfg(test)]
     mod tests;
 }
+
+#[cfg(any(windows, test))]
+pub(crate) mod acp;
 
 #[cfg(windows)]
 mod tsf;

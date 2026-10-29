@@ -2213,6 +2213,7 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "objc2-core-haptics",
  "objc2-foundation 0.3.2",
+ "objc2-metal 0.3.2",
  "objc2-quartz-core 0.3.2",
  "objc2-ui-kit 0.3.2",
  "parking_lot",
@@ -2235,6 +2236,7 @@ dependencies = [
  "wasm-bindgen-test",
  "wayland-backend",
  "wayland-client",
+ "wayland-cursor",
  "wayland-protocols",
  "web-sys",
  "web-time",
@@ -4501,6 +4503,7 @@ dependencies = [
  "bitflags 2.13.2",
  "block2 0.6.2",
  "objc2 0.6.5",
+ "objc2-core-foundation",
  "objc2-foundation 0.3.2",
 ]
 

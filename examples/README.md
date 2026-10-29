@@ -10,6 +10,13 @@ or WASM targets with their own build step.
 |---|---|
 | **counter** — the minimal FLUI app: one `Signal` and a `RawButton` whose press writes it (start here — this is the README's own "Hello World" code sample, and the exact shape `flui create`'s `counter` template generates) | `cargo run --example counter` |
 
+## Acceptance
+
+| Example | Run |
+|---|---|
+| **acceptance_app** — the notes application the headless acceptance rows run (`tests/fixtures/acceptance_app/`, through `tests/facade_consumer.rs`), in a window for native runs | `cargo run --example acceptance_app --features material` |
+| **acceptance_app_faults** — the same application with one injected panic, named by its argument (a `Fault` name, listed when the argument is missing) | `cargo run --example acceptance_app_faults --features material -- <fault>` |
+
 ## Rendering / engine internals
 
 | Example | Run |

@@ -25,6 +25,10 @@ pub(crate) struct ReportedFacts {
     pub(crate) safe_area: EdgeInsets,
     /// Whether the platform lets the window run its UI (ADR-0035).
     pub(crate) execution: WindowExecutionState,
+    /// Whether the window system says none of the window reaches the screen,
+    /// as it says it: the snapshot keeps it only for a shown, unminimized
+    /// window (`WindowState::successor`).
+    pub(crate) occluded: bool,
     /// What the last hover report said.
     pub(crate) hovered: bool,
     /// Whether the window is the active window of its desktop; its focus where
@@ -42,6 +46,7 @@ impl ReportedFacts {
             .with_appearance(self.appearance)
             .with_safe_area(self.safe_area)
             .with_execution(self.execution)
+            .with_occluded(self.occluded)
             .with_hovered(self.hovered)
             .with_active(self.active)
             .with_capabilities(self.capabilities)
@@ -55,6 +60,26 @@ impl ReportedFacts {
 #[cfg(any(windows, target_os = "macos", target_arch = "wasm32", linux_host))]
 pub(crate) fn not_carried_out(command: &flui_platform::WindowCommand) -> flui_platform::ApplyError {
     flui_platform::ApplyError::failed(format!("this window system does not carry out {command:?}"))
+}
+
+/// `size` held to `constraints` the way a resize by the user is: raised to the
+/// minimum, then lowered to the maximum, each axis on its own, so a maximum
+/// below the minimum wins. A window system that applies a size as given
+/// (AppKit's `setContentSize:`, a headless model) is handed this instead.
+pub(crate) fn held_to(
+    size: flui_foundation::geometry::Size<f64>,
+    constraints: flui_platform::SizeConstraints,
+) -> flui_foundation::geometry::Size<f64> {
+    let mut size = size;
+    if let Some(min) = constraints.min {
+        size.width = size.width.max(min.width);
+        size.height = size.height.max(min.height);
+    }
+    if let Some(max) = constraints.max {
+        size.width = size.width.min(max.width);
+        size.height = size.height.min(max.height);
+    }
+    size
 }
 
 /// What a window system says of a window, as the three facts its mode is
@@ -206,7 +231,7 @@ impl WindowStateCell {
     }
 
     /// The last published snapshot, without reading the OS.
-    #[cfg(any(windows, all(target_os = "linux", feature = "x11")))]
+    #[cfg(any(windows, x11_host, wayland_host))]
     pub(crate) fn published(&self) -> WindowState {
         self.last.lock().state.clone()
     }
@@ -278,7 +303,56 @@ mod tests {
     use flui_foundation::geometry::Size;
     use flui_platform::{WindowGeometry, WindowRevision, WindowState};
 
-    use super::WindowStateCell;
+    use super::{WindowStateCell, held_to};
+
+    /// A size is held to the window's limits on each axis alone, and a
+    /// maximum below the minimum wins, as the window systems that clamp a
+    /// resize themselves do.
+    #[test]
+    fn a_size_is_held_to_the_constraints() {
+        use flui_platform::SizeConstraints;
+
+        let size = Size::new;
+        let both = SizeConstraints::new(Some(size(400.0, 300.0)), Some(size(900.0, 700.0)));
+        let rows = [
+            ("inside", both, size(640.0, 480.0), size(640.0, 480.0)),
+            ("below", both, size(200.0, 100.0), size(400.0, 300.0)),
+            ("above", both, size(2000.0, 2000.0), size(900.0, 700.0)),
+            (
+                "one axis each way",
+                both,
+                size(200.0, 2000.0),
+                size(400.0, 700.0),
+            ),
+            (
+                "no limits",
+                SizeConstraints::NONE,
+                size(1.0, 1e9),
+                size(1.0, 1e9),
+            ),
+            (
+                "a minimum only",
+                SizeConstraints::new(Some(size(400.0, 300.0)), None),
+                size(200.0, 5000.0),
+                size(400.0, 5000.0),
+            ),
+            (
+                "a maximum only",
+                SizeConstraints::new(None, Some(size(900.0, 700.0))),
+                size(200.0, 5000.0),
+                size(200.0, 700.0),
+            ),
+            (
+                "a maximum below the minimum",
+                SizeConstraints::new(Some(size(500.0, 500.0)), Some(size(300.0, 300.0))),
+                size(400.0, 400.0),
+                size(300.0, 300.0),
+            ),
+        ];
+        for (case, constraints, asked, held) in rows {
+            assert_eq!(held_to(asked, constraints), held, "{case}");
+        }
+    }
 
     fn state(width: f64) -> WindowState {
         WindowState::new(
@@ -448,6 +522,7 @@ mod mapping {
     /// one.
     fn appkit(said: ModeFlags) -> ModeFlags {
         WindowFlags {
+            on_screen: !said.minimized,
             fullscreen: said.fullscreen,
             miniaturized: said.minimized,
             zoomed: said.maximized,
