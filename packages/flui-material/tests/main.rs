@@ -533,6 +533,10 @@ fn navigation_and_layout_contracts() {
             tabs::controller_mutation_during_build_is_refused,
         ),
         (
+            "tabs::tab controller listener writes from an event callback",
+            tabs::tab_controller_listener_writes_from_an_event_callback,
+        ),
+        (
             "tabs::tap sets the controller index through real pointer dispatch",
             tabs::tap_sets_the_controller_index_through_real_pointer_dispatch,
         ),

@@ -735,3 +735,93 @@ pub(crate) fn controller_mutation_during_build_is_refused() {
         "a refused change neither moves the index nor notifies"
     );
 }
+
+/// Rebuilds the bar from a signal its controller listener writes, reading the
+/// controller in the same build: the shape an app writes.
+#[derive(Clone, flui_sdk::view::prelude::StatefulView)]
+struct SelectionReader {
+    controller: TabController,
+    seen: Rc<Cell<Option<(usize, usize)>>>,
+}
+
+struct SelectionReaderState {
+    selected: Option<flui_sdk::view::Signal<usize>>,
+    controller: TabController,
+    listener: Option<flui_sdk::foundation::ListenerId>,
+}
+
+impl flui_sdk::view::StatefulView for SelectionReader {
+    type State = SelectionReaderState;
+    fn create_state(&self) -> Self::State {
+        SelectionReaderState {
+            selected: None,
+            controller: self.controller.clone(),
+            listener: None,
+        }
+    }
+}
+
+impl flui_sdk::view::ViewState<SelectionReader> for SelectionReaderState {
+    fn init_state(&mut self, ctx: &dyn flui_sdk::view::LifecycleContext) {
+        use flui_sdk::view::{BuildContextExt as _, SignalWriteExt as _};
+
+        let selected = ctx.signal(self.controller.index());
+        let writer = ctx.writer_source();
+        let heard = self.controller.clone();
+        self.listener = Some(self.controller.add_listener(move || {
+            let index = heard.index();
+            // An indicator reads the position too.
+            let _ = heard.position().value();
+            writer
+                .write(|cx| selected.set(cx, index))
+                .expect("the listener's write lands");
+        }));
+        self.selected = Some(selected);
+    }
+
+    fn dispose(&mut self) {
+        if let Some(id) = self.listener.take() {
+            self.controller.remove_listener(id);
+        }
+    }
+
+    fn build(
+        &self,
+        view: &SelectionReader,
+        ctx: &dyn flui_sdk::view::BuildContext,
+    ) -> impl flui_sdk::view::prelude::IntoView {
+        let selected = self.selected.expect("init_state ran");
+        view.seen
+            .set(Some((selected.get(ctx), view.controller.index())));
+        themed(
+            ThemeData::light(),
+            TabBar::secondary(two_tabs()).controller(view.controller.clone()),
+        )
+    }
+}
+
+/// A tap's event callback changes the tab; the controller notifies with no
+/// borrow held, so its listener reads the controller and writes a signal
+/// through a captured writer source, and the reader rebuilds reading both.
+pub(crate) fn tab_controller_listener_writes_from_an_event_callback() {
+    let controller = TabController::new(2, 0);
+    let seen = Rc::new(Cell::new(None));
+    let mut laid = lay_out(
+        SelectionReader {
+            controller: controller.clone(),
+            seen: Rc::clone(&seen),
+        },
+        tight(200.0, 48.0),
+    );
+    assert_eq!(seen.get(), Some((0, 0)));
+
+    laid.dispatch_pointer_down(150.0, 24.0);
+    laid.dispatch_pointer_up(150.0, 24.0);
+    laid.tick();
+
+    assert_eq!(
+        seen.get(),
+        Some((1, 1)),
+        "the reader rebuilt with the listener's write and the new index"
+    );
+}
