@@ -181,6 +181,9 @@ struct Shared {
     length: usize,
     pair: Cell<IndexPair>,
     index_listeners: TabListenerRegistry,
+    /// Tells the step actions their enablement may have changed: whether
+    /// there is a tab before or after depends on the selected index.
+    step_changes: ChangeNotifier,
     /// The owned position source. Taken out while it is driven, so a
     /// listener that re-enters the controller never meets a held borrow.
     owner: RefCell<Option<AnimatedValue<f64>>>,
@@ -226,6 +229,12 @@ fn default_motion() -> MotionSpec {
 }
 
 impl Shared {
+    /// Tell the index listeners and the step actions the selection changed.
+    fn notify_index_changed(&self) {
+        self.index_listeners.notify();
+        self.step_changes.notify_listeners();
+    }
+
     fn index(&self) -> usize {
         self.pair.get().index
     }
@@ -396,7 +405,7 @@ impl Shared {
             recovery.run(|| self.follow(settled, Change::Animate));
         }
         if committed {
-            recovery.run(|| self.index_listeners.notify());
+            recovery.run(|| self.notify_index_changed());
         }
         recovery.finish();
     }
@@ -611,6 +620,7 @@ impl TabController {
                     previous_index,
                 }),
                 index_listeners: TabListenerRegistry::default(),
+                step_changes: ChangeNotifier::new(),
                 owner: RefCell::new(Some(owner)),
                 owned,
                 pending_drive: Cell::new(None),
@@ -640,6 +650,12 @@ impl TabController {
 
     pub(crate) fn set_motion(&self, motion: MotionSpec) {
         *self.shared.motion.borrow_mut() = motion;
+    }
+
+    /// Notified whenever the selected index changes: what a step action
+    /// reports as the change of its enablement.
+    pub(crate) fn step_changes(&self) -> ChangeNotifier {
+        self.shared.step_changes.clone()
     }
 
     /// The index of the currently selected tab.
@@ -709,7 +725,7 @@ impl TabController {
         // failure is resumed once they have.
         let mut recovery = PanicRecovery::new();
         recovery.run(|| self.shared.follow(index, change));
-        recovery.run(|| self.shared.index_listeners.notify());
+        recovery.run(|| self.shared.notify_index_changed());
         recovery.finish();
     }
 

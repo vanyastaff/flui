@@ -256,7 +256,12 @@ pub struct CustomActionId(NonZeroU32);
 
 impl CustomActionId {
     /// The id of the action at `index` (zero-based) of a node's list.
-    pub(crate) fn at(index: usize) -> Self {
+    ///
+    /// A widget that offers only some of its custom actions at a time names
+    /// each by its place in the full list, so a handler keeps its id while
+    /// the others come and go ([`SemanticsConfiguration::add_custom_action_as`](crate::SemanticsConfiguration::add_custom_action_as)).
+    #[must_use]
+    pub fn at(index: usize) -> Self {
         let position = u32::try_from(index + 1)
             .ok()
             .and_then(NonZeroU32::new)

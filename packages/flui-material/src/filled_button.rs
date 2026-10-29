@@ -19,7 +19,7 @@ use flui_sdk::widgets::{WidgetState, WidgetStateProperty};
 use crate::ThemeData;
 use crate::button_style::ButtonStyle;
 use crate::button_style_button::{ButtonStyleButtonCore, PressCallback};
-use crate::elevated_button::pressed_hovered_focused_overlay;
+use crate::elevated_button::pressed_hovered_overlay;
 use crate::shape::MaterialShape;
 use crate::theme::Theme;
 
@@ -170,7 +170,7 @@ fn default_style(theme: &ThemeData, variant: FilledButtonVariant) -> ButtonStyle
             })
         })),
         overlay_color: Some(WidgetStateProperty::resolve_with(move |states| {
-            pressed_hovered_focused_overlay(states, foreground)
+            pressed_hovered_overlay(states, foreground)
         })),
         // Oracle order matters: `disabled` and `pressed` are checked BEFORE
         // `hovered`, so a state set containing both `Pressed` and `Hovered`

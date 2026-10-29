@@ -7,7 +7,7 @@
 
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, FieldMask, InheritedData, InheritedView, impl_inherited_view};
-use flui_sdk::widgets::InheritedTheme;
+use flui_sdk::widgets::{DefaultFocusRingStyle, InheritedTheme};
 
 use crate::theme_data::ThemeData;
 
@@ -34,12 +34,15 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// Wrap `child` in a `Theme` that provides `data` to all descendants.
+    /// Wrap `child` in a `Theme` that provides `data` to all descendants,
+    /// and `data.focus_ring` to their focus rings as the inherited
+    /// [`DefaultFocusRingStyle`].
     #[must_use]
     pub fn new(data: ThemeData, child: impl IntoView) -> Self {
+        let focus_ring = data.focus_ring;
         Self {
             data,
-            child: child.into_view().boxed(),
+            child: DefaultFocusRingStyle::new(focus_ring, child).boxed(),
         }
     }
 

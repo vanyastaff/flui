@@ -1110,6 +1110,10 @@ impl<K: Copy + Eq + 'static> Action<AnchorIntent> for AnchorAction<K> {
         self.target(*intent).is_some()
     }
 
+    fn enablement_changes(&self) -> Option<ChangeNotifier> {
+        Some(ChangeNotifier::clone(&self.controller.inner.notifier))
+    }
+
     fn invoke(&self, _cx: &mut EventCx<'_>, intent: &AnchorIntent) -> ActionOutcome {
         let Some(target) = self.target(*intent) else {
             return ActionOutcome::NotPerformed;

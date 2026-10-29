@@ -20,7 +20,7 @@
 //!
 //! # Deferred, and named
 //!
-//! An `ActionDispatcher` as a replaceable object, action listeners, an
+//! An `ActionDispatcher` as a replaceable object, an
 //! `Actions` handler hook and a do-nothing action (write `CallbackAction::new(|_cx, _| ())`
 //! until the propagation-control use case arrives). A `Shortcuts` resolves
 //! from the primary focus's position, the chain each `Focus` records on its
@@ -30,6 +30,7 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use flui_foundation::ChangeNotifier;
 use flui_interaction::focus::{FocusManager, FocusNode, KeyEventResult, NodeContext};
 use flui_view::element::ElementKind;
 use flui_view::impl_inherited_view;
@@ -91,6 +92,23 @@ pub trait Action<T: Intent> {
     fn is_enabled(&self, intent: &T) -> bool {
         let _ = intent;
         true
+    }
+
+    /// Notifies after [`is_enabled`](Self::is_enabled) may have started
+    /// answering differently, with no rebuild in between: an action whose
+    /// enablement follows state outside the widget tree (a page view's
+    /// position) returns the notifier that state changes through.
+    ///
+    /// What listens is the semantics layer: it offers a gesture's custom
+    /// accessibility action only while its action is enabled, and describes the
+    /// node again on this signal, so the action appears or goes without
+    /// the view rebuilding.
+    ///
+    /// `None`, the default, means enablement never changes after the action is
+    /// bound: it is a fact about the action, not a forgotten override. It is
+    /// read once, when the action is bound with [`Actions::action`].
+    fn enablement_changes(&self) -> Option<ChangeNotifier> {
+        None
     }
 
     /// Perform the operation inside the dispatch that resolved it:
@@ -186,6 +204,7 @@ pub(crate) struct ErasedAction {
     is_enabled: ErasedPredicate,
     invoke: ErasedInvoke,
     to_key_event_result: ErasedKeyResult,
+    enablement_changes: Option<ChangeNotifier>,
 }
 
 /// The typed view of an erased intent. Reached only through the matching
@@ -203,6 +222,7 @@ impl ErasedAction {
         let action = Rc::new(action);
         let enabled_action = Rc::clone(&action);
         let key_result_action = Rc::clone(&action);
+        let enablement_changes = action.enablement_changes();
         Self {
             is_enabled: Rc::new(move |intent| enabled_action.is_enabled(typed::<T>(intent))),
             invoke: Rc::new(move |cx: &mut EventCx<'_>, intent: &dyn Any| {
@@ -211,11 +231,17 @@ impl ErasedAction {
             to_key_event_result: Rc::new(move |intent, outcome| {
                 key_result_action.to_key_event_result(typed::<T>(intent), outcome)
             }),
+            enablement_changes,
         }
     }
 
     pub(crate) fn is_enabled(&self, intent: &dyn Any) -> bool {
         (self.is_enabled)(intent)
+    }
+
+    /// The signal [`Action::enablement_changes`] gave when this was bound.
+    pub(crate) fn enablement_changes(&self) -> Option<&ChangeNotifier> {
+        self.enablement_changes.as_ref()
     }
 
     /// Invoke outside a key dispatch: a gesture, a control's press, an

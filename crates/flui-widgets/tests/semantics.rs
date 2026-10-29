@@ -2175,6 +2175,77 @@ pub(crate) fn a_repeated_custom_action_label_replaces_the_action() {
     assert_eq!(*ran.borrow(), ["second"]);
 }
 
+/// A gated custom action is offered while its gate holds and withdrawn when
+/// the gate closes, each on the refresh signal alone: the widget is never
+/// rebuilt. A request that names it after the gate closed, before the
+/// platform heard, runs nothing.
+pub(crate) fn a_gated_custom_action_follows_its_gate_without_a_rebuild() {
+    use std::cell::Cell;
+
+    let open = Rc::new(Cell::new(false));
+    let signal = flui_foundation::ChangeNotifier::new();
+    let ran = Rc::new(Cell::new(0_u32));
+    let gate = Rc::clone(&open);
+    let counter = Rc::clone(&ran);
+    let (mut laid, tree, node_id) = pump_labelled(
+        host()
+            .custom_action_when(
+                "Go",
+                move || gate.get(),
+                move |_cx| counter.set(counter.get() + 1),
+            )
+            .refresh_on(signal.clone())
+            .child(SizedBox::new(40.0, 20.0)),
+    );
+    let offered = |laid: &LaidOut| {
+        laid.a11y_tree()
+            .expect("semantics enabled")
+            .find_by_label(LABEL)
+            .expect("the host is published")
+            .raw()
+            .custom_actions()
+            .len()
+    };
+    let go = |laid: &LaidOut| {
+        laid.invoke_semantics_action(request(
+            Action::CustomAction,
+            node_id,
+            Some(ActionData::CustomAction(1)),
+        ))
+    };
+    assert_eq!(
+        tree.find_by_label(LABEL)
+            .expect("the host is published")
+            .raw()
+            .custom_actions()
+            .len(),
+        0,
+        "a closed gate offers nothing"
+    );
+    assert!(
+        go(&laid).is_err(),
+        "and an agent's request does not resolve"
+    );
+
+    open.set(true);
+    signal.notify_listeners();
+    laid.tick();
+    assert_eq!(offered(&laid), 1, "the signal alone offers it");
+    go(&laid).expect("the offered action resolves");
+    assert_eq!(ran.get(), 1);
+
+    // Closed, but the platform has not heard: the request still resolves to
+    // the old offer and the gate refuses it at delivery.
+    open.set(false);
+    let _ = go(&laid);
+    assert_eq!(ran.get(), 1, "a closed gate runs nothing");
+
+    signal.notify_listeners();
+    laid.tick();
+    assert_eq!(offered(&laid), 0, "the signal alone withdraws it");
+    assert!(go(&laid).is_err());
+}
+
 /// A semantics diagnostic is reported with the pipeline checkout released: a
 /// `tracing` subscriber may read the pipeline through its public handle while
 /// it handles one, even disable semantics. A subscriber that panics does not

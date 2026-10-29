@@ -810,6 +810,11 @@ pub struct EditableTextState {
     /// The current [`EditableText::on_changed`] callback, read at edit time
     /// through a shared cell for the reason `on_submitted` is.
     on_changed: Rc<RefCell<Option<TextChanged>>>,
+    /// Whether an edit is reported through `on_changed`: cleared when
+    /// dispose begins, so an edit the input method makes while the field
+    /// lets go of it reaches no owner (ADR-0142 item 4). The callback itself
+    /// stays in its cell, retired by whichever holder outlives the field.
+    reports_edits: Rc<Cell<bool>>,
     /// The presentation's clipboard, acquired in `init_state`. `None` only
     /// on a bare owner; the clipboard actions are then disabled.
     clipboard: Option<ClipboardHandle>,
@@ -879,6 +884,7 @@ impl StatefulView for EditableText {
             writer: None,
             on_submitted: Rc::new(RefCell::new(self.on_submitted.clone())),
             on_changed: Rc::new(RefCell::new(self.on_changed.clone())),
+            reports_edits: Rc::new(Cell::new(true)),
             clipboard: None,
             selection_drag: Rc::new(Cell::new(None)),
             obscure: Rc::new(Cell::new(self.obscure_text)),
@@ -1156,6 +1162,7 @@ impl EditableTextState {
         EditObserver {
             controller: Rc::clone(&self.controller),
             on_changed: Rc::clone(&self.on_changed),
+            reports: Rc::clone(&self.reports_edits),
             writer: self.writer(),
         }
     }
@@ -1366,6 +1373,8 @@ impl Action<SelectAllTextIntent> for SelectAllTextAction {
 pub(super) struct EditObserver {
     controller: Rc<RefCell<TextEditingController>>,
     on_changed: Rc<RefCell<Option<TextChanged>>>,
+    /// The field's [`EditableTextState::reports_edits`].
+    reports: Rc<Cell<bool>>,
     writer: WriterSource,
 }
 
@@ -1399,9 +1408,12 @@ impl EditObserver {
 
     /// The `on_changed` an edit accepted now is owed to: a snapshot of the
     /// installed callback, which [`Self::deliver`] calls though the field
-    /// removed or replaced it meanwhile. `None` when none is installed: the
-    /// edit then owes nothing.
+    /// removed or replaced it meanwhile. `None` when none is installed or the
+    /// field's dispose has begun: the edit then owes nothing.
     pub(super) fn accept(&self) -> Option<TextChanged> {
+        if !self.reports.get() {
+            return None;
+        }
         self.on_changed.borrow().clone()
     }
 
@@ -2049,6 +2061,31 @@ impl ViewState<EditableText> for EditableTextState {
 
     fn dispose(&mut self) {
         self.accepts_semantics_actions.set(false);
+        // Owner code runs below (the controller's listeners, a detach that
+        // reaches the presentation): every later step still runs, and the
+        // first failure is resumed once dispose is complete.
+        let mut calls = OwnerCalls::new();
+        // No edit from here on reaches the owner: the field is going away
+        // (ADR-0142 item 4).
+        self.reports_edits.set(false);
+        // This field's own rebuild listener goes first: the commit below
+        // must not schedule a build of a subtree that is being unmounted.
+        if let Some(id) = self.controller_listener_id.take() {
+            let controller = self.controller.borrow().clone();
+            calls.run(|| controller.remove_listener(id));
+        }
+        // A field unmounted while it holds the input (a route the program
+        // changed) keeps the composition it shows as committed text: the
+        // composing range ends in place and the controller's listeners hear
+        // of it, before the store detaches below and drops whatever the input
+        // method still had queued. A field that blurred first was committed
+        // then, and holds no client now. Read in a statement of its own: the
+        // commit runs owner code.
+        let holds_input = self.ime_token.borrow().is_some();
+        if holds_input {
+            let controller = self.controller.borrow().clone();
+            calls.run(|| controller.end_composition());
+        }
         let attachment = self.focus_attachment.borrow_mut().take();
         self.selection_drag.set(None);
         let owns_attachment = attachment
@@ -2087,11 +2124,6 @@ impl ViewState<EditableText> for EditableTextState {
         // attachment is detached below, so this is the one path that unconditionally
         // closes the IME session on unmount. Harmless no-op if the field
         // already blurred (and so already detached) before unmounting.
-        //
-        // Detaching runs owner code (a retired client, a failure the
-        // presentation reports): every later step still runs, and the first
-        // failure is resumed once dispose is complete.
-        let mut calls = OwnerCalls::new();
         let token = self.ime_token.borrow_mut().take();
         if let Some(token) = token
             && let Some(handle) = &self.ime_handle
@@ -2127,12 +2159,6 @@ impl ViewState<EditableText> for EditableTextState {
             let _ = calls.run(|| attachment.detach());
         }
         self.parent = None;
-
-        // Remove the controller listener we registered in init_state.
-        if let Some(id) = self.controller_listener_id.take() {
-            let controller = self.controller.borrow().clone();
-            calls.run(|| controller.remove_listener(id));
-        }
         self.focus_manager = None;
         calls.resume();
 

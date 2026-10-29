@@ -180,7 +180,7 @@ repository = "https://github.com/vanyastaff/flui"
 [workspace.dependencies]
 # ASYNC RUNTIME — tokio 1.43 = LTS floor (lock resolves latest 1.x)
 tokio = { version = "1.43" }
-zbus = { version = "5.19", default-features = false, features = ["tokio"] }
+zbus = { version = "6", default-features = false, features = ["proxy", "tokio"] }
 # Structured cancellation for the runtime-owned execution services
 # (`CancellationToken`; adopted with the unified execution services,
 # ADR-0047, issue #557). `default-features = false` and no
@@ -209,7 +209,7 @@ crossbeam-channel = "0.5"
 interprocess = { version = "2.4", default-features = false }
 # OS random bytes: `flui run --agent`'s launch token (flui-cli). Already in the
 # graph through the networking and hashing crates, so no new copy.
-getrandom = "0.3"
+getrandom = "0.4"
 # The SDDL string of the agent endpoint's user-only pipe security descriptor
 # (Windows); `interprocess` already builds it.
 widestring = "1"

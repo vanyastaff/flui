@@ -50,6 +50,11 @@ mod measured {
         Vsync as _, VsyncPublication as _, VsyncRegistration as _, VsyncRegistrationError as _,
         VsyncRetirement as _, VsyncUpdate as _, curves as _,
     };
+    // The spring a loading indicator's morph follows.
+    use flui_sdk::animation::{
+        Simulation as _, SimulationError as _, SpringDescription as _, SpringSimulation as _,
+        Tolerance as _,
+    };
     use flui_sdk::foundation::notifier::Listenable as _;
     use flui_sdk::foundation::observe::{
         ElementMounted as _, ElementMoved as _, ElementRebuilt as _, ElementUnmounted as _,
@@ -99,8 +104,12 @@ mod measured {
     };
     use flui_sdk::painting::{Canvas as _, DrawOp as _};
     use flui_sdk::painting::{Clip as _, ClipOp as _, Paint as _, Path as _, StrokeCap as _};
+    // The shapes the Material 3 Expressive loading indicators morph between.
     use flui_sdk::painting::{
         FontWeight as _, TextDirection as _, TextSizing as _, TextStyle as _,
+    };
+    use flui_sdk::painting::{
+        Morph as _, PathCommand as _, RoundedPolygon as _, material_shapes as _,
     };
     use flui_sdk::painting::{SemanticsRegion as _, SemanticsRegionKey as _};
     use flui_sdk::pipeline::{
@@ -508,9 +517,13 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_painting::TextSizing;",
         "pub use flui_painting::paint::Clip;",
         "pub use flui_painting::paint::ClipOp;",
+        "pub use flui_painting::paint::Morph;",
         "pub use flui_painting::paint::Paint;",
         "pub use flui_painting::paint::Path;",
+        "pub use flui_painting::paint::PathCommand;",
+        "pub use flui_painting::paint::RoundedPolygon;",
         "pub use flui_painting::paint::StrokeCap;",
+        "pub use flui_painting::paint::shapes::material_shapes;",
         "pub use flui_painting::styling::Border;",
         "pub use flui_painting::styling::BorderRadius;",
         "pub use flui_painting::styling::BorderRadiusExt;",

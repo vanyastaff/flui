@@ -4,7 +4,7 @@ use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::painting::TextStyle;
 use flui_sdk::painting::{BorderRadius, BorderSide, BoxDecoration, Color};
 use flui_sdk::platform::{Brightness, TargetPlatform};
-use flui_sdk::widgets::WidgetStateProperty;
+use flui_sdk::widgets::{FocusRingStyle, WidgetStateProperty};
 
 use crate::button_style::ButtonStyle;
 use crate::color_scheme::ColorScheme;
@@ -18,6 +18,18 @@ use crate::typography;
 /// `*ThemeData` color/side slot in this module uses (`fill_color`,
 /// `check_color`, `overlay_color`, and friends).
 type StateColor = WidgetStateProperty<Option<Color>>;
+
+/// The baseline focus ring in `scheme`'s colours: the shape of
+/// [`FocusRingStyle::BUILT_IN`], a 2 px `on_surface` band outside a 1 px
+/// `surface` band. The two roles contrast with each other in every scheme,
+/// so one of them contrasts with whatever the ring is drawn over.
+fn focus_ring(scheme: &ColorScheme) -> FocusRingStyle {
+    FocusRingStyle {
+        outer: scheme.on_surface,
+        inner: scheme.surface,
+        ..FocusRingStyle::BUILT_IN
+    }
+}
 
 /// Compute the M3 default [`TextTheme`]: `englishLike2021` geometry overlaid
 /// with a color-only theme uniformly recolored to `on_surface`.
@@ -679,6 +691,21 @@ pub struct DataTableThemeData {
     pub checkbox_horizontal_margin: Option<f64>,
 }
 
+/// Which Material design a [`ThemeData`] follows.
+///
+/// One choice that components read rather than a flag per component, so an app switches
+/// to Material 3 Expressive in one place and each component that has an Expressive form
+/// follows it. `#[non_exhaustive]`: a later Material design is a new variant.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum MaterialStyle {
+    /// The Material 3 baseline.
+    #[default]
+    Baseline,
+    /// Material 3 Expressive.
+    Expressive,
+}
+
 /// Visual-style configuration provided to descendants by a
 /// [`Theme`](crate::Theme) ancestor.
 ///
@@ -713,6 +740,13 @@ pub struct ThemeData {
 
     /// The type-scale roles this theme provides.
     pub text_theme: TextTheme,
+
+    /// The keyboard focus indicator every control under the [`Theme`](crate::Theme)
+    /// draws: [`Theme`](crate::Theme) provides it as the inherited
+    /// `DefaultFocusRingStyle`. The baselines take two bands from the color
+    /// scheme, `on_surface` outside and `surface` inside, so one of them
+    /// contrasts with any background the control sits on.
+    pub focus_ring: FocusRingStyle,
 
     /// Overrides [`ElevatedButton`](crate::ElevatedButton)'s default style.
     /// `None` (the default): no override, `ElevatedButton` uses its own
@@ -789,6 +823,12 @@ pub struct ThemeData {
     /// baselines use the platform the app was built for.
     pub platform: TargetPlatform,
 
+    /// Which Material design the components follow: the M3 baseline, or Material 3
+    /// Expressive. Today it picks the indicator [`MaterialApp`](crate::MaterialApp) gives
+    /// every `RefreshIndicator`: a circular progress indicator for the baseline, a
+    /// [`LoadingIndicator`](crate::LoadingIndicator) for Expressive.
+    pub style: MaterialStyle,
+
     /// Which transition page routes run, per platform (ADR-0221 D3).
     /// [`MaterialApp`](crate::MaterialApp) installs the one for
     /// [`platform`](Self::platform).
@@ -805,6 +845,7 @@ impl ThemeData {
         Self {
             color_scheme,
             text_theme,
+            focus_ring: focus_ring(&color_scheme),
             elevated_button_theme: None,
             filled_button_theme: None,
             outlined_button_theme: None,
@@ -824,6 +865,7 @@ impl ThemeData {
             navigation_bar_theme: None,
             tab_bar_theme: None,
             data_table_theme: None,
+            style: MaterialStyle::default(),
             platform: TargetPlatform::current(),
             page_transitions_theme: PageTransitionsTheme::default(),
         }
@@ -838,6 +880,7 @@ impl ThemeData {
         Self {
             color_scheme,
             text_theme,
+            focus_ring: focus_ring(&color_scheme),
             elevated_button_theme: None,
             filled_button_theme: None,
             outlined_button_theme: None,
@@ -857,6 +900,7 @@ impl ThemeData {
             navigation_bar_theme: None,
             tab_bar_theme: None,
             data_table_theme: None,
+            style: MaterialStyle::default(),
             platform: TargetPlatform::current(),
             page_transitions_theme: PageTransitionsTheme::default(),
         }
@@ -901,6 +945,7 @@ impl ThemeData {
             text_theme: overrides
                 .text_theme
                 .unwrap_or_else(|| self.text_theme.clone()),
+            focus_ring: overrides.focus_ring.unwrap_or(self.focus_ring),
             // Each component-theme slot is itself already `Option<_>` on
             // `ThemeData`, so — unlike `color_scheme`/`text_theme` above —
             // the override field mirrors that `Option<_>` shape directly
@@ -954,6 +999,7 @@ impl ThemeData {
             data_table_theme: overrides
                 .data_table_theme
                 .or_else(|| self.data_table_theme.clone()),
+            style: overrides.style.unwrap_or(self.style),
             platform: overrides.platform.unwrap_or(self.platform),
             page_transitions_theme: overrides
                 .page_transitions_theme
@@ -979,6 +1025,8 @@ pub struct ThemeDataOverrides {
     pub color_scheme: Option<ColorScheme>,
     /// Overrides [`ThemeData::text_theme`].
     pub text_theme: Option<TextTheme>,
+    /// Overrides [`ThemeData::focus_ring`].
+    pub focus_ring: Option<FocusRingStyle>,
     /// Replaces [`ThemeData::elevated_button_theme`] wholesale when `Some`;
     /// `None` leaves it unchanged (see [`ThemeData::copy_with`]'s doc
     /// comment on why this mirrors `Option<ElevatedButtonThemeData>`
@@ -1021,6 +1069,8 @@ pub struct ThemeDataOverrides {
     pub tab_bar_theme: Option<TabBarThemeData>,
     /// Replaces [`ThemeData::data_table_theme`] wholesale when `Some`.
     pub data_table_theme: Option<DataTableThemeData>,
+    /// Overrides [`ThemeData::style`].
+    pub style: Option<MaterialStyle>,
     /// Overrides [`ThemeData::platform`].
     pub platform: Option<TargetPlatform>,
     /// Overrides [`ThemeData::page_transitions_theme`].

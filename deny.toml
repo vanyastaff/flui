@@ -54,13 +54,11 @@ ignore = [
 
     # RUSTSEC-2026-0370 / -0371 / -0372: zvariant, zbus_names and
     # zvariant_derive are unmaintained, merged into zbus 6 as its `wire` and
-    # `names` modules and derives. Source: zbus 5 ← flui-native (the winit
-    # backend reads desktop preferences over D-Bus) and zbus 5 ← atspi ←
-    # accesskit_unix ← flui-native
+    # `names` modules and derives. flui-native's own D-Bus code is on zbus 6;
+    # the remaining source is zbus 5 ← atspi ← accesskit_unix ← flui-native
     # (Linux accessibility). No safe upgrade exists while atspi pins zbus 5,
     # and the crates are D-Bus marshalling of local session-bus messages.
-    # Revisit all three when accesskit_unix moves to zbus 6, together with
-    # flui-native's own zbus.
+    # Remove all three when accesskit_unix moves to zbus 6.
     { id = "RUSTSEC-2026-0370" },
     { id = "RUSTSEC-2026-0371" },
     { id = "RUSTSEC-2026-0372" },

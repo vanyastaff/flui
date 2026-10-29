@@ -271,6 +271,7 @@ pub struct Focus {
     skip_traversal: Option<bool>,
     descendants_are_focusable: Option<bool>,
     on_focus_change: Option<FocusChangeHandler>,
+    on_visible_focus_change: Option<FocusChangeHandler>,
     on_key_event: Option<FocusKeyHandler>,
     debug_label: Option<&'static str>,
     include_semantics: bool,
@@ -289,6 +290,7 @@ impl Focus {
             skip_traversal: None,
             descendants_are_focusable: None,
             on_focus_change: None,
+            on_visible_focus_change: None,
             on_key_event: None,
             debug_label: None,
             include_semantics: true,
@@ -416,6 +418,23 @@ impl Focus {
         R: EventOutcome,
     {
         self.on_focus_change = Some(value_callback(handler));
+        self
+    }
+
+    /// Called with `true`/`false` as this widget's node gains/loses *visible*
+    /// focus ([`FocusNode::has_visible_focus`]): the primary focus, moved or
+    /// last used by a key, traversal or assistive technology. A pointer press
+    /// that focuses the node does not raise it, and a key pressed afterwards
+    /// does, with no change of primary focus. A control that draws its own
+    /// focus indication follows this rather than
+    /// [`on_focus_change`](Self::on_focus_change).
+    #[must_use]
+    pub fn on_visible_focus_change<F, R>(mut self, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, bool) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_visible_focus_change = Some(value_callback(handler));
         self
     }
 
@@ -599,6 +618,7 @@ impl StatefulView for Focus {
             autofocus: self.autofocus,
             did_autofocus: false,
             on_focus_change: Rc::new(RefCell::new(self.on_focus_change.clone())),
+            on_visible_focus_change: Rc::new(RefCell::new(self.on_visible_focus_change.clone())),
             reveal: Rc::default(),
         }
     }
@@ -703,6 +723,8 @@ pub struct FocusState {
     /// reinstalling the listener — a captured-by-value closure would keep firing the
     /// handler from the build that mounted it.
     on_focus_change: Rc<RefCell<Option<FocusChangeHandler>>>,
+    /// The current `on_visible_focus_change` handler, shared the same way.
+    on_visible_focus_change: Rc<RefCell<Option<FocusChangeHandler>>>,
     /// Where the node's shown focus is revealed (`focus_reveal.rs`).
     reveal: Rc<RevealSlot>,
 }
@@ -734,6 +756,7 @@ impl FocusState {
         let was_focused_for_listener = Rc::clone(&self.observed_was_focused);
         let node_revision = Rc::clone(&self.node_revision);
         let on_focus_change = Rc::clone(&self.on_focus_change);
+        let on_visible_focus_change = Rc::clone(&self.on_visible_focus_change);
         let reveal = Rc::clone(&self.reveal);
         let writer = self
             .writer
@@ -762,13 +785,20 @@ impl FocusState {
                     writer.write(|cx| handler(cx, now_focused));
                 }
             }
+            // Recorded before user code runs, so a notification it causes
+            // compares against this one's value.
+            let was_shown = reveal.shown.replace(now_shown);
+            if was_shown != now_shown {
+                let handler = on_visible_focus_change.borrow().clone();
+                if let Some(handler) = handler {
+                    writer.write(|cx| handler(cx, now_shown));
+                }
+            }
             // Shown focus is never left where the user cannot see it
             // (WCAG 2.4.11): on the edge into it, the scopes above bring the
             // node into view.
-            if now_shown && !reveal.shown.replace(now_shown) {
+            if now_shown && !was_shown {
                 reveal.reveal();
-            } else {
-                reveal.shown.set(now_shown);
             }
         }))
     }
@@ -915,6 +945,9 @@ impl ViewState<Focus> for FocusState {
         self.on_focus_change
             .borrow_mut()
             .clone_from(&new_view.on_focus_change);
+        self.on_visible_focus_change
+            .borrow_mut()
+            .clone_from(&new_view.on_visible_focus_change);
 
         // Against the hosted node, not the previous view: a replacement
         // refused earlier left the node behind the view it was asked for.

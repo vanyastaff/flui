@@ -870,6 +870,22 @@ impl SemanticsConfiguration {
         id
     }
 
+    /// Adds a custom action whose handler receives `own_id`, for a widget
+    /// that offers a changing subset of a fixed list: the handler keeps the id
+    /// it names the action by while the actions offered before it come and
+    /// go. The id this node publishes is still the action's place in this
+    /// node's list.
+    pub fn add_custom_action_as(
+        &mut self,
+        own_id: CustomActionId,
+        label: impl Into<SmolStr>,
+        handler: SemanticsActionHandler,
+    ) {
+        self.attributes.custom_actions.push(label.into());
+        self.custom_handlers.push((own_id, handler));
+        self.mark_annotated();
+    }
+
     /// The custom actions this node declares, with their ids, whether or not
     /// a block on user actions hides them.
     pub fn custom_actions(&self) -> impl Iterator<Item = (CustomActionId, &str)> + '_ {

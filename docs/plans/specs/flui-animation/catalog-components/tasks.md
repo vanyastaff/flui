@@ -1,6 +1,7 @@
 # flui-animation / catalog-components — задачи
 
-- **Статус:** готов к работе
+- **Статус:** в работе. Влиты T1, T2, T10; T9 сделан (`LoadingIndicator`, `ContainedLoadingIndicator`,
+  `MaterialStyle::Expressive` в `ThemeData`); дальше T13, T3, T7.
 - **Дата:** 2026-10-17
 - **Design:** [design.md](design.md), [requirements.md](requirements.md).
 - **Тикеты:** родитель vanyastaff/flui#1691; T1 #1692 · T2 #1693 · T3 #1694 · T4 #1695 ·
@@ -35,13 +36,13 @@ T1..T13 ─► T12 поверхность SDK, ARCHITECTURE, motion_lab, таб�
 
 ## Задачи
 
-### T1 — геометрия путей (#1692)
+### T1 — геометрия путей (#1692) — влито
 
 - **Что:** `Path::length`, `trim`, `transform`, `lerp` в `flui-painting` на kurbo, с политикой
   домена из G1/G2. Потребители — T2, T3, T4.
 - **Требования:** G1, G2.
 
-### T2 — скруглённые многоугольники и морф (#1693)
+### T2 — скруглённые многоугольники и морф (#1693) — влито
 
 - **Что:** собственные `RoundedPolygon`, `Morph`, `MaterialShapes` в `flui-painting`
   (Rust-дизайн FLUI); значения androidx.graphics.shapes — оракул в таблице, код не
@@ -87,13 +88,16 @@ T1..T13 ─► T12 поверхность SDK, ARCHITECTURE, motion_lab, таб�
   prelude (не через `flui-sdk`) и сцена в `motion_lab`.
 - **Требования:** C7. **После:** T7.
 
-### T9 — `LoadingIndicator` (#1701)
+### T9 — `LoadingIndicator` (#1701) — сделано
 
 - **Что:** `LoadingIndicator`, `ContainedLoadingIndicator` (неопределённый и определённый)
   на `Morph`; потребитель — Expressive-стиль `RefreshIndicator` через шов P6 из T10.
 - **Требования:** P3, P5, P6 (Expressive-стиль), строка M1. **После:** T2, T10.
+- **Проверка:** `progress_indicator_variants` в `flui-material` (`loading indicator morphs on a
+  spring`, `… stands still`, `… follows its value`, `contained loading indicator has its
+  container`, `expressive material app refresh shows the loading indicator`).
 
-### T10 — индикаторы прогресса (#1700)
+### T10 — индикаторы прогресса (#1700) — влито
 
 - **Что:** `CircularProgressIndicator`; зазор трека и stop-точка у линейного и кругового;
   волнистые варианты; шов `RefreshIndicatorStyle` в `flui-widgets` и ADR на него (по умолчанию

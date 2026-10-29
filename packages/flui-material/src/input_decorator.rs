@@ -263,7 +263,7 @@ fn supporting_line_padding(content_padding: EdgeInsets) -> EdgeInsets {
 /// — a fixed brightness-keyed constant, **not** a `ColorScheme` role (the
 /// M3 button family's own hover overlay, `onSurface@8%`, is a different,
 /// unrelated constant — see `crate::elevated_button`'s
-/// `pressed_hovered_focused_overlay`). `_getHoverColor`
+/// `pressed_hovered_overlay`). `_getHoverColor`
 /// (`input_decorator.dart:2142-2147`) falls back to this exact field when
 /// `InputDecoration.hoverColor` isn't set, which V1 has no override slot
 /// for yet.
