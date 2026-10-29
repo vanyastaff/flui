@@ -119,9 +119,10 @@ Amends §1 and the `Escape` item of "Not implemented"; the rest stands.
   `FocusRing` in the style `ThemeData::focus_ring` provides through `Theme`, and the stock
   overlay ramps have no focused tier; a checkbox, switch or radio keeps its M3 halo instead.
 
-Each route's scope answers both (`flui-widgets/src/navigator/route_keys.rs`): `BackIntent` pops
-the current route of the nearest navigator that has one to pop, `DismissIntent` pops only a
-dismissible modal (`back_keys_pop_only_the_current_page`).
+Each route's scope answers `BackIntent` and `DismissIntent`
+(`flui-widgets/src/navigator/route_keys.rs`): `BackIntent` pops the current route of the nearest
+navigator that has one to pop, `DismissIntent` pops only a dismissible modal
+(`back_keys_pop_only_the_current_page`).
 
 ## Amendment: links
 
