@@ -209,6 +209,11 @@ mod hosts;
 #[doc(hidden)]
 pub mod input;
 pub use input::event_timestamp_ns;
+// The native input journal (ADR-0215 §4): reachable for the native
+// recordings in `tests/`, which read, write and replay recordings through its
+// codec and capture sessions with its recorder; not an embedding API.
+#[doc(hidden)]
+pub mod journal;
 mod lifecycle;
 pub mod os;
 mod owner;

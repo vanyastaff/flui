@@ -338,7 +338,7 @@ impl ScrollOwner {
     /// Bound the next step and shape the next release with `physics`; a
     /// run in progress keeps the simulation it was started with.
     pub(crate) fn set_physics(&self, physics: SharedScrollPhysics) {
-        if Arc::ptr_eq(&self.physics.borrow(), &physics) {
+        if Rc::ptr_eq(&self.physics.borrow(), &physics) {
             return;
         }
         let outgoing = self.physics.replace(physics);

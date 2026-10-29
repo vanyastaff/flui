@@ -631,7 +631,7 @@ pub(crate) fn flow_repaint_and_delegate_replacement_update_accessible_children()
     let selected = Rc::new(Cell::new(0));
     let opacity = Rc::new(Cell::new(1.0));
     let notifier = Rc::new(ChangeNotifier::new());
-    let view = |delegate: Rc<dyn FlowDelegate>| {
+    let view = |delegate: Delegate| {
         Flow::new(
             delegate,
             (
@@ -647,11 +647,11 @@ pub(crate) fn flow_repaint_and_delegate_replacement_update_accessible_children()
         )
     };
     let mut laid = lay_out(
-        view(Rc::new(Delegate {
+        view(Delegate {
             selected: selected.clone(),
             opacity: opacity.clone(),
             notifier: notifier.clone(),
-        })),
+        }),
         loose(100.0),
     );
     laid.enable_semantics();
@@ -672,11 +672,11 @@ pub(crate) fn flow_repaint_and_delegate_replacement_update_accessible_children()
         assert_eq!(tree.find_by_label("first flow child").is_ok(), alpha > 0.0);
         assert!(tree.find_by_label("second flow child").is_err());
     }
-    laid.pump_widget(view(Rc::new(Delegate {
+    laid.pump_widget(view(Delegate {
         selected: Rc::new(Cell::new(1)),
         opacity: Rc::new(Cell::new(1.0)),
         notifier: Rc::new(ChangeNotifier::new()),
-    })));
+    }));
     assert_eq!(
         notifier.len(),
         0,
@@ -722,10 +722,10 @@ pub(crate) fn custom_painter_regions_follow_semantics_only_updates_and_layout_si
     let view = |width, label, rebuild_semantics| {
         CustomPaint::new()
             .size(Size::new(width, 20.0))
-            .painter(Rc::new(Painter {
+            .painter(Painter {
                 label,
                 rebuild_semantics,
-            }))
+            })
     };
     let mut laid = lay_out(view(40.0, "first", true), loose(200.0));
     laid.enable_semantics();
@@ -1475,7 +1475,7 @@ pub(crate) fn queued_directional_actions_and_numeric_values_reach_the_frame_prod
         let changed = Rc::clone(&current);
         host()
             .numeric_range(
-                NumericRange::new(current.get(), 0.0, 10.0, 1.0).expect("finite fixture"),
+                NumericRange::try_new(current.get(), 0.0, 10.0, 1.0).expect("finite fixture"),
             )
             .on_set_numeric_value(move |cx, exact| {
                 changed.set(exact);
@@ -1555,13 +1555,15 @@ pub(crate) fn numeric_range_admission_and_owner_payload_validation() {
         (2.0, 0.0, 1.0, 1.0, NumericRangeError::ValueOutOfRange),
         (0.0, 0.0, 1.0, 0.0, NumericRangeError::NonPositiveStep),
     ] {
-        assert_eq!(NumericRange::new(value, min, max, step), Err(error));
+        assert_eq!(NumericRange::try_new(value, min, max, step), Err(error));
     }
     let count = Rc::new(Cell::new(0));
     let changed = Rc::clone(&count);
     let (laid, tree, node_id) = pump_labelled(
         host()
-            .numeric_range(NumericRange::new(4.0, 4.0, 4.0, 1.0).expect("zero-span range is valid"))
+            .numeric_range(
+                NumericRange::try_new(4.0, 4.0, 4.0, 1.0).expect("zero-span range is valid"),
+            )
             .on_set_numeric_value(move |_cx, value| {
                 assert_eq!(value, 4.0);
                 changed.set(changed.get() + 1);
@@ -2462,8 +2464,9 @@ pub(crate) fn controls_publish_their_identifier_on_the_node_they_form() {
             identifier: "volume",
             role: Some(flui_testing::a11y::Role::Slider),
             view: || {
-                let range = flui_rendering::semantics::NumericRange::new(25.0, 0.0, 100.0, 10.0)
-                    .expect("valid range");
+                let range =
+                    flui_rendering::semantics::NumericRange::try_new(25.0, 0.0, 100.0, 10.0)
+                        .expect("valid range");
                 Slider::new(range)
                     .label("Volume")
                     .on_changed(|_cx, _value| {})
@@ -2545,4 +2548,94 @@ pub(crate) fn controls_publish_their_identifier_on_the_node_they_form() {
     }
 
     assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// What a `Semantics` author declares beyond name and state reaches the node
+/// the platform is handed: a navigation link's current page, keys, language
+/// and address, a field's popup, completion, error message and description,
+/// a slider's axis and large step, and the role words a screen reader says.
+pub(crate) fn authored_properties_and_relations_reach_the_published_node() {
+    use flui_foundation::geometry::Axis;
+    use flui_widgets::{
+        AutoComplete, Column, Current, HasPopup, Invalid, NumericRange, SemanticsAnchor,
+    };
+
+    let help = SemanticsAnchor::new();
+    let error = SemanticsAnchor::new();
+    let root = Column::new((
+        Semantics::new()
+            .container(true)
+            .role(SemanticsRole::Link)
+            .label("Docs")
+            .current(Current::Page)
+            .keyboard_shortcut("Alt+D")
+            .language("fr-FR")
+            .url("https://example.org/docs")
+            .child(SizedBox::new(20.0, 10.0)),
+        Semantics::new()
+            .container(true)
+            .role(SemanticsRole::ComboBox)
+            .label("Email")
+            .has_popup(HasPopup::ListBox)
+            .auto_complete(AutoComplete::List)
+            .invalid(Invalid::Spelling)
+            .described_by(help.clone())
+            .error_message(error.clone())
+            .child(SizedBox::new(20.0, 10.0)),
+        Semantics::new()
+            .container(true)
+            .label("Use your work address")
+            .anchor(help)
+            .child(SizedBox::new(20.0, 10.0)),
+        Semantics::new()
+            .container(true)
+            .label("Unknown domain")
+            .anchor(error)
+            .child(SizedBox::new(20.0, 10.0)),
+        Semantics::new()
+            .container(true)
+            .role(SemanticsRole::Slider)
+            .label("Volume")
+            .orientation(Axis::Vertical)
+            .role_description("fader")
+            .numeric_range(
+                NumericRange::try_new(3.0, 0.0, 10.0, 1.0)
+                    .and_then(|range| range.with_jump(5.0))
+                    .expect("finite fixture"),
+            )
+            .child(SizedBox::new(20.0, 10.0)),
+    ));
+    let mut laid = lay_out(root, loose(200.0));
+    laid.enable_semantics();
+    laid.pump();
+    let tree = laid
+        .a11y_tree()
+        .expect("semantics enabled before the frame");
+    let find = |label: &str| {
+        tree.find_by_label(label)
+            .unwrap_or_else(|error| panic!("{label}: {error}\n{}", tree.describe()))
+    };
+
+    let link = find("Docs");
+    let link = link.raw();
+    assert_eq!(link.aria_current(), Some(accesskit::AriaCurrent::Page));
+    assert_eq!(link.keyboard_shortcut(), Some("Alt+D"));
+    assert_eq!(link.language(), Some("fr-FR"));
+    assert_eq!(link.url(), Some("https://example.org/docs"));
+
+    let help_id = find("Use your work address").id();
+    let error_id = find("Unknown domain").id();
+    let field = find("Email");
+    let field = field.raw();
+    assert_eq!(field.has_popup(), Some(accesskit::HasPopup::Listbox));
+    assert_eq!(field.auto_complete(), Some(accesskit::AutoComplete::List));
+    assert_eq!(field.invalid(), Some(accesskit::Invalid::Spelling));
+    assert_eq!(field.described_by(), &[help_id]);
+    assert_eq!(field.error_message(), Some(error_id));
+
+    let slider = find("Volume");
+    let slider = slider.raw();
+    assert_eq!(slider.orientation(), Some(accesskit::Orientation::Vertical));
+    assert_eq!(slider.role_description(), Some("fader"));
+    assert_eq!(slider.numeric_value_jump(), Some(5.0));
 }

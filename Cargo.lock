@@ -1869,6 +1869,7 @@ dependencies = [
  "serde_json",
  "slab",
  "smallvec",
+ "static_assertions",
  "thiserror 2.0.21",
  "tracing",
  "tracing-subscriber",
@@ -2199,6 +2200,7 @@ dependencies = [
  "flui-native",
  "flui-painting",
  "flui-platform",
+ "flui-protocol",
  "flui-semantics",
  "flui-testing",
  "futures-util",
@@ -2527,9 +2529,11 @@ dependencies = [
 name = "flui-widgets"
 version = "0.2.0-dev"
 dependencies = [
+ "accesskit",
  "accesskit_consumer",
  "bitflags 2.13.2",
  "criterion",
+ "fastrand",
  "flui-animation",
  "flui-assets",
  "flui-foundation",
@@ -2549,6 +2553,7 @@ dependencies = [
  "percent-encoding",
  "proptest",
  "smallvec",
+ "static_assertions",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
@@ -3703,9 +3708,9 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "lru"
-version = "0.18.5"
+version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef9ac18847474e638e3702b76c65d4eb93428471a74778ef0f1be711717f89b5"
+checksum = "4a9f71e3591c7ec44d3e563e87bf14ddc2bada8519dca046e5b0e560cd004e2d"
 dependencies = [
  "hashbrown 0.17.1",
 ]
@@ -6873,9 +6878,9 @@ checksum = "33ff1c1b360982e93b6d8ea9c04836f71dba0817a16f91e229cf3a51bdd9d987"
 
 [[package]]
 name = "wasmparser"
-version = "0.261.0"
+version = "0.262.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f20f20e44f7e8aeb6744823ea9d869ede51e51be4fdaedede2852282e54d2d8"
+checksum = "974d643b125b272607e2fff8012ea14a8328acd7621e4bafa7afb32500052b1b"
 dependencies = [
  "bitflags 2.13.2",
  "indexmap",
@@ -7857,9 +7862,11 @@ dependencies = [
  "cargo_metadata",
  "clap",
  "keyboard-types",
+ "kurbo",
  "proc-macro2",
  "pulldown-cmark",
  "regex",
+ "roxmltree",
  "serde",
  "serde_json",
  "sha2",

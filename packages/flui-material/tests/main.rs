@@ -8,6 +8,9 @@
 
 mod common;
 
+#[path = "animated_icons.rs"]
+mod animated_icons;
+
 #[path = "app_bar.rs"]
 mod app_bar;
 
@@ -137,6 +140,14 @@ fn action_component_contracts() {
         (
             "icon_button::icon button theme slot reaches the icons icon theme",
             icon_button::icon_button_theme_slot_reaches_the_icons_icon_theme,
+        ),
+        (
+            "ink_well::a well shows focus only when the keyboard is in use",
+            ink_well::a_well_shows_focus_only_when_the_keyboard_is_in_use,
+        ),
+        (
+            "ink_well::a checkbox shows focus with its halo not a ring",
+            ink_well::a_checkbox_shows_focus_with_its_halo_not_a_ring,
         ),
         (
             "ink_well::disabled ink well does not fire a tap callback",
@@ -676,6 +687,10 @@ fn theme_and_app_contracts() {
             theme::theme_of_panicking_accessor_returns_ancestor_theme_data,
         ),
         (
+            "theme::theme installs the focus ring style",
+            theme::theme_installs_the_focus_ring_style,
+        ),
+        (
             "theme_fields::changing one theme slot rebuilds that slots readers and whole theme readers only",
             theme_fields::changing_one_theme_slot_rebuilds_that_slots_readers_and_whole_theme_readers_only,
         ),
@@ -847,4 +862,13 @@ fn gesture_alternatives() {
             gesture_alternatives::replacing_the_controller_moves_the_pager_and_bar_to_the_new_one,
         ),
     ]);
+}
+
+/// The Material animated icons: checked data, drawn inside the box, mirrored when they say so.
+#[test]
+fn material_animated_icons() {
+    common::run_cases(&[(
+        "animated_icons::every icon draws inside its box",
+        animated_icons::every_icon_draws_inside_its_box,
+    )]);
 }

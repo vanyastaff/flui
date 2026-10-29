@@ -4,7 +4,7 @@ use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::painting::TextStyle;
 use flui_sdk::painting::{BorderRadius, BorderSide, BoxDecoration, Color};
 use flui_sdk::platform::{Brightness, TargetPlatform};
-use flui_sdk::widgets::WidgetStateProperty;
+use flui_sdk::widgets::{FocusRingStyle, WidgetStateProperty};
 
 use crate::button_style::ButtonStyle;
 use crate::color_scheme::ColorScheme;
@@ -18,6 +18,18 @@ use crate::typography;
 /// `*ThemeData` color/side slot in this module uses (`fill_color`,
 /// `check_color`, `overlay_color`, and friends).
 type StateColor = WidgetStateProperty<Option<Color>>;
+
+/// The baseline focus ring in `scheme`'s colours: the shape of
+/// [`FocusRingStyle::BUILT_IN`], a 2 px `on_surface` band outside a 1 px
+/// `surface` band. The two roles contrast with each other in every scheme,
+/// so one of them contrasts with whatever the ring is drawn over.
+fn focus_ring(scheme: &ColorScheme) -> FocusRingStyle {
+    FocusRingStyle {
+        outer: scheme.on_surface,
+        inner: scheme.surface,
+        ..FocusRingStyle::BUILT_IN
+    }
+}
 
 /// Compute the M3 default [`TextTheme`]: `englishLike2021` geometry overlaid
 /// with a color-only theme uniformly recolored to `on_surface`.
@@ -729,6 +741,13 @@ pub struct ThemeData {
     /// The type-scale roles this theme provides.
     pub text_theme: TextTheme,
 
+    /// The keyboard focus indicator every control under the [`Theme`](crate::Theme)
+    /// draws: [`Theme`](crate::Theme) provides it as the inherited
+    /// `DefaultFocusRingStyle`. The baselines take two bands from the color
+    /// scheme, `on_surface` outside and `surface` inside, so one of them
+    /// contrasts with any background the control sits on.
+    pub focus_ring: FocusRingStyle,
+
     /// Overrides [`ElevatedButton`](crate::ElevatedButton)'s default style.
     /// `None` (the default): no override, `ElevatedButton` uses its own
     /// M3 token table verbatim.
@@ -826,6 +845,7 @@ impl ThemeData {
         Self {
             color_scheme,
             text_theme,
+            focus_ring: focus_ring(&color_scheme),
             elevated_button_theme: None,
             filled_button_theme: None,
             outlined_button_theme: None,
@@ -860,6 +880,7 @@ impl ThemeData {
         Self {
             color_scheme,
             text_theme,
+            focus_ring: focus_ring(&color_scheme),
             elevated_button_theme: None,
             filled_button_theme: None,
             outlined_button_theme: None,
@@ -924,6 +945,7 @@ impl ThemeData {
             text_theme: overrides
                 .text_theme
                 .unwrap_or_else(|| self.text_theme.clone()),
+            focus_ring: overrides.focus_ring.unwrap_or(self.focus_ring),
             // Each component-theme slot is itself already `Option<_>` on
             // `ThemeData`, so — unlike `color_scheme`/`text_theme` above —
             // the override field mirrors that `Option<_>` shape directly
@@ -1003,6 +1025,8 @@ pub struct ThemeDataOverrides {
     pub color_scheme: Option<ColorScheme>,
     /// Overrides [`ThemeData::text_theme`].
     pub text_theme: Option<TextTheme>,
+    /// Overrides [`ThemeData::focus_ring`].
+    pub focus_ring: Option<FocusRingStyle>,
     /// Replaces [`ThemeData::elevated_button_theme`] wholesale when `Some`;
     /// `None` leaves it unchanged (see [`ThemeData::copy_with`]'s doc
     /// comment on why this mirrors `Option<ElevatedButtonThemeData>`

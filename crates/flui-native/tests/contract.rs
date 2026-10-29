@@ -479,6 +479,10 @@ mod native_windows {
             synthetic_touch_and_pen_reach_native_pointer_dispatch,
         ),
         (
+            "two_injected_touches_arrive_as_one_pointer_frame",
+            two_injected_touches_arrive_as_one_pointer_frame,
+        ),
+        (
             "a_captured_native_pointer_session_replays_to_what_it_delivered",
             a_captured_native_pointer_session_replays_to_what_it_delivered,
         ),
@@ -3934,6 +3938,155 @@ mod native_windows {
                 );
             }
         }
+        window.close_now();
+    }
+
+    /// Two touches injected in one packet are sampled at one instant, so the
+    /// window delivers each of their steps (the presses, the moves, the lifts)
+    /// as one pointer frame holding both contacts, and never either contact
+    /// on its own.
+    #[expect(
+        unsafe_code,
+        reason = "real native touch injection into an ephemeral shown test window"
+    )]
+    fn two_injected_touches_arrive_as_one_pointer_frame() {
+        use flui_platform::PlatformInput;
+        use flui_platform::pointer::{PointerEvent, PointerKind};
+        use windows::Win32::UI::{
+            Controls::{
+                CreateSyntheticPointerDevice, DestroySyntheticPointerDevice,
+                HSYNTHETICPOINTERDEVICE, POINTER_FEEDBACK_NONE, POINTER_TYPE_INFO,
+                POINTER_TYPE_INFO_0,
+            },
+            Input::Pointer::{
+                InjectSyntheticPointerInput, POINTER_FLAG_DOWN, POINTER_FLAG_INCONTACT,
+                POINTER_FLAG_INRANGE, POINTER_FLAG_UP, POINTER_FLAG_UPDATE, POINTER_FLAGS,
+                POINTER_INFO, POINTER_TOUCH_INFO,
+            },
+            WindowsAndMessaging::{PT_TOUCH, WindowFromPoint},
+        };
+        struct Device(HSYNTHETICPOINTERDEVICE);
+        impl Drop for Device {
+            fn drop(&mut self) {
+                // SAFETY: this fixture uniquely owns the device returned by Create.
+                unsafe { DestroySyntheticPointerDevice(self.0) };
+            }
+        }
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let Some((window, _close)) = open_pointer_target(&platform) else {
+            return;
+        };
+        let hwnd = hwnd_of(&window);
+        let mut left = POINT { x: 30, y: 50 };
+        // SAFETY: the live shown owner window and an initialized point.
+        assert!(unsafe { ClientToScreen(hwnd, &raw mut left) }.as_bool());
+        let right = POINT {
+            x: left.x + 80,
+            y: left.y,
+        };
+        // SAFETY: hit tests of screen points; no handle is retained.
+        if [left, right]
+            .into_iter()
+            .any(|at| unsafe { WindowFromPoint(at) } != hwnd)
+        {
+            eprintln!("CANNOT_VERIFY pointer frame: the shown target is occluded");
+            return;
+        }
+        // SAFETY: one ephemeral synthetic device, no borrowed native resources.
+        let device =
+            match unsafe { CreateSyntheticPointerDevice(PT_TOUCH, 2, POINTER_FEEDBACK_NONE) } {
+                Ok(device) => Device(device),
+                Err(error) => {
+                    eprintln!(
+                        "CANNOT_VERIFY pointer frame: CreateSyntheticPointerDevice refused: {error}"
+                    );
+                    return;
+                }
+            };
+        // Each delivery's touch events: a frame's, or a lone event's.
+        let deliveries = Arc::new(Mutex::new(Vec::<Vec<PointerEvent>>::new()));
+        let recorded = Arc::clone(&deliveries);
+        window.handler.react_to_input(move |input| {
+            let events = match input {
+                PlatformInput::PointerFrame(frame) => frame.events().to_vec(),
+                PlatformInput::Pointer(event) => vec![event],
+                _ => return DispatchEventResult::default(),
+            };
+            recorded.lock().expect("pointer log").push(events);
+            DispatchEventResult::default()
+        });
+        let inject = |flags: POINTER_FLAGS, dy: i32| {
+            let packets = [(0, left), (1, right)].map(|(id, at)| {
+                let at = POINT {
+                    x: at.x,
+                    y: at.y + dy,
+                };
+                POINTER_TYPE_INFO {
+                    r#type: PT_TOUCH,
+                    Anonymous: POINTER_TYPE_INFO_0 {
+                        touchInfo: POINTER_TOUCH_INFO {
+                            pointerInfo: POINTER_INFO {
+                                pointerType: PT_TOUCH,
+                                pointerId: id,
+                                pointerFlags: flags,
+                                ptPixelLocation: at,
+                                ptPixelLocationRaw: at,
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        },
+                    },
+                }
+            });
+            // SAFETY: initialized union arms matching the device's type; the
+            // packets outlive the synchronous copy.
+            let injected = unsafe { InjectSyntheticPointerInput(device.0, &packets) };
+            let limit = Instant::now() + Duration::from_millis(200);
+            while Instant::now() < limit {
+                pump_pointer_thread();
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            injected
+        };
+        let held = POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT;
+        if let Err(error) = inject(POINTER_FLAG_DOWN | held, 0) {
+            eprintln!("CANNOT_VERIFY pointer frame: InjectSyntheticPointerInput refused: {error}");
+            return;
+        }
+        inject(POINTER_FLAG_UPDATE | held, 10).expect("inject the two touches' move");
+        inject(POINTER_FLAG_UP, 10).expect("inject the two touches' lift");
+
+        let step = |event: &PointerEvent| match event {
+            PointerEvent::Down(press) if press.pointer.kind == PointerKind::Touch => {
+                Some(("down", press.pointer.id))
+            }
+            PointerEvent::Move(update) if update.pointer.kind == PointerKind::Touch => {
+                Some(("move", update.pointer.id))
+            }
+            PointerEvent::Up(release) if release.pointer.kind == PointerKind::Touch => {
+                Some(("up", release.pointer.id))
+            }
+            _ => None,
+        };
+        let log = deliveries.lock().expect("pointer log");
+        let touch_deliveries: Vec<Vec<_>> = log
+            .iter()
+            .map(|events| events.iter().filter_map(step).collect::<Vec<_>>())
+            .filter(|steps| !steps.is_empty())
+            .collect();
+        let shape: Vec<Vec<&str>> = touch_deliveries
+            .iter()
+            .map(|steps| steps.iter().map(|(kind, _)| *kind).collect())
+            .collect();
+        assert_eq!(
+            shape,
+            [["down", "down"], ["move", "move"], ["up", "up"]],
+            "each injected step is one frame of both contacts: {log:?}"
+        );
+        for steps in &touch_deliveries {
+            assert_ne!(steps[0].1, steps[1].1, "two contacts: {log:?}");
+        }
+        drop(log);
         window.close_now();
     }
 

@@ -3,8 +3,8 @@
 use flui_interaction::gesture::GestureContest;
 use flui_interaction::pointer::MouseRegionTarget;
 use flui_interaction::{
-    HitTestEntry, InteractionDispatchError, InteractionDispatchHandle, InteractionLane,
-    PointerTarget, RenderId, ResolvedRouteToken,
+    HitMetadata, HitTestEntry, InteractionDispatchError, InteractionDispatchHandle,
+    InteractionLane, PointerTarget, RenderId, ResolvedRouteToken,
 };
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 
@@ -1217,7 +1217,6 @@ fn assert_hover_path_retirement(callback_fails: bool, failing_metadata: usize) {
     };
     use flui_interaction::{GestureBinding, HitTestResult, Offset, PointerId};
     use std::{
-        any::Any,
         cell::{Cell, RefCell},
         panic::{AssertUnwindSafe, catch_unwind},
         rc::Rc,
@@ -1243,13 +1242,13 @@ fn assert_hover_path_retirement(callback_fails: bool, failing_metadata: usize) {
     let binding = GestureBinding::new();
     let drops = Arc::new(AtomicUsize::new(0));
     let entries = failing_metadata.max(1);
-    let external: Rc<RefCell<Vec<Arc<dyn Any + Send + Sync>>>> = Rc::new(RefCell::new(
+    let external: Rc<RefCell<Vec<HitMetadata>>> = Rc::new(RefCell::new(
         (0..entries)
             .map(|index| {
-                Arc::new(MetadataCapture {
+                HitMetadata::new(MetadataCapture {
                     drops: Arc::clone(&drops),
                     panic_on_drop: index < failing_metadata,
-                }) as Arc<dyn Any + Send + Sync>
+                })
             })
             .collect(),
     ));
@@ -1288,9 +1287,7 @@ fn assert_hover_path_retirement(callback_fails: bool, failing_metadata: usize) {
         binding.handle_pointer_event(&movement, |_| {
             let mut path = HitTestResult::new();
             for (index, metadata) in external.borrow().iter().enumerate() {
-                path.add(
-                    HitTestEntry::new(RenderId::new(index + 1)).metadata(Arc::clone(metadata)),
-                );
+                path.add(HitTestEntry::new(RenderId::new(index + 1)).metadata(metadata.clone()));
             }
             path
         });
@@ -1487,10 +1484,12 @@ fn assert_queued_hover_retirement(mismatch: bool, failing_metadata: usize) {
             let mut path = HitTestResult::new();
             for index in 0..2 {
                 path.add(
-                    HitTestEntry::new(RenderId::new(index + 1)).metadata(Arc::new(Metadata {
-                        drops: Arc::clone(&drops),
-                        fails: index < failing_metadata,
-                    })),
+                    HitTestEntry::new(RenderId::new(index + 1)).metadata(HitMetadata::new(
+                        Metadata {
+                            drops: Arc::clone(&drops),
+                            fails: index < failing_metadata,
+                        },
+                    )),
                 );
             }
             path
@@ -4647,6 +4646,10 @@ fn captured_pinch_first_failure_survives_claim_failure() {
 }
 
 assert_not_impl_any!(InteractionLane: Send, Sync);
+// Hit-test metadata is owner-local, so the entries and paths that carry it are too.
+assert_not_impl_any!(HitMetadata: Send, Sync);
+assert_not_impl_any!(HitTestEntry: Send, Sync);
+assert_not_impl_any!(flui_interaction::HitTestResult: Send, Sync);
 assert_impl_all!(InteractionDispatchHandle: Clone, Send, Sync);
 assert_impl_all!(PointerTarget: Copy, Send, Sync);
 assert_impl_all!(MouseRegionTarget: Copy, Send, Sync);

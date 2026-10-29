@@ -378,6 +378,9 @@ impl UiRuntime {
     ) -> bool {
         let mut commits_closed = None;
         let commit_slot = &mut commits_closed;
+        // Owed until the anchor below completes: a drive that unwinds leaves
+        // it to the next owner turn (ADR-0142 item 5).
+        self.anchor_owed.set(true);
         let result = self
             .owner_frame
             .drive_frame(
@@ -391,13 +394,93 @@ impl UiRuntime {
             )
             .expect("BUG: the runtime's live frame owner must admit its frame transaction");
         drop(commits_closed);
-        // The commit anchor: each presentation's queued grants, against the
-        // stores that queued them.
+        self.run_commit_anchor();
+        result
+    }
+
+    /// The commit anchor: each presentation's queued grants, against the
+    /// stores that queued them, with the failure an owner callback parked in
+    /// its gate reported first (ADR-0142 items 2 and 5).
+    ///
+    /// Each presentation's anchor is contained, so one that fails does not
+    /// hold back its siblings' grants; the first failure is resumed once
+    /// every presentation ran. The debt is cleared only when every
+    /// presentation's anchor completed with its commits open: after a
+    /// failure, or with a presentation's commits still closed (its native
+    /// text preparation waits), the next owner turn runs it again.
+    fn run_commit_anchor(&self) {
+        let mut first = None;
+        let mut paid = true;
         for presentation in self.presentations.iter() {
-            let _ran = presentation.text_input().run_deferred_grants();
+            if presentation.text_input().is_transaction_open() {
+                // Its commits are still closed (a frame, a native text
+                // preparation): its anchor comes when they reopen.
+                paid = false;
+                continue;
+            }
+            let ran = catch_unwind(AssertUnwindSafe(|| {
+                let _ran = presentation.text_input().run_deferred_grants();
+            }))
+            .err();
+            paid &= ran.is_none() && !presentation.text_input().is_transaction_open();
+            crate::lifecycle_state::preserve_first_lifecycle_panic(
+                &mut first,
+                ran,
+                "commit anchor",
+            );
             presentation.rearm_completion();
         }
-        result
+        self.anchor_owed.set(!paid);
+        if let Some(failure) = first {
+            resume_unwind(failure);
+        }
+    }
+
+    /// Pay the commit anchor if this UI runtime owes it: a frame drive that
+    /// did not complete its anchor, or a failure owner code raised after a
+    /// grant the platform asked for outside any dispatch or anchor, which
+    /// waits in a presentation's gate (ADR-0142 item 5). Every owner turn
+    /// pays it first: the inbox drain, the background pump and the pump,
+    /// before its frame.
+    ///
+    /// # Panics
+    ///
+    /// Resumes the anchor's first failure, as [`Self::run_commit_anchor`].
+    pub(crate) fn pay_owed_anchor(&self) {
+        let owed = self.anchor_owed.get()
+            || self
+                .presentations
+                .iter()
+                .any(|presentation| presentation.text_input().holds_failure());
+        if owed {
+            self.run_commit_anchor();
+        }
+    }
+
+    /// Whether the commit anchor is owed ([`Self::pay_owed_anchor`]).
+    pub(crate) fn owes_anchor(&self) -> bool {
+        self.anchor_owed.get()
+    }
+
+    /// Record whether this UI runtime is checked out of its owner's slot:
+    /// while it is, every presentation's stores admit only their owner's own
+    /// calls (ADR-0142 item 6). A platform entry from elsewhere queues its
+    /// grant for [`Self::finish_checkout`].
+    pub(crate) fn set_text_commits_checked_out(&self, checked_out: bool) {
+        for presentation in self.presentations.iter() {
+            presentation.text_input().set_checked_out(checked_out);
+        }
+    }
+
+    /// The end of an owner turn, before the runtime returns to its slot:
+    /// the commit anchor runs, so a grant a platform entry queued while the
+    /// runtime was checked out runs at the end of the turn it came in.
+    ///
+    /// # Panics
+    ///
+    /// Resumes the anchor's first failure, as [`Self::run_commit_anchor`].
+    pub(crate) fn finish_checkout(&self) {
+        self.enter(UiRuntime::run_commit_anchor);
     }
 
     /// One presentation's build+layout+paint segment — moves VERBATIM from

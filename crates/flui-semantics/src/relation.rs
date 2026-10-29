@@ -55,4 +55,22 @@ pub enum SemanticsRelation {
     /// This node controls the anchored nodes, such as a button and the panel
     /// it opens (`aria-controls`).
     Controls,
+    /// The anchored nodes describe this one (`aria-describedby`): text read
+    /// after its name, such as a field's helper line.
+    DescribedBy,
+    /// The anchored nodes hold more detail about this one (`aria-details`),
+    /// such as a chart's data table.
+    Details,
+    /// Reading continues at the anchored nodes after this one
+    /// (`aria-flowto`), overriding document order.
+    FlowTo,
+    /// The anchored node says why this node's value is invalid
+    /// (`aria-errormessage`). AccessKit takes one node: the first published
+    /// target in identity order.
+    ErrorMessage,
+    /// The anchored node is the active descendant of this focused composite
+    /// (`aria-activedescendant`), such as the highlighted option of a combo
+    /// box whose focus stays in its field. AccessKit takes one node: the first
+    /// published target in identity order.
+    ActiveDescendant,
 }

@@ -2,7 +2,10 @@
 
 - **Status:** Accepted (2026-10-13); §8 amended (2026-10-18): Android injects through the shell's
   `input` and `uinput` commands, not instrumentation; §1 amended (2026-10-19): pointer input held
-  for a commit is recorded where it is dispatched or discarded. §1–§6 are implemented; §4's native codec is in
+  for a commit is recorded where it is dispatched or discarded; §4 amended (2026-10-29): the native
+  recording's schema is `flui-protocol`'s `native_recording`, so a reader such as the driver reads
+  a recording without the core, and its codec is `flui-native`'s `journal`. §1–§6 are implemented;
+  §4's native codec is in `crates/flui-native/src/journal/`, its goldens in
   `crates/flui-native/tests/native_recording/`, with the `native-capture` feature to record on a
   native host. §7 is implemented for pointer assembly, clocks, the scroll grammar, undecodable
   readings, availability and ownership (`flui_testing::backend_conformance`), with its DnD,
@@ -135,8 +138,10 @@ and put `serde` on the Stable contract crate.
 4. **Two recording levels.** `PlatformInput`-level recordings are `HostInput` streams that
    `flui-runtime`, `flui-interaction` and widget tests replay. Native recordings hold the backend's plain
    `NativeReading`s (no `windows::*` or `objc2` types), with clock frequency and anchor in the
-   header; their codec lives in `flui-native`'s tests and replays them through the pure
-   decoders, so Linux CI exercises Win32 and Apple translation without those hosts.
+   header; their schema is declared in `flui-protocol`, which a reader without the core reads,
+   and their codec is `flui-native`'s `journal`, built only with `native-capture` or `testing`; it
+   replays them through the pure decoders, so Linux CI exercises Win32 and Apple translation
+   without those hosts.
 5. **Privacy by default.** Key text, IME commit strings, accessibility action text
    (`ActionData::Value` for `SetValue` and `ReplaceSelectedText`, and any other text-carrying
    action data), window titles and device names are redacted when recorded. `--keep-text` is the

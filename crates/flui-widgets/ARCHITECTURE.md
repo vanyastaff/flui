@@ -931,7 +931,7 @@ the pixel position keeps its sample, velocity and frame origin; only an external
 position write requires synchronization. A target equal to the current position
 short-circuits only at rest. While moving, the driver brakes continuously and
 then settles exactly at that target. Scroll and page controllers accept the same
-`ArcCurve` handle used by `MotionSpec`.
+`SharedCurve` handle used by `MotionSpec`.
 
 `scrollable_retarget_preserves_the_position_velocity` and
 `scrollable_retarget_at_the_current_position_brakes_continuously` compare mounted
@@ -1043,6 +1043,42 @@ translation, so no new render object is needed.
 `motion::on_mount_plays_the_timeline_in_order`,
 `motion::target_reverses_mid_flight_without_a_jump` and
 `motion::a_scale_effect_keeps_its_alignment_fixed` pin the three.
+
+### Particles step on the frame clock and stop when idle
+
+`ParticleEmitter` runs its system on an unbounded `AnimationController` whose simulation reads
+elapsed seconds, so time comes only from the frame scheduler and the virtual clock drives
+tests. Each tick integrates in fixed steps of 1/60 s, at most fifteen a tick: a pause of the
+ticker up to a quarter second is caught up exactly, a longer one removes the live particles,
+and the rate never makes up a pause. The simulation's `is_done` reads an idle flag the clock's
+listener sets once nothing is alive and the rate has finished, so the clock ends its own run
+rather than being stopped from inside its listener; a burst starts a new run. Every quantity
+that reaches the atlas is checked when a particle is placed, and a particle whose sprite is not
+finite, leaves the engine's `f32` range or lies farther than its size outside the box is
+removed in that step. A `ParticleController` holds a weak link to at most one mounted emitter:
+a second emitter built with it runs without it until the first unmounts. The particles cases
+of `animation_and_visibility` pin each rule (`a_paused_ticker_catches_up_in_fixed_steps`,
+`non_finite_particles_never_reach_the_atlas`, `a_controller_drives_one_emitter`,
+`presets_never_flash`, …).
+
+### Animated icon data is constant key frames, checked once
+
+`AnimatedIconData` is key frames: one time line, and per path an opacity and a point list per
+command for every frame, with an optional cubic per gap. Constant data borrows `'static`
+slices (`from_static`, no allocation, usable in a `const`), run-time data is checked by
+`try_new` and shared behind an `Arc`; both are one type, so a pack's constants and an imported
+icon draw the same way. The check refuses mismatched frame counts, unordered times, values
+that are not finite, opacities outside `[0, 1]`, and a gap whose curve overshoots out of the
+finite range. Interpolation weighs the two ends (`a·(1−t) + b·t`), never their difference, so
+two finite extremes stay finite through the middle. `AnimatedIcon` takes the caller's
+animation, clamps its progress and keeps the last finite one, so an icon never vanishes and
+never publishes geometry that is not finite; mirroring under right-to-left text is the data's
+flag, because only the icon's author knows whether it points somewhere. The pictures come in
+through `cargo xtask icon-import` (SVG frames or an Android animated vector drawable), not a
+runtime parser.
+
+`animated_icon::icon_data_is_checked`, `animated_icon::the_frame_follows_the_progress` and
+`animated_icon::theme_and_direction_shape_the_icon` pin the three.
 
 ### Focused document selection uses the normal action chain
 
@@ -2092,18 +2128,19 @@ others take their payload typed: `on_set_value` a `&str`,
 set does not cover. None needs `Send + Sync`: the closures never reach the
 configuration.
 
-**Why the handlers stay owner-local, and how the storage bound is met.**
-`SemanticsActionHandler` is
-`Arc<dyn Fn(ActionCall) + Send + Sync>`
+**Why the handlers stay owner-local, and where they are stored.**
+`SemanticsActionHandler` is the owner-local `Rc<dyn Fn(ActionCall)>`
 (`crates/flui-semantics/src/action.rs`), stored in a `SemanticsConfiguration`
-that rides in the annotation render object, which `RenderView::RenderObject`
-pins `Send + Sync + 'static`. The handler is *not* invoked across a thread —
-resolution is owner-local (`PipelineOwner::resolve_semantics_action`) and the
-UI runtime drains it at a frame boundary, inside its entry. So the widget keeps its
-closures and its `WriterSource` in the interaction lane as one table per node,
-stores only the lane's ticket on the render object (`SemanticsActionRoute`),
-and advertises every action through one `Send + Sync` handler that holds the
-ticket and resolves it when invoked. This is the shape the surveyed frameworks
+that rides in the annotation render object. The handler is never invoked
+across a thread — resolution is owner-local
+(`PipelineOwner::resolve_semantics_action`) and the UI runtime drains it at a
+frame boundary, inside its entry; an accessibility adapter sends a
+`SemanticsActionRequest`, not the handler. The widget keeps its closures and its
+`WriterSource` in the interaction lane as one table per node, stores only the
+lane's ticket on the render object (`SemanticsActionRoute`), and advertises
+every action through one handler that holds the ticket and resolves it when
+invoked. A rebuild replaces the table under the same ticket and reuses the same
+handler, so the configuration compares equal and raises no semantics update. This is the shape the surveyed frameworks
 point at — none puts `Send` on the handler; Bevy, Iced, Slint and Dioxus/Blitz
 put it on something the widget owns — reached through ADR-0086's lane payload.
 
@@ -3181,7 +3218,7 @@ and a drop autoscroll — under the sequences they began, so a rebuild mid-drag 
 drag and one mid-fling keeps the fling and its bounce; the move calls no participant. A
 new physics or snap policy is taken in place and shapes the next step and release, while
 a run in progress keeps the simulation or target it started with: a build that writes
-`.physics(Arc::new(..))` keeps its owner and the chains below it, and replacing a sheet's
+`.physics(Rc::new(..))` keeps its owner and the chains below it, and replacing a sheet's
 stops never cuts its drag or its settle short. Rows:
 `a_fresh_physics_each_build_keeps_the_fling_and_its_bounce`,
 `a_fresh_ancestor_physics_mid_drag_keeps_taking_the_remainder` and

@@ -7,7 +7,9 @@ pub(crate) use crate::observation::preserve;
 use crate::observation::{CloseWindow, Observation, Panic, Phase, Subscription, WeakObservation};
 use flui_platform::HostNotice;
 use flui_scheduler::AppLifecycleState;
+use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+use std::rc::Rc;
 
 /// The presentation has closed or no longer accepts subscriptions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -128,6 +130,8 @@ impl std::fmt::Debug for HostNoticeSubscription {
 pub struct LifecycleSource {
     states: Observation<AppLifecycleState>,
     notices: Observation<HostNotice>,
+    /// The close-delivery latch, shared with the claimed [`CloseDelivery`].
+    close_delivery: Rc<Cell<CloseDeliveryState>>,
 }
 impl std::fmt::Debug for LifecycleSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -146,6 +150,7 @@ impl LifecycleSource {
         Self {
             states: Observation::keeping_latest(),
             notices: Observation::transient(),
+            close_delivery: Rc::new(Cell::new(CloseDeliveryState::NotStarted)),
         }
     }
     /// Weak owner-local consumer capability.
@@ -191,26 +196,24 @@ impl LifecycleSource {
     /// requested again from inside a Detached observer, or repeated when the
     /// UI runtime drops, delivers nothing twice. The token records whether the
     /// delivery completed or was interrupted.
-    ///
-    /// Not yet latched: every call gets a token.
     #[must_use = "dropping the token without completing it records an interrupted delivery"]
     pub fn claim_close_delivery(&self) -> Option<CloseDelivery> {
-        Some(CloseDelivery { _private: () })
+        if self.close_delivery.get() != CloseDeliveryState::NotStarted {
+            return None;
+        }
+        self.close_delivery.set(CloseDeliveryState::Running);
+        Some(CloseDelivery {
+            state: Rc::clone(&self.close_delivery),
+        })
     }
 
     /// How this presentation's close delivery stands.
-    ///
-    /// Not yet recorded: always [`CloseDeliveryState::NotStarted`].
     #[cfg_attr(
         not(test),
         expect(dead_code, reason = "read once the host classifies a failed close")
     )]
-    #[expect(
-        clippy::unused_self,
-        reason = "read from the source once the latch records"
-    )]
     pub(crate) fn close_delivery_state(&self) -> CloseDeliveryState {
-        CloseDeliveryState::NotStarted
+        self.close_delivery.get()
     }
     /// Fence new subscriptions and ordinary commits before terminal callbacks.
     pub fn begin_close(&self) {
@@ -263,10 +266,6 @@ impl LifecycleSource {
 /// [`LifecycleSource::claim_close_delivery`]. Crate-private until a
 /// production reader exists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "recorded once the close delivery latches")
-)]
 pub(crate) enum CloseDeliveryState {
     /// No delivery was claimed.
     NotStarted,
@@ -285,12 +284,24 @@ pub(crate) enum CloseDeliveryState {
 #[doc(hidden)]
 #[derive(Debug)]
 pub struct CloseDelivery {
-    _private: (),
+    state: Rc<Cell<CloseDeliveryState>>,
 }
 
 impl CloseDelivery {
     /// Record that the delivery ran to its end.
-    pub fn complete(self) {}
+    pub fn complete(self) {
+        self.state.set(CloseDeliveryState::Completed);
+    }
+}
+
+impl Drop for CloseDelivery {
+    /// A token dropped before [`CloseDelivery::complete`] records an
+    /// interrupted delivery; one that completed keeps its record.
+    fn drop(&mut self) {
+        if self.state.get() == CloseDeliveryState::Running {
+            self.state.set(CloseDeliveryState::Interrupted);
+        }
+    }
 }
 
 /// The in-progress window of one terminal close; see
@@ -406,8 +417,6 @@ mod tests {
 
     /// One presentation's close delivery is claimed once; the token records
     /// whether it completed or was interrupted, and neither is claimed again.
-    #[test]
-    #[ignore = "contract: close delivery is claimed once and records how it ended"]
     fn close_delivery_is_claimed_once_and_records_how_it_ended() {
         let completed = LifecycleSource::new();
         let delivery = completed.claim_close_delivery();
@@ -454,6 +463,10 @@ mod tests {
                 (
                     "lifecycle_subscription_terminal_reentry_drains_before_invalidating",
                     lifecycle_subscription_terminal_reentry_drains_before_invalidating as fn(),
+                ),
+                (
+                    "close_delivery_is_claimed_once_and_records_how_it_ended",
+                    close_delivery_is_claimed_once_and_records_how_it_ended as fn(),
                 ),
             ],
         );

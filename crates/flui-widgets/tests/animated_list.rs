@@ -7,7 +7,6 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use crate::common::{LaidOut, lay_out_animated, tight};
@@ -404,7 +403,7 @@ pub(crate) fn grid_tiles_slide_between_cells() {
         VsyncScope::new(
             registry.clone(),
             AnimatedGrid::new(
-                Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(2)),
+                SliverGridDelegateWithFixedCrossAxisCount::new(2),
                 ids.to_vec(),
                 |id| *id,
                 move |id| Row {

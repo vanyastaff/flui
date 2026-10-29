@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-12
+- **Superseded-by:** [ADR-0263](ADR-0263-semantics-relations-follow-aria.md) for §3 only (every ARIA
+  relation with an AccessKit property is a `SemanticsRelation`)
 - **Related:** [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md), the wire projection of the
   published AccessKit tree; `crates/flui-semantics/ARCHITECTURE.md`, "Failed incremental
   publication keeps delivery pending".

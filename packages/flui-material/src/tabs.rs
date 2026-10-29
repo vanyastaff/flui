@@ -429,10 +429,10 @@ fn resolve_style(theme: &ThemeData) -> ResolvedTabBarStyle {
     }
 }
 
-/// The secondary overlay color's resolver — pressed/hovered/
-/// focused ramp over `on_surface`, identical whether or not the tab is
-/// selected (the M3 spec's selected and unselected branches happen to
-/// produce the same three values).
+/// The secondary overlay color's resolver — pressed/hovered ramp over
+/// `on_surface`, identical whether or not the tab is selected (the M3 spec's
+/// selected and unselected branches happen to produce the same values). A
+/// focused tab shows the focus ring, not a layer (ADR-0079).
 fn default_overlay_color(on_surface: Color) -> WidgetStateProperty<Option<Color>> {
     WidgetStateProperty::from_map([
         (
@@ -442,10 +442,6 @@ fn default_overlay_color(on_surface: Color) -> WidgetStateProperty<Option<Color>
         (
             WidgetStateConstraint::Is(WidgetState::Hovered),
             Some(on_surface.with_opacity(StateLayerAlpha::M3.hovered)),
-        ),
-        (
-            WidgetStateConstraint::Is(WidgetState::Focused),
-            Some(on_surface.with_opacity(StateLayerAlpha::M3.focused)),
         ),
     ])
 }
@@ -698,13 +694,12 @@ impl ViewState<TabBar> for TabBarState {
         };
         // The indicator only paints: the tabs' ink wells beneath it own every
         // pointer in the band.
-        let indicator = Positioned::new(
-            IgnorePointer::new().child(CustomPaint::new().painter(Rc::new(painter))),
-        )
-        .left(0.0)
-        .right(0.0)
-        .bottom(0.0)
-        .height(view.indicator_weight);
+        let indicator =
+            Positioned::new(IgnorePointer::new().child(CustomPaint::new().painter(painter)))
+                .left(0.0)
+                .right(0.0)
+                .bottom(0.0)
+                .height(view.indicator_weight);
 
         let mut layers = Vec::with_capacity(3);
         if resolved.divider_height > 0.0 && resolved.divider_color != Color::TRANSPARENT {

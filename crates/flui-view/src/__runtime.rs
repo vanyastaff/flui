@@ -26,7 +26,10 @@ use std::cell::Cell;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use flui_protocol::{ActionRequest, ReadQuery, Tree, WindowId};
+use flui_protocol::{
+    ActionRequest, Actionability, ActionabilityParams, LocateParams, Matches, ReadQuery, Tree,
+    WindowId,
+};
 use flui_scheduler::AppLifecycleState;
 
 use crate::WidgetsBinding;
@@ -61,6 +64,23 @@ pub trait AgentPort: Send + Sync {
     ///
     /// When the request cannot be enqueued.
     fn act(&self, request: ActionRequest) -> Result<AgentAnswer<()>, AgentFault>;
+
+    /// Enqueue a locator resolution over the window's committed semantics tree.
+    ///
+    /// # Errors
+    ///
+    /// When the request cannot be enqueued.
+    fn locate(&self, params: LocateParams) -> Result<AgentAnswer<Matches>, AgentFault>;
+
+    /// Enqueue a read of the facts that decide whether input reaches an element.
+    ///
+    /// # Errors
+    ///
+    /// When the request cannot be enqueued.
+    fn actionability(
+        &self,
+        params: ActionabilityParams,
+    ) -> Result<AgentAnswer<Actionability>, AgentFault>;
 
     /// Enqueue a playback request for this exact window's animation clock.
     ///

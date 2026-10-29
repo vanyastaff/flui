@@ -8,17 +8,17 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use flui_native::input::assembly::capture::{CaptureGuard, CaptureSource, Captured, capture};
 use flui_native::input::assembly::{
     ContactRegistry, NativeClock, NativeContact, NativeReading, ReadingAction, ReadingTime, decode,
 };
+use flui_native::journal::capture::{CaptureGuard, CaptureSource, Captured, capture};
 use flui_platform::EventTime;
 use flui_platform::pointer::{PointerButton, PointerEvent, PointerKind};
 use parking_lot::Mutex;
 
 use super::codec::{Backend, NativeRecording, Row};
-use super::journal::Recorder;
 use super::{RECORDINGS, recording};
+use flui_native::journal::recorder::Recorder;
 
 /// Run `session` with a capture installed on this thread, and return its
 /// result with the recording of every registry created during it, in
@@ -297,7 +297,7 @@ pub fn a_captured_registry_journals_the_recording_it_replays() {
     for (name, text) in RECORDINGS {
         let mut original = recording(text);
         let (_, captured) = record(original.header.backend, || original.replay());
-        let recorder = super::journal::Recorder::start(original.header.backend);
+        let recorder = Recorder::start(original.header.backend);
         original.replay();
         let live = recorder.journals().snapshot();
         drop(recorder.finish());

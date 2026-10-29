@@ -2,6 +2,8 @@
 //! technology show it, a pointer hides it, and a stray modifier release left
 //! over from switching windows changes nothing.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
@@ -9,7 +11,7 @@ use flui_painting::display_list::DrawOp;
 use flui_painting::styling::Color;
 use flui_platform::keyboard::{Key, KeyRepeat, KeyState, NamedKey};
 use flui_testing::{Action, ActionRequest, MouseScript, TreeId};
-use flui_widgets::{DefaultFocusRingStyle, FocusRingStyle, RawButton, Text};
+use flui_widgets::{DefaultFocusRingStyle, Focus, FocusRingStyle, RawButton, Text};
 
 use super::{key, press, tab};
 use crate::common::{LaidOut, lay_out, loose};
@@ -166,6 +168,38 @@ fn a_stray_modifier_does_not_show_the_ring() {
     assert!(ring_painted(&app), "Tab is");
 }
 
+/// `on_visible_focus_change` reports each edge of shown focus: Tab shows it,
+/// a pointer press elsewhere hides it while the node keeps the primary
+/// focus, and the next Tab shows it again.
+fn visible_focus_change_reports_each_edge() {
+    let edges = Rc::new(RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&edges);
+    let mut app = lay_out(
+        Focus::new(Text::new("Go")).on_visible_focus_change(move |_cx, shown| {
+            recorded.borrow_mut().push(shown);
+        }),
+        loose(400.0),
+    );
+    app.pump();
+    tab_in(&mut app);
+    assert_eq!(*edges.borrow(), [true], "Tab shows the focus");
+    let manager = app.focus_manager();
+    let focused = manager.primary_focus().map(|node| node.id());
+    click(&mut app, 390.0, 390.0);
+    assert_eq!(
+        manager.primary_focus().map(|node| node.id()),
+        focused,
+        "the node keeps the primary focus"
+    );
+    assert_eq!(*edges.borrow(), [true, false], "a pointer press hides it");
+    let _ = app.enter_owner_scope(|| tab(&manager));
+    app.pump();
+    assert_eq!(
+        *edges.borrow(),
+        [true, false, true],
+        "the next Tab shows it"
+    );
+}
 /// The ring shows for focus the keyboard or assistive technology moved, and
 /// not once a pointer is in use.
 pub(crate) fn focus_indicator_follows_input_modality() {
@@ -174,4 +208,5 @@ pub(crate) fn focus_indicator_follows_input_modality() {
     a_click_shows_no_ring();
     pointer_input_hides_the_ring();
     a_stray_modifier_does_not_show_the_ring();
+    visible_focus_change_reports_each_edge();
 }

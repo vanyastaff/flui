@@ -6,7 +6,7 @@
 //! never touches the child, and live/dry baselines add the delegated child
 //! offset to the child's baseline.
 
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Size};
@@ -24,7 +24,7 @@ use flui_rendering::{
 /// A single-child render box whose layout is controlled by a delegate.
 #[derive(Debug, Clone)]
 pub struct RenderCustomSingleChildLayoutBox {
-    delegate: Arc<dyn SingleChildLayoutDelegate>,
+    delegate: Rc<dyn SingleChildLayoutDelegate>,
     has_child: bool,
     child_offset: Offset,
     child_baselines: [Option<f64>; 2],
@@ -32,7 +32,7 @@ pub struct RenderCustomSingleChildLayoutBox {
 
 impl RenderCustomSingleChildLayoutBox {
     /// Creates a custom single-child layout box.
-    pub fn new(delegate: Arc<dyn SingleChildLayoutDelegate>) -> Self {
+    pub fn new(delegate: Rc<dyn SingleChildLayoutDelegate>) -> Self {
         Self {
             delegate,
             has_child: false,
@@ -53,9 +53,9 @@ impl RenderCustomSingleChildLayoutBox {
     /// delegate's `should_relayout(old_delegate)` decides.
     pub fn set_delegate(
         &mut self,
-        delegate: Arc<dyn SingleChildLayoutDelegate>,
+        delegate: Rc<dyn SingleChildLayoutDelegate>,
     ) -> flui_rendering::RenderUpdateImpact {
-        if Arc::ptr_eq(&self.delegate, &delegate) {
+        if Rc::ptr_eq(&self.delegate, &delegate) {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
         let type_changed = self.delegate.as_any().type_id() != delegate.as_any().type_id();

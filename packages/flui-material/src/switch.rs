@@ -99,7 +99,7 @@ use flui_sdk::widgets::{
 };
 
 use crate::color_scheme::ColorScheme;
-use crate::ink_well::InkWell;
+use crate::ink_well::{FocusIndicator, InkWell};
 use crate::ripple::StateLayerAlpha;
 use crate::shape::MaterialShape;
 use crate::state_color::resolve_state_color;
@@ -365,12 +365,12 @@ impl ViewState<Switch> for SwitchState {
                 .or_else(|| switch_default_overlay_color(&colors, *live_states))
         });
 
-        let painter: std::rc::Rc<dyn CustomPainter> = std::rc::Rc::new(SwitchPainter {
+        let painter = SwitchPainter {
             position: self.position.animation(),
             off,
             on,
             rtl: Directionality::maybe_of(ctx) == Some(TextDirection::Rtl),
-        });
+        };
 
         let interactive = view.is_interactive();
         let next_value = !view.value;
@@ -382,7 +382,8 @@ impl ViewState<Switch> for SwitchState {
         )
         .shape(MaterialShape::Stadium)
         .overlay_color(overlay_color)
-        .states_controller(self.states.clone());
+        .states_controller(self.states.clone())
+        .focus_indicator(FocusIndicator::Halo);
         if interactive {
             ink_well = ink_well.on_tap(move |cx| {
                 if let Some(handler) = &on_changed {

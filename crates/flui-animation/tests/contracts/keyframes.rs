@@ -603,7 +603,7 @@ fn cubic_hermite_midpoint() {
 /// The midpoint of a one-second cubic from 1 to 2 after a one-second eased
 /// segment from 0 to 1 that ends with `curve`: 1.5 when the eased segment
 /// hands over no velocity.
-fn cubic_midpoint_after(curve: impl Curve + Send + Sync + 'static) -> f64 {
+fn cubic_midpoint_after(curve: impl Curve + 'static) -> f64 {
     let track = Keyframes::builder(0.0, Duration::from_secs(2))
         .to(1.0, Duration::from_secs(1), curve)
         .cubic(2.0, Duration::from_secs(1))
@@ -663,9 +663,9 @@ fn cubic_borrows_the_following_eased_velocity() {
     // Square's incoming slope is zero. Its mirrored curve has incoming
     // slope two, so a two-unit rise in one second starts at four units/s.
     for (curve, velocity) in [
-        (flui_animation::ArcCurve::new(Square), 0.0),
+        (flui_animation::SharedCurve::new(Square), 0.0),
         (
-            flui_animation::ArcCurve::new(flui_animation::Flipped::new(Square)),
+            flui_animation::SharedCurve::new(flui_animation::Flipped::new(Square)),
             4.0,
         ),
     ] {

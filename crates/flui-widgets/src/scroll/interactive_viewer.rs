@@ -2471,7 +2471,7 @@ fn viewer_semantics(core: &Rc<ViewerCore>, config: &ViewerConfig, matrix: &Matri
         .on_scroll_down(pan(Vec2::new(0.0, 1.0)));
     let (min, max) = (config.min_scale, config.max_scale);
     if min <= max
-        && let Ok(range) = NumericRange::new(
+        && let Ok(range) = NumericRange::try_new(
             scale.clamp(min, max),
             min,
             max,

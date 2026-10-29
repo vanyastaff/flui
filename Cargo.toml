@@ -251,7 +251,7 @@ serde_json = "1.0"
 schemars = "1.0"
 cargo_metadata = "0.23.1"
 # Core wasm import inspection in xtask. No validator, component model or serde.
-wasmparser = { version = "0.261", default-features = false, features = ["std"] }
+wasmparser = { version = "0.262", default-features = false, features = ["std"] }
 sha2 = { version = "0.11", default-features = false }
 # Parity-inventory manifest parsing (flui-widgets dev-dep) + flui-cli config.
 toml = "1.1"
@@ -316,6 +316,9 @@ flui-platform = { path = "crates/flui-platform", version = "=0.2.0-dev" }
 
 # ERROR HANDLING - Used everywhere
 thiserror = "2.0"
+# Seeded random numbers for particle effects (`flui-widgets` `motion::particles`):
+# reproducible frames from a seed, no global generator.
+fastrand = { version = "2.3", default-features = false }
 anyhow = "1.0"
 
 # TRACING — the emission facade is used everywhere; the *backends* below are
@@ -388,7 +391,7 @@ futures-util = { version = "0.3", default-features = false, features = ["alloc"]
 # before starting a bridged image load. No time-based eviction. flui-assets'
 # Moka cache stores typed loaded results with configurable expiration; bridged
 # image loads use this cache instead.
-lru = "0.18.5"
+lru = "0.19.0"
 
 # CLIPBOARD - Cross-platform clipboard access
 arboard = "3.4"
@@ -405,6 +408,8 @@ glam = { version = "0.34", default-features = false, features = ["std", "f64"] }
 # kurbo: the curve model behind flui-painting's `Path` (ADR-0098 §7): arcs and ovals as
 # curves, exact winding and tight bounds. Crate-internal; no kurbo type is public.
 kurbo = "0.13"
+# XML for `cargo xtask icon-import` (SVG and Android AnimatedVectorDrawable files).
+roxmltree = "0.20"
 # Private sRGB/Oklab conversions; FLUI owns admission and interpolation policy.
 color = "0.3.3"
 # bytemuck: zero-copy Pod/Zeroable derives used by flui-engine.

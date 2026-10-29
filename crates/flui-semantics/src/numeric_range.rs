@@ -13,12 +13,14 @@ pub struct NumericRange {
     min: f64,
     max: f64,
     step: f64,
+    jump: Option<f64>,
 }
 
 /// Why a numeric range could not be admitted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum NumericRangeError {
-    /// A value, bound, or step was non-finite.
+    /// A value, bound, step or large step was non-finite.
     #[error("numeric range values must be finite")]
     NonFinite,
     /// The minimum was greater than the maximum.
@@ -30,6 +32,9 @@ pub enum NumericRangeError {
     /// The adjustment step was zero or negative.
     #[error("numeric range step must be positive")]
     NonPositiveStep,
+    /// The large step was zero or negative.
+    #[error("numeric range large step must be positive")]
+    NonPositiveJump,
 }
 
 impl NumericRange {
@@ -37,7 +42,7 @@ impl NumericRange {
     ///
     /// # Errors
     /// Returns the violated admission rule; no invalid range is constructed.
-    pub fn new(value: f64, min: f64, max: f64, step: f64) -> Result<Self, NumericRangeError> {
+    pub fn try_new(value: f64, min: f64, max: f64, step: f64) -> Result<Self, NumericRangeError> {
         if ![value, min, max, step].into_iter().all(f64::is_finite) {
             return Err(NumericRangeError::NonFinite);
         }
@@ -55,6 +60,26 @@ impl NumericRange {
             min,
             max,
             step,
+            jump: None,
+        })
+    }
+
+    /// The same range with a large step, the distance Page Up and Page Down
+    /// move a slider or a scroll bar.
+    ///
+    /// # Errors
+    /// [`NumericRangeError::NonFinite`] or
+    /// [`NumericRangeError::NonPositiveJump`]; the range is not changed.
+    pub fn with_jump(self, jump: f64) -> Result<Self, NumericRangeError> {
+        if !jump.is_finite() {
+            return Err(NumericRangeError::NonFinite);
+        }
+        if jump <= 0.0 {
+            return Err(NumericRangeError::NonPositiveJump);
+        }
+        Ok(Self {
+            jump: Some(jump),
+            ..self
         })
     }
 
@@ -77,6 +102,11 @@ impl NumericRange {
     #[must_use]
     pub const fn step(self) -> f64 {
         self.step
+    }
+    /// Positive large step, when one was declared.
+    #[must_use]
+    pub const fn jump(self) -> Option<f64> {
+        self.jump
     }
     /// Whether an exact value is finite and inside the inclusive range.
     #[must_use]

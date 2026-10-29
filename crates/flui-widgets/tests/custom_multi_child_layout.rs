@@ -2,7 +2,6 @@
 //! `RenderCustomMultiChildLayoutBox` plus `LayoutId` parent-data delivery.
 
 use std::any::Any;
-use std::sync::Arc;
 
 use crate::common::{lay_out, loose, offset, size};
 use flui_foundation::geometry::{Offset, Size};
@@ -53,10 +52,10 @@ impl MultiChildLayoutDelegate for TwoSlotDelegate {
     }
 }
 
-fn two_slot_delegate() -> Arc<dyn MultiChildLayoutDelegate> {
-    Arc::new(TwoSlotDelegate {
+fn two_slot_delegate() -> TwoSlotDelegate {
+    TwoSlotDelegate {
         size: size(120.0, 90.0),
-    })
+    }
 }
 
 pub(crate) fn custom_multi_child_layout_mounts_render_object_and_positions_layout_id_children() {

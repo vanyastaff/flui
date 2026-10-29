@@ -83,7 +83,7 @@ fn progress_semantics(label: &str, fraction: Option<f64>) -> Semantics {
     };
     let percent = (fraction * 100.0).round();
     let semantics = semantics.value(format!("{percent}%"));
-    match NumericRange::new(percent, 0.0, 100.0, 1.0) {
+    match NumericRange::try_new(percent, 0.0, 100.0, 1.0) {
         Ok(range) => semantics.numeric_range(range),
         Err(_) => semantics,
     }

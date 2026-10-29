@@ -26,7 +26,7 @@ impl StatelessView for OpacityTarget {
             flui_widgets::ColoredBox::new(flui_painting::styling::Color::rgb(255, 0, 0)),
         )
         .duration(std::time::Duration::from_secs(1))
-        .curve(flui_animation::ArcCurve::new(
+        .curve(flui_animation::SharedCurve::new(
             flui_animation::curves::LINEAR,
         ))
     }

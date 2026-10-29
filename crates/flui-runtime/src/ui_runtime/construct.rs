@@ -239,6 +239,8 @@ impl UiRuntime {
             frame_failure_handler: Rc::new(RefCell::new(None)),
             pending_sampling_reports: RefCell::new(Vec::new()),
             owner_checkout_active: Cell::new(false),
+            anchor_owed: Cell::new(false),
+            press_commit: Cell::new(None),
             frame_failure_detail: Cell::new(FrameFailureDetail::default()),
             _owner_affine: PhantomData,
         })

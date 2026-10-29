@@ -215,11 +215,53 @@ pub enum CursorRequest {
     Icon(CursorIcon),
 }
 
+/// An opaque value a render object attaches to every hit that lands on it.
+///
+/// A searcher walking a hit path recovers it with
+/// [`downcast_ref`](Self::downcast_ref) without knowing which render object
+/// put it there. Owner-local: it may hold `Rc` state, and clones share one
+/// value.
+#[derive(Clone)]
+pub struct HitMetadata(std::rc::Rc<dyn std::any::Any>);
+
+impl HitMetadata {
+    /// Wraps `value` for attachment to hit-test entries.
+    #[must_use]
+    pub fn new(value: impl std::any::Any) -> Self {
+        Self(std::rc::Rc::new(value))
+    }
+
+    /// The value as a `T`, or `None` when it holds another type.
+    #[must_use]
+    pub fn downcast_ref<T: std::any::Any>(&self) -> Option<&T> {
+        self.0.downcast_ref::<T>()
+    }
+
+    /// Whether `self` and `other` are clones of one value.
+    #[must_use]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        std::rc::Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl std::fmt::Debug for HitMetadata {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The value is `dyn Any` and has no `Debug` of its own.
+        f.debug_struct("HitMetadata").finish_non_exhaustive()
+    }
+}
+
+impl crate::retain::Retain for HitMetadata {
+    fn retain(self) {
+        crate::retain::Retain::retain(self.0);
+    }
+}
+
 /// Base hit test entry.
 ///
-/// Data-only (`Send + Sync`): executable pointer callbacks live in the
-/// owner-local interaction lane and are addressed through the entry's
-/// [`PointerTarget`] identity, never stored here.
+/// Executable pointer callbacks live in the owner-local interaction lane and
+/// are addressed through the entry's [`PointerTarget`] identity, never stored
+/// here.
 #[derive(Clone)]
 pub struct HitTestEntry {
     /// Element/render ID.
@@ -261,7 +303,7 @@ pub struct HitTestEntry {
     /// guards ownership between entries; it cannot contain competing panics
     /// inside one opaque payload's destructor. Use [`Option::take`] to move the
     /// payload out of an owned entry.
-    pub metadata: Option<std::sync::Arc<dyn std::any::Any + Send + Sync>>,
+    pub metadata: Option<HitMetadata>,
 
     /// Data-plane identity of this target's owner-local scroll handler.
     pub scroll_target: Option<ScrollTarget>,
@@ -324,14 +366,14 @@ impl HitTestEntry {
 
     /// Builder: attach an opaque payload for searchers to find.
     #[must_use]
-    pub fn metadata(mut self, payload: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> Self {
+    pub fn metadata(mut self, payload: HitMetadata) -> Self {
         self.metadata = Some(payload);
         self
     }
 
     /// The payload downcast to `T`, or `None` if absent or a different type.
     #[must_use]
-    pub fn metadata_as<T: std::any::Any + Send + Sync + 'static>(&self) -> Option<&T> {
+    pub fn metadata_as<T: std::any::Any>(&self) -> Option<&T> {
         self.metadata.as_ref()?.downcast_ref::<T>()
     }
 

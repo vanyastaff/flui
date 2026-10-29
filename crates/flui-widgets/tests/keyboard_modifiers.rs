@@ -276,7 +276,7 @@ pub(crate) fn lock_states_do_not_disable_slider_navigation() {
         let proposals = Rc::new(RefCell::new(Vec::new()));
         let observed = Rc::clone(&proposals);
         let laid = lay_out(
-            Slider::new(NumericRange::new(25.0, 0.0, 100.0, 10.0).expect("valid range"))
+            Slider::new(NumericRange::try_new(25.0, 0.0, 100.0, 10.0).expect("valid range"))
                 .on_changed(move |_, value| observed.borrow_mut().push(value)),
             tight(100.0, 32.0),
         );
@@ -790,7 +790,7 @@ pub(crate) fn slider_glyph_and_composition_policy() {
         let proposals = Rc::new(RefCell::new(Vec::new()));
         let observed = Rc::clone(&proposals);
         let laid = lay_out(
-            Slider::new(NumericRange::new(25.0, 0.0, 100.0, 10.0).expect("valid range"))
+            Slider::new(NumericRange::try_new(25.0, 0.0, 100.0, 10.0).expect("valid range"))
                 .on_changed(move |_, value| observed.borrow_mut().push(value)),
             tight(100.0, 32.0),
         );

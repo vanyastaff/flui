@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use flui_animation::{ArcCurve, Vsync, curves};
+use flui_animation::{SharedCurve, Vsync, curves};
 use flui_foundation::geometry::{Axis, Offset};
 use flui_interaction::PointerKindSet;
 use flui_interaction::events::{Code, Key, KeyState, Modifiers, NamedKey};
@@ -414,7 +414,7 @@ fn a_refused_device_does_not_stop_a_pager_in_motion() {
         controller.animate_to_page(
             1,
             Duration::from_millis(1000),
-            ArcCurve::new(curves::LINEAR),
+            SharedCurve::new(curves::LINEAR),
         );
         laid.pump_for(Duration::from_millis(1));
         laid.pump_for(Duration::from_millis(100));
@@ -483,7 +483,11 @@ fn the_controller_jumps_and_animates_to_a_page() {
     controller.jump_to_page(2);
     assert_eq!(controller.page(), Some(2.0));
 
-    controller.animate_to_page(1, Duration::from_millis(200), ArcCurve::new(curves::LINEAR));
+    controller.animate_to_page(
+        1,
+        Duration::from_millis(200),
+        SharedCurve::new(curves::LINEAR),
+    );
     laid.pump_for(Duration::from_millis(1));
     laid.pump_for(Duration::from_millis(100));
     let midway = controller.page().expect("laid out");

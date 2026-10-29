@@ -575,7 +575,7 @@ fn owners_deliver_through_both_subscription_forms() {
             0.0_f64,
             flui_animation::MotionSpec::Curve {
                 duration: Duration::from_secs(1),
-                curve: flui_animation::ArcCurve::new(curves::LINEAR),
+                curve: flui_animation::SharedCurve::new(curves::LINEAR),
             },
             Some(&registry),
         )

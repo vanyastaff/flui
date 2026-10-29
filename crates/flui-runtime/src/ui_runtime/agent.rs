@@ -26,9 +26,13 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TryRecvError, TrySen
 use flui_foundation::PresentationId;
 use flui_foundation::geometry::DevicePixelRatio;
 use flui_protocol::{
-    ActionName, ActionRequest, ElementId, ErrorCode, ReadQuery, Retry, Tree, WindowId,
+    ActionName, ActionRequest, Actionability, ActionabilityParams, ElementId, ErrorCode,
+    LocateParams, Matches, ReadQuery, Retry, Tree, WindowId,
 };
-use flui_semantics::{Placement, SemanticsActionError, WireActionError, WireReadError};
+use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
+use flui_semantics::{
+    Placement, SemanticsActionError, WireActionError, WireLocateError, WireReadError,
+};
 use flui_view::__runtime::{AgentPort, PendingAnswer};
 use flui_view::dev_agent::{AgentAnswer, AgentFault, AgentWindow, HandleKind};
 use parking_lot::{Mutex, RwLock};
@@ -107,6 +111,18 @@ pub enum AgentError {
         /// The element addressed.
         element: ElementId,
     },
+    /// A render object panicked in the hit-test at the element's action
+    /// point; the panic continues on the owner thread. Nothing reached the
+    /// app: a hit-test only reads.
+    #[error("the hit-test at element {element} panicked")]
+    HitTestPanicked {
+        /// The element addressed.
+        element: ElementId,
+    },
+    /// The render tree was busy (a layout was in progress) when the hit-test
+    /// asked for it; the same call can succeed after the frame.
+    #[error("the render tree was busy")]
+    RenderTreeBusy,
 }
 
 impl AgentError {
@@ -114,16 +130,17 @@ impl AgentError {
     #[must_use]
     pub fn code(&self) -> ErrorCode {
         match self {
-            Self::InboxFull | Self::NoTreeYet => ErrorCode::Busy,
+            Self::InboxFull | Self::NoTreeYet | Self::RenderTreeBusy => ErrorCode::Busy,
             Self::RuntimeGone => ErrorCode::ShuttingDown,
             Self::PresentationGone | Self::NodeNotFound { issued: true, .. } => ErrorCode::Gone,
             Self::NodeNotFound { issued: false, .. } => ErrorCode::UnknownHandle,
             Self::ActionUnsupported { .. } => ErrorCode::ActionUnsupported,
             Self::Disabled { .. } => ErrorCode::Disabled,
             Self::InvalidArgument { .. } => ErrorCode::InvalidArgument,
-            Self::Malformed | Self::HandlerPanicked { .. } | Self::ResolvePanicked { .. } => {
-                ErrorCode::Platform
-            }
+            Self::Malformed
+            | Self::HandlerPanicked { .. }
+            | Self::ResolvePanicked { .. }
+            | Self::HitTestPanicked { .. } => ErrorCode::Platform,
         }
     }
 
@@ -131,7 +148,7 @@ impl AgentError {
     #[must_use]
     pub fn retry(&self) -> Retry {
         match self {
-            Self::InboxFull | Self::NoTreeYet => Retry::Soon,
+            Self::InboxFull | Self::NoTreeYet | Self::RenderTreeBusy => Retry::Soon,
             _ => Retry::Never,
         }
     }
@@ -157,6 +174,23 @@ impl AgentError {
         match error {
             WireReadError::NoTree => Self::NoTreeYet,
             WireReadError::NotFound { element } => Self::NodeNotFound { element, issued },
+            _ => Self::Malformed,
+        }
+    }
+
+    fn from_actionability(error: WireReadError) -> Self {
+        match error {
+            WireReadError::NoTree => Self::NoTreeYet,
+            _ => Self::Malformed,
+        }
+    }
+
+    fn from_locate(error: WireLocateError) -> Self {
+        match error {
+            WireLocateError::NoTree => Self::NoTreeYet,
+            // `locate_wire` lists matches and never answers `NotFound` or
+            // `Ambiguous`; they belong to resolving one element, which no
+            // agent job does yet.
             _ => Self::Malformed,
         }
     }
@@ -303,6 +337,14 @@ fn record_issued(tree: &Tree, issued: &Mutex<IssuedHandles>) {
         }
     }
     walk(&tree.roots, &mut issued.lock());
+}
+
+/// Records the element handles a locate reported, as a read does.
+fn record_issued_matches(matches: &Matches, issued: &Mutex<IssuedHandles>) {
+    let mut issued = issued.lock();
+    for found in &matches.matches {
+        issued.record(found.element.element);
+    }
 }
 
 /// The answer to one [`SemanticsAgent::read`] or [`SemanticsAgent::act`],
@@ -477,6 +519,67 @@ impl SemanticsAgent {
         )
     }
 
+    /// Resolve `params.locator` over the last committed tree: every match, or
+    /// the ones `pick` and `max_matches` leave. No match is an empty list.
+    ///
+    /// # Errors
+    ///
+    /// [`AgentError::InboxFull`] or [`AgentError::RuntimeGone`] when the
+    /// request cannot be enqueued; the reply carries the rest.
+    pub fn locate(&self, params: LocateParams) -> Result<AgentReply<Matches>, AgentError> {
+        let (command, answer) = self.locate_command(params);
+        self.sender.send(command).map_err(AgentError::from_send)?;
+        Ok(answer)
+    }
+
+    fn locate_command(&self, params: LocateParams) -> (UiCommand, AgentReply<Matches>) {
+        let (reply, answer) = self.reply(record_issued_matches);
+        (
+            UiCommand::SemanticsLocate {
+                presentation_id: self.sender.presentation_id,
+                params: Box::new(params),
+                reply,
+            },
+            answer,
+        )
+    }
+
+    /// The facts that decide whether input reaches `params.element`, read in
+    /// one owner turn: the last committed tree's, and the render hit-test's at
+    /// the point the action would land. An element the tree does not hold
+    /// answers `attached: false`, not a fault.
+    ///
+    /// `stable` compares the element's bounds with those the previous call
+    /// read; the first call answers unstable.
+    ///
+    /// # Errors
+    ///
+    /// [`AgentError::InboxFull`] or [`AgentError::RuntimeGone`] when the
+    /// request cannot be enqueued; the reply carries the rest.
+    pub fn actionability(
+        &self,
+        params: ActionabilityParams,
+    ) -> Result<AgentReply<Actionability>, AgentError> {
+        let (command, answer) = self.actionability_command(params);
+        self.sender.send(command).map_err(AgentError::from_send)?;
+        Ok(answer)
+    }
+
+    fn actionability_command(
+        &self,
+        params: ActionabilityParams,
+    ) -> (UiCommand, AgentReply<Actionability>) {
+        let (reply, answer) = self.reply(|_, _| {});
+        (
+            UiCommand::ElementActionability {
+                presentation_id: self.sender.presentation_id,
+                params,
+                reply,
+            },
+            answer,
+        )
+    }
+
     fn motion_command(
         &self,
         request: flui_protocol::MotionRequest,
@@ -556,6 +659,17 @@ impl AgentPort for DevAgentPort {
 
     fn act(&self, request: ActionRequest) -> Result<AgentAnswer<()>, AgentFault> {
         self.admit(|agent| agent.action_command(request))
+    }
+
+    fn locate(&self, params: LocateParams) -> Result<AgentAnswer<Matches>, AgentFault> {
+        self.admit(|agent| agent.locate_command(params))
+    }
+
+    fn actionability(
+        &self,
+        params: ActionabilityParams,
+    ) -> Result<AgentAnswer<Actionability>, AgentFault> {
+        self.admit(|agent| agent.actionability_command(params))
     }
 
     fn motion(
@@ -692,6 +806,108 @@ impl UiRuntime {
                 .read_wire(query, Placement::new(ratio, window))
                 .map_err(|error| AgentError::from_read(error, issued))
         })
+    }
+
+    /// The owner half of [`SemanticsAgent::locate`].
+    pub(super) fn serve_semantics_locate(
+        &self,
+        presentation: PresentationId,
+        params: &LocateParams,
+    ) -> Result<Matches, AgentError> {
+        let state = self
+            .presentations
+            .get(presentation)
+            .ok_or(AgentError::PresentationGone)?;
+        let window = WindowId::from_u64(presentation.as_u64())
+            .expect("BUG: a presentation id packs a non-zero generation");
+        state.pipeline().with(|pipeline| {
+            let ratio = DevicePixelRatio::new(pipeline.device_pixel_ratio())
+                .unwrap_or(DevicePixelRatio::ONE);
+            pipeline
+                .semantics_owner()
+                .ok_or(AgentError::NoTreeYet)?
+                .locate_wire(params, Placement::new(ratio, window))
+                .map_err(AgentError::from_locate)
+        })
+    }
+
+    /// The owner half of [`SemanticsAgent::actionability`].
+    ///
+    /// Three steps, none inside another's borrow. The semantics owner says
+    /// where the pointer would land; the render tree's hit-test runs there,
+    /// outside every semantics borrow because render objects are user code;
+    /// then the owner reads the facts against the path the hit-test found.
+    /// A render object that panics in the hit-test leaves its payload in
+    /// `hit_panic`, for the caller to answer and resume.
+    pub(super) fn serve_element_actionability(
+        &self,
+        presentation: PresentationId,
+        params: &ActionabilityParams,
+        hit_panic: &mut Option<Box<dyn std::any::Any + Send>>,
+    ) -> Result<Actionability, AgentError> {
+        let state = self
+            .presentations
+            .get(presentation)
+            .ok_or(AgentError::PresentationGone)?;
+        let window = WindowId::from_u64(presentation.as_u64())
+            .expect("BUG: a presentation id packs a non-zero generation");
+        let (placement, point) = state.pipeline().with(|pipeline| {
+            let ratio = DevicePixelRatio::new(pipeline.device_pixel_ratio())
+                .unwrap_or(DevicePixelRatio::ONE);
+            let placement = Placement::new(ratio, window);
+            let point = pipeline
+                .semantics_owner()
+                .ok_or(AgentError::NoTreeYet)?
+                .actionability_point(params.element, params.point, placement)
+                .map_err(AgentError::from_actionability)?;
+            Ok::<_, AgentError>((placement, point))
+        })?;
+
+        let mut hit = Vec::new();
+        if let Some(point) = point {
+            let mut result = flui_interaction::pointer::HitTestResult::new();
+            // No physical contact: the check asks about the element, not
+            // about the reach of a finger or a stylus.
+            match state.renderer().hit_test_in_view(
+                &mut result,
+                flui_foundation::geometry::Offset::new(point.x, point.y),
+                flui_interaction::events::PointerKind::Virtual,
+                0,
+            ) {
+                ViewHitTest::Answered {
+                    panic: Some(payload),
+                } => {
+                    *hit_panic = Some(payload);
+                    return Err(AgentError::HitTestPanicked {
+                        element: params.element.element,
+                    });
+                }
+                ViewHitTest::Answered { panic: None } => {}
+                ViewHitTest::TreeBusy => return Err(AgentError::RenderTreeBusy),
+            }
+            hit.extend(result.path().iter().map(|entry| entry.target));
+        }
+
+        let read = |previous| {
+            state.pipeline().with(|pipeline| {
+                pipeline
+                    .semantics_owner()
+                    .ok_or(AgentError::NoTreeYet)?
+                    .actionability_wire(params.element, point, previous, &hit, placement)
+                    .map_err(AgentError::from_actionability)
+            })
+        };
+        let facts = read(None)?;
+        let previous = state.agent_stability.borrow_mut().observe(
+            params.element,
+            state.tree_revision(),
+            !state.has_pending_work_snapshot(),
+            facts.rect,
+        );
+        match previous {
+            Some(_) => read(previous),
+            None => Ok(facts),
+        }
     }
 
     /// The owner half of [`SemanticsAgent::act`]: resolves the wire action

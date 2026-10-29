@@ -61,10 +61,9 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Duration;
 
-use flui_animation::{ArcCurve, curves};
+use flui_animation::{SharedCurve, curves};
 use flui_foundation::geometry::Axis;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerId};
 use flui_interaction::PointerKindSet;
@@ -77,7 +76,6 @@ use flui_view::{
     BoxedView, BuildContext, EventCx, EventOutcome, IntoView, LifecycleContext, PostFrameHandle,
     RebuildHandle, RebuildReason, ViewExt, ViewState, WriterSource,
 };
-use parking_lot::Mutex;
 
 use crate::localization::{
     BoxedWidgetsLocalizations, DefaultWidgetsLocalizations, WidgetsLocalizations,
@@ -220,7 +218,7 @@ impl PageController {
     /// last/first real page instead of overshooting past it — see
     /// [`next_page`](Self::next_page)/[`previous_page`](Self::previous_page)'s
     /// docs for the resulting end-of-range behavior.
-    pub fn animate_to_page(&self, page: usize, duration: Duration, curve: ArcCurve) {
+    pub fn animate_to_page(&self, page: usize, duration: Duration, curve: SharedCurve) {
         let page_f = page as f64;
         let position = self.scroll.position();
         if position.set_cached_page_while_collapsed(page_f) {
@@ -248,7 +246,7 @@ impl PageController {
     /// [`ScrollController::animate_to`] clamps the resulting pixel target to
     /// `max_scroll_extent`, so the run visibly stops AT the last page instead
     /// of scrolling past it.
-    pub fn next_page(&self, duration: Duration, curve: ArcCurve) {
+    pub fn next_page(&self, duration: Duration, curve: SharedCurve) {
         let Some(page) = self.page() else { return };
         self.animate_to_page((page.round() + 1.0).max(0.0) as usize, duration, curve);
     }
@@ -260,7 +258,7 @@ impl PageController {
     /// [`animate_to_page`](Self::animate_to_page)'s delegated `animate_to`
     /// clamps to `min_scroll_extent` regardless. A no-op before the first
     /// layout.
-    pub fn previous_page(&self, duration: Duration, curve: ArcCurve) {
+    pub fn previous_page(&self, duration: Duration, curve: SharedCurve) {
         let Some(page) = self.page() else { return };
         self.animate_to_page((page.round() - 1.0).max(0.0) as usize, duration, curve);
     }
@@ -368,7 +366,7 @@ impl Action<PageIntent> for PageAction {
             self.controller.jump_to_page(page);
         } else {
             self.controller
-                .animate_to_page(page, TURN, ArcCurve::new(curves::EASE_IN_OUT));
+                .animate_to_page(page, TURN, SharedCurve::new(curves::EASE_IN_OUT));
         }
         ActionOutcome::Performed
     }
@@ -564,13 +562,13 @@ pub struct PageViewState {
     /// callback that rebuild installed.
     on_page_changed: Rc<RefCell<Option<OnPageChanged>>>,
     /// Whether a callback is installed. Read by the controller's
-    /// `Send + Sync` listener, which cannot see the `Rc` slot, so a page view
+    /// listener, which shares only this flag and not the callback slot, so a page view
     /// nobody listens to records nothing and schedules no rebuild.
-    has_callback: Arc<AtomicBool>,
+    has_callback: Rc<Cell<bool>>,
     /// Pages the listener recorded and `build` has not yet handed to the
     /// post-frame lane, oldest first. One entry per change, so FIFO order
     /// and multiplicity survive a frame that observes several.
-    pending_pages: Arc<Mutex<VecDeque<usize>>>,
+    pending_pages: Rc<RefCell<VecDeque<usize>>>,
     /// Minted in `init_state`; the listener schedules the draining rebuild
     /// through it.
     rebuild: Option<RebuildHandle>,
@@ -580,7 +578,7 @@ pub struct PageViewState {
     /// [`Weak`] to it, so the lane cannot keep this state's callback or
     /// writer alive past teardown.
     delivery: Option<Rc<PageChangeDelivery>>,
-    last_reported_page: Arc<AtomicI64>,
+    last_reported_page: Rc<Cell<i64>>,
     /// The listenable the listener is registered on, alongside its id.
     /// Stored together (not looked up fresh from `self.controller` at
     /// removal time) because a controller SWAP changes which listenable
@@ -606,14 +604,8 @@ impl std::fmt::Debug for PageViewState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PageViewState")
             .field("controller", &self.controller)
-            .field(
-                "has_on_page_changed",
-                &self.has_callback.load(Ordering::Acquire),
-            )
-            .field(
-                "last_reported_page",
-                &self.last_reported_page.load(Ordering::Relaxed),
-            )
+            .field("has_on_page_changed", &self.has_callback.get())
+            .field("last_reported_page", &self.last_reported_page.get())
             .finish_non_exhaustive()
     }
 }
@@ -653,7 +645,7 @@ impl PageViewState {
     /// would run it inside `build`, where its writes are refused, so the
     /// pages are dropped with a warning instead.
     fn drain_page_changes(&self) {
-        let mut pending = std::mem::take(&mut *self.pending_pages.lock());
+        let mut pending = std::mem::take(&mut *self.pending_pages.borrow_mut());
         if pending.is_empty() {
             return;
         }
@@ -696,13 +688,13 @@ impl PageViewState {
     fn register_page_listener(&mut self) {
         let position = self.controller.position();
         let viewport_fraction = self.controller.viewport_fraction();
-        let last_reported = Arc::clone(&self.last_reported_page);
-        let has_callback = Arc::clone(&self.has_callback);
+        let last_reported = Rc::clone(&self.last_reported_page);
+        let has_callback = Rc::clone(&self.has_callback);
         let controller = self.controller.clone();
         let page_count = Rc::clone(&self.page_count);
         let last_turns = Rc::clone(&self.last_turns);
         let turns_change = self.turns_change.clone();
-        let pending = Arc::clone(&self.pending_pages);
+        let pending = Rc::clone(&self.pending_pages);
         let rebuild = self
             .rebuild
             .clone()
@@ -725,10 +717,10 @@ impl PageViewState {
             // the `.max(0.0)` here is belt-and-suspenders against a
             // negative-zero rounding artifact, not a real overflow guard.
             let current_page = metrics.page(viewport_fraction).round().max(0.0) as i64;
-            if current_page != last_reported.load(Ordering::SeqCst) {
-                last_reported.store(current_page, Ordering::SeqCst);
-                if has_callback.load(Ordering::Acquire) {
-                    pending.lock().push_back(current_page as usize);
+            if current_page != last_reported.get() {
+                last_reported.set(current_page);
+                if has_callback.get() {
+                    pending.borrow_mut().push_back(current_page as usize);
                 }
                 // The page label assistive technology reads follows the page.
                 rebuild.schedule(RebuildReason::StateChange);
@@ -749,12 +741,12 @@ impl StatefulView for PageView {
     fn create_state(&self) -> Self::State {
         let controller = self.controller.clone().unwrap_or_default();
         PageViewState {
-            last_reported_page: Arc::new(AtomicI64::new(controller.initial_page() as i64)),
+            last_reported_page: Rc::new(Cell::new(controller.initial_page() as i64)),
             snap: page_snap(&controller),
             controller,
             on_page_changed: Rc::new(RefCell::new(self.on_page_changed.clone())),
-            has_callback: Arc::new(AtomicBool::new(self.on_page_changed.is_some())),
-            pending_pages: Arc::new(Mutex::new(VecDeque::new())),
+            has_callback: Rc::new(Cell::new(self.on_page_changed.is_some())),
+            pending_pages: Rc::new(RefCell::new(VecDeque::new())),
             rebuild: None,
             post_frame: None,
             delivery: None,
@@ -800,7 +792,7 @@ impl ViewState<PageView> for PageViewState {
             .autofocus(view.autofocus)
             .scroll_direction(scroll_direction);
         if page_count > 0 {
-            let page = usize::try_from(self.last_reported_page.load(Ordering::Relaxed))
+            let page = usize::try_from(self.last_reported_page.get())
                 .unwrap_or(0)
                 .min(page_count - 1);
             let label = match BoxedWidgetsLocalizations::maybe_of(ctx) {
@@ -857,8 +849,7 @@ impl ViewState<PageView> for PageViewState {
         self.on_page_changed
             .borrow_mut()
             .clone_from(&new_view.on_page_changed);
-        self.has_callback
-            .store(new_view.on_page_changed.is_some(), Ordering::Release);
+        self.has_callback.set(new_view.on_page_changed.is_some());
 
         // No explicit controller in this build: keep the state-owned
         // default (and its live subscription) across the rebuild — see

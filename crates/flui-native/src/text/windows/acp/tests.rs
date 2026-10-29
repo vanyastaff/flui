@@ -13,9 +13,9 @@ use flui_platform::text_store::{
 };
 
 use super::{
-    AcpChange, AcpSelection, Hresult, LockRequest, Session, SessionSlot, acp, lock_answer,
-    lock_request, offset, point_mode, range, replace, request_lock, selection, set_selection,
-    store_error, text, wide_text,
+    AcpChange, AcpSelection, Hresult, LockRequest, SelectionInsert, Session, SessionSlot,
+    TS_IAS_QUERYONLY, acp, insert_at_selection, lock_answer, lock_request, offset, point_mode,
+    range, replace, request_lock, selection, set_selection, store_error, text, wide_text,
 };
 
 /// `a`, an astral emoji (two units), `b`, CR, LF and `c`: seven units, the
@@ -497,6 +497,85 @@ fn lock_flags_and_errors_translate_to_tsf_codes() {
             assert_eq!(answer(0x1), Err(Hresult::TS_E_INVALIDPOINT));
             assert_eq!(answer(0x2), Ok(0));
             assert_eq!(answer(0x3), Ok(0));
+        }),
+    ]);
+}
+
+#[test]
+fn query_only_insert_answers_from_the_selection() {
+    /// Code points 1..3, the astral pair, selected backwards.
+    const BACKWARDS: AcpSelection = AcpSelection {
+        start: 1,
+        end: 3,
+        active_at_start: true,
+    };
+    fn no_text() -> Result<String, Hresult> {
+        panic!("a query decodes no text")
+    }
+    fn select_then(
+        flags: u32,
+        text: fn() -> Result<String, Hresult>,
+    ) -> (Result<SelectionInsert, Hresult>, String, AcpSelection) {
+        editing(move |session| {
+            set_selection(session, BACKWARDS).expect("the pair is a span of the document");
+            let slot = SessionSlot::default();
+            slot.with_open(Session::Write(session), || {
+                insert_at_selection(&slot, flags, text)
+            })
+        })
+    }
+    run(&[
+        ("a query under a read lock", || {
+            let answer = reading(|session| {
+                let slot = SessionSlot::default();
+                slot.with_open(Session::Read(session), || {
+                    insert_at_selection(&slot, TS_IAS_QUERYONLY, no_text)
+                })
+            });
+            let end = acp(Utf16Offset::new(DOCUMENT.encode_utf16().count()));
+            assert_eq!(answer, Ok(SelectionInsert::Query { start: end, end }));
+        }),
+        (
+            "a query over a backward selection under a read-write lock",
+            || {
+                let (answer, text, after) = select_then(TS_IAS_QUERYONLY, no_text);
+                assert_eq!(answer, Ok(SelectionInsert::Query { start: 1, end: 3 }));
+                assert_eq!(text, DOCUMENT, "a query edits nothing");
+                assert_eq!(after, BACKWARDS, "a query keeps the selection");
+            },
+        ),
+        ("a query with no lock", || {
+            assert_eq!(
+                insert_at_selection(&SessionSlot::default(), TS_IAS_QUERYONLY, no_text),
+                Err(Hresult::TS_E_NOLOCK)
+            );
+        }),
+        ("an insertion under a read lock", || {
+            let answer = reading(|session| {
+                let slot = SessionSlot::default();
+                slot.with_open(Session::Read(session), || {
+                    insert_at_selection(&slot, 0, || Ok("x".into()))
+                })
+            });
+            assert_eq!(answer, Err(Hresult::TS_E_NOLOCK));
+        }),
+        ("an insertion replaces the selection", || {
+            let (answer, text, after) = select_then(0, || Ok("x".into()));
+            assert_eq!(
+                answer,
+                Ok(SelectionInsert::Inserted(AcpChange {
+                    start: 1,
+                    old_end: 3,
+                    new_end: 2,
+                }))
+            );
+            assert_eq!(text, "axb\r\nc");
+            assert_eq!(after, caret(2));
+        }),
+        ("an insertion whose text is refused", || {
+            let (answer, text, _) = select_then(0, || Err(Hresult::E_INVALIDARG));
+            assert_eq!(answer, Err(Hresult::E_INVALIDARG));
+            assert_eq!(text, DOCUMENT);
         }),
     ]);
 }

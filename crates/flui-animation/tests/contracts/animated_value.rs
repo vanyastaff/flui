@@ -5,15 +5,15 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::{
-    AnimatedValue, Animation, AnimationError, AnimationStatus, ArcCurve, MotionClock, MotionSpec,
-    MotionUpdate, SpringDescription, TwoWayConverter, Vsync, VsyncUpdate, curves,
+    AnimatedValue, Animation, AnimationError, AnimationStatus, MotionClock, MotionSpec,
+    MotionUpdate, SharedCurve, SpringDescription, TwoWayConverter, Vsync, VsyncUpdate, curves,
 };
 use flui_foundation::geometry::Offset;
 
-fn curve(curve: impl flui_animation::Curve + Send + Sync + 'static) -> MotionSpec {
+fn curve(curve: impl flui_animation::Curve + 'static) -> MotionSpec {
     MotionSpec::Curve {
         duration: Duration::from_secs(1),
-        curve: ArcCurve::new(curve),
+        curve: SharedCurve::new(curve),
     }
 }
 
@@ -437,7 +437,7 @@ fn immediate_motion_does_not_reconstruct_the_displaced_sample() {
                         Value(2.0),
                         MotionSpec::Curve {
                             duration: Duration::ZERO,
-                            curve: ArcCurve::new(curves::LINEAR),
+                            curve: SharedCurve::new(curves::LINEAR),
                         },
                     )
                     .unwrap();
@@ -763,7 +763,7 @@ fn releasing_the_owner_stops_the_remaining_component_callouts() {
     let mut clock = MotionClock::new();
     let motion = MotionSpec::Curve {
         duration: Duration::from_secs(1),
-        curve: ArcCurve::new(ClosingCurve {
+        curve: SharedCurve::new(ClosingCurve {
             close: Arc::clone(&close),
             closed: Arc::clone(&closed),
         }),
@@ -824,7 +824,7 @@ fn a_failed_component_keeps_the_whole_published_sample() {
     let mut clock = MotionClock::new();
     let motion = MotionSpec::Curve {
         duration: Duration::from_secs(1),
-        curve: ArcCurve::new(FailingComponent {
+        curve: SharedCurve::new(FailingComponent {
             fail: Arc::clone(&fail),
             calls: Arc::new(AtomicUsize::new(0)),
         }),
@@ -867,11 +867,11 @@ fn motion_spec_changes_keep_the_other_half() {
     );
     fn curve(
         millis: u64,
-        curve: impl flui_animation::Curve + Send + Sync + 'static,
+        curve: impl flui_animation::Curve + 'static,
     ) -> flui_animation::MotionSpec {
         flui_animation::MotionSpec::Curve {
             duration: Duration::from_millis(millis),
-            curve: flui_animation::ArcCurve::new(curve),
+            curve: flui_animation::SharedCurve::new(curve),
         }
     }
     let cases = [

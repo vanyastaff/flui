@@ -31,6 +31,8 @@ mod actions;
 #[path = "activity_indicator.rs"]
 mod activity_indicator;
 mod anchored_drag;
+#[path = "animated_icon.rs"]
+mod animated_icon;
 #[path = "animated_list.rs"]
 mod animated_list;
 #[path = "animated_size.rs"]
@@ -122,6 +124,8 @@ mod navigator_public;
 mod overlay;
 #[path = "owner_code.rs"]
 mod owner_code;
+#[path = "owner_local_values.rs"]
+mod owner_local_values;
 #[path = "page_route.rs"]
 mod page_route;
 #[path = "page_transitions.rs"]
@@ -132,6 +136,8 @@ mod page_view;
 mod page_view_events;
 #[path = "parent_data_ancestry.rs"]
 mod parent_data_ancestry;
+#[path = "particles.rs"]
+mod particles;
 #[path = "raw_button.rs"]
 mod raw_button;
 #[path = "routable_derive.rs"]
