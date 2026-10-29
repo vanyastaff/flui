@@ -248,7 +248,7 @@ pub(crate) struct WindowContext {
     /// in its mode, so the first sight of it is already maximized or
     /// fullscreen, not a normal window that jumps.
     pub(crate) first_show: std::cell::Cell<FirstShow>,
-    /// What hides a shown window from its snapshot: a cloak or a locked
+    /// What occludes a shown window in its snapshot: a cloak or a locked
     /// session.
     pub(crate) visibility: Visibility,
     /// The window's subscription to cloak changes.
@@ -1379,7 +1379,7 @@ pub(crate) struct OwnerTracking {
     pub(crate) restore_style: u32,
     pub(crate) constraints: SizeConstraints,
     pub(crate) display: Option<flui_platform::DisplayId>,
-    /// Whether a cloak or a locked session hides the window whatever it shows.
+    /// Whether a cloak or a locked session hides the window from the screen.
     pub(crate) occluded: bool,
     /// The user's theme as `WM_SETTINGCHANGE` last read it: never the
     /// dark-mode flag this host sets on the chrome to match (ADR-0222).
@@ -1430,7 +1430,7 @@ pub(crate) fn sample_state(
         let record = record.lock();
         (
             record.scale_factor,
-            record.visible && !occluded,
+            record.visible,
             record.focused,
             record.bounds.size,
         )
@@ -1524,6 +1524,9 @@ pub(crate) fn sample_state(
         // A desktop window has no safe area, and Win32 never suspends one.
         safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
         execution: flui_platform::WindowExecutionState::Running,
+        // Win32 tells of a cloak and a locked session; a window covered by
+        // others it does not report.
+        occluded,
         hovered,
         active,
         capabilities,
@@ -1916,7 +1919,7 @@ pub(crate) struct Occlusion {
     pub(crate) session_locked: bool,
 }
 
-/// What hides a shown window from its snapshot.
+/// What occludes a shown window in its snapshot.
 pub(crate) struct Visibility {
     occlusion: Cell<Occlusion>,
 }
@@ -1976,7 +1979,7 @@ impl WindowContext {
     }
 
     fn settle_visibility(&self) {
-        // A cloak or a lock hides a shown window in its snapshot too: read it
+        // A cloak or a lock occludes a shown window in its snapshot: read it
         // again and publish it, which says nothing when nothing changed.
         self.snapshot.invalidate();
         self.delivery.publish_state();

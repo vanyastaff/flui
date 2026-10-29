@@ -65,6 +65,18 @@ leak-timeout = "1s"
 # 64-265 s for a trybuild suite and ~180 s for each template build, varying
 # run to run with cache state -- a 4-minute global killed both template tests
 # once.
+#
+# One member gets a longer budget, set ahead of the groups (a setting comes
+# from the first override that matches and sets it) and setting no group:
+# the acceptance application's consumer is the only nested build with the
+# Material catalog, so no other nested test warms its graph, and it then runs
+# the application's rows at opt-level 0. It took 314 s cold on a 32-thread
+# Windows host (2026-10-28), past the 300 s period, and a cold 4-core runner
+# is slower.
+[[profile.default.overrides]]
+filter = 'binary_id(flui::facade_consumer) & test(=acceptance_app_runs_through_the_facade)'
+slow-timeout = { period = "600s", terminate-after = 3 }
+
 [[profile.default.overrides]]
 filter = 'binary_id(flui-engine::compile_fail) | binary_id(flui-rendering::compile_fail) | binary_id(flui-interaction::compile_fail) | binary_id(flui-platform::compile_fail) | binary_id(flui-widgets::routable_ui) | binary_id(flui-widgets::nested_scroll_ui) | binary_id(flui::thread_boundary_ui) | (binary_id(flui-painting::painting_it) & test(=compile_fail::trybuild_ui)) | test(=trybuild_ui::ui_tests)'
 slow-timeout = { period = "300s", terminate-after = 4 }

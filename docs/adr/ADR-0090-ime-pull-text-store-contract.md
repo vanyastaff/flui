@@ -115,8 +115,9 @@ The surface is `flui_platform::text_store`:
   `compile_fail` doctest). `LockArbiter` is the one lock state machine every store embeds.
 - Reads (`TextStoreRead`): `document_len`, `text`, `selection` (`Selection { anchor, active }`),
   `composition` (`Composition { range, hides_caret }`), `rect_for_range` (`RangeRect`),
-  `document_bounds`, `index_at_point` (`PointMode::{Exact, Nearest}`). Edits
-  (`TextStoreEdit`): `replace` and `insert_at_selection` (each returning a `TS_TEXTCHANGE`-shaped
+  `document_bounds`, `index_at_point` (`PointMode { round_to_nearest_edge,
+  nearest_when_outside }`, TSF's two independent `GXFPF_*` flags). Edits (`TextStoreEdit`):
+  `replace` and `insert_at_selection` (each returning a `TS_TEXTCHANGE`-shaped
   `TextChange`), `set_selection`, `set_composition`.
 - Offsets are `Utf16Offset`/`Utf16Range`; `text_store::utf16` is the one converter, and an
   offset past the end or inside a surrogate pair is an `OffsetError`, never a clamp.

@@ -1052,12 +1052,14 @@ impl IOSWindow {
     fn sample_state(&self) -> WindowState {
         let metrics = *self.metrics.lock();
         let closed = self.closed.load(Ordering::SeqCst);
-        let (focused, visible) = {
+        let (focused, foreground) = {
             let lifecycle = self.lifecycle.lock();
-            (lifecycle.focused && !closed, lifecycle.visible && !closed)
+            (lifecycle.focused && !closed, lifecycle.visible)
         };
         let state = WindowState::new(WindowGeometry::new(None, metrics.size), metrics.size)
-            .with_visible(visible)
+            // A scene cannot hide its window; in the background the system
+            // keeps it from the screen, which is its occlusion.
+            .with_visible(!closed)
             .with_focused(focused)
             .with_resizable(false)
             .with_decorated(false)
@@ -1075,6 +1077,7 @@ impl IOSWindow {
             },
             safe_area: metrics.safe_area,
             execution: self.execution_now(),
+            occluded: !foreground,
             hovered: self.delivery.hovered(),
             // A scene has no activation apart from its focus.
             active: focused,

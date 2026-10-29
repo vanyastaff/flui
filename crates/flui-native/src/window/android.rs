@@ -460,7 +460,9 @@ fn sample_state(
     };
     let focused = activity.focused.load(Ordering::SeqCst);
     let state = WindowState::new(WindowGeometry::new(None, size), size)
-        .with_visible(activity.visible.load(Ordering::SeqCst))
+        // An Activity cannot hide its window; between `onStop` and `onStart`
+        // the system keeps it from the screen, which is its occlusion.
+        .with_visible(true)
         .with_focused(focused)
         .with_resizable(false)
         .with_decorated(false)
@@ -472,6 +474,7 @@ fn sample_state(
         appearance: kept.appearance,
         safe_area: kept.safe_area,
         execution: execution_of(activity),
+        occluded: !activity.visible.load(Ordering::SeqCst),
         hovered: kept.hovered,
         // An Activity has no activation apart from its window's focus.
         active: focused,

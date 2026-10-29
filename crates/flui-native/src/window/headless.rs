@@ -359,6 +359,9 @@ pub struct HeadlessWindowSystem {
     pub focused: bool,
     /// Whether the window is shown and open.
     pub visible: bool,
+    /// Whether the simulated system says none of the window reaches the
+    /// screen ([`MockWindow::simulate_occlusion`]).
+    pub occluded: bool,
     /// Whether the simulated system honours the window's input regions, as
     /// the platform's input availability says
     /// ([`HeadlessPlatform::with_input_availability`](crate::HeadlessPlatform::with_input_availability)).
@@ -382,7 +385,7 @@ pub struct HeadlessWindowSystem {
 ///   like a real backend's frame wire;
 /// - programmatic event injection ([`Self::inject_event`]) and lifecycle
 ///   simulation (`simulate_resize` / `simulate_focus` /
-///   `simulate_visibility` / `simulate_close`), each calling the same
+///   `simulate_occlusion` / `simulate_close`), each calling the same
 ///   handler method a real platform would.
 ///
 /// There is no public constructor: obtain one by opening a window on a
@@ -565,6 +568,7 @@ struct MockWindowState {
     scale_factor: f64,
     focused: bool,
     visible: bool,
+    occluded: bool,
     execution: flui_platform::WindowExecutionState,
     safe_area: flui_foundation::geometry::EdgeInsets,
     closed: bool,
@@ -585,16 +589,10 @@ impl MockWindowState {
     /// `size` as the host ends up with it: raised to the window's minimum,
     /// lowered to its maximum and to the largest window the host allows.
     fn clamp_size(&self, size: Size<f64>, limits: &HeadlessWindowPolicy) -> Size<f64> {
-        let mut size = size;
-        if let Some(min) = self.constraints.min {
-            size.width = size.width.max(min.width);
-            size.height = size.height.max(min.height);
-        }
-        if let Some(max) = self.constraints.max {
-            size.width = size.width.min(max.width);
-            size.height = size.height.min(max.height);
-        }
-        Self::clamp_to_host(size, limits)
+        Self::clamp_to_host(
+            crate::window::state::held_to(size, self.constraints),
+            limits,
+        )
     }
 
     fn clamp_to_host(size: Size<f64>, limits: &HeadlessWindowPolicy) -> Size<f64> {
@@ -696,6 +694,7 @@ fn sample_window_state(model: &MockWindowState, hovered: bool) -> WindowState {
         appearance: model.appearance,
         safe_area: model.safe_area,
         execution,
+        occluded: model.occluded,
         hovered,
         active: model.focused,
         capabilities: *capabilities,
@@ -767,6 +766,7 @@ impl MockWindow {
             execution: flui_platform::WindowExecutionState::Running,
             safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
             visible: options.visible,
+            occluded: false,
             closed: false,
 
             appearance: WindowAppearance::default(),
@@ -941,6 +941,7 @@ impl MockWindow {
             .ok(),
             focused: state.focused,
             visible: state.visible && !state.closed,
+            occluded: state.occluded,
         }
     }
 
@@ -1028,10 +1029,12 @@ impl MockWindow {
         self.publish_state();
     }
 
-    /// Simulate a visibility/occlusion change for testing. Fires
-    /// the handler's `state_changed` when the snapshot differs.
-    pub fn simulate_visibility(&self, visible: bool) {
-        self.state.lock().visible = visible;
+    /// Simulate the window system covering the window, or showing it again:
+    /// the window stays shown and its snapshot says occluded. Fires the
+    /// handler's `state_changed` when the snapshot differs. Hiding is
+    /// [`WindowCommand::Hide`].
+    pub fn simulate_occlusion(&self, occluded: bool) {
+        self.state.lock().occluded = occluded;
         self.publish_state();
     }
 
@@ -1290,7 +1293,10 @@ impl PlatformWindow for MockWindow {
                 let local = Point::new(desktop.x - origin.x, desktop.y - origin.y);
                 let inside =
                     (0.0..size.width).contains(&local.x) && (0.0..size.height).contains(&local.y);
-                let shown = state.visible && !state.closed && state.mode != WindowMode::Minimized;
+                let shown = state.visible
+                    && !state.closed
+                    && state.mode != WindowMode::Minimized
+                    && !state.occluded;
                 (shown && inside).then_some(WindowAt::Window {
                     window: window.id,
                     position: local,

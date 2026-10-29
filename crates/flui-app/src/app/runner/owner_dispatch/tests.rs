@@ -260,7 +260,7 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
                 // before the application's subscriptions and therefore have no callback.
                 match change {
                     NativeChange::FocusLost => native.simulate_focus(false),
-                    NativeChange::Hidden => native.simulate_visibility(false),
+                    NativeChange::Hidden => native.simulate_occlusion(true),
                     NativeChange::Suspended => {
                         native.simulate_execution_state(WindowExecutionState::Suspended);
                     }
@@ -285,7 +285,7 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
                         "an unfocused visible running canvas remains eligible for rendering"
                     );
                 }
-                native.simulate_visibility(false);
+                native.simulate_occlusion(true);
                 assert_eq!(
                     observe_runtime(dispatcher, |runtime| runtime.scheduler().lifecycle_state()),
                     if matches!(change, NativeChange::Suspended) {
@@ -299,7 +299,7 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
                     !observe_runtime(dispatcher, |runtime| runtime.scheduler().frames_enabled()),
                     "a hidden window stops rendering"
                 );
-                native.simulate_visibility(true);
+                native.simulate_occlusion(false);
                 assert_eq!(
                     observe_runtime(dispatcher, |runtime| runtime.scheduler().lifecycle_state()),
                     match change {

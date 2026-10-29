@@ -399,7 +399,17 @@ mod cases {
                 .get_window_attributes(self.xid)
                 .ok()
                 .and_then(|cookie| cookie.reply().ok());
-            let viewable = attributes.is_some_and(|reply| reply.map_state == MapState::VIEWABLE);
+            let map_state = attributes.map(|reply| reply.map_state);
+            let viewable = map_state == Some(MapState::VIEWABLE);
+            // `WM_STATE`'s first word, as the window manager sets it: 3 is
+            // iconic (ICCCM 4.1.3.1).
+            let wm_state = atom(server, "WM_STATE");
+            let iconic = server
+                .get_property(false, self.xid, wm_state, wm_state, 0, 1)
+                .ok()
+                .and_then(|cookie| cookie.reply().ok())
+                .and_then(|reply| reply.value32()?.next())
+                == Some(3);
             let geometry = server
                 .get_geometry(self.xid)
                 .ok()
@@ -426,7 +436,11 @@ mod cases {
                 metrics,
                 focused: focus == Some(self.xid),
                 active: active == Some(self.xid),
-                visible: viewable,
+                // Shown: mapped by the application, or unmapped by the
+                // window manager that iconified it.
+                visible: map_state.is_some_and(|state| state != MapState::UNMAPPED) || iconic,
+                // X reports a covering only as an event.
+                occluded: None,
                 // X11 draws no material behind a window, and none is admitted.
                 material: None,
             }
