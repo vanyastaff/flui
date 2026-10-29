@@ -1,9 +1,10 @@
 # flui-driver: tasks
 
 - **Status:** approved by the owner (2026-10-20). FD27 (#1773), FD1 (#1782), FD4 (#1796), FD31
-  (#1804), FD2 (#1809, #1814) and FD3 (#1890) have merged. FD5 is next on the critical path;
-  FD28, FD29 and FD30 can start now. `interaction/completeness` has merged (#1733), so the IC
-  tasks are unblocked.
+  (#1804), FD2 (#1809, #1814) and FD3 (#1890) have merged; FD5 is in progress in steps (the
+  locate and actionability jobs are in review; the snapshot delta, waits and events, and the
+  inspect jobs follow). FD28, FD29 and FD30 can start now. `interaction/completeness` has merged
+  (#1733), so the IC tasks are unblocked.
   `flui run --agent` and `flui mcp` exist on the ADR-0095 endpoint (#1769); the tasks that replace
   that endpoint and `flui mcp` start from them. The owner deleted `interaction_gallery`, the
   probes, `tools/device-checks` and `cargo xtask device` (#1827) to write fresh ones: FD11 and
@@ -318,6 +319,30 @@ graph LR
   - two clients serialized;
   - a delta table: appeared, gone, changed name, value and state; a scroll yields no bounds noise.
   - a node ref read from one window and sent to another answers `UnknownPresentation`.
+- **Slices:** the locate and actionability jobs; the snapshot delta; wait conditions and events;
+  the inspect jobs and `NodeRef`. Each merges on its own.
+- **Evidence, locate and actionability jobs (2026-10-29):**
+  - `flui-runtime`'s `ui_runtime::tests::agent_locate`:
+    - `a_locator_lists_the_element_a_read_reports_and_an_unknown_name_lists_none`,
+      `a_located_element_acts_through_the_owner_and_its_handle_goes_gone_with_it` (the handle a
+      locate issued answers `gone`, not `unknown_handle`);
+    - `a_button_is_visible_enabled_and_receives_the_pointer_at_its_centre`,
+      `a_point_on_another_element_names_what_covers_it`,
+      `an_element_is_stable_once_a_frame_has_passed_with_the_same_bounds`,
+      `an_element_of_another_window_is_not_attached_here`;
+    - `a_render_object_that_panics_in_the_hit_test_answers_platform_before_the_owner_resumes`,
+      `a_panic_while_reading_the_facts_is_the_owners_and_answers_platform_first`,
+      `locating_before_the_first_semantics_frame_is_busy`,
+      `a_development_window_locates_and_reads_facts_until_its_presentation_closes`;
+  - `agent_stability::bounds_compare_across_a_frame_or_an_idle_presentation_and_not_otherwise` and
+    `elements_are_remembered_apart_and_the_table_stays_bounded`.
+  - Breaking the issued-handle record and the hit path each fails a test.
+  - As built: `AgentWindow::locate` and `AgentWindow::actionability` (and the same on
+    `SemanticsAgent`) are owner jobs; the hit-test runs between the semantics owner's two calls,
+    outside every semantics borrow. A `stable` comparison needs a terminal frame since the earlier
+    call, or no pending work. The `batch` job and `resolve` (`not_found` and `ambiguous` with
+    candidates) come with FD6, which composes them; no server reaches the two calls until FD7
+    replaces the ADR-0095 endpoint.
 
 ### FD6. Synthetic input, journal, recording (IC)
 

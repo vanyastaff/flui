@@ -845,6 +845,22 @@ reported per render slot, so it is bounded by the slots the presentation has use
 many elements came and went. Element handles are render identities, scoped to the one
 presentation; a server that spans windows keeps its own table over them (ADR-0095 §3).
 
+**Locate and actionability.** `locate` and `actionability` are owner jobs like `read`
+(`UiCommand::SemanticsLocate`, `UiCommand::ElementActionability`). A locate resolves the locator
+over the committed tree (`SemanticsOwner::locate_wire`) and records the handles it reports like
+a read. An actionability job runs three steps, none inside another's borrow: the semantics owner
+says where the pointer would land (`actionability_point`), the render tree's pointer hit-test runs
+there (render objects are user code, so never under a semantics borrow), and the owner reads the
+facts against the path found (`actionability_wire`). A hit-test the render tree cannot serve
+(`TreeBusy`) answers `RenderTreeBusy` (`busy`, retry `soon`); a render object that panics in it
+answers `HitTestPanicked` (`platform`, nothing ran) first and its panic then continues on the
+owner, as an action's does. `stable` needs bounds from an earlier call: `AgentStability`, on the
+presentation, keeps the bounds of the last 64 elements read, and a comparison counts once a
+terminal frame has run since (the presentation's tree revision moved) or while the presentation
+has no work pending that could still move the element. The first call for an element, and one
+made in the frame of the call before it with work pending, answer unstable. Pinned by
+`src/ui_runtime/tests/agent_locate.rs` and `agent_stability.rs`.
+
 **Enablement.** Every clone of an agent shares one `SemanticsHandle`, so semantics are
 collected while any clone lives, whatever assistive technology does; the tree an agent reads is
 the one published to assistive technology. Vending requests a frame, and until the first

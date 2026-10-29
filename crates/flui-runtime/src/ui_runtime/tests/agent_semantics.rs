@@ -74,7 +74,7 @@ impl flui_view::View for Counter {
     }
 }
 
-fn counter(ui_runtime: &UiRuntime, hide_at: Option<u32>) -> Arc<AtomicU32> {
+pub(super) fn counter(ui_runtime: &UiRuntime, hide_at: Option<u32>) -> Arc<AtomicU32> {
     let presses = Arc::new(AtomicU32::new(0));
     // Inside the ui_runtime's entry, as a host attaches: the button's semantics
     // action lives in the ui_runtime's interaction lane.
@@ -95,7 +95,7 @@ fn counter(ui_runtime: &UiRuntime, hide_at: Option<u32>) -> Arc<AtomicU32> {
 /// One whole frame, post-frame callbacks included: the frame step a pump
 /// runs after its drain, without the drain, inside the UI runtime's entry as a
 /// pump runs it.
-fn frame(ui_runtime: &UiRuntime, sink: &mut ScriptedSink) {
+pub(super) fn frame(ui_runtime: &UiRuntime, sink: &mut ScriptedSink) {
     let now = flui_scheduler::Instant::now();
     let _presented = ui_runtime.enter(|ui_runtime| {
         ui_runtime.drive_frame(
@@ -111,19 +111,19 @@ fn frame(ui_runtime: &UiRuntime, sink: &mut ScriptedSink) {
 /// the UI runtime first: the drain enters it itself, so an act still reaches a
 /// handler that lives in the UI runtime's interaction lane. Takes the answer the
 /// drain produced.
-fn answer<T>(ui_runtime: &UiRuntime, mut reply: AgentReply<T>) -> Result<T, AgentError> {
+pub(super) fn answer<T>(ui_runtime: &UiRuntime, mut reply: AgentReply<T>) -> Result<T, AgentError> {
     let _report = ui_runtime.drain_commands();
     reply
         .try_take()
         .expect("the drain answers every request it serves")
 }
 
-fn read(ui_runtime: &UiRuntime, agent: &SemanticsAgent) -> Tree {
+pub(super) fn read(ui_runtime: &UiRuntime, agent: &SemanticsAgent) -> Tree {
     let reply = agent.read(ReadQuery::new()).expect("the inbox has room");
     answer(ui_runtime, reply).expect("the committed tree reads")
 }
 
-fn find(tree: &Tree, name: &str) -> flui_protocol::Node {
+pub(super) fn find(tree: &Tree, name: &str) -> flui_protocol::Node {
     fn walk(nodes: &[flui_protocol::Node], name: &str) -> Option<flui_protocol::Node> {
         nodes.iter().find_map(|node| {
             (node.name.as_deref() == Some(name))

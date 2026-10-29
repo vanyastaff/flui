@@ -106,6 +106,7 @@ const DEFAULT_COMMAND_CAPACITY: usize = 256;
 const MAX_NOT_SHOWN_RETRIES: u32 = 128;
 
 mod agent;
+mod agent_stability;
 mod attach;
 mod commands;
 mod construct;
@@ -120,6 +121,7 @@ mod sampling;
 pub use crate::runtime_services::RuntimeHostServices;
 pub(crate) use agent::DevAgentSlot;
 pub use agent::{AgentError, AgentReply, SemanticsAgent};
+pub(crate) use agent_stability::AgentStability;
 pub use commands::{CommandSendError, DrainReport, UiCommand, UiCommandSender};
 use input::FocusCoordinator;
 pub(crate) use presentations::start_os_drags;

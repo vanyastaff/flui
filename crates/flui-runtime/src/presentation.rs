@@ -424,6 +424,9 @@ pub struct PresentationState {
     /// handle themselves, so collection lasts while the hook keeps one.
     /// Owner thread only.
     pub(crate) dev_agent: RefCell<Option<crate::ui_runtime::DevAgentSlot>>,
+    /// The bounds the agent's actionability check last read, to tell whether
+    /// an element holds still. Owner thread only.
+    pub(crate) agent_stability: RefCell<crate::ui_runtime::AgentStability>,
     /// The window this presentation is shown in, as the host controls it, once
     /// `UiRuntime::install_window` has attached it. Closed before the
     /// presentation's terminal notification, so a handle held past the close
@@ -963,6 +966,7 @@ impl PresentationState {
             text_input,
             semantics,
             dev_agent: RefCell::new(None),
+            agent_stability: RefCell::default(),
             window_control: RefCell::new(None),
             window_placement: Cell::new(None),
             widgets,
@@ -1085,6 +1089,7 @@ impl PresentationState {
             text_input,
             semantics,
             dev_agent: RefCell::new(None),
+            agent_stability: RefCell::default(),
             window_control: RefCell::new(None),
             window_placement: Cell::new(None),
             widgets,
@@ -1709,6 +1714,11 @@ impl PresentationState {
     /// starts a fresh streak. See [`Self::frame_failure_streak`]'s field doc.
     pub(crate) fn reset_frame_failure_streak(&self) {
         self.frame_failure_streak.set(0);
+    }
+
+    /// The latest terminal frame result's revision.
+    pub(crate) fn tree_revision(&self) -> TreeRevision {
+        self.tree_revision.get()
     }
 
     /// Advance after one terminal frame result (`Painted` or `Errored`).
