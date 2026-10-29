@@ -942,7 +942,7 @@ pub(crate) fn viewer_rebuild_from_its_update_callback_keeps_the_gesture() {
         let (transform, probe, vsync) =
             (TransformationController::new(), Probe::new(), Vsync::new());
         let mut laid = mounted(SizedBox::shrink().boxed(), vsync);
-        let reactive = laid.with_build_owner_mut(|owner| owner.reactive().clone());
+        let reactive = laid.with_build_owner_mut(|owner| owner.signal_graph().clone());
         let updates = Rc::new(RefCell::new(0));
         laid.pump_widget(Rebuilding {
             transform: transform.clone(),

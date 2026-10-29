@@ -1,0 +1,24 @@
+error[E0277]: `Reactive` cannot write a signal
+ --> tests/ui/signal_write_through_the_graph.rs:9:23
+  |
+9 |     let _ = count.set(&graph, 1);
+  |                   --- ^^^^^^ not a write context
+  |                   |
+  |                   required by a bound introduced by this call
+  |
+  = help: the trait `WriteTarget` is not implemented for `Reactive`
+  = note: a signal write takes the `&mut EventCx` an event callback receives: `move |cx| count.set(cx, v)`
+  = note: outside a callback, acquire a `WriterSource` in `init_state` and call `source.write(|cx| ..)`; `build` has none
+help: the following other types implement trait `WriteTarget`
+ --> src/reactive/writer.rs
+  |
+  | impl WriteTarget for Writer {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Writer`
+...
+  | impl WriteTarget for EventCx<'_> {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `EventCx<'_>`
+note: required by a bound in `set`
+ --> src/reactive/mod.rs
+  |
+  |     fn set<W: WriteTarget + ?Sized>(self, w: &W, value: T) -> Result<(), SignalError>;
+  |               ^^^^^^^^^^^ required by this bound in `SignalWriteExt::set`

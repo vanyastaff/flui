@@ -5,7 +5,7 @@
 use parking_lot::Mutex;
 
 use flui_platform::{PlatformSystemChrome, SystemUiOverlayStyle};
-use flui_view::{Reactive, Signal};
+use flui_view::Signal;
 use flui_widgets::AnnotatedRegion;
 
 use super::*;
@@ -63,7 +63,7 @@ struct Fixture {
     ui_runtime: UiRuntime,
     chrome: Arc<RecordingChrome>,
     scene: Signal<u32>,
-    graph: Reactive,
+    writer: flui_view::WriterSource,
     window: Rc<dyn flui_platform::PlatformWindow>,
 }
 
@@ -77,8 +77,11 @@ fn styled_runtime() -> Fixture {
     let ui_runtime = UiRuntime::for_test_with_window(Rc::clone(&window));
     let graph = ui_runtime
         .presentation_widgets_for_test(ui_runtime.presentation_id())
-        .with_build_owner(|owner| owner.reactive().clone());
+        .with_build_owner(|owner| owner.signal_graph().clone());
     let scene = graph.signal(0_u32);
+    let writer = ui_runtime
+        .presentation_widgets_for_test(ui_runtime.presentation_id())
+        .with_build_owner(flui_view::BuildOwner::writer_source);
     ui_runtime
         .attach_root_widget(&Styled { scene })
         .expect("root attaches");
@@ -86,7 +89,7 @@ fn styled_runtime() -> Fixture {
         ui_runtime,
         chrome,
         scene,
-        graph,
+        writer,
         window,
     }
 }
@@ -102,21 +105,21 @@ pub(crate) fn each_style_change_is_delivered_once() {
         ui_runtime,
         chrome,
         scene,
-        graph,
+        writer,
         window: _window,
     } = styled_runtime();
     let mut sink = ScriptedSink::always_presents();
     ui_runtime.render_frame(&mut sink);
     assert_eq!(delivered(&chrome), [Dark]);
     ui_runtime.render_frame(&mut sink);
-    scene.set(&graph, 2).expect("write");
+    writer.write(|cx| scene.set(cx, 2)).expect("write");
     ui_runtime.render_frame(&mut sink);
     assert_eq!(
         delivered(&chrome),
         [Dark],
         "an equal style repaints silently"
     );
-    scene.set(&graph, 1).expect("write");
+    writer.write(|cx| scene.set(cx, 1)).expect("write");
     ui_runtime.render_frame(&mut sink);
     assert_eq!(delivered(&chrome), [Dark, Light]);
 }
@@ -156,7 +159,7 @@ pub(crate) fn a_detached_presentation_resends_its_style() {
         ui_runtime,
         chrome,
         scene,
-        graph,
+        writer,
         window: _window,
     } = styled_runtime();
     let mut sink = ScriptedSink::always_presents();
@@ -164,7 +167,7 @@ pub(crate) fn a_detached_presentation_resends_its_style() {
     let id = ui_runtime.presentation_id();
     ui_runtime.synchronize_window_snapshot(id, Detached, true, true);
     ui_runtime.synchronize_window_snapshot(id, Running, true, true);
-    scene.set(&graph, 2).expect("write");
+    writer.write(|cx| scene.set(cx, 2)).expect("write");
     ui_runtime.render_frame(&mut sink);
     assert_eq!(
         delivered(&chrome),
@@ -179,7 +182,7 @@ pub(crate) fn a_panicking_chrome_is_retried_on_the_next_frame() {
         ui_runtime,
         chrome,
         scene,
-        graph,
+        writer,
         window: _window,
     } = styled_runtime();
     chrome.1.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -191,7 +194,7 @@ pub(crate) fn a_panicking_chrome_is_retried_on_the_next_frame() {
     assert_eq!(payload.downcast_ref::<&str>(), Some(&"chrome failed"));
     assert_eq!(delivered(&chrome), []);
     // An equal style: only the retry can deliver it.
-    scene.set(&graph, 2).expect("write");
+    writer.write(|cx| scene.set(cx, 2)).expect("write");
     ui_runtime.render_frame(&mut sink);
     assert_eq!(delivered(&chrome), [SystemUiOverlayStyle::Dark]);
 }

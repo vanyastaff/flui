@@ -107,7 +107,7 @@ pub(crate) fn panicking_keyboard_dispatch_keeps_priority_over_a_panicking_wake()
     let b_id = ui_runtime.install_second_presentation_for_test();
     let graph_b = ui_runtime
         .presentation_widgets_for_test(b_id)
-        .with_build_owner(|owner| owner.reactive().clone());
+        .with_build_owner(|owner| owner.signal_graph().clone());
     let signal = graph_b.signal(1u32);
     let node = FocusNode::with_debug_label("panicking-key-reader-with-panicking-wake");
     ui_runtime
