@@ -50,7 +50,13 @@
 //! in `SparseChildren::by_logical_index`; they are managed solely by
 //! `service_child_requests`.
 
-use std::{collections::HashMap, fmt, marker::PhantomData, rc::Rc, sync::Arc};
+use std::{
+    collections::{BTreeSet, HashMap},
+    fmt,
+    marker::PhantomData,
+    rc::Rc,
+    sync::Arc,
+};
 
 use flui_foundation::{ElementId, RenderId, ViewKey};
 use flui_objects::{Placement, RenderSliverFixedExtentList, RenderSliverGrid, RenderSliverList};
@@ -132,6 +138,17 @@ pub trait LazyMultiBoxRender:
     /// Unknown totals remain unknown even when layout probes a finite length.
     fn set_semantic_set_size(&mut self, count: Option<usize>)
     -> flui_rendering::RenderUpdateImpact;
+
+    /// Installs the logical indices of the attached children that are pinned
+    /// ([`KeepAliveHandle::pin`](crate::owner::KeepAliveHandle::pin)) and lie
+    /// outside the retained band. The render object lays each of them out at
+    /// its estimated offset after the band, keeps it out of its geometry,
+    /// anchor and measured extents, and skips it in paint and hit testing.
+    /// An index with no attached child is ignored.
+    fn set_pinned_indices(
+        &mut self,
+        pinned: &BTreeSet<usize>,
+    ) -> flui_rendering::RenderUpdateImpact;
 
     /// Animate children into new positions when the owner's roster changes
     /// (see [`Placement`]); `None` places them at once. A render object that
@@ -750,7 +767,8 @@ impl<R: LazyMultiBoxRender> ChildManager for SliverAdaptorManager<R> {
         }
         let count_clamped = reached_end_at
             .is_some_and(|end_index| self.clamp_render_item_count(end_index, pipeline));
-        retain_did_work || refresh_did_work || any_new_build || count_clamped
+        let pins_changed = self.sync_pinned(retain_first, retain_last, host, tree, owner, pipeline);
+        retain_did_work || refresh_did_work || any_new_build || count_clamped || pins_changed
     }
 
     fn forget_child(&mut self, child: ElementId) {
@@ -770,6 +788,48 @@ impl<R: LazyMultiBoxRender> ChildManager for SliverAdaptorManager<R> {
 }
 
 impl<R: LazyMultiBoxRender> SliverAdaptorManager<R> {
+    /// Hand the render object the logical indices of this host's pinned
+    /// residents outside `[retain_first, retain_last)`, and watch for pins on
+    /// its behalf so a pin taken or released later lays it out again. Returns
+    /// whether the render object's pinned set changed.
+    fn sync_pinned(
+        &mut self,
+        retain_first: usize,
+        retain_last: usize,
+        host: ElementId,
+        tree: &ElementTree,
+        owner: &ElementOwner<'_>,
+        pipeline: &PipelineCell,
+    ) -> bool {
+        let Some(render_id) = self.render_id else {
+            return false;
+        };
+        let pinned_children = owner.keep_alive.pinned_children(tree);
+        let pinned: BTreeSet<usize> = self
+            .sparse_children
+            .iter_built()
+            .filter(|(index, child)| {
+                (*index < retain_first || *index >= retain_last) && pinned_children.contains(child)
+            })
+            .map(|(index, _)| index)
+            .collect();
+        pipeline.with_mut(|pipeline_owner| {
+            if let Some(handle) = pipeline_owner.local_render_invalidation_handle(render_id) {
+                owner.keep_alive.watch_pins(host, handle);
+            }
+            let Some(render_object) = pipeline_owner
+                .render_tree_mut()
+                .get_mut(render_id)
+                .and_then(|node| node.downcast_render_object_mut::<R>())
+            else {
+                return false;
+            };
+            let impact = render_object.set_pinned_indices(&pinned);
+            pipeline_owner.apply_render_update_impact(render_id, impact);
+            !impact.is_none()
+        })
+    }
+
     /// The render object's current item count (the manager's view of the
     /// data source length).
     fn item_count(&self, pipeline: &PipelineCell) -> usize {
@@ -1170,6 +1230,12 @@ impl LazyMultiBoxRender for RenderSliverList {
     ) -> flui_rendering::RenderUpdateImpact {
         RenderSliverList::set_semantic_set_size(self, count)
     }
+    fn set_pinned_indices(
+        &mut self,
+        pinned: &BTreeSet<usize>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverList::set_pinned_indices(self, pinned)
+    }
     type Config = ListConfig;
 
     const KIND: &'static str = "SliverList";
@@ -1474,6 +1540,12 @@ impl LazyMultiBoxRender for RenderSliverGrid {
     ) -> flui_rendering::RenderUpdateImpact {
         RenderSliverGrid::set_semantic_set_size(self, count)
     }
+    fn set_pinned_indices(
+        &mut self,
+        pinned: &BTreeSet<usize>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverGrid::set_pinned_indices(self, pinned)
+    }
     type Config = Arc<dyn flui_rendering::delegates::SliverGridDelegate>;
 
     const KIND: &'static str = "SliverGrid";
@@ -1568,6 +1640,12 @@ impl LazyMultiBoxRender for RenderSliverFixedExtentList {
         count: Option<usize>,
     ) -> flui_rendering::RenderUpdateImpact {
         RenderSliverFixedExtentList::set_semantic_set_size(self, count)
+    }
+    fn set_pinned_indices(
+        &mut self,
+        pinned: &BTreeSet<usize>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverFixedExtentList::set_pinned_indices(self, pinned)
     }
     type Config = FixedExtentConfig;
 

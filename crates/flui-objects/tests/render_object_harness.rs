@@ -8295,6 +8295,179 @@ fn harness_sliver_list_seeded_residents_laid_out_at_expected_offsets() {
     );
 }
 
+/// The three lazy multi-box slivers, which share the pinned-child contract.
+#[derive(Clone, Copy, Debug)]
+enum LazySliver {
+    List,
+    FixedExtentList,
+    Grid,
+}
+
+impl LazySliver {
+    /// A sliver over `count` resident 50 px children seeded with their
+    /// logical indices, each announced as `row{index}`; row 0 paints blue and
+    /// every other row red.
+    fn mount(self, count: usize, pinned: &std::collections::BTreeSet<usize>) -> TreeNode {
+        let mut node = match self {
+            Self::List => {
+                let mut list = RenderSliverList::new(count, 50.0);
+                let _ = list.set_pinned_indices(pinned);
+                sliver_node(list)
+            }
+            Self::FixedExtentList => {
+                let mut list = RenderSliverFixedExtentList::new(50.0, count);
+                let _ = list.set_pinned_indices(pinned);
+                sliver_node(list)
+            }
+            Self::Grid => {
+                // Six 50 px columns across the 300 px viewport.
+                let mut grid = RenderSliverGrid::new(
+                    Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(6)),
+                    count,
+                );
+                let _ = grid.set_pinned_indices(pinned);
+                sliver_node(grid)
+            }
+        }
+        .label("sliver");
+        for index in 0..count {
+            let paint = if index == 0 {
+                RenderColoredBox::blue(300.0, 50.0)
+            } else {
+                RenderColoredBox::red(300.0, 50.0)
+            };
+            let mut row = box_node(
+                RenderSemanticsAnnotations::from_configuration(labelled(&format!("row{index}")))
+                    .with_container(true),
+            )
+            .child(box_node(paint))
+            .with_parent_data_seed(ParentDataSeed::SliverMultiBoxAdaptor(
+                SliverMultiBoxAdaptorParentData::new(index),
+            ));
+            if index == 0 {
+                row = row.label("item0");
+            }
+            node = node.child(row);
+        }
+        node
+    }
+
+    fn set_pinned(self, run: &mut FrameRun, pinned: &std::collections::BTreeSet<usize>) {
+        let sliver = run.id("sliver");
+        match self {
+            Self::List => run.update::<RenderSliverList>(sliver, |list| {
+                let _ = list.set_pinned_indices(pinned);
+            }),
+            Self::FixedExtentList => run.update::<RenderSliverFixedExtentList>(sliver, |list| {
+                let _ = list.set_pinned_indices(pinned);
+            }),
+            Self::Grid => run.update::<RenderSliverGrid>(sliver, |grid| {
+                let _ = grid.set_pinned_indices(pinned);
+            }),
+        }
+    }
+}
+
+/// The labels a frame announces.
+fn announced_labels(run: &FrameRun) -> Vec<String> {
+    run.pipeline()
+        .semantics_owner()
+        .expect("semantics enabled")
+        .tree()
+        .iter()
+        .filter_map(|(_, node)| node.label().map(ToString::to_string))
+        .collect()
+}
+
+/// A pinned child the band has left is laid out where it belongs and kept in
+/// the semantics tree, never painted, and adds nothing to the sliver's
+/// geometry; unpinned, it drops out of the tree without a scroll. The same
+/// on every lazy multi-box sliver and under either viewport clip, since a
+/// clip is no reason a child is not painted.
+fn harness_lazy_slivers_keep_a_pinned_child_out_of_band() {
+    use std::collections::BTreeSet;
+
+    // Rows of 50 px; the band at a 1000 px scroll offset starts well past
+    // row 0 (the cache extent reaches back 250 px).
+    const SCROLLED: f64 = 1000.0;
+    let pinned = BTreeSet::from([0]);
+    for sliver in [
+        LazySliver::List,
+        LazySliver::FixedExtentList,
+        LazySliver::Grid,
+    ] {
+        // The grid fits six tiles a row; give it as many rows as a list.
+        let count = match sliver {
+            LazySliver::Grid => 240,
+            _ => 40,
+        };
+        for clip in [Clip::HardEdge, Clip::None] {
+            let frame = |pins: &BTreeSet<usize>| {
+                // A scrollable answers `ScrollIntoView` above its viewport,
+                // which keeps a laid-out row past the cache addressable.
+                let mut revealing = SemanticsConfiguration::new();
+                revealing.add_action(
+                    flui_rendering::semantics::SemanticsAction::ScrollIntoView,
+                    Arc::new(|_| {}),
+                );
+                let scrollable =
+                    box_node(RenderSemanticsAnnotations::from_configuration(revealing))
+                        .child(viewport_with_scroll(0.0, sliver.mount(count, pins)));
+                let mut run = RenderTester::mount(scrollable)
+                    .with_size(Size::new(300.0, 100.0))
+                    .with_semantics_enabled()
+                    .run_frame();
+                let viewport = run.id("viewport");
+                run.update::<RenderViewport<ScrollableViewportOffset>>(viewport, |viewport| {
+                    let _ = viewport.set_clip_behavior(clip);
+                    viewport.offset_mut().set_pixels(SCROLLED);
+                });
+                run.pump();
+                run
+            };
+            let case = format!("{sliver:?} under {clip:?}");
+            let unpinned = frame(&BTreeSet::new());
+            let mut run = frame(&pinned);
+            let row = run.id("item0");
+
+            assert!(
+                announced_labels(&unpinned)
+                    .iter()
+                    .all(|label| label != "row0"),
+                "{case}: precondition: an unpinned row the band left is not announced"
+            );
+            assert_eq!(
+                run.offset(row).dy,
+                -SCROLLED,
+                "{case}: the pinned row is laid out at its own place, scrolled away"
+            );
+            assert!(
+                announced_labels(&run).iter().any(|label| label == "row0"),
+                "{case}: the pinned row stays in the semantics tree; got {:?}",
+                announced_labels(&run)
+            );
+            assert!(
+                !run.display_commands()
+                    .iter()
+                    .any(|command| command.line.contains("#0000FFFF")),
+                "{case}: the pinned row is not painted"
+            );
+            assert_eq!(
+                run.sliver_geometry(run.id("sliver")),
+                unpinned.sliver_geometry(unpinned.id("sliver")),
+                "{case}: a pinned row adds nothing to the geometry"
+            );
+
+            sliver.set_pinned(&mut run, &BTreeSet::new());
+            run.pump();
+            assert!(
+                announced_labels(&run).iter().all(|label| label != "row0"),
+                "{case}: an unpinned row drops out of the tree without a scroll"
+            );
+        }
+    }
+}
+
 fn harness_sliver_list_anchor_correction_emits_in_both_scroll_directions() {
     // Two-pass test for the anchor-correction state machine.
     //
@@ -13241,6 +13414,7 @@ fn family_sliver_lists() {
     run_family("sliver_lists", &[
         ("sliver_fixed_extent_list_geometry", harness_sliver_fixed_extent_list_geometry),
         ("sliver_list_seeded_residents_laid_out_at_expected_offsets", harness_sliver_list_seeded_residents_laid_out_at_expected_offsets),
+        ("lazy_slivers_keep_a_pinned_child_out_of_band", harness_lazy_slivers_keep_a_pinned_child_out_of_band),
         ("sliver_list_anchor_correction_emits_in_both_scroll_directions", harness_sliver_list_anchor_correction_emits_in_both_scroll_directions),
         ("sliver_list_placement_slides_moved_children_into_place", harness_sliver_list_placement_slides_moved_children_into_place),
         ("sliver_grid_placement_slides_tiles_between_cells", harness_sliver_grid_placement_slides_tiles_between_cells),

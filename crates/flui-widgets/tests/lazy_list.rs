@@ -20,6 +20,8 @@
 //! built and the sliver is marked dirty; after `tick2` the sliver lays out
 //! its real children and reaches a stable state.
 
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::common::{LaidOut, lay_out, tight};
@@ -448,4 +450,113 @@ pub(crate) fn lazy_list_view_builder_keyed_row_moving_with_the_viewport_keeps_st
         states_for_1, 1,
         "row 1's state must be created once and carried to its new index"
     );
+}
+
+// ============================================================================
+// Pinned rows — laid out and announced while scrolled away
+// ============================================================================
+
+/// A row that pins itself on mount and parks the lease where the test can
+/// drop it.
+#[derive(Clone, StatefulView)]
+struct PinnedRow {
+    lease: Rc<RefCell<Option<flui_view::owner::KeepAliveLease>>>,
+    disposed: Rc<Cell<bool>>,
+}
+
+struct PinnedRowState {
+    lease: Rc<RefCell<Option<flui_view::owner::KeepAliveLease>>>,
+    disposed: Rc<Cell<bool>>,
+}
+
+impl StatefulView for PinnedRow {
+    type State = PinnedRowState;
+    fn create_state(&self) -> PinnedRowState {
+        PinnedRowState {
+            lease: Rc::clone(&self.lease),
+            disposed: Rc::clone(&self.disposed),
+        }
+    }
+}
+
+impl ViewState<PinnedRow> for PinnedRowState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        *self.lease.borrow_mut() = Some(ctx.keep_alive_handle().pin());
+    }
+    fn build(&self, _view: &PinnedRow, _ctx: &dyn BuildContext) -> impl IntoView {
+        Semantics::new()
+            .container(true)
+            .label("pinned")
+            .child(SizedBox::new(200.0, 48.0))
+    }
+    fn dispose(&mut self) {
+        self.disposed.set(true);
+    }
+}
+
+fn announces_pinned(laid: &LaidOut) -> bool {
+    laid.a11y_tree()
+        .expect("semantics are enabled")
+        .nodes()
+        .any(|node| node.label() == Some("pinned"))
+}
+
+/// A pinned row scrolled far out of the band keeps its state and its place in
+/// the accessibility tree; releasing the pin evicts it on the next frame,
+/// with no scroll to prompt a relayout.
+pub(crate) fn a_pinned_row_stays_announced_until_its_pin_is_released() {
+    use flui_widgets::{ScrollController, Scrollable};
+
+    let lease = Rc::new(RefCell::new(None));
+    let disposed = Rc::new(Cell::new(false));
+    let row = {
+        let (lease, disposed) = (Rc::clone(&lease), Rc::clone(&disposed));
+        Rc::new(move |i: usize| {
+            (i < 500).then(|| {
+                if i == 0 {
+                    PinnedRow {
+                        lease: Rc::clone(&lease),
+                        disposed: Rc::clone(&disposed),
+                    }
+                    .boxed()
+                } else {
+                    SizedBox::new(200.0, 48.0).boxed()
+                }
+            })
+        })
+    };
+    let scroll = ScrollController::new();
+    let list = Scrollable::new()
+        .controller(scroll.clone())
+        .viewport_builder(Rc::new(move |position| {
+            let row = Rc::clone(&row);
+            ListView::builder(500, 48.0, move |i| row(i))
+                .position(position)
+                .boxed()
+        }));
+    let mut laid = lay_out(list, tight(200.0, 200.0));
+    laid.enable_semantics();
+    laid.tick();
+    laid.tick();
+    assert!(lease.borrow().is_some(), "precondition: row 0 took its pin");
+
+    scroll.jump_to(10_000.0);
+    for _ in 0..3 {
+        laid.tick();
+    }
+    assert!(!disposed.get(), "the band eviction keeps a pinned row");
+    assert!(
+        announces_pinned(&laid),
+        "a pinned row stays in the accessibility tree while scrolled away"
+    );
+
+    drop(lease.borrow_mut().take());
+    for _ in 0..3 {
+        laid.tick();
+    }
+    assert!(
+        disposed.get(),
+        "a released pin lets the next band eviction drop the row"
+    );
+    assert!(!announces_pinned(&laid), "the released row leaves the tree");
 }

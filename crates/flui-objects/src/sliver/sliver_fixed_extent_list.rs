@@ -64,6 +64,7 @@ use flui_rendering::{
     traits::RenderSliver,
 };
 
+use super::pinned::{PinnedChildren, PinnedPlace};
 use super::sliver_grid::{MAX_UNBOUNDED_WINDOW_CHILDREN, UNBOUNDED_SENTINEL_WINDOW};
 
 /// How far a layout offset may miss an exact multiple of the item extent and
@@ -90,9 +91,21 @@ pub struct RenderSliverFixedExtentList {
     /// The count the unbounded-window truncation last warned about, so the
     /// warning fires once per count rather than once per frame.
     warned_truncation_for: Option<usize>,
+    /// The pinned residents outside the window (`set_pinned_indices`).
+    pinned: PinnedChildren,
 }
 
 impl RenderSliverFixedExtentList {
+    /// The logical indices of pinned residents outside the window. Each is
+    /// laid out after the window at `index × item_extent`, adds nothing to the
+    /// geometry, and is skipped by paint and hit testing; semantics keeps it.
+    pub fn set_pinned_indices(
+        &mut self,
+        pinned: &std::collections::BTreeSet<usize>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        self.pinned.set(pinned)
+    }
+
     /// Overrides the accessible set size rather than deriving it from logical
     /// slots. `None` declares an unknown total.
     pub fn set_semantic_set_size(
@@ -127,6 +140,7 @@ impl RenderSliverFixedExtentList {
             logical_to_slot: BTreeMap::new(),
             attached_child_count: 0,
             warned_truncation_for: None,
+            pinned: PinnedChildren::default(),
         }
     }
 
@@ -393,6 +407,7 @@ impl RenderSliver for RenderSliverFixedExtentList {
 
         if self.item_count == 0 {
             self.attached_child_count = 0;
+            self.pinned.clear_slots();
             ctx.emit_retain_band(0, 0);
             return Ok(SliverGeometry::ZERO);
         }
@@ -410,6 +425,7 @@ impl RenderSliver for RenderSliverFixedExtentList {
             self.attached_child_count = ctx.child_count();
             let first = finite_leading_cache_edge(&constraints)
                 .map_or(0, |start| self.min_child_index_for_scroll_offset(start));
+            self.pinned.clear_slots();
             ctx.emit_retain_band(first, first);
             return Ok(SliverGeometry {
                 scroll_extent,
@@ -460,6 +476,7 @@ impl RenderSliver for RenderSliverFixedExtentList {
         }
         if self.item_count == 0 || first > last {
             self.attached_child_count = ctx.child_count();
+            self.pinned.clear_slots();
             ctx.emit_retain_band(first, first);
             let scroll_extent = self.compute_max_scroll_offset(effective_count);
             return Ok(SliverGeometry {
@@ -515,16 +532,39 @@ impl RenderSliver for RenderSliverFixedExtentList {
             }
         }
 
+        let item_count = self.item_count;
+        let item_extent = self.item_extent;
+        self.pinned.lay_out(first..last + 1, ctx, |index| {
+            (index < item_count).then(|| {
+                let layout_offset = item_extent * index as f64;
+                PinnedPlace {
+                    constraints: child_constraints,
+                    layout_offset,
+                    paint_offset: child_paint_offset(
+                        &constraints,
+                        &geometry,
+                        layout_offset,
+                        item_extent,
+                    ),
+                }
+            })
+        })?;
+
         Ok(geometry)
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
-        ctx.paint_children();
+        // A pinned child is placed, so only this skip keeps it off screen.
+        for slot in 0..ctx.child_count() {
+            if !self.pinned.is_pinned_slot(slot) {
+                ctx.paint_child(slot);
+            }
+        }
     }
 
     fn hit_test(&self, ctx: &mut SliverHitTestContext<'_, Variable, Self::ParentData>) -> bool {
         for slot in (0..self.attached_child_count).rev() {
-            if ctx.hit_test_child_at_layout_offset(slot) {
+            if !self.pinned.is_pinned_slot(slot) && ctx.hit_test_child_at_layout_offset(slot) {
                 return true;
             }
         }

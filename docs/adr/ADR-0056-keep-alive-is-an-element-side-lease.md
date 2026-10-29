@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-05
+- **Superseded-by:** [ADR-0263](ADR-0263-pinned-lazy-children-and-the-focusable-list.md) for "A parked child is not moved", for a pinned child only (a pinned child is laid out outside the band; releasing a pin schedules a relayout)
 - **Amends:** [ADR-0053](ADR-0053-one-lazy-child-lifecycle-for-multi-box-slivers.md) (its eviction contract: a held child is exempt from band eviction), and the evict-before-paint sentence in `crates/flui-rendering/ARCHITECTURE.md`
 - **Depends on:** the placed-generation stamp being consulted by all four observation walks (#834 for paint and hit-test, #881 for semantics) — see [Why the stamp is a prerequisite](#why-the-stamp-is-a-prerequisite)
 - **Issue:** #835

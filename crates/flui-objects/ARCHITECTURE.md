@@ -556,6 +556,22 @@ unchanged-placement no-op and the unarmed resize; the widgets row
 `an_item_entering_the_band_takes_its_place_without_sliding` pins the band rule
 through a mounted list.
 
+### Lazy slivers lay out a pinned child outside the band
+
+`RenderSliverList`, `RenderSliverFixedExtentList` and `RenderSliverGrid` share
+`PinnedChildren` (`sliver/pinned.rs`). The element side hands each the logical
+indices of its pinned residents outside the retained band
+(`set_pinned_indices`); after the band, the sliver lays every such attached
+child out under the band's child constraints, at the place the band would give
+it: the virtualizer's offset, `index × item_extent`, or the tile layout's cell.
+The child gets a fresh placed-generation stamp, so semantics and focus see it,
+and that same stamp is why paint and hit testing skip it by slot explicitly: a
+viewport clip would hide it only under a clipping viewport, and `Clip::None`
+has none. Its extent feeds none of the geometry, the anchor correction or the
+measured extents, so the sliver reports the same result pinned or not
+(ADR-0263). `harness_lazy_slivers_keep_a_pinned_child_out_of_band` pins all
+three slivers under both clips.
+
 ### Editable text scrolls its content within the allocated viewport
 
 `RenderEditable` keeps full text layout for single-line caret movement while
