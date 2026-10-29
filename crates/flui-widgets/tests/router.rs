@@ -1249,7 +1249,7 @@ fn terminal_modal_aliases_remain_usable_until_last_release() {
             let controller = transition
                 .controller()
                 .expect("mount installs the controller before owner retirement");
-            controller.set_value(0.25);
+            controller.set_value(0.25).expect("no build is running");
             assert_eq!(controller.value(), 0.25);
         } else {
             assert_eq!(
@@ -1277,7 +1277,7 @@ fn terminal_modal_aliases_remain_usable_until_last_release() {
         transition.drain_pending_statuses();
         if mounted {
             let controller = transition.controller().expect("the installed transition alias retains its controller after last navigator release");
-            controller.set_value(0.5);
+            controller.set_value(0.5).expect("no build is running");
             assert_eq!(controller.value(), 0.5);
         } else {
             assert!(
@@ -1295,7 +1295,7 @@ fn terminal_modal_aliases_remain_usable_until_last_release() {
             let controller = transition.controller().expect(
                 "the transition alias still owns its installed animation state after modal release",
             );
-            controller.set_value(0.75);
+            controller.set_value(0.75).expect("no build is running");
             assert_eq!(controller.value(), 0.75);
         } else {
             assert!(transition.controller().is_none());

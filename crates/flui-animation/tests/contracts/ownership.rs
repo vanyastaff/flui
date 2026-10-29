@@ -1122,7 +1122,7 @@ fn reentrant_owner_retirement_joins_registry_custody() {
         });
         drop(registry);
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            controller.set_value(0.25);
+            controller.set_value(0.25).expect("no build is running");
         }));
         assert_eq!(outcome.is_err(), earlier_failure);
         if let Err(payload) = outcome {
@@ -1733,7 +1733,7 @@ fn wrapper_over_a_disposed_source(wrap: fn(AnimationHandle) -> AnimationHandle) 
     let mut lifecycle =
         AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
     let parent = lifecycle.controller().clone();
-    parent.set_value(0.5);
+    parent.set_value(0.5).expect("no build is running");
     lifecycle.dispose();
     let (drops, value_probe) = drop_probe();
     let status_probe = DropProbe(drops.clone());
@@ -1748,7 +1748,7 @@ fn wrapper_over_a_disposed_source(wrap: fn(AnimationHandle) -> AnimationHandle) 
             panic!("a disposed source cannot send a new status");
         }))
         .detach();
-    parent.set_value(1.0);
+    parent.set_value(1.0).expect("no build is running");
     drop(wrapper);
     assert_eq!(
         drops.load(Ordering::SeqCst),
@@ -1837,8 +1837,8 @@ fn tween_status_listener_dies_with_the_wrapper() {
 #[test]
 fn switch_dispose_releases_callbacks() {
     let (current, next) = (controller(), controller());
-    current.set_value(0.8);
-    next.set_value(0.3);
+    current.set_value(0.8).expect("no build is running");
+    next.set_value(0.3).expect("no build is running");
     let (switched, listened) = (Arc::new(()), Arc::new(()));
     let switched_capture = Arc::clone(&switched);
     let switch = AnimationSwitch::new(
@@ -1871,8 +1871,8 @@ fn switch_dispose_releases_callbacks() {
 #[test]
 fn proxy_parented_to_a_capturing_switch_is_freed() {
     let (current, next) = (controller(), controller());
-    current.set_value(0.8);
-    next.set_value(0.3);
+    current.set_value(0.8).expect("no build is running");
+    next.set_value(0.3).expect("no build is running");
     let (drops, probe) = drop_probe();
     {
         let proxy = std::rc::Rc::new(ProxyAnimation::new(
@@ -2116,7 +2116,7 @@ fn proxy_listener_removal_joins_its_enclosing_cleanup() {
             let _capture = &capture;
             observed.set(observed.get() + 1);
         }));
-        parent.set_value(0.25);
+        parent.set_value(0.25).expect("no build is running");
         assert_eq!(calls.get(), 1);
         let outcome = catch_unwind(AssertUnwindSafe(|| {
             let mut recovery = flui_foundation::panic::PanicRecovery::new();
@@ -2136,7 +2136,7 @@ fn proxy_listener_removal_joins_its_enclosing_cleanup() {
             );
         }
         assert_eq!(drops.get(), usize::from(case == "healthy"));
-        parent.set_value(0.5);
+        parent.set_value(0.5).expect("no build is running");
         assert_eq!(
             calls.get(),
             1,

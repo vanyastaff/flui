@@ -87,7 +87,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 pub use flui_foundation::read_scope::{
     ReadGraph, ReadScope, ReaderSink, ScopeRef, Signal, SignalError, SignalSender, SignalSlot,
 };
-use flui_foundation::{ElementId, RebuildReason};
+use flui_foundation::{BuildPhase, BuildPhaseGuard, ElementId, RebuildReason};
 use smallvec::SmallVec;
 
 #[cfg(test)]
@@ -153,8 +153,14 @@ struct ActiveBuild {
 /// Reads need no such cell: a slot minted by another graph is
 /// [`SignalError::ForeignGraph`] on read, so a cross-window read is refused
 /// rather than left untracked.
+///
+/// The cell also carries the runtime's [`BuildPhase`], which controllers
+/// below this crate consult to refuse a mutation made from `build`.
 #[derive(Clone, Default)]
-pub struct BuildInProgress(Rc<std::cell::Cell<Option<ActiveBuild>>>);
+pub struct BuildInProgress {
+    active: Rc<std::cell::Cell<Option<ActiveBuild>>>,
+    phase: BuildPhase,
+}
 
 impl BuildInProgress {
     /// A cell with no build running.
@@ -162,12 +168,19 @@ impl BuildInProgress {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// The runtime's build phase: building while any graph sharing this
+    /// cell builds an element.
+    #[must_use]
+    pub fn phase(&self) -> BuildPhase {
+        self.phase.clone()
+    }
 }
 
 impl fmt::Debug for BuildInProgress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("BuildInProgress")
-            .field(&self.0.get())
+            .field(&self.active.get())
             .finish()
     }
 }
@@ -180,6 +193,11 @@ struct Inner {
     /// What the shared cell held when this graph's current build began, put
     /// back when it ends so a nested build of another graph stays guarded.
     outer_build: Option<ActiveBuild>,
+    /// The phase this graph publishes its builds into: its own until it joins
+    /// a runtime cell, then the runtime's.
+    phase: BuildPhase,
+    /// Held while one of this graph's elements builds.
+    phase_guard: Option<BuildPhaseGuard>,
     preserving_close: bool,
     nodes: Vec<Node>,
     free: Vec<u32>,
@@ -234,7 +252,7 @@ impl Inner {
     fn restore_outer_build(&mut self) {
         let outer = self.outer_build.take();
         if let Some(shared) = &self.build_in_progress {
-            shared.0.set(outer);
+            shared.active.set(outer);
         }
     }
 }
@@ -283,19 +301,27 @@ impl Reactive {
         inner.preserving_close |= preserving;
         // A closed window must not keep the runtime's other windows from
         // writing: drop the build it may have left published.
-        if inner
-            .build_in_progress
-            .as_ref()
-            .is_some_and(|shared| shared.0.get().is_some_and(|active| active.graph == self.id))
-        {
+        if inner.build_in_progress.as_ref().is_some_and(|shared| {
+            shared
+                .active
+                .get()
+                .is_some_and(|active| active.graph == self.id)
+        }) {
             inner.restore_outer_build();
         }
+        inner.phase_guard = None;
         // Values and scheduler ownership remain in the closed graph; no user
         // destructor is required to revoke their scheduling authority.
     }
 
     pub(crate) fn owner_closed(&self) -> bool {
         self.inner.borrow().closed
+    }
+
+    /// The phase this graph's builds are published into (see
+    /// [`BuildInProgress::phase`]).
+    pub(crate) fn build_phase(&self) -> BuildPhase {
+        self.inner.borrow().phase.clone()
     }
 
     // ------------------------------------------------------------------ slots
@@ -575,8 +601,10 @@ impl Reactive {
             .map_or_default(Membership::snapshot);
         Self::forget_element_reads(&mut inner, element);
         inner.building = Some(element);
+        let guard = inner.phase.enter();
+        inner.phase_guard = Some(guard);
         if let Some(shared) = &inner.build_in_progress {
-            let outer = shared.0.replace(Some(ActiveBuild {
+            let outer = shared.active.replace(Some(ActiveBuild {
                 graph: self.id,
                 element,
             }));
@@ -591,7 +619,7 @@ impl Reactive {
             inner
                 .build_in_progress
                 .as_ref()
-                .and_then(|shared| shared.0.get())
+                .and_then(|shared| shared.active.get())
                 .filter(|active| active.graph != graph)
                 .map(|active| active.element)
         })
@@ -599,7 +627,9 @@ impl Reactive {
 
     /// Join the UI runtime's build cell (see [`BuildInProgress`]).
     pub(crate) fn share_build_in_progress(&self, shared: BuildInProgress) {
-        self.inner.borrow_mut().build_in_progress = Some(shared);
+        let mut inner = self.inner.borrow_mut();
+        inner.phase = shared.phase();
+        inner.build_in_progress = Some(shared);
     }
 
     /// Called by `build_or_recover` right after `element`'s `build` returned
@@ -615,6 +645,7 @@ impl Reactive {
         if inner.building == Some(element) {
             inner.building = None;
             inner.restore_outer_build();
+            inner.phase_guard = None;
         }
         if completed {
             return;

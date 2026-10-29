@@ -78,7 +78,7 @@ fn navigator() -> (NavigatorHandle, Harness) {
 /// real `Vsync` instead.
 fn complete(handle: &TransitionHandle) {
     let controller = handle.controller().expect("install created the controller");
-    controller.set_value(1.0);
+    controller.set_value(1.0).expect("no build is running");
     assert_eq!(controller.status(), AnimationStatus::ForwardSettled);
     handle.drain_pending_statuses();
 }
@@ -86,7 +86,7 @@ fn complete(handle: &TransitionHandle) {
 /// Drive a controller to `ReverseSettled` (exit finished).
 fn dismiss(handle: &TransitionHandle) {
     let controller = handle.controller().expect("install created the controller");
-    controller.set_value(0.0);
+    controller.set_value(0.0).expect("no build is running");
     assert_eq!(controller.status(), AnimationStatus::ReverseSettled);
     handle.drain_pending_statuses();
 }
@@ -286,7 +286,9 @@ pub(crate) fn hopping_route_dropped_without_dispose_frees_proxy() {
         .controller()
         .expect("install created the controller");
     // Mid-entrance: a moving train at a value the replacement does not share.
-    middle_controller.set_value(0.5);
+    middle_controller
+        .set_value(0.5)
+        .expect("no build is running");
 
     let (top, _top_handle) = transition("top");
     navigator_handle.push_replacement(top);
@@ -318,7 +320,9 @@ pub(crate) fn replacement_retains_near_zero_secondary_progress_until_crossing() 
         navigator.push(middle);
         harness.tick();
         let middle_controller = middle_handle.controller().expect("installed middle");
-        middle_controller.set_value(progress);
+        middle_controller
+            .set_value(progress)
+            .expect("no build is running");
         let secondary = bottom_handle.secondary_animation();
         assert_eq!(secondary.value(), progress);
 
@@ -333,19 +337,25 @@ pub(crate) fn replacement_retains_near_zero_secondary_progress_until_crossing() 
         let replacement_controller = replacement_handle
             .controller()
             .expect("installed replacement");
-        replacement_controller.set_value(progress / 2.0);
+        replacement_controller
+            .set_value(progress / 2.0)
+            .expect("no build is running");
         assert_eq!(
             secondary.value(),
             progress,
             "the trains have not crossed yet"
         );
-        replacement_controller.set_value(progress * 2.0);
+        replacement_controller
+            .set_value(progress * 2.0)
+            .expect("no build is running");
         assert_eq!(
             secondary.value(),
             progress * 2.0,
             "the replacement now drives the secondary"
         );
-        middle_controller.set_value(0.8);
+        middle_controller
+            .set_value(0.8)
+            .expect("no build is running");
         assert_eq!(
             secondary.value(),
             progress * 2.0,

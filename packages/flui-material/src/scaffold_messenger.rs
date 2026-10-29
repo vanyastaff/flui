@@ -713,7 +713,7 @@ impl MessengerCore {
         if self.entry_controller.status() == AnimationStatus::ReverseSettled {
             self.pop_and_advance(ReconcileOrigin::Direct);
         } else {
-            self.entry_controller.set_value(0.0);
+            let _ = self.entry_controller.set_value(0.0);
         }
     }
 

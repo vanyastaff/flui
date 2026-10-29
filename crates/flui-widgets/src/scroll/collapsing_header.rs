@@ -377,7 +377,7 @@ impl HeaderModel {
     }
 
     fn run(&self, simulation: impl flui_animation::Simulation + 'static) {
-        self.settle.set_value(self.offset.get());
+        let _ = self.settle.set_value(self.offset.get());
         if self.settle.animate_with(simulation).is_err() {
             tracing::warn!("CollapsingHeader could not start its settle");
         }

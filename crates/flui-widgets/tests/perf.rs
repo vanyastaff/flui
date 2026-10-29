@@ -260,10 +260,10 @@ fn perf_a_slide_transition_tick_moves_a_layer_without_rebuilding() {
         MountOptions::tight(WIDTH, HEIGHT),
     );
     binding.enable_semantics().expect("tree-bound");
-    controller.set_value(0.25);
+    controller.set_value(0.25).expect("no build is running");
     binding.pump_frame(FRAME);
 
-    controller.set_value(0.5);
+    controller.set_value(0.5).expect("no build is running");
     binding.pump_frame(FRAME);
     let report = binding.last_frame_report().clone();
     record("slide_transition_tick", &report);

@@ -79,9 +79,9 @@ pub fn an_inactive_tabs_state_survives_switching_away_and_back() {
         "tab 0's Probe must have been created once"
     );
 
-    controller.set_index(1);
+    controller.set_index(1).expect("no build is running");
     laid.tick();
-    controller.set_index(0);
+    controller.set_index(0).expect("no build is running");
     laid.tick();
 
     assert_eq!(
@@ -195,7 +195,7 @@ pub fn a_jump_during_a_tab_animation_keeps_the_jumped_index() {
     let mut laid = mount_tabs_over_pages(&controller, &vsync);
     laid.pump_for(Duration::ZERO);
 
-    controller.animate_to(3);
+    controller.animate_to(3).expect("no build is running");
     laid.pump_for(Duration::ZERO);
     laid.pump_for(Duration::from_millis(150));
     // Far enough along that the interrupted page rounds away from the jump's.
@@ -205,7 +205,7 @@ pub fn a_jump_during_a_tab_animation_keeps_the_jumped_index() {
         "the run is under way: {mid_run}"
     );
 
-    controller.set_index(0);
+    controller.set_index(0).expect("no build is running");
     assert_eq!(controller.index(), 0, "the jump's index survives the stop");
     for _ in 0..30 {
         laid.pump_for(Duration::from_millis(16));
@@ -276,7 +276,7 @@ pub fn unmounting_the_view_mid_animation_keeps_the_committed_index() {
     let mut laid = mount_tabs_over_pages(&controller, &vsync);
     laid.pump_for(Duration::ZERO);
 
-    controller.animate_to(3);
+    controller.animate_to(3).expect("no build is running");
     laid.pump_for(Duration::ZERO);
     laid.pump_for(Duration::from_millis(150));
     let mid_run = controller.position().value();
@@ -340,7 +340,7 @@ pub fn a_refused_view_does_not_change_the_holders_motion_policy() {
     );
     laid.pump_for(Duration::ZERO);
 
-    controller.animate_to(2);
+    controller.animate_to(2).expect("no build is running");
     laid.pump_for(Duration::ZERO);
     laid.pump_for(Duration::from_millis(16));
 
@@ -424,7 +424,7 @@ pub fn a_refused_curve_still_moves_an_attached_pager() {
     let mut laid = mount_tabs_over_pages(&controller, &vsync);
     laid.pump_for(Duration::ZERO);
 
-    controller.animate_to(2);
+    controller.animate_to(2).expect("no build is running");
     laid.pump_for(Duration::ZERO);
     laid.pump_for(Duration::from_millis(16));
 
@@ -462,7 +462,7 @@ pub fn a_page_change_in_a_collapsed_viewport_reaches_position_observers() {
     let _observer = controller
         .position()
         .add_listener(Rc::new(move || counter.set(counter.get() + 1)));
-    controller.set_index(2);
+    controller.set_index(2).expect("no build is running");
 
     assert_eq!(controller.position().value(), 2.0);
     assert!(heard.get() >= 1, "the position change was published");
@@ -482,7 +482,7 @@ pub fn reduced_motion_settles_an_attached_view_on_the_first_frame() {
         laid.set_motion_override(preference);
         laid.pump_for(Duration::ZERO);
 
-        controller.animate_to(2);
+        controller.animate_to(2).expect("no build is running");
         laid.pump_for(Duration::ZERO);
         laid.pump_for(Duration::from_millis(16));
 

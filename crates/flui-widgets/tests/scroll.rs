@@ -192,7 +192,7 @@ pub(crate) fn scrollable_accessibility_ranges_follow_the_actual_axis() {
         laid.enable_semantics();
         laid.tick();
         assert_eq!(controller.max_scroll_extent(), 800.0, "measured viewport");
-        controller.jump_to(120.0);
+        controller.jump_to(120.0).expect("no build is running");
         laid.tick();
         let tree = laid
             .a11y_tree()
@@ -239,7 +239,7 @@ pub(crate) fn scrollable_accessibility_ranges_follow_the_actual_axis() {
                 "{axis:?}: orthogonal axis has no invented scroll range"
             );
         }
-        controller.jump_to(240.0);
+        controller.jump_to(240.0).expect("no build is running");
         laid.tick();
         let tree = laid.a11y_tree().expect("changed native offset republished");
         assert!(
@@ -468,7 +468,7 @@ pub(crate) fn a_remaining_touch_continues_scroll_without_an_intermediate_fling()
         controller.pixels()
     );
 
-    controller.jump_to(200.0);
+    controller.jump_to(200.0).expect("no build is running");
     scoped.dispatch_pointer_event(&event(2, 200, 200.0, PointerPhase::Down));
     // Past the slop: the drag starts from Down and applies all 30px.
     scoped.dispatch_pointer_event(&event(2, 210, 170.0, PointerPhase::Move));
@@ -651,11 +651,13 @@ fn assert_scroll_retarget_preserves_velocity(target: fn(f64) -> f64) {
         .controller(controller.clone())
         .child(SizedBox::new(300.0, 5000.0));
     let mut laid = fling_scoped(widget, registry, tight(300.0, 300.0));
-    controller.animate_to(
-        1000.0,
-        Duration::from_secs(1),
-        SharedCurve::new(curves::LINEAR),
-    );
+    controller
+        .animate_to(
+            1000.0,
+            Duration::from_secs(1),
+            SharedCurve::new(curves::LINEAR),
+        )
+        .expect("no build is running");
     laid.pump_for(Duration::from_millis(1));
     laid.pump_for(Duration::from_millis(250));
     let h = Duration::from_micros(100);
@@ -665,11 +667,13 @@ fn assert_scroll_retarget_preserves_velocity(target: fn(f64) -> f64) {
     let arriving = (seam - previous) / h.as_secs_f64();
     assert!(arriving > 100.0, "the mounted position was moving");
     let target = target(seam);
-    controller.animate_to(
-        target,
-        Duration::from_secs(1),
-        SharedCurve::new(curves::EASE_IN),
-    );
+    controller
+        .animate_to(
+            target,
+            Duration::from_secs(1),
+            SharedCurve::new(curves::EASE_IN),
+        )
+        .expect("no build is running");
     assert!((controller.pixels() - seam).abs() < 1e-12);
     assert!(controller.position().is_scrolling());
     laid.pump_for(h);
@@ -697,11 +701,13 @@ pub(crate) fn scrollable_jump_to_during_animate_to_cancels_it_synchronously() {
 
     let mut scoped = fling_scoped(widget, vsync, tight(300.0, 300.0));
 
-    controller.animate_to(
-        1000.0,
-        Duration::from_millis(300),
-        SharedCurve::new(curves::LINEAR),
-    );
+    controller
+        .animate_to(
+            1000.0,
+            Duration::from_millis(300),
+            SharedCurve::new(curves::LINEAR),
+        )
+        .expect("no build is running");
     // Three pumps of warm-up, one more than a direct `animate_with` fling:
     // `animate_to` queues a command, and pump 1's rebuild services it after
     // pump 1's own controller tick; pump 2 anchors the new run at `t = 0`;
@@ -714,7 +720,7 @@ pub(crate) fn scrollable_jump_to_during_animate_to_cancels_it_synchronously() {
         "sanity: the animation must be in flight before jump_to"
     );
 
-    controller.jump_to(42.0);
+    controller.jump_to(42.0).expect("no build is running");
     assert_eq!(
         controller.pixels(),
         42.0,
@@ -793,14 +799,16 @@ pub(crate) fn replacing_pending_scroll_motion_delivers_and_recovers_after_user_f
                 .update_dimensions(300.0, 0.0, 4700.0)
                 .expect("ordered extents");
             let drops = Arc::new(AtomicUsize::new(0));
-            controller.animate_to(
-                100.0,
-                Duration::from_secs(1),
-                SharedCurve::new(RetiringCurve {
-                    drops: Arc::clone(&drops),
-                    fails: retirement_fails,
-                }),
-            );
+            controller
+                .animate_to(
+                    100.0,
+                    Duration::from_secs(1),
+                    SharedCurve::new(RetiringCurve {
+                        drops: Arc::clone(&drops),
+                        fails: retirement_fails,
+                    }),
+                )
+                .expect("no build is running");
             let attempts = Rc::new(Cell::new(0));
             let calls = Rc::clone(&attempts);
             let listenable = controller.listenable();
@@ -820,13 +828,15 @@ pub(crate) fn replacing_pending_scroll_motion_delivers_and_recovers_after_user_f
             identity.set(Some(self_removing));
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 if jumps {
-                    controller.jump_to(200.0);
+                    controller.jump_to(200.0).expect("no build is running");
                 } else {
-                    controller.animate_to(
-                        200.0,
-                        Duration::from_secs(1),
-                        SharedCurve::new(curves::LINEAR),
-                    );
+                    controller
+                        .animate_to(
+                            200.0,
+                            Duration::from_secs(1),
+                            SharedCurve::new(curves::LINEAR),
+                        )
+                        .expect("no build is running");
                 }
             }));
             assert_eq!(
@@ -867,12 +877,14 @@ pub(crate) fn replacing_pending_scroll_motion_delivers_and_recovers_after_user_f
                 200.0,
                 "mounted consumer keeps accepted command"
             );
-            controller.jump_to(75.0);
-            controller.animate_to(
-                280.0,
-                Duration::from_secs(1),
-                SharedCurve::new(curves::LINEAR),
-            );
+            controller.jump_to(75.0).expect("no build is running");
+            controller
+                .animate_to(
+                    280.0,
+                    Duration::from_secs(1),
+                    SharedCurve::new(curves::LINEAR),
+                )
+                .expect("no build is running");
             laid.pump_for(Duration::ZERO);
             laid.pump_for(Duration::from_millis(400));
             assert!(
@@ -895,11 +907,13 @@ pub(crate) fn stopping_scroll_motion_preserves_commands_admitted_by_activity_obs
             Vsync::new(),
             tight(300.0, 300.0),
         );
-        controller.animate_to(
-            1000.0,
-            Duration::from_secs(1),
-            SharedCurve::new(curves::LINEAR),
-        );
+        controller
+            .animate_to(
+                1000.0,
+                Duration::from_secs(1),
+                SharedCurve::new(curves::LINEAR),
+            )
+            .expect("no build is running");
         laid.pump_for(Duration::ZERO);
         laid.pump_for(Duration::from_millis(200));
         assert!(
@@ -914,17 +928,19 @@ pub(crate) fn stopping_scroll_motion_preserves_commands_admitted_by_activity_obs
             .add_activity_listener(Rc::new(move || {
                 if !reentry.position().is_scrolling() && once.replace(false) {
                     if newer_jumps {
-                        reentry.jump_to(325.0);
+                        reentry.jump_to(325.0).expect("no build is running");
                     } else {
-                        reentry.animate_to(
-                            275.0,
-                            Duration::from_secs(1),
-                            SharedCurve::new(curves::LINEAR),
-                        );
+                        reentry
+                            .animate_to(
+                                275.0,
+                                Duration::from_secs(1),
+                                SharedCurve::new(curves::LINEAR),
+                            )
+                            .expect("no build is running");
                     }
                 }
             }));
-        controller.jump_to(200.0);
+        controller.jump_to(200.0).expect("no build is running");
         assert!(
             !armed.get(),
             "actual cancellation delivered the activity callback"
@@ -968,13 +984,15 @@ pub(crate) fn retiring_scroll_curves_preserves_newer_reentrant_commands() {
                 .with(|slot| slot.borrow_mut().take())
                 .expect("armed owner-local curve retirement");
             if jumps {
-                controller.jump_to(325.0);
+                controller.jump_to(325.0).expect("no build is running");
             } else {
-                controller.animate_to(
-                    275.0,
-                    Duration::from_secs(1),
-                    SharedCurve::new(curves::LINEAR),
-                );
+                controller
+                    .animate_to(
+                        275.0,
+                        Duration::from_secs(1),
+                        SharedCurve::new(curves::LINEAR),
+                    )
+                    .expect("no build is running");
             }
         }
     }
@@ -993,11 +1011,13 @@ pub(crate) fn retiring_scroll_curves_preserves_newer_reentrant_commands() {
                 };
                 let mut mounted_scene =
                     mounted.then(|| fling_scoped(content(), Vsync::new(), tight(300.0, 300.0)));
-                controller.animate_to(
-                    100.0,
-                    Duration::from_secs(1),
-                    SharedCurve::new(ReentrantCurve(Arc::clone(&drops))),
-                );
+                controller
+                    .animate_to(
+                        100.0,
+                        Duration::from_secs(1),
+                        SharedCurve::new(ReentrantCurve(Arc::clone(&drops))),
+                    )
+                    .expect("no build is running");
                 if let Some(laid) = &mut mounted_scene {
                     laid.pump_for(Duration::ZERO);
                     laid.pump_for(Duration::from_millis(200));
@@ -1008,13 +1028,15 @@ pub(crate) fn retiring_scroll_curves_preserves_newer_reentrant_commands() {
                 }
                 REENTRY.with(|slot| *slot.borrow_mut() = Some((controller.clone(), newer_jumps)));
                 if outer_jumps {
-                    controller.jump_to(200.0);
+                    controller.jump_to(200.0).expect("no build is running");
                 } else {
-                    controller.animate_to(
-                        200.0,
-                        Duration::from_secs(1),
-                        SharedCurve::new(curves::LINEAR),
-                    );
+                    controller
+                        .animate_to(
+                            200.0,
+                            Duration::from_secs(1),
+                            SharedCurve::new(curves::LINEAR),
+                        )
+                        .expect("no build is running");
                 }
                 assert_eq!(
                     drops.load(Ordering::SeqCst),
@@ -1079,7 +1101,7 @@ fn assert_scrollbar_track(height: f64) {
         laid.size(thumb).height <= height,
         "thumb exceeds {height}px track"
     );
-    controller.jump_to(900.0);
+    controller.jump_to(900.0).expect("no build is running");
     laid.tick();
     let bottom = laid.absolute_offset(thumb).dy + laid.size(thumb).height;
     assert!(
@@ -1087,7 +1109,7 @@ fn assert_scrollbar_track(height: f64) {
         "thumb must end at track boundary"
     );
 
-    controller.jump_to(0.0);
+    controller.jump_to(0.0).expect("no build is running");
     laid.tick();
     laid.dispatch_pointer_down(97.0, 5.0);
     laid.dispatch_pointer_move(97.0, 25.0);
@@ -1102,7 +1124,7 @@ fn assert_scrollbar_track(height: f64) {
             "thumb drag clamps to content end"
         );
     }
-    controller.jump_to(0.0);
+    controller.jump_to(0.0).expect("no build is running");
     laid.tick();
     assert_eq!(
         controller.pixels(),
@@ -1126,11 +1148,13 @@ pub(crate) fn dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_ti
         tight(300.0, 300.0),
         vsync,
     );
-    scroll.animate_to(
-        1000.0,
-        Duration::from_millis(300),
-        SharedCurve::new(curves::LINEAR),
-    );
+    scroll
+        .animate_to(
+            1000.0,
+            Duration::from_millis(300),
+            SharedCurve::new(curves::LINEAR),
+        )
+        .expect("no build is running");
     advance_scroll_run(&mut laid);
     assert!(scroll.pixels() > 0.0 && scroll.pixels() < 1000.0);
     assert!(scroll.position().is_scrolling());
@@ -1162,11 +1186,13 @@ pub(crate) fn dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_ti
         "retired animation must stay stopped"
     );
     assert!(!scroll.position().is_scrolling());
-    scroll.animate_to(
-        4000.0,
-        Duration::from_millis(300),
-        SharedCurve::new(curves::LINEAR),
-    );
+    scroll
+        .animate_to(
+            4000.0,
+            Duration::from_millis(300),
+            SharedCurve::new(curves::LINEAR),
+        )
+        .expect("no build is running");
     advance_scroll_run(&mut laid);
     assert!(
         scroll.pixels() > dragged,
@@ -1348,7 +1374,9 @@ pub(crate) fn nested_scroll_sequence_keeps_its_first_consumptive_target() {
     let outer = ScrollController::new();
     let inner = ScrollController::new();
     let scoped = nested_scrollables(&outer, &inner, Vsync::new());
-    inner.jump_to(inner.max_scroll_extent() - 20.0);
+    inner
+        .jump_to(inner.max_scroll_extent() - 20.0)
+        .expect("no build is running");
     scoped.dispatch_pointer_event(&phased_scroll(100.0, 20.0, Some(ScrollPhase::Began), 1));
     assert_eq!(inner.pixels(), inner.max_scroll_extent());
     scoped.dispatch_pointer_event(&phased_scroll(100.0, 30.0, Some(ScrollPhase::Changed), 1));
@@ -1364,7 +1392,7 @@ pub(crate) fn nested_scroll_sequence_keeps_its_first_consumptive_target() {
         30.0,
         "the next gesture selects the first target that can actually move"
     );
-    inner.jump_to(0.0);
+    inner.jump_to(0.0).expect("no build is running");
     scoped.dispatch_pointer_event(&phased_scroll(100.0, 30.0, Some(ScrollPhase::Changed), 1));
     assert_eq!(
         inner.pixels(),
@@ -1665,7 +1693,7 @@ pub(crate) fn replacing_vsync_releases_old_seats_and_drives_fresh_contacts() {
             if family == "scrollable" && fail_stop {
                 // Clock transfer preserves scrolling. Explicit cancellation
                 // still exercises the one-shot activity failure and recovery.
-                scroll.jump_to(pixels());
+                scroll.jump_to(pixels()).expect("no build is running");
             }
         }));
         if let Err(payload) = replacement {
@@ -1993,7 +2021,7 @@ pub(crate) fn wheel_policy_resolves_authored_axes_and_provider_replacement() {
                 150.0,
             ),
         ] {
-            scroll.jump_to(0.0);
+            scroll.jump_to(0.0).expect("no build is running");
             dispatch_wheel_distance(&laid, unit, x, y, modifiers);
             assert_eq!(
                 scroll.pixels(),
@@ -2010,7 +2038,7 @@ pub(crate) fn wheel_policy_resolves_authored_axes_and_provider_replacement() {
                 .with_vertical(WheelStep::Lines(0))
                 .with_horizontal_characters(0),
         );
-        scroll.jump_to(0.0);
+        scroll.jump_to(0.0).expect("no build is running");
         dispatch_wheel_distance(&laid, ScrollUnit::Detents, 1.0, 1.0, Modifiers::NONE);
         assert_eq!(scroll.pixels(), 0.0, "zero disables only raw detents");
         dispatch_wheel_distance(&laid, ScrollUnit::Pixels, 19.0, 17.0, Modifiers::NONE);
@@ -2027,7 +2055,7 @@ pub(crate) fn wheel_policy_resolves_authored_axes_and_provider_replacement() {
                 .with_vertical(WheelStep::Lines(2))
                 .with_horizontal_characters(2),
         );
-        scroll.jump_to(0.0);
+        scroll.jump_to(0.0).expect("no build is running");
         dispatch_wheel_distance(&laid, ScrollUnit::Detents, 1.0, 1.0, Modifiers::NONE);
         assert_eq!(
             scroll.pixels(),
@@ -2478,7 +2506,8 @@ pub(crate) fn a_scrollable_swap_stops_old_motion_and_retires_its_jump_hook() {
         1000.0,
         Duration::from_millis(300),
         SharedCurve::new(curves::LINEAR),
-    );
+    )
+    .expect("no build is running");
     advance_scroll_run(&mut laid);
     assert!(old.pixels() > 0.0);
     let retired = old.pixels();
@@ -2494,11 +2523,12 @@ pub(crate) fn a_scrollable_swap_stops_old_motion_and_retires_its_jump_hook() {
         900.0,
         Duration::from_millis(300),
         SharedCurve::new(curves::LINEAR),
-    );
+    )
+    .expect("no build is running");
     advance_scroll_run(&mut laid);
     let before = new.pixels();
     assert!(before > 0.0);
-    old.jump_to(42.0);
+    old.jump_to(42.0).expect("no build is running");
     laid.pump_for(Duration::from_millis(16));
     assert!(
         new.pixels() > before,
@@ -2515,11 +2545,13 @@ pub(crate) fn a_same_position_scrollable_rebuild_preserves_motion() {
         tight(300.0, 300.0),
         vsync.clone(),
     );
-    scroll.animate_to(
-        1000.0,
-        Duration::from_millis(300),
-        SharedCurve::new(curves::LINEAR),
-    );
+    scroll
+        .animate_to(
+            1000.0,
+            Duration::from_millis(300),
+            SharedCurve::new(curves::LINEAR),
+        )
+        .expect("no build is running");
     advance_scroll_run(&mut laid);
     let before = scroll.pixels();
     assert!(before > 0.0);
@@ -2599,18 +2631,20 @@ pub(crate) fn retiring_one_scrollable_preserves_a_later_owners_jump_hook() {
     first.pump_widget(SizedBox::new(300.0, 300.0));
     // Equal-value jumps emit no position notification. Only the surviving
     // owner's synchronous hook can stop its run before the next tick writes.
-    scroll.jump_to(before);
+    scroll.jump_to(before).expect("no build is running");
     second.pump_for(Duration::from_millis(16));
     assert_eq!(
         scroll.pixels(),
         before,
         "detaching a different owner must preserve cancellation"
     );
-    scroll.animate_to(
-        900.0,
-        Duration::from_millis(300),
-        SharedCurve::new(curves::LINEAR),
-    );
+    scroll
+        .animate_to(
+            900.0,
+            Duration::from_millis(300),
+            SharedCurve::new(curves::LINEAR),
+        )
+        .expect("no build is running");
     advance_scroll_run(&mut second);
     assert!(scroll.pixels() > before, "next command still progresses");
 }
@@ -2826,7 +2860,7 @@ pub(crate) fn unordered_extents_are_refused_and_bound_nothing() {
             "a refusal keeps the extents"
         );
     }
-    controller.jump_to(700.0);
+    controller.jump_to(700.0).expect("no build is running");
     assert_eq!(
         controller.pixels(),
         500.0,
@@ -3210,7 +3244,7 @@ fn settling_toward_500(
         tight(300.0, 300.0),
         vsync.clone(),
     );
-    controller.jump_to(800.0);
+    controller.jump_to(800.0).expect("no build is running");
     laid.pump_for(Duration::from_millis(16));
     laid.replay(&slow(Device::Touch, at(150.0, 100.0), at(150.0, 160.0)));
     for _ in 0..4 {
@@ -3475,8 +3509,8 @@ pub(crate) fn nested_fling_hands_remaining_velocity_to_matching_parent_axes() {
             tight(300.0, 300.0),
             vsync,
         );
-        outer.jump_to(600.0);
-        inner.jump_to(650.0);
+        outer.jump_to(600.0).expect("no build is running");
+        inner.jump_to(650.0).expect("no build is running");
         laid.tick();
         release_inner_fling(&laid, axis, false);
         assert_eq!(
@@ -3577,8 +3611,8 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
         let _ = host.pump(Duration::ZERO);
         assert_eq!(inner.position().max_scroll_extent(), 800.0);
         for id in 1_u64..=2 {
-            outer.jump_to(600.0);
-            inner.jump_to(650.0);
+            outer.jump_to(600.0).expect("no build is running");
+            inner.jump_to(650.0).expect("no build is running");
             let _ = host.pump(Duration::ZERO);
             let pointer = PointerInfo::new(
                 PointerId::try_from(id).expect("nonzero contact"),
@@ -3649,8 +3683,8 @@ pub(crate) fn nested_fling_same_controller_rebuild_preserves_accepted_handoff() 
             vsync.clone(),
         );
         for rebuild in [false, true, false] {
-            outer.jump_to(600.0);
-            inner.jump_to(650.0);
+            outer.jump_to(600.0).expect("no build is running");
+            inner.jump_to(650.0).expect("no build is running");
             laid.tick();
             release_inner_fling(&laid, axis, false);
             assert_eq!(inner.pixels(), 670.0, "actual post-threshold drag");
@@ -3692,8 +3726,8 @@ pub(crate) fn nested_fling_projects_reversed_child_and_preserves_orthogonal_and_
             tight(300.0, 300.0),
             vsync,
         );
-        outer.jump_to(600.0);
-        inner.jump_to(650.0);
+        outer.jump_to(600.0).expect("no build is running");
+        inner.jump_to(650.0).expect("no build is running");
         laid.tick();
         release_inner_fling(&laid, Vertical, reversed);
         assert_eq!(
@@ -3735,8 +3769,8 @@ pub(crate) fn replacing_parent_invalidates_old_fling_handoff_and_next_gesture_re
         tight(300.0, 300.0),
         vsync.clone(),
     );
-    old.jump_to(600.0);
-    inner.jump_to(650.0);
+    old.jump_to(600.0).expect("no build is running");
+    inner.jump_to(650.0).expect("no build is running");
     laid.tick();
     release_inner_fling(&laid, Vertical, false);
     assert_eq!(inner.pixels(), 670.0);
@@ -3756,7 +3790,7 @@ pub(crate) fn replacing_parent_invalidates_old_fling_handoff_and_next_gesture_re
         600.0,
         "new owner cannot inherit an old accepted handoff"
     );
-    inner.jump_to(650.0);
+    inner.jump_to(650.0).expect("no build is running");
     laid.tick();
     release_inner_fling(&laid, Vertical, false);
     for _ in 0..15 {
@@ -3790,8 +3824,8 @@ pub(crate) fn nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_pro
             tight(300.0, 300.0),
             vsync,
         );
-        outer.jump_to(600.0);
-        inner.jump_to(650.0);
+        outer.jump_to(600.0).expect("no build is running");
+        inner.jump_to(650.0).expect("no build is running");
         laid.tick();
         let listenable = outer.listenable();
         let first = Arc::new(AtomicBool::new(true));
@@ -3837,8 +3871,8 @@ pub(crate) fn nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_pro
         );
         listenable.remove_listener(first_id);
         listenable.remove_listener(second_id);
-        outer.jump_to(600.0);
-        inner.jump_to(650.0);
+        outer.jump_to(600.0).expect("no build is running");
+        inner.jump_to(650.0).expect("no build is running");
         laid.tick();
         release_inner_fling(&laid, Vertical, false);
         for _ in 0..15 {
@@ -3917,8 +3951,8 @@ pub(crate) fn nested_fling_equal_edge_jump_cancels_old_handoff_and_next_gesture_
         tight(300.0, 300.0),
         vsync,
     );
-    outer.jump_to(600.0);
-    inner.jump_to(650.0);
+    outer.jump_to(600.0).expect("no build is running");
+    inner.jump_to(650.0).expect("no build is running");
     laid.tick();
     let pending_jump = Arc::new(AtomicBool::new(true));
     let jump = Arc::clone(&pending_jump);
@@ -3928,7 +3962,7 @@ pub(crate) fn nested_fling_equal_edge_jump_cancels_old_handoff_and_next_gesture_
         if controller.pixels() == 800.0 && jump.swap(false, Ordering::SeqCst) {
             // Explicit programmatic cancellation must win even when it leaves
             // the already-committed edge pixels unchanged.
-            controller.jump_to(800.0);
+            controller.jump_to(800.0).expect("no build is running");
         }
     }));
     release_inner_fling(&laid, Vertical, false);
@@ -3951,8 +3985,8 @@ pub(crate) fn nested_fling_equal_edge_jump_cancels_old_handoff_and_next_gesture_
         "the explicit equal-edge jump cancels the older residual impulse"
     );
     listenable.remove_listener(listener);
-    inner.jump_to(650.0);
-    outer.jump_to(600.0);
+    inner.jump_to(650.0).expect("no build is running");
+    outer.jump_to(600.0).expect("no build is running");
     laid.tick();
     release_inner_fling(&laid, Vertical, false);
     for _ in 0..15 {
@@ -3993,9 +4027,9 @@ pub(crate) fn nested_fling_skips_saturated_parent_and_reentrant_jump_retires_tra
         tight(200.0, 200.0),
         vsync,
     );
-    outer.jump_to(600.0);
-    middle.jump_to(800.0);
-    inner.jump_to(650.0);
+    outer.jump_to(600.0).expect("no build is running");
+    middle.jump_to(800.0).expect("no build is running");
+    inner.jump_to(650.0).expect("no build is running");
     laid.tick();
     release_inner_fling(&laid, flui_foundation::geometry::Axis::Vertical, false);
     assert_eq!(
@@ -4016,8 +4050,8 @@ pub(crate) fn nested_fling_skips_saturated_parent_and_reentrant_jump_retires_tra
         "remaining impulse reaches the nearest willing ancestor"
     );
 
-    outer.jump_to(600.0);
-    inner.jump_to(650.0);
+    outer.jump_to(600.0).expect("no build is running");
+    inner.jump_to(650.0).expect("no build is running");
     laid.tick();
     let once = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let entered = Arc::clone(&once);
@@ -4025,7 +4059,7 @@ pub(crate) fn nested_fling_skips_saturated_parent_and_reentrant_jump_retires_tra
     let listenable = outer.listenable();
     let listener = listenable.add_listener(std::rc::Rc::new(move || {
         if entered.swap(false, std::sync::atomic::Ordering::SeqCst) {
-            reentrant.jump_to(123.0);
+            reentrant.jump_to(123.0).expect("no build is running");
         }
     }));
     release_inner_fling(&laid, flui_foundation::geometry::Axis::Vertical, false);
@@ -4048,8 +4082,8 @@ pub(crate) fn nested_fling_skips_saturated_parent_and_reentrant_jump_retires_tra
         "no older handoff overwrites the new position"
     );
     listenable.remove_listener(listener);
-    outer.jump_to(600.0);
-    inner.jump_to(650.0);
+    outer.jump_to(600.0).expect("no build is running");
+    inner.jump_to(650.0).expect("no build is running");
     laid.tick();
     release_inner_fling(&laid, flui_foundation::geometry::Axis::Vertical, false);
     for _ in 0..15 {
@@ -4095,9 +4129,9 @@ pub(crate) fn nested_fling_bouncing_parent_at_extent_absorbs_before_grandparent(
         tight(200.0, 200.0),
         vsync,
     );
-    outer.jump_to(600.0);
-    middle.jump_to(800.0);
-    inner.jump_to(650.0);
+    outer.jump_to(600.0).expect("no build is running");
+    middle.jump_to(800.0).expect("no build is running");
+    inner.jump_to(650.0).expect("no build is running");
     laid.tick();
     assert_eq!(
         middle.position().max_scroll_extent(),
@@ -4134,8 +4168,8 @@ pub(crate) fn nested_fling_bouncing_parent_at_extent_absorbs_before_grandparent(
         "absorbed impulse springs back locally"
     );
     assert_eq!(outer.pixels(), 600.0);
-    inner.jump_to(650.0);
-    middle.jump_to(800.0);
+    inner.jump_to(650.0).expect("no build is running");
+    middle.jump_to(800.0).expect("no build is running");
     laid.tick();
     release_inner_fling(&laid, Vertical, false);
     let mut recovered = false;
@@ -4279,7 +4313,7 @@ pub(crate) fn show_on_screen_reveals_offscreen_targets_on_both_axes_and_reverse(
                 revealed,
                 "already-visible reveal is idempotent"
             );
-            scroll.jump_to(0.0);
+            scroll.jump_to(0.0).expect("no build is running");
             laid.tick();
             request_reveal_target(&laid);
             laid.tick();
@@ -4329,7 +4363,7 @@ pub(crate) fn show_on_screen_walks_nested_axes_and_replacement_uses_current_geom
             "outer reveals the resulting inner viewport"
         );
         assert_reveal_target_visible(&laid);
-        outer.jump_to(0.0);
+        outer.jump_to(0.0).expect("no build is running");
         laid.pump_widget(content(&replacement));
         request_reveal_target(&laid);
         laid.tick();
@@ -4433,8 +4467,8 @@ pub(crate) fn show_on_screen_failure_continues_live_ancestors_and_fresh_requests
         );
         inner_listenable.remove_listener(first_id);
         outer_listenable.remove_listener(second_id);
-        inner.jump_to(0.0);
-        outer.jump_to(0.0);
+        inner.jump_to(0.0).expect("no build is running");
+        outer.jump_to(0.0).expect("no build is running");
         laid.tick();
         request_reveal_target(&laid);
         laid.tick();
@@ -4503,8 +4537,8 @@ pub(crate) fn show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers
     assert_eq!(outer.pixels(), 600.0);
     assert_reveal_target_visible(&laid);
     listenable.remove_listener(listener);
-    inner.jump_to(0.0);
-    outer.jump_to(0.0);
+    inner.jump_to(0.0).expect("no build is running");
+    outer.jump_to(0.0).expect("no build is running");
     laid.tick();
     request_reveal_target(&laid);
     laid.tick();
@@ -4636,7 +4670,7 @@ pub(crate) fn show_on_screen_sibling_reentry_delivers_last_target_without_stale_
             "last accepted target is visible: {bounds:?}"
         );
         listenable.remove_listener(listener);
-        controller.jump_to(0.0);
+        controller.jump_to(0.0).expect("no build is running");
         laid.tick();
         let current = laid.a11y_tree().expect("fresh geometry");
         let target = current
@@ -4748,8 +4782,8 @@ pub(crate) fn nested_fling_custom_physics_failure_and_retirement_preserve_first_
             tight(200.0, 200.0),
             vsync,
         );
-        outer.jump_to(600.0);
-        inner.jump_to(650.0);
+        outer.jump_to(600.0).expect("no build is running");
+        inner.jump_to(650.0).expect("no build is running");
         laid.tick();
         release_inner_fling(&laid, Vertical, false);
         assert_eq!(inner.pixels(), 670.0);
@@ -4794,8 +4828,8 @@ pub(crate) fn nested_fling_custom_physics_failure_and_retirement_preserve_first_
         // A failed boundary can leave the uncreated simulation's fault armed.
         // Disable it before checking the next gesture.
         fail_drop.store(false, Ordering::SeqCst);
-        inner.jump_to(650.0);
-        outer.jump_to(600.0);
+        inner.jump_to(650.0).expect("no build is running");
+        outer.jump_to(600.0).expect("no build is running");
         laid.tick();
         release_inner_fling(&laid, Vertical, false);
         for _ in 0..15 {
@@ -4831,11 +4865,13 @@ pub(crate) fn a_command_queued_before_mount_is_serviced_outside_build() {
         .add_activity_listener(Rc::new(move || {
             seen.set(Some(writer.write(|cx| signal.set(cx, 1))));
         }));
-    controller.animate_to(
-        100.0,
-        Duration::from_secs(1),
-        SharedCurve::new(curves::LINEAR),
-    );
+    controller
+        .animate_to(
+            100.0,
+            Duration::from_secs(1),
+            SharedCurve::new(curves::LINEAR),
+        )
+        .expect("no build is running");
     assert_eq!(outcome.get(), None, "nothing serves the command yet");
 
     laid.pump_widget(VsyncScope::new(
@@ -4850,4 +4886,70 @@ pub(crate) fn a_command_queued_before_mount_is_serviced_outside_build() {
         Some(Ok(())),
         "the run started and its listener wrote a signal"
     );
+}
+
+/// A widget whose `build` drives a scroll controller, recording what the
+/// controller answered.
+#[derive(Clone, flui_view::prelude::StatefulView)]
+struct ScrollInBuild {
+    scroll: ScrollController,
+    drive: bool,
+    outcome: Rc<std::cell::RefCell<Vec<Result<(), flui_foundation::MutatedDuringBuild>>>>,
+}
+
+struct ScrollInBuildState;
+
+impl flui_view::StatefulView for ScrollInBuild {
+    type State = ScrollInBuildState;
+    fn create_state(&self) -> Self::State {
+        ScrollInBuildState
+    }
+}
+
+impl flui_view::ViewState<ScrollInBuild> for ScrollInBuildState {
+    fn build(&self, view: &ScrollInBuild, _ctx: &dyn flui_view::BuildContext) -> impl IntoView {
+        if view.drive {
+            let mut outcome = view.outcome.borrow_mut();
+            outcome.push(view.scroll.jump_to(200.0));
+            outcome.push(view.scroll.animate_to(
+                300.0,
+                Duration::from_millis(100),
+                SharedCurve::new(curves::LINEAR),
+            ));
+        }
+        SizedBox::square(1.0)
+    }
+}
+
+/// `jump_to` and `animate_to` called from `build` are refused with a typed
+/// error and move nothing; the same calls from outside a build land
+/// (ADR-0086 §7).
+pub(crate) fn controller_mutation_during_build_is_refused() {
+    let scroll = ScrollController::new();
+    let vsync = Vsync::new();
+    let outcome = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let tree = |drive: bool| {
+        flui_widgets::Column::new((
+            SizedBox::new(300.0, 300.0).child(animated_scroll_content(&scroll, &vsync)),
+            ScrollInBuild {
+                scroll: scroll.clone(),
+                drive,
+                outcome: Rc::clone(&outcome),
+            },
+        ))
+    };
+    let mut laid = lay_out(tree(false), tight(300.0, 600.0));
+    scroll
+        .jump_to(10.0)
+        .expect("a jump outside build is accepted");
+    assert_eq!(scroll.pixels(), 10.0);
+
+    laid.pump_widget(tree(true));
+    advance_scroll_run(&mut laid);
+
+    let refused = flui_foundation::MutatedDuringBuild {
+        controller: "ScrollController",
+    };
+    assert_eq!(*outcome.borrow(), vec![Err(refused), Err(refused)]);
+    assert_eq!(scroll.pixels(), 10.0, "a refused mutation moves nothing");
 }

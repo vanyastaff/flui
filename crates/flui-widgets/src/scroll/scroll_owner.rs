@@ -1790,7 +1790,7 @@ impl ScrollOwner {
             return MoveOutcome::Unmoved;
         }
         if cause == ScrollCause::Programmatic && self.in_pass() {
-            self.controller.jump_to(target);
+            let _ = self.controller.jump_to(target);
             return MoveOutcome::Unmoved;
         }
         if self.refused() {

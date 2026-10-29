@@ -122,7 +122,10 @@ fn next_swap_still_notifies(proxy: &ProxyAnimation<f64>, changes: &AtomicUsize) 
 fn swap_with_status_change_fires_listeners() {
     let first = AnimationController::builder(Duration::from_millis(100)).build_on(None);
     let second = AnimationController::builder(Duration::from_millis(100)).build_on(None);
-    second.controller().set_value(1.0);
+    second
+        .controller()
+        .set_value(1.0)
+        .expect("no build is running");
     let proxy = ProxyAnimation::new(Rc::new(first.controller().clone()));
     let seen = Rc::new(RefCell::new(Vec::new()));
     let observed = Rc::clone(&seen);

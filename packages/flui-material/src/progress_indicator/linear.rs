@@ -223,7 +223,7 @@ impl ViewState<LinearProgressIndicator> for LinearProgressIndicatorState {
 
     fn did_update_view(&mut self, old: &LinearProgressIndicator, new: &LinearProgressIndicator) {
         if old.value.is_some() && new.value.is_none() {
-            self.controller.controller().set_value(0.0);
+            let _ = self.controller.controller().set_value(0.0);
         }
         self.fraction.update(new.value);
         self.run(new.value.is_none());

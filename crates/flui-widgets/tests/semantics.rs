@@ -488,7 +488,7 @@ pub(crate) fn sliver_fade_keeps_geometry_and_retargets_paint_and_semantics() {
         })
     };
     for value in [0.0, 0.5, 1.0, 0.0] {
-        first.set_value(value);
+        first.set_value(value).expect("no build is running");
         laid.tick();
         assert_eq!(
             laid.sliver_geometry(fade).scroll_extent,
@@ -505,7 +505,7 @@ pub(crate) fn sliver_fade_keeps_geometry_and_retargets_paint_and_semantics() {
         );
     }
     let second = Rc::new(AnimationController::builder(Duration::from_millis(100)).build());
-    second.set_value(0.25);
+    second.set_value(0.25).expect("no build is running");
     let second_witness = Rc::downgrade(&second);
     laid.pump_widget(view(second.clone()));
     assert_eq!(
@@ -514,7 +514,7 @@ pub(crate) fn sliver_fade_keeps_geometry_and_retargets_paint_and_semantics() {
         "replacement preserves the render object"
     );
     assert_eq!(alpha(&laid), Some(0.25));
-    first.set_value(0.75);
+    first.set_value(0.75).expect("no build is running");
     laid.tick();
     assert_eq!(
         alpha(&laid),
@@ -527,7 +527,7 @@ pub(crate) fn sliver_fade_keeps_geometry_and_retargets_paint_and_semantics() {
         first_witness.upgrade().is_none(),
         "replaced source ownership is released"
     );
-    second.set_value(0.75);
+    second.set_value(0.75).expect("no build is running");
     laid.tick();
     assert_eq!(alpha(&laid), Some(0.75));
     drop(laid);
@@ -2054,7 +2054,7 @@ pub(crate) fn published_bounds_are_physical_and_follow_the_scale_factor() {
     });
     laid.enable_semantics();
     laid.tick();
-    controller.jump_to(10.0);
+    controller.jump_to(10.0).expect("no build is running");
     laid.tick();
 
     let published = || {
