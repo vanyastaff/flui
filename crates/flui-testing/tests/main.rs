@@ -47,6 +47,8 @@ mod log_capture;
 mod mount_bootstrap;
 #[path = "multi_presentation_clock.rs"]
 mod multi_presentation_clock;
+#[path = "owner_local_write_paths.rs"]
+mod owner_local_write_paths;
 #[path = "owner_scope.rs"]
 mod owner_scope;
 mod ownership_table;
@@ -109,6 +111,23 @@ fn headless_frame_driver_matrix() {
             ("controller_restart::second_run_ticks_from_its_own_start_not_a_stale_anchor", controller_restart::second_run_ticks_from_its_own_start_not_a_stale_anchor as fn()),
             ("pointer_script_replay::a_long_press_script_held_past_the_deadline_fires_it", pointer_script_replay::a_long_press_script_held_past_the_deadline_fires_it as fn()),
             ("pointer_script_replay::the_same_script_released_before_the_deadline_does_not", pointer_script_replay::the_same_script_released_before_the_deadline_does_not as fn()),
+        ],
+    );
+}
+
+#[test]
+fn owner_local_write_paths() {
+    run_table(
+        "owner_local_write_paths",
+        &[
+            (
+                "owner_local_write_paths::nested_writer_source_inside_an_event_cx",
+                owner_local_write_paths::nested_writer_source_inside_an_event_cx as fn(),
+            ),
+            (
+                "owner_local_write_paths::nested_write_panics_inside_an_event_cx",
+                owner_local_write_paths::nested_write_panics_inside_an_event_cx,
+            ),
         ],
     );
 }

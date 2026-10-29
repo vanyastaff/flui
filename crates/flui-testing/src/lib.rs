@@ -680,15 +680,23 @@ impl HeadlessBinding {
         }
     }
 
-    /// The UI runtime's reactive graph (ADR-0074): create signals, write them, and
-    /// read them back without mounting a widget around them. `None` for a
+    /// The tree's writer source (ADR-0086): write signals and peek them back
+    /// from the test, the way an event callback does. `None` for a
     /// gesture-only binding (built via [`new`](Self::new) rather than
     /// [`with_tree`](Self::with_tree)): there is no tree, so no graph.
+    ///
+    /// The binding hands out no graph to write through directly:
+    ///
+    /// ```compile_fail,E0599
+    /// fn graph(binding: &flui_testing::HeadlessBinding) {
+    ///     let _ = binding.reactive();
+    /// }
+    /// ```
     #[must_use]
-    pub fn reactive(&self) -> Option<flui_view::Reactive> {
+    pub fn writer_source(&self) -> Option<flui_view::WriterSource> {
         self.tree
             .as_ref()
-            .map(|tree| tree.build_owner.reactive().clone())
+            .map(|tree| tree.build_owner.writer_source())
     }
 
     /// Mutable access to the bound `BuildOwner`, for an embedder/harness that

@@ -553,7 +553,7 @@ fn indicator_callback_requests_removal(source: usize) {
 
     let vsync = Vsync::new();
     let mut laid = lay_out_animated(SizedBox::shrink(), loose(200.0), vsync.clone());
-    let reactive = laid.with_build_owner_mut(|owner| owner.reactive().clone());
+    let reactive = laid.with_build_owner_mut(|owner| owner.signal_graph().clone());
     let count = reactive.signal(2usize);
     laid.pump_widget(VsyncScope::new(vsync.clone(), VisibleIndicators(count)));
     laid.pump_for(Duration::ZERO);
@@ -584,12 +584,13 @@ fn indicator_callback_requests_removal(source: usize) {
         })
         .collect::<Vec<_>>();
     let requested = Rc::new(Cell::new(false));
+    let writer = laid.with_build_owner_mut(|owner| owner.writer_source());
     let callback = animations[source].1.add_listener(Rc::new({
         let requested = requested.clone();
         move || {
             if !requested.replace(true) {
-                count
-                    .set(&reactive, 1)
+                writer
+                    .write(|cx| count.set(cx, 1))
                     .expect("callback may update visibility");
             }
         }

@@ -616,3 +616,101 @@ fn the_page_label_comes_from_the_widgets_localizations() {
     assert!(tree.find_by_label("Bildlaufposition").is_ok());
     assert!(tree.find_by_label("Scroll position").is_err());
 }
+
+/// The custom actions a page view's node offers, with the ids they are
+/// published under.
+fn offered_turns(laid: &LaidOut) -> Vec<(String, i32, flui_testing::a11y::NodeId)> {
+    let tree = laid.a11y_tree().expect("published semantics");
+    tree.nodes()
+        .flat_map(|node| {
+            let id = node.id();
+            node.raw()
+                .custom_actions()
+                .iter()
+                .map(|action| (action.description.clone(), action.id, id))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn labels(offered: &[(String, i32, flui_testing::a11y::NodeId)]) -> Vec<&str> {
+    offered.iter().map(|(label, ..)| label.as_str()).collect()
+}
+
+fn request_turn(
+    laid: &LaidOut,
+    (_, id, node): &(String, i32, flui_testing::a11y::NodeId),
+) -> Result<(), flui_testing::InvokeActionError> {
+    laid.invoke_semantics_action(flui_testing::a11y::ActionRequest {
+        action: flui_testing::a11y::Action::CustomAction,
+        target_tree: flui_testing::a11y::TreeId::ROOT,
+        target_node: *node,
+        data: Some(flui_testing::a11y::ActionData::CustomAction(*id)),
+    })
+}
+
+#[test]
+fn assistive_technology_is_offered_only_the_turns_the_page_can_make() {
+    let controller = PageController::new();
+    let (mut laid, _vsync) =
+        mount(PageView::new(pages(3), pager_alternatives()).controller(controller.clone()));
+    laid.enable_semantics();
+    laid.tick();
+    assert_eq!(
+        labels(&offered_turns(&laid)),
+        ["Next page"],
+        "the first page has nothing before it"
+    );
+
+    controller.jump_to_page(1);
+    laid.tick();
+    laid.tick();
+    assert_eq!(
+        labels(&offered_turns(&laid)),
+        ["Previous page", "Next page"],
+        "a middle page turns both ways"
+    );
+
+    controller.jump_to_page(2);
+    laid.tick();
+    laid.tick();
+    assert_eq!(
+        labels(&offered_turns(&laid)),
+        ["Previous page"],
+        "the last page has nothing after it"
+    );
+}
+
+#[test]
+fn a_turn_withdrawn_from_the_offer_is_refused_to_an_agent_too() {
+    let controller = PageController::with_params(1, ViewportFraction::FULL);
+    let (mut laid, _vsync) =
+        mount(PageView::new(pages(3), pager_alternatives()).controller(controller.clone()));
+    laid.enable_semantics();
+    laid.tick();
+    let offered = offered_turns(&laid);
+    let next = offered
+        .iter()
+        .find(|(label, ..)| label == "Next page")
+        .expect("a middle page offers the way on")
+        .clone();
+
+    // The page moves; the platform has not been told yet, so the request
+    // still names an action it was shown. The gate refuses it at delivery.
+    controller.jump_to_page(2);
+    let _ = request_turn(&laid, &next);
+    assert_eq!(
+        controller.page(),
+        Some(2.0),
+        "a turn on from the last page does nothing"
+    );
+
+    // Once the offer is republished, the request names nothing at all.
+    laid.tick();
+    laid.tick();
+    assert!(
+        request_turn(&laid, &next).is_err(),
+        "an agent's request for a withdrawn turn does not resolve"
+    );
+    assert_eq!(controller.page(), Some(2.0));
+}

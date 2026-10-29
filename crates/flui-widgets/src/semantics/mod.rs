@@ -34,10 +34,11 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use std::rc::Rc;
 use std::sync::Arc;
 
+use flui_foundation::ChangeNotifier;
 use flui_foundation::geometry::Offset;
 use flui_interaction::{InteractionDispatchError, LocalPayloadTarget, resolve_local_payload};
 use flui_objects::{
-    RenderExcludeSemantics, RenderIndexedSemantics, RenderMergeSemantics,
+    GatedCustomAction, RenderExcludeSemantics, RenderIndexedSemantics, RenderMergeSemantics,
     RenderSemanticsAnnotations, RenderSliverSemanticsAnnotations, SemanticsActionRoute,
 };
 use flui_rendering::{
@@ -92,7 +93,21 @@ type EventActionHandler = Rc<dyn Fn(&mut EventCx<'_>, ActionCall)>;
 #[derive(Clone, Default)]
 struct EventActions {
     handlers: Vec<(SemanticsAction, EventActionHandler)>,
-    custom: Vec<(String, EventActionHandler)>,
+    custom: Vec<CustomEntry>,
+}
+
+/// One labelled custom action, offered while its gate (if any) holds.
+#[derive(Clone)]
+struct CustomEntry {
+    label: String,
+    handler: EventActionHandler,
+    enabled: Option<Rc<dyn Fn() -> bool>>,
+}
+
+impl CustomEntry {
+    fn is_offered(&self) -> bool {
+        self.enabled.as_ref().is_none_or(|enabled| enabled())
+    }
 }
 
 impl EventActions {
@@ -128,7 +143,7 @@ impl std::fmt::Debug for EventActions {
                 &self
                     .custom
                     .iter()
-                    .map(|(label, _)| label)
+                    .map(|entry| &entry.label)
                     .collect::<Vec<_>>(),
             )
             .finish()
@@ -176,10 +191,13 @@ fn deliver(target: LocalPayloadTarget, call: ActionCall) {
     let handler = if let ActionCall::CustomAction(id) = &call {
         // The id is the one the node's configuration gave the action; the
         // widget's own follow any the configuration declared before them.
+        // A gated-off action is refused here too: a request may name one the
+        // platform was shown before its enablement last changed.
         id.index()
             .checked_sub(cell.custom_base)
             .and_then(|index| cell.actions.custom.get(index))
-            .map(|(_, handler)| Rc::clone(handler))
+            .filter(|entry| entry.is_offered())
+            .map(|entry| Rc::clone(&entry.handler))
     } else {
         cell.actions.get(action)
     };
@@ -198,6 +216,7 @@ fn deliver(target: LocalPayloadTarget, call: ActionCall) {
 pub struct Semantics {
     configuration: SemanticsConfiguration,
     event_actions: EventActions,
+    refresh: Vec<ChangeNotifier>,
     options: SemanticsOptions,
     scroll: Option<(
         flui_rendering::view::ScrollPosition,
@@ -213,6 +232,7 @@ impl std::fmt::Debug for Semantics {
             .field("configuration", &self.configuration)
             .field("scroll", &self.scroll)
             .field("event_actions", &self.event_actions)
+            .field("refresh_sources", &self.refresh.len())
             .field("options", &self.options)
             .field("child", &self.child)
             .finish()
@@ -224,6 +244,7 @@ impl Default for Semantics {
         Self {
             configuration: SemanticsConfiguration::new(),
             event_actions: EventActions::default(),
+            refresh: Vec::new(),
             options: SemanticsOptions::default(),
             scroll: None,
             child: Child::empty(),
@@ -876,14 +897,63 @@ impl Semantics {
     /// action's handler in place. A fresh closure on every `build` raises no
     /// semantics update; a changed label or count does.
     #[must_use]
-    pub fn custom_action<F, R>(mut self, label: impl Into<String>, handler: F) -> Self
+    pub fn custom_action<F, R>(self, label: impl Into<String>, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.push_custom_action(label.into(), handler, None)
+    }
+
+    /// Offer a custom action only while `enabled` returns `true`.
+    ///
+    /// Like [`Self::custom_action`], but the platform is shown the action
+    /// only when the gate holds, and a request for it while the gate is closed
+    /// is refused, whoever sent it (assistive technology or an agent). The
+    /// gate is read whenever the node's semantics are described, so an action
+    /// whose enablement changes with no rebuild (a page view reaching its last
+    /// page) is withdrawn and restored by naming what changes it in
+    /// [`Self::refresh_on`].
+    #[must_use]
+    pub fn custom_action_when<F, R>(
+        self,
+        label: impl Into<String>,
+        enabled: impl Fn() -> bool + 'static,
+        handler: F,
+    ) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.push_custom_action(label.into(), handler, Some(Rc::new(enabled)))
+    }
+
+    /// Describe this node's semantics again, without rebuilding anything,
+    /// whenever `source` notifies: the signal that a
+    /// [`Self::custom_action_when`] gate may now answer differently.
+    #[must_use]
+    pub fn refresh_on(mut self, source: ChangeNotifier) -> Self {
+        self.refresh.push(source);
+        self
+    }
+
+    fn push_custom_action<F, R>(
+        mut self,
+        label: String,
+        handler: F,
+        enabled: Option<Rc<dyn Fn() -> bool>>,
+    ) -> Self
     where
         F: Fn(&mut EventCx<'_>) -> R + 'static,
         R: EventOutcome,
     {
         let handler = event_callback(handler);
         let handler: EventActionHandler = Rc::new(move |cx, _call| handler(cx));
-        let label = label.into();
+        let entry = CustomEntry {
+            label,
+            handler,
+            enabled,
+        };
         // A label names one action of this widget: a second with the same
         // label replaces the first at its place, as a repeated `on_*` does.
         // Two same-labelled entries would be indistinguishable to the user,
@@ -892,10 +962,10 @@ impl Semantics {
             .event_actions
             .custom
             .iter_mut()
-            .find(|(known, _)| *known == label)
+            .find(|known| known.label == entry.label)
         {
-            Some((_, slot)) => *slot = handler,
-            None => self.event_actions.custom.push((label, handler)),
+            Some(slot) => *slot = entry,
+            None => self.event_actions.custom.push(entry),
         }
         self
     }
@@ -940,14 +1010,30 @@ impl Semantics {
     fn configuration_with(&self, route: Option<&SemanticsActionRoute>) -> SemanticsConfiguration {
         let mut configuration = self.configuration.clone();
         if let Some(route) = route {
-            for (label, _) in &self.event_actions.custom {
-                configuration.add_custom_action(label.as_str(), Arc::clone(route.handler()));
-            }
             for action in self.event_actions.actions() {
                 configuration.add_action(action, Arc::clone(route.handler()));
             }
         }
         configuration
+    }
+
+    /// The custom actions the render object offers beyond the configuration's
+    /// own, each advertised through `route`'s handler while its gate holds.
+    fn gated_custom_actions(&self, route: Option<&SemanticsActionRoute>) -> Vec<GatedCustomAction> {
+        let Some(route) = route else {
+            return Vec::new();
+        };
+        self.event_actions
+            .custom
+            .iter()
+            .map(|entry| {
+                GatedCustomAction::new(
+                    entry.label.as_str(),
+                    Arc::clone(route.handler()),
+                    entry.enabled.clone(),
+                )
+            })
+            .collect()
     }
 
     /// The lane payload for this build's action table, or `None` when there
@@ -1060,6 +1146,11 @@ impl RenderView for Semantics {
                     self.options.contains(SemanticsOptions::BLOCK_USER_ACTIONS),
                 );
         let _impact = render_object.set_scroll_source(self.scroll.clone());
+        let _impact = render_object.set_custom_actions(
+            self.configuration.custom_actions().count(),
+            self.gated_custom_actions(route.as_ref()),
+        );
+        render_object.set_refresh_sources(self.refresh.clone());
         let _none = render_object.set_action_route(route);
         render_object
     }
@@ -1071,9 +1162,13 @@ impl RenderView for Semantics {
     ) -> flui_rendering::RenderUpdateImpact {
         let route = self.sync_actions(ctx, render_object);
         let configuration = self.configuration_with(route.as_ref());
+        let custom = self.gated_custom_actions(route.as_ref());
         let _previous = render_object.set_action_route(route);
         let mut impact = flui_rendering::RenderUpdateImpact::NONE;
         impact |= render_object.set_configuration(configuration);
+        impact |=
+            render_object.set_custom_actions(self.configuration.custom_actions().count(), custom);
+        render_object.set_refresh_sources(self.refresh.clone());
         impact |= render_object.set_scroll_source(self.scroll.clone());
         impact |= render_object.set_container(self.options.contains(SemanticsOptions::CONTAINER));
         impact |= render_object.set_explicit_child_nodes(

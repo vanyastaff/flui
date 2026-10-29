@@ -183,12 +183,15 @@ fn text_editing() {
             ("editable_text::text_store::an_app_edit_during_a_lock_is_not_overwritten", crate::editable_text::text_store::an_app_edit_during_a_lock_is_not_overwritten),
             ("editable_text::text_store::a_no_layout_answer_is_followed_by_a_layout_notification", crate::editable_text::text_store::a_no_layout_answer_is_followed_by_a_layout_notification),
             ("editable_text::text_store::focus_gain_and_loss_reach_the_store_host", crate::editable_text::text_store::focus_gain_and_loss_reach_the_store_host),
+            ("editable_text::text_store::a_conversion_queued_for_an_unmounted_field_is_dropped", crate::editable_text::text_store::a_conversion_queued_for_an_unmounted_field_is_dropped),
+            ("editable_text::text_store::unmounting_a_composing_field_commits_the_preedit_once", crate::editable_text::text_store::unmounting_a_composing_field_commits_the_preedit_once),
             ("editable_text::text_store::swapping_the_controller_during_a_grant_drops_the_session", crate::editable_text::text_store::swapping_the_controller_during_a_grant_drops_the_session),
             ("editable_text::text_store::a_panicking_on_changed_is_reported_once_and_the_field_keeps_working", crate::editable_text::text_store::a_panicking_on_changed_is_reported_once_and_the_field_keeps_working),
             ("form::a_text_form_field_validates_and_saves_the_committed_text", crate::form::a_text_form_field_validates_and_saves_the_committed_text),
             ("form::dropping_a_composing_controller_keeps_the_preedit_out_of_the_value", crate::form::dropping_a_composing_controller_keeps_the_preedit_out_of_the_value),
             ("form::setting_the_shown_text_as_the_value_ends_a_reconversion", crate::form::setting_the_shown_text_as_the_value_ends_a_reconversion),
             ("form::setting_the_shown_preedit_as_the_value_commits_it", crate::form::setting_the_shown_preedit_as_the_value_commits_it),
+            ("form::a_reset_mid_composition_removes_the_preedit", crate::form::a_reset_mid_composition_removes_the_preedit),
             ("editable_text::text_store::long_input_reveals_the_caret_and_maps_visible_pointer_positions", crate::editable_text::text_store::long_input_reveals_the_caret_and_maps_visible_pointer_positions),
             ("editable_text::text_store::editable_paint_places_long_text_under_the_viewport_clip", crate::editable_text::text_store::editable_paint_places_long_text_under_the_viewport_clip),
             ("editable_text_clipboard::copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_and_the_key_unconsumed", crate::editable_text_clipboard::copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_and_the_key_unconsumed),
@@ -565,6 +568,7 @@ fn semantics_translation_and_routing() {
             ("semantics::a_diagnostic_is_reported_outside_the_pipeline_checkout", crate::semantics::a_diagnostic_is_reported_outside_the_pipeline_checkout),
             ("semantics::merged_custom_actions_each_reach_their_own_handler", crate::semantics::merged_custom_actions_each_reach_their_own_handler),
             ("semantics::a_repeated_custom_action_label_replaces_the_action", crate::semantics::a_repeated_custom_action_label_replaces_the_action),
+            ("semantics::a_gated_custom_action_follows_its_gate_without_a_rebuild", crate::semantics::a_gated_custom_action_follows_its_gate_without_a_rebuild),
             ("semantics::assistive_scroll_actions_move_a_scrollable", crate::semantics::assistive_scroll_actions_move_a_scrollable),
             ("semantics::a_horizontal_item_scroll_moves_one_character", crate::semantics::a_horizontal_item_scroll_moves_one_character),
             ("semantics::merge_semantics_collapses_its_descendants_in_the_a11y_tree", crate::semantics::merge_semantics_collapses_its_descendants_in_the_a11y_tree),
@@ -741,6 +745,9 @@ fn navigator_and_overlay() {
             ("back_gesture::replacing_authored_back_swipe_policy_cancels_the_outgoing_contact", crate::back_gesture::replacing_authored_back_swipe_policy_cancels_the_outgoing_contact),
             ("back_gesture::mounted_back_swipe_settle_uses_the_admitted_fling_bound", crate::back_gesture::mounted_back_swipe_settle_uses_the_admitted_fling_bound),
             ("navigator::local_history::an_entry_pops_before_the_route_and_observers_stay_silent", crate::navigator::local_history::an_entry_pops_before_the_route_and_observers_stay_silent as fn()),
+            ("navigator::local_history::local_history_removal_writes_after_the_flush", crate::navigator::local_history::local_history_removal_writes_after_the_flush),
+            ("navigator::local_history::a_panicking_removal_does_not_lose_the_next", crate::navigator::local_history::a_panicking_removal_does_not_lose_the_next),
+            ("navigator::local_history::an_unmounted_navigators_owed_removal_is_severed", crate::navigator::local_history::an_unmounted_navigators_owed_removal_is_severed),
             ("navigator::navigator_pop_removes_top_route_and_completes_result", crate::navigator::navigator_pop_removes_top_route_and_completes_result),
             ("navigator::navigator_push_builds_new_route_and_rearranges_overlay", crate::navigator::navigator_push_builds_new_route_and_rearranges_overlay),
             ("navigator::pop_scope_vetoes_maybe_pop_but_not_programmatic_pop", crate::navigator::pop_scope_vetoes_maybe_pop_but_not_programmatic_pop),
@@ -773,6 +780,21 @@ fn route_transitions() {
             ("transition_route::scope_replacement_moves_an_existing_route_without_restarting_it", crate::transition_route::scope_replacement_moves_an_existing_route_without_restarting_it),
             ("transition_route::hopping_route_dropped_without_dispose_frees_proxy", crate::transition_route::hopping_route_dropped_without_dispose_frees_proxy),
             ("transition_route::replacement_retains_near_zero_secondary_progress_until_crossing", crate::transition_route::replacement_retains_near_zero_secondary_progress_until_crossing),
+        ],
+    );
+}
+
+/// Navigation torn down mid-way: a window closing during a transition and a hero
+/// flight, an observer removed while its flight is airborne, and the last
+/// navigator handle dropped after a push. Each releases what it owned.
+#[test]
+fn navigation_teardown() {
+    run_cases(
+        "navigation_teardown",
+        &[
+            ("navigator::closing_mid_transition_releases_the_route_overlay_and_hero", crate::navigator::closing_mid_transition_releases_the_route_overlay_and_hero as fn()),
+            ("hero_flight::removing_the_observer_mid_flight_ends_the_flight", crate::hero_flight::removing_the_observer_mid_flight_ends_the_flight),
+            ("modal_route::dropping_the_last_navigator_handle_after_push_clears_the_modal_registry", crate::modal_route::dropping_the_last_navigator_handle_after_push_clears_the_modal_registry),
         ],
     );
 }

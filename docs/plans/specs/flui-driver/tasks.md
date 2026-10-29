@@ -1,9 +1,10 @@
 # flui-driver: tasks
 
 - **Status:** approved by the owner (2026-10-20). FD27 (#1773), FD1 (#1782), FD4 (#1796), FD31
-  (#1804), FD2 (#1809, #1814) and FD3 (#1890) have merged; FD5 is in progress in slices (5a locate
-  and actionability jobs done; snapshot delta, waits and events, and the inspect jobs follow).
-  `interaction/completeness` has merged (#1733), so the IC tasks are unblocked.
+  (#1804), FD2 (#1809, #1814) and FD3 (#1890) have merged; FD5 is in progress in steps (the
+  locate and actionability jobs are in review; the snapshot delta, waits and events, and the
+  inspect jobs follow). FD28, FD29 and FD30 can start now. `interaction/completeness` has merged
+  (#1733), so the IC tasks are unblocked.
   `flui run --agent` and `flui mcp` exist on the ADR-0095 endpoint (#1769); the tasks that replace
   that endpoint and `flui mcp` start from them. The owner deleted `interaction_gallery`, the
   probes, `tools/device-checks` and `cargo xtask device` (#1827) to write fresh ones: FD11 and

@@ -422,6 +422,68 @@ pub(crate) fn setting_the_shown_preedit_as_the_value_commits_it() {
     assert_eq!(field.value(), "abX", "the requested value is the field's");
 }
 
+/// A form reset while an input method composes "X" after the committed "ab"
+/// puts the field back to its initial value without the preedit, though the
+/// committed text already equals that value.
+///
+/// Red-check: write the reset through the change path — the committed text
+/// equals the value, so nothing is written and "abX" stays composing.
+pub(crate) fn a_reset_mid_composition_removes_the_preedit() {
+    use flui_platform::text_store::{
+        Composition, LockGrant, LockOutcome, LockTiming, Utf16Offset, Utf16Range,
+    };
+
+    let form = FormHandle::new();
+    let field = FormFieldHandle::new();
+    let controller = TextEditingController::with_text("ab");
+    let node = FocusNode::with_debug_label("reset mid-composition");
+    let probe = SignalProbe::new({
+        let (form, field, controller, node) = (
+            form.clone(),
+            field.clone(),
+            controller.clone(),
+            Rc::clone(&node),
+        );
+        move |_| {
+            Form::new(
+                RawTextFormField::new(controller.clone())
+                    .focus_node(Rc::clone(&node))
+                    .handle(field.clone()),
+            )
+            .handle(form.clone())
+        }
+    });
+    let mut harness = crate::common::harness::mount_with_ime(probe.view());
+    let _ = node.request_focus();
+    harness.tick();
+    let store = harness
+        .active_text_store()
+        .expect("the focused field is the active IME client");
+    let outcome = store.request_lock(
+        LockGrant::read_write(|session| {
+            session.insert_at_selection("X").expect("in range");
+            session
+                .set_composition(Some(Composition {
+                    range: Utf16Range::new(Utf16Offset::new(2), Utf16Offset::new(3))
+                        .expect("ordered"),
+                    hides_caret: false,
+                }))
+                .expect("in range");
+        }),
+        LockTiming::Sync,
+    );
+    assert_eq!(outcome, Ok(LockOutcome::Granted));
+    harness.tick();
+    assert_eq!(controller.text(), "abX", "precondition: composing");
+    assert_eq!(field.value(), "ab");
+
+    probe.write(|cx| form.reset(cx)).expect("same presentation");
+    harness.tick();
+    assert_eq!(controller.composing_range(), None, "the preedit is gone");
+    assert_eq!(controller.text(), "ab", "the initial value is shown");
+    assert_eq!(field.value(), "ab");
+}
+
 pub(crate) fn a_panicking_reset_callback_does_not_disable_later_form_validation() {
     let form = FormHandle::new();
     let field = FormFieldHandle::new();

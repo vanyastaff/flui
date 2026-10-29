@@ -22,24 +22,25 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use flui_view::prelude::*;
-use flui_view::{BoxedView, Reactive, SignalError};
+use flui_view::{BoxedView, SignalError};
 
 /// The signals a [`SignalProbe`] hands its builder.
 #[derive(Clone, Copy, Debug)]
 pub struct ProbeSignals {
     /// A live signal, read by the probe in every `build`.
     pub count: Signal<u32>,
-    /// A signal whose slot is already released, as after its owning element
-    /// unmounted: every write to it is refused with
-    /// [`SignalError::Released`], which a callback reports.
+    /// A handle kept past its slot: minted on a graph of its own, released,
+    /// and that graph dropped. Every write to it is refused (with
+    /// [`SignalError::ForeignGraph`], since no presentation owns its graph),
+    /// which a callback reports.
     pub released: Signal<u32>,
 }
 
-/// What the probe has seen: the signal and graph once mounted, and every
+/// What the probe has seen: the signal and its writer source once mounted, and every
 /// value it read.
 #[derive(Default)]
 struct Seen {
-    count: RefCell<Option<(Signal<u32>, Reactive)>>,
+    count: RefCell<Option<(Signal<u32>, WriterSource)>>,
     reads: RefCell<Vec<u32>>,
     writer: RefCell<Option<WriterSource>>,
 }
@@ -94,8 +95,8 @@ impl SignalProbe {
     /// Before the probe has built once.
     pub fn value(&self) -> Result<u32, SignalError> {
         let count = self.seen.count.borrow();
-        let (signal, graph) = count.as_ref().expect("the probe built before it is read");
-        signal.peek(graph, |v| *v)
+        let (signal, writer) = count.as_ref().expect("the probe built before it is read");
+        writer.write(|cx| signal.peek(cx, |v| *v))
     }
 
     /// Every value the probe's `build` read, oldest first: one entry per
@@ -158,15 +159,19 @@ impl StatefulView for ProbeRoot {
 impl ViewState<ProbeRoot> for ProbeRootState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.count = ctx.signal(0);
-        let graph = ctx.reactive();
-        self.released = graph.signal(0);
-        graph.release(self.released.slot());
+        let gone = flui_view::Reactive::new();
+        self.released = gone.signal(0);
+        gone.release(self.released.slot());
         self.writer = Some(ctx.writer_source());
     }
 
     fn build(&self, view: &ProbeRoot, ctx: &dyn BuildContext) -> impl IntoView {
         let seen = &view.probe.seen;
-        let previous = seen.count.replace(Some((self.count, ctx.reactive())));
+        let writer = self
+            .writer
+            .clone()
+            .expect("BUG: init_state acquires the writer source before the first build");
+        let previous = seen.count.replace(Some((self.count, writer)));
         drop(previous);
         seen.writer.borrow_mut().clone_from(&self.writer);
         seen.reads.borrow_mut().push(self.count.get(ctx));

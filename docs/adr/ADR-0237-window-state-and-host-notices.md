@@ -22,7 +22,7 @@
   lifecycle state, not inside it), [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md)
   (capabilities on `LifecycleContext`), [ADR-0123](ADR-0123-exceptional-presentation-close.md)
   (close stays the vetoed close path), [ADR-0082](ADR-0082-platform-api-contract-crate.md).
-- **Spec:** [window-lifecycle](../plans/specs/window-lifecycle/design.md)
+- **Spec:** [window-lifecycle](https://github.com/vanyastaff/flui/blob/01531550886e0ad4eefd4ee98fb9db4ab24e34c5/docs/plans/specs/window-lifecycle/design.md)
 
 ## Context
 
