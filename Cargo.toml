@@ -316,6 +316,9 @@ flui-platform = { path = "crates/flui-platform", version = "=0.2.0-dev" }
 
 # ERROR HANDLING - Used everywhere
 thiserror = "2.0"
+# Seeded random numbers for particle effects (`flui-widgets` `motion::particles`):
+# reproducible frames from a seed, no global generator.
+fastrand = { version = "2.3", default-features = false }
 anyhow = "1.0"
 
 # TRACING — the emission facade is used everywhere; the *backends* below are

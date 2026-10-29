@@ -1044,6 +1044,23 @@ translation, so no new render object is needed.
 `motion::target_reverses_mid_flight_without_a_jump` and
 `motion::a_scale_effect_keeps_its_alignment_fixed` pin the three.
 
+### Particles step on the frame clock and stop when idle
+
+`ParticleEmitter` runs its system on an unbounded `AnimationController` whose simulation reads
+elapsed seconds, so time comes only from the frame scheduler and the virtual clock drives
+tests. Each tick integrates in fixed steps of 1/60 s, at most fifteen a tick: a pause of the
+ticker up to a quarter second is caught up exactly, a longer one removes the live particles,
+and the rate never makes up a pause. The simulation's `is_done` reads an idle flag the clock's
+listener sets once nothing is alive and the rate has finished, so the clock ends its own run
+rather than being stopped from inside its listener; a burst starts a new run. Every quantity
+that reaches the atlas is checked when a particle is placed, and a particle whose sprite is not
+finite, leaves the engine's `f32` range or lies farther than its size outside the box is
+removed in that step. A `ParticleController` holds a weak link to at most one mounted emitter:
+a second emitter built with it runs without it until the first unmounts. The particles cases
+of `animation_and_visibility` pin each rule (`a_paused_ticker_catches_up_in_fixed_steps`,
+`non_finite_particles_never_reach_the_atlas`, `a_controller_drives_one_emitter`,
+`presets_never_flash`, …).
+
 ### Focused document selection uses the normal action chain
 
 `DefaultFocusTraversal` binds `SelectAllTextIntent` to Cmd+A on macOS/iOS and
