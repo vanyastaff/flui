@@ -180,7 +180,7 @@ repository = "https://github.com/vanyastaff/flui"
 [workspace.dependencies]
 # ASYNC RUNTIME — tokio 1.43 = LTS floor (lock resolves latest 1.x)
 tokio = { version = "1.43" }
-zbus = { version = "5.19", default-features = false, features = ["tokio"] }
+zbus = { version = "6", default-features = false, features = ["proxy", "tokio"] }
 # Structured cancellation for the runtime-owned execution services
 # (`CancellationToken`; adopted with the unified execution services,
 # ADR-0047, issue #557). `default-features = false` and no

@@ -20,11 +20,7 @@ use std::{
 
 use parking_lot::Mutex;
 use rustix::event::{PollFd, PollFlags, poll};
-use zbus::{
-    interface,
-    object_server::SignalEmitter,
-    zvariant::{OwnedFd, OwnedObjectPath},
-};
+use zbus::{OwnedFd, OwnedObjectPath, interface, object_server::SignalEmitter};
 
 use super::*;
 use crate::lifecycle::linux::Delivery;
@@ -187,18 +183,13 @@ impl Harness {
         let held = Arc::new(Held::default());
         *held.session_delay.lock() = session_delay;
         let server = zbus::connection::Builder::address(bus.address.as_str())
-            .expect("an address")
             .name(DESTINATION)
-            .expect("a bus name")
             .serve_at(MANAGER, Manager(Arc::clone(&held), SESSION))
-            .expect("serve the manager")
             .serve_at(SESSION, Session(Arc::clone(&held), locked))
-            .expect("serve the session")
             .build()
             .await
             .expect("the stand-in owns the name");
         let client = zbus::connection::Builder::address(bus.address.as_str())
-            .expect("an address")
             .build()
             .await
             .expect("the adapter connects");
