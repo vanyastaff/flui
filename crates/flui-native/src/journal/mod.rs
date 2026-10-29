@@ -5,7 +5,7 @@
 //!   [`ContactRegistry`](crate::input::assembly::ContactRegistry) created on a
 //!   thread reports its calls to while a capture is installed there;
 //! - `recorder` (the same builds): the sink that folds those calls into one
-//!   [`NativeRecording`](codec::NativeRecording) per registry;
+//!   `codec::NativeRecording` per registry;
 //! - `codec` (with `native-capture` or `testing`): the recording read,
 //!   written and replayed, in the schema `flui-protocol` declares, so a reader
 //!   such as the driver reads it without this crate.
