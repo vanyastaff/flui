@@ -388,7 +388,7 @@ futures-util = { version = "0.3", default-features = false, features = ["alloc"]
 # before starting a bridged image load. No time-based eviction. flui-assets'
 # Moka cache stores typed loaded results with configurable expiration; bridged
 # image loads use this cache instead.
-lru = "0.18.5"
+lru = "0.19.0"
 
 # CLIPBOARD - Cross-platform clipboard access
 arboard = "3.4"
