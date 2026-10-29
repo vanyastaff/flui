@@ -469,7 +469,9 @@ impl UiRuntime {
 
     /// Check if there is pending work in ANY presentation this UI runtime hosts:
     /// a pending build, pending gesture motion/deadlines, or a dirty render
-    /// node. The runner's wake gate (`needs_redraw() || has_pending_work()`)
+    /// node. A presentation waiting out a dropped frame's backoff counts its
+    /// frame work only once the wait is over.
+    /// The runner's wake gate (`needs_redraw() || has_pending_work()`)
     /// reads this every frame. Production may host multiple presentations,
     /// although secondary windows are contentless today, so the union must
     /// remain presentation-wide rather than assuming the primary is the
@@ -479,8 +481,16 @@ impl UiRuntime {
     /// whose attachment later retired, contribute until the next owner turn.
     pub fn has_pending_work(&self) -> bool {
         self.presentations.iter().any(|presentation| {
-            presentation.has_pending_work_snapshot()
-                || presentation.has_eligible_completion()
+            // A presentation waiting out a dropped frame's backoff has its
+            // frame work counted once the wait is over, not before.
+            let frame_work = match presentation.failure_retry_at() {
+                Some(at) => presentation.clock().now() >= at,
+                None => {
+                    presentation.has_pending_work_snapshot()
+                        || presentation.has_eligible_completion()
+                }
+            };
+            frame_work
                 || presentation.gestures().has_pending_motion()
                 || flui_interaction::__runtime::has_pending_deadlines_snapshot(
                     presentation.gestures(),
@@ -517,7 +527,9 @@ impl UiRuntime {
     /// The earliest wall-clock instant ANY presentation this UI runtime hosts
     /// needs the platform loop to wake at, if any — the min over every
     /// presentation's own armed gesture-arena
-    /// deadline observation (e.g. a long-press hold or a double-tap give-up).
+    /// deadline observation (e.g. a long-press hold or a double-tap give-up)
+    /// and every dropped frame's retry deadline (see
+    /// [`FAILURE_RETRY_CAP`](crate::frame_failure::FAILURE_RETRY_CAP)).
     /// This getter runs no extension query or diagnostics and is safe while
     /// the host holds its registry borrow. It is INDEPENDENT of every
     /// presentation's `FrameClock` state: a gated presentation's pending
@@ -544,6 +556,7 @@ impl UiRuntime {
                     presentation.text_preparation.borrow().next_wake(),
                     presentation.haptics().next_wake(),
                     presentation.frame_rate_hold(),
+                    presentation.failure_retry_at(),
                 ]
             })
             .flatten()
@@ -560,6 +573,20 @@ impl UiRuntime {
 
 #[cfg(test)]
 impl UiRuntime {
+    /// Bring every presentation's dropped-frame retry deadline to now, as a
+    /// host woken at that deadline finds it, for tests on a platform clock
+    /// that cannot be advanced. Returns whether any presentation was waiting.
+    pub(crate) fn wait_out_failure_retry_for_test(&self) -> bool {
+        let mut waited = false;
+        for presentation in self.presentations.iter() {
+            if presentation.failure_retry_at().is_some() {
+                presentation.arm_failure_retry(presentation.clock().now());
+                waited = true;
+            }
+        }
+        waited
+    }
+
     /// Read and clear presentation `id`'s redraw bit, for tests of addressed
     /// redraw routing; `None` when this UI runtime does not host `id`.
     pub(crate) fn take_redraw_pending_for_test(&self, id: PresentationId) -> Option<bool> {

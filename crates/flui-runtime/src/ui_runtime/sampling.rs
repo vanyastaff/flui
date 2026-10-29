@@ -154,6 +154,13 @@ impl<'runtime> PresentationSampling<'runtime> {
             self.admission = Admission::None;
             return;
         }
+        // A presentation waiting out a dropped frame's backoff is not
+        // attempted, and keeps every demand it has for the attempt it makes
+        // when the wait ends.
+        if !presentation.admit_failure_retry(presentation.clock().now()) {
+            tracing::trace!(target: "flui.pace", event = "segment_backoff", presentation = ?presentation.id(), "presentation waits out a dropped frame");
+            return;
+        }
         let mut selected = None;
         let mut completion_entered = self.completion_entered;
         self.run(SamplingStage::Preparation, |recovery| {

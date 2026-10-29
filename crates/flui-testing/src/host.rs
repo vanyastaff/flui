@@ -1178,6 +1178,27 @@ impl HeadlessHost {
         self.observe(window.0, flui_runtime::owner::WindowObservation::State);
     }
 
+    /// Deliver `display` as the display `window` is on, as a runner delivers
+    /// the one it derived from the platform's display snapshot: its refresh
+    /// period is what the UI runtime paces `window`'s presentation by.
+    ///
+    /// # Panics
+    ///
+    /// If `window` was not opened by this host.
+    pub fn set_window_display(
+        &self,
+        window: HeadlessWindowId,
+        display: Option<flui_platform::WindowDisplay>,
+    ) {
+        let _ = self.window_of(window);
+        self.observe(
+            window.0,
+            flui_runtime::owner::WindowObservation::Display(
+                flui_runtime::owner::DisplayUpdate::new(display),
+            ),
+        );
+    }
+
     /// Report that `window` gained OS focus, as a backend's focus callback
     /// does: keyboard input goes to its presentation from now on, whatever
     /// window it is stamped for, and the window that held focus loses it.
@@ -1459,6 +1480,35 @@ impl HeadlessHost {
             bounds.x0.midpoint(bounds.x1) / scale,
             bounds.y0.midpoint(bounds.y1) / scale,
         ))
+    }
+
+    /// How long a host's loop waits before its next frame: none while a frame
+    /// is asked for or work is pending, otherwise until the earliest deadline
+    /// the UI runtime armed, such as a gesture's or a dropped frame's retry.
+    /// `None` when the loop would wait for input alone.
+    #[must_use]
+    pub fn time_to_next_frame(&self) -> Option<Duration> {
+        let runtime = &self.ui_runtime;
+        if runtime.needs_redraw()
+            || runtime.scheduler().is_frame_scheduled()
+            || runtime.has_pending_work()
+        {
+            return Some(Duration::ZERO);
+        }
+        let wake = runtime.next_wake()?;
+        Some(wake.saturating_duration_since(flui_foundation::MonotonicClock::now(&self.clock)))
+    }
+
+    /// Wait as a host's loop does, [`time_to_next_frame`](Self::time_to_next_frame),
+    /// then pump. `None`, pumping nothing, when the loop would wait for input
+    /// alone.
+    ///
+    /// # Panics
+    ///
+    /// As [`pump`](Self::pump) does.
+    pub fn pump_next_frame(&mut self) -> Option<FrameOutcome> {
+        let wait = self.time_to_next_frame()?;
+        Some(self.pump(wait))
     }
 
     /// Pump frames of `frame` until nothing is left to do — no redraw or
