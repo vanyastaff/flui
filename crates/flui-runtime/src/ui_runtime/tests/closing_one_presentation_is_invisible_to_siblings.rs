@@ -70,7 +70,6 @@ struct CloseObserver {
 }
 
 struct CloseCapabilities {
-    graph: flui_view::reactive::Reactive,
     signal: flui_view::Signal<u32>,
     writer: flui_view::WriterSource,
     rebuild: flui_view::RebuildHandle,
@@ -88,7 +87,6 @@ impl StatefulView for CloseObserver {
 impl ViewState<CloseObserver> for CloseObserver {
     fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
         self.capabilities.borrow_mut().replace(CloseCapabilities {
-            graph: ctx.reactive(),
             signal: ctx.signal(7),
             writer: ctx.writer_source(),
             rebuild: ctx.rebuild_handle(),
@@ -394,7 +392,6 @@ type SiblingHandles = (
 /// to must already refuse them.
 #[derive(Clone)]
 struct SiblingProbe {
-    graph: Rc<std::cell::RefCell<Option<flui_view::reactive::Reactive>>>,
     sibling: Rc<std::cell::RefCell<Option<SiblingHandles>>>,
     disposed: Rc<Cell<usize>>,
 }
@@ -408,9 +405,6 @@ impl StatefulView for SiblingProbe {
 }
 
 impl ViewState<SiblingProbe> for SiblingProbe {
-    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
-        self.graph.borrow_mut().replace(ctx.reactive());
-    }
     fn build(&self, _view: &SiblingProbe, _ctx: &dyn BuildContext) -> impl IntoView {
         SizedBox::square(10.0)
     }
@@ -454,7 +448,6 @@ fn run_ui_runtime_sibling_child() {
         Rc::new(std::cell::RefCell::new(None)),
     ];
     let probe = |index: usize| SiblingProbe {
-        graph: Rc::clone(&graphs[index]),
         sibling: Rc::clone(&siblings[index]),
         disposed: Rc::clone(&disposed),
     };
@@ -462,6 +455,13 @@ fn run_ui_runtime_sibling_child() {
     ui_runtime
         .attach_root_widget_to_for_test(b, &probe(1))
         .expect("B mounts");
+    for (graph, id) in graphs.iter().zip([a, b]) {
+        graph.borrow_mut().replace(
+            ui_runtime
+                .presentation_widgets_for_test(id)
+                .with_build_owner(|owner| owner.signal_graph().clone()),
+        );
+    }
     let mut clock = flui_foundation::ManualClock::new();
     let mut sink = ScriptedSink::new(|_, _| crate::sink::SubmitVerdict::Presented);
     assert!(ui_runtime.pump(&mut clock, &mut sink).presented());
@@ -1070,6 +1070,9 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
     ui_runtime
         .attach_root_widget(&observer)
         .expect("A mounts disposal observer");
+    let observer_graph = ui_runtime
+        .presentation_widgets_for_test(ui_runtime.presentation_id())
+        .with_build_owner(|owner| owner.signal_graph().clone());
     ui_runtime
         .attach_root_widget_to_for_test(b, &SizedBox::square(30.0))
         .expect("B mounts");
@@ -1230,6 +1233,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
         let target_input = input.clone();
         let closed_key = observer.key.clone();
         let captured = Rc::clone(&capabilities);
+        let closed_graph = observer_graph.clone();
         CLOSE_REENTRY.with(|hook| {
             *hook.borrow_mut() = Some(Box::new(move || {
                 assert!(target_focus.is_closed(), "focus closes before rejection");
@@ -1238,7 +1242,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
                 let captured = captured.borrow();
                 let captured = captured.as_ref().expect("mounted capabilities");
                 assert_eq!(
-                    captured.graph.try_signal(1_u32).expect_err("closed graph"),
+                    closed_graph.try_signal(1_u32).expect_err("closed graph"),
                     flui_view::SignalError::OwnerClosed
                 );
                 assert!(!captured.rebuild.is_active());
@@ -1486,12 +1490,12 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
         let captured = capabilities.borrow();
         let captured = captured.as_ref().expect("mounted capabilities");
         assert_eq!(
-            captured.graph.try_signal(12_u32).expect_err("closed graph"),
+            observer_graph.try_signal(12_u32).expect_err("closed graph"),
             flui_view::SignalError::OwnerClosed
         );
         captured.writer.write(|cx| {
             assert_eq!(
-                captured.signal.peek(&captured.graph, |value| *value),
+                captured.signal.peek(cx, |value| *value),
                 Err(flui_view::SignalError::OwnerClosed)
             );
             assert_eq!(
@@ -1504,17 +1508,18 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
         // (ADR-0127).
         let probe = Rc::new(());
         assert_eq!(
-            captured
-                .graph
+            observer_graph
                 .try_signal(Rc::clone(&probe))
                 .expect_err("closed graph"),
             flui_view::SignalError::OwnerClosed
         );
         let held = Rc::clone(&probe);
         assert_eq!(
-            flui_view::SignalWriteExt::update(captured.signal, &captured.graph, move |value| {
-                let _ = &held;
-                *value
+            captured.writer.write(|cx| {
+                flui_view::SignalWriteExt::update(captured.signal, cx, move |value| {
+                    let _ = &held;
+                    *value
+                })
             }),
             Err(flui_view::SignalError::OwnerClosed)
         );

@@ -115,7 +115,9 @@ Amends §1 and the `Escape` item of "Not implemented"; the rest stands.
   `FocusCause::Assistive`), not focus set by a pointer press. `RawButton` is a Tab stop with
   `on_press`, answers the activation intents and draws the ring.
 
-Handlers for `BackIntent` and `DismissIntent` (the navigator and modal routes) are not wired yet.
+Each route's scope answers both (`flui-widgets/src/navigator/route_keys.rs`): `BackIntent` pops
+the current route of the nearest navigator that has one to pop, `DismissIntent` pops only a
+dismissible modal (`back_keys_pop_only_the_current_page`).
 
 ## Amendment: links
 

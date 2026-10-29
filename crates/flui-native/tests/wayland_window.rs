@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 use flui_foundation::geometry::{Size, WindowMetrics};
 use flui_native::testing::app::{self, AppCall};
 use flui_native::testing::wayland::{
-    bridge_focus, compositor_report, fullscreen_on, offers_activation, outputs, portal_parent,
-    present, run_for, suspend,
+    ClientFrameReport, bridge_focus, client_frame_report, compositor_report, fullscreen_on,
+    offers_activation, outputs, portal_parent, present, run_for, suspend,
 };
 use flui_native::{ExitAnswer, HostWindow, Platform as _, WaylandPlatform};
 use flui_platform::{
@@ -138,10 +138,14 @@ impl WindowFixture for WaylandFixture {
             compositor_report(self.window.as_ref()).expect("the window is a Wayland window");
         let has = |state: u32| report.states.contains(&state);
         let (width, height) = report.size;
+        // The configure sizes the window geometry, of which a title bar the
+        // window draws itself is not content.
+        let header = client_frame_report(self.window.as_ref())
+            .map_or(0.0, |frame| client_frame_header(&frame));
         let metrics = (width > 0 && height > 0 && (has(MAXIMIZED) || has(FULLSCREEN)))
             .then(|| {
                 WindowMetrics::from_logical(
-                    Size::new(f64::from(width), f64::from(height)),
+                    Size::new(f64::from(width), f64::from(height) - header),
                     self.scale(),
                 )
                 .ok()
@@ -780,18 +784,74 @@ fn a_deadline_its_frame_left_due_again_gets_another_frame() {
 /// `zxdg_toplevel_decoration_v1.mode`'s server side.
 const SERVER_SIDE: u32 = 2;
 
-/// A window's frame is the compositor's answer through `xdg-decoration`, never
-/// the window's request: turned off and on, the snapshot says what the
-/// compositor said each time, and where the compositor overrules the request
-/// (sway draws a frame around every tiled window) the command is no longer
-/// offered. A compositor without `xdg-decoration` (Weston) draws no frame,
-/// and the window refuses the command. Under sway the test's config floats the
-/// window titled "a floating frame", whose request sway honours.
+/// Who draws a window's frame, as the compositor's configure and the
+/// window's own surfaces say, checked against the snapshot: where the
+/// compositor answered with its frame (`xdg-decoration`'s server side) the
+/// window draws none, and elsewhere the window draws its own exactly when it
+/// is decorated, a title bar above its content inside its geometry.
+fn assert_frame_agrees(fixture: &WaylandFixture, context: &str) {
+    let mode = compositor_report(fixture.window.as_ref())
+        .expect("a Wayland window")
+        .frame_mode;
+    let own = client_frame_report(fixture.window.as_ref()).expect("a Wayland window");
+    let state = fixture.window.state();
+    if mode == Some(SERVER_SIDE) {
+        assert!(
+            !own.has_header(),
+            "{context}: the compositor draws the frame, and the window draws none: {own:?}"
+        );
+        assert!(state.decorated, "{context}: the compositor's frame");
+        return;
+    }
+    assert_eq!(
+        own.has_header(),
+        state.decorated,
+        "{context}: the window draws its own frame exactly when decorated: {own:?}"
+    );
+    let content = state.content_size;
+    if own.has_header() {
+        let header = client_frame_header(&own);
+        assert_eq!(
+            own.geometry,
+            Some((0.0, -header, content.width, content.height + header)),
+            "{context}: the geometry is the title bar and the content"
+        );
+        assert_eq!(
+            state.outer.size.height,
+            content.height + header,
+            "{context}: the outer size holds the title bar"
+        );
+    } else if let Some(geometry) = own.geometry {
+        assert_eq!(
+            geometry,
+            (0.0, 0.0, content.width, content.height),
+            "{context}: with no frame the geometry is the content"
+        );
+    }
+}
+
+/// The height of the title bar a window draws itself.
+fn client_frame_header(report: &ClientFrameReport) -> f64 {
+    report
+        .pieces
+        .iter()
+        .find(|(piece, _)| *piece == "header")
+        .map_or(0.0, |(_, (_, _, _, height))| *height)
+}
+
+/// A window's frame is the compositor's where it draws one, and the window's
+/// own where it leaves the frame to the client: turned off and on, the
+/// snapshot says who draws it each time, and where the compositor overrules
+/// the request (sway draws a frame around every tiled window) the command is
+/// no longer offered. A compositor without `xdg-decoration` (Weston) draws no
+/// frame, so the window draws its own and takes the command. Under sway the
+/// test's config floats the window titled "a floating frame", whose request
+/// sway honours.
 #[test]
-fn a_window_has_the_frame_its_compositor_answers() {
+fn a_window_has_the_frame_its_compositor_leaves_it() {
     use flui_platform::UnsupportedReason::NotOnThisDevice;
 
-    let case = "a_window_has_the_frame_its_compositor_answers";
+    let case = "a_window_has_the_frame_its_compositor_leaves_it";
     for title in ["a floating frame", "a tiled frame"] {
         let Some(platform) = platform(case) else {
             return;
@@ -803,23 +863,11 @@ fn a_window_has_the_frame_its_compositor_answers() {
                 .err()
                 .and_then(|refused| refused.unsupported().map(|unsupported| unsupported.reason))
         };
-        let Some(mode) = compositor_report(fixture.window.as_ref())
-            .expect("a Wayland window")
-            .frame_mode
-        else {
-            assert!(
-                !fixture.window.state().decorated,
-                "{title}: nobody draws a frame"
-            );
-            assert_eq!(refusal(&fixture, true), Some(NotOnThisDevice), "{title}");
-            eprintln!("{case}: {title}: the compositor offers no xdg-decoration");
-            continue;
-        };
-        assert_eq!(
+        assert!(
             fixture.window.state().decorated,
-            mode == SERVER_SIDE,
-            "{title}: the frame the compositor answered the opening with"
+            "{title}: a window opened decorated has a frame, whoever draws it"
         );
+        assert_frame_agrees(&fixture, &format!("{title}, opened"));
         let first = fixture.window.state().decorated;
         for wanted in [!first, first] {
             if let Some(reason) = refusal(&fixture, wanted) {
@@ -832,24 +880,18 @@ fn a_window_has_the_frame_its_compositor_answers() {
                 .admit_and_apply(WindowCommand::SetDecorated(wanted))
                 .expect("an offered command is applied");
             fixture.settle();
-            let mode = compositor_report(fixture.window.as_ref())
-                .expect("a Wayland window")
-                .frame_mode;
+            let context = format!("{title}, after SetDecorated({wanted})");
+            assert_frame_agrees(&fixture, &context);
             let decorated = fixture.window.state().decorated;
-            assert_eq!(
-                decorated,
-                mode == Some(SERVER_SIDE),
-                "{title}: after SetDecorated({wanted}) the snapshot is the compositor's answer"
-            );
             if decorated == wanted {
-                eprintln!("{case}: {title}: the compositor honoured SetDecorated({wanted})");
+                eprintln!("{case}: {context}: honoured");
             } else {
                 assert_eq!(
                     refusal(&fixture, !decorated),
                     Some(NotOnThisDevice),
-                    "{title}: an overruled request is no longer offered"
+                    "{context}: an overruled request is no longer offered"
                 );
-                eprintln!("{case}: {title}: the compositor overruled SetDecorated({wanted})");
+                eprintln!("{case}: {context}: overruled by the compositor");
                 break;
             }
         }

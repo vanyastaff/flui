@@ -228,8 +228,8 @@ impl BuildContext for ElementBuildContext {
         }
     }
 
-    fn reactive(&self) -> crate::reactive::Reactive {
-        self.reads.graph().clone()
+    fn graph(&self, _: super::build_context::sealed::CrateToken) -> &crate::reactive::Reactive {
+        self.reads.graph()
     }
 
     fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
@@ -816,8 +816,8 @@ impl BuildContext for BuildCtx<'_> {
         true
     }
 
-    fn reactive(&self) -> crate::reactive::Reactive {
-        self.capabilities.reads.graph().clone()
+    fn graph(&self, _: super::build_context::sealed::CrateToken) -> &crate::reactive::Reactive {
+        self.capabilities.reads.graph()
     }
 
     fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {

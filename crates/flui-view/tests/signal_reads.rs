@@ -169,7 +169,8 @@ impl View for ReaderRow {
 
 pub(crate) fn changing_read_sets_preserves_peer_rebuild_order() {
     let owners = MountOwners::fresh();
-    let graph = owners.build_owner.reactive().clone();
+    let graph = owners.build_owner.signal_graph().clone();
+    let writer = owners.build_owner.writer_source();
     let signals = Rc::new((0..9).map(|_| graph.signal(0u32)).collect::<Vec<_>>());
     let order = Rc::new(RefCell::new(Vec::new()));
     let readers = (0..9)
@@ -195,15 +196,16 @@ pub(crate) fn changing_read_sets_preserves_peer_rebuild_order() {
         // Moving one reader to the end exercises repeated unlink/reinsert
         // while both membership directions have more than four entries.
         let label = (round * 5) % readers.len();
-        readers[label]
-            .trigger
-            .set(&graph, round as u32)
+        writer
+            .write(|cx| readers[label].trigger.set(cx, round as u32))
             .expect("live");
         binding.pump_frame(FRAME);
         expected.retain(|value| *value != label);
         expected.push(label);
         order.borrow_mut().clear();
-        signals[8].set(&graph, round as u32).expect("live");
+        writer
+            .write(|cx| signals[8].set(cx, round as u32))
+            .expect("live");
         binding.pump_frame(FRAME);
         assert_eq!(*order.borrow(), expected, "peer order after re-reading");
         assert_eq!(
@@ -220,11 +222,15 @@ pub(crate) fn changing_read_sets_preserves_peer_rebuild_order() {
     for count in [2, 0, 9] {
         for reader in &readers {
             reader.count.set(count);
-            reader.trigger.set(&graph, count as u32).expect("live");
+            writer
+                .write(|cx| reader.trigger.set(cx, count as u32))
+                .expect("live");
         }
         binding.pump_frame(FRAME);
         order.borrow_mut().clear();
-        signals[8].set(&graph, count as u32).expect("live");
+        writer
+            .write(|cx| signals[8].set(cx, count as u32))
+            .expect("live");
         binding.pump_frame(FRAME);
         let expected = if count == 9 {
             (0..9).collect()
@@ -237,7 +243,9 @@ pub(crate) fn changing_read_sets_preserves_peer_rebuild_order() {
     let replacement = graph.signal(42u32);
     assert_eq!(graph.readers_of(replacement.slot()), [] as [ElementId; 0]);
     order.borrow_mut().clear();
-    replacement.set(&graph, 43).expect("replacement is live");
+    writer
+        .write(|cx| replacement.set(cx, 43))
+        .expect("replacement is live");
     binding.pump_frame(FRAME);
     assert!(order.borrow().is_empty(), "slot reuse inherits no readers");
 }
@@ -263,7 +271,9 @@ impl Drop for ReleaseProbe {
 }
 
 pub(crate) fn explicit_release_allows_destructor_reentry_and_slot_reuse() {
-    let graph = flui_view::Reactive::new();
+    let owner = flui_view::BuildOwner::new();
+    let graph = owner.signal_graph().clone();
+    let writer = owner.writer_source();
     let drops = Rc::new(Cell::new(0));
     let replacement = Rc::new(Cell::new(None));
     let signal = graph.signal(ReleaseProbe {
@@ -281,7 +291,9 @@ pub(crate) fn explicit_release_allows_destructor_reentry_and_slot_reuse() {
     let next = replacement
         .get()
         .expect("destructor allocated a replacement");
-    next.set(&graph, 9).expect("replacement is writable");
+    writer
+        .write(|cx| next.set(cx, 9))
+        .expect("replacement is writable");
     assert_eq!(next.peek(&graph, |value| *value), Ok(9));
     graph.release(signal.slot());
     assert_eq!(
@@ -300,7 +312,8 @@ pub(crate) fn owner_release_commits_the_batch_before_the_first_destructor_failur
         }
     }
     let mut owners = MountOwners::fresh();
-    let graph = owners.build_owner.reactive().clone();
+    let graph = owners.build_owner.signal_graph().clone();
+    let writer = owners.build_owner.writer_source();
     let element = owners.tree.mount_root_with_pipeline_owner(
         &Leaf,
         Some(owners.pipeline_owner.clone()),
@@ -345,7 +358,8 @@ pub(crate) fn owner_release_commits_the_batch_before_the_first_destructor_failur
     let next = replacement
         .get()
         .expect("first destructor reentered the graph");
-    next.set(&graph, 11)
+    writer
+        .write(|cx| next.set(cx, 11))
         .expect("the next write succeeds after containment");
     assert_eq!(next.peek(&graph, |value| *value), Ok(11));
 }
@@ -399,7 +413,7 @@ pub(crate) fn owner_release_refuses_signals_its_destructors_reintroduce() {
     }
 
     let mut owners = MountOwners::fresh();
-    let graph = owners.build_owner.reactive().clone();
+    let graph = owners.build_owner.signal_graph().clone();
     let element = owners.tree.mount_root_with_pipeline_owner(
         &Leaf,
         Some(owners.pipeline_owner.clone()),
@@ -493,7 +507,7 @@ impl Drop for Recreate {
 
 pub(crate) fn owner_release_bounds_a_destructor_that_always_recreates_itself() {
     let mut owners = MountOwners::fresh();
-    let graph = owners.build_owner.reactive().clone();
+    let graph = owners.build_owner.signal_graph().clone();
     let drops = Rc::new(Cell::new(0));
     // Twice: the second release shows the first left no refusal state behind.
     for pass in 1..=2 {
@@ -563,7 +577,7 @@ pub(crate) fn a_panicking_refusal_diagnostic_cannot_unwind_into_a_retained_value
     }
 
     let mut owners = MountOwners::fresh();
-    let graph = owners.build_owner.reactive().clone();
+    let graph = owners.build_owner.signal_graph().clone();
     let drops = Rc::new(Cell::new(0));
     let element = owners.tree.mount_root_with_pipeline_owner(
         &Leaf,
@@ -613,7 +627,7 @@ pub(crate) fn a_panicking_refusal_diagnostic_cannot_unwind_into_a_retained_value
 
 pub(crate) fn a_read_in_build_subscribes_through_the_production_context() {
     let owners = MountOwners::fresh();
-    let graph = owners.build_owner.reactive().clone();
+    let graph = owners.build_owner.signal_graph().clone();
     let sig = graph.signal(1u32);
     let reader_builds = Rc::new(Cell::new(0));
     let bystander_builds = Rc::new(Cell::new(0));
@@ -629,10 +643,11 @@ pub(crate) fn a_read_in_build_subscribes_through_the_production_context() {
 
     let mut binding = HeadlessBinding::new();
     binding.mount_root(&root, owners, MountOptions::tight(100.0, 100.0));
+    let writer = binding.writer_source().expect("tree-bound");
     assert_eq!(
-        binding.reactive().expect("tree-bound").id(),
+        writer.write(|cx| flui_view::ReadGraph::graph_id(cx)),
         graph.id(),
-        "the binding's graph is the owner's"
+        "the binding writes the owner's graph"
     );
     binding.pump_frame(FRAME);
     assert_eq!(
@@ -643,7 +658,8 @@ pub(crate) fn a_read_in_build_subscribes_through_the_production_context() {
     let reader = reader_id.get().expect("the reader built");
     assert_eq!(graph.readers_of(sig.slot()), [reader]);
 
-    sig.set(&graph, 2)
+    writer
+        .write(|cx| sig.set(cx, 2))
         .expect("a write outside the frame phases");
     binding.pump_frame(FRAME);
 
@@ -664,7 +680,8 @@ pub(crate) fn a_read_in_build_subscribes_through_the_production_context() {
 
 pub(crate) fn a_partially_committed_panicking_update_rebuilds_its_mounted_reader() {
     let owners = MountOwners::fresh();
-    let graph = owners.build_owner.reactive().clone();
+    let graph = owners.build_owner.signal_graph().clone();
+    let writer = owners.build_owner.writer_source();
     let signal = graph.signal(1u32);
     let builds = Rc::new(Cell::new(0));
     let reader_id = Rc::new(Cell::new(None));
@@ -678,9 +695,11 @@ pub(crate) fn a_partially_committed_panicking_update_rebuilds_its_mounted_reader
     binding.pump_frame(FRAME);
 
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        signal.update(&graph, |value| {
-            *value = 9;
-            panic!("update probe");
+        writer.write(|cx| {
+            signal.update(cx, |value| {
+                *value = 9;
+                panic!("update probe");
+            })
         })
     }));
     assert!(outcome.is_err());
@@ -767,7 +786,9 @@ pub(crate) fn run_released_loan_child() -> bool {
                 self.0.release(self.1);
             }
         }
-        let graph = flui_view::Reactive::new();
+        let owner = flui_view::BuildOwner::new();
+        let graph = owner.signal_graph().clone();
+        let writer = owner.writer_source();
         let drops = Rc::new(Cell::new(0));
         let signal = graph.signal(Bomb(Rc::clone(&drops)));
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -782,7 +803,8 @@ pub(crate) fn run_released_loan_child() -> bool {
         assert_eq!(drops.get(), 0, "opaque value retained during unwind");
         assert_eq!(graph.live_slot_count(), 0);
         let next = graph.signal(3u32);
-        next.set(&graph, 5)
+        writer
+            .write(|cx| next.set(cx, 5))
             .expect("next write after failed release");
         assert_eq!(next.peek(&graph, |value| *value), Ok(5));
         return true;
@@ -816,7 +838,9 @@ pub(crate) fn run_released_loan_child() -> bool {
             self.graph.release(self.slot);
         }
     }
-    let graph = flui_view::reactive::Reactive::new();
+    let owner = flui_view::BuildOwner::new();
+    let graph = owner.signal_graph().clone();
+    let writer = owner.writer_source();
     let next = graph.signal(10u32);
     let drops = Rc::new(Cell::new(0));
     let nested_drops = Rc::new(Cell::new(0));
@@ -835,10 +859,12 @@ pub(crate) fn run_released_loan_child() -> bool {
     let callback_graph = graph.clone();
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if update {
-            signal.update(&graph, move |_| {
-                let _keep_capture = &capture;
-                callback_graph.release(signal.slot());
-                assert!(!callback_fails, "primary callback failure");
+            writer.write(move |cx| {
+                signal.update(cx, move |_| {
+                    let _keep_capture = &capture;
+                    callback_graph.release(signal.slot());
+                    assert!(!callback_fails, "primary callback failure");
+                })
             })
         } else {
             signal.peek(&graph, move |_| {
@@ -868,7 +894,8 @@ pub(crate) fn run_released_loan_child() -> bool {
         signal.peek(&graph, |_| ()),
         Err(flui_view::SignalError::Released { .. })
     ));
-    next.update(&graph, |value| *value += 1)
+    writer
+        .write(|cx| next.update(cx, |value| *value += 1))
         .expect("next live update");
     assert_eq!(next.peek(&graph, |value| *value), Ok(11));
     true

@@ -1048,12 +1048,12 @@ trait depends on `flui-platform` instead.
   the one place that decides. Its frame is the compositor's answer through
   `xdg-decoration`, never the request; a configure after a request that names
   no mode answers it with the mode unchanged (wlroots sends no mode twice).
-  Where the compositor offers none, or answered the last request with the
-  other mode (sway frames every tiled window), `SetDecorated` is
-  `NotOnThisDevice`: the host draws no frame of its own yet; a client-side
-  frame, its title bar drawn through the engine and moved and resized
-  through `xdg_toplevel.move`/`resize` with an input serial, is a task of its
-  own after input (`decoration`). A suspended window is
+  Where the compositor offers none, or leaves the frame to the client, a
+  window that wants a frame draws its own (`client_frame`, see "A Wayland
+  window draws its own frame on subsurfaces, not through the engine" below);
+  only a compositor that draws a frame although asked not to (sway frames
+  every tiled window) makes `SetDecorated` `NotOnThisDevice`
+  (`decoration`). A suspended window is
   occluded: it is given no frame and gives up no frame callback until the
   compositor shows it again, when the frame asked for meanwhile is delivered
   (`frame::Pacing`). Where the compositor offers `xdg-foreign` v2 the window is
@@ -1144,7 +1144,10 @@ trait depends on `flui-platform` instead.
   (in the shared `xkb::Keyboard`, which also refuses a key code outside its
   keymap), one queued keymap per seat, and the X11 devices and valuators a
   query lists. A pointer frame's axes are fixed fields and bounded by their
-  type. The Wayland seats' queue of recorded events holds what one read of the
+  type. A Wayland window's own frame keeps one pointer state and one action
+  asked for, which a later press replaces, and draws each of its five pieces
+  at most once a turn, none wider or taller than `client_frame::MAX_EXTENT`
+  whatever size a configure gives. The Wayland seats' queue of recorded events holds what one read of the
   socket dispatched, since the loop delivers it before it reads again; a
   keymap is queued as the compositor's file, and a newer one replaces the
   queued one and closes its file unread, so delivery reads one keymap of up to
@@ -1200,7 +1203,12 @@ trait depends on `flui-platform` instead.
     frame's buttons (32), the seats (16), outputs (64), the X11 devices (128)
     and valuators (36), and the registry's contacts and devices, which those
     bound; a window lookup scans the application's own windows;
-  - an X11 event's valuator mask is read in the event's own length.
+  - an X11 event's valuator mask is read in the event's own length;
+  - a pointer event over a Wayland window's own frame looks its surface up
+    among the five pieces of each window's frame and hit-tests the five
+    pieces; the frame's title is shaped and rasterized again only when the
+    title, the room it has, the scale or the fonts changed, and a turn draws
+    each piece at most once (`client_frame`).
 
 ---
 
@@ -3595,6 +3603,48 @@ modules' tables
 `a_frame_asked_for_on_another_thread_wakes_the_loop`,
 `the_loop_ends_with_its_last_window` and
 `a_wake_deadline_no_frame_serviced_is_delivered_once`.
+
+### A Wayland window draws its own frame on subsurfaces, not through the engine
+
+Where the compositor draws no frame (Weston, GNOME) or leaves it to the
+client, a decorated native Wayland window draws its own
+(`window::linux::wayland::client_frame`): a title bar and four resize
+margins, each a `wl_subsurface` of the content surface, synchronized with it,
+drawn on the owner thread into `wl_shm` memory files. The title is shaped by
+Parley and rasterized by swash through `flui-painting`, as the renderer's
+text is, over a font collection the host's windows share: the bundled faces
+at once, the host's once a background scan added them, which wakes the loop.
+
+The engine does not draw it, though that was the first shape asked for:
+
+- the host cannot reach the engine: `flui-native` is layer 3 and
+  `flui-engine` layer 4, which `cargo xtask workspace` refuses, and the
+  engine's device and raster thread are the composition root's
+  (ADR-0091); a `wgpu::Instance` the host made apart from its surface is a
+  defect of its own;
+- the content surface is the renderer's alone (ADR-0063), so the frame
+  needs surfaces of its own, as libdecor, SCTK's frames and winit's
+  `sctk-adwaita` draw it; a toolkit that draws its frame inside its content
+  (GTK4's header bar, Chromium's views frame) draws an application's own
+  title bar, which is the contract's custom title bar (gaps entry 10), not
+  the frame `decorated: true` promises;
+- the engine drawing it from `flui-app` would split one host obligation over
+  the host, the composition root and the raster lane, a second swapchain a
+  window, and a commit order across threads, for a 37-pixel bar.
+
+What the frame decides is in the module docs of `client_frame`: the
+geometry is the bar and the content, so a configure's size loses the bar to
+the content and the limits gain it; the buttons follow `wm_capabilities`; a
+press asks for a move, a resize or the window menu with its own seat and
+serial, which the window carries out as it settles; the frame goes in
+fullscreen, its margins on a maximized window and at each tiled edge. The
+seats' input reaches it through `owner::linux::wayland::FramePointer`: a
+pointer over one of its surfaces is the frame's, and none of its events
+reaches the window's input. Tests: `a_frame_lies_around_its_content`,
+`the_frame_goes_away_in_fullscreen_and_at_tiled_edges`,
+`the_pointer_on_a_frame_asks_for_what_it_pressed`,
+`a_window_has_the_frame_its_compositor_leaves_it` (Weston and sway), and
+`tests/wayland_frame.rs` on Weston's desktop shell through XTest.
 
 ### Linux displays come from the compositor on a connection of their own, and a winit window names its display by native number
 

@@ -57,7 +57,7 @@
 //!   [`PageController::next_page`]/[`PageController::previous_page`]'s own
 //!   docs for end-of-range behavior.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
@@ -66,7 +66,7 @@ use std::time::Duration;
 
 use flui_animation::{ArcCurve, curves};
 use flui_foundation::geometry::Axis;
-use flui_foundation::{Listenable, ListenerId};
+use flui_foundation::{ChangeNotifier, Listenable, ListenerId};
 use flui_interaction::PointerKindSet;
 use flui_rendering::view::{
     CacheExtentStyle, DimensionChangePolicy, ScrollPosition, ViewportOffset,
@@ -315,27 +315,49 @@ struct PageAction {
     pages: usize,
     /// Under reduced motion a turn lands at once.
     reduced_motion: bool,
+    /// Notified when a turn becomes possible or stops being, which the
+    /// controller's position changes without a rebuild.
+    turns_change: ChangeNotifier,
+}
+
+/// The page `intent` turns to from the one `controller` shows among `pages`,
+/// if there is one.
+fn turn_target(controller: &PageController, pages: usize, intent: PageIntent) -> Option<usize> {
+    let current = controller.page()?.round();
+    if !current.is_finite() {
+        return None;
+    }
+    let current = current.max(0.0) as usize;
+    match intent {
+        PageIntent::Next => current.checked_add(1).filter(|page| *page < pages),
+        PageIntent::Previous => current.checked_sub(1),
+    }
+}
+
+/// Whether a turn to the previous page, and to the next, is possible.
+fn possible_turns(controller: &PageController, pages: usize) -> (bool, bool) {
+    (
+        turn_target(controller, pages, PageIntent::Previous).is_some(),
+        turn_target(controller, pages, PageIntent::Next).is_some(),
+    )
 }
 
 impl PageAction {
     /// The page `intent` turns to from the one showing, if there is one.
     fn target(&self, intent: PageIntent) -> Option<usize> {
-        let current = self.controller.page()?.round();
-        if !current.is_finite() {
-            return None;
-        }
-        let current = current.max(0.0) as usize;
-        match intent {
-            PageIntent::Next => current.checked_add(1).filter(|page| *page < self.pages),
-            PageIntent::Previous => current.checked_sub(1),
-        }
+        turn_target(&self.controller, self.pages, intent)
     }
 }
 
 impl Action<PageIntent> for PageAction {
-    /// Past either end the intent is not enabled, so a key there bubbles on.
+    /// Past either end the intent is not enabled, so a key there bubbles on
+    /// and assistive technology is not offered the turn.
     fn is_enabled(&self, intent: &PageIntent) -> bool {
         self.target(*intent).is_some()
+    }
+
+    fn enablement_changes(&self) -> Option<ChangeNotifier> {
+        Some(self.turns_change.clone())
     }
 
     fn invoke(&self, _cx: &mut EventCx<'_>, intent: &PageIntent) -> ActionOutcome {
@@ -570,6 +592,14 @@ pub struct PageViewState {
     /// (`crates/flui-view/src/element/behavior.rs`) uses for a `Listenable`
     /// swap.
     page_listener: Option<(std::rc::Rc<dyn Listenable>, ListenerId)>,
+    /// What the page action tells the semantics layer when a turn becomes
+    /// possible or stops being: its enablement follows the controller's
+    /// position, which changes with no rebuild.
+    turns_change: ChangeNotifier,
+    /// How many pages the last build showed, and which turns the listener
+    /// last found possible, so it notifies only when that pair flips.
+    page_count: Rc<Cell<usize>>,
+    last_turns: Rc<Cell<(bool, bool)>>,
 }
 
 impl std::fmt::Debug for PageViewState {
@@ -668,6 +698,10 @@ impl PageViewState {
         let viewport_fraction = self.controller.viewport_fraction();
         let last_reported = Arc::clone(&self.last_reported_page);
         let has_callback = Arc::clone(&self.has_callback);
+        let controller = self.controller.clone();
+        let page_count = Rc::clone(&self.page_count);
+        let last_turns = Rc::clone(&self.last_turns);
+        let turns_change = self.turns_change.clone();
         let pending = Arc::clone(&self.pending_pages);
         let rebuild = self
             .rebuild
@@ -678,6 +712,12 @@ impl PageViewState {
         let listener_id = listenable.add_listener(std::rc::Rc::new(move || {
             if !position.has_applied_viewport_dimension() {
                 return;
+            }
+            // Before anything else: the turns an action offers follow the
+            // position whether or not a page was crossed or anyone listens.
+            let turns = possible_turns(&controller, page_count.get());
+            if last_turns.replace(turns) != turns {
+                turns_change.notify_listeners();
             }
             let metrics = ScrollMetrics::from(&position);
             // The guarded `page` formula clamps its numerator to >= 0.0
@@ -719,6 +759,9 @@ impl StatefulView for PageView {
             post_frame: None,
             delivery: None,
             page_listener: None,
+            turns_change: ChangeNotifier::new(),
+            page_count: Rc::new(Cell::new(self.children.len())),
+            last_turns: Rc::new(Cell::new((false, false))),
         }
     }
 }
@@ -749,6 +792,7 @@ impl ViewState<PageView> for PageViewState {
         let children = view.children.clone();
         let cache_extent = view.cache_extent;
         let page_count = view.children.len();
+        self.page_count.set(page_count);
         let mut scrollable = Scrollable::new()
             .controller(controller.scroll_controller())
             .snap_policy(Arc::clone(&self.snap))
@@ -797,6 +841,7 @@ impl ViewState<PageView> for PageViewState {
             .action(PageAction {
                 controller,
                 pages: page_count,
+                turns_change: self.turns_change.clone(),
                 reduced_motion: MediaQuery::motion_of(ctx)
                     == Some(flui_animation::MotionPolicy::Reduce),
             })

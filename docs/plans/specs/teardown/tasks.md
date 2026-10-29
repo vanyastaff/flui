@@ -170,7 +170,7 @@ graph LR
   «realm» (GLOSSARY). Проверка: `cargo heli xtask checks` 2026-10-28 на этой ветке — зелёная
   (heli r8140, 70 с). Осталось: ревью и слияние.
 - [ ] T4 — `flui-view`: guard, реестр, `detached()`
-- [ ] T7 — строки навигации
+- [x] T7 — строки навигации: три строки R17 в таблице `navigation_teardown` (`crates/flui-widgets/tests/contracts.rs`); характеризация, на текущем коде проходят. Зубы проверены: без `finish_all` в `HeroController::did_detach` падают строки навигатора и hero. `cargo test -p flui-widgets --test widgets_it` 2026-10-29 — 70 из 70, clippy `-p flui-widgets --all-targets -D warnings` чистый
 - [ ] T8 — остаток: откат и проводка (мера R10 — ADR-0258 §6)
 - [ ] T9 — граница хода в `flui-app` (входы ОС не меняются, ADR-0258 §4; срок выхода — §7)
 - [ ] T10 — характеризация раннера (учёт `Drop` — ADR-0261 §2; R4 — `EXIT_BUDGET`)

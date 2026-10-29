@@ -2,19 +2,23 @@
 
 - **Status:** Proposed; the pilot passed (§9) and acceptance is the owner's call. Implemented:
   `EventCx`, `Writer`, `WriterSource`, lifecycle and render-context writer acquisition,
-  callback inference helpers, typed `Signal` writes beside the transitional `&Reactive`
-  target, and the owner-local catalog migration described below, including `Draggable`,
+  callback inference helpers, typed `Signal` writes, and the owner-local catalog migration
+  described below, including `Draggable`,
   `PageView::on_page_changed` (delivered on the local post-frame lane), the
   `Action::invoke`/`CallbackAction`/`CallbackShortcuts` family, and `DragTarget`'s and
   `Semantics`' callbacks through owner-local interaction-lane payloads (§3, amended
-  2026-09-30). The rollback trigger was evaluated and not met (§9). Outstanding, each named
-  again before the `!Send` flip of ADR-0091 §1:
-  - `LocalHistoryEntry::on_remove`: a public surface and its navigation-flush write contract;
+  2026-09-30). §8 step 3 is implemented: `Reactive` is no longer a write target,
+  `BuildContext::reactive()` and the public `BuildOwner::reactive()` are gone (host code
+  writes through `BuildOwner::writer_source`), and `UiCommand::SignalWrite` runs its retained
+  `FnMut(&mut EventCx)` envelope inside an `EventCx` opened by the minting presentation's
+  `WriterSource` (the ADR-0074 §5.8 amendment). A `LocalHistoryEntry::on_remove` owed by a
+  pop inside a navigator flush is delivered on the navigator's post-frame queue, after the
+  frame, so its write is never refused by the build guard. The rollback trigger was evaluated
+  and not met (§9). Outstanding, named again before the `!Send` flip of ADR-0091 §1:
+  - `LocalHistoryEntry` as a public surface (the module is crate-private until its first
+    catalog consumer);
   - listener, animation-status and post-frame `cx` (§5), `TabController::add_listener`
-    included;
-  - `UiCommand::SignalWrite` opening its write through a `WriterSource` (the ADR-0074 §5.8
-    amendment; the command still runs `FnMut(&Reactive)`);
-  - `&Reactive` removal and both `reactive()` accessors (§8 step 3).
+    included.
   Bound `StateCell`/`StateHandle` mutation refusal during `build` (§7) is implemented;
   it is not an outstanding schedule-method migration.
 - **Date:** 2026-09-25
