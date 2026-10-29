@@ -58,7 +58,7 @@ graph LR
 
 - **T5** — подтверждение при blur, pointer-down на поле и вставке есть (#1497). Остаток —
   T5 ниже: unmount (R8; `dispose` сегодня только отсоединяет) и хук принятого закрытия.
-- **T9** — R13, R14 (Win32), R19, F4 закрыты в T6. Остаток — реконверсия R20, T9 ниже.
+- **T9** — R13, R14 (Win32), R19, F4 закрыты в T6; Linux-строка R20 — ответ `TS_IAS_QUERYONLY` из выделения в модуле `acp`. Остаток — Win32-строка реконверсии R20 на Windows, T9 ниже.
 
 ## Устаревшие задачи
 
@@ -134,6 +134,6 @@ graph LR
 - [ ] T3 — runtime: долг якоря, gate, pointer-down вне поля
 - [x] T4 — остаток: `VK_PROCESSKEY`, ACP на Linux CI; #1955 (зонд и ручной прогон IME не выполнялись)
 - [ ] T5 — остаток: unmount и хук закрытия
-- [ ] T9 — остаток: реконверсия
+- [ ] T9 — остаток: реконверсия; L-часть — ответ `TS_IAS_QUERYONLY` в модуле `acp` (`acp::insert_at_selection`), `query_only_insert_answers_from_the_selection` зелёный на Linux, clippy `-p flui-native --target x86_64-pc-windows-msvc --all-targets` чистый; W-строка `reconversion_requests_leave_the_document_unchanged` ждёт прогона на Windows (Ваня)
 - [ ] T11 — строки IME на приложении приёмки
 - [ ] T10 — нативное доказательство (после flui-driver FD11)
