@@ -1048,7 +1048,11 @@ fn every_relation_resolves_to_its_accesskit_property() {
         "the first target in identity order, not in declaration order"
     );
     assert_eq!(published_field.active_descendant(), Some(published(6)));
-    assert!(published_field.controls().is_empty());
+    assert_eq!(
+        published_field.controls(),
+        &[] as &[accesskit::NodeId],
+        "a relation to an anchor no node declares is dropped"
+    );
 }
 
 /// A node whose only annotation is its selection still reaches the platform:
