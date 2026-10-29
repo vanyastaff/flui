@@ -154,7 +154,7 @@ graph LR
 - [x] T1 — #1462
 - [x] T3 — #1493
 - [x] T5 — платформенная серия: #1926 (LY45), #1872 (LY90), #1853 (LY26)
-- [ ] T2 — ADR и PANIC-POLICY. Ветка `teardown/adrs` (#1950): ADR-0258 (граница хода и
+- [x] T2 — ADR и PANIC-POLICY — #1950: ADR-0258 (граница хода и
   терминальный выход), ADR-0259 (close guard, причины, реестр сброса), ADR-0260 (завершение
   сеанса) и ADR-0261 (drop владельца завершает наблюдение) — `Accepted (2026-10-28)`, не
   реализованы; ADR-0262 (persistence: документы поверх байтового хранилища, codec-паника
@@ -168,8 +168,8 @@ graph LR
   T4 (#1953: наблюдатель остаётся в слоте, `notify_detached`; закрытие с удержанным сбоем
   владельца не роняет). Кэш ответа сеанса убран из T14 и таблицы (ADR-0260). Имена тестов без
   «realm» (GLOSSARY). Проверка: `cargo heli xtask checks` 2026-10-28 на этой ветке — зелёная
-  (heli r8140, 70 с). Осталось: ревью и слияние.
-- [ ] T4 — `flui-view`: guard, реестр, `detached()`
+  (heli r8140, 70 с).
+- [x] T4 — `flui-view`: guard, реестр, `detached()` — #1953; 12 контрактных тестов — строки `close_guard_matrix`, `flush_registry_matrix`, `lifecycle_subscription_matrix`; R3, persistence R20, R28
 - [x] T7 — строки навигации: три строки R17 в таблице `navigation_teardown` (`crates/flui-widgets/tests/contracts.rs`); характеризация, на текущем коде проходят. Зубы проверены: без `finish_all` в `HeroController::did_detach` падают строки навигатора и hero. `cargo test -p flui-widgets --test widgets_it` 2026-10-29 — 70 из 70, clippy `-p flui-widgets --all-targets -D warnings` чистый
 - [ ] T8 — остаток: откат и проводка (мера R10 — ADR-0258 §6)
 - [ ] T9 — граница хода в `flui-app` (входы ОС не меняются, ADR-0258 §4; срок выхода — §7)
