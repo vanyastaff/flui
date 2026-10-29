@@ -49,6 +49,7 @@ impl PlatformWindow for Faulty {
             // The snapshot of a window that keeps its metrics to itself.
             Fault::SnapshotWithoutFacts => state.metrics = None,
             Fault::ClaimsWhatItCannot => state.capabilities = WindowCapabilities::ALL,
+            Fault::HidesWhenMinimized => state.visible &= state.mode != WindowMode::Minimized,
             Fault::ClaimsPresentation => {
                 state.capabilities.reports_presentation = Availability::Native;
             }
@@ -188,6 +189,9 @@ enum Fault {
     /// The window's snapshot says it reports no presentation, and its frame
     /// requests carry reports.
     DisclaimsPresentation,
+    /// The window reads a minimized window as hidden, and so does the
+    /// fixture's own readback of it, the way X11's map state does.
+    HidesWhenMinimized,
 }
 
 impl Fixture {
@@ -219,7 +223,8 @@ impl Fixture {
                 | Fault::VerbsIgnoreTheirCapabilities
                 | Fault::PresentNotifyBlocks
                 | Fault::ClaimsPresentation
-                | Fault::DisclaimsPresentation),
+                | Fault::DisclaimsPresentation
+                | Fault::HidesWhenMinimized),
             ) => Rc::new(Faulty(Rc::clone(&model) as _, fault)),
             _ => Rc::clone(&model) as _,
         };
@@ -241,12 +246,15 @@ impl WindowFixture for Fixture {
     /// from the snapshot.
     fn readback(&self) -> Readback {
         let system = self.mock().window_system();
+        let minimized = self.model.state().mode == WindowMode::Minimized;
         Readback {
             metrics: system.metrics,
             focused: system.focused,
             // The headless desktop's activation is its focus.
             active: system.focused,
-            visible: system.visible,
+            visible: system.visible
+                && !(minimized && matches!(self.fault, Some(Fault::HidesWhenMinimized))),
+            occluded: Some(system.occluded),
             material: Some(system.material),
         }
     }
@@ -454,6 +462,27 @@ fn a_snapshot_without_the_windows_facts_is_caught() {
     assert_eq!(checks, ["the_snapshot_agrees_with_the_window_system"]);
 }
 
+/// A window that hides itself when minimized is caught even where its
+/// fixture's readback agrees with it: the expectation that a minimized window
+/// stays shown is the contract's, not the window system's.
+fn a_window_hidden_by_minimizing_is_caught_whatever_its_readback_says() {
+    let checks = caught(Fault::HidesWhenMinimized);
+    assert_eq!(checks, ["accepted_commands_converge"]);
+}
+
+/// The snapshot's occlusion is the window system's, and is compared only
+/// while the window is shown and not minimized.
+fn the_snapshot_follows_the_window_systems_occlusion() {
+    let mut fixture = Fixture::new(WindowCapabilities::ALL, None);
+    fixture.mock().simulate_occlusion(true);
+    let state = fixture.window.state();
+    assert!(
+        state.visible && state.occluded && !state.is_seen(),
+        "{state:?}"
+    );
+    assert_eq!(window_conformance::check(&mut fixture), []);
+}
+
 #[test]
 fn window_conformance_checks() {
     crate::run_table(
@@ -478,6 +507,14 @@ fn window_conformance_checks() {
             (
                 "a_snapshot_without_the_windows_facts_is_caught",
                 a_snapshot_without_the_windows_facts_is_caught as fn(),
+            ),
+            (
+                "a_window_hidden_by_minimizing_is_caught_whatever_its_readback_says",
+                a_window_hidden_by_minimizing_is_caught_whatever_its_readback_says as fn(),
+            ),
+            (
+                "the_snapshot_follows_the_window_systems_occlusion",
+                the_snapshot_follows_the_window_systems_occlusion as fn(),
             ),
             (
                 "a_window_that_ignores_the_token_is_caught",

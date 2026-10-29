@@ -45,7 +45,7 @@
 //! The window is on the first output its surface entered that it has not
 //! left, so a window the compositor moves to another output names that
 //! output's display, whatever its scale. A window the compositor suspends
-//! (covered, on a hidden workspace, its outputs off) is not shown and is
+//! (covered, on a hidden workspace, its outputs off) is occluded and is
 //! given no frame until it is shown again ([`frame`]).
 //!
 //! # The frame and the portals
@@ -1733,12 +1733,9 @@ mod toplevel {
             let outer = Size::new(content.width, content.height + header);
             let state = WindowState::new(WindowGeometry::new(None, outer), content)
                 .with_mode(states.mode())
-                // Shown is what the compositor says: a surface it maps (a
-                // configured window with a frame) enters an output, and one it
-                // does not draw is suspended.
-                .with_visible(
-                    applied.configured && entered.is_some() && !states.suspended && !self.closed,
-                )
+                // A toplevel has no hidden state of its own: it is shown
+                // until it closes.
+                .with_visible(!self.closed)
                 .with_focused(states.activated)
                 .with_title(Some(applied.title.clone()))
                 .with_constraints(applied.constraints)
@@ -1750,6 +1747,11 @@ mod toplevel {
                 appearance: self.portal.appearance(),
                 safe_area: EdgeInsets::ZERO,
                 execution: WindowExecutionState::Running,
+                // What the compositor says it draws: a surface it maps (a
+                // configured window with a frame) enters an output, and one
+                // it does not draw (covered, on a hidden workspace, its
+                // outputs off, minimized) is suspended.
+                occluded: !applied.configured || entered.is_none() || states.suspended,
                 hovered: self.hovered,
                 active: states.activated,
                 capabilities: presented::reported(

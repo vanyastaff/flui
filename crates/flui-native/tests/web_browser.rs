@@ -858,7 +858,7 @@ fn a_hidden_page_ends_its_presses_before_a_visibility_callback_closes_it() {
     let closing = std::rc::Rc::downgrade(&window.window);
     window.handler.react_to_state_change(move || {
         if let Some(window) = closing.upgrade()
-            && !window.state().visible
+            && window.state().occluded
         {
             window.close_now();
         }

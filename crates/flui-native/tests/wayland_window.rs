@@ -124,8 +124,8 @@ impl WindowFixture for WaylandFixture {
 
     /// What the compositor sent, read here by xdg-shell's own numbering and
     /// never through the window's decoding: the size where it sized the window
-    /// itself (maximized or fullscreen), the activation, and whether it shows
-    /// the window at all (configured, on an output, not suspended). A floating
+    /// itself (maximized or fullscreen), the activation, and whether it draws
+    /// the window (configured, on an output, not suspended). A floating
     /// window's size is its client's, which the compositor does not report.
     fn readback(&self) -> Readback {
         /// `xdg_toplevel.state` values, as xdg-shell numbers them.
@@ -155,7 +155,10 @@ impl WindowFixture for WaylandFixture {
             metrics,
             focused: has(ACTIVATED),
             active: has(ACTIVATED),
-            visible: report.configures > 0 && !report.outputs.is_empty() && !has(SUSPENDED),
+            // A toplevel is shown until it closes; whether the compositor
+            // draws it is its occlusion.
+            visible: true,
+            occluded: Some(report.configures == 0 || report.outputs.is_empty() || has(SUSPENDED)),
             material: None,
         }
     }
@@ -409,9 +412,10 @@ fn an_occluded_window_is_given_its_frame_once_shown() {
         suspend(fixture.window.as_ref(), true),
         "a configured window"
     );
+    let state = fixture.window.state();
     assert!(
-        !fixture.window.state().visible,
-        "a suspended window is not shown"
+        state.visible && state.occluded && !state.is_seen(),
+        "a suspended window is shown and occluded: {state:?}"
     );
     // A present armed its callback and the compositor, not showing the
     // window, never answers it; a frame is asked for behind it.

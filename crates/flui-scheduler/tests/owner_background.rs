@@ -161,6 +161,7 @@ fn preparation_generated_demand_survives_the_ready_poll() {
 }
 
 thread_local! {
+    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static RECOVERY_OWNER: RefCell<Option<(Rc<OwnerFrame>, flui_scheduler::WeakUpdateScheduler)>> = const { RefCell::new(None) };
 }
 

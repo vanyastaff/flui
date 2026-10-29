@@ -401,7 +401,8 @@ trait depends on `flui-platform` instead.
   keeps each window's field by `owner::android::ActivityWindowId`, and the
   Web's text input lives in the canvas window's owner-thread slot. Beside it,
   one file per platform with its pure half a module inside it:
-  `windows/mod.rs` (the pure `geometry`, the `Tsf` class hook) with `tsf/`,
+  `windows/mod.rs` (the pure `geometry` and `acp`, TSF's `ITextStoreACP`
+  answers over the field's store, and the `Tsf` class hook) with `tsf/`,
   `apple/{macos, ios}.rs`, `android.rs` (the pure `ime`, `input`, `sizing`),
   `web.rs` (the pure `ime`, `input`), `winit.rs` and `headless.rs`. `cargo
   xtask module-dag` lists each feature directory in `features`: a platform
@@ -610,9 +611,21 @@ trait depends on `flui-platform` instead.
   `window::state::mapping` reads one table through winit's flags, the X11
   window manager's properties, AppKit's raw flags (which keep full screen
   above a miniaturized flag, a row of their own) and the Win32 tracked mode.
-  Whether a window is seen is two facts of its snapshot, `visible` and its
-  mode, which `WindowState::is_seen` reads together; each window reads both
-  from its own OS. Each platform's
+  Whether a window is seen is three facts of its snapshot, `visible`, its
+  mode and `occluded`, which `WindowState::is_seen` reads together; each
+  window reads them from its own OS, the occlusion through `ReportedFacts`
+  so no host leaves it out. Shown is the show state: Win32's `WS_VISIBLE`,
+  an X11 window mapped, waiting for its first frame or iconic, AppKit's
+  `isVisible` or `isMiniaturized`, and on Wayland, Android, iOS and the Web,
+  where the application cannot hide its window, open. Occluded is what
+  each window system tells of a shown window kept off the screen: a DWM
+  cloak or a locked session, an X11 `VisibilityNotify` of `FullyObscured` or
+  an unviewable map state, AppKit's `occlusionState` without its visible
+  bit, winit's `Occluded`, a Wayland toplevel unconfigured, on no output or
+  `suspended`, an Activity stopped, a scene in the background, a hidden
+  document. The pure `held_to` holds a size to the window's constraints
+  for the hosts whose window system applies a size as given (AppKit's
+  `setContentSize:`, the headless model). Each platform's
   window is one file beside it (`android`, `web`, `winit`, `headless`, and
   `linux/x11`, the live X11 layer the winit host uses), or a directory where
   its halves or one OS object need one: `windows/` (the pure `limits` and
@@ -943,7 +956,7 @@ trait depends on `flui-platform` instead.
   the handler's `state_changed`, and one that needs to know which fact changed compares
   the snapshot with the last one it saw (`flui-app`'s
   `RuntimeEvent::of_state_change`). Whether a window is seen is
-  `WindowState::is_seen`: visible and not minimized. Each host sets a
+  `WindowState::is_seen`: shown, not minimized and not occluded. Each host sets a
   `StatePublisher` on the window's `WindowDelivery` when the window opens
   (`publish_through`, over a weak reference to the window). The publisher
   reads the window again and answers `Publication` (changed, unchanged,
@@ -1249,7 +1262,8 @@ the explicit window-resize fallback; failure of that mandatory fallback refuses
 opening. The platform frame slot retires by callback-set identity, so stale
 owners cannot erase replacements or publish redraws.
 
-Web visibility follows the canvas document's `hidden` value, independently of
+Web occlusion follows the canvas document's `hidden` value (the canvas itself is always
+shown), independently of
 focus and CSS layout visibility. Construction samples it; an owned mandatory
 Document `visibilitychange` listener updates it. Successful registration
 reconciles both focus and visibility before Created, including source changes
