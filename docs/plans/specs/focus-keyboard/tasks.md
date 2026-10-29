@@ -1,6 +1,6 @@
 # Фокус и клавиатура в приложении приёмки — задачи (уровень 1)
 
-- **Статус:** черновик, переписан 2026-10-29 под `main`; ждёт утверждения владельца. Сделаны T1
+- **Статус:** утверждена 2026-10-29 (координатор, по делегированию владельца); исполнение. Сделаны T1
   (частью контракта T3 и T8), T3, T5, T6, T7, T8, T10; осталось девять задач.
 - **Дата:** 2026-10-05, переписан 2026-10-29
 - **Design:** [design.md](design.md) («Работы» 1–8); требования — [requirements.md](requirements.md)
@@ -50,7 +50,7 @@ graph LR
 
 | ID | Задача | R | Файлы | Зависит | P | Где | Готово, когда | Дн | Статус |
 |---|---|---|---|---|---|---|---|---|---|
-| T2 | ADR «Pinned lazy children and the focusable list» (номер — следующий свободный на `main`), `Superseded-by` в ADR-0056 в части `Pin` | R5, R6 | `docs/adr/` | — | [P] | L | ADR принят владельцем до слияния T4 | 0,5 | — |
+| T2 | ADR «Pinned lazy children and the focusable list» (номер — следующий свободный на `main`), `Superseded-by` в ADR-0056 в части `Pin` | R5, R6 | `docs/adr/` | — | [P] | L | ADR принят до слияния T4 | 0,5 | — |
 | T4 | `flui-view` + `flui-objects`: аренда `Pin`, `retain_band` не вытесняет закреплённого, закреплённый слот в `RenderSliverList` и `RenderSliverFixedExtentList` (мерка без `set_measured`, якорь и геометрия не меняются, paint и hit-test пропускают явно), строки `render_object_harness`, `## Mapping decisions` в `crates/flui-objects/ARCHITECTURE.md` | R6 | `crates/flui-view/src/owner/keep_alive.rs`, `crates/flui-view/src/element/sparse_children.rs`, `crates/flui-objects/src/sliver/{sliver_list,sliver_fixed_extent_list,virtualized_band}.rs`, тесты harness | T2 | [P] | L | строки закреплённого ребёнка на оба sliver (одна с `Clip::None`) зелёные и падают без явного пропуска paint; `RENDER_OBJECT_TYPES` не меняется | 4 | — |
 | T9 | `EditableText`: `autofocus(bool)` с пробросом в `TextField` и `TextFormField`; Alt+Left/Right без Shift вне Apple не поглощается | R7, R9 | `crates/flui-widgets/src/text/editable_text.rs`, `packages/flui-material/src/{text_field,text_form_field}.rs`, `crates/flui-widgets/tests/keyboard_focus/{routes,activation}.rs` | text-ime T5 (#1958), send-flip T9 | — | L | строки «push фокусирует поле с `autofocus`» и «Alt+Left из поля» падают с откатом | 1 | — |
 | T11 | `flui-widgets/scroll`: `ListView::focusable`, `semantics_label`, `empty_label`; маркер `ListItemFocus` (проброс ключа, `MergeSemantics` + `ListItem`, аренда `Pin`); `ListFocusState`; вход через `register_traversal_entry`; стрелки, PageUp/Down, Home/End, раскрытие | R5, R6, R8, R13b, D6 | `crates/flui-widgets/src/scroll/{list_view,sliver_list,sliver_fixed_extent_list}.rs`, новый `scroll/list_focus.rs`, `crates/flui-widgets/tests/keyboard_focus/list.rs` | T4 | — | L | `list_keyboard_navigation` (10 000 строк, удержание PageDown, предел построения) и `focused_row_is_pinned_while_scrolled_away` падают с откатом; строки списка в `pop_restores_the_opening_element`; первый production-вызов `register_traversal_entry`, и его rustdoc больше не говорит «no widget registers an entry yet» | 4,5 | — |
