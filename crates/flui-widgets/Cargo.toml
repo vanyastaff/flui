@@ -83,6 +83,7 @@ flui-assets = { path = "../flui-assets", version = "=0.2.0-dev", optional = true
 flui-platform = { workspace = true }
 
 [dev-dependencies]
+accesskit = { workspace = true }
 accesskit_consumer = { workspace = true }
 # ADR-0074 §8 go/no-go benchmarks (`benches/signals_rebuilds.rs`).
 criterion = { workspace = true }

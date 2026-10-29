@@ -404,7 +404,7 @@ impl NumericControl {
         let numeric = Arc::clone(&received);
         control
             .config_mut()
-            .set_numeric_range(NumericRange::new(0.0, 0.0, 10.0, 1.0).expect("finite fixture"));
+            .set_numeric_range(NumericRange::try_new(0.0, 0.0, 10.0, 1.0).expect("finite fixture"));
         control.config_mut().add_action(
             SemanticsAction::SetNumericValue,
             Arc::new(move |call| {
@@ -451,7 +451,7 @@ impl NumericControl {
             .expect("control remains live")
             .config_mut()
             .set_numeric_range(
-                flui_semantics::NumericRange::new(0.0, 0.0, 5.0, 1.0)
+                flui_semantics::NumericRange::try_new(0.0, 0.0, 5.0, 1.0)
                     .expect("finite narrower range"),
             );
         self.owner.mark_dirty(self.id);
@@ -973,6 +973,82 @@ fn relations_resolve_through_anchors_across_publication() {
     let dropped = dialog_in(received.lock().last().expect("an update"))
         .expect("the dialog is republished when its target goes away");
     assert_eq!(dropped.labelled_by(), &[] as &[accesskit::NodeId]);
+}
+
+/// Each relation reaches its AccessKit property through the same anchor
+/// resolution as `labelled_by`. A single-target property takes the first
+/// target in identity order, whichever node declared the anchor first, and a
+/// relation to an anchor no node declares is dropped.
+#[test]
+fn every_relation_resolves_to_its_accesskit_property() {
+    use flui_semantics::{SemanticsAnchor, SemanticsRelation};
+
+    let render = |index: u32| {
+        RenderId::new_gen(
+            index,
+            core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
+        )
+    };
+    let published = |index: u32| {
+        accesskit::NodeId(flui_semantics::AccessibilityNodeId::from(render(index)).as_u64())
+    };
+    let help = SemanticsAnchor::new();
+    let details = SemanticsAnchor::new();
+    let next = SemanticsAnchor::new();
+    let error = SemanticsAnchor::new();
+    let option = SemanticsAnchor::new();
+    let unknown = SemanticsAnchor::new();
+
+    let (mut owner, received) = recording_owner();
+    let root = owner.insert(node(0, "root"));
+    // The error anchor is declared by two nodes, the later one first.
+    let targets = [
+        (5, "Must contain @", error.clone()),
+        (1, "Your work address", help),
+        (2, "Address book", details),
+        (3, "Password", next),
+        (4, "Required", error),
+        (6, "name@example.com", option),
+    ];
+    let mut field = SemanticsNode::new().with_source_render_id(render(9));
+    for (kind, anchor) in [
+        (SemanticsRelation::DescribedBy, &targets[1].2),
+        (SemanticsRelation::Details, &targets[2].2),
+        (SemanticsRelation::FlowTo, &targets[3].2),
+        (SemanticsRelation::ErrorMessage, &targets[0].2),
+        (SemanticsRelation::ActiveDescendant, &targets[5].2),
+        (SemanticsRelation::Controls, &unknown),
+    ] {
+        field.config_mut().add_relation(kind, anchor.clone());
+    }
+    for (index, label, anchor) in targets {
+        let mut target = node(index, label);
+        target.config_mut().add_anchor(anchor);
+        let target = owner.insert(target);
+        owner.add_child(root, target);
+    }
+    let field = owner.insert(field);
+    owner.add_child(root, field);
+    owner.set_root(Some(root));
+    owner.flush();
+
+    let update = &received.lock()[0];
+    let published_field = update
+        .nodes
+        .iter()
+        .find(|(id, _)| *id == published(9))
+        .map(|(_, node)| node.clone())
+        .expect("the full update carries the field");
+    assert_eq!(published_field.described_by(), &[published(1)]);
+    assert_eq!(published_field.details(), &[published(2)]);
+    assert_eq!(published_field.flow_to(), &[published(3)]);
+    assert_eq!(
+        published_field.error_message(),
+        Some(published(4)),
+        "the first target in identity order, not in declaration order"
+    );
+    assert_eq!(published_field.active_descendant(), Some(published(6)));
+    assert!(published_field.controls().is_empty());
 }
 
 /// A node whose only annotation is its selection still reaches the platform:
@@ -1679,7 +1755,7 @@ fn a_numeric_write_is_admitted_inside_both_ranges() {
     let slider = |min, max| {
         let mut node = node(1, "Volume");
         node.config_mut()
-            .set_numeric_range(NumericRange::new(min, min, max, 1.0).expect("finite range"));
+            .set_numeric_range(NumericRange::try_new(min, min, max, 1.0).expect("finite range"));
         let sink = Arc::clone(&received);
         node.config_mut().add_action(
             SemanticsAction::SetNumericValue,
@@ -1751,7 +1827,7 @@ fn a_text_write_is_read_as_a_number_only_where_a_range_was_delivered() {
     range.config_mut().set_role(SemanticsRole::Slider);
     range
         .config_mut()
-        .set_numeric_range(NumericRange::new(0.0, 0.0, 10.0, 1.0).expect("finite range"));
+        .set_numeric_range(NumericRange::try_new(0.0, 0.0, 10.0, 1.0).expect("finite range"));
     let sink = Arc::clone(&received);
     range.config_mut().add_action(
         SemanticsAction::SetNumericValue,
@@ -1916,8 +1992,9 @@ fn a_text_write_follows_the_delivered_value_handler() {
         let range = |numeric: bool| {
             let mut node = node(1, if numeric { "Level" } else { "Volume" });
             node.config_mut().set_role(SemanticsRole::Slider);
-            node.config_mut()
-                .set_numeric_range(NumericRange::new(0.0, 0.0, 10.0, 1.0).expect("finite range"));
+            node.config_mut().set_numeric_range(
+                NumericRange::try_new(0.0, 0.0, 10.0, 1.0).expect("finite range"),
+            );
             node.config_mut().set_value("zero");
             let sink = Arc::clone(&received);
             node.config_mut().add_action(

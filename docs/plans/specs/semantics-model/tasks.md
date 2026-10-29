@@ -17,7 +17,7 @@
 | W6 | Коллекции: позиция и размер набора, уровень, таблицы и сетки, сортировка, виртуализация | R15–R17 | W4 | смержено (#1678): позиция на элементе, размер на контейнере, уровень, таблицы, ячейки, сортировка, множественный выбор; фикстуры UIA для позиции, размера, уровня и сортировки |
 | W7 | Аллокатор синтетических id (ADR-0204); live-регионы с неявными значениями по ARIA, `busy`, объявитель; production-путь `SemanticsHost::announce` | R8–R10 | W4 | — |
 | W8 | Прогоны текста полей; выделение и правки из скринридера; граница слов по политике редактора | R12–R14 | W7 | — |
-| W9 | Оставшиеся свойства (`orientation`, `current`, `has_popup`, `autocomplete`, `keyboard_shortcut`, `language`, `url`, `role_description`) и роли матрицы | R6, R18 | W4 | — |
+| W9 | Оставшиеся свойства (`orientation`, `current`, `has_popup`, `autocomplete`, `keyboard_shortcut`, `language`, `url`, `role_description`) и роли матрицы | R6, R18 | W4 | готово (ветка `claude/project-thread-gyj8zp`): свойства, роли `Generic` и `Presentation`, `Invalid::False`, большой шаг диапазона, связи по ADR-0263; тесты — строки `every_published_attribute_reads_through_the_consumer` и `an_inapplicable_attribute_is_not_published`, `a_passed_validation_counts_as_declared`, `every_relation_resolves_to_its_accesskit_property`, `authored_properties_and_relations_reach_the_published_node` |
 
 Решения W2–W4 перенесены в `crates/flui-semantics/ARCHITECTURE.md` (решения 1, 3, 5, 6,
 «Publication reads attributes in place»); там же названы тесты, которые их закрепляют.
@@ -72,3 +72,14 @@ W4 уточнила ADR-0203: обработчик получает `ActionCall`
   `presentation`/`none` отделяются от отсутствия роли и публикуются как `GenericContainer` без
   превращения имени в текст. Повтор `CustomActionId` у двух источников — конфликт слияния, а не
   объединение. Действия подсказок (`ShowTooltip`, `HideTooltip`) получают виджет-потребителя.
+
+Решения W9, принятые при реализации (координатор, 2026-10-29):
+
+- `owns` не публикуется: в AccessKit 0.25 нет такого свойства, владение — это `children`
+  (ADR-0263 §3).
+- Повтор `CustomActionId` у двух источников невозможен: id — место действия в списке узла, и
+  слияние перенумеровывает действия вкладчика (ARCHITECTURE.md, решение 1). Конфликт не нужен.
+- Виджет-потребитель `ShowTooltip`/`HideTooltip` переносится в будущий виджет `Tooltip`
+  (поток каталога виджетов): в репозитории нет виджета подсказки, а потребитель без него был бы
+  выдуманным.
+- `NumericRange::new` переименован в `try_new` (конструктор, возвращающий `Result`).

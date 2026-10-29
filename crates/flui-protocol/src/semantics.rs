@@ -221,6 +221,15 @@ vocabulary! {
         Pane => "pane",
         /// A viewport whose content can be scrolled.
         ScrollView => "scrollView",
+
+        // ----- Structure without meaning -----
+        /// A container declared to mean nothing (ARIA `generic`): published
+        /// for structure, with no name. Unlike [`Self::None`], a label does not
+        /// make it static text.
+        Generic => "generic",
+        /// A node whose own semantics are removed (ARIA `presentation`, `none`);
+        /// its descendants keep theirs.
+        Presentation => "presentation",
     }
 }
 
@@ -547,6 +556,8 @@ mod tests {
                 "window",
                 "pane",
                 "scrollView",
+                "generic",
+                "presentation",
             ],
         );
         let actions: Vec<&str> = SemanticsAction::ALL.iter().map(|a| a.name()).collect();
@@ -613,7 +624,7 @@ mod tests {
         ("feed", Ok(SemanticsRole::Feed)),
         ("figure", Ok(SemanticsRole::Figure)),
         ("form", Ok(SemanticsRole::Form)),
-        ("generic", Ok(SemanticsRole::None)),
+        ("generic", Ok(SemanticsRole::Generic)),
         ("grid", Ok(SemanticsRole::Grid)),
         ("gridcell", Ok(SemanticsRole::GridCell)),
         ("group", Ok(SemanticsRole::Group)),
@@ -635,11 +646,11 @@ mod tests {
         ("menuitemradio", Ok(SemanticsRole::MenuItemRadio)),
         ("meter", Ok(SemanticsRole::Meter)),
         ("navigation", Ok(SemanticsRole::Navigation)),
-        ("none", Ok(SemanticsRole::None)),
+        ("none", Ok(SemanticsRole::Presentation)),
         ("note", Ok(SemanticsRole::Note)),
         ("option", Ok(SemanticsRole::ListBoxOption)),
         ("paragraph", Ok(SemanticsRole::Paragraph)),
-        ("presentation", Ok(SemanticsRole::None)),
+        ("presentation", Ok(SemanticsRole::Presentation)),
         ("progressbar", Ok(SemanticsRole::ProgressBar)),
         ("radio", Ok(SemanticsRole::RadioButton)),
         ("radiogroup", Ok(SemanticsRole::RadioGroup)),
@@ -675,8 +686,10 @@ mod tests {
 
     /// The roles FLUI has beyond ARIA's: the editable-text kinds AccessKit
     /// distinguishes (ARIA's `textbox` with `aria-multiline`, HTML input
-    /// types) and the desktop window roles.
+    /// types), the desktop window roles, and the absence of a declared role.
     const BEYOND_ARIA: &[SemanticsRole] = &[
+        // Declares no role: the role is derived from the node.
+        SemanticsRole::None,
         SemanticsRole::MultilineTextInput,
         SemanticsRole::PasswordInput,
         SemanticsRole::EmailInput,

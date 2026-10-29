@@ -62,12 +62,18 @@ pub enum RoleAttribute {
     Sort,
     /// `aria-multiselectable`.
     Multiselectable,
+    /// `aria-orientation`.
+    Orientation,
+    /// `aria-haspopup`.
+    HasPopup,
+    /// `aria-autocomplete`.
+    AutoComplete,
 }
 
 impl RoleAttribute {
     /// Every role-dependent attribute.
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 15] = [
+    pub(crate) const ALL: [Self; 18] = [
         Self::Toggled,
         Self::Selected,
         Self::Expanded,
@@ -83,6 +89,9 @@ impl RoleAttribute {
         Self::RowIndex,
         Self::Sort,
         Self::Multiselectable,
+        Self::Orientation,
+        Self::HasPopup,
+        Self::AutoComplete,
     ];
 
     /// The ARIA attributes it stands for.
@@ -103,6 +112,9 @@ impl RoleAttribute {
             Self::RowIndex => "aria-rowindex",
             Self::Sort => "aria-sort",
             Self::Multiselectable => "aria-multiselectable",
+            Self::Orientation => "aria-orientation",
+            Self::HasPopup => "aria-haspopup",
+            Self::AutoComplete => "aria-autocomplete",
         }
     }
 }
@@ -116,7 +128,7 @@ struct Field {
 }
 
 /// The fields behind each [`RoleAttribute`], one row each.
-const FIELDS: [Field; 15] = [
+const FIELDS: [Field; 18] = [
     Field {
         attribute: RoleAttribute::Toggled,
         declared: |a| a.states.toggled.is_some(),
@@ -191,6 +203,21 @@ const FIELDS: [Field; 15] = [
         attribute: RoleAttribute::Multiselectable,
         declared: |a| a.collection.multiselectable.is_some(),
         clear: |a| a.collection.multiselectable = None,
+    },
+    Field {
+        attribute: RoleAttribute::Orientation,
+        declared: |a| a.states.orientation.is_some(),
+        clear: |a| a.states.orientation = None,
+    },
+    Field {
+        attribute: RoleAttribute::HasPopup,
+        declared: |a| a.states.has_popup.is_some(),
+        clear: |a| a.states.has_popup = None,
+    },
+    Field {
+        attribute: RoleAttribute::AutoComplete,
+        declared: |a| a.states.auto_complete.is_some(),
+        clear: |a| a.states.auto_complete = None,
     },
 ];
 
@@ -294,17 +321,62 @@ pub(crate) fn applicable(role: SemanticsRole, attribute: RoleAttribute) -> bool 
             role,
             R::Grid | R::ListBox | R::TabList | R::Tree | R::TreeGrid
         ),
+        // `scrollbar`, `select`, `separator`, `slider`, `tablist` and `toolbar`,
+        // and the roles inheriting from `select`.
+        A::Orientation => matches!(
+            role,
+            R::ScrollBar
+                | R::Separator
+                | R::Slider
+                | R::TabList
+                | R::Toolbar
+                | R::ListBox
+                | R::Menu
+                | R::MenuBar
+                | R::RadioGroup
+                | R::Tree
+                | R::TreeGrid
+        ),
+        A::HasPopup => {
+            text_input
+                || matches!(
+                    role,
+                    R::Application
+                        | R::Button
+                        | R::ComboBox
+                        | R::GridCell
+                        | R::Link
+                        | R::MenuItem
+                        | R::MenuItemCheckbox
+                        | R::MenuItemRadio
+                        | R::Slider
+                        | R::Tab
+                        | R::TreeItem
+                        | R::ColumnHeader
+                        | R::RowHeader
+                )
+        }
+        A::AutoComplete => text_input || role == R::ComboBox,
     }
 }
 
 /// Whether WAI-ARIA 1.2 forbids `role` a name ("Name From: prohibited"):
-/// the text-level roles whose content speaks for itself.
+/// the text-level roles whose content speaks for itself, and the roles that
+/// declare a node to mean nothing (`generic`, `presentation`).
 #[must_use]
 pub(crate) fn prohibits_name(role: SemanticsRole) -> bool {
     use SemanticsRole as R;
     matches!(
         role,
-        R::Caption | R::Code | R::Deletion | R::Emphasis | R::Insertion | R::Paragraph | R::Strong
+        R::Caption
+            | R::Code
+            | R::Deletion
+            | R::Emphasis
+            | R::Generic
+            | R::Insertion
+            | R::Paragraph
+            | R::Presentation
+            | R::Strong
     )
 }
 
@@ -485,7 +557,7 @@ mod tests {
             let mut attrs = SemanticsAttributes {
                 role: SemanticsRole::Separator,
                 numeric_range: Some(
-                    crate::NumericRange::new(4.0, 0.0, 10.0, 2.0).expect("finite fixture"),
+                    crate::NumericRange::try_new(4.0, 0.0, 10.0, 2.0).expect("finite fixture"),
                 ),
                 ..SemanticsAttributes::default()
             };

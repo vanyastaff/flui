@@ -369,9 +369,10 @@ pub use flui_interaction::{
     PanZoomEvent, TapDetails,
 };
 pub use flui_rendering::semantics::{
-    ActionCall, Assertiveness, CellPosition, HeadingLevel, NumericRange, NumericRangeError, Reveal,
-    ScrollUnit as SemanticsScrollUnit, SemanticsAnchor, SemanticsConfiguration, SemanticsRole,
-    SetSize, SortDirection, TableShape, TextDirection as SemanticsTextDirection, Toggled,
+    ActionCall, Assertiveness, AutoComplete, CellPosition, Current, HasPopup, HeadingLevel,
+    Invalid, NumericRange, NumericRangeError, Reveal, ScrollUnit as SemanticsScrollUnit,
+    SemanticsAnchor, SemanticsConfiguration, SemanticsRole, SetSize, SortDirection, TableShape,
+    TextDirection as SemanticsTextDirection, Toggled,
 };
 
 // ============================================================================

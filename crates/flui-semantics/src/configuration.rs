@@ -20,7 +20,7 @@ use crate::{
     },
     relation::{SemanticsAnchor, SemanticsRelation},
     role::{Assertiveness, SemanticsRole},
-    states::{States, Toggled},
+    states::{AutoComplete, Current, HasPopup, Invalid, States, Toggled},
 };
 
 // ============================================================================
@@ -559,15 +559,62 @@ impl SemanticsConfiguration {
         self.attributes.states.required == Some(true)
     }
 
-    /// Declares whether this form control's value failed validation.
-    pub fn set_invalid(&mut self, value: bool) {
-        self.declare(|states| states.invalid = Some(value));
+    /// Declares whether this form control's value failed validation, and how.
+    /// [`Invalid::False`] declares that it was validated and passed.
+    pub fn set_invalid(&mut self, invalid: Invalid) {
+        self.declare(|states| states.invalid = Some(invalid));
     }
 
-    /// Returns whether this form control's value failed validation.
+    /// Whether this form control's value failed validation, and how; `None`
+    /// when not declared.
     #[inline]
-    pub fn is_invalid(&self) -> bool {
-        self.attributes.states.invalid == Some(true)
+    pub fn invalid(&self) -> Option<Invalid> {
+        self.attributes.states.invalid
+    }
+
+    /// Declares this node the current item of its set, and of which kind.
+    pub fn set_current(&mut self, current: Current) {
+        self.declare(|states| states.current = Some(current));
+    }
+
+    /// Which kind of current item this node is, `None` when it is not one.
+    #[inline]
+    pub fn current(&self) -> Option<Current> {
+        self.attributes.states.current
+    }
+
+    /// Declares what this node opens when activated.
+    pub fn set_has_popup(&mut self, popup: HasPopup) {
+        self.declare(|states| states.has_popup = Some(popup));
+    }
+
+    /// What this node opens when activated, `None` when not declared.
+    #[inline]
+    pub fn has_popup(&self) -> Option<HasPopup> {
+        self.attributes.states.has_popup
+    }
+
+    /// Declares how this text field or combo box completes typed text.
+    pub fn set_auto_complete(&mut self, auto_complete: AutoComplete) {
+        self.declare(|states| states.auto_complete = Some(auto_complete));
+    }
+
+    /// How this node completes typed text, `None` when not declared.
+    #[inline]
+    pub fn auto_complete(&self) -> Option<AutoComplete> {
+        self.attributes.states.auto_complete
+    }
+
+    /// Declares the axis this control runs along: a slider, a scroll bar, a
+    /// separator, a tab list, a toolbar, a menu or a list box.
+    pub fn set_orientation(&mut self, orientation: Axis) {
+        self.declare(|states| states.orientation = Some(orientation));
+    }
+
+    /// The axis this control runs along, `None` when not declared.
+    #[inline]
+    pub fn orientation(&self) -> Option<Axis> {
+        self.attributes.states.orientation
     }
 
     /// Declares whether this node scopes a route. Read by the framework,
@@ -713,6 +760,59 @@ impl SemanticsConfiguration {
     #[inline]
     pub fn placeholder(&self) -> Option<&str> {
         self.attributes.placeholder.as_deref()
+    }
+
+    /// Sets the keys that activate or focus this node, in the
+    /// `aria-keyshortcuts` grammar: chords separated by spaces, keys of a
+    /// chord by `+` (`"Control+S"`, `"Alt+Shift+N Control+N"`).
+    pub fn set_keyboard_shortcut(&mut self, shortcut: impl Into<SmolStr>) {
+        self.attributes.keyboard_shortcut = Some(shortcut.into());
+        self.mark_annotated();
+    }
+
+    /// Returns the keyboard shortcut.
+    #[inline]
+    pub fn keyboard_shortcut(&self) -> Option<&str> {
+        self.attributes.keyboard_shortcut.as_deref()
+    }
+
+    /// Sets the language of this node's text as a BCP 47 tag (`"en-US"`),
+    /// which a screen reader speaks it in.
+    pub fn set_language(&mut self, language: impl Into<SmolStr>) {
+        self.attributes.language = Some(language.into());
+        self.mark_annotated();
+    }
+
+    /// Returns the language tag.
+    #[inline]
+    pub fn language(&self) -> Option<&str> {
+        self.attributes.language.as_deref()
+    }
+
+    /// Sets the address a link leads to, or an image was loaded from.
+    pub fn set_url(&mut self, url: impl Into<SmolStr>) {
+        self.attributes.url = Some(url.into());
+        self.mark_annotated();
+    }
+
+    /// Returns the address.
+    #[inline]
+    pub fn url(&self) -> Option<&str> {
+        self.attributes.url.as_deref()
+    }
+
+    /// Sets the words a screen reader says for this node's role in place of
+    /// the role's own name (`aria-roledescription`), such as "slide" for a
+    /// group in a carousel. The role still decides how the node behaves.
+    pub fn set_role_description(&mut self, description: impl Into<SmolStr>) {
+        self.attributes.role_description = Some(description.into());
+        self.mark_annotated();
+    }
+
+    /// Returns the role description.
+    #[inline]
+    pub fn role_description(&self) -> Option<&str> {
+        self.attributes.role_description.as_deref()
     }
 
     /// Sets the stable identifier tests and automation select this node by
@@ -1377,6 +1477,10 @@ impl SemanticsConfiguration {
             hint: _,
             tooltip: _,
             placeholder: _,
+            keyboard_shortcut: _,
+            language: _,
+            url: _,
+            role_description: _,
             // Never crosses into another node, so two never compete.
             identifier: _,
             text_direction: _,
@@ -1503,6 +1607,10 @@ impl SemanticsConfiguration {
             hint,
             tooltip,
             placeholder,
+            keyboard_shortcut,
+            language,
+            url,
+            role_description,
             // Never carried upward (ADR-0240): the identifier names only the
             // node its own configuration forms, and a merged parent keeps its own.
             identifier: _,
@@ -1591,6 +1699,10 @@ impl SemanticsConfiguration {
         keep(&mut mine.decreased_value, decreased_value.as_ref());
         keep(&mut mine.tooltip, tooltip.as_ref());
         keep(&mut mine.placeholder, placeholder.as_ref());
+        keep(&mut mine.keyboard_shortcut, keyboard_shortcut.as_ref());
+        keep(&mut mine.language, language.as_ref());
+        keep(&mut mine.url, url.as_ref());
+        keep(&mut mine.role_description, role_description.as_ref());
         keep(&mut mine.sort_key, sort_key.as_ref());
         keep(&mut mine.text_direction, text_direction.as_ref());
         keep(&mut mine.hint_overrides, hint_overrides.as_ref());
@@ -2145,6 +2257,48 @@ mod tests {
         );
         let kept = merged(|c| c.set_enabled(Some(false)), |_| {});
         assert_eq!(kept.is_enabled(), Some(false));
+        let passed = merged(
+            |c| c.set_invalid(Invalid::False),
+            |c| c.set_invalid(Invalid::Spelling),
+        );
+        assert_eq!(
+            passed.invalid(),
+            Some(Invalid::False),
+            "a receiver that passed validation is not failed by a part"
+        );
+        let popup = merged(|_| {}, |c| c.set_has_popup(HasPopup::Dialog));
+        assert_eq!(popup.has_popup(), Some(HasPopup::Dialog));
+    }
+
+    /// A declared `Invalid::False` is a declaration: two fields that each
+    /// validated form two nodes, as two that each failed do, while a field
+    /// that declares nothing merges into either.
+    #[test]
+    fn a_passed_validation_counts_as_declared() {
+        let declared = |invalid: Option<Invalid>| {
+            let mut config = SemanticsConfiguration::new();
+            config.set_label("Field");
+            if let Some(invalid) = invalid {
+                config.set_invalid(invalid);
+            }
+            config
+        };
+        assert_compatibility_is_symmetric(
+            &declared(Some(Invalid::False)),
+            &declared(Some(Invalid::False)),
+            false,
+        );
+        assert_compatibility_is_symmetric(
+            &declared(Some(Invalid::False)),
+            &declared(Some(Invalid::True)),
+            false,
+        );
+        assert_compatibility_is_symmetric(&declared(None), &declared(Some(Invalid::False)), true);
+        let mut current = SemanticsConfiguration::new();
+        current.set_current(Current::Page);
+        let mut other = SemanticsConfiguration::new();
+        other.set_current(Current::Step);
+        assert_compatibility_is_symmetric(&current, &other, false);
     }
 
     /// A level belongs to a heading: a node that becomes something else drops
