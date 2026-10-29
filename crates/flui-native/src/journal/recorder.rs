@@ -1,19 +1,17 @@
 //! The capture sink that folds registry calls into native recordings
-//! (`native-capture`).
-//!
-//! Self-contained beside [`codec`](super::codec) so a run of the
-//! backend on a device journals with
-//! the same code the in-process captures use.
+//! (`native-capture`), one per registry, so a run of the backend on a device
+//! journals with the same code the in-process captures use.
 
 use std::sync::Arc;
 
-use flui_native::input::assembly::capture::{CaptureGuard, CaptureSource, Captured, capture};
 use parking_lot::Mutex;
 
+use super::capture::{CaptureGuard, CaptureSource, Captured, capture};
 use super::codec::{Backend, Header, NativeRecording, Row};
 
 /// A capture installed on this thread, journalling every registry created
 /// on it while it lives, in creation order.
+#[derive(Debug)]
 #[must_use = "the capture ends when the recorder is finished or dropped"]
 pub struct Recorder {
     journals: Arc<Mutex<Vec<NativeRecording>>>,
@@ -42,7 +40,7 @@ impl Recorder {
 }
 
 /// The recordings of a live [`Recorder`].
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Journals(Arc<Mutex<Vec<NativeRecording>>>);
 
 impl Journals {
@@ -130,7 +128,7 @@ fn journal(
         Captured::ViewportAbandoned { frame } => Row::ViewportAbandoned { frame },
         Captured::Wheel(reading) => Row::Wheel(*reading),
         Captured::Scroll(reading) => Row::Scroll(*reading),
-        other => panic!("the capture grew a call the native codec does not mirror: {other:?}"),
+        Captured::Started { .. } => unreachable!("BUG: a source starts once, handled above"),
     };
     recording.rows.push(row);
 }

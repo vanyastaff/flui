@@ -689,7 +689,7 @@ trait depends on `flui-platform` instead.
 - **The input is a feature directory, `input/` (ADR-0151 §10).** Its model
   is what the platforms share: `assembly` (the pointer registry every backend
   assembles its contacts through, the decoder of native readings, a
-  touchpad viewport's readings, and the `native-capture` journal; it names
+  touchpad viewport's readings, which report to the crate-level `journal`; it names
   no platform file and forbids `unsafe`), `availability` (each backend's
   input capabilities table), `keys` (the Win32 virtual keys and the mouse
   buttons' codes, `MouseButtonCodes`, the `adapter` from `ui-events` key
@@ -3935,12 +3935,16 @@ backend's `PlatformInput` on any host, so Linux CI exercises Win32 QPC
 stamping, AppKit and UIKit uptime clocks, Android history batches and DOM
 predictions. The format is the `HostInput` recording's framing (JSON Lines, a
 major version, unknown fields skipped, an unknown variant a typed error); its
-codec lives in `tests/native_recording/codec.rs`, so serde never enters the
+schema is `flui-protocol`'s `native_recording`, which a reader such as the
+driver reads without this crate, and its codec is `journal::codec`
+(`journal/`, a crate-level module, since it names the input feature's model
+and the Win32 touchpad assembler its replay drives), built only with
+`native-capture` or `testing`, so serde never enters the
 backend graph. The header declares every device label its rows read, with the
 kinds they read it as, and the reader refuses a row that names another.
 
 Recordings are captured in debug builds with the `native-capture` feature:
-`input::assembly::capture::capture` installs a sink on a thread, and
+`journal::capture::capture` installs a sink on a thread, and
 every registry created there while it is installed — a backend window's
 included — reports each call before acting on it. A registry reports to the
 capture installed when it was created, identified by session rather than by
@@ -3970,8 +3974,8 @@ the owner thread before the backend opens its windows.
 
 The Android goldens were recorded on a device by a `NativeActivity` library
 that installed the capture before the Android platform created its registry and
-shared the test codec and sink (`tests/native_recording/journal.rs`) through
-`#[path]`. Each session, in a
+shared the codec and sink, then in the tests and now `journal::codec` and
+`journal::recorder`, through `#[path]`. Each session, in a
 fresh launch, is injected by the system (`adb shell input`, and `uinput`
 devices the real `InputReader` reads: a pen with pressure, tilt and hover, a
 touchpad in pointer mode), and the library wrote its journal and the `Debug`

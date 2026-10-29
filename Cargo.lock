@@ -2199,6 +2199,7 @@ dependencies = [
  "flui-native",
  "flui-painting",
  "flui-platform",
+ "flui-protocol",
  "flui-semantics",
  "flui-testing",
  "futures-util",

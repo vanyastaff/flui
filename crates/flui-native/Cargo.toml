@@ -69,6 +69,15 @@ tracing = { workspace = true }
 # Pointer assembly returns the one or two events a reading makes inline.
 smallvec = { workspace = true }
 
+# The native recording codec (`journal::codec`, ADR-0215 §4), with
+# `native-capture` or `testing` only, so the backends link no serializer.
+# Recordings are JSON Lines in the schema `flui-protocol` declares. A replay
+# reproduces the delivered floats only if every number reads back to the bits
+# it was written from, which serde_json's default parser does not guarantee.
+flui-protocol = { workspace = true, optional = true, features = ["serde"] }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true, features = ["float_roundtrip"] }
+
 # Synchronization
 parking_lot = { workspace = true }
 crossbeam-channel = { workspace = true, optional = true }
@@ -540,17 +549,17 @@ winit-backend = [
 web = []
 x11 = ["dep:x11rb", "dep:rustix", "dep:xkbcommon-dl"]
 
-# Debug builds only: `input::assembly::capture` journals every
-# pointer registry call on a thread as a native recording (ADR-0215 §4), for
-# turning a session on a native host into a checked-in test. No dependency;
-# the recording codec lives in the tests.
-native-capture = []
+# Debug builds only: `journal::capture` journals every pointer registry call
+# on a thread as a native recording (ADR-0215 §4), for turning a session on a
+# native host into a checked-in test; with it comes the recording codec.
+native-capture = ["dep:flui-protocol", "dep:serde", "dep:serde_json"]
 
 # The `testing` module (ADR-0243): what a test of a native host's windows
-# needs from the host itself, such as turns of the AppKit event loop. Off by
+# needs from the host itself, such as turns of the AppKit event loop, and the
+# native recording codec the tests replay recordings through. Off by
 # default and not part of the release API; this crate's tests turn it on
 # through the dev-dependency on itself.
-testing = []
+testing = ["dep:flui-protocol", "dep:serde", "dep:serde_json"]
 
 # The `unexpected_cfgs` check-cfg declaration for objc 0.2's
 # `cfg(feature = "cargo-clippy")` probes lives in build.rs — Cargo forbids
@@ -581,10 +590,12 @@ anyhow = { workspace = true }
 tracing-subscriber = { workspace = true }
 # Exact diagnostics for owner capabilities and retired public names.
 trybuild = { workspace = true }
-# The native recording codec (ADR-0215 §4) lives in the tests: recordings are
-# JSON Lines, and serde stays out of the backend graph. A replay reproduces
-# the delivered floats only if every number reads back to the bits it was
-# written from, which serde_json's default parser does not guarantee.
+# The native recordings read straight into `flui-protocol`'s schema, as a
+# reader without this crate reads them, and the browser fixtures' JSON. A
+# replay reproduces the delivered floats only if every number reads back to
+# the bits it was written from, which serde_json's default parser does not
+# guarantee.
+flui-protocol = { workspace = true, features = ["serde"] }
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["float_roundtrip"] }
 
@@ -758,7 +769,7 @@ globals = [
     { item = "owner::winit::ACTIVE_EVENT_LOOP", grant = "ADR-0097", class = "trampoline", reason = "winit's event-loop borrow, reached from its callbacks for same-thread window creation" },
     { item = "clipboard::lock::CLIPBOARD", grant = "ADR-0097", class = "process", reason = "serializes access to the system clipboard, which the process shares with every window" },
     { item = "clipboard::lock::reentrancy::SESSION_OPEN", grant = "ADR-0097", class = "diagnostic", reason = "debug-build detection of a nested clipboard session; it only asserts" },
-    { item = "input::assembly::capture::INSTALLED", grant = "ADR-0097", class = "diagnostic", reason = "debug-build `native-capture` journal of pointer registry calls; it only observes" },
+    { item = "journal::capture::INSTALLED", grant = "ADR-0097", class = "diagnostic", reason = "debug-build `native-capture` journal of pointer registry calls; it only observes" },
 ]
 
 [package.metadata.flui.modules]
@@ -784,7 +795,7 @@ platforms = ["windows", "apple", "android", "web", "linux", "winit", "headless"]
 groups = { apple = ["macos", "ios"], linux = ["wayland", "x11"] }
 base = ["owner", "version", "storage"]
 hosts = "hosts"
-crate-level = ["host", "platform", "host_window", "error", "executor", "task", "os", "testing"]
+crate-level = ["host", "platform", "host_window", "error", "executor", "task", "os", "testing", "journal"]
 # The one edge between platform files of one feature: the winit host on Linux
 # reads the compositor's outputs through the Linux source, which leaves with
 # winit. No window file names another feature's: a window's text input,

@@ -4,9 +4,7 @@
 
 #[cfg(all(debug_assertions, feature = "native-capture"))]
 pub mod capture;
-pub mod codec;
-#[cfg(all(debug_assertions, feature = "native-capture"))]
-pub mod journal;
+pub use flui_native::journal::codec;
 
 use std::fmt::Write as _;
 
@@ -760,6 +758,27 @@ fn native_recordings_write_back_byte_for_byte() {
     }
 }
 
+/// Each checked-in recording reads into `flui-protocol`'s schema alone and
+/// writes back byte for byte, as a reader without this crate (the driver)
+/// reads it: the schema, not the core codec, is the format.
+fn native_recordings_read_through_the_protocol_schema() {
+    use flui_protocol::native_recording::{FORMAT_VERSION, Header, Row};
+    for (name, text) in RECORDINGS {
+        let text = text.replace("\r\n", "\n");
+        let mut lines = text.lines();
+        let header: Header = serde_json::from_str(lines.next().expect("a header line"))
+            .unwrap_or_else(|error| panic!("{name}: the header reads: {error}"));
+        assert_eq!(header.flui_native_recording, FORMAT_VERSION, "{name}");
+        let mut written = vec![serde_json::to_string(&header).expect("a header writes")];
+        for (index, line) in lines.enumerate() {
+            let row: Row = serde_json::from_str(line)
+                .unwrap_or_else(|error| panic!("{name}: row {} reads: {error}", index + 2));
+            written.push(serde_json::to_string(&row).expect("a row writes"));
+        }
+        assert_eq!(written.join("\n") + "\n", text, "{name}");
+    }
+}
+
 fn read_error(text: &str) -> CodecError {
     NativeRecording::read(text.as_bytes()).expect_err("the recording is refused")
 }
@@ -918,6 +937,10 @@ pub(crate) fn contracts() -> Vec<(&'static str, fn())> {
         (
             "native_recordings_write_back_byte_for_byte",
             native_recordings_write_back_byte_for_byte,
+        ),
+        (
+            "native_recordings_read_through_the_protocol_schema",
+            native_recordings_read_through_the_protocol_schema,
         ),
         (
             "an_unknown_native_variant_is_a_typed_error_not_a_skipped_row",
