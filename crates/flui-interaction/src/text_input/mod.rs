@@ -945,6 +945,15 @@ impl TextInputOwner {
         !self.gate.is_open()
     }
 
+    /// Whether a failure owner code raised after a grant waits in this
+    /// presentation's gate: a grant the platform asked for outside any
+    /// dispatch or anchor parked it, and the next
+    /// [`Self::run_deferred_grants`] reports it.
+    #[must_use]
+    pub fn holds_failure(&self) -> bool {
+        self.gate.holds_failure()
+    }
+
     /// Run what waited for the frame to close: first the pull host's queued
     /// operations, then the grants queued while commits were closed — those
     /// of the stores replaced or detached during the frame, in that order,

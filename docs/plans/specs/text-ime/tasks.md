@@ -131,7 +131,17 @@ graph LR
 - [x] T2a — #1458
 - [x] T2b — #1460, #1465
 - [x] T6 — #1497, #1774, #1805, #1821
-- [ ] T3 — runtime: долг якоря, gate, pointer-down вне поля
+- [ ] T3 — runtime: долг якоря, gate, pointer-down вне поля. Сделаны п. 4 (pointer-down) и п. 5
+  (долг якоря): `UiRuntime::pay_owed_anchor` в начале `drain_owner_inbox`, `pump_background` и
+  `pump`, запрос wake, пока долг не погашен, отказ из gate через тот же долг. Строки:
+  `a_grant_deferred_by_a_panicking_frame_runs_without_another_frame` (F8),
+  `a_failed_anchor_stays_owed_and_asks_for_a_wake`,
+  `a_failure_parked_by_a_platform_grant_reaches_the_next_owner_turn`,
+  `a_press_outside_the_field_commits_the_composition_before_its_handlers` (R6, runtime);
+  каждая падает по assert при откате своего хунка. Осталось п. 6 (gate на время `RuntimeLease`:
+  третье состояние `CommitGate`, вход платформы через `platform_entry`, sync-отказ и async-очередь,
+  якорь в конце lease; `TextStoreHost` получает gate) и строка
+  `tsf_entries_while_the_realm_is_checked_out_run_no_user_code`
 - [x] T4 — остаток: `VK_PROCESSKEY`, ACP на Linux CI; #1955 (зонд и ручной прогон IME не выполнялись)
 - [x] T5 — остаток: unmount и хук закрытия; #1958. `dispose` снимает composing range на месте
   (`end_composition`), если поле держит клиента, и перестаёт сообщать правки в `on_changed`;

@@ -403,6 +403,14 @@ their enclosing values on every exit. Rejected execution never reaches the
 successful deferred-grant anchor. The internal frame helper returns only a
 presentation boolean, so no opaque pipeline output survives into grant cleanup.
 
+A drive that unwinds, or an anchor that fails, leaves the anchor owed
+(ADR-0142 item 5). The next owner turn runs it first: the inbox drain, the
+background pump, and the pump before its frame. A turn that ends with it still
+owed asks for a wake, and only a completed anchor clears it. A failure owner
+code parked in a presentation's gate after a grant the platform asked for
+directly, outside any dispatch or frame, makes the anchor owed too, so it is
+reported at that next turn.
+
 `rejected_nested_pump_preserves_outer_commits_and_animation_time` observes queued
 store grants, synchronous lock exclusion, retained command delivery and animation
 progress after refusal.

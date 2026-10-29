@@ -1,10 +1,11 @@
 # ADR-0142: Text store owner notification, commit gate and owner-code containment
 
-- **Status:** Accepted (2026-10-06). Items 1–3, 7 and 8 are implemented; items 4–6 land with
-  the widget's composition handling and the runtime's anchor debt. Of those, the host contract,
+- **Status:** Accepted (2026-10-06). Items 1–3, 5, 7 and 8 are implemented; items 4 and 6 land
+  with the widget's composition handling and the runtime's gate rule. Of those, the host contract,
   the owner's `complete_composition` with the `Abandoned` path, the removal of `active_store`
-  ([ADR-0135](ADR-0135-win32-text-services-hold-the-text-store-on-the-owner-thread.md)), and
-  the field's commit on blur, on a pointer-down on it and on a paste are in the code.
+  ([ADR-0135](ADR-0135-win32-text-services-hold-the-text-store-on-the-owner-thread.md)), the
+  field's commit on blur, on a pointer-down on it and on a paste, and the runtime's commit on a
+  pointer-down anywhere in the presentation are in the code.
 - **Date:** 2026-10-06
 - **Superseded-by:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md), for the placement
   of `LockArbiter`, `CompositionLedger` and `EditGeneration` in the contract crate only (they move
@@ -218,10 +219,15 @@ In place:
   its failing `on_changed` is raised after it) and its `attach: replacing a composing client …`
   rows, `a_pointer_down_and_a_paste_commit_the_composition_first` and
   `moving_focus_off_a_composing_field_commits_it_in_either_mount_order`.
+- Item 4, the runtime's pointer-down: `flui-runtime`
+  `a_press_outside_the_field_commits_the_composition_before_its_handlers`.
+- Item 5, with item 2's report when no dispatch or anchor follows: `flui-runtime`
+  `a_grant_deferred_by_a_panicking_frame_runs_without_another_frame` (an inbox drain, a
+  background pump, and a pump before its frame each pay the debt),
+  `a_failed_anchor_stays_owed_and_asks_for_a_wake` and
+  `a_failure_parked_by_a_platform_grant_reaches_the_next_owner_turn`.
 
 Outstanding:
 
-- Items 4–6, with their tests: undo (the field has none yet) and unmount committing a
-  composition (item 4), the runtime's pointer-down and close
-  hooks, anchor debt and the gate's UI runtime rule (items 4–6), and a failure the gate holds being
-  reported through the anchor debt when no dispatch or anchor follows (items 2 and 5).
+- Items 4 and 6, with their tests: undo (the field has none yet), unmount committing a
+  composition and the accepted-close hook (item 4), and the gate's UI runtime rule (item 6).

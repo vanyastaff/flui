@@ -263,8 +263,9 @@ impl CommitGate {
         }
     }
 
-    /// Whether a failure waits here.
-    pub(crate) fn holds_failure(&self) -> bool {
+    /// Whether a failure waits here for its owner's next turn.
+    #[must_use]
+    pub fn holds_failure(&self) -> bool {
         self.failure.0.borrow().is_some()
     }
 
