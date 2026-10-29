@@ -386,6 +386,9 @@ impl UiRuntime {
         // The commit anchor: each presentation's queued grants, against the
         // stores that queued them.
         for presentation in self.presentations.iter() {
+            // A frame has passed since the actions an agent ran: the
+            // readings they owe are taken from the tree it left.
+            Self::complete_agent_reads(presentation);
             let _ran = presentation.text_input().run_deferred_grants();
             presentation.rearm_completion();
         }
