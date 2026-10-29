@@ -480,3 +480,128 @@ pub(crate) fn a_panicking_route_hook_leaves_the_navigator_usable() {
     );
     assert!(built.contains("after"), "and its content built");
 }
+
+// ============================================================================
+// Closing the window mid-navigation
+// ============================================================================
+
+/// **The window closes while a page is mid-transition and its hero is airborne.**
+/// A modal page route sits halfway up its entrance curve with a shuttle in the
+/// overlay; the window closes and its tree goes with it, while the application
+/// keeps its `NavigatorHandle`.
+///
+/// Observable: the close ends the flight and takes the route's overlay entry out
+/// of the overlay; no controller stays registered with the scope's `Vsync`, none
+/// runs, and no frame is requested from the close on. Once the application drops
+/// its handle as well, the route — its page builder, its `TransitionInner`, its
+/// modal registry entry — is released.
+///
+/// Characterization: this holds on the code as it is.
+pub(crate) fn closing_mid_transition_releases_the_route_overlay_and_hero() {
+    use std::cell::Cell;
+    use std::time::Duration;
+
+    use flui_animation::{Animation as _, Vsync};
+    use flui_foundation::ValueKey;
+    use flui_view::CloseReason;
+    use flui_widgets::__test_access::{
+        HeroControllerProbe as _, OverlayEntryProbe as _, RouteProbe as _,
+    };
+    use flui_widgets::navigator::{Hero, HeroController, NavigatorObserver, PageRoute};
+    use flui_widgets::{Center, VsyncScope};
+
+    use crate::common::{lay_out_animated, tight};
+
+    const TRANSITION: Duration = Duration::from_millis(300);
+    const FRAME: Duration = Duration::from_millis(16);
+
+    fn hero_page(page: Option<Rc<()>>) -> PageRoute<i32> {
+        PageRoute::<i32>::new(move |_ctx, _primary, _secondary| {
+            let _page = page.clone();
+            Center::new()
+                .child(Hero::new(
+                    ValueKey::new("shared"),
+                    SizedBox::new(40.0, 30.0),
+                ))
+                .into_view()
+                .boxed()
+        })
+        .transition_duration(TRANSITION)
+    }
+
+    let vsync = Vsync::new();
+    let frame_requests = Rc::new(Cell::new(0_usize));
+    vsync.set_frame_requester(Some(Rc::new({
+        let frame_requests = Rc::clone(&frame_requests);
+        move || frame_requests.set(frame_requests.get() + 1)
+    })));
+    let navigator = NavigatorHandle::new();
+    navigator.seed_initial(hero_page(None));
+    let controller = HeroController::new();
+    navigator.add_observer(Arc::clone(&controller) as Arc<dyn NavigatorObserver>);
+    let mut laid = lay_out_animated(
+        VsyncScope::new(vsync.clone(), Navigator::new(navigator.clone())),
+        tight(400.0, 400.0),
+        vsync.clone(),
+    );
+
+    let page = Rc::new(());
+    let route = hero_page(Some(Rc::clone(&page)));
+    let transition = route.transition_handle();
+    let _push = laid.enter_owner_scope(|| navigator.push(route));
+    laid.pump_for(FRAME);
+    laid.pump_for(FRAME);
+
+    let top = navigator.current().expect("the page is pushed");
+    let entry = navigator
+        .entry_of(top)
+        .expect("the page has an overlay entry");
+    let value = transition
+        .controller()
+        .expect("the push installed the controller")
+        .value();
+    assert!(
+        value > 0.0 && value < 1.0,
+        "precondition: the entrance is mid-curve ({value})"
+    );
+    assert_eq!(
+        controller.flights().len(),
+        1,
+        "precondition: the hero is airborne"
+    );
+    assert!(entry.is_mounted(), "precondition: the page is on screen");
+    assert!(
+        navigator.route_modal(top).is_some(),
+        "precondition: the page is in the modal registry"
+    );
+    assert!(vsync.has_running(), "precondition: its transition ticks");
+    drop(transition);
+
+    laid.request_close(CloseReason::User);
+    let requests_at_close = frame_requests.get();
+    drop(laid);
+
+    assert_eq!(controller.flights().len(), 0, "the close ended the flight");
+    assert!(
+        !entry.is_mounted(),
+        "the route's overlay entry left the overlay"
+    );
+    assert!(
+        vsync.is_empty(),
+        "no controller stays registered with the scope's ticker registry"
+    );
+    assert!(!vsync.has_running(), "nothing runs after the close");
+    assert_eq!(
+        frame_requests.get(),
+        requests_at_close,
+        "nothing requests a frame after the close"
+    );
+
+    drop(entry);
+    drop(navigator);
+    assert_eq!(
+        Rc::strong_count(&page),
+        1,
+        "dropping the application's handle releases the route and its page builder"
+    );
+}

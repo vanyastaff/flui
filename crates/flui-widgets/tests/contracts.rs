@@ -777,6 +777,21 @@ fn route_transitions() {
     );
 }
 
+/// Navigation torn down mid-way: a window closing during a transition and a hero
+/// flight, an observer removed while its flight is airborne, and the last
+/// navigator handle dropped after a push. Each releases what it owned.
+#[test]
+fn navigation_teardown() {
+    run_cases(
+        "navigation_teardown",
+        &[
+            ("navigator::closing_mid_transition_releases_the_route_overlay_and_hero", crate::navigator::closing_mid_transition_releases_the_route_overlay_and_hero as fn()),
+            ("hero_flight::removing_the_observer_mid_flight_ends_the_flight", crate::hero_flight::removing_the_observer_mid_flight_ends_the_flight),
+            ("modal_route::dropping_the_last_navigator_handle_after_push_clears_the_modal_registry", crate::modal_route::dropping_the_last_navigator_handle_after_push_clears_the_modal_registry),
+        ],
+    );
+}
+
 /// The `Router`, `#[derive(Routable)]` round trip and the `WidgetsApp` shell.
 #[test]
 fn router_and_widgets_app() {
