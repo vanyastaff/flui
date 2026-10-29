@@ -2,7 +2,7 @@
 //! these may trip the run-time guard that refuses writes and creation during
 //! `build` (`SignalError::WrittenDuringBuild` / `CreatedDuringBuild`).
 //!
-//! - reads in `build` (`get`, `with`, `try_get`, `peek`) are the subscription path;
+//! - reads in `build` (`get`, `with`, `try_get`) are the subscription path;
 //! - one-argument `Cell::set(x)` is not a signal write;
 //! - a write inside a callback closure *defined* in `build` runs later, from an event;
 //! - creation and writes in `init_state` / `did_update_view` are outside the frame phases.
@@ -11,7 +11,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use crate::common::{lay_out, loose};
-use flui_view::{Reactive, Signal};
+use flui_view::{EventCx, Signal};
 use flui_widgets::prelude::*;
 use flui_widgets::{Column, SizedBox};
 
@@ -47,8 +47,9 @@ impl ViewState<Counter> for CounterState {
         // Creation and a write from a lifecycle hook: legal.
         let count = cx.signal(self.view.seed);
         let other = cx.signal(0u32);
-        other
-            .set(&cx.reactive(), self.view.seed)
+        let seed = self.view.seed;
+        cx.writer_source()
+            .write(|w| other.set(w, seed))
             .expect("fresh slot");
         self.count = Some(count);
         self.other = Some(other);
@@ -61,17 +62,16 @@ impl ViewState<Counter> for CounterState {
         let n = count.get(cx);
         let t = count.with(cx, |c| *c * 2);
         let p = other.try_get(cx).expect("alive");
-        let q = count.peek(&cx.reactive(), |c| *c).expect("alive");
         // One-argument Cell::set is not a signal write.
         self.cell.set(n);
         self.flag.set(true);
         // Writes inside callback closures defined here run later, from an event.
         let tapped = Rc::clone(&self.view.tapped);
-        let _tap: Box<dyn Fn(&Reactive)> = Box::new(move |r: &Reactive| {
+        let _tap: Box<dyn Fn(&mut EventCx<'_>)> = Box::new(move |r| {
             tapped.set(tapped.get() + 1);
             let _ = count.update(r, |c| *c += 1);
         });
-        let _later: Box<dyn Fn(&Reactive)> = Box::new(move |r: &Reactive| {
+        let _later: Box<dyn Fn(&mut EventCx<'_>)> = Box::new(move |r| {
             let _ = count.update(r, |c| *c -= 1);
             let _ = other.set(r, 0);
         });
@@ -79,7 +79,7 @@ impl ViewState<Counter> for CounterState {
             flui_view::ViewExt::boxed(SizedBox::square(1.0 + n as f64)),
             flui_view::ViewExt::boxed(SizedBox::square(1.0 + t as f64)),
             flui_view::ViewExt::boxed(SizedBox::square(1.0 + p as f64)),
-            flui_view::ViewExt::boxed(SizedBox::square(1.0 + q as f64)),
+            flui_view::ViewExt::boxed(SizedBox::square(1.0 + other.get(cx) as f64)),
         ])
     }
 

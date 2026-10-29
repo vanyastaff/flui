@@ -338,6 +338,14 @@ fn owner_retirement_custody_contract() {
                 active_retired_post_frame_rejection_custody as fn(),
             ),
             (
+                "active retired post-frame rejection is not returned",
+                active_retired_post_frame_rejection_is_not_returned,
+            ),
+            (
+                "healthy closed post-frame rejection returns the callback",
+                healthy_closed_post_frame_rejection_returns_the_callback,
+            ),
+            (
                 "closed scheduler post-frame rejection custody",
                 closed_scheduler_post_frame_rejection_custody,
             ),
@@ -477,6 +485,56 @@ fn active_retired_post_frame_rejection_custody() {
         0,
         "retired lane retains rejected capture under active custody"
     );
+    assert_healthy_post_frame_rejection_retires(&handle);
+}
+
+/// `schedule_or_return` under active failure custody retains the callback:
+/// it neither comes back to the caller nor runs nor drops.
+fn active_retired_post_frame_rejection_is_not_returned() {
+    let scheduler = UpdateScheduler::new();
+    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let handle = owner.post_frame_handle();
+    let drops = Rc::new(Cell::new(0));
+    let ran = Rc::new(Cell::new(false));
+    assert_eq!(
+        owner.pump_background(|| {
+            catch_nested_refusal_failure(&owner);
+            assert!(owner.retire().is_none());
+            let owed = (RemovedCapture(Rc::clone(&drops)), Rc::clone(&ran));
+            let rejection = handle
+                .schedule_or_return(owed, |(_capture, ran), _| ran.set(true))
+                .expect_err("the retired lane refuses");
+            assert!(
+                matches!(rejection, flui_scheduler::PostFrameRejection::Retained),
+                "custody keeps the callback, got {rejection:?}"
+            );
+        }),
+        Ok(0)
+    );
+    assert!(!ran.get(), "a retained callback never runs");
+    assert_eq!(drops.get(), 0, "a retained callback is never dropped");
+}
+
+/// A healthy closed queue hands the callback back, unrun and undropped, and
+/// the caller decides; the next healthy rejection still retires normally.
+fn healthy_closed_post_frame_rejection_returns_the_callback() {
+    let scheduler = UpdateScheduler::new();
+    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let handle = owner.post_frame_handle();
+    assert!(owner.retire().is_none());
+    let drops = Rc::new(Cell::new(0));
+    let ran = Rc::new(Cell::new(false));
+    let owed = (RemovedCapture(Rc::clone(&drops)), Rc::clone(&ran));
+    let rejection = handle
+        .schedule_or_return(owed, |(_capture, ran), _| ran.set(true))
+        .expect_err("the retired lane refuses");
+    let flui_scheduler::PostFrameRejection::Returned(owed) = rejection else {
+        panic!("a healthy close returns the value, got {rejection:?}");
+    };
+    assert_eq!(drops.get(), 0, "returned, not retired");
+    drop(owed);
+    assert!(!ran.get(), "the queue never ran it");
+    assert_eq!(drops.get(), 1, "the caller's drop retires it");
     assert_healthy_post_frame_rejection_retires(&handle);
 }
 

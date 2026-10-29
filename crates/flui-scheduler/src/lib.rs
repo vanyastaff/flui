@@ -175,8 +175,8 @@ pub use frame_telemetry::{
     InputEpochs, MAX_COALESCED_INPUT_EPOCHS, PresentOutcome,
 };
 pub use post_frame::{
-    OwnerFrame, OwnerFrameError, PostFrameHandle, PostFrameScheduleError, PresentationFrameError,
-    PresentationFrameScope, PresentationScopeFactory,
+    OwnerFrame, OwnerFrameError, PostFrameHandle, PostFrameRejection, PostFrameScheduleError,
+    PresentationFrameError, PresentationFrameScope, PresentationScopeFactory,
 };
 pub use scheduler::execution::ExecutionError;
 mod post_frame;

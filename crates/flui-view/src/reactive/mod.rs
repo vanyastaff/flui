@@ -1293,7 +1293,7 @@ impl<T: 'static> SignalWriteExt<T> for Signal<T> {
             return Ok(false);
         }
         self.set(
-            r,
+            w,
             pending
                 .take()
                 .expect("BUG: a signal replacement is consumed only once"),
@@ -1335,10 +1335,16 @@ mod tests {
 
     use super::*;
 
-    // The graph handle `BuildContext::reactive()` returns cannot subscribe
+    // The graph itself cannot subscribe
     // anyone; the element sink this crate mints can.
     static_assertions::assert_not_impl_any!(Reactive: ReaderSink);
     static_assertions::assert_impl_all!(ElementReads: ReaderSink);
+
+    /// A writer on `r`, as a `WriterSource` lends one: the graph itself is
+    /// not a write target.
+    fn w(r: &Reactive) -> Writer {
+        Writer::new(r.clone())
+    }
 
     struct DropBomb(&'static str);
 
@@ -1397,7 +1403,7 @@ mod tests {
         r.register_element_reader(a.slot(), e1);
         r.register_element_reader(b.slot(), e2);
 
-        a.set(&r, 10).unwrap();
+        a.set(&w(&r), 10).unwrap();
 
         assert_eq!(scheduled(&inbox), vec![e1]);
         assert!(
@@ -1439,7 +1445,7 @@ mod tests {
                     .collect::<Vec<_>>();
                 for signal in &signals {
                     assert_eq!(r.readers_of(signal.slot()), expected, "still subscribed");
-                    signal.set(&r, 1).unwrap();
+                    signal.set(&w(&r), 1).unwrap();
                 }
                 assert_eq!(
                     scheduled(&inbox),
@@ -1456,7 +1462,7 @@ mod tests {
         let e1 = ElementId::new(1);
         r.begin_element_build(e1);
         assert_eq!(
-            a.set(&r, 1),
+            a.set(&w(&r), 1),
             Err(SignalError::WrittenDuringBuild { element: e1 })
         );
         assert_eq!(
@@ -1465,7 +1471,7 @@ mod tests {
         );
         assert_eq!(a.peek(&r, |v| *v), Ok(0), "reads stay legal during build");
         r.end_element_build(e1, true);
-        assert_eq!(a.set(&r, 1), Ok(()));
+        assert_eq!(a.set(&w(&r), 1), Ok(()));
         assert!(r.try_signal(7u8).is_ok());
     }
 
@@ -1482,7 +1488,7 @@ mod tests {
             owned.peek(&r, |v| *v),
             Err(SignalError::Released { .. })
         ));
-        shared.set(&r, 1).unwrap();
+        shared.set(&w(&r), 1).unwrap();
         assert_eq!(scheduled(&inbox), [] as [ElementId; 0]);
 
         let fresh = r.signal(9u8);
@@ -1522,7 +1528,7 @@ mod tests {
         r.register_element_reader(a.slot(), ElementId::new(1));
 
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = a.update(&r, |value| {
+            let _ = a.update(&w(&r), |value| {
                 value.push_str(" but loaned");
                 r.release(a.slot());
                 panic!("release wins");
@@ -1579,7 +1585,7 @@ mod tests {
         );
 
         let write = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            a.update(&r, |v| {
+            a.update(&w(&r), |v| {
                 *v = 99;
                 panic!("writer panics");
             })
@@ -1596,7 +1602,7 @@ mod tests {
             vec![e1, e2],
             "a partially committed value must not stay invisible to its readers"
         );
-        a.set(&r, 5).unwrap();
+        a.set(&w(&r), 5).unwrap();
         assert_eq!(
             scheduled(&inbox),
             vec![e1, e2],
@@ -1618,7 +1624,7 @@ mod tests {
         }
 
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            signal.update(&r, |value| {
+            signal.update(&w(&r), |value| {
                 *value = 1;
                 panic!("updater probe");
             })
@@ -1639,7 +1645,7 @@ mod tests {
         let second_capture = DropBomb("second updater capture destructor probe");
 
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            signal.update(&r, move |value| {
+            signal.update(&w(&r), move |value| {
                 let _capture_bundle_stays_owned_by_the_updater = (&first_capture, &second_capture);
                 *value = 1;
                 panic!("updater probe");
@@ -1659,7 +1665,7 @@ mod tests {
             "the partially committed update must still invalidate its reader"
         );
         signal
-            .set(&r, 2)
+            .set(&w(&r), 2)
             .expect("the signal remains usable after both contained panics");
         assert_eq!(signal.peek(&r, |value| *value), Ok(2));
     }
@@ -1682,7 +1688,7 @@ mod tests {
         };
 
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            signal.update(&r, move |value| {
+            signal.update(&w(&r), move |value| {
                 let _capture_stays_owned_by_the_updater = &capture;
                 *value = 1;
             })

@@ -1,7 +1,5 @@
-use flui_view::{BuildContext, WriterSource};
+use flui_view::{Reactive, WriterSource};
 
-fn build_body(ctx: &dyn BuildContext) {
-    let _ = WriterSource::new(ctx.reactive());
+fn main() {
+    let _ = WriterSource::new(Reactive::new());
 }
-
-fn main() {}

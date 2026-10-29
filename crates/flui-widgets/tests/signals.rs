@@ -88,28 +88,44 @@ impl ViewState<TolerantReader> for TolerantReaderState {
 #[derive(Clone, StatefulView)]
 struct WriterInBuild {
     sig: Signal<u32>,
+    /// The owner's graph, which a test can reach and `build` cannot.
+    graph: flui_view::Reactive,
     outcome: Rc<Cell<Option<Result<(), SignalError>>>>,
     created: Rc<Cell<Option<Result<(), SignalError>>>>,
 }
 
 struct WriterInBuildState {
     view: WriterInBuild,
+    writer: Option<flui_view::WriterSource>,
 }
 
 impl StatefulView for WriterInBuild {
     type State = WriterInBuildState;
     fn create_state(&self) -> Self::State {
-        WriterInBuildState { view: self.clone() }
+        WriterInBuildState {
+            view: self.clone(),
+            writer: None,
+        }
     }
 }
 
 impl ViewState<WriterInBuild> for WriterInBuildState {
-    fn build(&self, _view: &WriterInBuild, ctx: &dyn BuildContext) -> impl IntoView {
-        let r = ctx.reactive();
-        // This test proves the run-time refusal of a write in build.
-        self.view.outcome.set(Some(self.view.sig.set(&r, 99)));
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.writer = Some(ctx.writer_source());
+    }
+
+    fn build(&self, _view: &WriterInBuild, _ctx: &dyn BuildContext) -> impl IntoView {
+        let writer = self.writer.as_ref().expect("init_state ran");
+        // This test proves the run-time refusal of a write in build: a widget
+        // holding a writer source can still open one there.
+        let sig = self.view.sig;
+        self.view
+            .outcome
+            .set(Some(writer.write(|cx| sig.set(cx, 99))));
         // Same for a slot creation in build.
-        self.view.created.set(Some(r.try_signal(0u8).map(|_| ())));
+        self.view
+            .created
+            .set(Some(self.view.graph.try_signal(0u8).map(|_| ())));
         SizedBox::square(1.0)
     }
 }
@@ -118,7 +134,8 @@ pub(crate) fn writing_a_signal_rebuilds_exactly_its_readers() {
     // Mount a placeholder first: the tree's own graph is the one the build
     // contexts hand out, so the signals must be minted there.
     let mut laid = lay_out(SizedBox::square(1.0), loose(1000.0));
-    let r = laid.with_build_owner_mut(|owner| owner.reactive().clone());
+    let r = laid.with_build_owner_mut(|owner| owner.signal_graph().clone());
+    let w = laid.with_build_owner_mut(|owner| owner.writer_source());
     let a = r.signal(10u32);
     let b = r.signal(20u32);
     let (builds_a, builds_b) = (builds(), builds());
@@ -136,7 +153,7 @@ pub(crate) fn writing_a_signal_rebuilds_exactly_its_readers() {
     assert_eq!(r.readers_of(a.slot()).len(), 1, "one element reads a");
     assert_eq!(r.readers_of(b.slot()).len(), 1, "one element reads b");
 
-    a.set(&r, 30).unwrap();
+    w.write(|cx| a.set(cx, 30)).unwrap();
     laid.tick();
 
     assert_eq!(
@@ -154,7 +171,7 @@ pub(crate) fn writing_a_signal_rebuilds_exactly_its_readers() {
     assert_eq!(laid.size(laid.child(root, 1)), size(20.0, 20.0));
 
     // Equality is opt-in: an equal plain write still rebuilds the reader.
-    a.set(&r, 30).unwrap();
+    w.write(|cx| a.set(cx, 30)).unwrap();
     laid.tick();
     assert_eq!(
         count(&builds_a),
@@ -162,7 +179,7 @@ pub(crate) fn writing_a_signal_rebuilds_exactly_its_readers() {
         "a plain equal write marks readers"
     );
 
-    assert!(!a.set_if_changed(&r, 30).unwrap());
+    assert!(!w.write(|cx| a.set_if_changed(cx, 30)).unwrap());
     laid.tick();
     assert_eq!(
         count(&builds_a),
@@ -226,7 +243,7 @@ const ORDERED_READERS: usize = 8;
 /// after a provider change, in a fresh mount.
 fn reader_rebuild_orders() -> (Vec<usize>, Vec<usize>) {
     let mut laid = lay_out(SizedBox::square(1.0), loose(1000.0));
-    let r = laid.with_build_owner_mut(|owner| owner.reactive().clone());
+    let r = laid.with_build_owner_mut(|owner| owner.signal_graph().clone());
     let sig = r.signal(0u32);
     let log = Rc::new(RefCell::new(Vec::new()));
     let page = |value| Level {
@@ -247,7 +264,9 @@ fn reader_rebuild_orders() -> (Vec<usize>, Vec<usize>) {
     laid.pump_widget(page(0));
     log.borrow_mut().clear();
 
-    sig.set(&r, 1).unwrap();
+    laid.with_build_owner_mut(|owner| owner.writer_source())
+        .write(|cx| sig.set(cx, 1))
+        .unwrap();
     laid.tick();
     let after_write = log.take();
 
@@ -275,7 +294,7 @@ pub(crate) fn same_depth_readers_rebuild_in_child_order() {
 
 pub(crate) fn a_stale_handle_read_in_build_is_a_typed_error_through_try_get() {
     let mut laid = lay_out(SizedBox::square(1.0), loose(1000.0));
-    let r = laid.with_build_owner_mut(|owner| owner.reactive().clone());
+    let r = laid.with_build_owner_mut(|owner| owner.signal_graph().clone());
     let sig = r.signal(4u32);
     let outcome = Rc::new(Cell::new(None));
     laid.pump_widget(TolerantReader {
@@ -299,12 +318,13 @@ pub(crate) fn a_stale_handle_read_in_build_is_a_typed_error_through_try_get() {
 
 pub(crate) fn writes_and_creations_inside_build_are_refused_by_the_runtime() {
     let mut laid = lay_out(SizedBox::square(1.0), loose(1000.0));
-    let r = laid.with_build_owner_mut(|owner| owner.reactive().clone());
+    let r = laid.with_build_owner_mut(|owner| owner.signal_graph().clone());
     let sig = r.signal(1u32);
     let outcome = Rc::new(Cell::new(None));
     let created = Rc::new(Cell::new(None));
     laid.pump_widget(WriterInBuild {
         sig,
+        graph: r.clone(),
         outcome: Rc::clone(&outcome),
         created: Rc::clone(&created),
     });
@@ -334,6 +354,8 @@ pub(crate) fn writes_and_creations_inside_build_are_refused_by_the_runtime() {
         "the refused creation leaked nothing"
     );
 
-    sig.set(&r, 2).unwrap();
+    laid.with_build_owner_mut(|owner| owner.writer_source())
+        .write(|cx| sig.set(cx, 2))
+        .unwrap();
     assert_eq!(sig.peek(&r, |v| *v), Ok(2));
 }

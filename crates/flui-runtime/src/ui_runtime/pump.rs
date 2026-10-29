@@ -62,7 +62,7 @@ pub(super) fn rejected_nested_pump_preserves_outer_commits_and_animation_time() 
     let observed_store = store.clone();
     let signal = runtime
         .widgets()
-        .with_build_owner(|owner| owner.reactive().signal(0u32));
+        .with_build_owner(|owner| owner.signal_graph().signal(0u32));
     let commands = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let observed_commands = Arc::clone(&commands);
     let weak_runtime = Rc::downgrade(&runtime);

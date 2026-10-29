@@ -119,8 +119,12 @@ pub enum UiCommand {
     SignalWrite {
         /// The slot the write targets; its `graph()` selects the presentation.
         target: flui_view::SignalSlot,
-        /// Runs against the graph that minted `target`, and against no other.
-        apply: Box<dyn FnMut(&flui_view::Reactive) + Send>,
+        /// Runs inside an `EventCx` opened by the `WriterSource` of the
+        /// presentation whose graph minted `target`, and of no other. A
+        /// retained `FnMut` envelope invoked at most once: after a callback
+        /// panic its captures are kept rather than destroyed (ADR-0086,
+        /// revised 2026-09-28).
+        apply: Box<dyn FnMut(&mut flui_view::EventCx<'_>) + Send>,
     },
 }
 
@@ -343,9 +347,10 @@ impl UiCommandSender {
     }
 
     /// Enqueue a signal write for the owner thread (ADR-0074 §5.8). At the
-    /// next Idle drain `apply` receives `target` re-attached and the graph
-    /// that minted it (ADR-0085 §1), wherever in this UI runtime that graph lives;
-    /// a write it performs marks readers for the following frame. If no
+    /// next Idle drain `apply` receives `target` re-attached and an `EventCx`
+    /// opened by the writer source of the presentation whose graph minted it
+    /// (ADR-0085 §1), wherever in this UI runtime that presentation lives; a
+    /// write it performs marks readers for the following frame. If no
     /// presentation of this UI runtime owns that graph any more, `apply` is
     /// dropped without running and the drain counts the command as stale.
     ///
@@ -361,11 +366,11 @@ impl UiCommandSender {
     pub(crate) fn send_signal_write<T: 'static>(
         &self,
         target: flui_view::SignalSender<T>,
-        mut apply: impl FnMut(flui_view::Signal<T>, &flui_view::Reactive) + Send + 'static,
+        mut apply: impl FnMut(flui_view::Signal<T>, &mut flui_view::EventCx<'_>) + Send + 'static,
     ) -> Result<(), CommandSendError> {
         self.send(UiCommand::SignalWrite {
             target: target.slot(),
-            apply: Box::new(move |reactive| apply(target.attach(), reactive)),
+            apply: Box::new(move |cx| apply(target.attach(), cx)),
         })
     }
 
@@ -719,7 +724,7 @@ impl UiRuntime {
                     }
                 },
                 UiCommand::SignalWrite { target, mut apply } => {
-                    let Some((presentation, reactive)) = self.signal_graph_for(target) else {
+                    let Some((presentation, source)) = self.signal_writer_for(target) else {
                         let diagnosed = catch_unwind(AssertUnwindSafe(|| {
                             tracing::warn!(
                                 target: "flui::signals",
@@ -773,7 +778,7 @@ impl UiRuntime {
                         }
                         continue;
                     };
-                    let outcome = catch_unwind(AssertUnwindSafe(|| apply(&reactive)));
+                    let outcome = catch_unwind(AssertUnwindSafe(|| source.write(|cx| apply(cx))));
                     // Keep the command envelope outside the caught invocation.
                     // Consuming a boxed `FnOnce` there would destroy captures
                     // during a callback unwind, where a panicking destructor

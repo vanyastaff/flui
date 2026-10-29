@@ -1,7 +1,7 @@
 error[E0277]: `dyn flui_view::BuildContext` cannot write a signal
- --> tests/ui/signal_write_through_build_context.rs:7:23
+ --> tests/ui/signal_write_through_build_context.rs:8:23
   |
-7 |     let _ = count.set(ctx, 1);
+8 |     let _ = count.set(ctx, 1);
   |                   --- ^^^ not a write context
   |                   |
   |                   required by a bound introduced by this call
@@ -12,9 +12,6 @@ error[E0277]: `dyn flui_view::BuildContext` cannot write a signal
 help: the following other types implement trait `WriteTarget`
  --> src/reactive/writer.rs
   |
-  | impl WriteTarget for Reactive {
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Reactive`
-...
   | impl WriteTarget for Writer {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Writer`
 ...
@@ -25,3 +22,9 @@ note: required by a bound in `set`
   |
   |     fn set<W: WriteTarget + ?Sized>(self, w: &W, value: T) -> Result<(), SignalError>;
   |               ^^^^^^^^^^^ required by this bound in `SignalWriteExt::set`
+
+error[E0599]: no method named `reactive` found for reference `&dyn flui_view::BuildContext` in the current scope
+ --> tests/ui/signal_write_through_build_context.rs:9:28
+  |
+9 |     let _ = count.set(&ctx.reactive(), 2);
+  |                            ^^^^^^^^ method not found in `&dyn flui_view::BuildContext`
