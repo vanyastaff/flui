@@ -120,13 +120,13 @@ fn sample_state(
     display: Option<flui_platform::DisplayId>,
     hovered: bool,
 ) -> WindowState {
-    let (title, size, focused, visible, execution, metrics) = {
+    let (title, size, focused, hidden, execution, metrics) = {
         let state = state.lock();
         (
             state.title.clone(),
             Size::new(state.width, state.height),
             state.focused,
-            state.visible,
+            state.hidden,
             state.execution,
             // The backing store is the drawable area; an empty box is none.
             flui_foundation::geometry::WindowMetrics::new(
@@ -153,7 +153,8 @@ fn sample_state(
         } else {
             WindowMode::Normal
         })
-        .with_visible(visible)
+        // A page cannot hide its canvas from the user: it is shown.
+        .with_visible(true)
         .with_focused(focused)
         .with_title(Some(title))
         .with_resizable(false)
@@ -165,6 +166,7 @@ fn sample_state(
         // The page owns the viewport; the canvas has no safe area of its own.
         safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
         execution,
+        occluded: hidden,
         hovered,
         // A page has no activation apart from the canvas's focus.
         active: focused,
@@ -190,7 +192,9 @@ struct WebWindowState {
     /// The canvas's backing store, which is the surface's physical size.
     backing: DeviceSize,
     focused: bool,
-    visible: bool,
+    /// The document is hidden (a background tab, a minimized browser window, a
+    /// locked screen): the canvas stays shown and is occluded.
+    hidden: bool,
     /// What the Page Lifecycle API last said: a frozen page runs no script.
     execution: WindowExecutionState,
 }
@@ -413,7 +417,7 @@ impl WebWindow {
             scale_factor,
             backing,
             focused: effective_focus(&canvas),
-            visible: !document.hidden(),
+            hidden: document.hidden(),
             execution: WindowExecutionState::Running,
         };
 
@@ -719,7 +723,7 @@ impl WebWindow {
                 .owner_document()
                 .expect("BUG: window construction verified the canvas document"),
             state: Arc::clone(&self.state),
-            observed: Cell::new(self.state.lock().visible),
+            observed: Cell::new(self.state.lock().hidden),
             accepting,
             publisher: self.publisher(),
         }
@@ -817,13 +821,13 @@ pub(crate) struct VisibilitySync {
 
 impl VisibilitySync {
     pub(crate) fn sync(&self) {
-        let visible = !self.document.hidden();
+        let hidden = self.document.hidden();
         // A host getter can synchronously retire this registration.
-        if !self.accepting.get() || self.observed.replace(visible) == visible {
+        if !self.accepting.get() || self.observed.replace(hidden) == hidden {
             return;
         }
         // Committed where the snapshot reads it, then published.
-        self.state.lock().visible = visible;
+        self.state.lock().hidden = hidden;
         self.publisher.cell.invalidate();
         self.publisher.publish();
     }

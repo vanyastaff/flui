@@ -124,8 +124,8 @@ impl WindowFixture for WaylandFixture {
 
     /// What the compositor sent, read here by xdg-shell's own numbering and
     /// never through the window's decoding: the size where it sized the window
-    /// itself (maximized or fullscreen), the activation, and whether it shows
-    /// the window at all (configured, on an output, not suspended). A floating
+    /// itself (maximized or fullscreen), the activation, and whether it draws
+    /// the window (configured, on an output, not suspended). A floating
     /// window's size is its client's, which the compositor does not report.
     fn readback(&self) -> Readback {
         /// `xdg_toplevel.state` values, as xdg-shell numbers them.
@@ -151,7 +151,10 @@ impl WindowFixture for WaylandFixture {
             metrics,
             focused: has(ACTIVATED),
             active: has(ACTIVATED),
-            visible: report.configures > 0 && !report.outputs.is_empty() && !has(SUSPENDED),
+            // A toplevel is shown until it closes; whether the compositor
+            // draws it is its occlusion.
+            visible: true,
+            occluded: Some(report.configures == 0 || report.outputs.is_empty() || has(SUSPENDED)),
             material: None,
         }
     }
@@ -405,9 +408,10 @@ fn an_occluded_window_is_given_its_frame_once_shown() {
         suspend(fixture.window.as_ref(), true),
         "a configured window"
     );
+    let state = fixture.window.state();
     assert!(
-        !fixture.window.state().visible,
-        "a suspended window is not shown"
+        state.visible && state.occluded && !state.is_seen(),
+        "a suspended window is shown and occluded: {state:?}"
     );
     // A present armed its callback and the compositor, not showing the
     // window, never answers it; a frame is asked for behind it.
@@ -716,6 +720,60 @@ fn a_due_deadline_no_frame_serves_leaves_the_loop_idle() {
     assert!(
         asked < 20,
         "the loop asked for its deadline {asked} times in half a second: it spun"
+    );
+}
+
+/// A frame that serves one obligation and leaves the next due at the same
+/// instant earns that one its own frame: the instant is armed again once a
+/// frame ran, so three obligations due at one instant get three frames.
+#[test]
+fn a_deadline_its_frame_left_due_again_gets_another_frame() {
+    let Some(platform) = platform("a_deadline_its_frame_left_due_again_gets_another_frame") else {
+        return;
+    };
+    const OBLIGATIONS: usize = 3;
+    let log = app::AppLog::new();
+    let due = Instant::now() + Duration::from_millis(60);
+    let pending = Rc::new(Cell::new(OBLIGATIONS));
+    let served = Rc::new(Cell::new(0));
+    let asked = Rc::clone(&pending);
+    log.answer_deadline_with(move || (asked.get() > 0).then_some(due));
+    let (frame_pending, frame_served) = (Rc::clone(&pending), Rc::clone(&served));
+    log.bootstrap(move |owner| {
+        let handler = RecordingWindowHandler::new();
+        // Every frame is produced; one at or after the instant serves an
+        // obligation.
+        handler.react_to_frame(move |_| {
+            if frame_pending.get() == 0 || Instant::now() < due {
+                return;
+            }
+            frame_pending.set(frame_pending.get() - 1);
+            frame_served.set(frame_served.get() + 1);
+        });
+        let window = owner
+            .open_window(
+                WindowOptions::default().with_title("a deadline due again"),
+                handler as _,
+            )
+            .expect("a window opens")
+            .try_ready()
+            .expect("at once");
+        drop(window);
+        let proxy = owner.proxy();
+        std::thread::spawn(move || {
+            // Room for three frames on a slow compositor.
+            std::thread::sleep(Duration::from_millis(1500));
+            let _ = proxy.request_quit();
+        });
+        Ok(())
+    });
+    Box::new(platform)
+        .run(Rc::clone(&log) as _)
+        .expect("the run ends");
+    assert_eq!(
+        served.get(),
+        OBLIGATIONS,
+        "each obligation due at one instant gets its frame"
     );
 }
 

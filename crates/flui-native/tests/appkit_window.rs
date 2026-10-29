@@ -64,12 +64,28 @@ mod cases {
             a_newer_mode_drops_a_fixed_size_held_for_normal,
         ),
         (
+            "a_window_behind_a_backdrop_still_reports_its_frames",
+            a_window_behind_a_backdrop_still_reports_its_frames,
+        ),
+        (
+            "one_redraw_is_one_frame_request",
+            one_redraw_is_one_frame_request,
+        ),
+        (
             "a_redraw_from_another_thread_is_queued_without_waiting",
             a_redraw_from_another_thread_is_queued_without_waiting,
         ),
         (
             "a_surface_target_keeps_its_view_and_releases_it_on_main",
             a_surface_target_keeps_its_view_and_releases_it_on_main,
+        ),
+        (
+            "a_minimized_window_is_still_shown",
+            a_minimized_window_is_still_shown,
+        ),
+        (
+            "a_size_outside_the_constraints_is_held_to_them",
+            a_size_outside_the_constraints_is_held_to_them,
         ),
         (
             "a_closed_window_frees_its_view",
@@ -168,12 +184,12 @@ mod cases {
         app
     }
 
-    /// The AppKit window behind an open FLUI window's raw handle.
+    /// The FLUI view an open FLUI window's raw handle names.
     #[expect(
         unsafe_code,
         reason = "the FLUI view behind an open AppKit window's raw window handle"
     )]
-    fn ns_window_of(window: &dyn HostWindow) -> Retained<NSWindow> {
+    fn ns_view_of(window: &dyn HostWindow) -> Retained<NSView> {
         use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
 
         let target = window.surface_target();
@@ -184,9 +200,15 @@ mod cases {
         // SAFETY: an AppKit window's handle names its FLUI view, which the
         // open window's view hierarchy keeps alive; retaining it gives this
         // test its own reference on the main thread the cases run on.
-        let view = unsafe { Retained::retain(handle.ns_view.as_ptr().cast::<NSView>()) }
-            .expect("the handle names a view");
-        view.window().expect("the FLUI view is in its window")
+        unsafe { Retained::retain(handle.ns_view.as_ptr().cast::<NSView>()) }
+            .expect("the handle names a view")
+    }
+
+    /// The AppKit window behind an open FLUI window's raw handle.
+    fn ns_window_of(window: &dyn HostWindow) -> Retained<NSWindow> {
+        ns_view_of(window)
+            .window()
+            .expect("the FLUI view is in its window")
     }
 
     /// An AppKit window for the conformance checks. Dropping it closes the
@@ -223,11 +245,14 @@ mod cases {
                 metrics,
                 focused,
                 active: focused && self.app.isActive(),
-                visible: ns_window.isVisible()
-                    && !miniaturized
-                    && ns_window
+                // Shown, as `WindowState::visible` means it: on screen, or in
+                // the Dock, where AppKit does not call it `isVisible`.
+                visible: ns_window.isVisible() || miniaturized,
+                occluded: Some(
+                    !ns_window
                         .occlusionState()
                         .contains(NSWindowOcclusionState::Visible),
+                ),
                 material: self.material(),
             }
         }
@@ -271,6 +296,59 @@ mod cases {
         /// hands out its view.
         fn has_native_surface(&self) -> bool {
             true
+        }
+
+        /// Drawables presented into the window's own layer the way wgpu's
+        /// Metal backend presents them: each from the layer's `nextDrawable`,
+        /// by a command buffer's `presentDrawable:`. Metal reports a shown
+        /// drawable on a thread of its own, so the frames go out over a few
+        /// refreshes before the window asks for its next frame.
+        #[expect(unsafe_code, reason = "the backing layer of the window's FLUI view")]
+        fn present_and_request_frame(&mut self) -> Option<flui_platform::FrameRequest> {
+            use objc2::runtime::{AnyObject, ProtocolObject};
+            use objc2_metal::{
+                MTLCommandBuffer as _, MTLCommandQueue as _, MTLCreateSystemDefaultDevice,
+                MTLDevice as _, MTLDrawable, MTLPixelFormat,
+            };
+            use objc2_quartz_core::CAMetalLayer;
+
+            let view = ns_view_of(self.window.as_ref());
+            // SAFETY: `layer` answers the live view's backing layer.
+            let layer: Option<Retained<AnyObject>> = unsafe { objc2::msg_send![&*view, layer] };
+            let layer = layer
+                .expect("the FLUI view is layer-backed")
+                .downcast::<CAMetalLayer>()
+                .expect("the FLUI view's layer is a CAMetalLayer");
+            let device = MTLCreateSystemDefaultDevice().expect("a Metal device");
+            layer.setDevice(Some(&device));
+            layer.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
+            let queue = device.newCommandQueue().expect("a Metal command queue");
+            for _ in 0..10 {
+                let drawable = layer.nextDrawable().expect("a drawable");
+                let buffer = queue.commandBuffer().expect("a Metal command buffer");
+                buffer.presentDrawable(ProtocolObject::<dyn MTLDrawable>::from_ref(&*drawable));
+                buffer.commit();
+                appkit::run_for(Duration::from_millis(20));
+            }
+            self.handler.take_calls();
+            self.window.request_redraw();
+            self.settle();
+            let request = self
+                .handler
+                .take_calls()
+                .into_iter()
+                .rev()
+                .find_map(|call| match call {
+                    HandlerCall::FrameRequested(request) => Some(request),
+                    _ => None,
+                });
+            if let Some(request) = request {
+                eprintln!(
+                    "the next frame request: vsync {:?}, presented {:?}",
+                    request.vsync, request.presented
+                );
+            }
+            request
         }
     }
 
@@ -364,6 +442,49 @@ mod cases {
         );
     }
 
+    /// A backdrop material makes an `NSVisualEffectView` the window's content
+    /// view and moves FLUI's view inside it; the view keeps its own layer, and
+    /// the frames drawn into it are still reported shown.
+    fn a_window_behind_a_backdrop_still_reports_its_frames() {
+        let mut fixture = open("presented behind a backdrop");
+        fixture
+            .window
+            .admit_and_apply(WindowCommand::SetMaterial(WindowMaterial::System))
+            .unwrap_or_else(|refusal| panic!("SetMaterial(System) was refused: {refusal:?}"));
+        fixture.settle();
+        assert_eq!(fixture.material(), Some(WindowMaterial::System));
+        let request = fixture
+            .present_and_request_frame()
+            .expect("the window asks for a frame");
+        assert!(
+            request.presented.is_some(),
+            "a frame shown behind a backdrop was reported: {request:?}"
+        );
+    }
+
+    /// A redraw is one frame request: the view's layer asks it for content
+    /// once per display pass, whichever of AppKit's routes reaches it.
+    fn one_redraw_is_one_frame_request() {
+        let fixture = open("one frame per redraw");
+        let frames = |handler: &RecordingWindowHandler| {
+            handler
+                .take_calls()
+                .iter()
+                .filter(|call| matches!(call, HandlerCall::FrameRequested(_)))
+                .count()
+        };
+        for _ in 0..3 {
+            fixture.handler.take_calls();
+            fixture.window.request_redraw();
+            appkit::run_for(Duration::from_millis(300));
+            assert_eq!(
+                frames(&fixture.handler),
+                1,
+                "one redraw asked for one frame"
+            );
+        }
+    }
+
     /// A surface target holds a reference of its own to its window's view, so
     /// a renderer that outlives the window holds no dangling view; dropped on
     /// another thread, it gives that reference back in a later turn of the
@@ -421,6 +542,59 @@ mod cases {
             held - 1,
             "the main queue gave back the target's reference"
         );
+    }
+
+    /// A window in the Dock is still shown: AppKit reports it neither
+    /// `isVisible` nor visible in its occlusion state, but the user sees it
+    /// there, and a click brings it back.
+    fn a_minimized_window_is_still_shown() {
+        use flui_platform::WindowMode::Minimized;
+
+        let mut fixture = open("minimized and shown");
+        fixture
+            .window
+            .admit_and_apply(WindowCommand::SetMode(Minimized))
+            .unwrap_or_else(|refusal| panic!("SetMode(Minimized) was refused: {refusal:?}"));
+        fixture.settle();
+
+        let state = fixture.window.state();
+        assert_eq!(state.mode, Minimized);
+        assert!(state.visible, "a minimized window reads as shown");
+    }
+
+    /// A size outside the window's constraints is held to them, as a resize
+    /// by the user is: AppKit itself applies a content size below the
+    /// minimum.
+    fn a_size_outside_the_constraints_is_held_to_them() {
+        use flui_foundation::geometry::Size;
+        use flui_platform::SizeConstraints;
+
+        let mut fixture = open("size within the constraints");
+        let min = Size::new(400.0, 300.0);
+        let max = Size::new(900.0, 700.0);
+        fixture
+            .window
+            .admit_and_apply(WindowCommand::SetConstraints(SizeConstraints::new(
+                Some(min),
+                Some(max),
+            )))
+            .unwrap_or_else(|refusal| panic!("SetConstraints was refused: {refusal:?}"));
+        for (asked, held) in [
+            (Size::new(200.0, 100.0), min),
+            (Size::new(2000.0, 2000.0), max),
+            (Size::new(200.0, 2000.0), Size::new(400.0, 700.0)),
+        ] {
+            fixture
+                .window
+                .admit_and_apply(WindowCommand::SetSize(asked))
+                .unwrap_or_else(|refusal| panic!("SetSize({asked:?}) was refused: {refusal:?}"));
+            fixture.settle();
+            assert_eq!(
+                fixture.window.state().content_size,
+                held,
+                "SetSize({asked:?}) under {min:?}..{max:?}"
+            );
+        }
     }
 
     /// A window that closed and dropped, with no surface target left, takes

@@ -68,6 +68,7 @@ pub(super) const CASES: &[Case] = &[
     case!(moving_a_composition_to_adjacent_text_keeps_each_origin_apart, since 2),
     case!(narrowing_a_reconversion_keeps_the_committed_text, since 2),
     case!(marking_part_of_new_text_leaves_the_rest_new, since 2),
+    case!(index_at_point_reads_its_two_choices_apart, since 3),
 ];
 
 // ============================================================================
@@ -1174,7 +1175,7 @@ fn index_at_point_round_trips_rect_for_range(fixture: &mut dyn TextStoreFixture)
         }
         let point = centre(bounds);
         let found = read(&store, move |session| {
-            session.index_at_point(point, PointMode::Exact)
+            session.index_at_point(point, PointMode::EXACT)
         })?
         .map_err(|error| format!("index_at_point({point:?}) for {start:?}: {error}"))?;
         // The character the store names must be at or before the one asked
@@ -1200,6 +1201,60 @@ fn index_at_point_round_trips_rect_for_range(fixture: &mut dyn TextStoreFixture)
     Ok(())
 }
 
+/// Every combination of [`PointMode`]'s two choices, which TSF sets
+/// independently.
+const POINT_MODES: [PointMode; 4] = [
+    PointMode::EXACT,
+    PointMode {
+        round_to_nearest_edge: true,
+        nearest_when_outside: false,
+    },
+    PointMode {
+        round_to_nearest_edge: false,
+        nearest_when_outside: true,
+    },
+    PointMode::NEAREST,
+];
+
+/// Rounding decides a point inside a character's box, and only that; the
+/// nearest-position choice decides a point outside every box, and only that.
+fn index_at_point_reads_its_two_choices_apart(fixture: &mut dyn TextStoreFixture) -> Outcome {
+    if !fixture.capabilities().geometry {
+        return Ok(());
+    }
+    let store = fresh(fixture, CORPUS);
+    let rects = scalar_rects(&store)?;
+    let &(first, a) = rects.first().ok_or("the corpus has no scalar")?;
+    let next = rects.get(1).map_or(at(CORPUS_LEN), |&(offset, _)| offset);
+    let y = centre(a).y;
+    // Three quarters across the first character: its end is the nearer edge.
+    let inside = Point::new(a.origin.x + a.size.width * 0.75, y);
+    let bounds = read(&store, |session| session.document_bounds())?
+        .map_err(|error| format!("document_bounds: {error}"))?;
+    let outside = Point::new(bounds.origin.x - 5.0, y);
+    for mode in POINT_MODES {
+        let found = read(&store, move |session| session.index_at_point(inside, mode))?;
+        let wanted = if mode.round_to_nearest_edge {
+            next
+        } else {
+            first
+        };
+        ensure_eq(
+            found,
+            Ok(wanted),
+            &format!("inside the first box, {mode:?}"),
+        )?;
+        let found = read(&store, move |session| session.index_at_point(outside, mode))?;
+        let wanted = if mode.nearest_when_outside {
+            Ok(first)
+        } else {
+            Err(TextStoreError::PointOutside)
+        };
+        ensure_eq(found, wanted, &format!("left of the text, {mode:?}"))?;
+    }
+    Ok(())
+}
+
 fn index_at_point_never_splits_a_surrogate_pair(fixture: &mut dyn TextStoreFixture) -> Outcome {
     if !fixture.capabilities().geometry {
         return Ok(());
@@ -1213,13 +1268,13 @@ fn index_at_point_never_splits_a_surrogate_pair(fixture: &mut dyn TextStoreFixtu
     for step in 0..=40_u8 {
         let x = left - 5.0 + (width + 10.0) * f64::from(step) / 40.0;
         let point = Point::new(x, y);
-        for mode in [PointMode::Exact, PointMode::Nearest] {
+        for mode in POINT_MODES {
             let found = read(&store, move |session| session.index_at_point(point, mode))?;
             match found {
                 Ok(offset) => ensure(boundaries.contains(&offset), || {
                     format!("index_at_point({point:?}, {mode:?}) = {offset:?}, inside a scalar")
                 })?,
-                Err(TextStoreError::PointOutside) if mode == PointMode::Exact => {}
+                Err(TextStoreError::PointOutside) if !mode.nearest_when_outside => {}
                 Err(error) => return Err(format!("index_at_point({point:?}, {mode:?}): {error}")),
             }
         }

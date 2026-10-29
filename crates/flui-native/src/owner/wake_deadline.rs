@@ -1,7 +1,8 @@
 //! The owner's wake deadline as a loop arms and delivers it: the instant the
 //! application's handler asks the loop to wake at
 //! (`AppHandler::wake_deadline`), and the rule that keeps a deadline no frame
-//! could service from spinning the loop. The Win32 and X11 loops wait on it.
+//! could service from spinning the loop. The Win32, X11 and Wayland loops wait
+//! on it.
 
 /// The last deadline the loop delivered. The application's handler answers
 /// with an instant only, so the same instant is either work no frame has had
@@ -65,11 +66,11 @@ impl ModalDelivery {
 /// into it when its handler's `frame_requested` produces a frame, so a frame
 /// request no handler ran a frame for (a declined one, or a window that let go
 /// of its handler) leaves it unchanged.
-#[cfg(any(windows, x11_host))]
+#[cfg(any(windows, x11_host, wayland_host))]
 #[derive(Default)]
 pub(crate) struct FrameCount(std::sync::Arc<std::sync::atomic::AtomicU64>);
 
-#[cfg(any(windows, x11_host))]
+#[cfg(any(windows, x11_host, wayland_host))]
 impl FrameCount {
     pub(crate) fn get(&self) -> u64 {
         self.0.load(std::sync::atomic::Ordering::Relaxed)

@@ -347,16 +347,19 @@ impl WinitWindow {
                 title: &title,
                 constraints: *self.constraints.lock(),
                 focused,
-                visible: *self.is_visible.lock() && !self.occluded.load(Ordering::Acquire),
+                visible: *self.is_visible.lock(),
                 display: self.display(),
                 probed_mode: self.probed_mode(),
-                reported: reported_facts(
-                    &self.window,
-                    self.appearance(),
-                    focused,
-                    self.delivery.hovered(),
-                    self.capabilities(),
-                ),
+                reported: ReportedFacts {
+                    occluded: self.occluded.load(Ordering::Acquire),
+                    ..reported_facts(
+                        &self.window,
+                        self.appearance(),
+                        focused,
+                        self.delivery.hovered(),
+                        self.capabilities(),
+                    )
+                },
             },
         );
         let mut remembered = self.normal_geometry.lock();
@@ -375,10 +378,6 @@ impl WinitWindow {
                 state.normal_geometry = *remembered;
             }
             _ => {}
-        }
-        #[cfg(target_os = "linux")]
-        if self.x11.get().is_some() && state.mode == WindowMode::Minimized {
-            state.visible = false;
         }
         state
     }
@@ -577,7 +576,9 @@ struct RecordedState<'a> {
 
 /// What a winit window reports beyond its geometry. winit has no safe area
 /// and never suspends a desktop window, and its focus is the activation (it
-/// reports no other).
+/// reports no other). Its occlusion is an event (`Occluded`) the window
+/// records, so this says unoccluded and the window's sample puts the record
+/// in.
 fn reported_facts(
     window: &Window,
     appearance: WindowAppearance,
@@ -590,6 +591,7 @@ fn reported_facts(
         appearance,
         safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
         execution: flui_platform::WindowExecutionState::Running,
+        occluded: false,
         hovered,
         active: focused,
         capabilities,

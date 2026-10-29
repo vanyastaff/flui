@@ -530,16 +530,18 @@ fn index_at_point(
         clippy::cast_sign_loss,
         reason = "the cell index is clamped to 0..=cells before the cast"
     )]
-    let cell = match mode {
-        PointMode::Exact => {
-            let inside = (0.0..InMemoryTextStore::LINE_HEIGHT).contains(&y)
-                && (0.0..cells as f64).contains(&x);
-            if !inside {
-                return Err(TextStoreError::PointOutside);
-            }
+    let cell = {
+        let inside =
+            (0.0..InMemoryTextStore::LINE_HEIGHT).contains(&y) && (0.0..cells as f64).contains(&x);
+        if inside && mode.round_to_nearest_edge {
+            x.round() as usize
+        } else if inside {
             x.floor() as usize
+        } else if mode.nearest_when_outside {
+            x.round().clamp(0.0, cells as f64) as usize
+        } else {
+            return Err(TextStoreError::PointOutside);
         }
-        PointMode::Nearest => x.round().clamp(0.0, cells as f64) as usize,
     };
     Ok(doc.offset_of_cell(cell))
 }

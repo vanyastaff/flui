@@ -3599,7 +3599,15 @@ graph LR
   keymap стоит в очереди как fd композитора, более новая закрывает прежнюю непрочитанной, читается
   одна при доставке (1000 keymap держат один открытый fd). Наблюдатель дисплеев (LY92) читает не
   больше 64 выходов и держит по одному описанию цвета с его информацией на выход; не запускалось
-  — в Weston 13 нет ни `tablet-v2`, ни управления цветом.
+  — в Weston 13 нет ни `tablet-v2`, ни управления цветом. Правило «работа на событие пира
+  ограничена» (ARCHITECTURE.md): имена раскладок читаются из текста keymap один раз
+  (`a_layout_switch_reads_no_keymap`: 10 000 смен группы на keymap 8 MiB — одно чтение, без
+  кэша 10 002 и 87 с), имена хранятся диапазонами в тексте keymap, не копиями
+  (`layout_names_are_held_in_the_keymap_text`). X11 спрашивает сервер только об устройствах, которые
+  изменение иерархии добавляет, по их id и сразу, как GTK и winit: перо, подключённое посреди пачки,
+  рисует пером с нажимом (`a_pen_plugged_in_mid_batch_draws_as_a_pen`), одно изменение — по запросу
+  на каждое названное устройство (`a_hierarchy_change_asks_only_for_what_it_names`);
+  `XIDeviceChanged` берёт классы из события без запроса (`a_device_change_brings_its_own_classes`).
 - [x] **LY83** — ветка `platform/x11-input` от `main` @ `c8401e35b`, слито `main` @ `ee5480c57`
   (#1933). **Позиция ввода** таблицы `X11` — цикл (`type Input = X11Loop`): таблица делает
   `input::linux::x11::X11Input` (`X11Host::input`), цикл держит его через хук
@@ -4333,7 +4341,7 @@ graph LR
   средствами удалённого управления не удалось), действие AccessKit (нажатие XCUITest — касание, а
   не `accessibilityActivate`), объявления.
 
-- [ ] **LY91** (не закрыта: остаётся Apple, см. ниже) — ветка `platform/present-feedback` от `main` @ `8aee131f6`. **Форма (для владельца).**
+- [ ] **LY91** (не закрыта: iOS ждёт прогона на устройстве, см. ниже) — ветка `platform/present-feedback` от `main` @ `8aee131f6`. **Форма (для владельца).**
   Обратная связь едет в запросе кадра: `FrameRequest::presented: Option<FramePresented { at:
   EventTime, refresh: Option<Duration> }>` — самый новый показанный кадр окна с прошлого запроса,
   на шкале ввода; никогда не прогноз (ожидаемый показ — `target_present`). Есть ли она у окна —
@@ -4424,9 +4432,17 @@ graph LR
   обновлений (живой отчёт отстаёт на 3–4, измерено на Windows); `a_presentation_report_bounds_the_idle_work_of_a_later_frame`
   получил случай устаревшего отчёта (с горизонтом 240 падает, как и таблица `presentation_feedback`).
   `EventTime::now` — одно чтение часов событий. Android — `NotYetOnThisHost`, пути в gaps
-  (запись 23). **Apple — остаток LY91, в сессию Mac после слияния:** свой `CAMetalLayer` хоста
-  (`makeBackingLayer` с переносом display pass в `updateLayer` на AppKit, `layerClass` на UIKit),
-  `nextDrawable` которого вешает `addPresentedHandler:` на выданный drawable. Проверки после
+  (запись 23). **Apple (ветка `macos/present-feedback`):** AppKit — `Native`: вид держит свой
+  `CAMetalLayer` (`owner::apple::metal_layer::FluiMetalLayer` из `makeBackingLayer`), wgpu берёт его
+  корневым слоем, его `nextDrawable` вешает `addPresentedHandler:`; display pass перенесён из
+  `drawRect:` в `updateLayer` (политика `DuringViewResize`, `display` слоя зовёт `updateLayer`
+  вида). Прогон 2026-10-28, M1, macOS 27.0, 100 Гц: конформанс AppKit — запрос после показанных
+  кадров несёт `presented` за 13 мс до запроса, `refresh` 10 мс; `counter` — 29 отчётов на 30
+  нажатий, интервалы кратны 9,999 мс, обработчик через 0,34–0,49 мс после показа; Main Thread
+  Checker — 0. UIKit — остаётся `NotYetOnThisHost`: с `CAMetalLayer` корневым слоем вида (и своим,
+  и простым) симулятор iOS не показал ничего, без него показывает; на симуляторе у drawable нет
+  `addPresentedHandler:`. iOS ждёт прогона на устройстве; до него строка открыта, остаток — в gaps
+  (запись 23). Проверки после
   исправлений и слияния LY95: Windows clippy рабочего пространства, nextest семи крейтов — 680 из 680; clippy
   macOS, Android, iOS lib; `checks`, `doc-strict`, `wasm-check`, гейты; WSL clippy шести
   вариантов и крейтов, xvfb 397 из 397, Weston 38 из 38, rustdoc, `api-closure` (4 пакета чисто).

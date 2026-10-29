@@ -74,9 +74,22 @@ this one path (ADR-0151 §9).
   snapshot.
   Showing, activating and closing are `WindowCommand`s (`Show`, `Activate`,
   `Close`, the last admitted by `WindowCapabilities::closes`), with no method
-  twin. `WindowState::is_seen` is the one reading of "the surface is seen":
-  visible and not minimized. A `compile_fail` doctest on the trait pins that
-  a getter does not compile.
+  twin. A `compile_fail` doctest on the trait pins that a getter does not
+  compile.
+- **Shown, minimized and occluded are three facts.** `visible` is the
+  window's show state (`Show`, `Hide`, the opening option), which minimizing
+  and covering leave `true`, as Win32's `WS_VISIBLE` and ICCCM's
+  Normal/Iconic do; `mode` says minimized; `occluded` says the window system
+  keeps a shown, unminimized window off the screen (a covering it reports, a
+  cloak, a locked session, a suspended toplevel, a background page or app).
+  `WindowState::successor` drops an occlusion reported for a hidden or
+  minimized window, so the three never overlap, and `WindowState::is_seen`
+  (shown, not minimized, not occluded) is the one reading of "the surface is
+  seen" that frame scheduling, haptics and the lifecycle aggregate
+  (ADR-0035 §4) take. Folding occlusion into `visible` made the hosts
+  disagree (X11 read a minimized window hidden, Win32 shown); a separate fact
+  is what winit (`Occluded`), AppKit (`occlusionState` beside `isVisible`)
+  and Chromium (`OcclusionState` visible/occluded/hidden) keep too.
 - **A window takes only an admitted command (ADR-0254 §2).**
   `WindowCommand::admit(&WindowCapabilities)` is the one constructor of
   `AdmittedCommand`, and `PlatformWindow::apply` takes nothing else

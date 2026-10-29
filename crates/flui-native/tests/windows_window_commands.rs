@@ -1268,7 +1268,8 @@ fn win32_readback(hwnd: HWND) -> Readback {
             .flatten(),
         focused: focus == hwnd,
         active: active == hwnd,
-        visible: shown && !(cloak_read && cloaked != 0),
+        visible: shown,
+        occluded: cloak_read.then_some(cloaked != 0),
         material: system_backdrop(hwnd),
     }
 }
@@ -1658,16 +1659,17 @@ fn a_live_resize_publishes_inside_its_modal_loop() {
     );
 }
 
-fn a_locked_session_or_a_cloak_hides_a_shown_window() {
+fn a_locked_session_or_a_cloak_occludes_a_shown_window() {
     let platform = platform();
     let window = open(&platform, options());
     settle();
     let events = record_visibility(&window);
     send(&window, WM_WTSSESSION_CHANGE, WTS_SESSION_LOCK as usize, 1);
     assert_eq!(*events.lock().expect("log"), [false]);
+    let locked = window.state();
     assert!(
-        !window.state().visible,
-        "a runtime that first reads the window now must not see it visible"
+        locked.visible && locked.occluded && !locked.is_seen(),
+        "a runtime that first reads the window now must not see it seen: {locked:?}"
     );
     send(
         &window,
@@ -1676,7 +1678,7 @@ fn a_locked_session_or_a_cloak_hides_a_shown_window() {
         1,
     );
     assert_eq!(*events.lock().expect("log"), [false, true]);
-    assert!(window.state().visible);
+    assert!(window.state().is_seen());
 
     let cloak = |on: bool| {
         let value = BOOL::from(on);
@@ -1939,8 +1941,8 @@ fn native_window_commands() {
             deadlines_are_delivered_while_the_window_is_moved,
         ),
         (
-            "a_locked_session_or_a_cloak_hides_a_shown_window",
-            a_locked_session_or_a_cloak_hides_a_shown_window,
+            "a_locked_session_or_a_cloak_occludes_a_shown_window",
+            a_locked_session_or_a_cloak_occludes_a_shown_window,
         ),
         ("the_win32_window_conforms", the_win32_window_conforms),
         (
