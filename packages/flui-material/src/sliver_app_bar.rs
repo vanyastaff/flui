@@ -366,7 +366,7 @@ impl SliverPersistentHeaderDelegate for SliverAppBarDelegate {
         // over 300ms.
         self.snap.then(|| {
             flui_sdk::widgets::FloatingHeaderSnapConfiguration::new(
-                flui_sdk::animation::ArcCurve::new(flui_sdk::animation::curves::EASE),
+                flui_sdk::animation::SharedCurve::new(flui_sdk::animation::curves::EASE),
                 std::time::Duration::from_millis(300),
             )
         })

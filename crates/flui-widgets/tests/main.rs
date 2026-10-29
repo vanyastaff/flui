@@ -124,6 +124,8 @@ mod navigator_public;
 mod overlay;
 #[path = "owner_code.rs"]
 mod owner_code;
+#[path = "owner_local_values.rs"]
+mod owner_local_values;
 #[path = "page_route.rs"]
 mod page_route;
 #[path = "page_transitions.rs"]

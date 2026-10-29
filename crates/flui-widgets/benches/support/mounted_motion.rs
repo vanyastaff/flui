@@ -7,7 +7,7 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use flui_animation::{ArcCurve, Linear, Vsync, curves};
+use flui_animation::{Linear, SharedCurve, Vsync, curves};
 use flui_foundation::geometry::{Matrix4, Rect};
 use flui_painting::{display_list::DrawOp, styling::Color};
 use flui_rendering::{layer::Layer, pipeline::PipelineOwner};
@@ -367,7 +367,7 @@ impl MountedScroll {
 
     pub(super) fn animate(&mut self) {
         self.controller
-            .animate_to(1000.0, RUN, ArcCurve::new(curves::LINEAR));
+            .animate_to(1000.0, RUN, SharedCurve::new(curves::LINEAR));
         self.laid.tick();
     }
 

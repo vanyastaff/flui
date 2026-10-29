@@ -377,9 +377,8 @@ behavior, not an oversight.
 the radio role changes what the control *is* to a screen reader, not what a
 platform request can *do* to it. `InkResponse` does not publish a tap semantics
 action, so a screen reader cannot activate the control through the semantics
-tree. In FLUI the widget-layer gesture callback is `Rc<dyn Fn(..)>` while
-`SemanticsActionHandler` is `Arc<dyn Fn(..) + Send + Sync>`, so bridging the two
-is a storage-and-lifetime decision that owes its own design record; until then
+tree. Bridging the widget-layer gesture callback to a semantics action is a
+storage-and-lifetime decision that owes its own design record; until then
 activation reaches the tree only through the pointer path.
 
 **Replacement coverage:**

@@ -3,7 +3,10 @@
 //! The SemanticsOwner coordinates updates to the semantics tree and
 //! sends updates to the platform accessibility services.
 
-use std::{rc::Weak, sync::Arc};
+use std::{
+    rc::{Rc, Weak},
+    sync::Arc,
+};
 
 use flui_foundation::SemanticsId;
 use flui_protocol::TreeRevision;
@@ -437,7 +440,7 @@ fn inapplicable_of(node: &SemanticsNode) -> impl Iterator<Item = InapplicableAtt
 struct PublishedCustomAction {
     /// The handler's allocation, held weakly: identity without keeping the
     /// handler's captures alive, and without letting its address be reused.
-    handler: std::sync::Weak<dyn Fn(ActionCall) + Send + Sync>,
+    handler: std::rc::Weak<dyn Fn(ActionCall)>,
     own_id: crate::CustomActionId,
     label: smol_str::SmolStr,
 }
@@ -448,7 +451,7 @@ impl PublishedCustomAction {
     fn is(&self, declared: &crate::DeclaredCustomAction<'_>) -> bool {
         self.own_id == declared.own_id
             && self.label == declared.label
-            && std::ptr::addr_eq(self.handler.as_ptr(), Arc::as_ptr(declared.handler))
+            && std::ptr::addr_eq(self.handler.as_ptr(), Rc::as_ptr(declared.handler))
     }
 }
 
@@ -471,7 +474,7 @@ impl OfferRecord {
             custom: config
                 .offered_custom_actions()
                 .map(|declared| PublishedCustomAction {
-                    handler: Arc::downgrade(declared.handler),
+                    handler: Rc::downgrade(declared.handler),
                     own_id: declared.own_id,
                     label: declared.label.into(),
                 })
@@ -1107,7 +1110,7 @@ impl SemanticsOwner {
                 {
                     let viewport_rect = ancestor.reveal_rect();
                     steps.push((
-                        Arc::clone(handler),
+                        Rc::clone(handler),
                         Reveal {
                             target_rect,
                             viewport_rect,
@@ -1182,12 +1185,12 @@ impl SemanticsOwner {
             // The handler hears the id its own configuration gave the action,
             // not the one a merge published it under.
             call = ActionCall::CustomAction(declared.own_id);
-            Arc::clone(declared.handler)
+            Rc::clone(declared.handler)
         } else {
             let Some(handler) = (actions & routed.value() != 0)
                 .then(|| config.action_handler(routed))
                 .flatten()
-                .map(Arc::clone)
+                .map(Rc::clone)
             else {
                 return Err(unsupported);
             };
@@ -1902,7 +1905,7 @@ mod tests {
         let mut orphan = SemanticsNode::new().with_source_render_id(orphan_render_id);
         orphan
             .config_mut()
-            .add_action(SemanticsAction::Click, Arc::new(|_| {}));
+            .add_action(SemanticsAction::Click, Rc::new(|_| {}));
         let _orphan = owner.insert(orphan);
         owner.set_root(Some(root));
 
@@ -2027,7 +2030,7 @@ mod tests {
             let counter = Arc::clone(&counter);
             node.config_mut().add_action(
                 SemanticsAction::Click,
-                Arc::new(move |_| *counter.lock() += 1),
+                Rc::new(move |_| *counter.lock() += 1),
             );
             node
         };
@@ -2102,7 +2105,7 @@ mod tests {
         let ran = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let handler = |name: &'static str| -> crate::SemanticsActionHandler {
             let ran = Arc::clone(&ran);
-            Arc::new(move |_| ran.lock().push(name))
+            Rc::new(move |_| ran.lock().push(name))
         };
         let mut owner = SemanticsOwner::new(Arc::new(|_: &crate::TreeUpdate| {}));
         let render = RenderId::new(3);
@@ -2179,7 +2182,7 @@ mod tests {
             for id in [crate::CustomActionId::at(1), crate::CustomActionId::at(0)] {
                 let declared = config.custom_action(id).expect("declared");
                 node.config_mut()
-                    .add_custom_action(declared.label, Arc::clone(declared.handler));
+                    .add_custom_action(declared.label, Rc::clone(declared.handler));
             }
             node
         };

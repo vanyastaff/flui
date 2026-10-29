@@ -13,7 +13,6 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use flui_foundation::geometry::{Axis, Vec2};
@@ -147,7 +146,7 @@ impl DragAutoscrollAnchor {
         ));
         match ctx.register_local_payload(slot) {
             Ok(target) => {
-                render_object.set_shared_metadata(Some(Arc::new(target)));
+                render_object.set_metadata(Some(target));
             }
             Err(error) => tracing::debug!(
                 ?error,

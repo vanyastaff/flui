@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use flui_foundation::geometry::Lerp;
 
-use crate::curve::{ArcCurve, Curve};
+use crate::curve::{Curve, SharedCurve};
 use crate::tween_types::Animatable;
 use crate::value_conversion::TwoWayConverter;
 
@@ -68,7 +68,7 @@ struct Segment<T: TwoWayConverter> {
 /// How a segment moves between its two values.
 enum Motion<V> {
     /// `from.lerp_to(to, curve(s))`.
-    Eased(ArcCurve),
+    Eased(SharedCurve),
     /// A cubic Hermite segment with end velocities in units per second.
     Cubic { start_velocity: V, end_velocity: V },
     /// `from` throughout (`from == to`).
@@ -82,7 +82,7 @@ enum Pending<T> {
     Eased {
         value: T,
         over: Duration,
-        curve: ArcCurve,
+        curve: SharedCurve,
     },
     Cubic {
         value: T,
@@ -311,16 +311,11 @@ impl<T: Lerp + TwoWayConverter> KeyframesBuilder<T> {
     /// The curve belongs to this segment — the one arriving at `value` — and
     /// maps the segment's own progress. An overshooting curve extrapolates,
     /// as it does in a [`Tween`](crate::Tween).
-    pub fn to(
-        mut self,
-        value: T,
-        over: Duration,
-        curve: impl Curve + Send + Sync + 'static,
-    ) -> Self {
+    pub fn to(mut self, value: T, over: Duration, curve: impl Curve + 'static) -> Self {
         self.segments.push(Pending::Eased {
             value,
             over,
-            curve: ArcCurve::new(curve),
+            curve: SharedCurve::new(curve),
         });
         self
     }

@@ -94,7 +94,7 @@ use std::{
 };
 
 use flui_animation::{
-    Animatable, Animation, AnimationController, ArcCurve, CurvedAnimation, Tween, curves,
+    Animatable, Animation, AnimationController, CurvedAnimation, SharedCurve, Tween, curves,
 };
 use flui_foundation::Single;
 use flui_foundation::geometry::Axis;
@@ -225,7 +225,7 @@ impl fmt::Debug for OverScrollHeaderStretchConfiguration {
 #[derive(Debug, Clone)]
 pub struct FloatingHeaderSnapConfiguration {
     /// The snap animation curve.
-    pub curve: ArcCurve,
+    pub curve: SharedCurve,
     /// The snap animation's duration.
     pub duration: Duration,
 }
@@ -233,7 +233,7 @@ pub struct FloatingHeaderSnapConfiguration {
 impl FloatingHeaderSnapConfiguration {
     /// Creates a snap configuration with an explicit curve and duration.
     #[must_use]
-    pub fn new(curve: ArcCurve, duration: Duration) -> Self {
+    pub fn new(curve: SharedCurve, duration: Duration) -> Self {
         Self { curve, duration }
     }
 }
@@ -241,7 +241,7 @@ impl FloatingHeaderSnapConfiguration {
 impl Default for FloatingHeaderSnapConfiguration {
     fn default() -> Self {
         Self {
-            curve: ArcCurve::new(curves::EASE),
+            curve: SharedCurve::new(curves::EASE),
             duration: Duration::from_millis(300),
         }
     }
@@ -946,7 +946,7 @@ pub struct RenderSliverFloatingHeaderBase<M: FloatingHeaderMode> {
     controller: Option<AnimationController>,
     /// Lazily (re)built by [`Self::update_animation`] on the first retarget —
     /// rebuilt fresh per call, not fixed at construction.
-    animation: Option<CurvedAnimation<ArcCurve>>,
+    animation: Option<CurvedAnimation<SharedCurve>>,
     /// The begin/end span the animation interpolates over. Rebuilt alongside
     /// `animation` in [`Self::update_animation`].
     float_tween: Tween<f64>,
@@ -1140,7 +1140,7 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
     /// `duration` is silently ignored on every later call), this controller is
     /// always already-built — there is no "first creation" moment to gate on,
     /// so this method applies `duration` via `set_duration` on every call.
-    fn update_animation(&mut self, duration: Duration, end_value: f64, curve: ArcCurve) {
+    fn update_animation(&mut self, duration: Duration, end_value: f64, curve: SharedCurve) {
         let Some(controller) = self.controller.as_ref() else {
             return;
         };

@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use common::{LaidOut, lay_out, lay_out_animated, tight};
 use flui_material::{TabBar, TabBarView, TabController, Theme, ThemeData};
-use flui_sdk::animation::{ArcCurve, MotionOverride, MotionPolicy, MotionSpec, Vsync};
+use flui_sdk::animation::{MotionOverride, MotionPolicy, MotionSpec, SharedCurve, Vsync};
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::animated::VsyncScope;
@@ -419,7 +419,7 @@ pub fn a_refused_curve_still_moves_an_attached_pager() {
     let vsync = Vsync::new();
     let controller = TabController::new(4, 0).with_motion(MotionSpec::Curve {
         duration: Duration::from_millis(300),
-        curve: ArcCurve::new(crate::tabs::VerticalStart),
+        curve: SharedCurve::new(crate::tabs::VerticalStart),
     });
     let mut laid = mount_tabs_over_pages(&controller, &vsync);
     laid.pump_for(Duration::ZERO);

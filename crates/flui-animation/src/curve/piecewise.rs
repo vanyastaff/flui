@@ -91,7 +91,7 @@ struct Knot {
 /// exactly 0 and 1 even when multiple stops occupy an endpoint.
 ///
 /// Construction owns an immutable shared slice. Sampling allocates nothing.
-/// Independently constructed equivalent curves compare by value in [`super::ArcCurve`].
+/// Independently constructed equivalent curves compare by value in [`super::SharedCurve`].
 ///
 /// ```
 /// use flui_animation::{Curve, LinearStop, PiecewiseLinear};

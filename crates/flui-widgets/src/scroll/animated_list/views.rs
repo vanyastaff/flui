@@ -3,7 +3,6 @@
 
 use std::fmt;
 use std::hash::Hash;
-use std::sync::Arc;
 
 use flui_animation::{MotionSpec, Stagger};
 use flui_foundation::geometry::Axis;
@@ -222,13 +221,12 @@ scroll_view_methods!(AnimatedList);
 /// [`GridView::builder`](crate::GridView::builder) lays its tiles out.
 ///
 /// ```
-/// use std::sync::Arc;
 /// use flui_rendering::delegates::SliverGridDelegateWithFixedCrossAxisCount;
 /// use flui_widgets::prelude::*;
 /// use flui_widgets::AnimatedGrid;
 ///
 /// let grid = AnimatedGrid::new(
-///     Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(3)),
+///     SliverGridDelegateWithFixedCrossAxisCount::new(3),
 ///     1..=9_u32,
 ///     |n| *n,
 ///     |n| Text::new(n.to_string()),
@@ -253,7 +251,7 @@ where
     ///
     /// When two items share a key, with a `BUG:` message naming it.
     pub fn new<V: IntoView>(
-        grid_delegate: Arc<dyn SliverGridDelegate>,
+        grid_delegate: impl SliverGridDelegate + 'static,
         items: impl IntoIterator<Item = T>,
         key: impl Fn(&T) -> K,
         builder: impl Fn(&T) -> V + 'static,

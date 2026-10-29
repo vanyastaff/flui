@@ -63,7 +63,7 @@ use super::clip::ClipSourceToken;
 /// Deliberately **not** [`super::clip::ClipGeometry`] — see the module doc
 /// for why (extra per-instance config on the rectangle source, plus a
 /// shadow/fill vocabulary `ClipGeometry` has no need for).
-pub trait PhysicalClipShape: Clone + fmt::Debug + Send + Sync + 'static {
+pub trait PhysicalClipShape: Clone + fmt::Debug + 'static {
     /// Returns `true` if the local-space `position` falls inside the shape.
     fn contains(&self, position: Point<f64>) -> bool;
 
@@ -138,7 +138,7 @@ impl PhysicalClipShape for Path {
 // =============================================================================
 
 /// Per-variant "how do I derive the clip shape from `size`" source.
-pub trait PhysicalClipSource: Clone + fmt::Debug + Send + Sync + 'static {
+pub trait PhysicalClipSource: Clone + fmt::Debug + 'static {
     /// The clip-shape type this source produces.
     type Shape: PhysicalClipShape;
 

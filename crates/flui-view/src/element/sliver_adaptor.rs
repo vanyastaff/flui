@@ -1474,16 +1474,16 @@ impl LazyMultiBoxRender for RenderSliverGrid {
     ) -> flui_rendering::RenderUpdateImpact {
         RenderSliverGrid::set_semantic_set_size(self, count)
     }
-    type Config = Arc<dyn flui_rendering::delegates::SliverGridDelegate>;
+    type Config = Rc<dyn flui_rendering::delegates::SliverGridDelegate>;
 
     const KIND: &'static str = "SliverGrid";
 
     fn create(config: &Self::Config, item_count: usize) -> Self {
-        RenderSliverGrid::new(Arc::clone(config), item_count)
+        RenderSliverGrid::with_shared_delegate(Rc::clone(config), item_count)
     }
 
     fn update(&mut self, config: &Self::Config) -> flui_rendering::RenderUpdateImpact {
-        self.set_grid_delegate(Arc::clone(config))
+        self.set_grid_delegate(Rc::clone(config))
     }
 
     fn item_count(&self) -> usize {
@@ -1512,10 +1512,12 @@ pub type SliverGrid = SliverMultiBoxAdaptor<RenderSliverGrid>;
 impl SliverGrid {
     /// Constructs a new lazy-grid view configuration.
     pub fn new(
-        grid_delegate: Arc<dyn flui_rendering::delegates::SliverGridDelegate>,
+        grid_delegate: impl flui_rendering::delegates::SliverGridDelegate + 'static,
         item_count: usize,
         builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
     ) -> Self {
+        let grid_delegate: Rc<dyn flui_rendering::delegates::SliverGridDelegate> =
+            Rc::new(grid_delegate);
         SliverMultiBoxAdaptor::with_config(grid_delegate, item_count, builder)
     }
 
@@ -1523,19 +1525,21 @@ impl SliverGrid {
     /// delegate's key map.
     #[must_use]
     pub fn list(
-        grid_delegate: Arc<dyn flui_rendering::delegates::SliverGridDelegate>,
+        grid_delegate: impl flui_rendering::delegates::SliverGridDelegate + 'static,
         children: Vec<BoxedView>,
     ) -> Self {
-        Self::over(grid_delegate, &StaticChildren::new(children))
+        Self::over(Rc::new(grid_delegate), &StaticChildren::new(children))
     }
 
-    /// [`Self::list`] over an already shared delegate.
+    /// [`Self::list`] over already shared children, with a delegate its view
+    /// shares across rebuilds so an unchanged delegate keeps its identity.
     #[must_use]
     pub fn over(
-        grid_delegate: Arc<dyn flui_rendering::delegates::SliverGridDelegate>,
+        grid_delegate: Rc<dyn flui_rendering::delegates::SliverGridDelegate>,
         children: &Rc<StaticChildren>,
     ) -> Self {
-        Self::new(grid_delegate, 0, Rc::new(|_| None)).over_static_children(children)
+        SliverMultiBoxAdaptor::with_config(grid_delegate, 0, Rc::new(|_| None))
+            .over_static_children(children)
     }
 }
 

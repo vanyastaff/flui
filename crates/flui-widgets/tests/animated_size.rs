@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::common::{lay_out_animated, loose};
-use flui_animation::{ArcCurve, MotionSpec, SpringDescription, Vsync, curves};
+use flui_animation::{MotionSpec, SharedCurve, SpringDescription, Vsync, curves};
 use flui_painting::Alignment;
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{EventCx, IntoView, ViewState};
@@ -465,7 +465,7 @@ pub(crate) fn a_motion_change_mid_resize_keeps_the_size_shown() {
     let spring = MotionSpec::Spring(spring(400.0, 1.0));
     let curve = MotionSpec::Curve {
         duration: Duration::from_millis(300),
-        curve: ArcCurve::new(curves::EASE_IN),
+        curve: SharedCurve::new(curves::EASE_IN),
     };
     let mut laid = lay_out_animated(tree(spring.clone(), 20.0), loose(200.0), registry.clone());
     laid.pump_widget(tree(spring, 100.0));
@@ -621,7 +621,7 @@ pub(crate) fn a_size_and_motion_change_together_complete_one_resize() {
     side.set(60.0);
     *motion.borrow_mut() = MotionSpec::Curve {
         duration: Duration::from_micros(100),
-        curve: ArcCurve::new(curves::LINEAR),
+        curve: SharedCurve::new(curves::LINEAR),
     };
     app.pump_widget(root());
     for _ in 0..6 {

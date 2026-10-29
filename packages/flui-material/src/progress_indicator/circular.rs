@@ -102,11 +102,11 @@ impl ViewState<CircularProgressIndicator> for CircularProgressIndicatorState {
             .child(
                 CustomPaint::new()
                     .size(Size::new(SIDE, SIDE))
-                    .painter(std::rc::Rc::new(ArcPainter {
+                    .painter(ArcPainter {
                         fraction,
                         active: colors.primary,
                         track: colors.secondary_container,
-                    })),
+                    }),
             )
             .boxed()
     }

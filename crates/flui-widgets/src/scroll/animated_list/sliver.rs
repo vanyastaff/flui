@@ -6,7 +6,6 @@ use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use flui_animation::{
     AnimationController, DrivenController, MotionSpec, Stagger, Vsync, VsyncUpdate,
@@ -49,7 +48,7 @@ impl Default for ListMotion {
 #[derive(Clone)]
 pub(super) enum SliverLayout {
     List { item_extent_estimate: f64 },
-    Grid(Arc<dyn SliverGridDelegate>),
+    Grid(Rc<dyn SliverGridDelegate>),
 }
 
 impl fmt::Debug for SliverLayout {
@@ -160,12 +159,17 @@ where
 
     /// The grid form [`AnimatedGrid`](super::AnimatedGrid) builds on.
     pub(super) fn grid<V: IntoView>(
-        grid_delegate: Arc<dyn SliverGridDelegate>,
+        grid_delegate: impl SliverGridDelegate + 'static,
         items: impl IntoIterator<Item = T>,
         key: impl Fn(&T) -> K,
         builder: impl Fn(&T) -> V + 'static,
     ) -> Self {
-        Self::with_layout(items, key, builder, SliverLayout::Grid(grid_delegate))
+        Self::with_layout(
+            items,
+            key,
+            builder,
+            SliverLayout::Grid(Rc::new(grid_delegate)),
+        )
     }
 
     fn with_layout<V: IntoView>(
@@ -504,8 +508,8 @@ where
                 }
             }
             SliverLayout::Grid(delegate) => {
-                let sliver =
-                    SliverGrid::new(Arc::clone(delegate), count, builder).find_index_by_key(find);
+                let sliver = SliverGrid::with_config(Rc::clone(delegate), count, builder)
+                    .find_index_by_key(find);
                 match placement {
                     Some(placement) => sliver.placement(placement).boxed(),
                     None => sliver.boxed(),

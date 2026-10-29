@@ -63,11 +63,11 @@
 //!
 //! [`resolve`]: WidgetStateProperty::resolve
 
+use std::cell::Cell;
 use std::fmt;
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
-use parking_lot::Mutex;
 
 // ============================================================================
 // WidgetState / WidgetStates
@@ -243,9 +243,7 @@ pub enum WidgetStateProperty<T> {
     /// Resolves to the same value regardless of state.
     All(T),
     /// Resolves via an arbitrary function of the current states.
-    /// `Send + Sync` so a property built on one
-    /// thread can be handed to a render/paint path on another.
-    Resolver(Arc<dyn Fn(&WidgetStates) -> T + Send + Sync>),
+    Resolver(Rc<dyn Fn(&WidgetStates) -> T>),
     /// Resolves via first-match-wins lookup over an ordered list of
     /// constraints. An empty map, or a states set matching none of the entries, resolves
     /// to `T::default()` — see the module doc.
@@ -261,9 +259,9 @@ impl<T> WidgetStateProperty<T> {
     /// A property that resolves via `resolver`.
     pub fn resolve_with<F>(resolver: F) -> Self
     where
-        F: Fn(&WidgetStates) -> T + Send + Sync + 'static,
+        F: Fn(&WidgetStates) -> T + 'static,
     {
-        Self::Resolver(Arc::new(resolver))
+        Self::Resolver(Rc::new(resolver))
     }
 
     /// A property that resolves by first-match-wins lookup over `entries`.
@@ -305,13 +303,13 @@ impl<T: fmt::Debug> fmt::Debug for WidgetStateProperty<T> {
 
 impl<T: PartialEq> PartialEq for WidgetStateProperty<T> {
     /// Closures have no structural equality, so [`Resolver`](Self::Resolver)
-    /// compares by [`Arc::ptr_eq`] (closure identity), while
+    /// compares by [`Rc::ptr_eq`] (closure identity), while
     /// [`All`](Self::All) and [`Map`](Self::Map) compare structurally since
     /// `T: PartialEq` makes that possible.
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::All(a), Self::All(b)) => a == b,
-            (Self::Resolver(a), Self::Resolver(b)) => Arc::ptr_eq(a, b),
+            (Self::Resolver(a), Self::Resolver(b)) => Rc::ptr_eq(a, b),
             (Self::Map(a), Self::Map(b)) => a == b,
             _ => false,
         }
@@ -329,7 +327,7 @@ impl<T: PartialEq> PartialEq for WidgetStateProperty<T> {
 /// controller must be a shared, `Clone`-able handle — an app hands the same
 /// controller to a custom widget and an `InkWell`/button below it
 /// simultaneously. Instead this composes `flui-foundation`'s `ChangeNotifier` (already
-/// `Arc`-backed and `Clone`-shared) with a `parking_lot`-guarded
+/// `Rc`-backed and `Clone`-shared) with a shared
 /// [`WidgetStates`] cell — "a value cell of `WidgetStates` over
 /// `flui-foundation`'s `ChangeNotifier` idiom."
 ///
@@ -338,7 +336,7 @@ impl<T: PartialEq> PartialEq for WidgetStateProperty<T> {
 /// listeners.
 #[derive(Clone)]
 pub struct WidgetStatesController {
-    value: Arc<Mutex<WidgetStates>>,
+    value: Rc<Cell<WidgetStates>>,
     notifier: ChangeNotifier,
 }
 
@@ -348,7 +346,7 @@ impl WidgetStatesController {
     #[must_use]
     pub fn new(initial: WidgetStates) -> Self {
         Self {
-            value: Arc::new(Mutex::new(initial)),
+            value: Rc::new(Cell::new(initial)),
             notifier: ChangeNotifier::new(),
         }
     }
@@ -356,7 +354,7 @@ impl WidgetStatesController {
     /// The current set of active states.
     #[must_use]
     pub fn value(&self) -> WidgetStates {
-        *self.value.lock()
+        self.value.get()
     }
 
     /// Whether `self` and `other` share the same underlying state cell —
@@ -372,23 +370,20 @@ impl WidgetStatesController {
     /// re-homes its listener on such a swap.
     #[must_use]
     pub fn is_same(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.value, &other.value)
+        Rc::ptr_eq(&self.value, &other.value)
     }
 
     /// Adds `state` to the set if `add` is `true`, removes it otherwise.
     /// Notifies listeners only if the set actually changed.
     pub fn update(&self, state: WidgetState, add: bool) {
-        let changed = {
-            let mut guard = self.value.lock();
-            let before = *guard;
-            *guard = if add {
-                guard.with_state(state)
-            } else {
-                guard.without_state(state)
-            };
-            *guard != before
+        let before = self.value.get();
+        let after = if add {
+            before.with_state(state)
+        } else {
+            before.without_state(state)
         };
-        if changed {
+        self.value.set(after);
+        if after != before {
             self.notifier.notify_listeners();
         }
     }

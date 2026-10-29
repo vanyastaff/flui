@@ -287,7 +287,7 @@ let value = curves::ELASTIC_OUT.transform(t);
 ### Authored piecewise and spring easing
 
 ```rust
-use flui_animation::{ArcCurve, Curve, LinearStop, PiecewiseLinear, SpringCurve,
+use flui_animation::{SharedCurve, Curve, LinearStop, PiecewiseLinear, SpringCurve,
     SpringDescription, Tolerance};
 
 let piecewise = PiecewiseLinear::new(&[
@@ -298,7 +298,7 @@ let spring = SpringCurve::new(
     SpringDescription::new(1.0, 100.0, 20.0)?, Tolerance::DEFAULT,
 )?;
 assert!(!spring.duration().is_zero());
-let shared = ArcCurve::new(spring);
+let shared = SharedCurve::new(spring);
 assert_eq!(shared.transform(1.0), 1.0);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```

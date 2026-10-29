@@ -388,7 +388,7 @@ macro_rules! loading_state {
                 progress_semantics(&view.label, self.loading.shown()).child(
                     CustomPaint::new()
                         .size(Size::new(CONTAINER, CONTAINER))
-                        .painter(Rc::new(painter)),
+                        .painter(painter),
                 )
             }
 

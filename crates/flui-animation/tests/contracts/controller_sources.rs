@@ -388,7 +388,7 @@ fn slope_failure_keeps_custody(status_fails: bool, retarget: bool) {
                     0.8,
                     &flui_animation::MotionSpec::Curve {
                         duration: Duration::from_secs(1),
-                        curve: flui_animation::ArcCurve::new(flui_animation::curves::LINEAR),
+                        curve: flui_animation::SharedCurve::new(flui_animation::curves::LINEAR),
                     },
                 )
                 .expect("motion admission");

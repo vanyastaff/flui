@@ -702,7 +702,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     ///
     /// Default `None` — only a render object that exists to be *found*
     /// overrides it.
-    fn metadata(&self) -> Option<std::sync::Arc<dyn std::any::Any + Send + Sync>> {
+    fn metadata(&self) -> Option<crate::hit_testing::HitMetadata> {
         None
     }
 

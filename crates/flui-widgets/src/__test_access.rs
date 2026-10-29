@@ -93,12 +93,7 @@ pub trait NavigatorProbe {
     /// Whether `route` may start an edge-swipe-back gesture right now.
     fn pop_gesture_enabled(&self, route: RouteId) -> bool;
     /// Pop `route`, pacing its reverse transition with `duration` and `curve`.
-    fn pop_paced(
-        &self,
-        route: RouteId,
-        duration: Duration,
-        curve: Rc<dyn Curve + Send + Sync>,
-    ) -> bool;
+    fn pop_paced(&self, route: RouteId, duration: Duration, curve: Rc<dyn Curve>) -> bool;
 }
 
 impl NavigatorProbe for NavigatorHandle {
@@ -144,12 +139,7 @@ impl NavigatorProbe for NavigatorHandle {
     fn pop_gesture_enabled(&self, route: RouteId) -> bool {
         NavigatorHandle::pop_gesture_enabled(self, route)
     }
-    fn pop_paced(
-        &self,
-        route: RouteId,
-        duration: Duration,
-        curve: Rc<dyn Curve + Send + Sync>,
-    ) -> bool {
+    fn pop_paced(&self, route: RouteId, duration: Duration, curve: Rc<dyn Curve>) -> bool {
         NavigatorHandle::pop_paced(
             self,
             route,
