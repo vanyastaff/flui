@@ -1602,6 +1602,12 @@ impl WindowFixture for Win32Fixture {
                 request.presented,
                 flui_platform::EventTime::now()
             );
+            // DWM always composes on the hosts Win32 supports, and its report
+            // names the next refresh, whichever side of the reading it lies.
+            assert!(
+                request.target_present.is_some(),
+                "a Win32 frame request names the compositor's next refresh: {request:?}"
+            );
         }
         presenting
             .window

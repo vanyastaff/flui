@@ -333,7 +333,8 @@ impl WindowFixture for Fixture {
                 _ => None,
             });
         match self.fault {
-            // An hour on: a counter whose epoch is not the process's.
+            // An hour on, a counter whose epoch is not the process's, and a
+            // target present that now lies before it.
             Some(Fault::StampsFramesOffTheTimeline) => request.map(|mut request| {
                 let platform_clock = request.vsync + std::time::Duration::from_secs(3600);
                 request.target_present = Some(request.vsync);
