@@ -66,7 +66,6 @@ graph LR
   T17 & FD11["flui-driver FD11"] --> T19["T19 нативный прогон"]
   T4 --> P6["persistence P6"]
   T2 & T4 & T8 --> P5["persistence P5"]
-  T13 --> LY47["platform-layer LY47, LY48"]
 ```
 
 ## Сделано

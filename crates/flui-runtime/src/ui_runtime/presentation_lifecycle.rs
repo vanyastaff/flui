@@ -215,6 +215,17 @@ impl UiRuntime {
             .is_some_and(|presentation| presentation.close_guard().refuses(reason))
     }
 
+    /// Presentation `id`'s close guard, for the host to answer its window's
+    /// close requests with.
+    pub(crate) fn close_guard_of(
+        &self,
+        id: PresentationId,
+    ) -> Option<flui_view::__runtime::CloseGuardSource> {
+        self.presentations
+            .get(id)
+            .map(|presentation| presentation.close_guard().clone())
+    }
+
     /// Withdraw the close presentation `id`'s guard recorded for `reason`:
     /// the platform cancelled it, as when a log-off is cancelled. Closes
     /// recorded for other reasons stay recorded.

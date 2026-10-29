@@ -298,6 +298,9 @@ struct PresentationCloseEntry {
     /// mismatch means a backend broke that contract — never something to
     /// answer by reaching into UI runtime state anyway.
     owner_thread: ThreadId,
+    /// The presentation's close guard: a close one of its holds refuses is
+    /// recorded there and answered `KeepOpen` before the handler is asked.
+    guard: Option<flui_view::__runtime::CloseGuardSource>,
 }
 
 /// Loop-scoped registry of per-presentation close-request handlers.
@@ -345,7 +348,20 @@ impl PreparedCloseRequest {
             window: std::rc::Rc::downgrade(window),
             handler,
             owner_thread: std::thread::current().id(),
+            guard: None,
         })
+    }
+
+    /// Answer the window's close requests with the presentation's close guard
+    /// first: a close its holds refuse is recorded and kept open.
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    pub(crate) fn with_guard(mut self, guard: flui_view::__runtime::CloseGuardSource) -> Self {
+        self.0.guard = Some(guard);
+        self
     }
 }
 
@@ -434,28 +450,32 @@ impl CloseRequestRouter {
     /// An unregistered address answers [`CloseResponse::Close`], matching
     /// the platform seam's own "no callback means close is allowed".
     ///
-    /// `reason` is why the close was asked for. Not yet carried to the
-    /// handler: [`CloseRequest::reason`] reads [`CloseReason::User`].
+    /// `reason` is why the close was asked for. The presentation's close
+    /// guard is asked first, with it; a close the guard refuses is kept open
+    /// without asking the handler. Not yet carried to the handler:
+    /// [`CloseRequest::reason`] reads [`CloseReason::User`].
     pub(crate) fn consult(
         &self,
         address: PresentationAddress,
         reason: CloseReason,
     ) -> CloseResponse {
-        let _ = reason;
-        // Clone the handler out from under the lock before invoking it
-        // (ADR-0039): application code may re-enter this router — closing a
-        // sibling window, registering a handler — and this `Mutex` is not
-        // reentrant.
-        let Some((handler, owner_thread)) = ({
+        // Clone the handler and the guard out from under the lock before
+        // asking either (ADR-0039): application code may re-enter this router
+        // — closing a sibling window, registering a handler — and this
+        // `Mutex` is not reentrant.
+        let Some((handler, guard, owner_thread)) = ({
             let entries = self.entries.lock();
             entries
                 .iter()
                 .find(|e| e.address == address)
-                .and_then(|e| e.handler.clone().map(|h| (h, e.owner_thread)))
+                .map(|e| (e.handler.clone(), e.guard.clone(), e.owner_thread))
         }) else {
             return CloseResponse::Close;
         };
 
+        if handler.is_none() && guard.is_none() {
+            return CloseResponse::Close;
+        }
         let current = std::thread::current().id();
         if current != owner_thread {
             tracing::error!(
@@ -467,6 +487,16 @@ impl CloseRequestRouter {
             );
             return CloseResponse::KeepOpen;
         }
+
+        // The guard comes first: a close its holds refuse is recorded there
+        // and carried out once the last hold is released, without asking the
+        // handler again.
+        if guard.is_some_and(|guard| guard.refuses(reason)) {
+            return CloseResponse::KeepOpen;
+        }
+        let Some(handler) = handler else {
+            return CloseResponse::Close;
+        };
 
         let request = CloseRequest { address };
         let answered =
@@ -723,8 +753,61 @@ mod tests {
                     "a_window_that_cannot_close_says_so",
                     a_window_that_cannot_close_says_so as fn(),
                 ),
+                (
+                    "a_held_guard_keeps_the_close_before_the_handler_is_asked",
+                    a_held_guard_keeps_the_close_before_the_handler_is_asked as fn(),
+                ),
             ],
         );
+    }
+
+    /// A close the presentation's guard holds is kept open before the
+    /// handler is asked, and recorded on the guard; once the hold is
+    /// released, the handler answers again.
+    fn a_held_guard_keeps_the_close_before_the_handler_is_asked() {
+        let router = CloseRequestRouter::new();
+        let at = address(1, 1);
+        let asked = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&asked);
+        let source = flui_view::__runtime::CloseGuardSource::new(
+            &[CloseReason::User],
+            flui_view::__runtime::OwnerNotify::new(|_| Ok(())),
+        );
+        let prepared = PreparedCloseRequest::new(
+            at,
+            &window(1),
+            Some(CloseRequestHandler::new(move |_| {
+                counted.fetch_add(1, Ordering::SeqCst);
+                CloseResponse::Close
+            })),
+        )
+        .with_guard(source.clone());
+        router
+            .publication(&prepared)
+            .expect("fresh test registration")
+            .publish(prepared);
+        let guard = source.guard();
+        let hold = guard.hold();
+
+        assert_eq!(
+            router.consult(at, CloseReason::User),
+            CloseResponse::KeepOpen
+        );
+        assert_eq!(asked.load(Ordering::SeqCst), 0, "the guard answers first");
+        assert_eq!(
+            guard.pending().map(|pending| pending.reason()),
+            Some(CloseReason::User),
+            "the refused close is recorded on the guard"
+        );
+
+        drop(hold);
+        assert_eq!(
+            source.settle().close,
+            Some(CloseReason::User),
+            "releasing the hold makes the recorded close due"
+        );
+        assert_eq!(router.consult(at, CloseReason::User), CloseResponse::Close);
+        assert_eq!(asked.load(Ordering::SeqCst), 1);
     }
 
     /// A window whose window system lets the application close none of its
