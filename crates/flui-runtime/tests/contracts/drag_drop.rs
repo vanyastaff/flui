@@ -880,6 +880,7 @@ fn drags_from_both_windows_cross_independently() {
 
 thread_local! {
     /// The requests [`FirstStartPanics`] accepted, held as the OS holds them.
+    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static ACCEPTED: RefCell<Vec<OsDragRequest>> = const { RefCell::new(Vec::new()) };
 }
 

@@ -350,6 +350,8 @@ pub(crate) mod mode {
     /// What AppKit says about a window, as plain flags.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(crate) struct WindowFlags {
+        /// `isVisible`: ordered on screen, covered or not.
+        pub(crate) on_screen: bool,
         /// The style mask contains `NSWindowStyleMaskFullScreen`.
         pub(crate) fullscreen: bool,
         /// `isMiniaturized`.
@@ -361,6 +363,15 @@ pub(crate) mod mode {
     }
 
     impl WindowFlags {
+        /// Whether the window is shown: on screen, or in the Dock. A
+        /// miniaturized window is not `isVisible`, but it was not hidden: the
+        /// user sees it in the Dock. Covering is not hiding either; AppKit
+        /// tells it apart in `occlusionState`, which is the snapshot's
+        /// occlusion.
+        pub(crate) const fn is_shown(self) -> bool {
+            self.on_screen || self.miniaturized
+        }
+
         /// Whether the window is zoomed in the sense that matters: `isZoomed` is
         /// also true for a window that cannot be resized, which is not maximized.
         pub(crate) const fn is_maximized(self) -> bool {
@@ -383,12 +394,6 @@ pub(crate) mod mode {
                 maximized: self.is_maximized(),
             }
         }
-    }
-
-    /// Whether a window with these flags is shown: on screen, or in the Dock. A
-    /// miniaturized window is not `isVisible`, but the user sees it there.
-    pub(crate) const fn is_shown(on_screen: bool, miniaturized: bool) -> bool {
-        on_screen || miniaturized
     }
 
     /// One AppKit request on the way to a mode.
@@ -705,10 +710,11 @@ pub(crate) mod mode {
 
         use super::*;
 
-        /// The flags a row names: `F` full screen, `M` miniaturized, `Z` zoomed,
-        /// `R` resizable; anything else is off.
+        /// The flags a row names: `V` on screen, `F` full screen, `M`
+        /// miniaturized, `Z` zoomed, `R` resizable; anything else is off.
         fn flags(letters: &str) -> WindowFlags {
             WindowFlags {
+                on_screen: letters.contains('V'),
                 fullscreen: letters.contains('F'),
                 miniaturized: letters.contains('M'),
                 zoomed: letters.contains('Z'),
@@ -740,9 +746,18 @@ pub(crate) mod mode {
 
         #[test]
         fn a_miniaturized_window_is_shown() {
-            assert!(is_shown(true, false));
-            assert!(is_shown(false, true));
-            assert!(!is_shown(false, false));
+            for (letters, shown) in [
+                ("VR", true),
+                ("VZR", true),
+                ("VFR", true),
+                // In the Dock: not `isVisible`, and still shown.
+                ("MR", true),
+                // Ordered out.
+                ("R", false),
+                ("", false),
+            ] {
+                assert_eq!(flags(letters).is_shown(), shown, "flags {letters:?}");
+            }
         }
 
         #[test]

@@ -16,21 +16,31 @@
 //!
 //! The loop names no feature. What it keeps of one, it keeps through a hook
 //! declared here that the host's table fills (`WaylandHost`): the displays,
-//! the Settings portal's preferences, the notice channel and the sources of
-//! logind's and the kernel's notices. The last user input the seats report,
-//! which an activation token names, is kept here too (`LastInput`): the
-//! input feature records it, the window feature reads it. Its windows are the
-//! window feature's
+//! the seats' input, the Settings portal's preferences, the notice channel
+//! and the sources of logind's and the kernel's notices. The input binds the
+//! globals it speaks as the compositor announces them, records what its
+//! objects report, and delivers it to the windows on each turn before they
+//! settle (`WaylandInput`). The last user input the seats report, which an
+//! activation token names, is kept here too (`LastInput`): the input feature
+//! records it, the window feature reads it. Its windows are the window
+//! feature's
 //! (`window::linux::wayland`): the loop holds them as `LoopWindow`s and asks
 //! each to settle after every read, and the window feature implements the
 //! dispatch of its own protocol objects on `WaylandState`.
 
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub use event_loop::OutputName;
+#[cfg(all(
+    target_os = "linux",
+    feature = "wayland",
+    any(test, feature = "testing")
+))]
+pub(crate) use event_loop::ShownCursor;
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(crate) use event_loop::{
-    LastInput, LiveOutputs, LoopWaker, LoopWindow, OutputFacts, PresentationTime, WaylandDisplays,
-    WaylandHost, WaylandLoop, WaylandState, WindowSeed, WindowTable,
+    LastInput, LiveOutputs, LoopWaker, LoopWindow, MAX_OUTPUTS, OutputFacts, PresentationTime,
+    SeatWindow, WaylandDisplays, WaylandHost, WaylandInput, WaylandLoop, WaylandState, WindowSeed,
+    WindowTable,
 };
 
 pub(crate) mod activation {
@@ -113,8 +123,8 @@ pub(crate) mod activation {
 }
 
 pub(crate) mod wait {
-    //! How long one turn of the Wayland loop may block in `poll`, and when a
-    //! wake deadline is offered to the windows (ADR-0249's rule on this host).
+    //! How long one turn of the Wayland loop may block in `poll` (ADR-0249's
+    //! rule on this host).
     //!
     //! Every producer of work wakes the loop: the compositor's socket, the
     //! owner signal and a redraw asked for on another thread write what `poll`
@@ -122,10 +132,12 @@ pub(crate) mod wait {
     //! deliver now, or the application's handler named a wake deadline.
     //!
     //! A deadline that came due is served by a frame: the loop asks every
-    //! window for one, once. A deadline it already offered waits for a frame
-    //! that serves it (a frame callback, a configure) and then for the
-    //! handler to name another; asking again would turn a window that declines
-    //! its frames, or one the compositor does not draw, into a busy loop.
+    //! window for one, once, and arms the same instant again only after a
+    //! frame ran ([`WakeDeadline`](crate::owner::wake_deadline::WakeDeadline),
+    //! the rule the X11 and Win32 loops follow). Asking again with no frame
+    //! since would turn a window that declines its frames, or one the
+    //! compositor does not draw, into a busy loop. Only the deadline armed
+    //! bounds the wait.
 
     #![forbid(unsafe_code)]
 
@@ -141,11 +153,13 @@ pub(crate) mod wait {
         /// The earliest instant a window gives up on a frame callback that
         /// never came, with a frame asked for behind it.
         pub(crate) frame_wait: Option<Instant>,
-        /// The earliest instant the application's handler asked to be woken
-        /// at.
+        /// When the input next delivers something no event brings: a held
+        /// key's repeat.
+        pub(crate) input_due: Option<Instant>,
+        /// The wake deadline armed: one the application's handler asked for
+        /// and the last delivery does not hold back. One already due is
+        /// delivered on the next turn.
         pub(crate) wake_deadline: Option<Instant>,
-        /// The deadline already offered to the windows.
-        pub(crate) offered: Option<Instant>,
     }
 
     /// How the last flush of the connection went.
@@ -184,37 +198,17 @@ pub(crate) mod wait {
         }
     }
 
-    /// Whether the loop asks its windows for a frame for `deadline` now: it
-    /// is due and was not offered yet.
-    pub(crate) fn offer_now(
-        deadline: Option<Instant>,
-        offered: Option<Instant>,
-        now: Instant,
-    ) -> bool {
-        deadline.is_some_and(|deadline| deadline <= now && Some(deadline) != offered)
-    }
-
     /// How long `poll` may block; `None` blocks until something wakes the
     /// loop.
     pub(crate) fn poll_timeout(turn: LoopTurn, now: Instant) -> Option<Duration> {
         if turn.frame_due {
             return Some(Duration::ZERO);
         }
-        let until = |instant: Instant| instant.saturating_duration_since(now);
-        let deadline = turn.wake_deadline.and_then(|deadline| {
-            if deadline > now {
-                Some(until(deadline))
-            } else if Some(deadline) == turn.offered {
-                // Offered and waiting for a frame that serves it.
-                None
-            } else {
-                Some(Duration::ZERO)
-            }
-        });
-        [deadline, turn.frame_wait.map(until)]
+        [turn.wake_deadline, turn.frame_wait, turn.input_due]
             .into_iter()
             .flatten()
             .min()
+            .map(|instant| instant.saturating_duration_since(now))
     }
 
     #[cfg(test)]
@@ -222,25 +216,25 @@ pub(crate) mod wait {
         use super::*;
 
         /// An idle Wayland loop blocks until it is woken: no timer of its own,
-        /// a deadline ahead bounds the wait, a deadline that came due is
-        /// offered once, and one already offered never turns the wait into a
-        /// busy loop.
+        /// a deadline ahead bounds the wait, an armed deadline that came due
+        /// ends it at once so the next turn delivers it, and a frame waiting
+        /// on a callback that may be lost bounds it too.
         #[test]
         fn an_idle_wayland_loop_blocks_until_it_is_woken() {
             let now = Instant::now();
             let ms = Duration::from_millis;
             let behind = now.checked_sub(ms(40));
-            let turn = |frame_due, wake_deadline, offered| LoopTurn {
+            let turn = |frame_due, frame_wait, wake_deadline| LoopTurn {
                 frame_due,
-                frame_wait: None,
-                wake_deadline,
-                offered,
-            };
-            let waiting = |frame_wait, wake_deadline| LoopTurn {
-                frame_due: false,
                 frame_wait,
+                input_due: None,
                 wake_deadline,
-                offered: None,
+            };
+            let repeating = |input_due, wake_deadline| LoopTurn {
+                frame_due: false,
+                frame_wait: None,
+                input_due,
+                wake_deadline,
             };
             for (case, turn, expected) in [
                 ("idle", turn(false, None, None), None),
@@ -250,49 +244,49 @@ pub(crate) mod wait {
                     Some(Duration::ZERO),
                 ),
                 (
-                    "a frame to deliver with an offered deadline",
-                    turn(true, behind, behind),
+                    "a frame to deliver before a deadline ahead",
+                    turn(true, None, Some(now + ms(250))),
                     Some(Duration::ZERO),
                 ),
                 (
                     "a deadline ahead",
-                    turn(false, Some(now + ms(250)), None),
-                    Some(ms(250)),
-                ),
-                (
-                    "a deadline ahead, an earlier one offered",
-                    turn(false, Some(now + ms(250)), behind),
+                    turn(false, None, Some(now + ms(250))),
                     Some(ms(250)),
                 ),
                 (
                     "a deadline that came due",
-                    turn(false, behind, None),
+                    turn(false, None, behind),
                     Some(Duration::ZERO),
                 ),
                 (
                     "a deadline exactly due",
-                    turn(false, Some(now), None),
-                    Some(Duration::ZERO),
-                ),
-                (
-                    "a due deadline already offered",
-                    turn(false, behind, behind),
-                    None,
-                ),
-                (
-                    "a due deadline other than the one offered",
-                    turn(false, behind, Some(now + ms(5))),
+                    turn(false, None, Some(now)),
                     Some(Duration::ZERO),
                 ),
                 (
                     "a frame waits on a callback that may be lost",
-                    waiting(Some(now + ms(700)), None),
+                    turn(false, Some(now + ms(700)), None),
                     Some(ms(700)),
                 ),
                 (
                     "the earlier of a lost callback and a deadline",
-                    waiting(Some(now + ms(700)), Some(now + ms(100))),
+                    turn(false, Some(now + ms(700)), Some(now + ms(100))),
                     Some(ms(100)),
+                ),
+                (
+                    "a held key repeats",
+                    repeating(Some(now + ms(33)), None),
+                    Some(ms(33)),
+                ),
+                (
+                    "a repeat that came due",
+                    repeating(behind, None),
+                    Some(Duration::ZERO),
+                ),
+                (
+                    "the earlier of a repeat and a deadline",
+                    repeating(Some(now + ms(33)), Some(now + ms(500))),
+                    Some(ms(33)),
                 ),
             ] {
                 assert_eq!(poll_timeout(turn, now), expected, "{case}");
@@ -328,21 +322,6 @@ pub(crate) mod wait {
                 assert_eq!(before_poll(dispatched, flush), expected, "{case}");
             }
         }
-
-        /// A deadline is offered to the windows once, when it is due, and a
-        /// new deadline is offered again.
-        #[test]
-        fn a_due_deadline_is_offered_once() {
-            let now = Instant::now();
-            let behind = now.checked_sub(Duration::from_millis(10));
-            let ahead = Some(now + Duration::from_millis(10));
-            assert!(offer_now(behind, None, now), "due and not offered");
-            assert!(!offer_now(behind, behind, now), "offered already");
-            assert!(!offer_now(ahead, None, now), "not due");
-            assert!(!offer_now(None, None, now), "no deadline");
-            let later = Some(now);
-            assert!(offer_now(later, behind, now), "a new deadline");
-        }
     }
 }
 
@@ -356,8 +335,10 @@ mod event_loop {
     use std::thread::ThreadId;
     use std::time::Duration;
 
+    use cursor_icon::CursorIcon;
     use flui_platform::{
-        DisplayId, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice, WindowId,
+        CursorError, DisplayId, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice,
+        WindowId,
     };
     use parking_lot::Mutex;
     use rustix::event::{EventfdFlags, PollFd, PollFlags, Timespec, eventfd, poll};
@@ -386,7 +367,7 @@ mod event_loop {
     use web_time::Instant;
 
     use super::activation::{ActivationToken, LAUNCH_TOKEN_VARIABLE, UserInput, launch_token};
-    use super::wait::{BeforePoll, Flush, LoopTurn, before_poll, offer_now, poll_timeout};
+    use super::wait::{BeforePoll, Flush, LoopTurn, before_poll, poll_timeout};
     use crate::error::PlatformError;
     use crate::executor::BackgroundExecutor;
     use crate::host;
@@ -396,7 +377,9 @@ mod event_loop {
     use crate::owner::panic_boundary::contain_owner_callback;
     use crate::owner::signal::OwnerSignal;
     use crate::owner::slot::{OwnerCell, OwnerMap};
+    use crate::owner::wake_deadline::{FrameCount, WakeDeadline};
     use crate::owner::watch::Watch;
+    use crate::owner::window_delivery::WindowDelivery;
     use crate::owner::{DirectOwnerHooks, OpenWindowError, OwnerHooks, OwnerPlatform};
     use crate::platform::{AppHandler, Platform, PlatformExecutor};
 
@@ -409,6 +392,10 @@ mod event_loop {
     /// The newest `wl_output`; the loop binds every output only so that a
     /// surface's `enter` and `leave` name one.
     const OUTPUT_VERSION: u32 = 4;
+    /// The outputs the loop binds. A desk has a few screens and a video wall
+    /// a few dozen; a compositor announcing outputs without end is not bound
+    /// past this, and a surface on one of those names no display.
+    pub(crate) const MAX_OUTPUTS: usize = 64;
     /// `wp_viewporter` has one version.
     const VIEWPORTER_VERSION: u32 = 1;
     /// `zxdg_decoration_manager_v1` has one version.
@@ -431,6 +418,11 @@ mod event_loop {
         /// The displays: the compositor's outputs, read on a connection of
         /// their own.
         fn displays() -> Arc<dyn WaylandDisplays>;
+
+        /// The seats' input, made on the owner thread, which alone reaches
+        /// it, recording each user input it reports in `last_input`, which
+        /// the windows' activation tokens name.
+        fn input(last_input: LastInput) -> Arc<dyn WaylandInput>;
 
         /// The channel the loop's system notices take to the application.
         fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel>;
@@ -468,6 +460,88 @@ mod event_loop {
         /// Keep the outputs current, waking the owner behind `signal` when
         /// they change, until the watch is dropped.
         fn observe(self: Arc<Self>, signal: &Arc<OwnerSignal>) -> Watch;
+    }
+
+    /// A window as the seats' input reaches it, from its open to its close:
+    /// its identity, the surface the compositor names it by, and the delivery
+    /// its input goes through.
+    pub(crate) struct SeatWindow {
+        /// The window's identity.
+        pub(crate) id: WindowId,
+        /// Its `wl_surface`.
+        pub(crate) surface: WlSurface,
+        /// What its input is delivered through.
+        pub(crate) delivery: Arc<WindowDelivery>,
+        /// Its device pixels per logical pixel now, which a theme cursor
+        /// over it is drawn at.
+        pub(crate) scale: Arc<dyn Fn() -> f64 + Send + Sync>,
+    }
+
+    /// The cursor the input last showed, for a test.
+    #[cfg(any(test, feature = "testing"))]
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct ShownCursor {
+        /// The name it was found by: a `cursor-shape` value's number, or the
+        /// theme cursor's name.
+        pub(crate) name: String,
+        /// The buffer scale a theme cursor was drawn at; `0` for a shape.
+        pub(crate) scale: i32,
+    }
+
+    /// What the loop and its windows ask of the seats' input: the input
+    /// feature's (`input::linux::wayland`), which the table registers.
+    ///
+    /// Reached on the owner thread. The dispatch of the input's objects
+    /// records what they report and runs no handler; [`Self::deliver`] runs
+    /// the handlers, with no lock of the loop held.
+    pub(crate) trait WaylandInput: Send + Sync {
+        /// The compositor announced global `name`: bind it if the input
+        /// speaks its interface.
+        fn global(
+            &self,
+            registry: &WlRegistry,
+            name: u32,
+            interface: &str,
+            version: u32,
+            queue: &QueueHandle<WaylandState>,
+        );
+
+        /// The compositor removed global `name`.
+        fn global_removed(&self, name: u32);
+
+        /// Deliver to the windows what the seats reported since the last
+        /// turn, and a held key's repeat that came due.
+        fn deliver(&self);
+
+        /// When the input next delivers something no event brings.
+        fn next_due(&self) -> Option<Instant>;
+
+        /// A window opened: its input starts.
+        fn attach(&self, window: SeatWindow);
+
+        /// The window `id` closed: what it held open ends, and nothing more
+        /// reaches it.
+        fn detach(&self, id: WindowId);
+
+        /// Show `cursor` while the pointer is over the window `id`.
+        ///
+        /// # Errors
+        /// [`CursorError::Unsupported`] when the compositor takes no cursor
+        /// shape from the host.
+        fn set_cursor(&self, id: WindowId, cursor: CursorIcon) -> Result<(), CursorError>;
+
+        /// The active keyboard layout's name; empty before a keymap came.
+        fn keyboard_layout(&self) -> String;
+
+        /// Call `callback` on the owner thread each time the layout changes.
+        fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut() + Send>);
+
+        /// The loop ends: let go of the windows and the callbacks.
+        fn release(&self);
+
+        /// The cursor the input last showed, for a test.
+        #[cfg(any(test, feature = "testing"))]
+        fn shown_cursor(&self) -> Option<ShownCursor>;
     }
 
     /// An output by its global's name, which the compositor numbers alike for
@@ -577,12 +651,8 @@ mod event_loop {
     pub(crate) struct LastInput(Arc<OwnerCell<Option<SeatInput>>>);
 
     impl LastInput {
-        /// The seats report `input`, which is now the last.
-        ///
-        /// Only a test records yet: the host binds no seat, so no input event
-        /// reaches the loop. The seats' input becomes its caller, and drops
-        /// this `cfg`, once the host binds them.
-        #[cfg(test)]
+        /// The seats report `input`, which is now the last: a key, a button
+        /// or a touch going down, or the keyboard entering a surface.
         pub(crate) fn record(&self, input: SeatInput) {
             self.0.with(|last| *last = Some(input));
         }
@@ -775,6 +845,8 @@ mod event_loop {
         outputs: Vec<(OutputName, WlOutput)>,
         /// The same outputs, as the windows read them.
         live: LiveOutputs,
+        /// The seats' input, offered every global the loop does not bind.
+        input: Arc<dyn WaylandInput>,
     }
 
     impl WaylandState {
@@ -787,6 +859,10 @@ mod event_loop {
         ) {
             let name = OutputName::new(name);
             if self.outputs.iter().any(|(bound, _)| *bound == name) {
+                return;
+            }
+            if self.outputs.len() >= MAX_OUTPUTS {
+                tracing::debug!(?name, "a Wayland output past {MAX_OUTPUTS} was not bound");
                 return;
             }
             let output = registry.bind::<WlOutput, OutputName, Self>(
@@ -830,7 +906,17 @@ mod event_loop {
                 } if interface == WlOutput::interface().name => {
                     state.bind_output(registry, name, version, queue);
                 }
-                wl_registry::Event::GlobalRemove { name } => state.remove_output(name),
+                wl_registry::Event::Global {
+                    name,
+                    interface,
+                    version,
+                } => state
+                    .input
+                    .global(registry, name, &interface, version, queue),
+                wl_registry::Event::GlobalRemove { name } => {
+                    state.remove_output(name);
+                    state.input.global_removed(name);
+                }
                 _ => {}
             }
         }
@@ -1008,6 +1094,12 @@ mod event_loop {
         /// The channel a wake from sleep marks the window's state stale
         /// through.
         pub(crate) notices: Arc<dyn NoticeChannel>,
+        /// The loop's frame count, which the window's handler counts into
+        /// each frame it produces.
+        pub(crate) frames: Arc<AtomicU64>,
+        /// The seats' input, which the window joins as it opens and leaves
+        /// as it closes, and which shows its cursor.
+        pub(crate) input: Arc<dyn WaylandInput>,
     }
 
     /// The owner's event queue and what it dispatches into, kept together:
@@ -1040,6 +1132,7 @@ mod event_loop {
         /// runs its loop.
         owner_thread: ThreadId,
         displays: Arc<dyn WaylandDisplays>,
+        input: Arc<dyn WaylandInput>,
         notices: Arc<dyn NoticeChannel>,
         portal: PortalSlot,
         start_preferences: fn(&BackgroundExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxPreferences>,
@@ -1049,8 +1142,11 @@ mod event_loop {
         /// The display watch, which the owner thread starts and stops.
         display_watch: OwnerCell<Option<Watch>>,
         executor: Arc<BackgroundExecutor>,
-        /// The wake deadline already offered to the windows.
-        offered: OwnerCell<Option<Instant>>,
+        /// The wake deadline armed and the last one delivered.
+        deadline: OwnerCell<WakeDeadline>,
+        /// How many frames the windows' handlers produced, which tells the
+        /// deadline a delivery a frame served from one that reached nothing.
+        frames: FrameCount,
         /// The exit policy is asked again on the next turn.
         reevaluate: AtomicBool,
         /// The loop ran once; a platform runs once.
@@ -1137,18 +1233,24 @@ mod event_loop {
                 .bind::<wayland_client::protocol::wl_shm::WlShm, _, _>(&handle, 1..=1, ())
                 .ok();
             let live = LiveOutputs::default();
+            let last_input = LastInput::default();
+            let input = H::input(last_input.clone());
             let mut state = WaylandState {
                 outputs: Vec::new(),
                 live: live.clone(),
+                input: Arc::clone(&input),
             };
-            let outputs = globals.contents().with_list(|list| {
+            let announced = globals.contents().with_list(|list| {
                 list.iter()
-                    .filter(|global| global.interface == WlOutput::interface().name)
-                    .map(|global| (global.name, global.version))
+                    .map(|global| (global.name, global.interface.clone(), global.version))
                     .collect::<Vec<_>>()
             });
-            for (name, version) in outputs {
-                state.bind_output(globals.registry(), name, version, &handle);
+            for (name, interface, version) in announced {
+                if interface == WlOutput::interface().name {
+                    state.bind_output(globals.registry(), name, version, &handle);
+                } else {
+                    input.global(globals.registry(), name, &interface, version, &handle);
+                }
             }
             let waker = Arc::new(
                 LoopWaker::new().map_err(|error| init("the loop's wake descriptor", &error))?,
@@ -1175,7 +1277,7 @@ mod event_loop {
                     exporter,
                     presentation,
                     activation,
-                    last_input: LastInput::default(),
+                    last_input,
                     live,
                     #[cfg(any(test, feature = "testing"))]
                     shm,
@@ -1198,13 +1300,15 @@ mod event_loop {
                 )))),
                 owner_thread: std::thread::current().id(),
                 displays: H::displays(),
+                input,
                 portal: PortalSlot::default(),
                 start_preferences: H::preferences,
                 start_host_notices: H::host_notices,
                 sources: Mutex::new(Sources::default()),
                 display_watch: OwnerCell::new(),
                 executor: Arc::new(BackgroundExecutor::new()),
-                offered: OwnerCell::new(),
+                deadline: OwnerCell::new(),
+                frames: FrameCount::default(),
                 reevaluate: AtomicBool::new(false),
                 ran: AtomicBool::new(false),
             })
@@ -1244,6 +1348,8 @@ mod event_loop {
                 signal: Arc::clone(&self.signal),
                 waker: Arc::downgrade(&self.waker),
                 notices: Arc::clone(&self.notices),
+                frames: self.frames.counter(),
+                input: Arc::clone(&self.input),
             })
         }
 
@@ -1304,6 +1410,18 @@ mod event_loop {
             self.windows.active()
         }
 
+        /// The serial of the last user input the seats reported, which an
+        /// activation token names, for a test.
+        #[cfg(any(test, feature = "testing"))]
+        pub(crate) fn last_input_serial(&self) -> Option<u32> {
+            self.protocol.last_input.latest().map(|input| input.serial)
+        }
+
+        /// The cursor the seats' input last showed, for a test.
+        #[cfg(any(test, feature = "testing"))]
+        pub(crate) fn shown_cursor(&self) -> Option<ShownCursor> {
+            self.input.shown_cursor()
+        }
         /// Whether the compositor offers to draw a window's frame
         /// (`xdg-decoration`).
         pub(crate) fn offers_decorations(&self) -> bool {
@@ -1369,8 +1487,11 @@ mod event_loop {
         /// loop is to end.
         fn turn(&self, limit: Option<Duration>) -> Result<bool, PlatformError> {
             self.dispatch_pending()?;
-            // Each window carries out what was recorded, with no lock of the
-            // loop held: its handler may open, close or quit.
+            // The input the seats reported reaches the windows before they
+            // settle, so a frame they deliver follows the input it shows.
+            // Neither holds a lock of the loop: a handler may open, close or
+            // quit.
+            self.input.deliver();
             for window in self.windows.values() {
                 window.settle();
             }
@@ -1380,19 +1501,12 @@ mod event_loop {
                 return Ok(true);
             }
             let now = Instant::now();
-            let deadline = self.app.wake_deadline().or_resume(None);
             let windows = self.windows.values();
-            let offer = self
-                .offered
-                .with(|offered| {
-                    let offer = offer_now(deadline, *offered, now);
-                    if offer {
-                        *offered = deadline;
-                    }
-                    offer
-                })
+            let due = self
+                .deadline
+                .with(|deadline| deadline.take_due(now, self.frames.get()))
                 .unwrap_or(false);
-            if offer {
+            if due {
                 for window in &windows {
                     window.request_frame();
                 }
@@ -1403,12 +1517,23 @@ mod event_loop {
                 .filter_map(|window| window.frame_wait())
                 .min();
             drop(windows);
+            // A loop that stopped accepting work asks for no deadline, as the
+            // X11 and Win32 loops do.
+            let answer = if self.signal.accepting() {
+                self.app.wake_deadline().or_resume(None)
+            } else {
+                None
+            };
+            let wake_deadline = self
+                .deadline
+                .with(|deadline| deadline.arm(answer, self.frames.get()))
+                .flatten();
             let timeout = poll_timeout(
                 LoopTurn {
                     frame_due,
                     frame_wait,
-                    wake_deadline: deadline,
-                    offered: self.offered.with(|offered| *offered).flatten(),
+                    input_due: self.input.next_due(),
+                    wake_deadline,
                 },
                 now,
             );
@@ -1551,6 +1676,7 @@ mod event_loop {
             for window in self.windows.values() {
                 window.release();
             }
+            self.input.release();
             let quit = self.app.quit_requested();
             self.app.release();
             quit.or_resume(());
@@ -1690,6 +1816,18 @@ mod event_loop {
     impl host::Displays<WaylandLoop> for WaylandLoop {
         fn snapshot(owner: &WaylandLoop) -> Result<DisplaySnapshot, PlatformError> {
             owner.displays.snapshot()
+        }
+    }
+
+    /// The input position is the loop's: the seats' input the table
+    /// registered, whose keymap names the layout.
+    impl host::Input<WaylandLoop> for WaylandLoop {
+        fn keyboard_layout(owner: &WaylandLoop) -> String {
+            owner.input.keyboard_layout()
+        }
+
+        fn on_keyboard_layout_change(owner: &WaylandLoop, callback: Box<dyn FnMut() + Send>) {
+            owner.input.on_keyboard_layout_change(callback);
         }
     }
 

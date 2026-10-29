@@ -721,6 +721,9 @@ impl MacOSWindow {
                     displays.invalidate();
                 }
             }
+            // After the invalidation, so the snapshot read is the one with the
+            // display the window moved to.
+            self.sync_layer_refresh();
             self.publish_state();
         }
     }

@@ -19,8 +19,8 @@ use flui_animation::Vsync;
 use flui_painting::styling::Color;
 use flui_widgets::prelude::*;
 use flui_widgets::{
-    ColoredBox, GestureDetector, NavigatorHandle, NavigatorObserver, PopupRoute, RouteId,
-    RouteParseError, RouterError, Text, VsyncScope,
+    ColoredBox, GestureDetector, NavigatorHandle, NavigatorObserver, PopupRoute, RouteAnimation,
+    RouteId, RouteParseError, RouterError, Text, VsyncScope,
 };
 
 const FRAME: Duration = Duration::from_millis(50);
@@ -186,7 +186,7 @@ fn pages(home: &Probe) -> impl Fn(&AppRoute, &dyn BuildContext) -> BoxedView + '
     }
 }
 
-fn mount(router: Router<AppRoute>) -> LaidOut {
+fn mount<R: Routable>(router: Router<R>) -> LaidOut {
     let vsync = Vsync::new();
     let mut laid = lay_out_animated(
         VsyncScope::new(vsync.clone(), router),
@@ -456,6 +456,7 @@ struct DropRoute {
 thread_local! {
     // Set only in the isolated go-retirement child. The parser constructs
     // opaque original values; their page-builder clones do not own retirement.
+    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static GO_TARGET_DROP: RefCell<Option<Rc<Cell<bool>>>> = const { RefCell::new(None) };
 }
 
@@ -1486,6 +1487,312 @@ pub(crate) fn empty_stack_is_refused() {
         Router::<AppRoute>::from_stack(Vec::new(), pages(&home)),
         Err(RouterError::EmptyStack)
     ));
+}
+
+/// A restored stack opens on its top with no entrance transition, and the
+/// first frame builds every page on it.
+pub(crate) fn from_stack_opens_without_a_transition() {
+    let stack = vec![
+        AppRoute::Home,
+        AppRoute::Note { id: 5 },
+        AppRoute::Tag { name: "x".into() },
+    ];
+    let probe = Probe::default();
+    let built = Rc::new(RefCell::new(Vec::<AppRoute>::new()));
+    let entrances = Rc::new(RefCell::new(Vec::<f64>::new()));
+    let pages = {
+        let built = Rc::clone(&built);
+        let probe = probe.clone();
+        move |route: &AppRoute, _cx: &dyn BuildContext| {
+            built.borrow_mut().push(route.clone());
+            let label = route.to_path().to_string();
+            page(&probe, move || text(label.clone()))
+        }
+    };
+    let transitions = {
+        let entrances = Rc::clone(&entrances);
+        move |_cx: &dyn BuildContext,
+              animation: &RouteAnimation,
+              _secondary: &RouteAnimation,
+              child: BoxedView| {
+            entrances.borrow_mut().push(animation.value());
+            child
+        }
+    };
+    let router = Router::from_stack(stack.clone(), pages)
+        .expect("a non-empty stack")
+        .transitions(transitions);
+    let vsync = Vsync::new();
+    let mut laid = lay_out_animated(
+        VsyncScope::new(vsync.clone(), router),
+        tight(400.0, 400.0),
+        vsync,
+    );
+
+    assert!(
+        laid_out_text(&laid, "/tag/x"),
+        "the top is laid out on the first frame"
+    );
+    {
+        let entrances = entrances.borrow();
+        assert!(!entrances.is_empty(), "the pages were built");
+        assert!(
+            entrances.iter().all(|value| *value == 1.0),
+            "no restored page runs an entrance: {entrances:?}"
+        );
+    }
+    for route in &stack {
+        assert!(
+            built.borrow().contains(route),
+            "the first frame builds {route:?}"
+        );
+    }
+
+    // The same recording sees the entrance of a page pushed afterwards, two
+    // frames into its 300 ms transition.
+    entrances.borrow_mut().clear();
+    probe
+        .handle()
+        .push(AppRoute::Note { id: 9 })
+        .expect("mounted router");
+    laid.pump_for(FRAME);
+    laid.pump_for(FRAME);
+    assert!(
+        entrances.borrow().iter().any(|value| *value < 1.0),
+        "a pushed page runs its entrance: {:?}",
+        entrances.borrow()
+    );
+}
+
+/// `stack()` lists pages only: a popup above the top page is not a route.
+pub(crate) fn stack_leaves_out_popups() {
+    let (mut laid, home) = two_screen_app();
+    let router = home.handle();
+    router
+        .push(AppRoute::Note { id: 1 })
+        .expect("mounted router");
+    settle(&mut laid);
+    let _result = home
+        .navigator()
+        .push(PopupRoute::<()>::new(|_cx, _a, _s| text("Dialog".into())));
+    settle(&mut laid);
+
+    assert!(laid_out_text(&laid, "Dialog"));
+    assert_eq!(
+        router.stack(),
+        vec![AppRoute::Home, AppRoute::Note { id: 1 }]
+    );
+}
+
+/// `Debug` on a router and on its handle prints every route on the stack.
+pub(crate) fn debug_prints_the_whole_stack() {
+    let probe = Probe::default();
+    let stack = vec![
+        AppRoute::Home,
+        AppRoute::Note { id: 5 },
+        AppRoute::Tag { name: "x".into() },
+    ];
+    let printed = r#"["/", "/note/5", "/tag/x"]"#;
+    let router = Router::from_stack(stack, recording_pages(&probe)).expect("a non-empty stack");
+    let view = format!("{router:?}");
+    assert!(view.contains(printed), "{view}");
+
+    let _laid = mount(router);
+    let handle = format!("{:?}", probe.handle());
+    assert!(handle.contains(printed), "{handle}");
+}
+
+/// A route whose `Clone` or `==`, once armed, pops the router it is on.
+struct PoppingRoute {
+    index: u32,
+    router: Rc<RefCell<Option<RouterHandle<PoppingRoute>>>>,
+    pop_on_clone: Rc<Cell<bool>>,
+    pop_on_eq: Rc<Cell<bool>>,
+}
+
+impl PoppingRoute {
+    /// A route with its own unarmed hooks: what parsing a location yields.
+    fn parsed(index: u32) -> Self {
+        Self {
+            index,
+            router: Rc::default(),
+            pop_on_clone: Rc::default(),
+            pop_on_eq: Rc::default(),
+        }
+    }
+
+    fn pop_router_if(&self, armed: &Cell<bool>) {
+        if armed.replace(false) {
+            let router = self.router.borrow().clone().expect("the page was mounted");
+            assert_eq!(router.pop(), Ok(true), "the route pops the top page");
+        }
+    }
+}
+
+impl Clone for PoppingRoute {
+    fn clone(&self) -> Self {
+        self.pop_router_if(&self.pop_on_clone);
+        Self {
+            index: self.index,
+            router: Rc::clone(&self.router),
+            pop_on_clone: Rc::clone(&self.pop_on_clone),
+            pop_on_eq: Rc::clone(&self.pop_on_eq),
+        }
+    }
+}
+
+impl PartialEq for PoppingRoute {
+    fn eq(&self, other: &Self) -> bool {
+        self.pop_router_if(&self.pop_on_eq);
+        other.pop_router_if(&other.pop_on_eq);
+        self.index == other.index
+    }
+}
+
+impl Routable for PoppingRoute {
+    fn to_path(&self) -> RoutePath {
+        RoutePath::root().join(self.index)
+    }
+
+    fn from_path(path: &RoutePath) -> Result<Self, RouteParseError> {
+        let segments: Vec<_> = path.segments().collect();
+        match segments.as_slice() {
+            [index] => index
+                .parse()
+                .map(Self::parsed)
+                .map_err(|_| RouteParseError::NoMatch { path: path.clone() }),
+            _ => Err(RouteParseError::NoMatch { path: path.clone() }),
+        }
+    }
+
+    /// `/0/1/5` opens on `0`, `1` and `5`.
+    fn back_stack(path: &RoutePath) -> Result<Vec<Self>, RouteParseError> {
+        path.segments()
+            .map(|index| {
+                index
+                    .parse()
+                    .map(Self::parsed)
+                    .map_err(|_| RouteParseError::NoMatch { path: path.clone() })
+            })
+            .collect()
+    }
+}
+
+/// A page that keeps its `Router<PoppingRoute>` handle in `router`.
+#[derive(Clone)]
+struct HandleKeeper {
+    router: Rc<RefCell<Option<RouterHandle<PoppingRoute>>>>,
+}
+
+impl View for HandleKeeper {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+impl StatefulView for HandleKeeper {
+    type State = HandleKeeperState;
+    fn create_state(&self) -> HandleKeeperState {
+        HandleKeeperState {
+            router: Rc::clone(&self.router),
+        }
+    }
+}
+
+struct HandleKeeperState {
+    router: Rc<RefCell<Option<RouterHandle<PoppingRoute>>>>,
+}
+
+impl ViewState<HandleKeeper> for HandleKeeperState {
+    fn init_state(&mut self, cx: &dyn LifecycleContext) {
+        *self.router.borrow_mut() =
+            Some(Router::<PoppingRoute>::handle(cx).expect("a Router<PoppingRoute> above"));
+    }
+
+    fn build(&self, _view: &HandleKeeper, _cx: &dyn BuildContext) -> impl IntoView {
+        Text::new("page")
+    }
+}
+
+/// A mounted router on `0`, `1`, `2` whose routes pop it.
+struct PoppingRouter {
+    laid: LaidOut,
+    handle: RouterHandle<PoppingRoute>,
+    /// Arms a pop from the next route `Clone`.
+    pop_on_clone: Rc<Cell<bool>>,
+    /// Arms a pop from the next route `==`.
+    pop_on_eq: Rc<Cell<bool>>,
+}
+
+fn popping_router() -> PoppingRouter {
+    let router = Rc::new(RefCell::new(None));
+    let pop_on_clone = Rc::new(Cell::new(false));
+    let pop_on_eq = Rc::new(Cell::new(false));
+    let route = |index| PoppingRoute {
+        index,
+        router: Rc::clone(&router),
+        pop_on_clone: Rc::clone(&pop_on_clone),
+        pop_on_eq: Rc::clone(&pop_on_eq),
+    };
+    let keeper = HandleKeeper {
+        router: Rc::clone(&router),
+    };
+    let restored = Router::from_stack(vec![route(0), route(1), route(2)], move |_route, _cx| {
+        keeper.clone().boxed()
+    })
+    .expect("a non-empty stack");
+    let mut laid = mount(restored);
+    settle(&mut laid);
+    let handle = router.borrow().clone().expect("the page was mounted");
+    PoppingRouter {
+        laid,
+        handle,
+        pop_on_clone,
+        pop_on_eq,
+    }
+}
+
+/// `go` compares routes after releasing the router's stack, so a route's
+/// `==` may drive the router; `go` then reconciles against the pages still
+/// in place.
+pub(crate) fn a_route_eq_may_drive_its_router_during_go() {
+    let PoppingRouter {
+        mut laid,
+        handle,
+        pop_on_eq,
+        ..
+    } = popping_router();
+
+    pop_on_eq.set(true);
+    assert_eq!(handle.go("/0/1/5"), Ok(()));
+    assert!(!pop_on_eq.get(), "a comparison popped the top page");
+    settle(&mut laid);
+    let indices: Vec<_> = handle.stack().iter().map(|route| route.index).collect();
+    assert_eq!(indices, [0, 1, 5]);
+}
+
+/// `stack()` and `current()` clone routes after releasing the router's
+/// stack, so a route's `Clone` may drive the router; each reads the stack as
+/// it was when called.
+pub(crate) fn a_route_clone_may_drive_its_router() {
+    let PoppingRouter {
+        mut laid,
+        handle,
+        pop_on_clone: armed,
+        ..
+    } = popping_router();
+    let indices = |routes: Vec<PoppingRoute>| routes.iter().map(|r| r.index).collect::<Vec<_>>();
+
+    armed.set(true);
+    assert_eq!(indices(handle.stack()), [0, 1, 2], "the stack as read");
+    assert!(!armed.get(), "a clone popped the top page");
+    assert_eq!(indices(handle.stack()), [0, 1]);
+
+    armed.set(true);
+    assert_eq!(handle.current().index, 1, "the top as read");
+    assert!(!armed.get(), "the clone popped the top page");
+    assert_eq!(indices(handle.stack()), [0]);
+    settle(&mut laid);
 }
 
 // ============================================================================

@@ -810,10 +810,18 @@ not roll back reassembly or promise a host turn after every delivery fails.
 `reassemble_failure_keeps_priority_over_a_failed_rearm` exercise the real
 widget reassembly callback with a queued agent read.
 
-This is continuation safety, not rollback or callback isolation. The panic
-still leaves the dispatch boundary, and arbitrary external effects remain the
-application's responsibility. Pinned by the panicking secondary-presentation
+This is continuation safety, not rollback. Arbitrary external effects remain
+the application's responsibility. Pinned by the panicking secondary-presentation
 signal command, command-capture destructor, and addressed keyboard/IME tests.
+
+Today the first panic still leaves the dispatch boundary after the continuation
+above. ADR-0258 (accepted, not implemented) ends that: each owner operation is
+contained on its own and reported once as `FrameFailureKind::CallbackPanic`
+through `UiRuntime::report_contained_panic`, the runtime goes back to its slot
+and the FIFO tail runs; only a terminal failure (the last runtime closing, or
+loop exit) leaves, and it goes to the host's terminal slot, to resume with 101
+after the exit flush. The continuation rules here stay as they are; what
+changes is that the panic stops after them instead of resuming.
 
 Runtime and scheduling topology, including background execution
 (`execution`), is designed for Rust (ADR-0027); ADR-0047 records its design.

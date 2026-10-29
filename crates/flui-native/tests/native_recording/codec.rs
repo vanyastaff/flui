@@ -119,6 +119,9 @@ pub enum Backend {
     /// DOM `PointerEvent`s.
     #[serde(rename = "web")]
     Web,
+    /// A Wayland compositor's seats.
+    #[serde(rename = "wayland")]
+    Wayland,
     /// The headless backend.
     #[serde(rename = "headless")]
     Headless,
@@ -1234,7 +1237,8 @@ struct ScrollDto {
     delta: [f64; 2],
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     precise: bool,
-    /// Whole notches of a wheel the device reports as such (X11's).
+    /// Whole notches of a wheel the device reports as such (X11's, Wayland's
+    /// `value120`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     notched: bool,
     time_ns: u64,

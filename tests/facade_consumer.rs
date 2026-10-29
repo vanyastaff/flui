@@ -51,6 +51,19 @@ fn dependency(package: &str, path: &Path, defaults: bool) -> toml::Value {
     value.into()
 }
 
+/// The facade at `root`, without its defaults, with `features` on.
+fn facade_with_features(root: &Path, features: &[&str]) -> toml::Value {
+    let mut framework = dependency("flui", root, false);
+    framework
+        .as_table_mut()
+        .expect("framework dependency table")
+        .insert(
+            "features".into(),
+            toml::Value::Array(features.iter().map(|&feature| feature.into()).collect()),
+        );
+    framework
+}
+
 fn consumer_project(
     dependencies: toml::Table,
     dev_dependencies: Option<toml::Table>,
@@ -89,8 +102,12 @@ fn run_consumer(
     source: &str,
     command: &str,
 ) -> Output {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let project = consumer_project(dependencies, dev_dependencies, source);
+    run_project(&project, command)
+}
+
+fn run_project(project: &tempfile::TempDir, command: &str) -> Output {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     // Never reuse the outer Cargo target: its build lock remains held during
     // integration tests. Both cases share this separate cache, serialized by Cargo.
     Command::new(env!("CARGO"))
@@ -173,15 +190,7 @@ fn external_consumers_extend_and_test_through_the_facade() {
         let mut dependencies = toml::Table::new();
         dependencies.insert(alias.into(), dependency("flui", root, false));
         let mut dev_dependencies = toml::Table::new();
-        let mut framework = dependency("flui", root, false);
-        framework
-            .as_table_mut()
-            .expect("framework dependency table")
-            .insert(
-                "features".into(),
-                toml::Value::Array(vec!["testing".into()]),
-            );
-        dev_dependencies.insert(alias.into(), framework);
+        dev_dependencies.insert(alias.into(), facade_with_features(root, &["testing"]));
         let source = rename_facade(include_str!("fixtures/facade_extensions.rs"), alias);
         let output = run_consumer(dependencies, Some(dev_dependencies), &source, "test");
         assert!(
@@ -240,6 +249,89 @@ fn owner_local_values_fit_every_flip_position() {
     }
 }
 
+/// The acceptance application, `tests/fixtures/acceptance_app/`, runs its rows
+/// as a crate that depends on the facade alone, with `material` for the
+/// application and `testing` for its rows. Every `#[test]` in the directory
+/// must report `... ok`, so a row added there is required here without a
+/// second list.
+#[test]
+fn acceptance_app_runs_through_the_facade() {
+    let Some(root) = checkout_root() else { return };
+    let table = |features: &[&str]| {
+        let mut table = toml::Table::new();
+        table.insert("flui".into(), facade_with_features(root, features));
+        table
+    };
+    let project = consumer_project(
+        table(&["material"]),
+        Some(table(&["material", "testing"])),
+        "",
+    );
+    let fixture = root.join("tests/fixtures/acceptance_app");
+    copy_tree(&fixture, &project.path().join("src"));
+    let rows = test_names(&fixture);
+    assert!(rows.len() > 1, "no acceptance rows found in {fixture:?}");
+
+    let output = run_project(&project, "test");
+    let report = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "acceptance application:\n{report}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for row in rows {
+        assert!(
+            report.contains(&format!("{row} ... ok")),
+            "missing executed acceptance row {row}:\n{report}"
+        );
+    }
+}
+
+/// Copy every file under `from` to the same place under `to`.
+fn copy_tree(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).expect("create a consumer source directory");
+    for entry in std::fs::read_dir(from).expect("read a fixture directory") {
+        let entry = entry.expect("fixture entry");
+        let target = to.join(entry.file_name());
+        if entry.file_type().expect("fixture entry type").is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).expect("copy a fixture file");
+        }
+    }
+}
+
+/// The name of each `#[test]` function in the `.rs` files under `directory`:
+/// the `fn` that follows a `#[test]` line, past other attributes.
+fn test_names(directory: &Path) -> Vec<String> {
+    let mut names = Vec::new();
+    for entry in std::fs::read_dir(directory).expect("read a fixture directory") {
+        let path = entry.expect("fixture entry").path();
+        if path.is_dir() {
+            names.extend(test_names(&path));
+            continue;
+        }
+        if path.extension().is_none_or(|extension| extension != "rs") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).expect("read a fixture source");
+        let mut after_test = false;
+        for line in source.lines().map(str::trim) {
+            if line == "#[test]" {
+                after_test = true;
+            } else if after_test && let Some(signature) = line.strip_prefix("fn ") {
+                let name = signature
+                    .split(['(', '<'])
+                    .next()
+                    .expect("BUG: split yields at least one piece");
+                names.push(name.to_owned());
+                after_test = false;
+            }
+        }
+    }
+    names
+}
+
 /// `source` as a consumer that names the facade `alias` writes it.
 ///
 /// Rewrites each `flui::` that starts a path: one not preceded by an
@@ -268,13 +360,8 @@ fn rename_facade(source: &str, alias: &str) -> String {
 /// `None` when there is no checkout to depend on — see [`checkout_root`].
 fn hot_reload_dependencies(include_layer: bool) -> Option<toml::Table> {
     let root = checkout_root()?;
-    let mut framework = dependency("flui", root, false);
-    framework.as_table_mut().expect("dependency table").insert(
-        "features".into(),
-        toml::Value::Array(vec!["hot-reload".into()]),
-    );
     let mut dependencies = toml::Table::new();
-    dependencies.insert("flui".into(), framework);
+    dependencies.insert("flui".into(), facade_with_features(root, &["hot-reload"]));
     if include_layer {
         dependencies.insert(
             "flui-layer".into(),

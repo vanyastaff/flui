@@ -1583,11 +1583,11 @@ pub(crate) mod text_store {
                     from.origin.y + from.size.height / 2.0,
                 );
                 assert_eq!(
-                    session.index_at_point(point, PointMode::Exact),
+                    session.index_at_point(point, PointMode::EXACT),
                     Ok(at(scalar))
                 );
                 assert_eq!(
-                    session.index_at_point(from.origin, PointMode::Nearest),
+                    session.index_at_point(from.origin, PointMode::NEAREST),
                     Ok(at(scalar))
                 );
             }
@@ -2312,7 +2312,7 @@ pub(crate) mod text_store {
                         hidden += 1;
                         let point = Point::new(x, from.origin.y + from.size.height / 2.0);
                         assert_eq!(
-                            session.index_at_point(point, PointMode::Exact),
+                            session.index_at_point(point, PointMode::EXACT),
                             Err(TextStoreError::PointOutside),
                             "an offscreen glyph must not answer an exact viewport query"
                         );

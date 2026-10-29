@@ -10,6 +10,10 @@
 //! arriving inside it are queued) and contains a panic: a panic never unwinds
 //! into TSF, it poisons the document instead. A method whose answer reads no
 //! state goes through [`com_method`], the boundary alone.
+//!
+//! What each method answers is decided in `text::windows::acp`, free of
+//! `windows` types and checked on every host; this file moves values
+//! between COM's pointers and it.
 
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -17,9 +21,8 @@ use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::{DevicePixelRatio, DevicePoint};
 use flui_platform::text_store::{
-    Composition, LockGrant, LockOutcome, LockTiming, OwnerCalls, PointMode, Selection, TextChange,
-    TextInputPurpose, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead,
-    TextStoreStatus, Utf16Offset, Utf16Range,
+    Composition, OwnerCalls, TextChange, TextInputPurpose, TextStore, TextStoreError,
+    TextStoreObserver, TextStoreStatus, Utf16Range,
 };
 use windows::Win32::{
     Foundation::{
@@ -29,13 +32,13 @@ use windows::Win32::{
     System::Com::{FORMATETC, IDataObject},
     UI::{
         TextServices::{
-            GXFPF_ROUND_NEAREST, ITextStoreACP_Impl, ITextStoreACPSink, ITfCompositionView,
-            ITfContextOwnerCompositionSink_Impl, ITfRange, ITfRangeACP, TEXT_STORE_LOCK_FLAGS,
-            TEXT_STORE_TEXT_CHANGE_FLAGS, TS_AE_END, TS_AE_START, TS_AS_LAYOUT_CHANGE,
-            TS_AS_SEL_CHANGE, TS_AS_STATUS_CHANGE, TS_AS_TEXT_CHANGE, TS_ATTRVAL,
-            TS_DEFAULT_SELECTION, TS_E_INVALIDPOINT, TS_E_INVALIDPOS, TS_E_NOLAYOUT, TS_E_NOLOCK,
-            TS_E_SYNCHRONOUS, TS_IAS_QUERYONLY, TS_LC_CHANGE, TS_LF_READWRITE, TS_LF_SYNC,
-            TS_RT_PLAIN, TS_RUNINFO, TS_S_ASYNC, TS_SELECTION_ACP, TS_SELECTIONSTYLE,
+            GXFPF_NEAREST, GXFPF_ROUND_NEAREST, ITextStoreACP_Impl, ITextStoreACPSink,
+            ITfCompositionView, ITfContextOwnerCompositionSink_Impl, ITfRange, ITfRangeACP,
+            TEXT_STORE_LOCK_FLAGS, TEXT_STORE_TEXT_CHANGE_FLAGS, TS_AE_END, TS_AE_START,
+            TS_AS_LAYOUT_CHANGE, TS_AS_SEL_CHANGE, TS_AS_STATUS_CHANGE, TS_AS_TEXT_CHANGE,
+            TS_ATTRVAL, TS_DEFAULT_SELECTION, TS_E_INVALIDPOINT, TS_E_INVALIDPOS, TS_E_NOLAYOUT,
+            TS_E_NOLOCK, TS_E_SYNCHRONOUS, TS_IAS_QUERYONLY, TS_LC_CHANGE, TS_LF_READWRITE,
+            TS_LF_SYNC, TS_RT_PLAIN, TS_RUNINFO, TS_S_ASYNC, TS_SELECTION_ACP, TS_SELECTIONSTYLE,
             TS_SS_NOHIDDENTEXT, TS_STATUS, TS_TEXTCHANGE,
         },
         WindowsAndMessaging::GetClientRect,
@@ -46,7 +49,40 @@ use windows_core::{BOOL, GUID, HRESULT, IUnknown, Interface, PCWSTR, PWSTR, Ref}
 use super::{TextServices, input_scope};
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::owner::windows::WindowRef;
+use crate::text::windows::acp::{
+    self, AcpChange, AcpSelection, Hresult, Session, SessionSlot, acp, store_error,
+};
 use crate::text::windows::geometry::{ScreenRect, range_rect_to_screen, screen_point_to_client};
+
+// The codes and flags `acp` names are the ones `windows` defines.
+const _: () = {
+    assert!(Hresult::S_OK.value() == S_OK.0);
+    assert!(Hresult::TS_S_ASYNC.value() == TS_S_ASYNC.0);
+    assert!(Hresult::TS_E_INVALIDPOS.value() == TS_E_INVALIDPOS.0);
+    assert!(Hresult::TS_E_NOLOCK.value() == TS_E_NOLOCK.0);
+    assert!(Hresult::TS_E_NOLAYOUT.value() == TS_E_NOLAYOUT.0);
+    assert!(Hresult::TS_E_INVALIDPOINT.value() == TS_E_INVALIDPOINT.0);
+    assert!(Hresult::TS_E_SYNCHRONOUS.value() == TS_E_SYNCHRONOUS.0);
+    assert!(Hresult::E_UNEXPECTED.value() == E_UNEXPECTED.0);
+    assert!(Hresult::E_FAIL.value() == E_FAIL.0);
+    assert!(Hresult::E_INVALIDARG.value() == E_INVALIDARG.0);
+    assert!(acp::TS_LF_SYNC == TS_LF_SYNC);
+    assert!(acp::TS_LF_READWRITE == TS_LF_READWRITE.0);
+    assert!(acp::GXFPF_ROUND_NEAREST == GXFPF_ROUND_NEAREST);
+    assert!(acp::GXFPF_NEAREST == GXFPF_NEAREST);
+};
+
+impl From<Hresult> for HRESULT {
+    fn from(code: Hresult) -> Self {
+        Self(code.value())
+    }
+}
+
+impl From<Hresult> for windows_core::Error {
+    fn from(code: Hresult) -> Self {
+        HRESULT::from(code).into()
+    }
+}
 
 /// The state one TSF document shares between its COM object and the
 /// window's [`TextServices`].
@@ -153,162 +189,23 @@ impl DocumentState {
     }
 
     /// Run one granted lock: open the session slot, hand TSF the lock and
-    /// close the slot again (on unwind too). A grant for a closed document
-    /// never reaches TSF.
-    fn run_grant(&self, session: Session<'_>, flags: u32, result: &Cell<Option<HRESULT>>) {
+    /// close the slot again (on unwind too); answers what `OnLockGranted`
+    /// returned. A grant for a closed document never reaches TSF.
+    fn run_grant(&self, session: Session<'_>, flags: u32) -> Hresult {
         if self.closed.get() {
             tracing::debug!(target: "flui_native::tsf", "grant for a closed document dropped");
-            result.set(Some(E_UNEXPECTED));
-            return;
+            return Hresult::E_UNEXPECTED;
         }
         let Some(sink) = self.sink_for(u32::MAX) else {
-            result.set(Some(E_UNEXPECTED));
-            return;
+            return Hresult::E_UNEXPECTED;
         };
         self.slot.with_open(session, || {
             tracing::debug!(target: "flui_native::tsf", flags, "OnLockGranted");
             // SAFETY: a plain COM call on a sink TSF advised; no pointers.
             let granted = unsafe { sink.OnLockGranted(TEXT_STORE_LOCK_FLAGS(flags)) };
-            result.set(Some(granted.map_or_else(|error| error.code(), |()| S_OK)));
-        });
+            Hresult::new(granted.map_or_else(|error| error.code(), |()| S_OK).0)
+        })
     }
-}
-
-/// The session a granted lock opened, as the slot holds it.
-pub(super) enum Session<'a> {
-    Read(&'a dyn TextStoreRead),
-    Write(&'a mut dyn TextStoreEdit),
-}
-
-/// A session with its lifetime erased, valid only while
-/// [`SessionSlot::with_open`]'s frame is on the stack.
-#[derive(Clone, Copy)]
-enum ErasedSession {
-    Read(*const (dyn TextStoreRead + 'static)),
-    Write(*mut (dyn TextStoreEdit + 'static)),
-}
-
-/// Where a granted lock's session waits for the TSF calls made under it.
-///
-/// TSF reads and edits by calling the text store's methods from inside
-/// `OnLockGranted`; those calls reach the session through this slot. It is
-/// open only while [`Self::with_open`] runs, and at most one method borrows
-/// the session at a time (`in_use`): a method reached reentrantly while
-/// another holds it answers `E_UNEXPECTED` instead of taking a second
-/// `&mut`.
-#[derive(Default)]
-struct SessionSlot {
-    session: Cell<Option<ErasedSession>>,
-    in_use: Cell<bool>,
-}
-
-/// Restores the slot's previous value when `with_open`'s frame ends,
-/// unwinding included.
-struct SlotRestore<'a> {
-    slot: &'a SessionSlot,
-    previous: Option<ErasedSession>,
-}
-
-impl Drop for SlotRestore<'_> {
-    fn drop(&mut self) {
-        self.slot.session.set(self.previous);
-    }
-}
-
-/// Clears the slot's `in_use` flag when a method's borrow ends.
-struct InUse<'a>(&'a Cell<bool>);
-
-impl Drop for InUse<'_> {
-    fn drop(&mut self) {
-        self.0.set(false);
-    }
-}
-
-impl SessionSlot {
-    /// Run `f` with `session` reachable through the slot.
-    #[expect(
-        clippy::transmute_ptr_to_ptr,
-        reason = "only the trait object's lifetime bound changes, which a cast cannot do"
-    )]
-    fn with_open<R>(&self, session: Session<'_>, f: impl FnOnce() -> R) -> R {
-        let erased = match session {
-            // SAFETY: only the trait object's lifetime bound changes (the
-            // pointer's layout is the same). This frame keeps the borrow the
-            // pointer came from alive and unused until `SlotRestore` closes
-            // the slot again, before this function returns or unwinds, so
-            // the pointer never outlives the session it points to.
-            Session::Read(read) => ErasedSession::Read(unsafe {
-                std::mem::transmute::<
-                    *const (dyn TextStoreRead + '_),
-                    *const (dyn TextStoreRead + 'static),
-                >(read)
-            }),
-            // SAFETY: as above, for the read-write session.
-            Session::Write(write) => ErasedSession::Write(unsafe {
-                std::mem::transmute::<
-                    *mut (dyn TextStoreEdit + '_),
-                    *mut (dyn TextStoreEdit + 'static),
-                >(write)
-            }),
-        };
-        let _restore = SlotRestore {
-            slot: self,
-            previous: self.session.replace(Some(erased)),
-        };
-        f()
-    }
-
-    fn borrow(&self) -> windows_core::Result<(ErasedSession, InUse<'_>)> {
-        let session = self.session.get().ok_or(TS_E_NOLOCK)?;
-        if self.in_use.replace(true) {
-            tracing::warn!(target: "flui_native::tsf", "nested session borrow refused");
-            return Err(E_UNEXPECTED.into());
-        }
-        Ok((session, InUse(&self.in_use)))
-    }
-
-    /// Run `f` on the open session, read or read-write.
-    fn read<R>(
-        &self,
-        f: impl FnOnce(&dyn TextStoreRead) -> windows_core::Result<R>,
-    ) -> windows_core::Result<R> {
-        let (session, _in_use) = self.borrow()?;
-        match session {
-            // SAFETY: the slot holds a pointer only while `with_open`'s frame
-            // keeps its session alive (see there); `in_use` makes this the
-            // only borrow of it; the slot is owner-thread only (`Cell`).
-            ErasedSession::Read(read) => f(unsafe { &*read }),
-            // SAFETY: as above.
-            ErasedSession::Write(write) => f(unsafe { &*write }),
-        }
-    }
-
-    /// Run `f` on the open session; a read-only session answers
-    /// `TS_E_NOLOCK`.
-    fn write<R>(
-        &self,
-        f: impl FnOnce(&mut dyn TextStoreEdit) -> windows_core::Result<R>,
-    ) -> windows_core::Result<R> {
-        let (session, _in_use) = self.borrow()?;
-        match session {
-            ErasedSession::Read(_) => Err(TS_E_NOLOCK.into()),
-            // SAFETY: as in `read`; `in_use` rules out a second `&mut`.
-            ErasedSession::Write(write) => f(unsafe { &mut *write }),
-        }
-    }
-}
-
-/// A store error as the HRESULT TSF expects.
-fn store_error(error: TextStoreError) -> windows_core::Error {
-    match error {
-        TextStoreError::SyncLockUnavailable => TS_E_SYNCHRONOUS,
-        TextStoreError::Offset(_) => TS_E_INVALIDPOS,
-        TextStoreError::NoLayout => TS_E_NOLAYOUT,
-        TextStoreError::PointOutside => TS_E_INVALIDPOINT,
-        TextStoreError::Detached => E_UNEXPECTED,
-        _ => E_FAIL,
-    }
-    .into()
 }
 
 /// What `GetStatus` tells TSF about a store whose status is `status`.
@@ -331,25 +228,12 @@ pub(super) fn ts_status(status: TextStoreStatus) -> TS_STATUS {
     }
 }
 
-fn offset(acp: i32) -> windows_core::Result<Utf16Offset> {
-    usize::try_from(acp)
-        .map(Utf16Offset::new)
-        .map_err(|_| TS_E_INVALIDPOS.into())
-}
-
-fn acp(offset: Utf16Offset) -> i32 {
-    i32::try_from(offset.get()).unwrap_or(i32::MAX)
-}
-
-fn range(start: i32, end: i32) -> windows_core::Result<Utf16Range> {
-    Utf16Range::new(offset(start)?, offset(end)?).ok_or_else(|| TS_E_INVALIDPOS.into())
-}
-
-fn text_change(change: TextChange) -> TS_TEXTCHANGE {
+/// `change` as TSF's `TS_TEXTCHANGE`.
+fn ts_change(change: AcpChange) -> TS_TEXTCHANGE {
     TS_TEXTCHANGE {
-        acpStart: acp(change.start),
-        acpOldEnd: acp(change.old_end),
-        acpNewEnd: acp(change.new_end),
+        acpStart: change.start,
+        acpOldEnd: change.old_end,
+        acpNewEnd: change.new_end,
     }
 }
 
@@ -369,7 +253,7 @@ fn range_extent(range: &ITfRange) -> windows_core::Result<Utf16Range> {
     let (mut start, mut len) = (0, 0);
     // SAFETY: both out-pointers are live, writable locals.
     unsafe { range.GetExtent(&raw mut start, &raw mut len) }?;
-    self::range(start, start.saturating_add(len))
+    Ok(acp::range(start, start.saturating_add(len))?)
 }
 
 pub(super) use com_object::{TsfStore, TsfStore_Impl};
@@ -537,42 +421,17 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
 
     fn RequestLock(&self, dwlockflags: u32) -> windows_core::Result<HRESULT> {
         TsfStore::document_method(self, "RequestLock", |state| {
-            let timing = if dwlockflags & TS_LF_SYNC == 0 {
-                LockTiming::Async
-            } else {
-                LockTiming::Sync
-            };
-            let read_write = dwlockflags & TS_LF_READWRITE.0 == TS_LF_READWRITE.0;
-            let flags = dwlockflags & !TS_LF_SYNC;
-            let session_result = Rc::new(Cell::new(None));
-            let (grant_state, grant_result) = (Rc::clone(&self.state), Rc::clone(&session_result));
-            let grant = if read_write {
-                LockGrant::read_write(move |session| {
-                    grant_state.run_grant(Session::Write(session), flags, &grant_result);
-                })
-            } else {
-                LockGrant::read(move |session| {
-                    grant_state.run_grant(Session::Read(session), flags, &grant_result);
-                })
-            };
-            let outcome = state.store.request_lock(grant, timing);
-            let answer = match outcome {
-                Ok(LockOutcome::Granted) => session_result.get().unwrap_or(S_OK),
-                Ok(LockOutcome::Deferred) => TS_S_ASYNC,
-                Err(TextStoreError::SyncLockUnavailable) => TS_E_SYNCHRONOUS,
-                Err(error) => {
-                    tracing::debug!(target: "flui_native::tsf", dwlockflags, ?error, "RequestLock refused");
-                    return Err(store_error(error));
-                }
-            };
+            let grant_state = Rc::clone(&self.state);
+            let answer = acp::request_lock(&*state.store, dwlockflags, move |session, flags| {
+                grant_state.run_grant(session, flags)
+            });
             tracing::debug!(
                 target: "flui_native::tsf",
                 dwlockflags,
-                ?outcome,
-                session = ?answer,
+                ?answer,
                 "RequestLock"
             );
-            Ok(answer)
+            Ok(HRESULT::from(answer?))
         })
     }
 
@@ -591,7 +450,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         pacpresultend: *mut i32,
     ) -> windows_core::Result<()> {
         TsfStore::document_method(self, "QueryInsert", |_| {
-            range(acpteststart, acptestend)?;
+            acp::range(acpteststart, acptestend)?;
             put(pacpresultstart, acpteststart);
             put(pacpresultend, acptestend);
             Ok(())
@@ -613,15 +472,16 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
                 put(pcfetched, 0);
                 return Ok(());
             }
-            let selection = state.slot.read(|session| Ok(session.selection()))?;
-            let span = selection.range();
+            let selection = state
+                .slot
+                .read(|session| Ok::<_, Hresult>(acp::selection(session)))?;
             put(
                 pselection,
                 TS_SELECTION_ACP {
-                    acpStart: acp(span.start()),
-                    acpEnd: acp(span.end()),
+                    acpStart: selection.start,
+                    acpEnd: selection.end,
                     style: TS_SELECTIONSTYLE {
-                        ase: if selection.active < selection.anchor {
+                        ase: if selection.active_at_start {
                             TS_AE_START
                         } else {
                             TS_AE_END
@@ -646,21 +506,16 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
             }
             // SAFETY: non-null was checked; TSF passes one selection.
             let wanted = unsafe { *pselection };
-            let (start, end) = (offset(wanted.acpStart)?, offset(wanted.acpEnd)?);
-            let selection = if wanted.style.ase == TS_AE_START {
-                Selection {
-                    anchor: end,
-                    active: start,
-                }
-            } else {
-                Selection {
-                    anchor: start,
-                    active: end,
-                }
+            let wanted = AcpSelection {
+                start: wanted.acpStart,
+                end: wanted.acpEnd,
+                active_at_start: wanted.style.ase == TS_AE_START,
             };
-            state
+            acp::offset(wanted.start)?;
+            acp::offset(wanted.end)?;
+            Ok(state
                 .slot
-                .write(|session| session.set_selection(selection).map_err(store_error))
+                .write(|session| acp::set_selection(session, wanted))?)
         })
     }
 
@@ -678,31 +533,11 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
     ) -> windows_core::Result<()> {
         TsfStore::document_method(self, "GetText", |state| {
             // Only what the caller's buffer can hold is read and encoded.
-            let wanted = if pchplain.is_null() {
-                0
-            } else {
-                i32::try_from(cchplainreq).unwrap_or(i32::MAX)
-            };
-            let units = state.slot.read(|session| {
-                let end = if acpend == -1 {
-                    acp(session.document_len())
-                } else {
-                    acpend
-                };
-                let capped = end.min(acpstart.saturating_add(wanted));
-                let text = match session.text(range(acpstart, capped)?) {
-                    Ok(text) => text,
-                    // The cap fell inside a surrogate pair: stop before it.
-                    Err(_) if capped < end && capped > acpstart => session
-                        .text(range(acpstart, capped - 1)?)
-                        .map_err(store_error)?,
-                    Err(error) => return Err(store_error(error)),
-                };
-                Ok(text.encode_utf16().collect::<Vec<u16>>())
-            })?;
-            let copied = units
-                .len()
-                .min(usize::try_from(wanted).unwrap_or(usize::MAX));
+            let room = if pchplain.is_null() { 0 } else { cchplainreq };
+            let units = state
+                .slot
+                .read(|session| acp::text(session, acpstart, acpend, room))?;
+            let copied = units.len().min(usize::try_from(room).unwrap_or(usize::MAX));
             if copied > 0 {
                 // SAFETY: TSF's buffer holds `cchplainreq` units and
                 // `copied` is at most that; the source is our own vector.
@@ -740,12 +575,12 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
     ) -> windows_core::Result<TS_TEXTCHANGE> {
         TsfStore::document_method(self, "SetText", |state| {
             let text = wide_text(pchtext, cch)?;
-            let span = range(acpstart, acpend)?;
+            acp::range(acpstart, acpend)?;
             tracing::debug!(target: "flui_native::tsf", acpstart, acpend, text, "SetText");
-            state
+            let change = state
                 .slot
-                .write(|session| session.replace(span, &text).map_err(store_error))
-                .map(text_change)
+                .write(|session| acp::replace(session, acpstart, acpend, &text))?;
+            Ok(ts_change(change))
         })
     }
 
@@ -791,19 +626,24 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
     ) -> windows_core::Result<()> {
         TsfStore::document_method(self, "InsertTextAtSelection", |state| {
             if dwflags & TS_IAS_QUERYONLY != 0 {
-                let span = state.slot.read(|session| Ok(session.selection().range()))?;
-                put(pacpstart, acp(span.start()));
-                put(pacpend, acp(span.end()));
+                let selection = state
+                    .slot
+                    .read(|session| Ok::<_, Hresult>(acp::selection(session)))?;
+                put(pacpstart, selection.start);
+                put(pacpend, selection.end);
                 return Ok(());
             }
             let text = wide_text(pchtext, cch)?;
             tracing::debug!(target: "flui_native::tsf", text, "InsertTextAtSelection");
-            let change = state
-                .slot
-                .write(|session| session.insert_at_selection(&text).map_err(store_error))?;
-            put(pacpstart, acp(change.start));
-            put(pacpend, acp(change.new_end));
-            put(pchange, text_change(change));
+            let change = state.slot.write(|session| {
+                session
+                    .insert_at_selection(&text)
+                    .map(acp::text_change)
+                    .map_err(store_error)
+            })?;
+            put(pacpstart, change.start);
+            put(pacpend, change.new_end);
+            put(pchange, ts_change(change));
             Ok(())
         })
     }
@@ -905,7 +745,9 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
 
     fn GetEndACP(&self) -> windows_core::Result<i32> {
         TsfStore::document_method(self, "GetEndACP", |state| {
-            state.slot.read(|session| Ok(acp(session.document_len())))
+            Ok(state
+                .slot
+                .read(|session| Ok::<_, Hresult>(acp(session.document_len())))?)
         })
     }
 
@@ -929,17 +771,13 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
             let logical =
                 screen_point_to_client(DevicePoint::new(screen.x, screen.y), origin, scale)
                     .ok_or_else(|| store_error(TextStoreError::PointOutside))?;
-            let mode = if dwflags & GXFPF_ROUND_NEAREST == 0 {
-                PointMode::Exact
-            } else {
-                PointMode::Nearest
-            };
-            state.slot.read(|session| {
+            let mode = acp::point_mode(dwflags);
+            Ok(state.slot.read(|session| {
                 session
                     .index_at_point(logical, mode)
                     .map(acp)
                     .map_err(store_error)
-            })
+            })?)
         })
     }
 
@@ -952,7 +790,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         pfclipped: *mut BOOL,
     ) -> windows_core::Result<()> {
         TsfStore::document_method(self, "GetTextExt", |state| {
-            let span = range(acpstart, acpend)?;
+            let span = acp::range(acpstart, acpend)?;
             let rect = state
                 .slot
                 .read(|session| session.rect_for_range(span).map_err(store_error));
@@ -963,10 +801,10 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
                         target: "flui_native::tsf",
                         acpstart,
                         acpend,
-                        error = ?error.code(),
+                        ?error,
                         "GetTextExt"
                     );
-                    return Err(error);
+                    return Err(error.into());
                 }
             };
             let (scale, origin) = state.screen_frame();
@@ -1074,16 +912,16 @@ fn set_composition(state: &DocumentState, span: Option<Utf16Range>) -> windows_c
         range,
         hides_caret: false,
     });
-    state
+    Ok(state
         .slot
         .write(|session| session.set_composition(composition).map_err(store_error))
         .inspect_err(|error| {
             tracing::warn!(
                 target: "flui_native::tsf",
-                error = ?error.code(),
+                ?error,
                 "composition change outside a read-write session"
             );
-        })
+        })?)
 }
 
 /// `cch` UTF-16 units at `text` as a `String`; unpaired surrogates are an
@@ -1098,7 +936,7 @@ fn wide_text(text: &PCWSTR, cch: u32) -> windows_core::Result<String> {
     }
     // SAFETY: TSF passes `cch` readable units at a non-null `text`.
     let units = unsafe { std::slice::from_raw_parts(text.0, len) };
-    String::from_utf16(units).map_err(|_| E_INVALIDARG.into())
+    Ok(acp::wide_text(units)?)
 }
 
 /// The store's notifications forwarded to the advised `ITextStoreACPSink`.
@@ -1131,7 +969,7 @@ impl SinkObserver {
 
 impl TextStoreObserver for SinkObserver {
     fn text_changed(&self, change: TextChange) {
-        let change = text_change(change);
+        let change = ts_change(acp::text_change(change));
         // SAFETY: plain COM calls on the advised sink; `change` is a live
         // local for the call's length.
         self.notify(TS_AS_TEXT_CHANGE, "OnTextChange", |sink| unsafe {

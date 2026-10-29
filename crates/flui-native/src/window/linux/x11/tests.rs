@@ -314,8 +314,8 @@ fn x11_window_takes_commands_and_publishes_what_the_server_holds() {
 
         // The window manager minimizes the window: winit reports no
         // event, the probe hears of it, and the snapshot follows with
-        // a notification. X sends no visibility event for it either, so
-        // the window reports itself hidden from the mode.
+        // a notification. X sends no visibility event for it either; the
+        // mode alone keeps it from being seen, and it is still shown.
         let before = changes.load(Ordering::SeqCst);
         set_window_manager_state(server, id, 3, &["_NET_WM_STATE_HIDDEN"]);
         until_state(&window, "the minimized mode", |state| {
@@ -323,6 +323,7 @@ fn x11_window_takes_commands_and_publishes_what_the_server_holds() {
         });
         assert!(changes.load(Ordering::SeqCst) > before, "a notification");
         assert!(!window.state().is_seen(), "a minimized window is not seen");
+        assert!(window.state().visible, "a minimized window is still shown");
         // The report follows the publication on whichever thread made it.
         until_reports(
             &window,
@@ -374,7 +375,10 @@ fn x11_window_takes_commands_and_publishes_what_the_server_holds() {
         window
             .admit_and_apply(WindowCommand::Show)
             .expect("a desktop window shows");
-        assert!(!window.state().visible, "still covered");
+        assert!(
+            window.state().visible && window.state().occluded,
+            "still shown, and still covered"
+        );
         assert_eq!(*visibility.lock(), [true, false, true, false, true, false]);
         server.destroy_window(cover).expect("request");
         server.flush().expect("flush");

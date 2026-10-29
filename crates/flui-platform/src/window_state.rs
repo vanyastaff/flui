@@ -8,8 +8,11 @@
 //! never what code asked for: a size the OS clamped is the clamped size, and a
 //! maximize the OS refused leaves the mode where it was. It holds every fact of
 //! the window (ADR-0254 §1): geometry and mode, the drawable metrics and scale,
-//! appearance, display, safe area, execution state, focus, activation, visibility, hover
-//! and the [`WindowCapabilities`]. A change publishes a new snapshot with a
+//! appearance, display, safe area, execution state, focus, activation, visibility,
+//! occlusion, hover and the [`WindowCapabilities`]. Whether the window is shown
+//! ([`visible`](WindowState::visible)), minimized ([`mode`](WindowState::mode))
+//! and covered ([`occluded`](WindowState::occluded)) are three facts, and
+//! [`WindowState::is_seen`] is the one reading of all three. A change publishes a new snapshot with a
 //! higher [`WindowRevision`] and one payload-free `WindowHandler::state_changed`
 //! notification; a sample equal to the published one keeps the revision
 //! ([`WindowState::successor`]). The revision never wraps: the last one is
@@ -143,8 +146,23 @@ pub struct WindowState {
     /// The rectangle the window returns to from a maximized or fullscreen
     /// mode, when the OS reports it.
     pub normal_geometry: Option<WindowGeometry>,
-    /// Whether the window is shown.
+    /// Whether the window is shown: opened visible or shown since, and not
+    /// hidden since ([`WindowCommand::Show`], [`WindowCommand::Hide`]). It is
+    /// the window's own show state as its window system holds it (Win32's
+    /// `WS_VISIBLE`, an X11 window not withdrawn, AppKit's `isVisible` or
+    /// `isMiniaturized`), so minimizing a window or covering it leaves it
+    /// `true`: those are its [`mode`](Self::mode) and
+    /// [`occluded`](Self::occluded). Where the application cannot hide its
+    /// window (a Wayland toplevel, a mobile window, a page's canvas) it is
+    /// shown while it is open.
     pub visible: bool,
+    /// Whether the window system says none of a shown, unminimized window
+    /// reaches the screen: covered by other windows, on another workspace or
+    /// space, cloaked, behind a locked session, a background page or app, a
+    /// toplevel the compositor suspended. `false` where the window system does
+    /// not tell, and always `false` for a hidden or minimized window, which
+    /// [`successor`](Self::successor) holds: those are their own facts.
+    pub occluded: bool,
     /// Whether the window has input focus.
     pub focused: bool,
     /// The title; `None` where the OS has no window title.
@@ -190,8 +208,8 @@ pub struct WindowState {
 }
 
 impl WindowState {
-    /// A visible, unfocused, inactive, unhovered, running, resizable, decorated window
-    /// in normal mode at revision zero, with no title, limits, display,
+    /// A visible, unoccluded, unfocused, inactive, unhovered, running, resizable,
+    /// decorated window in normal mode at revision zero, with no title, limits, display,
     /// metrics or safe area, the light appearance, and capabilities that
     /// honour nothing.
     #[must_use]
@@ -203,6 +221,7 @@ impl WindowState {
             mode: WindowMode::Normal,
             normal_geometry: None,
             visible: true,
+            occluded: false,
             focused: false,
             title: None,
             constraints: SizeConstraints::NONE,
@@ -237,6 +256,14 @@ impl WindowState {
     #[must_use]
     pub fn with_visible(mut self, visible: bool) -> Self {
         self.visible = visible;
+        self
+    }
+
+    /// Set whether the window system says none of the window reaches the
+    /// screen.
+    #[must_use]
+    pub fn with_occluded(mut self, occluded: bool) -> Self {
+        self.occluded = occluded;
         self
     }
 
@@ -332,12 +359,14 @@ impl WindowState {
         self
     }
 
-    /// Whether the window's content can be seen: it is shown and not
-    /// minimized. A window manager may keep a minimized window shown; its
-    /// content is still not on screen, so its frames are not drawn.
+    /// Whether the window's content can be seen: it is shown, not minimized
+    /// and not occluded. A minimized window stays shown and a covered one
+    /// stays shown and unminimized, but neither puts content on screen, so
+    /// neither draws frames: this, not [`visible`](Self::visible), is what
+    /// frame scheduling and the lifecycle read.
     #[must_use]
     pub fn is_seen(&self) -> bool {
-        self.visible && self.mode != WindowMode::Minimized
+        self.visible && self.mode != WindowMode::Minimized && !self.occluded
     }
 
     /// The snapshot that follows this one with `sample`: this very value when
@@ -345,7 +374,10 @@ impl WindowState {
     /// `sample` at the next revision. The revision `sample` carries is
     /// ignored, and a sample without [`metrics`](Self::metrics) (the window
     /// reported no drawable area) keeps this snapshot's: a report that is not
-    /// a drawable area is never published.
+    /// a drawable area is never published. A sample of a hidden or minimized
+    /// window is not [`occluded`](Self::occluded), whatever the window system
+    /// said: AppKit calls a miniaturized window occluded, which is no
+    /// covering, and a hidden window has nothing to cover.
     ///
     /// The capabilities' own [`revision`](WindowCapabilities::revision) and
     /// owner are this function's to keep, so a sample's are ignored too: the
@@ -363,6 +395,7 @@ impl WindowState {
         if sample.metrics.is_none() {
             sample.metrics = self.metrics;
         }
+        sample.occluded &= sample.visible && sample.mode != WindowMode::Minimized;
         if sample == *self {
             return Ok(sample);
         }

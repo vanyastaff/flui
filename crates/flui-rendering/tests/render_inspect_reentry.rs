@@ -16,8 +16,10 @@ use flui_rendering::{
 
 thread_local! {
     /// The cell holding the tree the probe sits in.
+    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static CELL: RefCell<Option<WeakPipelineCell>> = const { RefCell::new(None) };
     /// What each nested snapshot answered.
+    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static ANSWERS: RefCell<Vec<Option<SnapshotError>>> = const { RefCell::new(Vec::new()) };
 }
 

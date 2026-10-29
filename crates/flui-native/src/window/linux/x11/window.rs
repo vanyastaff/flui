@@ -441,10 +441,15 @@ impl X11Window {
         // Remembered for a window whose platform is gone.
         record.support = support;
         let mode = mode_of(mode_flags(read.wm_state, read.net_state));
-        let viewable = read.map_state == MapState::VIEWABLE;
-        let visible = (record.reveal_pending || viewable)
-            && !record.obscured
-            && mode != WindowMode::Minimized;
+        // Shown while mapped, waiting for its first frame to be, or iconic: a
+        // window manager unmaps the windows it iconifies (ICCCM 4.1.4), and
+        // only the application withdraws one.
+        let visible = record.reveal_pending
+            || read.map_state != MapState::UNMAPPED
+            || mode == WindowMode::Minimized;
+        // Mapped under an unmapped ancestor (a window manager's frame on
+        // another workspace) or fully covered.
+        let occluded = read.map_state == MapState::UNVIEWABLE || record.obscured;
         let geometry = logical_geometry(outer, scale);
         let content_size = Size::new(
             f64::from(read.content.width) / scale,
@@ -479,6 +484,7 @@ impl X11Window {
             appearance: self.appearance(),
             safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
             execution: flui_platform::WindowExecutionState::Running,
+            occluded,
             hovered: self.delivery.hovered(),
             active: if support.managed {
                 read.active
