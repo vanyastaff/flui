@@ -88,6 +88,16 @@ pub enum UiCommand {
         /// Where the answer goes.
         reply: super::agent::ReplySender<flui_protocol::Tree>,
     },
+    /// Read the announcements the addressed presentation delivered, for a
+    /// [`SemanticsAgent`](super::SemanticsAgent), and answer on `reply`.
+    SemanticsAnnouncements {
+        /// The presentation the agent was vended for.
+        presentation_id: PresentationId,
+        /// Which announcements to answer.
+        params: flui_protocol::AnnouncementsParams,
+        /// Where the answer goes.
+        reply: super::agent::ReplySender<flui_protocol::AnnouncementJournal>,
+    },
     /// Resolve an agent's wire action against the addressed presentation's
     /// committed tree, invoke it, and answer on `reply`.
     SemanticsAgentAction {
@@ -171,6 +181,15 @@ impl std::fmt::Debug for UiCommand {
                 .debug_struct("UiCommand::SemanticsRead")
                 .field("presentation_id", presentation_id)
                 .field("query", query)
+                .finish_non_exhaustive(),
+            UiCommand::SemanticsAnnouncements {
+                presentation_id,
+                params,
+                ..
+            } => f
+                .debug_struct("UiCommand::SemanticsAnnouncements")
+                .field("presentation_id", presentation_id)
+                .field("since", &params.since)
                 .finish_non_exhaustive(),
             // The request's value stays out: it may be what a user typed.
             UiCommand::SemanticsAgentAction {
@@ -709,6 +728,19 @@ impl UiRuntime {
                         report.invoked += 1;
                     }
                     super::agent::send_reply(&reply, query.root, result);
+                }
+                UiCommand::SemanticsAnnouncements {
+                    presentation_id,
+                    params,
+                    reply,
+                } => {
+                    let result = self.serve_semantics_announcements(presentation_id, &params);
+                    if result == Err(super::AgentError::PresentationGone) {
+                        report.dropped_stale += 1;
+                    } else {
+                        report.invoked += 1;
+                    }
+                    super::agent::send_reply(&reply, None, result);
                 }
                 UiCommand::SemanticsAgentAction {
                     presentation_id,

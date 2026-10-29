@@ -387,6 +387,21 @@ impl AgentWindow {
             .ok_or_else(AgentFault::window_gone)?
             .motion(request)
     }
+
+    /// The announcements this window delivered to assistive technology after
+    /// `params.since`, oldest first. A read leaves out the announcer nodes
+    /// that carry them; this is where an agent hears them.
+    ///
+    /// # Errors
+    /// As [`Self::read`].
+    pub fn announcements(
+        &self,
+        params: flui_protocol::AnnouncementsParams,
+    ) -> Result<AgentAnswer<flui_protocol::AnnouncementJournal>, AgentFault> {
+        self.open_port()
+            .ok_or_else(AgentFault::window_gone)?
+            .announcements(params)
+    }
 }
 
 impl fmt::Debug for AgentWindow {
@@ -456,6 +471,15 @@ mod tests {
         ) -> Result<AgentAnswer<flui_protocol::MotionState>, AgentFault> {
             Ok(crate::__runtime::agent_answer(Ready(Some(
                 flui_protocol::MotionState::new(1.0, 0.0),
+            ))))
+        }
+
+        fn announcements(
+            &self,
+            _params: flui_protocol::AnnouncementsParams,
+        ) -> Result<AgentAnswer<flui_protocol::AnnouncementJournal>, AgentFault> {
+            Ok(crate::__runtime::agent_answer(Ready(Some(
+                flui_protocol::AnnouncementJournal::default(),
             ))))
         }
     }

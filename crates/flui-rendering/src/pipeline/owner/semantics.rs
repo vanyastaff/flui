@@ -333,16 +333,13 @@ impl RegionIdentities {
     /// reported once.
     pub(super) fn announcements(&mut self) -> Option<flui_semantics::Announcements> {
         if self.announcements.is_none() && !self.announcements_exhausted {
-            match self.source.allocate(2) {
-                Ok(ids) => {
-                    self.announcements = Some(flui_semantics::Announcements::new(ids[0], ids[1]));
-                }
-                Err(_) => {
-                    self.announcements_exhausted = true;
-                    tracing::error!(
-                        "semantics identity space exhausted: this presentation cannot announce"
-                    );
-                }
+            if let Ok(ids) = self.source.allocate(2) {
+                self.announcements = Some(flui_semantics::Announcements::new(ids[0], ids[1]));
+            } else {
+                self.announcements_exhausted = true;
+                tracing::error!(
+                    "semantics identity space exhausted: this presentation cannot announce"
+                );
             }
         }
         self.announcements.clone()

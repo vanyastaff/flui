@@ -14,7 +14,10 @@
 //! or a frame request that does not lead to a frame, leaves it for the next
 //! one.
 
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+
+use flui_protocol::{AnnouncementJournal, TreeRevision};
 
 use crate::identity::AccessibilityNodeId;
 use crate::regions::SemanticsRegionId;
@@ -53,6 +56,55 @@ impl Channel {
     }
 }
 
+/// How many delivered announcements the journal holds for an agent.
+const JOURNAL_CAPACITY: usize = 256;
+
+/// The announcements delivered so far, for an agent to read
+/// (`semantics.announcements`): assistive technology hears the node values,
+/// an agent reads the messages.
+#[derive(Debug, Default)]
+struct Journal {
+    entries: VecDeque<flui_protocol::Announcement>,
+    /// The sequence number the last delivered announcement took.
+    last_seq: u64,
+}
+
+impl Journal {
+    fn record(&mut self, urgency: Urgency, message: String, revision: TreeRevision) {
+        self.last_seq = self.last_seq.saturating_add(1);
+        if self.entries.len() == JOURNAL_CAPACITY {
+            self.entries.pop_front();
+        }
+        self.entries.push_back(flui_protocol::Announcement::new(
+            self.last_seq,
+            match urgency {
+                Urgency::Polite => flui_protocol::AnnouncementUrgency::Polite,
+                Urgency::Assertive => flui_protocol::AnnouncementUrgency::Assertive,
+            },
+            message,
+            revision,
+        ));
+    }
+
+    fn read(&self, since: Option<u64>, max_entries: Option<u32>) -> AnnouncementJournal {
+        let since = since.unwrap_or(0);
+        let first_held = self
+            .entries
+            .front()
+            .map_or(self.last_seq + 1, |entry| entry.seq);
+        let dropped = first_held.saturating_sub(since.saturating_add(1));
+        let max = max_entries.map_or(usize::MAX, |max| usize::try_from(max).unwrap_or(usize::MAX));
+        AnnouncementJournal::new(
+            self.entries
+                .iter()
+                .filter(|entry| entry.seq > since)
+                .take(max)
+                .cloned()
+                .collect(),
+            dropped,
+        )
+    }
+}
 #[derive(Debug, Default)]
 struct Queue {
     /// Whether an owner publishes: with no assistive technology listening a
@@ -60,6 +112,7 @@ struct Queue {
     listening: bool,
     polite: Channel,
     assertive: Channel,
+    journal: Journal,
 }
 
 impl Queue {
@@ -169,20 +222,42 @@ impl Announcements {
     }
 
     /// Records `delivered` as what the nodes show and removes the messages
-    /// it consumed. A message queued after [`Self::prepare`] stays.
-    pub(crate) fn commit(&self, delivered: &PreparedAnnouncements) {
+    /// it consumed, journaling them as delivered with `revision`. A message
+    /// queued after [`Self::prepare`] stays.
+    pub(crate) fn commit(&self, delivered: &PreparedAnnouncements, revision: TreeRevision) {
         let mut queue = self.lock();
         let Queue {
-            polite, assertive, ..
+            polite,
+            assertive,
+            journal,
+            ..
         } = &mut *queue;
-        for (channel, (value, consumed)) in [
-            (polite, (&delivered.polite, delivered.consumed[0])),
-            (assertive, (&delivered.assertive, delivered.consumed[1])),
+        for (urgency, channel, (value, consumed)) in [
+            (
+                Urgency::Polite,
+                polite,
+                (&delivered.polite, delivered.consumed[0]),
+            ),
+            (
+                Urgency::Assertive,
+                assertive,
+                (&delivered.assertive, delivered.consumed[1]),
+            ),
         ] {
             let consumed = consumed.min(channel.pending.len());
-            channel.pending.drain(..consumed);
+            for message in channel.pending.drain(..consumed) {
+                journal.record(urgency, message, revision);
+            }
             channel.shown.clone_from(value);
         }
+    }
+
+    /// The delivered announcements after `since`, at most `max_entries`, as
+    /// `semantics.announcements` answers: the journal outlives each owner,
+    /// keeps the last 256 and counts what it no longer holds.
+    #[must_use]
+    pub fn journal(&self, since: Option<u64>, max_entries: Option<u32>) -> AnnouncementJournal {
+        self.lock().journal.read(since, max_entries)
     }
 
     fn lock(&self) -> MutexGuard<'_, Queue> {

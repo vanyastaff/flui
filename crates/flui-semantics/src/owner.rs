@@ -820,7 +820,7 @@ impl SemanticsOwner {
             && let Some((update, announced)) = self.full_update(None)
         {
             callback(&update);
-            self.commit_announcements(announced.as_ref());
+            self.commit_announcements(announced.as_ref(), self.revision);
             let mut mirror = PublishedState::mirror_of(update);
             mirror.record_offers(&self.tree);
             self.published = Some(mirror);
@@ -1519,11 +1519,36 @@ impl SemanticsOwner {
         Some((update, prepared))
     }
 
-    /// Removes from the queue what a delivered update carried.
-    fn commit_announcements(&self, delivered: Option<&crate::announce::PreparedAnnouncements>) {
+    /// Removes from the queue what a delivered update carried, journaling it
+    /// under `revision`, the revision that update makes current.
+    fn commit_announcements(
+        &self,
+        delivered: Option<&crate::announce::PreparedAnnouncements>,
+        revision: TreeRevision,
+    ) {
         if let (Some(announcements), Some(delivered)) = (&self.announcements, delivered) {
-            announcements.commit(delivered);
+            announcements.commit(delivered, revision);
         }
+    }
+
+    /// The announcements this presentation delivered after `params.since`,
+    /// for an agent: assistive technology hears them as announcer node
+    /// values, which an agent's reads leave out. Empty when no announcement
+    /// queue is installed.
+    #[must_use]
+    pub fn announcement_journal(
+        &self,
+        params: &flui_protocol::AnnouncementsParams,
+    ) -> flui_protocol::AnnouncementJournal {
+        self.announcements
+            .as_ref()
+            .map(|announcements| announcements.journal(params.since, params.max_entries))
+            .unwrap_or_default()
+    }
+
+    /// The revision the publication in progress makes current.
+    fn next_revision(&self) -> TreeRevision {
+        TreeRevision(self.revision.0.saturating_add(1))
     }
 
     /// Publishes the complete rooted tree and resets the mirror to it.
@@ -1555,7 +1580,7 @@ impl SemanticsOwner {
             callback(&update);
         }
         // Delivered: a panic above leaves the messages queued for the retry.
-        self.commit_announcements(announced.as_ref());
+        self.commit_announcements(announced.as_ref(), self.next_revision());
 
         let published = update.nodes.len();
         self.revision = TreeRevision(self.revision.0.saturating_add(1));
@@ -1894,7 +1919,7 @@ impl SemanticsOwner {
         }
         // Delivered: a panic above leaves the messages queued for the retry.
         if let (Some(announcements), Some(announced)) = (&self.announcements, &announced) {
-            announcements.commit(announced);
+            announcements.commit(announced, TreeRevision(self.revision.0.saturating_add(1)));
         }
 
         #[cfg(debug_assertions)]

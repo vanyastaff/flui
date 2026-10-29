@@ -71,7 +71,7 @@ impl flui_runtime::sink::FrameSink for Sink {
 /// An announcement from a mounted widget in an idle presentation requests a
 /// frame, and that frame publishes the message as a live region's value
 /// with nothing else redrawn; a message equal to the last one is published
-/// as a change.
+/// as a change; an agent hears both through the announcement journal.
 #[test]
 fn an_idle_presentation_speaks_an_announcement() {
     let bridge = Arc::new(Bridge::default());
@@ -173,4 +173,32 @@ fn an_idle_presentation_speaks_an_announcement() {
     let repeated = polite_value().expect("the repeat is published");
     assert_ne!(repeated, "Message sent", "a repeat changes the value");
     assert_eq!(repeated.trim_end_matches('\u{200B}'), "Message sent");
+
+    // The announcer nodes stay out of an agent's reads; the journal is where
+    // it hears what was said, one entry per announcement.
+    let agent = runtime
+        .semantics_agent(runtime.presentation_id())
+        .expect("the runtime hosts its primary presentation");
+    let window = flui_protocol::WindowId::from_u64(runtime.presentation_id().as_u64())
+        .expect("a presentation id is non-zero");
+    let mut reply = agent
+        .announcements(flui_protocol::AnnouncementsParams::new(window))
+        .expect("the inbox has room");
+    let _ = runtime.drain_commands();
+    let journal = reply
+        .try_take()
+        .expect("the drain answers the request")
+        .expect("the presentation is open");
+    let heard: Vec<_> = journal
+        .entries
+        .iter()
+        .map(|entry| (entry.urgency, entry.message.as_str()))
+        .collect();
+    assert_eq!(
+        heard,
+        [
+            (flui_protocol::AnnouncementUrgency::Polite, "Message sent"),
+            (flui_protocol::AnnouncementUrgency::Polite, "Message sent"),
+        ]
+    );
 }

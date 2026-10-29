@@ -6,6 +6,11 @@
   and an idle presentation produces the frame that publishes them.
 - `Semantics::live_atomic` and `Semantics::busy` (`aria-atomic`, `aria-busy`); an `Alert` or
   `Status` is atomic unless declared otherwise.
+- **Driver protocol 0.7** (`flui-protocol`): `semantics.announcements` answers the announcements a
+  window delivered, after a sequence number (`AnnouncementJournal`, with a `dropped` count), and
+  the `announcement` event names one. `SemanticsAgent::announcements` and
+  `AgentWindow::announcements` read the journal; the announcer nodes stay out of an agent's
+  reads and locators.
 
 ### Changed
 

@@ -267,3 +267,86 @@ fn an_agent_neither_reads_nor_locates_the_announcer_nodes() {
         "no locator reaches an announcer node"
     );
 }
+
+/// Each delivered message enters the journal an agent reads, one entry per
+/// message with the revision that delivered it; an undelivered one does not,
+/// and a read after a sequence number answers only what came later.
+#[test]
+fn the_agent_journal_holds_each_delivered_announcement() {
+    use flui_protocol::{AnnouncementUrgency, AnnouncementsParams, WindowId};
+
+    let announcements = announcements();
+    let (mut owner, _, failing) = owner_with(&announcements);
+    let window = WindowId::from_u64(1).expect("non-zero");
+    owner.announce("Saved", Urgency::Polite).expect("accepted");
+    owner
+        .announce("Connection lost", Urgency::Assertive)
+        .expect("accepted");
+    failing.store(true, Ordering::SeqCst);
+    let _ = catch_unwind(AssertUnwindSafe(|| owner.flush()));
+    failing.store(false, Ordering::SeqCst);
+    assert!(
+        owner
+            .announcement_journal(&AnnouncementsParams::new(window))
+            .entries
+            .is_empty(),
+        "an undelivered announcement is not journaled"
+    );
+    owner.flush();
+    let journal = owner.announcement_journal(&AnnouncementsParams::new(window));
+    let read: Vec<_> = journal
+        .entries
+        .iter()
+        .map(|entry| (entry.seq, entry.urgency, entry.message.as_str()))
+        .collect();
+    assert_eq!(
+        read,
+        [
+            (1, AnnouncementUrgency::Polite, "Saved"),
+            (2, AnnouncementUrgency::Assertive, "Connection lost"),
+        ]
+    );
+    assert!(
+        journal
+            .entries
+            .iter()
+            .all(|entry| entry.revision == owner.revision()),
+        "journaled with the revision that delivered them"
+    );
+
+    owner.announce("Saved", Urgency::Polite).expect("accepted");
+    owner.flush();
+    let later = owner.announcement_journal(&AnnouncementsParams::new(window).since(2));
+    assert_eq!(later.entries.len(), 1);
+    assert_eq!(later.entries[0].message, "Saved", "a repeat reads unmarked");
+    assert_eq!(later.dropped, 0);
+}
+
+/// The journal keeps the last 256 announcements and says how many after the
+/// asked sequence number it no longer holds.
+#[test]
+fn the_agent_journal_counts_what_it_no_longer_holds() {
+    use flui_protocol::{AnnouncementsParams, WindowId};
+
+    let announcements = announcements();
+    let (mut owner, _, _) = owner_with(&announcements);
+    for index in 0..300 {
+        owner
+            .announce(&format!("Item {index}"), Urgency::Polite)
+            .expect("accepted");
+        owner.flush();
+    }
+    let window = WindowId::from_u64(1).expect("non-zero");
+    let journal = owner.announcement_journal(&AnnouncementsParams::new(window));
+    assert_eq!(journal.entries.len(), 256);
+    assert_eq!(journal.entries[0].seq, 45);
+    assert_eq!(journal.dropped, 44);
+    let capped = owner.announcement_journal(
+        &AnnouncementsParams::new(window)
+            .since(299)
+            .with_max_entries(5),
+    );
+    assert_eq!(capped.entries.len(), 1);
+    assert_eq!(capped.entries[0].message, "Item 299");
+    assert_eq!(capped.dropped, 0);
+}

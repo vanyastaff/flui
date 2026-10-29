@@ -455,13 +455,22 @@ adapter that connects later is not read a backlog. An announcement with nothing 
 produces a frame: the presentation's frame gate reads `PipelineOwner::has_pending_announcements`,
 and the semantics phase flushes an owner that needs it without assembling.
 
+An agent reads the interface, not the announcer nodes: `read_wire` and `locate_wire` leave them
+out by their identities. It hears announcements through the journal
+(`SemanticsOwner::announcement_journal`, protocol `semantics.announcements`): each delivered
+message is one entry with its urgency and the revision that delivered it, kept in the shared
+queue so it outlives owner replacement; the last 256 are held and the rest counted as dropped.
+
 **Why.** AccessKit 0.25 has no announcement API; every adapter announces a live region whose
 value changes (macOS and iOS read `value`, not `label`). A queue owned by the owner would lose
 accepted messages when accessibility is switched off and on, and a message committed before
 delivery would be lost to an adapter that panicked.
 
 **Test.** `announcements_reach_the_live_region_value`, `a_repeated_announcement_changes_the_value`,
-`a_failed_delivery_keeps_the_announcement`, `an_announcer_queues_then_requests_a_frame` in
+`a_failed_delivery_keeps_the_announcement`, `an_announcer_queues_then_requests_a_frame`,
+`an_agent_neither_reads_nor_locates_the_announcer_nodes`,
+`the_agent_journal_holds_each_delivered_announcement`,
+`the_agent_journal_counts_what_it_no_longer_holds` in
 `tests/announce.rs`; `an_idle_presentation_speaks_an_announcement` in
 `crates/flui-runtime/tests/contracts/announce.rs`.
 

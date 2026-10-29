@@ -26,8 +26,9 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TryRecvError, TrySen
 use flui_foundation::PresentationId;
 use flui_foundation::geometry::DevicePixelRatio;
 use flui_protocol::{
-    ActionName, ActionRequest, Actionability, ActionabilityParams, ElementId, ErrorCode,
-    LocateParams, Matches, ReadQuery, Retry, Tree, WindowId,
+    ActionName, ActionRequest, Actionability, ActionabilityParams, AnnouncementJournal,
+    AnnouncementsParams, ElementId, ErrorCode, LocateParams, Matches, ReadQuery, Retry, Tree,
+    WindowId,
 };
 use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_semantics::{
@@ -580,6 +581,38 @@ impl SemanticsAgent {
         )
     }
 
+    /// The announcements the presentation delivered to assistive technology
+    /// after `params.since`, oldest first: a read leaves out the announcer
+    /// nodes that carry them, so this is where an agent hears them.
+    ///
+    /// # Errors
+    ///
+    /// [`AgentError::InboxFull`] or [`AgentError::RuntimeGone`] when the
+    /// request cannot be enqueued; the reply carries the rest.
+    pub fn announcements(
+        &self,
+        params: AnnouncementsParams,
+    ) -> Result<AgentReply<AnnouncementJournal>, AgentError> {
+        let (command, answer) = self.announcements_command(params);
+        self.sender.send(command).map_err(AgentError::from_send)?;
+        Ok(answer)
+    }
+
+    fn announcements_command(
+        &self,
+        params: AnnouncementsParams,
+    ) -> (UiCommand, AgentReply<AnnouncementJournal>) {
+        let (reply, answer) = self.reply(|_, _| {});
+        (
+            UiCommand::SemanticsAnnouncements {
+                presentation_id: self.sender.presentation_id,
+                params,
+                reply,
+            },
+            answer,
+        )
+    }
+
     fn motion_command(
         &self,
         request: flui_protocol::MotionRequest,
@@ -677,6 +710,13 @@ impl AgentPort for DevAgentPort {
         request: flui_protocol::MotionRequest,
     ) -> Result<AgentAnswer<flui_protocol::MotionState>, AgentFault> {
         self.admit(|agent| agent.motion_command(request))
+    }
+
+    fn announcements(
+        &self,
+        params: AnnouncementsParams,
+    ) -> Result<AgentAnswer<AnnouncementJournal>, AgentFault> {
+        self.admit(|agent| agent.announcements_command(params))
     }
 }
 
@@ -908,6 +948,25 @@ impl UiRuntime {
             Some(_) => read(previous),
             None => Ok(facts),
         }
+    }
+
+    /// The owner half of [`SemanticsAgent::announcements`]. With
+    /// accessibility off there is no owner and nothing was delivered.
+    pub(super) fn serve_semantics_announcements(
+        &self,
+        presentation: PresentationId,
+        params: &AnnouncementsParams,
+    ) -> Result<AnnouncementJournal, AgentError> {
+        let state = self
+            .presentations
+            .get(presentation)
+            .ok_or(AgentError::PresentationGone)?;
+        Ok(state.pipeline().with(|pipeline| {
+            pipeline
+                .semantics_owner()
+                .map(|owner| owner.announcement_journal(params))
+                .unwrap_or_default()
+        }))
     }
 
     /// The owner half of [`SemanticsAgent::act`]: resolves the wire action
