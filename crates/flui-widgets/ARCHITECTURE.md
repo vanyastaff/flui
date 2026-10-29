@@ -1061,6 +1061,25 @@ of `animation_and_visibility` pin each rule (`a_paused_ticker_catches_up_in_fixe
 `non_finite_particles_never_reach_the_atlas`, `a_controller_drives_one_emitter`,
 `presets_never_flash`, …).
 
+### Animated icon data is constant key frames, checked once
+
+`AnimatedIconData` is key frames: one time line, and per path an opacity and a point list per
+command for every frame, with an optional cubic per gap. Constant data borrows `'static`
+slices (`from_static`, no allocation, usable in a `const`), run-time data is checked by
+`try_new` and shared behind an `Arc`; both are one type, so a pack's constants and an imported
+icon draw the same way. The check refuses mismatched frame counts, unordered times, values
+that are not finite, opacities outside `[0, 1]`, and a gap whose curve overshoots out of the
+finite range. Interpolation weighs the two ends (`a·(1−t) + b·t`), never their difference, so
+two finite extremes stay finite through the middle. `AnimatedIcon` takes the caller's
+animation, clamps its progress and keeps the last finite one, so an icon never vanishes and
+never publishes geometry that is not finite; mirroring under right-to-left text is the data's
+flag, because only the icon's author knows whether it points somewhere. The pictures come in
+through `cargo xtask icon-import` (SVG frames or an Android animated vector drawable), not a
+runtime parser.
+
+`animated_icon::icon_data_is_checked`, `animated_icon::the_frame_follows_the_progress` and
+`animated_icon::theme_and_direction_shape_the_icon` pin the three.
+
 ### Focused document selection uses the normal action chain
 
 `DefaultFocusTraversal` binds `SelectAllTextIntent` to Cmd+A on macOS/iOS and

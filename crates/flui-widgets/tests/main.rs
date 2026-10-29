@@ -31,6 +31,8 @@ mod actions;
 #[path = "activity_indicator.rs"]
 mod activity_indicator;
 mod anchored_drag;
+#[path = "animated_icon.rs"]
+mod animated_icon;
 #[path = "animated_list.rs"]
 mod animated_list;
 #[path = "animated_size.rs"]

@@ -17,7 +17,7 @@ autotests = false
 
 # Dev-only files a `cargo package --list` sweep found leaking into the
 # published archive (internal architecture docs, criterion benches, etc.):
-exclude = ["/ARCHITECTURE.md"]
+exclude = ["/ARCHITECTURE.md", "/assets"]
 
 [dependencies]
 # The package-author surface (ADR-0088 §4): the widget spine, the value types,
