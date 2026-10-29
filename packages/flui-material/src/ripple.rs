@@ -222,6 +222,10 @@ pub(crate) struct IndicationStyle {
     /// Without one a wave could not grow, so the well behaves as under
     /// reduced motion.
     pub(crate) has_clock: bool,
+    /// Whether the ambient state layer shows `Focused`. A well that draws a
+    /// focus ring shows focus with the ring alone, so its layer skips it; an
+    /// explicit `overlay_color` still sees the state.
+    pub(crate) focus_layer: bool,
 }
 
 impl IndicationStyle {
@@ -236,7 +240,12 @@ impl IndicationStyle {
             return Some(color);
         }
         let base = configuration.color.or(self.content_color)?;
-        let alpha = configuration.alpha.resolve(states);
+        let layered = if self.focus_layer {
+            states
+        } else {
+            states.without_state(WidgetState::Focused)
+        };
+        let alpha = configuration.alpha.resolve(layered);
         (alpha > 0.0).then(|| base.with_opacity(f64::from(base.opacity()) * alpha))
     }
 

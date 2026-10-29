@@ -106,7 +106,7 @@ use flui_sdk::widgets::{
 };
 
 use crate::color_scheme::ColorScheme;
-use crate::ink_well::InkWell;
+use crate::ink_well::{FocusIndicator, InkWell};
 use crate::ripple::StateLayerAlpha;
 use crate::shape::MaterialShape;
 use crate::state_color::resolve_state_color;
@@ -322,7 +322,8 @@ impl<T: PartialEq + Clone + 'static> ViewState<Radio<T>> for RadioState {
         )
         .shape(MaterialShape::Stadium)
         .overlay_color(overlay_color)
-        .states_controller(self.states.clone());
+        .states_controller(self.states.clone())
+        .focus_indicator(FocusIndicator::Halo);
         if interactive {
             ink_well = ink_well.on_tap(move |cx| {
                 if selected {

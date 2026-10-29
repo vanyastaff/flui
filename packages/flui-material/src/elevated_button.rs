@@ -144,7 +144,7 @@ fn default_style(theme: &ThemeData) -> ButtonStyle {
             })
         })),
         overlay_color: Some(WidgetStateProperty::resolve_with(move |states| {
-            pressed_hovered_focused_overlay(states, colors.primary)
+            pressed_hovered_overlay(states, colors.primary)
         })),
         elevation: Some(WidgetStateProperty::resolve_with(move |states| {
             Some(if states.contains_state(WidgetState::Disabled) {
@@ -178,12 +178,14 @@ pub(crate) fn scaled_padding_1x() -> EdgeInsets {
     EdgeInsets::symmetric(0.0, 24.0)
 }
 
-/// The pressed(10%)/hovered(8%)/focused(10%) overlay ramp every V1 button's
+/// The pressed(10%)/hovered(8%) overlay ramp every V1 button's
 /// `_TokenDefaultsM3.overlayColor` shares, differing only in `base_color`.
 /// Oracle order matters: pressed is checked FIRST, so a state set containing
 /// both `Pressed` and `Hovered` resolves the pressed opacity, not hover's.
+/// No focused tier: a focused button shows the focus ring alone, which a
+/// pressed overlay could not be mistaken for (ADR-0079).
 /// `None` (no interactive state active) leaves the `InkWell` at rest.
-pub(crate) fn pressed_hovered_focused_overlay(
+pub(crate) fn pressed_hovered_overlay(
     states: &flui_sdk::widgets::WidgetStates,
     base_color: Color,
 ) -> Option<Color> {
@@ -191,8 +193,6 @@ pub(crate) fn pressed_hovered_focused_overlay(
         Some(base_color.with_opacity(StateLayerAlpha::M3.pressed))
     } else if states.contains_state(WidgetState::Hovered) {
         Some(base_color.with_opacity(StateLayerAlpha::M3.hovered))
-    } else if states.contains_state(WidgetState::Focused) {
-        Some(base_color.with_opacity(StateLayerAlpha::M3.focused))
     } else {
         None
     }

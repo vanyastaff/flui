@@ -25,8 +25,8 @@
 //!   fallback is always `onSurfaceVariant`.
 //! - `overlay_color` — the oracle's `resolveWith` closure nests a `selected`
 //!   branch (never reached here, same reasoning) around the unselected
-//!   pressed(10%)/hovered(8%)/focused(10%) ramp — exactly
-//!   `crate::elevated_button::pressed_hovered_focused_overlay`'s shape, so
+//!   pressed(10%)/hovered(8%) ramp (focus is the focus ring) — exactly
+//!   `crate::elevated_button::pressed_hovered_overlay`'s shape, so
 //!   this reuses that helper against `onSurfaceVariant` rather than
 //!   duplicating the chain. The oracle's unconditional `Colors.transparent`
 //!   fallback (vs. this crate's `None`, which leaves the `InkWell` at rest
@@ -127,7 +127,7 @@ use flui_sdk::{
 use crate::ThemeData;
 use crate::button_style::ButtonStyle;
 use crate::button_style_button::{ButtonStyleButtonCore, PressCallback, resolve_property};
-use crate::elevated_button::pressed_hovered_focused_overlay;
+use crate::elevated_button::pressed_hovered_overlay;
 use crate::shape::MaterialShape;
 use crate::theme::Theme;
 
@@ -284,7 +284,7 @@ fn default_style(theme: &ThemeData) -> ButtonStyle {
             })
         })),
         overlay_color: Some(WidgetStateProperty::resolve_with(move |states| {
-            pressed_hovered_focused_overlay(states, colors.on_surface_variant)
+            pressed_hovered_overlay(states, colors.on_surface_variant)
         })),
         elevation: Some(WidgetStateProperty::all(Some(0.0))),
         padding: Some(WidgetStateProperty::all(Some(EdgeInsets::all(8.0)))),

@@ -51,11 +51,11 @@
 //! # Overlay ramp
 //!
 //! `splashColor`/`focusColor` both resolve to `onPrimaryContainer` at 10%
-//! opacity and `hoverColor` to 8% — the exact pressed(10%)/hovered(8%)/
-//! focused(10%) shape `crate::elevated_button::pressed_hovered_focused_overlay`
-//! already implements for the button family, reused here rather than
-//! duplicated (see that function's own doc for the pressed-before-hovered
-//! order it preserves).
+//! opacity and `hoverColor` to 8%. The pressed(10%)/hovered(8%) shape
+//! `crate::elevated_button::pressed_hovered_overlay` implements is
+//! reused here rather than duplicated; the focus colour is drawn as the focus
+//! ring instead of a layer (ADR-0079). See that function's own doc for the
+//! pressed-before-hovered order it preserves.
 //!
 //! # Deferred, and named
 //!
@@ -85,7 +85,7 @@ use flui_sdk::widgets::{
 };
 
 use crate::button_style_button::PressCallback;
-use crate::elevated_button::pressed_hovered_focused_overlay;
+use crate::elevated_button::pressed_hovered_overlay;
 use crate::ink_well::InkWell;
 use crate::material::Material;
 use crate::shape::MaterialShape;
@@ -326,7 +326,7 @@ impl ViewState<FloatingActionButton> for FloatingActionButtonState {
 
         // The overlay ramp's base color is `_FABDefaultsM3`'s own
         // `splashColor`/`focusColor`/`hoverColor` — independent oracle
-        // fields (see `pressed_hovered_focused_overlay`'s call site here),
+        // fields (see `pressed_hovered_overlay`'s call site here),
         // NOT derived from the resolved `foreground_color` above. FLUI
         // exposes no theme slot for them (named deferral, see
         // `crate::theme_data::FabThemeData`'s doc comment), so this stays
@@ -334,7 +334,7 @@ impl ViewState<FloatingActionButton> for FloatingActionButtonState {
         // theme/widget override.
         let overlay_base = theme.color_scheme.on_primary_container;
         let overlay_color = WidgetStateProperty::resolve_with(move |states: &WidgetStates| {
-            pressed_hovered_focused_overlay(states, overlay_base)
+            pressed_hovered_overlay(states, overlay_base)
         });
 
         let icon = IconTheme::new(
