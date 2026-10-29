@@ -97,8 +97,8 @@ use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{
     Actions, ActivateIntent, ButtonActivateIntent, ButtonChange, CallbackAction, CustomPaint,
-    Focus, GestureDetector, Listener, MediaQuery, MouseRegion, PointerDispatch, PointerEvent,
-    WidgetState, WidgetStateProperty, WidgetStatesController,
+    Focus, FocusRing, GestureDetector, Listener, MediaQuery, MouseRegion, PointerDispatch,
+    PointerEvent, WidgetState, WidgetStateProperty, WidgetStatesController,
 };
 
 use crate::ripple::{Indication, IndicationPainter, IndicationStyle, RippleScope};
@@ -108,6 +108,17 @@ use crate::theme::Theme;
 /// A user tap handler. `Rc`-based (owner-local, per ADR-0027) — matches
 /// `GestureDetector::on_tap`'s own callback shape.
 type TapCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>)>;
+
+/// How an [`InkWell`] shows that it has visible keyboard focus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FocusIndicator {
+    /// A [`FocusRing`] in the inherited style around the well: buttons,
+    /// tabs, list rows and every other control without one of its own.
+    Ring,
+    /// The control draws its own: the M3 halo of a checkbox, switch or radio,
+    /// which reads the well's `Focused` state.
+    Halo,
+}
 
 /// How long the pressed state lingers after a tap — see the module doc's
 /// "Press-state timing" section for why this substrate applies it
@@ -124,6 +135,7 @@ pub struct InkWell {
     shape: MaterialShape,
     states_controller: Option<WidgetStatesController>,
     focus_node: Option<Rc<FocusNode>>,
+    focus_indicator: FocusIndicator,
 }
 
 impl InkWell {
@@ -138,6 +150,7 @@ impl InkWell {
             shape: MaterialShape::default(),
             states_controller: None,
             focus_node: None,
+            focus_indicator: FocusIndicator::Ring,
         }
     }
 
@@ -185,6 +198,14 @@ impl InkWell {
     #[must_use]
     pub fn focus_node(mut self, node: Rc<FocusNode>) -> Self {
         self.focus_node = Some(node);
+        self
+    }
+
+    /// How the well shows visible focus; [`FocusIndicator::Ring`] unless a
+    /// control draws its own.
+    #[must_use]
+    pub(crate) fn focus_indicator(mut self, indicator: FocusIndicator) -> Self {
+        self.focus_indicator = indicator;
         self
     }
 
@@ -289,6 +310,7 @@ impl StatefulView for InkWell {
                 content_color: None,
                 reduce_motion: false,
                 has_clock: false,
+                focus_layer: self.focus_indicator == FocusIndicator::Halo,
             },
         );
         InkWellState {
@@ -402,8 +424,11 @@ impl ViewState<InkWell> for InkWellState {
 
         // A new overlay color or controller retargets the state layer.
         let overlay_color = new_view.overlay_color.clone();
-        self.indication
-            .update_style(|style| style.overlay_color = overlay_color);
+        let focus_layer = new_view.focus_indicator == FocusIndicator::Halo;
+        self.indication.update_style(|style| {
+            style.overlay_color = overlay_color;
+            style.focus_layer = focus_layer;
+        });
     }
 
     fn build(&self, view: &InkWell, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -509,11 +534,17 @@ impl ViewState<InkWell> for InkWellState {
             }));
         }
         let content = content.child(view.child.clone());
+        let content = match view.focus_indicator {
+            FocusIndicator::Ring => FocusRing::new(content).boxed(),
+            FocusIndicator::Halo => content.boxed(),
+        };
+        // `Focused` is the focus a user can see (ADR-0079): a pointer press
+        // that focuses the well leaves no ring, halo or overlay behind.
         let focus_states = self.states.clone();
         let mut focus = Focus::new(content)
             .can_request_focus(enabled)
-            .on_focus_change(move |_cx, has_focus| {
-                focus_states.update(WidgetState::Focused, has_focus);
+            .on_visible_focus_change(move |_cx, shown| {
+                focus_states.update(WidgetState::Focused, shown);
             });
         if let Some(node) = &view.focus_node {
             focus = focus.focus_node(Rc::clone(node));

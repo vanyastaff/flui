@@ -429,10 +429,10 @@ fn resolve_style(theme: &ThemeData) -> ResolvedTabBarStyle {
     }
 }
 
-/// The secondary overlay color's resolver — pressed/hovered/
-/// focused ramp over `on_surface`, identical whether or not the tab is
-/// selected (the M3 spec's selected and unselected branches happen to
-/// produce the same three values).
+/// The secondary overlay color's resolver — pressed/hovered ramp over
+/// `on_surface`, identical whether or not the tab is selected (the M3 spec's
+/// selected and unselected branches happen to produce the same values). A
+/// focused tab shows the focus ring, not a layer (ADR-0079).
 fn default_overlay_color(on_surface: Color) -> WidgetStateProperty<Option<Color>> {
     WidgetStateProperty::from_map([
         (
@@ -442,10 +442,6 @@ fn default_overlay_color(on_surface: Color) -> WidgetStateProperty<Option<Color>
         (
             WidgetStateConstraint::Is(WidgetState::Hovered),
             Some(on_surface.with_opacity(StateLayerAlpha::M3.hovered)),
-        ),
-        (
-            WidgetStateConstraint::Is(WidgetState::Focused),
-            Some(on_surface.with_opacity(StateLayerAlpha::M3.focused)),
         ),
     ])
 }

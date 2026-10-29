@@ -5,6 +5,7 @@
 //! component theme, switches half way: they are choices, not magnitudes.
 
 use flui_sdk::geometry::Lerp;
+use flui_sdk::widgets::FocusRingStyle;
 
 use crate::color_scheme::ColorScheme;
 use crate::text_theme::TextTheme;
@@ -127,13 +128,25 @@ impl Lerp for TextTheme {
     }
 }
 
-/// The colour scheme and text theme interpolate; every component theme
+/// The colour scheme, text theme and focus ring interpolate; every component theme
 /// switches half way.
 impl Lerp for ThemeData {
     fn lerp_to(&self, other: &Self, t: f64) -> Self {
         Self {
             color_scheme: self.color_scheme.lerp_to(&other.color_scheme, t),
             text_theme: self.text_theme.lerp_to(&other.text_theme, t),
+            focus_ring: FocusRingStyle {
+                outer: self.focus_ring.outer.lerp_to(&other.focus_ring.outer, t),
+                inner: self.focus_ring.inner.lerp_to(&other.focus_ring.inner, t),
+                outer_width: self
+                    .focus_ring
+                    .outer_width
+                    .lerp_to(&other.focus_ring.outer_width, t),
+                inner_width: self
+                    .focus_ring
+                    .inner_width
+                    .lerp_to(&other.focus_ring.inner_width, t),
+            },
             ..if t < 0.5 { self.clone() } else { other.clone() }
         }
     }

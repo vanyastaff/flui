@@ -27,7 +27,7 @@ use flui_sdk::widgets::{WidgetState, WidgetStateProperty};
 use crate::ThemeData;
 use crate::button_style::ButtonStyle;
 use crate::button_style_button::{ButtonStyleButtonCore, PressCallback};
-use crate::elevated_button::pressed_hovered_focused_overlay;
+use crate::elevated_button::pressed_hovered_overlay;
 use crate::shape::MaterialShape;
 use crate::theme::Theme;
 
@@ -140,7 +140,7 @@ fn default_style(theme: &ThemeData) -> ButtonStyle {
             })
         })),
         overlay_color: Some(WidgetStateProperty::resolve_with(move |states| {
-            pressed_hovered_focused_overlay(states, colors.primary)
+            pressed_hovered_overlay(states, colors.primary)
         })),
         elevation: Some(WidgetStateProperty::all(Some(0.0))),
         padding: Some(WidgetStateProperty::all(Some(scaled_padding_1x()))),
