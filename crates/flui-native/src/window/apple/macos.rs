@@ -61,9 +61,7 @@ use crate::window::apple::geometry::{
         cocoa_frame, cocoa_frame_keeping_top, cocoa_top_left_point, constraints_of_content_limits,
         content_limits_of_constraints, globalize, top_left_of_frame,
     },
-    mode::{
-        ANIMATION_LIMIT, FixedSize, ModeSequence, ModeStep, WindowFlags, capabilities_of, is_shown,
-    },
+    mode::{ANIMATION_LIMIT, FixedSize, ModeSequence, ModeStep, WindowFlags, capabilities_of},
 };
 use crate::window::capabilities::{appkit_window_capabilities, frame_rate_absence};
 use parking_lot::Mutex;
@@ -216,10 +214,9 @@ struct MacOSWindowState {
     sequence: ModeSequence,
 
     /// The visible bit of the window's `occlusionState`, as
-    /// `windowDidChangeOcclusionState:` last read it: a window fully covered,
-    /// on another space or hidden is not visible in its snapshot. Starts
-    /// `true` — a freshly created window is visible until AppKit says
-    /// otherwise.
+    /// `windowDidChangeOcclusionState:` last read it: a window fully covered
+    /// or on another space is occluded in its snapshot. Starts `true` — a
+    /// freshly created window is unoccluded until AppKit says otherwise.
     occlusion_visible: bool,
 
     /// The window was opened `visible: true` with
@@ -1639,7 +1636,6 @@ impl MacOSWindow {
             let frame: NSRect = msg_send![self.ns_window, frame];
             let content: NSRect = msg_send![self.ns_window, contentRectForFrameRect: frame];
             let flags = self.read_flags();
-            let on_screen: bool = msg_send![self.ns_window, isVisible];
             let focused: bool = msg_send![self.ns_window, isKeyWindow];
             let min: NSSize = msg_send![self.ns_window, contentMinSize];
             let max: NSSize = msg_send![self.ns_window, contentMaxSize];
@@ -1671,7 +1667,7 @@ impl MacOSWindow {
             } else {
                 normal
             })
-            .with_visible(is_shown(on_screen, occlusion_visible, flags.miniaturized))
+            .with_visible(flags.is_shown())
             .with_focused(focused)
             .with_title(Some(title))
             .with_resizable(flags.resizable)
@@ -1698,6 +1694,8 @@ impl MacOSWindow {
                 // suspends one.
                 safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
                 execution: flui_platform::WindowExecutionState::Running,
+                // Covered or on another space.
+                occluded: !occlusion_visible,
                 hovered,
                 // The key window is the one this host reports active;
                 // the main window has no report of its own here.
@@ -1723,6 +1721,7 @@ impl MacOSWindow {
         unsafe {
             let mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
             WindowFlags {
+                on_screen: msg_send![self.ns_window, isVisible],
                 fullscreen: mask.contains(NSWindowStyleMask::FullScreen),
                 miniaturized: msg_send![self.ns_window, isMiniaturized],
                 zoomed: msg_send![self.ns_window, isZoomed],
@@ -1807,11 +1806,15 @@ impl MacOSWindow {
         unsafe {
             let min: NSSize = msg_send![self.ns_window, contentMinSize];
             let max: NSSize = msg_send![self.ns_window, contentMaxSize];
-            let ns_size = NSSize::new(
-                size.width.max(min.width).min(max.width),
-                size.height.max(min.height).min(max.height),
+            let held = crate::window::state::held_to(
+                size,
+                constraints_of_content_limits(
+                    Size::new(min.width, min.height),
+                    Size::new(max.width, max.height),
+                ),
             );
-            let _: () = msg_send![self.ns_window, setContentSize: ns_size];
+            let _: () =
+                msg_send![self.ns_window, setContentSize: NSSize::new(held.width, held.height)];
         }
     }
 

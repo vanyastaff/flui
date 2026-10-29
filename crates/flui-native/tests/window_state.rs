@@ -505,9 +505,9 @@ fn window_facts_arrive_only_in_the_snapshot() {
             Box::new(|state: &WindowState| !state.focused && !state.active),
         ),
         (
-            "visibility",
-            Box::new(|mock: &MockWindow| mock.simulate_visibility(false)),
-            Box::new(|state: &WindowState| !state.visible),
+            "occlusion",
+            Box::new(|mock: &MockWindow| mock.simulate_occlusion(true)),
+            Box::new(|state: &WindowState| state.visible && state.occluded && !state.is_seen()),
         ),
         (
             "hover",

@@ -245,14 +245,14 @@ mod cases {
                 metrics,
                 focused,
                 active: focused && self.app.isActive(),
-                // Shown, as `WindowState::visible` means it: on screen and
-                // not occluded, or in the Dock, where AppKit reports it
-                // neither (`is_seen` is what leaves a minimized window out).
-                visible: (ns_window.isVisible()
-                    && ns_window
+                // Shown, as `WindowState::visible` means it: on screen, or in
+                // the Dock, where AppKit does not call it `isVisible`.
+                visible: ns_window.isVisible() || miniaturized,
+                occluded: Some(
+                    !ns_window
                         .occlusionState()
-                        .contains(NSWindowOcclusionState::Visible))
-                    || miniaturized,
+                        .contains(NSWindowOcclusionState::Visible),
+                ),
                 material: self.material(),
             }
         }

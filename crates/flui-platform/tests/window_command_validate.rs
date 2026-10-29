@@ -347,9 +347,10 @@ fn metrics(width: i32, height: i32, scale: f64) -> WindowMetrics {
 fn each_window_fact_advances_the_revision() {
     let mut honours_title = WindowCapabilities::NONE;
     honours_title.sets_title = Availability::Native;
-    let facts: [(&str, WindowState); 9] = [
+    let facts: [(&str, WindowState); 10] = [
         ("focus", base_state().with_focused(true)),
         ("visibility", base_state().with_visible(false)),
+        ("occlusion", base_state().with_occluded(true)),
         ("hover", base_state().with_hovered(true)),
         ("activation", base_state().with_active(true)),
         (
@@ -410,6 +411,48 @@ fn a_report_that_is_not_drawable_keeps_the_metrics() {
         WindowState::new(WindowGeometry::new(None, size(0.0, 0.0)), size(0.0, 0.0)).metrics,
         None,
         "nothing drawable reported yet"
+    );
+}
+
+/// Shown, minimized and occluded are separate facts that `is_seen` reads
+/// together: minimizing or covering a window leaves it shown, and an
+/// occlusion is published only for a shown window in another mode than
+/// minimized, whatever the window system said of the others.
+fn shown_minimized_and_occluded_are_three_facts() {
+    use WindowMode::{Maximized, Minimized, Normal};
+
+    // (shown, mode, occlusion reported) → (occlusion published, seen)
+    for (visible, mode, reported, occluded, seen) in [
+        (true, Normal, false, false, true),
+        (true, Maximized, false, false, true),
+        (true, Normal, true, true, false),
+        (true, Maximized, true, true, false),
+        (true, Minimized, false, false, false),
+        (true, Minimized, true, false, false),
+        (false, Normal, false, false, false),
+        (false, Normal, true, false, false),
+    ] {
+        let published = base_state()
+            .successor(
+                base_state()
+                    .with_visible(visible)
+                    .with_mode(mode)
+                    .with_occluded(reported),
+            )
+            .expect("a revision");
+        let case = format!("shown {visible}, {mode:?}, occlusion reported {reported}");
+        assert_eq!(published.visible, visible, "{case}: shown is kept");
+        assert_eq!(published.mode, mode, "{case}: the mode is kept");
+        assert_eq!(published.occluded, occluded, "{case}: occlusion");
+        assert_eq!(published.is_seen(), seen, "{case}: seen");
+    }
+    let minimized = base_state()
+        .successor(base_state().with_mode(Minimized))
+        .expect("minimized");
+    assert_eq!(
+        minimized.successor(base_state().with_mode(Minimized).with_occluded(true)),
+        Ok(minimized),
+        "an occlusion of a minimized window is no change"
     );
 }
 
@@ -628,6 +671,10 @@ fn window_command_validate() {
             (
                 "a_report_that_is_not_drawable_keeps_the_metrics",
                 a_report_that_is_not_drawable_keeps_the_metrics,
+            ),
+            (
+                "shown_minimized_and_occluded_are_three_facts",
+                shown_minimized_and_occluded_are_three_facts,
             ),
             (
                 "the_capabilities_revision_moves_only_with_the_capabilities",
