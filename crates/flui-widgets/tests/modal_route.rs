@@ -166,3 +166,48 @@ pub(crate) fn modal_barrier_absorbs_pointers_and_a_dismissible_one_adds_a_gestur
         "a dismissible barrier listens for the dismiss tap: {names:?}"
     );
 }
+
+// ============================================================================
+// Teardown
+// ============================================================================
+
+/// **Dropping the last `NavigatorHandle` after an ordinary push clears the modal
+/// registry** (#1066). A modal route is pushed and settles, so the navigator's
+/// modal registry holds its `ModalHandle`, and through it the route's page
+/// builder. The window goes, then the application drops its handle, the last
+/// one: the registry's entry goes with the route, and the page builder's
+/// captures are released.
+///
+/// Characterization: this holds on the code as it is.
+pub(crate) fn dropping_the_last_navigator_handle_after_push_clears_the_modal_registry() {
+    let (navigator, mut harness, _bottom) = navigator_with_seed();
+    let built = Built::default();
+    let creations = Arc::new(AtomicUsize::new(0));
+    let route = modal(&built, &creations);
+    let transition = route.transition_handle();
+    let _result = navigator.push(route);
+    harness.tick();
+    complete_entrance(&transition, &mut harness);
+    drop(transition);
+
+    let top = *navigator.route_ids().last().expect("the modal is on top");
+    assert!(
+        navigator.route_modal(top).is_some(),
+        "precondition: the modal registry holds the pushed route"
+    );
+    assert_eq!(creations.load(Ordering::Relaxed), 1, "its page is built");
+
+    drop(harness);
+    assert!(
+        Arc::strong_count(&built.0) > 1,
+        "the application's handle still owns the route once the window is gone"
+    );
+
+    drop(navigator);
+    assert_eq!(
+        Arc::strong_count(&built.0),
+        1,
+        "the last handle's drop releases the route and its modal registry entry"
+    );
+    assert_eq!(Arc::strong_count(&creations), 1);
+}

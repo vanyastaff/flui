@@ -139,6 +139,14 @@ fn action_component_contracts() {
             icon_button::icon_button_theme_slot_reaches_the_icons_icon_theme,
         ),
         (
+            "ink_well::a well shows focus only when the keyboard is in use",
+            ink_well::a_well_shows_focus_only_when_the_keyboard_is_in_use,
+        ),
+        (
+            "ink_well::a checkbox shows focus with its halo not a ring",
+            ink_well::a_checkbox_shows_focus_with_its_halo_not_a_ring,
+        ),
+        (
             "ink_well::disabled ink well does not fire a tap callback",
             ink_well::disabled_ink_well_does_not_fire_a_tap_callback,
         ),
@@ -676,6 +684,10 @@ fn theme_and_app_contracts() {
             theme::theme_of_panicking_accessor_returns_ancestor_theme_data,
         ),
         (
+            "theme::theme installs the focus ring style",
+            theme::theme_installs_the_focus_ring_style,
+        ),
+        (
             "theme_fields::changing one theme slot rebuilds that slots readers and whole theme readers only",
             theme_fields::changing_one_theme_slot_rebuilds_that_slots_readers_and_whole_theme_readers_only,
         ),
@@ -770,6 +782,26 @@ fn progress_indicator_variants() {
         (
             "material app refresh shows the circular indicator",
             progress_variants::material_app_refresh_shows_the_circular_indicator,
+        ),
+        (
+            "loading indicator morphs on a spring",
+            progress_variants::loading_indicator_morphs_on_a_spring,
+        ),
+        (
+            "loading indicator stands still",
+            progress_variants::loading_indicator_stands_still,
+        ),
+        (
+            "loading indicator follows its value",
+            progress_variants::loading_indicator_follows_its_value,
+        ),
+        (
+            "contained loading indicator has its container",
+            progress_variants::contained_loading_indicator_has_its_container,
+        ),
+        (
+            "expressive material app refresh shows the loading indicator",
+            progress_variants::expressive_material_app_refresh_shows_the_loading_indicator,
         ),
     ]);
 }

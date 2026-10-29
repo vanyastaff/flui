@@ -8,15 +8,21 @@
 use crate::common;
 
 use std::rc::Rc;
+use std::time::Duration;
 
-use common::{lay_out, tight};
+use common::{LaidOut, lay_out, tight};
 use flui_interaction::KeyEventResult;
 use flui_interaction::events::{Code, Key, KeyEvent, NamedKey};
 use flui_interaction::testing::input::KeyEventBuilder;
-use flui_material::InkWell;
+use flui_material::{Checkbox, InkWell, Theme, ThemeData};
+use flui_painting::display_list::DrawOp;
+use flui_painting::styling::Color;
+use flui_sdk::geometry::Offset;
 use flui_sdk::interaction::FocusNode;
+use flui_sdk::view::IntoView;
 use flui_sdk::view::SignalWriteExt;
-use flui_sdk::widgets::{SizedBox, WidgetState, WidgetStatesController};
+use flui_sdk::widgets::{FocusRingStyle, SizedBox, WidgetState, WidgetStatesController};
+use flui_testing::replay::MouseScript;
 
 pub fn press_highlight_lasts_its_delay_under_reduced_motion() {
     use flui_sdk::animation::MotionOverride;
@@ -155,4 +161,102 @@ pub fn enter_on_a_focused_elevated_button_writes_a_signal_and_rebuilds_its_reade
     assert_eq!(probe.value(), Ok(1), "the activation wrote at dispatch");
     laid.tick();
     assert_eq!(probe.reads(), [0, 1], "and the reader rebuilt once");
+}
+
+/// A ring style no Material colour role produces, so its bands are found by
+/// colour alone.
+pub const RING: FocusRingStyle = FocusRingStyle {
+    outer: Color::rgb(200, 0, 0),
+    inner: Color::rgb(0, 200, 0),
+    outer_width: 2.0,
+    inner_width: 1.0,
+};
+
+/// `child` under the light theme with [`RING`] as its focus ring.
+pub fn themed(child: impl IntoView) -> Theme {
+    let mut data = ThemeData::light();
+    data.focus_ring = RING;
+    Theme::new(data, child)
+}
+
+/// Whether the last frame painted both bands of [`RING`].
+pub fn ring_painted(laid: &LaidOut) -> bool {
+    let colors: Vec<Color> = laid
+        .draw_ops()
+        .into_iter()
+        .filter_map(|command| match command.op {
+            DrawOp::Rect { paint, .. }
+            | DrawOp::RRect { paint, .. }
+            | DrawOp::DRRect { paint, .. }
+            | DrawOp::Path { paint, .. }
+            | DrawOp::Line { paint, .. } => Some(paint.color),
+            _ => None,
+        })
+        .collect();
+    let outer = colors.contains(&RING.outer);
+    let inner = colors.contains(&RING.inner);
+    assert_eq!(outer, inner, "the ring paints both of its bands or neither");
+    outer
+}
+
+/// A mouse click at `(x, y)`, through the UI runtime's input path, so the
+/// presentation sees pointer input.
+fn click(laid: &mut LaidOut, x: f64, y: f64) {
+    let click = MouseScript::new("click")
+        .press(Offset::new(x, y))
+        .wait(Duration::from_millis(16))
+        .release()
+        .build()
+        .expect("the click releases its button");
+    laid.replay(&click);
+    laid.pump();
+}
+
+/// `Focused` is the focus a user can see: focus taken after a click is not
+/// shown, neither as the state nor as a ring, and the next key shows both,
+/// in the theme's ring style.
+pub fn a_well_shows_focus_only_when_the_keyboard_is_in_use() {
+    let node = FocusNode::with_debug_label("visible-focus");
+    let states = WidgetStatesController::default();
+    let mut laid = lay_out(
+        themed(
+            InkWell::new(SizedBox::new(80.0, 40.0))
+                .focus_node(Rc::clone(&node))
+                .states_controller(states.clone())
+                .on_tap(|_| {}),
+        ),
+        tight(80.0, 40.0),
+    );
+    click(&mut laid, 40.0, 20.0);
+    let _ = laid.enter_owner_scope(|| node.request_focus());
+    laid.pump_for(Duration::from_millis(200));
+    assert!(node.has_primary_focus(), "the well took the focus");
+    assert!(
+        !states.value().contains_state(WidgetState::Focused),
+        "focus after a click is not shown"
+    );
+    assert!(!ring_painted(&laid), "and draws no ring");
+    let _ = laid.enter_owner_scope(|| laid.focus_manager().dispatch_key_event(&tab()));
+    laid.pump_for(Duration::from_millis(200));
+    assert!(
+        states.value().contains_state(WidgetState::Focused),
+        "a key shows the focus"
+    );
+    assert!(ring_painted(&laid), "as the theme's ring");
+}
+
+/// A checkbox shows its focus with the M3 halo, so it draws no ring.
+pub fn a_checkbox_shows_focus_with_its_halo_not_a_ring() {
+    let mut laid = lay_out(
+        themed(Checkbox::new(false).on_changed(|_cx, _value| {})),
+        tight(48.0, 48.0),
+    );
+    let manager = laid.focus_manager();
+    let _ = laid.enter_owner_scope(|| manager.dispatch_key_event(&tab()));
+    laid.pump_for(Duration::from_millis(200));
+    assert!(
+        manager.primary_focus().is_some(),
+        "Tab focused the checkbox"
+    );
+    assert!(!ring_painted(&laid), "the halo is its indicator");
 }

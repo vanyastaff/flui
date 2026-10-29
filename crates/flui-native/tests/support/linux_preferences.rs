@@ -37,7 +37,7 @@ pub mod linux {
             &self,
             namespace: &str,
             key: &str,
-        ) -> Result<zbus::zvariant::OwnedValue, SettingsError> {
+        ) -> Result<zbus::OwnedVariant, SettingsError> {
             if self.state.failing.load(Ordering::SeqCst) {
                 if namespace == "org.freedesktop.appearance" && key == "reduced-motion" {
                     self.state.failed.notify_one();
@@ -71,14 +71,10 @@ pub mod linux {
 
     #[zbus::interface(name = "org.freedesktop.portal.Settings")]
     impl LegacySettings {
-        fn read(
-            &self,
-            namespace: &str,
-            key: &str,
-        ) -> Result<zbus::zvariant::OwnedValue, SettingsError> {
+        fn read(&self, namespace: &str, key: &str) -> Result<zbus::OwnedVariant, SettingsError> {
             if namespace == "org.freedesktop.appearance" && key == "reduced-motion" {
                 Ok(
-                    zbus::zvariant::OwnedValue::try_from(zbus::zvariant::Value::Value(Box::new(
+                    zbus::OwnedVariant::try_from(zbus::Variant::Variant(Box::new(
                         self.value.into(),
                     )))
                     .expect("legacy double variant"),
@@ -89,11 +85,29 @@ pub mod linux {
         }
     }
 
+    /// A portal that answers a key it lacks with D-Bus's `UnknownProperty`
+    /// instead of its own `NotFound`, and has only GNOME's `enable-animations`.
+    struct UnknownPropertySettings {
+        value: u32,
+    }
+
+    #[zbus::interface(name = "org.freedesktop.portal.Settings")]
+    impl UnknownPropertySettings {
+        fn read_one(&self, namespace: &str, key: &str) -> zbus::fdo::Result<zbus::OwnedVariant> {
+            if namespace == "org.gnome.desktop.interface" && key == "enable-animations" {
+                Ok((self.value != 1).into())
+            } else {
+                Err(zbus::fdo::Error::UnknownProperty("unknown setting".into()))
+            }
+        }
+    }
+
     pub const CASES: &[&str] = &[
         "reduce",
         "full",
         "unknown-number",
         "gnome",
+        "gnome-unknown-property",
         "live",
         "recovery",
         "restart",
@@ -139,7 +153,7 @@ pub mod linux {
             &self,
             namespace: &str,
             key: &str,
-        ) -> Result<zbus::zvariant::OwnedValue, SettingsError> {
+        ) -> Result<zbus::OwnedVariant, SettingsError> {
             let scale = f64::from_bits(self.text_scale.load(Ordering::SeqCst));
             if key == "text-scaling-factor" {
                 self.scale_read.notify_waiters();
@@ -200,7 +214,7 @@ pub mod linux {
         connection: &zbus::Connection,
         namespace: &str,
         key: &str,
-        value: zbus::zvariant::Value<'_>,
+        value: zbus::Variant<'_>,
     ) {
         connection
             .emit_signal(
@@ -252,9 +266,9 @@ pub mod linux {
             .expect("fixture runtime");
         let service = runtime
             .block_on(async {
-                zbus::connection::Builder::session()?
-                    .name("org.freedesktop.portal.Desktop")?
-                    .serve_at("/org/freedesktop/portal/desktop", values)?
+                zbus::connection::Builder::session()
+                    .name("org.freedesktop.portal.Desktop")
+                    .serve_at("/org/freedesktop/portal/desktop", values)
                     .build()
                     .await
             })
@@ -289,7 +303,7 @@ pub mod linux {
                         &connection,
                         "org.gnome.desktop.interface",
                         "text-scaling-factor",
-                        zbus::zvariant::Value::from(refused),
+                        zbus::Variant::from(refused),
                     )
                     .await;
                     read.await;
@@ -312,13 +326,13 @@ pub mod linux {
                         (
                             "org.gnome.desktop.a11y.interface",
                             "high-contrast",
-                            zbus::zvariant::Value::from(high),
+                            zbus::Variant::from(high),
                         )
                     } else {
                         (
                             "org.freedesktop.appearance",
                             "contrast",
-                            zbus::zvariant::Value::from(u32::from(high)),
+                            zbus::Variant::from(u32::from(high)),
                         )
                     }
                 }
@@ -331,7 +345,7 @@ pub mod linux {
                     (
                         "org.gnome.desktop.interface",
                         "text-scaling-factor",
-                        zbus::zvariant::Value::from(scale),
+                        zbus::Variant::from(scale),
                     )
                 }
             };
@@ -396,7 +410,7 @@ pub mod linux {
                 &(
                     "org.freedesktop.appearance",
                     key,
-                    zbus::zvariant::Value::from(value),
+                    zbus::Variant::from(value),
                 ),
             )
             .await
@@ -470,22 +484,31 @@ pub mod linux {
             .expect("fixture runtime");
         let service = runtime
             .block_on(async {
-                let builder = zbus::connection::Builder::session()?;
+                let builder = zbus::connection::Builder::session();
                 if case == "no-service" {
                     builder.build().await
                 } else if case == "legacy" {
                     builder
-                        .name("org.freedesktop.portal.Desktop")?
+                        .name("org.freedesktop.portal.Desktop")
                         .serve_at(
                             "/org/freedesktop/portal/desktop",
                             LegacySettings { value: 1 },
-                        )?
+                        )
+                        .build()
+                        .await
+                } else if case == "gnome-unknown-property" {
+                    builder
+                        .name("org.freedesktop.portal.Desktop")
+                        .serve_at(
+                            "/org/freedesktop/portal/desktop",
+                            UnknownPropertySettings { value: 1 },
+                        )
                         .build()
                         .await
                 } else {
                     builder
-                        .name("org.freedesktop.portal.Desktop")?
-                        .serve_at("/org/freedesktop/portal/desktop", settings)?
+                        .name("org.freedesktop.portal.Desktop")
+                        .serve_at("/org/freedesktop/portal/desktop", settings)
                         .build()
                         .await
                 }
@@ -519,9 +542,7 @@ pub mod linux {
                     .expect("release old owner");
                 return Some(
                     zbus::connection::Builder::session()
-                        .expect("replacement session")
                         .name("org.freedesktop.portal.Desktop")
-                        .expect("replacement name")
                         .serve_at(
                             "/org/freedesktop/portal/desktop",
                             Settings {
@@ -530,7 +551,6 @@ pub mod linux {
                                 absent: false,
                             },
                         )
-                        .expect("replacement service")
                         .build()
                         .await
                         .expect("replacement owner"),

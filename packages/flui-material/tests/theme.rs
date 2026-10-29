@@ -247,3 +247,30 @@ pub fn retained_theme_roles_paint_distinct_numeric_sizing_answers() {
         }
     }
 }
+
+/// `Theme` provides its `focus_ring` to every focus ring below it, a
+/// control from `flui-widgets` included.
+pub fn theme_installs_the_focus_ring_style() {
+    use crate::ink_well::{ring_painted, themed};
+    use flui_sdk::widgets::{RawButton, Text};
+
+    let mut laid = lay_out(
+        themed(RawButton::new(Text::new("Go")).on_press(|_cx| {})),
+        loose(400.0),
+    );
+    let manager = laid.focus_manager();
+    let _ = laid.enter_owner_scope(|| {
+        manager.dispatch_key_event(
+            &flui_interaction::testing::input::KeyEventBuilder::new(
+                flui_interaction::events::Code::Tab,
+            )
+            .with_key(flui_interaction::events::Key::Named(
+                flui_interaction::events::NamedKey::Tab,
+            ))
+            .build(),
+        )
+    });
+    laid.pump();
+    assert!(manager.primary_focus().is_some(), "Tab focused the button");
+    assert!(ring_painted(&laid), "the ring takes the theme's style");
+}
