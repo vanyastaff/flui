@@ -75,6 +75,7 @@ request.
 
 - Desktop is always on but untested with a screen reader.
 - **Runs on iOS:** every UIKit window answers UIAccessibility through `accesskit_ios`'s low-level adapter, and the semantics identifier reaches `accessibilityIdentifier`; on the iOS Simulator an XCUITest client read the tree, found a button by its identifier and pressed it (2026-10-28). No VoiceOver session ran, and no AccessKit action was sent.
+- **Runs on Windows:** the semantics identifier reaches UI Automation's `AutomationId`: a `UIAutomationClient` read a counter's button by its identifier, invoked it twice and read the count (Windows 11, 2026-10-29). No Narrator session ran.
 - AccessKit has an Android adapter, not yet wired, and none for the Web (it needs a parallel ARIA DOM).
 - When they are wired, the semantics identifier (ADR-0240) must reach Android's `viewIdResourceName` and a `data-flui-id` DOM attribute, as it reaches `AutomationId`, `AXIdentifier`, AT-SPI's id and iOS's `accessibilityIdentifier` through `author_id`.
 - The runs read one control, not a Narrator, VoiceOver or Orca session.

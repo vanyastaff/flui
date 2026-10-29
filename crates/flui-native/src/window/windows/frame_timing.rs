@@ -27,30 +27,37 @@ pub(crate) struct RefreshTiming {
     pub(crate) until_refresh: Duration,
 }
 
-/// The refresh timing at the counter reading `now`, given the counter of the last refresh
-/// (`vblank`) and the refresh period, all in counter ticks at `frequency` per second.
+/// The refresh timing at the counter reading `now`, given the counter of a refresh the system
+/// reported (`vblank`) and the refresh period, all in counter ticks at `frequency` per second.
 ///
-/// A refresh the system reports ahead of the reading, or a period of zero, is a report that cannot
-/// be placed, and gives `None`: the caller falls back to the reading itself. A refresh several
-/// periods back (a compositor that has not ticked, a paused display) places the next refresh on
-/// the grid that refresh started, never earlier than the reading.
+/// DWM's `qpcVBlank` is usually the refresh still to come: on a Windows 11 run at 100 Hz it lay
+/// up to a period after the reading in most reads, and before it in the rest. A refresh ahead of
+/// the reading places the last one a whole number of periods before it. A refresh several periods
+/// back (a compositor that has not ticked, a paused display) is the last refresh, and the next one
+/// lies on the grid it started, never earlier than the reading. A period of zero is a report that
+/// cannot be placed, and gives `None`: the caller falls back to the reading itself.
 pub(crate) fn refresh_timing(
     now: u64,
     vblank: u64,
     period: u64,
     frequency: NonZeroU64,
 ) -> Option<RefreshTiming> {
-    if period == 0 || vblank > now {
+    if period == 0 {
         return None;
     }
-    let elapsed = now - vblank;
+    let (since, until) = if let Some(elapsed) = now.checked_sub(vblank) {
+        (elapsed, period - elapsed % period)
+    } else {
+        let into_period = (period - (vblank - now) % period) % period;
+        (into_period, period - into_period)
+    };
     let to_duration = |ticks: u64| {
         let nanos = u128::from(ticks) * 1_000_000_000 / u128::from(frequency.get());
         Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
     };
     Some(RefreshTiming {
-        since_refresh: to_duration(elapsed),
-        until_refresh: to_duration(period - elapsed % period),
+        since_refresh: to_duration(since),
+        until_refresh: to_duration(until),
     })
 }
 
@@ -250,14 +257,30 @@ mod tests {
         );
     }
 
+    /// A refresh reported ahead of the reading is the next one, and the last lies a period
+    /// before it; one further ahead is placed on its grid. The readings are a live Windows 11
+    /// run's at 100 Hz.
+    #[test]
+    fn a_refresh_reported_ahead_of_the_reading_is_the_next_one() {
+        let next = refresh_timing(3_068_788_336_492, 3_068_788_408_043, 100_000, MHZ_10)
+            .expect("a refresh still to come");
+        assert_eq!(next.until_refresh, Duration::from_nanos(7_155_100));
+        assert_eq!(next.since_refresh, Duration::from_nanos(2_844_900));
+
+        let two_on = refresh_timing(1_000_000, 1_000_000 + 2 * 100_000 + 30_000, 100_000, MHZ_10)
+            .expect("a refresh two periods on");
+        assert_eq!(two_on.until_refresh, Duration::from_millis(3));
+        assert_eq!(two_on.since_refresh, Duration::from_millis(7));
+
+        let on_a_refresh =
+            refresh_timing(1_000_000, 1_100_000, 100_000, MHZ_10).expect("a refresh a period on");
+        assert_eq!(on_a_refresh.since_refresh, Duration::ZERO);
+        assert_eq!(on_a_refresh.until_refresh, Duration::from_millis(10));
+    }
+
     /// A report that cannot be placed is no timing, not a made-up one.
     #[test]
     fn an_unplaceable_refresh_report_gives_no_timing() {
-        assert_eq!(
-            refresh_timing(100, 200, 166_667, MHZ_10),
-            None,
-            "refresh in the future"
-        );
         assert_eq!(refresh_timing(300, 200, 0, MHZ_10), None, "no period");
     }
 }
