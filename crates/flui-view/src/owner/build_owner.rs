@@ -580,8 +580,7 @@ pub struct BuildOwner {
 
     /// The host's flush registry, which `Persisted` publishes into through
     /// the crate-private `LifecycleContext::flush_registry_in_crate`. `None`
-    /// on a bare owner, and under every UI runtime until the host's installer
-    /// lands with the registry's wiring.
+    /// on a bare owner and under a host without storage.
     pub(crate) flush_registry: Option<crate::flush_registry::FlushRegistry>,
 
     /// The binding's owner-local interaction dispatch capability (ADR-0027).

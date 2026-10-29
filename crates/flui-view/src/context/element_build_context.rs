@@ -612,6 +612,9 @@ impl LifecycleContext for ElementBuildContext {
     fn storage(&self) -> Option<std::sync::Arc<dyn flui_platform::Storage>> {
         self.owner.read().capabilities().storage.clone()
     }
+    fn close_guard(&self) -> Option<crate::CloseGuard> {
+        self.owner.read().capabilities().close_guard.clone()
+    }
     fn flush_registry_in_crate(
         &self,
         _token: super::build_context::sealed::CrateToken,
@@ -1054,6 +1057,9 @@ impl LifecycleContext for BuildCtx<'_> {
     }
     fn storage(&self) -> Option<std::sync::Arc<dyn flui_platform::Storage>> {
         self.capabilities.presentation.storage.clone()
+    }
+    fn close_guard(&self) -> Option<crate::CloseGuard> {
+        self.capabilities.presentation.close_guard.clone()
     }
     fn flush_registry_in_crate(
         &self,
