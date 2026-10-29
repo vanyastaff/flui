@@ -174,17 +174,22 @@ pub(crate) fn exec_on_owner<R: Send>(
 /// panic shield.
 ///
 /// Unlike [`exec_on_owner`] this NEVER BLOCKS the caller: `f` is dispatched
-/// with `Queue::exec_async` and the function returns immediately. Its purpose
-/// is teardown tails that must not hang window close — `MacOSWindow`'s `Drop`
-/// routes its AppKit tail here and lets the lane run it if and when it
-/// services. If the lane is not servicing (pre-`run`, or the run loop is
-/// gone), `f` simply never runs and is dropped WITH ITS CAPTURES — which is
-/// exactly why `f` must be `'static` and own its state. `f` runs under the
+/// with `Queue::exec_async` and the function returns immediately, and `f` runs
+/// on a later turn of the lane, after the caller's frame has unwound. That is
+/// what its callers want: a teardown tail that must not hang window close
+/// (`MacOSWindow`'s `Drop`), a redraw request moved out of a display pass, a
+/// held mode change planned once AppKit has finished the notification it is
+/// in, and the lifecycle deliveries of the loop control.
+///
+/// If the lane is not servicing (pre-`run`, or the run loop is gone), `f`
+/// simply never runs and is dropped WITH ITS CAPTURES — which is exactly why
+/// `f` must be `'static` and own its state, and why a caller hands it only
+/// work that may lapse with the loop. `f` runs under the
 /// [`OnOwnerQueueGuard`] and is catch_unwind-wrapped (the GCD `exec_async`
 /// trampoline is `extern "C"` with no panic catch, the same hazard
 /// `exec_on_owner`'s shield exists for); a caught panic is logged here —
 /// fire-and-forget has no caller frame to resume to.
-pub(crate) fn exec_async_guarded(
+pub(crate) fn exec_async_on_owner(
     owner: &'static dispatch::Queue,
     f: impl FnOnce() + Send + 'static,
 ) {
@@ -195,7 +200,27 @@ pub(crate) fn exec_async_guarded(
     // caller frame to resume.
     owner.exec_async(move || {
         os_entry(
-            "an owner-lane teardown tail",
+            "a deferred owner-lane turn",
+            (),
+            AfterPanic::Answer(|()| ()),
+            move || {
+                let _guard = OnOwnerQueueGuard::new(owner);
+                f();
+            },
+        );
+    });
+}
+
+/// Run `f` on the owner lane after `delay`, fire-and-forget, under the same
+/// boundary and on-lane guard as [`exec_async_on_owner`].
+pub(crate) fn exec_after_on_owner(
+    owner: &'static dispatch::Queue,
+    delay: std::time::Duration,
+    f: impl FnOnce() + Send + 'static,
+) {
+    owner.exec_after(delay, move || {
+        os_entry(
+            "a delayed owner-lane turn",
             (),
             AfterPanic::Answer(|()| ()),
             move || {
@@ -210,9 +235,16 @@ pub(crate) fn exec_async_guarded(
 /// group so remaining windows and the quit notification still get their turn.
 /// Forget only panic payloads: dropping an arbitrary payload can itself panic
 /// while bootstrap is already unwinding. This exceptional leak prevents abort.
-pub(crate) fn run_cleanup_guarded(body: impl FnOnce()) {
-    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
-        report_contained_panic(payload);
+///
+/// Answers whether `body` ran to its end, for a step whose failure changes
+/// what the next one may do.
+pub(crate) fn run_cleanup_guarded(body: impl FnOnce()) -> bool {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+        Ok(()) => true,
+        Err(payload) => {
+            report_contained_panic(payload);
+            false
+        }
     }
 }
 

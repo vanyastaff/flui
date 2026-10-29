@@ -15,6 +15,7 @@
 use std::{
     collections::HashMap,
     marker::PhantomData,
+    rc::Rc,
     sync::Arc,
     thread,
     time::{Duration, Instant},
@@ -29,13 +30,13 @@ use flui_platform::input_capabilities::{InputCapabilities, PointerKindSet};
 use flui_platform::{
     Clipboard, DataTransferOffer, DataTransferSource, DisplayId, DisplaySnapshot, DragDropEvent,
     InMemoryClipboard, NullDataTransferSource, PlatformInput, SystemPreferences,
-    WindowCapabilities, WindowEvent, WindowId, WindowOptions,
+    WindowCapabilities, WindowId, WindowOptions,
 };
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::WindowId as WinitWindowId;
 
 #[cfg(target_os = "linux")]
-pub(crate) use window_scenario::run_window_scenario;
+pub(crate) use window_scenario::{ScenarioWindow, run_window_scenario};
 
 use super::control::{ControlReceiver, ControlSender, control_lane};
 use super::{
@@ -46,12 +47,12 @@ use crate::error::PlatformError;
 use crate::host::{self, Absent, Host, position};
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
-use crate::owner::call_point::install;
+use crate::owner::app_delivery::AppDelivery;
 use crate::owner::notices::testing::NoNotices;
 use crate::owner::notices::{NoticeChannel, StaleOnWake};
 use crate::owner::signal::OwnerSignal;
 use crate::owner::sources::SystemPreferenceSource;
-use crate::platform::{HostPlatform, Platform, PlatformReadyCallback};
+use crate::platform::{AppHandler, HostPlatform, Platform};
 
 /// Builds a real `EventLoop` for a test running on an ordinary test
 /// thread, not the process's actual main thread. winit refuses this by
@@ -209,7 +210,7 @@ impl WinitApp {
         platform: Arc<WinitLoop>,
         owner_platform: Arc<dyn Platform>,
         LaneReceiver(control): LaneReceiver,
-        on_ready: Option<PlatformReadyCallback>,
+        handler: Option<Rc<dyn AppHandler>>,
     ) -> Self {
         Self {
             #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
@@ -224,7 +225,8 @@ impl WinitApp {
             display_watch: None,
             platform,
             owner_platform,
-            on_ready,
+            handler,
+            owner_hooks: None,
             control,
             quit_notified: false,
             in_flight_replies: Vec::new(),
@@ -277,7 +279,7 @@ impl<D: HostDisplays + Default + 'static> WinitHost for QuietHost<D> {
         Arc::new(D::default())
     }
 
-    fn notices() -> Arc<dyn NoticeChannel> {
+    fn notices(_: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {
         Arc::new(NoNotices)
     }
 
@@ -332,9 +334,10 @@ impl Host for QuietTable {
 
 /// A platform of [`QuietTable`] over a loop whose hooks `H` makes.
 pub(crate) fn quiet_platform_over<H: WinitHost>() -> HostPlatform<QuietTable> {
-    HostPlatform::from_parts(NoWindows, |windows| {
-        WinitLoop::new::<H>(Arc::clone(windows) as _)
-    })
+    HostPlatform::from_parts(
+        |_| NoWindows,
+        |windows| WinitLoop::new::<H>(Arc::clone(windows) as _),
+    )
 }
 
 /// A platform of [`QuietTable`] over a loop of [`QuietHost`].
@@ -361,7 +364,7 @@ impl LoopWindows for NoWindows {
         _: &ActiveEventLoop,
         _: WindowSeed<'_>,
         _: WindowOptions,
-    ) -> Result<Arc<dyn LoopWindow>, OpenWindowError> {
+    ) -> Result<Rc<dyn LoopWindow>, OpenWindowError> {
         Err(Self::refusal())
     }
 
@@ -373,12 +376,15 @@ impl LoopWindows for NoWindows {
 
 impl host::Window<WinitLoop> for NoWindows {
     type Shared = NoWindows;
+    /// No window is opened, so none is referred to.
+    type Ref = ();
 
     fn open(
         _: &WinitLoop,
         _: &Arc<NoWindows>,
         _: WindowOptions,
-    ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
+        _: Rc<dyn flui_platform::WindowHandler>,
+    ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
         Err(Self::refusal())
     }
 
@@ -392,13 +398,6 @@ impl host::Window<WinitLoop> for NoWindows {
 
     fn frame_inset(_: &WinitLoop, _: &NoWindows, _: f64) -> Size<f64> {
         Size::new(0.0, 0.0)
-    }
-
-    fn on_event(owner: &WinitLoop, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        install(
-            &owner.handler(|state| &mut state.handlers.window_event),
-            callback,
-        );
     }
 }
 
@@ -491,6 +490,11 @@ impl HostDisplays for NoDisplays {
     #[cfg(target_os = "linux")]
     fn is_wayland(&self) -> bool {
         false
+    }
+
+    #[cfg(target_os = "macos")]
+    fn version(&self) -> crate::version::gate::apple::MacOSVersion {
+        crate::version::gate::apple::MacOSVersion::new(14, 0, 0)
     }
 }
 
@@ -648,29 +652,87 @@ impl FileDrops for NoFileDrops {
 mod window_scenario {
     use std::{
         panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
+        rc::Rc,
         sync::Arc,
         thread,
+        time::Duration,
     };
 
     use flui_foundation::ClaimOutcome;
-    use flui_platform::WindowOptions;
+    use flui_platform::{CommandRefusal, WindowCommand, WindowState};
     use winit::event_loop::EventLoop;
 
     use super::{install_control_lane, install_test_owner_signal, wait_for_running};
     use crate::host_window::HostWindow;
+    use crate::owner::signal::OwnerSignal;
     use crate::owner::winit::{WinitApp, WinitLoop};
     use crate::platform::Platform;
+    use crate::{OpenedWindow, WindowRequest};
+
+    /// The window a scenario drives from its worker thread. A window is its
+    /// owner thread's (ADR-0254 §5), so each call runs there, in an owner
+    /// turn, and the worker waits for its answer; a panic of the call is
+    /// raised on the worker.
+    pub(crate) struct ScenarioWindow {
+        opened: Arc<OpenedWindow>,
+        signal: Arc<OwnerSignal>,
+    }
+
+    impl ScenarioWindow {
+        /// Run `call` with the window on the owner thread and hand back what
+        /// it answered.
+        pub(crate) fn with<R: Send + 'static>(
+            &self,
+            call: impl FnOnce(&Rc<dyn HostWindow>) -> R + Send + 'static,
+        ) -> R {
+            let (answer, answered) = std::sync::mpsc::sync_channel(1);
+            let opened = Arc::clone(&self.opened);
+            let call = parking_lot::Mutex::new(Some(call));
+            let turn = OwnerSignal::window_wake(&self.signal, move || {
+                let Some(call) = call.lock().take() else {
+                    return;
+                };
+                let crate::OpenedWindowReach::Open(window) = opened.window() else {
+                    panic!("the scenario's window is open, on its owner thread");
+                };
+                let _ = answer.send(catch_unwind(AssertUnwindSafe(|| call(&window))));
+            });
+            turn();
+            match answered
+                .recv_timeout(Duration::from_secs(10))
+                .expect("the owner ran the scenario's call")
+            {
+                Ok(answer) => answer,
+                Err(payload) => resume_unwind(payload),
+            }
+        }
+
+        /// The window's snapshot, read on the owner thread.
+        pub(crate) fn state(&self) -> WindowState {
+            self.with(|window| window.state())
+        }
+
+        /// Admit `command` and apply it on the owner thread.
+        pub(crate) fn admit_and_apply(&self, command: WindowCommand) -> Result<(), CommandRefusal> {
+            self.with(move |window| command.admit_and_apply(&**window))
+        }
+
+        /// The first frame was presented: the window reveals itself.
+        pub(crate) fn reveal_after_first_frame(&self) {
+            self.with(|window| window.reveal_after_first_frame());
+        }
+    }
 
     /// Run `event_loop` for `platform`, the loop of `owner_platform`, open a
-    /// window with `opening` once the loop runs, and run `scenario` against
+    /// window for `opening` once the loop runs, and run `scenario` against
     /// it on a worker thread; the loop quits when the scenario returns, and a
     /// panic in it fails the test.
     pub(crate) fn run_window_scenario(
         platform: Arc<WinitLoop>,
         owner_platform: Arc<dyn Platform>,
         event_loop: EventLoop<()>,
-        opening: WindowOptions,
-        scenario: impl FnOnce(Arc<dyn HostWindow>) + Send + 'static,
+        opening: WindowRequest,
+        scenario: impl FnOnce(ScenarioWindow) + Send + 'static,
     ) {
         install_test_owner_signal(&platform, &event_loop);
         let (control, lane) = install_control_lane(&platform, &event_loop);
@@ -680,7 +742,7 @@ mod window_scenario {
         let worker = thread::spawn(move || {
             let outcome = catch_unwind(AssertUnwindSafe(|| {
                 wait_for_running(&platform_for_worker);
-                let window = match control_for_worker
+                let opened = match control_for_worker
                     .request_open_window(opening)
                     .expect("lane accepts the request")
                     .wait()
@@ -688,7 +750,15 @@ mod window_scenario {
                     ClaimOutcome::Delivered(result) => result.expect("window creation succeeds"),
                     _ => panic!("the window request is delivered"),
                 };
-                scenario(window);
+                let signal = platform_for_worker
+                    .owner_signal
+                    .lock()
+                    .clone()
+                    .expect("the test installed the owner signal");
+                scenario(ScenarioWindow {
+                    opened: Arc::new(opened),
+                    signal,
+                });
             }));
             control_for_worker.request_quit();
             if let Err(payload) = outcome {

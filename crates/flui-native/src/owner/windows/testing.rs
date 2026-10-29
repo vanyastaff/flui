@@ -24,14 +24,16 @@ use super::control::{
     OwnerWindow,
 };
 use super::{
-    ClassWindows, HostDisplays, HostDrag, WindowClass, WindowHooks, WindowInputs, WindowRef,
-    WindowsHost,
+    ClassWindows, CreatedWindow, HostDisplays, HostDrag, WindowClass, WindowHooks, WindowInputs,
+    WindowRef, WindowTexts, WindowsHost,
 };
 use crate::error::PlatformError;
+use crate::owner::app_delivery::AppDelivery;
 use crate::owner::handlers::OpenWindows;
 use crate::owner::notices::testing::NoNotices;
 use crate::owner::notices::{NoticeChannel, StaleOnWake};
 use crate::owner::sources::SystemPreferenceSource;
+use flui_platform::text_store::TextStoreHost;
 
 /// The hooks of a test host's window class, in the order the class's
 /// procedure offers them a message.
@@ -58,6 +60,7 @@ impl<C: ClassHooks> WindowsHost for QuietHost<C> {
         WindowClass {
             hooks: C::hooks(),
             input: Rc::new(NoInputs),
+            text: Rc::new(NoTexts),
         }
     }
 
@@ -65,7 +68,7 @@ impl<C: ClassHooks> WindowsHost for QuietHost<C> {
         Ok(Rc::new(NoPreferences))
     }
 
-    fn notices() -> Arc<dyn NoticeChannel> {
+    fn notices(_: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {
         Arc::new(NoNotices)
     }
 
@@ -107,10 +110,6 @@ pub(crate) struct NoInputs;
 
 impl WindowInputs for NoInputs {
     fn hovered(&self, _window: WindowRef) -> Option<bool> {
-        None
-    }
-
-    fn modifiers(&self, _window: WindowRef) -> Option<flui_platform::Modifiers> {
         None
     }
 
@@ -165,7 +164,7 @@ impl OwnerPreferences for NoPreferences {
         &self,
         _: u32,
     ) -> Result<flui_platform::GesturePreferences, flui_platform::PreferenceQueryError> {
-        Err(flui_platform::PreferenceQueryError::Unavailable)
+        Err(flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotRegistered).into())
     }
 }
 
@@ -248,7 +247,10 @@ impl PlatformDragSource for NoDrag {
     }
 
     fn start(&self, _request: OsDragRequest) -> Result<(), DragError> {
-        Err(DragError::Unavailable)
+        Err(
+            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
+                .into(),
+        )
     }
 }
 
@@ -257,5 +259,19 @@ impl HostDrag for NoDrag {
         self
     }
 
-    fn register_target(self: Arc<Self>, _window: WindowRef) {}
+    fn register_target(
+        self: Arc<Self>,
+        _window: &CreatedWindow,
+    ) -> Option<Box<dyn super::DropTarget>> {
+        None
+    }
+}
+
+/// A text input that holds no window.
+pub(crate) struct NoTexts;
+
+impl WindowTexts for NoTexts {
+    fn store_host(&self, _window: WindowRef) -> Option<Rc<dyn TextStoreHost>> {
+        None
+    }
 }

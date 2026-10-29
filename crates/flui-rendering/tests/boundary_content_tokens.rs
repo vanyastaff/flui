@@ -97,12 +97,11 @@ fn a_repainted_boundary_mints() {
     assert_eq!(tokens(&second)[&a], tokens(&third)[&a]);
 }
 
-/// The reason tokens exist: an outer boundary re-descended only because a
-/// boundary nested in it is dirty re-records its inline pictures, so their
-/// `Arc`s change although its content did not. A pointer comparison of
-/// pictures would report it changed on every such frame.
+/// A boundary nested in an outer one repaints alone: the outer boundary is
+/// replayed from its capture (a slot holds the nested boundary), so it keeps its
+/// token and its own pictures are the very ones it recorded before.
 #[test]
-fn an_outer_boundary_redescended_for_a_nested_repaint_keeps_its_token() {
+fn an_outer_boundary_keeps_its_token_and_pictures_when_a_nested_one_repaints() {
     let (owner, registry) = mount(
         box_node(RenderFlex::row()).child(
             box_node(RenderRepaintBoundary::new()).label("outer").child(
@@ -147,9 +146,9 @@ fn an_outer_boundary_redescended_for_a_nested_repaint_keeps_its_token() {
         !p1.is_empty(),
         "precondition: the outer boundary paints a picture of its own"
     );
-    assert!(
-        p1.iter().zip(&p2).all(|(a, b)| a != b),
-        "the outer pictures were re-recorded, so picture identity cannot be the test"
+    assert_eq!(
+        p1, p2,
+        "the outer boundary replayed its own pictures; only the nested boundary was recorded again"
     );
 }
 

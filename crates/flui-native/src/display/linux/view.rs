@@ -1,16 +1,20 @@
 //! What a Linux display protocol hands the snapshot, and the step that gives
 //! each output its id.
 //!
-//! Both protocol models ([`wayland_model`](super::wayland_model),
-//! [`x11_model`](super::x11_model)) end in a list of [`OutputView`]s; this
+//! Both protocol models (`wayland_model`, `x11_model`, each built with its
+//! feature) end in a list of [`OutputView`]s; this
 //! module turns that list into [`DisplayInfo`]s. An output the protocol keys
 //! gets the id of its key; an output it cannot key gets one fresh id that stays
 //! its own while the native object it stands for exists.
 
 use std::collections::HashMap;
 
-use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform::{DisplayId, DisplayInfo, DisplayKey, RefreshPeriod};
+use flui_foundation::geometry::Bounds;
+#[cfg(any(feature = "x11", test))]
+use flui_foundation::geometry::{Point, Size};
+use flui_platform::{
+    CapabilityAbsence, DisplayColor, DisplayId, DisplayInfo, DisplayKey, RefreshPeriod,
+};
 
 /// How an output is told apart from the others.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +45,9 @@ pub(crate) struct OutputView {
     /// What names the output again after a restart; see
     /// [`DisplayInfo::persistent_key`].
     pub persistent_key: Option<String>,
+    /// The output's colour, or why the protocol gives none; see
+    /// [`DisplayInfo::color`].
+    pub color: Result<DisplayColor, CapabilityAbsence>,
 }
 
 /// The numbers one display answers to, with its id.
@@ -96,7 +103,8 @@ impl FreshIds {
             let Some(id) = id else { continue };
             let mut info = DisplayInfo::new(id, view.name.clone(), view.bounds, view.scale_factor)
                 .with_usable_bounds(view.usable_bounds)
-                .with_primary(view.is_primary);
+                .with_primary(view.is_primary)
+                .with_color(view.color);
             info.refresh_period = view.refresh_period;
             info.persistent_key.clone_from(&view.persistent_key);
             displays.push(info);
@@ -112,6 +120,7 @@ impl FreshIds {
 /// The display a native number belongs to: a window names its monitor by the
 /// number winit gives it, and any of a display's numbers answers (a tiled X11
 /// monitor has several CRTCs).
+#[cfg(any(wayland_host, winit_host, test))]
 pub(crate) fn display_of_native_number(natives: &[NativeIds], native: u32) -> Option<DisplayId> {
     natives
         .iter()
@@ -121,6 +130,7 @@ pub(crate) fn display_of_native_number(natives: &[NativeIds], native: u32) -> Op
 
 /// The overlap of two rectangles, `None` when they share no area. Computed in
 /// 64 bits, so rectangles at the edge of the `i32` range do not overflow.
+#[cfg(any(feature = "x11", test))]
 pub(crate) fn intersection(a: Bounds<i32>, b: Bounds<i32>) -> Option<Bounds<i32>> {
     let edge = |origin: i32, extent: i32| i64::from(origin) + i64::from(extent);
     let left = i64::from(a.origin.x.max(b.origin.x));
@@ -156,6 +166,7 @@ mod tests {
             refresh_period: None,
             is_primary: false,
             persistent_key: None,
+            color: Err(CapabilityAbsence::NotYetOnThisHost),
         }
     }
 

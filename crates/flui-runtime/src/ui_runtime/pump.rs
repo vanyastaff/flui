@@ -62,7 +62,7 @@ pub(super) fn rejected_nested_pump_preserves_outer_commits_and_animation_time() 
     let observed_store = store.clone();
     let signal = runtime
         .widgets()
-        .with_build_owner(|owner| owner.reactive().signal(0u32));
+        .with_build_owner(|owner| owner.signal_graph().signal(0u32));
     let commands = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let observed_commands = Arc::clone(&commands);
     let weak_runtime = Rc::downgrade(&runtime);
@@ -228,8 +228,25 @@ impl UiRuntime {
         // Records a tap admitted reentrantly wait for this owner turn.
         self.begin_recorded_input();
         self.deliver_input_records();
-        let now = clock.frame_time();
-        let deadline = clock.idle_deadline(now);
+        let sampled = clock.frame_time();
+        let pending = self.pending_frame_request();
+        let request = pending.map(|(request, _)| request);
+        let now = self.frame_time_for(request, sampled);
+        self.last_frame_time.set(Some(now));
+        // Idle work runs until the instant the platform names for this frame's
+        // present, else until the next refresh the presentation's newest
+        // presentation report places, else until the host's deadline.
+        let deadline = pending
+            .and_then(|(request, presentation)| {
+                request
+                    .target_present
+                    .and_then(|shown| self.instant_of(shown))
+                    .or_else(|| presentation.clock().next_presentation_after(now))
+            })
+            .map_or_else(
+                || clock.idle_deadline(now),
+                flui_scheduler::IdleDeadline::from,
+            );
         let mut frame_time = None;
         let mut geometry_turn = None;
         let outcome = catch_unwind(AssertUnwindSafe(|| {
@@ -262,6 +279,7 @@ impl UiRuntime {
         let admitted = frame_time.is_some();
         drop(geometry_turn);
         drop(frame_time);
+        self.clear_frame_requests();
         // The verdicts the frame made (deadlines) follow its frame row.
         self.deliver_input_records();
         if !admitted {
@@ -385,5 +403,60 @@ impl UiRuntime {
             resume_unwind(failure);
         }
         value.expect("BUG: a successful owner operation retains its result")
+    }
+}
+
+impl UiRuntime {
+    /// The request of the newest frame delivered since the last pump, if any host delivered one,
+    /// with the presentation it was delivered to.
+    fn pending_frame_request(
+        &self,
+    ) -> Option<(
+        flui_platform::FrameRequest,
+        &crate::presentation::PresentationState,
+    )> {
+        self.presentations
+            .iter()
+            .filter_map(|presentation| {
+                presentation
+                    .frame_request
+                    .get()
+                    .map(|request| (request, presentation))
+            })
+            .max_by_key(|(request, _)| request.vsync)
+    }
+
+    /// Forget requests this pump did not render, so a skipped frame's vsync never dates a later
+    /// wake.
+    fn clear_frame_requests(&self) {
+        for presentation in self.presentations.iter() {
+            presentation.frame_request.set(None);
+        }
+    }
+
+    /// The instant on this runtime's clock that `time` names, or `None` past the last one the
+    /// platform represents.
+    pub(super) fn instant_of(&self, time: flui_platform::EventTime) -> Option<web_time::Instant> {
+        flui_foundation::MonotonicClock::epoch(&self.clock)
+            .checked_add(std::time::Duration::from_nanos(time.as_nanos()))
+    }
+
+    /// The time this frame runs at (ADR-0257): the delivered vsync, held between the previous
+    /// frame's time (the clock never runs backwards) and `sampled`, the host's own reading when it
+    /// pumped (a platform timestamp ahead of that is a defect, not a time). Without a vsync, or
+    /// one off the clock's range, the sampled reading.
+    fn frame_time_for(
+        &self,
+        request: Option<flui_platform::FrameRequest>,
+        sampled: web_time::Instant,
+    ) -> web_time::Instant {
+        let Some(vsync) = request.and_then(|request| self.instant_of(request.vsync)) else {
+            return sampled;
+        };
+        let floor = self
+            .last_frame_time
+            .get()
+            .map_or(vsync, |last| vsync.max(last));
+        floor.min(sampled)
     }
 }

@@ -5,7 +5,7 @@ use flui_native::{HeadlessPlatform, Platform, WindowInstallation};
 
 fn acknowledgement_and_cancellation_are_committed_before_notification() {
     Box::new(HeadlessPlatform::new())
-        .run(Box::new(|owner| {
+        .run(crate::app::on_ready(|owner| {
             let (ready, pending) = WindowInstallation::channel(owner.proxy());
             assert!(pending.outcome().is_none());
             ready.complete().expect("notify readiness");
@@ -52,7 +52,7 @@ fn failed_wake_does_not_undo_installation_acknowledgement() {
     let saved = std::rc::Rc::new(std::cell::RefCell::new(None));
     let installed = std::rc::Rc::clone(&saved);
     Box::new(platform)
-        .run(Box::new(move |owner| {
+        .run(crate::app::on_ready(move |owner| {
             owner.on_wake(Box::new(|| {}))?;
             *installed.borrow_mut() = Some(owner);
             Ok(())

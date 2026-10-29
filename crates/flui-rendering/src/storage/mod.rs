@@ -63,6 +63,7 @@ mod erased;
 mod flags;
 mod links;
 mod node;
+mod node_slab;
 mod state;
 mod tree;
 
@@ -78,4 +79,5 @@ pub use state::RenderState;
 pub use state::{BoxLayoutCache, IntrinsicDimension, ProtocolLayoutCache};
 // Type aliases for convenience
 pub use state::{BoxRenderState, SliverRenderState};
+pub(crate) use tree::TreeLease;
 pub use tree::{ChildrenUpdate, RenderTree};

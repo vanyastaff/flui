@@ -183,12 +183,15 @@ fn text_editing() {
             ("editable_text::text_store::an_app_edit_during_a_lock_is_not_overwritten", crate::editable_text::text_store::an_app_edit_during_a_lock_is_not_overwritten),
             ("editable_text::text_store::a_no_layout_answer_is_followed_by_a_layout_notification", crate::editable_text::text_store::a_no_layout_answer_is_followed_by_a_layout_notification),
             ("editable_text::text_store::focus_gain_and_loss_reach_the_store_host", crate::editable_text::text_store::focus_gain_and_loss_reach_the_store_host),
+            ("editable_text::text_store::a_conversion_queued_for_an_unmounted_field_is_dropped", crate::editable_text::text_store::a_conversion_queued_for_an_unmounted_field_is_dropped),
+            ("editable_text::text_store::unmounting_a_composing_field_commits_the_preedit_once", crate::editable_text::text_store::unmounting_a_composing_field_commits_the_preedit_once),
             ("editable_text::text_store::swapping_the_controller_during_a_grant_drops_the_session", crate::editable_text::text_store::swapping_the_controller_during_a_grant_drops_the_session),
             ("editable_text::text_store::a_panicking_on_changed_is_reported_once_and_the_field_keeps_working", crate::editable_text::text_store::a_panicking_on_changed_is_reported_once_and_the_field_keeps_working),
             ("form::a_text_form_field_validates_and_saves_the_committed_text", crate::form::a_text_form_field_validates_and_saves_the_committed_text),
             ("form::dropping_a_composing_controller_keeps_the_preedit_out_of_the_value", crate::form::dropping_a_composing_controller_keeps_the_preedit_out_of_the_value),
             ("form::setting_the_shown_text_as_the_value_ends_a_reconversion", crate::form::setting_the_shown_text_as_the_value_ends_a_reconversion),
             ("form::setting_the_shown_preedit_as_the_value_commits_it", crate::form::setting_the_shown_preedit_as_the_value_commits_it),
+            ("form::a_reset_mid_composition_removes_the_preedit", crate::form::a_reset_mid_composition_removes_the_preedit),
             ("editable_text::text_store::long_input_reveals_the_caret_and_maps_visible_pointer_positions", crate::editable_text::text_store::long_input_reveals_the_caret_and_maps_visible_pointer_positions),
             ("editable_text::text_store::editable_paint_places_long_text_under_the_viewport_clip", crate::editable_text::text_store::editable_paint_places_long_text_under_the_viewport_clip),
             ("editable_text_clipboard::copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_and_the_key_unconsumed", crate::editable_text_clipboard::copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_and_the_key_unconsumed),
@@ -255,6 +258,11 @@ fn pointer_and_gesture_recognition() {
             ("pointer_vocabulary::viewer_extreme_finite_pan_preserves_the_boundary_result", crate::pointer_vocabulary::viewer_extreme_finite_pan_preserves_the_boundary_result),
             ("pointer_vocabulary::viewer_focal_fling_advances_then_stops_on_new_input", crate::pointer_vocabulary::viewer_focal_fling_advances_then_stops_on_new_input),
             ("pointer_vocabulary::viewer_reports_scale_velocity_separately_from_focal_velocity", crate::pointer_vocabulary::viewer_reports_scale_velocity_separately_from_focal_velocity),
+            ("touchpad_pan::a_touchpad_pan_drives_a_pan_only_gesture_detector", crate::touchpad_pan::a_touchpad_pan_drives_a_pan_only_gesture_detector as fn()),
+            ("touchpad_pan::a_scrollable_inside_a_horizontal_drag_wins_a_vertical_pan", crate::touchpad_pan::a_scrollable_inside_a_horizontal_drag_wins_a_vertical_pan),
+            ("touchpad_pan::a_horizontal_pan_beside_a_vertical_list_goes_to_the_drag", crate::touchpad_pan::a_horizontal_pan_beside_a_vertical_list_goes_to_the_drag),
+            ("touchpad_pan::a_list_with_nowhere_to_go_leaves_the_pan_to_the_drag", crate::touchpad_pan::a_list_with_nowhere_to_go_leaves_the_pan_to_the_drag),
+            ("touchpad_pan::a_plain_list_scrolls_with_a_touchpad_pan_as_before", crate::touchpad_pan::a_plain_list_scrolls_with_a_touchpad_pan_as_before),
             ("listener::presentation_resampling_uses_the_owner_frame_clock", crate::listener::presentation_resampling_uses_the_owner_frame_clock as fn()),
             ("gesture_detector::pan_claim_region_keeps_the_pan_from_an_enclosing_drag", crate::gesture_detector::pan_claim_region_keeps_the_pan_from_an_enclosing_drag),
             ("gesture_detector::recognizers_follow_a_changed_arena_scope", crate::gesture_detector::recognizers_follow_a_changed_arena_scope),
@@ -560,6 +568,7 @@ fn semantics_translation_and_routing() {
             ("semantics::a_diagnostic_is_reported_outside_the_pipeline_checkout", crate::semantics::a_diagnostic_is_reported_outside_the_pipeline_checkout),
             ("semantics::merged_custom_actions_each_reach_their_own_handler", crate::semantics::merged_custom_actions_each_reach_their_own_handler),
             ("semantics::a_repeated_custom_action_label_replaces_the_action", crate::semantics::a_repeated_custom_action_label_replaces_the_action),
+            ("semantics::a_gated_custom_action_follows_its_gate_without_a_rebuild", crate::semantics::a_gated_custom_action_follows_its_gate_without_a_rebuild),
             ("semantics::assistive_scroll_actions_move_a_scrollable", crate::semantics::assistive_scroll_actions_move_a_scrollable),
             ("semantics::a_horizontal_item_scroll_moves_one_character", crate::semantics::a_horizontal_item_scroll_moves_one_character),
             ("semantics::merge_semantics_collapses_its_descendants_in_the_a11y_tree", crate::semantics::merge_semantics_collapses_its_descendants_in_the_a11y_tree),
@@ -736,6 +745,9 @@ fn navigator_and_overlay() {
             ("back_gesture::replacing_authored_back_swipe_policy_cancels_the_outgoing_contact", crate::back_gesture::replacing_authored_back_swipe_policy_cancels_the_outgoing_contact),
             ("back_gesture::mounted_back_swipe_settle_uses_the_admitted_fling_bound", crate::back_gesture::mounted_back_swipe_settle_uses_the_admitted_fling_bound),
             ("navigator::local_history::an_entry_pops_before_the_route_and_observers_stay_silent", crate::navigator::local_history::an_entry_pops_before_the_route_and_observers_stay_silent as fn()),
+            ("navigator::local_history::local_history_removal_writes_after_the_flush", crate::navigator::local_history::local_history_removal_writes_after_the_flush),
+            ("navigator::local_history::a_panicking_removal_does_not_lose_the_next", crate::navigator::local_history::a_panicking_removal_does_not_lose_the_next),
+            ("navigator::local_history::an_unmounted_navigators_owed_removal_is_severed", crate::navigator::local_history::an_unmounted_navigators_owed_removal_is_severed),
             ("navigator::navigator_pop_removes_top_route_and_completes_result", crate::navigator::navigator_pop_removes_top_route_and_completes_result),
             ("navigator::navigator_push_builds_new_route_and_rearranges_overlay", crate::navigator::navigator_push_builds_new_route_and_rearranges_overlay),
             ("navigator::pop_scope_vetoes_maybe_pop_but_not_programmatic_pop", crate::navigator::pop_scope_vetoes_maybe_pop_but_not_programmatic_pop),
@@ -772,6 +784,21 @@ fn route_transitions() {
     );
 }
 
+/// Navigation torn down mid-way: a window closing during a transition and a hero
+/// flight, an observer removed while its flight is airborne, and the last
+/// navigator handle dropped after a push. Each releases what it owned.
+#[test]
+fn navigation_teardown() {
+    run_cases(
+        "navigation_teardown",
+        &[
+            ("navigator::closing_mid_transition_releases_the_route_overlay_and_hero", crate::navigator::closing_mid_transition_releases_the_route_overlay_and_hero as fn()),
+            ("hero_flight::removing_the_observer_mid_flight_ends_the_flight", crate::hero_flight::removing_the_observer_mid_flight_ends_the_flight),
+            ("modal_route::dropping_the_last_navigator_handle_after_push_clears_the_modal_registry", crate::modal_route::dropping_the_last_navigator_handle_after_push_clears_the_modal_registry),
+        ],
+    );
+}
+
 /// The `Router`, `#[derive(Routable)]` round trip and the `WidgetsApp` shell.
 #[test]
 fn router_and_widgets_app() {
@@ -790,6 +817,13 @@ fn router_and_widgets_app() {
             ("router::router_go_preserves_its_commit_after_an_observer_panic", crate::router::router_go_preserves_its_commit_after_an_observer_panic),
             ("router::removing_a_router_value_retires_it_after_releasing_the_stack_borrow", crate::router::removing_a_router_value_retires_it_after_releasing_the_stack_borrow),
             ("router::empty_stack_is_refused", crate::router::empty_stack_is_refused),
+            ("router::from_stack_restores_back_order", crate::router::from_stack_restores_back_order),
+            ("router::stack_reads_every_committed_edit", crate::router::stack_reads_every_committed_edit),
+            ("router::from_stack_opens_without_a_transition", crate::router::from_stack_opens_without_a_transition),
+            ("router::stack_leaves_out_popups", crate::router::stack_leaves_out_popups),
+            ("router::debug_prints_the_whole_stack", crate::router::debug_prints_the_whole_stack),
+            ("router::a_route_clone_may_drive_its_router", crate::router::a_route_clone_may_drive_its_router),
+            ("router::a_route_eq_may_drive_its_router_during_go", crate::router::a_route_eq_may_drive_its_router_during_go),
             ("widgets_app::builder_only_app_receives_no_routing_and_supplies_the_subtree", crate::widgets_app::builder_only_app_receives_no_routing_and_supplies_the_subtree),
             ("widgets_app::home_is_seeded_once_as_the_root_route", crate::widgets_app::home_is_seeded_once_as_the_root_route),
             ("widgets_app::observers_attach_at_mount_and_see_the_home_route", crate::widgets_app::observers_attach_at_mount_and_see_the_home_route),
@@ -798,22 +832,6 @@ fn router_and_widgets_app() {
             ("widgets_app_router::widgets_app_router_navigates_by_handle_and_the_url_follows", crate::widgets_app_router::widgets_app_router_navigates_by_handle_and_the_url_follows),
         ],
     );
-}
-
-/// A router reopened on a saved stack keeps its Back order. Joins
-/// `router_and_widgets_app` once `Router::from_stack` places the whole stack.
-#[test]
-#[ignore = "contract: Router::from_stack places every saved route"]
-fn from_stack_restores_back_order() {
-    crate::router::from_stack_restores_back_order();
-}
-
-/// `RouterHandle::stack` reads the whole stack. Joins
-/// `router_and_widgets_app` once it does.
-#[test]
-#[ignore = "contract: RouterHandle::stack reads every page on the stack"]
-fn stack_reads_every_committed_edit() {
-    crate::router::stack_reads_every_committed_edit();
 }
 
 /// An adopted page-transition builder may reach its navigator; each row runs
@@ -1231,6 +1249,7 @@ fn nested_scroll_channel() {
             ("nested_scroll::contained_scrollable_keeps_its_remainder", crate::nested_scroll::contained_scrollable_keeps_its_remainder),
             ("nested_scroll::snap_policy_targets", crate::nested_scroll::snap_policy_targets),
             ("interactive_viewer::photo_in_pager_hands_pan_remainder_to_pager", crate::interactive_viewer::photo_in_pager_hands_pan_remainder_to_pager),
+            ("interactive_viewer::a_turned_photo_at_its_edge_frees_the_axis_it_cannot_pan", crate::interactive_viewer::a_turned_photo_at_its_edge_frees_the_axis_it_cannot_pan),
             ("interactive_viewer::photo_in_rtl_pager_turns_toward_the_reading_end", crate::interactive_viewer::photo_in_rtl_pager_turns_toward_the_reading_end),
             ("interactive_viewer::viewer_inertia_is_a_side_effect_of_the_releasing_sequence", crate::interactive_viewer::viewer_inertia_is_a_side_effect_of_the_releasing_sequence),
             ("interactive_viewer::viewer_release_failure_still_ends_the_sequence", crate::interactive_viewer::viewer_release_failure_still_ends_the_sequence),

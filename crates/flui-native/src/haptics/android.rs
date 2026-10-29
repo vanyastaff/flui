@@ -90,8 +90,17 @@ fn millis(duration: Duration) -> i64 {
     i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
 }
 
+/// The Activity's window plays on its decor view and the device's vibrator.
+impl crate::host::Haptics<crate::owner::android::ActivityRef> for AndroidHaptics {
+    fn for_window(
+        window: &crate::owner::android::ActivityRef,
+    ) -> Arc<dyn flui_platform::PlatformHaptics> {
+        Arc::new(Self::new(window.app.clone(), window.api))
+    }
+}
+
 impl AndroidHaptics {
-    pub(crate) fn new(app: AndroidApp, api: AndroidApi) -> Self {
+    fn new(app: AndroidApp, api: AndroidApi) -> Self {
         Self {
             app,
             api: haptics_api(api),

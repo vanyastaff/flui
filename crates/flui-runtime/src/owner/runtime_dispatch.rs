@@ -87,7 +87,7 @@ pub(super) enum RuntimeWork {
         super::presentation_dispatch::PendingWindowState,
     ),
     /// A frame and its vsync on the event timeline.
-    Frame(PresentationAddress, flui_platform::EventTime),
+    Frame(PresentationAddress, flui_platform::FrameRequest),
     TextSizingInstall(PresentationAddress, flui_painting::TextSizingSource),
     TextSizingService(PresentationAddress, flui_painting::TextSizingSource),
     TextSizingWithdraw(PresentationAddress, flui_painting::TextSizingSource),
@@ -236,10 +236,10 @@ impl RuntimeWork {
                     });
                 });
             }
-            Self::Frame(address, vsync) => {
+            Self::Frame(address, request) => {
                 // The interaction layer samples this frame at its vsync, on
                 // the timeline input arrives on (ADR-0207 §2).
-                runtime.note_frame_vsync(address.presentation_id, vsync);
+                runtime.note_frame_request(address.presentation_id, request);
                 effects.frame(address, runtime);
             }
             Self::TextSizingInstall(address, source) => {

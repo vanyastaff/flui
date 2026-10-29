@@ -1,12 +1,10 @@
-use std::cell::RefCell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use parking_lot::Mutex;
 
-use super::{Called, Field, Once, SharedField, call, install, retire};
+use super::{Called, Field, call, install, retire};
 
 type Handler = Box<dyn FnMut() -> u32 + Send>;
 
@@ -178,26 +176,6 @@ fn a_contained_failure_answers_the_fallback() {
     );
 }
 
-/// A one-shot call retires the handler after it runs, outside the lock.
-#[test]
-fn a_one_shot_call_retires_its_handler() {
-    let state = Arc::new(Mutex::new(State::default()));
-    let (capture, observed) = witness(&state, false);
-    state.lock().handler = Some(Box::new(move || {
-        let _ = &capture;
-        1
-    }));
-    assert_eq!(
-        call(&Once(slot(&state)), |handler| handler()).or_resume(0),
-        1
-    );
-    assert!(observed.dropped.load(Ordering::SeqCst));
-    assert!(!observed.dropped_under_lock.load(Ordering::SeqCst));
-    assert!(state.lock().handler.is_none());
-}
-
-/// A slot that stopped taking handlers hands the one that ran back, to be
-/// retired.
 #[test]
 fn a_closed_slot_does_not_take_its_handler_back() {
     let state = Mutex::new(State::default());
@@ -213,31 +191,6 @@ fn a_closed_slot_does_not_take_its_handler_back() {
         1
     );
     assert!(state.lock().handler.is_none());
-}
-
-/// A shared handler stays installed while it runs, so a call from inside it
-/// reaches it too.
-#[test]
-fn a_shared_handler_stays_installed_while_it_runs() {
-    type Shared = Rc<dyn Fn(u32) -> u32>;
-    let state: Rc<RefCell<Option<Shared>>> = Rc::new(RefCell::new(None));
-    let inner = Rc::downgrade(&state);
-    *state.borrow_mut() = Some(Rc::new(move |depth| {
-        let state = inner.upgrade().expect("state");
-        if depth == 0 {
-            return 0;
-        }
-        call(&SharedField::new(&*state, |slot| slot), |hook| {
-            hook(depth - 1)
-        })
-        .or_resume(0)
-            + 1
-    }));
-    assert_eq!(
-        call(&SharedField::new(&*state, |slot| slot), |hook| hook(3)).or_resume(0),
-        3
-    );
-    assert!(state.borrow().is_some());
 }
 
 /// While the thread is already unwinding, a retired value is retained.

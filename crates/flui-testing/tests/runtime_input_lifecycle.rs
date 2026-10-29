@@ -49,7 +49,7 @@ fn dispatch(realm: &UiRuntime, id: PresentationId, event: PointerEvent) {
 }
 
 fn install_secondary(realm: &mut UiRuntime) -> PresentationId {
-    let window: Arc<dyn PlatformWindow> = Arc::new(TestWindow::new().focused(false));
+    let window: Rc<dyn PlatformWindow> = Rc::new(TestWindow::new().focused(false));
     let presentation = realm.assemble_presentation(window);
     realm.install_presentation(presentation)
 }
@@ -1385,7 +1385,7 @@ pub(crate) fn a_secondary_layout_refreshes_its_stationary_hover() {
     let secondary = install_secondary(&mut realm);
     let graph = realm
         .presentation_widgets_for_test(secondary)
-        .with_build_owner(|owner| owner.reactive().clone());
+        .with_build_owner(|owner| owner.signal_graph().clone());
     let enters = Rc::new(Cell::new(0));
     let exits = Rc::new(Cell::new(0));
     realm
@@ -1424,5 +1424,96 @@ pub(crate) fn a_secondary_layout_refreshes_its_stationary_hover() {
         (enters.get(), exits.get()),
         (1, 1),
         "ambient refresh does not duplicate exit"
+    );
+}
+
+pub(crate) fn pointer_frame_settles_a_pinch_once_for_both_contacts() {
+    use flui_interaction::events::{
+        make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
+    };
+    use flui_platform::PointerFrame;
+    use flui_runtime::presentation::PointerResampling;
+
+    // The scales a two-finger pinch reports when the contacts move together,
+    // delivered as one frame or as two separate events.
+    let scales = |framed: bool| {
+        let mut realm = UiRuntime::for_test();
+        let primary = realm.presentation_id();
+        realm
+            .set_pointer_resampling(primary, PointerResampling::Disabled)
+            .expect("policy");
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let updates = Rc::clone(&seen);
+        realm
+            .attach_root_widget(
+                &GestureDetector::new()
+                    .behavior(HitTestBehavior::Opaque)
+                    .transform(
+                        TransformSlot::new()
+                            .on_update(move |_, details| updates.borrow_mut().push(details.scale)),
+                    )
+                    .child(SizedBox::new(400.0, 40.0)),
+            )
+            .expect("scale consumer");
+        realm.synchronize_window_snapshot(primary, WindowExecutionState::Running, true, true);
+        pump(&mut realm);
+        let one = PointerId::try_from(1_u64).expect("contact");
+        let two = PointerId::try_from(2_u64).expect("contact");
+        let contacts = |make: fn(PointerId, Offset<f64>, PointerKind) -> Option<PointerEvent>,
+                        at: [f64; 2]| {
+            [(one, at[0]), (two, at[1])]
+                .map(|(id, x)| make(id, Offset::new(x, 10.0), PointerKind::Touch).expect("event"))
+        };
+        let deliver = |realm: &UiRuntime, events: [PointerEvent; 2]| {
+            if framed {
+                realm.enter(|realm| {
+                    realm.handle_input_addressed(
+                        primary,
+                        PlatformInput::PointerFrame(
+                            PointerFrame::new(events.to_vec()).expect("two events"),
+                        ),
+                    );
+                });
+            } else {
+                for event in events {
+                    dispatch(realm, primary, event);
+                }
+            }
+        };
+        deliver(
+            &realm,
+            contacts(
+                |id, at, kind| make_down_event_for_id(id, at, kind).ok(),
+                [100.0, 300.0],
+            ),
+        );
+        seen.borrow_mut().clear();
+        deliver(
+            &realm,
+            contacts(
+                |id, at, kind| make_move_event_for_id(id, at, kind).ok(),
+                [50.0, 350.0],
+            ),
+        );
+        pump(&mut realm);
+        deliver(
+            &realm,
+            contacts(
+                |id, at, kind| make_up_event_for_id(id, at, kind).ok(),
+                [50.0, 350.0],
+            ),
+        );
+        seen.take()
+    };
+
+    let separate = scales(false);
+    let framed = scales(true);
+    assert_eq!(
+        framed, separate,
+        "a frame of contacts measures what the same events one by one do"
+    );
+    assert!(
+        framed.iter().any(|scale| (scale - 1.5).abs() < 1e-9),
+        "the frame reached the recognizer: {framed:?}"
     );
 }

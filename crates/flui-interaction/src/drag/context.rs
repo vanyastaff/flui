@@ -24,7 +24,7 @@ use crate::pointer::{LocalPayloadTarget, MouseTracker};
 pub struct DragAndDrop {
     handle: DragHandle,
     presentation: PresentationId,
-    window: std::sync::Weak<dyn PlatformWindow>,
+    window: std::rc::Weak<dyn PlatformWindow>,
     cursor: WeakMouseTracker,
 }
 
@@ -43,7 +43,7 @@ impl DragAndDrop {
     pub fn new(
         handle: DragHandle,
         presentation: PresentationId,
-        window: std::sync::Weak<dyn PlatformWindow>,
+        window: std::rc::Weak<dyn PlatformWindow>,
         cursor: &MouseTracker,
     ) -> Self {
         Self {

@@ -37,7 +37,7 @@ use std::{
 type Installer = Box<
     dyn FnMut(
         &AppHandle,
-        Arc<dyn HostWindow>,
+        Rc<dyn HostWindow>,
         flui_scheduler::AppLifecycleState,
     ) -> Result<RenderedMain, AppWindowError>,
 >;
@@ -50,6 +50,9 @@ pub(in crate::app) struct MainController {
     open: Option<RenderedMain>,
     installing: Option<RenderedMain>,
     pending: Option<PendingWindow>,
+    /// The handler the window being opened was opened with, until it is
+    /// installed.
+    routes: Option<Rc<super::window_routes::WindowRoutes>>,
     pending_wake: Option<Arc<OpenWake>>,
     closing: bool,
     initial: bool,
@@ -90,7 +93,7 @@ impl OpenWake {
     fn failure(&self) -> Option<AppWindowError> {
         match &*self.state.lock() {
             CompletionState::Failed(error) => Some(error.clone()),
-            _ => None,
+            CompletionState::Waiting | CompletionState::Claimed => None,
         }
     }
     fn take_failure(&self) -> Option<AppWindowError> {
@@ -200,13 +203,18 @@ impl MainController {
             if let Poll::Ready(result) = result {
                 self.pending = None;
                 if !completion.claim() {
-                    if let Ok(window) = result {
-                        contain(|| window.close());
+                    if let Ok(window) = result.and_then(super::opened_window) {
+                        contain(|| {
+                            super::discard_window(
+                                window.as_ref(),
+                                "a main window nobody waits for",
+                            );
+                        });
                     }
                     self.fail(completion.failure().unwrap_or(AppWindowError::Cancelled));
                     return;
                 }
-                match result {
+                match result.and_then(super::opened_window) {
                     Ok(window) => self.install(window),
                     Err(error) => self.fail(AppWindowError::Native {
                         source: Arc::new(error),
@@ -219,13 +227,24 @@ impl MainController {
             return;
         }
         if let Some(open) = &self.open {
-            let result =
-                open.window
-                    .show()
-                    .map(|()| open.address)
-                    .map_err(|error| AppWindowError::Show {
-                        source: Arc::new(error),
-                    });
+            // Shown, then asked for focus: a window system that cannot give
+            // focus (Wayland) still shows the window.
+            use flui_platform::{CommandRefusal, WindowCommand};
+            let result = WindowCommand::Show
+                .admit_and_apply(&*open.window)
+                .and_then(
+                    |()| match WindowCommand::Activate.admit_and_apply(&*open.window) {
+                        Err(CommandRefusal::Admission(
+                            flui_platform::AdmissionError::Unsupported(_),
+                        ))
+                        | Ok(()) => Ok(()),
+                        Err(error) => Err(error),
+                    },
+                )
+                .map(|()| open.address)
+                .map_err(|error| AppWindowError::Show {
+                    source: Arc::new(error),
+                });
             let still_registered = APP_RUNTIME.with(|slot| {
                 slot.borrow()
                     .installed_host
@@ -252,13 +271,25 @@ impl MainController {
         // Deferred reveal: this window is installed through
         // `install_desktop_window`, which performs the reveal.
         let options = super::desktop::rendered_window_options(&self.config);
-        let opened = with_owner_platform(|owner| owner.open_window(options));
+        let routes = super::window_routes::WindowRoutes::new();
+        let opened = with_owner_platform(|owner| owner.open_window(options, routes.clone()));
+        self.routes = Some(routes);
         if !self.is_current() {
             match opened {
-                Some(Ok(WindowOpen::Ready(window))) => contain(|| window.close()),
+                Some(Ok(WindowOpen::Ready(window))) => contain(|| {
+                    super::discard_window(window.as_ref(), "a main window nobody waits for");
+                }),
                 Some(Ok(WindowOpen::Pending(mut pending))) => {
-                    if let Some(Ok(window)) = pending.try_take() {
-                        contain(|| window.close());
+                    if let Some(Ok(window)) = pending
+                        .try_take()
+                        .map(|taken| taken.and_then(super::opened_window))
+                    {
+                        contain(|| {
+                            super::discard_window(
+                                window.as_ref(),
+                                "a main window nobody waits for",
+                            );
+                        });
                     }
                     contain(|| drop(pending));
                 }
@@ -290,9 +321,14 @@ impl MainController {
             None => self.fail(AppWindowError::Cancelled),
         }
     }
-    fn install(&mut self, window: Arc<dyn HostWindow>) {
+    fn install(&mut self, window: Rc<dyn HostWindow>) {
+        if let Some(routes) = self.routes.take() {
+            routes.adopt(window.id());
+        }
         if !self.is_current() {
-            contain(|| window.close());
+            contain(|| {
+                super::discard_window(window.as_ref(), "a main window nobody waits for");
+            });
             self.cancel();
             return;
         }
@@ -303,7 +339,7 @@ impl MainController {
                 .as_mut()
                 .expect("BUG: live controller owns installer"))(
                 &self.ingress.handle(),
-                Arc::clone(&window),
+                Rc::clone(&window),
                 host,
             )
         }));
@@ -324,7 +360,9 @@ impl MainController {
                 self.finish_install();
             }
             Ok(open) => {
-                contain(|| window.close());
+                contain(|| {
+                    super::discard_window(window.as_ref(), "a main window nobody waits for");
+                });
                 contain(|| drop(open));
                 if self.is_current() {
                     self.fail(AppWindowError::Cancelled);
@@ -333,7 +371,9 @@ impl MainController {
                 }
             }
             Err(error) => {
-                contain(|| window.close());
+                contain(|| {
+                    super::discard_window(window.as_ref(), "a main window nobody waits for");
+                });
                 if self.is_current() {
                     self.fail(error);
                 } else {
@@ -369,7 +409,9 @@ impl MainController {
                 self.ingress.settle(Ok(address));
             }
             outcome => {
-                contain(|| open.window.close());
+                contain(|| {
+                    super::discard_window(open.window.as_ref(), "a main window nobody waits for");
+                });
                 contain(|| drop(open));
                 if self.is_current() {
                     self.fail(match outcome {
@@ -385,12 +427,19 @@ impl MainController {
     fn cancel_pending(&mut self) {
         if let Some(installing) = self.installing.take() {
             installing.installation.cancel();
-            contain(|| installing.window.close());
+            contain(|| {
+                super::discard_window(installing.window.as_ref(), "a main window nobody waits for");
+            });
             contain(|| drop(installing));
         }
         if let Some(mut pending) = self.pending.take() {
-            if let Some(Ok(window)) = pending.try_take() {
-                contain(|| window.close());
+            if let Some(Ok(window)) = pending
+                .try_take()
+                .map(|taken| taken.and_then(super::opened_window))
+            {
+                contain(|| {
+                    super::discard_window(window.as_ref(), "a main window nobody waits for");
+                });
             }
             contain(|| drop(pending));
         }
@@ -625,7 +674,7 @@ where
     // the ui_runtimes (and the native windows they own) are retired while the
     // owner platform still lives, on unwind too.
     let teardown = LoopTeardown;
-    let result = platform.run(Box::new(move |owner| {
+    let result = platform.run(crate::app::runner::app_handler(move |owner| {
         let Application {
             mut factory,
             config,
@@ -652,12 +701,10 @@ where
         install_exit_policy_hook(config.exit_policy);
         install_platform_quit_hook();
         let reopen = Arc::downgrade(&ingress);
-        with_owner_platform(|owner| {
-            owner.shared().on_reopen(Box::new(move || {
-                if let Some(ingress) = reopen.upgrade() {
-                    ingress.request_native_show();
-                }
-            }));
+        super::host::route_reopen(move || {
+            if let Some(ingress) = reopen.upgrade() {
+                ingress.request_native_show();
+            }
         });
         let reload = WorkerReload::from_config(&config);
         let watcher = reload.spawn_watcher(runtime_wake_callback());
@@ -692,6 +739,7 @@ where
                 open: None,
                 installing: None,
                 pending: None,
+                routes: None,
                 pending_wake: None,
                 closing: false,
                 initial: startup == StartupWindow::Open,
@@ -754,6 +802,7 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     use flui_native::{HeadlessPlatform, Platform};
+    use flui_testing::window_commands::AdmitAndApply as _;
 
     use crate::app::runtime::ExitPolicy;
 
@@ -777,6 +826,7 @@ mod tests {
                 open: None,
                 installing: None,
                 pending: None,
+                routes: None,
                 pending_wake: None,
                 closing: false,
                 initial: false,
@@ -800,7 +850,7 @@ mod tests {
         let saved = Rc::new(RefCell::new(None));
         let output = Rc::clone(&saved);
         Box::new(platform)
-            .run(Box::new(move |owner| {
+            .run(crate::app::runner::app_handler(move |owner| {
                 let handle = install_test_controller(
                     owner,
                     Box::new(move |_, _, _| {
@@ -855,7 +905,7 @@ mod tests {
             let _owner = OwnerHostClearGuard::arm();
             let _cleanup = LoopTeardown;
             Box::new(HeadlessPlatform::new())
-                .run(Box::new(move |owner| {
+                .run(crate::app::runner::app_handler(move |owner| {
                     let handle = install_test_controller(
                         owner,
                         Box::new(move |_, window, host| {
@@ -863,9 +913,9 @@ mod tests {
                             runtime
                                 .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 30.0))
                                 .expect("mount root");
-                            let window: Arc<dyn flui_platform::PlatformWindow> = window;
+                            let window: Rc<dyn flui_platform::PlatformWindow> = window;
                             let mut prepared =
-                                prepare_ui_runtime_alongside(runtime, Arc::clone(&window));
+                                prepare_ui_runtime_alongside(runtime, Rc::clone(&window));
                             let address = prepared.dispatcher().address;
                             prepared
                                 .frame_driver(FrameDriver::Test(TestFrameDriver {
@@ -884,7 +934,7 @@ mod tests {
                                 "completion tail cannot publish during the current owner turn"
                             );
                             if close_before_publication {
-                                window.close();
+                                window.close_now();
                             }
                             Ok(RenderedMain {
                                 window,
@@ -940,7 +990,7 @@ mod tests {
         let _owner = OwnerHostClearGuard::arm();
         let _cleanup = LoopTeardown;
         Box::new(HeadlessPlatform::new())
-            .run(Box::new(move |owner| {
+            .run(crate::app::runner::app_handler(move |owner| {
                 let calls = Rc::new(Cell::new(0));
                 let called = Rc::clone(&calls);
                 let handle = install_test_controller(
@@ -1295,7 +1345,7 @@ mod tests {
                         observed.set(Some(
                             ui_runtime
                                 .widgets()
-                                .with_build_owner(|owner| owner.storage().is_some()),
+                                .with_build_owner(|owner| owner.capabilities().storage.is_some()),
                         ));
                     },
                 )),

@@ -48,7 +48,7 @@ use crate::haptics::degradation::{
 use crate::owner::apple::ios::NativeOwner;
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
-use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics};
+use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics, Unsupported, UnsupportedReason};
 
 /// Whether the generators take a view (iOS 17.5+).
 fn view_bound() -> bool {
@@ -396,8 +396,16 @@ impl std::fmt::Debug for IOSHaptics {
     }
 }
 
+/// Each UIKit window gets an actuator bound to its view, whose Core Haptics
+/// engine starts on first use and lives as long as the window.
+impl crate::host::Haptics<crate::owner::apple::ios::ViewRef> for IOSHaptics {
+    fn for_window(window: &crate::owner::apple::ios::ViewRef) -> Arc<dyn PlatformHaptics> {
+        Arc::new(Self::new(window.view.clone(), window.marker))
+    }
+}
+
 impl IOSHaptics {
-    pub(crate) fn new(view: Retained<UIView>, mtm: MainThreadMarker) -> Self {
+    fn new(view: Retained<UIView>, mtm: MainThreadMarker) -> Self {
         Self {
             view: NativeOwner::new(view, mtm),
             core: Arc::new(CoreHaptics::new(mtm)),
@@ -449,7 +457,7 @@ impl PlatformHaptics for IOSHaptics {
     fn perform_with(&self, feedback: HapticFeedback, _request: &HapticRequest) -> HapticOutcome {
         // Requests run on the owner thread, which UIKit makes the main thread.
         let Some(mtm) = MainThreadMarker::new() else {
-            return HapticOutcome::Unavailable;
+            return Unsupported::new(UnsupportedReason::Unavailable).into();
         };
         let bound = view_bound();
         let (generator, outcome) = ios_feedback(feedback, bound);
@@ -464,7 +472,7 @@ impl PlatformHaptics for IOSHaptics {
         request: &HapticRequest,
     ) -> HapticOutcome {
         let Some(mtm) = MainThreadMarker::new() else {
-            return HapticOutcome::Unavailable;
+            return Unsupported::new(UnsupportedReason::Unavailable).into();
         };
         let outcome = ios_pattern(self.core.engine_state(mtm));
         if outcome == HapticOutcome::Submitted && self.core.play(mtm, &ios_pattern_parts(pattern)) {

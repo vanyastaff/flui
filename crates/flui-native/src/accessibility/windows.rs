@@ -32,57 +32,16 @@
 
 use std::sync::Arc;
 
-use accesskit::{ActionHandler, ActionRequest, ActivationHandler, TreeUpdate};
+use accesskit::TreeUpdate;
 use accesskit_windows::SubclassingAdapter;
 use parking_lot::Mutex;
 use windows::Win32::Foundation::HWND;
 
-use super::bridge::BridgeShared;
-use crate::owner::panic_boundary::{AfterPanic, os_entry};
+use super::bridge::{Action, Activation, BridgeShared};
 use flui_semantics::{
     platform::AccessibilityActionListener, platform::AccessibilityActivationListener,
     platform::PlatformAccessibility,
 };
-
-struct Activation(Arc<BridgeShared>);
-
-// Each handler runs the composition root's listener inside AccessKit's UIA
-// entry, an `extern "system"` vtable method: a panic in it is contained here
-// and answers as if no listener ran.
-
-impl ActivationHandler for Activation {
-    fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
-        os_entry(
-            "AccessKit's activation",
-            (),
-            AfterPanic::Answer(|()| None),
-            || {
-                // Order matters: mark active and tell the composition root *before*
-                // reading the retained tree. The listener typically enables
-                // semantics, and on a cold start that is what will produce the first
-                // tree at all — reading first would answer `None` even when a
-                // synchronous listener could have supplied one.
-                self.0.notify_activation(true);
-                self.0.retained()
-            },
-        )
-    }
-}
-
-struct Action(Arc<BridgeShared>);
-
-impl ActionHandler for Action {
-    fn do_action(&mut self, request: ActionRequest) {
-        os_entry(
-            "an AccessKit action",
-            (),
-            AfterPanic::Answer(|()| ()),
-            || {
-                self.0.notify_action(request);
-            },
-        );
-    }
-}
 
 /// UIA accessibility for one window.
 pub struct WindowsAccessibility {
@@ -90,7 +49,7 @@ pub struct WindowsAccessibility {
     /// The adapter needs `&mut` to publish, and the capability is shared
     /// behind an `Arc`, so the mutability lives here rather than in the
     /// trait. `Option` because the adapter's lifetime is deliberately
-    /// shorter than the capability's: [`Self::shutdown`] (window teardown)
+    /// shorter than the capability's: `detach` (window teardown)
     /// or a same-thread [`Drop`] takes it out, and every later call through
     /// a still-live `Arc` clone is a guarded no-op instead of a touch of
     /// torn-down subclass state.
@@ -166,15 +125,30 @@ impl WindowsAccessibility {
             owner_thread: std::thread::current().id(),
         }
     }
+}
 
+impl crate::host::WindowAccessibility for WindowsAccessibility {
     /// Unhook and drop the adapter now, on the caller's (owner) thread —
     /// the deterministic half of teardown, called by the window's own
     /// `Drop` **before** it destroys the HWND, so the subclass is removed
     /// while the window still exists. Every later call through a still-live
     /// capability `Arc` is a no-op. Idempotent.
-    pub(crate) fn shutdown(&self) {
+    fn detach(&self) {
         let adapter = self.adapter.lock().take();
         drop(adapter);
+    }
+
+    /// The subclassed procedure sees `WM_SETFOCUS` and `WM_KILLFOCUS` itself.
+    fn focus_changed(&self, _: bool) {}
+}
+
+/// Each Win32 window subclasses its own procedure for UIA, on the thread
+/// that created it, where the table's position makes the bridge.
+impl crate::host::Accessibility<crate::owner::windows::WindowRef> for WindowsAccessibility {
+    fn for_window(
+        window: &crate::owner::windows::WindowRef,
+    ) -> Arc<dyn crate::host::WindowAccessibility> {
+        Arc::new(Self::new(window.hwnd()))
     }
 }
 
@@ -267,8 +241,8 @@ mod tests {
         let initial = contained.expect("a listener's panic unwound out of its handler");
         assert!(initial.is_none(), "a failed activation answers no tree");
         assert!(
-            shared.is_active(),
-            "the activation reached the bridge before its listener failed"
+            !shared.is_active(),
+            "the root never heard of the activation whose listener failed"
         );
     }
 }

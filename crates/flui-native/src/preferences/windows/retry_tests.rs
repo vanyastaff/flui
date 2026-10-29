@@ -31,38 +31,40 @@ fn native_setting_message_replaces_the_cached_observation() {
     let (finish, finished) = std::sync::mpsc::channel();
     let (watchdog_tx, watchdog_rx) = std::sync::mpsc::channel();
     Box::new(platform)
-        .run(Box::new(move |owner| {
-            let quit = owner.proxy();
-            let timeout = quit.clone();
-            owner.on_wake(Box::new(move || {
-                let source = gate
-                    .shares("notification observation")
-                    .expect("owner")
-                    .preferences;
-                let value = source.sample().expect("native refresh").text_scale();
-                *output.lock() = value;
-                quit.request_quit().expect("observed notification");
-            }))?;
-            watchdog_tx
-                .send(std::thread::spawn(move || {
-                    if finished
-                        .recv_timeout(std::time::Duration::from_secs(2))
-                        .is_err()
-                    {
-                        let _ = timeout.request_quit();
-                    }
-                }))
-                .expect("watchdog handle");
-            // Hook registration saw a clean source. Only the receiver message can
-            // invalidate the distinguishing cache and arrange an owner callback.
-            crate::owner::windows::broadcast::send_for_test(
-                receiver,
-                windows::Win32::UI::WindowsAndMessaging::WM_SETTINGCHANGE,
-                0,
-                0,
-            );
-            Ok(())
-        }))
+        .run(crate::owner::app_delivery::testing::on_ready(
+            move |owner| {
+                let quit = owner.proxy();
+                let timeout = quit.clone();
+                owner.on_wake(Box::new(move || {
+                    let source = gate
+                        .shares("notification observation")
+                        .expect("owner")
+                        .preferences;
+                    let value = source.sample().expect("native refresh").text_scale();
+                    *output.lock() = value;
+                    quit.request_quit().expect("observed notification");
+                }))?;
+                watchdog_tx
+                    .send(std::thread::spawn(move || {
+                        if finished
+                            .recv_timeout(std::time::Duration::from_secs(2))
+                            .is_err()
+                        {
+                            let _ = timeout.request_quit();
+                        }
+                    }))
+                    .expect("watchdog handle");
+                // Hook registration saw a clean source. Only the receiver message can
+                // invalidate the distinguishing cache and arrange an owner callback.
+                crate::owner::windows::broadcast::send_for_test(
+                    receiver,
+                    windows::Win32::UI::WindowsAndMessaging::WM_SETTINGCHANGE,
+                    0,
+                    0,
+                );
+                Ok(())
+            },
+        ))
         .expect("notification loop");
     let _ = finish.send(());
     watchdog_rx
@@ -94,43 +96,45 @@ fn failed_native_posts_still_deliver_owner_turns_and_quit() {
     let (finish, finished) = std::sync::mpsc::channel();
     let (worker_tx, worker_rx) = std::sync::mpsc::channel();
     Box::new(platform)
-        .run(Box::new(move |owner| {
-            let proxy = owner.proxy();
-            let next = proxy.clone();
-            owner.on_wake(Box::new(move || {
-                if observed.fetch_add(1, Ordering::AcqRel) == 0 {
-                    // Reentrant admission must survive the active callback and
-                    // another failed post when its continuation is scheduled.
-                    next.wake().expect("reentrant fallback admission");
-                } else {
-                    next.request_quit().expect("quit through fallback");
-                }
-            }))?;
-            // SAFETY: value-only identity of this native message-loop thread.
-            let thread = unsafe { windows::Win32::System::Threading::GetCurrentThreadId() };
-            worker_tx
-                .send(std::thread::spawn(move || {
-                    proxy.wake().expect("worker fallback admission");
-                    if finished
-                        .recv_timeout(std::time::Duration::from_secs(2))
-                        .is_err()
-                    {
-                        // SAFETY: this test-created loop has an initialized message
-                        // queue. The pointer-free watchdog message only ends that loop.
-                        unsafe {
-                            windows::Win32::UI::WindowsAndMessaging::PostThreadMessageW(
-                                thread,
-                                WM_QUIT,
-                                WPARAM(0),
-                                LPARAM(0),
-                            )
-                            .expect("watchdog quit");
-                        }
+        .run(crate::owner::app_delivery::testing::on_ready(
+            move |owner| {
+                let proxy = owner.proxy();
+                let next = proxy.clone();
+                owner.on_wake(Box::new(move || {
+                    if observed.fetch_add(1, Ordering::AcqRel) == 0 {
+                        // Reentrant admission must survive the active callback and
+                        // another failed post when its continuation is scheduled.
+                        next.wake().expect("reentrant fallback admission");
+                    } else {
+                        next.request_quit().expect("quit through fallback");
                     }
-                }))
-                .expect("worker handle");
-            Ok(())
-        }))
+                }))?;
+                // SAFETY: value-only identity of this native message-loop thread.
+                let thread = unsafe { windows::Win32::System::Threading::GetCurrentThreadId() };
+                worker_tx
+                    .send(std::thread::spawn(move || {
+                        proxy.wake().expect("worker fallback admission");
+                        if finished
+                            .recv_timeout(std::time::Duration::from_secs(2))
+                            .is_err()
+                        {
+                            // SAFETY: this test-created loop has an initialized message
+                            // queue. The pointer-free watchdog message only ends that loop.
+                            unsafe {
+                                windows::Win32::UI::WindowsAndMessaging::PostThreadMessageW(
+                                    thread,
+                                    WM_QUIT,
+                                    WPARAM(0),
+                                    LPARAM(0),
+                                )
+                                .expect("watchdog quit");
+                            }
+                        }
+                    }))
+                    .expect("worker handle");
+                Ok(())
+            },
+        ))
         .expect("native fallback loop");
     let _ = finish.send(());
     worker_rx
@@ -173,65 +177,67 @@ fn recovery(panics: bool, repeat_failure: bool) {
     let (healthy, health) = std::sync::mpsc::channel();
     let (watchdog_tx, watchdog_rx) = std::sync::mpsc::channel();
     Box::new(platform)
-        .run(Box::new(move |owner| {
-            let watchdog_quit = owner.proxy();
-            watchdog_tx
-                .send(std::thread::spawn(move || {
-                    if health
-                        .recv_timeout(std::time::Duration::from_secs(2))
-                        .is_ok()
-                    {
-                        // Leave more than two retry intervals idle after success.
-                        // A source that forgot to disarm produces extra callbacks.
-                        let _ = finish.recv_timeout(std::time::Duration::from_millis(250));
+        .run(crate::owner::app_delivery::testing::on_ready(
+            move |owner| {
+                let watchdog_quit = owner.proxy();
+                watchdog_tx
+                    .send(std::thread::spawn(move || {
+                        if health
+                            .recv_timeout(std::time::Duration::from_secs(2))
+                            .is_ok()
+                        {
+                            // Leave more than two retry intervals idle after success.
+                            // A source that forgot to disarm produces extra callbacks.
+                            let _ = finish.recv_timeout(std::time::Duration::from_millis(250));
+                        }
+                        let _ = watchdog_quit.request_quit();
+                    }))
+                    .expect("watchdog handle");
+                owner.on_wake(Box::new(move || {
+                    let source = kept(
+                        gate.shares("retry callback")
+                            .expect("live owner")
+                            .preferences,
+                    );
+                    let call = called.fetch_add(1, Ordering::AcqRel);
+                    if repeat_failure && call == 0 {
+                        assert!(
+                            source
+                                .sample_with(|| Err(PlatformError::Preferences {
+                                    message: "repeated getter failure".into(),
+                                }))
+                                .is_err()
+                        );
+                        return;
                     }
-                    let _ = watchdog_quit.request_quit();
-                }))
-                .expect("watchdog handle");
-            owner.on_wake(Box::new(move || {
-                let source = kept(
-                    gate.shares("retry callback")
-                        .expect("live owner")
-                        .preferences,
-                );
-                let call = called.fetch_add(1, Ordering::AcqRel);
-                if repeat_failure && call == 0 {
+                    source.sample().expect("native read recovers");
+                    observed.store(true, Ordering::Release);
+                    let _ = healthy.send(());
+                }))?;
+                // Registration saw a clean source. Only a failed later native read can
+                // make this owner wake; no input, user window, or redraw source exists.
+                // Inject a pending read without the notification wake being tested
+                // elsewhere, so only this read's failure can arrange a retry.
+                source.invalidate_for_retry_test();
+                if panics {
+                    assert!(
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            source.sample_with(|| panic!("injected native getter panic"))
+                        }))
+                        .is_err()
+                    );
+                } else {
                     assert!(
                         source
                             .sample_with(|| Err(PlatformError::Preferences {
-                                message: "repeated getter failure".into(),
+                                message: "injected getter failure".into(),
                             }))
                             .is_err()
                     );
-                    return;
                 }
-                source.sample().expect("native read recovers");
-                observed.store(true, Ordering::Release);
-                let _ = healthy.send(());
-            }))?;
-            // Registration saw a clean source. Only a failed later native read can
-            // make this owner wake; no input, user window, or redraw source exists.
-            // Inject a pending read without the notification wake being tested
-            // elsewhere, so only this read's failure can arrange a retry.
-            source.invalidate_for_retry_test();
-            if panics {
-                assert!(
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        source.sample_with(|| panic!("injected native getter panic"))
-                    }))
-                    .is_err()
-                );
-            } else {
-                assert!(
-                    source
-                        .sample_with(|| Err(PlatformError::Preferences {
-                            message: "injected getter failure".into(),
-                        }))
-                        .is_err()
-                );
-            }
-            Ok(())
-        }))
+                Ok(())
+            },
+        ))
         .expect("native loop");
     let _ = finished.send(());
     watchdog_rx

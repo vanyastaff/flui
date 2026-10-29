@@ -13,7 +13,8 @@ use crate::haptics::windows::WindowsHaptics;
 use crate::host::{Absent, Host, position};
 use crate::input::windows::InputWindows;
 use crate::lifecycle::notice::SystemNotices;
-use crate::lifecycle::windows::HostEvents;
+use crate::lifecycle::windows::{HostEvents, SessionWindows};
+use crate::owner::app_delivery::AppDelivery;
 use crate::owner::notices::NoticeChannel;
 use crate::owner::windows::broadcast::Subscriber;
 use crate::owner::windows::control::{OwnerLifecycle, OwnerObjects, OwnerPreferences, OwnerSeeds};
@@ -23,7 +24,8 @@ use crate::owner::windows::{
 use crate::platform::HostPlatform;
 use crate::preferences::windows::PreferenceSource;
 use crate::storage::UserDataDirs;
-use crate::text::windows::{TextServices, Tsf};
+use crate::text::windows::Tsf;
+use crate::version::gate::windows::WindowsBuild;
 use crate::window::config::WindowConfiguration;
 use crate::window::windows::proc::WindowProc;
 use crate::window::windows::{WindowSet, WindowsWindow};
@@ -39,7 +41,7 @@ impl Host for Windows {
     type Window = WindowsWindow;
     type Displays = WindowsLoop;
     type Input = WindowsLoop;
-    type Text = Rc<TextServices>;
+    type Text = Tsf;
     type Accessibility = WindowsAccessibility;
     type Clipboard = WindowsClipboard;
     type Drag = WindowsLoop;
@@ -54,34 +56,38 @@ impl WindowsHost for Windows {
     /// The text services, which hear a window's moves before its procedure
     /// answers them and answer nothing themselves; the window's own messages;
     /// its input (the mouse, pointers, wheel, keyboard and keyboard layout,
-    /// and the precision touchpad's hit test and pacing timer); and the drop
-    /// target, which only learns of each window created. The hooks list
-    /// disjoint messages (`the_window_hooks_answer_disjoint_messages`); what
-    /// none answers gets the default procedure. A created window activates
-    /// TSF, then gets its input with its touchpad viewport, then registers
-    /// its drop target.
+    /// and the precision touchpad's hit test and pacing timer); the session,
+    /// whose lock and unlock it answers; and the drop target, which answers
+    /// nothing. The hooks list disjoint messages
+    /// (`the_window_hooks_answer_disjoint_messages`); what none answers gets
+    /// the default procedure. A created window activates TSF, then gets its
+    /// input with its touchpad viewport, then hears its session, then
+    /// registers its drop target. The text services are the class's text,
+    /// which the window hands out.
     fn window_class() -> WindowClass {
         let input = InputWindows::new();
+        let text = Tsf::new();
         let hooks: WindowHooks = Rc::new([
-            Rc::new(Tsf) as Rc<dyn WindowMessages>,
+            Rc::clone(&text) as Rc<dyn WindowMessages>,
             Rc::new(WindowProc),
             Rc::clone(&input) as Rc<dyn WindowMessages>,
-            Rc::new(DropTargetRegistration),
+            Rc::new(SessionWindows::default()),
+            DropTargetRegistration::new(),
         ]);
-        WindowClass { hooks, input }
+        WindowClass { hooks, input, text }
     }
 
     fn preferences(owner: &OwnerSeeds<'_>) -> Result<Rc<dyn OwnerPreferences>, PlatformError> {
         Ok(Rc::new(PreferenceSource::new(owner.signal)?))
     }
 
-    fn notices() -> Arc<dyn NoticeChannel> {
-        Arc::new(SystemNotices::default())
+    fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {
+        Arc::new(SystemNotices::new(Arc::clone(app)))
     }
 
     fn lifecycle(owner: &OwnerSeeds<'_>) -> Rc<dyn OwnerLifecycle> {
         Rc::new(HostEvents::new(
-            Rc::clone(owner.handlers),
+            Arc::clone(owner.app),
             Arc::clone(owner.notices),
         ))
     }
@@ -119,9 +125,17 @@ impl HostPlatform<Windows> {
     /// [`PlatformError::Init`] when the owner thread's COM apartment, window
     /// class or owner window cannot be set up.
     pub fn new() -> Result<Self, PlatformError> {
-        Self::try_from_parts(WindowSet::new(WindowConfiguration::default()), |windows| {
-            WindowsLoop::new::<Windows>(Arc::clone(windows) as _)
-        })
+        Self::at_build(WindowsBuild::read())
+    }
+
+    /// The platform as it runs on `build`, which its windows' version gates
+    /// read: [`new`](Self::new) with the build the process runs on, and a
+    /// test with the build it names.
+    pub(crate) fn at_build(build: WindowsBuild) -> Result<Self, PlatformError> {
+        Self::try_from_parts(
+            |positions| WindowSet::new(WindowConfiguration::default(), positions, build),
+            |windows| WindowsLoop::new::<Windows>(Arc::clone(windows) as _),
+        )
     }
 }
 

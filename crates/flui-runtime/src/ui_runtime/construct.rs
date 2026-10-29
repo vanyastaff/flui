@@ -23,7 +23,7 @@ use flui_rendering::pipeline::PipelineCell;
 use flui_scheduler::AppLifecycleState;
 #[cfg(any(test, feature = "testing"))]
 use flui_scheduler::ClockSource;
-use flui_view::GlobalKeyScope;
+use flui_view::{BuildInProgress, GlobalKeyScope};
 use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -146,8 +146,13 @@ impl UiRuntime {
 
         let interaction_lane = InteractionLane::try_new()?;
         let global_key_scope = GlobalKeyScope::new();
-        let drag =
-            flui_interaction::drag::DragOwner::new(process_nonce, ui_runtime_id, data_transfer);
+        let build_in_progress = BuildInProgress::new();
+        let drag = flui_interaction::drag::DragOwner::new(
+            process_nonce,
+            ui_runtime_id,
+            data_transfer,
+            Arc::clone(&wake),
+        );
 
         let presentation = PresentationState::new(
             presentation_id,
@@ -155,6 +160,7 @@ impl UiRuntime {
             window,
             RuntimeCapabilities {
                 global_key_scope: global_key_scope.clone(),
+                build_in_progress: build_in_progress.clone(),
                 async_driver: owner_frame.async_driver(),
                 completion_scope: owner_frame.presentation_scope(),
                 interaction_dispatch_handle: interaction_lane.dispatch_handle(),
@@ -202,12 +208,14 @@ impl UiRuntime {
             interaction_lane,
             drag,
             global_key_scope,
+            build_in_progress,
             presentations: PresentationForest::single(presentation),
             focus_coordinator: FocusCoordinator::new(presentation_id),
             host_lifecycle: Cell::new(HostLifecycle::Observed(AppLifecycleState::Resumed)),
             start,
             clock,
             frame_time: Cell::new(None),
+            last_frame_time: Cell::new(None),
             needs_redraw,
             input_taps: crate::InputTaps::new(Arc::clone(&wake)),
             decision_recorder: super::recording::DecisionRecorder::default(),
@@ -266,7 +274,7 @@ impl UiRuntime {
     /// If the UI runtime's interaction lane cannot be created.
     #[cfg(any(test, feature = "testing"))]
     #[must_use]
-    pub fn for_test_with_window(window: Arc<dyn flui_platform::PlatformWindow>) -> Self {
+    pub fn for_test_with_window(window: Rc<dyn flui_platform::PlatformWindow>) -> Self {
         let identity = crate::runtime_services::next_identity();
         // The no-op `wake` still must set THIS SAME `needs_redraw` flag —
         // in production the two are the same fact through AppRuntime's

@@ -137,7 +137,7 @@ fn pixel_context(presentation: &PresentationState) -> DevicePixelRatio {
 /// The display the presentation's window is on, when its backend can say.
 fn current_display(presentation: &PresentationState) -> Option<DisplayId> {
     presentation
-        .with_window(|window| window.display_id())
+        .with_window(|window| window.state().display)
         .flatten()
 }
 
@@ -207,7 +207,9 @@ fn refresh(
         query = Some(
             presentation
                 .with_window(|window| window.gesture_geometry())
-                .unwrap_or(Err(PreferenceQueryError::Unavailable)),
+                .unwrap_or(Err(PreferenceQueryError::Unsupported(
+                    flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NoWindow),
+                ))),
         );
     });
     let mut diagnostic = None;

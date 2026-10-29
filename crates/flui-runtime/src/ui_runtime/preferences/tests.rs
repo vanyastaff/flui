@@ -1,10 +1,7 @@
 //! Synchronous same-presentation replacement is below OwnerHost's queued lease
 //! boundary. These private fixtures invoke the real query/diagnostic path.
 use super::*;
-use flui_foundation::{
-    ManualClock,
-    geometry::{Offset, Size},
-};
+use flui_foundation::{ManualClock, geometry::Offset};
 use flui_painting::TextSizing;
 use flui_platform::{Distance, PlatformWindow};
 use flui_view::prelude::*;
@@ -31,7 +28,7 @@ fn invoke(slot: &'static std::thread::LocalKey<Callback>) {
 }
 
 struct Window {
-    inner: Arc<dyn PlatformWindow>,
+    inner: Rc<dyn PlatformWindow>,
     answer: Mutex<Result<Option<GestureGeometry>, PreferenceQueryError>>,
     panic_query: AtomicBool,
 }
@@ -39,23 +36,14 @@ impl PlatformWindow for Window {
     fn id(&self) -> flui_platform::WindowId {
         self.inner.id()
     }
-    fn physical_size(&self) -> Size<i32> {
-        self.inner.physical_size()
-    }
-    fn logical_size(&self) -> Size<f64> {
-        self.inner.logical_size()
-    }
-    fn scale_factor(&self) -> f64 {
-        self.inner.scale_factor()
-    }
     fn request_redraw(&self) {
         self.inner.request_redraw();
     }
-    fn is_focused(&self) -> bool {
-        self.inner.is_focused()
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        self.inner.redraw_requester()
     }
-    fn is_visible(&self) -> bool {
-        self.inner.is_visible()
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        self.inner.surface_target()
     }
     fn set_cursor(
         &self,
@@ -63,23 +51,44 @@ impl PlatformWindow for Window {
     ) -> Result<(), flui_platform::CursorError> {
         self.inner.set_cursor(cursor)
     }
-    fn state(&self) -> flui_platform::WindowState {
-        let size = self.logical_size();
-        flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
+    fn set_frame_rate_hint(
+        &self,
+        hint: flui_platform::FrameRateHint,
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.inner.set_frame_rate_hint(hint)
     }
-
-    fn capabilities(&self) -> flui_platform::WindowCapabilities {
-        flui_platform::WindowCapabilities::NONE
+    fn set_input_regions(
+        &self,
+        regions: &[flui_platform::input_regions::InputRegion],
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.inner.set_input_regions(regions)
+    }
+    fn state(&self) -> flui_platform::WindowState {
+        self.inner.state()
     }
 
     fn apply(
         &self,
-        command: flui_platform::WindowCommand,
-    ) -> Result<(), flui_platform::WindowCommandError> {
-        command.admit(&flui_platform::WindowCapabilities::NONE)?;
+        command: flui_platform::AdmittedCommand,
+    ) -> Result<(), flui_platform::ApplyError> {
+        command.against(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
 
+    fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
+        None
+    }
+
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+        None
+    }
+
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
+        None
+    }
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        None
+    }
     fn gesture_geometry(&self) -> Result<Option<GestureGeometry>, PreferenceQueryError> {
         let answer = self.answer.lock().expect("query script").clone();
         let panic = self.panic_query.swap(false, Ordering::Relaxed);
@@ -133,9 +142,12 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
         )
     };
     for (in_query, panics) in [(true, false), (true, true), (false, false), (false, true)] {
-        let window = Arc::new(Window {
+        let window = Rc::new(Window {
             inner: flui_native::headless_platform()
-                .open_window(flui_platform::WindowOptions::default())
+                .open_window(
+                    flui_platform::WindowOptions::default(),
+                    flui_testing::window_handler::RecordingWindowHandler::new(),
+                )
                 .expect("window"),
             answer: Mutex::new(Ok(geometry(10.0))),
             panic_query: AtomicBool::new(false),
@@ -171,7 +183,7 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
             )
             .expect("root");
         let replacement = Rc::clone(&runtime);
-        let next_window = Arc::clone(&window);
+        let next_window = Rc::clone(&window);
         let next_clock = clock.clone();
         let callback = Box::new(move || {
             *next_window.answer.lock().expect("replacement") = Ok(geometry(2.0));
@@ -194,7 +206,9 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
             QUERY.with(|slot| *slot.borrow_mut() = Some(callback));
             window.panic_query.store(panics, Ordering::Relaxed);
         } else {
-            *window.answer.lock().expect("old query") = Err(PreferenceQueryError::Unavailable);
+            *window.answer.lock().expect("old query") = Err(PreferenceQueryError::Unsupported(
+                flui_platform::Unsupported::new(flui_platform::UnsupportedReason::Unavailable),
+            ));
             DIAGNOSTIC.with(|slot| *slot.borrow_mut() = Some(callback));
         }
         let old = SystemPreferences::default()
@@ -301,30 +315,21 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
 }
 
 struct HapticWindow {
-    inner: Arc<dyn PlatformWindow>,
+    inner: Rc<dyn PlatformWindow>,
     haptics: Arc<flui_platform::haptics::FakeHaptics>,
 }
 impl PlatformWindow for HapticWindow {
     fn id(&self) -> flui_platform::WindowId {
         self.inner.id()
     }
-    fn physical_size(&self) -> Size<i32> {
-        self.inner.physical_size()
-    }
-    fn logical_size(&self) -> Size<f64> {
-        self.inner.logical_size()
-    }
-    fn scale_factor(&self) -> f64 {
-        self.inner.scale_factor()
-    }
     fn request_redraw(&self) {
         self.inner.request_redraw();
     }
-    fn is_focused(&self) -> bool {
-        self.inner.is_focused()
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        self.inner.redraw_requester()
     }
-    fn is_visible(&self) -> bool {
-        self.inner.is_visible()
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        self.inner.surface_target()
     }
     fn set_cursor(
         &self,
@@ -332,20 +337,38 @@ impl PlatformWindow for HapticWindow {
     ) -> Result<(), flui_platform::CursorError> {
         self.inner.set_cursor(cursor)
     }
+    fn set_frame_rate_hint(
+        &self,
+        hint: flui_platform::FrameRateHint,
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.inner.set_frame_rate_hint(hint)
+    }
+    fn set_input_regions(
+        &self,
+        regions: &[flui_platform::input_regions::InputRegion],
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.inner.set_input_regions(regions)
+    }
     fn state(&self) -> flui_platform::WindowState {
         self.inner.state()
     }
-    fn capabilities(&self) -> flui_platform::WindowCapabilities {
-        self.inner.capabilities()
-    }
     fn apply(
         &self,
-        command: flui_platform::WindowCommand,
-    ) -> Result<(), flui_platform::WindowCommandError> {
+        command: flui_platform::AdmittedCommand,
+    ) -> Result<(), flui_platform::ApplyError> {
         self.inner.apply(command)
     }
     fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
         Some(self.haptics.clone())
+    }
+    fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
+        self.inner.text_input()
+    }
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
+        self.inner.system_chrome()
+    }
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        self.inner.drag_source()
     }
 }
 
@@ -358,9 +381,12 @@ pub(crate) fn haptics_preference_suppresses_both_tiers() {
         FakeHaptics, HapticOutcome, HapticPattern, HapticRequest, HapticTiming,
     };
     let haptics = Arc::new(FakeHaptics::new());
-    let window = Arc::new(HapticWindow {
+    let window = Rc::new(HapticWindow {
         inner: flui_native::headless_platform()
-            .open_window(flui_platform::WindowOptions::default())
+            .open_window(
+                flui_platform::WindowOptions::default(),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
             .expect("window"),
         haptics: haptics.clone(),
     });
@@ -450,9 +476,12 @@ pub(crate) fn frame_aligned_haptics_play_only_with_a_presented_frame() {
         SubmitVerdict::NoPresent,
     ] {
         let haptics = Arc::new(FakeHaptics::new());
-        let window = Arc::new(HapticWindow {
+        let window = Rc::new(HapticWindow {
             inner: flui_native::headless_platform()
-                .open_window(flui_platform::WindowOptions::default())
+                .open_window(
+                    flui_platform::WindowOptions::default(),
+                    flui_testing::window_handler::RecordingWindowHandler::new(),
+                )
                 .expect("window"),
             haptics: haptics.clone(),
         });

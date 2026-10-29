@@ -285,7 +285,10 @@ pub(crate) struct ScrollSequence {
     /// including the nearest [`OverscrollBehavior::Contain`] scrollable.
     post_end: usize,
     handoff: RemainderHandoff,
-    /// Per axis (`x`, `y`): the position the remainder is latched to.
+    /// Per axis (`x`, `y`) of the leaf's plane: the position the remainder is
+    /// latched to. The leaf's plane, not the presentation's, so a motion along
+    /// one of the leaf's axes latches that axis alone however the leaf is
+    /// rotated.
     latch: [Cell<Option<usize>>; 2],
     phase: Cell<Phase>,
     /// What the sequence ends with once its last run comes to rest.
@@ -498,7 +501,10 @@ impl ScrollSequence {
         }
         let update = {
             let mut idle_end = self.idle_end.borrow_mut();
-            if idle_end.is_none() {
+            if idle_end.as_ref().is_none_or(|armed| !armed.is_on(arena)) {
+                // Dropped first: the old arena withdraws its registration
+                // before the new one is made.
+                drop(idle_end.take());
                 *idle_end = IdleEnd::arm(arena, self);
             }
             let Some(timer) = idle_end.as_ref() else {
@@ -639,11 +645,6 @@ impl ScrollSequence {
         self.device_pixel_ratio.get()
     }
 
-    /// The presentation axis (`0` is `x`) the leaf's own `axis` runs along.
-    fn leaf_axis(&self, axis: usize) -> usize {
-        self.plane_at(0).root_axis(axis, self.focal())
-    }
-
     fn fling_step(
         &self,
         velocity: Vec2,
@@ -726,6 +727,11 @@ impl ScrollSequence {
                 continue;
             };
             let position = Some(index + 1);
+            let focal = self.focal();
+            // The latch is in the leaf's plane: the velocity crosses into it,
+            // keeps the axes this participant holds, and goes on to its own.
+            let leaf = self.plane_at(0);
+            let held = leaf.to_local_velocity(velocity, focal).unwrap_or(velocity);
             let along = |axis: usize, value: f64| {
                 if self.latch[axis].get() == position {
                     value
@@ -733,10 +739,11 @@ impl ScrollSequence {
                     0.0
                 }
             };
-            let velocity = Vec2::new(along(0, velocity.x), along(1, velocity.y));
+            let held = Vec2::new(along(0, held.x), along(1, held.y));
+            let velocity = leaf.to_root_velocity(held, focal).unwrap_or(held);
             let velocity = self
                 .plane_at(index + 1)
-                .to_local_velocity(velocity, self.focal())
+                .to_local_velocity(velocity, focal)
                 .unwrap_or(Vec2::ZERO);
             let _ = owner.settle_owed(self.id, self.device, velocity, recovery);
         }
@@ -830,7 +837,11 @@ impl ScrollSequence {
             };
             remaining = rest_of(remaining - taken, total);
         }
-        let offer = self.latch_mask(runner, remaining);
+        let frame = LatchFrame {
+            plane: planes[0],
+            focal,
+        };
+        let offer = self.latch_mask(&frame, runner, remaining);
         let mut taken = Vec2::ZERO;
         if let Some(local) = plane
             .to_local_delta(offer, focal)
@@ -841,13 +852,14 @@ impl ScrollSequence {
         }
         remaining = rest_of(remaining - taken, total);
         let mut at_edge = [false; 2];
+        let (taken_latch, offer_latch) = (frame.local(taken), frame.local(offer));
         for (axis, edge) in at_edge.iter_mut().enumerate() {
             let latched = self.latched(axis, runner);
-            if component(taken, axis) != 0.0 {
+            if component(taken_latch, axis) != 0.0 {
                 if latched.is_none() {
                     self.latch[axis].set(Some(runner));
                 }
-            } else if latched == Some(runner) && component(offer, axis) != 0.0 {
+            } else if latched == Some(runner) && component(offer_latch, axis) != 0.0 {
                 *edge = true;
             }
         }
@@ -857,10 +869,7 @@ impl ScrollSequence {
                 break;
             }
             let position = index + 1;
-            let offer = Vec2::new(
-                self.post_offer(0, position, runner, at_edge[0], remaining.x),
-                self.post_offer(1, position, runner, at_edge[1], remaining.y),
-            );
+            let offer = self.post_offers(&frame, position, runner, at_edge, remaining);
             let plane = planes[position];
             let Some(local) = plane
                 .to_local_delta(offer, focal)
@@ -904,16 +913,17 @@ impl ScrollSequence {
             let taken = root_taken(&plane, local_taken, local, offer, focal);
             remaining = rest_of(remaining - taken, total);
             below += taken;
+            let (taken_latch, offer_latch) = (frame.local(taken), frame.local(offer));
             for (axis, edge) in at_edge.iter_mut().enumerate() {
                 let latched = self.latched(axis, runner);
-                if component(taken, axis) != 0.0 {
+                if component(taken_latch, axis) != 0.0 {
                     if latched.is_none() || *edge {
                         // The first consumer latches; past a latched edge,
                         // the remainder moves up, never back.
                         self.latch[axis].set(Some(position));
                         *edge = false;
                     }
-                } else if latched == Some(position) && component(offer, axis) != 0.0 {
+                } else if latched == Some(position) && component(offer_latch, axis) != 0.0 {
                     *edge = true;
                 }
             }
@@ -983,16 +993,14 @@ impl ScrollSequence {
     /// Per axis of the leaf's own plane (`x`, `y`), whether the leaf itself
     /// holds the latch.
     pub(crate) fn leaf_holds(&self) -> [bool; 2] {
-        [0, 1].map(|axis| self.latch[self.leaf_axis(axis)].get() == Some(0))
+        [0, 1].map(|axis| self.latch[axis].get() == Some(0))
     }
 
     /// Whether a participant above the leaf holds the latch on the leaf's
     /// own `axis` (`0` is `x`): the leaf then runs no motion of its own on
     /// that axis, which settles where the latch is.
     pub(crate) fn held_above(&self, axis: usize) -> bool {
-        self.latch[self.leaf_axis(axis)]
-            .get()
-            .is_some_and(|position| position > 0)
+        self.latch[axis].get().is_some_and(|position| position > 0)
     }
 
     /// The step a participant in `plane` is offered: `available` in that
@@ -1023,12 +1031,40 @@ impl ScrollSequence {
     }
 
     /// What the runner may take: nothing on an axis latched above it.
-    fn latch_mask(&self, runner: usize, remaining: Vec2) -> Vec2 {
+    fn latch_mask(&self, frame: &LatchFrame, runner: usize, remaining: Vec2) -> Vec2 {
+        let local = frame.local(remaining);
         let open = |axis: usize, value: f64| match self.latched(axis, runner) {
             Some(position) if position != runner => 0.0,
             _ => value,
         };
-        Vec2::new(open(0, remaining.x), open(1, remaining.y))
+        let open = Vec2::new(open(0, local.x), open(1, local.y));
+        if open == local {
+            remaining
+        } else {
+            frame.root(open)
+        }
+    }
+
+    /// What the participant at `position` is offered of `remaining`: each
+    /// axis of the latch's frame by [`post_offer`](Self::post_offer).
+    fn post_offers(
+        &self,
+        frame: &LatchFrame,
+        position: usize,
+        runner: usize,
+        at_edge: [bool; 2],
+        remaining: Vec2,
+    ) -> Vec2 {
+        let local = frame.local(remaining);
+        let offered = Vec2::new(
+            self.post_offer(0, position, runner, at_edge[0], local.x),
+            self.post_offer(1, position, runner, at_edge[1], local.y),
+        );
+        if offered == local {
+            remaining
+        } else {
+            frame.root(offered)
+        }
     }
 
     /// What the participant at `position` is offered on `axis`.
@@ -1200,6 +1236,26 @@ fn rest_of(left: Vec2, total: Vec2) -> Vec2 {
     Vec2::new(clear(left.x), clear(left.y))
 }
 
+/// The frame a sequence's latch lives in: the leaf's plane at the step's
+/// focal point. A remainder crosses into it to be masked per axis and back,
+/// so the latch follows the leaf's own axes under a rotated or scaled
+/// subtree. A plane that cannot be crossed leaves the vector as it is, and
+/// the latch then reads the presentation's axes.
+struct LatchFrame {
+    plane: Plane,
+    focal: Point,
+}
+
+impl LatchFrame {
+    fn local(&self, root: Vec2) -> Vec2 {
+        self.plane.to_local_delta(root, self.focal).unwrap_or(root)
+    }
+
+    fn root(&self, local: Vec2) -> Vec2 {
+        self.plane.to_root_delta(local, self.focal).unwrap_or(local)
+    }
+}
+
 fn component(vector: Vec2, axis: usize) -> f64 {
     if axis == 0 { vector.x } else { vector.y }
 }
@@ -1252,15 +1308,19 @@ mod tests {
     use flui_animation::AnimationController;
     use flui_foundation::IdMint;
     use flui_foundation::geometry::{Axis, Point, Vec2};
-    use flui_interaction::InputSequenceId;
+    use flui_interaction::{GestureArena, InputSequenceId, RemainderHandoff};
+    use flui_platform::EventTime;
     use flui_platform::pointer::PointerKind;
 
-    use super::{ChainNode, Participant};
-    use crate::scroll::nested::{NestedScrollConnection, OverscrollBehavior, ScrollStep};
+    use super::{ChainNode, Participant, ScrollSequence};
+    use crate::scroll::nested::{
+        NestedScrollConnection, OverscrollBehavior, ScrollDevice, ScrollStep,
+    };
     use crate::scroll::scroll_owner::{OwnerConfig, OwnerEnv, ScrollOwner};
     use crate::scroll::{ClampingScrollPhysics, ScrollController};
 
     thread_local! {
+        #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
         static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
     }
 
@@ -1346,6 +1406,40 @@ mod tests {
             parent,
             super::PlaneSource::default(),
         ))
+    }
+
+    /// A presentation that swaps its gesture arena mid-sequence takes the
+    /// wheel sequence's idle deadline with it: the next packet arms it on the
+    /// new arena and the old one withdraws it, so the sequence still ends at
+    /// its latch's lapse instead of with the next sequence.
+    #[test]
+    fn idle_deadline_follows_the_arena_a_sequence_is_dispatched_on() {
+        let sequence = ScrollSequence::above(
+            None,
+            super::PlaneSource::default(),
+            IdMint::<InputSequenceId>::new()
+                .next()
+                .expect("a fresh mint issues"),
+            ScrollDevice::Pointer {
+                kind: PointerKind::Mouse,
+                device: None,
+            },
+            false,
+            RemainderHandoff::NextSequence,
+        );
+        let (old, new) = (GestureArena::new(), GestureArena::new());
+        let first = EventTime::from_nanos(100_000_000);
+        let second = EventTime::from_nanos(200_000_000);
+
+        sequence.lapse_at(&old, first);
+        assert_eq!(old.next_deadline(), Some(first), "armed on the first arena");
+
+        sequence.lapse_at(&old, second);
+        assert_eq!(old.next_deadline(), Some(second), "a packet moves it on");
+
+        sequence.lapse_at(&new, second);
+        assert_eq!(new.next_deadline(), Some(second), "the new arena has it");
+        assert_eq!(old.next_deadline(), None, "and the old one has let go");
     }
 
     /// A drag step through three links above the leaf (a connection, a

@@ -3634,22 +3634,22 @@ impl HoveringDrag {
         use flui_interaction::drag::{DragOwner, ProcessNonce};
         use flui_platform::DragDropEvent;
         use flui_platform::data_transfer::{
-            DataTransferOffer, OfferRecord, OfferTable, RepresentationDescriptor, TransferActions,
-            TransferFormat,
+            DataTransferOffer, RepresentationDescriptor, TransferActions, TransferFormat,
         };
 
         let owner = DragOwner::new(
             ProcessNonce::from_raw(std::num::NonZeroU64::new(7).expect("nonzero")),
             UiRuntimeId::new(7),
             Arc::new(flui_platform::NullDataTransferSource),
+            Arc::new(|| {}),
         );
         let representations: Arc<[RepresentationDescriptor]> =
             Arc::from(vec![RepresentationDescriptor {
                 format: TransferFormat::Text,
                 declared_len: None,
             }]);
-        let mut offers = OfferTable::new();
-        let id = offers.mint(OfferRecord::new(Arc::clone(&representations)));
+        // The id a source minted for the offer.
+        let id = flui_foundation::DataTransferId::new_gen(0, std::num::NonZeroU32::MIN);
         let offer = DataTransferOffer::new(id, representations);
         let drag = Self {
             owner,

@@ -488,7 +488,7 @@ fn shared_clip_snapshot_survives_segment_barriers_with_one_mask_budget() {
 
 /// Format used for all color-readback tests: plain UNorm so the stored bytes
 /// equal the sRGB-encoded bytes the shader emits 1:1 (no OETF on store),
-/// matching the production surface format chosen by `select_surface_format`
+/// matching the production surface format chosen by `select_sdr`
 /// and the usual onscreen convention.
 const READBACK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -766,7 +766,12 @@ fn retained_presentation_preserves_bytes_and_fallbacks() {
             let mut presenter =
                 crate::offscreen::OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue));
             presenter
-                .present_to_surface(&source, &destination, &view)
+                .present_to_surface(
+                    &source,
+                    &destination,
+                    &view,
+                    crate::surface_color::OutputEncoding::Identity,
+                )
                 .expect("presentation submits");
             let actual = readback_bytes(&device, &queue, &destination, 32 * scale, 16 * scale);
             for y in 0..16 * scale {

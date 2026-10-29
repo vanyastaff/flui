@@ -14,6 +14,138 @@
 
 #[cfg(windows)]
 pub(crate) use host_events::HostEvents;
+#[cfg(windows)]
+pub(crate) use session::SessionWindows;
+
+#[cfg(windows)]
+mod session {
+    //! The lifecycle's hook on FLUI's window class: each window hears its
+    //! session lock and unlock, decoded by [`messages`](super::messages), and
+    //! the hook tells the class's hooks of it as the window's step, which the
+    //! window follows (a locked session hides it).
+
+    // Win32 calls: each window's session notification. Each `unsafe` block
+    // states its invariant.
+    #![expect(unsafe_code)]
+
+    use std::rc::{Rc, Weak};
+
+    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows::Win32::System::RemoteDesktop::{
+        NOTIFY_FOR_THIS_SESSION, WTSRegisterSessionNotification, WTSUnRegisterSessionNotification,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::WM_NCDESTROY;
+
+    use super::messages::{HostEvent, HostMessage, WM_WTSSESSION_CHANGE, classify};
+    use crate::owner::windows::{
+        CreatedWindow, WindowMessages, WindowRef, WindowStep, WindowTable, window_step,
+    };
+
+    /// The session's part of FLUI's window class: what it keeps of each
+    /// window, from the window's creation to its destruction (or
+    /// `WM_NCDESTROY` for a window whose destruction was not announced).
+    #[derive(Default)]
+    pub(crate) struct SessionWindows {
+        windows: WindowTable<SessionWindow>,
+    }
+
+    /// One window as the session's hook keeps it.
+    struct SessionWindow {
+        /// The hooks of its class, which its lock and unlock are told to;
+        /// weak, since this hook is one of them.
+        hooks: Weak<[Rc<dyn WindowMessages>]>,
+        /// Whether the system took its subscription, which its destruction
+        /// gives back.
+        subscribed: bool,
+    }
+
+    /// Give back the subscription the hook made on `window`, which is still
+    /// being destroyed.
+    fn unsubscribe(window: WindowRef, kept: SessionWindow) {
+        if !kept.subscribed {
+            return;
+        }
+        // SAFETY: the subscription this hook made on the window, which is
+        // still being destroyed; a handle already gone only makes the call
+        // fail.
+        if let Err(error) = unsafe { WTSUnRegisterSessionNotification(window.hwnd()) } {
+            tracing::debug!(%error, "the session notification was already gone");
+        }
+    }
+
+    impl WindowMessages for SessionWindows {
+        /// Subscribe the window to its session's lock and unlock.
+        fn created(&self, window: &CreatedWindow) {
+            // SAFETY: the live window its class just created on this thread;
+            // the flag asks for this session's notifications only.
+            let subscribed = match unsafe {
+                WTSRegisterSessionNotification(window.hwnd, NOTIFY_FOR_THIS_SESSION)
+            } {
+                Ok(()) => true,
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        "session notifications unavailable: a locked session leaves the window visible"
+                    );
+                    false
+                }
+            };
+            self.windows.put(
+                window.window(),
+                SessionWindow {
+                    hooks: Rc::downgrade(&window.hooks),
+                    subscribed,
+                },
+            );
+        }
+
+        fn destroyed(&self, window: WindowRef) {
+            if let Some((window, kept)) = self.windows.take(window.identity()) {
+                unsubscribe(window, kept);
+            }
+        }
+
+        fn answers(&self, msg: u32, _wparam: WPARAM) -> bool {
+            msg == WM_WTSSESSION_CHANGE
+        }
+
+        /// The session locked or unlocked: the window takes the step. A
+        /// window's last message forgets what is left of a window whose
+        /// destruction was not announced (heard, not answered).
+        unsafe fn message(
+            &self,
+            hwnd: HWND,
+            msg: u32,
+            wparam: WPARAM,
+            lparam: LPARAM,
+        ) -> Option<LRESULT> {
+            if msg == WM_NCDESTROY {
+                if let Some((window, kept)) = self.windows.take_handle(hwnd) {
+                    unsubscribe(window, kept);
+                }
+                return None;
+            }
+            if msg != WM_WTSSESSION_CHANGE {
+                return None;
+            }
+            let locked = match classify(msg, wparam.0, lparam.0) {
+                HostMessage::Event(HostEvent::SessionLocked) => Some(true),
+                HostMessage::Event(HostEvent::SessionUnlocked) => Some(false),
+                _ => None,
+            };
+            if let Some(locked) = locked
+                && let Some(window) = self.windows.window_of(hwnd)
+                && let Some(hooks) = self
+                    .windows
+                    .read(window, |kept| kept.hooks.upgrade())
+                    .flatten()
+            {
+                window_step(&hooks, window, WindowStep::SessionLocked(locked));
+            }
+            Some(LRESULT(0))
+        }
+    }
+}
 
 #[cfg(windows)]
 mod host_events {
@@ -33,7 +165,6 @@ mod host_events {
     use std::{
         cell::{Cell, RefCell},
         ffi::c_void,
-        rc::Rc,
         sync::{
             Arc,
             atomic::{AtomicBool, Ordering},
@@ -65,8 +196,7 @@ mod host_events {
 
     use super::memory_watch::{HOLD_INTERVAL, MemoryWatch};
     use super::messages::{self, HostEvent, HostMessage, QueryAnswer};
-    use crate::owner::call_point::{Field, call};
-    use crate::owner::handlers::PlatformHandlers;
+    use crate::owner::app_delivery::AppDelivery;
     use crate::owner::notices::NoticeChannel;
     use crate::owner::panic_boundary::{AfterPanic, os_entry};
     use crate::owner::windows::broadcast::Subscriber;
@@ -81,7 +211,7 @@ mod host_events {
     /// The host's side of the receiver. `!Send`: it is created, used and dropped
     /// on the owner thread.
     pub(crate) struct HostEvents {
-        handlers: Rc<RefCell<PlatformHandlers>>,
+        app: Arc<AppDelivery>,
         notices: Arc<dyn NoticeChannel>,
         clock_origin: Instant,
         /// The window a shutdown-blocking reason is registered on, while one is.
@@ -99,12 +229,9 @@ mod host_events {
     }
 
     impl HostEvents {
-        pub(crate) fn new(
-            handlers: Rc<RefCell<PlatformHandlers>>,
-            notices: Arc<dyn NoticeChannel>,
-        ) -> Self {
+        pub(crate) fn new(app: Arc<AppDelivery>, notices: Arc<dyn NoticeChannel>) -> Self {
             Self {
-                handlers,
+                app,
                 notices,
                 clock_origin: Instant::now(),
                 blocking: Cell::new(None),
@@ -181,18 +308,15 @@ mod host_events {
             }
         }
 
-        /// Run the host's session-end hook. A panic in it answers `Proceed`: the
-        /// session must not hang on a broken subscriber.
+        /// Ask the application's handler about a phase of the session ending.
+        /// A panic in it answers `Proceed`, and so does a run with no handler:
+        /// the session must not hang on a broken subscriber.
         fn ask_session_end(&self, phase: SessionEndPhase) -> SessionEndAnswer {
-            // Through the call point: no borrow of the handler set is held while
-            // the hook runs, and a superseded hook is retired in a boundary of its
-            // own, so a capture that panics in `Drop` cannot turn the answer into
-            // the default one.
-            call(
-                &Field::new(&*self.handlers, |handlers| &mut handlers.session_end),
-                |hook| hook(phase),
-            )
-            .or_contain(SessionEndAnswer::Proceed, "the session-end hook")
+            // Through the call point: no borrow of the receiver is held while
+            // the handler runs.
+            self.app
+                .session_end(phase)
+                .or_contain(SessionEndAnswer::Proceed, "the session-end handler")
         }
 
         fn now(&self) -> std::time::Duration {

@@ -2,10 +2,9 @@
 //! the deadline redraws and the modal paints, the window position that opens
 //! them into it, and where a window opens and returns to (its placement).
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, rc::Rc, sync::Arc};
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use parking_lot::Mutex;
 use windows::Win32::{
     Foundation::{HWND, RECT},
     Graphics::Gdi::UpdateWindow,
@@ -14,14 +13,21 @@ use windows::Win32::{
     },
 };
 
-use flui_platform::{PlatformWindow, WindowCapabilities, WindowId, WindowOptions};
+use flui_platform::{
+    PlatformWindow, Unsupported, WindowCapabilities, WindowHandler, WindowId, WindowOptions,
+};
 
+use super::material::{self, SystemBackdrop};
 use super::proc::{WindowRef, to_screen, with_window_context_checked};
 use super::window::{WindowsWindow, window_capabilities};
+use crate::host::WindowPositions;
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
 use crate::owner::handlers::OpenWindows;
+use crate::owner::slot::OwnerCell;
 use crate::owner::windows::{ClassWindows, WindowsLoop};
+use crate::version::gate::Since;
+use crate::version::gate::windows::WindowsBuild;
 use crate::window::config::WindowConfiguration;
 
 /// The windows of FLUI's class the platform tracks, keyed by HWND, and the
@@ -33,17 +39,35 @@ use crate::window::config::WindowConfiguration;
 /// it when the window closes. Public where it is defined, as the host's table
 /// names it, and nameable only inside the crate.
 pub struct WindowSet {
-    by_handle: Mutex<HashMap<isize, Arc<WindowsWindow>>>,
+    /// The windows, on the owner thread: a window is not `Send`.
+    by_handle: OwnerCell<HashMap<isize, Rc<WindowsWindow>>>,
     pub(super) config: WindowConfiguration,
+    /// What every window hands out of the window-level positions.
+    pub(super) positions: WindowPositions<WindowRef>,
+    /// Whether the build the platform runs on draws a material behind a
+    /// window, read once with the platform.
+    pub(super) material: Result<Since<SystemBackdrop>, Unsupported>,
 }
 
 impl WindowSet {
-    /// No window yet; every window opens with `config`.
-    pub(crate) fn new(config: WindowConfiguration) -> Self {
+    /// No window yet; every window opens with `config` and hands out
+    /// `positions`, and draws a material as `build` allows.
+    pub(crate) fn new(
+        config: WindowConfiguration,
+        positions: WindowPositions<WindowRef>,
+        build: WindowsBuild,
+    ) -> Self {
         Self {
-            by_handle: Mutex::new(HashMap::new()),
+            by_handle: OwnerCell::new(),
             config,
+            positions,
+            material: material::gate(build),
         }
+    }
+
+    /// What every window of this platform honours and observes.
+    pub(super) const fn capabilities(&self) -> WindowCapabilities {
+        window_capabilities(&self.material)
     }
 
     /// Stops tracking the window `hwnd` names, when it is the one with
@@ -53,42 +77,55 @@ impl WindowSet {
         &self,
         hwnd: HWND,
         identity: crate::owner::windows::WindowIdentity,
-    ) -> Option<(Arc<WindowsWindow>, bool)> {
+    ) -> Option<(Rc<WindowsWindow>, bool)> {
         let key = hwnd.0 as isize;
-        let mut windows = self.by_handle.lock();
-        if windows
-            .get(&key)
-            .is_some_and(|window| window.identity == identity)
-        {
-            windows
-                .remove(&key)
-                .map(|window| (window, windows.is_empty()))
-        } else {
-            None
-        }
+        self.by_handle
+            .with(|windows| {
+                if windows
+                    .get(&key)
+                    .is_some_and(|window| window.identity == identity)
+                {
+                    windows
+                        .remove(&key)
+                        .map(|window| (window, windows.is_empty()))
+                } else {
+                    None
+                }
+            })
+            .flatten()
+    }
+
+    /// A snapshot of the windows, taken on the owner thread: what each of them
+    /// does next may run user code, which may open or close windows.
+    fn snapshot(&self) -> Vec<Rc<WindowsWindow>> {
+        self.by_handle
+            .with(|windows| windows.values().cloned().collect())
+            .unwrap_or_default()
     }
 }
 
 impl std::fmt::Debug for WindowSet {
-    // `try_lock`, never `lock`: `parking_lot::Mutex` is not reentrant and
-    // BLOCKS rather than panicking, so formatting this value while the same
-    // thread already holds the set would deadlock silently — and a Debug impl
-    // gets called from assertion messages and `tracing` fields, which is
-    // exactly where a lock is likely to be held. Same pattern
-    // `parking_lot::Mutex<T>: Debug` itself uses.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut out = f.debug_struct("WindowSet");
-        match self.by_handle.try_lock() {
-            Some(windows) => out.field("windows", &windows.len()),
-            None => out.field("windows", &format_args!("<locked>")),
+        // Off the owner thread the count is not there to read.
+        match self.by_handle.with(|windows| windows.len()) {
+            Some(windows) => out.field("windows", &windows),
+            None => out.field("windows", &format_args!("<owner's>")),
         };
-        out.field("config", &self.config).finish()
+        out.field("config", &self.config)
+            .field("positions", &self.positions)
+            .field("material", &self.material)
+            .finish()
     }
 }
 
 impl OpenWindows for WindowSet {
+    /// Asked on the owner thread; a set no window was ever stored into is
+    /// empty.
     fn is_empty(&self) -> bool {
-        self.by_handle.lock().is_empty()
+        self.by_handle
+            .with(|windows| windows.is_empty())
+            .unwrap_or(true)
     }
 }
 
@@ -98,14 +135,12 @@ impl ClassWindows for WindowSet {
     fn redraw_for_deadline(&self) {
         // Traverse a bounded identity snapshot without a per-frame Vec.
         // A minimized window's frame request runs user code, which may open
-        // or close windows; each owning Arc is cloned under the set's lock and
-        // used only after releasing it.
+        // or close windows; each owning `Rc` is cloned out of the set and used
+        // only after the set is let go.
         let Some(limit) = self
             .by_handle
-            .lock()
-            .values()
-            .map(|window| window.identity)
-            .max()
+            .with(|windows| windows.values().map(|window| window.identity).max())
+            .flatten()
         else {
             return;
         };
@@ -113,13 +148,17 @@ impl ClassWindows for WindowSet {
         loop {
             let next = self
                 .by_handle
-                .lock()
-                .values()
-                .filter(|window| {
-                    after.is_none_or(|after| window.identity > after) && window.identity <= limit
+                .with(|windows| {
+                    windows
+                        .values()
+                        .filter(|window| {
+                            after.is_none_or(|after| window.identity > after)
+                                && window.identity <= limit
+                        })
+                        .min_by_key(|window| window.identity)
+                        .cloned()
                 })
-                .min_by_key(|window| window.identity)
-                .cloned();
+                .flatten();
             let Some(window) = next else {
                 break;
             };
@@ -148,28 +187,25 @@ impl ClassWindows for WindowSet {
 
     fn paint_invalid(&self) {
         // A snapshot: a paint runs user code, which may open or close windows.
-        let painted: Vec<HWND> = self
-            .by_handle
-            .lock()
-            .values()
-            .map(|window| window.hwnd())
-            .collect();
-        for hwnd in painted {
+        for window in self.snapshot() {
             // SAFETY: a window this thread created; a handle closed by an
             // earlier paint fails the call harmlessly. Nothing is borrowed.
-            let _ = unsafe { UpdateWindow(hwnd) };
+            let _ = unsafe { UpdateWindow(window.hwnd()) };
         }
     }
 }
 
 impl crate::host::Window<WindowsLoop> for WindowsWindow {
     type Shared = WindowSet;
+    /// A window by its handle and the identity of its context.
+    type Ref = WindowRef;
 
     fn open(
         owner: &WindowsLoop,
         windows: &Arc<WindowSet>,
         options: WindowOptions,
-    ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
+        handler: Rc<dyn WindowHandler>,
+    ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
         if !owner.owner_control.signal.accepting() {
             return Err(OpenWindowError::OwnerGone {
                 rejected: Some(Box::new(options)),
@@ -190,27 +226,21 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
 
         let window = WindowsWindow::new(
             options,
+            handler,
             Arc::clone(windows),
             shares,
             owner.apartment.share(),
             Arc::clone(&owner.drag),
         )?;
         let hwnd_value = window.hwnd().0 as isize;
-        let this = WindowRef::new(window.hwnd(), window.identity);
-        let wake =
-            crate::owner::signal::OwnerSignal::input_wake(&owner.owner_control.signal, move || {
-                let _ = this.with_context("resume_input_delivery", |context| {
-                    context.callbacks.resume_input_delivery();
-                });
-            });
-        // The input set the window's capabilities when the class announced
-        // it; the wake resumes the input held behind them.
-        let _ = with_window_context_checked(window.hwnd(), "input_wake", |context| {
-            context.callbacks.set_input_wake(wake);
-        });
 
         // Store window
-        let _prev = windows.by_handle.lock().insert(hwnd_value, window.clone());
+        // A window opens on the owner thread alone (`shares` above), which
+        // built the set.
+        let _prev = windows
+            .by_handle
+            .with(|tracked| tracked.insert(hwnd_value, Rc::clone(&window)))
+            .expect("BUG: a window set is built on the owner thread that opens its windows");
 
         Ok(window)
     }
@@ -229,20 +259,14 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
         }
     }
 
-    fn capabilities(_: &WindowsLoop, _: &WindowSet) -> WindowCapabilities {
-        window_capabilities()
+    fn capabilities(_: &WindowsLoop, windows: &WindowSet) -> WindowCapabilities {
+        windows.capabilities()
     }
 
     fn frame_inset(_: &WindowsLoop, _: &WindowSet, _: f64) -> Size<f64> {
         // The frame is not measured before a window exists, so the host
         // reports the contract's default: no inset.
         Size::new(0.0, 0.0)
-    }
-
-    fn on_event(owner: &WindowsLoop, callback: Box<dyn FnMut(flui_platform::WindowEvent) + Send>) {
-        owner.register_handler("on_window_event", callback, |handlers| {
-            &mut handlers.window_event
-        });
     }
 }
 
@@ -441,6 +465,8 @@ mod open_tests {
         WindowOptions,
     };
 
+    use flui_testing::window_commands::AdmitAndApply as _;
+
     use super::open_spot;
     use crate::platform::Platform as _;
 
@@ -571,6 +597,7 @@ mod open_tests {
                 WindowOptions::default()
                     .with_size(Size::new(640.0, 480.0))
                     .with_visible(false),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
             )
             .expect("window");
         let state = window.state();
@@ -591,13 +618,16 @@ mod open_tests {
     fn a_size_set_while_maximized_is_the_size_restored_to() {
         let platform = crate::WindowsPlatform::new().expect("platform");
         let window = platform
-            .open_window(WindowOptions::default().with_visible(false))
+            .open_window(
+                WindowOptions::default().with_visible(false),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
             .expect("window");
         window
-            .apply(WindowCommand::SetMode(WindowMode::Maximized))
+            .admit_and_apply(WindowCommand::SetMode(WindowMode::Maximized))
             .expect("maximize");
         window
-            .apply(WindowCommand::SetSize(Size::new(500.0, 400.0)))
+            .admit_and_apply(WindowCommand::SetSize(Size::new(500.0, 400.0)))
             .expect("resize while maximized");
         assert_eq!(
             window.state().mode,
@@ -605,7 +635,7 @@ mod open_tests {
             "still maximized"
         );
         window
-            .apply(WindowCommand::SetMode(WindowMode::Normal))
+            .admit_and_apply(WindowCommand::SetMode(WindowMode::Normal))
             .expect("restore");
         let state = window.state();
         assert!(
@@ -626,11 +656,12 @@ mod open_tests {
                         Some(Point::new(120.0, 100.0)),
                         Size::new(700.0, 500.0),
                     ))),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
             )
             .expect("window");
         assert_eq!(window.state().mode, WindowMode::Maximized);
         window
-            .apply(WindowCommand::SetMode(WindowMode::Normal))
+            .admit_and_apply(WindowCommand::SetMode(WindowMode::Normal))
             .expect("restore");
         let outer = window.state().outer;
         assert!(
@@ -653,6 +684,7 @@ mod open_tests {
                     .with_size(Size::new(640.0, 480.0))
                     .with_position(Some(Point::new(150.0, 120.0)))
                     .with_visible(false),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
             )
             .expect("window");
         let normal = window.state().outer;
@@ -676,11 +708,11 @@ mod open_tests {
         };
 
         window
-            .apply(WindowCommand::SetMode(WindowMode::Maximized))
+            .admit_and_apply(WindowCommand::SetMode(WindowMode::Maximized))
             .expect("maximize");
         same_as_normal(window.state(), "a maximized window");
         window
-            .apply(WindowCommand::SetMode(WindowMode::Fullscreen))
+            .admit_and_apply(WindowCommand::SetMode(WindowMode::Fullscreen))
             .expect("fullscreen");
         same_as_normal(window.state(), "a fullscreen window entered from maximized");
     }

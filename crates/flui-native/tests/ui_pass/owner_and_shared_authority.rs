@@ -1,9 +1,9 @@
 use flui_native::{HostWindow, OwnerPlatform, SharedPlatform};
-use std::sync::Arc;
+use std::rc::Rc;
 
 fn assert_shared<T: Send + Sync + Clone>() {}
 
-fn owner_context(owner: &OwnerPlatform, window: &Arc<dyn HostWindow>) {
+fn owner_context(owner: &OwnerPlatform, window: &Rc<dyn HostWindow>) {
     let _shared: SharedPlatform = owner.shared();
     let _ = owner.text_store_host(window);
 }

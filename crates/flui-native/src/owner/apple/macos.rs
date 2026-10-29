@@ -3,7 +3,7 @@
 //! pump that actuates the registered wake deadline.
 //!
 //! [`MacOSLoop`] is the loop of the macOS host's table. It tracks the open
-//! windows as [`CallbackWindow`]s, the window feature's, without naming them
+//! windows as [`HostWindow`]s, the window feature's, without naming them
 //! ([`WindowRegistry`]); the clipboard and the other features keep their code
 //! in their own directories and reach the owner thread through what this
 //! module re-exports. The loop holds the displays, the preference source, the
@@ -15,6 +15,8 @@
 // application starts, is deprecated in favour of `activate`, a macOS 14 method.
 #![expect(deprecated)]
 
+pub(crate) mod content_view;
+pub(crate) mod display_pass;
 mod loop_control;
 pub(crate) mod observation;
 mod owner_lane;
@@ -24,7 +26,8 @@ pub(crate) use loop_control::LoopControl;
 #[cfg(test)]
 pub(crate) use owner_lane::test_owner_queue;
 pub(crate) use owner_lane::{
-    exec_async_guarded, exec_on_owner, on_owner_thread, owner_queue, run_cleanup_guarded,
+    exec_after_on_owner, exec_async_on_owner, exec_on_owner, on_owner_thread, owner_queue,
+    run_cleanup_guarded,
 };
 pub(crate) use wake_pump::WeakWakePump;
 
@@ -42,7 +45,7 @@ pub(crate) trait MacosHost: 'static {
     fn preferences(signal: &Arc<OwnerSignal>) -> Box<dyn SystemPreferenceSource>;
 
     /// The channel the host's system notices take to the application.
-    fn notices() -> Arc<dyn NoticeChannel>;
+    fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel>;
 
     /// The sources of those notices, for the loop whose channel is `notices`
     /// and whose control answers the terminate request; nothing listens until
@@ -51,6 +54,18 @@ pub(crate) trait MacosHost: 'static {
         notices: &Arc<dyn NoticeChannel>,
         control: &Arc<LoopControl>,
     ) -> Box<dyn NoticeSources>;
+
+    /// What each window's content view dispatches to: its input and its text
+    /// input, made with the view.
+    fn view_hooks() -> content_view::ViewHooks;
+}
+
+/// An AppKit rectangle as the geometry type the shared rules take.
+pub(crate) fn bounds_of(rect: objc2_foundation::NSRect) -> flui_foundation::geometry::Bounds<f64> {
+    flui_foundation::geometry::Bounds {
+        origin: flui_foundation::geometry::Point::new(rect.origin.x, rect.origin.y),
+        size: flui_foundation::geometry::Size::new(rect.size.width, rect.size.height),
+    }
 }
 
 /// The sources of the macOS host's system notices, which the loop starts once
@@ -82,43 +97,82 @@ pub(crate) trait HostDisplays: StaleOnWake {
     /// Mark the screens stale and wake the owner behind `signal` when AppKit
     /// reports a change of screen parameters, until the watch is dropped.
     fn observe(self: Arc<Self>, signal: &Arc<OwnerSignal>) -> Watch;
+
+    /// The macOS version the process runs on, read once (ADR-0244).
+    fn version(&self) -> crate::version::gate::apple::MacOSVersion;
 }
 
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, rc::Rc, sync::Arc};
 
 use flui_foundation::OwnerAffinity;
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSApplication, NSScreen};
-use parking_lot::Mutex;
 
 use crate::host;
-use crate::owner::handlers::CallbackWindow;
+use crate::host_window::HostWindow;
+
 use crate::{
     error::PlatformError,
     executor::BackgroundExecutor,
     owner::DirectOwnerHooks,
     owner::OwnerHooks,
     owner::OwnerPlatform,
+    owner::app_delivery::AppDelivery,
     owner::apple::NativeOwner,
-    owner::call_point::{Field, install},
-    owner::handlers::{PlatformHandlers, SessionEndHook},
     owner::notices::{LifecycleHooks, NoticeChannel, StaleOnWake},
     owner::signal::OwnerSignal,
+    owner::slot::OwnerMap,
     owner::sources::SystemPreferenceSource,
     owner::watch::Watch,
+    platform::AppHandler,
     platform::Platform,
     platform::PlatformExecutor,
-    platform::PlatformReadyCallback,
 };
 use flui_platform::{DisplayId, DisplaySnapshot, PlatformWindow, SystemPreferences};
 
 /// The windows the macOS loop tracks, keyed by `NSWindow` pointer: the window
 /// feature's, which the loop holds without naming them (ADR-0151 §10). Each
-/// window adds itself when it opens and removes itself when it goes; the loop
+/// window adds itself when it opens and removes itself when it closes; the loop
 /// asks them for frames from the wake pump and closes them when the
-/// application stops.
-pub(crate) type WindowRegistry = Arc<Mutex<HashMap<u64, Arc<dyn CallbackWindow>>>>;
+/// application stops. A window is not `Send` (ADR-0254 §5), so only the AppKit
+/// main thread, where every window is made, reaches the map; elsewhere it is
+/// empty.
+///
+/// The key only removes a window on its own close and is never looked up: a
+/// pointer the system reuses for a later window cannot reach an earlier one,
+/// since a window leaves the map before its `NSWindow` is released.
+pub(crate) type WindowRegistry = Arc<OwnerMap<u64, Rc<dyn HostWindow>>>;
+
+/// A macOS window as the features beside it reach it (ADR-0151 §3): its
+/// content view, whether it has closed, and the owner lane every AppKit
+/// message to it travels through. The table's text, accessibility and haptics
+/// positions make the window's part of them from this, as the window opens.
+///
+/// Public where it is defined, so the host table can name it as the window's
+/// reference; the module is private, so it is nameable only inside the crate.
+#[derive(Clone)]
+pub struct ContentViewRef {
+    /// The window's content view. Not retained: it lives as long as its
+    /// window, and `closed` says when a late message to it would be one to a
+    /// window AppKit has been told to tear down.
+    pub(crate) view: *mut objc2::runtime::AnyObject,
+    /// Set once the window has closed; shared with the window.
+    pub(crate) closed: Arc<std::sync::atomic::AtomicBool>,
+    /// The lane every AppKit message to the view travels through.
+    pub(crate) owner: &'static dispatch::Queue,
+    /// Whether `owner` is the main queue, so the main thread is the lane.
+    pub(crate) owner_is_main: bool,
+}
+
+impl std::fmt::Debug for ContentViewRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ContentViewRef")
+            .field("view", &self.view.addr())
+            .field("closed", &self.closed)
+            .finish_non_exhaustive()
+    }
+}
 
 /// The macOS host's loop: the state every position of its table reads.
 ///
@@ -130,10 +184,10 @@ pub struct MacOSLoop {
     /// Open windows (keyed by NSWindow pointer as u64)
     pub(crate) windows: WindowRegistry,
 
-    /// Platform event handlers
-    handlers: Arc<Mutex<PlatformHandlers>>,
+    /// What the loop delivers to the application's handler, which `run` binds.
+    app_delivery: Arc<AppDelivery>,
 
-    /// The landing place for the wake deadline `handlers.wake_deadline`
+    /// The landing place for the wake deadline the application's handler
     /// publishes — AppKit has no `ControlFlow::WaitUntil`, so this module
     /// actuates it (see `wake_pump`). Each window holds a `Weak` back
     /// to it and arms it from `request_redraw`.
@@ -163,6 +217,9 @@ pub struct MacOSLoop {
     /// Where sleep, wake, lock and memory notices go, and what a wake marks
     /// stale before the host hears of it.
     pub(crate) notices: Arc<dyn NoticeChannel>,
+
+    /// What each window's content view dispatches to, as the table made it.
+    pub(crate) view_hooks: content_view::ViewHooks,
 
     /// Records the event-loop owner thread so the thread-affine AppKit
     /// operations below can `debug_assert` their caller (ADR-0039).
@@ -198,9 +255,10 @@ pub(crate) fn debug_assert_appkit_main_thread(op: &'static str) {
 // `NativeOwner`, which only the main thread reads and which releases its value
 // there wherever the loop is dropped; the preference source and the notice
 // sources are read and started on the main thread only, and what they hold of
-// AppKit is notification-centre tokens, which any thread may remove; every
-// other field is `Arc`/`Mutex`-protected. `host::Loop: Send + Sync` requires
-// the wrapper to be shareable.
+// AppKit is notification-centre tokens, which any thread may remove; the
+// window map is reached by the owner thread alone; every other field is
+// `Arc`/`Mutex`-protected. `host::Loop: Send + Sync` requires the wrapper to be
+// shareable.
 unsafe impl Send for MacOSLoop {}
 // SAFETY: see `Send` above — interior mutability is Mutex-guarded, the
 // screen observer is reached only through a main-thread marker, and the raw
@@ -209,33 +267,16 @@ unsafe impl Sync for MacOSLoop {}
 
 impl std::fmt::Debug for MacOSLoop {
     // Hand-written: the remaining fields are raw platform handles and callback
-    // payloads with no useful Debug form.
-    //
-    // `try_lock`, never `lock`: `parking_lot::Mutex` is not reentrant and
-    // BLOCKS rather than panicking, so formatting this value while the same
-    // thread already holds `windows` would deadlock silently — and a Debug
-    // impl gets called from assertion messages and `tracing` fields, which is
-    // exactly where a lock is likely to be held. Same pattern
-    // `parking_lot::Mutex<T>: Debug` itself uses.
+    // payloads with no useful Debug form. The window count is the owner
+    // thread's; anywhere else the map reads empty.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut out = f.debug_struct("MacOSLoop");
-        match self.windows.try_lock() {
-            Some(windows) => out.field("windows", &windows.len()),
-            None => out.field("windows", &format_args!("<locked>")),
-        };
-        out.finish_non_exhaustive()
+        f.debug_struct("MacOSLoop")
+            .field("windows", &self.windows.keys().len())
+            .finish_non_exhaustive()
     }
 }
 
 impl MacOSLoop {
-    /// One of the application's handlers, as a slot of the handler set.
-    pub(crate) fn handler<H>(
-        &self,
-        project: fn(&mut PlatformHandlers) -> &mut Option<H>,
-    ) -> Field<'_, Mutex<PlatformHandlers>, H> {
-        Field::new(&*self.handlers, project)
-    }
-
     /// A loop over the displays `H` makes.
     ///
     /// # Errors
@@ -262,18 +303,16 @@ impl MacOSLoop {
             // Bind the fields the wake pump needs as locals first: the pump is
             // passed a wake closure over the window map, and both must exist
             // before the struct literal that owns them.
-            let windows: WindowRegistry = Arc::new(Mutex::new(HashMap::new()));
-            let handlers = Arc::new(Mutex::new(PlatformHandlers::default()));
-            let wake_pump = wake_pump::WakePump::new(Arc::clone(&handlers), {
+            let windows: WindowRegistry = Arc::new(OwnerMap::new());
+            let app_delivery = Arc::new(AppDelivery::new());
+            let wake_pump = wake_pump::WakePump::new(Arc::clone(&app_delivery), {
                 let windows = Arc::clone(&windows);
                 Box::new(move || {
-                    // Clone the window handles out and drop the guard
-                    // before messaging any of them: `request_redraw`
-                    // reaches the owner lane, and ADR-0038 §5's
-                    // discipline for re-entrant calls applies to a lock
-                    // held across one just as it does to the handler lock.
-                    let open: Vec<Arc<dyn CallbackWindow>> =
-                        windows.lock().values().cloned().collect();
+                    // The pump wakes on the owner thread, where the map is
+                    // reached. The handles are cloned out before any of them
+                    // is asked for a frame, so no borrow of the map is held
+                    // while a window runs (ADR-0038 §5).
+                    let open: Vec<Rc<dyn HostWindow>> = windows.values();
                     for window in open {
                         // A frame for a window whose surface is already
                         // gone is the renderer's to decline — this only
@@ -286,14 +325,14 @@ impl MacOSLoop {
 
             tracing::info!("macOS platform initialized with AppKit");
 
-            let loop_control = LoopControl::new(Arc::clone(&windows), Arc::clone(&handlers));
+            let loop_control = LoopControl::new(Arc::clone(&windows), Arc::clone(&app_delivery));
             let preferences = H::preferences(&loop_control.owner_signal);
             let displays = H::displays();
             let screen_observer = NativeOwner::new(
                 Arc::clone(&displays).observe(&loop_control.owner_signal),
                 mtm,
             );
-            let notices = H::notices();
+            let notices = H::notices(&app_delivery);
             notices.mark_held_stale_on_wake(Arc::downgrade(&displays) as _);
             let notice_sources = H::notice_sources(&notices, &loop_control);
             let platform = Self {
@@ -302,12 +341,13 @@ impl MacOSLoop {
                 notice_sources,
                 app,
                 windows,
-                handlers,
+                app_delivery,
                 wake_pump,
                 background_executor,
                 displays,
                 _screen_observer: screen_observer,
                 notices,
+                view_hooks: H::view_hooks(),
                 affinity: OwnerAffinity::new(),
             };
             // The constructor requires the main thread (checked above), so
@@ -323,24 +363,35 @@ impl host::Loop for MacOSLoop {
     fn run(
         self: Arc<Self>,
         platform: Arc<dyn Platform>,
-        on_finish_launching: PlatformReadyCallback,
+        handler: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError> {
         // Idempotent when `MacOSPlatform::new` already bound on this thread; trips
         // a debug assertion if `run` somehow migrated threads (ADR-0039).
         self.affinity.bind_current();
         debug_assert_appkit_main_thread("MacOSPlatform::run");
 
-        let ownership =
-            loop_control::LoopOwnership::acquire(&self.app, Arc::clone(&self.loop_control))?;
+        // The delivery holds the platform and the hooks weakly: they live in
+        // this frame, past the ownership guard that tells the handler of the
+        // quit as it drops.
         let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::with_signal(
             Arc::clone(&platform),
             Arc::clone(&self.loop_control.owner_signal),
         ));
-        on_finish_launching(OwnerPlatform::new(platform, hooks))
+        let ownership =
+            loop_control::LoopOwnership::acquire(&self.app, Arc::clone(&self.loop_control))?;
+        self.app_delivery.bind(handler, &platform, &hooks);
+        self.app_delivery
+            .resume_through_signal(&self.loop_control.owner_signal);
+        self.app_delivery
+            .ready(OwnerPlatform::new(
+                Arc::clone(&platform),
+                Arc::clone(&hooks),
+            ))
             .map_err(PlatformError::bootstrap)?;
-        // The sources start listening only now: the application has installed
-        // its hooks while it bootstrapped, and a notice that arrived earlier
-        // would find none and be lost.
+        // The handler is bound: the pump may ask it for its deadline.
+        self.wake_pump.arm();
+        // The sources start listening once the application has bootstrapped;
+        // a notice that arrived earlier waited for it.
         let notice_watch = self.notice_sources.listen();
         ownership.run();
         drop(notice_watch);
@@ -356,39 +407,8 @@ impl host::Loop for MacOSLoop {
         self.loop_control.quit();
     }
 
-    fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
-        install(&self.handler(|handlers| &mut handlers.quit), callback);
-    }
-
-    fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
-        install(&self.handler(|handlers| &mut handlers.exit_policy), hook);
-    }
-
     fn request_exit_policy_reevaluation(&self) {
         self.loop_control.request(false);
-    }
-
-    /// Unlike `winit`'s override (which hands the deadline to
-    /// `ControlFlow::WaitUntil`) and Android's (whose own loop checks it
-    /// once per iteration), AppKit's run loop is opaque and exposes neither —
-    /// so this backend *actuates* the deadline instead: the private
-    /// `wake_pump` module schedules a main-queue tick for it and asks the
-    /// windows for a frame
-    /// when it comes due. Storage is the identical
-    /// `PlatformHandlers::wake_deadline` slot the other two backends use, for
-    /// the same `Arc`-cloned-out-of-the-lock consultation discipline
-    /// (ADR-0038 §5) — which is why the pump, not this method, owns the call.
-    fn set_wake_deadline_hook(
-        &self,
-        hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
-    ) {
-        // Store under the lock, then arm OUTSIDE it: arming consults the hook,
-        // and the hook re-enters `flui-app` while taking gesture locks.
-        install(
-            &self.handler(|handlers| &mut handlers.wake_deadline),
-            Arc::from(hook),
-        );
-        self.wake_pump.arm();
     }
 }
 
@@ -470,20 +490,8 @@ impl host::Preferences<MacOSLoop> for MacOSLoop {
 /// session end is announced, and the control answers the terminate request.
 /// The lifecycle feature's position reaches the hooks through this.
 impl LifecycleHooks for MacOSLoop {
-    fn notices(&self) -> &dyn NoticeChannel {
-        &*self.notices
-    }
-
-    fn set_session_end_hook(&self, hook: SessionEndHook) {
-        install(&self.handler(|handlers| &mut handlers.session_end), hook);
-    }
-
     fn release_session_end(&self) {
         self.loop_control.session_end_released();
-    }
-
-    fn set_reopen_hook(&self, hook: Box<dyn FnMut() + Send>) {
-        self.loop_control.set_reopen(hook);
     }
 }
 

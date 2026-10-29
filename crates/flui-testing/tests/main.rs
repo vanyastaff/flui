@@ -47,6 +47,8 @@ mod log_capture;
 mod mount_bootstrap;
 #[path = "multi_presentation_clock.rs"]
 mod multi_presentation_clock;
+#[path = "owner_local_write_paths.rs"]
+mod owner_local_write_paths;
 #[path = "owner_scope.rs"]
 mod owner_scope;
 mod ownership_table;
@@ -68,6 +70,8 @@ mod scripts;
 mod self_rescheduling_local_post_frame;
 #[path = "text_store_kit.rs"]
 mod text_store_kit;
+#[path = "window_commands.rs"]
+mod window_commands;
 #[path = "window_conformance.rs"]
 mod window_conformance;
 #[path = "window_scale_factor.rs"]
@@ -112,6 +116,23 @@ fn headless_frame_driver_matrix() {
 }
 
 #[test]
+fn owner_local_write_paths() {
+    run_table(
+        "owner_local_write_paths",
+        &[
+            (
+                "owner_local_write_paths::nested_writer_source_inside_an_event_cx",
+                owner_local_write_paths::nested_writer_source_inside_an_event_cx as fn(),
+            ),
+            (
+                "owner_local_write_paths::nested_write_panics_inside_an_event_cx",
+                owner_local_write_paths::nested_write_panics_inside_an_event_cx,
+            ),
+        ],
+    );
+}
+
+#[test]
 fn containment_and_isolation_matrix() {
     run_table(
         "containment_and_isolation_matrix",
@@ -119,6 +140,7 @@ fn containment_and_isolation_matrix() {
             ("runtime_input_lifecycle::keyboard_coalesced_prefix_survives_reentrant_capture_release", runtime_input_lifecycle::keyboard_coalesced_prefix_survives_reentrant_capture_release as fn()),
             ("runtime_input_lifecycle::keyboard_barrier_keeps_frozen_coalesced_motion_before_reentrant_replacement", runtime_input_lifecycle::keyboard_barrier_keeps_frozen_coalesced_motion_before_reentrant_replacement as fn()),
             ("runtime_input_lifecycle::runtime_keyboard_barrier_preserves_scale_contacts_and_continuity", runtime_input_lifecycle::runtime_keyboard_barrier_preserves_scale_contacts_and_continuity as fn()),
+            ("runtime_input_lifecycle::pointer_frame_settles_a_pinch_once_for_both_contacts", runtime_input_lifecycle::pointer_frame_settles_a_pinch_once_for_both_contacts as fn()),
             ("runtime_input_lifecycle::keyboard_motion_barrier_uses_resolved_focus_owner_during_reentrant_focus_change", runtime_input_lifecycle::keyboard_motion_barrier_uses_resolved_focus_owner_during_reentrant_focus_change as fn()),
             ("runtime_input_lifecycle::ime_commit_observes_preceding_measured_motion", runtime_input_lifecycle::ime_commit_observes_preceding_measured_motion as fn()),
             ("runtime_input_lifecycle::ime_commit_survives_competing_motion_and_owner_failures", runtime_input_lifecycle::ime_commit_survives_competing_motion_and_owner_failures as fn()),

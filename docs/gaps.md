@@ -1,7 +1,7 @@
 # Where FLUI falls short
 
 > [!NOTE]
-> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-22 · **Change:** minor (entry 30, panic containment not gated, closed by `cargo xtask panic-boundary`, its Apple runs a bullet on entry 4, and entries 31–40 renumbered 30–39; entry 2: the desktop accessibility adapters are always on; previously minor: a bullet on entry 15, an Android touch held through Home; before that minor: entry 23, preferences polled on Android, closed and entries 24–41 renumbered 23–40; entry 14 retitled now that every host reads contrast and languages; previously minor: entries 39–41: add-to-app embedding, gamepad and D-pad, rotary input; before that minor: entries 32–38: live resize, present-mode and tearing control, launch handoff, quality-bar partials, power-aware pacing, the locale edge, accessibility bridge fidelity; a bullet each on entries 1, 14, 18, 24, 25, 26, 27, 28, 29 and 30; before that major: entries 23–31: the quality bar — polling, presentation feedback, HDR and colour, sandboxing, secure entry, latency modes, distribution, activation, panic gating)
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-28 · **Change:** minor (entries 5 and 10: the native Wayland host draws its own frame where the compositor draws none, its title bar, buttons and resize margins run on Weston 13; previously minor: entry 9: shown, minimized and occluded are three facts of the window snapshot; what of occlusion no run covers; previously minor: presentation feedback on macOS: the AppKit view's own `CAMetalLayer` reports each shown drawable, run on an M1 at 100 Hz, macOS ❌ to ✅; iOS tried and left `NotYetOnThisHost` after a blank Simulator run; previously minor: entry 9: a hand run of the AppKit window on an M1, macOS 27.0, two defects fixed and two mode findings recorded; previously minor: entry 24: every display carries its colour profile, read on every host but X11 and published as a snapshot revision when it changes, and the engine sets a surface up for it; no HDR display ran; previously minor: entry 23: Windows and the native Wayland host report presentation, the frame clock reads it; Apple, Android and winit still do not; previously minor: entries 5 and 29: Windows activates under the foreground rules, flashing where refused and handing the right only to the handler a link starts; the native Wayland host asks with an `xdg-activation` token, which names no input until its seats are bound; previously minor: entry 5: the native X11 host has its input, run with XTest on Xvfb; previously minor: entries 5 and 9: the native X11 host passes the window conformance under openbox on Xvfb, its input, text, clipboard, drag and drop and selection still owed; previously minor: entries 4 and 9: the AppKit window ran the window conformance on an M1, macOS 27.0, its hand checks still owed; entry 9: two AppKit mode findings from review (a transient `Normal` publish; admission against the published mode), not yet fixed; previously minor: entry 20: the contract has a window material, drawn on Windows and on macOS (type-checked), so Mica is a choice there; previously minor: entry 9: no close request on the Web and Android; previously minor: entry 9: Android cannot close its window; entry 4: the browser run of the window snapshot is owed; previously minor: entry 20: the macOS backdrop material and Liquid Glass are reachable through `flui::native::macos`, unrun; previously minor: entry 30, panic containment not gated, closed by `cargo xtask panic-boundary`, its Apple runs a bullet on entry 4, and entries 31–40 renumbered 30–39; entry 2: the desktop accessibility adapters are always on; previously minor: a bullet on entry 15, an Android touch held through Home; before that minor: entry 23, preferences polled on Android, closed and entries 24–41 renumbered 23–40; entry 14 retitled now that every host reads contrast and languages; previously minor: entries 39–41: add-to-app embedding, gamepad and D-pad, rotary input; before that minor: entries 32–38: live resize, present-mode and tearing control, launch handoff, quality-bar partials, power-aware pacing, the locale edge, accessibility bridge fidelity; a bullet each on entries 1, 14, 18, 24, 25, 26, 27, 28, 29 and 30; before that major: entries 23–31: the quality bar — polling, presentation feedback, HDR and colour, sandboxing, secure entry, latency modes, distribution, activation, panic gating)
 
 The work list. One entry per shortfall, ranked by how much it stops someone from choosing FLUI for a
 production app on that environment. Each entry says what is missing, the evidence, who it hurts and
@@ -22,7 +22,7 @@ request.
 | 6 | [Clipboard is broken on three environments](#6-clipboard-is-broken-on-three-environments) | Android, Wayland, Web; all for rich | Every app with copy and paste |
 | 7 | [File dialogs, open URL, reveal, trash, message box and share exist on Windows only, or nowhere](#7-file-dialogs-open-url-reveal-trash-message-box-and-share-exist-on-windows-only-or-nowhere) | all | Every document app; any app with a link |
 | 8 | [No native drag and drop](#8-no-native-drag-and-drop) | all | Document, media and file-manager apps |
-| 9 | [Window control has run only on Windows and an X11 test server](#9-window-control-has-run-only-on-windows-and-an-x11-test-server) | desktop | Every desktop app |
+| 9 | [Window control has run only on Windows, an X11 test server and the AppKit conformance kit](#9-window-control-has-run-only-on-windows-an-x11-test-server-and-the-appkit-conformance-kit) | desktop | Every desktop app |
 | 10 | [No custom title bar, popups or owned windows](#10-no-custom-title-bar-popups-or-owned-windows) | desktop | Apps with modern chrome; every menu and dropdown |
 | 11 | [No native menus](#11-no-native-menus) | macOS, iPadOS; Windows | Every macOS app |
 | 12 | [Lifecycle holes](#12-lifecycle-holes) | all | Apps that save state or hold resources |
@@ -36,7 +36,7 @@ request.
 | 20 | [Window looks](#20-window-looks) | desktop; mobile for capture | Apps with a native look; apps showing sensitive data |
 | 21 | [Unaudited rows](#21-unaudited-rows) | desktop, Web | Unknown |
 | 22 | [Version floors not enforced, and one GPU backend per environment](#22-version-floors-not-enforced-and-one-gpu-backend-per-environment) | all | Users on older systems or GPUs without Vulkan or WebGPU |
-| 23 | [No presentation feedback](#23-no-presentation-feedback) | all | Every animated app; every latency claim |
+| 23 | [No presentation feedback](#23-no-presentation-feedback) | iOS, Android, winit | Every animated app; every latency claim |
 | 24 | [No HDR, wide gamut or colour management](#24-no-hdr-wide-gamut-or-colour-management) | all | Photo, video and design apps; every app on an HDR display |
 | 25 | [Sandbox-aware file access is absent](#25-sandbox-aware-file-access-is-absent) | all desktop and mobile | Every app distributed through a store or Flatpak |
 | 26 | [Secure text entry and concealed clipboard entries are absent](#26-secure-text-entry-and-concealed-clipboard-entries-are-absent) | all | Every sign-in form; password managers |
@@ -61,7 +61,8 @@ request.
 > **Environments:** iOS, Android, Web · **Who it hurts:** Every app with a text field · **Parity:** [Text input](platform-parity.md#text-input)
 
 - No IME connection, soft keyboard, keyboard insets or input hints.
-- **Missing on iOS:** no `UITextInput`.
+- **Runs on iOS:** an invisible `UITextInput` responder (ADR-0255 decision 11) takes the system keyboard when a field takes focus and turns its edits into composition and commits; on the iOS 27.1 Simulator the Japanese Romaji and nine-key Pinyin keyboards composed `日本語` and `你好` into an `EditableText` (2026-10-28).
+- **Missing on iOS:** the shared text-store host behind the responder (until it serves the field's text and layout, the responder answers `firstRectForRange:` and `caretRectForPosition:` with the field's caret area whatever the range, `selectionRectsForRange:` with no rects, and tells the field only edits at its caret), `UITextInteraction`'s selection UI, input hints, keyboard insets, hiding the keyboard checked on screen and a run on a device. The field draws kana and kanji as missing-glyph boxes on the Simulator: its font fallback has no CJK face there.
 - **Runs on Android:** it serves fields through `FluiView`'s `InputConnection` (ADR-0247), run with Samsung Keyboard on a Galaxy S21 (composition, commit, Escape, the action key, the keyboard shown and hidden, and through a manual Android run a field submitted by Done while the keyboard still composed).
 - **Missing on Android:** never run with Gboard, `CursorAnchorInfo` placement, keyboard insets, paste through `OnReceiveContentListener` or stylus handwriting.
 - **Runs on the Web:** it now serves fields through `EditContext` or a hidden textarea, run only through Chrome's own input-method path in headless Chrome.
@@ -73,8 +74,9 @@ request.
 > **Environments:** iOS, Android, Web; desktop · **Who it hurts:** Blind and low-vision users; anyone who must meet accessibility law · **Parity:** [Accessibility](platform-parity.md#accessibility)
 
 - Desktop is always on but untested with a screen reader.
-- AccessKit has iOS and Android adapters but none for the Web (it needs a parallel ARIA DOM).
-- When they are wired, the semantics identifier (ADR-0240) must reach Android's `viewIdResourceName`, iOS's `accessibilityIdentifier` and a `data-flui-id` DOM attribute, as it reaches `AutomationId`, `AXIdentifier` and AT-SPI's id through `author_id` on the desktop.
+- **Runs on iOS:** every UIKit window answers UIAccessibility through `accesskit_ios`'s low-level adapter, and the semantics identifier reaches `accessibilityIdentifier`; on the iOS Simulator an XCUITest client read the tree, found a button by its identifier and pressed it (2026-10-28). No VoiceOver session ran, and no AccessKit action was sent.
+- AccessKit has an Android adapter, not yet wired, and none for the Web (it needs a parallel ARIA DOM).
+- When they are wired, the semantics identifier (ADR-0240) must reach Android's `viewIdResourceName` and a `data-flui-id` DOM attribute, as it reaches `AutomationId`, `AXIdentifier`, AT-SPI's id and iOS's `accessibilityIdentifier` through `author_id`.
 - The runs read one control, not a Narrator, VoiceOver or Orca session.
 - No locked adapter routes custom actions or `ShowContextMenu`, so gesture alternatives (ADR-0216) keep a control on every path.
 
@@ -94,11 +96,23 @@ request.
 - Device checks exist for a handful of rows, and the macOS and iOS drivers are Python and Swift.
 - Display runs still owed:
   - the macOS and iOS display sources (type-checked, never run)
-  - the macOS and iOS window lifecycle (window state and commands, sleep, lock, session end, memory pressure; [#1736](https://github.com/vanyastaff/flui/issues/1736))
+  - the macOS window by hand: the AppKit window conformance kit passes on an M1, macOS 27.0,
+    2026-10-27 (nextest flui-native 233/233; the fixture after review: appkit_window 3/3, nextest
+    flui-native 237/237, 2026-10-27), and [#1736](https://github.com/vanyastaff/flui/issues/1736)
+    still lists a drag, the y-axis and a second display; the green button, Cmd-M and the Dock;
+    opening options; displays (UUID and bounds); sleep, lock and memory-pressure notices; session end
+  - the iOS window lifecycle (the memory warning and `applicationWillTerminate:`)
   - a window moved between two monitors on every host but Windows
   - unplugging a monitor on Windows
+  - in a browser, the page moved to another screen changing the window snapshot's `display`, and
+    a `freeze`/`resume` and a canvas focus change each arriving as one `WindowHandler::state_changed`: the
+    Node suite covers them against a fake page, no browser run yet
 - The panic boundary's Apple entries (AppKit and UIKit methods, blocks, GCD work items) are
   type-checked only: no panic has been seen contained on a Mac or an iPhone
+  ([#1840](https://github.com/vanyastaff/flui/issues/1840)).
+- The macOS extension `flui::native::macos` is type-checked only: neither the backdrop material
+  behind the content, nor Liquid Glass (`NSGlassEffectView`, macOS 26), nor the narrowing of an
+  AppKit window to its view has run on a Mac
   ([#1840](https://github.com/vanyastaff/flui/issues/1840)).
 - A macOS display whose current mode reports 0 Hz (some built-in panels) has no period and paces at the 60 Hz default, because the `CVDisplayLink` fallback is not written.
 
@@ -107,10 +121,14 @@ request.
 > **Environments:** Wayland, X11 · **Who it hurts:** Linux users · **Parity:** [Summary](platform-parity.md#summary)
 
 - It replaces the winit fallback.
+- **X11 has its own host now** (`X11Platform`): one libxcb connection read by a loop on the owner thread, which waits with no timeout but the application's wake deadline; windows that publish what the server and the window manager hold, take every window command, and honour what the window manager supports; the RandR displays, the Settings portal, logind and memory pressure, and an AT-SPI bridge per window. Ran on WSL Ubuntu 24.04 under Xvfb with openbox, 2026-10-27: the window conformance, a mode set before mapping, the window manager's close asked of the handler, a frame asked for on another thread waking an idle loop, the exit with the last window and a wake deadline delivered once. Its input is XInput 2 (pointers, touch, pens, unphased smooth scrolling), XKB (keys, compose, the layout and its changes) and the cursor theme; XTest's pointer, buttons, wheel and keys ran through it on the same server (2026-10-28) and replay from a native recording, while touch, pens and smooth scrolling are checked by the decoder alone, since Xvfb has no such device. **Still missing on it:** text input, the clipboard and drag and drop, which come with the host's later parts; a run on a desktop X server with a touchscreen, a tablet and a touchpad.
+- The X11 host's pen, touch, smooth scrolling, touchpad pinch (XInput 2.4, which Xvfb announces), a grab's cancel mid-press and the device hierarchy (a device unplugged and plugged back in) are tested only synthetically: their XInput 2 events are built by the decoder's tests and the conformance table, never produced by a server, since Xvfb has no touch screen, tablet or touchpad and XTest drives only the core pointer and keyboard. Swipes are not delivered, as on Wayland. `current_platform` picks it for an X11 session only when winit is not built, and `flui-app` builds winit on Linux.
+- The native Wayland host has its foundation (`WaylandPlatform`): the loop, `xdg-shell` windows with the snapshot and commands, displays, preferences, lifecycle and AT-SPI, run against a headless Weston. Its windows ask the compositor for their frame (`xdg-decoration`), draw at a fractional scale (`wp_fractional_scale_v1`), are given no frame while suspended, and are exported for a portal's parent (`xdg-foreign` v2); the AT-SPI bridge follows the compositor's activation. A window moved between two outputs of one scale names the display it moved to, run 2026-10-28 on Weston 13 with two outputs (X11 backend on Xvfb). Weston offers none of `xdg-decoration`, `wp_fractional_scale_v1` and `xdg-foreign`; the three ran on a headless sway 1.9 at scale 1.5, 2026-10-28 (WSL Ubuntu 24.04): sway honoured a floating window's frame request and overruled a tiled one's, the buffer was drawn at 1.5, and a second client imported the export and saw it revoked with the window. A tiled window takes no `SetSize`, as the tiling holds its size. Under sway the window conformance still fails on `SetMode(Maximized)`, which sway (`xdg_wm_base` v2, no `wm_capabilities`) ignores and the window cannot know in advance. Its windows ask to be activated with an `xdg-activation` token, which names the last key, button, touch or keyboard focus the seats report (entry 29). Its seats deliver input: keyboard through XKB (layout, compose and client-side repeat, read through the keyboard the X11 host shares), pointer and wheel, touch, pens (`tablet-v2`), pinches (`pointer-gestures`) and cursors (`cursor-shape`); the cursor, a click, a wheel notch and a key ran from a Weston seat, while touch, pens and pinches have run through their translation tests only, with no device, and no cursor shape has run: Weston 13 has no `cursor-shape`, so the cursor ran from the cursor theme (`XCURSOR_THEME`, `XCURSOR_SIZE`), the fallback for such compositors. A tablet pad's buttons, rings and strips are not read. Where the compositor draws no frame, the window draws its own (entry 10). Missing there: text input, clipboard, drag and drop, the portal parent reaching a capability crate (the contract's window reference does not carry it yet), and a run under a desktop compositor (GNOME, KDE, Hyprland). `current_platform` picks winit while it is built, which `flui-app` does on Linux.
+- A Wayland window opened with `visible: false` cannot be hidden: Wayland has no hide for a toplevel, so it stays unshown only until it draws its first frame, and no command shows or hides it later (`hides`/`shows` are `Unavailable`).
 - winit leaves the clipboard inert on pure Wayland, reports no occlusion on Wayland, has no pen, no pinch and no window bounds.
 - winit reports no event when a window crosses to another Wayland output of equal scale (the `wl_surface.enter` events belong to its connection).
 - FLUI asks every Wayland window's monitor again when the loop goes idle, never run with a window moved between two outputs.
-- Under Hyprland (Omarchy's compositor) the host takes the decoration the compositor chooses through `zxdg_decoration_manager_v1` (no title bar of its own), presents an alpha surface so the compositor's blur applies, and scales through `wp_fractional_scale_v1` and `wp_viewporter`; none of it exists, and winit draws its own decorations there.
+- Under Hyprland (Omarchy's compositor) the host takes the decoration the compositor chooses through `zxdg_decoration_manager_v1` (no title bar of its own), presents an alpha surface so the compositor's blur applies, and scales through `wp_fractional_scale_v1` and `wp_viewporter`. The native Wayland host does the decoration and the scale (not run under Hyprland); the alpha surface does not exist, and winit, which `flui-app` picks, draws its own decorations there.
 
 ### 6. Clipboard is broken on three environments
 
@@ -139,16 +157,27 @@ request.
 - **Still missing:** `NSDraggingDestination` and every other native drag source and target.
 - Planned in the [interaction spec](plans/specs/flui-interaction/completeness/tasks.md) (ADR-0211; T28–T31, T35, T37 and the per-OS tickets).
 
-### 9. Window control has run only on Windows and an X11 test server
+### 9. Window control has run only on Windows, an X11 test server and the AppKit conformance kit
 
 > **Environments:** desktop · **Who it hurts:** Every desktop app · **Parity:** [Windows](platform-parity.md#windows)
 
 - **Runs:** title, mode, fullscreen, position, size and constraint commands with a state readback ship on every desktop host ([ADR-0237](adr/ADR-0237-window-state-and-host-notices.md)).
-- **Missing:** macOS carries them out and reads them back type-checked only, never run ([#1736](https://github.com/vanyastaff/flui/issues/1736)).
-- X11 ran only on an Xvfb server with the test standing in for the window manager.
+- **macOS:** the AppKit window conformance kit passes on an M1, macOS 27.0, 2026-10-27 (nextest flui-native 233/233); the fixture after review: appkit_window 3/3, nextest flui-native 237/237, 2026-10-27. A hand run on the same Mac, 2026-10-28, one display: every command and opening option, a title-bar drag (the position follows, y grows downward, the top stops under the menu bar at y = 30), the green button (full screen) and Option-click (zoom and back), the yellow button, a Dock click (`reopen`, then `Show` brings the window back), a corner resize held to the constraints, the title-bar close of one of two windows, a borderless window taking keys, a quit Apple Event ([#1736](https://github.com/vanyastaff/flui/issues/1736)). A minimized window read `visible: false` and `SetSize` went below the minimum; both are fixed. Still owed: a second display; sleep, lock and memory-pressure notices; session end.
+  - **A window at its maximum size reads `Maximized`.** AppKit's `isZoomed` holds for any frame equal to the standard frame, which the window's maximum size bounds, so a window resized by hand or by `SetSize` to its constraints' maximum (900×700 on a 3440×1320 usable area) publishes `Maximized` with a `normal_geometry`, though it does not fill the usable area. Win32's `IsZoomed` stays false for a window dragged to its maximum. Telling a zoom from a frame that equals the standard one needs a decision on what the backend tracks.
+  - **`normal_geometry` after a macOS tile is stale.** Dragging a window to the top edge fills the screen through the system's tiling, which no delegate method reports; the window reads `Maximized` with the `normal_geometry` recorded before its last move, while AppKit returns it to where it was dragged from.
+  - **A transient `Normal` publish on leaving full screen.** `windowDidExitFullScreen:` publishes the window before AppKit puts back the frame it had before full screen; only the held mode waits for the owner lane's next turn. A window zoomed before full screen therefore publishes `Normal` for a moment before it publishes `Maximized`. The final state is correct, seen on an M1, macOS 27.0: without a subscriber command the window comes back maximized, and with a subscriber's `SetMode(Normal)` it ends normal and unzoomed. Proposed fix: defer the publish with the held mode. Reported on [#1736](https://github.com/vanyastaff/flui/issues/1736).
+- X11 through winit ran only on an Xvfb server with the test standing in for the window manager. The native X11 host's window passes the window conformance under openbox on Xvfb (2026-10-27), the snapshot compared with what the server reads back; not yet under a desktop's window manager or on a HiDPI server.
 - winit cannot read a title back on Linux, so the snapshot holds the one last set.
 - Wayland never reports minimized.
+- **Occlusion.** Every host keeps the window's show state (`visible`), its minimized mode and its occlusion (`occluded`) apart, and a minimized window stays shown; the conformance checks that without a readback of the host's own. What no run covers: a covering by another window on Win32, which reports none (a cloak and a locked session it does), on a native X11 window manager, which reports it only as an event the conformance cannot read back, and on AppKit by hand; Cmd-H on macOS takes `isVisible` from the application's windows, so a hidden application reads as hidden, not occluded.
 - Placement restore ran only on Windows; live resize is not audited.
+- **The snapshot against the window system** (`window_conformance`'s `the_snapshot_agrees_with_the_window_system`: metrics, focus, activation, visibility and capabilities read back by the fixture's own means) ran on headless, on Win32 and on AppKit (an M1, macOS 27.0, 2026-10-27).
+  - winit: not run; the real-loop harness runs a scenario on a worker thread, while the fixture's `apply` and `settle` need owner turns between commands.
+  - UIKit: not run, type-checked only, queued in [#1840](https://github.com/vanyastaff/flui/issues/1840).
+  - Web: not run; the browser suite has no fixture that reads the canvas back apart from the window.
+  - Android: not run; the conformance needs a device fixture.
+- **Android cannot close its window:** `WindowCommand::Close` is `Unavailable` there (one native window, which the application does not finish), so a programmatic close answers `CloseRequestError::Refused`.
+- **No close request on the Web and Android:** neither host ever asks a window handler's `close_requested` (a page's unload and an Activity's finish are not requests the application can refuse), so an application's close veto never runs there.
 
 ### 10. No custom title bar, popups or owned windows
 
@@ -157,12 +186,13 @@ request.
 - Undecorated Windows windows can't be dragged or resized.
 - No caption hit-testing or snap layouts.
 - Menus, tooltips and dropdowns can't leave the window.
+- On Wayland, where the compositor draws no frame (GNOME, Weston) or leaves it to the client, the native host's window draws its own: a title bar with the title and the buttons `wm_capabilities` offers, margins it is resized from, moved and resized through `xdg_toplevel.move`/`resize` with the press's serial, and the compositor's window menu on a secondary press. It ran on Weston 13's desktop shell (X11 backend on Xvfb, XTest, 2026-10-28): the bar read back from the screen, a drag moved and a corner resized the window, the buttons maximized and closed it. **Still missing:** it is the host's own neutral frame, light or dark after the desktop, not the application's title bar (no caption hit-testing for a frame drawn by the interface, as on Windows above); no touch or pen drags it; no shadow is drawn; the window menu, tiled edges and a fractional scale have not run (Weston 13 has no window menu or tiling, sway draws its own frames), nor has GNOME. Its title is shaped over the bundled faces and the host's, read by a scan of its own, which an application's font collection does not share yet.
 
 ### 11. No native menus
 
 > **Environments:** macOS, iPadOS; Windows · **Who it hurts:** Every macOS app · **Parity:** [Menus](platform-parity.md#menus)
 
-- No macOS menu bar (no Quit or Edit menu).
+- No macOS menu bar (no Quit or Edit menu), so the shortcuts its items carry do nothing: Ctrl-Cmd-F leaves a full-screen window full screen.
 - No native context menus, no Dock menu or jump list.
 
 ### 12. Lifecycle holes
@@ -177,7 +207,7 @@ request.
 
 > **Environments:** all · **Who it hurts:** Apps opened from links, files or a second launch · **Parity:** [App lifecycle](platform-parity.md#app-lifecycle)
 
-- `on_open_urls` is never called.
+- No host reports an opened URL or file: the registration that would have heard one is gone, and `opened(urls, files)` joins the application handler with the activation feature.
 - Packaging (app identity) not audited.
 
 ### 14. System preferences missing or never run
@@ -200,6 +230,7 @@ request.
 - Android: a touch held while the app goes to the background makes the system report it not responding ten seconds later. The loop reads its input queue only while the Activity is resumed, so the cancel the system sends for the window it took away is never answered (seen on a Galaxy S21 by holding a touch and pressing Home).
 - Web: no precise-scroll phases, and its trackpad pinch (decoded from Control-held wheel and WebKit gesture events) ran only with constructed events in headless Chrome.
 - The winit X11 and Wayland pointer rules (X11's first-touch cursor and fractional touchpad lines, a Wayland leave mid-press) ran only as unit rows, never on a native session with a touchscreen or touchpad.
+- Pointer frames (`PlatformInput::PointerFrame`): only Windows touch and pen report them, read with `GetPointerFrameInfo` and delivered as one frame after `SkipPointerFrameMessages`, and that path has run on synthetic data only: no two-finger touch run on a Windows touch machine yet. Wayland through winit frames the touches of one loop turn, because winit does not report `wl_touch.frame` (a turn holds whole frames but may hold several; no touchscreen run). Android frames the fingers of one `ACTION_MOVE` (cross-checked in CI, no run on a device), and iOS (a touch set) still reports each contact on its own, as frames of one.
 - Pointer, scroll and pinch work is planned per OS in the [interaction spec](plans/specs/flui-interaction/completeness/tasks.md) (T36 DirectManipulation is implemented and awaits a touchpad run; T40–T44).
 
 ### 16. Mobile system UI
@@ -240,7 +271,8 @@ request.
 > **Environments:** desktop; mobile for capture · **Who it hurts:** Apps with a native look; apps showing sensitive data · **Parity:** [Windows](platform-parity.md#windows)
 
 - Backdrop materials, transparency, icon, capture exclusion.
-- Windows forces Mica; macOS Liquid Glass unreachable; no window icon on Windows or Linux.
+- The contract's window material (`WindowCommand::SetMaterial`: `Opaque`, `System`) is drawn on Windows (Mica, build 22621 and later; a Win32 window still opens on it) and on macOS (`NSVisualEffectView`'s window-background material, type-checked only); Linux, Web and mobile report it `Unavailable`. The backdrop material and Liquid Glass of `flui::native::macos` ran on macOS 27 (an M1, 2026-10-27, `an_appkit_backdrop_goes_behind_the_content_and_comes_away`); the contract's material on macOS waits for its Mac run; no window icon on Windows or Linux.
+- What the OS has and the host does not drive answers `NotYetOnThisHost`, not `NotOnThisPlatform`: the material on iOS (`UIVisualEffectView`), on Android from API 31 where the device blurs across windows, and on an AppKit window off the main lane; the macOS frame-rate hint from macOS 14 (`NSView.displayLink`); the pointer's shape on Android from API 24 (`PointerIcon`) and on an iPad from iOS 13.4 (`UIPointerStyle`). Below those versions, on an iPhone, or with the device's cross-window blur off, the answer is `NotOnThisDevice`. Only the rules' table tests ran (on Windows); none of the iOS, Android or macOS paths has run on a device.
 
 ### 21. Unaudited rows
 
@@ -260,19 +292,24 @@ request.
 
 ### 23. No presentation feedback
 
-> **Environments:** all · **Who it hurts:** Every animated app; every latency claim · **Parity:** [Displays and metrics](platform-parity.md#displays-and-metrics)
+> **Environments:** iOS, Android, Linux on winit · **Who it hurts:** Every animated app; every latency claim · **Parity:** [Displays and metrics](platform-parity.md#displays-and-metrics)
 
-- Nothing reports when a frame reached the screen.
-- No DXGI frame statistics, `addPresentedHandler`, `wp_presentation_time`, frame timelines or `requestAnimationFrame` timestamps feed the frame clock, so animations schedule blind and input-to-photon latency cannot be measured or regressed.
-- A Web `requestAnimationFrame` timestamp is the end of the previous frame's rendering, not a presentation time, so the Web cell cannot reach ✅ through it.
+- Windows (DXGI frame statistics, run) and the native Wayland host (`wp_presentation_time`, run under Weston 13) report when each frame reached the screen, on the event timeline; the frame clock keeps the report and bounds idle work by the next refresh. Headless injects one.
+- macOS reports (run): the AppKit view is backed by its own `CAMetalLayer`, which wgpu draws into and whose `nextDrawable` adds `addPresentedHandler:` to each drawable; the display pass moved from `drawRect:` to `updateLayer`. On an M1, macOS 27.0, 100 Hz (2026-10-28): 29 reports for 30 presses of `counter`, the shown times a multiple of 9.999 ms apart, the handler 0.34–0.49 ms after the showing; the conformance row saw a report 13 ms before the next request. During a live resize Metal reports most drawables never shown (80 of 102); whether the window shows fewer frames there than with wgpu's own layer is not measured, and no one has looked at a resize by eye.
+- iOS reports nothing (`NotYetOnThisHost`): a UIKit view whose layer class is a `CAMetalLayer` (FLUI's or the plain class) showed nothing on the iOS Simulator (iOS 27.1), while the same app with wgpu's sublayer draws; the simulator's drawables have no `addPresentedHandler:` either. A device run decides whether the layer class works there.
+- Android reports nothing (`NotYetOnThisHost`): the time a frame was shown belongs to the Vulkan swap chain wgpu presents through, and wgpu reads none. Two paths: wgpu reading `VK_GOOGLE_display_timing` (`vkGetPastPresentationTimingGOOGLE`) and handing it to the presenter as DXGI's statistics are handed over, which reports presentation; or `AChoreographer_postVsyncCallback` (API 33), whose frame timelines name when a frame is due on screen (`expectedPresentationTimeNanos`) and so fill only `FrameRequest::target_present`, never a report, and need the loop to dispatch frames from the callback.
+- winit, the Wayland and X11 columns' host until the native ones replace it, reports nothing. The Web (a `requestAnimationFrame` timestamp is a frame's start) and X11 (the Present extension reports a completion to the GPU driver's connection) have no presentation time a toolkit can read, and their windows say so.
+- Animations still tick on the vsync instant, never the presentation time (ADR-0257 decision 2); nothing yet attributes a presentation to the produced frame it showed, so the frame telemetry's input-to-present histogram still ends at the submit.
 
 ### 24. No HDR, wide gamut or colour management
 
 > **Environments:** all · **Who it hurts:** Photo, video and design apps; every app on an HDR display · **Parity:** [Displays and metrics](platform-parity.md#displays-and-metrics)
 
-- The platform layer has no surface colour space, headroom query or display-profile change.
-- The engine's colour spaces stop at images and gradients.
-- Android has public headroom APIs (`Display.getHdrSdrRatio`, API 34, with a listener for changes); the Web reports capability only and cannot observe headroom. HDR and SDR-white change events are a parity row of their own.
+- The engine requests a surface colour capability per window (`AppConfig::surface_color`, [ADR-0256](adr/ADR-0256-surface-colour-is-requested-and-converted-at-presentation.md)) and converts to Display P3, scRGB, extended sRGB or HDR10 at presentation; no run on an HDR or P3 display backs it yet, and no Metal space has run.
+- Every display carries its colour profile (`DisplayInfo::color`: `SurfaceColorSpace` and `Headroom`, or why there is none), read on Windows, macOS, iOS, Android, Wayland and the Web, and a profile change is a new snapshot revision; the engine sets a surface up for the colour of its window's display. Only an SDR Windows monitor has run; no HDR or P3 display, and the Apple, Android and Wayland reads are type-checked only.
+- A profile change reconfigures the window's surface before its next frame (ADR-0256 §6, amended), but no host ran a real change: Windows, macOS and Wayland observe the change type-checked or synthetically only, iOS and Android re-read only on their other display events.
+- X11 reads no colour (`_ICC_PROFILE` is not parsed). Windows has no broadcast for the SDR white level, so a moved slider is read at the next other display event. Android sets the window's `ColorMode` for the requested surface but does not listen to `Display.registerHdrSdrRatioChangedListener`: the listener needs a Java class in `FluiView`, so a moved HDR/SDR ratio is read only at the next configuration change or resume. The Web reports capability only and no headroom.
+- Sources are still sRGB: images with a profile, video and HDR images enter the working space as sRGB values.
 
 ### 25. Sandbox-aware file access is absent
 
@@ -298,7 +335,7 @@ request.
 - `InputLatency` is set by nobody.
 - Android cannot honour it on `NativeActivity`.
 - iOS coalesced and predicted touches and the Linux and macOS paths are not audited.
-- Timestamp conversion is a hazard of its own: Win32 `GetMessageTime` is 32-bit milliseconds that wrap every 49.7 days, Wayland event times have an undefined base, and Android's event time is uptime milliseconds. Windows pointer ticks are rebased across the wrap (`NativeTime::TickMillis`); the Wayland, X11, Android and Web conversions are not audited.
+- Timestamp conversion is a hazard of its own: Win32 `GetMessageTime` is 32-bit milliseconds that wrap every 49.7 days, Wayland event times have an undefined base, and Android's event time is uptime milliseconds. Windows pointer ticks are rebased across the wrap (`NativeTime::TickMillis`); the native Wayland host reads a stamp through the same rule only when it lies within a second of `CLOCK_MONOTONIC` and stamps the event on arrival otherwise (Weston's X11 backend stamps on the X server's clock); the X11, Android and Web conversions are not audited.
 
 ### 28. Distribution is unaudited
 
@@ -313,8 +350,9 @@ request.
 
 > **Environments:** Windows, Wayland · **Who it hurts:** Apps brought forward by a link, a second launch or a notification · **Parity:** [App lifecycle](platform-parity.md#app-lifecycle)
 
-- No `xdg-activation` token.
-- Windows re-foregrounds whatever is already in front.
+- Windows follows the foreground rules: an activation the rules refuse flashes the window's taskbar button and leaves the foreground with the application the user works with, a right handed over (`AllowSetForegroundWindow`) brings it forward (run with two processes, 2026-10-28). Opening a link, file or folder hands the right only to the handler process the shell started, by its id; a handler already running (a browser, Explorer) is handed nothing and comes forward under the OS's own rules, which may leave it behind (the PID hand-over not run against a real handler). No second launch hands the right yet: that comes with single instance, in the activation spec (entry 13).
+- The Win32 snapshot says `focused: true` and `active: true` for a window of a process the user is not working with: they are its thread's focus and activation, not the system's. `WM_ACTIVATEAPP` does not tell them apart (Windows sends it for the thread's own activation of a background process, seen in a two-process run, 2026-10-28), so the fix needs the foreground's changes (`EVENT_SYSTEM_FOREGROUND`) to reach each window, which the host does not watch yet.
+- The native Wayland host asks with an `xdg-activation` token and uses the launcher's `XDG_ACTIVATION_TOKEN` for the first window it holds; a token names the last key, button, touch or keyboard focus its seats report, the serial a compositor weighs before it moves the focus (with no input yet, an activation asks for attention: sway marks the window urgent). CI covers only the refusal: Weston 13, which CI runs, has no `xdg_activation_v1`, so the whole path runs only on sway, locally ([testing](testing.md)). It is not the Linux host `current_platform` picks yet, and winit requests no token.
 - macOS cooperative activation (`NSApplication.yieldActivation(to:)`, macOS 14) is documented by Apple, which also marks `activate(ignoringOtherApps:)` deprecated; neither is audited.
 
 ### 30. Live resize is unaudited and unscheduled
@@ -351,7 +389,7 @@ request.
 
 > **Environments:** all · **Who it hurts:** Everyone who relies on a platform claim; maintainers who cannot replay a failure · **Parity:** [Quality bar](platform-parity.md#quality-bar)
 
-- Honest absence: nine spellings of "not here" exist today, and the Android clipboard is an in-process mock (ADR-0152, ADR-0254). Other layers show what silent spellings cost: winit setters return `()` while their documentation lists platforms as unsupported, `tauri-plugin-geolocation` resolves to a zeroed position on the desktop, and `tauri-plugin-notification` reports a permission it did not check.
+- Honest absence: the nine spellings of "not here" are one now, `Unsupported` with its reason in every contract error (ADR-0151 §4); the Android clipboard is still an in-process mock (ADR-0152). Other layers show what silent spellings cost: winit setters return `()` while their documentation lists platforms as unsupported, `tauri-plugin-geolocation` resolves to a zeroed position on the desktop, and `tauri-plugin-notification` reports a permission it did not check.
 - Replay: pointer, key and wheel traces replay on the headless host; IME, lifecycle, preference and display recordings do not exist.
 - The `native-capture` journal records pointers only, so a failure in any other event family cannot be replayed.
 - Not every unsupported cell in the parity tables names its reason, and nothing checks the cells against the code's `Unsupported` reasons.
@@ -456,5 +494,20 @@ request.
 | 2026-10-21 | minor | Entry 23 closes: Android preferences arrive through `FluiView`'s setting, contrast and inset callbacks, and the Galaxy S21 loop made no turn in 10 s idle, resumed or behind Home; entries 24–41 become 23–40. Entry 14 becomes "System preferences missing or never run" |
 | 2026-10-22 | minor | Entry 2: the desktop accessibility adapters are always on (no `a11y` feature; AT-SPI comes with the Linux host), still unrun with a screen reader |
 | 2026-10-22 | minor | Entry 30 closes: `cargo xtask panic-boundary` holds every OS entry into the core host (169: extern fns, Objective-C and COM methods, AccessKit handlers, blocks, delegates and GCD work items) to a constant or one call of `owner::panic_boundary::os_entry`; the AppKit, UIKit, Win32 and Android entries it found unguarded go through it now, and the Apple ones, type-checked only, join entry 4's runs still owed ([#1840](https://github.com/vanyastaff/flui/issues/1840)); entries 31–40 become 30–39 |
+| 2026-10-26 | minor | Entry 15: the interaction layer has the pointer frame (`dispatch_pointer_frame_on`, `pointer_frame_end`); no backend reports frames yet. Follow-ups: Win32 `GetPointerFrameInfoHistory`, Android `ACTION_MOVE` with all pointers, Wayland `wl_touch.frame`, iOS touch sets |
+| 2026-10-26 | minor | Entry 15: `PlatformInput::PointerFrame` carries a frame from a backend; the Win32 touch and pen path reads it with `GetPointerFrameInfo` (synthetic data only, live touch run pending) |
+| 2026-10-26 | minor | Entry 20: the macOS backdrop material and Liquid Glass come back through the escape hatch `flui::native::macos` (`AppKitWindow::set_backdrop`), type-checked only and listed in [#1840](https://github.com/vanyastaff/flui/issues/1840); Windows still forces Mica |
+| 2026-10-26 | minor | Entry 9: the window snapshot holds every window fact, and the window conformance compares it with what the window system reads back; it ran on headless and Win32, and the winit, AppKit, UIKit, Web and Android runs are listed |
+| 2026-10-27 | minor | Entries 4 and 9: the AppKit window conformance kit passes on an M1, macOS 27.0 (nextest flui-native 233/233), and entry 9 is retitled for it; the hand checks of [#1736](https://github.com/vanyastaff/flui/issues/1736) stay owed. The fixture after review: appkit_window 3/3, nextest flui-native 237/237, 2026-10-27. Entry 9 gains two AppKit mode findings from review: a transient `Normal` publish inside `windowDidExitFullScreen:` (the final state is correct, seen on an M1, macOS 27.0), and admission against the published mode rather than the queued one |
+| 2026-10-27 | minor | Entry 20: the contract's window material (`WindowCommand::SetMaterial`, `Opaque` and `System`) replaces `WindowBackgroundAppearance`; Windows draws it from build 22621 and admission answers `NotOnThisDevice` below, which ran on Windows 11; macOS draws it type-checked only; every other host reports it `Unavailable` |
+| 2026-10-27 | minor | Entries 5 and 9: the native X11 host (loop, windows, displays, preferences, host notices, AT-SPI) passes the window conformance under openbox on Xvfb; its input, text input, clipboard and drag and drop, its selection by `current_platform` and a desktop run are still owed |
+| 2026-10-28 | minor | Entries 5 and 29: a Win32 activation the foreground rules refuse flashes the taskbar button and takes no foreground, a right handed over brings the window forward (run with two processes), and opening a link or file hands the right only to the handler process the shell started; the Win32 snapshot's thread-local focus of a background process is recorded, not fixed; `Platform::activate` no longer touches another application's window. The native Wayland host asks with an `xdg-activation` token (run on sway; Weston 13 has none), which names no user input until the seats are bound; a second launch handing the right waits for a single instance (entry 13) |
+| 2026-10-28 | minor | Entry 5: the native X11 host has its input (XInput 2 pointers, touch, pens and unphased smooth scrolling, XKB keys, compose and layout, the cursor), XTest runs on Xvfb; its text input, clipboard and drag and drop, trackpad gestures, its selection by `current_platform` and a desktop run are still owed |
+| 2026-10-28 | minor | Entry 5: the native Wayland host has its seats' input (XKB keys with compose and layout, pointer and wheel, touch, `tablet-v2`, `pointer-gestures`, `cursor-shape` or the cursor theme); a cursor, a click, a wheel notch and a key ran from a Weston seat; touch, pens and pinches tested by translation only |
+| 2026-10-28 | minor | Entry 24: every display carries its colour profile (`DisplayInfo::color`), read on Windows (DXGI), macOS, iOS, Android, Wayland (`wp_color_management_v1`) and the Web, a change published as a snapshot revision, and the engine sets a surface up for it; what remains: a live reconfiguration, X11, the Android listener and `ColorMode`, an HDR display run, wide-gamut sources |
+| 2026-10-28 | minor | Entry 23: frame requests carry when earlier frames reached the screen (`FrameRequest::presented`); Windows reads DXGI frame statistics and the native Wayland host `wp_presentation_time`, both run; the frame clock bounds idle work by the next reported refresh; macOS, iOS, Android and winit report nothing yet, and the Web and X11 have nothing to report |
+| 2026-10-28 | minor | Entry 9: a hand run of the AppKit window on an M1, macOS 27.0: drag, the title-bar buttons, the Dock, a corner resize, a close of one of two windows and a borderless window ran; a minimized window read hidden and `SetSize` went below the minimum (both fixed); a window at its maximum size reads `Maximized`, and `normal_geometry` after a tile is stale |
+| 2026-10-28 | minor | Entry 23: macOS reports when each frame reached the screen (the AppKit view's own `CAMetalLayer`, run on an M1); iOS left out after a blank Simulator run with such a layer, and macOS dropped from the entry's environments |
+| 2026-10-28 | minor | Entry 9: the window snapshot keeps shown, minimized and occluded apart on every host (`visible`, `mode`, `occluded`, read together by `is_seen`); a minimized X11 window no longer reads hidden; a covering on Win32, a native X11 window manager and AppKit by hand has not run, and Cmd-H reads as hidden |
 
 </details>

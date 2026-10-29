@@ -5,7 +5,8 @@
 //! The rules behind them are the pure half, which every host compiles and
 //! tests: the proof a capability exists ([`capability`]), the pixel-ratio query
 //! ([`dppx_query`]), the refresh estimate from animation-frame timestamps
-//! ([`refresh_estimate`]) and screen identity ([`screen_identity`]). `source`
+//! ([`refresh_estimate`]), screen identity ([`screen_identity`]) and the
+//! colour the media queries describe ([`color_query`]). `source`
 //! and `events` call the browser and exist only on wasm32.
 
 #[cfg(target_arch = "wasm32")]
@@ -1042,6 +1043,84 @@ pub(crate) mod screen_identity {
     }
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+#[forbid(unsafe_code)]
+pub(crate) mod color_query {
+    //! The colour of the screen a page is on, from the media queries a browser
+    //! answers: `dynamic-range` and `color-gamut`.
+    //!
+    //! `(dynamic-range: high)` says the screen can show high range, not that it
+    //! does now, and a browser exposes no headroom, so a high-range screen's
+    //! headroom is absent on this platform. A page learns a change of either
+    //! answer from its query's `change` event.
+
+    use flui_platform::{CapabilityAbsence, ColorGamut, DisplayColor};
+
+    /// Whether the screen can show high range.
+    const HIGH_RANGE: &str = "(dynamic-range: high)";
+    /// Whether the screen covers the BT.2020 gamut.
+    const REC2020: &str = "(color-gamut: rec2020)";
+    /// Whether the screen covers the Display P3 gamut.
+    const P3: &str = "(color-gamut: p3)";
+
+    /// Every query the colour is read from, which a page listens to for its
+    /// change.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) const QUERIES: [&str; 3] = [HIGH_RANGE, REC2020, P3];
+
+    /// The display colour the queries `matches` answers describe: the widest
+    /// gamut that matches, high range with no headroom to read when
+    /// `dynamic-range` matches.
+    pub(crate) fn display_color(matches: impl Fn(&str) -> bool) -> DisplayColor {
+        let gamut = if matches(REC2020) {
+            ColorGamut::Rec2020
+        } else if matches(P3) {
+            ColorGamut::DisplayP3
+        } else {
+            ColorGamut::Srgb
+        };
+        if matches(HIGH_RANGE) {
+            DisplayColor::high(gamut, Err(CapabilityAbsence::NotOnThisPlatform))
+        } else {
+            DisplayColor::standard(gamut)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// Each answer the colour queries give, to the display colour it means.
+        #[test]
+        fn browser_colour_queries_map_to_the_display_colour() {
+            let matching = |high_range: bool, rec2020: bool, p3: bool| {
+                display_color(|query| match query {
+                    HIGH_RANGE => high_range,
+                    REC2020 => rec2020,
+                    P3 => p3,
+                    _ => panic!("{query} is no colour query"),
+                })
+            };
+            assert_eq!(
+                matching(false, false, false),
+                DisplayColor::standard(ColorGamut::Srgb)
+            );
+            assert_eq!(
+                matching(false, false, true),
+                DisplayColor::standard(ColorGamut::DisplayP3)
+            );
+            assert_eq!(
+                matching(true, true, true),
+                DisplayColor::high(
+                    ColorGamut::Rec2020,
+                    Err(CapabilityAbsence::NotOnThisPlatform)
+                ),
+                "the widest gamut wins, and the headroom is never readable"
+            );
+        }
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod source {
     //! The Web display source.
@@ -1105,7 +1184,10 @@ pub(crate) mod source {
     use std::sync::Arc;
 
     use flui_foundation::geometry::{Bounds, Point, Size};
-    use flui_platform::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot, RefreshPeriod};
+    use flui_platform::{
+        CapabilityAbsence, DisplayColor, DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot,
+        RefreshPeriod,
+    };
     use parking_lot::Mutex;
     use wasm_bindgen::{JsCast, JsValue};
 
@@ -1113,6 +1195,7 @@ pub(crate) mod source {
         FeatureKind, FeatureProbe, GetScreenDetails, MatchMedia, PermissionsQuery, ScreenChange,
         WebFeature,
     };
+    use super::color_query::display_color;
     use super::refresh_estimate::RefreshEstimator;
     use super::screen_identity::RetainedScreens;
     use crate::display::source::DisplaySource;
@@ -1269,6 +1352,22 @@ pub(crate) mod source {
             Ok(displays)
         }
 
+        /// The colour of the screen the page is on, by its media queries; absent
+        /// on a browser without `matchMedia`.
+        fn page_color(&self, window: &web_sys::Window) -> Result<DisplayColor, CapabilityAbsence> {
+            let media = self
+                .features
+                .match_media
+                .ok_or(CapabilityAbsence::NotOnThisDevice)?;
+            Ok(display_color(|query| {
+                media
+                    .query(window, query)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|list| list.matches())
+            }))
+        }
+
         /// The one screen `window.screen` describes.
         fn single_screen(
             &self,
@@ -1293,7 +1392,8 @@ pub(crate) mod source {
                 .map(|id| {
                     vec![with_period(
                         DisplayInfo::new(id, "Browser Screen", bounds, scale_factor)
-                            .with_primary(true),
+                            .with_primary(true)
+                            .with_color(self.page_color(window)),
                         period,
                     )]
                 })
@@ -1354,8 +1454,12 @@ pub(crate) mod source {
                         // same with and without screen access. Its estimate belongs
                         // to it alone.
                         with_period(screen_info(screen, *id, window_scale), period)
+                            .with_color(self.page_color(window))
                     } else {
+                        // A page's media queries describe the screen it is on;
+                        // the browser says nothing of the others' colour.
                         screen_info(screen, *id, None)
+                            .with_color(Err(CapabilityAbsence::NotOnThisPlatform))
                     }
                 })
                 .collect();
@@ -1581,7 +1685,9 @@ mod events {
     //!   again;
     //! - Window Management access: when its permission is already granted the
     //!   screen list and its changes are followed. The permission is only read,
-    //!   never requested.
+    //!   never requested;
+    //! - the `dynamic-range` and `color-gamut` queries, whose change is a change
+    //!   of the screen's colour.
 
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
@@ -1591,6 +1697,7 @@ mod events {
     use web_sys::{Event, MediaQueryList};
 
     use super::capability::{GetScreenDetails, MatchMedia, PermissionsQuery, WebFeature};
+    use super::color_query::QUERIES;
     use super::dppx_query::DppxWatch;
     use super::source::{WebDisplays, event_target, get};
     use crate::owner::signal::OwnerSignal;
@@ -1607,6 +1714,7 @@ mod events {
         _screen_change: Option<Listener>,
         _resize: Option<Listener>,
         _screens: Option<Rc<ScreenAccess>>,
+        _color: Vec<Listener>,
     }
 
     impl DisplayObservers {
@@ -1648,6 +1756,7 @@ mod events {
                         &active,
                     )
                 });
+            let color = color_listeners(displays, signal, &active);
             Self {
                 active,
                 _pixel_ratio: pixel_ratio,
@@ -1655,8 +1764,43 @@ mod events {
                 _screen_change: screen_change,
                 _resize: resize,
                 _screens: screens,
+                _color: color,
             }
         }
+    }
+
+    // ==================== Colour ====================
+
+    /// The colour queries raise `change` when the screen's dynamic range or
+    /// gamut answer changes: the page moved to another screen, or the system
+    /// switched HDR. Each marks the snapshot stale and wakes the owner.
+    fn color_listeners(
+        displays: &Arc<WebDisplays>,
+        signal: &Arc<OwnerSignal>,
+        active: &Rc<Cell<bool>>,
+    ) -> Vec<Listener> {
+        let (Some(media), Some(window)) = (displays.features.match_media, web_sys::window()) else {
+            return Vec::new();
+        };
+        QUERIES
+            .into_iter()
+            .filter_map(|query| {
+                let list = media.query(&window, query).ok().flatten()?;
+                let displays = Arc::downgrade(displays);
+                let signal = Arc::downgrade(signal);
+                let active = Rc::clone(active);
+                Listener::add(list.as_ref(), "change", move |_| {
+                    if active.get()
+                        && let Some(displays) = displays.upgrade()
+                    {
+                        displays.invalidate();
+                        wake(&signal);
+                    }
+                })
+                .inspect_err(|error| warn_failure("colour observation unavailable", error))
+                .ok()
+            })
+            .collect()
     }
 
     impl Drop for DisplayObservers {

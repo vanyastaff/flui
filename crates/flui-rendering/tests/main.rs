@@ -38,6 +38,9 @@ mod render_inspect_reentry;
 #[path = "retained_boundary_layers.rs"]
 mod retained_boundary_layers;
 
+#[path = "nested_boundary_capture.rs"]
+mod nested_boundary_capture;
+
 #[path = "boundary_content_tokens.rs"]
 mod boundary_content_tokens;
 

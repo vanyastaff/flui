@@ -1,4 +1,4 @@
-# Persistence: сохранение и восстановление состояния Notes — design
+# Persistence: сохранение и восстановление состояния приложения — design
 
 - **Статус:** черновик, вторая редакция после adversarial-ревью
 - **Дата:** 2026-10-05
@@ -7,6 +7,9 @@
 - **Связанные:** [teardown/design.md](../teardown/design.md) (владеет контрактом закрытия и
   завершения сеанса), [send-flip/requirements.md](../send-flip/requirements.md) (разделение
   `AsyncDriver` на `Send`-waker и owner-local очередь)
+- **Решения владельца 2026-10-28** — в конце документа. Пример Notes (`examples/two_screens`,
+  `tests/fixtures/notes_flow.rs`) удалён; где ниже сказано «Notes», читать «приложение приёмки»
+  (tasks.md P10): та же модель заметок, только на facade, headless.
 
 ## Текущее состояние
 
@@ -330,15 +333,15 @@ wasm32 — тот же API поверх IndexedDB, асинхронный), `sto
 CAS-алгоритм файла: конфликт проверяется на настоящем `FileStore`. Строки проверяют содержимое
 хранилища, не только статус.
 
-**Notes через facade** (C; `tests/fixtures/notes_flow.rs`, таблицы рядом с
-`notes_public_input_flow_matrix`; `external_notes_showcase_runs_through_the_facade` требует их
-`... ok`). `notes_restart_matrix`: `saved_title_survives_restart_and_others_stay` (R1, R34),
+**Приложение приёмки через facade** (C; `tests/fixtures/acceptance_app/`;
+`acceptance_app_runs_through_the_facade` в `tests/facade_consumer.rs` требует каждую строку
+`... ok`). Таблица «перезапуск»: `saved_title_survives_restart_and_others_stay` (R1, R34),
 `compact_rows_survive_restart` (R2), `unsaved_draft_reopens_its_note_without_changing_the_list`
 (R3), `settings_over_editor_restores_and_backs_out_twice` (R4),
 `list_offset_and_route_are_restored_on_the_first_loaded_frame` (R5),
 `first_launch_starts_from_initial_state_without_an_error` (R9). Без изменения Notes не читает
 хранилище — каждая строка падает на старом значении.
-`notes_storage_failure_matrix` (H через harness): `failed_data_load_leaves_session_unread_and_unwritten`
+Таблица «отказы хранилища» (на том же приложении): `failed_data_load_leaves_session_unread_and_unwritten`
 (R6), `deleted_note_then_crash_drops_the_draft_and_trims_the_stack` (R7: сеанс снят на ревизии
 r с черновиком заметки 3; данные переписаны без заметки 3 ревизией r + 1; снятие дерева до
 записи сеанса; перезапуск — Home, черновика нет, ошибки нет),
@@ -350,7 +353,7 @@ r с черновиком заметки 3; данные переписаны б
 **`Persisted<D>`** (H; модуль `persist` в `crates/flui-view/tests/main.rs`, через его `run_table`).
 `persisted_document_contract`: `user_close_waits_for_an_in_flight_save` (R12),
 `saved_status_appears_only_after_commit`, `drop_before_commit_loses_only_that_edit` (R15),
-`busy_retry_follows_the_realm_clock` (R16, R22: на 49 мс повтора нет, на 50 мс есть; пять `Busy`
+`busy_retry_follows_the_runtime_clock` (R16, R22: на 49 мс повтора нет, на 50 мс есть; пять `Busy`
 → `Failed`), `retry_after_failure_publishes_the_latest_value` (R20),
 `repeated_retries_apply_exactly_one_result` (R25), `a_later_edit_supersedes_an_unstarted_one` (R28),
 `unmount_during_load_releases_requests` (R27), `no_write_without_a_loaded_base` (R24).
@@ -359,7 +362,7 @@ r с черновиком заметки 3; данные переписаны б
 `oversized_file_is_refused_unread` (R30), `older_version_decodes_or_reports_without_writing`,
 `newer_version_is_never_written` (R31), `unavailable_storage_runs_in_memory_with_status` (R33),
 `codec_panic_is_contained_first_failure_kept` (R29: паника в `encode`, затем в `decode`, payload с
-паникующим `Drop`; следующий `set` пишет), `two_realms_keep_independent_documents` (R36).
+паникующим `Drop`; следующий `set` пишет), `two_runtimes_keep_independent_documents` (R36).
 
 **Реестр и закрытие** (`flui-app`, in-src: реестр — приватный шов с блокирующим поддельным
 `FileStore`). `flush_registry_matrix`: `a_blocked_store_keeps_frames_and_input_live` (R11 через
@@ -395,8 +398,8 @@ In-src `storage::tests::file_store_interruption_matrix`: обрыв после t
 ## ADR
 
 Нужен: новые контракты `flui-platform-api`, `flui-view`, `flui-app`, `flui-widgets` и facade.
-**ADR (номер назначит оркестратор) «Persistence: byte storage capability, flush registry and
-versioned documents».** Решение:
+**ADR-0262 (`Proposed`; было «Persistence: byte storage capability, flush registry and
+versioned documents»).** Решение:
 
 1. `flui-platform-api::Storage` — асинхронное чтение и синхронно принимаемая публикация байтов;
    через границу IO идут только байты и версии. Данные пишутся с CAS под короткой
@@ -404,7 +407,9 @@ versioned documents».** Решение:
 2. Атомарность — уникальный tmp, `sync_all`, `std::fs::rename`; «Saved» переживает падение
    процесса, не потерю питания.
 3. Реестр сброса принадлежит хосту, лежит вне realm, пишется IO-пулом, а при завершении сеанса —
-   синхронно inline; `LifecycleContext::storage` выдаёт его realm'у (ADR-0078 §1, ADR-0047).
+   синхронно inline; realm получает хранилище через шов возможностей (провайдер `Storage`,
+   platform-layer LY52; ADR-0152), а не через `LifecycleContext::storage` (решение владельца
+   2026-10-28).
 4. `Persisted<D>` — owner-local; кодирование у приложения (`Document::encode`/`decode`), заголовок
    с именем, версией и постоянной ревизией — у framework. `serde` в сигнатурах нет (ADR-0089 §2).
 5. Удержание закрытия — через close guard из ADR teardown: `hold` на запись в полёте,
@@ -413,13 +418,11 @@ versioned documents».** Решение:
 
 ## Риски и открытые вопросы
 
-1. **R34 (владелец).** Notes с persistence требует фичу `persist` и собственные зависимости
-   `serde`/`serde_json`; R34 говорит «только `flui` с `material`». Предлагаю «`flui` с `material`
-   и `persist`; кодирование — зависимость приложения». Альтернатива — построчный формат в Notes
-   без serde: хуже как образец.
-2. **Зависимость от send-flip.** `Persisted` и `load()` — `!Send` и требуют owner-local очереди
-   `AsyncDriver`. Если разделение не смержено к 2026-11-24, persistence ждёт его или временно
-   держит состояние в `Arc<Mutex<_>>` с `D: Send` и меняет bounds в 0.3. Решает владелец.
+1. **R34 — закрыт.** Фича `persist` удалена (решение владельца 2026-10-17, «Изменения после
+   P6»), так что набор фич R34 — `flui` с `material` (и `testing` для headless-строк), кодек
+   (`serde_json`) — зависимость приложения; записано в ADR-0262 §1.
+2. **Зависимость от send-flip — закрыта.** Owner-local очередь `AsyncDriver` слита (send-flip
+   T1, #1496).
 3. **Windows-эксперимент.** `LockFileEx` и `MoveFileExW` на OneDrive-каталоге с файлами по
    запросу; укладывается ли удержание файла антивирусом в бюджет повтора (~1,5 с) и inline-сброс
    реестра — в 3 с завершения сеанса. Если нет — бюджеты пересматриваются до RC.
@@ -490,3 +493,14 @@ merge: это публичные типы, и после заморозки пр
    `AppWindowError::UnsupportedConfiguration` удалены: других причин отказа не было.
 6. Запись `FlushRegistry` и путь `Persisted` (P4, P5) этим не подключаются; до них документы —
    `Unavailable`, а прямой `LifecycleContext::storage` читает и пишет.
+
+## Решения владельца 2026-10-28
+
+1. **P4 и P5 строятся прямо на шве возможностей**, после platform-layer LY50 (шов) и LY52
+   (провайдер `Storage` поверх `FileStore` и IndexedDB, удаление `LifecycleContext::storage`).
+   Путь через `LifecycleContext::storage` для них не строится. Реестр сброса хоста (остаток P6)
+   создаёт тот же провайдер. До LY52 идут P3 (Router) и teardown T2, T4.
+2. **Приёмка — приложение приёмки** (tasks.md P10): небольшое headless-приложение заметок только
+   на facade; оно заменяет Notes, `two_screens` и `notes_flow` и несёт таблицы persistence,
+   teardown и text-ime. Нативные шаги (бывший P9) идут через лейн `os` flui-driver.
+3. LY52 сохраняет второго потребителя хранилища хоста — `placement_recorder.rs` (#1899).

@@ -118,6 +118,7 @@ mod arena_driver;
 mod close_coordinator;
 mod move_coalescer;
 mod pan_zoom_sequences;
+mod pointer_frame;
 mod pointer_sequences;
 mod scroll_contact;
 mod scroll_sequences;
@@ -319,7 +320,7 @@ pub struct InvalidSamplingWindow;
 /// render hit-test entries and route tokens remain on the separate data plane.
 pub struct GestureBinding {
     close: CloseCoordinator,
-    capture_wake: RefCell<Option<std::sync::Weak<dyn flui_platform::PlatformWindow>>>,
+    capture_wake: RefCell<Option<std::rc::Weak<dyn flui_platform::PlatformWindow>>>,
     contacts: PointerSequences,
     moves: MoveCoalescer,
     scrolls: ScrollSequences,
@@ -582,7 +583,7 @@ impl GestureBinding {
             .capture_wake
             .borrow()
             .as_ref()
-            .and_then(std::sync::Weak::upgrade);
+            .and_then(std::rc::Weak::upgrade);
         if let Some(window) = window {
             window.request_redraw();
         }
@@ -624,7 +625,7 @@ impl GestureBinding {
 
     pub(crate) fn set_pointer_capture_wake(
         &self,
-        window: std::sync::Weak<dyn flui_platform::PlatformWindow>,
+        window: std::rc::Weak<dyn flui_platform::PlatformWindow>,
     ) {
         self.arena.arena().set_deadline_wake(window.clone());
         *self.capture_wake.borrow_mut() = Some(window);
@@ -1002,7 +1003,7 @@ impl GestureBinding {
         }))
     }
 
-    fn flush_pending_moves_kernel(&self, mode: MotionFlush) -> usize {
+    fn deliver_pending_moves(&self, mode: MotionFlush) -> usize {
         if self.contacts.is_retiring_any() {
             return 0;
         }
@@ -2146,35 +2147,18 @@ impl GestureBinding {
         let contact =
             self.drive_scroll_contact(surface, scroll, &sequence, &fresh_result, &mut first_panic);
         let claim = RoutePanic::capture(|| {
-            if contact == scroll_contact::ContactOutcome::Consumed || momentum_dropped {
-                return;
-            }
-            let claimed = match &sequence {
-                ScrollAdmission::Terminal(ended) => {
-                    match ended.as_ref().and_then(|s| s.route.get()) {
-                        Some(route) => route.dispatch(scroll, || {}),
-                        // A final delta may be the first meaningful packet.
-                        // It is deliverable, but cannot publish a lasting lease.
-                        None => fresh_result.dispatch_scroll(scroll),
-                    }
-                }
-                ScrollAdmission::Refused => false,
-                ScrollAdmission::Active(sequence) => {
-                    if let Some(route) = sequence.route.get() {
-                        // A gone target stays inert until the sequence ends;
-                        // it never hands this gesture to a new hit path.
-                        route.dispatch(scroll, || {})
-                    } else if self.scrolls.is_current(surface, scroll.pointer, sequence) {
-                        fresh_result.dispatch_scroll_with_claim(scroll, |route| {
-                            if self.scrolls.is_current(surface, scroll.pointer, sequence) {
-                                sequence.route.set(Some(route));
-                            }
-                        })
-                    } else {
-                        false
-                    }
-                }
+            let replay = match contact {
+                scroll_contact::ContactOutcome::Consumed => return,
+                scroll_contact::ContactOutcome::None if momentum_dropped => return,
+                scroll_contact::ContactOutcome::None => Vec::new(),
+                scroll_contact::ContactOutcome::Replay(earlier) => earlier,
             };
+            // The packets the contact kept back reach the scroll route first,
+            // in order, so the wait for the verdict loses no motion.
+            for earlier in &replay {
+                self.deliver_scroll(surface, earlier, &sequence, &fresh_result);
+            }
+            let claimed = self.deliver_scroll(surface, scroll, &sequence, &fresh_result);
             tracing::trace!(
                 claimed,
                 scroll_targets = fresh_result.entries_with_scroll_targets().count(),
@@ -2188,6 +2172,43 @@ impl GestureBinding {
         );
         if let Some(panic) = first_panic {
             panic.resume();
+        }
+    }
+
+    /// Offer one packet of a scroll sequence to the consumptive channel: the
+    /// route its latch holds, or the first scroll target that claims it.
+    fn deliver_scroll(
+        &self,
+        surface: InputSurface,
+        scroll: &ScrollEvent,
+        sequence: &ScrollAdmission,
+        fresh_result: &HitTestResult,
+    ) -> bool {
+        match sequence {
+            ScrollAdmission::Terminal(ended) => {
+                match ended.as_ref().and_then(|s| s.route.get()) {
+                    Some(route) => route.dispatch(scroll, || {}),
+                    // A final delta may be the first meaningful packet.
+                    // It is deliverable, but cannot publish a lasting lease.
+                    None => fresh_result.dispatch_scroll(scroll),
+                }
+            }
+            ScrollAdmission::Refused => false,
+            ScrollAdmission::Active(sequence) => {
+                if let Some(route) = sequence.route.get() {
+                    // A gone target stays inert until the sequence ends;
+                    // it never hands this gesture to a new hit path.
+                    route.dispatch(scroll, || {})
+                } else if self.scrolls.is_current(surface, scroll.pointer, sequence) {
+                    fresh_result.dispatch_scroll_with_claim(scroll, |route| {
+                        if self.scrolls.is_current(surface, scroll.pointer, sequence) {
+                            sequence.route.set(Some(route));
+                        }
+                    })
+                } else {
+                    false
+                }
+            }
         }
     }
 

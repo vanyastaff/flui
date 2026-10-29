@@ -90,6 +90,7 @@ impl PipelineOwner<Idle> {
             scenes_painted: 0,
             last_follower_offsets: FxHashMap::default(),
             retained_boundaries: FxHashMap::default(),
+            retained_pixel_ratio: 1.0,
             root_content: None,
             last_hidden_follower_ids: FxHashSet::default(),
             device_pixel_ratio: 1.0,

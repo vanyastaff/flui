@@ -65,7 +65,7 @@ neither: no backend sends a pan there.
      `Momentum*` packets that follow are dropped: the recognizer's end already carried the
      release velocity.
    - A scroll target wins: its route becomes the latch's route (as a first claimant's does
-     today). The deltas buffered since `Began` are delivered to it as one packet, so the slop wait
+     today). The packets buffered since `Began` are delivered to it in order, so the slop wait
      loses no motion, and later packets, momentum included, reach it as today.
    - Different axes are decided on the first delta that crosses slop; the table does the rest.
 

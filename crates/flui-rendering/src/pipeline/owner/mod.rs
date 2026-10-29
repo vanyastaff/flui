@@ -268,6 +268,11 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// misses the map.
     retained_boundaries: FxHashMap<RenderId, paint::RetainedSubtree>,
 
+    /// The device pixel ratio the retained output above was recorded under.
+    /// A paint pass under another ratio drops it first, without waking anyone:
+    /// a ratio change is observed where it is applied, but acted on at paint.
+    retained_pixel_ratio: f64,
+
     /// The root boundary's committed content token, with the root it belongs
     /// to.
     ///
@@ -406,6 +411,7 @@ where
         scenes_painted: from.scenes_painted,
         last_follower_offsets: from.last_follower_offsets,
         retained_boundaries: from.retained_boundaries,
+        retained_pixel_ratio: from.retained_pixel_ratio,
         root_content: from.root_content,
         last_hidden_follower_ids: from.last_hidden_follower_ids,
         device_pixel_ratio: from.device_pixel_ratio,
@@ -1280,6 +1286,7 @@ mod tests {
             entry.layout_leaf_only(
                 crate::constraints::BoxConstraints::tight(Size::ZERO),
                 text.source(),
+                false,
             )
         };
 

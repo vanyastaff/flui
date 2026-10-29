@@ -5,9 +5,9 @@ use std::sync::LazyLock;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::{
-    DisplayId, DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot, PlacementError,
-    ResolvedPlacement, WindowCapabilities, WindowGeometry, WindowMode, WindowPlacement,
-    WindowState,
+    Availability, DisplayId, DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot,
+    PlacementError, ResolvedPlacement, WindowCapabilities, WindowGeometry, WindowMode,
+    WindowPlacement, WindowState,
 };
 
 fn bounds(x: i32, y: i32, width: i32, height: i32) -> Bounds<i32> {
@@ -199,7 +199,7 @@ fn a_mode_the_window_cannot_enter_becomes_normal() {
     );
     assert_eq!(resolved(&full).mode, WindowMode::Fullscreen);
     let mut capabilities = WindowCapabilities::ALL;
-    capabilities.enters_fullscreen = false;
+    capabilities.enters_fullscreen = Availability::Unavailable;
     let result = full
         .resolve(&DESK.displays, &capabilities, NO_FRAME)
         .expect("resolves");
@@ -208,7 +208,7 @@ fn a_mode_the_window_cannot_enter_becomes_normal() {
 
 fn without_places_at_open_size_and_mode_stay_but_position_goes() {
     let mut capabilities = WindowCapabilities::ALL;
-    capabilities.places_at_open = false;
+    capabilities.places_at_open = Availability::Unavailable;
     let maximized = WindowPlacement::new(
         Some("key-left".into()),
         Some(Point::new(100.0, 100.0)),

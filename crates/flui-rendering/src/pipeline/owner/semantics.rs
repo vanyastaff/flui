@@ -1112,7 +1112,7 @@ fn build_semantics_fragments_impl(
         // Skipped when the node is dropped rather than merely transparent: a
         // clipped-away row has no position to announce.
         if !clipped.dropped {
-            offer_semantic_index_to_fragments(node, &mut child_fragments);
+            offer_semantic_index_to_fragments(node, tree.parent(id), &mut child_fragments);
         }
         return Some(SemanticsFragments {
             nodes: child_fragments,
@@ -1131,7 +1131,7 @@ fn build_semantics_fragments_impl(
     // stamped index before that ran would make the stamp win, since `absorb`
     // does not overwrite a value the parent already holds, and hand-indexed
     // content inside a lazy list would become impossible.
-    apply_lazy_child_semantic_index(node, &mut config, &children);
+    apply_lazy_child_semantic_index(node, tree.parent(id), &mut config, &children);
     let pending = PendingSemanticsNode {
         source: SemanticsSource::Render(id),
         config,
@@ -1663,8 +1663,8 @@ fn item_declares_position(
 }
 
 /// Record the position `node`'s host stamped, as that host's member.
-fn stamp_position(node: &RenderNode, config: &mut SemanticsConfiguration, index: usize) {
-    match node.parent() {
+fn stamp_position(host: Option<RenderId>, config: &mut SemanticsConfiguration, index: usize) {
+    match host {
         Some(host) => config.set_collection_index(host, index),
         None => config.set_position_in_set(index),
     }
@@ -1679,7 +1679,11 @@ fn stamp_position(node: &RenderNode, config: &mut SemanticsConfiguration, index:
 /// a position already declared anywhere in it is that member's, and otherwise
 /// only the first fragment carries it, so a row that forms two controls does
 /// not announce both as "item 1".
-fn offer_semantic_index_to_fragments(node: &RenderNode, fragments: &mut [SemanticsFragment]) {
+fn offer_semantic_index_to_fragments(
+    node: &RenderNode,
+    host: Option<RenderId>,
+    fragments: &mut [SemanticsFragment],
+) {
     let Some(index) = stamped_sliver_parent_data(node).and_then(|pd| pd.semantic_index) else {
         return;
     };
@@ -1695,7 +1699,7 @@ fn offer_semantic_index_to_fragments(node: &RenderNode, fragments: &mut [Semanti
         return;
     }
     if let Some(first) = fragments.first_mut() {
-        stamp_position(node, fragment_config(first), index);
+        stamp_position(host, fragment_config(first), index);
     }
 }
 
@@ -1729,6 +1733,7 @@ fn stamped_sliver_parent_data(
 /// is.
 fn apply_lazy_child_semantic_index(
     node: &RenderNode,
+    host: Option<RenderId>,
     config: &mut SemanticsConfiguration,
     children: &[BuiltSemanticsNode],
 ) {
@@ -1736,7 +1741,7 @@ fn apply_lazy_child_semantic_index(
         return;
     };
     if !item_declares_position(config, children) {
-        stamp_position(node, config, index);
+        stamp_position(host, config, index);
     }
 }
 

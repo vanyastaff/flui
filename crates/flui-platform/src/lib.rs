@@ -7,8 +7,9 @@
 //!   [`Clipboard`] and the data-transfer transport
 //!   ([`data_transfer::DataTransferSource`], ADR-0038);
 //! - the display vocabulary: [`DisplaySnapshot`], [`DisplayInfo`], the opaque
-//!   [`DisplayId`] a [`DisplayRegistry`] issues, and the validated
-//!   [`RefreshPeriod`] (ADR-0236);
+//!   [`DisplayId`] a [`DisplayRegistry`] issues, the validated
+//!   [`RefreshPeriod`] (ADR-0236), and each display's colour profile
+//!   ([`DisplayColor`]: its [`SurfaceColorSpace`] and [`Headroom`]);
 //! - the byte-storage capability [`Storage`] and its vocabulary
 //!   ([`StorageName`], [`StoredVersion`], [`WriteMode`], [`StorageError`]);
 //! - the text store an input method pulls from ([`TextStore`] and the rest of
@@ -18,12 +19,17 @@
 //!   ([`input_capabilities`], ADR-0213);
 //! - the two haptic tiers, their requests and outcomes ([`haptics`], ADR-0210);
 //! - the per-window contract [`PlatformWindow`] and the window vocabulary
-//!   ([`WindowId`], [`WindowOptions`], [`WindowEvent`],
+//!   ([`WindowId`], [`WindowOptions`],
 //!   [`WindowExecutionState`], [`CursorIcon`] and the errors window
 //!   operations return);
 //! - the window state contract: the [`WindowState`] snapshot a window
 //!   publishes, the [`WindowCommand`]s it takes and the
-//!   [`WindowCapabilities`] that say which (ADR-0237).
+//!   [`WindowCapabilities`] that say which (ADR-0237);
+//! - the [`WindowHandler`] a window is opened with: one method per obligation
+//!   the window has towards the code that opened it (ADR-0254 §4);
+//! - one vocabulary for absence: [`Unsupported`] and its
+//!   [`UnsupportedReason`], which every error that can mean "not here"
+//!   embeds, and [`Availability`] (ADR-0151 §4).
 //!
 //! No OS, winit, AccessKit or tokio type may appear here (ADR-0082 §1). That
 //! is the point of the crate: naming a contract must not link a backend, so a
@@ -95,6 +101,12 @@
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
+// A public enum is closed only where that is a decision: one more variant
+// later is a breaking change, so each closed enum says why it is closed.
+#![deny(clippy::exhaustive_enums)]
+// A `_` arm must not absorb a variant added later; see the
+// `wildcard_enum_match_arm` entry in the workspace `Cargo.toml`.
+#![warn(clippy::wildcard_enum_match_arm)]
 
 mod brightness;
 mod clipboard;
@@ -103,6 +115,7 @@ mod display;
 pub mod drag;
 mod event_time;
 mod flag_set;
+mod frame_request;
 mod haptic_feedback;
 pub mod haptics;
 mod host_notice;
@@ -112,16 +125,21 @@ pub mod input_capabilities;
 pub mod input_regions;
 pub mod keyboard;
 mod locale;
+pub mod os_options;
 mod placement;
 mod platform_window;
 pub mod pointer;
 mod preferences;
 mod storage;
+mod surface_target;
 mod system_chrome;
 mod target_platform;
+pub mod testing;
 mod text_input;
 pub mod text_store;
+mod unsupported;
 mod window;
+mod window_handler;
 mod window_state;
 
 pub use brightness::Brightness;
@@ -131,11 +149,13 @@ pub use clipboard::{Clipboard, ClipboardItem, InMemoryClipboard};
 pub use cursor_icon::CursorIcon;
 pub use data_transfer::{DataTransferOffer, DataTransferSource, NullDataTransferSource};
 pub use display::{
-    DisplayId, DisplayIdsExhausted, DisplayInfo, DisplayKey, DisplayRegistry, DisplayRevision,
-    DisplayRevisionExhausted, DisplaySnapshot, FrameRateHint, InvalidRefreshPeriod, RefreshPeriod,
-    WindowDisplay,
+    ColorGamut, DisplayColor, DisplayId, DisplayIdsExhausted, DisplayInfo, DisplayKey,
+    DisplayRegistry, DisplayRevision, DisplayRevisionExhausted, DisplaySnapshot, DynamicRange,
+    FrameRateHint, Headroom, InvalidHeadroom, InvalidRefreshPeriod, RefreshPeriod,
+    SurfaceColorSpace, WindowDisplay,
 };
 pub use event_time::EventTime;
+pub use frame_request::{FramePresented, FrameRequest};
 pub use haptic_feedback::HapticFeedback;
 pub use haptics::PlatformHaptics;
 pub use host_notice::{
@@ -144,8 +164,7 @@ pub use host_notice::{
 };
 pub use ime::ImeEvent;
 pub use input::{
-    DispatchEventResult, DragDropEvent, PlatformInput, delta_offset_from_coords, device_to_logical,
-    logical_to_device, offset_from_coords,
+    DispatchEventResult, DragDropEvent, EmptyPointerFrame, PlatformInput, PointerFrame,
 };
 pub use keyboard::{Code, Key, KeyEvent, KeyState, Location, Modifiers, NamedKey};
 pub use locale::{InvalidLocale, Locale};
@@ -166,15 +185,22 @@ pub use preferences::{
 pub use storage::{
     Storage, StorageError, StorageFuture, StorageName, Stored, StoredVersion, WriteMode,
 };
+pub use surface_target::{
+    DxgiFrameStatistics, RedrawRequester, SurfaceTarget, SwapChainStatistics,
+};
 pub use system_chrome::{PlatformSystemChrome, SystemUiOverlayStyle};
 pub use target_platform::TargetPlatform;
 pub use text_input::PlatformTextInput;
 pub use text_store::{TextStore, TextStoreEdit, TextStoreHost, TextStoreObserver, TextStoreRead};
+pub use unsupported::{Availability, CapabilityAbsence, Unsupported, UnsupportedReason};
 pub use window::{
-    CursorError, InputLatency, WindowAppearance, WindowBackgroundAppearance, WindowEvent,
-    WindowExecutionState, WindowId, WindowOptions, WindowReveal, WindowShowError,
+    CursorError, InputLatency, WindowAppearance, WindowExecutionState, WindowId, WindowMaterial,
+    WindowOptions, WindowReveal,
 };
+pub use window_handler::{CloseDecision, FrameOutcome, SurfaceChange, WindowHandler};
 pub use window_state::{
-    SizeConstraints, WindowCapabilities, WindowCommand, WindowCommandError, WindowControl,
-    WindowGeometry, WindowMode, WindowRevision, WindowRevisionExhausted, WindowState,
+    AdmissionError, AdmittedCommand, ApplyError, CapabilitiesOwner, CommandRefusal,
+    PlatformFailure, SizeConstraints, SubmitError, WindowCapabilities, WindowCommand,
+    WindowControl, WindowGeometry, WindowMode, WindowRevision, WindowRevisionExhausted,
+    WindowState,
 };

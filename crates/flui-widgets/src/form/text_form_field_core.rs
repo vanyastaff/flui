@@ -14,7 +14,9 @@ use flui_platform::text_store::TextInputPurpose;
 use flui_view::prelude::*;
 
 use super::AutovalidateMode;
-use super::form_field::{FormField, FormFieldHandle, FormFieldSetter, FormFieldValidator};
+use super::form_field::{
+    FormField, FormFieldHandle, FormFieldSetter, FormFieldValidator, ValueWrite,
+};
 use crate::support::EventCallback;
 use crate::text::{SubmitCallback, TextEditingController};
 
@@ -226,10 +228,11 @@ impl TextFormFieldCore {
         // The field's value is the committed text (ADR-0090): what an input
         // method is still composing is neither validated nor saved, and a
         // value the controller already holds is not written back over the
-        // composition.
+        // composition. A reset is the exception: the field shows the initial
+        // value and no preedit, whatever was committed.
         .value_binding(
-            Rc::new(move |value: &String| {
-                if sink.committed_text() == *value {
+            Rc::new(move |value: &String, write: ValueWrite| {
+                if write == ValueWrite::Change && sink.committed_text() == *value {
                     return;
                 }
                 if sink.text() == *value {

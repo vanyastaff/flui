@@ -4,6 +4,9 @@
 - **Дата:** 2026-10-05
 - **База:** `main` @ `4915054c8`
 - **Требования:** [requirements.md](requirements.md)
+- **Решения владельца 2026-10-28:** ветка ядра, календарь и go/no-go сняты; gate (d) строится на
+  загрузчике `api-closure` без ledger; (e) отброшено; Notes заменено приложением приёмки
+  (persistence P10). Сводка — в конце документа.
 - **Связанные:** [persistence/design.md](../persistence/design.md) (ждёт owner-local
   `AsyncDriver`), [teardown/design.md](../teardown/design.md) (порядок уничтожения полей realm,
   `DropLedger`), [research/2026-10-05-realm-model-experiment.ru.md](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/specs/realm-model/experiment.md) (граф на
@@ -90,7 +93,7 @@ issue #1162): `request_frame` — `if !frame_scheduled.swap(true, SeqCst) { hook
 
 **Первая задача — `AsyncDriver`/`FutureBuilder` в окончательной форме** (порядок оркестратора).
 Ломающее (строки 1–3 и 33 контракта), но окончательное: 6a его не переделывает, и промежуточного
-async API не бывает, даже если ядро не успеет к 11-24.
+async API не бывает.
 - `UpdateScheduler` пока `Send`, а `unsafe impl Send` запрещён (R5), поэтому задачи и post-frame
   очередь живут в отдельном `!Send` `OwnerFrame` (`#[doc(hidden)]`, поглощает
   `LocalPostFrameLane`). Единственная сильная ссылка — у realm (`RealmServices`) и `HeadlessBinding`.
@@ -139,7 +142,7 @@ R13. Цена: 6 дней (~80 вызовов входов кадра, почт�
 - **Рекурсия слушателей** (A ↔ B через контроллеры) глубиной не ограничивается — это синхронный
   пользовательский цикл; документируется. Мутатор с равным значением не уведомляет, а запись
   сигнала слушателей синхронно не вызывает, поэтому через сигналы цикла нет.
-- **`UiCommand::SignalWrite`** несёт `Box<dyn FnOnce(&mut EventCx<'_>) + Send>`; realm открывает
+- **`UiCommand::SignalWrite`** несёт `Box<dyn FnMut(&mut EventCx<'_>) + Send>`, вызываемый не больше одного раза; realm открывает
   `EventCx` через `WriterSource` presentation, выпустившей слот (ADR-0085 §1); envelope при
   панике удерживается (ревизия ADR-0086 от 2026-09-28).
 - **`LocalHistoryEntry::on_remove(impl Fn() + 'static)`** — сигнатура та же; pop, применённый во
@@ -151,20 +154,19 @@ R13. Цена: 6 дней (~80 вызовов входов кадра, почт�
 
 ### (d) Gate R3: перечень `Send`/`Sync` поверхности
 
-- **d1 rustdoc JSON + `rustdoc-types` в xtask (выбран).** Видит позиции структурно, включая
-  синтетические auto-trait impl; классифицирует по пути и позиции; закреплённый toolchain +
-  `RUSTC_BOOTSTRAP=1`; загрузчик общий с `api-closure` (ADR-0089 §6).
+- **d1 rustdoc JSON в xtask (выбран).** Видит позиции структурно, включая синтетические
+  auto-trait impl. Загрузчик — уже существующий `rustdoc_json` в `tools/xtask/src/api_closure.rs`
+  (ADR-0089 §6): тот же toolchain и тот же CI-джоб `doc`.
 - **d2 `cargo-public-api`.** Текст сигнатур и регэкспы; внешний бинарник и nightly. Отклонён.
 - **d3 только trybuild.** Не видит вхождений, которых нет в списке фикстур. Отклонён как gate,
   остаётся для R1.
 
-Выбор d1: команда `cargo xtask thread-boundary`. Строит rustdoc JSON для `flui` и `flui-sdk`
-с замыканием реэкспортов, перечисляет каждое вхождение `Send`/`Sync` (позиция, путь, тип) и
-auto-trait факты публичных типов. Сверяет с `tools/xtask/allowlists/thread-boundary.toml`:
-`keep` — путь, позиция, причина, точные счётчики, только сокращаются; `flip` — запрет на
-возврат; `owner-only` — типы, которые не должны быть `Send` (все `*Controller`, `AnimationController`,
-`UpdateScheduler`, `AsyncDriver`, `Signal`, `WriterSource`, …); `sendable` — типы, которые обязаны
-остаться `Send` (R4).
+Выбор d1. Gate строит rustdoc JSON для `flui` и `flui-sdk` с замыканием реэкспортов,
+перечисляет каждое вхождение `Send`/`Sync` (позиция, путь, тип) и сверяет со списком
+разрешённых позиций. Список снимается с поверхности после flip и только сокращается: новое
+вхождение и запись, которой больше нет в коде, — находки. Классификации flip/keep/owner-only/
+sendable с причинами (ledger ADR-0136) нет — решение владельца 2026-10-28; `Send` типов из R4
+держит consumer R4, `!Send` owner-типов — trybuild R1.
 
 **Позиции**, каждая со своей self-test fixture (крейт-заглушка, на котором gate обязан упасть):
 supertrait; bound параметра и where-clause; alias (`DynTrait`); поле публичного типа;
@@ -173,20 +175,20 @@ supertrait; bound параметра и where-clause; alias (`DynTrait`); пол
 `Base: Send`) — JSON строится с `--document-private-items`, и замыкание supertrait
 проходит по приватным элементам; `-> impl Trait + Send` в возврате. Вторая линия для трейтов —
 consumer R2: `!Send` реализатор каждого flip-трейта не скомпилируется, если bound спрятан
-где-то, чего ledger не видит.
+где-то, чего gate не видит.
 
-**Где работает.** Ledger вызывается изнутри `cargo xtask doc-strict`: джоб `doc` уже идёт на
-широкой линии, workflow не меняется; таймаут джоба 25 минут, время второго прохода rustdoc
-замеряется в пункте 2 работ (при превышении — по крейтам). `--self-test` — в `cargo test -p xtask`,
-то есть в `checks`; оркестратор правит текст R3 под это. Скан `unsafe impl Send/Sync` через `syn`
-(комментарии не считаются) с allowlist для `flui-platform`, `flui-hot-reload`, `tools/desktop-mcp`
-— без сборки, в `checks`. Загрузчика `api-closure` (ADR-0089 §6) ещё нет: его строит пункт 2.
-`deny.toml [bans]`: `send_wrapper`, `fragile`, `send-cell`, `unsend`, `force-send-sync`.
+**Где работает.** В CI-джобе `doc`, рядом с `api-closure`, на том же rustdoc JSON.
+`--self-test` — в `cargo test -p xtask`, то есть в `checks`. Скан `unsafe impl Send/Sync` через
+`syn` (комментарии не считаются) со списком для `flui-native`, `flui-hot-reload` и `tools/desktop-mcp` — без сборки, в
+`checks`. `deny.toml [bans]`: `send_wrapper`, `fragile`, `send-cell`, `unsend`, `force-send-sync`.
 Требования: R3, R4, R5. ADR: ADR-0089 §6.
 
 ### (e) Параллельная раскладка после 0.2.0 (D5)
 
-- **e1 (выбран): opt-in маркер и развилка у родителя.** После 0.2.0 аддитивно в `flui-rendering`:
+**Отброшено (владелец, 2026-10-28).** Opt-in `IndependentLayout` — непринятая часть ADR-0136;
+она не принимается и в работы не входит. Раздел ниже остаётся заметкой без обязательства.
+
+- **e1 (был выбран): opt-in маркер и развилка у родителя.** После 0.2.0 аддитивно в `flui-rendering`:
   ```rust
   /// Объект и всё, что он держит, можно раскладывать на другом потоке.
   pub trait IndependentLayout: RenderBox + Send {}
@@ -328,7 +330,7 @@ material 17/5/1/6/20; cupertino 2/–/–/–/2; devtools –/–/–/–/1; exa
    `Arc<dyn (Simulation|…)>` → `Rc<dyn …>`; `Arc<dyn Any + Send + Sync>` в metadata →
    `HitMetadata::new(v)`.
 3. Удалить `+ Send + Sync`/`+ Send` из supertrait и bound'ов flip-класса по списку строк gate
-   (`cargo xtask thread-boundary --report`), остальное — по ошибкам компилятора.
+   (отчёт gate R3), остальное — по ошибкам компилятора.
 4. Захваты `Arc<Mutex<_>>`/`Arc<AtomicX>`, которые существовали ради `Send` listener'а →
    `Rc<RefCell<_>>`/`Rc<Cell<_>>` (ручная правка; `clippy::arc_with_non_send_sync` их находит).
 5. Запись из listener через `SignalSender` + `UiCommand` (17 упоминаний) → захваченный
@@ -337,8 +339,9 @@ material 17/5/1/6/20; cupertino 2/–/–/–/2; devtools –/–/–/–/1; exa
 6. `.reactive()` (30, почти все в тестах) → `writer_source().write(..)` или `peek`.
 7. `local_post_frame_handle()` → `post_frame_handle()`, `.schedule_local(` → `.schedule(`.
 
-Notes (`examples/two_screens`, `tests/fixtures/notes_flow.rs`): изменений сигнатур не требует,
-`FutureBuilder` принимает прежний future; проверяется внешним consumer. Шаблоны `flui create`:
+Приложение приёмки (persistence P10; Notes, `examples/two_screens` и `tests/fixtures/notes_flow.rs`
+удалены): изменений сигнатур не требует, `FutureBuilder` принимает прежний future; проверяется
+внешним consumer. Шаблоны `flui create`:
 `hot_reload.rs` держит `Arc<AtomicI32>` — компилируется и после (Send-значения принимаются);
 проверка `cli_create::generated_*`. `flui migrate` не пишется (открытый вопрос 1 requirements):
 строки миграции — в `changelog.d/send-flip.md`, по строке на каждый элемент таблицы выше.
@@ -385,9 +388,9 @@ Notes (`examples/two_screens`, `tests/fixtures/notes_flow.rs`): изменени
 |---|---|---|---|
 | R1 | trybuild `tests/ui/thread_boundary/` в новом корневом `tests/thread_boundary_ui.rs` (группа `trybuild` в `.config/nextest.toml`): `animation_controller_stays_on_its_thread`, `scroll_controller_stays_on_its_thread`, `cupertino_tab_controller_stays_on_its_thread`, `async_driver_stays_on_its_thread` (НК); `signal_…`, `writer_source_…`, `writer_…`, `event_cx_…`, `state_cell_…`, `tab_controller_stays_on_its_thread` (РГ) | trybuild, `.stderr` со строкой ``within `AnimationController` `` | НК-фикстуры компилируются: trybuild «expected compile failure» |
 | R2 | `owner_local_values_fit_every_flip_position` — consumer через `flui` и через `flui-sdk`, по `Rc<Cell<_>>`-реализатору или замыканию на строку таблицы (B-строки выше) | consumer compile | E0277: `Rc<Cell<u8>>` cannot be sent/shared |
-| R3 | `cargo xtask thread-boundary` с целевым allowlist; `--self-test` | gate | supertrait `Listenable: Send` и др. не в keep |
+| R3 | gate R3 со списком разрешённых позиций; `--self-test` | gate | возвращённый `Send` в снятой позиции не в списке |
 | R4 | `cross_thread_handles_stay_sendable` — consumer шлёт `SignalSender`, `RebuildHandle`, `IoFuture`, `FrameWaker` в `thread::spawn` | consumer compile | `FrameWaker` не существует (НК); остальное РГ |
-| R5 | скан `unsafe impl` в `thread-boundary`, `--self-test`; `cargo xtask deps` с баном `send_wrapper` | gate | РГ (allowlist равен сегодняшнему) |
+| R5 | скан `unsafe impl` в `checks`, `--self-test`; `cargo xtask deps` с баном `send_wrapper` | gate | РГ (allowlist равен сегодняшнему) |
 | R6 | `event_setters_infer_cx_through_the_facade` — inline-замыкание без аннотаций на setter семейства | consumer compile | РГ |
 | R7 | таблица `owner_local_write_paths` (`flui-widgets/tests`, `flui-testing` на виртуальных часах): `listener_writes_through_a_captured_writer_source`, `animation_status_writes_through_a_captured_writer_source`, `post_frame_callback_writes_through_a_captured_writer_source`, `local_history_removal_writes_after_the_flush`, `tab_controller_listener_writes_from_an_event_callback`, `cross_thread_signal_write_opens_the_owner_writer_source` | nextest | не компилируется. Мутация: контроллер уведомляет, держа borrow своего `RefCell` → перестроенный подписчик читает контроллер → `BorrowError` |
 | R8 | trybuild `signal_write_through_build_context` дополнен `ctx.reactive()`; новая `headless_binding_exposes_no_reactive_graph` | trybuild | `reactive()` существует → `.stderr` не совпадает |
@@ -397,7 +400,7 @@ Notes (`examples/two_screens`, `tests/fixtures/notes_flow.rs`): изменени
 | R11 | матрица `owner_callback_panic_containment`: «одиночный сбой», «два сбоя в конкуренции», «следующий dispatch после локализации» для listener, status и post-frame; `nested_write_panics_inside_an_event_cx`; `listener_panic_reaches_the_realm_report` | nextest | не компилируется. Мутация: убрать catch раунда (локализация) → второй слушатель не вызван; вернуть «только `error!`» → отчёт realm пуст |
 | R12 | `notifier_reentry`: `listener_write_triggers_a_second_write`, `listener_replaced_from_inside_itself`, `last_owner_released_during_notify`, `nested_writer_source_inside_an_event_cx`, `listener_drop_reads_the_controller_during_dispose`, `last_controller_rc_dropped_at_round_end` | nextest | первые три не компилируются. Мутации: обход живой карты под borrow вместо снимка → `BorrowMutError`; снимок/заменённый уничтожается под borrow → `Drop`, зовущий `remove_listener`, паникует; без сильной ссылки на себя → `DropLedger` видит `Drop` до конца раунда. Четвёртая — РГ порядка |
 | R13 | `owner_local_captures_drop_once_on_the_owner_thread`: замена, unmount, teardown | nextest | не компилируется. Мутация: заменённый callback уничтожается под borrow реестра или клон снимка утекает → счётчик `Drop` ≠ 1 |
-| R14 | `cargo xtask check-changed`, `cli_create::generated_*`, `external_notes_showcase_runs_through_the_facade` | CI | — |
+| R14 | clippy и nextest изменённых крейтов, `cli_create::generated_*`, внешний consumer приложения приёмки (persistence P10) | CI | — |
 | R15 | `wasm_consumer_captures_rc_in_listener_and_post_frame` в `cargo xtask wasm-check`; `cargo xtask cross-typecheck` | wasm consumer | E0277 |
 | R16–R18 | `cargo xtask changelog --check`; ревью по списку; `cargo xtask docs-paths`, `rg "render.rs:451"` пуст | gate/ревью | — |
 
@@ -415,22 +418,24 @@ Send, Sync)` (`post_frame.rs:304`) удаляется в пользу gate и tr
    время `build` отказывает». Outstanding закрыт: `LocalHistoryEntry::on_remove` (вне `build`),
    `UiCommand::SignalWrite` через `WriterSource` (ADR-0074 §5.8), `&Reactive` (§8 шаг 3),
    `StateCell::schedule` (§7).
-2. **ADR (номер назначит оркестратор) «UI surfaces are owner-local; one thread-boundary
-   ledger».** (1) flip/keep с причинами, ledger `tools/xtask/allowlists/thread-boundary.toml`,
-   gate `cargo xtask thread-boundary`; (2) `OwnerFrame` у realm (единственная сильная ссылка),
+2. **ADR-0136 «UI surfaces are owner-local; one thread-boundary ledger»** (создан T1, принят
+   §2). Пункты (1) ledger и (7) `IndependentLayout` отброшены решением владельца 2026-10-28 и
+   записываются в ADR отброшенными; gate R3 — без ledger, см. (d). Исходный состав: (1)
+   flip/keep с причинами, ledger, gate; (2) `OwnerFrame` у realm (единственная сильная ссылка),
    `AsyncDriver` — `Weak`, через поток — только `FrameWaker` (защёлка из (b)) и `Waker`; (3) одна
    post-frame очередь; (4) контроллеры `Rc<RefCell>`, мутация в `build` отказывает; (5) паника
    слушателя — после раунда в отчёт realm; (6) никаких `unsafe impl Send/Sync` для UI-типов;
    (7) параллельная раскладка — opt-in `IndependentLayout` и шесть запретов (e). Amends ADR-0027
    §2 и §9 (§10 получает маркер); закрывает абзац ADR-0091 §1 о переходе.
 3. **ADR-0091:** §1 заменяет ADR realm-model (D4, номер назначит оркестратор); для R17 — Accepted
-   для §2–§6, `Superseded-by` для §1. **ADR-0089 §6:** загрузчик строит `thread-boundary`.
+   для §2–§6, `Superseded-by` для §1. **ADR-0089 §6:** загрузчик `api-closure` уже есть, gate
+   R3 строится на нём.
 
 ## Работы
 
-Слитое в `main` в любой момент — согласованная модель: окончательный async-драйвер, путь
-записи, ослабления — да; противоречивая половина перехода — нет. Ядро идёт интеграционной
-веткой `send-flip/core` и сливается одним PR (или не сливается до 0.3).
+Таблица ниже — исходная разбивка. Интеграционной ветки `send-flip/core` нет (решение владельца
+2026-10-28): пункты 1, 6a, 6b слиты в `main`, остаток идёт шестью PR прямо в `main`; их состав и
+порядок — в [tasks.md](tasks.md). Колонка «Ветка» устарела.
 
 | # | Работа | Ветка | Дни | Зависит | [P] / файлы | Linux remote |
 |---|---|---|---|---|---|---|
@@ -445,7 +450,7 @@ Send, Sync)` (`post_frame.rs:304`) удаляется в пользу gate и tr
 | 6d | C2: `HitMetadata`, делегаты, `ScrollPosition`, hit-test, semantics | core | 4 | 5 | [P] `flui-rendering`, `flui-objects`, `flui-interaction`, `flui-semantics` | да |
 | 6e | C2: контроллеры виджетов (кроме `TextEditingController`), конструкторы `impl Delegate`, пакеты, examples, шаблоны | core | 4 | 5 | [P] `flui-widgets` (кроме `text/controller.rs`), `packages/**`, `examples/**`, `flui-cli/src/templates` | да |
 | 7 | Закрытие: consumer R2/R4/R6/R15, trybuild R1, матрицы R10–R13 (пишутся в 6a–6e), целевой allowlist, docs (R18), changelog, ADR | core | 4 | 6a–6e, 2, 3 | — | да |
-| 8 | Нативный smoke Notes на Windows (`cargo xtask device windows-notes`) на SHA PR ядра | — | 0,5 | 7 | — | нет |
+| 8 | Устарело: Notes и `cargo xtask device` удалены; R14 проверяет внешний consumer приложения приёмки (persistence P10) | — | — | — | — | — |
 | 9 | `TextEditingController`: внутренний `Arc<Mutex>` → `Rc<RefCell>`; `with_inner_silent` (`text/controller.rs:994`) зовёт замыкание под замком — переделка с выносом состояния, не механика | core после text-ime T5 (или `main` после ядра) | 2 | 6e, T5 | `crates/flui-widgets/src/text/controller.rs` | да |
 
 Пункт 9 контракт не меняет: `TextEditingController` становится `!Send` через свой `ChangeNotifier`
@@ -457,24 +462,26 @@ Send, Sync)` (`post_frame.rs:304`) удаляется в пользу gate и tr
 `crates/flui-interaction/src/recognizers/**` и арена (ADR-0086 §4); `crates/flui-platform/**`,
 `crates/flui-platform-api/src/text_store/**`, `crates/flui-engine/**`. В `gesture_detector.rs` — одна строка (`:711`).
 
-Итого ≈ 48 человеко-дней. **Критический путь:** 1 (6) → 5 (4) → 6a (5) → 7 (4) → ревью, smoke и
-буфер (5) = 24 рабочих дня: 10-06 → 10-13 (1), 10-14 → 10-19 (5), 10-20 → 10-26 (6a),
-10-27 → 10-30 (7), 11-02 → 11-06 ревью; **цель мержа ядра ~11-09**. До отсечки 11-24 — 11 рабочих
-дней запаса (коэффициент ≈1,45 на критический путь). Пункты 2, 3, 4 и 6b–6e идут параллельно с
-непересекающимися файлами; каждый 6x — подветка ядра с CI. Ветка ядра перебазируется на `main`
-еженедельно; пункт 5 повторяется по рецепту, а не переносится конфликтами. GPU не нужен; Windows —
-только пункту 8.
+Сроки, критический путь и перебазирование ветки ядра сняты решением владельца 2026-10-28. GPU и
+Windows остатку не нужны.
 
 ## Риски
 
-1. **Конфликты интеграционной ветки (главный).** Пункт 5 касается ~100 файлов во всех крейтах,
-   пока в `main` идут persistence, teardown, **text-ime** (`flui-widgets/src/text/**`,
-   `TextEditingController`, T5) и authoring-styles. Смягчение: механика пункта 5 воспроизводится
-   скриптом (ast-grep); `text/controller.rs` вынесен в пункт 9 после T5; широкие рефакторинги
-   `flui-widgets` в окне 10-27 → 11-09 согласует оркестратор. Если 11-17 ядро не review-ready,
-   оркестратор готовит объявление для 0.3 (D3); в 0.2.0 остаются пункты 1–4, они согласованы.
-2. **Формат и время rustdoc JSON.** `RUSTC_BOOTSTRAP=1` на закреплённом stable; смена toolchain
-   меняет `FORMAT_VERSION` и требует обновить `rustdoc-types` в том же PR (`cargo xtask toolchain`
-   сверяет). Проход с `--document-private-items` — в джобе `doc` (25 минут); иначе — по крейтам.
+1. **Широкий остаток flip в `main`.** Остаток (tasks.md T10) касается многих крейтов, пока в
+   `main` идут text-ime, teardown и platform-layer. Смягчение: один PR на остаток, механика
+   call sites — ast-grep; `text/controller.rs` вынесен в T9 после text-ime T5.
+2. **Время rustdoc JSON.** Gate берёт тот же rustdoc JSON, что `api-closure`, в том же джобе
+   `doc`; проход с `--document-private-items` для sealed supertrait замеряется в PR gate.
 3. **Новые отказы во время `build`.** Мутация контроллера в `build` раньше проходила молча; код,
    который так делает, меняет поведение. Смягчение: `warn!` с именем контроллера, строка в changelog.
+
+## Решения владельца 2026-10-28
+
+1. Остаток flip — шесть PR прямо в `main`; ветки `send-flip/core`, рецепта перебазирования,
+   календаря, go/no-go и отсечки нет.
+2. Gate R3 строится на загрузчике rustdoc JSON `api-closure`; список разрешённых позиций `Send`
+   только сокращается; gate добавляет баны `deny.toml`.
+3. `ImageProvider` и `WidgetsLocalizations` остаются `Send` (как в строке keep выше).
+4. Непринятые части ADR-0136 — ledger и `IndependentLayout` — отброшены.
+5. Notes, `two_screens`, `notes_flow`, `cargo xtask device` и live-smoke удалены; приёмку через
+   facade даёт приложение приёмки (persistence P10).

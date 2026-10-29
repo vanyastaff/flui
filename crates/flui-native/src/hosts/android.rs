@@ -19,11 +19,12 @@ use crate::owner::android::ndk::SymbolSource;
 use crate::owner::android::{
     ActivityInput, ActivityPreferences, AndroidHost, AndroidLoop, HostDisplays,
 };
+use crate::owner::app_delivery::AppDelivery;
 use crate::owner::notices::NoticeChannel;
 use crate::owner::signal::OwnerSignal;
 use crate::platform::HostPlatform;
 use crate::preferences::android::AndroidPreferences;
-use crate::text::android::{AndroidTextInput, ViewInputMethod};
+use crate::text::android::ViewInputMethod;
 use crate::version::gate::android::AndroidApi;
 use crate::window::android::{AndroidWindow, system_chrome::AndroidSystemChrome};
 
@@ -38,7 +39,7 @@ impl Host for Android {
     type Window = AndroidWindow;
     type Displays = AndroidLoop;
     type Input = AndroidLoop;
-    type Text = std::rc::Rc<AndroidTextInput>;
+    type Text = ViewInputMethod;
     type Accessibility = Absent<position::Accessibility>;
     // The loop holds the clipboard and the transport `AndroidHost` makes.
     type Clipboard = AndroidLoop;
@@ -79,12 +80,12 @@ impl AndroidHost for Android {
         app: &AndroidApp,
         api: AndroidApi,
         signal: &Arc<OwnerSignal>,
-    ) -> Box<dyn ActivityPreferences> {
-        Box::new(AndroidPreferences::new(app, api, signal))
+    ) -> Arc<dyn ActivityPreferences> {
+        Arc::new(AndroidPreferences::new(app, api, signal))
     }
 
-    fn notices() -> Arc<dyn NoticeChannel> {
-        Arc::new(SystemNotices::default())
+    fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {
+        Arc::new(SystemNotices::new(Arc::clone(app)))
     }
 
     /// The lifecycle feature's reading of the Activity's callbacks.
@@ -102,6 +103,6 @@ impl HostPlatform<Android> {
     /// The Android platform over the Activity `android_main` was handed; the
     /// crate root's `android_platform` is its one caller.
     pub(crate) fn new(app: AndroidApp) -> Self {
-        Self::from_parts((), |_| AndroidLoop::new::<Android>(app))
+        Self::from_parts(|positions| positions, |_| AndroidLoop::new::<Android>(app))
     }
 }

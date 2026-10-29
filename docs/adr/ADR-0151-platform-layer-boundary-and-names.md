@@ -17,6 +17,13 @@
   behaviour, as the section says: since Rust 1.81 it aborts the process, with nothing in FLUI's
   diagnostics; out of an `extern "C-unwind"` frame it unwinds through foreign frames not written
   for it. Containment buys a logged failure and an answer the OS understands.
+- **Amended:** 2026-10-27 — sections 2 and 7: three items stay in the contract. `TransferCompleter`
+  is the producer half every source makes with its request (`TransferRequest::pending()` returns
+  both, so nothing claims a delivery before the request exists), test sources included;
+  `DeviceInputRegion` is plain data with the one projection (`DeviceInputRegion::project`) that
+  the core host's `ProjectedInputRegions` and the testing host both use; `KeyText` keeps a
+  character key's text non-empty by type. The rest of the list moved as written; the typed
+  `UriList` and `Image` payloads went with `TransferUri` and `TransferImage` (ADR-0038).
 - **Supersedes:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) §1 (what the contract crate
   holds), §2 (the crates' names and what the core host keeps), §4 step 2 (callbacks without
   `Send`, jointly with [ADR-0254](ADR-0254-window-contract.md)) and §5's Linux row (winit as the
@@ -63,7 +70,8 @@ source is named.
 - **The contract crate** (`flui-platform-api`) has 16,481 lines in `src/`, re-exported whole as
   `flui::platform`. 63% of it is text-store machinery (3,708 lines), keyboard (2,613), pointer
   (2,016), data transfer and drag (1,173) and haptics (868). Items with no production consumer
-  above the host sit in it: `WindowEvent`, `WindowBackgroundAppearance`, the `OfferTable` family, four
+  above the host sit in it: `WindowEvent`, `WindowBackgroundAppearance` (since replaced by `WindowCommand::SetMaterial`,
+  ADR-0254 §3), the `OfferTable` family, four
   coordinate helpers, and three test doubles (`InMemoryClipboard`, `InMemoryTextStore`,
   `FakeHaptics`). 26 of its 82 public enums are closed with no recorded decision (82 `pub enum`,
   56 of them with `#[non_exhaustive]`, over `crates/flui-platform-api/src`), and nine enums spell
@@ -261,11 +269,11 @@ and `HandleError`; `cursor-icon`; `serde` behind a feature), whatever ADR-0089's
 
 | Module | Fate |
 |---|---|
-| `brightness`, `locale`, `target_platform`, `event_time`, `keyboard/`, `pointer/`, `ime`, `text_input`, `input_capabilities/`, `display`, `placement`, `window_state`, `host_notice`, `preferences/`, `system_chrome`, `haptic_feedback`, `haptics/`, `drag`, `storage` | Stay. `keyboard` loses `KeyText`; `display` moves to `std::sync::Mutex`; `haptics/` loses `FakeHaptics` |
+| `brightness`, `locale`, `target_platform`, `event_time`, `keyboard/`, `pointer/`, `ime`, `text_input`, `input_capabilities/`, `display`, `placement`, `window_state`, `host_notice`, `preferences/`, `system_chrome`, `haptic_feedback`, `haptics/`, `drag`, `storage` | Stay. `display` moves to `std::sync::Mutex`; `haptics/` loses `FakeHaptics` |
 | `window`, `platform_window` | Reworked by ADR-0254: snapshot, `AdmittedCommand`, `WindowHandler`, `!Send` window and `SurfaceTarget`. `WindowEvent`, `WindowBackgroundAppearance`, the getters and the command twins are removed |
 | `input` | `PlatformInput`, `DispatchEventResult` and `DragDropEvent` stay; the coordinate helpers move to the core host |
-| `input_regions` | `InputRegion` and `InputRegionKind` stay; `DeviceInputRegion` and `ProjectedInputRegions` move to the core host |
-| `data_transfer` | The vocabulary stays; `OfferTable`, `OfferRecord`, `TransferCompleter`, `TransferUri` and `TransferImage` move to the core host |
+| `input_regions` | `InputRegion`, `InputRegionKind` and `DeviceInputRegion` stay; `ProjectedInputRegions` moves to the core host |
+| `data_transfer` | The vocabulary stays, `TransferCompleter` with it; `OfferTable`, `OfferRecord`, `TransferUri` and `TransferImage` move to the core host |
 | `clipboard` | Removed. Clipboard is a service behind the seam: its handle in `flui-interaction`, its provider in `flui-app` over the core host's clipboard (section 7) |
 | `text_store/` | Section 6 |
 | `unsupported` (new) | `Unsupported`, `UnsupportedReason`, `Availability` (section 4) |
@@ -340,7 +348,8 @@ mean absence, in place of the nine spellings found today (`WindowCommandError`,
 `WindowShowError`, `CursorError`, `DragError`, the haptic outcome enum, `StorageError`,
 `PreferenceQueryError`, `TextStoreHostError` and `Availability`). Its reasons are
 `NotOnThisPlatform`, `NotOnThisDevice` (the OS build or the hardware of this device lacks it; the
-value names no version), `NotDeclared { what }`, `Unavailable` (temporary; trying again may
+value names no version), `NotYetOnThisHost` (the OS has it and this host does not implement it
+yet; added 2026-10-27, ADR-0152), `NotDeclared { what }`, `Unavailable` (temporary; trying again may
 succeed), `NotRegistered` and `NoWindow`. It is built with `Unsupported::new(reason)`, or with
 `Unsupported::of::<C>(reason)` when a capability's name belongs in the message (ADR-0152).
 `Availability` (native, emulated, unavailable) moves from the input capabilities into the
@@ -429,14 +438,14 @@ containment, the owner hearing committed text) stand. `InMemoryTextStore` moves 
   implementation, `pub(crate)` in the core host (the headless host is a runtime-selected host
   and cannot depend on `flui-testing`), and a scripted double in `flui-testing`. The roles differ:
   the buffer of a headless host against the sequence of answers a test scripts.
-- **Host-only items move into the core host as `pub(crate)`:** `OfferTable`, `OfferRecord`,
-  `TransferCompleter`, `TransferUri`, `TransferImage`, `device_to_logical`, `logical_to_device`,
-  `offset_from_coords`, `delta_offset_from_coords`, `DeviceInputRegion`, `ProjectedInputRegions`,
+- **Host-only items move into the core host as `pub(crate)`:** `OfferTable`, `OfferRecord`
+  (dissolved into the table), `TransferUri`, `TransferImage` (deleted with its payload),
+  `ProjectedInputRegions`, the coordinate helpers (deleted: nothing called them),
   and the drag provider hooks `OsDragProvider` and `OsDragEndHook`, which nothing above the host
   names at `083b0f75d` (`PlatformDragSource` and the drag vocabulary stay).
-- **Deleted:** `WindowEvent`, `Platform::on_window_event`, `KeyText`, and
-  `WindowBackgroundAppearance`, which a background-material command gated by a window capability
-  replaces (ADR-0254).
+- **Deleted:** `WindowEvent`, `Platform::on_window_event` and
+  `WindowBackgroundAppearance`, which the command `WindowCommand::SetMaterial`, admitted against
+  `WindowCapabilities::material`, replaces (ADR-0254 §3).
 - **Kept, and wired.** `WindowOptions::input_latency` has no setter above the host today (only
   the Android and Web hosts read it). It stays in the contract, and the application's window
   configuration, its consumer, sets it in the same series.
@@ -482,7 +491,8 @@ The application-level registrations that remain (`on_quit`, `on_reopen`, `on_ses
 framework handed it, there is one slot and one drop order, and nothing is registered late.
 
 `AppHandler` is a trait of the core host (`flui-native`), not of the contract: it names
-`OwnerPlatform`, and only `flui-app` implements it. Its obligations are exactly what `Platform`
+`OwnerPlatform`, so only code that runs a host itself implements it: `flui-app`, and an example or
+a test that drives `flui-native` directly. Its obligations are exactly what `Platform`
 registers today, as required methods with no default body: `ready(OwnerPlatform)` (the bootstrap
 that `PlatformReadyCallback` carried), `quit_requested`, `reopen`, `session_end` (answering with
 `SessionEndAnswer`), `host_notice`, and the two queries the loop asks, `exit_policy` and

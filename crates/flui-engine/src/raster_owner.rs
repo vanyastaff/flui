@@ -219,18 +219,9 @@ struct InFlightAccounting {
     /// example of acceptable wake machinery, which is the defect #949 is
     /// about. Copy the reentrancy discipline from it, not the example.
     ///
-    /// **Do not call `PlatformWindow::request_redraw` from it.** This doc used
-    /// to offer that as an example, and it is the one thing the hook must not
-    /// do. `PlatformWindow` is `Send + Sync`, so the call compiles from any
-    /// thread; on macOS it messages the NSWindow's content view, and
-    /// `MacOSWindow`'s `unsafe impl Send` states its whole justification as
-    /// "the NSWindow pointer is only messaged from the main thread". That
-    /// backend is compiled by CI and never linked or executed, so a hook that
-    /// gets this wrong goes green everywhere. `flui-app`'s `FrameWakeHandle`
-    /// does make the call directly — it is not the example to copy here, and
-    /// issue #949 tracks the same defect on its own path.
-    ///
-    /// ADR-0045 decision 5 names the shape that is correct for a hook fired
+    /// **The raster side never asks the window for a frame** (ADR-0045
+    /// decision 5). The window is not `Send` (ADR-0254 §5), so a hook here
+    /// cannot reach it; ADR-0045 decision 5 names the shape for a hook fired
     /// off the owner thread: push onto a channel, and let the platform's own
     /// event-loop waker drain it where the window may be touched.
     wake: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,

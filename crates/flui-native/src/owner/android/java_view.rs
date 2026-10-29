@@ -42,7 +42,7 @@ use crate::owner::signal::OwnerSignal;
 use crate::version::gate::Since;
 use crate::version::gate::android::{AndroidApi, InMemoryDex};
 
-use super::ActivityWindow;
+use super::{ActivityWindow, ActivityWindowId};
 use crate::owner::android::activity::with_activity;
 
 /// The view's classes, compiled from `android/java` (see the module doc).
@@ -91,6 +91,21 @@ pub(crate) trait ViewTransfer: flui_platform::data_transfer::DataTransferSource 
 
     /// The action FLUI's target took when FLUI's own drag dropped on it, once.
     fn take_local_drop(&self) -> Option<flui_platform::data_transfer::TransferActions>;
+
+    /// The system drag source of a window over `view`, at `api`: the drags
+    /// that window starts are the view's (`View.startDragAndDrop`).
+    fn drag_source(&self, view: Arc<JavaView>, api: AndroidApi) -> Arc<dyn ActivityDragSource>;
+}
+
+/// A window's system drag source as the window that holds it reaches it:
+/// what it hands out, and what the loop tells it through the window.
+pub(crate) trait ActivityDragSource: flui_platform::drag::PlatformDragSource {
+    /// The system drag ended: `result` is whether a target took it. Owner
+    /// thread.
+    fn finish(&self, result: bool);
+
+    /// The window closed: a running drag ends cancelled. Owner thread.
+    fn retire(&self);
 }
 
 /// Makes the host's [`ViewTransfer`] for the view it is given, which it reaches
@@ -151,6 +166,23 @@ pub(crate) trait InputMethod: Send + Sync {
     /// take the stroke. Android's own initiation sees only the stylus events
     /// native code leaves unhandled.
     fn pen_down(&self, window: &dyn ActivityWindow, at: flui_foundation::geometry::Point<f64>);
+
+    /// The window `window` opened over `view` at `api`: from now on the input
+    /// method edits its field, which this keeps until the window closes. On
+    /// the owner thread.
+    fn window_opened(&self, window: ActivityWindowId, view: &Arc<JavaView>, api: AndroidApi);
+
+    /// `window` is going away: its field is detached for good, and work the
+    /// input method made for it finds none. On the owner thread.
+    fn window_closed(&self, window: ActivityWindowId);
+
+    /// The store host of `window`'s field, which serves the focused field to
+    /// the input method; `None` for a window this does not hold. On the owner
+    /// thread.
+    fn store_host(
+        &self,
+        window: ActivityWindowId,
+    ) -> Option<std::rc::Rc<dyn flui_platform::text_store::TextStoreHost>>;
 }
 
 /// What the text feature made of one of the input method's calls through the

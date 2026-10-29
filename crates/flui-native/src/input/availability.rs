@@ -8,7 +8,8 @@
 //! [`InputCapabilities::with_present`]. The functions are cfg-free so Linux CI
 //! runs every backend's table.
 
-use flui_platform::input_capabilities::{Availability, InputCapabilities};
+use flui_platform::Availability;
+use flui_platform::input_capabilities::InputCapabilities;
 
 use Availability::{Emulated, Native, Unavailable};
 
@@ -129,6 +130,47 @@ pub const fn winit(session: WinitSession) -> InputCapabilities {
             .build(),
         WinitSession::Wayland => builder.precise_scroll(Native).build(),
         WinitSession::Windows | WinitSession::X11 => builder.precise_scroll(Unavailable).build(),
+    }
+}
+
+/// The protocols beside `wl_seat` a Wayland compositor offers for input.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct WaylandInputGlobals {
+    /// `zwp_tablet_manager_v2`: pens and other tablet tools.
+    pub tablet: bool,
+    /// `zwp_pointer_gestures_v1`: a touchpad's pinch.
+    pub pointer_gestures: bool,
+}
+
+/// The native Wayland backend with the compositor's `globals`: a touchpad's
+/// two-finger scrolling arrives as `wl_pointer` axis frames from a finger
+/// source with a stop at the lift, delivered as phased precise scrolling;
+/// pens arrive through `tablet-v2` and a touchpad's pinch through
+/// `pointer-gestures`, where the compositor has them. No system gesture can
+/// be excluded, and no drag leaves the window yet (`wl_data_device`).
+#[must_use]
+pub const fn wayland(globals: WaylandInputGlobals) -> InputCapabilities {
+    let mut builder = InputCapabilities::builder().precise_scroll(Native);
+    if globals.tablet {
+        builder = builder.pen(Native);
+    }
+    if globals.pointer_gestures {
+        builder = builder.trackpad_gestures(Native);
+    }
+    builder.build()
+}
+
+/// The native X11 backend: XInput 2 carries pen input (a tablet's stylus and
+/// eraser) and touch, and on a server with XInput 2.4 (`gestures`) a
+/// touchpad's pinch; its smooth scrolling has no phases, and there is no
+/// outgoing drag yet.
+#[must_use]
+pub const fn x11(gestures: bool) -> InputCapabilities {
+    let builder = InputCapabilities::builder().pen(Native);
+    if gestures {
+        builder.trackpad_gestures(Native).build()
+    } else {
+        builder.build()
     }
 }
 

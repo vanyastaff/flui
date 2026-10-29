@@ -1,0 +1,768 @@
+//! The AppKit window against the window conformance checks of `flui-testing`,
+//! with AppKit's own answers as the readback.
+//!
+//! Its own harness: AppKit windows are built on the main thread, which a
+//! libtest worker is not. The cases build wherever the macOS target is
+//! type-checked; they run only on a Mac.
+
+fn main() {
+    #[cfg(target_os = "macos")]
+    {
+        let mut arguments = libtest_mimic::Arguments::from_args();
+        // One thread: the cases run on the main thread.
+        arguments.test_threads = Some(1);
+        let trials = cases::CASES
+            .iter()
+            .map(|&(name, case)| {
+                libtest_mimic::Trial::test(name, move || {
+                    case();
+                    Ok(())
+                })
+            })
+            .collect();
+        libtest_mimic::run(&arguments, trials).exit();
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod cases {
+    use std::rc::Rc;
+    use std::time::{Duration, Instant};
+
+    use flui_foundation::geometry::{Size, WindowMetrics};
+    use flui_native::testing::appkit;
+    use flui_native::{HostWindow, MacOSPlatform, Platform as _};
+    use flui_platform::{
+        Availability, PlatformWindow, WindowCommand, WindowMaterial, WindowOptions,
+    };
+    use flui_testing::window_commands::AdmitAndApply as _;
+    use flui_testing::window_conformance::{self, Readback, WindowFixture};
+    use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
+    use objc2::MainThreadMarker;
+    use objc2::rc::Retained;
+    use objc2_app_kit::{
+        NSApplication, NSApplicationActivationPolicy, NSView, NSVisualEffectMaterial,
+        NSVisualEffectView, NSWindow, NSWindowOcclusionState,
+    };
+
+    pub(super) const CASES: &[(&str, fn())] = &[
+        ("the_appkit_window_conforms", the_appkit_window_conforms),
+        (
+            "a_window_zoomed_before_full_screen_returns_to_normal",
+            a_window_zoomed_before_full_screen_returns_to_normal,
+        ),
+        (
+            "a_window_sent_to_normal_takes_a_fixed_size_in_the_same_turn",
+            a_window_sent_to_normal_takes_a_fixed_size_in_the_same_turn,
+        ),
+        (
+            "a_window_heading_out_of_full_screen_cannot_be_fixed_in_size",
+            a_window_heading_out_of_full_screen_cannot_be_fixed_in_size,
+        ),
+        (
+            "a_newer_mode_drops_a_fixed_size_held_for_normal",
+            a_newer_mode_drops_a_fixed_size_held_for_normal,
+        ),
+        (
+            "a_window_behind_a_backdrop_still_reports_its_frames",
+            a_window_behind_a_backdrop_still_reports_its_frames,
+        ),
+        (
+            "one_redraw_is_one_frame_request",
+            one_redraw_is_one_frame_request,
+        ),
+        (
+            "a_redraw_from_another_thread_is_queued_without_waiting",
+            a_redraw_from_another_thread_is_queued_without_waiting,
+        ),
+        (
+            "a_surface_target_keeps_its_view_and_releases_it_on_main",
+            a_surface_target_keeps_its_view_and_releases_it_on_main,
+        ),
+        (
+            "a_minimized_window_is_still_shown",
+            a_minimized_window_is_still_shown,
+        ),
+        (
+            "a_size_outside_the_constraints_is_held_to_them",
+            a_size_outside_the_constraints_is_held_to_them,
+        ),
+        (
+            "a_closed_window_frees_its_view",
+            a_closed_window_frees_its_view,
+        ),
+        (
+            "each_display_is_named_as_appkit_names_its_screen",
+            each_display_is_named_as_appkit_names_its_screen,
+        ),
+        (
+            "each_display_reports_the_colour_appkit_reports",
+            each_display_reports_the_colour_appkit_reports,
+        ),
+    ];
+
+    /// The snapshot names a display the way System Settings does, from
+    /// `NSScreen.localizedName`, screen by screen in AppKit's order.
+    fn each_display_is_named_as_appkit_names_its_screen() {
+        use objc2_app_kit::NSScreen;
+
+        let mtm = MainThreadMarker::new().expect("the cases run on the main thread");
+        let platform = MacOSPlatform::new().expect("the AppKit platform");
+        let snapshot = platform.display_snapshot().expect("a display snapshot");
+        let names: Vec<String> = NSScreen::screens(mtm)
+            .iter()
+            .map(|screen| screen.localizedName().to_string())
+            .collect();
+        let published: Vec<&str> = snapshot
+            .displays()
+            .iter()
+            .map(|display| display.name.as_str())
+            .collect();
+        assert_eq!(published, names, "the snapshot's display names");
+    }
+
+    /// The snapshot gives each display the colour its screen reports: Display
+    /// P3 where AppKit says the screen can show it, and high range at the
+    /// screen's potential headroom where that is over white. The values are
+    /// printed, so a run records what this machine's screens report.
+    fn each_display_reports_the_colour_appkit_reports() {
+        use flui_platform::{ColorGamut, DisplayColor, Headroom};
+        use objc2_app_kit::{NSDisplayGamut, NSScreen};
+
+        let mtm = MainThreadMarker::new().expect("the cases run on the main thread");
+        let platform = MacOSPlatform::new().expect("the AppKit platform");
+        let snapshot = platform.display_snapshot().expect("a display snapshot");
+        let screens = NSScreen::screens(mtm);
+        assert_eq!(
+            snapshot.displays().len(),
+            screens.len(),
+            "one display a screen"
+        );
+        for (display, screen) in snapshot.displays().iter().zip(screens.iter()) {
+            let p3 = screen.canRepresentDisplayGamut(NSDisplayGamut::P3);
+            let potential = screen.maximumPotentialExtendedDynamicRangeColorComponentValue();
+            let current = screen.maximumExtendedDynamicRangeColorComponentValue();
+            println!(
+                "{}: p3 {p3}, potential EDR {potential}, current EDR {current}, published {:?}",
+                display.name, display.color
+            );
+            let gamut = if p3 {
+                ColorGamut::DisplayP3
+            } else {
+                ColorGamut::Srgb
+            };
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "a screen's headroom is a small multiple of white"
+            )]
+            let expected = if potential > 1.0 {
+                DisplayColor::high(
+                    gamut,
+                    Ok(Headroom::try_new(potential as f32).expect("a finite headroom over white")),
+                )
+            } else {
+                DisplayColor::standard(gamut)
+            };
+            assert_eq!(
+                display.color,
+                Ok(expected),
+                "{}: the published colour",
+                display.name
+            );
+        }
+    }
+
+    /// The application as `MacOSPlatform::run` makes it before its loop: a
+    /// regular application that has finished launching and is active, so its
+    /// window can become key and enter full screen.
+    fn launched(mtm: MainThreadMarker) -> Retained<NSApplication> {
+        let app = NSApplication::sharedApplication(mtm);
+        app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+        app.finishLaunching();
+        #[expect(deprecated, reason = "the call `MacOSPlatform::run` makes")]
+        app.activateIgnoringOtherApps(true);
+        app
+    }
+
+    /// The FLUI view an open FLUI window's raw handle names.
+    #[expect(
+        unsafe_code,
+        reason = "the FLUI view behind an open AppKit window's raw window handle"
+    )]
+    fn ns_view_of(window: &dyn HostWindow) -> Retained<NSView> {
+        use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+
+        let target = window.surface_target();
+        let handle = target.window_handle().expect("a live AppKit window");
+        let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+            panic!("an AppKit window hands out an AppKit handle");
+        };
+        // SAFETY: an AppKit window's handle names its FLUI view, which the
+        // open window's view hierarchy keeps alive; retaining it gives this
+        // test its own reference on the main thread the cases run on.
+        unsafe { Retained::retain(handle.ns_view.as_ptr().cast::<NSView>()) }
+            .expect("the handle names a view")
+    }
+
+    /// The AppKit window behind an open FLUI window's raw handle.
+    fn ns_window_of(window: &dyn HostWindow) -> Retained<NSWindow> {
+        ns_view_of(window)
+            .window()
+            .expect("the FLUI view is in its window")
+    }
+
+    /// An AppKit window for the conformance checks. Dropping it closes the
+    /// window and settles, so a case that fails part way leaves no window for
+    /// the next one.
+    struct AppKitFixture {
+        app: Retained<NSApplication>,
+        _platform: MacOSPlatform,
+        window: Rc<dyn HostWindow>,
+        ns_window: Retained<NSWindow>,
+        handler: Rc<RecordingWindowHandler>,
+    }
+
+    impl WindowFixture for AppKitFixture {
+        fn window(&self) -> Rc<dyn PlatformWindow> {
+            Rc::clone(&self.window) as Rc<dyn PlatformWindow>
+        }
+
+        fn readback(&self) -> Readback {
+            let ns_window = &self.ns_window;
+            let miniaturized = ns_window.isMiniaturized();
+            let content = ns_window.contentRectForFrameRect(ns_window.frame());
+            let metrics = (!miniaturized)
+                .then(|| {
+                    WindowMetrics::from_logical(
+                        Size::new(content.size.width, content.size.height),
+                        ns_window.backingScaleFactor(),
+                    )
+                    .ok()
+                })
+                .flatten();
+            let focused = ns_window.isKeyWindow();
+            Readback {
+                metrics,
+                focused,
+                active: focused && self.app.isActive(),
+                // Shown, as `WindowState::visible` means it: on screen, or in
+                // the Dock, where AppKit does not call it `isVisible`.
+                visible: ns_window.isVisible() || miniaturized,
+                occluded: Some(
+                    !ns_window
+                        .occlusionState()
+                        .contains(NSWindowOcclusionState::Visible),
+                ),
+                material: self.material(),
+            }
+        }
+
+        fn settle(&mut self) {
+            // Until the snapshot stops moving: a mode change animates for
+            // most of a second, and a full-screen transition can go most of
+            // one without publishing.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut last = self.window.state().revision;
+            let mut quiet_since = Instant::now();
+            while Instant::now() < deadline {
+                appkit::run_for(Duration::from_millis(50));
+                let now = self.window.state().revision;
+                if now == last {
+                    if quiet_since.elapsed() >= Duration::from_secs(1) {
+                        return;
+                    }
+                } else {
+                    last = now;
+                    quiet_since = Instant::now();
+                }
+            }
+        }
+
+        /// The window system's own close, the title bar's close button: the
+        /// checks reach it only for a window that does not take
+        /// `WindowCommand::Close`. Cleanup is `Drop`'s.
+        fn close(&mut self) {
+            self.ns_window.performClose(None);
+            self.settle();
+        }
+
+        /// The AppKit input table: an AppKit window hands the system no input
+        /// region.
+        fn input_regions(&self) -> Availability {
+            flui_native::input::availability::macos().input_regions()
+        }
+
+        /// The checks run on the main thread, where an AppKit window's target
+        /// hands out its view.
+        fn has_native_surface(&self) -> bool {
+            true
+        }
+
+        /// Drawables presented into the window's own layer the way wgpu's
+        /// Metal backend presents them: each from the layer's `nextDrawable`,
+        /// by a command buffer's `presentDrawable:`. Metal reports a shown
+        /// drawable on a thread of its own, so the frames go out over a few
+        /// refreshes before the window asks for its next frame.
+        #[expect(unsafe_code, reason = "the backing layer of the window's FLUI view")]
+        fn present_and_request_frame(&mut self) -> Option<flui_platform::FrameRequest> {
+            use objc2::runtime::{AnyObject, ProtocolObject};
+            use objc2_metal::{
+                MTLCommandBuffer as _, MTLCommandQueue as _, MTLCreateSystemDefaultDevice,
+                MTLDevice as _, MTLDrawable, MTLPixelFormat,
+            };
+            use objc2_quartz_core::CAMetalLayer;
+
+            let view = ns_view_of(self.window.as_ref());
+            // SAFETY: `layer` answers the live view's backing layer.
+            let layer: Option<Retained<AnyObject>> = unsafe { objc2::msg_send![&*view, layer] };
+            let layer = layer
+                .expect("the FLUI view is layer-backed")
+                .downcast::<CAMetalLayer>()
+                .expect("the FLUI view's layer is a CAMetalLayer");
+            let device = MTLCreateSystemDefaultDevice().expect("a Metal device");
+            layer.setDevice(Some(&device));
+            layer.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
+            let queue = device.newCommandQueue().expect("a Metal command queue");
+            for _ in 0..10 {
+                let drawable = layer.nextDrawable().expect("a drawable");
+                let buffer = queue.commandBuffer().expect("a Metal command buffer");
+                buffer.presentDrawable(ProtocolObject::<dyn MTLDrawable>::from_ref(&*drawable));
+                buffer.commit();
+                appkit::run_for(Duration::from_millis(20));
+            }
+            self.handler.take_calls();
+            self.window.request_redraw();
+            self.settle();
+            let request = self
+                .handler
+                .take_calls()
+                .into_iter()
+                .rev()
+                .find_map(|call| match call {
+                    HandlerCall::FrameRequested(request) => Some(request),
+                    _ => None,
+                });
+            if let Some(request) = request {
+                eprintln!(
+                    "the next frame request: vsync {:?}, presented {:?}",
+                    request.vsync, request.presented
+                );
+            }
+            request
+        }
+    }
+
+    impl Drop for AppKitFixture {
+        fn drop(&mut self) {
+            // A window the checks closed already is closed; any other refusal
+            // is logged, so a case already unwinding keeps its first failure.
+            self.window.close_for_cleanup();
+            self.settle();
+        }
+    }
+
+    impl AppKitFixture {
+        /// The contract's material AppKit draws behind the window: an
+        /// `NSVisualEffectView` with the window-background material as the
+        /// content view is `System`, another material has no name here, and
+        /// FLUI's view as the content view, no effect view, is `Opaque`.
+        fn material(&self) -> Option<WindowMaterial> {
+            let content = self.ns_window.contentView()?;
+            match content.downcast::<NSVisualEffectView>() {
+                Ok(effect) => (effect.material() == NSVisualEffectMaterial::WindowBackground)
+                    .then_some(WindowMaterial::System),
+                Err(_) => Some(WindowMaterial::Opaque),
+            }
+        }
+    }
+
+    /// A shown AppKit window, settled.
+    fn open(title: &str) -> AppKitFixture {
+        let mtm = MainThreadMarker::new().expect("the cases run on the main thread");
+        let app = launched(mtm);
+        let platform = MacOSPlatform::new().expect("the AppKit platform");
+        let handler = RecordingWindowHandler::new();
+        let window = platform
+            .open_window(
+                WindowOptions::default().with_title(title),
+                Rc::clone(&handler) as _,
+            )
+            .expect("an AppKit window opens");
+        let ns_window = ns_window_of(window.as_ref());
+        let mut fixture = AppKitFixture {
+            app,
+            _platform: platform,
+            window,
+            ns_window,
+            handler,
+        };
+        fixture.settle();
+        fixture
+    }
+
+    fn the_appkit_window_conforms() {
+        let mut fixture = open("window conformance");
+        window_conformance::assert_conforms(&mut fixture);
+    }
+
+    /// A redraw asked for on another thread is queued for the main thread,
+    /// not waited for: the asking thread is done while the main thread is
+    /// still joined on it, and the frame arrives once AppKit runs again.
+    fn a_redraw_from_another_thread_is_queued_without_waiting() {
+        let fixture = open("redraw from another thread");
+        let frames = |handler: &RecordingWindowHandler| {
+            handler
+                .take_calls()
+                .iter()
+                .filter(|call| matches!(call, HandlerCall::FrameRequested(_)))
+                .count()
+        };
+
+        fixture.handler.take_calls();
+        appkit::run_for(Duration::from_millis(500));
+        assert_eq!(
+            frames(&fixture.handler),
+            0,
+            "a settled window asks for no frame of its own"
+        );
+
+        let requester = fixture.window.redraw_requester();
+        std::thread::spawn(move || requester.request_redraw())
+            .join()
+            .expect("the asking thread");
+        assert_eq!(
+            frames(&fixture.handler),
+            0,
+            "no frame runs before the main thread runs AppKit"
+        );
+        appkit::run_for(Duration::from_millis(500));
+        assert!(
+            frames(&fixture.handler) >= 1,
+            "the redraw asked for on another thread produced no frame request"
+        );
+    }
+
+    /// A backdrop material makes an `NSVisualEffectView` the window's content
+    /// view and moves FLUI's view inside it; the view keeps its own layer, and
+    /// the frames drawn into it are still reported shown.
+    fn a_window_behind_a_backdrop_still_reports_its_frames() {
+        let mut fixture = open("presented behind a backdrop");
+        fixture
+            .window
+            .admit_and_apply(WindowCommand::SetMaterial(WindowMaterial::System))
+            .unwrap_or_else(|refusal| panic!("SetMaterial(System) was refused: {refusal:?}"));
+        fixture.settle();
+        assert_eq!(fixture.material(), Some(WindowMaterial::System));
+        let request = fixture
+            .present_and_request_frame()
+            .expect("the window asks for a frame");
+        assert!(
+            request.presented.is_some(),
+            "a frame shown behind a backdrop was reported: {request:?}"
+        );
+    }
+
+    /// A redraw is one frame request: the view's layer asks it for content
+    /// once per display pass, whichever of AppKit's routes reaches it.
+    fn one_redraw_is_one_frame_request() {
+        let fixture = open("one frame per redraw");
+        let frames = |handler: &RecordingWindowHandler| {
+            handler
+                .take_calls()
+                .iter()
+                .filter(|call| matches!(call, HandlerCall::FrameRequested(_)))
+                .count()
+        };
+        for _ in 0..3 {
+            fixture.handler.take_calls();
+            fixture.window.request_redraw();
+            appkit::run_for(Duration::from_millis(300));
+            assert_eq!(
+                frames(&fixture.handler),
+                1,
+                "one redraw asked for one frame"
+            );
+        }
+    }
+
+    /// A surface target holds a reference of its own to its window's view, so
+    /// a renderer that outlives the window holds no dangling view; dropped on
+    /// another thread, it gives that reference back in a later turn of the
+    /// main queue, not on the dropping thread.
+    #[expect(
+        unsafe_code,
+        reason = "the view behind the target's raw handle, and its retain count"
+    )]
+    fn a_surface_target_keeps_its_view_and_releases_it_on_main() {
+        use objc2::msg_send;
+        use objc2::rc::autoreleasepool;
+        use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+
+        // SAFETY: `retainCount` on a live view, on the main thread.
+        let count = |view: &NSView| -> usize { unsafe { msg_send![view, retainCount] } };
+        let (target, view) = autoreleasepool(|_| {
+            let fixture = open("surface target outlives its window");
+            let view = {
+                let target = fixture.window.surface_target();
+                let handle = target.window_handle().expect("an open window's handle");
+                let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+                    panic!("an AppKit window hands out an AppKit handle");
+                };
+                // SAFETY: the handle names the window's FLUI view, which the
+                // open window holds; it is retained on the main thread the
+                // cases run on, so the counts below read a live view.
+                unsafe { Retained::retain(handle.ns_view.as_ptr().cast::<NSView>()) }
+                    .expect("the handle names a view")
+            };
+            let before = count(&view);
+            let target = fixture.window.surface_target();
+            assert_eq!(
+                count(&view),
+                before + 1,
+                "a surface target keeps its own reference to the view"
+            );
+            // Dropping the fixture closes the window and drops it.
+            drop(fixture);
+            (target, view)
+        });
+        autoreleasepool(|_| appkit::run_for(Duration::from_millis(500)));
+        let held = count(&view);
+
+        std::thread::spawn(move || drop(target))
+            .join()
+            .expect("the dropping thread");
+        assert_eq!(
+            count(&view),
+            held,
+            "the view was released on the thread that dropped the target"
+        );
+        autoreleasepool(|_| appkit::run_for(Duration::from_millis(500)));
+        assert_eq!(
+            count(&view),
+            held - 1,
+            "the main queue gave back the target's reference"
+        );
+    }
+
+    /// A window in the Dock is still shown: AppKit reports it neither
+    /// `isVisible` nor visible in its occlusion state, but the user sees it
+    /// there, and a click brings it back.
+    fn a_minimized_window_is_still_shown() {
+        use flui_platform::WindowMode::Minimized;
+
+        let mut fixture = open("minimized and shown");
+        fixture
+            .window
+            .admit_and_apply(WindowCommand::SetMode(Minimized))
+            .unwrap_or_else(|refusal| panic!("SetMode(Minimized) was refused: {refusal:?}"));
+        fixture.settle();
+
+        let state = fixture.window.state();
+        assert_eq!(state.mode, Minimized);
+        assert!(state.visible, "a minimized window reads as shown");
+    }
+
+    /// A size outside the window's constraints is held to them, as a resize
+    /// by the user is: AppKit itself applies a content size below the
+    /// minimum.
+    fn a_size_outside_the_constraints_is_held_to_them() {
+        use flui_foundation::geometry::Size;
+        use flui_platform::SizeConstraints;
+
+        let mut fixture = open("size within the constraints");
+        let min = Size::new(400.0, 300.0);
+        let max = Size::new(900.0, 700.0);
+        fixture
+            .window
+            .admit_and_apply(WindowCommand::SetConstraints(SizeConstraints::new(
+                Some(min),
+                Some(max),
+            )))
+            .unwrap_or_else(|refusal| panic!("SetConstraints was refused: {refusal:?}"));
+        for (asked, held) in [
+            (Size::new(200.0, 100.0), min),
+            (Size::new(2000.0, 2000.0), max),
+            (Size::new(200.0, 2000.0), Size::new(400.0, 700.0)),
+        ] {
+            fixture
+                .window
+                .admit_and_apply(WindowCommand::SetSize(asked))
+                .unwrap_or_else(|refusal| panic!("SetSize({asked:?}) was refused: {refusal:?}"));
+            fixture.settle();
+            assert_eq!(
+                fixture.window.state().content_size,
+                held,
+                "SetSize({asked:?}) under {min:?}..{max:?}"
+            );
+        }
+    }
+
+    /// A window that closed and dropped, with no surface target left, takes
+    /// its FLUI view with it once AppKit has run a turn.
+    #[expect(unsafe_code, reason = "the view behind the window's raw handle")]
+    fn a_closed_window_frees_its_view() {
+        use objc2::rc::{Weak, autoreleasepool};
+        use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+
+        let (view, window) = autoreleasepool(|_| {
+            let fixture = open("a closed window frees its view");
+            let target = fixture.window.surface_target();
+            let handle = target.window_handle().expect("an open window's handle");
+            let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+                panic!("an AppKit window hands out an AppKit handle");
+            };
+            // SAFETY: the handle names the window's FLUI view, which the
+            // open window holds; retained on the main thread the cases run
+            // on, only to make the weak reference.
+            let view = unsafe { Retained::retain(handle.ns_view.as_ptr().cast::<NSView>()) }
+                .expect("the handle names a view");
+            let views = (
+                Weak::from_retained(&view),
+                Weak::from_retained(&fixture.ns_window),
+            );
+            drop(target);
+            // Dropping the fixture closes the window and drops it.
+            drop(fixture);
+            views
+        });
+        autoreleasepool(|_| appkit::run_for(Duration::from_millis(500)));
+        assert!(window.load().is_none(), "the closed NSWindow was freed");
+        assert!(
+            view.load().is_none(),
+            "the closed window's FLUI view outlived it"
+        );
+    }
+
+    /// A window told to go back to normal from another mode and then to stop
+    /// being resizable, in one turn, does both: the second command is
+    /// admitted against the mode the first takes the window to, though
+    /// AppKit's transition may still be animating, and the window ends
+    /// normal, at its size before, and fixed in size. A fixed-size window
+    /// reads as zoomed whatever its frame, so the frame is the witness. A
+    /// window zoomed under full screen comes back zoomed, so its un-zoom
+    /// comes before the fixed size.
+    fn a_window_sent_to_normal_takes_a_fixed_size_in_the_same_turn() {
+        use flui_platform::WindowMode::{Fullscreen, Maximized, Minimized, Normal};
+
+        for from in [
+            &[Maximized][..],
+            &[Fullscreen],
+            &[Minimized],
+            &[Maximized, Fullscreen],
+        ] {
+            let mut fixture = open("normal and fixed in one turn");
+            let normal = fixture.ns_window.frame();
+            for &mode in from {
+                fixture
+                    .window
+                    .admit_and_apply(WindowCommand::SetMode(mode))
+                    .unwrap_or_else(|refusal| panic!("SetMode({mode:?}) was refused: {refusal:?}"));
+                fixture.settle();
+                assert_eq!(fixture.window.state().mode, mode);
+            }
+
+            fixture
+                .window
+                .admit_and_apply(WindowCommand::SetMode(Normal))
+                .unwrap_or_else(|refusal| panic!("SetMode(Normal) from {from:?}: {refusal:?}"));
+            fixture
+                .window
+                .admit_and_apply(WindowCommand::SetResizable(false))
+                .unwrap_or_else(|refusal| {
+                    panic!("SetResizable(false) after SetMode(Normal) from {from:?}: {refusal:?}")
+                });
+            fixture.settle();
+
+            let state = fixture.window.state();
+            assert_eq!(state.mode, Normal, "from {from:?}: the window ends normal");
+            assert!(
+                !state.resizable,
+                "from {from:?}: the window ends fixed in size"
+            );
+            assert_eq!(
+                fixture.ns_window.frame().size,
+                normal.size,
+                "from {from:?}: the window is back to its size before"
+            );
+        }
+    }
+
+    /// A window sent into full screen and back in one turn is still in full
+    /// screen until the exit animates, and a full-screen window cannot be
+    /// restyled: a fixed size is refused at admission, not left to fail.
+    fn a_window_heading_out_of_full_screen_cannot_be_fixed_in_size() {
+        use flui_platform::WindowMode::{Fullscreen, Normal};
+
+        let mut fixture = open("out of full screen and fixed");
+        for mode in [Fullscreen, Normal] {
+            fixture
+                .window
+                .admit_and_apply(WindowCommand::SetMode(mode))
+                .unwrap_or_else(|refusal| panic!("SetMode({mode:?}) was refused: {refusal:?}"));
+        }
+        let refusal = fixture
+            .window
+            .admit_and_apply(WindowCommand::SetResizable(false))
+            .expect_err("a window still in full screen took a fixed size");
+        assert!(
+            refusal.unsupported().is_some(),
+            "a fixed size is refused by the window's capabilities: {refusal:?}"
+        );
+        fixture.settle();
+
+        let state = fixture.window.state();
+        assert_eq!(state.mode, Normal, "the window ends normal");
+        assert!(state.resizable, "the window stays resizable");
+    }
+
+    /// A fixed size held for the step to normal mode is dropped by a newer
+    /// mode command: the window ends in that mode, still resizable.
+    fn a_newer_mode_drops_a_fixed_size_held_for_normal() {
+        use flui_platform::WindowMode::{Maximized, Minimized, Normal};
+
+        let mut fixture = open("held fixed size dropped");
+        fixture
+            .window
+            .admit_and_apply(WindowCommand::SetMode(Minimized))
+            .unwrap_or_else(|refusal| panic!("SetMode(Minimized) was refused: {refusal:?}"));
+        fixture.settle();
+        assert_eq!(fixture.window.state().mode, Minimized);
+
+        for command in [
+            WindowCommand::SetMode(Normal),
+            WindowCommand::SetResizable(false),
+            WindowCommand::SetMode(Maximized),
+        ] {
+            fixture
+                .window
+                .admit_and_apply(command.clone())
+                .unwrap_or_else(|refusal| panic!("{command:?} was refused: {refusal:?}"));
+        }
+        fixture.settle();
+
+        let state = fixture.window.state();
+        assert_eq!(state.mode, Maximized, "the newest mode wins");
+        assert!(state.resizable, "the held fixed size was dropped");
+    }
+
+    /// AppKit keeps a window's zoom under full screen and puts it back only
+    /// after `windowDidExitFullScreen:`, so leaving for normal mode takes an
+    /// un-zoom planned from the frame it comes back with.
+    fn a_window_zoomed_before_full_screen_returns_to_normal() {
+        use flui_platform::WindowMode::{Fullscreen, Maximized, Normal};
+
+        let mut fixture = open("zoomed under full screen");
+        for mode in [Maximized, Fullscreen, Normal] {
+            fixture
+                .window
+                .admit_and_apply(WindowCommand::SetMode(mode))
+                .unwrap_or_else(|refusal| panic!("SetMode({mode:?}) was refused: {refusal:?}"));
+            fixture.settle();
+            assert_eq!(fixture.window.state().mode, mode, "after SetMode({mode:?})");
+        }
+        assert!(
+            !fixture.ns_window.isZoomed(),
+            "AppKit kept the zoom of a window asked for normal mode"
+        );
+    }
+}

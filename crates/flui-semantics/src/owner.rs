@@ -6,6 +6,7 @@
 use std::{rc::Weak, sync::Arc};
 
 use flui_foundation::SemanticsId;
+use flui_protocol::TreeRevision;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use thiserror::Error;
@@ -350,6 +351,10 @@ pub struct SemanticsOwner {
     /// What publications found wrong with what authors declared and the frame
     /// driver has not yet reported, oldest first.
     diagnostics: std::collections::VecDeque<SemanticsDiagnostic>,
+
+    /// How many publications have changed what the platform was told (see
+    /// [`Self::revision`]).
+    revision: TreeRevision,
 
     /// The identifier clashes the last check found, so each is reported once
     /// for as long as it lasts (debug builds only).
@@ -731,6 +736,7 @@ impl SemanticsOwner {
             #[cfg(any(test, feature = "testing"))]
             examined_last_flush: 0,
             diagnostics: std::collections::VecDeque::new(),
+            revision: TreeRevision::default(),
             #[cfg(debug_assertions)]
             reported_clashes: Vec::new(),
         }
@@ -756,6 +762,7 @@ impl SemanticsOwner {
             #[cfg(any(test, feature = "testing"))]
             examined_last_flush: 0,
             diagnostics: std::collections::VecDeque::new(),
+            revision: TreeRevision::default(),
             #[cfg(debug_assertions)]
             reported_clashes: Vec::new(),
         }
@@ -775,6 +782,7 @@ impl SemanticsOwner {
             #[cfg(any(test, feature = "testing"))]
             examined_last_flush: 0,
             diagnostics: std::collections::VecDeque::new(),
+            revision: TreeRevision::default(),
             #[cfg(debug_assertions)]
             reported_clashes: Vec::new(),
         }
@@ -1412,6 +1420,7 @@ impl SemanticsOwner {
         }
 
         let published = update.nodes.len();
+        self.revision = TreeRevision(self.revision.0.saturating_add(1));
         let mut mirror = PublishedState::mirror_of(update);
         mirror.record_offers(&self.tree);
         self.published = Some(mirror);
@@ -1748,6 +1757,7 @@ impl SemanticsOwner {
         if identifiers_changed {
             self.check_identifier_clashes();
         }
+        self.revision = TreeRevision(self.revision.0.saturating_add(1));
         update.nodes.len()
     }
 
@@ -1837,6 +1847,16 @@ impl SemanticsOwner {
     #[must_use]
     pub fn device_pixel_ratio(&self) -> f64 {
         self.device_pixel_ratio
+    }
+
+    /// The revision of the tree the platform was last told: it grows by one at
+    /// every publication that delivered something, so two readings compare by
+    /// revision (`Match::revision`, `Actionability::revision`).
+    ///
+    /// A flush that finds nothing changed, or no root yet, leaves it as it was.
+    #[must_use]
+    pub fn revision(&self) -> TreeRevision {
+        self.revision
     }
 
     /// Forces a full tree update, now.

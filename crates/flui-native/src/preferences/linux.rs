@@ -1,7 +1,7 @@
 //! The Linux host's system preferences: the Settings portal
 //! (`org.freedesktop.portal.Settings`) on the session bus, observed for one
-//! incarnation of the owner's loop. Every Linux host reads it; today that is
-//! the winit host.
+//! incarnation of the owner's loop. Every Linux host reads it: the Wayland and
+//! X11 hosts and the winit host.
 //!
 //! D-Bus runs on the existing background executor. The owner only reads an
 //! immutable accepted snapshot; no portal request runs in build/layout/paint.
@@ -17,7 +17,7 @@ use std::{
 use flui_platform::{MotionPreference, SystemPreferences, WindowAppearance};
 use futures_util::StreamExt;
 use parking_lot::Mutex;
-use zbus::{Proxy, zvariant::OwnedValue};
+use zbus::{OwnedVariant, Proxy};
 
 use crate::{
     PlatformError, executor::BackgroundExecutor, owner::signal::OwnerSignal,
@@ -36,7 +36,7 @@ struct Observation {
     accepted: SystemPreferences,
     /// The portal's `color-scheme`, kept beside the host-wide snapshot because
     /// brightness is presentation-specific (ADR-0172): each window reports it
-    /// through `PlatformWindow::appearance`.
+    /// through the window state's `appearance`.
     appearance: WindowAppearance,
 }
 
@@ -98,6 +98,15 @@ mod winit {
 
 #[cfg(feature = "winit-backend")]
 pub(crate) use winit::WinitSettings;
+
+/// The native Linux loops start the portal's watch as they run, and their
+/// windows follow the portal's colour scheme.
+impl crate::owner::linux::LinuxPreferences for PreferenceSource {
+    /// The accepted `color-scheme`; light until the portal says otherwise.
+    fn appearance(&self) -> WindowAppearance {
+        self.observation.lock().appearance
+    }
+}
 
 impl PreferenceSource {
     /// Start watching the portal on `executor`, waking the owner behind
@@ -173,7 +182,7 @@ async fn observe_connection(
     ready: &mut Option<mpsc::SyncSender<()>>,
 ) -> zbus::Result<()> {
     let connection = tokio::time::timeout(BOOTSTRAP_TIMEOUT, async {
-        zbus::connection::Builder::session()?
+        zbus::connection::Builder::session()
             .method_timeout(READ_TIMEOUT)
             .build()
             .await
@@ -202,7 +211,7 @@ async fn observe_connection(
             message = changes.next() => {
                 let Some(message) = message else { return Ok(()); };
                 let body = message.body();
-                let Ok((namespace, key, _)) = body.deserialize::<(&str, &str, OwnedValue)>() else {
+                let Ok((namespace, key, _)) = body.deserialize::<(&str, &str, OwnedVariant)>() else {
                     continue;
                 };
                 if matches!(
@@ -344,20 +353,25 @@ async fn read_motion(proxy: &Proxy<'_>) -> zbus::Result<MotionPreference> {
     Ok(motion)
 }
 
+/// Whether the portal has no value for the key. The portal's own `NotFound`
+/// arrives as a method error; a name `fdo::Error` defines arrives as that type.
 fn missing_key(error: &zbus::Error) -> bool {
-    matches!(error, zbus::Error::MethodError(name, _, _) if matches!(name.as_str(),
-        "org.freedesktop.portal.Error.NotFound" | "org.freedesktop.DBus.Error.UnknownProperty"))
+    match error {
+        zbus::Error::MethodError(name, _, _) => {
+            name.as_str() == "org.freedesktop.portal.Error.NotFound"
+        }
+        zbus::Error::FDO(error) => matches!(**error, zbus::fdo::Error::UnknownProperty(_)),
+        _ => false,
+    }
 }
 
-async fn read(proxy: &Proxy<'_>, namespace: &str, key: &str) -> zbus::Result<OwnedValue> {
+async fn read(proxy: &Proxy<'_>, namespace: &str, key: &str) -> zbus::Result<OwnedVariant> {
     match proxy.call("ReadOne", &(namespace, key)).await {
-        Err(zbus::Error::MethodError(name, _, _))
-            if name.as_str() == "org.freedesktop.DBus.Error.UnknownMethod" =>
-        {
+        Err(zbus::Error::FDO(error)) if matches!(*error, zbus::fdo::Error::UnknownMethod(_)) => {
             // Settings v1's deprecated Read wraps its value in two variants.
-            let value: OwnedValue = proxy.call("Read", &(namespace, key)).await?;
-            match zbus::zvariant::Value::from(value) {
-                zbus::zvariant::Value::Value(inner) => Ok(OwnedValue::try_from(*inner)?),
+            let value: OwnedVariant = proxy.call("Read", &(namespace, key)).await?;
+            match zbus::Variant::from(value) {
+                zbus::Variant::Variant(inner) => Ok(OwnedVariant::try_from(*inner)?),
                 _ => Err(zbus::Error::Failure("invalid legacy Settings value".into())),
             }
         }

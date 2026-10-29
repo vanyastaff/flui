@@ -1,8 +1,10 @@
 //! Installed owner delivery through a private capture failure seam. No SDK calls.
 
 use super::*;
+use crate::app::runner::window_routes::OwnerOpenRouted as _;
 use flui_native::{HeadlessPlatform, Platform};
 use flui_runtime::ui_runtime::UiRuntime;
+use std::sync::Arc;
 
 fn installed_capture(
     run: impl FnOnce(
@@ -18,15 +20,15 @@ fn installed_capture(
     let installed = Rc::new(RefCell::new(None));
     let completed = Rc::clone(&installed);
     Box::new(platform)
-        .run(Box::new(move |owner| {
+        .run(crate::app::runner::app_handler(move |owner| {
             let owner = Rc::new(owner);
             owner.on_wake(Box::new(refresh_installed_after_wake))?;
             let window = owner
-                .open_window(flui_platform::WindowOptions::default())?
+                .open_routed(flui_platform::WindowOptions::default())?
                 .try_ready()?;
             let runtime = UiRuntime::new(
                 flui_runtime::presentation::PresentationWindow::new(
-                    Arc::clone(&window) as Arc<dyn flui_platform::PlatformWindow>,
+                    Rc::clone(&window) as Rc<dyn flui_platform::PlatformWindow>,
                     None,
                 )
                 .with_text_store_host(Some(flui_testing::RecordingTextStoreHost::new())),
@@ -43,7 +45,7 @@ fn installed_capture(
                 ui_runtime_id: runtime.id(),
                 presentation_id: runtime.presentation_id(),
             };
-            let record = NativeTextSizing::prepare(address, Arc::clone(&window), Rc::clone(&owner));
+            let record = NativeTextSizing::prepare(address, Rc::clone(&window), Rc::clone(&owner));
             let calls = Rc::new(Cell::new(0));
             let observed = Rc::clone(&calls);
             *record.capture_sampler.borrow_mut() = Some(Box::new(move || {
@@ -338,8 +340,11 @@ fn acquisition_without_progress_releases_document_edits(
             })),
         )
         .expect("actual pending frame owner turn");
-        dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(binding))
-            .expect("actual installed product pump");
+        dispatch_platform_ui_runtime(
+            dispatcher,
+            RuntimeTask::Frame(binding, flui_native::frame_request_now()),
+        )
+        .expect("actual installed product pump");
         dispatch_platform_ui_runtime(
             dispatcher,
             RuntimeTask::TestCallback(Box::new(|runtime| {

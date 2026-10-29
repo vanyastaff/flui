@@ -16,12 +16,16 @@ use tracing::{Event, Subscriber};
 use tracing_subscriber::{Layer, layer::Context, prelude::*, registry::LookupSpan};
 
 thread_local! {
+    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static OBSERVED: RefCell<Option<AnimationController>> = const { RefCell::new(None) };
     #[cfg(feature = "diagnostics")]
+    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static OBSERVED_OWNER: RefCell<Option<flui_animation::DrivenController>> = const { RefCell::new(None) };
     #[cfg(feature = "diagnostics")]
+    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static OBSERVED_VSYNC: RefCell<Option<Vsync>> = const { RefCell::new(None) };
     #[cfg(feature = "diagnostics")]
+    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static ADMITTED: RefCell<Vec<(flui_animation::DrivenController, flui_animation::AnimationRunFuture)>> = const { RefCell::new(Vec::new()) };
 }
 

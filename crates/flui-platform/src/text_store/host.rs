@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 use super::lock::{LockGrant, LockOutcome, LockTiming, TextStoreError};
 use super::store::TextStore;
+use crate::Unsupported;
 
 /// A pull-model platform's side of one window's text input: the object a
 /// window's input-method integration (Win32 text services) hands the
@@ -41,7 +42,7 @@ pub trait TextStoreHost {
     ///
     /// - [`TextStoreHostError::NotFocused`] when `store` is not the focused
     ///   store: the platform composes in no other, so it has nothing to end.
-    /// - [`TextStoreHostError::Unavailable`] when the window's text services
+    /// - [`TextStoreHostError::Unsupported`] when the window's text services
     ///   are gone.
     ///
     /// Either way the caller commits the composition in place
@@ -75,10 +76,22 @@ pub enum TextStoreHostError {
     /// The store asked about is not the one the host was last told to focus.
     #[error("the store is not the window's focused text store")]
     NotFocused,
-    /// The window's text services were shut down (the window is closing, or
-    /// they failed and the window fell back to character messages).
-    #[error("the window's text services are unavailable")]
-    Unavailable,
+    /// The window's text services are not there: they were shut down as the
+    /// window closed ([`NoWindow`](crate::UnsupportedReason::NoWindow)), or
+    /// they failed and the window fell back to character messages.
+    #[error("the window's text services cannot act: {0}")]
+    Unsupported(#[from] Unsupported),
+}
+
+impl TextStoreHostError {
+    /// What is not here, when that is why the host could not act.
+    #[must_use]
+    pub const fn unsupported(&self) -> Option<Unsupported> {
+        match self {
+            Self::Unsupported(unsupported) => Some(*unsupported),
+            Self::NotFocused => None,
+        }
+    }
 }
 
 /// Commit `store`'s composition where it stands: clear its composing range

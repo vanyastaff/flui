@@ -486,7 +486,7 @@ pub(crate) fn unclaimed_wins_cancel_no_listener() {
 }
 
 /// A window that counts the frames asked of it.
-struct RedrawCounter(std::sync::atomic::AtomicUsize);
+struct RedrawCounter(Arc<std::sync::atomic::AtomicUsize>);
 
 impl RedrawCounter {
     fn requests(&self) -> usize {
@@ -498,40 +498,49 @@ impl flui_platform::PlatformWindow for RedrawCounter {
     fn id(&self) -> flui_platform::WindowId {
         flui_platform::WindowId(1)
     }
-    fn physical_size(&self) -> flui_foundation::geometry::Size<i32> {
-        flui_foundation::geometry::Size::new(100, 100)
-    }
-    fn logical_size(&self) -> flui_foundation::geometry::Size<f64> {
-        flui_foundation::geometry::Size::new(100.0, 100.0)
-    }
-    fn scale_factor(&self) -> f64 {
-        1.0
-    }
     fn request_redraw(&self) {
         self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
-    fn is_focused(&self) -> bool {
-        true
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        let requests = Arc::clone(&self.0);
+        Arc::new(move || {
+            requests.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        })
     }
-    fn is_visible(&self) -> bool {
-        true
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        Arc::new(flui_platform::testing::NoNativeSurface)
     }
+    flui_platform::window_takes_no_frame_verbs!();
+
     fn set_cursor(&self, _: flui_platform::CursorIcon) -> Result<(), flui_platform::CursorError> {
         Ok(())
     }
     fn state(&self) -> flui_platform::WindowState {
-        let size = self.logical_size();
+        let size = flui_foundation::geometry::Size::new(100.0, 100.0);
         flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
-    }
-    fn capabilities(&self) -> flui_platform::WindowCapabilities {
-        flui_platform::WindowCapabilities::NONE
+            .with_focused(true)
+            .with_metrics(flui_foundation::geometry::WindowMetrics::from_logical(size, 1.0).ok())
     }
     fn apply(
         &self,
-        command: flui_platform::WindowCommand,
-    ) -> Result<(), flui_platform::WindowCommandError> {
-        command.admit(&flui_platform::WindowCapabilities::NONE)?;
+        command: flui_platform::AdmittedCommand,
+    ) -> Result<(), flui_platform::ApplyError> {
+        command.against(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
+    }
+    fn text_input(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformTextInput>> {
+        None
+    }
+
+    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformHaptics>> {
+        None
+    }
+
+    fn system_chrome(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformSystemChrome>> {
+        None
+    }
+    fn drag_source(&self) -> Option<std::sync::Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        None
     }
 }
 
@@ -563,9 +572,9 @@ pub(crate) fn hover_freezes_while_a_scroll_is_latched() {
     for (dragging, hovering, frozen_heard, heard) in cases {
         let lane = InteractionLane::try_new().expect("owner lane");
         let binding = GestureBinding::with_clock(Arc::new(ManualClock::new()));
-        let window = Arc::new(RedrawCounter(std::sync::atomic::AtomicUsize::new(0)));
-        let wake: Arc<dyn flui_platform::PlatformWindow> = window.clone();
-        flui_interaction::__runtime::set_pointer_capture_wake(&binding, Arc::downgrade(&wake));
+        let window = Rc::new(RedrawCounter(Arc::default()));
+        let wake: Rc<dyn flui_platform::PlatformWindow> = window.clone();
+        flui_interaction::__runtime::set_pointer_capture_wake(&binding, Rc::downgrade(&wake));
         let arena = binding.arena().clone();
         let scroll = DragGestureRecognizer::builder(arena, DragAxis::Horizontal).build();
         let log = Events::default();

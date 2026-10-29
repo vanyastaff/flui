@@ -44,15 +44,15 @@ use flui_foundation::DataTransferId;
 use flui_foundation::geometry::Point;
 use parking_lot::Mutex;
 
+use crate::drag::offers::{OfferTable, PathStyle, TransferUri};
 use crate::owner::winit::FileDrops;
 use flui_platform::{DragDropEvent, WindowId};
 use flui_platform::{
     data_transfer::DataTransferOffer, data_transfer::DataTransferSource,
-    data_transfer::DropFeedback, data_transfer::OfferRecord, data_transfer::OfferTable,
-    data_transfer::RepresentationDescriptor, data_transfer::RepresentationIndex,
-    data_transfer::TransferActions, data_transfer::TransferCompleter, data_transfer::TransferError,
-    data_transfer::TransferFormat, data_transfer::TransferLimits, data_transfer::TransferPayload,
-    data_transfer::TransferRequest, data_transfer::TransferUri,
+    data_transfer::DropFeedback, data_transfer::RepresentationDescriptor,
+    data_transfer::RepresentationIndex, data_transfer::TransferActions,
+    data_transfer::TransferCompleter, data_transfer::TransferError, data_transfer::TransferFormat,
+    data_transfer::TransferLimits, data_transfer::TransferPayload, data_transfer::TransferRequest,
 };
 
 /// One drag session over one window (at most one live per window).
@@ -61,14 +61,14 @@ struct DragSession {
     /// The offer id minted for this session.
     id: DataTransferId,
     /// Paths accumulated from `HoveredFile` / `DroppedFile` events, drained
-    /// into the offer's `UriList` payload at the freeze.
+    /// into the offer's URI list at the freeze.
     paths: Vec<PathBuf>,
     /// At least one `DroppedFile` arrived — the next `about_to_wait` freezes
     /// the burst.
     dropped: bool,
-    /// The burst was frozen: the payload is snapshot in the offer record and
-    /// the session no longer accepts accumulation.
-    frozen: bool,
+    /// The burst was frozen: the URI list the offer serves from then on. A
+    /// frozen session no longer accepts accumulation.
+    frozen: Option<TransferPayload>,
     /// Deliveries requested before the freeze; completed at the freeze or
     /// dropped (→ `SourceGone`) when the session is torn down.
     pending: Vec<(TransferCompleter, TransferLimits)>,
@@ -137,7 +137,7 @@ impl FileDrops for WinitDataTransfer {
             let mut state = self.state.lock();
             match state.sessions.get(&window) {
                 None => return None,
-                Some(session) if session.frozen => {
+                Some(session) if session.frozen.is_some() => {
                     tracing::trace!(?window, "ignoring hover-cancel after the drop burst froze");
                     return None;
                 }
@@ -163,13 +163,13 @@ impl FileDrops for WinitDataTransfer {
             .lock()
             .sessions
             .iter()
-            .filter(|(_, session)| session.dropped && !session.frozen)
+            .filter(|(_, session)| session.dropped && session.frozen.is_none())
             .map(|(window, _)| *window)
             .collect()
     }
 
     /// Freeze every completed drop burst: snapshot the accumulated paths as
-    /// the offer's `UriList` payload, complete parked deliveries, and return
+    /// the offer's URI list, complete parked deliveries, and return
     /// the `Dropped` events to dispatch. The action is stamped
     /// [`TransferActions::COPY`] — winit cannot report the real effect
     /// (documented approximation).
@@ -182,19 +182,16 @@ impl FileDrops for WinitDataTransfer {
             Vec::new();
         {
             let mut state = self.state.lock();
-            let DragDropState { table, sessions } = &mut *state;
-            for (window, session) in sessions.iter_mut() {
-                if !session.dropped || session.frozen {
+            for (window, session) in &mut state.sessions {
+                if !session.dropped || session.frozen.is_some() {
                     continue;
                 }
-                let uris: Vec<TransferUri> =
-                    session.paths.drain(..).map(TransferUri::Path).collect();
-                let payload = TransferPayload::UriList(uris);
+                let payload = TransferUri::list_payload(
+                    session.paths.drain(..).map(TransferUri::Path),
+                    PathStyle::HOST,
+                );
                 let actual = payload.byte_len();
-                if let Some(record) = table.get_mut(session.id) {
-                    record.set_payload(payload.clone());
-                }
-                session.frozen = true;
+                session.frozen = Some(payload.clone());
                 for (completer, limits) in session.pending.drain(..) {
                     let result = if actual > limits.max_bytes {
                         Err(TransferError::TooLarge {
@@ -250,7 +247,7 @@ impl WinitDataTransfer {
         let (event, stale_pending) = {
             let mut state = self.state.lock();
             if let Some(session) = state.sessions.get_mut(&window)
-                && !session.frozen
+                && session.frozen.is_none()
             {
                 // winit re-reports every hovered path through the
                 // `DroppedFile` arm at the actual drop, so each file of one
@@ -278,16 +275,14 @@ impl WinitDataTransfer {
                     format: TransferFormat::UriList,
                     declared_len: None,
                 }]);
-            let id = state
-                .table
-                .mint(OfferRecord::new(Arc::clone(&representations)));
+            let id = state.table.mint(Arc::clone(&representations));
             state.sessions.insert(
                 window,
                 DragSession {
                     id,
                     paths: vec![path],
                     dropped,
-                    frozen: false,
+                    frozen: None,
                     pending: Vec::new(),
                 },
             );
@@ -323,16 +318,21 @@ impl DataTransferSource for WinitDataTransfer {
     ) -> TransferRequest {
         let mut state = self.state.lock();
         let DragDropState { table, sessions } = &mut *state;
-        let Some(record) = table.get(id) else {
+        let Some(representations) = table.get(id) else {
             return TransferRequest::ready(Err(TransferError::StaleOffer(id)));
         };
-        if usize::from(representation.0) >= record.representations().len() {
+        if usize::from(representation.0) >= representations.len() {
             return TransferRequest::ready(Err(TransferError::UnknownRepresentation {
                 id,
                 index: representation,
             }));
         }
-        if let Some(payload) = record.payload() {
+        // A live offer always belongs to a session in this source; a miss
+        // means the producer side is gone.
+        let Some(session) = sessions.values_mut().find(|session| session.id == id) else {
+            return TransferRequest::ready(Err(TransferError::SourceGone));
+        };
+        if let Some(payload) = &session.frozen {
             // Frozen file offer: the path list is genuinely in memory, so
             // the delivery resolves synchronously — not fake async.
             let actual = payload.byte_len();
@@ -346,14 +346,9 @@ impl DataTransferSource for WinitDataTransfer {
         }
         // Live pre-drop session: park the completer; the drop-burst freeze
         // completes it, and session teardown drops it (→ `SourceGone`).
-        if let Some(session) = sessions.values_mut().find(|session| session.id == id) {
-            let (request, completer) = TransferRequest::channel();
-            session.pending.push((completer, limits));
-            return request;
-        }
-        // A record without payload always belongs to a live session in this
-        // source; a miss means the producer side is gone.
-        TransferRequest::ready(Err(TransferError::SourceGone))
+        let (request, completer) = TransferRequest::pending();
+        session.pending.push((completer, limits));
+        request
     }
 
     fn update_drop_feedback(&self, id: DataTransferId, feedback: DropFeedback) {
@@ -457,16 +452,11 @@ mod tests {
             RepresentationIndex(0),
             TransferLimits::default(),
         ));
-        let Poll::Ready(Ok(TransferPayload::UriList(uris))) = outcome else {
-            panic!("frozen offer must deliver its UriList, got {outcome:?}");
+        let Poll::Ready(Ok(TransferPayload::Custom { mime, bytes })) = outcome else {
+            panic!("frozen offer must deliver its URI list, got {outcome:?}");
         };
-        assert_eq!(
-            uris,
-            vec![
-                TransferUri::Path(PathBuf::from("/tmp/a.txt")),
-                TransferUri::Path(PathBuf::from("/tmp/b.txt")),
-            ]
-        );
+        assert_eq!(mime.as_str(), "text/uri-list");
+        assert_eq!(&*bytes, b"file:///tmp/a.txt\r\nfile:///tmp/b.txt\r\n");
     }
 
     fn window_teardown_resolves_parked_deliveries_as_source_gone() {

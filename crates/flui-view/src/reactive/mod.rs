@@ -131,9 +131,55 @@ struct Node {
     element_readers: Membership<ElementId>,
 }
 
+/// The build that is running anywhere in a UI runtime: the graph whose element
+/// is building, and that element.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ActiveBuild {
+    graph: u32,
+    element: ElementId,
+}
+
+/// Which build is running across the graphs of one UI runtime.
+///
+/// Every presentation has its own [`Reactive`] graph, so a graph's own
+/// `building` cannot see another window's build. The UI runtime hands one
+/// `BuildInProgress` to every `BuildOwner` it assembles
+/// ([`BuildOwner::set_build_in_progress`](crate::BuildOwner::set_build_in_progress));
+/// each graph publishes its builds there and consults it before accepting a
+/// write or a slot creation, so a write that reaches window A's graph (through
+/// the runtime's `Writer` routing) while window B builds is refused with
+/// [`SignalError::WrittenDuringBuild`] just like a write into B's own graph.
+///
+/// Reads need no such cell: a slot minted by another graph is
+/// [`SignalError::ForeignGraph`] on read, so a cross-window read is refused
+/// rather than left untracked.
+#[derive(Clone, Default)]
+pub struct BuildInProgress(Rc<std::cell::Cell<Option<ActiveBuild>>>);
+
+impl BuildInProgress {
+    /// A cell with no build running.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl fmt::Debug for BuildInProgress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("BuildInProgress")
+            .field(&self.0.get())
+            .finish()
+    }
+}
+
 #[derive(Default)]
 struct Inner {
     closed: bool,
+    /// The runtime-wide build cell, once the owner is wired into a UI runtime.
+    build_in_progress: Option<BuildInProgress>,
+    /// What the shared cell held when this graph's current build began, put
+    /// back when it ends so a nested build of another graph stays guarded.
+    outer_build: Option<ActiveBuild>,
     preserving_close: bool,
     nodes: Vec<Node>,
     free: Vec<u32>,
@@ -183,6 +229,16 @@ impl fmt::Debug for Reactive {
     }
 }
 
+impl Inner {
+    /// Put the shared cell back to what it held before this graph's build.
+    fn restore_outer_build(&mut self) {
+        let outer = self.outer_build.take();
+        if let Some(shared) = &self.build_in_progress {
+            shared.0.set(outer);
+        }
+    }
+}
+
 /// A snapshot of one live slot, for tests, tooling and agents
 /// ([`Reactive::snapshot`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -225,6 +281,15 @@ impl Reactive {
         let mut inner = self.inner.borrow_mut();
         inner.closed = true;
         inner.preserving_close |= preserving;
+        // A closed window must not keep the runtime's other windows from
+        // writing: drop the build it may have left published.
+        if inner
+            .build_in_progress
+            .as_ref()
+            .is_some_and(|shared| shared.0.get().is_some_and(|active| active.graph == self.id))
+        {
+            inner.restore_outer_build();
+        }
         // Values and scheduler ownership remain in the closed graph; no user
         // destructor is required to revoke their scheduling authority.
     }
@@ -246,7 +311,7 @@ impl Reactive {
         if inner.closed {
             return Err((SignalError::OwnerClosed, value));
         }
-        if let Some(element) = inner.building {
+        if let Some(element) = Self::building_element(&inner, self.id) {
             tracing::warn!(
                 target: "flui::signals",
                 element = ?element,
@@ -510,6 +575,31 @@ impl Reactive {
             .map_or_default(Membership::snapshot);
         Self::forget_element_reads(&mut inner, element);
         inner.building = Some(element);
+        if let Some(shared) = &inner.build_in_progress {
+            let outer = shared.0.replace(Some(ActiveBuild {
+                graph: self.id,
+                element,
+            }));
+            inner.outer_build = outer;
+        }
+    }
+
+    /// The element building right now in this graph, or, failing that, in
+    /// another graph of the same UI runtime.
+    fn building_element(inner: &Inner, graph: u32) -> Option<ElementId> {
+        inner.building.or_else(|| {
+            inner
+                .build_in_progress
+                .as_ref()
+                .and_then(|shared| shared.0.get())
+                .filter(|active| active.graph != graph)
+                .map(|active| active.element)
+        })
+    }
+
+    /// Join the UI runtime's build cell (see [`BuildInProgress`]).
+    pub(crate) fn share_build_in_progress(&self, shared: BuildInProgress) {
+        self.inner.borrow_mut().build_in_progress = Some(shared);
     }
 
     /// Called by `build_or_recover` right after `element`'s `build` returned
@@ -524,6 +614,7 @@ impl Reactive {
         let previous = std::mem::take(&mut inner.previous_reads);
         if inner.building == Some(element) {
             inner.building = None;
+            inner.restore_outer_build();
         }
         if completed {
             return;
@@ -756,7 +847,7 @@ impl Reactive {
     fn refuse_if_building(&self, slot: SignalSlot) -> Result<(), SignalError> {
         let inner = self.inner.borrow();
         self.check(&inner, slot)?;
-        if let Some(element) = inner.building {
+        if let Some(element) = Self::building_element(&inner, self.id) {
             tracing::warn!(
                 target: "flui::signals",
                 slot = ?slot,
@@ -1202,7 +1293,7 @@ impl<T: 'static> SignalWriteExt<T> for Signal<T> {
             return Ok(false);
         }
         self.set(
-            r,
+            w,
             pending
                 .take()
                 .expect("BUG: a signal replacement is consumed only once"),
@@ -1244,10 +1335,16 @@ mod tests {
 
     use super::*;
 
-    // The graph handle `BuildContext::reactive()` returns cannot subscribe
+    // The graph itself cannot subscribe
     // anyone; the element sink this crate mints can.
     static_assertions::assert_not_impl_any!(Reactive: ReaderSink);
     static_assertions::assert_impl_all!(ElementReads: ReaderSink);
+
+    /// A writer on `r`, as a `WriterSource` lends one: the graph itself is
+    /// not a write target.
+    fn w(r: &Reactive) -> Writer {
+        Writer::new(r.clone())
+    }
 
     struct DropBomb(&'static str);
 
@@ -1306,7 +1403,7 @@ mod tests {
         r.register_element_reader(a.slot(), e1);
         r.register_element_reader(b.slot(), e2);
 
-        a.set(&r, 10).unwrap();
+        a.set(&w(&r), 10).unwrap();
 
         assert_eq!(scheduled(&inbox), vec![e1]);
         assert!(
@@ -1348,7 +1445,7 @@ mod tests {
                     .collect::<Vec<_>>();
                 for signal in &signals {
                     assert_eq!(r.readers_of(signal.slot()), expected, "still subscribed");
-                    signal.set(&r, 1).unwrap();
+                    signal.set(&w(&r), 1).unwrap();
                 }
                 assert_eq!(
                     scheduled(&inbox),
@@ -1365,7 +1462,7 @@ mod tests {
         let e1 = ElementId::new(1);
         r.begin_element_build(e1);
         assert_eq!(
-            a.set(&r, 1),
+            a.set(&w(&r), 1),
             Err(SignalError::WrittenDuringBuild { element: e1 })
         );
         assert_eq!(
@@ -1374,7 +1471,7 @@ mod tests {
         );
         assert_eq!(a.peek(&r, |v| *v), Ok(0), "reads stay legal during build");
         r.end_element_build(e1, true);
-        assert_eq!(a.set(&r, 1), Ok(()));
+        assert_eq!(a.set(&w(&r), 1), Ok(()));
         assert!(r.try_signal(7u8).is_ok());
     }
 
@@ -1391,7 +1488,7 @@ mod tests {
             owned.peek(&r, |v| *v),
             Err(SignalError::Released { .. })
         ));
-        shared.set(&r, 1).unwrap();
+        shared.set(&w(&r), 1).unwrap();
         assert_eq!(scheduled(&inbox), [] as [ElementId; 0]);
 
         let fresh = r.signal(9u8);
@@ -1431,7 +1528,7 @@ mod tests {
         r.register_element_reader(a.slot(), ElementId::new(1));
 
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = a.update(&r, |value| {
+            let _ = a.update(&w(&r), |value| {
                 value.push_str(" but loaned");
                 r.release(a.slot());
                 panic!("release wins");
@@ -1488,7 +1585,7 @@ mod tests {
         );
 
         let write = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            a.update(&r, |v| {
+            a.update(&w(&r), |v| {
                 *v = 99;
                 panic!("writer panics");
             })
@@ -1505,7 +1602,7 @@ mod tests {
             vec![e1, e2],
             "a partially committed value must not stay invisible to its readers"
         );
-        a.set(&r, 5).unwrap();
+        a.set(&w(&r), 5).unwrap();
         assert_eq!(
             scheduled(&inbox),
             vec![e1, e2],
@@ -1527,7 +1624,7 @@ mod tests {
         }
 
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            signal.update(&r, |value| {
+            signal.update(&w(&r), |value| {
                 *value = 1;
                 panic!("updater probe");
             })
@@ -1548,7 +1645,7 @@ mod tests {
         let second_capture = DropBomb("second updater capture destructor probe");
 
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            signal.update(&r, move |value| {
+            signal.update(&w(&r), move |value| {
                 let _capture_bundle_stays_owned_by_the_updater = (&first_capture, &second_capture);
                 *value = 1;
                 panic!("updater probe");
@@ -1568,7 +1665,7 @@ mod tests {
             "the partially committed update must still invalidate its reader"
         );
         signal
-            .set(&r, 2)
+            .set(&w(&r), 2)
             .expect("the signal remains usable after both contained panics");
         assert_eq!(signal.peek(&r, |value| *value), Ok(2));
     }
@@ -1591,7 +1688,7 @@ mod tests {
         };
 
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            signal.update(&r, move |value| {
+            signal.update(&w(&r), move |value| {
                 let _capture_stays_owned_by_the_updater = &capture;
                 *value = 1;
             })

@@ -1,0 +1,2 @@
+### Changed
+- `BuildOwner` holds one `PresentationCapabilities` (`capabilities()` / `capabilities_mut()`) in place of the `set_text_input_handle`, `set_clipboard_handle`, `set_haptics_handle`, `set_drag_and_drop`, `set_texture_registry`, `set_storage` and `set_error_view_builder` setters and their getters. `LifecycleContext::texture_registry` and `storage` no longer default to `None`, so an implementation cannot silently omit one.

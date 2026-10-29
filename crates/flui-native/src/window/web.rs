@@ -24,18 +24,26 @@ use parking_lot::Mutex;
 use wasm_bindgen::{JsCast, prelude::*};
 
 use crate::{
-    host, host_window::HostWindow, owner::OpenWindowError, owner::handlers::WindowCallbacks,
-    owner::signal::OwnerSignal, owner::web::WebLoop, window::state::WindowStateCell,
-    window::visibility::ReportedVisibility,
+    host,
+    host::WindowFacets,
+    host::WindowPositions,
+    host_window::HostWindow,
+    owner::OpenWindowError,
+    owner::web::WebLoop,
+    owner::window_delivery::WindowDelivery,
+    text::WindowTextInput,
+    window::state::{ReportedFacts, WindowStateCell},
 };
 use flui_platform::{
-    CursorError, PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowCapabilities,
-    WindowCommand, WindowCommandError, WindowEvent, WindowExecutionState, WindowGeometry, WindowId,
-    WindowMode, WindowOptions, WindowState,
+    AdmittedCommand, ApplyError, CursorError, PlatformWindow, Unsupported, UnsupportedReason,
+    WindowAppearance, WindowCapabilities, WindowCommand, WindowExecutionState, WindowGeometry,
+    WindowId, WindowMode, WindowOptions, WindowState,
 };
 
+use crate::owner::web::listener::CanvasListener;
 use crate::owner::web::{
-    Accepting, CanvasFocus, CanvasRegistration, CanvasTimer, HostDisplays, PointerCustody,
+    Accepting, CanvasEditor, CanvasFocus, CanvasRef, CanvasRegistration, CanvasTimer, HostDisplays,
+    PointerCustody,
 };
 
 /// Web window wrapping a `<canvas>` element
@@ -43,11 +51,14 @@ pub struct WebWindow {
     id: WindowId,
     canvas: web_sys::HtmlCanvasElement,
     state: Arc<Mutex<WebWindowState>>,
-    callbacks: Arc<WindowCallbacks>,
+    delivery: Arc<WindowDelivery>,
     registration: RefCell<Option<Registration>>,
     retire_frame_slot: RefCell<Option<Box<dyn FnOnce()>>>,
     drag: RefCell<Option<Box<dyn crate::owner::web::CanvasDrag>>>,
-    text: RefCell<Option<Rc<crate::text::web::WebTextInput>>>,
+    /// What the table's window-level positions made for the window once its
+    /// canvas registered; `None` before and once it retired.
+    /// Its text input is the editor over the canvas and the field it serves.
+    facets: RefCell<Option<WindowFacets>>,
     /// The platform's display state, which names the screen this window is on.
     displays: Arc<dyn HostDisplays>,
     /// The published window state (ADR-0237).
@@ -61,20 +72,28 @@ pub(crate) struct StatePublisher {
     cell: Arc<WindowStateCell>,
     canvas: web_sys::HtmlCanvasElement,
     state: Arc<Mutex<WebWindowState>>,
-    callbacks: Arc<WindowCallbacks>,
+    delivery: Arc<WindowDelivery>,
     displays: Arc<dyn HostDisplays>,
 }
 
 impl StatePublisher {
+    /// The page's report of the window now.
+    fn sample(&self) -> WindowState {
+        sample_state(
+            &self.canvas,
+            &self.state,
+            self.displays.current_display(),
+            self.delivery.hovered(),
+        )
+    }
+
     /// The published state, read from the page again first when something
-    /// invalidated it; `on_state_changed` is raised when that produced a new
+    /// invalidated it; `WindowHandler::state_changed` is raised when that produced a new
     /// revision.
     fn current(&self) -> WindowState {
-        let published = self.cell.state_with(|| {
-            sample_state(&self.canvas, &self.state, self.displays.current_display())
-        });
+        let published = self.cell.state_with(|| self.sample());
         if published.changed {
-            self.callbacks.dispatch_state_changed();
+            self.delivery.dispatch_state_changed();
         }
         published.state
     }
@@ -84,6 +103,13 @@ impl StatePublisher {
         self.cell.invalidate();
         let _ = self.current();
     }
+
+    /// Read the page again for the window's state publisher, announcing
+    /// nothing.
+    fn read(&self) -> crate::owner::window_delivery::Publication {
+        self.cell.invalidate();
+        self.cell.state_with(|| self.sample()).outcome()
+    }
 }
 
 /// The window as the page reports it now. A canvas has no frame, no global
@@ -92,14 +118,25 @@ fn sample_state(
     canvas: &web_sys::HtmlCanvasElement,
     state: &Mutex<WebWindowState>,
     display: Option<flui_platform::DisplayId>,
+    hovered: bool,
 ) -> WindowState {
-    let (title, size, focused, visible) = {
+    let (title, size, focused, hidden, execution, metrics) = {
         let state = state.lock();
         (
             state.title.clone(),
             Size::new(state.width, state.height),
             state.focused,
-            state.visible,
+            state.hidden,
+            state.execution,
+            // The backing store is the drawable area; an empty box is none.
+            flui_foundation::geometry::WindowMetrics::new(
+                flui_foundation::geometry::DeviceSize::new(
+                    i32::try_from(state.backing.width).unwrap_or(i32::MAX),
+                    i32::try_from(state.backing.height).unwrap_or(i32::MAX),
+                ),
+                state.scale_factor,
+            )
+            .ok(),
         )
     };
     // The canvas, or an element that holds it: another element of the page (a
@@ -110,18 +147,41 @@ fn sample_state(
             .fullscreen_element()
             .is_some_and(|element| element.contains(Some(canvas)))
     });
-    WindowState::new(WindowGeometry::new(None, size), size)
+    let state = WindowState::new(WindowGeometry::new(None, size), size)
         .with_mode(if fullscreen {
             WindowMode::Fullscreen
         } else {
             WindowMode::Normal
         })
-        .with_visible(visible)
+        // A page cannot hide its canvas from the user: it is shown.
+        .with_visible(true)
         .with_focused(focused)
         .with_title(Some(title))
         .with_resizable(false)
         .with_decorated(false)
-        .with_display(display)
+        .with_display(display);
+    ReportedFacts {
+        metrics,
+        appearance: page_appearance(),
+        // The page owns the viewport; the canvas has no safe area of its own.
+        safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
+        execution,
+        occluded: hidden,
+        hovered,
+        // A page has no activation apart from the canvas's focus.
+        active: focused,
+        capabilities: window_capabilities(),
+    }
+    .onto(state)
+}
+
+/// The user's color scheme as the page sees it (`prefers-color-scheme`).
+fn page_appearance() -> WindowAppearance {
+    if dark_scheme_query().is_some_and(|query| query.matches()) {
+        WindowAppearance::Dark
+    } else {
+        WindowAppearance::Light
+    }
 }
 
 struct WebWindowState {
@@ -132,14 +192,12 @@ struct WebWindowState {
     /// The canvas's backing store, which is the surface's physical size.
     backing: DeviceSize,
     focused: bool,
-    visible: bool,
+    /// The document is hidden (a background tab, a minimized browser window, a
+    /// locked screen): the canvas stays shown and is occluded.
+    hidden: bool,
     /// What the Page Lifecycle API last said: a frozen page runs no script.
     execution: WindowExecutionState,
 }
-
-// SAFETY: WASM is single-threaded — no data races possible
-unsafe impl Send for WebWindow {}
-unsafe impl Sync for WebWindow {}
 
 /// The canvas's current CSS box in CSS pixels and the device pixel ratio,
 /// read from the live layout. `None` when the box is empty — a canvas that
@@ -279,6 +337,7 @@ impl WebWindow {
         width: f64,
         height: f64,
         displays: Arc<dyn HostDisplays>,
+        delivery: WindowDelivery,
     ) -> Result<Self, OpenWindowError> {
         fn backend(message: impl Into<String>) -> OpenWindowError {
             OpenWindowError::Backend {
@@ -358,21 +417,21 @@ impl WebWindow {
             scale_factor,
             backing,
             focused: effective_focus(&canvas),
-            visible: !document.hidden(),
+            hidden: document.hidden(),
             execution: WindowExecutionState::Running,
         };
 
         let state = Arc::new(Mutex::new(state));
-        let initial = sample_state(&canvas, &state, displays.current_display());
+        let initial = sample_state(&canvas, &state, displays.current_display(), false);
         Ok(Self {
             id,
             registration: RefCell::new(Some(Registration::new(&canvas, claim))),
             retire_frame_slot: RefCell::new(None),
             drag: RefCell::new(None),
-            text: RefCell::new(None),
+            facets: RefCell::new(None),
             canvas,
             state,
-            callbacks: Arc::new(WindowCallbacks::new()),
+            delivery: Arc::new(delivery),
             displays,
             snapshot: Arc::new(WindowStateCell::new(initial)),
         })
@@ -384,7 +443,7 @@ impl WebWindow {
             cell: Arc::clone(&self.snapshot),
             canvas: self.canvas.clone(),
             state: Arc::clone(&self.state),
-            callbacks: Arc::clone(&self.callbacks),
+            delivery: Arc::clone(&self.delivery),
             displays: Arc::clone(&self.displays),
         }
     }
@@ -400,15 +459,10 @@ impl WebWindow {
         LayoutSync {
             canvas: self.canvas.clone(),
             state: Arc::clone(&self.state),
-            callbacks: Arc::clone(&self.callbacks),
+            delivery: Arc::clone(&self.delivery),
             publisher: self.publisher(),
             observed: Cell::new(None),
         }
-    }
-
-    /// Get window callbacks for event dispatch
-    pub fn callbacks(&self) -> &Arc<WindowCallbacks> {
-        &self.callbacks
     }
 
     /// Register the canvas's listeners: the drag transport's first, so the
@@ -424,6 +478,7 @@ impl WebWindow {
         input_latency: flui_platform::InputLatency,
         transfer: &Arc<dyn crate::owner::web::HostDrag>,
         input: &dyn crate::owner::web::HostInput,
+        positions: &WindowPositions<CanvasRef>,
         retire_frame_slot: impl FnOnce() + 'static,
     ) -> Result<(), OpenWindowError> {
         let mut registration = self
@@ -432,21 +487,21 @@ impl WebWindow {
             .take()
             .expect("BUG: newly opened window owns its registration");
         let drag =
-            Arc::clone(transfer).register(&self.canvas, &self.callbacks, &mut registration)?;
+            Arc::clone(transfer).register(&self.canvas, &self.delivery, &mut registration)?;
         let keys = input.register(
             &self.canvas,
-            &self.callbacks,
+            &self.delivery,
             input_latency,
             &mut registration,
         )?;
         let focus = self.register_focus_events(&mut registration)?;
-        let text = crate::text::web::WebTextInput::new(
-            &self.canvas,
-            registration.editor_slot(),
-            registration.accepting(),
+        let canvas = CanvasRef {
+            canvas: self.canvas.clone(),
+            accepting: registration.accepting(),
             keys,
-            Rc::clone(&focus),
-        );
+            editor: Rc::clone(&focus) as Rc<dyn CanvasEditor>,
+        };
+        let facets = positions.for_window(&canvas);
         let visibility = Rc::new(self.visibility_sync(Rc::clone(&registration.accepting)));
         let observer = Rc::clone(&visibility);
         registration.listen(
@@ -465,7 +520,7 @@ impl WebWindow {
         visibility.sync();
         drag.arm();
         *self.drag.borrow_mut() = Some(drag);
-        *self.text.borrow_mut() = Some(text);
+        *self.facets.borrow_mut() = Some(facets);
         *self.registration.borrow_mut() = Some(registration);
         *self.retire_frame_slot.borrow_mut() = Some(Box::new(retire_frame_slot));
         Ok(())
@@ -477,7 +532,7 @@ impl WebWindow {
         &self,
         registration: &mut Registration,
     ) -> Result<Rc<FocusSync>, OpenWindowError> {
-        let focus = Rc::new(self.focus_sync());
+        let focus = Rc::new(self.focus_sync(registration.editor_slot()));
         let browser = web_sys::window().expect("BUG: construction verified browser");
         for target in [self.canvas.as_ref(), browser.as_ref()] {
             for kind in ["focus", "blur"] {
@@ -550,12 +605,12 @@ impl WebWindow {
         let Some(query) = dark_scheme_query() else {
             return Ok(());
         };
-        let callbacks = Arc::clone(&self.callbacks);
+        let delivery = Arc::clone(&self.delivery);
         registration.listen(
             query.as_ref(),
             "change",
             Rc::new(move |_: web_sys::Event| {
-                callbacks.dispatch_appearance_changed();
+                delivery.publish_state();
             }),
         )
     }
@@ -613,16 +668,22 @@ impl WebWindow {
         &self,
         registration: &mut Registration,
     ) -> Result<(), OpenWindowError> {
-        for (kind, available) in [("webglcontextlost", false), ("webglcontextrestored", true)] {
-            let callbacks = Arc::clone(&self.callbacks);
+        for (kind, change) in [
+            ("webglcontextlost", flui_platform::SurfaceChange::Release),
+            (
+                "webglcontextrestored",
+                flui_platform::SurfaceChange::Rebuild,
+            ),
+        ] {
+            let delivery = Arc::clone(&self.delivery);
             registration.listen(
                 self.canvas.as_ref(),
                 kind,
                 Rc::new(move |event: web_sys::Event| {
-                    if !available {
+                    if change == flui_platform::SurfaceChange::Release {
                         event.prevent_default();
                     }
-                    callbacks.dispatch_surface_status_change(available);
+                    delivery.dispatch_surface_change(change);
                 }),
             )?;
         }
@@ -636,11 +697,11 @@ impl WebWindow {
             .expect("BUG: window construction verified the canvas document")
     }
 
-    fn focus_sync(&self) -> FocusSync {
+    fn focus_sync(&self, editor: EditorSlot) -> FocusSync {
         FocusSync {
             canvas: self.canvas.clone(),
+            editor,
             state: Arc::clone(&self.state),
-            callbacks: Arc::clone(&self.callbacks),
             observed: Cell::new(self.state.lock().focused),
             publisher: self.publisher(),
         }
@@ -651,7 +712,7 @@ impl WebWindow {
     fn execution_sync(&self) -> ExecutionSync {
         ExecutionSync {
             state: Arc::clone(&self.state),
-            callbacks: Arc::clone(&self.callbacks),
+            delivery: Arc::clone(&self.delivery),
         }
     }
 
@@ -662,8 +723,7 @@ impl WebWindow {
                 .owner_document()
                 .expect("BUG: window construction verified the canvas document"),
             state: Arc::clone(&self.state),
-            callbacks: Arc::clone(&self.callbacks),
-            observed: Cell::new(ReportedVisibility::new(self.state.lock().visible)),
+            observed: Cell::new(self.state.lock().hidden),
             accepting,
             publisher: self.publisher(),
         }
@@ -679,35 +739,26 @@ impl WebWindow {
         if let Some(drag) = drag {
             drag.retire();
         }
-        let text = self.text.borrow_mut().take();
-        if let Some(text) = text {
-            text.retire();
+        let facets = self.facets.borrow_mut().take();
+        if let Some(facets) = facets {
+            facets.text.detach();
+            facets.accessibility.detach();
         }
         let retire_frame_slot = self.retire_frame_slot.borrow_mut().take();
         if let Some(retire) = retire_frame_slot {
             retire();
         }
         drop(registration);
-        struct Clear<'a>(&'a WindowCallbacks);
+        struct Clear<'a>(&'a WindowDelivery);
         impl Drop for Clear<'_> {
             fn drop(&mut self) {
                 self.0.clear();
             }
         }
-        let _clear = Clear(&self.callbacks);
+        let _clear = Clear(&self.delivery);
         if notify_close {
-            self.callbacks.dispatch_close();
+            self.delivery.dispatch_close();
         }
-    }
-
-    fn install_callback<T>(&self, slot: &Mutex<Option<T>>, callback: T) {
-        let accepting = self.registration.borrow().is_some();
-        let old = if accepting {
-            slot.lock().replace(callback)
-        } else {
-            Some(callback)
-        };
-        crate::owner::call_point::retire(old);
     }
 }
 
@@ -717,12 +768,34 @@ impl Drop for WebWindow {
     }
 }
 
+/// The window's focus, as the canvas's focus area has it: the canvas and the
+/// editor its text input names on the canvas's claim.
 pub(crate) struct FocusSync {
     canvas: web_sys::HtmlCanvasElement,
+    editor: EditorSlot,
     state: Arc<Mutex<WebWindowState>>,
-    callbacks: Arc<WindowCallbacks>,
     observed: Cell<bool>,
     publisher: StatePublisher,
+}
+
+/// The text input's editor joins the canvas's focus area, and a focus move
+/// it makes reaches the window.
+impl CanvasEditor for FocusSync {
+    fn set(&self, editor: Option<&web_sys::HtmlElement>) {
+        self.editor.set(editor);
+    }
+
+    fn has_focus(&self) -> bool {
+        effective_focus(&self.canvas)
+    }
+
+    fn is_handoff(&self, event: &web_sys::Event) -> bool {
+        is_focus_handoff(&self.canvas, event)
+    }
+
+    fn sync(&self) {
+        FocusSync::sync(self);
+    }
 }
 
 impl FocusSync {
@@ -731,12 +804,9 @@ impl FocusSync {
         if self.observed.replace(focused) == focused {
             return;
         }
-        let state = Arc::clone(&self.state);
-        let cell = Arc::clone(&self.publisher.cell);
-        self.callbacks.dispatch_focus_observation(focused, move || {
-            state.lock().focused = focused;
-            cell.invalidate();
-        });
+        // Committed where the snapshot reads it, then published.
+        self.state.lock().focused = focused;
+        self.publisher.cell.invalidate();
         self.publisher.publish();
     }
 }
@@ -744,29 +814,21 @@ impl FocusSync {
 pub(crate) struct VisibilitySync {
     pub(crate) document: web_sys::Document,
     state: Arc<Mutex<WebWindowState>>,
-    callbacks: Arc<WindowCallbacks>,
-    observed: Cell<ReportedVisibility>,
+    observed: Cell<bool>,
     accepting: Rc<Cell<bool>>,
     publisher: StatePublisher,
 }
 
 impl VisibilitySync {
     pub(crate) fn sync(&self) {
-        let visible = !self.document.hidden();
+        let hidden = self.document.hidden();
         // A host getter can synchronously retire this registration.
-        if !self.accepting.get() {
+        if !self.accepting.get() || self.observed.replace(hidden) == hidden {
             return;
         }
-        let Some(visible) = ReportedVisibility::report_in(&self.observed, visible) else {
-            return;
-        };
-        let state = Arc::clone(&self.state);
-        let cell = Arc::clone(&self.publisher.cell);
-        self.callbacks
-            .dispatch_visibility_observation(visible, move || {
-                state.lock().visible = visible;
-                cell.invalidate();
-            });
+        // Committed where the snapshot reads it, then published.
+        self.state.lock().hidden = hidden;
+        self.publisher.cell.invalidate();
         self.publisher.publish();
     }
 }
@@ -775,12 +837,13 @@ impl VisibilitySync {
 /// change once; see [`WebWindow::execution_sync`].
 pub(crate) struct ExecutionSync {
     state: Arc<Mutex<WebWindowState>>,
-    callbacks: Arc<WindowCallbacks>,
+    delivery: Arc<WindowDelivery>,
 }
 
 impl ExecutionSync {
     /// The page is frozen (`Suspended`) or runs again (`Running`). The state
-    /// lock is released before the dispatch, which runs embedder callbacks.
+    /// lock is released before the snapshot is published, which runs embedder
+    /// callbacks.
     pub(crate) fn set(&self, next: WindowExecutionState) {
         {
             let mut state = self.state.lock();
@@ -789,7 +852,7 @@ impl ExecutionSync {
             }
             state.execution = next;
         }
-        self.callbacks.dispatch_execution_state_change(next);
+        self.delivery.publish_state();
     }
 }
 
@@ -797,7 +860,7 @@ impl ExecutionSync {
 pub(crate) struct LayoutSync {
     canvas: web_sys::HtmlCanvasElement,
     state: Arc<Mutex<WebWindowState>>,
-    callbacks: Arc<WindowCallbacks>,
+    delivery: Arc<WindowDelivery>,
     publisher: StatePublisher,
     /// The device-pixel size the `ResizeObserver` last reported, with the
     /// CSS box it was reported for.
@@ -886,32 +949,60 @@ impl LayoutSync {
         }
         apply_backing_size(&self.canvas, backing);
         self.publisher.publish();
-        let physical = flui_foundation::geometry::DeviceSize::new(
-            i32::try_from(backing.width).unwrap_or(i32::MAX),
-            i32::try_from(backing.height).unwrap_or(i32::MAX),
-        );
-        if let Ok(metrics) = flui_foundation::geometry::WindowMetrics::new(physical, scale_factor) {
-            self.callbacks.dispatch_resize(metrics);
-        }
-        self.callbacks.dispatch_request_frame();
+        self.delivery.dispatch_request_frame();
     }
 }
 
-impl crate::host_window::CoreHostWindow for WebWindow {}
+impl crate::host_window::CoreHostWindow for WebWindow {
+    fn window_delivery(&self) -> &WindowDelivery {
+        &self.delivery
+    }
+}
+
+impl WebWindow {
+    /// What the window's text input answers; `None` before its canvas
+    /// registered and once it retired.
+    fn text_input_of(&self) -> Option<WindowTextInput> {
+        let text = self
+            .facets
+            .borrow()
+            .as_ref()
+            .map(|facets| Arc::clone(&facets.text))?;
+        // Read with no borrow held: the store host is the field's.
+        text.window_text_input()
+    }
+}
 
 impl crate::host_window::HostWindow for WebWindow {
+    fn accessibility(&self) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {
+        self.facets
+            .borrow()
+            .as_ref()
+            .map(|facets| Arc::clone(&facets.accessibility) as _)
+    }
+
+    /// The browser's text size is linear: nothing is captured.
+    fn capture_text_sizing(
+        &self,
+        _owner: crate::host_window::OwnerThreadToken,
+    ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
+        let text = self
+            .facets
+            .borrow()
+            .as_ref()
+            .map(|facets| Arc::clone(&facets.text));
+        text.map_or(Ok(crate::TextSizingCaptureState::Unsupported), |text| {
+            text.capture_sizing()
+        })
+    }
+
     /// The canvas's `EditContext` or hidden textarea, serving the focused
     /// field's store; `None` once the window closed.
     fn text_store_host(
         &self,
         _owner: crate::host_window::OwnerThreadToken,
     ) -> Option<Rc<dyn flui_platform::text_store::TextStoreHost>> {
-        use crate::text::{TextInput, WindowTextInput};
-        self.text
-            .borrow()
-            .as_ref()
-            .and_then(TextInput::window_text_input)
-            .and_then(WindowTextInput::store_host)
+        self.text_input_of().and_then(WindowTextInput::store_host)
     }
 }
 
@@ -919,9 +1010,14 @@ impl crate::host_window::HostWindow for WebWindow {
 /// (`Platform::window_capabilities`).
 pub(crate) const fn window_capabilities() -> WindowCapabilities {
     let mut capabilities = WindowCapabilities::NONE;
-    capabilities.sets_title = true;
-    capabilities.enters_fullscreen = true;
-    capabilities
+    capabilities.sets_title = flui_platform::Availability::Native;
+    capabilities.enters_fullscreen = flui_platform::Availability::Native;
+    // The page keeps its tab: the canvas is retired and its embedder told.
+    capabilities.closes = flui_platform::Availability::Emulated;
+    // A browser names when an animation frame starts (the
+    // `requestAnimationFrame` timestamp), never when the frame it painted
+    // reached the screen.
+    capabilities.without_presentation_feedback(flui_platform::CapabilityAbsence::NotOnThisPlatform)
 }
 
 impl std::fmt::Debug for WebWindow {
@@ -934,13 +1030,16 @@ impl std::fmt::Debug for WebWindow {
 
 impl host::Window<WebLoop> for WebWindow {
     /// The page's one window is the loop's to track (its callbacks).
-    type Shared = ();
+    type Shared = WindowPositions<CanvasRef>;
+    /// A window by its canvas and what registered beside it.
+    type Ref = CanvasRef;
 
     fn open(
         owner: &WebLoop,
-        _: &Arc<()>,
+        positions: &Arc<WindowPositions<CanvasRef>>,
         options: WindowOptions,
-    ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
+        handler: Rc<dyn flui_platform::WindowHandler>,
+    ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
         tracing::info!(title = %options.title, "Creating web window (canvas)");
 
         let window = Self::new(
@@ -949,88 +1048,69 @@ impl host::Window<WebLoop> for WebWindow {
             options.size.width,
             options.size.height,
             Arc::clone(&owner.displays),
+            WindowDelivery::new(handler, owner.input.availability()),
         )?;
 
-        // Store window callbacks in state so the RAF loop can dispatch frames
-        let callbacks = window.callbacks().clone();
-        callbacks.set_input_capabilities(owner.input.availability());
-        callbacks.set_input_wake(OwnerSignal::callbacks_wake(&owner.signal, &callbacks));
-        let retiring = Arc::clone(&callbacks);
+        // The RAF loop and the owner's wake reach the window's delivery
+        // through the loop's state.
+        let delivery = Arc::clone(&window.delivery);
+        let retiring = Arc::clone(&delivery);
         let state = Arc::downgrade(&owner.state);
         let transfer = Arc::clone(&owner.drag);
-        window.install(options.input_latency, &transfer, &*owner.input, move || {
-            let removed = state.upgrade().and_then(|state| {
-                let mut state = state.lock();
-                if state
-                    .window_callbacks
-                    .as_ref()
-                    .is_some_and(|current| Arc::ptr_eq(current, &retiring))
-                {
-                    state.window_callbacks.take()
-                } else {
-                    None
-                }
-            });
-            drop(removed);
-        })?;
+        window.install(
+            options.input_latency,
+            &transfer,
+            &*owner.input,
+            positions,
+            move || {
+                let removed = state.upgrade().and_then(|state| {
+                    let mut state = state.lock();
+                    if state
+                        .window_delivery
+                        .as_ref()
+                        .is_some_and(|current| Arc::ptr_eq(current, &retiring))
+                    {
+                        state.window_delivery.take()
+                    } else {
+                        None
+                    }
+                });
+                drop(removed);
+            },
+        )?;
         owner.with_state(|s| {
-            s.window_callbacks = Some(callbacks);
+            s.window_delivery = Some(delivery);
         });
 
-        // Notify window created
-        WebLoop::dispatch_window_event(&owner.state, WindowEvent::Created(WindowId(0)));
-
-        Ok(Arc::new(window))
+        let window = Rc::new(window);
+        window
+            .delivery
+            .publish_through_owner(&window, |window: &WebWindow| window.publisher().read());
+        Ok(window)
     }
 
-    fn active(owner: &WebLoop, (): &()) -> Option<WindowId> {
+    fn active(owner: &WebLoop, _: &WindowPositions<CanvasRef>) -> Option<WindowId> {
         owner
             .state
             .lock()
-            .window_callbacks
+            .window_delivery
             .as_ref()
             .map(|_| WindowId(0))
     }
 
-    fn capabilities(_: &WebLoop, (): &()) -> WindowCapabilities {
+    fn capabilities(_: &WebLoop, _: &WindowPositions<CanvasRef>) -> WindowCapabilities {
         window_capabilities()
     }
 
-    fn frame_inset(_: &WebLoop, (): &(), _: f64) -> Size<f64> {
+    fn frame_inset(_: &WebLoop, _: &WindowPositions<CanvasRef>, _: f64) -> Size<f64> {
         // A canvas has no title bar or borders: its outer size is its content size.
         Size::new(0.0, 0.0)
-    }
-
-    fn on_event(owner: &WebLoop, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        crate::owner::call_point::install(
-            &WebLoop::handler(&owner.state, |state| &mut state.handlers.window_event),
-            callback,
-        );
     }
 }
 
 impl PlatformWindow for WebWindow {
     fn id(&self) -> WindowId {
         self.id
-    }
-
-    fn physical_size(&self) -> Size<i32> {
-        // The canvas's backing store, so the surface the embedder configures
-        // from this answer and the store it renders into agree.
-        let backing = self.state.lock().backing;
-        Size::new(
-            i32::try_from(backing.width).unwrap_or(i32::MAX),
-            i32::try_from(backing.height).unwrap_or(i32::MAX),
-        )
-    }
-
-    fn logical_size(&self) -> Size<f64> {
-        let state = self.state.lock();
-        Size::new(state.width, state.height)
-    }
-
-    fn scale_factor(&self) -> f64 {
-        self.state.lock().scale_factor
     }
 
     /// Served by the page's next animation frame: the platform's
@@ -1041,16 +1121,18 @@ impl PlatformWindow for WebWindow {
     /// dispatch, in a loop that holds the page's only thread.
     fn request_redraw(&self) {}
 
-    fn is_focused(&self) -> bool {
-        self.state.lock().focused
+    /// The page's animation frames serve every request, as
+    /// [`request_redraw`](PlatformWindow::request_redraw) says: there is
+    /// nothing to carry, from the page's only thread or any other.
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        Arc::new(|| {})
     }
 
-    fn is_visible(&self) -> bool {
-        self.state.lock().visible
-    }
-
-    fn execution_state(&self) -> WindowExecutionState {
-        self.state.lock().execution
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        Arc::new(WebSurface {
+            canvas: self.canvas.clone(),
+            retirement: self.delivery.retirement(),
+        })
     }
 
     // ==================== State and commands (ADR-0237) ====================
@@ -1059,16 +1141,18 @@ impl PlatformWindow for WebWindow {
         self.publisher().current()
     }
 
-    fn capabilities(&self) -> WindowCapabilities {
-        window_capabilities()
-    }
-
-    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+    fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
         if self.registration.borrow().is_none() {
-            return Err(WindowCommandError::Closed);
+            return Err(ApplyError::Closed);
         }
-        command.admit(&PlatformWindow::capabilities(self))?;
+        let command = command.against(&self.snapshot.published_capabilities())?;
         match command {
+            // A page cannot close its tab: closing the window retires the
+            // canvas's registration and tells the embedder.
+            WindowCommand::Close => {
+                self.retire(true);
+                return Ok(());
+            }
             WindowCommand::SetTitle(title) => {
                 self.state.lock().title.clone_from(&title);
                 if let Some(document) = web_sys::window().and_then(|w| w.document()) {
@@ -1078,9 +1162,7 @@ impl PlatformWindow for WebWindow {
             WindowCommand::SetMode(WindowMode::Fullscreen) => {
                 let el: &web_sys::Element = self.canvas.as_ref();
                 el.request_fullscreen()
-                    .map_err(|error| WindowCommandError::Backend {
-                        message: format!("{error:?}"),
-                    })?;
+                    .map_err(|error| ApplyError::failed(format!("{error:?}")))?;
             }
             WindowCommand::SetMode(WindowMode::Normal) => {
                 if let Some(document) = self.canvas.owner_document()
@@ -1090,8 +1172,8 @@ impl PlatformWindow for WebWindow {
                 }
             }
             // Every other command is refused by `admit` through a capability
-            // this backend leaves `false`.
-            _ => return Err(WindowCommandError::Unsupported),
+            // this backend leaves `Unavailable`.
+            other => return Err(crate::window::state::not_carried_out(&other)),
         }
         // The page answers a fullscreen request later, with
         // `fullscreenchange`; the title is ours to report at once.
@@ -1099,34 +1181,21 @@ impl PlatformWindow for WebWindow {
         Ok(())
     }
 
-    fn is_active(&self) -> bool {
-        self.state.lock().focused
+    /// The browser paces `requestAnimationFrame` to the display; a page asks
+    /// for no rate.
+    fn set_frame_rate_hint(&self, _hint: flui_platform::FrameRateHint) -> Result<(), Unsupported> {
+        Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
     }
 
-    fn appearance(&self) -> WindowAppearance {
-        if dark_scheme_query().is_some_and(|query| query.matches()) {
-            WindowAppearance::Dark
-        } else {
-            WindowAppearance::Light
-        }
-    }
-
-    /// The browser's screen the page is on: the one screen of a tab, or the
-    /// current screen when the Window Management API lists several. The id is
-    /// the snapshot's, so the host derives the period from it.
-    fn display_id(&self) -> Option<flui_platform::DisplayId> {
-        if self.registration.borrow().is_none() {
-            return None;
-        }
-        self.displays.current_display()
-    }
-
-    fn close(&self) {
-        self.retire(true);
-    }
-
-    fn set_background_appearance(&self, _appearance: WindowBackgroundAppearance) {
-        // Not applicable for web canvas
+    /// The input regions keep the system's edge gestures out of a region
+    /// (`InputRegionKind::SystemGestureExclusion`); a page cannot keep the
+    /// browser's or the system's edge swipes out of part of its canvas. CSS
+    /// `pointer-events` decides which element takes input, which is not that.
+    fn set_input_regions(
+        &self,
+        _regions: &[flui_platform::input_regions::InputRegion],
+    ) -> Result<(), Unsupported> {
+        Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
     }
 
     fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
@@ -1134,7 +1203,21 @@ impl PlatformWindow for WebWindow {
     }
 
     fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
-        Some(Arc::new(crate::haptics::web::WebHaptics))
+        self.facets
+            .borrow()
+            .as_ref()
+            .map(|facets| Arc::clone(&facets.haptics))
+    }
+
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
+        self.facets
+            .borrow()
+            .as_ref()
+            .map(|facets| Arc::clone(&facets.chrome))
+    }
+
+    fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
+        self.text_input_of().and_then(WindowTextInput::ime)
     }
 
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
@@ -1143,90 +1226,37 @@ impl PlatformWindow for WebWindow {
             .set_property("cursor", cursor.name())
             .map_err(|error| CursorError::Backend(format!("{error:?}")))
     }
+}
 
-    // ==================== Callback Registration ====================
+/// A canvas window's surface target (ADR-0254 §5): the canvas element, until
+/// the window retires.
+struct WebSurface {
+    canvas: web_sys::HtmlCanvasElement,
+    retirement: crate::owner::window_delivery::Retirement,
+}
 
-    fn on_input(
-        &self,
-        callback: Box<
-            dyn FnMut(flui_platform::PlatformInput) -> flui_platform::DispatchEventResult,
-        >,
-    ) {
-        if self.registration.borrow().is_some() {
-            self.callbacks.set_input_callback(callback);
-        } else {
-            crate::owner::panic_boundary::contain_owner_callback(|| drop(callback));
-        }
-    }
-    fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
-        self.install_callback(&self.callbacks.on_request_frame, callback);
-    }
-    fn on_resize(&self, callback: Box<dyn FnMut(flui_foundation::geometry::WindowMetrics) + Send>) {
-        self.install_callback(&self.callbacks.on_resize, callback);
-    }
-    fn on_state_changed(&self, callback: Box<dyn FnMut() + Send>) {
-        self.install_callback(&self.callbacks.on_state_changed, callback);
-    }
-    fn on_close(&self, callback: Box<dyn FnOnce() + Send>) {
-        self.install_callback(&self.callbacks.on_close, callback);
-    }
-    fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
-        self.install_callback(&self.callbacks.on_should_close, callback);
-    }
-    fn on_safe_area_change(
-        &self,
-        callback: Box<dyn FnMut(flui_foundation::geometry::EdgeInsets) + Send>,
-    ) {
-        let accepting = self.registration.borrow().is_some();
-        crate::owner::panic_boundary::contain_owner_callback(|| {
-            if accepting {
-                self.callbacks.set_safe_area_callback(callback);
-            } else {
-                drop(callback);
-            }
-        });
-    }
-    fn on_execution_state_change(
-        &self,
-        callback: Box<dyn FnMut(flui_platform::WindowExecutionState) + Send>,
-    ) {
-        let accepting = self.registration.borrow().is_some();
-        crate::owner::panic_boundary::contain_owner_callback(|| {
-            if accepting {
-                self.callbacks.set_execution_state_callback(callback);
-            } else {
-                drop(callback);
-            }
-        });
-    }
-    fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        self.install_callback(&self.callbacks.on_active_status_change, callback);
-    }
-    fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        self.install_callback(&self.callbacks.on_visibility_status_change, callback);
-    }
-    fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        self.install_callback(&self.callbacks.on_hover_status_change, callback);
-    }
-    fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
-        self.install_callback(&self.callbacks.on_appearance_changed, callback);
-    }
-    fn on_surface_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        self.install_callback(&self.callbacks.on_surface_status_change, callback);
-    }
+// SAFETY: the target holds a JavaScript object, which belongs to the thread
+// of the page that made it. This crate builds the web host for
+// `wasm32-unknown-unknown` without the `atomics` target feature, where the
+// page's one thread is the only thread: the target is made, read and dropped
+// there, so no other thread can reach the object.
+#[cfg(not(target_feature = "atomics"))]
+unsafe impl Send for WebSurface {}
+// SAFETY: see `Send` above: with one thread, a shared reference is never
+// used concurrently.
+#[cfg(not(target_feature = "atomics"))]
+unsafe impl Sync for WebSurface {}
 
-    // ==================== GPU Surface Handles ====================
-
+impl raw_window_handle::HasWindowHandle for WebSurface {
     fn window_handle(
         &self,
     ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
-        let accepting = self.registration.borrow().is_some();
-        if !accepting {
-            return Err(raw_window_handle::HandleError::Unavailable);
-        }
         use raw_window_handle::{RawWindowHandle, WebCanvasWindowHandle, WindowHandle};
 
-        // WebCanvasWindowHandle expects a NonNull<c_void> pointer to the canvas object
+        if self.retirement.is_retired() {
+            return Err(raw_window_handle::HandleError::Unavailable);
+        }
+        // The handle points at the canvas object this target holds.
         let obj: &wasm_bindgen::JsValue = self.canvas.as_ref();
         let ptr = std::ptr::NonNull::new(
             std::ptr::from_ref(obj)
@@ -1234,21 +1264,31 @@ impl PlatformWindow for WebWindow {
                 .cast::<std::ffi::c_void>(),
         )
         .expect("BUG: a reference can never be null");
-        let handle = WebCanvasWindowHandle::new(ptr);
-        let raw = RawWindowHandle::WebCanvas(handle);
-        // SAFETY: The canvas element is valid for the lifetime of this borrow
+        let raw = RawWindowHandle::WebCanvas(WebCanvasWindowHandle::new(ptr));
+        // SAFETY: the pointer is to the canvas `JsValue` this target owns,
+        // valid for the borrow of `self` the handle carries.
         Ok(unsafe { WindowHandle::borrow_raw(raw) })
     }
+}
 
+impl raw_window_handle::HasDisplayHandle for WebSurface {
     fn display_handle(
         &self,
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
         use raw_window_handle::{DisplayHandle, RawDisplayHandle, WebDisplayHandle};
 
         let raw = RawDisplayHandle::Web(WebDisplayHandle::new());
-        // SAFETY: Web display handle is always valid
+        // SAFETY: a web display handle carries no fields: there is nothing
+        // for `borrow_raw` to keep valid.
         Ok(unsafe { DisplayHandle::borrow_raw(raw) })
     }
+}
+
+impl flui_platform::SurfaceTarget for WebSurface {
+    /// The page presents on its animation frames: there is nothing to arm
+    /// before a present, so it returns at once. A browser reports no time a
+    /// frame reached the screen, so there is nothing to ask for either.
+    fn pre_present_notify(&self, _: flui_platform::SwapChainStatistics) {}
 }
 
 #[wasm_bindgen(inline_js = "
@@ -1445,112 +1485,6 @@ impl Drop for CanvasClaim {
     }
 }
 
-pub(crate) struct Listener {
-    target: web_sys::EventTarget,
-    kind: &'static str,
-    capture: bool,
-    closure: Option<Closure<dyn Fn(web_sys::Event)>>,
-    // The JS wrapper has only a Weak reference. Even a refused detach cannot
-    // retain application captures or invoke the retired body.
-    _body: Rc<dyn Fn(web_sys::Event)>,
-}
-
-impl Listener {
-    /// A nonpassive listener for `kind` on `target`, outside a
-    /// registration's installation: one the window's text input attaches to
-    /// its surface while the window lives. Its body runs only while
-    /// `accepting` holds; dropping it detaches it.
-    pub(crate) fn install(
-        target: &web_sys::EventTarget,
-        kind: &'static str,
-        accepting: &Accepting,
-        body: impl Fn(web_sys::Event) + 'static,
-    ) -> Result<Self, OpenWindowError> {
-        Self::install_in_phase(target, kind, accepting, false, body)
-    }
-
-    /// [`Self::install`] in the capture phase when `capture` holds, which
-    /// sees the events of descendants that do not bubble (`scroll`).
-    pub(crate) fn install_in_phase(
-        target: &web_sys::EventTarget,
-        kind: &'static str,
-        accepting: &Accepting,
-        capture: bool,
-        body: impl Fn(web_sys::Event) + 'static,
-    ) -> Result<Self, OpenWindowError> {
-        Self::install_body(target, kind, accepting, capture, Rc::new(body))
-    }
-
-    /// [`Self::install_in_phase`] for a body handed over behind its `Rc`, of
-    /// which the listener keeps the only strong reference.
-    fn install_body(
-        target: &web_sys::EventTarget,
-        kind: &'static str,
-        accepting: &Accepting,
-        capture: bool,
-        body: Rc<dyn Fn(web_sys::Event)>,
-    ) -> Result<Self, OpenWindowError> {
-        debug_assert_eq!(
-            Rc::strong_count(&body),
-            1,
-            "BUG: a listener keeps the only strong reference to its body"
-        );
-        let weak = Rc::downgrade(&body);
-        let accepting = accepting.clone();
-        let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |event| {
-            if accepting.get()
-                && let Some(body) = weak.upgrade()
-            {
-                body(event);
-            }
-        });
-        let options = web_sys::AddEventListenerOptions::new();
-        options.set_passive(false);
-        options.set_capture(capture);
-        // Own the token before calling the host: a replaced add method might
-        // install a listener and then throw. Dropping it still attempts removal.
-        let listener = Self {
-            target: target.clone(),
-            kind,
-            capture,
-            closure: Some(closure),
-            _body: body,
-        };
-        target
-            .add_event_listener_with_callback_and_add_event_listener_options(
-                kind,
-                listener
-                    .closure
-                    .as_ref()
-                    .expect("BUG: live listener owns closure")
-                    .as_ref()
-                    .unchecked_ref(),
-                &options,
-            )
-            .map_err(backend)?;
-        Ok(listener)
-    }
-}
-
-impl Drop for Listener {
-    fn drop(&mut self) {
-        let Some(closure) = self.closure.take() else {
-            return;
-        };
-        if let Err(error) = self.target.remove_event_listener_with_callback_and_bool(
-            self.kind,
-            closure.as_ref().unchecked_ref(),
-            self.capture,
-        ) {
-            // A host-replaced removal method can leave JS referring to this
-            // function. Transfer the weak-only wrapper to wasm-bindgen's GC
-            // lifetime instead of invalidating a still-referenced trampoline.
-            let _ = closure.into_js_value();
-            report(error);
-        }
-    }
-}
-
 struct ResizeSubscription {
     observer: web_sys::ResizeObserver,
     closure: Option<Closure<dyn Fn(JsValue)>>,
@@ -1614,7 +1548,7 @@ impl Drop for DeadlineTimer {
 pub(crate) struct Registration {
     pub(crate) accepting: Rc<Cell<bool>>,
     canvas: web_sys::HtmlCanvasElement,
-    listeners: Vec<Listener>,
+    listeners: Vec<CanvasListener>,
     observers: Vec<ResizeSubscription>,
     timers: Vec<Rc<DeadlineTimer>>,
     /// What the features registered to run as the registration retires.
@@ -1633,7 +1567,7 @@ impl CanvasRegistration for Registration {
     ) -> Result<(), OpenWindowError> {
         // A refused add drops its token at once, which attempts removal; the
         // installed prefix is removed when the registration rolls back.
-        let listener = Listener::install_body(
+        let listener = CanvasListener::install_body(
             target,
             kind,
             &Accepting::reading(&self.accepting),

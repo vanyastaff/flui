@@ -106,6 +106,18 @@ impl Drop for FailureScope<'_> {
     }
 }
 
+/// Whether a value refused under `slot` falls to failure custody: the thread
+/// is unwinding, or the owner turn it belongs to holds a caught failure. Such
+/// a value is retained, never run or destroyed.
+pub(crate) fn execution_failure_held(slot: &RefCell<Option<Weak<FailureSignal>>>) -> bool {
+    std::thread::panicking()
+        || slot
+            .borrow()
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .is_some_and(|signal| signal.get())
+}
+
 pub(crate) fn retire_with_execution_custody<T>(
     slot: &RefCell<Option<Weak<FailureSignal>>>,
     value: T,

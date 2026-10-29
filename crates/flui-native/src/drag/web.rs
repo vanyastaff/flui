@@ -20,7 +20,8 @@
 //! drag threshold, which then stores its representations eagerly. Otherwise
 //! `dragstart` is cancelled, the press goes on as ordinary pointer input, and
 //! a session the runtime starts later in that press is refused as
-//! `DragError::Unavailable`, so it stays in its window.
+//! `DragError::Unsupported` (`Unavailable`: not in this press), so it stays in
+//! its window.
 //!
 //! How `DataTransfer` types and effect names map to transfer formats and
 //! actions is decided in [`mapping`] with no DOM call, so every host compiles
@@ -46,7 +47,7 @@
 mod mapping {
     use flui_platform::data_transfer::{
         DropFeedback, Mime, RepresentationDescriptor, RepresentationIndex, TransferActions,
-        TransferFormat, TransferPayload, TransferUri,
+        TransferFormat, TransferPayload,
     };
     use flui_platform::drag::OsDragProvider;
 
@@ -180,14 +181,12 @@ mod mapping {
         match format {
             TransferFormat::Text => TransferPayload::Text(text),
             TransferFormat::Html => TransferPayload::Html(text),
-            // RFC 2483: one URI per CRLF-separated line, `#` lines are comments.
-            TransferFormat::UriList => TransferPayload::UriList(
-                text.lines()
-                    .map(str::trim)
-                    .filter(|line| !line.is_empty() && !line.starts_with('#'))
-                    .map(|line| TransferUri::Uri(line.to_owned()))
-                    .collect(),
-            ),
+            // The browser's `text/uri-list` string is already the list
+            // (RFC 2483): delivered as the browser gave it.
+            TransferFormat::UriList => TransferPayload::Custom {
+                mime: Mime::new("text/uri-list"),
+                bytes: std::sync::Arc::from(text.into_bytes()),
+            },
             TransferFormat::Image { .. } | TransferFormat::Custom { .. } => {
                 payload_of_bytes(format, text.into_bytes())
             }
@@ -255,16 +254,7 @@ mod mapping {
         };
         let text = match payload {
             TransferPayload::Text(text) | TransferPayload::Html(text) => text.clone(),
-            TransferPayload::UriList(uris) => uris
-                .iter()
-                .map(|uri| match uri {
-                    TransferUri::Uri(uri) => uri.clone(),
-                    TransferUri::Path(path) => format!("file://{}", path.display()),
-                })
-                .collect::<Vec<_>>()
-                .join("\r\n"),
             TransferPayload::Custom { bytes, .. } => std::str::from_utf8(bytes).ok()?.to_owned(),
-            TransferPayload::Image(image) => std::str::from_utf8(&image.bytes).ok()?.to_owned(),
         };
         Some((dom_type, text))
     }
@@ -287,11 +277,11 @@ use std::{
 use flui_foundation::{DataTransferId, geometry::Point};
 #[cfg(target_arch = "wasm32")]
 use flui_platform::{
-    DragDropEvent, PlatformInput,
+    DragDropEvent, PlatformInput, Unsupported, UnsupportedReason,
     data_transfer::{
-        DataTransferOffer, DataTransferSource, DropFeedback, Mime, OfferRecord, OfferTable,
-        RepresentationDescriptor, RepresentationIndex, TransferActions, TransferError,
-        TransferFormat, TransferLimits, TransferPayload, TransferRequest,
+        DataTransferOffer, DataTransferSource, DropFeedback, Mime, RepresentationDescriptor,
+        RepresentationIndex, TransferActions, TransferError, TransferFormat, TransferLimits,
+        TransferPayload, TransferRequest,
     },
     drag::{DragError, OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource},
 };
@@ -302,11 +292,11 @@ use wasm_bindgen::JsCast;
 
 #[cfg(target_arch = "wasm32")]
 use crate::{
-    drag::offers::payload_of_bytes,
-    owner::handlers::WindowCallbacks,
+    drag::offers::{OfferTable, payload_of_bytes},
     owner::panic_boundary::contain_owner_callback,
     owner::web::event::{answer, pointer_position},
     owner::web::{CanvasDrag, CanvasRegistration, HostDrag},
+    owner::window_delivery::WindowDelivery,
 };
 #[cfg(target_arch = "wasm32")]
 use mapping::{
@@ -372,9 +362,7 @@ impl WebTransfer {
         let (sources, representations): (Vec<_>, Vec<_>) = offered.into_iter().unzip();
         let representations: Arc<[RepresentationDescriptor]> = Arc::from(representations);
         let mut offers = self.offers.lock();
-        let id = offers
-            .table
-            .mint(OfferRecord::new(Arc::clone(&representations)));
+        let id = offers.table.mint(Arc::clone(&representations));
         offers.feedback.insert(id, DropFeedback::default());
         offers
             .held
@@ -409,10 +397,7 @@ impl WebTransfer {
         };
         let representations = {
             let offers = self.offers.lock();
-            offers
-                .table
-                .get(id)
-                .map(|record| Arc::clone(record.representations()))
+            offers.table.get(id).map(Arc::clone)
         };
         let Some(representations) = representations else {
             return;
@@ -461,10 +446,10 @@ impl HostDrag for WebTransfer {
     fn register(
         self: Arc<Self>,
         canvas: &web_sys::HtmlCanvasElement,
-        callbacks: &Arc<WindowCallbacks>,
+        delivery: &Arc<WindowDelivery>,
         registration: &mut dyn CanvasRegistration,
     ) -> Result<Box<dyn CanvasDrag>, crate::OpenWindowError> {
-        Ok(Box::new(register(canvas, &self, callbacks, registration)?))
+        Ok(Box::new(register(canvas, &self, delivery, registration)?))
     }
 }
 
@@ -504,9 +489,8 @@ impl DataTransferSource for WebTransfer {
                     let format = offers
                         .table
                         .get(id)
-                        .and_then(|record| {
-                            record
-                                .representations()
+                        .and_then(|representations| {
+                            representations
                                 .get(usize::from(representation.0))
                                 .map(|descriptor| descriptor.format.clone())
                         })
@@ -542,7 +526,7 @@ impl DataTransferSource for WebTransfer {
                         limit: limits.max_bytes,
                     }));
                 }
-                let (request, completer) = TransferRequest::channel();
+                let (request, completer) = TransferRequest::pending();
                 js_sys::futures::spawn_local(async move {
                     let result = js_sys::futures::JsFuture::from(file.array_buffer())
                         .await
@@ -712,7 +696,7 @@ impl PlatformDragSource for WebDragSource {
             } = request;
             contain_owner_callback(|| drop(provider));
             drop(on_end);
-            return Err(DragError::Unavailable);
+            return Err(Unsupported::new(UnsupportedReason::Unavailable).into());
         }
         *self.outgoing.borrow_mut() = Outgoing::Waiting(request);
         Ok(())
@@ -796,7 +780,7 @@ fn offered_by(transfer: &web_sys::DataTransfer) -> Vec<(DomSource, Representatio
 fn register(
     canvas: &web_sys::HtmlCanvasElement,
     transfer: &Arc<WebTransfer>,
-    callbacks: &Arc<WindowCallbacks>,
+    delivery: &Arc<WindowDelivery>,
     registration: &mut dyn CanvasRegistration,
 ) -> Result<HtmlCanvasDrag, crate::OpenWindowError> {
     let hover: Hover = Rc::default();
@@ -804,9 +788,9 @@ fn register(
 
     // The target.
     for kind in ["dragenter", "dragover"] {
-        let (transfer, callbacks, hover) = (
+        let (transfer, delivery, hover) = (
             Arc::clone(transfer),
-            Arc::clone(callbacks),
+            Arc::clone(delivery),
             Rc::clone(&hover),
         );
         registration.listen(
@@ -840,7 +824,7 @@ fn register(
                     )
                 };
                 hover.set(Some((id, allowed)));
-                let result = callbacks.dispatch_input(PlatformInput::DragDrop(input));
+                let result = delivery.dispatch_input(PlatformInput::DragDrop(input));
                 let effect = drop_effect(transfer.feedback(id), allowed);
                 data.set_drop_effect(effect);
                 // Cancelling `dragenter` makes the canvas the drag's target;
@@ -857,9 +841,9 @@ fn register(
         )?;
     }
     {
-        let (transfer, callbacks, hover) = (
+        let (transfer, delivery, hover) = (
             Arc::clone(transfer),
-            Arc::clone(callbacks),
+            Arc::clone(delivery),
             Rc::clone(&hover),
         );
         registration.listen(
@@ -870,16 +854,16 @@ fn register(
                     return;
                 };
                 let result =
-                    callbacks.dispatch_input(PlatformInput::DragDrop(DragDropEvent::Exited { id }));
+                    delivery.dispatch_input(PlatformInput::DragDrop(DragDropEvent::Exited { id }));
                 transfer.close_offer(id);
                 answer(&event, result);
             }),
         )?;
     }
     {
-        let (transfer, callbacks, hover) = (
+        let (transfer, delivery, hover) = (
             Arc::clone(transfer),
-            Arc::clone(callbacks),
+            Arc::clone(delivery),
             Rc::clone(&hover),
         );
         registration.listen(
@@ -891,7 +875,7 @@ fn register(
                 };
                 let action = action_of(drop_effect(transfer.feedback(id), allowed));
                 if action.is_empty() {
-                    let result = callbacks
+                    let result = delivery
                         .dispatch_input(PlatformInput::DragDrop(DragDropEvent::Exited { id }));
                     transfer.close_offer(id);
                     answer(&event, result);
@@ -901,7 +885,7 @@ fn register(
                     transfer.materialize(id, &data);
                 }
                 let result =
-                    callbacks.dispatch_input(PlatformInput::DragDrop(DragDropEvent::Dropped {
+                    delivery.dispatch_input(PlatformInput::DragDrop(DragDropEvent::Dropped {
                         id,
                         action,
                         position: Some(drag_position(&event)),

@@ -3,7 +3,7 @@
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 #[cfg(all(
     not(target_os = "android"),
@@ -24,9 +24,8 @@ use super::host::{APP_RUNTIME, with_owner_platform};
     not(target_arch = "wasm32")
 ))]
 use super::owner_dispatch::{
-    PresentationDispatcher, RuntimeEvent, RuntimeTask, close_this_window,
-    dispatch_platform_ui_runtime, install_input_wiring, prepare_presentation_alongside,
-    prepare_ui_runtime_alongside,
+    PresentationDispatcher, close_this_window, install_input_wiring,
+    prepare_presentation_alongside, prepare_ui_runtime_alongside,
 };
 #[cfg(all(
     not(target_os = "android"),
@@ -89,8 +88,8 @@ use flui_view::View;
 /// ui_runtime/presentation topology the new window becomes. Must be called from
 /// the owner thread while a loop is live (mirrors `bootstrap_desktop`'s own
 /// `OwnerPlatform` access constraint: reachable only from inside, or after,
-/// `on_ready` — e.g. from a `window.on_input`/`window.on_should_close`
-/// callback the FIRST window already registered).
+/// `on_ready` — e.g. from the input or close-request route of the FIRST
+/// window).
 ///
 /// # [`WindowPolicy::Isolated`]
 ///
@@ -243,7 +242,7 @@ struct SecondaryWindowInstallConfig {
 struct PendingCompletion {
     reply: Option<Arc<crate::app::application_control::Reply>>,
     config: SecondaryWindowInstallConfig,
-    window: Arc<dyn flui_native::HostWindow>,
+    window: Rc<dyn flui_native::HostWindow>,
     stage: CompletionStage,
 }
 
@@ -268,7 +267,7 @@ enum CompletionStage {
 ))]
 pub(super) type OpenedWindow = (
     PresentationDispatcher,
-    Arc<dyn flui_platform::PlatformWindow>,
+    Rc<dyn flui_platform::PlatformWindow>,
 );
 
 /// Owns the generic root until preparation and returns its publication receipt.
@@ -279,7 +278,7 @@ pub(super) type OpenedWindow = (
 ))]
 type SecondaryWindowInstall = Box<
     dyn FnOnce(
-        Arc<dyn flui_native::HostWindow>,
+        Rc<dyn flui_native::HostWindow>,
     ) -> Result<super::installed_host::Installation, AppWindowError>,
 >;
 
@@ -307,7 +306,7 @@ impl PendingCompletion {
                 if !config.reservation.0.begin_install() {
                     return Err(AppWindowError::Cancelled);
                 }
-                install(Arc::clone(&window))?
+                install(Rc::clone(&window))?
             }
             CompletionStage::Publishing(receipt) => receipt,
         };
@@ -465,6 +464,8 @@ struct PendingOpen {
     config: SecondaryWindowInstallConfig,
     pending: flui_native::PendingWindow,
     waker: std::task::Waker,
+    /// The handler the window was opened with, adopted once it resolves.
+    routes: std::rc::Rc<super::window_routes::WindowRoutes>,
 }
 #[cfg(all(
     not(target_os = "android"),
@@ -527,8 +528,12 @@ thread_local! {
     not(target_arch = "wasm32")
 ))]
 fn discard_pending_open(mut request: PendingOpen) {
-    if let Some(Ok(window)) = request.pending.try_take() {
-        window.close();
+    if let Some(Ok(window)) = request
+        .pending
+        .try_take()
+        .map(|taken| taken.and_then(super::opened_window))
+    {
+        super::discard_window(window.as_ref(), "an open nobody waits for");
     }
     // An unresolved handle is disclaimed; a delivered handle is explicitly
     // closed above, since dropping an Arc alone need not destroy a native window.
@@ -557,9 +562,10 @@ pub(super) fn cancel_pending_secondary_windows() {
         );
     }
     for completion in completions {
-        let error =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| completion.window.close()))
-                .err();
+        let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            super::discard_window(completion.window.as_ref(), "a cancelled pending open");
+        }))
+        .err();
         crate::app::lifecycle_state::preserve_first_lifecycle_panic(
             &mut panic,
             error,
@@ -697,16 +703,22 @@ pub(super) fn drain_pending_secondary_window_completions(
                 PENDING_SECONDARY_WINDOW_OPENS.with(|queue| queue.borrow_mut().push(request));
             }
             Ok(std::task::Poll::Pending) => {}
-            Ok(std::task::Poll::Ready(Ok(window))) => {
-                PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
-                    queue.borrow_mut().push(PendingCompletion {
-                        reply: None,
-                        config: request.config,
-                        window,
-                        stage: CompletionStage::Bare,
+            Ok(std::task::Poll::Ready(Ok(opened))) => match super::opened_window(opened) {
+                Ok(window) => {
+                    request.routes.adopt(window.id());
+                    PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
+                        queue.borrow_mut().push(PendingCompletion {
+                            reply: None,
+                            config: request.config,
+                            window,
+                            stage: CompletionStage::Bare,
+                        });
                     });
-                });
-            }
+                }
+                Err(error) => {
+                    tracing::error!(%error, "pending secondary window creation failed");
+                }
+            },
             Ok(std::task::Poll::Ready(Err(error))) => {
                 tracing::error!(%error, "pending secondary window creation failed");
             }
@@ -729,7 +741,7 @@ pub(super) fn drain_pending_secondary_window_completions(
             PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| queue.borrow_mut().push(completion));
             continue;
         }
-        let window = Arc::clone(&completion.window);
+        let window = Rc::clone(&completion.window);
         let reply = completion.reply.clone();
         let detail = completion.config.frame_failure_detail;
         let result =
@@ -758,8 +770,10 @@ pub(super) fn drain_pending_secondary_window_completions(
             "pending window installation",
         );
         if failed {
-            let error =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| window.close())).err();
+            let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                super::discard_window(window.as_ref(), "a failed installation");
+            }))
+            .err();
             crate::app::lifecycle_state::preserve_first_lifecycle_panic(
                 &mut first_panic,
                 error,
@@ -800,7 +814,7 @@ pub(super) fn drain_pending_secondary_window_completions(
 /// native window it opened and wired — the public function discards it
 /// (embedders address the window only through dispatched events, never a
 /// held handle); this module's own tests need it to drive a REAL close
-/// (`window.close()`) instead of reaching for the internal
+/// (`WindowCommand::Close`) instead of reaching for the internal
 /// `close_this_window`/`request_ui_runtime_uninstall` primitives directly, which
 /// would prove the primitives work without proving THIS function's own
 /// `on_close` wiring calls them.
@@ -853,7 +867,8 @@ pub(super) fn open_secondary_window_impl(
     // ever call `reveal_after_first_frame` — see
     // `desktop::rendered_window_options` for the path that defers.
     let options: WindowOptions = (&config).into();
-    let open = with_owner_platform(|owner| owner.open_window(options))
+    let routes = super::window_routes::WindowRoutes::new();
+    let open = with_owner_platform(|owner| owner.open_window(options, routes.clone()))
         .ok_or(AppWindowError::NoOwnerLoop)?
         .map_err(native_error)?;
 
@@ -871,9 +886,12 @@ pub(super) fn open_secondary_window_impl(
     };
 
     match open {
-        WindowOpen::Ready(window) => finish_open_secondary_window(install_config, window),
+        WindowOpen::Ready(window) => {
+            routes.adopt(window.id());
+            finish_open_secondary_window(install_config, window)
+        }
         WindowOpen::Pending(pending) => {
-            spawn_pending_secondary_window_completion(install_config, pending)?;
+            spawn_pending_secondary_window_completion(install_config, pending, routes)?;
             Ok(None)
         }
     }
@@ -924,12 +942,14 @@ where
     // Deferred reveal: the content install below goes through
     // `install_desktop_window`, which performs the reveal.
     let options: WindowOptions = super::desktop::rendered_window_options(&config);
-    let open = with_owner_platform(|owner| owner.open_window(options))
+    let routes = super::window_routes::WindowRoutes::new();
+    let open = with_owner_platform(|owner| owner.open_window(options, routes.clone()))
         .ok_or(AppWindowError::NoOwnerLoop)?
         .map_err(native_error)?;
 
     match open {
         WindowOpen::Ready(window) => {
+            routes.adopt(window.id());
             let (reply, request) = crate::app::WindowRequest::new();
             // Preparation consumes the captured root once. The completion then
             // retains the native window and liveness reservation until the
@@ -954,13 +974,13 @@ where
                 queue.borrow_mut().push(PendingCompletion {
                     reply: Some(reply),
                     config: install_config,
-                    window: Arc::clone(&window),
+                    window: Rc::clone(&window),
                     stage: CompletionStage::Content(Box::new(move |window| {
                         super::desktop::install_desktop_window(
                             root,
                             &config_for_install,
                             reload,
-                            Arc::clone(&window),
+                            Rc::clone(&window),
                             host,
                         )
                         .map(|rendered| rendered.installation)
@@ -999,6 +1019,7 @@ where
 fn spawn_pending_secondary_window_completion(
     config: SecondaryWindowInstallConfig,
     pending: flui_native::PendingWindow,
+    routes: std::rc::Rc<super::window_routes::WindowRoutes>,
 ) -> Result<(), AppWindowError> {
     let proxy = with_owner_platform(flui_native::OwnerPlatform::proxy)
         .ok_or(AppWindowError::NoOwnerLoop)?;
@@ -1013,6 +1034,7 @@ fn spawn_pending_secondary_window_completion(
             config,
             pending,
             waker,
+            routes,
         });
     });
     if let Err(error) = proxy.wake() {
@@ -1045,21 +1067,22 @@ fn spawn_pending_secondary_window_completion(
 ))]
 fn finish_open_secondary_window(
     config: SecondaryWindowInstallConfig,
-    host: Arc<dyn flui_native::HostWindow>,
+    host: Rc<dyn flui_native::HostWindow>,
 ) -> Result<Option<OpenedWindow>, AppWindowError> {
-    let window: Arc<dyn flui_platform::PlatformWindow> = Arc::clone(&host) as _;
-    struct Uninstalled(Option<Arc<dyn flui_platform::PlatformWindow>>);
+    let window: Rc<dyn flui_platform::PlatformWindow> = Rc::clone(&host) as _;
+    struct Uninstalled(Option<Rc<dyn flui_platform::PlatformWindow>>);
     impl Drop for Uninstalled {
         fn drop(&mut self) {
             if let Some(window) = self.0.take()
-                && let Err(payload) =
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| window.close()))
+                && let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    super::discard_window(window.as_ref(), "an uninstalled secondary window");
+                }))
             {
                 std::mem::forget(payload);
             }
         }
     }
-    let mut uninstalled = Uninstalled(Some(Arc::clone(&window)));
+    let mut uninstalled = Uninstalled(Some(Rc::clone(&window)));
     if !secondary_install_admitted(&config.loop_identity) || !config.reservation.0.begin_install() {
         return Err(AppWindowError::Cancelled);
     }
@@ -1088,15 +1111,16 @@ fn finish_open_secondary_window(
                 })?;
                 prepare_presentation_alongside(
                     shared_with,
-                    super::presentation_window(Arc::clone(&host))
+                    super::presentation_window(Rc::clone(&host))
                         .with_pointer_resampling(config.pointer_resampling),
                 )
                 .map_err(mount_error)?
             }
             WindowPolicy::Isolated => {
-                let scale_factor = window.scale_factor();
+                let scale_factor =
+                    super::window_install::SurfaceGeometry::of(window.as_ref()).scale;
                 let ui_runtime = super::host::build_ui_runtime(
-                    super::presentation_window(Arc::clone(&host))
+                    super::presentation_window(Rc::clone(&host))
                         .with_pointer_resampling(config.pointer_resampling),
                     scale_factor,
                 )
@@ -1113,7 +1137,7 @@ fn finish_open_secondary_window(
                 // `open_secondary_window`'s current contract this ui_runtime has no
                 // root widget or renderer, so secondary handler ownership is
                 // blocked on the documented secondary-window rendering contract.
-                prepare_ui_runtime_alongside(ui_runtime, Arc::clone(&window))
+                prepare_ui_runtime_alongside(ui_runtime, Rc::clone(&window))
             }
         };
     let owner_dispatch = installation.dispatcher();
@@ -1137,13 +1161,6 @@ fn finish_open_secondary_window(
 
     install_input_wiring(owner_dispatch, window.as_ref());
 
-    window.on_resize(Box::new(move |metrics| {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::Resized(metrics)),
-        );
-    }));
-
     // Window close -> close THIS window's own presentation, exactly like
     // `run_desktop`'s primary window (see `close_this_window`'s own doc):
     // `WindowPolicy::Isolated` reduces to a full uninstall of this new, independent
@@ -1153,10 +1170,9 @@ fn finish_open_secondary_window(
     // `request_ui_runtime_uninstall`, which would tear down the WHOLE shared
     // ui_runtime out from under a still-open sibling window.
     //
-    // No `on_quit` registration here — that is a single platform-level
-    // callback slot the FIRST window's bootstrap already owns
-    // (`Platform::on_quit`/`SharedPlatform::on_quit` replace, never stack);
-    // registering a second one here would silently steal the first window's
+    // No quit route here — that is the run's single route, which the FIRST
+    // window's bootstrap already set (`route_quit` replaces, never stacks);
+    // setting another here would silently steal the first window's
     // Detached-lifecycle notification on process quit instead of adding to
     // it. The loop-owned quit callback visits every installed ui_runtime once,
     // including this window's ui_runtime, after any active dispatch restores it.
@@ -1164,36 +1180,10 @@ fn finish_open_secondary_window(
         tracing::info!(?owner_dispatch, "Secondary window closed");
         close_this_window(owner_dispatch);
     });
-    // The prepared close-request wiring publishes its router entry with the window.
-    window.on_active_status_change(Box::new(move |focused| {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::WindowFocus(focused)),
-        );
-    }));
-    window.on_execution_state_change(Box::new(move |state| {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::WindowExecution(state)),
-        );
-    }));
-    window.on_visibility_status_change(Box::new(move |visible| {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::WindowVisibility(visible)),
-        );
-    }));
-    installation.observe_appearance();
-    installation.observe_display();
-    installation.observe_window_state();
-    let execution = window.execution_state();
-    let focused = window.is_focused();
-    let visible = window.is_visible();
-    installation.observe(flui_runtime::owner::WindowObservation::Snapshot {
-        execution,
-        focused,
-        visible,
-    });
+    // The prepared close-request wiring publishes its router entry with the
+    // window; its facts reach the presentation from its one snapshot
+    // subscription.
+    installation.observe_window();
     let receipt = installation.submit();
     match receipt.outcome() {
         Some(Err(error)) => return Err(error.into()),
@@ -1238,9 +1228,12 @@ fn warn_window_storage_dir(config: &AppConfig) {
     not(target_arch = "wasm32")
 ))]
 mod tests {
+    use super::super::owner_dispatch::{RuntimeTask, dispatch_platform_ui_runtime};
     use super::*;
+    use crate::app::runner::window_routes::OwnerOpenRouted as _;
     use flui_native::{HeadlessPlatform, Platform};
     use flui_runtime::{owner::WindowObservation, ui_runtime::UiRuntime};
+    use flui_testing::window_commands::AdmitAndApply as _;
     use std::{cell::Cell, rc::Rc, sync::atomic::Ordering};
 
     // Inject a renderer through the same completion transport without requiring
@@ -1282,9 +1275,8 @@ mod tests {
     fn installation_case(case: InstallCase) {
         let _clear = super::super::host::OwnerHostClearGuard::arm();
         Box::new(HeadlessPlatform::new())
-            .run(Box::new(move |owner| {
-                let window = owner
-                    .open_window(flui_platform::WindowOptions::default())
+            .run(crate::app::runner::app_handler(move |owner| {
+                let window = owner.open_routed(flui_platform::WindowOptions::default())
                     .expect("native window");
                 let flui_native::WindowOpen::Ready(window) = window else {
                     panic!("headless ready window")
@@ -1339,12 +1331,12 @@ mod tests {
                             runtime
                                 .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 30.0))
                                 .expect("root");
-                            let window: Arc<dyn flui_platform::PlatformWindow> = window;
-                            let closing_window = Arc::clone(&window);
+                            let window: Rc<dyn flui_platform::PlatformWindow> = window;
+                            let closing_window = Rc::clone(&window);
                             let mut prepared =
                                 super::super::owner_dispatch::prepare_ui_runtime_alongside(
                                     runtime,
-                                    Arc::clone(&window),
+                                    Rc::clone(&window),
                                 );
                             installed_address.set(Some(prepared.dispatcher().address));
                             prepared
@@ -1358,7 +1350,7 @@ mod tests {
                                         resize: Some(Box::new(move |_| {
                                             observed.set(Some(retained.load(Ordering::Acquire)));
                                             if matches!(case, InstallCase::ClosedDuringInitialization | InstallCase::ClosedDuringInitializationThenPanic) {
-                                                closing_window.close();
+                                                closing_window.close_now();
                                             }
                                             assert!(
                                                 !matches!(case, InstallCase::InitializationPanic | InstallCase::ClosedDuringInitializationThenPanic),
@@ -1381,7 +1373,7 @@ mod tests {
                                 "publication is queued in the completion tail"
                             );
                             if case == InstallCase::Closed {
-                                window.close();
+                                window.close_now();
                             }
                             Ok(receipt)
                         })),
@@ -1451,7 +1443,12 @@ mod tests {
                                 InstallCase::Closed | InstallCase::ClosedDuringInitialization => {
                                     matches!(completion, Err(AppWindowError::Cancelled))
                                 }
-                                _ => matches!(completion, Err(AppWindowError::Mount { .. })),
+                                InstallCase::Ready
+                                | InstallCase::ClosedDuringInitializationThenPanic
+                                | InstallCase::InitializationPanic
+                                | InstallCase::ObserverDropped => {
+                                    matches!(completion, Err(AppWindowError::Mount { .. }))
+                                }
                             },
                             "failure is typed after rollback: {completion:?}"
                         );
@@ -1529,22 +1526,24 @@ mod tests {
         }
         let _clear = super::super::host::OwnerHostClearGuard::arm();
         Box::new(HeadlessPlatform::new())
-            .run(Box::new(|owner| {
+            .run(crate::app::runner::app_handler(|owner| {
                 super::super::host::install_owner_platform(owner).expect("owner");
                 let closed = Arc::new(AtomicUsize::new(0));
                 let mut requests = Vec::new();
                 for _ in 0..2 {
                     let window = with_owner_platform(|owner| {
-                        owner.open_window(flui_platform::WindowOptions::default())
+                        owner.open_routed(flui_platform::WindowOptions::default())
                     })
                     .expect("owner")
                     .expect("open")
                     .try_ready()
                     .expect("headless ready");
                     let observed = Arc::clone(&closed);
-                    window.on_close(Box::new(move || {
-                        observed.fetch_add(1, Ordering::SeqCst);
-                    }));
+                    crate::app::runner::window_routes::WindowRoutes::of(&*window).route_closed(
+                        move || {
+                            observed.fetch_add(1, Ordering::SeqCst);
+                        },
+                    );
                     let (reply, request) = crate::app::WindowRequest::new();
                     requests.push(request);
                     let config = SecondaryWindowInstallConfig {
@@ -1625,11 +1624,11 @@ mod tests {
         let calls = Rc::new(Cell::new(0));
         let called = Rc::clone(&calls);
         Box::new(platform)
-            .run(Box::new(move |owner| {
+            .run(crate::app::runner::app_handler(move |owner| {
                 super::super::host::install_owner_platform(owner).expect("owner");
                 for first in [true, false] {
                     let window = with_owner_platform(|owner| {
-                        owner.open_window(flui_platform::WindowOptions::default())
+                        owner.open_routed(flui_platform::WindowOptions::default())
                     })
                     .expect("owner")
                     .expect("open")
@@ -1651,7 +1650,7 @@ mod tests {
                     let stage = if first {
                         let receipt = super::super::owner_dispatch::prepare_ui_runtime_alongside(
                             UiRuntime::for_test(),
-                            Arc::clone(&window) as Arc<dyn flui_platform::PlatformWindow>,
+                            Rc::clone(&window) as Rc<dyn flui_platform::PlatformWindow>,
                         )
                         .submit();
                         assert!(matches!(receipt.outcome(), Some(Ok(()))));
@@ -1721,9 +1720,9 @@ mod tests {
             Failure::OwnerReplacement,
         ] {
             let _clear = super::super::host::OwnerHostClearGuard::arm();
-            Box::new(HeadlessPlatform::new()).run(Box::new(move |owner| {
+            Box::new(HeadlessPlatform::new()).run(crate::app::runner::app_handler(move |owner| {
                 super::super::host::install_owner_platform(owner).expect("owner");
-                let window = with_owner_platform(|owner| owner.open_window(flui_platform::WindowOptions::default()))
+                let window = with_owner_platform(|owner| owner.open_routed(flui_platform::WindowOptions::default()))
                     .expect("owner").expect("open").try_ready().expect("headless ready");
                 let identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
                 let (reply, mut request) = crate::app::WindowRequest::new();
@@ -1780,7 +1779,7 @@ mod tests {
         for policy in [WindowPolicy::Isolated, WindowPolicy::Shared] {
             let _clear = super::super::host::OwnerHostClearGuard::arm();
             Box::new(HeadlessPlatform::new())
-                .run(Box::new(move |owner| {
+                .run(crate::app::runner::app_handler(move |owner| {
                     super::super::host::install_owner_platform(owner).expect("owner");
                     let outer = super::super::owner_dispatch::install_platform_ui_runtime(
                         UiRuntime::for_test(),

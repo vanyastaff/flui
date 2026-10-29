@@ -21,20 +21,35 @@ use std::sync::{Arc, Weak};
 use flui_foundation::DataTransferId;
 use flui_foundation::geometry::Point;
 use flui_platform::data_transfer::{
-    DataTransferOffer, DataTransferSource, DropFeedback, OfferRecord, RepresentationDescriptor,
+    DataTransferOffer, DataTransferSource, DropFeedback, RepresentationDescriptor,
     RepresentationIndex, TransferActions, TransferError, TransferFormat, TransferLimits,
     TransferPayload, TransferRequest,
 };
 use flui_platform::drag::{
     DragError, OsDragEnd, OsDragProvider, OsDragRequest, OsDragStart, PlatformDragSource,
 };
-use flui_platform::{DragDropEvent, PlatformInput, WindowId};
+use flui_platform::{DragDropEvent, PlatformInput, Unsupported, UnsupportedReason, WindowId};
 use parking_lot::Mutex;
 
+use crate::drag::offers::OfferTable;
 use crate::host::{self, Host};
-use crate::owner::headless::{DragOver, HeadlessLoop, HeadlessState, OsDragSession, OsDrags};
+use crate::owner::headless::{
+    DragOver, HeadlessLoop, HeadlessState, OsDragSession, OsDrags, SimulatedOffers,
+};
 use crate::owner::slot::OwnerSlot;
 use crate::platform::HostPlatform;
+
+/// The simulated system mints its offers in the table every source does.
+impl SimulatedOffers for OfferTable {
+    fn mint(&mut self, representations: Arc<[RepresentationDescriptor]>) -> DataTransferId {
+        OfferTable::mint(self, representations)
+    }
+
+    fn retire(&mut self, id: DataTransferId) {
+        // A stale id is a no-op, as the system's every retirement may be.
+        let _ = OfferTable::retire(self, id);
+    }
+}
 
 /// The headless host's drag-and-drop transport: the platform's one
 /// data-transfer source, over the drag state of the simulated system, which
@@ -130,7 +145,7 @@ impl DataTransferSource for DragDouble {
     fn conclude_drop(&self, id: DataTransferId) {
         let concluded = {
             let mut inner = self.drags.lock();
-            let _ = inner.table.retire(id);
+            inner.table.retire(id);
             inner.open.remove(&id)
         };
         // After the session ended this is the provider's last clone: its
@@ -176,13 +191,13 @@ impl PlatformDragSource for HeadlessDragSource {
         let slot = Arc::new(OwnerSlot::new());
         let on_end_slot = OwnerSlot::new();
         if slot.replace(provider).is_err() || on_end_slot.replace(on_end).is_err() {
-            return Err(DragError::Unavailable);
+            return Err(Unsupported::new(UnsupportedReason::Unavailable).into());
         }
         let mut inner = self.drags.lock();
         if inner.session.is_some() {
             // One OS session at a time, as on a desktop.
             drop(inner);
-            return Err(DragError::Unavailable);
+            return Err(Unsupported::new(UnsupportedReason::Unavailable).into());
         }
         inner.session = Some(OsDragSession {
             representations: Arc::from(representations),
@@ -210,7 +225,7 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
             state.input_availability = state
                 .input_availability
                 .to_builder()
-                .outgoing_drag(flui_platform::input_capabilities::Availability::Native)
+                .outgoing_drag(flui_platform::Availability::Native)
                 .build();
         });
         self
@@ -254,7 +269,7 @@ impl HeadlessDragAndDrop {
         // The windows are the window feature's, which the loop holds without
         // naming them: their callbacks are what the drag reaches.
         let windows = system.map(|system| Arc::clone(&system.lock().windows));
-        let callbacks = windows.and_then(|windows| windows.callbacks_of(window));
+        let callbacks = windows.and_then(|windows| windows.delivery_of(window));
         if let Some(callbacks) = callbacks {
             // No lock is held: the window's callback reenters the runtime.
             callbacks.dispatch_input(PlatformInput::DragDrop(event));
@@ -310,7 +325,7 @@ impl HeadlessDragAndDrop {
     ///
     /// # Errors
     ///
-    /// [`DragError::Unavailable`] while another session runs: the OS runs one
+    /// [`DragError::Unsupported`] (`Unavailable`) while another session runs: the OS runs one
     /// at a time.
     pub fn start_foreign(
         &self,
@@ -335,11 +350,11 @@ impl HeadlessDragAndDrop {
         });
         if slot.replace(served).is_err() {
             // The slot was made on this thread: only exhausted slot keys refuse it.
-            return Err(DragError::Unavailable);
+            return Err(Unsupported::new(UnsupportedReason::Unavailable).into());
         }
         let mut inner = self.drags.lock();
         if inner.session.is_some() {
-            return Err(DragError::Unavailable);
+            return Err(Unsupported::new(UnsupportedReason::Unavailable).into());
         }
         inner.session = Some(OsDragSession {
             representations: Arc::from(representations),
@@ -378,12 +393,12 @@ impl HeadlessDragAndDrop {
                     }
                 } else {
                     if let Some(previous) = session.over.take() {
-                        let _ = table.retire(previous.offer);
+                        table.retire(previous.offer);
                         // Not the provider's last clone: the session holds one.
                         open.remove(&previous.offer);
                         left = Some((previous.window, previous.offer));
                     }
-                    let id = table.mint(OfferRecord::new(Arc::clone(&session.representations)));
+                    let id = table.mint(Arc::clone(&session.representations));
                     open.insert(id, Arc::clone(&session.provider));
                     session.over = Some(DragOver {
                         window,
@@ -417,7 +432,7 @@ impl HeadlessDragAndDrop {
             } = &mut *inner;
             let over = session.as_mut().and_then(|session| session.over.take());
             over.map(|over| {
-                let _ = table.retire(over.offer);
+                table.retire(over.offer);
                 // Not the provider's last clone: the session holds one.
                 open.remove(&over.offer);
                 (over.window, over.offer)

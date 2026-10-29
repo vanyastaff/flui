@@ -9,22 +9,27 @@
 //!   reaches the operating system;
 //! - [`call_point`]: the one point where the platform calls an application or
 //!   window handler, with no lock or borrow held;
-//! - [`handlers`]: the application's handler set and a window's callbacks,
-//!   called through it;
+//! - `app_delivery`: what a loop delivers to the application's handler, the
+//!   one passed to `run`, through one causal queue;
+//! - [`handlers`]: what a loop asks of the windows it holds, and the frame
+//!   requests a host stamps;
+//! - `window_delivery`: what a window delivers to the handler it was opened
+//!   with, through one causal queue;
 //! - [`notices`]: the channel a loop pushes system notices through, which the
-//!   lifecycle feature implements, and the application's lifecycle hooks a
-//!   loop keeps;
+//!   lifecycle feature implements;
 //! - `sources`: what a loop keeps of its host's preference source;
 //! - `watch`: an observation a feature started for a loop, which the loop
 //!   ends by dropping it;
 //! - `hwnd_affinity`: the Win32 rules for which thread may reach a window
 //!   and when its user data is torn down, which the owner control and the
 //!   loop apply (on Windows, and in tests on every host);
-//! - `windows`, `apple`, `android`, `web`, `winit` and [`headless`]: each
-//!   platform's loop, its wakes and what it owns of the thread, each on the
-//!   targets its host runs on (headless everywhere); `redraw_poll`, the redraw
-//!   decision around one native poll, and `modal_pace`, how often a Windows
-//!   modal loop asks for frames, both pure and checked on every host. A loop
+//! - `windows`, `apple`, `android`, `web`, `linux` (Wayland and X11), `winit`
+//!   and [`headless`]: each platform's loop, its wakes and what it owns of the
+//!   thread, each on the targets its host runs on (headless everywhere);
+//!   `redraw_poll`, the redraw decision around one native poll,
+//!   `wake_deadline`, the rule by which a loop that waits with a timeout of its
+//!   own arms the application's wake deadline, and `modal_pace`, how often a
+//!   Windows modal loop asks for frames, each pure and checked on every host. A loop
 //!   that serves several features through one operating-system object
 //!   dispatches through hooks declared beside it, which the host registers. A
 //!   feature's state or object the loop keeps (the displays, the preference
@@ -38,7 +43,7 @@
 //! on at least one real OS: window creation, display queries, activation,
 //! appearance/keyboard queries, and quit. It is minted only by a backend, on
 //! the thread that owns — or, before the loop starts, will own — its event
-//! loop, and handed to [`PlatformReadyCallback`](crate::PlatformReadyCallback).
+//! loop, and handed to [`AppHandler::ready`](crate::AppHandler::ready).
 //! `!Send + !Sync` by phantom marker: possession proves the thread, so a
 //! wrong-thread call becomes a compile error instead of a runtime assert (the
 //! [`OwnerAffinity`] backstop `flui-foundation` carries).
@@ -55,16 +60,21 @@
 //! channel.
 //!
 //! Only the `pub(crate)` constructor here mints an `OwnerPlatform`, so only a
-//! host in this crate can hand `on_ready` the capability it needs; `Platform`
+//! host in this crate can hand `ready` the capability it needs; `Platform`
 //! is sealed to say so in its type (ADR-0151 §5).
 
+#[cfg(any(target_os = "ios", test))]
+pub(crate) mod accessibility_slot;
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android;
+pub(crate) mod app_delivery;
 #[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) mod apple;
 pub(crate) mod call_point;
 pub mod handlers;
 pub(crate) mod headless;
+#[cfg(any(wayland_host, x11_host, test))]
+pub(crate) mod linux;
 #[cfg(any(test, windows))]
 pub(crate) mod modal_pace;
 pub(crate) mod notices;
@@ -78,23 +88,26 @@ pub(crate) mod panic_boundary;
 pub(crate) mod redraw_poll;
 pub(crate) mod signal;
 pub(crate) mod slot;
+#[cfg(any(windows, x11_host, wayland_host, test))]
+pub(crate) mod wake_deadline;
 #[cfg(any(
     target_os = "macos",
     target_os = "ios",
     target_os = "android",
     target_arch = "wasm32",
-    all(target_os = "linux", feature = "winit-backend")
+    linux_host
 ))]
 pub(crate) mod watch;
+pub(crate) mod window_delivery;
 // Every native host keeps a source; the headless host keeps none, so a Linux
-// build without the winit host has no loop to keep one.
+// build without a Linux host has no loop to keep one.
 #[cfg(any(
     windows,
     target_os = "android",
     target_os = "macos",
     target_os = "ios",
     target_arch = "wasm32",
-    all(target_os = "linux", feature = "winit-backend")
+    linux_host
 ))]
 pub(crate) mod sources;
 #[cfg(target_arch = "wasm32")]
@@ -116,7 +129,6 @@ use std::thread::ThreadId;
 
 use flui_foundation::{ClaimHandle, ClaimOutcome};
 use flui_platform::text_store::TextStoreHost;
-use flui_platform::{SessionEndAnswer, SessionEndPhase, SystemNotice};
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 
 use crate::error::PlatformError;
@@ -124,7 +136,7 @@ use crate::host_window::{HostWindow, OwnerThreadToken};
 use crate::platform::{PathPromptOptions, Platform, PlatformExecutor};
 use crate::task::Task;
 use flui_platform::data_transfer::DataTransferSource;
-use flui_platform::{Clipboard, ClipboardItem, WindowEvent, WindowId, WindowOptions};
+use flui_platform::{Clipboard, ClipboardItem, WindowHandler, WindowId, WindowOptions};
 use signal::{OwnerSignal, SignalTransport};
 
 // ============================================================================
@@ -182,23 +194,6 @@ impl OwnerPlatform {
         self.hooks.on_wake(callback)
     }
 
-    /// Install the callback the platform asks at each phase of the user's
-    /// session ending, replacing any earlier one. See
-    /// [`Platform::on_session_end`].
-    pub fn on_session_end(
-        &self,
-        callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
-    ) {
-        self.platform.on_session_end(callback);
-    }
-
-    /// Install the callback the platform calls with each system notice other
-    /// than a session end's phases, replacing any earlier one. See
-    /// [`Platform::on_host_notice`].
-    pub fn on_host_notice(&self, callback: Box<dyn FnMut(SystemNotice) + Send>) {
-        self.platform.on_host_notice(callback);
-    }
-
     /// Tell the platform the application released the session end it asked to
     /// wait for. See [`Platform::release_session_end`].
     pub fn release_session_end(&self) {
@@ -219,14 +214,21 @@ impl OwnerPlatform {
         self.platform.window_frame_inset(scale_factor)
     }
 
-    /// Open a window. `Ready` is guaranteed inside `on_ready`; afterwards
-    /// the backend may defer through its owner lane (where one exists),
-    /// returning `Pending`.
+    /// Open a window whose deliveries go to `handler` (ADR-0254 §4). `Ready`
+    /// is guaranteed inside `on_ready`; afterwards the backend may defer
+    /// through its owner lane (where one exists), returning `Pending`.
+    ///
+    /// The handler exists before the window's first event: its first input
+    /// is the window's capability snapshot. A refused open drops it here.
     ///
     /// # Errors
     /// See [`OpenWindowError`].
-    pub fn open_window(&self, options: WindowOptions) -> Result<WindowOpen, OpenWindowError> {
-        self.hooks.open_owner_window(options)
+    pub fn open_window(
+        &self,
+        options: WindowOptions,
+        handler: Rc<dyn WindowHandler>,
+    ) -> Result<WindowOpen, OpenWindowError> {
+        self.hooks.open_owner_window(options, handler)
     }
 
     /// The currently active (focused) window, if any.
@@ -298,7 +300,7 @@ impl OwnerPlatform {
     ///
     /// [`PlatformWindow::text_input`]: flui_platform::PlatformWindow::text_input
     #[must_use]
-    pub fn text_store_host(&self, window: &Arc<dyn HostWindow>) -> Option<Rc<dyn TextStoreHost>> {
+    pub fn text_store_host(&self, window: &Rc<dyn HostWindow>) -> Option<Rc<dyn TextStoreHost>> {
         window.text_store_host(OwnerThreadToken::new())
     }
 }
@@ -392,26 +394,6 @@ impl SharedPlatform {
         self.platform.data_transfer()
     }
 
-    /// Registers a callback for when the application should quit.
-    pub fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
-        self.platform.on_quit(callback);
-    }
-
-    /// Registers the callback asked at each phase of the user's session
-    /// ending; see [`Platform::on_session_end`].
-    pub fn on_session_end(
-        &self,
-        callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
-    ) {
-        self.platform.on_session_end(callback);
-    }
-
-    /// Registers the callback called with each other system notice; see
-    /// [`Platform::on_host_notice`].
-    pub fn on_host_notice(&self, callback: Box<dyn FnMut(SystemNotice) + Send>) {
-        self.platform.on_host_notice(callback);
-    }
-
     /// Tells the platform the application released the session end it asked to
     /// wait for; see [`Platform::release_session_end`].
     pub fn release_session_end(&self) {
@@ -432,48 +414,15 @@ impl SharedPlatform {
         self.platform.window_frame_inset(scale_factor)
     }
 
-    /// Registers a callback for when the application is reopened (macOS).
-    pub fn on_reopen(&self, callback: Box<dyn FnMut() + Send>) {
-        self.platform.on_reopen(callback);
-    }
-
-    /// Registers a callback for window events.
-    pub fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        self.platform.on_window_event(callback);
-    }
-
-    /// Installs the hook this platform consults before exiting
-    /// unconditionally on "every window closed" — see
-    /// [`Platform::set_exit_policy_hook`]'s doc for the full contract.
-    pub fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
-        self.platform.set_exit_policy_hook(hook);
-    }
-
-    /// Requests an owner-thread re-consultation of the exit-policy hook —
-    /// see [`Platform::request_exit_policy_reevaluation`]'s doc for the
-    /// full contract. On this fence deliberately: it is the one exit-path
-    /// operation a *worker* thread legitimately needs (a keep-alive
-    /// application service completing is what makes a prior last-window
-    /// veto stale), it is coalesced and enqueue-and-wake only — the hook
-    /// itself always runs on the owner thread, never here.
+    /// Requests that the owner thread ask the application handler's exit
+    /// policy again — see [`Platform::request_exit_policy_reevaluation`]'s
+    /// doc for the full contract. On this fence deliberately: it is the one
+    /// exit-path operation a *worker* thread legitimately needs (a keep-alive
+    /// application service completing is what makes a prior last-window veto
+    /// stale), it is coalesced and enqueue-and-wake only — the handler itself
+    /// is always asked on the owner thread, never here.
     pub fn request_exit_policy_reevaluation(&self) {
         self.platform.request_exit_policy_reevaluation();
-    }
-
-    /// Installs the hook this platform consults, once per idle iteration,
-    /// for the earliest wall-clock instant it should wake at instead of
-    /// blocking forever — see [`Platform::set_wake_deadline_hook`]'s doc for
-    /// the full contract.
-    pub fn set_wake_deadline_hook(
-        &self,
-        hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
-    ) {
-        self.platform.set_wake_deadline_hook(hook);
-    }
-
-    /// Registers a callback for URLs opened by the system.
-    pub fn on_open_urls(&self, callback: Box<dyn FnMut(Vec<String>) + Send>) {
-        self.platform.on_open_urls(callback);
     }
 
     /// Registers a callback for keyboard layout changes.
@@ -542,7 +491,7 @@ assert_impl_all!(SharedPlatform: Send, Sync, Clone);
 pub enum WindowOpen {
     /// Created synchronously. Always the case inside `on_ready`, and on
     /// backends whose owner thread may create directly outside callbacks.
-    Ready(Arc<dyn HostWindow>),
+    Ready(Rc<dyn HostWindow>),
     /// Enqueued on the owner lane; resolves at the loop's next drain
     /// anchor.
     Pending(PendingWindow),
@@ -565,7 +514,7 @@ impl WindowOpen {
     /// # Errors
     /// [`OpenWindowError::NotReady`] if this call is deferred (never the
     /// case inside `on_ready`).
-    pub fn try_ready(self) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
+    pub fn try_ready(self) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
         match self {
             Self::Ready(window) => Ok(window),
             Self::Pending(pending) => Err(OpenWindowError::NotReady(pending)),
@@ -607,6 +556,9 @@ pub enum OpenWindowError {
         /// The backend's own error message.
         message: String,
     },
+    /// This host opens no windows: its table's window position is absent.
+    #[error("this host opens no windows: {0}")]
+    Unsupported(#[from] flui_platform::Unsupported),
     /// The event loop cannot service window creation from this call site in
     /// its current lifecycle state: called before `Platform::run` started
     /// the loop, from another thread while bootstrap (`on_ready`) is still
@@ -638,9 +590,79 @@ pub enum OpenWindowError {
 // PlatformProxy
 // ============================================================================
 
+/// Builds a window's handler on the owner thread, for a window opened from
+/// another thread ([`PlatformProxy::open_window`]): the handler is an `Rc`,
+/// which cannot cross threads, so the request carries what builds it.
+pub type WindowHandlerFactory = Box<dyn FnOnce() -> Rc<dyn WindowHandler> + Send>;
+
+/// A window opened from another thread: its options, and what builds its
+/// handler on the owner thread. A refused request hands both back.
+pub struct WindowRequest {
+    /// The window's options.
+    pub options: WindowOptions,
+    /// Builds the window's handler, once, on the owner thread.
+    pub handler: WindowHandlerFactory,
+}
+
+impl WindowRequest {
+    /// A request for a window with `options`, whose handler `handler` builds
+    /// on the owner thread.
+    #[must_use]
+    pub fn new(
+        options: WindowOptions,
+        handler: impl FnOnce() -> Rc<dyn WindowHandler> + Send + 'static,
+    ) -> Self {
+        Self {
+            options,
+            handler: Box::new(handler),
+        }
+    }
+}
+
+impl WindowRequest {
+    /// Run the factory, once, on the owner thread: the window's options and
+    /// its handler. The factory is application code: its panic is contained
+    /// here (logged, its payload retained) and the open fails with what it
+    /// said, so a loop draining requests carries on.
+    #[cfg_attr(
+        not(all(
+            feature = "winit-backend",
+            any(target_os = "windows", target_os = "macos", target_os = "linux")
+        )),
+        expect(dead_code, reason = "only the winit lane carries deferred opens")
+    )]
+    pub(crate) fn build_on_owner(
+        self,
+    ) -> Result<(WindowOptions, Rc<dyn WindowHandler>), OpenWindowError> {
+        let Self { options, handler } = self;
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(handler)) {
+            Ok(handler) => Ok((options, handler)),
+            Err(payload) => {
+                let message = format!(
+                    "the window's handler factory panicked: {}",
+                    flui_foundation::panic::payload_text(&*payload)
+                        .unwrap_or("non-string panic payload")
+                );
+                panic_boundary::contain_owner_callback(|| tracing::error!("{message}"));
+                flui_foundation::panic::retain_opaque_payload(payload);
+                Err(OpenWindowError::Backend { message })
+            }
+        }
+    }
+}
+
+impl fmt::Debug for WindowRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WindowRequest")
+            .field("options", &self.options)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Cross-thread request capability. `Clone + Send + Sync`. Enqueue-and-wake
-/// with bounded backpressure; never blocks the sender; never carries
-/// closures (ADR-0037 §3 closed vocabulary).
+/// with bounded backpressure; never blocks the sender. The one closure it
+/// carries is a window's handler factory (ADR-0254 §4), run once on the
+/// owner; every other request is a closed vocabulary (ADR-0037 §3).
 #[derive(Clone)]
 pub struct PlatformProxy {
     transport: Arc<dyn ProxyTransport>,
@@ -671,20 +693,21 @@ impl PlatformProxy {
     /// Enqueues a window-open request. Never blocks — on any thread,
     /// including the owner (deferral replaces the old owner-side refusal;
     /// the blocking hazard lives in [`PendingWindow::wait`], which is where
-    /// it is refused). Fails fast with the rejected options returned so the
-    /// producer can retry without rebuilding them.
+    /// it is refused). The request's handler factory runs once, on the owner,
+    /// right before the window is built. Fails fast with the rejected request
+    /// returned so the producer can retry without rebuilding it.
     ///
     /// # Errors
     /// See [`ProxySendError`].
     #[expect(
         clippy::result_large_err,
-        reason = "the rejection hands the caller's options back for a retry; a window open is not a hot path"
+        reason = "the rejection hands the caller's request back for a retry; a window open is not a hot path"
     )]
     pub fn open_window(
         &self,
-        options: WindowOptions,
-    ) -> Result<PendingWindow, ProxySendError<WindowOptions>> {
-        self.transport.open_window(options)
+        request: WindowRequest,
+    ) -> Result<PendingWindow, ProxySendError<WindowRequest>> {
+        self.transport.open_window(request)
     }
 
     /// Coalesced quit signal, independent of window-command queue capacity.
@@ -774,6 +797,78 @@ pub enum ProxySendError<T: fmt::Debug> {
 // PendingWindow
 // ============================================================================
 
+/// A window a deferred open built (ADR-0254 §4): its identity, which any
+/// thread may hold, and the window itself, which only the owner thread
+/// reaches.
+///
+/// The window is not `Send`, so a thread that is not the owner never holds
+/// it: what it gets is the [`WindowId`]. The owner's host keeps the window
+/// tracked until it closes; this holds it weakly, so a value dropped on
+/// another thread keeps no window alive.
+pub struct OpenedWindow {
+    id: WindowId,
+    window: slot::OwnerWeak<dyn HostWindow>,
+}
+
+impl OpenedWindow {
+    /// The opened window, which `window` names on the owner thread. Built
+    /// there.
+    pub(crate) fn new(window: &Rc<dyn HostWindow>) -> Self {
+        Self {
+            id: window.id(),
+            window: slot::OwnerWeak::new(window),
+        }
+    }
+
+    /// The window's identity.
+    #[must_use]
+    pub fn id(&self) -> WindowId {
+        self.id
+    }
+
+    /// The window, on the owner thread while it is still open.
+    #[must_use]
+    pub fn window(&self) -> OpenedWindowReach {
+        if !self.window.is_owner_thread() {
+            return OpenedWindowReach::OtherThread;
+        }
+        self.window
+            .upgrade()
+            .map_or(OpenedWindowReach::Closed, OpenedWindowReach::Open)
+    }
+}
+
+/// What [`OpenedWindow::window`] reaches.
+pub enum OpenedWindowReach {
+    /// The window, which is open: the caller is on its owner thread.
+    Open(Rc<dyn HostWindow>),
+    /// The window closed after it was opened.
+    Closed,
+    /// The caller is not the window's owner thread, which alone reaches it:
+    /// what another thread has of the window is its identity.
+    OtherThread,
+}
+
+impl fmt::Debug for OpenedWindowReach {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Open(window) => f.debug_tuple("Open").field(&window.id()).finish(),
+            Self::Closed => f.write_str("Closed"),
+            Self::OtherThread => f.write_str("OtherThread"),
+        }
+    }
+}
+
+impl fmt::Debug for OpenedWindow {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OpenedWindow")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
+assert_impl_all!(OpenedWindow: Send, Sync);
+
 /// A deferred window-open request in flight on the owner lane.
 ///
 /// Dropping a `PendingWindow` disclaims the request: the owner skips
@@ -783,7 +878,7 @@ pub enum ProxySendError<T: fmt::Debug> {
 #[must_use = "dropping a PendingWindow disclaims the request; the owner \
               skips or unwinds the window"]
 pub struct PendingWindow {
-    handle: ClaimHandle<Result<Arc<dyn HostWindow>, OpenWindowError>>,
+    handle: ClaimHandle<Result<OpenedWindow, OpenWindowError>>,
     owner_thread: ThreadId,
 }
 
@@ -804,7 +899,7 @@ impl PendingWindow {
     // headless-only default) makes this constructor genuinely unused.
     #[cfg_attr(not(feature = "winit-backend"), allow(dead_code))]
     pub(crate) fn new(
-        handle: ClaimHandle<Result<Arc<dyn HostWindow>, OpenWindowError>>,
+        handle: ClaimHandle<Result<OpenedWindow, OpenWindowError>>,
         owner_thread: ThreadId,
     ) -> Self {
         Self {
@@ -813,7 +908,9 @@ impl PendingWindow {
         }
     }
 
-    /// Blocking wait — worker threads only. On the owner thread this
+    /// Blocking wait — worker threads only — for the identity of the opened
+    /// window; the window itself stays on the owner (ADR-0254 §4). On the
+    /// owner thread this
     /// returns [`WaitError::WouldBlockOwner`] instead of deadlocking on the
     /// lane the caller itself drains.
     ///
@@ -823,12 +920,14 @@ impl PendingWindow {
     /// already claimed the result — `try_take` takes `&mut self`, so
     /// nothing stops a caller from following a successful `try_take` with a
     /// `wait` on the same handle; there is nothing left to wait for.
-    pub fn wait(self) -> Result<Arc<dyn HostWindow>, WaitError> {
+    pub fn wait(self) -> Result<WindowId, WaitError> {
         if self.owner_thread == std::thread::current().id() {
             return Err(WaitError::WouldBlockOwner(self));
         }
         match self.handle.wait() {
-            ClaimOutcome::Delivered(result) => result.map_err(WaitError::Open),
+            ClaimOutcome::Delivered(result) => {
+                result.map(|opened| opened.id()).map_err(WaitError::Open)
+            }
             ClaimOutcome::AlreadyClaimed => Err(WaitError::AlreadyClaimed),
             ClaimOutcome::OwnerGone => Err(WaitError::Open(OpenWindowError::OwnerGone {
                 rejected: None,
@@ -839,13 +938,13 @@ impl PendingWindow {
     /// Non-blocking poll; safe on any thread.
     #[must_use = "discarding Some(_) strands whatever the owner delivered \
                   (a live window, or the typed error explaining why not)"]
-    pub fn try_take(&mut self) -> Option<Result<Arc<dyn HostWindow>, OpenWindowError>> {
+    pub fn try_take(&mut self) -> Option<Result<OpenedWindow, OpenWindowError>> {
         self.handle.try_take()
     }
 }
 
 impl std::future::Future for PendingWindow {
-    type Output = Result<Arc<dyn HostWindow>, OpenWindowError>;
+    type Output = Result<OpenedWindow, OpenWindowError>;
 
     /// Non-blocking poll — safe on any thread, including the owner (unlike
     /// [`wait`](Self::wait), which refuses there because it would block on
@@ -925,7 +1024,11 @@ pub(crate) trait OwnerHooks: Send + Sync {
     /// Creates or enqueues a window from the owner thread. Backends with an
     /// owner lane (winit) enqueue when called outside `on_ready`; every
     /// other backend creates directly and always returns `Ready`.
-    fn open_owner_window(&self, options: WindowOptions) -> Result<WindowOpen, OpenWindowError>;
+    fn open_owner_window(
+        &self,
+        options: WindowOptions,
+        handler: Rc<dyn WindowHandler>,
+    ) -> Result<WindowOpen, OpenWindowError>;
 
     /// The cross-thread transport backing [`PlatformProxy`]. Operation support
     /// is independent: a signal-only transport need not support window creation.
@@ -956,13 +1059,19 @@ impl OwnerHooks for DirectOwnerHooks {
         self.signal.register(callback)
     }
 
-    fn open_owner_window(&self, options: WindowOptions) -> Result<WindowOpen, OpenWindowError> {
+    fn open_owner_window(
+        &self,
+        options: WindowOptions,
+        handler: Rc<dyn WindowHandler>,
+    ) -> Result<WindowOpen, OpenWindowError> {
         if !self.signal.accepting() {
             return Err(OpenWindowError::OwnerGone {
                 rejected: Some(Box::new(options)),
             });
         }
-        self.platform.open_window(options).map(WindowOpen::Ready)
+        self.platform
+            .open_window(options, handler)
+            .map(WindowOpen::Ready)
     }
 
     fn transport(&self) -> Arc<dyn ProxyTransport> {
@@ -981,12 +1090,12 @@ pub(crate) trait ProxyTransport: Send + Sync {
     /// Enqueues a window-open request from a worker thread.
     #[expect(
         clippy::result_large_err,
-        reason = "the rejection hands the caller's options back for a retry; a window open is not a hot path"
+        reason = "the rejection hands the caller's request back for a retry; a window open is not a hot path"
     )]
     fn open_window(
         &self,
-        options: WindowOptions,
-    ) -> Result<PendingWindow, ProxySendError<WindowOptions>>;
+        request: WindowRequest,
+    ) -> Result<PendingWindow, ProxySendError<WindowRequest>>;
 
     /// Requests application quit — coalesced, non-starvable.
     ///

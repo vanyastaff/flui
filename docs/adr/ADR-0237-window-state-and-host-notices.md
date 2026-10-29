@@ -22,7 +22,7 @@
   lifecycle state, not inside it), [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md)
   (capabilities on `LifecycleContext`), [ADR-0123](ADR-0123-exceptional-presentation-close.md)
   (close stays the vetoed close path), [ADR-0082](ADR-0082-platform-api-contract-crate.md).
-- **Spec:** [window-lifecycle](../plans/specs/window-lifecycle/design.md)
+- **Spec:** [window-lifecycle](https://github.com/vanyastaff/flui/blob/01531550886e0ad4eefd4ee98fb9db4ab24e34c5/docs/plans/specs/window-lifecycle/design.md)
 
 ## Context
 
@@ -50,7 +50,8 @@ Web ignored page freeze and GPU context loss.
    `WindowState` value (geometry in logical pixels, mode, normal geometry, visibility, focus, title,
    constraints, flags, display) that describes what the OS reports, not what code asked for.
    Position is `None` where the OS does not report a global position. A change publishes a new
-   snapshot with a higher revision and one payload-free `on_state_changed` notification; an equal
+   snapshot with a higher revision and one payload-free `state_changed` call to the window's
+   handler (ADR-0254 §4; first decided as an `on_state_changed` registration); an equal
    sample keeps the revision. An exhausted revision refuses permanently. Backends share one cell
    (`WindowStateCell`) built like ADR-0236's `DisplaySource`. The snapshot is also how a move
    reaches the framework: a published state whose position, display or frame differs from the

@@ -302,6 +302,7 @@ fn independent_replaced_and_dropped_waiters() {
 
 fn inline_wake_can_poll_and_drop_its_future() {
     thread_local! {
+        #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
         static FUTURE: std::cell::RefCell<Option<AnimationRunFuture>> = const { std::cell::RefCell::new(None) };
     }
     let (completer, future) = AnimationRunFuture::pending();
@@ -328,6 +329,7 @@ fn inline_wake_can_poll_and_drop_its_future() {
 
 fn replaced_waker_retirement_can_reenter_registration() {
     thread_local! {
+        #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
         static FUTURE: std::cell::RefCell<Option<AnimationRunFuture>> = const { std::cell::RefCell::new(None) };
     }
     struct RegisterOnDrop {

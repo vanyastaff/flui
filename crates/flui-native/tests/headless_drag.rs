@@ -33,7 +33,7 @@ const LINK: TransferActions = TransferActions::LINK;
 struct Desktop {
     dnd: HeadlessDragAndDrop,
     transfer: Arc<dyn DataTransferSource>,
-    window: Arc<dyn HostWindow>,
+    window: Rc<dyn HostWindow>,
     seen: Rc<RefCell<Vec<DragDropEvent>>>,
     _owner: flui_native::OwnerPlatform,
 }
@@ -45,20 +45,21 @@ fn desktop(accept: Option<TransferActions>) -> Desktop {
     let saved = Rc::new(RefCell::new(None));
     let installed = Rc::clone(&saved);
     Box::new(platform)
-        .run(Box::new(move |owner| {
+        .run(crate::app::on_ready(move |owner| {
             *installed.borrow_mut() = Some(owner);
             Ok(())
         }))
         .expect("headless owner");
     let owner: flui_native::OwnerPlatform = saved.borrow_mut().take().expect("started owner");
+    let handler = flui_testing::window_handler::RecordingWindowHandler::new();
     let window = owner
-        .open_window(WindowOptions::default())
+        .open_window(WindowOptions::default(), handler.clone())
         .expect("open")
         .try_ready()
         .expect("ready");
     let seen = Rc::new(RefCell::new(Vec::new()));
     let (target, answering) = (Rc::clone(&seen), Arc::clone(&transfer));
-    window.on_input(Box::new(move |input| {
+    handler.react_to_input(move |input| {
         if let PlatformInput::DragDrop(event) = input {
             let hovered = match &event {
                 DragDropEvent::Entered { offer, .. } => Some(offer.id()),
@@ -71,7 +72,7 @@ fn desktop(accept: Option<TransferActions>) -> Desktop {
             target.borrow_mut().push(event);
         }
         DispatchEventResult::default()
-    }));
+    });
     Desktop {
         dnd,
         transfer,
@@ -193,7 +194,9 @@ fn driving_the_double_out_of_order_is_an_error() {
         .expect("no session runs yet");
     assert_eq!(
         desktop.dnd.start_foreign(text("second"), MOVE),
-        Err(DragError::Unavailable),
+        Err(DragError::Unsupported(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::Unavailable
+        ))),
         "the OS runs one session at a time"
     );
     assert_eq!(

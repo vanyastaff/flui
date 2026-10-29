@@ -175,12 +175,10 @@ impl WinitApp {
             return;
         };
         let appearance = source.appearance();
-        let windows: Vec<_> = self
-            .platform
-            .with_state(|state| state.windows.values().cloned().collect());
+        let windows: Vec<_> = self.platform.with_state(|state| state.windows.values());
         for window in windows {
             if window.observe_portal_appearance(appearance) {
-                window.callbacks().dispatch_appearance_changed();
+                window.refresh_state();
             }
         }
     }

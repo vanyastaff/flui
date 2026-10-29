@@ -1,9 +1,12 @@
 //! The application's control over its window (ADR-0237): the commands app code
 //! queues through a `WindowHandle`, and their application on the owner thread.
 //!
-//! A command is checked when it is submitted ([`WindowCommand::admit`] against
-//! the window's capabilities), queued, and applied at the start of the owner's
-//! next turn, before its frame, in submission order. It is not applied inline:
+//! A command is admitted when it is submitted ([`WindowCommand::admit`] against
+//! the capabilities of the window's snapshot), queued as the
+//! [`AdmittedCommand`] that admission built, and applied at the start of the
+//! owner's next turn, before its frame, in submission order (ADR-0254 §2). A
+//! command whose capabilities changed in between is admitted again then. It
+//! is not applied inline:
 //! a native call such as `SetWindowPos` re-enters the window procedure
 //! synchronously, which would deliver a resize into the middle of the code that
 //! asked for it. A command submitted while the queue is being applied runs on
@@ -12,22 +15,22 @@
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::{Rc, Weak as RcWeak};
-use std::sync::{Arc, Weak};
 
 use flui_foundation::PresentationAddress;
 use flui_foundation::panic::FirstPanic;
 use flui_platform::PlatformWindow;
 use flui_platform::{
-    WindowCapabilities, WindowCommand, WindowCommandError, WindowControl, WindowState,
+    AdmissionError, AdmittedCommand, ApplyError, CommandRefusal, SubmitError, WindowCommand,
+    WindowControl, WindowState,
 };
 use flui_view::__runtime::WindowSource;
 use flui_view::WindowHandle;
 
-use super::close_request::{CloseReason, CloseRequestRouter, CloseResponse};
+use super::close_request::{CloseReason, CloseRequestError, CloseRequestRouter, CloseResponse};
 
 /// One unit of queued work for a window, applied in the order it was queued.
 enum Queued {
-    Command(WindowCommand),
+    Command(AdmittedCommand),
     /// Ask the window to close through the application's close-request
     /// handler, which may veto.
     Close,
@@ -35,10 +38,10 @@ enum Queued {
 
 /// A window's queued work and the way back to the window.
 pub(crate) struct WindowQueue {
-    window: Weak<dyn PlatformWindow>,
+    window: std::rc::Weak<dyn PlatformWindow>,
     pending: RefCell<VecDeque<Queued>>,
     address: PresentationAddress,
-    router: Arc<CloseRequestRouter>,
+    router: Rc<CloseRequestRouter>,
     /// Asks the owner for a turn; `false` when it cannot be woken.
     wake: Rc<dyn Fn() -> bool>,
 }
@@ -86,23 +89,11 @@ impl WindowQueue {
         };
         while let Some(work) = batch.rest.pop_front() {
             match work {
-                Queued::Command(command) => match window.apply(command) {
-                    Ok(()) => {}
-                    Err(WindowCommandError::Backend { message }) => {
-                        tracing::warn!(
-                            window = ?window.id(),
-                            %message,
-                            "the window system failed a window command"
-                        );
+                Queued::Command(admitted) => {
+                    if let Err(refusal) = apply_admitted(&*window, admitted) {
+                        report(&*window, &refusal);
                     }
-                    Err(error) => {
-                        tracing::debug!(
-                            window = ?window.id(),
-                            %error,
-                            "a queued window command was refused"
-                        );
-                    }
-                },
+                }
                 Queued::Close => {
                     if self.close_with_veto() {
                         batch.rest.clear();
@@ -113,15 +104,75 @@ impl WindowQueue {
     }
 
     /// Close the window unless the application's close-request handler vetoes.
-    /// `true` when the window is closed or was already gone.
+    /// `true` when the window is closed or was already gone, which ends the
+    /// batch. A close the window refused (its capabilities do not take one) or
+    /// its window system failed leaves the window open, so the rest of the
+    /// batch still applies to it.
     fn close_with_veto(&self) -> bool {
         if self.router.consult(self.address, CloseReason::Program) != CloseResponse::Close {
             return false;
         }
-        if let Err(error) = self.router.request_close(self.address) {
-            tracing::debug!(%error, "a queued window close found the window already gone");
+        match self.router.request_close(self.address) {
+            Ok(())
+            | Err(CloseRequestError::Failed {
+                error: ApplyError::Closed,
+                ..
+            }) => true,
+            Err(error @ (CloseRequestError::Refused { .. } | CloseRequestError::Failed { .. })) => {
+                tracing::warn!(%error, "a queued window close was not carried out; the window stays");
+                false
+            }
+            Err(error) => {
+                tracing::debug!(%error, "a queued window close found the window already gone");
+                true
+            }
         }
-        true
+    }
+}
+
+/// Apply `admitted` to `window`. A command the window answers
+/// [`Superseded`](ApplyError::Superseded) — its capabilities changed after the
+/// command was admitted — is given back, admitted again against the window's
+/// snapshot now (the queue is its caller) and applied in its place; one the
+/// window no longer honours is refused then.
+fn apply_admitted(
+    window: &dyn PlatformWindow,
+    admitted: AdmittedCommand,
+) -> Result<(), CommandRefusal> {
+    match window.apply(admitted) {
+        Err(ApplyError::Superseded { command }) => command.admit_and_apply(window),
+        outcome => Ok(outcome?),
+    }
+}
+
+/// Report a queued command the window did not carry out: a failure of the
+/// window system as a warning; a refusal with its reason and whether asking
+/// again could help, since a refusal for good is not worth retrying from the
+/// application.
+fn report(window: &dyn PlatformWindow, refusal: &CommandRefusal) {
+    match refusal {
+        CommandRefusal::Apply(ApplyError::Platform(failure)) => {
+            tracing::warn!(
+                window = ?window.id(),
+                %failure,
+                "the window system failed a window command"
+            );
+        }
+        CommandRefusal::Admission(AdmissionError::Unsupported(absent)) => {
+            tracing::debug!(
+                window = ?window.id(),
+                reason = ?absent.reason,
+                retryable = absent.is_retryable(),
+                "the window no longer takes a queued window command"
+            );
+        }
+        other @ (CommandRefusal::Admission(_) | CommandRefusal::Apply(_)) => {
+            tracing::debug!(
+                window = ?window.id(),
+                error = %other,
+                "a queued window command was not applied"
+            );
+        }
     }
 }
 
@@ -174,7 +225,23 @@ impl WindowCommandQueues {
             let queue = queue.upgrade()?;
             // A source that closed keeps its queue until it is dropped; its
             // handle answers closed, and a closed window has no handle to give.
-            (queue.address == address && handle.capabilities().is_ok()).then(|| handle.clone())
+            (queue.address == address && handle.state().is_ok()).then(|| handle.clone())
+        })
+    }
+
+    /// The window presented at `address`, while it is open.
+    #[cfg(feature = "native")]
+    pub(crate) fn window_for(
+        &self,
+        address: PresentationAddress,
+    ) -> Option<Rc<dyn PlatformWindow>> {
+        self.queues.borrow().iter().find_map(|(queue, handle)| {
+            let queue = queue.upgrade()?;
+            // A closed window keeps its queue until it is dropped; it is not
+            // handed out.
+            (queue.address == address && handle.state().is_ok())
+                .then(|| queue.window.upgrade())
+                .flatten()
         })
     }
 
@@ -216,12 +283,8 @@ struct HostWindowControl {
 }
 
 impl HostWindowControl {
-    fn enqueue(&self, work: Queued) -> Result<(), WindowCommandError> {
-        let window = self
-            .queue
-            .window
-            .upgrade()
-            .ok_or(WindowCommandError::Closed)?;
+    fn enqueue(&self, work: Queued) -> Result<(), SubmitError> {
+        let window = self.queue.window.upgrade().ok_or(SubmitError::Closed)?;
         self.queue.pending.borrow_mut().push_back(work);
         self.queue.ask_for_turn(&*window);
         Ok(())
@@ -240,21 +303,10 @@ impl WindowControl for HostWindowControl {
         }
     }
 
-    fn capabilities(&self) -> WindowCapabilities {
-        self.queue
-            .window
-            .upgrade()
-            .map_or(WindowCapabilities::NONE, |window| window.capabilities())
-    }
-
-    fn submit(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
-        let window = self
-            .queue
-            .window
-            .upgrade()
-            .ok_or(WindowCommandError::Closed)?;
-        command.admit(&window.capabilities())?;
-        self.enqueue(Queued::Command(command))
+    fn submit(&self, command: WindowCommand) -> Result<(), SubmitError> {
+        let window = self.queue.window.upgrade().ok_or(SubmitError::Closed)?;
+        let admitted = command.admit(&window.state().capabilities)?;
+        self.enqueue(Queued::Command(admitted))
     }
 
     fn request_close(&self) {
@@ -266,14 +318,14 @@ impl WindowControl for HostWindowControl {
 /// The window control for the presentation at `address`, registered with
 /// `queues` so its commands are applied each owner turn.
 pub(crate) fn window_source(
-    window: &Arc<dyn PlatformWindow>,
+    window: &Rc<dyn PlatformWindow>,
     address: PresentationAddress,
     queues: &WindowCommandQueues,
     wake: Rc<dyn Fn() -> bool>,
-    router: Arc<CloseRequestRouter>,
+    router: Rc<CloseRequestRouter>,
 ) -> WindowSource {
     let queue = Rc::new(WindowQueue {
-        window: Arc::downgrade(window),
+        window: Rc::downgrade(window),
         pending: RefCell::new(VecDeque::new()),
         address,
         router,

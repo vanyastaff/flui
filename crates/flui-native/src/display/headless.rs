@@ -12,7 +12,8 @@ use std::time::Duration;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::{
-    DisplayId, DisplayInfo, DisplayKey, DisplayRegistry, DisplayRevisionExhausted, DisplaySnapshot,
+    CapabilityAbsence, ColorGamut, DisplayColor, DisplayId, DisplayInfo, DisplayKey,
+    DisplayRegistry, DisplayRevisionExhausted, DisplaySnapshot,
 };
 use parking_lot::Mutex;
 
@@ -32,11 +33,12 @@ pub struct DisplaySpec {
     scale_factor: f64,
     refresh_period: Option<Duration>,
     persistent_key: Option<String>,
+    color: Result<DisplayColor, CapabilityAbsence>,
 }
 
 impl DisplaySpec {
-    /// A display of `width` by `height` device pixels at scale 1 whose
-    /// refresh period is unknown.
+    /// A standard-range sRGB display of `width` by `height` device pixels at
+    /// scale 1 whose refresh period is unknown.
     #[must_use]
     pub fn new(name: impl Into<String>, width: i32, height: i32) -> Self {
         Self {
@@ -45,7 +47,16 @@ impl DisplaySpec {
             scale_factor: 1.0,
             refresh_period: None,
             persistent_key: None,
+            color: Ok(DisplayColor::standard(ColorGamut::Srgb)),
         }
+    }
+
+    /// The display's colour profile, as [`DisplayInfo::color`] reports it: a
+    /// colour space and headroom, or the reason a platform would give none.
+    #[must_use]
+    pub fn with_color(mut self, color: Result<DisplayColor, CapabilityAbsence>) -> Self {
+        self.color = color;
+        self
     }
 
     /// The key that names this display again in another run, as
@@ -74,7 +85,7 @@ impl DisplaySpec {
 
 impl Default for DisplaySpec {
     /// The single display a platform without `with_displays` has: 1920 by
-    /// 1080 at scale 1, refresh period unknown.
+    /// 1080 at scale 1, standard-range sRGB, refresh period unknown.
     fn default() -> Self {
         Self::new("Headless Display", 1920, 1080)
     }
@@ -91,6 +102,9 @@ pub enum DisplayChange {
     ScaleFactor(f64),
     /// The display was renamed. A field no window pacing reads.
     Name(String),
+    /// The display's colour profile changed: HDR switched on or off, the
+    /// headroom moved, or the colour can no longer be read.
+    Color(Result<DisplayColor, CapabilityAbsence>),
 }
 
 /// Why a simulated display change or move was refused.
@@ -107,7 +121,7 @@ pub enum DisplayChangeError {
 
 /// The snapshot of `specs`, laid out left to right with the first primary: the
 /// displays the headless loop holds, which a test changes through
-/// [`LaidOutDisplays::apply`]. The registry that issues their ids is only
+/// [`HeadlessDisplayControls`]. The registry that issues their ids is only
 /// needed while the specs are turned into displays, so it is not kept.
 pub(crate) fn laid_out(specs: Vec<DisplaySpec>) -> DisplaySnapshot {
     let registry = DisplayRegistry::new();
@@ -121,8 +135,9 @@ pub(crate) fn laid_out(specs: Vec<DisplaySpec>) -> DisplaySnapshot {
                 .expect("BUG: a fresh registry has ids for the displays a test names");
             let bounds = Bounds::new(Point::new(next_x, 0), spec.size);
             next_x = next_x.saturating_add(spec.size.width);
-            let mut info =
-                DisplayInfo::new(id, spec.name, bounds, spec.scale_factor).with_primary(index == 0);
+            let mut info = DisplayInfo::new(id, spec.name, bounds, spec.scale_factor)
+                .with_primary(index == 0)
+                .with_color(spec.color);
             if let Some(period) = spec.refresh_period {
                 info = info.with_refresh_period(period);
             }
@@ -137,71 +152,33 @@ pub(crate) fn laid_out(specs: Vec<DisplaySpec>) -> DisplaySnapshot {
         .expect("BUG: revision 0 has a successor")
 }
 
-/// What the headless doubles ask of the snapshot a test laid out, and how a
-/// test changes it.
-pub(crate) trait LaidOutDisplays {
-    /// Whether the snapshot holds display `id`.
-    fn contains(&self, id: DisplayId) -> bool;
-
-    /// The bounds of display `id` in the logical pixels of its own scale.
-    fn logical_bounds(&self, id: DisplayId) -> Option<Bounds<f64>>;
-
-    /// The display a new window opens on.
-    fn default_window_display(&self) -> Option<DisplayId>;
-
-    /// Apply `change` to display `id`, as the snapshot's successor.
-    ///
-    /// # Errors
-    /// [`DisplayChangeError::UnknownDisplay`] for an id the snapshot does not
-    /// hold; [`DisplayChangeError::RevisionExhausted`] when the revision cannot
-    /// advance.
-    fn apply(&mut self, id: DisplayId, change: DisplayChange) -> Result<(), DisplayChangeError>;
-}
-
-impl LaidOutDisplays for DisplaySnapshot {
-    fn contains(&self, id: DisplayId) -> bool {
-        self.get(id).is_some()
-    }
-
-    fn logical_bounds(&self, id: DisplayId) -> Option<Bounds<f64>> {
-        let display = self.get(id)?;
-        let scale = display.scale_factor;
-        let device = display.bounds;
-        Some(Bounds::new(
-            Point::new(
-                f64::from(device.origin.x) / scale,
-                f64::from(device.origin.y) / scale,
-            ),
-            Size::new(
-                f64::from(device.size.width) / scale,
-                f64::from(device.size.height) / scale,
-            ),
-        ))
-    }
-
-    fn default_window_display(&self) -> Option<DisplayId> {
-        self.primary()
-            .or_else(|| self.displays().first())
-            .map(|display| display.id)
-    }
-
-    fn apply(&mut self, id: DisplayId, change: DisplayChange) -> Result<(), DisplayChangeError> {
-        let mut displays = self.displays().to_vec();
-        let display = displays
-            .iter_mut()
-            .find(|display| display.id == id)
-            .ok_or(DisplayChangeError::UnknownDisplay)?;
-        match change {
-            DisplayChange::RefreshPeriod(period) => {
-                display.refresh_period =
-                    period.and_then(|period| flui_platform::RefreshPeriod::try_from(period).ok());
-            }
-            DisplayChange::ScaleFactor(scale_factor) => display.scale_factor = scale_factor,
-            DisplayChange::Name(name) => display.name = name,
+/// Apply `change` to display `id` of `snapshot`, as the snapshot's successor.
+///
+/// # Errors
+/// [`DisplayChangeError::UnknownDisplay`] for an id the snapshot does not
+/// hold; [`DisplayChangeError::RevisionExhausted`] when the revision cannot
+/// advance.
+fn apply(
+    snapshot: &mut DisplaySnapshot,
+    id: DisplayId,
+    change: DisplayChange,
+) -> Result<(), DisplayChangeError> {
+    let mut displays = snapshot.displays().to_vec();
+    let display = displays
+        .iter_mut()
+        .find(|display| display.id == id)
+        .ok_or(DisplayChangeError::UnknownDisplay)?;
+    match change {
+        DisplayChange::RefreshPeriod(period) => {
+            display.refresh_period =
+                period.and_then(|period| flui_platform::RefreshPeriod::try_from(period).ok());
         }
-        *self = self.successor(displays)?;
-        Ok(())
+        DisplayChange::ScaleFactor(scale_factor) => display.scale_factor = scale_factor,
+        DisplayChange::Name(name) => display.name = name,
+        DisplayChange::Color(color) => display.color = color,
     }
+    *snapshot = snapshot.successor(displays)?;
+    Ok(())
 }
 
 /// What the headless platform offers for its displays beyond [`Platform`](crate::Platform).
@@ -272,7 +249,7 @@ impl HeadlessDisplayControls {
         let Some(state) = self.state.upgrade() else {
             return Ok(());
         };
-        state.lock().displays.apply(id, change)?;
+        apply(&mut state.lock().displays, id, change)?;
         // A failed wake leaves the signal's pending debt for the next turn.
         if let Some(signal) = self.signal.upgrade() {
             let _ = signal.wake();

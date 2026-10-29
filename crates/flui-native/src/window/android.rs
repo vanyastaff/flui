@@ -16,23 +16,35 @@ use std::sync::{
 use android_activity::AndroidApp;
 use android_activity::ndk::configuration::UiModeNight;
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::{EdgeInsets, Point, Size};
-use flui_platform::input_regions::{InputRegion, InputRegionKind, ProjectedInputRegions};
+use flui_foundation::geometry::{EdgeInsets, Size};
+use flui_platform::input_regions::{InputRegion, InputRegionKind};
 use flui_platform::{
-    DisplayId, FrameRateHint, WindowAppearance, WindowCapabilities, WindowCommand,
-    WindowCommandError, WindowEvent, WindowGeometry, WindowOptions, WindowState,
+    AdmittedCommand, ApplyError, FrameRateHint, Unsupported, UnsupportedReason, WindowAppearance,
+    WindowCapabilities, WindowGeometry, WindowOptions, WindowState,
 };
 use parking_lot::Mutex;
 
-use crate::host;
-use crate::owner::android::java_view::JavaView;
-use crate::owner::android::{ActivityFlags, ActivityWindow, AndroidLoop};
-use crate::owner::handlers::CallbackWindow;
+use crate::host::{self, WindowFacets, WindowPositions};
+use crate::input::regions::ProjectedInputRegions;
+use crate::owner::android::java_view::{ActivityDragSource, JavaView};
+use crate::owner::android::{
+    ActivityFlags, ActivityPreferences, ActivityRef, ActivityWindow, ActivityWindowId, AndroidLoop,
+};
+use crate::window::capabilities::{
+    ActivityFacts, WindowColorMode, activity_capabilities, activity_color_mode,
+    pointer_icon_absence,
+};
+
+use crate::text::WindowTextInput;
 use crate::{
-    input::availability::AndroidInputApis, owner::OpenWindowError,
-    owner::handlers::WindowCallbacks, owner::slot::OwnerSlot, version::gate::android::AndroidApi,
-    version::gate::android::DragSource, version::gate::android::GestureExclusion,
-    version::gate::android::TouchpadGestures, window::state::WindowStateCell,
+    input::availability::AndroidInputApis,
+    owner::OpenWindowError,
+    owner::window_delivery::WindowDelivery,
+    version::gate::android::AndroidApi,
+    version::gate::android::DragSource,
+    version::gate::android::GestureExclusion,
+    version::gate::android::TouchpadGestures,
+    window::state::{ReportedFacts, WindowStateCell},
 };
 use flui_platform::{CursorError, PlatformWindow, WindowExecutionState, WindowId};
 
@@ -47,30 +59,34 @@ use flui_platform::{CursorError, PlatformWindow, WindowExecutionState, WindowId}
 /// window can be used directly with wgpu for Vulkan surface creation.
 #[derive(Clone)]
 pub struct AndroidWindow {
+    /// The window's identity, by which features keep what they hold of it.
+    id: ActivityWindowId,
     app: AndroidApp,
-    callbacks: Arc<WindowCallbacks>,
+    delivery: Arc<WindowDelivery>,
     redraw_requested: Arc<AtomicBool>,
     activity: Arc<ActivityFlags>,
     owner: std::thread::ThreadId,
     owner_signal: Weak<crate::owner::signal::OwnerSignal>,
     geometry_live: Arc<AtomicBool>,
-    text_sizing: Arc<crate::text::android::sizing::Acquisition>,
     safe_area: Arc<Mutex<safe_area::Capture>>,
     /// The exclusion rectangles last handed to the decor view, as projected.
     input_regions: Arc<Mutex<ProjectedInputRegions>>,
-    /// The decor view and vibrator haptics play on (ADR-0210).
-    haptics: Arc<crate::haptics::android::AndroidHaptics>,
+    /// What the table's positions made for the window: its actuator (the
+    /// decor view and the vibrator, ADR-0210), its text input (the field the
+    /// input method edits, and the capture of its text size), its bridge,
+    /// and the system bars it styles.
+    facets: WindowFacets,
     /// `FluiView`: the input method's editor, the drop target and the drag
     /// source (ADR-0247).
     java_view: Arc<JavaView>,
-    /// The window's text input, on the owner thread only.
-    text_input: Arc<OwnerSlot<Rc<crate::text::android::AndroidTextInput>>>,
-    drag_source: Arc<crate::drag::android::AndroidDragSource>,
-    system_chrome: Arc<system_chrome::AndroidSystemChrome>,
+    /// The system drag source the drag transport made for the window.
+    drag_source: Arc<dyn ActivityDragSource>,
+    /// The preference source the loop keeps: the night mode, the density and
+    /// the touch geometry the window reports, as it reads them.
+    preferences: Arc<dyn ActivityPreferences>,
     /// The platform's API level, for the safe-area gates.
     api: AndroidApi,
-    /// The night mode last reported to `on_appearance_changed`, which
-    /// `appearance` returns.
+    /// The night mode last reported, which the snapshot's appearance reads.
     appearance: Arc<Mutex<WindowAppearance>>,
     displays: Arc<dyn crate::owner::android::HostDisplays>,
     /// The last refresh-rate request, applied again to every native window that
@@ -89,65 +105,62 @@ impl std::fmt::Debug for AndroidWindow {
 }
 
 impl AndroidWindow {
-    /// Create a new Android window wrapping the given `AndroidApp`
-    pub(super) fn new(
-        app: AndroidApp,
+    /// The Activity's window `window` names, with what `positions` make of the
+    /// table's window-level positions for it.
+    fn new(
+        window: &ActivityRef,
+        positions: &WindowPositions<ActivityRef>,
         activity: Arc<ActivityFlags>,
-        owner_signal: Weak<crate::owner::signal::OwnerSignal>,
-        java_view: Arc<JavaView>,
         displays: Arc<dyn crate::owner::android::HostDisplays>,
-        api: AndroidApi,
+        preferences: Arc<dyn ActivityPreferences>,
+        drag_source: Arc<dyn ActivityDragSource>,
+        handler: Rc<dyn flui_platform::WindowHandler>,
     ) -> Self {
-        let callbacks = Arc::new(WindowCallbacks::new());
-        callbacks.set_input_capabilities(input_capabilities(api, java_view.is_ready()));
-        let text_input = Arc::new(OwnerSlot::new());
-        if text_input
-            .replace(crate::text::android::AndroidTextInput::new(
-                Arc::clone(&java_view),
-                api,
-            ))
-            .is_err()
-        {
-            tracing::warn!(
-                target: "flui_native::android",
-                "the window's text input was made off its owner thread"
-            );
-        }
-        let drag_source = Arc::new(crate::drag::android::AndroidDragSource::new(
-            Arc::clone(&java_view),
+        let ActivityRef {
+            id,
+            app,
+            view: java_view,
             api,
+            owner,
+            signal: owner_signal,
+        } = window.clone();
+        let delivery = Arc::new(WindowDelivery::new(
+            handler,
+            input_capabilities(api, java_view.is_ready()),
         ));
+        // What another thread raises for the window waits for a looper turn.
         if let Some(signal) = owner_signal.upgrade() {
-            callbacks.set_input_wake(crate::owner::signal::OwnerSignal::callbacks_wake(
-                &signal, &callbacks,
-            ));
+            delivery.resume_through_signal(&signal);
         }
-        let system_chrome = Arc::new(system_chrome::AndroidSystemChrome::new(app.clone(), api));
+        let appearance = night_mode(&app, preferences.as_ref());
         let snapshot = Arc::new(WindowStateCell::new(sample_state(
             &app,
+            preferences.as_ref(),
             displays.as_ref(),
+            api,
             &activity,
+            &Kept {
+                appearance,
+                safe_area: EdgeInsets::ZERO,
+                hovered: false,
+            },
         )));
         Self {
-            haptics: Arc::new(crate::haptics::android::AndroidHaptics::new(
-                app.clone(),
-                api,
-            )),
-            appearance: Arc::new(Mutex::new(night_mode(&app))),
+            id,
+            facets: positions.for_window(window),
+            appearance: Arc::new(Mutex::new(appearance)),
             app,
-            callbacks,
+            delivery,
             redraw_requested: Arc::new(AtomicBool::new(true)),
             activity,
-            owner: std::thread::current().id(),
+            owner,
             owner_signal,
             geometry_live: Arc::new(AtomicBool::new(true)),
-            text_sizing: crate::text::android::sizing::Acquisition::new(),
             safe_area: Arc::new(Mutex::new(safe_area::Capture::default())),
             input_regions: Arc::default(),
             java_view,
-            text_input,
             drag_source,
-            system_chrome,
+            preferences,
             displays,
             frame_rate_hint: Arc::new(Mutex::new(FrameRateHint::Default)),
             snapshot,
@@ -155,24 +168,16 @@ impl AndroidWindow {
         }
     }
 
-    /// The window's text input; `None` off the owner thread.
-    pub(crate) fn text_input(&self) -> Option<Rc<crate::text::android::AndroidTextInput>> {
-        let input = self.text_input.take()?;
-        let shared = Rc::clone(&input);
-        let _ = self.text_input.restore(input);
-        Some(shared)
-    }
-
-    /// Access the callback storage (used by `AndroidLoop` to dispatch
-    /// events)
-    pub fn callbacks(&self) -> &WindowCallbacks {
-        &self.callbacks
+    /// The native window's size in device pixels; zero while there is none.
+    fn device_size(&self) -> Size<i32> {
+        let (width, height) = self.native_size();
+        Size::new(width, height)
     }
 
     fn accept_safe_area(&self, sample: Option<safe_area::Sample>) {
-        let size = self.physical_size();
-        let scale = self.scale_factor();
-        let changed = {
+        let size = self.device_size();
+        let scale = self.scale();
+        {
             let mut capture = self.safe_area.lock();
             let Some(sample) = sample else {
                 return;
@@ -194,9 +199,8 @@ impl AndroidWindow {
                 return;
             }
             capture.accepted = insets;
-            insets
-        };
-        self.callbacks.dispatch_safe_area_change(changed);
+        }
+        ActivityWindow::publish_state(self);
         self.request_redraw();
     }
 
@@ -239,35 +243,57 @@ impl AndroidWindow {
     }
 
     /// The window's published state, read again first when something
-    /// invalidated it; `on_state_changed` is raised when that produced a new
+    /// invalidated it; `WindowHandler::state_changed` is raised when that produced a new
     /// revision.
     fn current_state(&self) -> WindowState {
-        let published = self
-            .snapshot
-            .state_with(|| sample_state(&self.app, self.displays.as_ref(), &self.activity));
+        let published = self.snapshot.state_with(|| self.sample());
         if published.changed {
-            self.callbacks.dispatch_state_changed();
+            self.delivery.dispatch_state_changed();
         }
         published.state
     }
-}
 
-impl CallbackWindow for AndroidWindow {
-    fn callbacks(&self) -> &WindowCallbacks {
-        &self.callbacks
+    fn sample(&self) -> WindowState {
+        sample_state(
+            &self.app,
+            self.preferences.as_ref(),
+            self.displays.as_ref(),
+            self.api,
+            &self.activity,
+            &Kept {
+                appearance: *self.appearance.lock(),
+                safe_area: self.safe_area.lock().accepted,
+                hovered: self.delivery.hovered(),
+            },
+        )
+    }
+
+    /// Read the activity surface again for its state publisher, announcing
+    /// nothing.
+    fn read_state(&self) -> crate::owner::window_delivery::Publication {
+        self.snapshot.invalidate();
+        self.snapshot.state_with(|| self.sample()).outcome()
     }
 }
 
 impl ActivityWindow for AndroidWindow {
+    fn activity_id(&self) -> ActivityWindowId {
+        self.id
+    }
+
     /// The activity surface may differ from its published state: read it again.
     fn publish_state(&self) {
         self.snapshot.invalidate();
         let _ = self.current_state();
     }
 
+    fn scale(&self) -> f64 {
+        native_scale(&self.app, self.preferences.as_ref())
+    }
+
     /// The view's installation finished: what the window can do now.
     fn refresh_capabilities(&self) {
-        self.callbacks
+        self.delivery
             .set_input_capabilities(input_capabilities(self.api, self.java_view.is_ready()));
     }
 
@@ -307,10 +333,11 @@ impl ActivityWindow for AndroidWindow {
         }
     }
 
-    /// Report a night-mode change from the configuration that just changed.
-    /// A failed read keeps the night mode last reported.
+    /// Report a night-mode change from the configuration that just changed,
+    /// as the preference source reads it. A failed read keeps the night mode
+    /// last reported.
     fn settle_appearance(&self) {
-        let appearance = match crate::preferences::android::night_mode(&self.app) {
+        let appearance = match self.preferences.night_mode() {
             Ok(night) => appearance_of(night),
             Err(error) => {
                 tracing::warn!(%error, "Android night-mode query failed");
@@ -318,33 +345,29 @@ impl ActivityWindow for AndroidWindow {
             }
         };
         if std::mem::replace(&mut *self.appearance.lock(), appearance) != appearance {
-            self.callbacks.dispatch_appearance_changed();
+            ActivityWindow::publish_state(self);
         }
     }
 
     fn invalidate_text_sizing(&self) {
-        self.text_sizing.invalidate();
-        if let Some(signal) = self.owner_signal.upgrade() {
-            let _ = signal.wake();
-        }
+        self.facets.text.invalidate_sizing();
     }
 
     fn fence_text_sizing(&self) {
-        self.text_sizing.fence();
+        self.facets.text.fence_sizing();
     }
 
     /// Replacing the Activity presentation retires this projection capability,
     /// even if an old handle still keeps the shared AndroidApp alive.
     fn revoke_geometry(&self) {
         self.geometry_live.store(false, Ordering::Release);
-        self.text_sizing.invalidate();
+        self.facets.text.invalidate_sizing();
     }
 
     /// The window is going away: its field and its drag are detached.
     fn retire_java_view(&self) {
-        if let Some(input) = self.text_input() {
-            input.retire();
-        }
+        self.facets.text.detach();
+        self.facets.accessibility.detach();
         self.drag_source.retire();
     }
 
@@ -395,9 +418,10 @@ fn native_extent(app: &AndroidApp) -> (i32, i32) {
     }
 }
 
-/// Device pixels per logical pixel, from the configuration's density.
-fn native_scale(app: &AndroidApp) -> f64 {
-    if let Ok(ratio) = crate::preferences::android::pixel_ratio(app) {
+/// Device pixels per logical pixel: the density the preference source reads
+/// from the Activity's display metrics, else the native configuration's.
+fn native_scale(app: &AndroidApp, preferences: &dyn ActivityPreferences) -> f64 {
+    if let Ok(ratio) = preferences.pixel_ratio() {
         return ratio.get();
     }
     // android-activity config returns density as DPI / 160
@@ -407,35 +431,96 @@ fn native_scale(app: &AndroidApp) -> f64 {
     density as f64 / 160.0
 }
 
-/// The activity surface as the system reports it now. The activity fills its
-/// display with no frame, title or position of its own.
+/// What the window kept of facts the Activity reported earlier: the night
+/// mode its configuration last said, the safe area last accepted and the
+/// hover last reported.
+struct Kept {
+    appearance: WindowAppearance,
+    safe_area: EdgeInsets,
+    hovered: bool,
+}
+
+/// The activity surface as the system reports it now, with what the window
+/// `kept`. The activity fills its display with no frame, title or position of
+/// its own.
 fn sample_state(
     app: &AndroidApp,
+    preferences: &dyn ActivityPreferences,
     displays: &dyn crate::owner::android::HostDisplays,
+    api: AndroidApi,
     activity: &ActivityFlags,
+    kept: &Kept,
 ) -> WindowState {
     let (width, height) = native_extent(app);
-    let scale = native_scale(app);
+    let scale = native_scale(app, preferences);
     let size = if scale > 0.0 {
         Size::new(f64::from(width) / scale, f64::from(height) / scale)
     } else {
         Size::new(f64::from(width), f64::from(height))
     };
-    WindowState::new(WindowGeometry::new(None, size), size)
-        .with_visible(activity.visible.load(Ordering::SeqCst))
-        .with_focused(activity.focused.load(Ordering::SeqCst))
+    let focused = activity.focused.load(Ordering::SeqCst);
+    let state = WindowState::new(WindowGeometry::new(None, size), size)
+        // An Activity cannot hide its window; between `onStop` and `onStart`
+        // the system keeps it from the screen, which is its occlusion.
+        .with_visible(true)
+        .with_focused(focused)
         .with_resizable(false)
         .with_decorated(false)
-        .with_display(displays.activity_display())
+        .with_display(displays.activity_display());
+    ReportedFacts {
+        // No native window (terminated, or not yet made) is no drawable area.
+        metrics: flui_foundation::geometry::WindowMetrics::new(Size::new(width, height), scale)
+            .ok(),
+        appearance: kept.appearance,
+        safe_area: kept.safe_area,
+        execution: execution_of(activity),
+        occluded: !activity.visible.load(Ordering::SeqCst),
+        hovered: kept.hovered,
+        // An Activity has no activation apart from its window's focus.
+        active: focused,
+        capabilities: activity_capabilities(activity_facts(api, displays)),
+    }
+    .onto(state)
+}
+
+/// What the system said at `api` and at the displays' last sample that an
+/// Activity's window capabilities rest on.
+fn activity_facts(
+    api: AndroidApi,
+    displays: &dyn crate::owner::android::HostDisplays,
+) -> ActivityFacts {
+    ActivityFacts {
+        api,
+        frame_rate_hint: displays.frame_rate_hint(),
+        cross_window_blur: displays.cross_window_blur(),
+    }
+}
+
+/// Running while the Activity is resumed, independent of focus and of the
+/// native window (ADR-0035).
+fn execution_of(activity: &ActivityFlags) -> WindowExecutionState {
+    if activity.resumed.load(Ordering::SeqCst) {
+        WindowExecutionState::Running
+    } else {
+        WindowExecutionState::Suspended
+    }
 }
 
 fn take_deliverable_redraw_request(redraw_requested: &AtomicBool, execution_running: bool) -> bool {
     execution_running && redraw_requested.swap(false, Ordering::SeqCst)
 }
 
-impl crate::host_window::CoreHostWindow for AndroidWindow {}
+impl crate::host_window::CoreHostWindow for AndroidWindow {
+    fn window_delivery(&self) -> &WindowDelivery {
+        &self.delivery
+    }
+}
 
 impl crate::host_window::HostWindow for AndroidWindow {
+    fn accessibility(&self) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {
+        Some(Arc::clone(&self.facets.accessibility) as _)
+    }
+
     fn capture_text_sizing(
         &self,
         _owner: crate::host_window::OwnerThreadToken,
@@ -452,8 +537,7 @@ impl crate::host_window::HostWindow for AndroidWindow {
         {
             return Err(crate::TextSizingCaptureError::Unavailable);
         }
-        self.text_sizing
-            .poll(&self.app, &self.owner_signal, self.owner)
+        self.facets.text.capture_sizing()
     }
 
     /// The window's input method host (ADR-0090, ADR-0247): `FluiView`'s
@@ -462,22 +546,27 @@ impl crate::host_window::HostWindow for AndroidWindow {
         &self,
         _owner: crate::host_window::OwnerThreadToken,
     ) -> Option<Rc<dyn flui_platform::text_store::TextStoreHost>> {
-        use crate::text::{TextInput as _, WindowTextInput};
-        self.text_input()
-            .and_then(|input| input.window_text_input())
+        self.facets
+            .text
+            .window_text_input()
             .and_then(WindowTextInput::store_host)
     }
 }
 
 impl host::Window<AndroidLoop> for AndroidWindow {
-    /// The Activity's one window is the loop's to track (its window slot).
-    type Shared = ();
+    /// The Activity's one window is the loop's to track (its window slot);
+    /// what each window shares is what it hands out of the window-level
+    /// positions.
+    type Shared = WindowPositions<ActivityRef>;
+    /// A window by the Activity it shows and its identity.
+    type Ref = ActivityRef;
 
     fn open(
         owner: &AndroidLoop,
-        _: &Arc<()>,
+        positions: &Arc<WindowPositions<ActivityRef>>,
         options: WindowOptions,
-    ) -> Result<Arc<dyn crate::host_window::HostWindow>, OpenWindowError> {
+        handler: Rc<dyn flui_platform::WindowHandler>,
+    ) -> Result<Rc<dyn crate::host_window::HostWindow>, OpenWindowError> {
         if options.input_latency == flui_platform::InputLatency::Low {
             // NativeActivity takes touch from the native input queue, which
             // `requestUnbufferedDispatch` does not reach (docs/gaps.md).
@@ -485,15 +574,59 @@ impl host::Window<AndroidLoop> for AndroidWindow {
                 "InputLatency::Low is not supported on Android yet; input stays batched"
             );
         }
+        let id = owner.window_ids.next().ok_or(OpenWindowError::Backend {
+            message: "the Activity's window identities are used up".to_owned(),
+        })?;
+        if let Some(mode) = options
+            .os_options
+            .android
+            .as_ref()
+            .and_then(|android| activity_color_mode(android.color_mode))
+        {
+            if owner.api.since::<WindowColorMode>().is_some() {
+                let app = owner.app.clone();
+                // The window's attributes belong to the Java main thread.
+                owner.app.run_on_java_main_thread(Box::new(move || {
+                    if let Err(error) = color_mode::apply(&app, mode) {
+                        tracing::warn!(
+                            target: "flui_native::android",
+                            %error,
+                            "the window's colour mode was not set"
+                        );
+                    }
+                }));
+            } else {
+                tracing::debug!(
+                    target: "flui_native::android",
+                    "below API 26 the window keeps the display's default colour mode"
+                );
+            }
+        }
         let cancelled = owner.input.capture_lost();
+        let reference = ActivityRef {
+            id,
+            app: owner.app.clone(),
+            view: Arc::clone(&owner.java_view),
+            api: owner.api,
+            owner: std::thread::current().id(),
+            signal: Arc::downgrade(&owner.owner_signal),
+        };
+        let drag_source = owner
+            .java_view
+            .transfer()
+            .drag_source(Arc::clone(&owner.java_view), owner.api);
         let window = Arc::new(AndroidWindow::new(
-            owner.app.clone(),
+            &reference,
+            positions,
             Arc::clone(&owner.activity),
-            Arc::downgrade(&owner.owner_signal),
-            Arc::clone(&owner.java_view),
             Arc::clone(&owner.displays),
-            owner.api,
+            Arc::clone(&owner.preferences),
+            drag_source,
+            handler,
         ));
+        window
+            .delivery
+            .publish_through(Arc::downgrade(&window), AndroidWindow::read_state);
         let previous = owner
             .window
             .lock()
@@ -502,41 +635,38 @@ impl host::Window<AndroidLoop> for AndroidWindow {
             previous.retire_java_view();
             previous.revoke_geometry();
             for event in cancelled {
-                previous.callbacks().dispatch_input(event);
+                previous.delivery().dispatch_input(event);
             }
         }
         tracing::info!("Android window created (wrapping ANativeWindow)");
-        Ok(window)
+        // The application holds its own handle on the same window; the looper
+        // keeps this one.
+        Ok(Rc::new(AndroidWindow::clone(&window)))
     }
 
-    fn active(owner: &AndroidLoop, (): &()) -> Option<WindowId> {
+    fn active(owner: &AndroidLoop, _: &WindowPositions<ActivityRef>) -> Option<WindowId> {
         owner.window.lock().as_ref().map(|_| WindowId(0))
     }
 
-    fn capabilities(_: &AndroidLoop, (): &()) -> WindowCapabilities {
-        WindowCapabilities::NONE
+    fn capabilities(owner: &AndroidLoop, _: &WindowPositions<ActivityRef>) -> WindowCapabilities {
+        activity_capabilities(activity_facts(owner.api, owner.displays.as_ref()))
     }
 
-    fn frame_inset(_: &AndroidLoop, (): &(), _: f64) -> Size<f64> {
+    fn frame_inset(_: &AndroidLoop, _: &WindowPositions<ActivityRef>, _: f64) -> Size<f64> {
         // The Activity fills its display with no frame, title or border.
         Size::new(0.0, 0.0)
-    }
-
-    fn on_event(owner: &AndroidLoop, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        crate::owner::call_point::install(
-            &owner.handler(|handlers| &mut handlers.window_event),
-            callback,
-        );
     }
 }
 
 /// The light/dark half of the activity's configuration: night mode is the
-/// system dark theme (or the app's `AppCompatDelegate` override of it). The
-/// native configuration stands in when the Java read fails; it is current only
-/// until the first change the Activity handles in place.
-fn night_mode(app: &AndroidApp) -> WindowAppearance {
+/// system dark theme (or the app's `AppCompatDelegate` override of it), as the
+/// preference source reads it. The native configuration stands in when the
+/// Java read fails; it is current only until the first change the Activity
+/// handles in place.
+fn night_mode(app: &AndroidApp, preferences: &dyn ActivityPreferences) -> WindowAppearance {
     appearance_of(
-        crate::preferences::android::night_mode(app)
+        preferences
+            .night_mode()
             .unwrap_or_else(|_| app.config().ui_mode_night() == UiModeNight::Yes),
     )
 }
@@ -559,36 +689,14 @@ impl PlatformWindow for AndroidWindow {
         WindowId(1)
     }
 
-    fn physical_size(&self) -> Size<i32> {
-        let (w, h) = self.native_size();
-        Size::new(w, h)
-    }
-
-    fn logical_size(&self) -> Size<f64> {
-        let (w, h) = self.native_size();
-        let scale = self.scale_factor();
-        if scale > 0.0 {
-            Size::new(w as f64 / scale, h as f64 / scale)
-        } else {
-            Size::new(w as f64, h as f64)
+    /// Kept and sent with every native window the Activity gets, from API 30.
+    fn set_frame_rate_hint(&self, hint: FrameRateHint) -> Result<(), Unsupported> {
+        if !self.displays.frame_rate_hint().is_available() {
+            return Err(Unsupported::new(UnsupportedReason::NotOnThisDevice));
         }
-    }
-
-    fn appearance(&self) -> WindowAppearance {
-        *self.appearance.lock()
-    }
-
-    fn display_id(&self) -> Option<DisplayId> {
-        self.displays.activity_display()
-    }
-
-    fn set_frame_rate_hint(&self, hint: FrameRateHint) {
         *self.frame_rate_hint.lock() = hint;
         self.apply_frame_rate_hint();
-    }
-
-    fn scale_factor(&self) -> f64 {
-        native_scale(&self.app)
+        Ok(())
     }
 
     fn gesture_geometry(
@@ -604,51 +712,50 @@ impl PlatformWindow for AndroidWindow {
                 .upgrade()
                 .is_some_and(|signal| signal.accepting())
         {
-            return Err(flui_platform::PreferenceQueryError::Unavailable);
+            return Err(flui_platform::Unsupported::new(
+                flui_platform::UnsupportedReason::Unavailable,
+            )
+            .into());
         }
-        crate::preferences::android::geometry(&self.app).map(Some)
-    }
-
-    fn execution_state(&self) -> WindowExecutionState {
-        if self.activity.resumed.load(Ordering::SeqCst) {
-            WindowExecutionState::Running
-        } else {
-            WindowExecutionState::Suspended
-        }
-    }
-
-    fn safe_area_insets(&self) -> EdgeInsets {
-        self.safe_area.lock().accepted
+        self.preferences.gesture_geometry().map(Some)
     }
 
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
-        Some(Arc::clone(&self.system_chrome) as Arc<dyn flui_platform::PlatformSystemChrome>)
+        Some(Arc::clone(&self.facets.chrome))
     }
 
-    /// Callable from any thread: the first request since the last frame wakes
-    /// the looper, which otherwise blocks until something else does.
+    fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
+        self.facets
+            .text
+            .window_text_input()
+            .and_then(WindowTextInput::ime)
+    }
+
+    /// The first request since the last frame wakes the looper, which
+    /// otherwise blocks until something else does.
     fn request_redraw(&self) {
-        if !self.redraw_requested.swap(true, Ordering::SeqCst) {
-            self.app.create_waker().wake();
-        }
+        flui_platform::RedrawRequester::request_redraw(&self.redraw());
     }
 
-    fn is_focused(&self) -> bool {
-        self.activity.focused.load(Ordering::SeqCst)
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        Arc::new(self.redraw())
     }
 
-    fn is_visible(&self) -> bool {
-        self.activity.visible.load(Ordering::SeqCst)
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        Arc::new(AndroidSurface {
+            app: self.app.clone(),
+            looper: self.owner,
+            kept: Mutex::new(None),
+            retirement: self.delivery.retirement(),
+        })
     }
 
-    fn capabilities(&self) -> WindowCapabilities {
-        WindowCapabilities::NONE
-    }
-
-    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
-        // The system owns the surface: every command is refused unless it asks
-        // for what the window already is.
-        command.admit(&WindowCapabilities::NONE)?;
+    fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
+        // The system owns the surface and the Activity's lifetime: every
+        // command is refused unless it asks for what the window already is.
+        // An Activity cannot bring its task to the front itself: the user and
+        // the system decide which task is shown.
+        command.against(&self.snapshot.published_capabilities())?;
         Ok(())
     }
 
@@ -656,12 +763,13 @@ impl PlatformWindow for AndroidWindow {
         self.current_state()
     }
 
+    /// Not set: the reason [`pointer_icon_absence`] gives at this API level.
     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
-        Err(CursorError::Unsupported)
+        Err(Unsupported::from(pointer_icon_absence(self.api)).into())
     }
 
     fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
-        Some(Arc::clone(&self.haptics) as Arc<dyn flui_platform::PlatformHaptics>)
+        Some(Arc::clone(&self.facets.haptics))
     }
 
     /// `FluiView.startDragAndDrop`, once the view is installed, from API 24:
@@ -676,15 +784,15 @@ impl PlatformWindow for AndroidWindow {
     /// hands the exclusion rectangles to the decor view on the Java main thread. The
     /// native surface fills the decor view, so both share one pixel space. Before API 29
     /// the OS has no such call and the capability reports `Unavailable`.
-    fn set_input_regions(&self, regions: &[InputRegion]) {
+    fn set_input_regions(&self, regions: &[InputRegion]) -> Result<(), Unsupported> {
         if self.api.since::<GestureExclusion>().is_none() {
-            return;
+            return Err(Unsupported::new(UnsupportedReason::NotOnThisDevice));
         }
-        let scale = self.scale_factor();
+        let scale = self.scale();
         let rects: Vec<[i32; 4]> = {
             let mut projection = self.input_regions.lock();
             let Some(sent) = projection.update(regions, scale, None) else {
-                return;
+                return Ok(());
             };
             sent.iter()
                 .filter(|region| region.kind() == InputRegionKind::SystemGestureExclusion)
@@ -706,94 +814,115 @@ impl PlatformWindow for AndroidWindow {
                 );
             }
         }));
+        Ok(())
     }
+}
 
-    // ==================== Callback Registration ====================
+impl AndroidWindow {
+    /// How any thread asks this window for a frame.
+    fn redraw(&self) -> AndroidRedraw {
+        AndroidRedraw {
+            app: self.app.clone(),
+            requested: Arc::clone(&self.redraw_requested),
+            retirement: self.delivery.retirement(),
+        }
+    }
+}
 
-    crate::owner::handlers::impl_window_callback_setters!(callbacks);
+/// An Android window's redraw requester: the first request since the last
+/// frame wakes the looper, from any thread.
+struct AndroidRedraw {
+    app: AndroidApp,
+    requested: Arc<AtomicBool>,
+    retirement: crate::owner::window_delivery::Retirement,
+}
 
-    // ==================== Window Handles (GPU integration) ====================
+impl flui_platform::RedrawRequester for AndroidRedraw {
+    fn request_redraw(&self) {
+        if !self.retirement.is_retired() && !self.requested.swap(true, Ordering::SeqCst) {
+            self.app.create_waker().wake();
+        }
+    }
+}
 
+/// An Android window's surface target (ADR-0254 §5): the Activity's
+/// `ANativeWindow`, on the looper thread.
+///
+/// It answers `Unavailable` off the looper thread, while the Activity has no
+/// native window (from `TerminateWindow` to the next `InitWindow`), and once
+/// the window was retired (the looper's exit). An ordinary pause keeps the
+/// native window, and the target with it: the surface is released by the
+/// handler's `surface_changed(Release)`, not by this answer.
+struct AndroidSurface {
+    app: AndroidApp,
+    /// The looper thread, the one that creates and replaces the surface.
+    looper: std::thread::ThreadId,
+    /// A counted reference to the native window the target last handed out,
+    /// so the pointer in that handle stays valid as long as the target
+    /// lives, whatever the glue does with its own reference.
+    kept: Mutex<Option<android_activity::ndk::native_window::NativeWindow>>,
+    retirement: crate::owner::window_delivery::Retirement,
+}
+
+impl raw_window_handle::HasWindowHandle for AndroidSurface {
     fn window_handle(
         &self,
     ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
-        // Get the ANativeWindow pointer from the AndroidApp and construct the handle
-        // manually. We can't delegate to NativeWindow::window_handle() because
-        // that borrows a temporary.
-        //
-        // This already satisfies `PlatformWindow::window_handle`'s MUST
-        // (see that trait method's doc): `native_window()` answers `None`
-        // exactly when no ANativeWindow is live, and the `ok_or` below maps
-        // that straight to `Unavailable` — no separate flag needed. The span
-        // where it is `None` runs from `MainEvent::TerminateWindow` to the
-        // next `MainEvent::InitWindow` (`owner/android/looper.rs`'s event
-        // loop, module doc's "Surface Lifecycle" section), and that span is
-        // open at both ends *inside* those callbacks: the field is still
-        // `Some` while the `TerminateWindow` callback runs (the applier clears
-        // it in `post_exec_cmd` once the callback has returned) and already
-        // `Some` while the `InitWindow` callback runs (it is set in
-        // `pre_exec_cmd` before the callback). Note what that span is
-        // NOT: an ordinary `MainEvent::Pause` leaves `native_window()`
-        // `Some`, because `AppCmd::TermWindow` is what clears it and a pause
-        // does not apply that command.
-        let native_window = self
+        if std::thread::current().id() != self.looper || self.retirement.is_retired() {
+            return Err(raw_window_handle::HandleError::Unavailable);
+        }
+        // `native_window()` answers `None` exactly while no ANativeWindow is
+        // live: from `MainEvent::TerminateWindow` (cleared in `post_exec_cmd`
+        // once that callback returned) to the next `MainEvent::InitWindow`
+        // (set in `pre_exec_cmd` before it). A pause does not clear it.
+        let current = self
             .app
             .native_window()
             .ok_or(raw_window_handle::HandleError::Unavailable)?;
-        // NativeWindow::ptr() returns NonNull<ANativeWindow>; cast to NonNull<c_void>
-        // for rwh
-        let ptr = native_window.ptr().cast();
-        let handle = raw_window_handle::AndroidNdkWindowHandle::new(ptr);
-        let raw = raw_window_handle::RawWindowHandle::AndroidNdk(handle);
-        // SAFETY: `ptr` is the ANativeWindow `AndroidApp` currently holds,
-        // re-queried immediately above. The bound on that pointer is the
-        // ANativeWindow refcount, and it is NOT this borrow. `ndk::NativeWindow`
-        // is a refcounted wrapper (`Clone` calls `ANativeWindow_acquire`,
-        // `Drop` calls `ANativeWindow_release`); `AndroidApp::native_window()`
-        // returns a clone of the glue guard's field
-        // (`android-activity` 0.6.1, `native_activity/mod.rs`); and the guard
-        // holds the last strong clone the Rust side keeps, dropping it in
-        // `post_exec_cmd(AppCmd::TermWindow)` — `guard.window = None`,
-        // `native_activity/glue.rs` — which the main loop applies *after* the
-        // `MainEvent::TerminateWindow` callback returns (`pre_exec_cmd` →
-        // callback → `post_exec_cmd`). The `'_` on the returned handle is the
-        // borrow of `self` and does not encode that bound: `AndroidLoop`
-        // keeps holding its `AndroidWindow` across a pause, and the only
-        // writes to that field are `Window::open` (this file), which fills it,
-        // and `AndroidLoop::run`'s exit path (`owner/android/looper.rs`),
-        // which takes it exactly once, after the last dispatch, so for every
-        // handle this method ever returns, `self` and the borrow outlive the
-        // pointer.
-        //
-        // The obligation that carries the weight is therefore
-        // consumer-enforced, not type-enforced: nothing may dereference the
-        // handle once the window has been terminated, and this type cannot
-        // express that, because `native_window()` keeps answering `Some`
-        // through the very callback that precedes the release. `flui-app`'s
-        // Android runner discharges it by releasing the wgpu surface built
-        // from this handle inside `on_surface_status_change(false)`, which
-        // `MainEvent::Pause` and `MainEvent::TerminateWindow` both deliver —
-        // the second one still inside the callback, before the release above.
+        let ptr = {
+            let mut kept = self.kept.lock();
+            // The kept reference holds its window alive, so an equal address
+            // is that same window, never a new one at a reused address.
+            if kept.as_ref().is_none_or(|kept| kept.ptr() != current.ptr()) {
+                *kept = Some(current);
+            }
+            kept.as_ref()
+                .expect("BUG: a native window was just kept")
+                .ptr()
+                .cast()
+        };
+        let raw = raw_window_handle::RawWindowHandle::AndroidNdk(
+            raw_window_handle::AndroidNdkWindowHandle::new(ptr),
+        );
+        // SAFETY: `ptr` is the ANativeWindow this target holds a counted
+        // reference to (`kept`, `ANativeWindow_acquire`), released no sooner
+        // than the target drops or hands out a different window, so it
+        // outlives every handle borrowed from the target. A surface made from
+        // it is released by the window's handler at `surface_changed(Release)`,
+        // before the Activity replaces its window.
         #[expect(unsafe_code)]
         Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(raw) })
     }
+}
 
+impl raw_window_handle::HasDisplayHandle for AndroidSurface {
     fn display_handle(
         &self,
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
-        // Android always uses the default Android display
-        let handle = raw_window_handle::AndroidDisplayHandle::new();
-        let raw = raw_window_handle::RawDisplayHandle::Android(handle);
-        // SAFETY: The Android display handle is always valid while the app is running
+        let raw = raw_window_handle::RawDisplayHandle::Android(
+            raw_window_handle::AndroidDisplayHandle::new(),
+        );
+        // SAFETY: an Android display handle carries no fields: there is
+        // nothing for `borrow_raw` to keep valid.
         #[expect(unsafe_code)]
         Ok(unsafe { raw_window_handle::DisplayHandle::borrow_raw(raw) })
     }
+}
 
-    // ==================== Additional query methods ====================
-
-    fn mouse_position(&self) -> Point<f64> {
-        Point::default()
-    }
+impl flui_platform::SurfaceTarget for AndroidSurface {
+    /// Android has no frame callback to arm before a present: it returns at
+    /// once.
+    fn pre_present_notify(&self, _: flui_platform::SwapChainStatistics) {}
 }
 
 mod safe_area {
@@ -1008,6 +1137,40 @@ mod safe_area {
     }
 }
 
+mod color_mode {
+    //! Ask the Activity's window for a colour mode (`Window.setColorMode`,
+    //! API 26+).
+
+    use android_activity::AndroidApp;
+    use jni::{JValue, jni_sig, jni_str};
+
+    /// Set the window's colour mode to the `ActivityInfo.COLOR_MODE_*` value
+    /// `mode`. Must run on Android's Java main thread, which owns the window's
+    /// attributes.
+    pub(super) fn apply(
+        app: &AndroidApp,
+        mode: i32,
+    ) -> Result<(), flui_platform::PreferenceQueryError> {
+        crate::owner::android::activity::with_activity(app, |env, activity| {
+            let window = env
+                .call_method(
+                    activity,
+                    jni_str!("getWindow"),
+                    jni_sig!("()Landroid/view/Window;"),
+                    &[],
+                )?
+                .l()?;
+            env.call_method(
+                &window,
+                jni_str!("setColorMode"),
+                jni_sig!("(I)V"),
+                &[JValue::Int(mode)],
+            )?;
+            Ok(())
+        })
+    }
+}
+
 mod gesture_exclusion {
     //! Hand system-gesture exclusion rectangles to the Activity's decor view
     //! (`View.setSystemGestureExclusionRects`, API 29+).
@@ -1110,9 +1273,15 @@ pub(crate) mod system_chrome {
         }
     }
 
-    impl AndroidSystemChrome {
-        pub(super) fn new(app: AndroidApp, api: AndroidApi) -> Self {
-            Self { app, api }
+    /// The Activity's window styles the status bar over it.
+    impl crate::host::Chrome<crate::owner::android::ActivityRef> for AndroidSystemChrome {
+        fn for_window(
+            window: &crate::owner::android::ActivityRef,
+        ) -> std::sync::Arc<dyn PlatformSystemChrome> {
+            std::sync::Arc::new(Self {
+                app: window.app.clone(),
+                api: window.api,
+            })
         }
     }
 

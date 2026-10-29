@@ -22,7 +22,7 @@
 //!
 use crate::{keyboard::KeyEvent, pointer::PointerEvent};
 use flui_foundation::DataTransferId;
-use flui_foundation::geometry::{Offset, Point};
+use flui_foundation::geometry::Point;
 
 /// Result of dispatching an input event through a callback
 ///
@@ -84,6 +84,62 @@ impl Default for DispatchEventResult {
     }
 }
 
+/// The pointer events a backend sampled at one instant, in the order it
+/// sampled them: the contacts a touch screen reported together, or the motion
+/// of one display frame.
+///
+/// A recognizer that measures the relation between contacts (a pinch) is
+/// settled once, after the last event, so it never sees one finger moved and
+/// the other not. A backend reports a lone event as a frame of one
+/// ([`PointerFrame::single`]) or as [`PlatformInput::Pointer`]; the two are
+/// the same input.
+#[derive(Debug, Clone)]
+pub struct PointerFrame(Vec<PointerEvent>);
+
+/// A [`PointerFrame`] needs at least one event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("a pointer frame holds at least one event")]
+pub struct EmptyPointerFrame;
+
+impl PointerFrame {
+    /// The frame of `events`, which must not be empty.
+    ///
+    /// # Errors
+    ///
+    /// [`EmptyPointerFrame`] when `events` is empty.
+    pub fn new(events: Vec<PointerEvent>) -> Result<Self, EmptyPointerFrame> {
+        if events.is_empty() {
+            return Err(EmptyPointerFrame);
+        }
+        Ok(Self(events))
+    }
+
+    /// A frame of one event.
+    #[must_use]
+    pub fn single(event: PointerEvent) -> Self {
+        Self(vec![event])
+    }
+
+    /// The events, in the order they were sampled.
+    #[must_use]
+    pub fn events(&self) -> &[PointerEvent] {
+        &self.0
+    }
+
+    /// The events, in the order they were sampled.
+    #[must_use]
+    pub fn into_events(self) -> Vec<PointerEvent> {
+        self.0
+    }
+
+    /// How many events the frame holds; at least one.
+    #[must_use]
+    #[expect(clippy::len_without_is_empty, reason = "a frame is never empty")]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
 /// Platform input event wrapper
 ///
 /// This enum carries FLUI-owned types for platform-specific dispatching.
@@ -96,9 +152,16 @@ impl Default for DispatchEventResult {
 /// constructing those values; one reporting points or CSS pixels passes them
 /// through. Geometry and device metadata remain distinct typed values.
 #[derive(Debug, Clone)]
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "every consumer routes every kind of input, so a new kind is a change each of them makes"
+)]
 pub enum PlatformInput {
     /// Pointer, scrolling, trackpad or device-lifecycle event.
     Pointer(PointerEvent),
+
+    /// Pointer events sampled at one instant; see [`PointerFrame`].
+    PointerFrame(PointerFrame),
 
     /// Keyboard event
     Keyboard(KeyEvent),
@@ -127,6 +190,7 @@ impl PlatformInput {
         match self {
             PlatformInput::Pointer(event) => Some(event),
             PlatformInput::Keyboard(_)
+            | PlatformInput::PointerFrame(_)
             | PlatformInput::Ime(_)
             | PlatformInput::DragDrop(_)
             | PlatformInput::Capabilities(_) => None,
@@ -139,6 +203,7 @@ impl PlatformInput {
         match self {
             PlatformInput::Keyboard(event) => Some(event),
             PlatformInput::Pointer(_)
+            | PlatformInput::PointerFrame(_)
             | PlatformInput::Ime(_)
             | PlatformInput::DragDrop(_)
             | PlatformInput::Capabilities(_) => None,
@@ -151,6 +216,7 @@ impl PlatformInput {
         match self {
             PlatformInput::Ime(event) => Some(event),
             PlatformInput::Pointer(_)
+            | PlatformInput::PointerFrame(_)
             | PlatformInput::Keyboard(_)
             | PlatformInput::DragDrop(_)
             | PlatformInput::Capabilities(_) => None,
@@ -163,6 +229,7 @@ impl PlatformInput {
         match self {
             PlatformInput::DragDrop(event) => Some(event),
             PlatformInput::Pointer(_)
+            | PlatformInput::PointerFrame(_)
             | PlatformInput::Keyboard(_)
             | PlatformInput::Ime(_)
             | PlatformInput::Capabilities(_) => None,
@@ -175,6 +242,10 @@ impl PlatformInput {
 /// reply half flows the other way, through
 /// [`crate::data_transfer::DataTransferSource::update_drop_feedback`].
 #[derive(Debug, Clone)]
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "the stages of the transport protocol (ADR-0038), each of which a target answers"
+)]
 pub enum DragDropEvent {
     /// A drag entered the window. Carries the full offer (stage 1) and the
     /// actions the source currently permits.
@@ -218,50 +289,4 @@ pub enum DragDropEvent {
         /// The retired session's offer id (now stale by construction).
         id: DataTransferId,
     },
-}
-
-// ============================================================================
-// Platform conversion utilities
-// ============================================================================
-
-/// Convert device (physical) pixels to logical pixels
-///
-/// Platform implementations should use this to convert native coordinates
-/// to framework coordinates (logical pixels).
-///
-/// # Example
-///
-/// ```rust,ignore
-/// // Windows: WM_MOUSEMOVE gives physical pixels
-/// let physical_x = 1920; // On 2x DPI display
-/// let physical_y = 1080;
-/// let scale_factor = 2.0;
-///
-/// let logical_pos = Offset::new(
-///     (device_to_logical(physical_x as f64, scale_factor)),
-///     (device_to_logical(physical_y as f64, scale_factor))
-/// );
-/// // Result: (960, 540) logical pixels
-/// ```
-#[inline]
-pub fn device_to_logical(device_pixels: f64, scale_factor: f64) -> f64 {
-    device_pixels / scale_factor
-}
-
-/// Convert logical pixels to device (physical) pixels
-#[inline]
-pub fn logical_to_device(logical_pixels: f64, scale_factor: f64) -> f64 {
-    logical_pixels * scale_factor
-}
-
-/// Helper to create an Offset from raw coordinates
-#[inline]
-pub fn offset_from_coords(x: f64, y: f64) -> Offset<f64> {
-    Offset::new(x, y)
-}
-
-/// Helper to create a delta Offset from raw coordinates
-#[inline]
-pub fn delta_offset_from_coords(dx: f64, dy: f64) -> Offset<f64> {
-    Offset::new(dx, dy)
 }

@@ -205,10 +205,20 @@ fn scheduling_observation_case(scope: ObservationScope) {
     }
 }
 
-fn manual_runtime(clock: ManualClock) -> (UiRuntime, Arc<dyn flui_platform::PlatformWindow>) {
-    let window = crate::owner_publication::window();
+/// A runtime's native window and the handler it delivers to.
+struct ManualWindow {
+    _native: Rc<dyn flui_platform::PlatformWindow>,
+    handler: Rc<flui_testing::window_handler::RecordingWindowHandler>,
+}
+
+fn manual_runtime(clock: ManualClock) -> (UiRuntime, ManualWindow) {
+    let handler = flui_testing::window_handler::RecordingWindowHandler::new();
+    let window = crate::owner_publication::window_with(Rc::clone(&handler));
     // A native host owns the window; the runtime intentionally holds it weakly.
-    let native_window = Arc::clone(window.window());
+    let native_window = ManualWindow {
+        _native: Rc::clone(window.window()),
+        handler,
+    };
     let runtime = UiRuntime::new(
         window,
         1.0,
@@ -788,9 +798,9 @@ fn retained_deadline_publisher_updates_cancels_and_refuses_stale_authority() {
     let (runtime, window) = manual_runtime(clock.clone());
     let wakes = Arc::new(AtomicUsize::new(0));
     let wake_count = Arc::clone(&wakes);
-    window.on_request_frame(Box::new(move || {
+    window.handler.react_to_frame(move |_| {
         wake_count.fetch_add(1, Ordering::Relaxed);
-    }));
+    });
     let queries = Rc::new(Cell::new(0));
     let member = Rc::new(PublishedDeadline {
         due: Cell::new(Some(crate::event_at(&clock, initial))),
@@ -1376,9 +1386,9 @@ fn queued_render_invalidation_is_observed_without_foreign_work() {
     let live = mounted_root_invalidation(&runtime);
     let wakes = Arc::new(AtomicUsize::new(0));
     let observed_wakes = Arc::clone(&wakes);
-    window.on_request_frame(Box::new(move || {
+    window.handler.react_to_frame(move |_| {
         observed_wakes.fetch_add(1, Ordering::Relaxed);
-    }));
+    });
     retired
         .mark_needs_paint()
         .expect("the live pipeline accepts the queued old attachment");

@@ -7,7 +7,10 @@
   vocabulary live in `flui-platform`, re-exported at `flui_native::data_transfer`; §9: the
   `Clipboard` trait moves there too, while the required `Platform::clipboard()` stays on
   `Platform` in `flui-native`); [ADR-0211](ADR-0211-unified-drag-and-drop.md) (§2: several concurrent offers and sessions; §5: the source
-  side, sessions and escalation from in-window drags; §8: the Web target)
+  side, sessions and escalation from in-window drags; §8: the Web target);
+  [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) (§7: `OfferTable` is the core host's;
+  a URI list and an image arrive as `TransferPayload::Custom` of their type, the typed
+  `UriList` and `Image` payloads removed; §2, §3 and §4 below follow it)
 
 ## Context
 
@@ -69,9 +72,10 @@ slot 0 produce ids that pass each other's checks — so:
 > `DataTransferSource`. Every `DataTransferId` the app can observe, clipboard
 > or DnD, is minted there and redeemable at `Platform::data_transfer()`.
 
-`OfferTable` (mint / generation-checked get / retire-and-bump) is one shared
-type in `flui_native::data_transfer`, not reimplemented per backend. A
-request for a mismatched id is `TransferError::StaleOffer`.
+`OfferTable` (mint / generation-checked get / retire-and-bump) is one type
+of the core host (`flui-native`'s drag model, `pub(crate)` since ADR-0151 §7),
+not reimplemented per backend. A request for a mismatched id is
+`TransferError::StaleOffer`.
 
 Offer lifecycle:
 
@@ -91,7 +95,7 @@ Offer lifecycle:
 
 ### 3. Vocabulary
 
-Plain data in `flui_native::data_transfer`; no lock guard in any public
+Plain data in `flui_platform::data_transfer`; no lock guard in any public
 signature:
 
 - `Mime` — type/subtype and parameter names lowercased, parameter values kept
@@ -103,9 +107,12 @@ signature:
   convention treats them.
 - `TransferActions` (COPY/MOVE/LINK bitset), `DropFeedback { accept }`
   (`None` = reject).
-- `TransferPayload` — `Text`, `Html`, `UriList(Vec<TransferUri>)`,
-  `Image(TransferImage)` (encoded bytes; pixel decoding belongs to the
-  consumer), `Custom`.
+- `TransferPayload` — `Text`, `Html`, and `Custom { mime, bytes }` for every
+  other type: a URI list arrives as the bytes of `text/uri-list` (RFC 2483,
+  local paths as `file:` URIs), an image as the encoded bytes of its container
+  (pixel decoding belongs to the consumer). The typed `UriList` and `Image`
+  payloads left with ADR-0151 §7, which nothing above the host read; a
+  consumer that needs them brings them back with it.
 - `TransferLimits { max_bytes }` (16 MiB default; `#[non_exhaustive]`), checked
   against the declared length at request time and the accumulated length
   during delivery.
@@ -122,12 +129,13 @@ feedback)` and `conclude_drop(id)`. None blocks and none is `async fn`.
 `NullDataTransferSource` is the honest inert source for backends without a
 transport.
 
-`TransferRequest::channel()` returns a connected pair. The request is a `Send`
-future; dropping it cancels, which the producer sees through
-`TransferCompleter::is_cancelled()`. Completing after cancellation is a no-op;
-dropping the completer without completing resolves the request with
-`SourceGone`, so a crashed producer never leaves a consumer pending.
-`TransferRequest::ready(..)` serves data already in memory.
+`TransferRequest::pending()` returns a connected pair, made together over one
+`flui_foundation::claim_slot`, so nothing can claim the delivery before the
+request exists. The request is a `Send` future; dropping it cancels, which the
+producer sees through `TransferCompleter::is_cancelled()`. Completing after
+cancellation is a no-op; dropping the completer without completing resolves
+the request with `SourceGone`, so a crashed producer never leaves a consumer
+pending. `TransferRequest::ready(..)` serves data already in memory.
 
 The consumer spawns the request on the UI runtime scheduler and holds the house
 `TaskToken`; it is polled by the frame-driven async driver, and the

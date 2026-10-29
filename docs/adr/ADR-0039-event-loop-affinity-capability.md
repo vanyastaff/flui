@@ -7,7 +7,9 @@
   `window_appearance` entry only;
   [ADR-0254](ADR-0254-window-contract.md) for §3's sentence that the owner lane carries no closures
   only (the deferred window open carries a `Send` factory that builds the window's handler on the
-  owner).
+  owner); and [ADR-0254](ADR-0254-window-contract.md) decision 4 for the one-shot
+  `PlatformReadyCallback` of §1 and §6 only (`run` takes an `AppHandler`, whose `ready` receives
+  the capability; the capability and its loop scope stay).
 
 ## Context
 

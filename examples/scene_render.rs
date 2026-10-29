@@ -42,17 +42,70 @@
 #[path = "scene_render/effects.rs"]
 mod effects;
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use flui_engine::Renderer;
-use flui_foundation::geometry::{Rect, Size};
+use flui_foundation::geometry::{Rect, Size, WindowMetrics};
 use flui_hot_reload::HotReloadDriver;
 use flui_layer::{CanvasLayer, Layer, LayerTree, Scene};
 use flui_native::current_platform;
 use flui_painting::{paint::Paint, styling::Color};
-use flui_platform::WindowOptions;
+use flui_platform::{
+    CloseDecision, DispatchEventResult, FrameOutcome, FrameRequest, PlatformInput, SurfaceChange,
+    WindowHandler, WindowOptions,
+};
 
 /// Build a scene with colored rectangles (fallback when no plugin is loaded).
+/// The window's drawable size, from its snapshot: zero before the host has
+/// published drawable metrics.
+/// The window's handler: it draws a frame and follows the drawable size once
+/// the renderer both need exists, and ignores the rest.
+#[derive(Default)]
+struct SceneWindow {
+    frame: RefCell<Option<Box<dyn FnMut()>>>,
+    resized: RefCell<Option<Box<dyn FnMut()>>>,
+}
+
+impl WindowHandler for SceneWindow {
+    fn input(&self, _input: PlatformInput) -> DispatchEventResult {
+        DispatchEventResult::default()
+    }
+
+    fn state_changed(&self) {
+        if let Some(resized) = self.resized.borrow_mut().as_mut() {
+            resized();
+        }
+    }
+
+    fn frame_requested(&self, _request: FrameRequest) -> FrameOutcome {
+        match self.frame.borrow_mut().as_mut() {
+            Some(frame) => {
+                frame();
+                FrameOutcome::Produced
+            }
+            None => FrameOutcome::Declined,
+        }
+    }
+
+    fn close_requested(&self) -> CloseDecision {
+        CloseDecision::Close
+    }
+
+    fn closed(&self) {}
+
+    // A desktop window keeps its surface while it is open.
+    fn surface_changed(&self, _change: SurfaceChange) {}
+}
+
+fn physical_size(window: &dyn flui_platform::PlatformWindow) -> Size<i32> {
+    window
+        .state()
+        .metrics
+        .map_or(Size::new(0, 0), WindowMetrics::physical)
+}
+
 fn build_test_scene(width: f64, height: f64) -> Scene {
     let mut canvas_layer = CanvasLayer::new();
     let canvas = canvas_layer.canvas_mut();
@@ -164,22 +217,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_max_size(None);
 
     // Create window before running the event loop (run() takes ownership)
+    let handler = Rc::new(SceneWindow::default());
     let window = platform
-        .open_window(options)
+        .open_window(options, handler.clone())
         .expect("Failed to open window");
 
+    let opened = window.state().metrics;
     tracing::info!(
         "Window created: {:?} @ {:.1}x scale",
-        window.physical_size(),
-        window.scale_factor()
+        opened.map(WindowMetrics::physical),
+        opened.map_or(1.0, |metrics| metrics.scale().get())
     );
 
-    // `Renderer::new` takes ownership of a `WindowTarget` (issue #1043) —
-    // `Arc::clone` gives it its own strong ref rather than a borrow.
-    let mut renderer = pollster::block_on(Renderer::new(Arc::clone(&window)))
+    // `Renderer::new` takes ownership of a `WindowTarget`: the
+    // window's surface target, never the window (ADR-0254 §5).
+    let mut renderer = pollster::block_on(Renderer::new(window.surface_target()))
         .expect("Failed to create GPU renderer");
 
-    let phys = window.physical_size();
+    let phys = physical_size(window.as_ref());
     renderer.resize(phys.width as u32, phys.height as u32);
 
     tracing::info!(
@@ -192,10 +247,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Register frame callback — build scene and render each frame
     let renderer_frame = Arc::clone(&renderer);
-    let window_for_frame = window.clone();
+    let window_for_frame = Rc::downgrade(&window);
     let hot_reload_frame = hot_reload.clone();
-    window.on_request_frame(Box::new(move || {
-        let size = window_for_frame.physical_size();
+    *handler.frame.borrow_mut() = Some(Box::new(move || {
+        let Some(window_for_frame) = window_for_frame.upgrade() else {
+            return;
+        };
+        let size = physical_size(window_for_frame.as_ref());
         let w = size.width as f64;
         let h = size.height as f64;
 
@@ -234,12 +292,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }));
 
-    // Register resize callback
+    // Resize the surface when the snapshot carries a new drawable size.
     let renderer_resize = Arc::clone(&renderer);
-    window.on_resize(Box::new(move |metrics| {
-        let w = metrics.physical().width.unsigned_abs();
-        let h = metrics.physical().height.unsigned_abs();
-        renderer_resize.lock().unwrap().resize(w, h);
+    let observed = Rc::downgrade(&window);
+    let mut sized = phys;
+    *handler.resized.borrow_mut() = Some(Box::new(move || {
+        let Some(window) = observed.upgrade() else {
+            return;
+        };
+        let size = physical_size(window.as_ref());
+        if size == sized {
+            return;
+        }
+        sized = size;
+        renderer_resize
+            .lock()
+            .unwrap()
+            .resize(size.width.unsigned_abs(), size.height.unsigned_abs());
     }));
 
     // Request first frame
@@ -251,16 +320,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!("Scene render pipeline active — set FLUI_SCENE_PLUGIN for hot-reload");
     }
 
+    // The handler keeps the window and the renderer alive for the run, and
+    // lets the loop end when the window closes.
     platform
-        .run(Box::new(move |_owner| {
-            tracing::info!("Platform ready");
-            // Keep resources alive via closure capture
-            let _window = &window;
-            let _renderer = &renderer;
-            Ok(())
+        .run(Rc::new(SceneApp {
+            _window: window,
+            _renderer: renderer,
         }))
         .expect("platform event loop exited with an error");
 
     tracing::info!("Application finished");
     Ok(())
+}
+
+/// The example's application handler: it keeps the window and the renderer
+/// for the run and lets the loop end with its last window.
+struct SceneApp {
+    _window: Rc<dyn flui_native::HostWindow>,
+    _renderer: Arc<Mutex<Renderer>>,
+}
+
+impl flui_native::AppHandler for SceneApp {
+    fn ready(&self, _: flui_native::OwnerPlatform) -> Result<(), flui_native::BootstrapError> {
+        tracing::info!("Platform ready");
+        Ok(())
+    }
+
+    fn quit_requested(&self, _: &flui_native::OwnerPlatform) {}
+
+    fn reopen(&self, _: &flui_native::OwnerPlatform) {}
+
+    fn session_end(
+        &self,
+        _: &flui_native::OwnerPlatform,
+        _: flui_platform::SessionEndPhase,
+    ) -> flui_platform::SessionEndAnswer {
+        flui_platform::SessionEndAnswer::Proceed
+    }
+
+    fn host_notice(&self, _: &flui_native::OwnerPlatform, _: flui_platform::SystemNotice) {}
+
+    fn exit_policy(&self, _: &flui_native::OwnerPlatform) -> flui_native::ExitAnswer {
+        flui_native::ExitAnswer::End
+    }
+
+    fn wake_deadline(&self, _: &flui_native::OwnerPlatform) -> Option<std::time::Instant> {
+        None
+    }
 }

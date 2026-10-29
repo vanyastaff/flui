@@ -1,6 +1,6 @@
-//! The one point where the platform calls a handler: an application handler
-//! (`on_quit`, `on_window_event`, the session-end, exit-policy and
-//! wake-deadline hooks, …) or a window's callback (ADR-0151 §10).
+//! The one point where the platform calls a handler: the application's
+//! handler (`app_delivery`), a window's (`window_delivery`), or a callback a
+//! host keeps (ADR-0151 §10).
 //!
 //! A handler waits between calls in a [`HandlerSlot`], wherever its host keeps
 //! it: a field of a state mutex, a `RefCell` the owner thread borrows, a
@@ -77,6 +77,14 @@ impl<R> Called<R> {
     /// What the handler returned, or `fallback` when none ran or it panicked,
     /// for a caller with no frame to unwind into (an OS callback): the panic
     /// is logged under `handler` and its payload retained.
+    #[cfg(any(
+        target_os = "windows",
+        target_os = "macos",
+        target_os = "ios",
+        target_arch = "wasm32",
+        all(target_os = "linux", feature = "x11"),
+        all(test, not(target_arch = "wasm32"))
+    ))]
     pub(crate) fn or_contain(self, fallback: R, handler: &'static str) -> R {
         match self {
             Self::Vacant => fallback,
@@ -265,7 +273,7 @@ impl<'a, G: ?Sized + Guarded, H> Field<'a, G, H> {
 
     /// The same field, taking a handler back only while `accepts` answers
     /// `true`.
-    #[cfg(any(target_os = "macos", target_os = "ios", test))]
+    #[cfg(any(target_os = "ios", all(test, not(target_arch = "wasm32"))))]
     pub(crate) fn restoring_while<A: Fn() -> bool>(self, accepts: A) -> Field<'a, G, H, A> {
         Field {
             state: self.state,
@@ -297,84 +305,6 @@ impl<G: ?Sized + Guarded, H, A: Fn() -> bool> HandlerSlot for Field<'_, G, H, A>
     fn replace(&self, handler: H) -> Option<H> {
         self.state
             .with(|state| (self.project)(state).replace(handler))
-    }
-}
-
-/// A shared handler (`Arc<dyn Fn ..>`) that is one field of state behind a
-/// lock or a `RefCell`: a call takes a clone, so the stored handler stays
-/// installed while it runs and may be called again from inside it. The clone
-/// is retired after the call; it drops the handler when it was replaced
-/// meanwhile. Built where a host consults a wake-deadline hook.
-#[cfg(any(
-    windows,
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "android",
-    all(target_os = "linux", feature = "winit-backend"),
-    test
-))]
-pub(crate) struct SharedField<'a, G: ?Sized + Guarded, H> {
-    state: &'a G,
-    project: fn(&mut G::Target) -> &mut Option<H>,
-}
-
-#[cfg(any(
-    windows,
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "android",
-    all(target_os = "linux", feature = "winit-backend"),
-    test
-))]
-impl<'a, G: ?Sized + Guarded, H: Clone> SharedField<'a, G, H> {
-    /// The field of `state` that `project` names.
-    pub(crate) fn new(state: &'a G, project: fn(&mut G::Target) -> &mut Option<H>) -> Self {
-        Self { state, project }
-    }
-}
-
-#[cfg(any(
-    windows,
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "android",
-    all(target_os = "linux", feature = "winit-backend"),
-    test
-))]
-impl<G: ?Sized + Guarded, H: Clone> HandlerSlot for SharedField<'_, G, H> {
-    type Handler = H;
-
-    fn take(&self) -> Option<H> {
-        self.state.with(|state| (self.project)(state).clone())
-    }
-
-    fn restore(&self, handler: H) -> Option<H> {
-        Some(handler)
-    }
-
-    fn replace(&self, handler: H) -> Option<H> {
-        self.state
-            .with(|state| (self.project)(state).replace(handler))
-    }
-}
-
-/// A slot whose handler is called once more and then retired: a call takes it
-/// for good, as a host's quit takes its quit handler.
-pub(crate) struct Once<S>(pub(crate) S);
-
-impl<S: HandlerSlot> HandlerSlot for Once<S> {
-    type Handler = S::Handler;
-
-    fn take(&self) -> Option<S::Handler> {
-        self.0.take()
-    }
-
-    fn restore(&self, handler: S::Handler) -> Option<S::Handler> {
-        Some(handler)
-    }
-
-    fn replace(&self, handler: S::Handler) -> Option<S::Handler> {
-        self.0.replace(handler)
     }
 }
 

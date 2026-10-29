@@ -1,16 +1,17 @@
 //! The drag start and escalation decision, and the identity representation (ADR-0211).
 
-use std::num::NonZeroU64;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::sync::Arc;
 
-use flui_foundation::{DragSessionId, IdMint, UiRuntimeId};
+use flui_foundation::{DataTransferId, DragSessionId, IdMint, UiRuntimeId};
 use flui_platform::data_transfer::{
-    DataTransferOffer, DropFeedback, Mime, OfferRecord, OfferTable, TransferActions, TransferFormat,
+    DataTransferOffer, DropFeedback, Mime, TransferActions, TransferFormat,
 };
 use flui_platform::drag::{
     AllowedActions, DragError, DragMoment, DragReach, DragSessionKey, IDENTITY_ESSENCE,
     OsDragStart, OsOffer, OsSessionPlan, ProcessNonce, plan_os_session, validate_session,
 };
+use flui_platform::{Unsupported, UnsupportedReason};
 
 const COPY: TransferActions = TransferActions::COPY;
 const MOVE: TransferActions = TransferActions::MOVE;
@@ -39,11 +40,9 @@ fn plan(
 fn offer_of(
     representations: Vec<flui_platform::data_transfer::RepresentationDescriptor>,
 ) -> DataTransferOffer {
-    let mut table = OfferTable::new();
-    let id = table.mint(OfferRecord::new(Arc::from(representations)));
     DataTransferOffer::new(
-        id,
-        Arc::clone(table.get(id).expect("live").representations()),
+        DataTransferId::new_gen(0, NonZeroU32::MIN),
+        Arc::from(representations),
     )
 }
 
@@ -223,7 +222,9 @@ fn a_backend_without_a_drag_source_refuses_what_needs_the_os() {
             false,
             false
         ),
-        Err(DragError::Unavailable)
+        Err(DragError::Unsupported(Unsupported::new(
+            UnsupportedReason::NotOnThisPlatform
+        )))
     );
     assert_eq!(
         plan_os_session(

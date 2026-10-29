@@ -1,10 +1,16 @@
 //! The window state contract (ADR-0237), driven through the public
 //! `PlatformWindow` surface of the headless platform: every command changes the
 //! snapshot and advances its revision by one, a repeat changes nothing, the
-//! host's clamps and refusals show in the snapshot, and a capability that is
-//! `false` refuses with `Unsupported` and no change.
+//! host's clamps and refusals show in the snapshot, admission refuses a
+//! command whose capability is `Unavailable` with `Unsupported` and no change,
+//! and a command admitted before the capabilities changed is `Superseded`.
 
+use flui_platform::CommandRefusal;
+use flui_testing::window_commands::AdmitAndApply as _;
+use std::rc::Rc;
 use std::sync::Arc;
+
+use crate::Opened;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::geometry::{Point, Size};
@@ -12,38 +18,39 @@ use flui_native::{
     DisplaySpec, HeadlessPlatform, HeadlessWindowPolicy, HostWindow, MockWindow, Platform as _,
 };
 use flui_platform::{
-    SizeConstraints, WindowCapabilities, WindowCommand, WindowCommandError, WindowMode,
+    AdmissionError, ApplyError, SizeConstraints, WindowCapabilities, WindowCommand, WindowMode,
     WindowOptions, WindowState,
 };
 
-fn open(platform: &HeadlessPlatform) -> Arc<dyn HostWindow> {
-    let window: Arc<dyn HostWindow> = platform
-        .open_window(WindowOptions::default())
-        .expect("a headless window opens");
-    window
+/// What a window answers for a command its capabilities leave out.
+const NOT_HERE: flui_platform::Unsupported =
+    flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform);
+
+fn open(platform: &HeadlessPlatform) -> Opened {
+    Opened::on(platform, WindowOptions::default()).expect("a headless window opens")
 }
 
-fn mock(window: &Arc<dyn HostWindow>) -> &MockWindow {
+fn mock(window: &Rc<dyn HostWindow>) -> &MockWindow {
     window
         .as_any()
         .downcast_ref::<MockWindow>()
         .expect("the headless platform opens mock windows")
 }
 
-/// Counts `on_state_changed` notifications.
-fn count_changes(window: &Arc<dyn HostWindow>) -> Arc<AtomicUsize> {
+/// Counts the handler's `state_changed` calls from here on.
+fn count_changes(window: &Opened) -> Arc<AtomicUsize> {
     let changes = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&changes);
-    window.on_state_changed(Box::new(move || {
+    window.handler.react_to_state_change(move || {
         counter.fetch_add(1, Ordering::SeqCst);
-    }));
+    });
     changes
 }
 
-fn applied(window: &Arc<dyn HostWindow>, command: WindowCommand) -> (WindowState, WindowState) {
+fn applied(window: &Rc<dyn HostWindow>, command: WindowCommand) -> (WindowState, WindowState) {
     let before = window.state();
     window
-        .apply(command.clone())
+        .admit_and_apply(command.clone())
         .unwrap_or_else(|error| panic!("{command:?} is supported: {error}"));
     (before, window.state())
 }
@@ -125,7 +132,7 @@ fn every_command_changes_the_snapshot_and_advances_the_revision_by_one() {
 fn show_and_activate_change_what_hide_and_blur_left() {
     let platform = HeadlessPlatform::new();
     let window = open(&platform);
-    window.apply(WindowCommand::Hide).expect("hide");
+    window.admit_and_apply(WindowCommand::Hide).expect("hide");
     let (before, after) = applied(&window, WindowCommand::Show);
     assert!(after.visible && after.focused, "show reveals and focuses");
     assert_eq!(after.revision.get(), before.revision.get() + 1);
@@ -227,8 +234,10 @@ fn a_false_capability_is_unsupported_and_changes_nothing() {
         let changes = count_changes(&window);
         let before = window.state();
         assert_eq!(
-            window.apply(command),
-            Err(WindowCommandError::Unsupported),
+            window.admit_and_apply(command),
+            Err(CommandRefusal::Admission(AdmissionError::Unsupported(
+                NOT_HERE
+            ))),
             "{name}"
         );
         assert_eq!(window.state(), before, "{name}: no change");
@@ -238,17 +247,19 @@ fn a_false_capability_is_unsupported_and_changes_nothing() {
 
 fn a_true_capability_is_honoured() {
     let mut only_title = WindowCapabilities::NONE;
-    only_title.sets_title = true;
+    only_title.sets_title = flui_platform::Availability::Native;
     let platform = HeadlessPlatform::new().with_window_capabilities(only_title);
     let window = open(&platform);
-    assert_eq!(window.capabilities(), only_title);
+    assert_eq!(window.state().capabilities, only_title);
     window
-        .apply(WindowCommand::SetTitle("Allowed".into()))
+        .admit_and_apply(WindowCommand::SetTitle("Allowed".into()))
         .expect("the one capability the window has");
     assert_eq!(window.state().title.as_deref(), Some("Allowed"));
     assert_eq!(
-        window.apply(WindowCommand::SetMode(WindowMode::Maximized)),
-        Err(WindowCommandError::Unsupported)
+        window.admit_and_apply(WindowCommand::SetMode(WindowMode::Maximized)),
+        Err(CommandRefusal::Admission(AdmissionError::Unsupported(
+            NOT_HERE
+        )))
     );
 }
 
@@ -256,7 +267,7 @@ fn restoring_normal_is_always_accepted() {
     let platform = HeadlessPlatform::new().with_window_capabilities(WindowCapabilities::NONE);
     let window = open(&platform);
     window
-        .apply(WindowCommand::SetMode(WindowMode::Normal))
+        .admit_and_apply(WindowCommand::SetMode(WindowMode::Normal))
         .expect("every window is normal already");
 }
 
@@ -274,8 +285,8 @@ fn invalid_geometry_is_refused_before_the_host() {
         )),
     ] {
         assert_eq!(
-            window.apply(command.clone()),
-            Err(WindowCommandError::InvalidGeometry),
+            window.admit_and_apply(command.clone()),
+            Err(CommandRefusal::Admission(AdmissionError::InvalidGeometry)),
             "{command:?}"
         );
     }
@@ -285,11 +296,120 @@ fn invalid_geometry_is_refused_before_the_host() {
 fn a_closed_window_refuses_commands() {
     let platform = HeadlessPlatform::new();
     let window = open(&platform);
-    window.close();
+    window
+        .admit_and_apply(flui_platform::WindowCommand::Close)
+        .expect("a headless window closes");
     assert_eq!(
-        window.apply(WindowCommand::SetTitle("late".into())),
-        Err(WindowCommandError::Closed)
+        window.admit_and_apply(WindowCommand::SetTitle("late".into())),
+        Err(CommandRefusal::Apply(ApplyError::Closed))
     );
+}
+
+/// A command admitted at one capabilities revision and applied after the
+/// window system revised what the window honours answers `Superseded`, not a
+/// failure of the OS, and changes nothing; admitted again it either applies
+/// or is refused by `admit`. The revision of the capabilities moves with the
+/// change, one `WindowHandler::state_changed` announces it, and a fact apart from the
+/// capabilities leaves their revision where it was.
+fn a_command_admitted_before_a_capability_change_is_superseded() {
+    let platform = HeadlessPlatform::new();
+    let window = open(&platform);
+    let changes = count_changes(&window);
+    let opened = window.state();
+    let title = WindowCommand::SetTitle("admitted before".into());
+    let maximize = WindowCommand::SetMode(WindowMode::Maximized);
+    let early_title = title
+        .clone()
+        .admit(&opened.capabilities)
+        .expect("the window takes titles");
+    let early_maximize = maximize
+        .clone()
+        .admit(&opened.capabilities)
+        .expect("the window maximizes");
+
+    mock(&window).simulate_focus(false);
+    let unfocused = window.state();
+    assert_eq!(
+        unfocused.capabilities.revision(),
+        opened.capabilities.revision(),
+        "focus is not a capability"
+    );
+
+    let mut revised = WindowCapabilities::ALL;
+    revised.maximizes = flui_platform::Availability::Unavailable;
+    mock(&window).simulate_capabilities(revised);
+    let after = window.state();
+    assert_eq!(after.revision.get(), unfocused.revision.get() + 1);
+    assert_eq!(after.capabilities.revision(), after.revision);
+    assert_eq!(
+        changes.load(Ordering::SeqCst),
+        2,
+        "focus, then the capabilities"
+    );
+
+    assert_eq!(
+        window.apply(early_title),
+        Err(ApplyError::Superseded {
+            command: title.clone()
+        })
+    );
+    assert_eq!(
+        window.apply(early_maximize),
+        Err(ApplyError::Superseded {
+            command: maximize.clone()
+        })
+    );
+    assert_eq!(
+        window.state(),
+        after,
+        "a superseded command changes nothing"
+    );
+
+    window
+        .admit_and_apply(title)
+        .expect("admitted again, the title applies");
+    assert_eq!(window.state().title.as_deref(), Some("admitted before"));
+    assert_eq!(
+        window.admit_and_apply(maximize),
+        Err(CommandRefusal::Admission(AdmissionError::Unsupported(
+            NOT_HERE
+        ))),
+        "admitted again, what the window lost is refused"
+    );
+}
+
+/// A command admitted for one window is never applied to another, even
+/// though both opened with the same capabilities at the same revision, and a
+/// command admitted against capabilities built by hand opens on no window.
+fn a_command_admitted_for_another_window_is_superseded() {
+    let platform = HeadlessPlatform::new();
+    let first = open(&platform);
+    let second = open(&platform);
+    assert_eq!(
+        first.state().capabilities.revision(),
+        second.state().capabilities.revision()
+    );
+    let title = WindowCommand::SetTitle("for the first".into());
+    let for_first = title
+        .clone()
+        .admit(&first.state().capabilities)
+        .expect("the first window takes titles");
+    assert_eq!(
+        second.apply(for_first),
+        Err(ApplyError::Superseded {
+            command: title.clone()
+        })
+    );
+    let by_hand = title
+        .clone()
+        .admit(&WindowCapabilities::ALL)
+        .expect("capabilities built by hand take titles");
+    assert_eq!(
+        first.apply(by_hand),
+        Err(ApplyError::Superseded { command: title })
+    );
+    assert_ne!(first.state().title.as_deref(), Some("for the first"));
+    assert_ne!(second.state().title.as_deref(), Some("for the first"));
 }
 
 fn the_user_resizing_and_moving_publish_too() {
@@ -319,7 +439,7 @@ fn the_user_resizing_and_moving_publish_too() {
 
 fn a_window_without_position_reports_none() {
     let mut caps = WindowCapabilities::ALL;
-    caps.observes_position = false;
+    caps.observes_position = flui_platform::Availability::Unavailable;
     let platform = HeadlessPlatform::new().with_window_capabilities(caps);
     let window = open(&platform);
     assert_eq!(window.state().outer.position, None);
@@ -333,11 +453,144 @@ fn opening_options_are_reflected_in_the_first_snapshot() {
         .with_position(Some(Point::new(50.0, 60.0)))
         .with_mode(WindowMode::Maximized)
         .with_normal_geometry(Some(normal));
-    let window: Arc<dyn HostWindow> = platform.open_window(options).expect("window");
+    let window: Rc<dyn HostWindow> = platform
+        .open_window(
+            options,
+            flui_testing::window_handler::RecordingWindowHandler::new(),
+        )
+        .expect("window");
     let state = window.state();
     assert_eq!(state.mode, WindowMode::Maximized);
     assert_eq!(state.revision.get(), 0, "the first snapshot is revision 0");
     assert_eq!(state.normal_geometry, Some(normal));
+}
+
+/// Record the snapshot read inside every `state_changed` of `window`'s handler
+/// from here on.
+fn listen(window: &Opened) -> Arc<std::sync::Mutex<Vec<WindowState>>> {
+    let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let state = Rc::downgrade(&window.window);
+    let log = Arc::clone(&heard);
+    window.handler.react_to_state_change(move || {
+        if let Some(window) = state.upgrade() {
+            let snapshot = window.state();
+            log.lock().expect("log").push(snapshot);
+        }
+    });
+    heard
+}
+
+/// Each window fact (ADR-0254 §1) arrives only in the snapshot: its change
+/// publishes one revision, announced by exactly one `WindowHandler::state_changed` that
+/// reads it; the same report again publishes nothing; a report that is not a
+/// drawable area publishes nothing.
+fn window_facts_arrive_only_in_the_snapshot() {
+    use flui_foundation::geometry::{EdgeInsets, WindowMetrics};
+    use flui_platform::{WindowAppearance, WindowExecutionState};
+
+    let platform = HeadlessPlatform::new().with_displays(vec![
+        DisplaySpec::new("Left", 1920, 1080),
+        DisplaySpec::new("Right", 2560, 1440),
+    ]);
+    let right = platform.display_snapshot().expect("displays").displays()[1].id;
+    let window = open(&platform);
+    let mock = mock(&window).clone();
+    let insets = EdgeInsets::new(24.0, 0.0, 48.0, 0.0);
+    type Report = Box<dyn Fn(&MockWindow)>;
+    type Holds = Box<dyn Fn(&WindowState) -> bool>;
+    let rows: Vec<(&str, Report, Holds)> = vec![
+        (
+            "focus",
+            Box::new(|mock: &MockWindow| mock.simulate_focus(false)),
+            Box::new(|state: &WindowState| !state.focused && !state.active),
+        ),
+        (
+            "occlusion",
+            Box::new(|mock: &MockWindow| mock.simulate_occlusion(true)),
+            Box::new(|state: &WindowState| state.visible && state.occluded && !state.is_seen()),
+        ),
+        (
+            "hover",
+            Box::new(|mock: &MockWindow| mock.simulate_hover(true)),
+            Box::new(|state: &WindowState| state.hovered),
+        ),
+        (
+            "appearance",
+            Box::new(|mock: &MockWindow| mock.simulate_appearance(WindowAppearance::Dark)),
+            Box::new(|state: &WindowState| state.appearance == WindowAppearance::Dark),
+        ),
+        (
+            "safe area",
+            Box::new(move |mock: &MockWindow| mock.simulate_safe_area(insets)),
+            Box::new(move |state: &WindowState| state.safe_area == insets),
+        ),
+        (
+            "execution",
+            Box::new(|mock: &MockWindow| {
+                mock.simulate_execution_state(WindowExecutionState::Suspended);
+            }),
+            Box::new(|state: &WindowState| state.execution == WindowExecutionState::Suspended),
+        ),
+        (
+            "display",
+            Box::new(move |mock: &MockWindow| {
+                mock.simulate_move_to(right).expect("a held display");
+            }),
+            Box::new(move |state: &WindowState| state.display == Some(right)),
+        ),
+        (
+            "scale",
+            Box::new(|mock: &MockWindow| mock.simulate_scale_factor_change(2.0)),
+            Box::new(|state: &WindowState| {
+                state.metrics.map(|metrics| metrics.scale().get()) == Some(2.0)
+                    && state.metrics.map(WindowMetrics::physical) == Some(Size::new(1600, 1200))
+            }),
+        ),
+        (
+            "size",
+            Box::new(|mock: &MockWindow| mock.simulate_resize(1000.0, 500.0)),
+            Box::new(|state: &WindowState| {
+                state.metrics.map(WindowMetrics::physical) == Some(Size::new(2000, 1000))
+            }),
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (name, report, holds) in &rows {
+        let heard = listen(&window);
+        let before = window.state();
+        report(&mock);
+        // What the report itself announced, before any read could sample
+        // the window again.
+        let log = heard.lock().expect("log").clone();
+        let after = window.state();
+        if !holds(&after) || after.revision.get() != before.revision.get() + 1 {
+            failures.push(format!("{name}: the snapshot is {after:?}"));
+        }
+        if log != [after.clone()] {
+            failures.push(format!("{name}: heard {log:?}"));
+        }
+        heard.lock().expect("log").clear();
+        report(&mock);
+        if window.state() != after || !heard.lock().expect("log").is_empty() {
+            failures.push(format!("{name}: the same report published again"));
+        }
+    }
+    // Nothing drawable: a zero size and a scale that is not finite.
+    let heard = listen(&window);
+    let drawn = window.state();
+    mock.simulate_scale_factor_change(f64::NAN);
+    if window.state().metrics != drawn.metrics || !heard.lock().expect("log").is_empty() {
+        failures.push("a NaN scale reached the snapshot".to_owned());
+    }
+    mock.simulate_scale_factor_change(2.0);
+    heard.lock().expect("log").clear();
+    let before_empty = window.state();
+    mock.simulate_resize(0.0, 0.0);
+    let empty = window.state();
+    if empty.metrics != before_empty.metrics {
+        failures.push(format!("an empty area reached the metrics: {empty:?}"));
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
 }
 
 #[test]
@@ -394,6 +647,14 @@ fn window_state_contract() {
                 a_closed_window_refuses_commands as fn(),
             ),
             (
+                "a_command_admitted_before_a_capability_change_is_superseded",
+                a_command_admitted_before_a_capability_change_is_superseded as fn(),
+            ),
+            (
+                "a_command_admitted_for_another_window_is_superseded",
+                a_command_admitted_for_another_window_is_superseded as fn(),
+            ),
+            (
                 "the_user_resizing_and_moving_publish_too",
                 the_user_resizing_and_moving_publish_too as fn(),
             ),
@@ -404,6 +665,10 @@ fn window_state_contract() {
             (
                 "opening_options_are_reflected_in_the_first_snapshot",
                 opening_options_are_reflected_in_the_first_snapshot as fn(),
+            ),
+            (
+                "window_facts_arrive_only_in_the_snapshot",
+                window_facts_arrive_only_in_the_snapshot as fn(),
             ),
         ],
     );

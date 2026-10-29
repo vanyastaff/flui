@@ -2,19 +2,20 @@
 //! process, and the handlers of what the delegate reports (resize, move,
 //! focus, occlusion, close, backing scale and screen changes).
 
+use std::rc::{Rc, Weak};
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Weak};
 
 use flui_foundation::geometry::{Point, Size};
 use flui_platform::DisplayId;
 use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
 use objc2::{ClassType, class, msg_send, sel};
+use objc2_app_kit::NSWindowStyleMask;
 use objc2_foundation::NSRect;
 
 use super::{BObjC, Class, MacOSWindow, NIL, NO, ObjcId, Object, YES};
-use crate::input::apple::macos as view;
 use crate::owner::apple::macos::HostDisplays;
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
+use crate::window::apple::geometry::mode::HeldCommand;
 
 /// The display a raw `NSScreen*` names, or `None` when the pointer is nil (a
 /// window not on any screen) or the source leaves that screen out.
@@ -41,7 +42,9 @@ pub(super) unsafe fn display_of_screen(
 pub(super) fn create_window_delegate(window: Weak<MacOSWindow>) -> ObjcId {
     // SAFETY: the delegate class is registered before alloc/init; the boxed
     // Weak pointer stored in the ivar is reclaimed in the delegate's
-    // `dealloc`, so it lives exactly as long as the delegate.
+    // `dealloc`, so it lives exactly as long as the delegate. AppKit sends
+    // the delegate's methods, `dealloc` among them, on the main thread, where
+    // the window and its reference counts live.
     unsafe {
         // Get or create delegate class
         let class = get_or_create_delegate_class();
@@ -136,9 +139,10 @@ fn get_or_create_delegate_class() -> &'static Class {
         }
 
         // The delegate callbacks below share one invariant: they run on the
-        // main thread, on a live `FLUIWindowDelegate` whose `window_ptr` ivar
-        // holds the `Box<Weak<MacOSWindow>>` that `create_window_delegate`
-        // stored, which is what `get_window_from_delegate` requires.
+        // main thread, where the window lives, on a live `FLUIWindowDelegate`
+        // whose `window_ptr` ivar holds the `Box<Weak<MacOSWindow>>` that
+        // `create_window_delegate` stored, which is what
+        // `get_window_from_delegate` requires.
 
         // windowWillMiniaturize: comes before the window leaves normal mode,
         // while its frame is still the one it returns to.
@@ -461,8 +465,10 @@ fn get_or_create_delegate_class() -> &'static Class {
 /// # Safety
 ///
 /// `delegate` must be a live FLUIWindowDelegate whose `window_ptr` ivar is
-/// either null or points to a `Weak<MacOSWindow>` owned by that delegate.
-unsafe fn get_window_from_delegate(delegate: &Object) -> Option<Arc<MacOSWindow>> {
+/// either null or points to a `Weak<MacOSWindow>` owned by that delegate, and
+/// the call must run on the main thread, where the window and its reference
+/// counts live.
+unsafe fn get_window_from_delegate(delegate: &Object) -> Option<Rc<MacOSWindow>> {
     // SAFETY: per the function contract the ivar is null or a valid
     // Box<Weak<MacOSWindow>> pointer owned by the delegate.
     unsafe {
@@ -489,17 +495,45 @@ impl MacOSWindow {
     }
 
     /// A step that animates is over (or failed): publish the window, then send
-    /// the mode held back for it, if there is one. The held mode is taken after
-    /// the publish, since a subscriber that runs in it may command a newer one.
-    fn handle_transition_ended(&self) {
+    /// the mode held back for it, if there is one.
+    ///
+    /// The held mode is planned on the owner lane's next turn. AppKit puts back
+    /// the frame a window had before full screen only after
+    /// `windowDidExitFullScreen:` returns, so inside it a window that went full
+    /// screen zoomed still reads as unzoomed, and a held `Normal` would plan no
+    /// un-zoom and leave it maximized. It is also taken after the publish,
+    /// since a subscriber that runs in it may command a newer one. A window
+    /// dropped before that turn has no mode left to take.
+    fn handle_transition_ended(self: &Rc<Self>) {
         self.state.lock().sequence.step_ended();
         self.publish_state();
-        let held = self.state.lock().sequence.take_held();
-        if let Some(mode) = held
-            && let Err(error) = self.change_mode(mode)
-        {
-            tracing::debug!(%error, "a window could not finish changing mode");
-        }
+        let window = crate::owner::slot::OwnerWeak::new(self);
+        crate::owner::apple::macos::exec_async_on_owner(self.owner, move || {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
+            // The held mode first, then the held commands in arrival order: a
+            // fixed size meant for the normal window the held mode leads to
+            // lands after it, held again if that mode set off another step.
+            let after = window.state.lock().sequence.take_after_step();
+            if let Some(mode) = after.mode
+                && let Err(error) = window.change_mode(mode)
+            {
+                tracing::debug!(%error, "a window could not finish changing mode");
+            }
+            for command in after.commands {
+                match command {
+                    HeldCommand::FixedSize => {
+                        match window.set_style_bit(NSWindowStyleMask::Resizable, false) {
+                            Ok(()) => window.publish_state(),
+                            Err(error) => {
+                                tracing::debug!(%error, "a window could not be made fixed-size");
+                            }
+                        }
+                    }
+                }
+            }
+        });
     }
 
     /// Handle window resize event
@@ -514,17 +548,8 @@ impl MacOSWindow {
                 content_rect.size.height as f64,
             );
 
-            // Update state
-            let scale = {
-                let mut state = self.state.lock();
-                state.bounds.size = new_size;
-                state.scale_factor
-            };
-
-            // Notify per-window callbacks
+            self.state.lock().bounds.size = new_size;
             self.publish_state();
-            self.callbacks
-                .dispatch_logical_resize(new_size, scale as f64);
 
             tracing::debug!("Window resized to {}x{}", new_size.width, new_size.height);
         }
@@ -553,34 +578,28 @@ impl MacOSWindow {
     /// Handle focus gained event
     fn handle_focus_gained(&self) {
         self.publish_state();
-        self.callbacks.dispatch_active_status_change(true);
         // Key-window status is what VoiceOver treats as view focus; the
         // delegate delivers this on the main thread.
-        if let Some(bridge) = self.accessibility.get() {
-            bridge.update_view_focus_state(true);
-        }
+        self.facets.accessibility.focus_changed(true);
         tracing::debug!("Window gained focus");
     }
 
     /// Handle focus lost event
     fn handle_focus_lost(&self) {
         self.publish_state();
-        self.callbacks.dispatch_active_status_change(false);
-        if let Some(bridge) = self.accessibility.get() {
-            bridge.update_view_focus_state(false);
-        }
+        self.facets.accessibility.focus_changed(false);
         tracing::debug!("Window lost focus");
     }
 
     /// Handle occlusion state change (hidden-surface gating).
     ///
-    /// Reads the window's current `occlusionState` and forwards the visible
-    /// bit through `dispatch_visibility_status_change` — the wire the
-    /// runtime's per-presentation `FrameClock` gate and `AppLifecycleState`
-    /// derivation hang off. The decidable half is host-tested: the bit test
-    /// and its polarity in `crate::window::apple::geometry::surface`, the edge
-    /// filter in `crate::window::visibility`; only the `occlusionState` read
-    /// is AppKit-bound.
+    /// Reads the window's current `occlusionState` into the snapshot's
+    /// visibility — what the runtime's per-presentation `FrameClock` gate and
+    /// `AppLifecycleState` derivation read. The bit test and its polarity are
+    /// host-tested in `crate::window::apple::geometry::surface`; only the
+    /// `occlusionState` read is AppKit-bound. AppKit may post the notification
+    /// for reasons other than the visible bit flipping: an unchanged snapshot
+    /// publishes nothing.
     fn handle_occlusion_state_changed(&self) {
         // SAFETY: `ns_window` is alive for the lifetime of `self`;
         // `occlusionState` returns a plain NSUInteger bitmask.
@@ -589,46 +608,48 @@ impl MacOSWindow {
             state as u64
         };
         let visible = crate::window::apple::geometry::surface::occlusion_state_is_visible(raw);
-        let edge = self.state.lock().occlusion_visible.report(visible);
-        // Dispatch outside the state lock, like every other handler here.
-        if let Some(visible) = edge {
-            tracing::debug!(?visible, "Window occlusion state changed");
-            self.publish_state();
-            self.callbacks.dispatch_visibility_status_change(visible);
-        }
+        self.state.lock().occlusion_visible = visible;
+        // Published outside the state lock, like every other handler here.
+        self.publish_state();
     }
 
     /// Handle close request event
     ///
-    /// Returns true to allow close, false to prevent
-    fn handle_close_request(&self) -> bool {
-        let should_close = self.callbacks.dispatch_should_close();
-        tracing::debug!("Window close requested: {}", should_close);
-        should_close
+    /// Returns true to allow close, false to prevent. Asked behind a running
+    /// handler method (a `performClose:` sent from inside `input`), the
+    /// window is kept for now and closed later if the handler grants it.
+    fn handle_close_request(self: &Rc<Self>) -> bool {
+        let window = crate::owner::slot::OwnerWeak::new(self);
+        let decision = self.delivery.dispatch_close_request(move || {
+            if let Some(window) = window.upgrade() {
+                window.close_window();
+            }
+        });
+        tracing::debug!(?decision, "Window close requested");
+        decision == flui_platform::CloseDecision::Close
     }
 
     /// Handle window close event
     ///
     /// Fires from `windowWillClose:` while `ns_window` is still valid — the
     /// delegate notification AppKit posts for every route through
-    /// `-[NSWindow close]`, vetoed or not (see [`close`](Self::close)'s own
-    /// doc). Order matters: `closed` is set BEFORE `dispatch_close` so that
+    /// `-[NSWindow close]`, vetoed or not (see the comment in
+    /// [`close_window`](Self::close_window)). Order matters: `closed` is set BEFORE `dispatch_close` so that
     /// a frame callback the close dispatch itself triggers observes the
-    /// window as already gone, and `callbacks.clear()` runs AFTER, so the
-    /// `on_close` callback registered above still fires normally before its
-    /// slot — and every other slot — is released.
+    /// window as already gone, and the delivery's `clear()` runs AFTER, so
+    /// the handler's `closed` is still called before the window lets go of
+    /// the handler.
     fn handle_close(&self) {
         if self.closed.swap(true, Ordering::SeqCst) {
             return;
         }
 
         // Untrack from the platform's window map here, on the owner thread the
-        // delegate notification runs on, rather than from `Drop` — `Drop` is the
-        // only other removal site and is unreachable while the map itself pins a
-        // wrapper clone (issue #1147). Removing the entry lets the wrapper reach
-        // `Drop`'s last-clone gate (and so the NSWindow release + a11y teardown
-        // tail) as soon as the application drops its final external handle;
-        // without it, every closed window stays pinned for the process lifetime.
+        // delegate notification runs on: the map holds the window strongly, so
+        // removing the entry lets the window drop (and so release its NSWindow
+        // and detach its bridge) as soon as the application drops its last
+        // handle; without it, every closed window stays pinned for the process
+        // lifetime.
         //
         // Removal precedes `dispatch_close()` so the closing window is already
         // untracked when user close callbacks run. Unlike the repo's winit
@@ -636,29 +657,28 @@ impl MacOSWindow {
         // callbacks (owner/winit.rs dispatch_close before windows.remove) —
         // this ordering is safe here because the macOS map is private with no
         // content readers: the early removal is observable only as the intended
-        // lifetime change. `Drop`'s removal stays as an idempotent safety net.
-        let _prev = self.windows_map.lock().remove(&(self.ns_window as u64));
+        // lifetime change. The removed entry drops at the end of this
+        // statement's scope, and the delegate holds the window meanwhile.
+        let _prev = self.windows_map.remove(&(self.ns_window as u64));
 
-        self.callbacks.dispatch_close();
+        self.delivery.dispatch_close();
         tracing::debug!("Window closed");
 
         // Release every remaining registered callback now, while
         // `ns_window` is still valid (this delegate method runs before
-        // AppKit tears the window down further). Without this, the frame
-        // callback registered via `on_request_frame` — which in
-        // `flui-app`'s wiring owns this window's GPU renderer, whose
-        // `wgpu::Surface` is built from the `Arc<dyn PlatformWindow>` clone
-        // the renderer owns (ADR-0063) — stays pinned forever: window
-        // (through its callback slots) → frame closure → raster lane →
-        // renderer → surface → `Arc<MacOSWindow>`, a cycle nothing else
-        // here breaks.
-        self.callbacks.clear();
+        // AppKit tears the window down further): the handler owns, in
+        // `flui-app`'s wiring, this window's GPU renderer, whose
+        // `wgpu::Surface` is built from the window's surface target, and that
+        // surface goes while the window's view is still there (ADR-0063).
+        // The clear also retires the delivery, so the surface target answers
+        // `Unavailable` from here on.
+        self.delivery.clear();
 
         // Match winit's own `windowWillClose:` handling: NIL the delegate
         // so no further delegate method can fire against a window this
         // wrapper now treats as closed. Harmless even without this today
-        // (the delegate holds only a `Weak<MacOSWindow>`), but this is the
-        // documented AppKit-recommended cleanup, not just a FLUI habit.
+        // (the delegate holds only a weak reference to the window), but this
+        // is the documented AppKit-recommended cleanup, not just a FLUI habit.
         //
         // SAFETY: `ns_window` is alive for the lifetime of `self`.
         unsafe {
@@ -677,45 +697,34 @@ impl MacOSWindow {
             let new_scale: f64 = msg_send![self.ns_window, backingScaleFactor];
 
             // Update window state
-            let (changed, size) = {
+            let changed = {
                 let mut state = self.state.lock();
                 let changed = (state.scale_factor - new_scale).abs() > 0.01;
                 if changed {
                     state.scale_factor = new_scale;
                     tracing::info!("Window scale factor changed to {}", new_scale);
                 }
-                (changed, state.bounds.size)
+                changed
             };
 
             // Re-read the display in the same pass: this handler is reached on
             // both a backing-properties change and a screen change
             // (`handle_screen_changed` delegates here), and the display belongs
-            // to the window exactly as the scale does. A change of display or
-            // of its scale is a hint to re-read the snapshot; it dispatches no
-            // resize, because a refresh period does not invalidate layout.
+            // to the window exactly as the scale does.
             let moved = self.refresh_display();
-            self.publish_state();
-
-            // Update the FLUI view's scale factor
-            view::update_view_scale_factor(self.view, new_scale);
-
             if moved || changed {
-                // The snapshot carries each display's scale, and a window that
-                // moved may sit on a display the last sample did not hold.
-                // Invalidated before any callback so a resize handler that
-                // reads the snapshot sees the new scale.
+                // The display snapshot carries each display's scale, and a
+                // window that moved may sit on a display the last sample did
+                // not hold. Invalidated before the window's snapshot is
+                // published, so a consumer it wakes reads the displays again.
                 if let Some(displays) = self.displays.get() {
                     displays.invalidate();
                 }
             }
-
-            // A scale change invalidates layout: notify as a resize
-            if changed {
-                self.callbacks.dispatch_logical_resize(size, new_scale);
-            }
-            if moved || changed {
-                self.callbacks.dispatch_display_changed();
-            }
+            // After the invalidation, so the snapshot read is the one with the
+            // display the window moved to.
+            self.sync_layer_refresh();
+            self.publish_state();
         }
     }
 
@@ -734,7 +743,7 @@ impl MacOSWindow {
             } else if self.refresh_display() {
                 // Off every screen: the window names no display until it is
                 // on one again, and its scale is left as it was.
-                self.callbacks.dispatch_display_changed();
+                self.publish_state();
             }
         }
     }

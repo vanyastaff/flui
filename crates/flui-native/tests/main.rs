@@ -17,8 +17,14 @@
 //! asserts the AppKit main thread, which a bare `cargo test` cannot host
 //! unbundled (ADR-0039; unbundled NSWindow construction aborts the process).
 
+#[path = "absent.rs"]
+mod absent;
 #[path = "android_exit_path.rs"]
 mod android_exit_path;
+use flui_native::testing::app;
+#[path = "app_handler.rs"]
+#[cfg(not(target_arch = "wasm32"))]
+mod app_handler;
 #[path = "backend_conformance.rs"]
 mod backend_conformance;
 #[path = "contract.rs"]
@@ -47,6 +53,9 @@ mod input_regions;
 mod native_recording;
 #[path = "preferences.rs"]
 mod preferences;
+#[path = "wayland_window.rs"]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
+mod wayland_window;
 #[path = "window_callback_unwind.rs"]
 #[cfg(not(target_arch = "wasm32"))]
 mod window_callback_unwind;
@@ -54,6 +63,9 @@ mod window_callback_unwind;
 mod window_installation;
 #[path = "window_state.rs"]
 mod window_state;
+#[path = "windows_foreground.rs"]
+#[cfg(target_os = "windows")]
+mod windows_foreground;
 #[path = "windows_host_events.rs"]
 #[cfg(target_os = "windows")]
 mod windows_host_events;
@@ -66,7 +78,8 @@ mod windows_window_commands;
 /// host's window type and its `HWND` are not public (ADR-0151 §8).
 #[cfg(target_os = "windows")]
 fn win32_handle(window: &dyn flui_native::HostWindow) -> windows::Win32::Foundation::HWND {
-    let handle = flui_platform::PlatformWindow::window_handle(window)
+    let surface = flui_platform::PlatformWindow::surface_target(window);
+    let handle = raw_window_handle::HasWindowHandle::window_handle(&*surface)
         .expect("a live Win32 window has a handle");
     let raw_window_handle::RawWindowHandle::Win32(handle) = handle.as_raw() else {
         panic!("not a Win32 window");
@@ -82,4 +95,45 @@ fn run_table(table: &str, cases: &[(&str, fn())]) {
         .map(|(name, _)| *name)
         .collect();
     assert!(failed.is_empty(), "{table}: failing cases: {failed:?}");
+}
+
+/// A window and the recording handler it was opened with: a test drives the
+/// window and sets what each handler method does.
+struct Opened {
+    window: std::rc::Rc<dyn flui_native::HostWindow>,
+    handler: std::rc::Rc<flui_testing::window_handler::RecordingWindowHandler>,
+}
+
+impl Opened {
+    /// A window `platform` opens with `options`, delivering to a fresh
+    /// handler.
+    fn on(
+        platform: &(impl flui_native::Platform + ?Sized),
+        options: flui_platform::WindowOptions,
+    ) -> Result<Self, flui_native::OpenWindowError> {
+        let handler = flui_testing::window_handler::RecordingWindowHandler::new();
+        let window = platform.open_window(options, handler.clone())?;
+        Ok(Self { window, handler })
+    }
+
+    /// A window `owner` opens at once with `options`, delivering to a fresh
+    /// handler.
+    #[cfg(target_os = "windows")]
+    fn ready(owner: &flui_native::OwnerPlatform, options: flui_platform::WindowOptions) -> Self {
+        let handler = flui_testing::window_handler::RecordingWindowHandler::new();
+        let window = owner
+            .open_window(options, handler.clone())
+            .expect("the window opens")
+            .try_ready()
+            .expect("the window opens at once");
+        Self { window, handler }
+    }
+}
+
+impl std::ops::Deref for Opened {
+    type Target = std::rc::Rc<dyn flui_native::HostWindow>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.window
+    }
 }

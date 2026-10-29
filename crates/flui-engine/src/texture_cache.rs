@@ -48,7 +48,7 @@ use wgpu::{
 ///
 /// The onscreen surface format is `Bgra8Unorm` / `Rgba8Unorm` (UNorm, plain
 /// gamma-space storage, per Impeller parity — see `renderer.rs`
-/// `select_surface_format`). When sampling an `*Srgb` texture, the GPU
+/// `select_sdr`). When sampling an `*Srgb` texture, the GPU
 /// hardware applies the sRGB→linear EOTF on every texel read, converting the
 /// stored byte/255 value to a linear float. The shader then writes that linear
 /// float into the UNorm surface, which stores it as-is — so a mid-tone byte

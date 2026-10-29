@@ -74,12 +74,16 @@ fn windows_reads_preferences_before_a_user_window_exists() {
     // Repeated sampling must preserve the platform's outer COM lifetime so
     // a subsequent real native window can still initialize its text services.
     let window = platform
-        .open_window(flui_platform::WindowOptions::default().with_visible(false))
+        .open_window(
+            flui_platform::WindowOptions::default().with_visible(false),
+            flui_testing::window_handler::RecordingWindowHandler::new(),
+        )
         .expect("native window after preference reads");
     let projected = window
         .gesture_geometry()
         .expect("native geometry query")
         .expect("Windows observes mouse geometry");
+    use flui_testing::window_commands::AdmitAndApply as _;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::{
         Foundation::HWND,
@@ -88,7 +92,8 @@ fn windows_reads_preferences_before_a_user_window_exists() {
             WindowsAndMessaging::{SM_CXDOUBLECLK, SM_CXDRAG, SM_CYDOUBLECLK, SM_CYDRAG},
         },
     };
-    let RawWindowHandle::Win32(handle) = window.window_handle().expect("live handle").as_raw()
+    let surface = window.surface_target();
+    let RawWindowHandle::Win32(handle) = surface.window_handle().expect("live handle").as_raw()
     else {
         panic!("native Win32 handle")
     };
@@ -113,20 +118,12 @@ fn windows_reads_preferences_before_a_user_window_exists() {
     assert_eq!(projected.mouse_double_click_area(), Some(area));
     assert_eq!(projected.mouse_drag_tolerance(), Some(drag));
     assert!(projected.touch_slop().is_none());
-    let refused = std::thread::scope(|scope| {
-        scope
-            .spawn(|| window.gesture_geometry())
-            .join()
-            .expect("foreign query returned")
-    });
-    assert_eq!(
-        refused,
-        Err(flui_platform::PreferenceQueryError::WrongThread)
-    );
-    window.close();
+    window.close_now();
     assert_eq!(
         window.gesture_geometry(),
-        Err(flui_platform::PreferenceQueryError::Unavailable)
+        Err(flui_platform::PreferenceQueryError::Unsupported(
+            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NoWindow)
+        ))
     );
 }
 
@@ -147,7 +144,7 @@ fn a_change_with_no_turn_callback_reaches_the_next_one_registered() {
     let saved = Rc::new(RefCell::new(None));
     let installed = Rc::clone(&saved);
     Box::new(platform)
-        .run(Box::new(move |owner| {
+        .run(crate::app::on_ready(move |owner| {
             *installed.borrow_mut() = Some(owner);
             Ok(())
         }))
@@ -263,7 +260,7 @@ fn setting_messages_wake_the_owner_without_a_user_window() {
     let (finished, wait) = mpsc::channel();
     let (watchdog, watchdog_result) = mpsc::channel();
     Box::new(platform)
-        .run(Box::new(move |owner| {
+        .run(crate::app::on_ready(move |owner| {
             owner.preferences().expect("initial native observation");
             let quit = owner.proxy();
             owner

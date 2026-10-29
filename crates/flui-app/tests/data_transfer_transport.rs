@@ -1,14 +1,9 @@
-//! Gate-visible tests for the data-transfer transport (ADR-0038).
-//!
-//! These live in flui-app rather than next to the code because
-//! flui-native's tests are excluded from the CI test job — a transport
-//! test there would be green-by-vacuity at the merge gate. flui-app is
-//! CI-covered and already depends on flui-native and flui-scheduler, so
-//! the `OfferTable`, `TransferRequest`/`TransferCompleter`, and
-//! mock-source-through-`AsyncDriver` evidence runs here until the exclusion
-//! lifts.
+//! The data-transfer transport (ADR-0038): a source with a native backend's
+//! shape driven through every stage, its delivery polled by a real
+//! `AsyncDriver`.
 
 use std::future::Future;
+use std::num::NonZeroU32;
 use std::pin::pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -17,11 +12,10 @@ use std::task::{Context, Poll, Waker};
 use flui_foundation::DataTransferId;
 use flui_platform::{
     data_transfer::DataTransferOffer, data_transfer::DataTransferSource,
-    data_transfer::DropFeedback, data_transfer::OfferRecord, data_transfer::OfferTable,
-    data_transfer::RepresentationDescriptor, data_transfer::RepresentationIndex,
-    data_transfer::TransferActions, data_transfer::TransferCompleter, data_transfer::TransferError,
-    data_transfer::TransferFormat, data_transfer::TransferLimits, data_transfer::TransferPayload,
-    data_transfer::TransferRequest,
+    data_transfer::DropFeedback, data_transfer::RepresentationDescriptor,
+    data_transfer::RepresentationIndex, data_transfer::TransferActions,
+    data_transfer::TransferCompleter, data_transfer::TransferError, data_transfer::TransferFormat,
+    data_transfer::TransferLimits, data_transfer::TransferPayload, data_transfer::TransferRequest,
 };
 use flui_scheduler::{OwnerFrame, UpdateScheduler};
 use parking_lot::Mutex;
@@ -46,26 +40,22 @@ fn poll_once(
 }
 
 // ============================================================================
-// OfferTable semantics
-// ============================================================================
-
-// ============================================================================
-// TransferRequest / TransferCompleter state machine
-// ============================================================================
-
-// ============================================================================
 // Mock source: the seven stages over a real AsyncDriver
 // ============================================================================
 
-/// A `DataTransferSource` with the same shape a native backend has: one
-/// `OfferTable`, lazy delivery through parked completers, and a feedback
-/// cache — enough to drive every transport stage from a test.
+/// A `DataTransferSource` with the same shape a native backend has: ids
+/// minted once and retired for good, lazy delivery through parked
+/// completers, and a feedback cache — enough to drive every transport stage
+/// from a test.
 struct MockSource {
     state: Mutex<MockState>,
 }
 
 struct MockState {
-    table: OfferTable,
+    /// How many offers were minted: the next one's slot, so no id repeats.
+    minted: u32,
+    /// The offers not retired yet, each with what it announced.
+    live: Vec<(DataTransferId, Arc<[RepresentationDescriptor]>)>,
     /// Text payload per live offer, delivered when the test releases it.
     payloads: Vec<(DataTransferId, String)>,
     /// Deliveries parked until `deliver_all` (the "async backend" half).
@@ -80,7 +70,8 @@ impl MockSource {
     fn new() -> Self {
         Self {
             state: Mutex::new(MockState {
-                table: OfferTable::new(),
+                minted: 0,
+                live: Vec::new(),
                 payloads: Vec::new(),
                 parked: Vec::new(),
                 feedback: Vec::new(),
@@ -93,9 +84,9 @@ impl MockSource {
     fn mint_text_offer(&self, text: &str) -> DataTransferOffer {
         let representations = text_representations();
         let mut state = self.state.lock();
-        let id = state
-            .table
-            .mint(OfferRecord::new(Arc::clone(&representations)));
+        let id = DataTransferId::new_gen(state.minted, NonZeroU32::MIN);
+        state.minted = state.minted.checked_add(1).expect("few offers");
+        state.live.push((id, Arc::clone(&representations)));
         state.payloads.push((id, text.to_string()));
         DataTransferOffer::new(id, representations)
     }
@@ -127,6 +118,15 @@ impl MockSource {
         }
     }
 
+    /// What live offer `id` announced.
+    fn live(state: &MockState, id: DataTransferId) -> Option<&Arc<[RepresentationDescriptor]>> {
+        state
+            .live
+            .iter()
+            .find(|(live, _)| *live == id)
+            .map(|(_, representations)| representations)
+    }
+
     fn cached_feedback(&self, id: DataTransferId) -> Option<DropFeedback> {
         self.state
             .lock()
@@ -154,23 +154,23 @@ impl DataTransferSource for MockSource {
         limits: TransferLimits,
     ) -> TransferRequest {
         let mut state = self.state.lock();
-        let Some(record) = state.table.get(id) else {
+        let Some(representations) = Self::live(&state, id) else {
             return TransferRequest::ready(Err(TransferError::StaleOffer(id)));
         };
-        if usize::from(representation.0) >= record.representations().len() {
+        if usize::from(representation.0) >= representations.len() {
             return TransferRequest::ready(Err(TransferError::UnknownRepresentation {
                 id,
                 index: representation,
             }));
         }
-        let (request, completer) = TransferRequest::channel();
+        let (request, completer) = TransferRequest::pending();
         state.parked.push((id, completer, limits));
         request
     }
 
     fn update_drop_feedback(&self, id: DataTransferId, feedback: DropFeedback) {
         let mut state = self.state.lock();
-        if state.table.get(id).is_none() {
+        if Self::live(&state, id).is_none() {
             return; // stale ids are a no-op per the trait contract
         }
         state.feedback.push((id, feedback));
@@ -178,7 +178,9 @@ impl DataTransferSource for MockSource {
 
     fn conclude_drop(&self, id: DataTransferId) {
         let mut state = self.state.lock();
-        if state.table.retire(id).is_some() {
+        let before = state.live.len();
+        state.live.retain(|(live, _)| *live != id);
+        if state.live.len() < before {
             state.concluded.push(id);
         }
     }

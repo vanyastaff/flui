@@ -70,7 +70,6 @@ struct CloseObserver {
 }
 
 struct CloseCapabilities {
-    graph: flui_view::reactive::Reactive,
     signal: flui_view::Signal<u32>,
     writer: flui_view::WriterSource,
     rebuild: flui_view::RebuildHandle,
@@ -88,7 +87,6 @@ impl StatefulView for CloseObserver {
 impl ViewState<CloseObserver> for CloseObserver {
     fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
         self.capabilities.borrow_mut().replace(CloseCapabilities {
-            graph: ctx.reactive(),
             signal: ctx.signal(7),
             writer: ctx.writer_source(),
             rebuild: ctx.rebuild_handle(),
@@ -394,7 +392,6 @@ type SiblingHandles = (
 /// to must already refuse them.
 #[derive(Clone)]
 struct SiblingProbe {
-    graph: Rc<std::cell::RefCell<Option<flui_view::reactive::Reactive>>>,
     sibling: Rc<std::cell::RefCell<Option<SiblingHandles>>>,
     disposed: Rc<Cell<usize>>,
 }
@@ -408,9 +405,6 @@ impl StatefulView for SiblingProbe {
 }
 
 impl ViewState<SiblingProbe> for SiblingProbe {
-    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
-        self.graph.borrow_mut().replace(ctx.reactive());
-    }
     fn build(&self, _view: &SiblingProbe, _ctx: &dyn BuildContext) -> impl IntoView {
         SizedBox::square(10.0)
     }
@@ -454,7 +448,6 @@ fn run_ui_runtime_sibling_child() {
         Rc::new(std::cell::RefCell::new(None)),
     ];
     let probe = |index: usize| SiblingProbe {
-        graph: Rc::clone(&graphs[index]),
         sibling: Rc::clone(&siblings[index]),
         disposed: Rc::clone(&disposed),
     };
@@ -462,6 +455,13 @@ fn run_ui_runtime_sibling_child() {
     ui_runtime
         .attach_root_widget_to_for_test(b, &probe(1))
         .expect("B mounts");
+    for (graph, id) in graphs.iter().zip([a, b]) {
+        graph.borrow_mut().replace(
+            ui_runtime
+                .presentation_widgets_for_test(id)
+                .with_build_owner(|owner| owner.signal_graph().clone()),
+        );
+    }
     let mut clock = flui_foundation::ManualClock::new();
     let mut sink = ScriptedSink::new(|_, _| crate::sink::SubmitVerdict::Presented);
     assert!(ui_runtime.pump(&mut clock, &mut sink).presented());
@@ -481,7 +481,7 @@ fn run_ui_runtime_sibling_child() {
 
 struct OwnershipWindow {
     delegate: crate::testing::TestWindow,
-    external: std::sync::Weak<parking_lot::Mutex<Option<Arc<dyn flui_platform::PlatformWindow>>>>,
+    external: std::rc::Weak<RefCell<Option<Rc<dyn flui_platform::PlatformWindow>>>>,
     armed: AtomicBool,
     fail_callback: bool,
     _captures: DropCompetition,
@@ -491,26 +491,38 @@ impl flui_platform::PlatformWindow for OwnershipWindow {
     fn id(&self) -> flui_platform::WindowId {
         self.delegate.id()
     }
-    fn physical_size(&self) -> flui_foundation::geometry::Size<i32> {
-        self.delegate.physical_size()
-    }
-    fn logical_size(&self) -> flui_foundation::geometry::Size<f64> {
-        self.delegate.logical_size()
-    }
-    fn scale_factor(&self) -> f64 {
-        self.delegate.scale_factor()
-    }
     fn request_redraw(&self) {
         self.delegate.request_redraw();
     }
-    fn is_focused(&self) -> bool {
-        true
+    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
+        self.delegate.redraw_requester()
     }
-    fn is_visible(&self) -> bool {
-        true
+    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
+        self.delegate.surface_target()
     }
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
         self.delegate.text_input()
+    }
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+        self.delegate.haptics()
+    }
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
+        self.delegate.system_chrome()
+    }
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        self.delegate.drag_source()
+    }
+    fn set_frame_rate_hint(
+        &self,
+        hint: flui_platform::FrameRateHint,
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.delegate.set_frame_rate_hint(hint)
+    }
+    fn set_input_regions(
+        &self,
+        regions: &[flui_platform::input_regions::InputRegion],
+    ) -> Result<(), flui_platform::Unsupported> {
+        self.delegate.set_input_regions(regions)
     }
     fn set_cursor(
         &self,
@@ -518,7 +530,7 @@ impl flui_platform::PlatformWindow for OwnershipWindow {
     ) -> Result<(), flui_platform::CursorError> {
         if self.armed.load(Ordering::Relaxed) {
             if let Some(external) = self.external.upgrade() {
-                external.lock().take();
+                external.borrow_mut().take();
             }
             assert!(!self.fail_callback, "window cursor failure");
         }
@@ -527,13 +539,10 @@ impl flui_platform::PlatformWindow for OwnershipWindow {
     fn state(&self) -> flui_platform::WindowState {
         self.delegate.state()
     }
-    fn capabilities(&self) -> flui_platform::WindowCapabilities {
-        self.delegate.capabilities()
-    }
     fn apply(
         &self,
-        command: flui_platform::WindowCommand,
-    ) -> Result<(), flui_platform::WindowCommandError> {
+        command: flui_platform::AdmittedCommand,
+    ) -> Result<(), flui_platform::ApplyError> {
         self.delegate.apply(command)
     }
 }
@@ -579,7 +588,7 @@ fn run_platform_ownership_child(kind: &str) {
     let cursor_first = kind == "cursor-platform";
     let window_drops = Arc::new(AtomicUsize::new(0));
     let bridge_drops = Arc::new(AtomicUsize::new(0));
-    let external_window = Arc::new(parking_lot::Mutex::new(None));
+    let external_window = Rc::new(RefCell::new(None));
     let external_bridge = Arc::new(parking_lot::Mutex::new(None));
     // The window and the bridge are framework-owned (ADR-0127): close
     // releases them even after a failure, so their captures must drop.
@@ -593,9 +602,9 @@ fn run_platform_ownership_child(kind: &str) {
             drops: Arc::clone(counts),
         },
     };
-    let window = Arc::new(OwnershipWindow {
+    let window = Rc::new(OwnershipWindow {
         delegate: crate::testing::TestWindow::new().focused(true),
-        external: Arc::downgrade(&external_window),
+        external: Rc::downgrade(&external_window),
         armed: AtomicBool::new(false),
         fail_callback: fail_window || cursor_first,
         _captures: bundle(&window_drops),
@@ -607,7 +616,7 @@ fn run_platform_ownership_child(kind: &str) {
         fail_callback: fail_bridge || cursor_first,
         _captures: bundle(&bridge_drops),
     });
-    *external_window.lock() = Some(window.clone() as Arc<dyn flui_platform::PlatformWindow>);
+    *external_window.borrow_mut() = Some(window.clone() as Rc<dyn flui_platform::PlatformWindow>);
     *external_bridge.lock() =
         Some(bridge.clone() as Arc<dyn flui_semantics::platform::PlatformAccessibility>);
     let mut ui_runtime = UiRuntime::new(
@@ -669,7 +678,7 @@ fn run_platform_ownership_child(kind: &str) {
         2,
         "close releases the accessibility bridge"
     );
-    assert!(external_window.lock().is_none());
+    assert!(external_window.borrow().is_none());
     assert!(external_bridge.lock().is_none());
     assert!(!ui_runtime.close_presentation_entered(a));
 }
@@ -1061,6 +1070,9 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
     ui_runtime
         .attach_root_widget(&observer)
         .expect("A mounts disposal observer");
+    let observer_graph = ui_runtime
+        .presentation_widgets_for_test(ui_runtime.presentation_id())
+        .with_build_owner(|owner| owner.signal_graph().clone());
     ui_runtime
         .attach_root_widget_to_for_test(b, &SizedBox::square(30.0))
         .expect("B mounts");
@@ -1221,6 +1233,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
         let target_input = input.clone();
         let closed_key = observer.key.clone();
         let captured = Rc::clone(&capabilities);
+        let closed_graph = observer_graph.clone();
         CLOSE_REENTRY.with(|hook| {
             *hook.borrow_mut() = Some(Box::new(move || {
                 assert!(target_focus.is_closed(), "focus closes before rejection");
@@ -1229,7 +1242,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
                 let captured = captured.borrow();
                 let captured = captured.as_ref().expect("mounted capabilities");
                 assert_eq!(
-                    captured.graph.try_signal(1_u32).expect_err("closed graph"),
+                    closed_graph.try_signal(1_u32).expect_err("closed graph"),
                     flui_view::SignalError::OwnerClosed
                 );
                 assert!(!captured.rebuild.is_active());
@@ -1477,12 +1490,12 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
         let captured = capabilities.borrow();
         let captured = captured.as_ref().expect("mounted capabilities");
         assert_eq!(
-            captured.graph.try_signal(12_u32).expect_err("closed graph"),
+            observer_graph.try_signal(12_u32).expect_err("closed graph"),
             flui_view::SignalError::OwnerClosed
         );
         captured.writer.write(|cx| {
             assert_eq!(
-                captured.signal.peek(&captured.graph, |value| *value),
+                captured.signal.peek(cx, |value| *value),
                 Err(flui_view::SignalError::OwnerClosed)
             );
             assert_eq!(
@@ -1495,17 +1508,18 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
         // (ADR-0127).
         let probe = Rc::new(());
         assert_eq!(
-            captured
-                .graph
+            observer_graph
                 .try_signal(Rc::clone(&probe))
                 .expect_err("closed graph"),
             flui_view::SignalError::OwnerClosed
         );
         let held = Rc::clone(&probe);
         assert_eq!(
-            flui_view::SignalWriteExt::update(captured.signal, &captured.graph, move |value| {
-                let _ = &held;
-                *value
+            captured.writer.write(|cx| {
+                flui_view::SignalWriteExt::update(captured.signal, cx, move |value| {
+                    let _ = &held;
+                    *value
+                })
             }),
             Err(flui_view::SignalError::OwnerClosed)
         );

@@ -435,3 +435,39 @@ pub(crate) fn a_moved_node_marks_its_new_ancestors() {
         "the moved leaf lays out under its new parent"
     );
 }
+
+/// A relayout walk acquires the nodes it reaches, not the dirty subtree: with only the root dirty,
+/// every branch is entered once and served from its cache, and nothing below a branch is touched.
+pub(crate) fn a_relayout_acquires_only_the_nodes_it_reaches() {
+    use crate::common::BoxedRenderObject;
+
+    const BRANCHES: usize = 50;
+    const DEPTH: usize = 20;
+    let mut owner = flui_rendering::pipeline::PipelineOwner::new(
+        flui_rendering::TextContextHandle::standalone(),
+    );
+    let root = owner.insert(Box::new(LooseColumn) as BoxedRenderObject);
+    for _ in 0..BRANCHES {
+        let branch = owner.insert(Box::new(LooseColumn) as BoxedRenderObject);
+        owner.adopt_render_child(root, branch);
+        loose_chain(&mut owner, branch, DEPTH);
+    }
+    owner.set_root_id(Some(root));
+    owner.set_root_constraints(Some(BoxConstraints::loose(Size::new(100.0, 100.0))));
+    let mut owner = owner.into_layout();
+    owner.run_layout().expect("first layout");
+    let total = 1 + BRANCHES * (1 + DEPTH);
+    assert_eq!(owner.counters().nodes_laid_out, total as u64);
+
+    let before = owner.counters();
+    owner.mark_needs_layout(root);
+    owner.run_layout().expect("relayout");
+    let work = owner.counters().since(before);
+    assert_eq!(work.nodes_laid_out, 1, "only the root's own layout ran");
+    assert_eq!(
+        work.nodes_acquired,
+        (1 + BRANCHES) as u64,
+        "the root and each branch it asked about were entered; the {} nodes below the branches were not",
+        total - 1 - BRANCHES,
+    );
+}

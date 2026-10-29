@@ -2,6 +2,10 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-18
+- **Amended:** 2026-10-22 — following [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md)
+  §10: `FLUIContentView` is the owner's (`owner::apple::macos::content_view`) and registers
+  every method itself, the `NSTextInputClient` ones included, dispatching them to the input and
+  the text input each view keeps.
 - **Absorbs:** ADR-0070
 
 ## Context
@@ -48,9 +52,10 @@ retain/release tail stay structurally identical, and the
 `setReleasedWhenClosed:NO` lifetime rule (ADR-0063) is preserved.
 
 `FLUIContentView` and `FLUIWindowDelegate` are built with `ClassBuilder`, not
-`define_class!`: the content view's eleven `NSTextInputClient` methods
-(ADR-0069) are registered from a separate module, which the declarative macro
-cannot express across files.
+`define_class!`, kept like the raw `msg_send!` shape above: the content view's
+eleven `NSTextInputClient` methods (ADR-0069) were first registered from a
+separate module, which the declarative macro cannot express across files, and
+moving the classes to the macro is a migration of its own.
 
 ### 3. iOS: `applicationWillTerminate:` is the loop-exit signal
 

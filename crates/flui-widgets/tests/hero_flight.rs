@@ -295,6 +295,65 @@ pub(crate) fn a_nonlinear_hero_pop_retraces_the_airborne_push() {
 // Cleanup — retired flights are drained deterministically
 // ============================================================================
 
+/// **Removing the hero observer mid-flight ends the flight** (#1195). An app
+/// shell configured with a `HeroController` loses it from its configuration while
+/// a push flight is airborne: observer reconciliation deregisters the
+/// controller, which cancels the flight, so its shuttle's overlay entry leaves
+/// the overlay instead of being stranded there with nothing left to land it.
+///
+/// Characterization: this holds on the code as it is.
+pub(crate) fn removing_the_observer_mid_flight_ends_the_flight() {
+    use flui_widgets::app::WidgetsApp;
+
+    let navigator = NavigatorHandle::new();
+    let controller = HeroController::new();
+    let app = |observer: Option<&Arc<HeroController>>| {
+        let app = WidgetsApp::new(SizedBox::new(10.0, 10.0)).navigator(navigator.clone());
+        match observer {
+            Some(observer) => app.observer(Arc::clone(observer) as Arc<dyn NavigatorObserver>),
+            None => app,
+        }
+    };
+    let mut harness = mount(app(Some(&controller)));
+    let _transition = fly(
+        &navigator,
+        &mut harness,
+        hero_page("shared", 30.0, 20.0),
+        hero_page("shared", 60.0, 45.0),
+    );
+    let routes = navigator.route_ids().len();
+    let airborne = navigator.overlay().len();
+    let shuttle = controller
+        .flights()
+        .get(&tag("shared"))
+        .expect("precondition: the hero is airborne")
+        .entry_id();
+    assert_eq!(navigator.overlay().entry_ids().last().copied(), shuttle);
+
+    harness.swap_root(app(None));
+
+    assert!(
+        controller.navigator().is_none(),
+        "the controller was deregistered"
+    );
+    assert_eq!(controller.flights().len(), 0, "and its flight ended");
+    let left = navigator.overlay().entry_ids();
+    assert_eq!(
+        left.len(),
+        airborne - 1,
+        "the shuttle's overlay entry left the overlay"
+    );
+    assert!(!left.contains(&shuttle.expect("the shuttle has an entry")));
+    harness.tick();
+    harness.tick();
+    assert_eq!(
+        navigator.overlay().entry_ids(),
+        left,
+        "and nothing brings it back"
+    );
+    assert_eq!(navigator.route_ids().len(), routes, "the routes stay");
+}
+
 // ============================================================================
 // onTick fade-out when the destination is lost mid-flight
 // ============================================================================

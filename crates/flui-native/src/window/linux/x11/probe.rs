@@ -45,7 +45,7 @@ use x11rb::{
     wrapper::ConnectionExt as _,
 };
 
-use super::mode::{NetWmState, NetWmStateAtoms, WmState, mode_flags};
+use super::mode::{NetWmState, NetWmStateAtoms, WmState, mode_flags, with_mode};
 use crate::owner::{panic_boundary::contain_owner_callback, signal::OwnerSignal};
 use crate::window::state::mode_of;
 use crate::window::{WindowManagerError, WindowManagerView};
@@ -200,30 +200,13 @@ impl WindowManagerView for X11WindowProbe {
     /// mode, and so does [`WindowMode::Minimized`], which is no mode to be
     /// mapped in (the window is minimized after it is mapped).
     fn set_mode_hint(&self, window: u32, mode: WindowMode) {
-        let states = &self.atoms.states;
-        let wanted: &[u32] = match mode {
-            WindowMode::Normal | WindowMode::Minimized => &[],
-            WindowMode::Maximized => &[states.maximized_horz, states.maximized_vert],
-            WindowMode::Fullscreen => &[states.fullscreen],
-            _ => return,
-        };
-        let mode_atoms = [
-            states.maximized_horz,
-            states.maximized_vert,
-            states.fullscreen,
-        ];
         let current: Vec<u32> = self
             .property(window, self.atoms.net_wm_state, AtomEnum::ATOM.into())
             .and_then(|reply| Some(reply.value32()?.collect()))
             .unwrap_or_default();
-        let mut atoms = current.clone();
-        atoms.retain(|atom| !mode_atoms.contains(atom));
-        atoms.extend_from_slice(wanted);
-        // A write of what is there changes nothing and would still tell every
-        // watcher of the window that something changed.
-        if atoms == current {
+        let Some(atoms) = with_mode(&current, mode, &self.atoms.states) else {
             return;
-        }
+        };
         let set = self
             .query
             .change_property32(

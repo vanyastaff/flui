@@ -13,9 +13,11 @@ use super::{
     offer_representations, os_loop_buttons, transfer_format,
 };
 use flui_platform::data_transfer::{
-    Mime, TransferActions, TransferError, TransferFormat, TransferPayload, TransferUri,
+    Mime, TransferActions, TransferError, TransferFormat, TransferPayload,
 };
 use flui_platform::drag::IDENTITY_ESSENCE;
+
+use crate::drag::offers::{PathStyle, TransferUri};
 
 const COPY: TransferActions = TransferActions::COPY;
 const MOVE: TransferActions = TransferActions::MOVE;
@@ -139,7 +141,7 @@ fn payloads_round_trip_through_their_clipboard_formats() {
         ),
         (
             TransferFormat::UriList,
-            TransferPayload::UriList(vec![TransferUri::Path(path)]),
+            TransferUri::list_payload([TransferUri::Path(path)], PathStyle::Windows),
         ),
         (
             TransferFormat::Custom {
@@ -158,7 +160,10 @@ fn payloads_round_trip_through_their_clipboard_formats() {
         assert_eq!(format!("{back:?}"), format!("{payload:?}"), "{format:?}");
     }
     // A URI list with no local path has nothing CF_HDROP can carry.
-    let remote = TransferPayload::UriList(vec![TransferUri::Uri("https://flui.dev".into())]);
+    let remote = TransferUri::list_payload(
+        [TransferUri::Uri("https://flui.dev".into())],
+        PathStyle::Windows,
+    );
     assert!(encode(&NativeFormat::FileDrop, &remote).is_none());
     // A payload of another kind than its format is not served.
     assert!(
@@ -209,8 +214,12 @@ fn foreign_allocations_decode_within_their_bounds() {
     ansi.extend_from_slice(&0_i32.to_le_bytes());
     ansi.extend_from_slice(b"C:\\a.txt\0C:\\b.txt\0\0");
     let decoded = decode(&NativeFormat::FileDrop, &TransferFormat::UriList, &ansi);
-    assert!(
-        matches!(&decoded, Ok(TransferPayload::UriList(uris)) if *uris == [
+    assert_eq!(
+        decoded
+            .as_ref()
+            .ok()
+            .and_then(|decoded| TransferUri::list_of(decoded, PathStyle::Windows)),
+        Some(vec![
             TransferUri::Path(r"C:\a.txt".into()),
             TransferUri::Path(r"C:\b.txt".into()),
         ]),
@@ -254,19 +263,21 @@ fn the_drop_source_drops_on_release_and_cancels_otherwise() {
 }
 
 /// OLE's loop carries a drag only on the mouse buttons held as it starts:
-/// none held, or a pen or touch contact, leaves the drag in its window.
+/// none held leaves the drag in its window for now, and a pen or touch
+/// contact on every Windows device.
 fn the_os_loop_carries_only_a_drag_a_mouse_button_holds() {
+    use flui_platform::UnsupportedReason::{NotOnThisPlatform, Unavailable};
     use flui_platform::pointer::{PenTool, PointerKind};
     const LEFT: u32 = 0x01;
     const SHIFT: u32 = 0x04;
     let pen = PointerKind::Pen { tool: PenTool::Tip };
     let rows = [
-        (None, LEFT, Some(LEFT)),
-        (Some(PointerKind::Mouse), LEFT | SHIFT, Some(LEFT)),
-        (Some(PointerKind::Mouse), SHIFT, None),
-        (Some(PointerKind::Mouse), 0, None),
-        (Some(pen), LEFT, None),
-        (Some(PointerKind::Touch), LEFT, None),
+        (None, LEFT, Ok(LEFT)),
+        (Some(PointerKind::Mouse), LEFT | SHIFT, Ok(LEFT)),
+        (Some(PointerKind::Mouse), SHIFT, Err(Unavailable)),
+        (Some(PointerKind::Mouse), 0, Err(Unavailable)),
+        (Some(pen), LEFT, Err(NotOnThisPlatform)),
+        (Some(PointerKind::Touch), LEFT, Err(NotOnThisPlatform)),
     ];
     for (kind, held, expected) in rows {
         assert_eq!(os_loop_buttons(kind, held), expected, "{kind:?} {held:#x}");

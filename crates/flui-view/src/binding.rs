@@ -1329,7 +1329,7 @@ impl WidgetsBinding {
     /// [`Self::run_frame_with_layout_builders`]'s build-during-layout
     /// fixpoint alone, released before it returns, so the caller can run
     /// owner code against the settled tree before
-    /// [`Self::run_settled_frame`] paints it.
+    /// [`PipelineCell::run_frame`] paints it.
     ///
     /// # Errors
     ///
@@ -1345,19 +1345,6 @@ impl WidgetsBinding {
             ..
         } = *inner;
         build_owner.settle_layout_with_builders(element_tree, pipeline)
-    }
-
-    /// Paint a tree [`Self::settle_layout_with_builders`] settled: layout of
-    /// whatever is still dirty, compositing, paint and semantics.
-    ///
-    /// # Errors
-    ///
-    /// The pipeline's first error.
-    pub fn run_settled_frame(
-        &self,
-        pipeline: &PipelineCell,
-    ) -> flui_rendering::error::RenderResult<Option<flui_rendering::layer::LayerTree>> {
-        BuildOwner::run_settled_frame(pipeline)
     }
 
     /// Check if we are currently building dirty elements.

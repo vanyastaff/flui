@@ -11,23 +11,23 @@
 //! when the next deadline is. The window arms and stops that timer; its
 //! [`ModalPacing`] counts its modal loops and keeps its frames.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::{Arc, Weak};
 
 use super::{ClassWindows, FrameCount, ModalDelivery, WindowsLoop};
-use crate::owner::handlers::PlatformHandlers;
+use crate::owner::app_delivery::AppDelivery;
 
 /// The timer that paces a window's modal loops. Distinct from the touchpad's.
 pub(crate) const MODAL_DEADLINE_TIMER: usize = 0x4D4C;
 
-/// What one modal loop's frames are delivered from: the handlers whose
-/// wake-deadline hook is asked, the windows painted, the frame count the
+/// What one modal loop's frames are delivered from: the application whose
+/// wake deadline is asked, the windows painted, the frame count the
 /// deliveries are keyed by and the last deadline this loop delivered. The
 /// owner window keeps one for the drag loop and each window one for its own,
-/// all over the platform's one handler set and frame count.
+/// all over the platform's one application delivery and frame count.
 pub(crate) struct ModalFrames {
-    handlers: Rc<RefCell<PlatformHandlers>>,
+    app: Arc<AppDelivery>,
     windows: Weak<dyn ClassWindows>,
     frames: Rc<FrameCount>,
     delivered: ModalDelivery,
@@ -35,12 +35,12 @@ pub(crate) struct ModalFrames {
 
 impl ModalFrames {
     pub(crate) fn new(
-        handlers: Rc<RefCell<PlatformHandlers>>,
+        app: Arc<AppDelivery>,
         windows: Weak<dyn ClassWindows>,
         frames: Rc<FrameCount>,
     ) -> Self {
         Self {
-            handlers,
+            app,
             windows,
             frames,
             delivered: ModalDelivery::default(),
@@ -58,37 +58,17 @@ impl ModalFrames {
     /// delivered as the main loop delivers it, once per frame generation, and
     /// every window with an invalid region is painted, so every runtime on the
     /// thread keeps getting frames. Returns how many milliseconds to wait
-    /// before the next request. The hook is user code, run with no borrow
-    /// held and in the main loop's custody; a caller holds its own clone of
-    /// `self`, since that code may close the window that keeps it.
+    /// before the next request. The application's handler is user code, asked
+    /// with no borrow held and in the main loop's custody; a caller holds its
+    /// own clone of `self`, since that code may close the window that keeps
+    /// it.
     pub(crate) fn deliver(&self) -> u32 {
-        // A replaced hook's final captures may replace the registration
-        // again: the query retires its clone before the answer is checked
-        // against it.
-        let queried = WindowsLoop::ask_wake_deadline(&self.handlers);
-        // The answer of a hook that is no longer installed is not its
-        // replacement's: as in the main loop, the delivery record is keyed by
-        // the hook as well as the instant.
-        let current = queried.and_then(|(deadline, identity)| {
-            let installed = self
-                .handlers
-                .borrow()
-                .wake_deadline
-                .as_ref()
-                .is_some_and(|hook| Weak::ptr_eq(&identity, &Arc::downgrade(hook)));
-            installed.then_some((deadline?, identity))
-        });
+        let deadline = WindowsLoop::ask_wake_deadline(&self.app);
         let now = web_time::Instant::now();
-        let deadline = current.as_ref().map(|(deadline, _)| *deadline);
-        match current {
-            Some((deadline, identity))
-                if deadline <= now
-                    && self
-                        .delivered
-                        .admits(deadline, &identity, self.frames.get()) =>
-            {
+        match deadline {
+            Some(due) if due <= now && self.delivered.admits(due, self.frames.get()) => {
                 if let Some(windows) = self.windows.upgrade() {
-                    self.delivered.record(deadline, identity, self.frames.get());
+                    self.delivered.record(due, self.frames.get());
                     windows.redraw_for_deadline();
                 }
             }

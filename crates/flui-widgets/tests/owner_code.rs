@@ -3111,6 +3111,7 @@ fn attach_replacing_a_client_whose_platform_enable_panicked() {
 
 thread_local! {
     /// The store a close's cleanup edits, following the closing owner's gate.
+    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static CLEANUP_STORE: RefCell<Option<Rc<InMemoryTextStore>>> = const { RefCell::new(None) };
 }
 
@@ -3222,6 +3223,7 @@ fn attach_and_detach_whose_diagnostics_panic() {
 
 thread_local! {
     /// The owner a platform closes from inside its own call.
+    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static CLOSING_OWNER: RefCell<Option<Weak<TextInputOwner>>> = const { RefCell::new(None) };
 }
 
@@ -3569,11 +3571,11 @@ fn editable_update_whose_observer_and_focus_listener_panic() {
     // Recovery must report the observer's earlier failure rather than the
     // competing focus listener.
     harness.with_build_owner_mut(|owner| {
-        owner.set_error_view_builder(Some(|error| {
+        owner.capabilities_mut().error_view_builder = Some(|error| {
             assert_eq!(error.message, "observer failure on status");
             OBSERVER_FAILURE_RECOVERED.store(true, std::sync::atomic::Ordering::Relaxed);
             Box::new(flui_view::ErrorView::from_error(error))
-        }));
+        });
     });
     harness.swap_root(EditableText::new(controller.clone(), Rc::clone(&new)).obscure_text(true));
     assert!(

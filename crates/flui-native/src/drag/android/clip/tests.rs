@@ -13,10 +13,11 @@ use super::{
 };
 use flui_foundation::{DragSessionId, UiRuntimeId};
 use flui_platform::data_transfer::{
-    Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat, TransferImage,
-    TransferPayload, TransferUri,
+    Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat, TransferPayload,
 };
 use flui_platform::drag::{DragSessionKey, OsDragEnd, ProcessNonce};
+
+use crate::drag::offers::{PathStyle, TransferUri};
 
 fn identity() -> RepresentationDescriptor {
     DragSessionKey::new(
@@ -75,10 +76,11 @@ fn a_description_offers_its_media_types() {
     );
 }
 
-/// The drop holds the clip's text, HTML and URIs in memory, and the bytes of
-/// a typed representation as its first URI, read when requested and resolved
-/// as the format it announced: an image as an image, another type as raw
-/// bytes of its essence; what the clip did not carry is missing.
+/// The drop holds the clip's text, HTML and URIs (as a `text/uri-list`) in
+/// memory, and the bytes of a typed representation as its first URI, read when
+/// requested and resolved as the format it announced: an image as the bytes of
+/// its container, another type as raw bytes of its essence; what the clip did
+/// not carry is missing.
 fn a_drop_holds_what_the_clip_carried() {
     let offer = offered([
         "text/plain",
@@ -108,15 +110,16 @@ fn a_drop_holds_what_the_clip_carried() {
     assert!(
         matches!(
             image.payload(vec![1, 2, 3]),
-            TransferPayload::Image(TransferImage { mime, bytes })
+            TransferPayload::Custom { mime, bytes }
                 if mime.as_str() == "image/png" && *bytes == [1, 2, 3]
         ),
-        "an image offer resolves as the image it announced"
+        "an image offer resolves as the bytes of the image it announced"
     );
     assert!(matches!(
         &holds[3],
-        Held::Payload(TransferPayload::UriList(uris)) if uris.len() == 2
-            && matches!(&uris[1], TransferUri::Uri(uri) if uri == "content://media/2")
+        Held::Payload(TransferPayload::Custom { mime, bytes })
+            if mime.as_str() == "text/uri-list"
+                && **bytes == *b"content://media/1\r\ncontent://media/2\r\n"
     ));
     let Held::Uri(document) = &holds[4] else {
         panic!(
@@ -195,11 +198,14 @@ fn a_flui_drag_puts_what_a_clip_can_carry_in_its_clip() {
     let payloads = [
         Some(TransferPayload::Text("hi".to_owned())),
         Some(TransferPayload::Html("<b>hi</b>".to_owned())),
-        Some(TransferPayload::UriList(vec![
-            TransferUri::Uri("content://doc/1".to_owned()),
-            TransferUri::Uri("file:///sdcard/a.txt".to_owned()),
-            TransferUri::Path("/sdcard/b.txt".into()),
-        ])),
+        Some(TransferUri::list_payload(
+            [
+                TransferUri::Uri("content://doc/1".to_owned()),
+                TransferUri::Uri("file:///sdcard/a.txt".to_owned()),
+                TransferUri::Path("/sdcard/b.txt".into()),
+            ],
+            PathStyle::Posix,
+        )),
         Some(TransferPayload::Custom {
             mime: Mime::new("image/png"),
             bytes: Arc::from(vec![0_u8; 4]),

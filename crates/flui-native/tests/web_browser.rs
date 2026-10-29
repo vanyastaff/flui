@@ -8,12 +8,18 @@
 //! default actions.
 #![cfg(target_arch = "wasm32")]
 
+use flui_native::testing::app;
+
+use flui_testing::window_commands::AdmitAndApply as _;
+use flui_testing::window_handler::RecordingWindowHandler;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use flui_foundation::{DragSessionId, UiRuntimeId};
 use flui_native::{HostWindow, Platform, WebPlatform};
+use flui_platform::Availability;
 use flui_platform::data_transfer::{
     DataTransferOffer, DropFeedback, Mime, RepresentationDescriptor, RepresentationIndex,
     TransferActions, TransferError, TransferFormat, TransferLimits, TransferPayload,
@@ -21,7 +27,6 @@ use flui_platform::data_transfer::{
 use flui_platform::drag::{
     DragError, DragSessionKey, OsDragEnd, OsDragRequest, OsDragStart, ProcessNonce,
 };
-use flui_platform::input_capabilities::Availability;
 use flui_platform::keyboard::{ImeComposition, KeyEvent};
 use flui_platform::pointer::{PanZoomPhase, PointerEvent, PointerKind};
 use flui_platform::text_store::{
@@ -199,10 +204,17 @@ export function typeIntoEditor(value, caret, composing) {
         inputType: composing ? 'insertCompositionText' : 'insertText' }));
 }
 export function editorComposition(type) { editor().dispatchEvent(new CompositionEvent(type, { bubbles: true })); }
+// Hold the page's thread for `ms` at the start of the next animation frame, before any
+// callback registered after this one.
+export function holdNextFrame(ms) {
+    requestAnimationFrame(() => { const end = performance.now() + ms; while (performance.now() < end) {} });
+}
 "#)]
 extern "C" {
     #[wasm_bindgen(js_name = freshCanvas)]
     fn fresh_canvas();
+    #[wasm_bindgen(js_name = holdNextFrame)]
+    fn hold_next_frame(millis: f64);
     #[wasm_bindgen(js_name = pageCanvas)]
     fn page_canvas();
     #[wasm_bindgen(js_name = touchAction)]
@@ -318,7 +330,8 @@ async fn wait(millis: u32) {
 /// and answers with `answer`; closed when dropped, so the next test can own
 /// the canvas.
 struct CanvasWindow {
-    window: Arc<dyn HostWindow>,
+    window: Rc<dyn HostWindow>,
+    handler: Rc<RecordingWindowHandler>,
     platform: WebPlatform,
     seen: Rc<RefCell<Vec<PlatformInput>>>,
     answer: Rc<Cell<DispatchEventResult>>,
@@ -338,9 +351,7 @@ impl CanvasWindow {
         // the backend on a canvas of its own, which it creates.
         fresh_canvas();
         let platform = WebPlatform::new().expect("a browser platform");
-        let window = platform
-            .open_window(WindowOptions::default())
-            .expect("the page's canvas opens");
+        let handler = RecordingWindowHandler::new();
         let seen = Rc::new(RefCell::new(Vec::new()));
         let answer = Rc::new(Cell::new(DispatchEventResult::resolved(false, true)));
         let accept = Rc::new(Cell::new(None));
@@ -352,7 +363,7 @@ impl CanvasWindow {
             Rc::clone(&on_press),
         );
         let transfer = platform.data_transfer();
-        window.on_input(Box::new(move |input| {
+        handler.react_to_input(move |input| {
             let hovered = match &input {
                 PlatformInput::DragDrop(DragDropEvent::Entered { offer, .. }) => Some(offer.id()),
                 PlatformInput::DragDrop(DragDropEvent::Moved { id, .. }) => Some(*id),
@@ -374,9 +385,13 @@ impl CanvasWindow {
             }
             record.borrow_mut().push(input);
             reply.get()
-        }));
+        });
+        let window = platform
+            .open_window(WindowOptions::default(), handler.clone())
+            .expect("the page's canvas opens");
         Self {
             window,
+            handler,
             platform,
             seen,
             answer,
@@ -425,7 +440,7 @@ impl CanvasWindow {
 
 impl Drop for CanvasWindow {
     fn drop(&mut self) {
-        self.window.close();
+        self.window.close_for_cleanup();
     }
 }
 
@@ -477,10 +492,10 @@ fn the_browser_leaves_every_touch_on_the_canvas_to_the_application() {
         place();
         let platform = WebPlatform::new().expect("a browser platform");
         let window = platform
-            .open_window(WindowOptions::default())
+            .open_window(WindowOptions::default(), RecordingWindowHandler::new())
             .expect("the page's canvas opens");
         assert_eq!(touch_action(), "none", "the canvas {canvas}");
-        window.close();
+        window.close_now();
     }
 }
 
@@ -496,12 +511,12 @@ async fn a_redraw_waits_for_the_next_animation_frame() {
     const ANIMATION: usize = 100;
     let canvas = HostedCanvas::open();
     let frames = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let (counted, window) = (Arc::clone(&frames), Arc::clone(&canvas.window));
-    canvas.window.on_request_frame(Box::new(move || {
+    let (counted, window) = (Arc::clone(&frames), std::rc::Rc::clone(&canvas.window));
+    canvas.handler.react_to_frame(move |_| {
         if counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < ANIMATION {
             window.request_redraw();
         }
-    }));
+    });
     canvas.window.request_redraw();
     let inline = frames.load(std::sync::atomic::Ordering::SeqCst);
     wait(200).await;
@@ -840,14 +855,14 @@ fn the_context_menu_is_answered_as_its_secondary_press() {
 #[wasm_bindgen_test]
 fn a_hidden_page_ends_its_presses_before_a_visibility_callback_closes_it() {
     let window = CanvasWindow::open();
-    let closing = Arc::clone(&window.window);
-    window
-        .window
-        .on_visibility_status_change(Box::new(move |visible| {
-            if !visible {
-                closing.close();
-            }
-        }));
+    let closing = std::rc::Rc::downgrade(&window.window);
+    window.handler.react_to_state_change(move || {
+        if let Some(window) = closing.upgrade()
+            && window.state().occluded
+        {
+            window.close_now();
+        }
+    });
     pointer_at("pointerdown", 5, "touch", 0, 1, 40.0, 30.0);
     hide_page(true);
     hide_page(false);
@@ -941,14 +956,14 @@ async fn an_html_drag_over_the_canvas_is_offered_and_dropped() {
             mime: Mime::new("image/png"),
         })
         .expect("the image file is offered as an image");
-    let TransferPayload::Image(png) = transfer
+    let TransferPayload::Custom { mime, bytes } = transfer
         .request(*id, image, TransferLimits::default())
         .await
         .expect("the image is read")
     else {
-        panic!("an image file resolves as the image it announced");
+        panic!("an image file resolves as bytes with its container type");
     };
-    assert_eq!((png.mime.as_str(), &*png.bytes), ("image/png", &b"png"[..]));
+    assert_eq!((mime.as_str(), &*bytes), ("image/png", &b"png"[..]));
     assert!(matches!(
         transfer
             .request(*id, file, TransferLimits::default().with_max_bytes(3))
@@ -1099,7 +1114,9 @@ fn dragstart_runs_a_waiting_session_and_refuses_otherwise() {
     assert!(started().prevented);
     assert_eq!(
         source.start(os_drag_request(&ended)),
-        Err(DragError::Unavailable),
+        Err(DragError::Unsupported(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::Unavailable
+        ))),
         "too late for this press: the session stays in its window"
     );
     press_mouse("pointerup", 40.0, 30.0);
@@ -1113,7 +1130,9 @@ fn dragstart_runs_a_waiting_session_and_refuses_otherwise() {
     assert_eq!(ended.borrow().last(), Some(&OsDragEnd::Cancelled));
     assert_eq!(
         source.start(os_drag_request(&ended)),
-        Err(DragError::Unavailable),
+        Err(DragError::Unsupported(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::Unavailable
+        ))),
         "no press"
     );
 }
@@ -1123,7 +1142,8 @@ fn dragstart_runs_a_waiting_session_and_refuses_otherwise() {
 /// focus it reported.
 struct HostedCanvas {
     owner: flui_native::OwnerPlatform,
-    window: Arc<dyn HostWindow>,
+    window: Rc<dyn HostWindow>,
+    handler: Rc<RecordingWindowHandler>,
     host: Rc<dyn TextStoreHost>,
     keys: Rc<RefCell<Vec<KeyEvent>>>,
     active: Arc<std::sync::Mutex<Vec<bool>>>,
@@ -1135,32 +1155,42 @@ impl HostedCanvas {
         let slot = Rc::new(RefCell::new(None));
         let out = Rc::clone(&slot);
         Box::new(WebPlatform::new().expect("a browser platform"))
-            .run(Box::new(move |owner| {
+            .run(crate::app::on_ready(move |owner| {
+                let handler = RecordingWindowHandler::new();
+                let keys = Rc::new(RefCell::new(Vec::new()));
+                let record = Rc::clone(&keys);
+                handler.react_to_input(move |input| {
+                    if let PlatformInput::Keyboard(key) = input {
+                        record.borrow_mut().push(key);
+                    }
+                    // Nothing handles a key: the browser keeps its default.
+                    DispatchEventResult::resolved(true, false)
+                });
                 let flui_native::WindowOpen::Ready(window) =
-                    owner.open_window(WindowOptions::default())?
+                    owner.open_window(WindowOptions::default(), handler.clone())?
                 else {
                     return Err("the web opens its window at once".into());
                 };
                 let host = owner
                     .text_store_host(&window)
                     .ok_or("the web window serves text stores")?;
-                let keys = Rc::new(RefCell::new(Vec::new()));
-                let record = Rc::clone(&keys);
-                window.on_input(Box::new(move |input| {
-                    if let PlatformInput::Keyboard(key) = input {
-                        record.borrow_mut().push(key);
-                    }
-                    // Nothing handles a key: the browser keeps its default.
-                    DispatchEventResult::resolved(true, false)
-                }));
                 let active = Arc::new(std::sync::Mutex::new(Vec::new()));
                 let seen = Arc::clone(&active);
-                window.on_active_status_change(Box::new(move |focused| {
-                    seen.lock().expect("focus log").push(focused);
-                }));
+                let observed = std::rc::Rc::downgrade(&window);
+                let last = Cell::new(window.state().focused);
+                handler.react_to_state_change(move || {
+                    let Some(window) = observed.upgrade() else {
+                        return;
+                    };
+                    let focused = window.state().focused;
+                    if focused != last.replace(focused) {
+                        seen.lock().expect("focus log").push(focused);
+                    }
+                });
                 *out.borrow_mut() = Some(Self {
                     owner,
                     window,
+                    handler,
                     host,
                     keys,
                     active,
@@ -1178,7 +1208,7 @@ impl HostedCanvas {
 
 impl Drop for HostedCanvas {
     fn drop(&mut self) {
-        self.window.close();
+        self.window.close_for_cleanup();
         self.owner.quit();
     }
 }
@@ -1303,7 +1333,7 @@ fn a_textarea_serves_the_field_without_edit_context() {
         canvas.active.lock().expect("focus log")[reported..].is_empty(),
         "focus moved within the canvas's area: no window focus change"
     );
-    assert!(canvas.window.is_focused());
+    assert!(canvas.window.state().focused);
 
     editor_composition("compositionstart");
     type_into_editor("abに", 3, true);
@@ -1331,5 +1361,43 @@ fn a_textarea_serves_the_field_without_edit_context() {
 
     canvas.host.focus_store(None);
     assert!(editor().is_none(), "the textarea is gone");
-    assert!(canvas.window.is_focused(), "focus went back to the canvas");
+    assert!(
+        canvas.window.state().focused,
+        "focus went back to the canvas"
+    );
+}
+
+/// A frame request carries the browser's own frame time, not the moment the callback ran: a frame
+/// the page's thread was held for before the backend's callback sees a vsync that old.
+#[wasm_bindgen_test]
+async fn an_animation_frame_request_is_stamped_with_the_browsers_frame_time() {
+    const HELD_MS: f64 = 25.0;
+    let canvas = HostedCanvas::open();
+    // `(requests seen, how long before the callback ran the second one's vsync was)`.
+    let seen = Arc::new(std::sync::Mutex::new((0_usize, Duration::ZERO)));
+    let record = Arc::clone(&seen);
+    canvas.handler.react_to_frame(move |request| {
+        let now = flui_platform::EventTime::from_nanos(flui_native::event_timestamp_ns());
+        let mut seen = record.lock().expect("the frame record");
+        seen.0 += 1;
+        if seen.0 == 2 {
+            seen.1 = now.saturating_duration_since(request.vsync);
+        }
+        if seen.0 == 1 {
+            // Registered inside the callback, so it runs ahead of the backend's own callback for
+            // the following frame and holds the thread between the frame's start and that callback.
+            hold_next_frame(HELD_MS);
+        }
+        assert!(
+            request.target_present.is_none(),
+            "the browser names no present time"
+        );
+    });
+    wait(300).await;
+    let (requests, age) = *seen.lock().expect("the frame record");
+    assert!(requests >= 2, "{requests} frame requests in 300 ms");
+    assert!(
+        age >= Duration::from_millis(20),
+        "the frame after a {HELD_MS} ms hold was stamped {age:?} before its callback"
+    );
 }

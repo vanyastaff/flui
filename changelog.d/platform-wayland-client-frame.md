@@ -1,0 +1,6 @@
+### Added
+- The native Wayland host's windows draw their own frame where the compositor draws none (Weston, GNOME) or leaves it to the client: a title bar with the window's title and its close, maximize and minimize buttons (as the compositor's `wm_capabilities` offer them), and margins the window is resized from, on subsurfaces around the content, the title shaped and rasterized by `flui-painting`. A press on the title bar moves the window and a press on a margin resizes it, through `xdg_toplevel.move` and `resize` with the press's seat and serial; a double press maximizes or restores; a secondary press shows the compositor's window menu. The window geometry excludes the margins, and the frame goes away in fullscreen, its margins on a maximized window and at each tiled edge.
+- `flui_native::testing::wayland::{client_frame_report, ClientFrameReport, Rectangle}`: the frame a Wayland window drew, its geometry and the moves and resizes it asked for with their serials.
+
+### Changed
+- On a Wayland compositor without `xdg-decoration`, a native host's window is `decorated: true` by default and takes `WindowCommand::SetDecorated` (it was `NotOnThisDevice`); its outer size includes the title bar, and the size a configure gives is the title bar and the content. `Platform::window_frame_inset` answers the title bar's height there.

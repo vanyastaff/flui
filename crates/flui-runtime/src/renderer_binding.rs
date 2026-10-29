@@ -469,18 +469,13 @@ impl RenderingBinding {
     /// [`Self::mark_first_frame_sent`] directly at its own presentation
     /// step.
     pub fn draw_frame(&self) -> Option<flui_layer::LayerTree> {
-        let layer_tree = self.root_pipeline_owner().with_mut(|guard| {
-            let owner = guard.take_idle();
-            let (owner, result) = owner.run_frame();
-            *guard = owner;
-            match result {
-                Ok(layer_tree) => layer_tree,
-                Err(e) => {
-                    tracing::error!(error = ?e, "draw_frame: pipeline failed, dropping frame");
-                    None
-                }
+        let layer_tree = match self.root_pipeline_owner().run_frame() {
+            Ok(layer_tree) => layer_tree,
+            Err(e) => {
+                tracing::error!(error = ?e, "draw_frame: pipeline failed, dropping frame");
+                None
             }
-        });
+        };
         // The frame's semantics diagnostics, with the checkout released (a
         // `tracing` subscriber is user code that may reach this pipeline). A
         // subscriber that panics unwinds out of here; the painted tree goes
