@@ -3,6 +3,8 @@
 
 #[path = "actionability.rs"]
 mod actionability;
+#[path = "announce.rs"]
+mod announce;
 #[path = "fixture.rs"]
 mod fixture;
 #[path = "identifier.rs"]

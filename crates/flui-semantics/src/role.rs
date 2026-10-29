@@ -81,34 +81,34 @@ pub enum DebugSemanticsDumpOrder {
 }
 
 // ============================================================================
-// Assertiveness
+// LiveSetting, Urgency
 // ============================================================================
 
-/// The assertiveness level for accessibility announcements.
+/// How a live region's changes reach a screen reader (`aria-live`).
 ///
-/// This controls how urgently screen readers announce content.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum Assertiveness {
-    /// Polite announcements wait for the user to finish.
-    #[default]
+/// [`Self::Off`] is a setting, not an absence: an undeclared setting inherits
+/// the enclosing region's, so a ticking timer inside a polite region declares
+/// `Off` to stay silent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum LiveSetting {
+    /// Changes are not announced.
+    Off,
+    /// Changes are announced after what is being read.
     Polite,
-
-    /// Assertive announcements interrupt the user immediately.
+    /// Changes interrupt what is being read.
     Assertive,
 }
 
-impl Assertiveness {
-    /// Returns the string name of this assertiveness level.
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Polite => "polite",
-            Self::Assertive => "assertive",
-        }
-    }
-}
-
-impl std::fmt::Display for Assertiveness {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.name())
-    }
+/// How urgently an announcement is spoken.
+///
+/// Apart from [`LiveSetting`]: an announcement is always spoken, so it has no
+/// `Off`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Urgency {
+    /// Spoken after what is being read.
+    Polite,
+    /// Interrupts what is being read.
+    Assertive,
 }

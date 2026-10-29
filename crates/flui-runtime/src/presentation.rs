@@ -891,6 +891,18 @@ impl PresentationState {
         widgets.with_build_owner_mut(|owner| {
             owner.capabilities_mut().haptics = Some(haptics.handle());
         });
+        // Announcements queue on the pipeline, which keeps them across
+        // accessibility being switched off and on, and request this
+        // presentation's frame so an idle window still speaks.
+        let announcer = pipeline
+            .with_mut(flui_rendering::pipeline::PipelineOwner::announcements)
+            .map(|announcements| {
+                let request_frame = Arc::clone(&request_frame);
+                announcements.announcer(Arc::new(move || request_frame()))
+            });
+        widgets.with_build_owner_mut(|owner| {
+            owner.capabilities_mut().announcer = announcer;
+        });
         let drag_and_drop = flui_interaction::drag::DragAndDrop::new(
             capabilities.drag.clone(),
             id,
@@ -2121,7 +2133,6 @@ impl PresentationState {
         if let Some(window) = &window_control {
             failure.invoke(|| window.close());
         }
-        let (announce, event) = self.semantics.take_close_callbacks();
 
         let source = self.widgets.lifecycle_source();
         source.begin_close();
@@ -2131,8 +2142,6 @@ impl PresentationState {
         failure.invoke(|| source.finish_close_with_mode(mode));
         let mode = failure.mode();
         failure.invoke(|| close_mouse_tracker(self.gestures.mouse_tracker(), mode));
-        failure.retire(announce);
-        failure.retire(event);
         failure.retire(agent);
         failure.release(window_control);
         let mode = failure.mode();

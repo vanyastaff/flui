@@ -44,8 +44,8 @@ use flui_objects::{
 use flui_rendering::{
     protocol::{BoxProtocol, SliverProtocol},
     semantics::{
-        ActionCall, Assertiveness, AutoComplete, CellPosition, Current, HasPopup, HeadingLevel,
-        Invalid, Reveal, ScrollUnit, SemanticsAction, SemanticsActionHandler, SemanticsAnchor,
+        ActionCall, AutoComplete, CellPosition, Current, HasPopup, HeadingLevel, Invalid,
+        LiveSetting, Reveal, ScrollUnit, SemanticsAction, SemanticsActionHandler, SemanticsAnchor,
         SemanticsConfiguration, SemanticsRelation, SemanticsRole, SetSize, SortDirection,
         TableShape, TextDirection, Toggled,
     },
@@ -695,9 +695,26 @@ impl Semantics {
 
     /// Make this node a live region: assistive technology announces its
     /// changes without the user moving to it, politely or interrupting.
+    /// [`LiveSetting::Off`] keeps it silent inside an enclosing region.
     #[must_use]
-    pub fn live_region(mut self, politeness: Assertiveness) -> Self {
-        self.configuration.set_live_region(Some(politeness));
+    pub fn live_region(mut self, setting: LiveSetting) -> Self {
+        self.configuration.set_live_region(setting);
+        self
+    }
+
+    /// Set whether a change announces the whole region rather than only what
+    /// changed. Undeclared, an alert or a status is atomic.
+    #[must_use]
+    pub fn live_atomic(mut self, atomic: bool) -> Self {
+        self.configuration.set_live_atomic(atomic);
+        self
+    }
+
+    /// Set whether this node is being updated: a screen reader holds back
+    /// the announcements of its subtree until it is not.
+    #[must_use]
+    pub fn busy(mut self, busy: bool) -> Self {
+        self.configuration.set_busy(busy);
         self
     }
 

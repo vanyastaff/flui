@@ -223,6 +223,15 @@ impl PipelineOwner<Semantics> {
                      semantics config build for {pending_count} node(s) is skipped"
                 );
             }
+        } else if let Some(owner) = self
+            .semantics_owner
+            .as_mut()
+            .filter(|owner| owner.needs_flush())
+        {
+            // Nothing to assemble, but the owner has work of its own: an
+            // announcement, or a full publish a new adapter asked for.
+            let published = owner.flush();
+            self.counters.semantics_nodes_updated += published as u64;
         } else if pending_count > 0 {
             tracing::warn!(
                 count = pending_count,
@@ -273,6 +282,11 @@ enum SemanticsSource {
 pub(super) struct RegionIdentities {
     source: flui_semantics::SemanticsIdentitySource,
     retained: FxHashMap<RegionSource, flui_semantics::SemanticsRegionId>,
+    /// The announcement queue and announcer node identities, minted from
+    /// `source` on first request and kept across owner replacement.
+    announcements: Option<flui_semantics::Announcements>,
+    /// The identity space ran out before the announcer nodes were minted.
+    announcements_exhausted: bool,
 }
 
 #[derive(Default)]
@@ -314,6 +328,31 @@ impl Drop for AssemblyCallbacks {
 }
 
 impl RegionIdentities {
+    /// The presentation's announcement queue, minting the two announcer
+    /// identities on first use. `None` once the identity space is exhausted,
+    /// reported once.
+    pub(super) fn announcements(&mut self) -> Option<flui_semantics::Announcements> {
+        if self.announcements.is_none() && !self.announcements_exhausted {
+            match self.source.allocate(2) {
+                Ok(ids) => {
+                    self.announcements = Some(flui_semantics::Announcements::new(ids[0], ids[1]));
+                }
+                Err(_) => {
+                    self.announcements_exhausted = true;
+                    tracing::error!(
+                        "semantics identity space exhausted: this presentation cannot announce"
+                    );
+                }
+            }
+        }
+        self.announcements.clone()
+    }
+
+    /// The queue, if one was requested.
+    pub(super) fn existing_announcements(&self) -> Option<&flui_semantics::Announcements> {
+        self.announcements.as_ref()
+    }
+
     fn prepare(
         &mut self,
         regions: &AssemblyRegions,

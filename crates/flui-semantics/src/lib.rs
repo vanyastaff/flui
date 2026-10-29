@@ -43,10 +43,10 @@ mod applicability;
 // contract, and a translation detail is not something a consumer should pin.
 mod accesskit_translation;
 pub mod action;
+mod announce;
 mod attributes;
 mod collection;
 pub mod configuration;
-pub mod event;
 pub mod identity;
 pub mod node;
 mod numeric_range;
@@ -95,9 +95,9 @@ pub use configuration::{DeclaredCustomAction, SemanticsConfiguration};
 // ============================================================================
 pub use collection::{CellPosition, SetSize, SortDirection, TableShape};
 // ============================================================================
-// RE-EXPORTS - Event Types
+// RE-EXPORTS - Announcements
 // ============================================================================
-pub use event::{SemanticsEvent, SemanticsEventData, SemanticsEventType};
+pub use announce::{AnnounceError, Announcements, Announcer};
 // ============================================================================
 // RE-EXPORTS - State Types
 // ============================================================================
@@ -142,7 +142,7 @@ pub use properties::{
 // ============================================================================
 pub use relation::{SemanticsAnchor, SemanticsRelation};
 pub use role::{
-    AccessibilityFocusBlockType, Assertiveness, DebugSemanticsDumpOrder, SemanticsRole,
+    AccessibilityFocusBlockType, DebugSemanticsDumpOrder, LiveSetting, SemanticsRole, Urgency,
 };
 // ============================================================================
 // RE-EXPORTS - Attributes and Tree Types
@@ -165,12 +165,12 @@ pub mod prelude {
     pub use smol_str::SmolStr;
 
     pub use crate::{
-        AccessibilityFocusBlockType, AccessibilityNodeId, ActionCall, Assertiveness,
-        AttributedString, DebugSemanticsDumpOrder, HeadingLevel, NumericRange, NumericRangeError,
+        AccessibilityFocusBlockType, AccessibilityNodeId, ActionCall, Announcer, AttributedString,
+        DebugSemanticsDumpOrder, HeadingLevel, LiveSetting, NumericRange, NumericRangeError,
         SemanticsAction, SemanticsActionError, SemanticsActionHandler, SemanticsActionInvocation,
-        SemanticsActionRequest, SemanticsAnchor, SemanticsConfiguration, SemanticsEvent,
-        SemanticsEventType, SemanticsId, SemanticsNode, SemanticsOwner, SemanticsRelation,
-        SemanticsRole, SemanticsTag, SemanticsTree, States, TextDirection, Toggled,
+        SemanticsActionRequest, SemanticsAnchor, SemanticsConfiguration, SemanticsId,
+        SemanticsNode, SemanticsOwner, SemanticsRelation, SemanticsRole, SemanticsTag,
+        SemanticsTree, States, TextDirection, Toggled, Urgency,
     };
 }
 

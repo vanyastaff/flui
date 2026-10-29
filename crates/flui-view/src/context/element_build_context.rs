@@ -599,6 +599,9 @@ impl LifecycleContext for ElementBuildContext {
     fn clipboard_handle(&self) -> Option<flui_interaction::ClipboardHandle> {
         self.owner.read().capabilities().clipboard.clone()
     }
+    fn announcer(&self) -> Option<flui_rendering::semantics::Announcer> {
+        self.owner.read().capabilities().announcer.clone()
+    }
     fn haptics(&self) -> Option<flui_interaction::HapticsHandle> {
         let handle = self.owner.read().capabilities().haptics.clone()?;
         Some(crate::haptics_mode::scoped(self, handle))
@@ -1041,6 +1044,9 @@ impl LifecycleContext for BuildCtx<'_> {
     }
     fn clipboard_handle(&self) -> Option<flui_interaction::ClipboardHandle> {
         self.capabilities.presentation.clipboard.clone()
+    }
+    fn announcer(&self) -> Option<flui_rendering::semantics::Announcer> {
+        self.capabilities.presentation.announcer.clone()
     }
     fn haptics(&self) -> Option<flui_interaction::HapticsHandle> {
         let handle = self.capabilities.presentation.haptics.clone()?;
