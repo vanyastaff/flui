@@ -2530,6 +2530,7 @@ dependencies = [
  "accesskit_consumer",
  "bitflags 2.13.2",
  "criterion",
+ "fastrand",
  "flui-animation",
  "flui-assets",
  "flui-foundation",

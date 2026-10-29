@@ -1,7 +1,7 @@
 # flui-animation / catalog-components — задачи
 
-- **Статус:** в работе. Влиты T1, T2, T10; T9 сделан (`LoadingIndicator`, `ContainedLoadingIndicator`,
-  `MaterialStyle::Expressive` в `ThemeData`); дальше T13, T3, T7.
+- **Статус:** в работе. Влиты T1, T2, T9, T10; T13 сделан (`ParticleEmitter`, `ParticleController`,
+  `ParticleConfig` в `flui-widgets::motion`); дальше T3, T7.
 - **Дата:** 2026-10-17
 - **Design:** [design.md](design.md), [requirements.md](requirements.md).
 - **Тикеты:** родитель vanyastaff/flui#1691; T1 #1692 · T2 #1693 · T3 #1694 · T4 #1695 ·
@@ -88,7 +88,7 @@ T1..T13 ─► T12 поверхность SDK, ARCHITECTURE, motion_lab, таб�
   prelude (не через `flui-sdk`) и сцена в `motion_lab`.
 - **Требования:** C7. **После:** T7.
 
-### T9 — `LoadingIndicator` (#1701) — сделано
+### T9 — `LoadingIndicator` (#1701) — влито
 
 - **Что:** `LoadingIndicator`, `ContainedLoadingIndicator` (неопределённый и определённый)
   на `Morph`; потребитель — Expressive-стиль `RefreshIndicator` через шов P6 из T10.
@@ -113,12 +113,14 @@ T1..T13 ─► T12 поверхность SDK, ARCHITECTURE, motion_lab, таб�
   потребитель.
 - **Требования:** P4, строка M1. **После:** T7.
 
-### T13 — частицы (#1703)
+### T13 — частицы (#1703) — сделано
 
 - **Что:** `ParticleEmitter`, `ParticleConfig`, `ParticleController`, пресеты; атлас
   спрайтов из `Image::from_rgba8`; `fastrand` с сидом; остановка тика и перезапуск по
   всплеску. API приложения (Z2): экспорт через фасад и сцена в `motion_lab`.
 - **Требования:** X1–X8, N1, строка M1.
+- **Проверка:** случаи `particles::*` в `animation_and_visibility` (`flui-widgets`). Сцена
+  `motion_lab` — в T12: примера ещё нет.
 
 ### T12 — закрытие (#1704)
 
