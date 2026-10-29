@@ -139,6 +139,79 @@ pub struct CompositorReport {
     pub activations: u32,
 }
 
+/// A rectangle as `(x, y, width, height)` in logical pixels.
+pub type Rectangle = (f64, f64, f64, f64);
+
+/// The frame a Wayland window draws itself where the compositor draws none,
+/// as the window last sent it to the compositor. Rectangles are
+/// `(x, y, width, height)` in logical pixels relative to the content
+/// surface's origin.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct ClientFrameReport {
+    /// The window geometry last sent (`xdg_surface.set_window_geometry`);
+    /// `None` before the window drew a frame.
+    pub geometry: Option<Rectangle>,
+    /// Each surface of the frame shown now (`"header"`, `"top"`,
+    /// `"bottom"`, `"left"`, `"right"`), with its rectangle.
+    pub pieces: Vec<(&'static str, Rectangle)>,
+    /// Each move, resize and window menu the frame asked of the compositor
+    /// (`"move"`, `"resize"`, `"menu"`, and the modes and close it carried
+    /// out), with the serial of the input it named.
+    pub requests: Vec<(&'static str, u32)>,
+}
+
+impl ClientFrameReport {
+    /// Whether the frame shows its title bar.
+    #[must_use]
+    pub fn has_header(&self) -> bool {
+        self.pieces.iter().any(|(piece, _)| *piece == "header")
+    }
+}
+
+/// The frame `window` draws itself; `None` for a window of another host.
+#[must_use]
+pub fn client_frame_report(window: &dyn HostWindow) -> Option<ClientFrameReport> {
+    use crate::window::linux::wayland::client_frame::{Action, Piece, Rect};
+
+    let window = window.as_any().downcast_ref::<WaylandWindow>()?;
+    let said = window.client_frame_said();
+    let rect = |rect: Rect| (rect.x, rect.y, rect.width, rect.height);
+    Some(ClientFrameReport {
+        geometry: said.geometry.map(rect),
+        pieces: said
+            .pieces
+            .into_iter()
+            .map(|(piece, area)| {
+                let name = match piece {
+                    Piece::Header => "header",
+                    Piece::Top => "top",
+                    Piece::Bottom => "bottom",
+                    Piece::Left => "left",
+                    Piece::Right => "right",
+                };
+                (name, rect(area))
+            })
+            .collect(),
+        requests: said
+            .carried
+            .into_iter()
+            .map(|(action, serial)| {
+                let name = match action {
+                    Action::Move => "move",
+                    Action::Resize(_) => "resize",
+                    Action::Menu { .. } => "menu",
+                    Action::Close => "close",
+                    Action::Minimize => "minimize",
+                    Action::Maximize => "maximize",
+                    Action::Restore => "restore",
+                };
+                (name, serial)
+            })
+            .collect(),
+    })
+}
+
 /// The cursor the seats' input last showed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
