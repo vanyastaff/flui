@@ -18,7 +18,7 @@ use std::{
 
 type Proposals = Rc<RefCell<Vec<f64>>>;
 fn range(value: f64, min: f64, max: f64, step: f64) -> NumericRange {
-    NumericRange::new(value, min, max, step).expect("valid range")
+    NumericRange::try_new(value, min, max, step).expect("valid range")
 }
 fn slider(range: NumericRange, log: &Proposals) -> Slider {
     let log = Rc::clone(log);

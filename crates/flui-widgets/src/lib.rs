@@ -224,8 +224,9 @@ pub use layout::{
 };
 pub use motion::{
     Animate, AnimateExt, AnimateState, AnimatedSwitcher, AnimatedSwitcherLayoutBuilder,
-    AnimatedSwitcherState, AnimatedSwitcherTransitionBuilder, Effect, Effects, Shimmer,
-    ShimmerBand, ShimmerState, Skeleton, SkeletonState, Transition, Trigger,
+    AnimatedSwitcherState, AnimatedSwitcherTransitionBuilder, Effect, Effects, ParticleController,
+    ParticleEmitter, ParticleEmitterState, Shimmer, ShimmerBand, ShimmerState, Skeleton,
+    SkeletonState, Transition, Trigger,
 };
 // `OverflowBoxFit` configures `OverflowBox`'s size policy; exposed at crate root
 // so consumers don't need to reach into `flui_objects`.
@@ -369,9 +370,10 @@ pub use flui_interaction::{
     PanZoomEvent, TapDetails,
 };
 pub use flui_rendering::semantics::{
-    ActionCall, Assertiveness, CellPosition, HeadingLevel, NumericRange, NumericRangeError, Reveal,
-    ScrollUnit as SemanticsScrollUnit, SemanticsAnchor, SemanticsConfiguration, SemanticsRole,
-    SetSize, SortDirection, TableShape, TextDirection as SemanticsTextDirection, Toggled,
+    ActionCall, Assertiveness, AutoComplete, CellPosition, Current, HasPopup, HeadingLevel,
+    Invalid, NumericRange, NumericRangeError, Reveal, ScrollUnit as SemanticsScrollUnit,
+    SemanticsAnchor, SemanticsConfiguration, SemanticsRole, SetSize, SortDirection, TableShape,
+    TextDirection as SemanticsTextDirection, Toggled,
 };
 
 // ============================================================================

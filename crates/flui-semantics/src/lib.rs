@@ -104,7 +104,7 @@ pub use event::{SemanticsEvent, SemanticsEventData, SemanticsEventType};
 pub use collection::{
     SemanticsCollection, SemanticsCollectionKind, SemanticsCollectionOrigin, SemanticsIndexOrigin,
 };
-pub use states::{States, Toggled};
+pub use states::{AutoComplete, Current, HasPopup, Invalid, States, Toggled};
 // ============================================================================
 // RE-EXPORTS - Stable Accessibility Identity
 // ============================================================================

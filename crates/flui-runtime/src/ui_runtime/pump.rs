@@ -228,6 +228,13 @@ impl UiRuntime {
         // Records a tap admitted reentrantly wait for this owner turn.
         self.begin_recorded_input();
         self.deliver_input_records();
+        // An anchor an earlier turn owes runs before this frame builds. The
+        // frame runs even when it fails: that failure came first, and is
+        // raised once the frame is done.
+        let paid = catch_unwind(AssertUnwindSafe(|| {
+            self.enter(UiRuntime::pay_owed_anchor);
+        }))
+        .err();
         let sampled = clock.frame_time();
         let pending = self.pending_frame_request();
         let request = pending.map(|(request, _)| request);
@@ -279,6 +286,19 @@ impl UiRuntime {
         let admitted = frame_time.is_some();
         drop(geometry_turn);
         drop(frame_time);
+        let outcome = match paid {
+            None => outcome,
+            Some(failure) => {
+                let mut first = Some(failure);
+                crate::lifecycle_state::preserve_first_lifecycle_panic(
+                    &mut first,
+                    outcome.err(),
+                    "frame after the owed anchor",
+                );
+                Err(first.expect("BUG: the owed anchor's failure stays first"))
+            }
+        };
+        let outcome = self.wake_for_owed_anchor(outcome);
         self.clear_frame_requests();
         // The verdicts the frame made (deadlines) follow its frame row.
         self.deliver_input_records();
@@ -337,7 +357,10 @@ impl UiRuntime {
     /// from filling; the coalesced redraw request is consumed here.
     pub fn drain_owner_inbox(&self) -> bool {
         let turn = self.begin_geometry_turn();
-        let outcome = catch_unwind(AssertUnwindSafe(|| {
+        // The owed anchor first; the inbox drains even if it fails, so the
+        // bounded inbox never fills behind a failing grant.
+        let mut first = catch_unwind(AssertUnwindSafe(|| self.pay_owed_anchor())).err();
+        let drained = catch_unwind(AssertUnwindSafe(|| {
             let report = self.drain_commands();
             if report != DrainReport::default() {
                 tracing::trace!(?report, "owner inbox drained");
@@ -346,7 +369,42 @@ impl UiRuntime {
             self.take_redraw_request()
         }));
         drop(turn);
+        let outcome = match drained {
+            Ok(redraw) => first.map_or(Ok(redraw), Err),
+            Err(failure) => {
+                crate::lifecycle_state::preserve_first_lifecycle_panic(
+                    &mut first,
+                    Some(failure),
+                    "owner inbox drain",
+                );
+                Err(first.expect("BUG: a failed drain keeps a failure"))
+            }
+        };
+        let outcome = self.wake_for_owed_anchor(outcome);
         self.finish_owner_activity(outcome, DeadlineWork::Observe)
+    }
+
+    /// Ask for a wake while the commit anchor is still owed after this turn
+    /// (a frame unwound, or an anchor failed), so the next owner turn comes
+    /// and pays it. A wake that fails is contained behind the turn's own
+    /// failure and leaves the debt in place.
+    fn wake_for_owed_anchor<T>(&self, outcome: std::thread::Result<T>) -> std::thread::Result<T> {
+        if !self.owes_anchor() {
+            return outcome;
+        }
+        let woke = catch_unwind(AssertUnwindSafe(|| self.request_redraw())).err();
+        match outcome {
+            Ok(value) => woke.map_or(Ok(value), Err),
+            Err(failure) => {
+                let mut first = Some(failure);
+                crate::lifecycle_state::preserve_first_lifecycle_panic(
+                    &mut first,
+                    woke,
+                    "owed anchor wake",
+                );
+                Err(first.expect("BUG: the turn's own failure stays first"))
+            }
+        }
     }
 
     /// Commands, deferred grants and async callbacks may replace a deadline

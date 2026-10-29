@@ -193,9 +193,10 @@ impl ElementUnmounted {
 /// # Teardown
 ///
 /// The seam does not synthesize `element_unmounted` for elements alive at
-/// teardown. [`detached`](Self::detached) is the end-of-life signal — and
-/// it only fires if the embedder clears the observer (install/clear
-/// symmetry); an owner dropped without clearing emits nothing.
+/// teardown. [`detached`](Self::detached) is the end-of-life signal: it
+/// fires once, when the embedder clears or replaces the observer or when
+/// its owner is dropped. An owner dropped while its thread unwinds a panic
+/// emits nothing.
 pub trait TreeObserver: Send + Sync {
     /// A fresh element was minted and mounted.
     fn element_mounted(&self, event: &ElementMounted) {
@@ -213,10 +214,10 @@ pub trait TreeObserver: Send + Sync {
     fn element_unmounted(&self, event: &ElementUnmounted) {
         let _ = event;
     }
-    /// End of stream: the observer was replaced or explicitly cleared. No
-    /// further events will arrive from this owner. Consumers drop or
-    /// archive their mirror here — this, not mount/unmount balance, is the
-    /// end-of-life signal. Not called when the observer is detached after
-    /// a panic (see the trait docs).
+    /// End of stream: the observer was replaced or explicitly cleared, or
+    /// its owner was dropped. No further events will arrive from this
+    /// owner. Consumers drop or archive their mirror here — this, not
+    /// mount/unmount balance, is the end-of-life signal. Not called when the
+    /// observer is detached after a panic (see the trait docs).
     fn detached(&self) {}
 }

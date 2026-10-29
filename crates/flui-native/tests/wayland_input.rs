@@ -21,16 +21,6 @@ fn main() {
     cases::main();
 }
 
-#[cfg(all(target_os = "linux", debug_assertions, feature = "native-capture"))]
-#[path = "native_recording/codec.rs"]
-mod codec;
-#[cfg(all(target_os = "linux", debug_assertions, feature = "native-capture"))]
-mod native_recording {
-    pub(crate) use super::codec;
-    #[path = "../native_recording/journal.rs"]
-    pub(crate) mod journal;
-}
-
 #[cfg(target_os = "linux")]
 #[path = "support/weston_x11.rs"]
 mod weston_x11;
@@ -130,8 +120,9 @@ mod cases {
     /// step in detents, and a key under the compositor's keymap.
     fn a_compositor_seat_reaches_the_window(session: &Session) {
         #[cfg(all(debug_assertions, feature = "native-capture"))]
-        let recorder =
-            super::native_recording::journal::Recorder::start(super::codec::Backend::Wayland);
+        let recorder = flui_native::journal::recorder::Recorder::start(
+            flui_native::journal::codec::Backend::Wayland,
+        );
         let platform = WaylandPlatform::new().expect("the harness's Weston answers");
         let handler = RecordingWindowHandler::new();
         let window = platform
@@ -307,10 +298,7 @@ mod cases {
     /// window heard, and is written over the checked-in recording when
     /// blessed.
     #[cfg(all(debug_assertions, feature = "native-capture"))]
-    fn hold_recording(
-        recorder: super::native_recording::journal::Recorder,
-        heard: &[PointerEvent],
-    ) {
+    fn hold_recording(recorder: flui_native::journal::recorder::Recorder, heard: &[PointerEvent]) {
         let recordings = recorder.finish();
         let [recording] = recordings.as_slice() else {
             panic!("one registry, the seats': {}", recordings.len());
@@ -332,7 +320,8 @@ mod cases {
         );
         let mut out = Vec::new();
         recording.write(&mut out).expect("a recording writes");
-        let read = super::codec::NativeRecording::read(out.as_slice()).expect("it reads back");
+        let read = flui_native::journal::codec::NativeRecording::read(out.as_slice())
+            .expect("it reads back");
         assert_eq!(
             pointers(read.replay()),
             replayed,

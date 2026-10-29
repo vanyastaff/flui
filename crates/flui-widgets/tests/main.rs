@@ -132,6 +132,8 @@ mod page_view;
 mod page_view_events;
 #[path = "parent_data_ancestry.rs"]
 mod parent_data_ancestry;
+#[path = "particles.rs"]
+mod particles;
 #[path = "raw_button.rs"]
 mod raw_button;
 #[path = "routable_derive.rs"]

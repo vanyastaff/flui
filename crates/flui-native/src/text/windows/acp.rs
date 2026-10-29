@@ -80,6 +80,9 @@ pub(crate) const GXFPF_ROUND_NEAREST: u32 = 0x1;
 /// `GXFPF_NEAREST`: a point outside every character's box takes the nearest
 /// position instead of failing with `TS_E_INVALIDPOINT`.
 pub(crate) const GXFPF_NEAREST: u32 = 0x2;
+/// `TS_IAS_QUERYONLY`: `InsertTextAtSelection` inserts nothing and answers
+/// the range an insertion would replace.
+pub(crate) const TS_IAS_QUERYONLY: u32 = 0x2;
 
 /// A `RequestLock`'s flags as the store's request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -317,6 +320,50 @@ pub(crate) fn replace(
         .replace(span, text)
         .map(text_change)
         .map_err(store_error)
+}
+
+/// What `InsertTextAtSelection` answers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SelectionInsert {
+    /// `TS_IAS_QUERYONLY`: the span an insertion would replace, the
+    /// selection; nothing changed.
+    Query { start: i32, end: i32 },
+    /// The text replaced the selection.
+    Inserted(AcpChange),
+}
+
+/// `InsertTextAtSelection` on the open session with `flags`. `text` is read
+/// only when the call inserts: a query passes no text to decode.
+///
+/// A query only reads, so any lock serves it, and an input method that
+/// reconverts committed text asks one before it marks that text; the
+/// document and its selection stay as they were.
+///
+/// # Errors
+///
+/// `TS_E_NOLOCK` outside a lock, and for an insertion under a read lock;
+/// `text`'s refusal; the store's refusal otherwise.
+pub(crate) fn insert_at_selection(
+    slot: &SessionSlot,
+    flags: u32,
+    text: impl FnOnce() -> Result<String, Hresult>,
+) -> Result<SelectionInsert, Hresult> {
+    if flags & TS_IAS_QUERYONLY != 0 {
+        return slot.read(|session| {
+            let span = selection(session);
+            Ok(SelectionInsert::Query {
+                start: span.start,
+                end: span.end,
+            })
+        });
+    }
+    let text = text()?;
+    slot.write(|session| {
+        session
+            .insert_at_selection(&text)
+            .map(|change| SelectionInsert::Inserted(text_change(change)))
+            .map_err(store_error)
+    })
 }
 
 /// `cch` UTF-16 units TSF passed as a `String`; an unpaired surrogate is an

@@ -2,13 +2,14 @@
 //! `native-capture` feature.
 //!
 //! [`capture`] installs a sink on the calling thread. Every
-//! [`ContactRegistry`](super::ContactRegistry) created on that thread while
+//! [`ContactRegistry`](crate::input::assembly::ContactRegistry) created on that thread while
 //! it is installed — a backend's window registry included — reports each
 //! call that shapes its output: its clock and setup, each reading or
 //! coalesced batch, device hot-plug and cancellation. That journal is a
 //! native recording: replaying it through the same calls reproduces the
-//! input the backend delivered. The sink writes it; the codec lives in this
-//! crate's tests, so the backend links no serializer.
+//! input the backend delivered. A sink receives it: [`recorder`](super::recorder)
+//! folds it into recordings, which [`codec`](super::codec) writes; a build
+//! without the feature links neither.
 //!
 //! A capture is identified by its session, not by an index: a registry
 //! reports to the capture that was installed when it was created, for as
@@ -26,11 +27,11 @@ use flui_platform::EventTime;
 use flui_platform::pointer::PointerKind;
 use parking_lot::{Mutex, ReentrantMutex};
 
-use super::{
+use crate::input::assembly::{
     ClickSettings, ContactScroll, CounterAnchor, NativeCancel, NativeClock, NativeContact,
     NativeDevice, NativeReading, NativeSurface, WheelReading,
 };
-use super::{TouchpadFrame, ViewportReading};
+use crate::input::assembly::{TouchpadFrame, ViewportReading};
 
 /// One registry call, as a native recording holds it.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -119,11 +120,11 @@ pub enum Captured<'a> {
     },
     /// A mouse wheel turned ([`ContactRegistry::wheel`]).
     ///
-    /// [`ContactRegistry::wheel`]: super::ContactRegistry::wheel
+    /// [`ContactRegistry::wheel`]: crate::input::assembly::ContactRegistry::wheel
     Wheel(&'a WheelReading),
     /// A contact scrolled ([`ContactRegistry::scroll`]).
     ///
-    /// [`ContactRegistry::scroll`]: super::ContactRegistry::scroll
+    /// [`ContactRegistry::scroll`]: crate::input::assembly::ContactRegistry::scroll
     Scroll(&'a ContactScroll),
 }
 
@@ -190,7 +191,7 @@ pub fn capture(sink: impl FnMut(CaptureSource, Captured<'_>) + Send + 'static) -
 
 /// A registry's link to the capture it reports to, if any.
 #[derive(Debug, Default)]
-pub(super) struct Journal {
+pub(crate) struct Journal {
     session: Option<(Weak<Session>, CaptureSource)>,
 }
 
@@ -199,7 +200,7 @@ impl Journal {
     /// first: numbered within the installed capture, or reporting nowhere
     /// when none is installed or the capture has numbered every source it
     /// can.
-    pub(super) fn open(clock: NativeClock) -> Self {
+    pub(crate) fn open(clock: NativeClock) -> Self {
         let session = INSTALLED.with(|installed| installed.borrow().clone());
         let source = session.upgrade().and_then(|live| {
             let mut next = live.next_source.lock();
@@ -222,7 +223,7 @@ impl Journal {
     /// Report `call` to the capture, if it is still installed. The sink is
     /// moved out while it runs, so a call it causes is not reported, and a
     /// panic drops it.
-    pub(super) fn record(&self, call: Captured<'_>) {
+    pub(crate) fn record(&self, call: Captured<'_>) {
         let Some((session, source)) = &self.session else {
             return;
         };

@@ -18,8 +18,9 @@ use flui_platform::text_store::{
 };
 use windows::Win32::Foundation::{E_UNEXPECTED, HWND};
 use windows::Win32::UI::TextServices::{
-    ITextStoreACP, ITextStoreACP_Impl, ITfComposition, ITfContext, ITfDocumentMgr, ITfEditSession,
-    TF_ES_READWRITE, TF_ES_SYNC, TF_POPF_ALL, TS_LF_READ, TS_LF_SYNC, TS_SS_NOHIDDENTEXT,
+    GUID_SYSTEM_FUNCTIONPROVIDER, ITextStoreACP, ITextStoreACP_Impl, ITfComposition, ITfContext,
+    ITfDocumentMgr, ITfEditSession, ITfFnReconversion, ITfRange, TF_ES_READ, TF_ES_READWRITE,
+    TF_ES_SYNC, TF_POPF_ALL, TS_LF_READ, TS_LF_SYNC, TS_SS_NOHIDDENTEXT,
 };
 use windows_core::Interface as _;
 
@@ -298,7 +299,7 @@ fn a_queued_unfocus_whose_teardown_and_diagnostic_panic_stays_in_the_com_entry(h
     services.shutdown();
 }
 
-use edit_session::StartsComposition;
+use edit_session::{StartsComposition, TakesRange};
 
 /// The `#[implement]` expansion, in a module of its own so the lints its
 /// generated code trips are expected here and nowhere else.
@@ -313,7 +314,7 @@ mod edit_session {
 
     use windows::Win32::UI::TextServices::{
         ITfComposition, ITfCompositionSink, ITfCompositionSink_Impl, ITfContext,
-        ITfContextComposition, ITfEditSession, ITfEditSession_Impl,
+        ITfContextComposition, ITfEditSession, ITfEditSession_Impl, ITfRange,
     };
     use windows_core::Ref;
     use windows_core::{Interface as _, implement};
@@ -353,6 +354,30 @@ mod edit_session {
                 compositions.StartComposition(cookie, &range, &sink)?
             };
             *self.started.borrow_mut() = Some(started);
+            Ok(())
+        }
+    }
+
+    /// A TSF edit session that takes the range over the first `length`
+    /// characters of its context, as a text service does before it asks to
+    /// reconvert them.
+    #[implement(ITfEditSession)]
+    pub(in super::super) struct TakesRange {
+        pub(in super::super) context: ITfContext,
+        pub(in super::super) length: i32,
+        pub(in super::super) taken: RefCell<Option<ITfRange>>,
+    }
+
+    impl ITfEditSession_Impl for TakesRange_Impl {
+        fn DoEditSession(&self, cookie: u32) -> windows_core::Result<()> {
+            // SAFETY: plain COM calls inside the edit session TSF granted.
+            let range = unsafe {
+                let range = self.context.GetStart(cookie)?;
+                let mut moved = 0;
+                range.ShiftEnd(cookie, self.length, &raw mut moved, std::ptr::null())?;
+                range
+            };
+            *self.taken.borrow_mut() = Some(range);
             Ok(())
         }
     }
@@ -441,6 +466,91 @@ fn a_refused_completion_reports_its_teardown_before_its_recovery(hwnd: HWND) {
         gate.take_failure().is_none(),
         "nothing is left for a later turn"
     );
+    services.shutdown();
+}
+
+/// The range over the first `length` characters of the focused document,
+/// taken in a read session under the window's own client id.
+fn document_range(services: &TextServices, length: i32) -> ITfRange {
+    let context = match &*services.serving.borrow() {
+        Serving::Field(document) => document.context.clone(),
+        Serving::Nothing | Serving::Shutdown => panic!("no document is open"),
+    };
+    let session = windows_core::ComObject::new(TakesRange {
+        context: context.clone(),
+        length,
+        taken: RefCell::new(None),
+    });
+    let as_session: ITfEditSession = session.to_interface();
+    // SAFETY: a plain COM call on the window's owner thread.
+    let answer = unsafe {
+        context.RequestEditSession(services.client_id, &as_session, TF_ES_SYNC | TF_ES_READ)
+    };
+    assert_eq!(
+        answer.map(|session| session.0),
+        Ok(0),
+        "TSF ran the edit session"
+    );
+    session
+        .taken
+        .borrow_mut()
+        .take()
+        .expect("the edit session took the range")
+}
+
+/// Reconversion is out of scope: the system's reconversion function, asked
+/// to query and reconvert committed text, leaves the document as it was and
+/// no TSF call into the store panics. Without an input method that
+/// reconverts, either call may refuse; only the document is asserted.
+fn reconversion_requests_leave_the_document_unchanged(hwnd: HWND) {
+    let services =
+        TextServices::activate(window_ref(hwnd), unscaled(), apartment()).expect("TSF activates");
+    let store = InMemoryTextStore::new("日本語");
+    let gate = CommitGate::new();
+    store.set_commit_gate(gate.clone());
+    services.focus_store(Some(erased(&store)));
+    let context = associated_context(&services);
+    let before = (store.text(), store.selection());
+    let poisonings = services.poisonings.get();
+    let range = document_range(&services, 3);
+    // SAFETY: plain COM calls on the window's owner thread.
+    let reconversion: ITfFnReconversion = unsafe {
+        services
+            .thread_manager
+            .GetFunctionProvider(&GUID_SYSTEM_FUNCTIONPROVIDER)
+            .and_then(|provider| {
+                provider.GetFunction(&windows_core::GUID::zeroed(), &ITfFnReconversion::IID)
+            })
+            .and_then(|function| function.cast::<ITfFnReconversion>())
+    }
+    .expect("the system offers reconversion");
+    let mut found: Option<ITfRange> = None;
+    let mut convertible = windows_core::BOOL(0);
+    // SAFETY: plain COM calls on the window's owner thread; `found` and
+    // `convertible` outlive the call that writes them.
+    let (queried, reconverted) = unsafe {
+        (
+            reconversion.QueryRange(&range, &raw mut found, &raw mut convertible),
+            reconversion.Reconvert(&range),
+        )
+    };
+    tracing::debug!(?queried, ?reconverted, "reconversion answers");
+    assert_eq!(
+        (store.text(), store.selection()),
+        before,
+        "the document is unchanged"
+    );
+    assert_eq!(store.composition(), None, "nothing composes");
+    assert_eq!(
+        services.poisonings.get(),
+        poisonings,
+        "no TSF call into the store panicked"
+    );
+    assert!(
+        same_object(&context, &associated_context(&services)),
+        "the same document is still associated"
+    );
+    assert!(gate.take_failure().is_none(), "no owner failure was parked");
     services.shutdown();
 }
 
@@ -1119,6 +1229,10 @@ fn the_text_services_answer_a_completion_for_its_store() {
         (
             "document store bound to its apartment",
             a_document_store_is_bound_to_its_apartment,
+        ),
+        (
+            "reconversion requests",
+            reconversion_requests_leave_the_document_unchanged,
         ),
     ];
     let mut failed = Vec::new();

@@ -3,12 +3,15 @@
 //! Tests dirty element tracking, build scheduling, and the GlobalKey
 //! registry.
 
+use flui_foundation::observe::TreeObserver;
 use flui_objects::RenderSizedBox;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
     BuildOwner, ElementTree, FrameBuildReport, RebuildReason, RenderView, View, WidgetsBinding,
 };
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 // ============================================================================
 // Test View
@@ -127,6 +130,60 @@ pub(crate) fn clean_binding_frames_report_no_builds() {
     assert!(rebuilt.count(RebuildReason::HotReload) > 0, "{rebuilt:?}");
     binding.draw_frame();
     assert_no_builds(binding.with_build_owner(BuildOwner::last_frame_build_report));
+}
+
+/// Counts the `detached()` calls it receives.
+#[derive(Default)]
+struct DetachCounter(AtomicUsize);
+
+impl TreeObserver for DetachCounter {
+    fn detached(&self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+impl DetachCounter {
+    fn detached_count(&self) -> usize {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+/// An owner dropped with its observer installed ends the observer's stream
+/// once; an observer already cleared or replaced is not told again.
+pub(crate) fn dropping_an_owner_with_an_observer_detaches_it_once() {
+    let installed = Arc::new(DetachCounter::default());
+    let mut owner = BuildOwner::new();
+    owner.set_tree_observer(Arc::clone(&installed) as Arc<dyn TreeObserver>);
+    drop(owner);
+
+    let cleared = Arc::new(DetachCounter::default());
+    let mut owner = BuildOwner::new();
+    owner.set_tree_observer(Arc::clone(&cleared) as Arc<dyn TreeObserver>);
+    owner.clear_tree_observer();
+    drop(owner);
+
+    let replaced = Arc::new(DetachCounter::default());
+    let replacement = Arc::new(DetachCounter::default());
+    let mut owner = BuildOwner::new();
+    owner.set_tree_observer(Arc::clone(&replaced) as Arc<dyn TreeObserver>);
+    owner.set_tree_observer(Arc::clone(&replacement) as Arc<dyn TreeObserver>);
+    drop(owner);
+
+    assert_eq!(
+        installed.detached_count(),
+        1,
+        "dropping the owner ends the installed observer's stream"
+    );
+    assert_eq!(
+        cleared.detached_count(),
+        1,
+        "a cleared observer is told once"
+    );
+    assert_eq!(
+        (replaced.detached_count(), replacement.detached_count()),
+        (1, 1),
+        "a replaced observer is told at the replacement, its replacement at the drop"
+    );
 }
 
 // ============================================================================

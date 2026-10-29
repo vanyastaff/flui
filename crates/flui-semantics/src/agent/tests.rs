@@ -93,12 +93,16 @@ fn published_role(role: SemanticsRole, label: bool) -> accesskit::Role {
 
 /// ADR-0095's "Mapping pinned": every semantics role reads as a wire role
 /// other than `unknown`, except `none`, which declares no role and publishes
-/// a `GenericContainer` the wire lifts into its parent rather than naming.
+/// a `GenericContainer` the wire lifts into its parent rather than naming, and
+/// `generic` and `presentation`, which declare a node to mean nothing.
 #[test]
 fn every_role_but_none_reads_as_a_wire_role() {
     for &role in SemanticsRole::ALL {
         let published = published_role(role, false);
-        if role == SemanticsRole::None {
+        if matches!(
+            role,
+            SemanticsRole::None | SemanticsRole::Generic | SemanticsRole::Presentation
+        ) {
             assert_eq!(
                 published,
                 accesskit::Role::GenericContainer,
@@ -496,7 +500,9 @@ fn advertised_actions_follow_the_uia_patterns() {
     });
     f.add(Some(root), 10, |c| {
         c.set_role(SemanticsRole::Slider);
-        c.set_numeric_range(crate::NumericRange::new(2.5, 0.0, 10.0, 0.5).expect("finite range"));
+        c.set_numeric_range(
+            crate::NumericRange::try_new(2.5, 0.0, 10.0, 0.5).expect("finite range"),
+        );
         c.add_action(SemanticsAction::SetNumericValue, noop());
     });
 
@@ -732,7 +738,9 @@ fn set_value_reaches_the_handler_with_its_payload() {
     let mut numeric = Fixture::new();
     let root = numeric.add(None, 1, |_| {});
     numeric.add(Some(root), 2, |c| {
-        c.set_numeric_range(crate::NumericRange::new(0.0, 0.0, 10.0, 1.0).expect("finite fixture"));
+        c.set_numeric_range(
+            crate::NumericRange::try_new(0.0, 0.0, 10.0, 1.0).expect("finite fixture"),
+        );
         c.add_action(SemanticsAction::SetNumericValue, noop());
     });
     let request = numeric
@@ -791,7 +799,7 @@ fn value_case(shape: &ValueShape, value: Option<&str>, expected: Option<Semantic
         }
         if shape.range {
             c.set_numeric_range(
-                crate::NumericRange::new(5.0, 0.0, 10.0, 1.0).expect("finite fixture"),
+                crate::NumericRange::try_new(5.0, 0.0, 10.0, 1.0).expect("finite fixture"),
             );
         }
         if shape.set_text {

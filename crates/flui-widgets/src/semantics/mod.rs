@@ -35,7 +35,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::ChangeNotifier;
-use flui_foundation::geometry::Offset;
+use flui_foundation::geometry::{Axis, Offset};
 use flui_interaction::{InteractionDispatchError, LocalPayloadTarget, resolve_local_payload};
 use flui_objects::{
     GatedCustomAction, RenderExcludeSemantics, RenderIndexedSemantics, RenderMergeSemantics,
@@ -44,9 +44,10 @@ use flui_objects::{
 use flui_rendering::{
     protocol::{BoxProtocol, SliverProtocol},
     semantics::{
-        ActionCall, Assertiveness, CellPosition, HeadingLevel, Reveal, ScrollUnit, SemanticsAction,
-        SemanticsActionHandler, SemanticsAnchor, SemanticsConfiguration, SemanticsRelation,
-        SemanticsRole, SetSize, SortDirection, TableShape, TextDirection, Toggled,
+        ActionCall, Assertiveness, AutoComplete, CellPosition, Current, HasPopup, HeadingLevel,
+        Invalid, Reveal, ScrollUnit, SemanticsAction, SemanticsActionHandler, SemanticsAnchor,
+        SemanticsConfiguration, SemanticsRelation, SemanticsRole, SetSize, SortDirection,
+        TableShape, TextDirection, Toggled,
     },
 };
 use flui_view::{
@@ -558,6 +559,52 @@ impl Semantics {
         self
     }
 
+    /// Record that the nodes `anchor` names describe this one: a field's
+    /// helper line, read after its name.
+    #[must_use]
+    pub fn described_by(mut self, anchor: SemanticsAnchor) -> Self {
+        self.configuration
+            .add_relation(SemanticsRelation::DescribedBy, anchor);
+        self
+    }
+
+    /// Record that the nodes `anchor` names hold more detail about this one:
+    /// a chart's data table.
+    #[must_use]
+    pub fn details(mut self, anchor: SemanticsAnchor) -> Self {
+        self.configuration
+            .add_relation(SemanticsRelation::Details, anchor);
+        self
+    }
+
+    /// Record that reading continues at the nodes `anchor` names after this
+    /// one, overriding the order of the tree.
+    #[must_use]
+    pub fn flow_to(mut self, anchor: SemanticsAnchor) -> Self {
+        self.configuration
+            .add_relation(SemanticsRelation::FlowTo, anchor);
+        self
+    }
+
+    /// Record that the node `anchor` names says why this field's value is
+    /// invalid.
+    #[must_use]
+    pub fn error_message(mut self, anchor: SemanticsAnchor) -> Self {
+        self.configuration
+            .add_relation(SemanticsRelation::ErrorMessage, anchor);
+        self
+    }
+
+    /// Record that the node `anchor` names is the active descendant of this
+    /// focused composite: the highlighted option of a combo box whose focus
+    /// stays in its field.
+    #[must_use]
+    pub fn active_descendant(mut self, anchor: SemanticsAnchor) -> Self {
+        self.configuration
+            .add_relation(SemanticsRelation::ActiveDescendant, anchor);
+        self
+    }
+
     /// Set whether this form control must be filled before submitting.
     #[must_use]
     pub fn required(mut self, required: bool) -> Self {
@@ -565,10 +612,69 @@ impl Semantics {
         self
     }
 
-    /// Set whether this form control's value failed validation.
+    /// Declare whether this form control's value failed validation, and how;
+    /// [`Invalid::False`] declares it validated and passed.
     #[must_use]
-    pub fn invalid(mut self, invalid: bool) -> Self {
+    pub fn invalid(mut self, invalid: Invalid) -> Self {
         self.configuration.set_invalid(invalid);
+        self
+    }
+
+    /// Declare this node the current item of its set: the page a navigation
+    /// link leads to, the step of a process.
+    #[must_use]
+    pub fn current(mut self, current: Current) -> Self {
+        self.configuration.set_current(current);
+        self
+    }
+
+    /// Declare what this node opens when activated.
+    #[must_use]
+    pub fn has_popup(mut self, popup: HasPopup) -> Self {
+        self.configuration.set_has_popup(popup);
+        self
+    }
+
+    /// Declare how this text field or combo box completes typed text.
+    #[must_use]
+    pub fn auto_complete(mut self, auto_complete: AutoComplete) -> Self {
+        self.configuration.set_auto_complete(auto_complete);
+        self
+    }
+
+    /// Declare the axis this control runs along.
+    #[must_use]
+    pub fn orientation(mut self, orientation: Axis) -> Self {
+        self.configuration.set_orientation(orientation);
+        self
+    }
+
+    /// Set the keys that activate or focus this node, in the
+    /// `aria-keyshortcuts` grammar (`"Control+S"`).
+    #[must_use]
+    pub fn keyboard_shortcut(mut self, shortcut: impl Into<String>) -> Self {
+        self.configuration.set_keyboard_shortcut(shortcut.into());
+        self
+    }
+
+    /// Set the BCP 47 language of this node's text (`"fr-FR"`).
+    #[must_use]
+    pub fn language(mut self, language: impl Into<String>) -> Self {
+        self.configuration.set_language(language.into());
+        self
+    }
+
+    /// Set the address a link leads to or an image came from.
+    #[must_use]
+    pub fn url(mut self, url: impl Into<String>) -> Self {
+        self.configuration.set_url(url.into());
+        self
+    }
+
+    /// Set the words a screen reader says for this node's role ("slide").
+    #[must_use]
+    pub fn role_description(mut self, description: impl Into<String>) -> Self {
+        self.configuration.set_role_description(description.into());
         self
     }
 

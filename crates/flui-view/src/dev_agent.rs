@@ -55,7 +55,10 @@ use std::fmt;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use flui_protocol::{ActionRequest, ErrorCode, ReadQuery, Retry, Tree, WindowId};
+use flui_protocol::{
+    ActionRequest, Actionability, ActionabilityParams, ErrorCode, LocateParams, Matches, ReadQuery,
+    Retry, Tree, WindowId,
+};
 
 use crate::__runtime::{AgentPort, PendingAnswer};
 
@@ -336,6 +339,41 @@ impl AgentWindow {
             .act(request)
     }
 
+    /// Resolve `params.locator` over the window's committed semantics tree.
+    /// Every match is listed, or the ones `pick` and `max_matches` leave; no
+    /// match is an empty list, not a fault. The answer's matches carry the
+    /// tree revision they were made on.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::read`]; the answer carries the rest.
+    pub fn locate(&self, params: LocateParams) -> Result<AgentAnswer<Matches>, AgentFault> {
+        self.open_port()
+            .ok_or_else(AgentFault::window_gone)?
+            .locate(params)
+    }
+
+    /// The facts about one element that decide whether input reaches it,
+    /// all read in the one owner turn: the tree's, and the render hit-test's
+    /// at the point the action would land.
+    ///
+    /// `stable` compares the element's bounds with those the previous call
+    /// saw on an earlier frame, so the first call answers unstable and asks
+    /// for a frame. A caller that needs a stable element calls again after
+    /// the next frame.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::read`]; the answer carries the rest.
+    pub fn actionability(
+        &self,
+        params: ActionabilityParams,
+    ) -> Result<AgentAnswer<Actionability>, AgentFault> {
+        self.open_port()
+            .ok_or_else(AgentFault::window_gone)?
+            .actionability(params)
+    }
+
     /// Read or change this window's animation playback through its owner inbox.
     /// Rate and step are applied together only after validation.
     ///
@@ -397,6 +435,19 @@ mod tests {
 
         fn act(&self, _request: ActionRequest) -> Result<AgentAnswer<()>, AgentFault> {
             Ok(crate::__runtime::agent_answer(Ready(Some(()))))
+        }
+
+        fn locate(&self, _params: LocateParams) -> Result<AgentAnswer<Matches>, AgentFault> {
+            Ok(crate::__runtime::agent_answer(Ready(Some(Matches::new(
+                Vec::new(),
+            )))))
+        }
+
+        fn actionability(
+            &self,
+            _params: ActionabilityParams,
+        ) -> Result<AgentAnswer<Actionability>, AgentFault> {
+            Err(AgentFault::window_gone())
         }
 
         fn motion(
