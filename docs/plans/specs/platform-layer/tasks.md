@@ -4526,7 +4526,7 @@ graph LR
   браузер не затронуты; `cross-typecheck` — в CI.
 
 - [ ] **LY98** (не закрыта: фича `driver` и `record.start{native}` ждут flui-driver FD6) — ветка
-  `claude/project-thread-jqc75j` от `main` @ `015315508`. **Схема** — `flui-protocol::native_recording`
+  `claude/project-thread-jqc75j` от `main` @ `c313cc9f2`. **Схема** — `flui-protocol::native_recording`
   (за фичей `serde`): `Header` (поле версии `VERSION_KEY` = `flui_native_recording`,
   `FORMAT_VERSION` = 1), `Row` (по тегу `row`), `Reading`, `Frame`, `Wheel`, `Scroll` и словари
   `Backend`, `PointerKind`, `CancelReason`, `Modifier`, `GestureComponent`, `GesturePhase`,
