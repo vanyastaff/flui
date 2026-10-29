@@ -1483,20 +1483,28 @@ impl HeadlessHost {
     }
 
     /// How long a host's loop waits before its next frame: none while a frame
-    /// is asked for or work is pending, otherwise until the earliest deadline
-    /// the UI runtime armed, such as a gesture's or a dropped frame's retry.
-    /// `None` when the loop would wait for input alone.
+    /// is asked for or work is pending, unless a dropped frame waits for its
+    /// retry; otherwise until the earliest deadline the UI runtime armed, such
+    /// as a gesture's or a dropped frame's retry. `None` when the loop would
+    /// wait for input alone.
     #[must_use]
     pub fn time_to_next_frame(&self) -> Option<Duration> {
         let runtime = &self.ui_runtime;
-        if runtime.needs_redraw()
-            || runtime.scheduler().is_frame_scheduled()
-            || runtime.has_pending_work()
+        let now = flui_foundation::MonotonicClock::now(&self.clock);
+        // A dropped frame waiting for its retry runs nothing sooner, though a
+        // gesture deadline before it still wakes the loop.
+        let retrying = runtime
+            .failure_retry_deadline()
+            .is_some_and(|retry| retry > now);
+        if !retrying
+            && (runtime.needs_redraw()
+                || runtime.scheduler().is_frame_scheduled()
+                || runtime.has_pending_work())
         {
             return Some(Duration::ZERO);
         }
         let wake = runtime.next_wake()?;
-        Some(wake.saturating_duration_since(flui_foundation::MonotonicClock::now(&self.clock)))
+        Some(wake.saturating_duration_since(now))
     }
 
     /// Wait as a host's loop does, [`time_to_next_frame`](Self::time_to_next_frame),

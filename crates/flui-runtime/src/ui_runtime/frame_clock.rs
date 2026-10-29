@@ -569,6 +569,19 @@ impl UiRuntime {
             }))
             .min()
     }
+
+    /// The earliest instant a presentation that dropped a frame tries it
+    /// again: until then every frame it asks for waits, so a host that would
+    /// run a frame at once sleeps until this instant instead. `None` when no
+    /// dropped frame is waiting.
+    #[must_use]
+    pub fn failure_retry_deadline(&self) -> Option<web_time::Instant> {
+        self.presentations
+            .iter()
+            .filter(|presentation| !presentation.closing_requested.get())
+            .filter_map(PresentationState::failure_retry_at)
+            .min()
+    }
 }
 
 #[cfg(test)]
