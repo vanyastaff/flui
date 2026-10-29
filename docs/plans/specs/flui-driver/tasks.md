@@ -209,8 +209,12 @@ graph LR
     - `flui-cupertino`'s `component_contracts`: `button_publishes_its_identifier`.
   - `windows-a11y` requires the probe's Increment button (`.identifier("increment")`) to report
     that `AutomationId` before invoking it. CI's Native xtask job compiles and lints it on
-    `windows-latest`; it has not run against a live UIA tree yet, which needs
-    `cargo xtask device windows-a11y` on a Windows desktop.
+    `windows-latest`.
+- **Evidence (2026-10-29):** `cargo xtask device windows-a11y` went with the device probes
+  (#1827), so the live UIA read ran by hand on a Windows 11 desktop: the `counter` example with
+  `.identifier("increment")` on its `RawButton`, read through `UIAutomationClient`, showed
+  `Button` `Increment` with `AutomationId` `increment`; found by that id and invoked twice
+  through `InvokePattern`, the count text read `2`. FD11's Windows lane makes it a scenario.
 
 ### FD3. Locator and actionability
 

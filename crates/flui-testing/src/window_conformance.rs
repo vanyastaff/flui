@@ -35,6 +35,11 @@
 //!   does not names a lasting reason and carries none. A fixture that cannot
 //!   present ([`WindowFixture::present_and_request_frame`]) checks the reason
 //!   only.
+//! - **Frame requests are on the event timeline.** A frame request's vsync
+//!   lies within a second before its arrival, never after it, and the
+//!   platform's target present time, where it names one, within a second
+//!   after the vsync: a platform stamp the backend did not rebase onto the
+//!   event epoch lands far from both.
 //! - **A closed window refuses.** Every admitted command after the window
 //!   closed — through [`WindowCommand::Close`] where the window takes it, else
 //!   the way the window system closes it — is [`Closed`](ApplyError::Closed).
@@ -206,6 +211,10 @@ const CHECKS: &[(&str, Check)] = &[
     (
         "presentation_is_reported_exactly_when_claimed",
         presentation_is_reported_exactly_when_claimed,
+    ),
+    (
+        "a_frame_request_is_stamped_on_the_event_timeline",
+        a_frame_request_is_stamped_on_the_event_timeline,
     ),
     (
         "a_surface_target_is_send_sync_and_unavailable_after_close",
@@ -580,6 +589,45 @@ fn presentation_is_reported_exactly_when_claimed(
     }
     finish(broken)
 }
+
+/// `a_frame_request_is_stamped_on_the_event_timeline`: the vsync of the
+/// frame request after shown frames lies within [`FRAME_STAMP_SLACK`] before
+/// the request's arrival and never after it, and a target present time within
+/// that slack after the vsync. A refresh period is far shorter than the
+/// slack, so a correctly rebased stamp always fits; a platform reading left on
+/// its own clock (a raw performance counter, a compositor's epoch) does not.
+fn a_frame_request_is_stamped_on_the_event_timeline(
+    fixture: &mut dyn WindowFixture,
+) -> Result<(), String> {
+    let Some(request) = fixture.present_and_request_frame() else {
+        return Ok(());
+    };
+    let arrived = EventTime::now();
+    let mut broken = Vec::new();
+    if request.vsync > arrived
+        || arrived.saturating_duration_since(request.vsync) > FRAME_STAMP_SLACK
+    {
+        broken.push(format!(
+            "a frame request that arrived by {arrived:?} has its vsync at {:?}",
+            request.vsync
+        ));
+    }
+    if let Some(target) = request.target_present
+        && (target <= request.vsync
+            || target.saturating_duration_since(request.vsync) > FRAME_STAMP_SLACK)
+    {
+        broken.push(format!(
+            "a frame request whose vsync is {:?} targets its present at {target:?}",
+            request.vsync
+        ));
+    }
+    finish(broken)
+}
+
+/// How far a frame request's stamps may lie from its arrival and from each
+/// other: longer than any refresh period and any wait between a vsync and its
+/// request, shorter than any clock mix-up.
+const FRAME_STAMP_SLACK: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Close the window by the command where the window takes it, the way the
 /// application closes a window; else the way the window system would. A

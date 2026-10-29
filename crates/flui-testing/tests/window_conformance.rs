@@ -192,6 +192,9 @@ enum Fault {
     /// The window reads a minimized window as hidden, and so does the
     /// fixture's own readback of it, the way X11's map state does.
     HidesWhenMinimized,
+    /// The window's frame requests carry the platform's stamps on the
+    /// platform's own clock, never rebased onto the event epoch.
+    StampsFramesOffTheTimeline,
 }
 
 impl Fixture {
@@ -320,14 +323,26 @@ impl WindowFixture for Fixture {
             .simulate_presented(FramePresented::new(EventTime::now()));
         self.handler.take_calls();
         self.window.request_redraw();
-        self.handler
+        let request = self
+            .handler
             .take_calls()
             .into_iter()
             .rev()
             .find_map(|call| match call {
                 HandlerCall::FrameRequested(request) => Some(request),
                 _ => None,
-            })
+            });
+        match self.fault {
+            // An hour on, a counter whose epoch is not the process's, and a
+            // target present that now lies before it.
+            Some(Fault::StampsFramesOffTheTimeline) => request.map(|mut request| {
+                let platform_clock = request.vsync + std::time::Duration::from_secs(3600);
+                request.target_present = Some(request.vsync);
+                request.vsync = platform_clock;
+                request
+            }),
+            _ => request,
+        }
     }
 }
 
@@ -457,6 +472,13 @@ fn a_window_whose_presentation_reports_disagree_with_its_capabilities_is_caught(
     );
 }
 
+fn a_window_whose_frame_stamps_are_off_the_timeline_is_caught() {
+    assert_eq!(
+        caught(Fault::StampsFramesOffTheTimeline),
+        ["a_frame_request_is_stamped_on_the_event_timeline"]
+    );
+}
+
 fn a_snapshot_without_the_windows_facts_is_caught() {
     let checks = caught(Fault::SnapshotWithoutFacts);
     assert_eq!(checks, ["the_snapshot_agrees_with_the_window_system"]);
@@ -532,6 +554,10 @@ fn window_conformance_checks() {
                 "a_window_whose_presentation_reports_disagree_with_its_capabilities_is_caught",
                 a_window_whose_presentation_reports_disagree_with_its_capabilities_is_caught
                     as fn(),
+            ),
+            (
+                "a_window_whose_frame_stamps_are_off_the_timeline_is_caught",
+                a_window_whose_frame_stamps_are_off_the_timeline_is_caught as fn(),
             ),
         ],
     );
