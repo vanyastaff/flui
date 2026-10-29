@@ -903,6 +903,146 @@ fn a_view_hit_test_reports_a_busy_tree_and_contains_a_render_object_panic() {
     );
 }
 
+/// What a press's handler saw of a text store that a nested message loop
+/// asked for locks from inside the handler.
+type NestedLocks = Rc<RefCell<Vec<String>>>;
+
+/// A platform entry that reaches a text store while its UI runtime is
+/// checked out for an owner turn (a text service called from a message loop
+/// nested in a press's handler) runs no owner code: its synchronous lock is
+/// refused and its asynchronous one waits, running once the turn ends and
+/// before the runtime returns to its slot. The owner's own call in that turn
+/// (the press committing the field's composition) is served (ADR-0142
+/// item 6).
+///
+/// Red-check: drop `set_text_commits_checked_out(true)` from the lease's
+/// checkout — the nested synchronous lock is granted inside the handler;
+/// drop `finish_checkout` from `return_to_owner` — the queued grant has not
+/// run when the dispatch returns.
+fn a_platform_entry_while_the_runtime_is_checked_out_runs_no_owner_code() {
+    use flui_platform::text_store::{
+        Composition, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore, Utf16Offset,
+        Utf16Range,
+    };
+
+    let owner = OwnerHost::new();
+    let text_input: std::sync::Arc<dyn flui_platform::PlatformTextInput> =
+        std::sync::Arc::new(flui_native::FakeTextInput::new());
+    let mut runtime = UiRuntime::for_test_with_text_input(Some(text_input));
+    let store = InMemoryTextStore::new("ab");
+    let erased: Rc<dyn TextStore> = store.clone(); // the presentation holds the field's store through the erased contract.
+    let _token = runtime
+        .text_input_handle()
+        .attach(flui_interaction::TextInputClient::new(Rc::clone(&erased)))
+        .expect("the headless window takes text input");
+    let composing = Composition {
+        range: Utf16Range::new(Utf16Offset::new(2), Utf16Offset::new(4)).expect("ordered"),
+        hides_caret: false,
+    };
+    assert_eq!(
+        erased.request_lock(
+            LockGrant::read_write(move |session| {
+                session.insert_at_selection("東京").expect("in range");
+                session.set_composition(Some(composing)).expect("in range");
+            }),
+            LockTiming::Sync,
+        ),
+        Ok(LockOutcome::Granted),
+        "in its slot, the runtime admits a platform entry"
+    );
+
+    let log: NestedLocks = Rc::default();
+    let (nested, seen) = (Rc::clone(&erased), Rc::clone(&log));
+    runtime
+        .attach_root_widget_with_size(
+            &flui_widgets::Listener::new()
+                .behavior(flui_rendering::hit_testing::HitTestBehavior::Opaque)
+                .on_pointer_down(move |_, _| {
+                    let read = Rc::clone(&seen);
+                    let sync = nested.request_lock(
+                        LockGrant::read(move |_| read.borrow_mut().push("sync grant".into())),
+                        LockTiming::Sync,
+                    );
+                    seen.borrow_mut().push(format!("sync {sync:?}"));
+                    let queued = Rc::clone(&seen);
+                    let deferred = nested.request_lock(
+                        LockGrant::read(move |session| {
+                            queued.borrow_mut().push(format!(
+                                "async grant, composing {:?}",
+                                session.composition()
+                            ));
+                        }),
+                        LockTiming::Async,
+                    );
+                    seen.borrow_mut().push(format!("async {deferred:?}"));
+                })
+                .child(flui_widgets::SizedBox::new(40.0, 40.0)),
+            40.0,
+            40.0,
+        )
+        .expect("mount the press's handler");
+    runtime.synchronize_window_snapshot(
+        runtime.presentation_id(),
+        WindowExecutionState::Running,
+        true,
+        true,
+    );
+    struct Sink;
+    impl flui_runtime::sink::FrameSink for Sink {
+        fn surface_size(&mut self) -> (u32, u32) {
+            (40, 40)
+        }
+        fn submit(&mut self, _: flui_layer::Scene) -> flui_runtime::sink::SubmitVerdict {
+            flui_runtime::sink::SubmitVerdict::Presented
+        }
+    }
+    let _ = runtime.pump(
+        &mut flui_runtime::pump::SampledClock(web_time::Instant::now()),
+        &mut Sink,
+    );
+    let address = owner
+        .publication(owner.prepare_runtime(runtime))
+        .expect("publish")
+        .commit();
+    let effects = Effects {
+        input: owner
+            .presentation_dispatcher(address)
+            .expect("input authority"),
+        trace: Rc::new(RefCell::new(Vec::new())),
+        nested_input: Cell::new(false),
+        wakes: Cell::new(0),
+    };
+    let press = flui_interaction::events::make_down_event(
+        flui_foundation::geometry::Offset::new(4.0, 6.0),
+        flui_interaction::events::PointerKind::Mouse,
+    )
+    .expect("finite test position");
+    let _ = effects
+        .input
+        .input(PlatformInput::Pointer(press), &effects)
+        .expect("the press is delivered");
+
+    assert_eq!(
+        store.composition(),
+        None,
+        "the press committed the composition"
+    );
+    assert_eq!(store.text(), "ab東京", "keeping its text");
+    assert_eq!(
+        *log.borrow(),
+        [
+            "sync Err(SyncLockUnavailable)".to_owned(),
+            "async Ok(Deferred)".to_owned(),
+            "async grant, composing None".to_owned(),
+        ],
+        "the nested entry ran no grant inside the handler; its queued one ran at the turn's end"
+    );
+    assert_eq!(
+        erased.request_lock(LockGrant::read(|_| {}), LockTiming::Sync),
+        Ok(LockOutcome::Granted),
+        "back in its slot, the runtime admits a platform entry again"
+    );
+}
 #[test]
 fn owner_input_contract() {
     crate::table_test::run_table(
@@ -944,6 +1084,10 @@ fn owner_input_contract() {
             (
                 "a_view_hit_test_reports_a_busy_tree_and_contains_a_render_object_panic",
                 a_view_hit_test_reports_a_busy_tree_and_contains_a_render_object_panic as fn(),
+            ),
+            (
+                "a_platform_entry_while_the_runtime_is_checked_out_runs_no_owner_code",
+                a_platform_entry_while_the_runtime_is_checked_out_runs_no_owner_code as fn(),
             ),
         ],
     );
