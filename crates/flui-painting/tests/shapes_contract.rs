@@ -207,7 +207,7 @@ fn rectangle_rounding_by_hand() {
         "area",
     );
 
-    let smooth = CornerRounding::new(0.5, 1.0).expect("valid");
+    let smooth = CornerRounding::try_new(0.5, 1.0).expect("valid");
     let smoothed = RoundedPolygon::rectangle(square, smooth).expect("valid");
     // Full smoothing leaves no arc: two flanking curves per corner, meeting in its middle.
     assert_eq!(
@@ -222,8 +222,8 @@ fn rectangle_rounding_by_hand() {
 fn clockwise_input_runs_positive() {
     let ccw = [p(1.0, 0.0), p(0.0, 1.0), p(-1.0, 0.0), p(0.0, -1.0)];
     let cw = [ccw[0], ccw[3], ccw[2], ccw[1]];
-    let a = RoundedPolygon::new(&ccw, round(0.2)).expect("valid");
-    let b = RoundedPolygon::new(&cw, round(0.2)).expect("valid");
+    let a = RoundedPolygon::try_new(&ccw, round(0.2)).expect("valid");
+    let b = RoundedPolygon::try_new(&cw, round(0.2)).expect("valid");
     assert_eq!(a.path(), b.path());
     assert!(area(&a.path()) > 0.0);
 }
@@ -235,32 +235,32 @@ fn malformed_input_is_refused() {
     let cases: [(&str, Result<RoundedPolygon, ShapeError>, ShapeError); 15] = [
         (
             "two vertices",
-            RoundedPolygon::new(&triangle[..2], none),
+            RoundedPolygon::try_new(&triangle[..2], none),
             ShapeError::TooFewVertices { count: 2 },
         ),
         (
             "NaN",
-            RoundedPolygon::new(&[triangle[0], p(f64::NAN, 0.0), triangle[2]], none),
+            RoundedPolygon::try_new(&[triangle[0], p(f64::NAN, 0.0), triangle[2]], none),
             ShapeError::NonFiniteVertex { index: 1 },
         ),
         (
             "duplicate neighbours",
-            RoundedPolygon::new(&[triangle[0], triangle[1], triangle[1], triangle[2]], none),
+            RoundedPolygon::try_new(&[triangle[0], triangle[1], triangle[1], triangle[2]], none),
             ShapeError::DuplicateVertex { index: 1 },
         ),
         (
             "collinear",
-            RoundedPolygon::new(&[p(0.0, 0.0), p(1.0, 1.0), p(3.0, 3.0)], none),
+            RoundedPolygon::try_new(&[p(0.0, 0.0), p(1.0, 1.0), p(3.0, 3.0)], none),
             ShapeError::ZeroArea,
         ),
         (
             "edge length overflows",
-            RoundedPolygon::new(&[p(f64::MAX, 0.0), p(-f64::MAX, 0.0), p(0.0, 1.0)], none),
+            RoundedPolygon::try_new(&[p(f64::MAX, 0.0), p(-f64::MAX, 0.0), p(0.0, 1.0)], none),
             ShapeError::Overflow,
         ),
         (
             "rounding overflows",
-            RoundedPolygon::new(&triangle, round(f64::MAX)),
+            RoundedPolygon::try_new(&triangle, round(f64::MAX)),
             ShapeError::Overflow,
         ),
         (
@@ -273,12 +273,12 @@ fn malformed_input_is_refused() {
         ),
         (
             "negative radius",
-            CornerRounding::circular(-1.0).and_then(|r| RoundedPolygon::new(&triangle, r)),
+            CornerRounding::circular(-1.0).and_then(|r| RoundedPolygon::try_new(&triangle, r)),
             ShapeError::InvalidRadius,
         ),
         (
             "smoothing above one",
-            CornerRounding::new(0.1, 1.5).and_then(|r| RoundedPolygon::new(&triangle, r)),
+            CornerRounding::try_new(0.1, 1.5).and_then(|r| RoundedPolygon::try_new(&triangle, r)),
             ShapeError::InvalidSmoothing,
         ),
         (
@@ -320,7 +320,7 @@ fn malformed_input_is_refused() {
 // Thin, extreme-aspect and subnormal-scale polygons are polygons: they build, and a subnormal one still
 // normalizes to the unit square with every coordinate finite.
 fn extreme_but_valid_input_builds() {
-    let thin = RoundedPolygon::new(
+    let thin = RoundedPolygon::try_new(
         &[p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1e-13)],
         CornerRounding::UNROUNDED,
     );
@@ -329,7 +329,7 @@ fn extreme_but_valid_input_builds() {
         "a thin triangle"
     );
     // Scaled to unit size its height would underflow to zero; measured as given it does not.
-    let sliver = RoundedPolygon::new(
+    let sliver = RoundedPolygon::try_new(
         &[
             p(0.0, 0.0),
             p(f64::MAX, 0.0),
@@ -339,7 +339,7 @@ fn extreme_but_valid_input_builds() {
     );
     assert!(sliver.is_ok(), "an extreme-aspect triangle: {sliver:?}");
 
-    let tiny = RoundedPolygon::new(
+    let tiny = RoundedPolygon::try_new(
         &[p(0.0, 0.0), p(1e-310, 0.0), p(0.0, 1e-310)],
         CornerRounding::UNROUNDED,
     )

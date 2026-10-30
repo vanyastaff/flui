@@ -495,7 +495,7 @@ impl WgpuPainter {
             let result = crate::clip_geometry::ValidatedClip::rect(bounds)
                 .map_err(crate::command_ir::RecordError::Geometry)
                 .and_then(|shape| {
-                    crate::clip_geometry::ValidatedAffine::new(glam::DMat4::from_cols_array(
+                    crate::clip_geometry::ValidatedAffine::try_new(glam::DMat4::from_cols_array(
                         &self.state.current_transform_matrix().m,
                     ))
                     .map_err(crate::command_ir::RecordError::Geometry)
@@ -611,7 +611,7 @@ impl WgpuPainter {
                 });
             return self.recording_result().map(|()| false);
         }
-        let affine = crate::clip_geometry::ValidatedAffine::new(glam::DMat4::from_cols_array(
+        let affine = crate::clip_geometry::ValidatedAffine::try_new(glam::DMat4::from_cols_array(
             &self.current_transform_matrix().m,
         ))?;
         let Some(device_bounds) = affine.map_bounds(bounds)? else {
@@ -634,11 +634,11 @@ impl WgpuPainter {
         let result = (|| {
             self.recording_result()?;
             let matrix = glam::DMat4::from_cols_array(&self.current_transform_matrix().m);
-            let affine = crate::clip_geometry::ValidatedAffine::new(matrix)?;
+            let affine = crate::clip_geometry::ValidatedAffine::try_new(matrix)?;
             if affine.is_empty() {
                 return Ok(());
             }
-            let inverse = crate::clip_geometry::ValidatedAffine::new(matrix.inverse())?;
+            let inverse = crate::clip_geometry::ValidatedAffine::try_new(matrix.inverse())?;
             let viewport = self.filter_desired_output().map_err(|error| match error {
                 crate::command_ir::RecordError::Geometry(error) => {
                     crate::EngineError::InvalidGeometry(error)
@@ -797,7 +797,7 @@ impl WgpuPainter {
                 .and_then(|shape| {
                     clip.chain.append(
                         shape,
-                        crate::clip_geometry::ValidatedAffine::new(glam::DMat4::IDENTITY)
+                        crate::clip_geometry::ValidatedAffine::try_new(glam::DMat4::IDENTITY)
                             .expect("BUG: identity is an admitted clip transform"),
                         crate::clip_chain::ClipOp::Intersect,
                         true,

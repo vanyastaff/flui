@@ -757,7 +757,7 @@ impl DrawBatcher {
                 return true;
             }
         }
-        let transformed = match crate::clip_geometry::ValidatedAffine::new(matrix)
+        let transformed = match crate::clip_geometry::ValidatedAffine::try_new(matrix)
             .and_then(|affine| affine.map_bounds(bounds))
         {
             Ok(Some(bounds)) => bounds,

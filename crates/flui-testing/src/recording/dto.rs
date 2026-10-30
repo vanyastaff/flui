@@ -2554,7 +2554,7 @@ mod tests {
             "{refused:?}"
         );
         let mut writer =
-            RecordingWriter::new(Vec::new(), &RecordingHeader::new(RecordingClock::Virtual))
+            RecordingWriter::try_new(Vec::new(), &RecordingHeader::new(RecordingClock::Virtual))
                 .expect("header");
         let error = writer
             .write_row(Err(refused.expect_err("refused")))

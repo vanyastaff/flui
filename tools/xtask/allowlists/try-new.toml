@@ -57,38 +57,6 @@ crate = "flui-animation"
 type = "ValueRange"
 
 [[allow]]
-crate = "flui-assets"
-type = "NetworkLoader"
-
-[[allow]]
-crate = "flui-cli"
-type = "SourceWatcher"
-
-[[allow]]
-crate = "flui-desktop-mcp"
-type = "Input"
-
-[[allow]]
-crate = "flui-desktop-mcp"
-type = "Uia"
-
-[[allow]]
-crate = "flui-engine"
-type = "GpuFrameProfiler"
-
-[[allow]]
-crate = "flui-engine"
-type = "ImageQuad"
-
-[[allow]]
-crate = "flui-engine"
-type = "TileAxis"
-
-[[allow]]
-crate = "flui-engine"
-type = "ValidatedAffine"
-
-[[allow]]
 crate = "flui-foundation"
 type = "DevicePixelRatio"
 
@@ -111,14 +79,6 @@ type = "OneEuroTuning"
 [[allow]]
 crate = "flui-interaction"
 type = "PolynomialFit"
-
-[[allow]]
-crate = "flui-log"
-type = "AppIdentity"
-
-[[allow]]
-crate = "flui-log"
-type = "AppleBundleId"
 
 [[allow]]
 crate = "flui-native"
@@ -237,18 +197,6 @@ crate = "flui-objects"
 type = "Strategy"
 
 [[allow]]
-crate = "flui-painting"
-type = "Corner"
-
-[[allow]]
-crate = "flui-painting"
-type = "CornerRounding"
-
-[[allow]]
-crate = "flui-painting"
-type = "RoundedPolygon"
-
-[[allow]]
 crate = "flui-platform"
 type = "Distance"
 
@@ -283,18 +231,6 @@ type = "UiRuntime"
 [[allow]]
 crate = "flui-scheduler"
 type = "OwnerFrame"
-
-[[allow]]
-crate = "flui-testing"
-type = "HeaderDto"
-
-[[allow]]
-crate = "flui-testing"
-type = "RecordingReader"
-
-[[allow]]
-crate = "flui-testing"
-type = "RecordingWriter"
 
 [[allow]]
 crate = "flui-widgets"
@@ -344,6 +280,3 @@ type = "SwipeActions"
 crate = "flui-widgets"
 type = "ViewportFraction"
 
-[[allow]]
-crate = "xtask"
-type = "ScratchDir"

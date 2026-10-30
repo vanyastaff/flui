@@ -154,7 +154,7 @@ impl GpuStateStack {
         hard: bool,
         budget: &std::sync::Arc<crate::recording_budget::RecordingBudget>,
     ) -> Result<(), crate::command_ir::RecordError> {
-        let affine = crate::clip_geometry::ValidatedAffine::new(self.current_transform)
+        let affine = crate::clip_geometry::ValidatedAffine::try_new(self.current_transform)
             .map_err(crate::command_ir::RecordError::Geometry)?;
         self.current_clip_chain = self
             .current_clip_chain

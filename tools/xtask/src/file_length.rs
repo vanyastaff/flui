@@ -466,7 +466,7 @@ type Identity = (String, &'static str);
 
 /// Writes the planted tree under a fresh directory and scans it.
 fn self_test_findings() -> anyhow::Result<(ScratchDir, Vec<Finding>)> {
-    let dir = ScratchDir::new("file-length")?;
+    let dir = ScratchDir::try_new("file-length")?;
     let root = dir.path().to_path_buf();
     for (path, text) in planted() {
         let path = root.join(path);

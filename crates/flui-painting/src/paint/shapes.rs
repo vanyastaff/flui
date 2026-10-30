@@ -110,7 +110,7 @@ impl CornerRounding {
     ///
     /// [`ShapeError::InvalidRadius`] for a negative or non-finite radius and
     /// [`ShapeError::InvalidSmoothing`] for a smoothing outside `[0, 1]`.
-    pub fn new(radius: f64, smoothing: f64) -> Result<Self, ShapeError> {
+    pub fn try_new(radius: f64, smoothing: f64) -> Result<Self, ShapeError> {
         if !(radius.is_finite() && radius >= 0.0) {
             return Err(ShapeError::InvalidRadius);
         }
@@ -126,7 +126,7 @@ impl CornerRounding {
     ///
     /// [`ShapeError::InvalidRadius`] for a negative or non-finite radius.
     pub fn circular(radius: f64) -> Result<Self, ShapeError> {
-        Self::new(radius, 0.0)
+        Self::try_new(radius, 0.0)
     }
 
     /// The radius of the corner's arc before any shrinking to fit.
@@ -197,7 +197,7 @@ impl RoundedPolygon {
     ///
     /// [`ShapeError`] for fewer than three vertices, a non-finite vertex, a vertex equal to the
     /// next one, collinear vertices, or an outline that overflows.
-    pub fn new(vertices: &[Point<f64>], rounding: CornerRounding) -> Result<Self, ShapeError> {
+    pub fn try_new(vertices: &[Point<f64>], rounding: CornerRounding) -> Result<Self, ShapeError> {
         Self::build(vertices, |_| rounding)
     }
 
@@ -278,7 +278,7 @@ impl RoundedPolygon {
         let vertices: Vec<_> = (0..sides)
             .map(|i| polar(vertex_radius, step * i as f64))
             .collect();
-        Self::new(&vertices, CornerRounding::circular(radius)?)
+        Self::try_new(&vertices, CornerRounding::circular(radius)?)
     }
 
     /// The rectangle `rect` with every corner rounded by `rounding`; its first vertex is the
@@ -300,7 +300,7 @@ impl RoundedPolygon {
             Point::new(left, top),
             Point::new(right, top),
         ];
-        Self::new(&vertices, rounding)
+        Self::try_new(&vertices, rounding)
     }
 
     /// The outline as a closed path.
@@ -391,7 +391,7 @@ impl RoundedPolygon {
             .iter()
             .enumerate()
             .map(|(i, &source)| {
-                Corner::new(
+                Corner::try_new(
                     points[(i + n - 1) % n],
                     points[i],
                     points[(i + 1) % n],
@@ -493,7 +493,7 @@ struct Corner {
 }
 
 impl Corner {
-    fn new(
+    fn try_new(
         previous: kurbo::Point,
         point: kurbo::Point,
         next: kurbo::Point,
