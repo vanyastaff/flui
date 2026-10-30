@@ -22,11 +22,13 @@
 //! - **A write** makes a data source offering the text in every form of
 //!   [`TextForm::OFFERED`] and sets it as the selection of the last user
 //!   input's seat, under that input's serial: a compositor takes a selection
-//!   only from a client the user is working in. Each `send` is written by a
-//!   thread of its own, at most [`MAX_WRITERS`] at once, from the text
-//!   encoded once per form; `cancelled` (another client took the selection) ends
-//!   the ownership. With no user input yet the text is held here only, and a
-//!   read answers it until another client's selection arrives.
+//!   only from a client the user is working in, and only that seat's earlier
+//!   selection is replaced: another seat keeps its own. Each `send` is
+//!   written by a thread of its own, at most [`MAX_WRITERS`] at once, from
+//!   the text encoded once per form; `cancelled` (another client took the
+//!   selection) ends that seat's ownership. With no user input yet the text
+//!   is held here only, and a read answers it until another client's
+//!   selection arrives.
 
 use std::os::fd::{AsFd, OwnedFd};
 use std::sync::{Arc, Weak};
@@ -42,6 +44,7 @@ use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, event_created_child};
 use web_time::Instant;
 
+use super::owners::Owners;
 use super::text::TextForm;
 use crate::host::NativeClipboard;
 use crate::owner::linux::wayland::{LastInput, WaylandClipboard, WaylandState};
@@ -81,8 +84,8 @@ struct State {
     /// The queue the devices and sources report to.
     queue: Option<QueueHandle<WaylandState>>,
     devices: Vec<SeatDevice>,
-    /// The text the application owns the selection with.
-    owned: Option<Owned>,
+    /// The text the application owns each seat's selection with.
+    owned: Owners<WlSeat, Owned>,
 }
 
 /// One seat's data device and the offers it holds.
@@ -98,7 +101,7 @@ struct SeatDevice {
 impl SeatDevice {
     fn release(self) {
         for offer in [self.selection, self.dragged].into_iter().flatten() {
-            offer.destroy();
+            destroy_offer(offer);
         }
         // `release` exists from version 2; below it the proxy is just
         // dropped.
@@ -108,29 +111,27 @@ impl SeatDevice {
     }
 }
 
-/// The application's selection: its text, and the seat and source the
-/// compositor asks for it under; `None` while no seat took it.
+/// One of the application's selections: its text, and the source the
+/// compositor asks for it through; `None` while it is held in this process
+/// alone, under no seat.
 struct Owned {
     text: Arc<str>,
-    source: Option<(WlSeat, WlDataSource)>,
-}
-
-impl Owned {
-    /// Whether the application's text is the selection `seat` reads: the
-    /// seat it set its source on, or any seat while it set none.
-    fn holds(&self, seat: Option<&WlSeat>) -> bool {
-        match &self.source {
-            Some((owner, _)) => seat == Some(owner),
-            None => true,
-        }
-    }
+    source: Option<WlDataSource>,
 }
 
 impl Owned {
     fn release(self) {
-        if let Some((_, source)) = self.source {
+        if let Some(source) = self.source {
             source.destroy();
         }
+    }
+}
+
+/// Lets go of an offer: `destroy` exists from version 3, below it the proxy
+/// is just dropped.
+fn destroy_offer(offer: WlDataOffer) {
+    if offer.version() >= 3 {
+        offer.destroy();
     }
 }
 
@@ -235,9 +236,7 @@ impl WaylandClipboard for SeatClipboard {
         let held = self.shared.state.with(std::mem::take);
         if let Some(State { devices, owned, .. }) = held {
             devices.into_iter().for_each(SeatDevice::release);
-            if let Some(owned) = owned {
-                owned.release();
-            }
+            owned.into_items().into_iter().for_each(Owned::release);
         }
     }
 }
@@ -269,9 +268,7 @@ impl NativeClipboard for SeatClipboard {
                             .iter()
                             .find(|device| device.selection.is_some())
                     });
-                if let Some(owned) = &state.owned
-                    && owned.holds(device.map(|device| &device.seat))
-                {
+                if let Some(owned) = state.owned.read(device.map(|device| &device.seat)) {
                     return Read::Now(Some(owned.text.to_string()));
                 }
                 let Some((offer, (form, mime))) = device
@@ -347,7 +344,10 @@ impl NativeClipboard for SeatClipboard {
                     "no user input to set the selection under: the text is held in this process"
                 );
             }
-            state.owned.replace(Owned { text, source })
+            let (seat, source) = source.unzip();
+            // Only this seat's earlier selection is replaced: another seat
+            // keeps the source it reads.
+            state.owned.set(seat, Owned { text, source })
         });
         if let Some(previous) = previous.flatten() {
             previous.release();
@@ -468,13 +468,8 @@ impl Dispatch<WlDataDevice, DeviceData> for WaylandState {
                         let replaced = std::mem::replace(&mut held.selection, id);
                         // Text held in this process with no source is the
                         // selection until another client's arrives.
-                        if foreign
-                            && state
-                                .owned
-                                .as_ref()
-                                .is_some_and(|owned| owned.source.is_none())
-                        {
-                            state.owned = None;
+                        if foreign {
+                            state.owned.remove_unseated();
                         }
                         replaced
                     }
@@ -493,7 +488,7 @@ impl Dispatch<WlDataDevice, DeviceData> for WaylandState {
             })
             .flatten();
         if let Some(offer) = replaced {
-            offer.destroy();
+            destroy_offer(offer);
         }
     }
 
@@ -553,14 +548,11 @@ impl Dispatch<WlDataSource, SourceData> for WaylandState {
             wl_data_source::Event::Cancelled => {
                 if let Some(shared) = data.shared.upgrade() {
                     shared.state.with(|state| {
-                        if state.owned.as_ref().is_some_and(|owned| {
-                            owned
-                                .source
-                                .as_ref()
-                                .is_some_and(|(_, held)| held == source)
-                        }) {
-                            state.owned = None;
-                        }
+                        // Only this source's seat lost its selection; it is
+                        // destroyed below, not by the entry's release.
+                        state
+                            .owned
+                            .remove(|owned| owned.source.as_ref() == Some(source));
                     });
                 }
                 // After the clipboard's release the source is still the
