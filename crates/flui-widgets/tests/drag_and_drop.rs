@@ -207,7 +207,7 @@ fn card(shared: &Rc<Shared>, name: &'static str) -> BoxedView {
         Text::new("c"),
     ));
     let (ended, started) = (Rc::clone(shared), Rc::clone(shared));
-    Draggable::new(
+    Draggable::try_new(
         commands,
         move || vec![DragItem::new().with_value(name).with_text(name)],
         SizedBox::new(200.0, ROW).child(Text::new(name)),
@@ -248,7 +248,7 @@ fn target_at(
         Text::new("v"),
     ));
     let (shown, dropped, sprung) = (Rc::clone(shared), Rc::clone(shared), Rc::clone(shared));
-    let mut target = DropTarget::new(
+    let mut target = DropTarget::try_new(
         commands,
         move |drag| {
             drag.value::<&'static str>()
@@ -1054,7 +1054,7 @@ fn quiet_commands() -> DragCommands {
 }
 
 fn quiet_draggable(started: Rc<Cell<u32>>, ended: Rc<Cell<u32>>) -> Draggable {
-    Draggable::new(
+    Draggable::try_new(
         quiet_commands(),
         || vec![DragItem::new().with_value(7_u32)],
         flui_widgets::ColoredBox::new(flui_painting::styling::Color::RED),
@@ -1207,7 +1207,7 @@ pub(crate) fn the_alternatives_perform_the_transfer_the_drag_would() {
         } else {
             AlternativeKind::default()
         };
-        let card = Draggable::new(
+        let card = Draggable::try_new(
             DragCommands::new(CommandAppearance::new("Cut Alice", Text::new("x")))
                 .copy(CommandAppearance::new("Copy Alice", Text::new("c")))
                 .alternative(alternative.clone()),
@@ -1223,7 +1223,7 @@ pub(crate) fn the_alternatives_perform_the_transfer_the_drag_would() {
             ],
             "menu {menu}: the draggable's commands cut and copy"
         );
-        let target = DropTarget::new(
+        let target = DropTarget::try_new(
             DropCommands::new(CommandAppearance::new("Paste into Done", Text::new("v")))
                 .alternative(alternative),
             |_drag| None,
@@ -1236,7 +1236,7 @@ pub(crate) fn the_alternatives_perform_the_transfer_the_drag_would() {
             "menu {menu}: the target's command pastes"
         );
     }
-    let same = Draggable::new(
+    let same = Draggable::try_new(
         DragCommands::new(CommandAppearance::new("Move", Text::new("x")))
             .copy(CommandAppearance::new("Move", Text::new("c"))),
         Vec::new,
@@ -1254,7 +1254,7 @@ pub(crate) fn the_alternatives_perform_the_transfer_the_drag_would() {
 pub(crate) fn unmounting_a_target_releases_its_receiver() {
     let captured = Rc::new(());
     let witness = Rc::downgrade(&captured);
-    let target = DropTarget::new(
+    let target = DropTarget::try_new(
         DropCommands::new(CommandAppearance::new("Paste", Text::new("v"))),
         |_drag| None,
         |_hover| SizedBox::new(40.0, 40.0).into_view().boxed(),
@@ -1321,7 +1321,7 @@ impl StatefulView for InsetDesk {
         let handle = OverlayHandle::new();
         let anchor = self.anchor;
         let entry = OverlayEntry::new(move |_ctx| {
-            let card = Draggable::new(
+            let card = Draggable::try_new(
                 quiet_commands(),
                 || vec![DragItem::new().with_value(7_u32)],
                 SizedBox::new(200.0, ROW).child(Text::new("card")),
@@ -1411,7 +1411,7 @@ fn autoscroll_through(fixed_extent: bool) {
         move |index: usize| -> BoxedView {
             let hovers = Rc::clone(&hovers);
             let paste = CommandAppearance::new(format!("Paste into {index}"), Text::new("v"));
-            DropTarget::new(
+            DropTarget::try_new(
                 DropCommands::new(paste),
                 |drag| drag.value::<&'static str>().map(|_| TransferActions::MOVE),
                 move |hover| {
@@ -1434,7 +1434,7 @@ fn autoscroll_through(fixed_extent: bool) {
         };
         list.position(position).into_view().boxed()
     }));
-    let card = Draggable::new(
+    let card = Draggable::try_new(
         quiet_commands(),
         || vec![DragItem::new().with_value("Alice")],
         SizedBox::new(200.0, ROW).child(Text::new("Alice")),
@@ -1505,7 +1505,7 @@ pub(crate) fn a_dragged_row_scrolled_out_of_a_lazy_list_keeps_its_drag() {
                 deepest.set(deepest.get().max(index));
                 if index == 0 {
                     let outcomes = Rc::clone(&outcomes);
-                    Draggable::new(
+                    Draggable::try_new(
                         quiet_commands(),
                         || vec![DragItem::new().with_value("Alice")],
                         SizedBox::new(400.0, 50.0).child(Text::new("Alice")),
@@ -1517,7 +1517,7 @@ pub(crate) fn a_dragged_row_scrolled_out_of_a_lazy_list_keeps_its_drag() {
                 } else {
                     // A row that declines, through which the drag finds the
                     // list to scroll.
-                    DropTarget::new(
+                    DropTarget::try_new(
                         DropCommands::new(CommandAppearance::new(
                             format!("Paste into {index}"),
                             Text::new("v"),
@@ -1540,7 +1540,7 @@ pub(crate) fn a_dragged_row_scrolled_out_of_a_lazy_list_keeps_its_drag() {
             .into_view()
             .boxed()
     }));
-    let target = DropTarget::new(
+    let target = DropTarget::try_new(
         DropCommands::new(CommandAppearance::new("Paste", Text::new("v"))),
         |drag| drag.value::<&'static str>().map(|_| TransferActions::MOVE),
         |_hover| SizedBox::new(400.0, 100.0).into_view().boxed(),

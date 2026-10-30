@@ -54,7 +54,7 @@ struct Options {
 /// One row whose content is `color`, its actions logging into `log`.
 fn row(color: Color, options: Options, log: &Log) -> BoxedView {
     let action = |label: &'static str| Text::new(label);
-    let row = SwipeActions::new(
+    let row = SwipeActions::try_new(
         ColoredBox::new(color).child(SizedBox::new(300.0, 60.0)),
         [SwipeAction::new(
             GestureCommand::new("Pin Alice", Pin),
@@ -449,9 +449,9 @@ pub(crate) fn a_cancelled_swipe_returns_where_it_began() {
 /// A row needs an action, and its commands must be told apart.
 pub(crate) fn swipe_actions_refuse_rows_without_distinct_actions() {
     let menu = || SwipeAlternative::PresentedMenu(Rc::new(|_cx, _request| {}));
-    let none = SwipeActions::new(SizedBox::shrink(), [], [], menu());
+    let none = SwipeActions::try_new(SizedBox::shrink(), [], [], menu());
     assert_eq!(none.err(), Some(SwipeActionsError::NoActions));
-    let twice = SwipeActions::new(
+    let twice = SwipeActions::try_new(
         SizedBox::shrink(),
         [SwipeAction::new(
             GestureCommand::new("Delete", Delete),

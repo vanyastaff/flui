@@ -734,7 +734,7 @@ fn refresh_indicator_spins_while_refreshing() {
                     Scrollable::new()
                         .controller(ScrollController::new())
                         .child(SizedBox::new(250.0, 5000.0)),
-                    GestureAlternatives::new(Alternative::VisibleControl(ControlSpec::new(
+                    GestureAlternatives::try_new(Alternative::VisibleControl(ControlSpec::new(
                         RefreshIntent::command("Refresh"),
                         SizedBox::new(24.0, 24.0),
                     )))
@@ -856,10 +856,12 @@ fn refresh_style_builds_the_indicator_from_the_phase() {
                         Scrollable::new()
                             .controller(ScrollController::new())
                             .child(SizedBox::new(300.0, 5000.0)),
-                        GestureAlternatives::new(Alternative::VisibleControl(ControlSpec::new(
-                            RefreshIntent::command("Refresh"),
-                            SizedBox::new(24.0, 24.0),
-                        )))
+                        GestureAlternatives::try_new(Alternative::VisibleControl(
+                            ControlSpec::new(
+                                RefreshIntent::command("Refresh"),
+                                SizedBox::new(24.0, 24.0),
+                            ),
+                        ))
                         .expect("one labelled command"),
                     )
                     .controller(refresh.clone())

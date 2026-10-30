@@ -100,7 +100,7 @@ impl ContextMenuArea {
             .into_iter()
             .fold(MenuSpec::new(first, |_cx, _request| {}), MenuSpec::item);
         Ok(Self {
-            alternatives: GestureAlternatives::new(Alternative::ContextMenu(menu))?,
+            alternatives: GestureAlternatives::try_new(Alternative::ContextMenu(menu))?,
             child: None,
         })
     }

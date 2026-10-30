@@ -158,7 +158,7 @@ impl Draggable {
     /// [`GestureAlternativesError::EmptyLabel`] for a command without a
     /// label, [`GestureAlternativesError::DuplicateLabel`] for a cut and a
     /// copy with one.
-    pub fn new(
+    pub fn try_new(
         commands: DragCommands,
         items: impl Fn() -> Vec<DragItem> + 'static,
         child: impl IntoView,

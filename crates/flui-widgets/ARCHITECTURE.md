@@ -767,7 +767,7 @@ Pinned by `a_vertical_drag_slot_claims_only_vertical_motion`,
 A behavioural widget's constructor takes a `GestureAlternatives` (ADR-0216).
 Its commands live inside the `Alternative` — a `ControlSpec`'s controls or a
 `MenuSpec`'s items — so no command can exist without its single-pointer path,
-and `GestureAlternatives::new` refuses an empty or repeated label, which
+and `GestureAlternatives::try_new` refuses an empty or repeated label, which
 assistive technology could not tell apart. Each command is an `Intent`
 resolved through the `Actions` chain where the alternatives are mounted: the
 gesture through `CommandHandle::perform` (from `handle(ctx)` in the widget's
@@ -832,7 +832,7 @@ behavioural widget in the same frame, which is why the question waits for the
 frame to end; `unfulfilled_companion_alternatives_are_reported`), and
 `assert_gesture_alternatives` resolves the anchor in the published tree and
 activates that node. The type erasure sits in `CompanionSpec` so that
-`Alternative` stays one non-generic enum; `GestureAlternatives::new` refuses a
+`Alternative` stays one non-generic enum; `GestureAlternatives::try_new` refuses a
 command whose intent is not the link's (`ForeignIntent`). Rows:
 `page_view_with_buttons_beside_it`, and flui-material's `TabBar` beside a
 `TabBarView`.
@@ -3564,7 +3564,7 @@ For assistive technology the header is a labelled `Banner` landmark. ARIA admits
 expands and its `ScrollDown` collapses (the Android app bar's precedent), each offered only
 where it moves the header. A `ScrollIntoView` reaching the banner for content it clips in
 part expands it; content it clips entirely is not published. Equal extents give a header that
-takes nothing and offers no scroll action; `HeaderExtents::new` refuses extents that are not
+takes nothing and offers no scroll action; `HeaderExtents::try_new` refuses extents that are not
 finite, negative, past `HeaderExtents::MAX` or inverted. Vertical only: a horizontal header
 (and its RTL reading) is not built. The header takes no `GestureAlternatives`: its collapse is
 what scrolling the body does, never an operation, and what it clips stays reachable by the

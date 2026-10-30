@@ -150,7 +150,7 @@ fn row_alternatives(
             )
         }
     };
-    GestureAlternatives::new(alternative)
+    GestureAlternatives::try_new(alternative)
         .expect("each row's labels name its message")
         .target(name)
 }
@@ -390,7 +390,7 @@ fn swipe_row(
             }))
         }
     };
-    SwipeActions::new(
+    SwipeActions::try_new(
         SizedBox::new(300.0, 50.0)
             .child(ColoredBox::new(Color::rgb(10, 20, 30)).child(Text::new(name))),
         [],
@@ -488,7 +488,7 @@ pub(crate) fn interactive_viewer_with_zoom_controls() {
     use flui_widgets::{InteractiveViewer, TransformationController, ZoomIntent};
 
     let mount = || {
-        let alternatives = GestureAlternatives::new(Alternative::VisibleControl(
+        let alternatives = GestureAlternatives::try_new(Alternative::VisibleControl(
             ControlSpec::new(
                 GestureCommand::new("Zoom in", ZoomIntent::In)
                     .key(SingleActivator::character("i").control()),
@@ -545,7 +545,7 @@ pub(crate) fn interactive_viewer_with_pan_controls() {
         let command = |label: &str, intent: PanIntent, key: &str| {
             GestureCommand::new(label, intent).key(SingleActivator::character(key).control())
         };
-        let alternatives = GestureAlternatives::new(Alternative::VisibleControl(
+        let alternatives = GestureAlternatives::try_new(Alternative::VisibleControl(
             ControlSpec::new(command("Pan right", PanIntent::Right, "l"), Text::new(">"))
                 .control(command("Pan left", PanIntent::Left, "h"), Text::new("<"))
                 .control(command("Pan down", PanIntent::Down, "j"), Text::new("v"))
@@ -591,7 +591,7 @@ pub(crate) fn interactive_viewer_with_pan_controls() {
 /// to the same page.
 pub(crate) fn page_view_with_page_controls() {
     let mount = || {
-        let alternatives = GestureAlternatives::new(Alternative::VisibleControl(
+        let alternatives = GestureAlternatives::try_new(Alternative::VisibleControl(
             ControlSpec::new(
                 GestureCommand::new("Previous page", PageIntent::Previous)
                     .key(SingleActivator::character("[").control()),
@@ -649,7 +649,7 @@ pub(crate) fn anchored_drag_with_anchor_controls() {
     }
 
     let mount = || {
-        let alternatives = GestureAlternatives::new(Alternative::VisibleControl(
+        let alternatives = GestureAlternatives::try_new(Alternative::VisibleControl(
             ControlSpec::new(
                 GestureCommand::new("Expand sheet", AnchorIntent::Previous)
                     .key(SingleActivator::character("[").control()),
@@ -669,7 +669,8 @@ pub(crate) fn anchored_drag_with_anchor_controls() {
             .build()
             .expect("three distinct anchors");
         // At the middle anchor, so both commands move it.
-        let controller = AnchoredDragController::new(anchors, Stop::Half).expect("a known anchor");
+        let controller =
+            AnchoredDragController::try_new(anchors, Stop::Half).expect("a known anchor");
         let model = controller.clone();
         let view = AnchoredDrag::new(
             controller,
@@ -848,7 +849,7 @@ pub(crate) fn the_revealed_menu_control_follows_focus_and_reading_direction() {
         (RowFocus::Assistive, TextDirection::Rtl),
     ] {
         let case = format!("{entry:?} / {direction:?}");
-        let alternatives = GestureAlternatives::new(Alternative::ContextMenu(MenuSpec::new(
+        let alternatives = GestureAlternatives::try_new(Alternative::ContextMenu(MenuSpec::new(
             GestureCommand::new("Delete Alice", Delete("Alice")),
             |_cx, _request| {},
         )))
@@ -989,7 +990,7 @@ pub(crate) fn labels_name_one_action_each() {
         ("repeats refused", ctrl_d.allow_repeats(false)),
     ];
     for (label, key) in overlapping {
-        let shared_key = GestureAlternatives::new(Alternative::ContextMenu(
+        let shared_key = GestureAlternatives::try_new(Alternative::ContextMenu(
             MenuSpec::new(keyed("Delete"), |_cx, _request| {})
                 .item(GestureCommand::new("Archive", Delete("Alice")).key(key.clone())),
         ));
@@ -999,14 +1000,14 @@ pub(crate) fn labels_name_one_action_each() {
             "{label}"
         );
     }
-    let distinct = GestureAlternatives::new(Alternative::ContextMenu(
+    let distinct = GestureAlternatives::try_new(Alternative::ContextMenu(
         MenuSpec::new(keyed("Delete"), |_cx, _request| {}).item(
             GestureCommand::new("Archive", Delete("Alice"))
                 .key(SingleActivator::character("d").control().shift()),
         ),
     ));
     assert!(distinct.is_ok(), "Ctrl+Shift+D is another key press");
-    let repeated_on_one = GestureAlternatives::new(Alternative::ContextMenu(MenuSpec::new(
+    let repeated_on_one = GestureAlternatives::try_new(Alternative::ContextMenu(MenuSpec::new(
         keyed("Delete").key(SingleActivator::character("d").control()),
         |_cx, _request| {},
     )));
@@ -1016,7 +1017,7 @@ pub(crate) fn labels_name_one_action_each() {
     );
 
     let control = |label: &str| GestureCommand::new(label.to_owned(), Delete("Alice"));
-    let duplicate = GestureAlternatives::new(Alternative::VisibleControl(
+    let duplicate = GestureAlternatives::try_new(Alternative::VisibleControl(
         ControlSpec::new(control("Delete"), SizedBox::shrink())
             .control(control("Delete"), SizedBox::shrink()),
     ));
@@ -1026,14 +1027,14 @@ pub(crate) fn labels_name_one_action_each() {
             label: "Delete".to_owned()
         })
     );
-    let menu = GestureAlternatives::new(Alternative::ContextMenu(
+    let menu = GestureAlternatives::try_new(Alternative::ContextMenu(
         MenuSpec::new(control("Delete"), |_cx, _request| {}).item(control("Delete")),
     ));
     assert!(matches!(
         menu,
         Err(GestureAlternativesError::DuplicateLabel { .. })
     ));
-    let empty = GestureAlternatives::new(Alternative::VisibleControl(ControlSpec::new(
+    let empty = GestureAlternatives::try_new(Alternative::VisibleControl(ControlSpec::new(
         control(""),
         SizedBox::shrink(),
     )));
@@ -1057,7 +1058,7 @@ pub(crate) fn reserved_keys_are_not_bound() {
         [SingleActivator::named(NamedKey::F2)],
         "only the unreserved key is bound"
     );
-    let alternatives = GestureAlternatives::new(Alternative::VisibleControl(ControlSpec::new(
+    let alternatives = GestureAlternatives::try_new(Alternative::VisibleControl(ControlSpec::new(
         command,
         SizedBox::new(16.0, 16.0),
     )))
@@ -1154,7 +1155,7 @@ pub(crate) fn controls_follow_the_reading_direction() {
         (TextDirection::Ltr, ControlPlacement::Leading, true),
         (TextDirection::Rtl, ControlPlacement::Leading, false),
     ] {
-        let alternatives = GestureAlternatives::new(Alternative::VisibleControl(
+        let alternatives = GestureAlternatives::try_new(Alternative::VisibleControl(
             ControlSpec::new(
                 GestureCommand::new("Delete Alice", Delete("Alice")),
                 SizedBox::new(16.0, 16.0),
@@ -1203,7 +1204,7 @@ pub(crate) fn the_revealed_menu_control_names_its_target() {
         (Some("Alice"), "Actions for Alice", true),
     ];
     for (target, label, localized) in rows {
-        let alternatives = GestureAlternatives::new(Alternative::ContextMenu(MenuSpec::new(
+        let alternatives = GestureAlternatives::try_new(Alternative::ContextMenu(MenuSpec::new(
             GestureCommand::new("Delete Alice", Delete("Alice")),
             |_cx, _request| {},
         )))
@@ -1263,7 +1264,7 @@ pub(crate) fn the_revealed_menu_control_draws_its_glyph_on_its_own_surface() {
     use flui_painting::typography::TextStyle;
     use flui_widgets::DefaultTextStyle;
 
-    let alternatives = GestureAlternatives::new(Alternative::ContextMenu(MenuSpec::new(
+    let alternatives = GestureAlternatives::try_new(Alternative::ContextMenu(MenuSpec::new(
         GestureCommand::new("Delete Alice", Delete("Alice")),
         |_cx, _request| {},
     )))
@@ -1354,7 +1355,7 @@ pub(crate) fn the_revealed_menu_control_draws_its_glyph_on_its_own_surface() {
 /// reserved key is reported once, not again on each rebuild.
 pub(crate) fn an_unanswered_intent_and_a_reserved_key_are_reported() {
     let row = || {
-        GestureAlternatives::new(Alternative::VisibleControl(ControlSpec::new(
+        GestureAlternatives::try_new(Alternative::VisibleControl(ControlSpec::new(
             GestureCommand::new("Delete Alice", Delete("Alice"))
                 .key(SingleActivator::named(NamedKey::Escape)),
             SizedBox::new(16.0, 16.0),
@@ -1482,7 +1483,7 @@ impl std::fmt::Debug for PageButtonsState {
 /// Page commands whose single-pointer path is the buttons of `link`'s
 /// companion.
 fn companion_page_alternatives(link: &CompanionLink<PageIntent>) -> GestureAlternatives {
-    GestureAlternatives::new(Alternative::Companion(
+    GestureAlternatives::try_new(Alternative::Companion(
         CompanionSpec::new(
             GestureCommand::new("Previous page", PageIntent::Previous)
                 .key(SingleActivator::character("[").control()),
@@ -1651,7 +1652,7 @@ pub(crate) fn a_companion_command_must_perform_an_intent_its_link_carries() {
     use flui_widgets::AnchorIntent;
 
     let link = CompanionLink::<PageIntent>::new();
-    let foreign = GestureAlternatives::new(Alternative::Companion(
+    let foreign = GestureAlternatives::try_new(Alternative::Companion(
         CompanionSpec::new(GestureCommand::new("Next page", PageIntent::Next), &link)
             .command(GestureCommand::new("Collapse sheet", AnchorIntent::Next)),
     ));

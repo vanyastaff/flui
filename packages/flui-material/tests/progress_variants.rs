@@ -481,7 +481,7 @@ pub fn material_app_refresh_shows_the_circular_indicator() {
     let (primary, track) = colors();
     let refresh = RefreshController::new();
     let vsync = Vsync::new();
-    let alternatives = GestureAlternatives::new(Alternative::VisibleControl(ControlSpec::new(
+    let alternatives = GestureAlternatives::try_new(Alternative::VisibleControl(ControlSpec::new(
         RefreshIntent::command("Refresh"),
         SizedBox::new(24.0, 24.0),
     )))
@@ -823,7 +823,7 @@ pub fn expressive_material_app_refresh_shows_the_loading_indicator() {
     let (primary, _) = colors();
     let refresh = RefreshController::new();
     let vsync = Vsync::new();
-    let alternatives = GestureAlternatives::new(Alternative::VisibleControl(ControlSpec::new(
+    let alternatives = GestureAlternatives::try_new(Alternative::VisibleControl(ControlSpec::new(
         RefreshIntent::command("Refresh"),
         SizedBox::new(24.0, 24.0),
     )))

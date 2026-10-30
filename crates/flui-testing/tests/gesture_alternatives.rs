@@ -198,7 +198,7 @@ fn mount(subject: Subject) -> AlternativesSubject<u32> {
         }
         _ => Alternative::VisibleControl(ControlSpec::new(command, SizedBox::new(16.0, 16.0))),
     };
-    let alternatives = GestureAlternatives::new(alternative).expect("one labelled command");
+    let alternatives = GestureAlternatives::try_new(alternative).expect("one labelled command");
     let extra = Rc::clone(&removed);
     let mut card = Dismissible::new(
         SizedBox::new(300.0, 50.0).child(ColoredBox::new(Color::rgb(10, 20, 30))),

@@ -137,7 +137,7 @@ start" and "move to end" actions.
 ### 4. The shape
 
 ```rust
-GestureAlternatives::new(Alternative) -> Result<GestureAlternatives, GestureAlternativesError>
+GestureAlternatives::try_new(Alternative) -> Result<GestureAlternatives, GestureAlternativesError>
 enum Alternative { VisibleControl(ControlSpec), ContextMenu(MenuSpec), Companion(CompanionSpec) }
 ControlSpec::new(GestureCommand, content).control(GestureCommand, content).placement(ControlPlacement)
 MenuSpec::new(GestureCommand, presenter: impl Fn(&mut EventCx, MenuRequest)).item(GestureCommand)
@@ -173,7 +173,7 @@ GestureAlternatives::handle(&self, &dyn BuildContext) -> CommandHandle   // the 
   `MenuSpec`'s presenter, which receives the items, the cause and the pointer position;
   `assert_gesture_alternatives` finds the items it shows in the semantics tree.
 - **Companions.** A `CompanionLink<I>` is an `Rc`: clones are one link and equality is the
-  allocation's, and `GestureAlternatives::new` refuses a companion command whose intent is not an
+  allocation's, and `GestureAlternatives::try_new` refuses a companion command whose intent is not an
   `I` (`GestureAlternativesError::ForeignIntent`). A `CompanionRegistration` ends when it is
   dropped, which is how a companion leaves on unmount. Nothing is borrowed while a companion's
   resolver, or the captures of a registration being dropped, run, so a companion may register or

@@ -158,7 +158,7 @@ impl Screen {
 }
 
 fn extents() -> HeaderExtents {
-    HeaderExtents::new(COLLAPSED, EXPANDED).expect("ordered, finite extents")
+    HeaderExtents::try_new(COLLAPSED, EXPANDED).expect("ordered, finite extents")
 }
 
 fn near(value: f64, expected: f64) -> bool {
@@ -605,7 +605,7 @@ pub(crate) fn collapsing_header_is_a_banner_assistive_scrolls_expand_and_collaps
 /// refused.
 pub(crate) fn collapsing_header_with_equal_extents_takes_no_scroll() {
     for device in DEVICES {
-        let fixed = HeaderExtents::new(EXPANDED, EXPANDED).expect("equal extents");
+        let fixed = HeaderExtents::try_new(EXPANDED, EXPANDED).expect("equal extents");
         let mut screen = Screen::new(fixed, |header| {
             header
                 .expands(HeaderOrder::BeforeContent)
@@ -641,13 +641,13 @@ pub(crate) fn collapsing_header_with_equal_extents_takes_no_scroll() {
         (20.0, 10.0, HeaderExtentsError::Inverted),
     ] {
         assert_eq!(
-            HeaderExtents::new(collapsed, expanded),
+            HeaderExtents::try_new(collapsed, expanded),
             Err(error),
             "{collapsed}..{expanded}"
         );
     }
     assert!(
-        HeaderExtents::new(0.0, 0.0).is_ok(),
+        HeaderExtents::try_new(0.0, 0.0).is_ok(),
         "a header of no extent is admitted"
     );
 }
