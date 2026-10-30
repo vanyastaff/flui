@@ -11,7 +11,7 @@ use std::time::Duration;
 use flui_foundation::geometry::{Offset, Point};
 use flui_interaction::events::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey};
 use flui_interaction::testing::input::KeyEventBuilder;
-use flui_painting::typography::TextDirection;
+use flui_painting::typography::{TextDirection, TextStyle};
 use flui_platform::EventTime;
 use flui_platform::pointer::{
     PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove,
@@ -609,4 +609,48 @@ pub(crate) fn shown_handles_rebuild_with_a_new_direction() {
             .all(|info| info.text_direction == TextDirection::Rtl),
         "{last:?}"
     );
+}
+
+/// Handles built in the frame that lays their text out anew read the old
+/// line, since a build runs before layout; after the frame they are sized
+/// to the new one.
+///
+/// Red-check: skip the rebuild after the frame (the handles keep the old
+/// line).
+pub(crate) fn shown_handles_follow_their_text_laid_out_anew() {
+    let area = |handles: Marked, size: f64| {
+        SelectionArea::new(Column::new((
+            Text::new(WORDS).style(TextStyle::new().with_font_size(size)),
+        )))
+        .handles(handles)
+    };
+    let (first, second) = (Marked::default(), Marked::default());
+    let mut scene = Scene::laid_out(WidgetsApp::new(area(first.clone(), 14.0)), Rc::default());
+    scene.long_press(scene.along(width_of("al")));
+    assert_eq!(scene.handles(), 2);
+    let before = first.0.borrow().last().expect("built").line_height;
+
+    scene
+        .laid
+        .pump_widget(WidgetsApp::new(area(second.clone(), 28.0)));
+    scene.settle();
+    assert_eq!(scene.handles(), 2);
+    let built = second.0.borrow().clone();
+    assert!(
+        built.len() >= 2
+            && built
+                .iter()
+                .rev()
+                .take(2)
+                .all(|info| info.line_height > before * 1.5),
+        "{built:?} after {before}"
+    );
+
+    // The same handles over text laid out anew.
+    scene
+        .laid
+        .pump_widget(WidgetsApp::new(area(second.clone(), 14.0)));
+    scene.settle();
+    let last = second.0.borrow().last().expect("built").line_height;
+    assert!((last - before).abs() < 0.5, "{last} after {before}");
 }

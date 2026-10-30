@@ -602,6 +602,7 @@ fn selection_area_handles() {
             ("selection_area_handles::a_failing_primary_release_still_takes_the_handles_away", crate::selection_area_handles::a_failing_primary_release_still_takes_the_handles_away),
             ("selection_area_handles::shown_handles_rebuild_with_a_new_direction", crate::selection_area_handles::shown_handles_rebuild_with_a_new_direction),
             ("selection_area_handles::a_handle_released_past_its_last_move_ends_there", crate::selection_area_handles::a_handle_released_past_its_last_move_ends_there),
+            ("selection_area_handles::shown_handles_follow_their_text_laid_out_anew", crate::selection_area_handles::shown_handles_follow_their_text_laid_out_anew),
             ("selection_area_handles::shown_handles_rebuild_with_new_handles", crate::selection_area_handles::shown_handles_rebuild_with_new_handles),
             ("selection_area_handles::a_panicking_listener_still_shows_the_handles", crate::selection_area_handles::a_panicking_listener_still_shows_the_handles),
         ],

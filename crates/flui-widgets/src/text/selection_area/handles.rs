@@ -191,6 +191,11 @@ pub(super) struct HandleState {
     entry: RefCell<Option<OverlayEntry>>,
     /// What the handles look like, resolved at the area's last build.
     look: RefCell<Option<Look>>,
+    /// The line heights the shown handles were last built for, `None`
+    /// for an end that was not laid out.
+    built: Cell<[Option<f64>; 2]>,
+    /// Whether a check of the built line heights waits for the frame.
+    check_pending: Cell<bool>,
     /// Where a handle drag holds the end, relative to the contact.
     pub(super) grip: Cell<Option<(HandleSide, Offset<f64>)>>,
     /// Whether the missing overlay was already reported.
@@ -205,6 +210,8 @@ impl Default for HandleState {
             overlay: RefCell::new(None),
             entry: RefCell::new(None),
             look: RefCell::new(None),
+            built: Cell::new([None; 2]),
+            check_pending: Cell::new(false),
             grip: Cell::new(None),
             warned: Cell::new(false),
         }
@@ -305,9 +312,13 @@ impl StatelessView for HandlesView {
             .model
             .upgrade()
             .map(|model| {
+                let heights = model.end_line_heights();
+                model.handles.built.set(heights);
+                model.check_handles_after_frame();
                 [HandleSide::Start, HandleSide::End]
                     .into_iter()
-                    .filter_map(|side| handle(&model, side, ctx))
+                    .zip(heights)
+                    .filter_map(|(side, height)| handle(&model, side, height?, ctx))
                     .collect()
             })
             .unwrap_or_default();
@@ -315,14 +326,55 @@ impl StatelessView for HandlesView {
     }
 }
 
-/// `side`'s handle, under its end, which a drag moves; `None` while the
-/// end is nowhere laid out.
+impl SelectionModel {
+    /// The heights of the lines the start and the end sit on, each `None`
+    /// while its end is nowhere laid out.
+    fn end_line_heights(&self) -> [Option<f64>; 2] {
+        [
+            self.end_line_height(HandleSide::Start),
+            self.end_line_height(HandleSide::End),
+        ]
+    }
+
+    /// After the frame, rebuilds shown handles built for lines that have
+    /// since been laid out again: a build runs before layout, so handles
+    /// built in the frame that changes their text read the old lines, or
+    /// none. Without a post-frame lane they keep what they were built for.
+    pub(super) fn check_handles_after_frame(self: &Rc<Self>) {
+        if !self.handles.shown.get() || self.handles.check_pending.replace(true) {
+            return;
+        }
+        let Some(post_frame) = self.post_frame.borrow().clone() else {
+            self.handles.check_pending.set(false);
+            return;
+        };
+        let model = Rc::downgrade(self);
+        let scheduled = post_frame.schedule(move |_| {
+            let Some(model) = Weak::upgrade(&model) else {
+                return;
+            };
+            model.handles.check_pending.set(false);
+            if model.handles.shown.get() && model.end_line_heights() != model.handles.built.get() {
+                let mut failure = FirstPanic::new();
+                model.handles.refresh(&mut failure);
+                failure.resume();
+            }
+        });
+        if let Err(error) = scheduled {
+            self.handles.check_pending.set(false);
+            tracing::warn!(?error, "SelectionArea: the post-frame lane is closed");
+        }
+    }
+}
+
+/// `side`'s handle, under its end on a line `line_height` tall, which a
+/// drag moves.
 fn handle(
     model: &Rc<SelectionModel>,
     side: HandleSide,
+    line_height: f64,
     ctx: &dyn BuildContext,
 ) -> Option<BoxedView> {
-    let line_height = model.end_line_height(side)?;
     let look = model.handles.look.borrow().clone()?;
     let info = HandleInfo {
         side,
