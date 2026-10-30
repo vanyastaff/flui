@@ -581,6 +581,9 @@ impl LifecycleContext for ElementBuildContext {
     fn writer_source(&self) -> crate::WriterSource {
         crate::WriterSource::new(self.reads.graph().clone())
     }
+    fn build_phase(&self) -> flui_foundation::BuildPhase {
+        self.reads.graph().build_phase()
+    }
     fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver> {
         self.owner.read().async_driver().cloned()
     }
@@ -617,6 +620,9 @@ impl LifecycleContext for ElementBuildContext {
     }
     fn storage(&self) -> Option<std::sync::Arc<dyn flui_platform::Storage>> {
         self.owner.read().capabilities().storage.clone()
+    }
+    fn close_guard(&self) -> Option<crate::CloseGuard> {
+        self.owner.read().capabilities().close_guard.clone()
     }
     fn flush_registry_in_crate(
         &self,
@@ -1036,6 +1042,9 @@ impl LifecycleContext for BuildCtx<'_> {
     fn writer_source(&self) -> crate::WriterSource {
         crate::WriterSource::new(self.capabilities.reads.graph().clone())
     }
+    fn build_phase(&self) -> flui_foundation::BuildPhase {
+        self.capabilities.reads.graph().build_phase()
+    }
     fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver> {
         self.capabilities.async_driver.clone()
     }
@@ -1066,6 +1075,9 @@ impl LifecycleContext for BuildCtx<'_> {
     }
     fn storage(&self) -> Option<std::sync::Arc<dyn flui_platform::Storage>> {
         self.capabilities.presentation.storage.clone()
+    }
+    fn close_guard(&self) -> Option<crate::CloseGuard> {
+        self.capabilities.presentation.close_guard.clone()
     }
     fn flush_registry_in_crate(
         &self,

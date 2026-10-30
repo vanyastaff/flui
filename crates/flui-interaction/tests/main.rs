@@ -25,6 +25,15 @@ mod focus_retention;
 
 mod focus_keys;
 
+#[path = "composition_ledger.rs"]
+mod composition_ledger;
+
+#[path = "ime_projection.rs"]
+mod ime_projection;
+
+#[path = "lock_gate.rs"]
+mod lock_gate;
+
 #[path = "text_store_host.rs"]
 mod text_store_host;
 

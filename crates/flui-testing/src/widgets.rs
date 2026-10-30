@@ -507,28 +507,38 @@ impl LaidOut {
         self.host.ui_runtime().set_system_preferences(values);
     }
 
-    /// Close the tree's presentation for `reason`, as the host does once the
-    /// close is agreed: its lifecycle observers are told it is detached, its
-    /// held input is dropped, and later lifecycle updates are ignored. The
-    /// tree stays mounted until this `LaidOut` drops.
-    ///
-    /// Not yet the host's shared close delivery: `reason` is not consulted,
-    /// so a close guard's holds do not refuse it.
-    pub fn request_close(&self, reason: flui_view::CloseReason) {
-        let _ = reason;
-        self.host
+    /// Ask to close the tree's presentation for `reason`, as its platform
+    /// does. The presentation's close guard is asked first: a close it
+    /// refuses is recorded and nothing changes, and the pump after its last
+    /// hold is released carries the close out. Otherwise the presentation
+    /// closes now: its lifecycle observers are told it is detached, its held
+    /// input is dropped, and later lifecycle updates are ignored. The tree
+    /// stays mounted until this `LaidOut` drops. `true` when it closed now.
+    pub fn request_close(&self, reason: flui_view::CloseReason) -> bool {
+        let runtime = self.host.ui_runtime();
+        if runtime
+            .ui_runtime()
+            .close_refused(runtime.ui_runtime().presentation_id(), reason)
+        {
+            return false;
+        }
+        runtime
             .ui_runtime()
             .enter(flui_runtime::ui_runtime::UiRuntime::stop_presentations);
+        true
     }
 
     /// End the session the tree runs in, as the operating system does at log
-    /// off or shut down: the presentation is closed for
-    /// [`CloseReason::SessionEnd`](flui_view::CloseReason::SessionEnd).
-    ///
-    /// Not yet the host's session end: nothing is flushed, and the close is
-    /// [`request_close`](Self::request_close)'s.
+    /// off or shut down once the session is ending: what the documents
+    /// published is written, then the presentation closes, past every hold
+    /// ([`CloseReason::SessionEnd`](flui_view::CloseReason::SessionEnd) can
+    /// no longer be refused once the session is ending).
     pub fn end_session(&self) {
-        self.request_close(flui_view::CloseReason::SessionEnd);
+        let runtime = self.host.ui_runtime();
+        let _answer = runtime.end_session(flui_platform::SessionEndPhase::Ending);
+        runtime
+            .ui_runtime()
+            .enter(flui_runtime::ui_runtime::UiRuntime::stop_presentations);
     }
 
     /// Deliver an accessibility action to the node it addresses, as a platform

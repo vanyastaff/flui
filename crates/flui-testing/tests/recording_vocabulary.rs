@@ -824,3 +824,49 @@ fn every_vocabulary_variant_round_trips_through_the_recording_dto() {
         changed.join("\n")
     );
 }
+
+/// The JSON a preferences row is written as, field for field: the row's schema
+/// is shared with the native recording's (`flui-protocol`), and sharing it must
+/// not change a byte of recordings already written.
+#[test]
+fn preference_rows_keep_their_json_spelling() {
+    let rows = [
+        preferences(full_preferences()),
+        preferences(
+            SystemPreferences::default()
+                .with_motion(MotionPreference::from_duration_scale(0.5).expect("finite"))
+                .with_text_weight(TextWeightPreference::from_adjustment(-100))
+                .with_wheel(WheelPreferences::default().with_vertical(WheelStep::Page)),
+        ),
+        preferences(SystemPreferences::default()),
+    ];
+    let mut writer =
+        RecordingWriter::new(Vec::new(), &RecordingHeader::new(RecordingClock::Monotonic))
+            .expect("header");
+    for row in &rows {
+        writer.write(row).expect("row");
+    }
+    let bytes = writer.finish().expect("flush");
+    let text = String::from_utf8(bytes).expect("JSON Lines are UTF-8");
+    let written: Vec<&str> = text.lines().skip(1).collect();
+    assert_eq!(
+        written,
+        [
+            concat!(
+                r#"{"preferences":{"revision":7,"text_scale":1.25,"motion":"reduce","#,
+                r#""high_contrast":true,"haptics":false,"text_weight":"bold","#,
+                r#""locales":["en-US","ar-EG"],"gestures":{"double_click_interval_ns":500000000,"#,
+                r#""double_tap_interval_ns":300000000,"long_press_timeout_ns":450000000,"#,
+                r#""native_mouse_geometry":{"double_click_area":[4,4],"drag_tolerance":[2,3],"#,
+                r#""pixel_ratio":1.5},"native_touch_geometry":{"touch_slop":8,"#,
+                r#""double_tap_slop":100,"min_fling":50,"max_fling":8000,"pixel_ratio":1.5}},"#,
+                r#""wheel_vertical":{"lines":3},"wheel_horizontal_characters":2}}"#,
+            ),
+            concat!(
+                r#"{"preferences":{"revision":7,"motion":{"scaled":0.5},"#,
+                r#""text_weight":{"adjustment":-100},"gestures":{},"wheel_vertical":"page"}}"#,
+            ),
+            r#"{"preferences":{"revision":7,"gestures":{}}}"#,
+        ]
+    );
+}

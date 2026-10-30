@@ -227,7 +227,7 @@ impl PageController {
         if position.has_applied_viewport_dimension() {
             let metrics = ScrollMetrics::from(&position);
             let pixels = metrics.pixels_from_page(self.viewport_fraction(), page_f);
-            self.scroll.animate_to(pixels, duration, curve);
+            let _ = self.scroll.animate_to(pixels, duration, curve);
         } else {
             position.set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
                 viewport_fraction: self.viewport_fraction(),

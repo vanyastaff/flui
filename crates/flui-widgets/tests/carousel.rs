@@ -213,7 +213,7 @@ fn items_are_masked_to_the_keylines_they_pass() {
     // Between two resting offsets every shown item is masked to where the geometry places it,
     // strictly between the extents of the keylines on either side.
     let between = f64::midpoint(shape.rest_offset(1), shape.rest_offset(2));
-    controller.jump_to_item(1);
+    controller.jump_to_item(1).expect("no build is running");
     laid.tick();
     assert_eq!(
         seen.shown(1),
@@ -253,7 +253,7 @@ fn a_tap_lands_only_where_an_item_shows() {
 fn the_controller_tracks_one_carousel() {
     let controller = CarouselController::new();
     assert_eq!(controller.index(), None, "not taken by a carousel");
-    controller.animate_to_item(2);
+    controller.animate_to_item(2).expect("no build is running");
     let seen = Seen::default();
     let mut laid = mount(seen.carousel(10).controller(controller.clone()));
     laid.tick();
@@ -263,7 +263,9 @@ fn the_controller_tracks_one_carousel() {
         "opened on the item asked for before layout"
     );
 
-    controller.jump_to_item(usize::MAX);
+    controller
+        .jump_to_item(usize::MAX)
+        .expect("no build is running");
     laid.tick();
     assert_eq!(controller.index(), Some(9), "past the end is the last item");
 
@@ -272,7 +274,7 @@ fn the_controller_tracks_one_carousel() {
 
     let empty = CarouselController::new();
     let mut laid = mount(seen.carousel(0).controller(empty.clone()));
-    empty.jump_to_item(3);
+    empty.jump_to_item(3).expect("no build is running");
     laid.tick();
     assert_eq!(empty.index(), None, "an empty carousel has no active item");
 }
@@ -285,7 +287,7 @@ fn a_second_carousel_runs_on_its_own_controller() {
         flui_widgets::Expanded::new(first.carousel(10).controller(controller.clone())).boxed(),
         flui_widgets::Expanded::new(second.carousel(10).controller(controller.clone())).boxed(),
     ]));
-    controller.jump_to_item(4);
+    controller.jump_to_item(4).expect("no build is running");
     laid.tick();
     assert_eq!(controller.index(), Some(4));
     let large = first.shown(4).expect("the first carousel moved");
@@ -307,7 +309,7 @@ fn index_changes_are_heard_once_each() {
             heard.borrow_mut().push(index);
             // Moving again from inside the callback holds no borrow of the controller.
             if index == 3 {
-                again.jump_to_item(5);
+                again.jump_to_item(5).expect("no build is running");
             }
         });
     }
@@ -320,7 +322,7 @@ fn index_changes_are_heard_once_each() {
         "the first item is no change"
     );
 
-    controller.jump_to_item(3);
+    controller.jump_to_item(3).expect("no build is running");
     settle(&mut laid);
     assert_eq!(*heard.borrow(), [3, 5]);
     assert_eq!(controller.index(), Some(5));
@@ -330,7 +332,7 @@ fn index_changes_are_heard_once_each() {
         let replaced = Rc::clone(&replaced);
         controller.on_index_changed(move |_cx, index| replaced.borrow_mut().push(index));
     }
-    controller.jump_to_item(1);
+    controller.jump_to_item(1).expect("no build is running");
     settle(&mut laid);
     assert_eq!(
         *heard.borrow(),
@@ -351,7 +353,7 @@ fn single_advance_moves_one_item_from_where_the_drag_began() {
     ];
     for (start, from, to, expected) in cases {
         let controller = CarouselController::new();
-        controller.jump_to_item(start);
+        controller.jump_to_item(start).expect("no build is running");
         let seen = Seen::default();
         let mut laid = mount(
             seen.carousel(10)
@@ -436,7 +438,7 @@ fn reduced_motion_stops_autoplay_and_moves_at_once() {
         "no autoplay under reduced motion"
     );
 
-    controller.animate_to_item(2);
+    controller.animate_to_item(2).expect("no build is running");
     laid.tick();
     assert_eq!(controller.index(), Some(2), "the move takes one frame");
 }
@@ -482,7 +484,7 @@ fn items_are_numbered_and_scroll_actions_stop_at_the_ends() {
     );
     assert!(view.supports_action(Action::ScrollRight));
 
-    controller.jump_to_item(4);
+    controller.jump_to_item(4).expect("no build is running");
     laid.tick();
     let tree = laid.a11y_tree().expect("republished semantics");
     let view = tree.find_by_label("Photos").expect("the scroll view");

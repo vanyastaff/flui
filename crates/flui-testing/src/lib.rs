@@ -142,7 +142,7 @@ pub use gesture_alternatives::{
 };
 pub use host::{
     HeadlessDevAgent, HeadlessHost, HeadlessOsDrags, HeadlessSink, HeadlessWindow,
-    HeadlessWindowId, NotSettled, StartedOsDrag,
+    HeadlessWindowId, NotSettled, SESSION_END_BUDGET, StartedOsDrag,
 };
 pub use log_capture::{CapturedLog, CapturedRecord, capture, disarm_interest_cache};
 pub use ownership::assert_ownership_table;
@@ -607,6 +607,8 @@ impl HeadlessBinding {
             build_owner.set_interaction_dispatch_handle(self.interaction_dispatch_handle());
             self.install_hit_test_capability(&mut build_owner, &pipeline_owner);
         }
+        // Controllers ticked here refuse mutation while this tree builds.
+        self.vsync.set_build_phase(Some(build_owner.build_phase()));
         self.tree = Some(TreeBinding {
             build_owner,
             tree,
@@ -645,6 +647,9 @@ impl HeadlessBinding {
         }
         let (alive, request_frame) = Self::registry_driver(&self.scheduler);
         self.vsync_driver_alive = alive;
+        if let Some(tree) = &self.tree {
+            vsync.set_build_phase(Some(tree.build_owner.build_phase()));
+        }
         let outgoing = std::mem::replace(&mut self.vsync, vsync);
         Self::complete_driver_replacement(&self.vsync, request_frame, outgoing);
     }

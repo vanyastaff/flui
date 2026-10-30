@@ -32,6 +32,7 @@ use flui_scheduler::{
 };
 use flui_semantics::platform::PlatformAccessibility;
 use flui_semantics::{SemanticsActionError, SemanticsActionRequest};
+use flui_view::__runtime::CloseGuardSource;
 use flui_view::{
     __runtime::{BindingRuntime as _, FramePhaseMarker},
     BuildInProgress, GlobalKeyScope, WidgetsBinding,
@@ -92,6 +93,9 @@ pub(crate) struct RuntimeCapabilities<'a> {
     /// The UI runtime's byte storage, if it has one, handed to widgets through
     /// `LifecycleContext::storage`.
     pub(crate) storage: Option<Arc<dyn flui_platform::Storage>>,
+    /// What the presentation closes and persists through: its close guard's
+    /// vetoes and signal, and the host's flush registry.
+    pub(crate) close: crate::runtime_services::CloseServices,
     /// Where the UI runtime reads time: this presentation's gesture arena and
     /// [`FrameClock`] read the same source as the UI runtime's frame clock.
     pub(crate) clock: &'a ClockSource,
@@ -437,6 +441,10 @@ pub struct PresentationState {
     /// The bounds the agent's actionability check last read, to tell whether
     /// an element holds still. Owner thread only.
     pub(crate) agent_stability: RefCell<crate::ui_runtime::AgentStability>,
+    /// Actions the agent ran that owe a reading of the tree once a frame has
+    /// passed. Answered by `UiRuntime::complete_agent_reads` after a frame,
+    /// and as failed when the presentation closes first. Owner thread only.
+    pub(crate) agent_reads: RefCell<Vec<crate::ui_runtime::PendingActRead>>,
     /// The window this presentation is shown in, as the host controls it, once
     /// `UiRuntime::install_window` has attached it. Closed before the
     /// presentation's terminal notification, so a handle held past the close
@@ -453,6 +461,11 @@ pub struct PresentationState {
     /// registry (composed into the UI runtime's whole-frame composite by
     /// `UiRuntime::enter`, never activated standalone in production).
     widgets: WidgetsBinding,
+    /// The presentation's close guard: its widgets hold the close through
+    /// [`CloseGuard`](flui_view::CloseGuard), the host asks it whether a close
+    /// may proceed, and the owner settles it on its turn. One per
+    /// presentation, so it outlives every remount of the root.
+    close_guard: CloseGuardSource,
     /// Render tree, layout/paint pipeline coordination, and this
     /// presentation's own semantics-enablement fan-out. Moved from the
     /// retired UI runtime-level singular `UiRuntime::renderer`: `render_views`,
@@ -823,6 +836,10 @@ impl PresentationState {
 
         // Frames and retirements wake the runtime so the raster lane applies them.
         let textures = flui_layer::TextureRegistry::new(Arc::clone(&capabilities.wake));
+        let close_guard = CloseGuardSource::new(
+            &capabilities.close.vetoes,
+            capabilities.close.notify.clone(),
+        );
         let widgets = WidgetsBinding::with_focus_manager(Rc::clone(&focus));
         widgets.set_pipeline_owner(pipeline.clone());
         widgets.with_build_owner_mut(|owner| {
@@ -831,6 +848,9 @@ impl PresentationState {
             owner.set_async_driver(capabilities.async_driver);
             owner.set_post_frame_handle(capabilities.completion_scope.post_frame_handle());
             owner.set_interaction_dispatch_handle(interaction_dispatch.clone());
+            if let Some(registry) = capabilities.close.flush_registry.clone() {
+                owner.set_flush_registry(registry);
+            }
             let presentation = owner.capabilities_mut();
             presentation.text_input = Some(text_input.handle());
             presentation.clipboard = Some(flui_interaction::ClipboardHandle::new(
@@ -838,6 +858,7 @@ impl PresentationState {
             ));
             presentation.textures = Some(textures.clone());
             presentation.storage = capabilities.storage;
+            presentation.close_guard = Some(close_guard.guard());
             // Paired here, the one place holding both halves: the ui_runtime's
             // dispatch ticket (identity) and THIS presentation's pipeline
             // (the tree). A ui_runtime may host several presentations, each with
@@ -897,6 +918,10 @@ impl PresentationState {
             }
         });
         let vsync = Vsync::new();
+        // Controllers ticked here refuse mutation while this runtime builds.
+        vsync.set_build_phase(Some(
+            widgets.with_build_owner(flui_view::BuildOwner::build_phase),
+        ));
         let request_animation_frame = Arc::clone(&request_frame);
         let animation_owner = Rc::downgrade(&alive);
         vsync.set_frame_requester(Some(Rc::new(move || {
@@ -1020,9 +1045,11 @@ impl PresentationState {
             semantics,
             dev_agent: RefCell::new(None),
             agent_stability: RefCell::default(),
+            agent_reads: RefCell::default(),
             window_control: RefCell::new(None),
             window_placement: Cell::new(None),
             widgets,
+            close_guard,
             renderer,
             frames_rendered: Cell::new(0),
             frames_dropped: Cell::new(0),
@@ -1144,9 +1171,14 @@ impl PresentationState {
             semantics,
             dev_agent: RefCell::new(None),
             agent_stability: RefCell::default(),
+            agent_reads: RefCell::default(),
             window_control: RefCell::new(None),
             window_placement: Cell::new(None),
             widgets,
+            close_guard: CloseGuardSource::new(
+                &[],
+                flui_view::__runtime::OwnerNotify::new(|_| Ok(())),
+            ),
             renderer,
             frames_rendered: Cell::new(0),
             frames_dropped: Cell::new(0),
@@ -1189,6 +1221,11 @@ impl PresentationState {
 
     /// This presentation's own widget framework state.
     #[must_use]
+    /// The presentation's close guard.
+    pub(crate) fn close_guard(&self) -> &CloseGuardSource {
+        &self.close_guard
+    }
+
     pub(crate) fn widgets(&self) -> &WidgetsBinding {
         &self.widgets
     }
@@ -1816,6 +1853,15 @@ impl PresentationState {
         }
     }
 
+    /// Answers every reading an agent's action still owes as failed: the
+    /// presentation closes before a frame could take it. The actions ran.
+    pub(crate) fn abandon_agent_reads(&self) {
+        let owed = std::mem::take(&mut *self.agent_reads.borrow_mut());
+        for pending in owed {
+            pending.abandon();
+        }
+    }
+
     /// The latest terminal frame result's revision.
     pub(crate) fn tree_revision(&self) -> TreeRevision {
         self.tree_revision.get()
@@ -2217,6 +2263,7 @@ impl PresentationState {
         if let Some(agent) = &agent {
             agent.withdraw();
         }
+        self.abandon_agent_reads();
         let window_control = self.window_control.take();
         if let Some(window) = &window_control {
             failure.invoke(|| window.close());
@@ -2336,6 +2383,7 @@ impl PresentationState {
         if let Some(agent) = &*self.dev_agent.borrow() {
             agent.withdraw();
         }
+        self.abandon_agent_reads();
         flui_interaction::__runtime::withdraw_focus(&self.focus);
         flui_interaction::__runtime::withdraw_text_input(&self.text_input);
         keys

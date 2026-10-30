@@ -533,7 +533,7 @@ fn scrolling_between_push_and_pop_moves_the_reverse_end() {
     let mut rig = rig(ContainerTransition::Fade);
     rig.open();
     rig.settle();
-    rig.scroll.jump_to(shift);
+    rig.scroll.jump_to(shift).expect("no build is running");
     rig.app.pump_for(ms(16));
     rig.dismiss();
     rig.app.pump_for(ms(285));

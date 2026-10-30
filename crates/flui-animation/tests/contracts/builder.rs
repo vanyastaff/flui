@@ -50,7 +50,7 @@ fn non_finite_initial_value(input: f64, bounded: bool, expected: f64) {
             1,
             "invalid initialization must be observable"
         );
-        controller.set_value(f64::NAN);
+        controller.set_value(f64::NAN).expect("no build is running");
         assert_eq!(
             warnings.load(Ordering::Relaxed),
             1,

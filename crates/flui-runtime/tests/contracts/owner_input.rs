@@ -924,9 +924,9 @@ type NestedLocks = Rc<RefCell<Vec<String>>>;
 /// drop `finish_checkout` from `return_to_owner` — the queued grant has not
 /// run when the dispatch returns.
 fn a_platform_entry_while_the_runtime_is_checked_out_runs_no_owner_code() {
+    use flui_interaction::testing::InMemoryTextStore;
     use flui_platform::text_store::{
-        Composition, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore, Utf16Offset,
-        Utf16Range,
+        Composition, LockGrant, LockOutcome, LockTiming, TextStore, Utf16Offset, Utf16Range,
     };
 
     let owner = OwnerHost::new();

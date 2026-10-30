@@ -245,11 +245,11 @@ impl WindowInstall {
     ))]
     pub(super) fn close_requests(&mut self, handler: Option<CloseRequestHandler>) {
         let address = self.prepared.address();
-        self.native.close = Some(PreparedCloseRequest::new(
-            address,
-            self.window.native(),
-            handler,
-        ));
+        let mut close = PreparedCloseRequest::new(address, self.window.native(), handler);
+        if let Some(guard) = self.prepared.close_guard() {
+            close = close.with_guard(guard);
+        }
+        self.native.close = Some(close);
         let router = self.host.native().close_requests();
         let closing = Rc::downgrade(self.window.native());
         WindowRoutes::of(&**self.window.native()).route_close_requested(

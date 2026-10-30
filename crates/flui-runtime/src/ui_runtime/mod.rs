@@ -119,8 +119,8 @@ mod recording;
 mod sampling;
 
 pub use crate::runtime_services::RuntimeHostServices;
-pub(crate) use agent::DevAgentSlot;
 pub use agent::{AgentError, AgentReply, SemanticsAgent};
+pub(crate) use agent::{DevAgentSlot, PendingActRead};
 pub(crate) use agent_stability::AgentStability;
 pub use commands::{CommandSendError, DrainReport, UiCommand, UiCommandSender};
 use input::FocusCoordinator;
@@ -247,6 +247,9 @@ pub struct UiRuntime {
     /// (`LifecycleContext::storage`), if the host gave it one; installed
     /// like [`Self::clipboard`].
     storage: Option<Arc<dyn flui_platform::Storage>>,
+    /// What every presentation closes and persists through, installed like
+    /// [`Self::clipboard`].
+    close: crate::runtime_services::CloseServices,
     /// The UI runtime's owner-thread text service (ADR-0092 §3): a `TextContext`
     /// over the app's font collection, built in
     /// [`RuntimeServices::construct`](crate::runtime_services::RuntimeServices::construct).

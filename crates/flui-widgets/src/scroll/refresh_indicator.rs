@@ -539,7 +539,7 @@ impl Refresher {
         }
         self.settle_from.set(from);
         if self.settle_bound.get() {
-            self.settle.set_value(1.0);
+            let _ = self.settle.set_value(1.0);
             if self
                 .settle
                 .animate_to_curved(0.0, Some(SETTLE), flui_animation::curves::EASE_OUT)

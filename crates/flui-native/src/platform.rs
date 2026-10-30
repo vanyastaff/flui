@@ -477,6 +477,10 @@ pub struct HostPlatform<H: Host> {
     owner: Arc<H::Loop>,
     window_shared: Arc<WindowShared<H>>,
     host: PhantomData<fn() -> H>,
+    /// What the platform answers the application's reads of the system with,
+    /// journalled while a native capture is installed (ADR-0215 §4).
+    #[cfg(all(debug_assertions, feature = "native-capture"))]
+    journal: crate::journal::capture::Journal,
 }
 
 /// What the windows of host `H` share: its window position's
@@ -500,6 +504,10 @@ impl<H: Host> HostPlatform<H> {
             owner: Arc::new(owner(&window_shared)),
             window_shared,
             host: PhantomData,
+            #[cfg(all(debug_assertions, feature = "native-capture"))]
+            journal: crate::journal::capture::Journal::open_stream(
+                flui_protocol::native_recording::Stream::Platform,
+            ),
         }
     }
 
@@ -524,6 +532,10 @@ impl<H: Host> HostPlatform<H> {
             owner: Arc::new(owner(&window_shared)?),
             window_shared,
             host: PhantomData,
+            #[cfg(all(debug_assertions, feature = "native-capture"))]
+            journal: crate::journal::capture::Journal::open_stream(
+                flui_protocol::native_recording::Stream::Platform,
+            ),
         })
     }
 
@@ -596,7 +608,13 @@ impl<H: Host> Platform for HostPlatform<H> {
     }
 
     fn preferences(&self) -> Result<SystemPreferences, PlatformError> {
-        H::Preferences::sample(&self.owner)
+        let read = H::Preferences::sample(&self.owner);
+        #[cfg(all(debug_assertions, feature = "native-capture"))]
+        self.journal
+            .record(crate::journal::capture::Captured::Preferences(
+                read.as_ref(),
+            ));
+        read
     }
 
     fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {

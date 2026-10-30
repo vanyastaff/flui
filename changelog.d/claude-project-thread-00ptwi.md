@@ -4,6 +4,22 @@
   `CommitGate::holds_failure` is public: whether a failure owner code raised after a grant waits
   for its owner's next turn.
 
+### Changed
+
+- **`flui-platform`**: `FakeHaptics`, `HapticCall` and `HapticPlay` moved from
+  `flui_platform::haptics` to `flui_platform::testing`, behind the new `testing` feature
+  ([ADR-0264](/docs/adr/ADR-0264-platform-test-doubles-live-with-their-contract.md)): enable
+  `flui-platform/testing` in the dev-dependencies of a test that records haptics. A headless
+  window's actuator is no longer a `FakeHaptics`: it plays every request and keeps nothing.
+- **`flui-platform`**, **`flui-interaction`**: `LockArbiter`, `CompositionLedger`,
+  `EditGeneration` and `committed_text` moved from `flui_platform::text_store` to
+  `flui_interaction::text_input`, re-exported for text-widget authors as
+  `flui_sdk::interaction::text_input`; the reference store `InMemoryTextStore` moved to
+  `flui_interaction::testing` (feature `testing`) and is re-exported by
+  `flui_testing::text_store_kit` (ADR-0151 §6,
+  [ADR-0264](/docs/adr/ADR-0264-platform-test-doubles-live-with-their-contract.md)). The lock's
+  values, `CommitGate`, `OwnerCalls` and `project_ime_event` stay in the contract.
+
 ### Fixed
 
 - **`flui-runtime`**: a press anywhere in a presentation commits the focused field's composition

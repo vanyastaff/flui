@@ -1072,14 +1072,19 @@ pub enum PumpOutcome {
     /// No frame was pending. A coalesced resize may still have been applied
     /// to the backend.
     Idle,
-    /// The pending frame rendered and presented.
+    /// The pending frame rendered; `disposition` says whether it reached the
+    /// screen.
     #[non_exhaustive]
     Presented {
-        /// The presented frame's epoch.
+        /// The rendered frame's epoch.
         epoch: FrameEpoch,
-        /// The presented frame's address, echoed from the submitted
+        /// The rendered frame's address, echoed from the submitted
         /// [`flui_layer::SceneSnapshot`].
         address: PresentationAddress,
+        /// What the backend did with the frame, the value this pump also
+        /// publishes as [`SurfaceState::last_completion`]. A caller that
+        /// pumps inline reads it here; one on another thread reads the slot.
+        disposition: PresentDisposition,
     },
     /// The pending frame was dropped without presenting.
     #[non_exhaustive]
@@ -1473,6 +1478,7 @@ impl<B: RasterBackend> RasterOwner<B> {
                     PumpOutcome::Presented {
                         epoch: frame.snapshot.stamp.epoch,
                         address: frame.snapshot.stamp.address,
+                        disposition: reported,
                     }
                 }
                 Err(error) => {
@@ -1994,6 +2000,7 @@ mod tests {
                 PumpOutcome::Presented {
                     epoch,
                     address: test_address(),
+                    disposition: PresentDisposition::Presented,
                 }
             );
         }
@@ -2513,6 +2520,7 @@ mod tests {
             PumpOutcome::Presented {
                 epoch: epoch2,
                 address: test_address(),
+                disposition: PresentDisposition::Presented,
             }
         );
         assert_eq!(handle.in_flight(), 0);
@@ -2578,6 +2586,7 @@ mod tests {
             PumpOutcome::Presented {
                 epoch,
                 address: test_address(),
+                disposition: PresentDisposition::Presented,
             }
         );
 

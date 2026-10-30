@@ -107,14 +107,14 @@ pub(crate) fn a_jump_from_a_participant_lands_when_the_pass_returns() {
                 Callout::Ended => (0.0, 5000.0),
                 Callout::Pre | Callout::Released => (0.0, 500.0),
             };
-            controller.jump_to(start);
+            controller.jump_to(start).expect("no build is running");
             laid.tick();
             probe.take();
             let armed = Rc::new(Cell::new(true));
             let (trigger, reentrant) = (Rc::clone(&armed), controller.clone());
             near.set_observe(move |seen| {
                 if callout.heard(seen) && trigger.replace(false) {
-                    reentrant.jump_to(target);
+                    reentrant.jump_to(target).expect("no build is running");
                 }
             });
             let script = if callout == Callout::PostFling {
@@ -175,7 +175,7 @@ pub(crate) fn a_jump_from_a_position_listener_never_nests_inside_a_step() {
     for device in DEVICES {
         let (controller, probe, vsync) = (ScrollController::new(), Probe::new(), Vsync::new());
         let mut laid = mounted(list_under(&probe, &controller, &vsync), vsync);
-        controller.jump_to(650.0);
+        controller.jump_to(650.0).expect("no build is running");
         laid.tick();
         probe.take();
         let listenable = controller.listenable();
@@ -183,7 +183,7 @@ pub(crate) fn a_jump_from_a_position_listener_never_nests_inside_a_step() {
         let (trigger, reentrant) = (Rc::clone(&armed), controller.clone());
         let jumper = listenable.add_listener(Rc::new(move || {
             if reentrant.pixels() >= 700.0 && trigger.replace(false) {
-                reentrant.jump_to(100.0);
+                reentrant.jump_to(100.0).expect("no build is running");
             }
         }));
         let heard = Rc::new(RefCell::new(Vec::new()));
@@ -250,24 +250,26 @@ pub(crate) fn requests_made_in_one_pass_keep_the_latest() {
                     return;
                 }
                 let animate = || {
-                    reentrant.animate_to(
-                        600.0,
-                        Duration::from_millis(200),
-                        flui_animation::SharedCurve::new(flui_animation::curves::LINEAR),
-                    );
+                    reentrant
+                        .animate_to(
+                            600.0,
+                            Duration::from_millis(200),
+                            flui_animation::SharedCurve::new(flui_animation::curves::LINEAR),
+                        )
+                        .expect("no build is running");
                 };
                 match requests {
                     Requests::TwoJumps => {
-                        reentrant.jump_to(300.0);
-                        reentrant.jump_to(700.0);
+                        reentrant.jump_to(300.0).expect("no build is running");
+                        reentrant.jump_to(700.0).expect("no build is running");
                     }
                     Requests::JumpThenAnimate => {
-                        reentrant.jump_to(300.0);
+                        reentrant.jump_to(300.0).expect("no build is running");
                         animate();
                     }
                     Requests::AnimateThenJump => {
                         animate();
-                        reentrant.jump_to(300.0);
+                        reentrant.jump_to(300.0).expect("no build is running");
                     }
                 }
             });
@@ -332,7 +334,7 @@ pub(crate) fn a_landing_jump_preempts_the_run_and_keeps_live_input() {
                 && step.cause == ScrollCause::SideEffect
                 && trigger.replace(false)
             {
-                reentrant.jump_to(100.0);
+                reentrant.jump_to(100.0).expect("no build is running");
             }
         });
         laid.replay(&fling(device, at(150.0, 250.0), at(150.0, 150.0)));
@@ -371,7 +373,7 @@ pub(crate) fn a_landing_jump_preempts_the_run_and_keeps_live_input() {
                 && step.cause == ScrollCause::UserInput
                 && trigger.replace(false)
             {
-                reentrant.jump_to(500.0);
+                reentrant.jump_to(500.0).expect("no build is running");
             }
         });
         laid.replay(&slow(device, at(150.0, 250.0), at(150.0, 100.0)));
@@ -411,7 +413,7 @@ pub(crate) fn a_landing_jump_preempts_the_run_and_keeps_live_input() {
             && step.device == ScrollDevice::Keyboard
             && trigger.replace(false)
         {
-            reentrant.jump_to(300.0);
+            reentrant.jump_to(300.0).expect("no build is running");
         }
     });
     assert!(
@@ -450,7 +452,7 @@ pub(crate) fn a_jump_asked_before_a_participant_panics_still_lands() {
             let (trigger, reentrant) = (Rc::clone(&armed), controller.clone());
             near.set_pre(move |_| {
                 if trigger.replace(false) {
-                    reentrant.jump_to(500.0);
+                    reentrant.jump_to(500.0).expect("no build is running");
                     panic!("first participant failure");
                 }
                 Vec2::ZERO
@@ -474,7 +476,7 @@ pub(crate) fn a_jump_asked_before_a_participant_panics_still_lands() {
             );
 
             *near.on_end.borrow_mut() = None;
-            controller.jump_to(0.0);
+            controller.jump_to(0.0).expect("no build is running");
             laid.tick();
             near.take();
             assert!(
@@ -517,7 +519,9 @@ impl JumpingOnEveryChange {
         controller.listenable().add_listener(Rc::new(move || {
             if left.get() > 0 {
                 left.set(left.get() - 1);
-                reentrant.jump_to(reentrant.pixels() + 1.0);
+                reentrant
+                    .jump_to(reentrant.pixels() + 1.0)
+                    .expect("no build is running");
             }
         }));
         Self {
@@ -535,7 +539,10 @@ impl JumpingOnEveryChange {
 /// last waits and lands on the next notification.
 pub(crate) fn a_jump_feedback_loop_is_bounded_and_keeps_its_target() {
     let scene = JumpingOnEveryChange::new(50);
-    scene.controller.jump_to(100.0);
+    scene
+        .controller
+        .jump_to(100.0)
+        .expect("no build is running");
     let landed = scene.controller.pixels();
     scene.remaining.set(0);
     assert!(
@@ -562,7 +569,10 @@ pub(crate) fn a_jump_feedback_loop_is_bounded_and_keeps_its_target() {
 /// controller writes it, clamped, with no owner left.
 pub(crate) fn a_jump_pending_across_an_unmount_writes_the_position() {
     let mut scene = JumpingOnEveryChange::new(50);
-    scene.controller.jump_to(100.0);
+    scene
+        .controller
+        .jump_to(100.0)
+        .expect("no build is running");
     let landed = scene.controller.pixels();
     scene.remaining.set(0);
     scene.laid.pump_widget(VsyncScope::new(

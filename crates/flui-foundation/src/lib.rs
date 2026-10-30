@@ -163,6 +163,8 @@ pub mod affinity;
 // Compile-time child-count markers the render protocol attaches to nodes.
 pub mod arity;
 pub mod async_snapshot;
+// Whether a build is running, for controllers below the signal graph (ADR-0086 §7).
+pub mod build_phase;
 // Generic at-most-once request/reply primitive (ADR-0039 §3): the winit
 // owner lane's claim-slot reply protocol composes this; its state-machine
 // tests live here so CI actually runs them (same rationale as `affinity`).
@@ -231,6 +233,7 @@ pub use affinity::OwnerAffinity;
 // shadow `std::ops::Range`.
 pub use arity::{Arity, AtLeast, Exact, Leaf, Never, Optional, Range, Single, Variable};
 pub use async_snapshot::{AsyncSnapshot, ConnectionState};
+pub use build_phase::{BuildPhase, BuildPhaseGuard, MutatedDuringBuild};
 // Claim-slot request/reply primitive (ADR-0039 §3)
 pub use claim_slot::{ClaimHandle, ClaimOutcome, ClaimSlot, claim_slot};
 // Monotonic time source (OS / virtual clock) — foundational primitive injected

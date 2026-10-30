@@ -1251,6 +1251,22 @@ fn a_disposed_controller_refuses_a_run() {
     });
 }
 
+fn a_mutation_during_build_is_refused() {
+    let vsync = Vsync::new();
+    let phase = flui_foundation::BuildPhase::new();
+    vsync.set_build_phase(Some(phase.clone()));
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
+    let controller = owner.controller().clone();
+    let _build = phase.enter();
+    refuses(
+        "AnimationController::forward",
+        "mutated_during_build",
+        || {
+            assert!(controller.forward().is_err());
+        },
+    );
+}
+
 fn a_disposed_controller_tears_down_quietly() {
     let mut owner = AnimationController::builder(Duration::from_secs(1)).build_on(None);
     let controller = owner.controller().clone();
@@ -1366,7 +1382,10 @@ fn a_run_toward_an_infinite_bound_is_refused() {
 
 fn an_overflowing_span_is_refused() {
     let owner = unbounded();
-    owner.controller().set_value(-f64::MAX);
+    owner
+        .controller()
+        .set_value(-f64::MAX)
+        .expect("no build is running");
     refuses("AnimationController::animate_to", "span_overflow", || {
         assert!(owner.controller().animate_to(f64::MAX, None).is_err());
     });
@@ -1584,6 +1603,7 @@ fn refusal_diagnostic_contract() {
             a_panicking_refusal_subscriber_keeps_the_typed_error,
         ),
         ("disposed", a_disposed_controller_refuses_a_run),
+        ("mutated_during_build", a_mutation_during_build_is_refused),
         (
             "disposed teardown",
             a_disposed_controller_tears_down_quietly,

@@ -296,8 +296,8 @@ pub use scroll::{
 };
 pub use scroll::{
     Carousel, CarouselAutoplay, CarouselAutoplayError, CarouselController, CarouselItemScope,
-    CarouselLayout, CarouselLayoutError, CarouselState, KeylineSnap, MAX_ITEM_EXTENT,
-    MIN_AUTOPLAY_PERIOD,
+    CarouselLayout, CarouselLayoutError, CarouselLayoutKind, CarouselState, KeylineSnap,
+    MAX_ITEM_EXTENT, MIN_AUTOPLAY_PERIOD,
 };
 pub use scroll::{FloatingHeaderSnapConfiguration, ScrollPositionScope};
 pub use scroll::{

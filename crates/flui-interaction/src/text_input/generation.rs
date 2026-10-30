@@ -19,7 +19,7 @@ impl EditGeneration {
     /// The last count before exhaustion, where a test starts a store that
     /// makes no 2^64 edits.
     #[cfg(test)]
-    pub(super) const LAST: Self = Self(Some(u64::MAX));
+    pub(crate) const LAST: Self = Self(Some(u64::MAX));
 
     /// Count one more application edit; past the last count, exhausted for
     /// good.

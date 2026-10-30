@@ -36,7 +36,6 @@ use std::time::Duration;
 
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Size};
 use flui_foundation::{ManualClock, PresentationId};
-use flui_platform::TextStoreHost;
 use flui_platform::data_transfer::{RepresentationDescriptor, TransferActions};
 use flui_platform::drag::{DragError, OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource};
 use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
@@ -44,6 +43,7 @@ use flui_platform::{
     CursorError, CursorIcon, DisplayId, InMemoryClipboard, PlatformInput, PlatformTextInput,
     PlatformWindow, Unsupported, UnsupportedReason, WindowId,
 };
+use flui_platform::{SessionEndAnswer, SessionEndPhase, TextStoreHost};
 use flui_rendering::layer::{LayerTree, Scene};
 use flui_runtime::dev_agent::{DevAgentAttachment, DevAgentHost};
 use flui_runtime::frame_failure::{
@@ -59,6 +59,8 @@ use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, AssistiveFocusListener,
     PlatformAccessibility,
 };
+use flui_view::__runtime::{FlushHost, FlushWrite, OwnerNotify};
+use flui_view::CloseReason;
 use flui_view::dev_agent::DevAgentHook;
 use parking_lot::Mutex;
 
@@ -86,7 +88,7 @@ pub struct HeadlessWindow {
     /// every change this double makes to it.
     revision: Mutex<flui_platform::WindowRevision>,
     input_regions: Mutex<SentInputRegions>,
-    haptics: Arc<flui_platform::haptics::FakeHaptics>,
+    haptics: Arc<flui_platform::testing::FakeHaptics>,
     os_drags: Arc<HeadlessOsDrags>,
     /// Whether the simulated platform reports when frames reached the screen
     /// ([`HeadlessWindow::with_presentation_reports`]).
@@ -158,7 +160,7 @@ impl HeadlessWindow {
             display: Mutex::new(None),
             revision: Mutex::new(flui_platform::WindowRevision::ZERO),
             input_regions: Mutex::default(),
-            haptics: Arc::new(flui_platform::haptics::FakeHaptics::new()),
+            haptics: Arc::new(flui_platform::testing::FakeHaptics::new()),
             os_drags: Arc::new(HeadlessOsDrags::default()),
             reports_presentation: false,
         }
@@ -174,7 +176,7 @@ impl HeadlessWindow {
     /// The recording actuator this window plays haptics on: every request the
     /// UI runtime handed the platform, with the outcome it returned.
     #[must_use]
-    pub fn haptic_actuator(&self) -> &flui_platform::haptics::FakeHaptics {
+    pub fn haptic_actuator(&self) -> &flui_platform::testing::FakeHaptics {
         &self.haptics
     }
 
@@ -613,6 +615,9 @@ impl std::fmt::Debug for HeadlessDevAgent {
             .finish_non_exhaustive()
     }
 }
+/// How long [`HeadlessHost::end_session`]'s `Ending` phase writes what the
+/// documents published (ADR-0260).
+pub const SESSION_END_BUDGET: Duration = Duration::from_secs(3);
 
 /// A [`UiRuntime`] hosted headlessly, driven frame by frame on a manual clock.
 /// See the [module docs](self).
@@ -636,6 +641,14 @@ pub struct HeadlessHost {
     /// The presentation report the next pump's frame requests carry
     /// ([`Self::report_presented`]).
     presented: Option<flui_platform::FramePresented>,
+    /// The flush registry's host side, when the host was given storage: what
+    /// the widgets' documents publish, written as a runner writes it.
+    flush: Option<FlushHost>,
+    /// The registry's writes waiting for the next pump to run them, as a
+    /// runner's IO pool runs them.
+    flush_writes: Arc<Mutex<Vec<FlushWrite>>>,
+    /// Whether the primary window was closed.
+    primary_closed: bool,
 }
 
 impl std::fmt::Debug for HeadlessHost {
@@ -688,6 +701,19 @@ impl HeadlessHost {
         // runtime's demand for a next frame is observable here.
         let needs_redraw = Arc::new(AtomicBool::new(false));
         let wake_flag = Arc::clone(&needs_redraw);
+        let flush_writes = Arc::new(Mutex::new(Vec::new()));
+        let flush = storage.as_ref().map(|storage| {
+            let queued = Arc::clone(&flush_writes);
+            FlushHost::new(
+                Arc::clone(storage),
+                Box::new(move |write| {
+                    queued.lock().push(write);
+                    Ok(())
+                }),
+                // Every pump settles the registry, so a signal has nothing to wake.
+                OwnerNotify::new(|_| Ok(())),
+            )
+        });
         let mut host = RuntimeHostServices::new(
             Arc::new(move || wake_flag.store(true, Ordering::Relaxed)),
             needs_redraw,
@@ -698,6 +724,14 @@ impl HeadlessHost {
         if let Some(storage) = storage {
             host = host.with_storage(storage);
         }
+        if let Some(flush) = &flush {
+            host = host.with_flush_registry(flush.registry());
+        }
+        host = host.with_close_vetoes(&[
+            CloseReason::User,
+            CloseReason::Program,
+            CloseReason::SessionEnd,
+        ]);
         let ui_runtime = UiRuntime::new(
             PresentationWindow::new(
                 Rc::clone(&window) as Rc<dyn PlatformWindow>,
@@ -734,6 +768,9 @@ impl HeadlessHost {
             embedded: Vec::new(),
             failures,
             presented: None,
+            flush,
+            flush_writes,
+            primary_closed: false,
         }
     }
 
@@ -808,6 +845,7 @@ impl HeadlessHost {
             panic!("{failure}");
         }
         self.clock.advance(dt);
+        self.settle_lifecycle();
         // The frame is delivered as `HostInput::Frame` would be: every
         // window's vsync is the clock's reading, on the event timeline, so a
         // recording sees the frame where its deadlines fire.
@@ -1081,6 +1119,56 @@ impl HeadlessHost {
     #[must_use]
     pub fn primary_window(&self) -> HeadlessWindowId {
         HeadlessWindowId(self.ui_runtime.presentation_id())
+    }
+
+    /// Ask to close `window` for `reason`, as its platform does when the user
+    /// clicks its close button (or as the program or the session asks). The
+    /// window's close guard is asked first: a close it refuses is recorded,
+    /// nothing is torn down, and the pump after the last hold is released
+    /// carries it out. `true` when the window closed now; `false` when the
+    /// guard refused or the window is already gone.
+    pub fn request_close(&mut self, window: HeadlessWindowId, reason: CloseReason) -> bool {
+        if self.ui_runtime.close_refused(window.0, reason) {
+            return false;
+        }
+        self.ui_runtime.commit_composition_for_close(window.0);
+        self.close_presentation(window.0)
+    }
+
+    /// One phase of the user's session ending, as the operating system reports
+    /// it (ADR-0260). `Query` asks every window's guard for the session's
+    /// end and answers [`Block`](SessionEndAnswer::Block) when one refuses;
+    /// `Cancelled` withdraws only those session-end records; `Ending` writes
+    /// what the documents published, within [`SESSION_END_BUDGET`].
+    pub fn end_session(&self, phase: SessionEndPhase) -> SessionEndAnswer {
+        let windows = self.presentation_ids();
+        match phase {
+            SessionEndPhase::Query => {
+                let mut answer = SessionEndAnswer::Proceed;
+                for id in windows {
+                    if self.ui_runtime.close_refused(id, CloseReason::SessionEnd) {
+                        answer = SessionEndAnswer::Block;
+                    }
+                }
+                answer
+            }
+            SessionEndPhase::Cancelled => {
+                for id in windows {
+                    self.ui_runtime.withdraw_close(id, CloseReason::SessionEnd);
+                }
+                SessionEndAnswer::Proceed
+            }
+            SessionEndPhase::Ending => {
+                self.run_flush_writes();
+                if let Some(flush) = &self.flush {
+                    let _report =
+                        flush.flush_within(std::time::Instant::now() + SESSION_END_BUDGET);
+                }
+                SessionEndAnswer::Proceed
+            }
+            // A phase added later asks this host nothing.
+            _ => SessionEndAnswer::Proceed,
+        }
     }
 
     /// Open `window` beside the existing ones, as a runner installs a
@@ -1667,6 +1755,51 @@ impl HeadlessHost {
     }
 
     /// Every window's presentation, the primary first.
+    /// The owner turn's settle, before its frame: carry out the closes the
+    /// windows' guards now let through, run the registry's queued writes and
+    /// wake what they resolved.
+    fn settle_lifecycle(&mut self) {
+        for (id, _reason) in self.ui_runtime.settle_close_guards() {
+            self.close_presentation(id);
+        }
+        self.run_flush_writes();
+        if let Some(flush) = &self.flush {
+            for waker in flush.settle() {
+                waker.wake();
+            }
+        }
+    }
+
+    /// Poll every queued registry write once, keeping those still waiting
+    /// for their storage. The queue's lock is not held while a write runs.
+    fn run_flush_writes(&self) {
+        let writes = std::mem::take(&mut *self.flush_writes.lock());
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        let waiting: Vec<FlushWrite> = writes
+            .into_iter()
+            .filter_map(|mut write| write.as_mut().poll(&mut cx).is_pending().then_some(write))
+            .collect();
+        self.flush_writes.lock().extend(waiting);
+    }
+
+    /// Close presentation `id`: a secondary window's presentation is closed
+    /// and removed, as a runner closes a window; the primary one stops and
+    /// its tree stays mounted for the test to inspect, as a runner's last
+    /// window stays until the loop's teardown. `false` when it is already
+    /// closed.
+    fn close_presentation(&mut self, id: PresentationId) -> bool {
+        if id == self.ui_runtime.presentation_id() {
+            if std::mem::replace(&mut self.primary_closed, true) {
+                return false;
+            }
+            self.ui_runtime
+                .enter(|ui_runtime| ui_runtime.stop_presentation_for_test(id));
+            return true;
+        }
+        self.secondary.retain(|secondary| secondary.id != id);
+        self.ui_runtime.close_presentation_entered(id)
+    }
+
     fn presentation_ids(&self) -> Vec<PresentationId> {
         std::iter::once(self.ui_runtime.presentation_id())
             .chain(self.secondary.iter().map(|secondary| secondary.id))

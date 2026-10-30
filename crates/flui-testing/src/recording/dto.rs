@@ -35,10 +35,11 @@ use flui_platform::pointer::{
     ScrollPrecision, ScrollUnit, TangentialPressure, Twist,
 };
 use flui_platform::{
-    Brightness, DragDropEvent, EventTime, FramePresented, GesturePreferences, ImeEvent, Locale,
-    MotionPreference, NativeMouseGeometry, NativeTouchGeometry, PlatformInput, SystemPreferences,
-    TextWeightPreference, WheelPreferences, WheelStep, WindowExecutionState, WindowId,
+    Brightness, DragDropEvent, EventTime, FramePresented, GestureParts, ImeEvent, Locale,
+    MotionPreference, NativeMouseGeometry, NativeTouchGeometry, PlatformInput, PreferenceParts,
+    SystemPreferences, TextWeightPreference, WheelParts, WheelStep, WindowExecutionState, WindowId,
 };
+use flui_protocol::native_recording as wire;
 use flui_runtime::owner::{InputOutcome, WindowObservation};
 use flui_runtime::{
     DeadlineRow, DecisionRow, HostInput, InputRecord, InputRow, PreferencesRow, RecordedMember,
@@ -2103,259 +2104,228 @@ impl TryFrom<ActionRequestDto> for accesskit::ActionRequest {
 // System preferences
 // ============================================================================
 
-#[derive(Debug, Serialize, Deserialize)]
-enum MotionDto {
-    #[serde(rename = "no_preference")]
-    NoPreference,
-    #[serde(rename = "reduce")]
-    Reduce,
-    #[serde(rename = "scaled")]
-    Scaled(f64),
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-enum TextWeightDto {
-    #[serde(rename = "no_preference")]
-    NoPreference,
-    #[serde(rename = "bold")]
-    Bold,
-    #[serde(rename = "adjustment")]
-    Adjustment(i32),
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-enum WheelStepDto {
-    #[serde(rename = "lines")]
-    Lines(u32),
-    #[serde(rename = "page")]
-    Page,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct MouseGeometryDto {
-    double_click_area: [i32; 2],
-    drag_tolerance: [i32; 2],
-    pixel_ratio: f64,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct TouchGeometryDto {
-    touch_slop: i32,
-    double_tap_slop: i32,
-    min_fling: i32,
-    max_fling: i32,
-    pixel_ratio: f64,
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct GesturesDto {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    double_click_interval_ns: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    double_tap_interval_ns: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    long_press_timeout_ns: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    native_mouse_geometry: Option<MouseGeometryDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    native_touch_geometry: Option<TouchGeometryDto>,
-}
-
+/// A preferences row: its revision beside the preferences, in the schema a
+/// native recording's `preferences` row shares (`flui-protocol`), so the two
+/// never spell a preference differently.
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct PreferencesDto {
     revision: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    text_scale: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    motion: Option<MotionDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    high_contrast: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    haptics: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    text_weight: Option<TextWeightDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    locales: Option<Vec<String>>,
-    #[serde(default)]
-    gestures: GesturesDto,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    wheel_vertical: Option<WheelStepDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    wheel_horizontal_characters: Option<u32>,
+    #[serde(flatten)]
+    values: wire::Preferences,
 }
 
 fn nanos(duration: std::time::Duration) -> u64 {
     u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
 }
 
-impl TryFrom<&PreferencesRow> for PreferencesDto {
-    type Error = DtoError;
-
-    fn try_from(row: &PreferencesRow) -> Result<Self> {
-        let values = &row.values;
-        let gestures = values.gestures();
-        Ok(Self {
-            revision: row.revision,
-            text_scale: values.text_scale(),
-            motion: values
-                .motion()
-                .map(|motion| {
-                    Ok(match motion {
-                        MotionPreference::NoPreference => MotionDto::NoPreference,
-                        MotionPreference::Reduce => MotionDto::Reduce,
-                        MotionPreference::Scaled(scale) => MotionDto::Scaled(scale.get()),
-                        _ => return Err(unmirrored("MotionPreference")),
-                    })
-                })
-                .transpose()?,
-            high_contrast: values.high_contrast(),
-            haptics: values.haptics(),
-            text_weight: values
-                .text_weight()
-                .map(|weight| {
-                    Ok(match weight {
-                        TextWeightPreference::NoPreference => TextWeightDto::NoPreference,
-                        TextWeightPreference::Bold => TextWeightDto::Bold,
-                        TextWeightPreference::Adjustment(value) => {
-                            TextWeightDto::Adjustment(value.get())
-                        }
-                        _ => return Err(unmirrored("TextWeightPreference")),
-                    })
-                })
-                .transpose()?,
-            locales: values
-                .locales()
-                .map(|locales| locales.iter().map(Locale::to_language_tag).collect()),
-            gestures: GesturesDto {
-                double_click_interval_ns: gestures.double_click_interval().map(nanos),
-                double_tap_interval_ns: gestures.double_tap_interval().map(nanos),
-                long_press_timeout_ns: gestures.long_press_timeout().map(nanos),
-                native_mouse_geometry: gestures.native_mouse_geometry().map(|geometry| {
-                    let area = geometry.double_click_area();
-                    let tolerance = geometry.drag_tolerance();
-                    MouseGeometryDto {
-                        double_click_area: [area.width, area.height],
-                        drag_tolerance: [tolerance.width, tolerance.height],
-                        pixel_ratio: geometry.pixel_ratio().get(),
-                    }
-                }),
-                native_touch_geometry: gestures.native_touch_geometry().map(|geometry| {
-                    TouchGeometryDto {
-                        touch_slop: geometry.touch_slop(),
-                        double_tap_slop: geometry.double_tap_slop(),
-                        min_fling: geometry.min_fling(),
-                        max_fling: geometry.max_fling(),
-                        pixel_ratio: geometry.pixel_ratio().get(),
-                    }
-                }),
+/// `values` in the shared schema, through [`PreferenceParts`]: a field added
+/// there fails to compile here until it is mirrored.
+fn preferences_wire(values: SystemPreferences) -> Result<wire::Preferences> {
+    let PreferenceParts {
+        text_scale,
+        motion,
+        high_contrast,
+        haptics,
+        text_weight,
+        locales,
+        gestures:
+            GestureParts {
+                double_click_interval,
+                double_tap_interval,
+                long_press_timeout,
+                native_mouse_geometry,
+                native_touch_geometry,
             },
-            wheel_vertical: values
-                .wheel()
-                .vertical()
-                .map(|step| {
-                    Ok(match step {
-                        WheelStep::Lines(lines) => WheelStepDto::Lines(lines),
-                        WheelStep::Page => WheelStepDto::Page,
-                        _ => return Err(unmirrored("WheelStep")),
-                    })
+        wheel: WheelParts {
+            vertical,
+            horizontal_characters,
+        },
+    } = values.into_parts();
+    Ok(wire::Preferences {
+        text_scale,
+        motion: motion
+            .map(|motion| {
+                Ok(match motion {
+                    MotionPreference::NoPreference => wire::Motion::NoPreference,
+                    MotionPreference::Reduce => wire::Motion::Reduce,
+                    MotionPreference::Scaled(scale) => wire::Motion::Scaled(scale.get()),
+                    _ => return Err(unmirrored("MotionPreference")),
                 })
-                .transpose()?,
-            wheel_horizontal_characters: values.wheel().horizontal_characters(),
-        })
-    }
+            })
+            .transpose()?,
+        high_contrast,
+        haptics,
+        text_weight: text_weight
+            .map(|weight| {
+                Ok(match weight {
+                    TextWeightPreference::NoPreference => wire::TextWeight::NoPreference,
+                    TextWeightPreference::Bold => wire::TextWeight::Bold,
+                    TextWeightPreference::Adjustment(value) => {
+                        wire::TextWeight::Adjustment(value.get())
+                    }
+                    _ => return Err(unmirrored("TextWeightPreference")),
+                })
+            })
+            .transpose()?,
+        locales: locales.map(|locales| locales.iter().map(Locale::to_language_tag).collect()),
+        gestures: wire::Gestures {
+            double_click_interval_ns: double_click_interval.map(nanos),
+            double_tap_interval_ns: double_tap_interval.map(nanos),
+            long_press_timeout_ns: long_press_timeout.map(nanos),
+            native_mouse_geometry: native_mouse_geometry.map(|geometry| {
+                let area = geometry.double_click_area();
+                let tolerance = geometry.drag_tolerance();
+                wire::MouseGeometry {
+                    double_click_area: [area.width, area.height],
+                    drag_tolerance: [tolerance.width, tolerance.height],
+                    pixel_ratio: geometry.pixel_ratio().get(),
+                }
+            }),
+            native_touch_geometry: native_touch_geometry.map(|geometry| wire::TouchGeometry {
+                touch_slop: geometry.touch_slop(),
+                double_tap_slop: geometry.double_tap_slop(),
+                min_fling: geometry.min_fling(),
+                max_fling: geometry.max_fling(),
+                pixel_ratio: geometry.pixel_ratio().get(),
+            }),
+        },
+        wheel_vertical: vertical
+            .map(|step| {
+                Ok(match step {
+                    WheelStep::Lines(lines) => wire::WheelStep::Lines(lines),
+                    WheelStep::Page => wire::WheelStep::Page,
+                    _ => return Err(unmirrored("WheelStep")),
+                })
+            })
+            .transpose()?,
+        wheel_horizontal_characters: horizontal_characters,
+    })
 }
 
 fn pixel_ratio(value: f64) -> Result<DevicePixelRatio> {
     DevicePixelRatio::new(value).ok_or_else(|| invalid(format!("pixel ratio {value}")))
 }
 
+/// The preferences `wire` describes, validated as the `with_*` methods
+/// validate them.
+fn preferences_from_wire(wire: wire::Preferences) -> Result<SystemPreferences> {
+    let wire::Preferences {
+        text_scale,
+        motion,
+        high_contrast,
+        haptics,
+        text_weight,
+        locales,
+        gestures,
+        wheel_vertical,
+        wheel_horizontal_characters,
+    } = wire;
+    let duration = std::time::Duration::from_nanos;
+    PreferenceParts {
+        text_scale,
+        motion: motion
+            .map(|motion| {
+                Ok(match motion {
+                    wire::Motion::NoPreference => MotionPreference::NoPreference,
+                    wire::Motion::Reduce => MotionPreference::Reduce,
+                    wire::Motion::Scaled(scale) => {
+                        MotionPreference::from_duration_scale(scale).map_err(invalid)?
+                    }
+                    _ => return Err(unmirrored("native_recording::Motion")),
+                })
+            })
+            .transpose()?,
+        high_contrast,
+        haptics,
+        text_weight: text_weight
+            .map(|weight| {
+                Ok(match weight {
+                    wire::TextWeight::NoPreference => TextWeightPreference::NoPreference,
+                    wire::TextWeight::Bold => TextWeightPreference::Bold,
+                    wire::TextWeight::Adjustment(value) => {
+                        TextWeightPreference::from_adjustment(value)
+                    }
+                    _ => return Err(unmirrored("native_recording::TextWeight")),
+                })
+            })
+            .transpose()?,
+        locales: locales
+            .map(|tags| {
+                tags.iter()
+                    .map(|tag| {
+                        Locale::from_language_tag(tag)
+                            .ok_or_else(|| invalid(format!("locale {tag}")))
+                    })
+                    .collect::<Result<Arc<[Locale]>>>()
+            })
+            .transpose()?,
+        gestures: GestureParts {
+            double_click_interval: gestures.double_click_interval_ns.map(duration),
+            double_tap_interval: gestures.double_tap_interval_ns.map(duration),
+            long_press_timeout: gestures.long_press_timeout_ns.map(duration),
+            native_mouse_geometry: gestures
+                .native_mouse_geometry
+                .map(|geometry| {
+                    let [area_w, area_h] = geometry.double_click_area;
+                    let [drag_w, drag_h] = geometry.drag_tolerance;
+                    NativeMouseGeometry::new(
+                        Size::new(area_w, area_h),
+                        Size::new(drag_w, drag_h),
+                        pixel_ratio(geometry.pixel_ratio)?,
+                    )
+                    .map_err(invalid)
+                })
+                .transpose()?,
+            native_touch_geometry: gestures
+                .native_touch_geometry
+                .map(|geometry| {
+                    NativeTouchGeometry::new(
+                        geometry.touch_slop,
+                        geometry.double_tap_slop,
+                        geometry.min_fling,
+                        geometry.max_fling,
+                        pixel_ratio(geometry.pixel_ratio)?,
+                    )
+                    .map_err(invalid)
+                })
+                .transpose()?,
+        },
+        wheel: WheelParts {
+            vertical: wheel_vertical
+                .map(|step| {
+                    Ok(match step {
+                        wire::WheelStep::Lines(lines) => WheelStep::Lines(lines),
+                        wire::WheelStep::Page => WheelStep::Page,
+                        _ => return Err(unmirrored("native_recording::WheelStep")),
+                    })
+                })
+                .transpose()?,
+            horizontal_characters: wheel_horizontal_characters,
+        },
+    }
+    .try_into_preferences()
+    .map_err(invalid)
+}
+
+impl TryFrom<&PreferencesRow> for PreferencesDto {
+    type Error = DtoError;
+
+    fn try_from(row: &PreferencesRow) -> Result<Self> {
+        Ok(Self {
+            revision: row.revision,
+            values: preferences_wire(SystemPreferences::clone(&row.values))?,
+        })
+    }
+}
+
 impl TryFrom<PreferencesDto> for PreferencesRow {
     type Error = DtoError;
 
     fn try_from(dto: PreferencesDto) -> Result<Self> {
-        let mut values = SystemPreferences::default();
-        if let Some(scale) = dto.text_scale {
-            values = values.with_text_scale(scale).map_err(invalid)?;
-        }
-        if let Some(motion) = dto.motion {
-            values = values.with_motion(match motion {
-                MotionDto::NoPreference => MotionPreference::NoPreference,
-                MotionDto::Reduce => MotionPreference::Reduce,
-                MotionDto::Scaled(scale) => {
-                    MotionPreference::from_duration_scale(scale).map_err(invalid)?
-                }
-            });
-        }
-        if let Some(enabled) = dto.high_contrast {
-            values = values.with_high_contrast(enabled);
-        }
-        if let Some(enabled) = dto.haptics {
-            values = values.with_haptics(enabled);
-        }
-        if let Some(weight) = dto.text_weight {
-            values = values.with_text_weight(match weight {
-                TextWeightDto::NoPreference => TextWeightPreference::NoPreference,
-                TextWeightDto::Bold => TextWeightPreference::Bold,
-                TextWeightDto::Adjustment(value) => TextWeightPreference::from_adjustment(value),
-            });
-        }
-        if let Some(tags) = dto.locales {
-            let locales = tags
-                .iter()
-                .map(|tag| {
-                    Locale::from_language_tag(tag).ok_or_else(|| invalid(format!("locale {tag}")))
-                })
-                .collect::<Result<Vec<_>>>()?;
-            values = values.with_locales(locales);
-        }
-        let mut gestures = GesturePreferences::default();
-        let duration = std::time::Duration::from_nanos;
-        if let Some(value) = dto.gestures.double_click_interval_ns {
-            gestures = gestures.with_double_click_interval(duration(value));
-        }
-        if let Some(value) = dto.gestures.double_tap_interval_ns {
-            gestures = gestures.with_double_tap_interval(duration(value));
-        }
-        if let Some(value) = dto.gestures.long_press_timeout_ns {
-            gestures = gestures.with_long_press_timeout(duration(value));
-        }
-        if let Some(geometry) = dto.gestures.native_mouse_geometry {
-            let [area_w, area_h] = geometry.double_click_area;
-            let [drag_w, drag_h] = geometry.drag_tolerance;
-            gestures = gestures.with_native_mouse_geometry(
-                NativeMouseGeometry::new(
-                    Size::new(area_w, area_h),
-                    Size::new(drag_w, drag_h),
-                    pixel_ratio(geometry.pixel_ratio)?,
-                )
-                .map_err(invalid)?,
-            );
-        }
-        if let Some(geometry) = dto.gestures.native_touch_geometry {
-            gestures = gestures.with_native_touch_geometry(
-                NativeTouchGeometry::new(
-                    geometry.touch_slop,
-                    geometry.double_tap_slop,
-                    geometry.min_fling,
-                    geometry.max_fling,
-                    pixel_ratio(geometry.pixel_ratio)?,
-                )
-                .map_err(invalid)?,
-            );
-        }
-        values = values.with_gestures(gestures);
-        let mut wheel = WheelPreferences::default();
-        if let Some(step) = dto.wheel_vertical {
-            wheel = wheel.with_vertical(match step {
-                WheelStepDto::Lines(lines) => WheelStep::Lines(lines),
-                WheelStepDto::Page => WheelStep::Page,
-            });
-        }
-        if let Some(characters) = dto.wheel_horizontal_characters {
-            wheel = wheel.with_horizontal_characters(characters);
-        }
-        values = values.with_wheel(wheel);
-        Ok(Self::new(dto.revision, Arc::new(values)))
+        Ok(Self::new(
+            dto.revision,
+            Arc::new(preferences_from_wire(dto.values)?),
+        ))
     }
 }
 

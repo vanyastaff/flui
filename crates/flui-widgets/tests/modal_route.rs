@@ -79,7 +79,7 @@ fn complete_entrance(transition: &TransitionHandle, harness: &mut Harness) {
     let controller = transition
         .controller()
         .expect("install must have created the controller");
-    controller.set_value(1.0);
+    controller.set_value(1.0).expect("no build is running");
     assert_eq!(controller.status(), AnimationStatus::ForwardSettled);
     harness.tick();
     harness.tick();

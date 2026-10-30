@@ -562,7 +562,7 @@ mod tests {
                 .expect("headless open_window is always Ready");
                 let ui_runtime =
                     host::build_ui_runtime(presentation_window(window), 1.0).expect("ui_runtime");
-                let store = flui_platform::text_store::InMemoryTextStore::new("");
+                let store = flui_interaction::testing::InMemoryTextStore::new("");
                 let _token = ui_runtime
                     .text_input_handle()
                     .attach(flui_interaction::TextInputClient::new(store))
