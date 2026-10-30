@@ -1,10 +1,10 @@
 //! A selection's text as the Linux desktops exchange it: the forms an owner
 //! offers it in, the one a reader asks for, and the bytes of each.
 //!
-//! Wayland's data offers name MIME types, X11's selections name targets; the
-//! toolkits of both offer text under the same few names, the MIME types and
-//! the X11 target names alike, so one table serves both hosts. Pure: the
-//! hosts move the bytes.
+//! Wayland's data offers name MIME types, X11's selections and XDND drags name
+//! targets; the toolkits of both offer text under the same few names, the MIME
+//! types and the X11 target names alike, so one table serves both hosts. Pure:
+//! the hosts move the bytes.
 
 #![forbid(unsafe_code)]
 
@@ -45,7 +45,7 @@ impl TextForm {
 
     /// The form `name` names; `None` for a form that is not text, or not one
     /// a reader asks for.
-    #[cfg(wayland_host)]
+    #[cfg(any(wayland_host, x11_host))]
     pub(crate) fn named(name: &str) -> Option<Self> {
         Self::OFFERED.into_iter().find(|form| {
             // MIME type parameters are case-insensitive, and `utf-8` is
@@ -57,7 +57,7 @@ impl TextForm {
     /// The form a reader asks for among the `offered` names: the first of
     /// [`Self::OFFERED`] that the owner offers; `None` when it offers no
     /// text.
-    #[cfg(wayland_host)]
+    #[cfg(any(wayland_host, x11_host))]
     pub(crate) fn preferred<'a>(offered: impl IntoIterator<Item = &'a str>) -> Option<Self> {
         offered
             .into_iter()

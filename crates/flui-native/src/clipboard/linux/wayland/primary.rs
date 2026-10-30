@@ -41,7 +41,7 @@ use wayland_protocols::wp::primary_selection::zv1::client::{
 use web_time::Instant;
 
 use super::{MAX_WRITERS, OfferData, Shared, TRANSFER_TIMEOUT, transfer};
-use crate::clipboard::linux::text::TextForm;
+use crate::clipboard::text::TextForm;
 use crate::owner::linux::wayland::WaylandState;
 
 /// What the application offers as its selection.

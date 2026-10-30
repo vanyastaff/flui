@@ -3641,8 +3641,8 @@ portal of `preferences::linux` and the logind and pressure sources of
 (`owner::linux::{LinuxPreferences, LinuxNotices}`); every window hands out the
 AT-SPI bridge of `accessibility::linux`. `current_platform` picks the host for
 an X11 session when the winit host is not built (`choose_linux_host`).
-Text input, the clipboard and drag and drop are `Absent` in the table until
-the host's later parts fill them.
+Text input is `Absent` in the table until the host's later parts fill it; the
+clipboard is the clipboard feature's, on a connection and thread of its own.
 
 The input position is the loop's (`type Input = X11Loop`): the table makes
 the input feature's `input::linux::x11::X11Input` (`X11Host::input`) and the
@@ -3723,6 +3723,37 @@ modules' tables
 `a_frame_asked_for_on_another_thread_wakes_the_loop`,
 `the_loop_ends_with_its_last_window` and
 `a_wake_deadline_no_frame_serviced_is_delivered_once`.
+
+The drag position is the loop's too (`type Drag = X11Loop`): the table makes
+the drag feature's `drag::x11::X11Drag` (`X11Host::drag`), the platform's one
+`DataTransferSource`, and the loop holds it by the hook
+`owner::linux::x11::LoopDrag`, hands it every event before the input, and
+wakes for the deadline of the fetch it waits on. A window opening tells it
+with the same `InputTarget` and is marked `XdndAware` (version 5); closing
+ends a drag over it with nothing told, while a drop it took stays fetchable
+until concluded. Its windows are XDND targets: the offer is minted at the
+first `XdndPosition`, so `Entered` carries the pointer and the source's
+action (an `XdndActionAsk` reads the source's `XdndActionList`); each
+position is answered `XdndStatus` from the feedback the target cached while
+hearing it, asking for every movement; a drop resolves the action from that
+feedback, and a refusal answers `XdndFinished` at once while the window hears
+`Exited`. Types map to representations in the pure `drag::x11::model`: text
+once, in the reader's preferred form, HTML (UTF-8, or UTF-16 behind its mark),
+every other media type as named. A request converts `XdndSelection` at the
+drag's last time into one of four properties of a window of the transfer's
+own, read on the owner thread as the loop hands over the answer, `INCR` a
+chunk at a time; more requests wait for a property, each is held to its
+limit before a byte is read and to five seconds between answers. Nothing is
+dispatched or completed under the transfer's lock, so a handler may fetch or
+conclude while it hears the drop. The drag source is not written yet.
+
+Tests of the drag: `drag::x11::tests` holds the model's tables
+(`messages_read_what_the_source_wrote`, `types_offer_each_format_once`,
+`bytes_make_their_payload`, …) and, against the X server CI starts, a source
+on a connection of its own: `an_accepted_drop_is_fetched_and_finished`,
+`a_refused_drop_finishes_unaccepted_and_exits`,
+`a_drag_that_leaves_retires_its_offer` and
+`an_incr_answer_is_read_in_chunks_and_held_to_its_limit`.
 
 ### A Wayland window draws its own frame on subsurfaces, not through the engine
 

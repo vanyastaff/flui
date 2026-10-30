@@ -94,7 +94,7 @@ use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
 use crate::owner::handlers::OpenWindows;
 use crate::owner::linux::x11::{
-    Doorbell, HostDisplays, InputTarget, LoopInput, LoopWindows, WindowRef, WindowScale,
+    Doorbell, HostDisplays, InputTarget, LoopDrag, LoopInput, LoopWindows, WindowRef, WindowScale,
     X11Connection, X11Loop,
 };
 use crate::owner::slot::{OwnerMap, OwnerWeak};
@@ -319,6 +319,9 @@ pub struct X11Window {
     /// The windows' input, which delivers this window's pointers and keys
     /// and shows its cursor.
     input: Arc<dyn LoopInput>,
+    /// The windows' drag and drop, which offers this window the drags over
+    /// it.
+    drag: Arc<dyn LoopDrag>,
     /// The scale the input reads this window's positions at.
     input_scale: WindowScale,
     record: RefCell<Record>,
@@ -1028,6 +1031,7 @@ impl X11Window {
         self.facets.text.detach();
         self.facets.accessibility.detach();
         self.input.window_closed(self.window_ref());
+        self.drag.window_closed(self.window_ref());
         self.retire();
     }
 
@@ -1132,6 +1136,7 @@ impl X11Window {
     fn release(&self) {
         self.closed.set(true);
         self.input.window_closed(self.window_ref());
+        self.drag.window_closed(self.window_ref());
         self.retire();
     }
 }
@@ -1642,6 +1647,7 @@ impl X11Windows {
             doorbell: owner.doorbell().clone(),
             displays: Arc::clone(owner.displays()),
             input,
+            drag: Arc::clone(owner.drag()),
             input_scale: WindowScale::new(scale),
             record: RefCell::new(Record {
                 title: options.title.clone(),
@@ -1682,11 +1688,13 @@ impl X11Windows {
                 message: "the X11 window table answers on its owner thread alone".into(),
             });
         }
-        window.input.window_opened(InputTarget {
+        let target = InputTarget {
             window: window.window_ref(),
             delivery: Arc::clone(&window.delivery),
             scale: window.input_scale.clone(),
-        });
+        };
+        window.drag.window_opened(target.clone());
+        window.input.window_opened(target);
         // Mapped now unless it waits for its first frame or the application
         // asked for it hidden; one opened in a mode has it in its properties
         // by now.
