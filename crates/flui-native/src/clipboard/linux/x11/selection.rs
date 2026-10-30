@@ -28,6 +28,7 @@
 //!   all and at most [`MAX_TEXT`] bytes.
 
 use std::os::fd::{AsFd, OwnedFd};
+use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
@@ -183,10 +184,32 @@ impl Atoms {
     }
 }
 
-/// The text the application owns the selection with, and since when.
+/// The text the application owns the selection with, since when, and the
+/// forms it was encoded in so far, which every transfer of a form shares.
 struct Owned {
     text: String,
     time: xproto::Timestamp,
+    encoded: Vec<(TextForm, Arc<[u8]>)>,
+}
+
+impl Owned {
+    fn new(text: String, time: xproto::Timestamp) -> Self {
+        Self {
+            text,
+            time,
+            encoded: Vec::new(),
+        }
+    }
+
+    /// The text in `form`, encoded once for every request.
+    fn encoded(&mut self, form: TextForm) -> Arc<[u8]> {
+        if let Some((_, bytes)) = self.encoded.iter().find(|(held, _)| *held == form) {
+            return Arc::clone(bytes);
+        }
+        let bytes: Arc<[u8]> = form.encode(&self.text).into();
+        self.encoded.push((form, Arc::clone(&bytes)));
+        bytes
+    }
 }
 
 /// An `INCR` write: the requestor's property, filled a chunk at a time.
@@ -194,7 +217,7 @@ struct Transfer {
     requestor: xproto::Window,
     property: xproto::Atom,
     kind: xproto::Atom,
-    bytes: Vec<u8>,
+    bytes: Arc<[u8]>,
     written: usize,
     /// Whether the zero-length chunk that ends it is written.
     ended: bool,
@@ -219,6 +242,9 @@ pub(super) struct Selections {
     owned: Option<Owned>,
     /// A write waiting for its timestamp; a newer write replaces it.
     pending: Option<String>,
+    /// The writes' clock appends the server has not stamped yet: only the
+    /// last one's time is the pending write's.
+    clocks: usize,
     /// The reads waiting: for the one under way, or for a pending write.
     readers: Vec<Resolver<Option<String>>>,
     reading: Option<Reading>,
@@ -266,6 +292,7 @@ impl Selections {
             atoms,
             owned: None,
             pending: None,
+            clocks: 0,
             readers: Vec::new(),
             reading: None,
             destination: 0,
@@ -279,6 +306,7 @@ impl Selections {
         match command {
             Command::Write(text) => {
                 self.pending = Some(text);
+                self.clocks += 1;
                 // The server stamps the property's change with its time.
                 self.connection.change_property8(
                     PropMode::APPEND,
@@ -432,6 +460,12 @@ impl Selections {
 
     /// The server's time arrived: own the selection with the pending text.
     fn own(&mut self, time: xproto::Timestamp) -> Result<(), ReplyOrIdError> {
+        // A stamp of a write a newer one replaced: the newer write takes the
+        // stamp of its own append, which follows.
+        self.clocks = self.clocks.saturating_sub(1);
+        if self.clocks > 0 {
+            return Ok(());
+        }
         let Some(text) = self.pending.take() else {
             return Ok(());
         };
@@ -443,7 +477,7 @@ impl Selections {
             .reply()?
             .owner;
         if owner == self.window {
-            self.owned = Some(Owned { text, time });
+            self.owned = Some(Owned::new(text, time));
         } else {
             // A client took it at a later time than ours.
             self.owned = None;
@@ -636,7 +670,9 @@ impl Selections {
             return Ok(false);
         };
         let kind = self.atoms.form(form);
-        let bytes = form.encode(&owned.text);
+        let Some(bytes) = self.owned.as_mut().map(|owned| owned.encoded(form)) else {
+            return Ok(false);
+        };
         if bytes.len() <= self.chunk {
             self.connection.change_property8(
                 PropMode::REPLACE,
