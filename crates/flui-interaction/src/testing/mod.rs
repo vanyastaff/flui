@@ -13,6 +13,8 @@
 //! replays them by advancing a `HeadlessBinding`'s `ManualClock`.
 
 pub mod input;
+mod text_store;
 
 // Re-export input builders
 pub use input::ModifiersBuilder;
+pub use text_store::InMemoryTextStore;

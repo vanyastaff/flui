@@ -12,10 +12,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use flui_foundation::geometry::Size;
 use flui_platform::ImeEvent;
 use flui_platform::text_store::{
-    CommitGate, CompositionEnd, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, OwnerCalls,
-    TextStore, TextStoreError, TextStoreHost, TextStoreHostError, TextStoreObserver,
-    TextStoreStatus, project_ime_event,
+    CommitGate, CompositionEnd, LockGrant, LockOutcome, LockTiming, OwnerCalls, TextStore,
+    TextStoreError, TextStoreHost, TextStoreHostError, TextStoreObserver, TextStoreStatus,
+    project_ime_event,
 };
+use flui_testing::text_store_kit::InMemoryTextStore;
 use windows::Win32::Foundation::{E_UNEXPECTED, HWND};
 use windows::Win32::UI::TextServices::{
     GUID_SYSTEM_FUNCTIONPROVIDER, ITextStoreACP, ITextStoreACP_Impl, ITfComposition, ITfContext,
