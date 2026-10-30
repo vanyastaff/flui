@@ -53,7 +53,7 @@ use flui_runtime::execution::{ExecutionServices, HostExecutors};
 /// of the semantics tree's collection and platform delivery.
 pub(crate) struct SharedEngineServices {
     /// The app's font collection, fed from one host scan. Every UI runtime
-    /// built on this thread gets a clone (`UiRuntime::new`'s `fonts`) and owns
+    /// built on this thread gets a clone (`UiRuntime::try_new`'s `fonts`) and owns
     /// a `TextContext` over it, so a face registered here reaches every
     /// UI runtime, and the host's faces are read once per app, not per UI runtime.
     pub(super) fonts: FontCollection,
@@ -456,7 +456,7 @@ impl AppRuntime {
     /// thread -- can never itself run singleton construction or full
     /// system-font enumeration. Real service resolution happens only when a
     /// UI runtime is built or installed -- [`Self::font_collection`] for
-    /// `UiRuntime::new`, or the explicit [`Self::ensure_services`] call from
+    /// `UiRuntime::try_new`, or the explicit [`Self::ensure_services`] call from
     /// `install_platform_ui_runtime` -- never from an incidental
     /// first touch such as `OwnerHostClearGuard::drop` unwinding through a
     /// virgin thread, and never from `install_owner_platform` either (every
@@ -631,7 +631,7 @@ impl AppRuntime {
         self.fonts_announced.replace(now) != now
     }
 
-    /// The app's font collection, for `UiRuntime::new`'s `fonts`: a clone of
+    /// The app's font collection, for `UiRuntime::try_new`'s `fonts`: a clone of
     /// the one [`SharedEngineServices`] owns, resolving the services first if
     /// no UI runtime has been built yet. Every call returns the same collection.
     ///

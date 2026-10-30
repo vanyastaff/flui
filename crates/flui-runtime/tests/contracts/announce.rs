@@ -86,7 +86,7 @@ fn an_idle_presentation_speaks_an_announcement() {
         )
         .expect("headless window");
     let wakes = Arc::new(AtomicUsize::new(0));
-    let mut runtime = UiRuntime::new(
+    let mut runtime = UiRuntime::try_new(
         PresentationWindow::new(window, Some(Arc::clone(&bridge) as Arc<_>)),
         1.0,
         flui_runtime::ui_runtime::RuntimeHostServices::new(

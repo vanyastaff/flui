@@ -48,6 +48,8 @@
 - **`flui-widgets`**: the same for `Draggable`, `DropTarget`, `GestureAlternatives`,
   `SwipeActions`, `DismissThreshold`, `AnchoredDragController`, `AnchorSnap`, `ViewportFraction`,
   `HeaderExtents` and `SliverConstrainedCrossAxis`.
+- **`flui-runtime`, `flui-widgets`**: `UiRuntime::new` is `UiRuntime::try_new` and
+  `ContextMenuArea::new` is `ContextMenuArea::try_new`; no fallible `new` is left in the workspace.
 
 ### Fixed
 

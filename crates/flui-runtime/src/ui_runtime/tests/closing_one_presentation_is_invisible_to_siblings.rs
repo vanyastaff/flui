@@ -623,7 +623,7 @@ fn run_platform_ownership_child(kind: &str) {
     *external_window.borrow_mut() = Some(window.clone() as Rc<dyn flui_platform::PlatformWindow>);
     *external_bridge.lock() =
         Some(bridge.clone() as Arc<dyn flui_semantics::platform::PlatformAccessibility>);
-    let mut ui_runtime = UiRuntime::new(
+    let mut ui_runtime = UiRuntime::try_new(
         crate::presentation::PresentationWindow::new(window.clone(), Some(bridge.clone())),
         1.0,
         crate::runtime_services::RuntimeHostServices::new(

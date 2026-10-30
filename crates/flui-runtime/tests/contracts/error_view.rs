@@ -34,7 +34,7 @@ impl FrameSink for DiscardSink {
 }
 
 fn runtime(clock: &ManualClock) -> UiRuntime {
-    UiRuntime::new(
+    UiRuntime::try_new(
         crate::owner_publication::window(),
         1.0,
         RuntimeHostServices::new(

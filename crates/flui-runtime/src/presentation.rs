@@ -108,7 +108,7 @@ pub(crate) struct RuntimeCapabilities<'a> {
 }
 
 /// A fresh in-memory clipboard — the one the headless platform hands out —
-/// for a test UI runtime's `UiRuntime::new`.
+/// for a test UI runtime's `UiRuntime::try_new`.
 #[cfg(any(test, feature = "testing"))]
 #[must_use]
 pub fn test_clipboard() -> Arc<dyn Clipboard> {

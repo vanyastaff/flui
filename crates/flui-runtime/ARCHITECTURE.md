@@ -335,7 +335,7 @@ host.
   widget harness runs every frame through it. It neither constructs
   `OwnerHost` nor reproduces native event-loop routing; owner-turn behavior
   is tested in this crate's own host tests.
-- **A UI runtime reads time from one `ClockSource`.** `UiRuntime::new` takes the
+- **A UI runtime reads time from one `ClockSource`.** `UiRuntime::try_new` takes the
   source: the UI runtime's frame-time origin, every presentation's gesture arena
   (its deadlines) and `FrameClock` (its produce gate) read it, so a
   `ClockSource::Manual` UI runtime keeps them on the timeline its driver
@@ -369,7 +369,7 @@ host.
   mapping, and a wildcard arm would swallow it (pinned by the enum's
   doctest, which matches every variant from outside the crate).
 - **A UI runtime owns one text context over the app's font collection.**
-  `UiRuntime::new` takes the app's `FontCollection` (the host's shared engine
+  `UiRuntime::try_new` takes the app's `FontCollection` (the host's shared engine
   services hold it), and `RuntimeServices::construct` builds the UI runtime's one
   `TextContext` over it (ADR-0092 §3), behind a `TextContextHandle`. A
   presentation builds none: `PresentationState::new`, the one place a

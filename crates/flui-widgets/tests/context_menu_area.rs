@@ -97,7 +97,7 @@ impl Scene {
 
     /// Alice's area, with Delete, Archive and Pin.
     fn area() -> ContextMenuArea {
-        ContextMenuArea::new(
+        ContextMenuArea::try_new(
             GestureCommand::new(DELETE, Delete),
             [
                 GestureCommand::new(ARCHIVE, Archive),
@@ -769,7 +769,7 @@ fn hold_then_drag(at: Offset<f64>) -> PointerScript {
 pub(crate) fn a_held_press_moved_past_the_slop_closes_the_menu_and_drags() {
     let at = Offset::new(150.0, 25.0);
     let area = |events: &Events| {
-        ContextMenuArea::new(GestureCommand::new(DELETE, Delete), [])
+        ContextMenuArea::try_new(GestureCommand::new(DELETE, Delete), [])
             .expect("one labelled command")
             .child(long_press_card(events, false))
     };

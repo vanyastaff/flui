@@ -154,7 +154,7 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
         });
         let clock = ManualClock::new();
         let mut runtime = Rc::new(
-            UiRuntime::new(
+            UiRuntime::try_new(
                 PresentationWindow::new(window.clone(), None),
                 1.0,
                 RuntimeHostServices::new(
@@ -389,7 +389,7 @@ pub(crate) fn haptics_preference_suppresses_both_tiers() {
             .expect("window"),
         haptics: haptics.clone(),
     });
-    let runtime = UiRuntime::new(
+    let runtime = UiRuntime::try_new(
         crate::presentation::PresentationWindow::new(window.clone(), None),
         1.0,
         crate::runtime_services::RuntimeHostServices::new(
@@ -486,7 +486,7 @@ pub(crate) fn frame_aligned_haptics_play_only_with_a_presented_frame() {
             haptics: haptics.clone(),
         });
         let clock = ManualClock::new();
-        let mut runtime = UiRuntime::new(
+        let mut runtime = UiRuntime::try_new(
             PresentationWindow::new(window.clone(), None),
             1.0,
             RuntimeHostServices::new(

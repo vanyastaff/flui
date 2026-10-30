@@ -34,7 +34,7 @@ pub(super) fn start_service(
     }
 }
 
-/// The platform clipboard for [`crate::app::ui_runtime::UiRuntime::new`]'s
+/// The platform clipboard for [`crate::app::ui_runtime::UiRuntime::try_new`]'s
 /// `clipboard` parameter. Same borrow rule as [`runtime_wake_callback`].
 ///
 /// # Panics
@@ -47,7 +47,7 @@ pub(super) fn runtime_clipboard() -> Arc<dyn flui_platform::Clipboard> {
         .expect("BUG: the runner installs the platform clipboard before it builds a ui_runtime")
 }
 
-/// The app's font collection for [`crate::app::ui_runtime::UiRuntime::new`]'s
+/// The app's font collection for [`crate::app::ui_runtime::UiRuntime::try_new`]'s
 /// `fonts` parameter (ADR-0092 §2). Same borrow rule as
 /// [`runtime_wake_callback`]. The first call on a thread resolves the shared
 /// engine services.
@@ -340,7 +340,7 @@ pub(super) fn build_ui_runtime(
         host = host.with_preferences(preferences);
     }
     let native = Rc::clone(window.window());
-    let ui_runtime = crate::app::ui_runtime::UiRuntime::new(window, scale_factor, host)?;
+    let ui_runtime = crate::app::ui_runtime::UiRuntime::try_new(window, scale_factor, host)?;
     attach_window_control(&ui_runtime, &native);
     Ok(ui_runtime)
 }

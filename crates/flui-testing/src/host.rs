@@ -732,7 +732,7 @@ impl HeadlessHost {
             CloseReason::Program,
             CloseReason::SessionEnd,
         ]);
-        let ui_runtime = UiRuntime::new(
+        let ui_runtime = UiRuntime::try_new(
             PresentationWindow::new(
                 Rc::clone(&window) as Rc<dyn PlatformWindow>,
                 Some(Arc::clone(&accessibility) as Arc<dyn PlatformAccessibility>),

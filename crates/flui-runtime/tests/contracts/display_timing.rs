@@ -153,7 +153,7 @@ impl PlatformWindow for CountingWindow {
 }
 
 fn runtime_on(window: PresentationWindow) -> UiRuntime {
-    UiRuntime::new(
+    UiRuntime::try_new(
         window,
         1.0,
         RuntimeHostServices::new(
