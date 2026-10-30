@@ -83,6 +83,7 @@ impl PipelineOwner<Idle> {
             semantics_owner: None,
             semantics_regions: super::semantics::RegionIdentities::default(),
             semantics_diagnostics: std::collections::VecDeque::new(),
+            assistive_focus: flui_semantics::AssistiveFocus::default(),
             #[cfg(any(test, feature = "testing"))]
             unchecked_semantics_diagnostics: Vec::new(),
             semantics_update_callback: None,

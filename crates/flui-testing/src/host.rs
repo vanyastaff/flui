@@ -56,7 +56,8 @@ use flui_runtime::sink::{FrameSink, SubmitVerdict};
 use flui_runtime::ui_runtime::{RuntimeHostServices, UiRuntime};
 use flui_scheduler::{ClockSource, PostFrameHandle};
 use flui_semantics::platform::{
-    AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
+    AccessibilityActionListener, AccessibilityActivationListener, AssistiveFocusListener,
+    PlatformAccessibility,
 };
 use flui_view::dev_agent::DevAgentHook;
 use parking_lot::Mutex;
@@ -446,6 +447,7 @@ struct HeadlessAccessibility {
     active: AtomicBool,
     activation: Mutex<Option<AccessibilityActivationListener>>,
     action: Mutex<Option<AccessibilityActionListener>>,
+    assistive_focus: Mutex<Option<AssistiveFocusListener>>,
     published: Mutex<Option<accesskit::TreeUpdate>>,
 }
 
@@ -509,6 +511,16 @@ impl PlatformAccessibility for HeadlessAccessibility {
 
     fn set_action_listener(&self, listener: AccessibilityActionListener) {
         *self.action.lock() = Some(listener);
+    }
+
+    /// A test plays the screen reader, so the cursor is reported: through
+    /// [`HeadlessHost::move_assistive_focus`].
+    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
+        flui_semantics::AssistiveFocusSupport::Reported
+    }
+
+    fn set_assistive_focus_listener(&self, listener: AssistiveFocusListener) {
+        *self.assistive_focus.lock() = Some(listener);
     }
 }
 
@@ -948,6 +960,25 @@ impl HeadlessHost {
     #[must_use]
     pub fn accessibility_action_listener(&self) -> Option<AccessibilityActionListener> {
         self.accessibility.action.lock().clone()
+    }
+
+    /// Move the screen reader's cursor to `node` of the published tree, or
+    /// off it for `None`, as VoiceOver or TalkBack reports it: the UI runtime
+    /// queues the move in its owner inbox for the next [`pump`](Self::pump),
+    /// which tells the subtrees the cursor left and entered.
+    ///
+    /// # Panics
+    ///
+    /// Before the UI runtime registered its listener, which it does as the
+    /// window opens.
+    pub fn move_assistive_focus(&self, node: Option<accesskit::NodeId>) {
+        let listener = self
+            .accessibility
+            .assistive_focus
+            .lock()
+            .clone()
+            .expect("BUG: the UI runtime registers its cursor listener as the window opens");
+        listener(node);
     }
 
     /// Run `f` inside the UI runtime's owner scope (its interaction lane, global
@@ -1409,6 +1440,11 @@ impl HeadlessHost {
                         HostInput::Accessibility(request) => {
                             self.ui_runtime.enter(|ui_runtime| {
                                 ui_runtime.dispatch_accessibility(presentation, request);
+                            });
+                        }
+                        HostInput::AssistiveFocus(node) => {
+                            self.ui_runtime.enter(|ui_runtime| {
+                                ui_runtime.dispatch_assistive_focus(presentation, *node);
                             });
                         }
                         other => panic!("this host cannot replay {other:?}"),

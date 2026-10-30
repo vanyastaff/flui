@@ -5,6 +5,8 @@
 mod actionability;
 #[path = "announce.rs"]
 mod announce;
+#[path = "assistive_focus.rs"]
+mod assistive_focus;
 #[path = "fixture.rs"]
 mod fixture;
 #[path = "identifier.rs"]

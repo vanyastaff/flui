@@ -168,6 +168,17 @@ impl PlatformAccessibility for IosAccessibility {
     fn set_action_listener(&self, listener: AccessibilityActionListener) {
         self.shared.set_action_listener(listener);
     }
+
+    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
+        Self::ASSISTIVE_FOCUS
+    }
+}
+
+impl IosAccessibility {
+    /// `accesskit_ios` tracks VoiceOver's cursor itself and tells nobody
+    /// ([gap 36](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#36-accessibility-bridge-fidelity-properties-and-announcements)).
+    pub(crate) const ASSISTIVE_FOCUS: flui_semantics::AssistiveFocusSupport =
+        flui_semantics::AssistiveFocusSupport::Unreported;
 }
 
 impl std::fmt::Debug for IosAccessibility {

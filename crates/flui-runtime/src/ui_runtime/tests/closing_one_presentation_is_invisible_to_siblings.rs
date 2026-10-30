@@ -579,6 +579,10 @@ impl flui_semantics::platform::PlatformAccessibility for OwnershipBridge {
     fn set_action_listener(&self, listener: flui_semantics::platform::AccessibilityActionListener) {
         self.delegate.set_action_listener(listener);
     }
+
+    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
+        flui_semantics::AssistiveFocusSupport::Unreported
+    }
 }
 
 fn run_platform_ownership_child(kind: &str) {

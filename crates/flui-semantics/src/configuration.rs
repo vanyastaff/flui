@@ -12,7 +12,7 @@ use smallvec::SmallVec;
 use smol_str::SmolStr;
 
 use crate::{
-    action::{CustomActionId, SemanticsAction, SemanticsActionHandler},
+    action::{AssistiveFocusHandler, CustomActionId, SemanticsAction, SemanticsActionHandler},
     attributes::SemanticsAttributes,
     collection::{CellPosition, SetSize, SortDirection, TableShape},
     properties::{
@@ -135,6 +135,11 @@ pub struct SemanticsConfiguration {
     /// A merge renumbers the published id; the handler still receives this one.
     custom_handlers: SmallVec<[(CustomActionId, SemanticsActionHandler); 2]>,
 
+    /// Told when the assistive technology's cursor enters or leaves the
+    /// subtree of the node this configuration forms or merges into. Merging
+    /// keeps every contributor's.
+    assistive_focus_handlers: SmallVec<[AssistiveFocusHandler; 1]>,
+
     /// What this node publishes (ADR-0206).
     attributes: SemanticsAttributes,
 }
@@ -165,6 +170,12 @@ impl PartialEq for SemanticsConfiguration {
                 .iter()
                 .zip(&other.custom_handlers)
                 .all(|((a_id, a), (b_id, b))| a_id == b_id && Rc::ptr_eq(a, b))
+            && self.assistive_focus_handlers.len() == other.assistive_focus_handlers.len()
+            && self
+                .assistive_focus_handlers
+                .iter()
+                .zip(&other.assistive_focus_handlers)
+                .all(|(a, b)| Rc::ptr_eq(a, b))
             && self.attributes == other.attributes
     }
 }
@@ -187,6 +198,7 @@ impl SemanticsConfiguration {
         let Self {
             actions,
             custom_handlers,
+            assistive_focus_handlers,
             attributes,
             ..
         } = self;
@@ -194,6 +206,9 @@ impl SemanticsConfiguration {
             recovery.retire(handler);
         }
         for (_, handler) in custom_handlers {
+            recovery.retire(handler);
+        }
+        for handler in assistive_focus_handlers {
             recovery.retire(handler);
         }
         drop(attributes);
@@ -939,6 +954,22 @@ impl SemanticsConfiguration {
             .chain(self.custom_handlers.iter().map(|(_, handler)| handler))
     }
 
+    /// Tell `handler` when the assistive technology's cursor enters or leaves
+    /// the subtree of the node this configuration forms or merges into.
+    /// Annotates the configuration, as an action does, so a handler alone
+    /// merges into the node above it.
+    pub fn add_assistive_focus_handler(&mut self, handler: AssistiveFocusHandler) {
+        self.assistive_focus_handlers.push(handler);
+        self.mark_annotated();
+    }
+
+    /// The handlers told when the assistive technology's cursor enters or
+    /// leaves this node's subtree, in the order they were added and merged.
+    #[must_use]
+    pub fn assistive_focus_handlers(&self) -> &[AssistiveFocusHandler] {
+        &self.assistive_focus_handlers
+    }
+
     /// Record the ancestor reveal route discovered during render assembly.
     /// This structural directive does not annotate otherwise transparent nodes.
     pub fn set_has_reveal_ancestor(&mut self, value: bool) {
@@ -1617,6 +1648,7 @@ impl SemanticsConfiguration {
     /// - **Custom actions** — the contributor's follow the receiver's, each
     ///   with its own handler; a contributor that blocks user actions adds
     ///   none.
+    /// - **Assistive-focus handlers** — the contributor's follow the receiver's.
     /// - **Tags, anchors, relations** — union.
     /// - **Label / hint** — concatenate, text-direction aware.
     /// - **Identifier** — never absorbed: the receiver keeps its own (ADR-0240).
@@ -1651,6 +1683,10 @@ impl SemanticsConfiguration {
                     .map(|(id, handler)| (*id, Rc::clone(handler))),
             );
         }
+        // The cursor in the contributor's subtree is in the merged node's:
+        // every handler goes along, blocked user actions or not.
+        self.assistive_focus_handlers
+            .extend(other.assistive_focus_handlers.iter().map(Rc::clone));
 
         // Exhaustive: a new attribute does not compile until it decides here.
         let SemanticsAttributes {

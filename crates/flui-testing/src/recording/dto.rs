@@ -301,6 +301,9 @@ enum HostInputDto {
     },
     #[serde(rename = "accessibility")]
     Accessibility(ActionRequestDto),
+    /// The screen reader's cursor: the node id it moved to, or none off the tree.
+    #[serde(rename = "assistive_focus")]
+    AssistiveFocus(Option<u64>),
 }
 
 impl HostInputDto {
@@ -308,7 +311,7 @@ impl HostInputDto {
         match self {
             Self::Platform(input) => input.redact(),
             Self::Accessibility(request) => request.redact(),
-            Self::Window(_) | Self::Frame { .. } => false,
+            Self::Window(_) | Self::Frame { .. } | Self::AssistiveFocus(_) => false,
         }
     }
 }
@@ -333,6 +336,7 @@ impl TryFrom<&HostInput> for HostInputDto {
                 }),
             },
             HostInput::Accessibility(request) => Self::Accessibility(request.try_into()?),
+            HostInput::AssistiveFocus(node) => Self::AssistiveFocus(node.map(|node| node.0)),
             _ => return Err(unmirrored("HostInput")),
         })
     }
@@ -363,6 +367,7 @@ impl TryFrom<HostInputDto> for HostInput {
                 }),
             },
             HostInputDto::Accessibility(request) => Self::Accessibility(request.try_into()?),
+            HostInputDto::AssistiveFocus(node) => Self::AssistiveFocus(node.map(accesskit::NodeId)),
         })
     }
 }

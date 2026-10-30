@@ -558,6 +558,27 @@ fn input_on_the_carousel_pauses_autoplay_for_good() {
 }
 
 #[test]
+fn the_screen_reader_entering_the_carousel_pauses_autoplay() {
+    let controller = CarouselController::new();
+    let mut laid = mount(autoplaying(&controller, 3));
+    laid.enable_semantics();
+    laid.tick();
+    let item = laid
+        .a11y_tree()
+        .expect("published semantics")
+        .find_by_label("item 0")
+        .expect("item 0")
+        .id();
+
+    laid.move_assistive_focus(Some(item));
+    laid.tick();
+    assert!(controller.is_paused(), "the cursor on an item pauses it");
+    laid.move_assistive_focus(None);
+    run_for(&mut laid, Duration::from_secs(12));
+    assert_eq!(controller.index(), Some(0), "leaving does not resume it");
+}
+
+#[test]
 fn autoplay_takes_no_step_when_every_item_fits() {
     let controller = CarouselController::new();
     let mut laid = mount(

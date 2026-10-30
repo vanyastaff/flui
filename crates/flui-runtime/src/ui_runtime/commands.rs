@@ -75,6 +75,16 @@ pub enum UiCommand {
         /// The request, decoded on the owner thread.
         request: accesskit::ActionRequest,
     },
+    /// [`HostInput::AssistiveFocus`](crate::HostInput::AssistiveFocus) from the
+    /// platform adapter's thread, addressed and drained as
+    /// [`Self::Accessibility`] is, so a cursor move and the actions around it
+    /// apply in the order the platform reported them.
+    AssistiveFocus {
+        /// The presentation this move was stamped for.
+        presentation_id: PresentationId,
+        /// The node the cursor is on, or `None` off the tree.
+        node: Option<accesskit::NodeId>,
+    },
     /// Read the addressed presentation's semantics tree as wire nodes, for
     /// a [`SemanticsAgent`](super::SemanticsAgent), and answer on `reply`.
     SemanticsRead {
@@ -172,6 +182,14 @@ impl std::fmt::Debug for UiCommand {
                 .debug_struct("UiCommand::Accessibility")
                 .field("presentation_id", presentation_id)
                 .field("request", request)
+                .finish(),
+            UiCommand::AssistiveFocus {
+                presentation_id,
+                node,
+            } => f
+                .debug_struct("UiCommand::AssistiveFocus")
+                .field("presentation_id", presentation_id)
+                .field("node", node)
                 .finish(),
             UiCommand::SemanticsRead {
                 presentation_id,
@@ -374,6 +392,23 @@ impl UiCommandSender {
         self.send(UiCommand::Accessibility {
             presentation_id: self.presentation_id,
             request,
+        })
+    }
+
+    /// Enqueue a move of the assistive technology's cursor as host input, in
+    /// the same FIFO as [`Self::send_accessibility`].
+    ///
+    /// # Errors
+    ///
+    /// [`CommandSendError::ChannelFull`] under backpressure,
+    /// [`CommandSendError::OwnerGone`] once the runtime is dropped.
+    pub(crate) fn send_assistive_focus(
+        &self,
+        node: Option<accesskit::NodeId>,
+    ) -> Result<(), CommandSendError> {
+        self.send(UiCommand::AssistiveFocus {
+            presentation_id: self.presentation_id,
+            node,
         })
     }
 
@@ -672,6 +707,20 @@ impl UiRuntime {
                     // failed reassemble does, before resuming.
                     match catch_unwind(AssertUnwindSafe(|| {
                         self.dispatch_accessibility(presentation_id, &request)
+                    })) {
+                        Ok(true) => report.invoked += 1,
+                        Ok(false) => report.dropped_stale += 1,
+                        Err(payload) => self.rearm_after_command_panic(payload),
+                    }
+                }
+                UiCommand::AssistiveFocus {
+                    presentation_id,
+                    node,
+                } => {
+                    // A panicking handler keeps the accepted tail live, as an
+                    // action's does, before resuming.
+                    match catch_unwind(AssertUnwindSafe(|| {
+                        self.dispatch_assistive_focus(presentation_id, node)
                     })) {
                         Ok(true) => report.invoked += 1,
                         Ok(false) => report.dropped_stale += 1,

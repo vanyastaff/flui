@@ -474,6 +474,32 @@ delivery would be lost to an adapter that panicked.
 `tests/announce.rs`; `an_idle_presentation_speaks_an_announcement` in
 `crates/flui-runtime/tests/contracts/announce.rs`.
 
+### The screen reader's cursor is reported in, never published
+
+**Rule.** An adapter whose `assistive_focus_support()` is `Reported` calls the listener it was
+given with the node the assistive technology's cursor moved to, or `None` when it left the tree.
+The presentation queues the move in its owner inbox, and the drain hands it to
+`PipelineOwner::move_assistive_focus`. The pipeline keeps one `AssistiveFocus` across the
+semantics owners it makes: the node and the handlers it last told `true`. A move walks the new
+node's ancestors through `SemanticsOwner::assistive_focus_chain`, tells the handlers no longer on
+the chain `false` and then the new ones `true`, each once, after the pipeline borrow is
+released. A node the owner no longer holds, or no owner at all, leaves every subtree, so each
+`true` is followed by a `false`. Handlers are compared by `Rc` identity: `Semantics` keeps one
+handler per mount, so a rebuild does not count as leaving. Deactivating the adapter moves the
+cursor off the tree. Every native adapter reports `Unreported` (gap 36); the headless test host
+reports it and moves it with `move_assistive_focus`.
+
+**Why.** Input focus is the application's; the screen reader's cursor is the platform's and
+moves without it, so it is never written into the tree. Keeping the told handlers on the
+pipeline, not on the owner, means turning accessibility off and on still tells a subtree it was
+left.
+
+**Test.** `the_cursor_enters_and_leaves_subtrees`, `every_entered_subtree_hears_it_is_left`,
+`a_panicking_handler_does_not_silence_the_others` in `tests/assistive_focus.rs`;
+`the_assistive_cursor_entering_and_leaving_a_subtree_reaches_its_handler` and
+`the_screen_reader_entering_the_carousel_pauses_autoplay` in `crates/flui-widgets/tests`;
+`no_native_adapter_reports_the_assistive_cursor_yet` in `flui-native`.
+
 ### A text field's text is published as runs under pipeline identities
 
 **Rule.** [ADR-0204](../../docs/adr/ADR-0204-synthetic-semantics-nodes.md). The render object that

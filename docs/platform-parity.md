@@ -64,14 +64,14 @@ columns and is listed after them.
 
 | Environment | Host | ✅ | 🟡 | ❌ | — | ❔ | Score | Ready |
 |:--|:--|--:|--:|--:|--:|--:|--:|:-:|
-| Windows | Win32 (native) | 11 | 49 | 33 | 18 | 10 | 38% | no |
-| macOS | AppKit (native) | 10 | 37 | 45 | 19 | 10 | 31% | no |
-| Wayland | winit (fallback) | 6 | 34 | 44 | 27 | 10 | 27% | no |
-| X11 | winit (fallback) | 8 | 33 | 41 | 29 | 10 | 30% | no |
-| iOS | UIKit (native) | 7 | 27 | 47 | 32 | 8 | 25% | no |
-| Android | android-activity (native) | 18 | 31 | 39 | 29 | 4 | 38% | no |
-| Web | wasm canvas (native) | 7 | 36 | 31 | 42 | 5 | 34% | no |
-| Headless | test double | 46 | 2 | 52 | 19 | 2 | 47% | — |
+| Windows | Win32 (native) | 11 | 49 | 34 | 18 | 10 | 38% | no |
+| macOS | AppKit (native) | 10 | 37 | 46 | 19 | 10 | 31% | no |
+| Wayland | winit (fallback) | 6 | 34 | 45 | 27 | 10 | 27% | no |
+| X11 | winit (fallback) | 8 | 33 | 42 | 29 | 10 | 30% | no |
+| iOS | UIKit (native) | 7 | 27 | 48 | 32 | 8 | 25% | no |
+| Android | android-activity (native) | 18 | 31 | 40 | 29 | 4 | 38% | no |
+| Web | wasm canvas (native) | 7 | 36 | 32 | 42 | 5 | 33% | no |
+| Headless | test double | 47 | 2 | 52 | 19 | 2 | 48% | — |
 
 Quality bar: 2 of 16 met (no process-global state, one monotonic clock); 8 partly; 4 not met (zero idle CPU, power and
 thermal behaviour, assistive technology conformance, the first frame matching the OS splash); 2 not
@@ -263,6 +263,7 @@ secrets).
 | Properties (value, hint, description, state) | ❔ | ❔ | ❔ | ❔ | ❔ | ❌ | ❌ | ❔ | Not audited on the desktop adapters or iOS; Android and the Web have no tree for a property to reach. |
 | Announcements and live regions | ❔ | ❔ | ❔ | ❔ | ❔ | ❌ | ❌ | ❔ | Announcements not audited; live regions, alerts and route changes need an announcement on each OS. |
 | Gesture alternatives (custom actions, context menu, keys, controls) | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | Checked headless by `assert_gesture_alternatives` (ADR-0216); no locked AccessKit adapter routes custom actions or `ShowContextMenu`, so assistive technology reaches them only through the controls. |
+| Assistive-technology focus (screen reader cursor) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | `Semantics::on_assistive_focus_within` hears the cursor where an adapter reports it; no native adapter does yet ([gap 36](gaps.md#36-accessibility-bridge-fidelity-properties-and-announcements)), checked headless by `the_screen_reader_entering_the_carousel_pauses_autoplay`. |
 
 <details>
 <summary>Run evidence</summary>
@@ -271,6 +272,7 @@ secrets).
 - **Properties (value, hint, description, state)** — Each part of a bridge can fail on its own: another framework's Linux bridge drops a field's `value` and `hint` while its tree and actions work ([flutter/flutter#194638](https://github.com/flutter/flutter/issues/194638)). A check with the real assistive technology per OS has to read role, name, value, hint and state, not one control's label.
 - **Announcements and live regions** — Announcements not audited. Another framework's Linux bridge produces no AT-SPI announcement for live regions, snack bars, alert dialogs or route changes, only for an explicit announcement call ([flutter/flutter#194045](https://github.com/flutter/flutter/issues/194045)); its harness registers AT-SPI listeners and matches only strings that carry a nonce, so no other source can produce a hit.
 - **Gesture alternatives (custom actions, context menu, keys, controls)** — Behavioural widgets publish each gesture's intent as a custom action, keys and a visible control or a context menu (ADR-0216), checked headless by `assert_gesture_alternatives`; no locked AccessKit adapter routes custom actions or `ShowContextMenu`, so on every platform assistive technology reaches them only through the controls; the Win32 and AppKit menu-key decoders pass the conformance row, no native run
+- **Assistive-technology focus (screen reader cursor)** — A subtree hears the screen reader's cursor enter and leave it through `Semantics::on_assistive_focus_within`, and `PresentationCapabilities::assistive_focus` says whether the platform reports it. UI Automation, NSAccessibility and AT-SPI give no signal for the cursor, `accesskit_ios` keeps VoiceOver's cursor to itself, and Android and the Web have no adapter, so every native adapter reports `Unreported` (`no_native_adapter_reports_the_assistive_cursor_yet`). The headless host moves it with `move_assistive_focus`.
 
 </details>
 

@@ -640,6 +640,7 @@ impl PresentationState {
         let republish_flag = semantics.full_republish_handle();
         let wake = Arc::clone(wake);
         let awaken_window = window.redraw_requester();
+        let detached = command_sender.clone();
         bridge.set_activation_listener(Arc::new(move |active| {
             enabled_flag.store(active, Ordering::Relaxed);
             if active {
@@ -648,6 +649,12 @@ impl PresentationState {
                 // incrementally, so it must be answered with a
                 // self-contained full tree, not the next diff.
                 republish_flag.store(true, Ordering::Relaxed);
+            } else if let Err(error) = detached.send_assistive_focus(None) {
+                // Its cursor left with it, whether or not the adapter said so.
+                tracing::warn!(
+                    ?error,
+                    "dropping the end of the assistive cursor: the ui_runtime inbox is full or gone"
+                );
             }
             // The flag alone changes nothing until a frame runs: wake the
             // loop and poke this window so the reconcile actually happens.
@@ -662,6 +669,17 @@ impl PresentationState {
             semantics.set_platform_semantics_enabled(true);
         }
 
+        let cursor = command_sender.clone();
+        bridge.set_assistive_focus_listener(Arc::new(move |node| {
+            // Transported like an action, so the two apply in the order the
+            // platform reported them.
+            if let Err(error) = cursor.send_assistive_focus(node) {
+                tracing::warn!(
+                    ?error,
+                    "dropping an assistive cursor move: the ui_runtime inbox is full or gone"
+                );
+            }
+        }));
         bridge.set_action_listener(Arc::new(move |request| {
             // The adapter's thread only transports the request: it reaches
             // the owner as `HostInput::Accessibility` and is decoded there
@@ -937,6 +955,15 @@ impl PresentationState {
             semantics_flag.store(enabled, Ordering::Relaxed);
         }));
 
+        // Whether this window's adapter says where the assistive technology's
+        // cursor is: a widget that acts on it asks before relying on it.
+        let assistive_focus = accessibility.as_ref().map_or(
+            flui_semantics::AssistiveFocusSupport::Unreported,
+            |bridge| bridge.assistive_focus_support(),
+        );
+        widgets.with_build_owner_mut(|owner| {
+            owner.capabilities_mut().assistive_focus = assistive_focus;
+        });
         Self::wire_platform_accessibility(
             &window,
             accessibility.as_ref(),
