@@ -7,7 +7,8 @@
   `weighted`, returning `CarouselLayoutError`).
 - `KeylineSnap` settles a release on an item: `SingleAdvance` one item from where the drag began,
   `MultiBrowse` where the fling coasts.
-- `CarouselController`: the active item, `animate_to_item`, `jump_to_item` and
+- `CarouselController`: the active item, `animate_to_item` and `jump_to_item` (a call from
+  `build` is refused with `MutatedDuringBuild`, ADR-0086 §7), and
   `on_index_changed`, delivered after the frame; one mounted carousel per controller.
 - `CarouselAutoplay::every` (at least five seconds) with a pause control the carousel draws, and
   pauses on focus, pointer, hover and the app leaving the front.
