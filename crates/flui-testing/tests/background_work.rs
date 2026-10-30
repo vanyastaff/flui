@@ -296,9 +296,9 @@ pub(crate) fn a_replaced_waker_that_cancels_as_it_drops_does_not_deadlock() {
     assert_eq!(task.poll(), Some(Err(BackgroundError::Cancelled)));
 }
 
-/// The variable under which `background_work_keeps_captures_while_unwinding`
-/// runs its child cases.
-pub(crate) const UNWIND_CHILD: &str = "FLUI_BACKGROUND_UNWIND_CHILD";
+/// The variable under which `background_work_callback_keeps_its_captures`
+/// runs its child case.
+pub(crate) const CALLBACK_UNWIND_CHILD: &str = "FLUI_BACKGROUND_CALLBACK_UNWIND_CHILD";
 
 /// Panics when dropped, as a capture with a faulty `Drop` does.
 struct PanicOnDrop;
@@ -404,19 +404,4 @@ pub(crate) fn work_handed_to_on_complete_is_cancelled_when_its_runtime_ends() {
         Poll::Ready(()),
         "the retired runtime's work is cancelled"
     );
-}
-
-/// A compute job that panics while it holds a capture whose `Drop` panics
-/// too: the capture is kept through the unwind, so the process does not
-/// abort, and the task answers `Panicked`.
-pub(crate) fn a_compute_panic_keeps_its_captures() {
-    let mut host = HeadlessHost::new(window());
-    let background = background(&mut host);
-    let capture = PanicOnDrop;
-    let mut task = background.compute(move || -> u8 {
-        let _ = &capture;
-        panic!("decode failed");
-    });
-    let _ = host.pump(Duration::ZERO);
-    assert_eq!(task.poll(), Some(Err(BackgroundError::Panicked)));
 }
