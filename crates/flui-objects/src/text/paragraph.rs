@@ -229,11 +229,6 @@ impl RenderParagraph {
         }
     }
 
-    /// The links the selection's start and end are published under.
-    pub fn selection_handles(&self) -> (Option<LayerLink>, Option<LayerLink>) {
-        (self.start_handle, self.end_handle)
-    }
-
     fn publishes_handles(&self) -> bool {
         self.start_handle.is_some() || self.end_handle.is_some()
     }

@@ -407,7 +407,16 @@ fn handle(
                         if details.reason == GestureEndReason::Completed {
                             model.handle_dragged(side, details.global_position);
                         }
-                        model.handles.grip.set(None);
+                        // A drag of the other handle that began since holds
+                        // the grip now.
+                        if model
+                            .handles
+                            .grip
+                            .get()
+                            .is_some_and(|(gripped, _)| gripped == side)
+                        {
+                            model.handles.grip.set(None);
+                        }
                     }
                 }),
         )

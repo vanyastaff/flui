@@ -555,15 +555,22 @@ impl SelectionModel {
     }
 
     /// The area gained or lost the focus: it rebuilds with the active or the
-    /// dimmed highlight, and keeps its selection.
+    /// dimmed highlight, and keeps its selection. Losing it hides the
+    /// handles, which would otherwise stay above whatever took the focus,
+    /// such as a route pushed over the area.
     fn focus_changed(&self, focused: bool) {
         if self.focused.replace(focused) == focused {
             return;
+        }
+        let mut failure = FirstPanic::new();
+        if !focused {
+            self.hide_handles(&mut failure);
         }
         let rebuild = self.rebuild.borrow().clone();
         if let Some(rebuild) = rebuild {
             rebuild.schedule(RebuildReason::StateChange);
         }
+        failure.resume();
     }
 
     /// The text under `anchor` left the area. When it held an end of the

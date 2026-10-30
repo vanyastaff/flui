@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use flui_foundation::geometry::{Offset, Point};
 use flui_interaction::events::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey};
+use flui_interaction::focus::FocusNode;
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_painting::typography::{TextDirection, TextStyle};
 use flui_platform::EventTime;
@@ -20,8 +21,8 @@ use flui_platform::pointer::{
 use flui_testing::replay::{MouseScript, PointerScript};
 use flui_view::{BoxedView, BuildContext, ViewExt};
 use flui_widgets::{
-    Column, DefaultSelectionHandles, DefaultTextStyle, Directionality, HandleInfo, HandleSide,
-    SelectionArea, SelectionHandles, SizedBox, Text, WidgetsApp,
+    Column, DefaultSelectionHandles, DefaultTextStyle, Directionality, Focus, HandleInfo,
+    HandleSide, SelectionArea, SelectionHandles, SizedBox, Text, WidgetsApp,
 };
 
 use crate::common::{LaidOut, lay_out, tight};
@@ -168,11 +169,11 @@ impl Scene {
         self.settle();
     }
 
-    /// One step of a touch contact by hand, `millis` into it, for a test
+    /// One step of touch contact `finger` by hand, `millis` into it, for a test
     /// whose release lands where no move reported.
-    fn touch(&mut self, step: Touch, millis: u64, at: Offset<f64>) {
+    fn touch(&mut self, finger: u64, step: Touch, millis: u64, at: Offset<f64>) {
         let finger = PointerInfo::new(
-            PointerId::try_from(79_u64).expect("a nonzero id"),
+            PointerId::try_from(finger).expect("a nonzero id"),
             PointerKind::Touch,
         );
         let sample = PointerSample::new(
@@ -573,10 +574,10 @@ pub(crate) fn a_handle_released_past_its_last_move_ends_there() {
 
     let from = scene.handle_at(width_of("alpha beta"));
     let released = scene.handle_at(width_of(WORDS) + 10.0);
-    scene.touch(Touch::Down, 0, from);
-    scene.touch(Touch::Move, 16, from + Offset::new(20.0, 0.0));
-    scene.touch(Touch::Move, 32, from + Offset::new(24.0, 0.0));
-    scene.touch(Touch::Up, 48, released);
+    scene.touch(1, Touch::Down, 0, from);
+    scene.touch(1, Touch::Move, 16, from + Offset::new(20.0, 0.0));
+    scene.touch(1, Touch::Move, 32, from + Offset::new(24.0, 0.0));
+    scene.touch(1, Touch::Up, 48, released);
     scene.settle();
     assert_eq!(scene.selected().as_deref(), Some("beta gamma"));
 }
@@ -699,9 +700,9 @@ pub(crate) fn an_end_inside_a_new_cluster_sits_where_the_highlight_ends() {
     // Released just before the middle of "d", the end stays before it.
     let between = f64::midpoint(width_of("ae\u{301} c"), width_of(NEW)) - 1.0;
     let from = scene.handle_at(floor);
-    scene.touch(Touch::Down, 0, from);
-    scene.touch(Touch::Move, 16, from + Offset::new(20.0, 0.0));
-    scene.touch(Touch::Up, 32, scene.handle_at(between));
+    scene.touch(1, Touch::Down, 0, from);
+    scene.touch(1, Touch::Move, 16, from + Offset::new(20.0, 0.0));
+    scene.touch(1, Touch::Up, 32, scene.handle_at(between));
     scene.settle();
     assert_eq!(scene.selected().as_deref(), Some("ae\u{301} c"));
 }
@@ -735,4 +736,49 @@ pub(crate) fn shown_handles_follow_an_inherited_style() {
         "{last} after {before}, {} builds after {builds}",
         built.len()
     );
+}
+
+/// A handle let go after the other handle's drag began leaves that drag
+/// holding its end.
+///
+/// Red-check: clear the grip on any handle's release (the second drag
+/// stops moving its end).
+pub(crate) fn letting_go_of_one_handle_keeps_the_other_dragging() {
+    let mut scene = Scene::over(Some(Marked::default()));
+    scene.long_press(scene.along(width_of("alpha be")));
+    assert_eq!(scene.selected().as_deref(), Some("beta"));
+
+    let start = scene.handle_at(width_of("alpha "));
+    let end = scene.handle_at(width_of("alpha beta"));
+    scene.touch(1, Touch::Down, 0, start);
+    scene.touch(1, Touch::Move, 16, start + Offset::new(0.0, 30.0));
+    scene.touch(2, Touch::Down, 20, end);
+    scene.touch(2, Touch::Move, 32, end + Offset::new(0.0, 30.0));
+    scene.touch(1, Touch::Up, 40, start + Offset::new(0.0, 30.0));
+    let past = scene.handle_at(width_of(WORDS) + 10.0);
+    scene.touch(2, Touch::Move, 48, past);
+    scene.touch(2, Touch::Up, 64, past);
+    scene.settle();
+    assert_eq!(scene.selected().as_deref(), Some("beta gamma"));
+}
+
+/// The focus moving elsewhere, as to a route pushed over the area, takes
+/// the handles away and keeps the selection.
+///
+/// Red-check: leave the handles shown when the area loses the focus.
+pub(crate) fn losing_the_focus_hides_the_handles() {
+    let heard: Heard = Rc::default();
+    let elsewhere = FocusNode::with_debug_label("elsewhere");
+    let app = WidgetsApp::new(Column::new((
+        Scene::area(&heard, Some(Marked::default())),
+        Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&elsewhere)),
+    )));
+    let mut scene = Scene::laid_out(app, heard);
+    scene.long_press(scene.along(width_of("alpha be")));
+    assert_eq!(scene.handles(), 2);
+
+    let _ = elsewhere.request_focus();
+    scene.settle();
+    assert_eq!(scene.handles(), 0);
+    assert_eq!(scene.selected().as_deref(), Some("beta"));
 }
