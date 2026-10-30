@@ -38,7 +38,7 @@ fn platform(case: &str) -> Option<WaylandPlatform> {
         eprintln!("{case}: skipped, WAYLAND_DISPLAY names no compositor");
         return None;
     }
-    Some(WaylandPlatform::new().expect("the compositor WAYLAND_DISPLAY names answers"))
+    Some(WaylandPlatform::try_new().expect("the compositor WAYLAND_DISPLAY names answers"))
 }
 
 /// A Wayland window for the conformance checks. Dropping it closes the window

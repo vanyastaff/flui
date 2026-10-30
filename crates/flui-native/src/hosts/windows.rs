@@ -78,7 +78,7 @@ impl WindowsHost for Windows {
     }
 
     fn preferences(owner: &OwnerSeeds<'_>) -> Result<Rc<dyn OwnerPreferences>, PlatformError> {
-        Ok(Rc::new(PreferenceSource::new(owner.signal)?))
+        Ok(Rc::new(PreferenceSource::try_new(owner.signal)?))
     }
 
     fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {
@@ -124,17 +124,17 @@ impl HostPlatform<Windows> {
     /// # Errors
     /// [`PlatformError::Init`] when the owner thread's COM apartment, window
     /// class or owner window cannot be set up.
-    pub fn new() -> Result<Self, PlatformError> {
+    pub fn try_new() -> Result<Self, PlatformError> {
         Self::at_build(WindowsBuild::read())
     }
 
     /// The platform as it runs on `build`, which its windows' version gates
-    /// read: [`new`](Self::new) with the build the process runs on, and a
+    /// read: [`try_new`](Self::try_new) with the build the process runs on, and a
     /// test with the build it names.
     pub(crate) fn at_build(build: WindowsBuild) -> Result<Self, PlatformError> {
         Self::try_from_parts(
             |positions| WindowSet::new(WindowConfiguration::default(), positions, build),
-            |windows| WindowsLoop::new::<Windows>(Arc::clone(windows) as _),
+            |windows| WindowsLoop::try_new::<Windows>(Arc::clone(windows) as _),
         )
     }
 }

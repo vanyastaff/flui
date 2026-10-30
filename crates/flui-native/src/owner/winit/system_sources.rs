@@ -241,7 +241,7 @@ impl WinitApp {
             }
             // The receiver it replaces retires after its successor stands.
             let receiver =
-                Receiver::new(subscribers).map_err(|error| PlatformError::Preferences {
+                Receiver::try_new(subscribers).map_err(|error| PlatformError::Preferences {
                     message: error.to_string(),
                 })?;
             self.broadcasts = Some(receiver);

@@ -107,7 +107,7 @@ mod cases {
         use objc2_app_kit::NSScreen;
 
         let mtm = MainThreadMarker::new().expect("the cases run on the main thread");
-        let platform = MacOSPlatform::new().expect("the AppKit platform");
+        let platform = MacOSPlatform::try_new().expect("the AppKit platform");
         let snapshot = platform.display_snapshot().expect("a display snapshot");
         let names: Vec<String> = NSScreen::screens(mtm)
             .iter()
@@ -130,7 +130,7 @@ mod cases {
         use objc2_app_kit::{NSDisplayGamut, NSScreen};
 
         let mtm = MainThreadMarker::new().expect("the cases run on the main thread");
-        let platform = MacOSPlatform::new().expect("the AppKit platform");
+        let platform = MacOSPlatform::try_new().expect("the AppKit platform");
         let snapshot = platform.display_snapshot().expect("a display snapshot");
         let screens = NSScreen::screens(mtm);
         assert_eq!(
@@ -380,7 +380,7 @@ mod cases {
     fn open(title: &str) -> AppKitFixture {
         let mtm = MainThreadMarker::new().expect("the cases run on the main thread");
         let app = launched(mtm);
-        let platform = MacOSPlatform::new().expect("the AppKit platform");
+        let platform = MacOSPlatform::try_new().expect("the AppKit platform");
         let handler = RecordingWindowHandler::new();
         let window = platform
             .open_window(

@@ -143,7 +143,7 @@ mod winit {
             &self,
             signal: &Arc<OwnerSignal>,
         ) -> Result<Rc<dyn OwnerPreferences>, PlatformError> {
-            Ok(Rc::new(PreferenceSource::new(signal)?))
+            Ok(Rc::new(PreferenceSource::try_new(signal)?))
         }
     }
 }
@@ -227,7 +227,7 @@ pub(crate) fn kept(source: Rc<dyn OwnerPreferences>) -> Rc<PreferenceSource> {
 impl PreferenceSource {
     /// A source that wakes the owner behind `signal` when a preference
     /// changes.
-    pub(crate) fn new(signal: &Arc<OwnerSignal>) -> Result<Self, PlatformError> {
+    pub(crate) fn try_new(signal: &Arc<OwnerSignal>) -> Result<Self, PlatformError> {
         let entry = WinRtEntry::enter().map_err(native_error)?;
         // SAFETY: this owner holds its WinRT entry; class strings are owned.
         // Direct activation avoids the generated process-wide factory cache,

@@ -282,16 +282,16 @@ impl MacOSLoop {
     /// # Errors
     ///
     /// [`PlatformError::Init`] off the AppKit main thread.
-    pub(crate) fn new<H: MacosHost>() -> Result<Self, PlatformError> {
+    pub(crate) fn try_new<H: MacosHost>() -> Result<Self, PlatformError> {
         // AppKit is touched below (`sharedApplication`,
         // `setActivationPolicy`), so the main-thread requirement starts HERE,
         // not at `run` — `MainThreadMarker::new()` both checks it and produces
         // the token objc2's AppKit API requires, which is why there is no
         // separate pre-check.
         let mtm = MainThreadMarker::new().ok_or_else(|| PlatformError::Init {
-            message: "MacOSPlatform::new must run on the AppKit main thread".to_string(),
+            message: "MacOSPlatform::try_new must run on the AppKit main thread".to_string(),
         })?;
-        debug_assert_appkit_main_thread("MacOSPlatform::new");
+        debug_assert_appkit_main_thread("MacOSPlatform::try_new");
 
         {
             // Initialize NSApplication (the process-wide singleton).
@@ -365,7 +365,7 @@ impl host::Loop for MacOSLoop {
         platform: Arc<dyn Platform>,
         handler: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError> {
-        // Idempotent when `MacOSPlatform::new` already bound on this thread; trips
+        // Idempotent when `MacOSPlatform::try_new` already bound on this thread; trips
         // a debug assertion if `run` somehow migrated threads (ADR-0039).
         self.affinity.bind_current();
         debug_assert_appkit_main_thread("MacOSPlatform::run");

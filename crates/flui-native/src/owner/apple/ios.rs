@@ -469,10 +469,12 @@ impl IOSLoop {
     /// # Errors
     ///
     /// [`PlatformError::Init`] off the main thread.
-    pub(crate) fn new<H: IosHost>(windows: Arc<dyn SceneWindows>) -> Result<Self, PlatformError> {
+    pub(crate) fn try_new<H: IosHost>(
+        windows: Arc<dyn SceneWindows>,
+    ) -> Result<Self, PlatformError> {
         if MainThreadMarker::new().is_none() {
             return Err(PlatformError::Init {
-                message: "IOSPlatform::new must run on the main thread (UIKit is \
+                message: "IOSPlatform::try_new must run on the main thread (UIKit is \
                           main-thread-only)"
                     .to_string(),
             });

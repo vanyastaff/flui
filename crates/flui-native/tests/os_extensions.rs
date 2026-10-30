@@ -123,7 +123,7 @@ mod cases {
         });
 
         let platform: Box<dyn Platform> =
-            Box::new(flui_native::WindowsPlatform::new().expect("the Win32 platform"));
+            Box::new(flui_native::WindowsPlatform::try_new().expect("the Win32 platform"));
         let window = platform
             .open_window(
                 hidden(),
@@ -150,7 +150,7 @@ mod cases {
         };
 
         let platform: Box<dyn Platform> =
-            Box::new(flui_native::WindowsPlatform::new().expect("the Win32 platform"));
+            Box::new(flui_native::WindowsPlatform::try_new().expect("the Win32 platform"));
         for (corners, theme) in [
             (WindowsCornerPreference::DoNotRound, WindowsTheme::Dark),
             (WindowsCornerPreference::RoundSmall, WindowsTheme::Light),
@@ -183,7 +183,7 @@ mod cases {
         use flui_platform::{Unsupported, UnsupportedReason};
 
         let platform: Box<dyn Platform> =
-            Box::new(flui_native::WindowsPlatform::new().expect("the Win32 platform"));
+            Box::new(flui_native::WindowsPlatform::try_new().expect("the Win32 platform"));
         let window = platform
             .open_window(
                 hidden(),
@@ -330,7 +330,7 @@ mod cases {
         use objc2_app_kit::{NSVisualEffectMaterial, NSVisualEffectView};
 
         let platform: Box<dyn Platform> =
-            Box::new(flui_native::MacOSPlatform::new().expect("the AppKit platform"));
+            Box::new(flui_native::MacOSPlatform::try_new().expect("the AppKit platform"));
         let window = platform
             .open_window(
                 hidden(),

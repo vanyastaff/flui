@@ -131,7 +131,7 @@ mod wayland {
         /// [`PlatformError::Init`] when `WAYLAND_DISPLAY` names no socket, no
         /// compositor answers on it, libwayland cannot be loaded, or the
         /// compositor lacks the globals a window needs.
-        pub fn new() -> Result<Self, PlatformError> {
+        pub fn try_new() -> Result<Self, PlatformError> {
             let socket = Environment::current()
                 .wayland_socket_path()
                 .ok_or_else(|| PlatformError::Init {
@@ -140,7 +140,7 @@ mod wayland {
                         .to_owned(),
                 })?;
             Self::try_from_parts(WaylandWindows::new, |_| {
-                WaylandLoop::new::<Wayland>(&socket)
+                WaylandLoop::try_new::<Wayland>(&socket)
             })
         }
     }
@@ -231,13 +231,13 @@ mod x11 {
         /// # Errors
         /// [`PlatformError::Init`] when libxcb cannot be loaded, no X server
         /// answers, or the loop's wake descriptor cannot be made.
-        pub fn new() -> Result<Self, PlatformError> {
+        pub fn try_new() -> Result<Self, PlatformError> {
             let connection = X11Connection::connect()?;
             let atoms = WindowAtoms::intern(&connection)?;
             let windows = Arc::clone(&connection);
             Self::try_from_parts(
                 |positions| X11Windows::new(positions, windows, atoms),
-                |windows| X11Loop::new::<X11>(connection, Arc::clone(windows) as _),
+                |windows| X11Loop::try_new::<X11>(connection, Arc::clone(windows) as _),
             )
         }
     }

@@ -107,7 +107,7 @@ fn send(hwnd: HWND, message: u32) {
 /// A window whose input callback logs scrolls, and calls `nested`
 /// once, from inside the callback, on the first scroll it receives.
 fn fixture(nested: Option<fn(HWND)>) -> Fixture {
-    let platform = WindowsPlatform::new().expect("platform");
+    let platform = WindowsPlatform::try_new().expect("platform");
     let handler = RecordingWindowHandler::new();
     let window = platform
         .open_window(

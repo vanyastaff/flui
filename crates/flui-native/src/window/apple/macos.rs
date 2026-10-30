@@ -291,7 +291,7 @@ impl MacOSWindow {
     /// # Errors
     /// [`OpenWindowError::Backend`] when AppKit refuses to allocate the
     /// NSWindow.
-    pub(crate) fn new(
+    pub(crate) fn try_new(
         options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
         windows_map: WindowRegistry,
@@ -1136,7 +1136,7 @@ impl host::Window<MacOSLoop> for MacOSWindow {
             });
         }
         measure_placement_globally(owner.displays.as_ref(), &mut options);
-        let window = MacOSWindow::new(
+        let window = MacOSWindow::try_new(
             options,
             handler,
             Arc::clone(&owner.windows),
@@ -1173,7 +1173,7 @@ impl host::Window<MacOSLoop> for MacOSWindow {
 
     fn capabilities(_: &MacOSLoop, _: &MacOSWindows) -> WindowCapabilities {
         // Every window the platform opens routes through the AppKit main lane
-        // (`MacOSWindow::new`).
+        // (`MacOSWindow::try_new`).
         appkit_window_capabilities(true)
     }
 

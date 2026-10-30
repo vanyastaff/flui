@@ -91,7 +91,7 @@ mod narrowing {
             OsWindowOptions, Win32WindowOptions, WindowsCornerPreference, WindowsTheme,
         };
 
-        let platform = flui_native::WindowsPlatform::new().expect("the Win32 platform");
+        let platform = flui_native::WindowsPlatform::try_new().expect("the Win32 platform");
         let window = flui_native::Platform::open_window(
             &platform,
             hidden().with_os_options(

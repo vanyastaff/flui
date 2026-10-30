@@ -431,12 +431,12 @@ pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {
 
     #[cfg(windows)]
     {
-        Ok(Box::new(WindowsPlatform::new()?))
+        Ok(Box::new(WindowsPlatform::try_new()?))
     }
 
     #[cfg(all(target_os = "macos", not(windows)))]
     {
-        Ok(Box::new(MacOSPlatform::new()?))
+        Ok(Box::new(MacOSPlatform::try_new()?))
     }
 
     #[cfg(all(target_os = "linux", not(any(windows, target_os = "macos"))))]
@@ -478,7 +478,7 @@ pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {
         ))
     ))]
     {
-        Ok(Box::new(IOSPlatform::new()?))
+        Ok(Box::new(IOSPlatform::try_new()?))
     }
 
     #[cfg(all(
@@ -492,7 +492,7 @@ pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {
         ))
     ))]
     {
-        Ok(Box::new(WebPlatform::new()?))
+        Ok(Box::new(WebPlatform::try_new()?))
     }
 
     #[cfg(not(any(
@@ -532,7 +532,7 @@ fn start_winit() -> Result<Box<dyn Platform>, PlatformError> {
 /// The native Wayland host, as [`current_platform`] starts it.
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 fn start_wayland() -> Result<Box<dyn Platform>, PlatformError> {
-    Ok(Box::new(WaylandPlatform::new()?))
+    Ok(Box::new(WaylandPlatform::try_new()?))
 }
 
 /// A build without the Wayland host never chooses it.
@@ -546,7 +546,7 @@ fn start_wayland() -> Result<Box<dyn Platform>, PlatformError> {
 /// The native X11 host, as [`current_platform`] starts it.
 #[cfg(x11_host)]
 fn start_x11() -> Result<Box<dyn Platform>, PlatformError> {
-    Ok(Box::new(X11Platform::new()?))
+    Ok(Box::new(X11Platform::try_new()?))
 }
 
 /// A build without the X11 host never chooses it.

@@ -777,7 +777,7 @@ impl Delivering {
                         }
                         read
                     }
-                    None => match Keyboard::new(&source) {
+                    None => match Keyboard::try_new(&source) {
                         Some(keyboard) => {
                             self.keymaps.push((seat, SeatKeymap { source, keyboard }));
                             true

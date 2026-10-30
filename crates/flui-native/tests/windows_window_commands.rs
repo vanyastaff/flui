@@ -57,7 +57,7 @@ use windows::core::{BOOL, w};
 const CONTENT: Size<f64> = Size::new(640.0, 480.0);
 
 fn platform() -> WindowsPlatform {
-    WindowsPlatform::new().expect("native Windows platform")
+    WindowsPlatform::try_new().expect("native Windows platform")
 }
 
 fn options() -> WindowOptions {

@@ -146,7 +146,7 @@ impl Host for Apple {
 /// ```rust,ignore
 /// use flui_native::{MacOSPlatform, Platform};
 ///
-/// let platform = MacOSPlatform::new()?;
+/// let platform = MacOSPlatform::try_new()?;
 /// // `App` implements `AppHandler`: its `ready` is the bootstrap.
 /// Box::new(platform).run(Rc::new(App::default()))?;
 /// ```
@@ -225,10 +225,10 @@ impl IosHost for Apple {
 #[cfg(target_os = "macos")]
 impl HostPlatform<Apple> {
     /// Create a new macOS platform.
-    pub fn new() -> Result<Self, PlatformError> {
+    pub fn try_new() -> Result<Self, PlatformError> {
         // The loop keeps the open windows itself; what they share is the
         // table's window-level positions.
-        Self::try_from_parts(MacOSWindows::new, |_| MacOSLoop::new::<Apple>())
+        Self::try_from_parts(MacOSWindows::new, |_| MacOSLoop::try_new::<Apple>())
     }
 }
 
@@ -240,9 +240,9 @@ impl HostPlatform<Apple> {
     ///
     /// Returns [`PlatformError::Init`] if called off the main thread, which is
     /// where UIKit requires every window and view operation to run.
-    pub fn new() -> Result<Self, PlatformError> {
+    pub fn try_new() -> Result<Self, PlatformError> {
         Self::try_from_parts(IOSWindows::new, |windows| {
-            IOSLoop::new::<Apple>(Arc::clone(windows) as _)
+            IOSLoop::try_new::<Apple>(Arc::clone(windows) as _)
         })
     }
 }

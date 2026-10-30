@@ -23,10 +23,10 @@ fn windows_reads_preferences_before_a_user_window_exists() {
 
     // A later host must not reuse an activation factory from a retired apartment.
     {
-        let previous = flui_native::WindowsPlatform::new().expect("previous native platform");
+        let previous = flui_native::WindowsPlatform::try_new().expect("previous native platform");
         previous.preferences().expect("previous native observation");
     }
-    let platform = flui_native::WindowsPlatform::new().expect("native platform");
+    let platform = flui_native::WindowsPlatform::try_new().expect("native platform");
     let refused = std::thread::scope(|scope| {
         scope
             .spawn(|| platform.preferences())
@@ -250,7 +250,7 @@ fn setting_messages_wake_the_owner_without_a_user_window() {
     }
 
     let before = top_levels();
-    let platform = flui_native::WindowsPlatform::new().expect("native platform");
+    let platform = flui_native::WindowsPlatform::try_new().expect("native platform");
     let receivers: Vec<_> = top_levels()
         .into_iter()
         .filter(|hwnd| !before.contains(hwnd))
