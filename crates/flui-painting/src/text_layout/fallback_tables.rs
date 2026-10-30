@@ -68,6 +68,23 @@ pub(crate) const fn common(platform: Platform) -> &'static [&'static str] {
     }
 }
 
+/// The colour emoji faces an emoji cluster tries first, in order, before the
+/// common list.
+///
+/// The common lists put a text face ahead of the emoji face (unix's
+/// `"DejaVu Sans"`, which maps many emoji code points to monochrome
+/// outlines), so an emoji walked through them alone shapes in black and
+/// white. iOS shares the unix table, hence its Apple face there; Android
+/// and wasm name none and keep the collection's own emoji generic.
+pub(crate) const fn emoji(platform: Platform) -> &'static [&'static str] {
+    match platform {
+        Platform::Windows => &["Segoe UI Emoji"],
+        Platform::Unix => &["Noto Color Emoji", "Apple Color Emoji"],
+        Platform::MacOs => &["Apple Color Emoji"],
+        Platform::Other => &[],
+    }
+}
+
 /// The families tried first for the script whose ISO 15924 code is
 /// `script`, for `locale`. `locale` picks the Han list (Japanese, Korean,
 /// Hong Kong and Taiwan faces; Simplified Chinese otherwise) by its
