@@ -46,8 +46,21 @@ impl<L: crate::owner::notices::LifecycleHooks> crate::host::Lifecycle<L> for L {
         owner.release_session_end();
     }
 
-    fn session_end_support(owner: &L) -> flui_platform::SessionEndSupport {
-        owner.session_end_support()
+    /// AppKit holds a log out with `NSTerminateLater`; logind waits for the
+    /// owner through its delay inhibitor; UIKit and Android do not wait.
+    fn session_end_support(_: &L) -> flui_platform::SessionEndSupport {
+        #[cfg(target_os = "macos")]
+        {
+            flui_platform::SessionEndSupport::Hold
+        }
+        #[cfg(linux_host)]
+        {
+            linux::SESSION_END_SUPPORT
+        }
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        {
+            flui_platform::SessionEndSupport::NotifyOnly
+        }
     }
 
     fn activate(_: &L, _: bool) {

@@ -882,10 +882,6 @@ impl LifecycleHooks for IOSLoop {
         // The answer to a session end is not read, so no session end is held
         // open.
     }
-
-    fn session_end_support(&self) -> flui_platform::SessionEndSupport {
-        flui_platform::SessionEndSupport::NotifyOnly
-    }
 }
 
 /// Run the bootstrap stashed by [`IOSLoop`]'s `run`, on the main thread,

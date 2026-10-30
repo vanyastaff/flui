@@ -1158,10 +1158,6 @@ impl LifecycleHooks for AndroidLoop {
         // The system does not wait for an answer to a session end, so no end
         // is held open.
     }
-
-    fn session_end_support(&self) -> flui_platform::SessionEndSupport {
-        flui_platform::SessionEndSupport::NotifyOnly
-    }
 }
 
 impl host::Storage<AndroidLoop> for AndroidLoop {
