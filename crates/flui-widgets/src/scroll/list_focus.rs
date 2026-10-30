@@ -64,6 +64,9 @@ struct Inner {
     /// A row asked for while it was not built; its marker focuses it on mount.
     pending: Cell<Option<usize>>,
     item_count: Cell<usize>,
+    /// Whether this list sits inside another focusable list, which then
+    /// takes the arrow keys this one has no row for.
+    nested: Cell<bool>,
     axis: Cell<Axis>,
     /// Whether the main axis runs against the index order on screen (a
     /// horizontal list under right-to-left text).
@@ -95,6 +98,7 @@ impl ListFocusController {
                 remembered: Cell::new(None),
                 pending: Cell::new(None),
                 item_count: Cell::new(0),
+                nested: Cell::new(false),
                 axis: Cell::new(Axis::Vertical),
                 reversed: Cell::new(false),
                 reach: RefCell::new(None),
@@ -296,7 +300,12 @@ impl ListFocusController {
         };
         match target {
             Some(index) if self.move_to(index) => KeyEventResult::Handled,
-            _ => KeyEventResult::Ignored,
+            Some(_) => KeyEventResult::Ignored,
+            // At the edge an enclosing list moves on; an outermost list keeps
+            // the key, so focus stays on the row instead of leaving the list
+            // by direction.
+            None if self.inner.nested.get() => KeyEventResult::Ignored,
+            None => KeyEventResult::Handled,
         }
     }
 
@@ -484,6 +493,11 @@ fn apply_config(controller: &ListFocusController, config: &ListFocusConfig) {
 }
 
 impl ViewState<FocusableList> for FocusableListState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        let nested = ctx.get::<ListFocusScope, _>(|_| ()).is_some();
+        self.controller.inner.nested.set(nested);
+    }
+
     fn did_update_view(&mut self, _old: &FocusableList, view: &FocusableList) {
         apply_config(&self.controller, &view.config);
     }

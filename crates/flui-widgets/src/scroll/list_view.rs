@@ -223,7 +223,9 @@ impl ListView {
     ///
     /// Tab enters the list on the row it last focused, or on the first visible
     /// one, and leaves it for the next control. Inside it, the arrow keys
-    /// along `scroll_direction` move between rows, Page Up and Page Down move
+    /// along `scroll_direction` move between rows (at the first or last row the
+    /// arrow stays in the list; a list inside another focusable list hands it
+    /// on to that list), Page Up and Page Down move
     /// to the edge of the visible rows and then a page past it, and Home and
     /// End go to the first and last row. A row's focus goes to its first
     /// focusable descendant, so the row's button activates and shows its ring
