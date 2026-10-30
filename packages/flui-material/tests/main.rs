@@ -16,6 +16,8 @@ mod app_bar;
 
 #[path = "card.rs"]
 mod card;
+#[path = "carousel_view.rs"]
+mod carousel_view;
 
 #[path = "checkbox.rs"]
 mod checkbox;
@@ -879,4 +881,31 @@ fn material_animated_icons() {
         "animated_icons::every icon draws inside its box",
         animated_icons::every_icon_draws_inside_its_box,
     )]);
+}
+
+/// `CarouselView`: cards on the mask, the theme cascade, taps and the snap a layout implies.
+#[test]
+fn carousel_view_contracts() {
+    common::run_cases(&[
+        (
+            "carousel_view::every layout implies its snap",
+            carousel_view::every_layout_implies_its_snap,
+        ),
+        (
+            "carousel_view::the implied snap settles a release and none scrolls freely",
+            carousel_view::the_implied_snap_settles_a_release_and_none_scrolls_freely,
+        ),
+        (
+            "carousel_view::cards cover the shown part of each item",
+            carousel_view::cards_cover_the_shown_part_of_each_item,
+        ),
+        (
+            "carousel_view::the widget beats the theme which beats the tokens",
+            carousel_view::the_widget_beats_the_theme_which_beats_the_tokens,
+        ),
+        (
+            "carousel_view::a tap reports its card and cards are buttons only with on_tap",
+            carousel_view::a_tap_reports_its_card_and_cards_are_buttons_only_with_on_tap,
+        ),
+    ]);
 }
