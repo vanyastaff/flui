@@ -373,7 +373,9 @@ pub use flui_app::run_app_android;
 /// What [`run_app`] and `run_app_android` start a run with, the capability
 /// registrations it carries, and why starting fails. Re-exported from [`app`]
 /// (`flui-app`).
-pub use flui_app::{AppCapabilities, AppLaunch, LaunchError, UnsupportedSystem};
+pub use flui_app::{
+    AppCapabilities, AppLaunch, BackendFailure, GpuBackend, LaunchError, UnsupportedSystem,
+};
 /// Registers a font's faces with the app, for measurement, paint and carets.
 /// Re-exported from [`app`] (`flui-app`).
 ///

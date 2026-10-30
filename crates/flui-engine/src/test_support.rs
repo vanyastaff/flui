@@ -30,7 +30,8 @@ use std::sync::Arc;
 /// [`crate::adapter::trusted_adapter_options`].
 #[cfg(feature = "testing")]
 fn request_test_adapter() -> Result<wgpu::Adapter, wgpu::RequestAdapterError> {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());
     pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::LowPower,
         force_fallback_adapter: false,

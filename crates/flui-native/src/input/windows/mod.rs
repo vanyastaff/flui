@@ -183,6 +183,9 @@ struct InputWindow {
     /// Physical keys held down that were pressed as dead keys, so their
     /// release reports `Dead` like the press.
     held_dead_keys: RefCell<raw::HeldKeys>,
+    /// Keys held down whose scancode names no code, with the key each was
+    /// pressed as, so its repeats and release carry that key.
+    unplaced_keys: RefCell<crate::input::keys::UnplacedKeys<(u16, bool)>>,
     /// Physical keys held down whose press an input method took
     /// (`VK_PROCESSKEY`): their release is no key either.
     keys_taken_by_input_method: RefCell<raw::HeldKeys>,
@@ -214,6 +217,7 @@ impl InputWindow {
             touchpad: direct_manipulation::TouchpadSlot::default(),
             pending_high_surrogate: Cell::new(None),
             held_dead_keys: RefCell::default(),
+            unplaced_keys: RefCell::default(),
             keys_taken_by_input_method: RefCell::default(),
             gone: Cell::new(false),
         }
@@ -656,7 +660,8 @@ impl InputWindows {
                         use raw::key_down_event;
                         let event = {
                             let mut held = ctx.held_dead_keys.borrow_mut();
-                            key_down_event(key, stroke, &mut held, time)
+                            let event = key_down_event(key, stroke, &mut held, time);
+                            ctx.settle_unplaced(key.scan_code, key.extended, event)
                         };
                         let result = ctx.delivery.dispatch_input(event);
                         // A callback can close this window and create another
@@ -711,7 +716,8 @@ impl InputWindows {
                         use raw::key_up_event;
                         let event = {
                             let mut held = ctx.held_dead_keys.borrow_mut();
-                            key_up_event(key, &mut held, time)
+                            let event = key_up_event(key, &mut held, time);
+                            ctx.settle_unplaced(key.scan_code, key.extended, event)
                         };
                         let result = ctx.delivery.dispatch_input(event);
                         if result.default_prevented || !ctx.is_current() {
@@ -894,6 +900,27 @@ mod keystroke_queue {
 /// the window loses focus or is minimised.
 #[cfg(windows)]
 impl InputWindow {
+    /// `input` of the key `(scan_code, extended)`, its key the key-down's when
+    /// its scancode names no code (`KeyEvent`'s contract).
+    fn settle_unplaced(
+        &self,
+        scan_code: u16,
+        extended: bool,
+        input: flui_platform::PlatformInput,
+    ) -> flui_platform::PlatformInput {
+        match input {
+            // Scan code 0 (input injected by virtual key alone) names no key.
+            flui_platform::PlatformInput::Keyboard(event) => {
+                flui_platform::PlatformInput::Keyboard(
+                    self.unplaced_keys
+                        .borrow_mut()
+                        .settle((scan_code != 0).then_some((scan_code, extended)), event),
+                )
+            }
+            other => other,
+        }
+    }
+
     /// Record whether the mouse is over the window, raising the hover change
     /// only when it changed. Every route the mouse reaches the window by
     /// reports through here: `WM_MOUSEMOVE`/`WM_MOUSELEAVE`, and `WM_POINTER*`

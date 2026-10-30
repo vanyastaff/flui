@@ -323,6 +323,65 @@ mod gpu_tests {
         );
     }
 
+    // ── Pixel-aligned rects cover their corner pixels fully ──────────────────
+
+    /// A rect whose edges lie on pixel boundaries covers every pixel inside it
+    /// fully and none outside, wherever its corners fall in the 2×2 fragment
+    /// quads. The AA band is measured through the local position's derivatives,
+    /// not the distance's: the distance creases inside each corner, and a
+    /// driver with fine derivatives (lavapipe, llvmpipe) used to read a √2
+    /// slope there and leave a corner pixel at 240 of 255.
+    #[test]
+    fn pixel_aligned_rects_cover_their_corner_pixels() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        // Even and odd origins and sizes put each corner in every quad position.
+        let rects: [(u32, u32, u32, u32); 5] = [
+            (1, 1, 2, 2),
+            (8, 8, 4, 4),
+            (17, 16, 3, 5),
+            (24, 25, 1, 1),
+            (33, 33, 6, 3),
+        ];
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        for &(x, y, w, h) in &rects {
+            painter.draw_rect(
+                Rect::from_xywh(f64::from(x), f64::from(y), f64::from(w), f64::from(h)),
+                &Paint::fill(Color::WHITE),
+            );
+        }
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Pixel-aligned rect encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+
+        let mut wrong = Vec::new();
+        for row in 0..48 {
+            for col in 0..48 {
+                let inside = rects
+                    .iter()
+                    .any(|&(x, y, w, h)| (x..x + w).contains(&col) && (y..y + h).contains(&row));
+                let alpha = pixels[(row * SURFACE_WIDTH + col) as usize][3];
+                if alpha != if inside { 255 } else { 0 } {
+                    wrong.push((col, row, alpha));
+                }
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "pixels with partial or missing coverage: {wrong:?}"
+        );
+    }
+
     // ── O4: Rotated rrect — correct size + orientation + AA ──────────────────
 
     // ── O5: Byte-identity — axis-aligned SrcOver rect and rrect ──────────────

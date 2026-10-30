@@ -4,6 +4,7 @@
 mod animated_default_text_style;
 mod default_text_style;
 mod linked_paragraph;
+mod primary_selection;
 mod rich_text;
 mod selection_area;
 mod selection_style;

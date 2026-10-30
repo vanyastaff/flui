@@ -442,7 +442,7 @@ impl LoopInput for NoInput {
     }
 
     fn key(
-        &self,
+        &mut self,
         _: winit::event::KeyEvent,
         _: winit::keyboard::ModifiersState,
     ) -> Option<PlatformInput> {

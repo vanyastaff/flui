@@ -102,7 +102,7 @@ wgpu-profiler = { workspace = true, optional = true }
 # target-scoped entries are feature-unified with the base `wgpu` dependency
 # above, so every consumer of flui-engine gets the native backend for the
 # compile target without opting in. The mapping mirrors
-# `Renderer::select_backend()`; the named features above (`vulkan`, `metal`,
+# `gpu_backend::Family::order`; the named features above (`vulkan`, `metal`,
 # `dx12`, `webgpu`, `gles`) remain available to enable additional backends.
 [target.'cfg(target_os = "windows")'.dependencies]
 wgpu = { workspace = true, default-features = false, features = ["dx12"] }
@@ -111,16 +111,20 @@ wgpu = { workspace = true, default-features = false, features = ["dx12"] }
 wgpu = { workspace = true, default-features = false, features = ["metal"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
-wgpu = { workspace = true, default-features = false, features = ["vulkan"] }
+# GLES 3.0 is the fallback when no Vulkan adapter answers (ADR-0244 §1).
+wgpu = { workspace = true, default-features = false, features = ["vulkan", "gles"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # fragile-send-sync-non-atomic-wasm: wgpu types are Rc/RefCell-based on the
 # WebGPU backend and therefore !Send; this feature marks them Send+Sync, which
 # is sound only while the wasm build has no threads (no atomics target
-# features). Required by flui-app's Send-bounded frame callbacks.
+# features). Required by flui-app's Send-bounded frame callbacks. `webgl`
+# is the WebGL2 fallback (ADR-0244 §1): `gles` alone builds no GL backend on
+# wasm32.
 wgpu = { workspace = true, default-features = false, features = [
     "webgpu",
     "gles",
+    "webgl",
     "fragile-send-sync-non-atomic-wasm",
 ] }
 

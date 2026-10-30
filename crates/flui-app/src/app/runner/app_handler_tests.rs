@@ -320,10 +320,151 @@ mod handler_containment {
         assert_held();
     }
 
+    /// The loop's terminal failure is the routing's own panic, a borrow it
+    /// found taken, taken so the next row starts with none.
+    fn assert_routing_held() {
+        let held = crate::app::runner::terminal::take_terminal()
+            .expect("the routing's panic is held as the loop's terminal failure");
+        let text = flui_foundation::panic::payload_text(held.as_ref())
+            .expect("the borrow failure has a text payload");
+        assert!(text.contains("borrowed"), "{text}");
+    }
+
+    /// A window handler method called while its routes are jammed, so the
+    /// routing itself fails before any route runs; `then` checks the outcome
+    /// while the window is still open.
+    fn jammed_window_method(call: impl FnOnce(&dyn flui_platform::WindowHandler), then: fn()) {
+        let routed = Routed::open();
+        let jammed = routed.routes.jam();
+        call(&*routed.routes);
+        drop(jammed);
+        then();
+    }
+
+    fn routing_window_input() {
+        jammed_window_method(
+            |handler| {
+                handler.input(flui_platform::PlatformInput::Ime(
+                    flui_platform::ImeEvent::Enabled,
+                ));
+            },
+            assert_routing_held,
+        );
+    }
+
+    fn routing_window_state_changed() {
+        jammed_window_method(|handler| handler.state_changed(), assert_routing_held);
+    }
+
+    /// A failed frame is answered `Failed` and is not terminal (ADR-0258 §4).
+    fn routing_window_frame_requested() {
+        jammed_window_method(
+            |handler| {
+                let outcome = handler.frame_requested(flui_platform::FrameRequest::new(
+                    flui_platform::EventTime::from_nanos(1),
+                ));
+                assert!(matches!(outcome, flui_platform::FrameOutcome::Failed));
+            },
+            || {
+                assert!(
+                    crate::app::runner::terminal::take_terminal().is_none(),
+                    "a failed frame ended the loop"
+                );
+            },
+        );
+    }
+
+    fn routing_window_close_requested() {
+        jammed_window_method(
+            |handler| {
+                assert!(
+                    matches!(
+                        handler.close_requested(),
+                        flui_platform::CloseDecision::KeepOpen
+                    ),
+                    "a close whose routing panicked keeps the window"
+                );
+            },
+            assert_routing_held,
+        );
+    }
+
+    fn routing_window_closed() {
+        jammed_window_method(|handler| handler.closed(), assert_routing_held);
+    }
+
+    fn routing_window_surface_changed() {
+        jammed_window_method(
+            |handler| {
+                handler.surface_changed(flui_platform::SurfaceChange::Release);
+            },
+            assert_routing_held,
+        );
+    }
+
+    /// A runner handler whose bootstrap keeps the owner it is handed.
+    fn runner_handler(
+        kept: &Rc<RefCell<Option<OwnerPlatform>>>,
+    ) -> Rc<super::super::RunnerHandler> {
+        let kept = Rc::clone(kept);
+        Rc::new(super::super::RunnerHandler {
+            bootstrap: RefCell::new(Some(Box::new(move |owner| {
+                kept.replace(Some(owner));
+                Ok(())
+            }))),
+            routes: Rc::default(),
+        })
+    }
+
+    /// An application handler method called, the way the platform calls it,
+    /// while the run's routes are borrowed, so the routing itself fails.
+    fn jammed_app_method(call: fn(&dyn AppHandler, &OwnerPlatform)) {
+        let kept: Rc<RefCell<Option<OwnerPlatform>>> = Rc::default();
+        let handler = runner_handler(&kept);
+        run(Rc::clone(&handler) as Rc<dyn AppHandler>).expect("the run");
+        let owner = kept.take().expect("the bootstrap ran");
+        let _jammed = handler.routes.borrow_mut();
+        call(&*handler, &owner);
+        assert_routing_held();
+    }
+
+    fn routing_app_ready() {
+        let kept: Rc<RefCell<Option<OwnerPlatform>>> = Rc::default();
+        let handler = runner_handler(&kept);
+        let jammed = handler.bootstrap.borrow_mut();
+        run(Rc::clone(&handler) as Rc<dyn AppHandler>)
+            .expect("a bootstrap whose routing panicked returns from the run");
+        drop(jammed);
+        assert_routing_held();
+    }
+
+    fn routing_app_quit_requested() {
+        jammed_app_method(AppHandler::quit_requested);
+    }
+
+    fn routing_app_reopen() {
+        jammed_app_method(AppHandler::reopen);
+    }
+
+    fn routing_app_exit_policy() {
+        jammed_app_method(|handler, owner| {
+            assert_eq!(
+                handler.exit_policy(owner),
+                ExitAnswer::End,
+                "a failed exit policy ends the loop"
+            );
+        });
+    }
+
+    fn routing_app_wake_deadline() {
+        jammed_app_method(|handler, owner| assert_eq!(handler.wake_deadline(owner), None));
+    }
+
     /// ADR-0258 §4: application code that panics inside a handler method never
     /// unwinds out of the platform's call (the call point's `or_resume`, which on
-    /// Win32, AppKit and UIKit is an abort). One row per method of `AppHandler`
-    /// and `WindowHandler`; a row fails when the panic leaves the method.
+    /// Win32, AppKit and UIKit is an abort), nor does a panic of the routing of
+    /// `flui-app` itself. One row per method of `AppHandler` and `WindowHandler`
+    /// for each; a row fails when the panic leaves the method.
     #[test]
     fn an_application_panic_never_leaves_a_handler() {
         crate::table_test::run_table(
@@ -340,6 +481,35 @@ mod handler_containment {
                 ("WindowHandler::close_requested", window_close_requested),
                 ("WindowHandler::closed", window_closed),
                 ("WindowHandler::surface_changed", window_surface_changed),
+                ("routing: AppHandler::ready", routing_app_ready),
+                (
+                    "routing: AppHandler::quit_requested",
+                    routing_app_quit_requested,
+                ),
+                ("routing: AppHandler::reopen", routing_app_reopen),
+                ("routing: AppHandler::exit_policy", routing_app_exit_policy),
+                (
+                    "routing: AppHandler::wake_deadline",
+                    routing_app_wake_deadline,
+                ),
+                ("routing: WindowHandler::input", routing_window_input),
+                (
+                    "routing: WindowHandler::state_changed",
+                    routing_window_state_changed,
+                ),
+                (
+                    "routing: WindowHandler::frame_requested",
+                    routing_window_frame_requested,
+                ),
+                (
+                    "routing: WindowHandler::close_requested",
+                    routing_window_close_requested,
+                ),
+                ("routing: WindowHandler::closed", routing_window_closed),
+                (
+                    "routing: WindowHandler::surface_changed",
+                    routing_window_surface_changed,
+                ),
             ],
         );
     }

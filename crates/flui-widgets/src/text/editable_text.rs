@@ -11,9 +11,10 @@ use std::{
 use flui_foundation::ListenerId;
 use flui_foundation::geometry::{Bounds, Offset, Point, Rect};
 use flui_foundation::notifier::Listenable;
+use flui_foundation::panic::FirstPanic;
 use flui_interaction::PointerDispatch;
 use flui_interaction::events::PointerEventExt;
-use flui_interaction::events::PointerId;
+use flui_interaction::events::{PointerButton, PointerId};
 use flui_interaction::focus::{
     FocusAttachment, FocusCause, FocusManager, FocusNode, FocusNodeRegistration, KeyEventHandler,
     KeyEventResult, RectProvider,
@@ -45,7 +46,12 @@ use crate::interaction::actions::{
 use crate::semantics::Semantics;
 use crate::support::{command_modifiers, ref_callback};
 use crate::text::controller::TextEditingController;
+use crate::text::primary_selection::PrimarySelectionOwner;
 use crate::text::text_store::{EditableTextStore, FieldParts, with_editable_global};
+
+mod clipboard;
+
+use clipboard::{ClipboardTextAction, claim_primary};
 
 type ImeFocusTransition = Rc<dyn Fn(bool)>;
 
@@ -348,6 +354,16 @@ pub(super) fn source_offset_for_masked_offset(
 /// The clipboard is acquired in `init_state` through
 /// `cx.capability::<ClipboardCapability>()` (ADR-0152); a refusal leaves
 /// copy, cut and paste disabled.
+///
+/// # Primary selection
+///
+/// Where the platform has one (X11 and Wayland), a non-empty selection in a
+/// field that is not obscured is offered as the primary selection, read only
+/// when another application pastes it, and let go when the selection empties,
+/// the field is obscured or it unmounts. A middle press focuses the field and
+/// pastes the primary selection where it lands, as Paste does, once the read
+/// settles; it starts no selection. Elsewhere the capability is refused and a
+/// middle press is left to whatever else uses it.
 ///
 /// # DEFERRED (v1)
 ///
@@ -836,6 +852,10 @@ pub struct EditableTextState {
     /// The presentation's clipboard, acquired in `init_state`. `None` only
     /// on a bare owner; the clipboard actions are then disabled.
     clipboard: Option<ClipboardHandle>,
+    /// The field's hold on the primary selection, acquired in `init_state`:
+    /// claimed while the field shows a selection and is not obscured, read
+    /// by a middle press.
+    primary: Rc<PrimarySelectionOwner>,
     selection_drag: Rc<Cell<Option<SelectionDrag>>>,
     /// Whether the field is obscured, read by the copy action at key time
     /// and kept current by `did_update_view`.
@@ -908,6 +928,7 @@ impl StatefulView for EditableText {
             on_changed: Rc::new(RefCell::new(self.on_changed.clone())),
             reports_edits: Rc::new(Cell::new(true)),
             clipboard: None,
+            primary: Rc::default(),
             selection_drag: Rc::new(Cell::new(None)),
             obscure: Rc::new(Cell::new(self.obscure_text)),
             input_purpose: Rc::new(Cell::new(self.input_purpose)),
@@ -979,6 +1000,7 @@ impl EditableTextState {
             let focus_node = Rc::clone(&focus_node);
             let drag_anchor = Rc::clone(&drag_anchor);
             let commit = self.composition_commit();
+            let paste = self.clipboard_action();
             move |_cx: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
                 let flui_interaction::PointerEvent::Down(press) = dispatch.global else {
                     return;
@@ -987,6 +1009,24 @@ impl EditableTextState {
                     return;
                 };
                 if !enabled || drag_anchor.get().is_some() {
+                    return;
+                }
+                if press.button() == PointerButton::AUXILIARY {
+                    // A middle press pastes the primary selection where it
+                    // lands, on the platforms that have one, and selects
+                    // nothing; elsewhere it is left to whatever else uses it.
+                    if !paste.primary.is_available() {
+                        return;
+                    }
+                    let Some(at) = resolve(position) else {
+                        return;
+                    };
+                    let mut calls = OwnerCalls::new();
+                    calls.run(|| {
+                        let _ = focus_node.request_focus();
+                    });
+                    paste.paste_primary(&mut calls, at);
+                    calls.resume();
                     return;
                 }
                 // Admit the contact before any owner code runs (the commit's
@@ -1252,6 +1292,39 @@ impl EditableTextState {
         })
     }
 
+    /// This field's copy, cut and paste, the middle press's paste included.
+    fn clipboard_action(&self) -> ClipboardTextAction {
+        ClipboardTextAction {
+            attachment: Rc::clone(&self.focus_attachment),
+            enabled: Rc::clone(&self.accepts_semantics_actions),
+            controller: Rc::clone(&self.controller),
+            focus_node: Rc::clone(&self.observed_focus_node),
+            obscure: Rc::clone(&self.obscure),
+            clipboard: self.clipboard.clone(),
+            primary: Rc::clone(&self.primary),
+            edits: self.edit_observer(),
+            commit: self.composition_commit(),
+        }
+    }
+
+    /// The listener this field adds to its controller: a change rebuilds
+    /// the field, and the selection it leaves is claimed as the primary
+    /// selection, or let go when empty.
+    fn controller_listener(&self) -> Rc<dyn Fn()> {
+        let rebuild_notifier = self.rebuild_notifier.clone();
+        let primary = Rc::clone(&self.primary);
+        let controller = Rc::downgrade(&self.controller);
+        let obscure = Rc::clone(&self.obscure);
+        Rc::new(move || {
+            // Each runs though the other's owner code fails; the first
+            // failure is resumed after both.
+            let mut failure = FirstPanic::new();
+            failure.contain(|| rebuild_notifier.notify_listeners());
+            failure.contain(|| claim_primary(&primary, &controller, &obscure));
+            failure.resume();
+        })
+    }
+
     /// This field's clipboard actions layered over the `Actions` chain at
     /// its position, recorded on its focus node — where a `Shortcuts` looks
     /// an intent up while this field holds the primary focus. Depends on the
@@ -1272,16 +1345,7 @@ impl EditableTextState {
         {
             return;
         }
-        let action = ClipboardTextAction {
-            attachment: Rc::clone(&self.focus_attachment),
-            enabled: Rc::clone(&self.accepts_semantics_actions),
-            controller: Rc::clone(&self.controller),
-            focus_node: Rc::clone(&self.observed_focus_node),
-            obscure: Rc::clone(&self.obscure),
-            clipboard: self.clipboard.clone(),
-            edits: self.edit_observer(),
-            commit: self.composition_commit(),
-        };
+        let action = self.clipboard_action();
         let chain = layered_chain(
             enclosing.clone(),
             &[
@@ -1557,122 +1621,6 @@ impl CompositionCommit {
     }
 }
 
-/// Copy, cut and paste for one mounted field — see [`EditableText`]'s
-/// `# Clipboard` section for when each is enabled.
-///
-/// Reads the controller, node and obscuring flag through the state's shared
-/// cells at key time, so a swapped controller or node is the one acted on.
-#[derive(Clone)]
-struct ClipboardTextAction {
-    attachment: Rc<RefCell<Option<Rc<FocusAttachment>>>>,
-    enabled: Rc<Cell<bool>>,
-    controller: Rc<RefCell<TextEditingController>>,
-    /// The field's current node; its `can_request_focus` tracks `enabled`.
-    focus_node: Rc<RefCell<Rc<FocusNode>>>,
-    obscure: Rc<Cell<bool>>,
-    clipboard: Option<ClipboardHandle>,
-    /// Cut and paste are user edits.
-    edits: EditObserver,
-    /// A paste commits the composition first.
-    commit: CompositionCommit,
-}
-
-impl ClipboardTextAction {
-    fn admits_paste(&self) -> bool {
-        let attachment = self.attachment.borrow().clone();
-        let node = self.focus_node.borrow().clone();
-        self.enabled.get()
-            && attachment.is_some_and(|a| a.is_attached())
-            && node.has_primary_focus()
-            && node.can_request_focus()
-    }
-    fn enabled(&self) -> bool {
-        self.focus_node.borrow().can_request_focus()
-    }
-
-    /// The controller, cloned out of its cell so no borrow is held while the
-    /// clipboard or the controller's listeners run.
-    fn controller(&self) -> TextEditingController {
-        self.controller.borrow().clone()
-    }
-}
-
-impl Action<CopySelectionTextIntent> for ClipboardTextAction {
-    fn is_enabled(&self, intent: &CopySelectionTextIntent) -> bool {
-        self.clipboard.is_some()
-            && !self.obscure.get()
-            && (*intent == CopySelectionTextIntent::Copy || self.enabled())
-            && self.controller.borrow().has_selection()
-    }
-
-    fn invoke(&self, _cx: &mut EventCx<'_>, intent: &CopySelectionTextIntent) -> ActionOutcome {
-        let Some(clipboard) = &self.clipboard else {
-            return ActionOutcome::NotPerformed;
-        };
-        let controller = self.controller();
-        let selected = controller.selected_text();
-        if selected.is_empty() {
-            return ActionOutcome::NotPerformed;
-        }
-        clipboard.write_text(selected);
-        if *intent == CopySelectionTextIntent::Cut {
-            // Replacing the selection with nothing deletes it and leaves the
-            // caret at its start.
-            self.edits.around(|| controller.insert_str(""));
-        }
-        ActionOutcome::Performed
-    }
-}
-
-impl Action<PasteTextIntent> for ClipboardTextAction {
-    fn is_enabled(&self, _intent: &PasteTextIntent) -> bool {
-        self.clipboard.is_some() && self.enabled()
-    }
-
-    /// Commits an active composition first, keeping its text, so the paste
-    /// lands after it (ADR-0142 item 4); the paste runs though the commit's
-    /// owner code failed, and that failure is resumed after it.
-    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &PasteTextIntent) -> ActionOutcome {
-        let Some(clipboard) = &self.clipboard else {
-            return ActionOutcome::NotPerformed;
-        };
-        let mut calls = OwnerCalls::new();
-        self.commit.run(&mut calls);
-        if !self.admits_paste() {
-            calls.resume();
-            return ActionOutcome::NotPerformed;
-        }
-        let authority = self.clone();
-        let controller = self.controller();
-        let edits = self.edits.clone();
-        // Settles at a later owner turn, never inside `read_text`; the backend
-        // the provider supplied is user code, so it runs under `calls`.
-        calls.run(|| {
-            clipboard.read_text().on_complete(move |text| {
-                if !authority.admits_paste()
-                    || !authority.controller().is_same_controller(&controller)
-                {
-                    return;
-                }
-                let Ok(Some(text)) = text else {
-                    return;
-                };
-                // A single-line field: line breaks are dropped, `\r` included,
-                // so a Windows `\r\n` leaves nothing behind.
-                let line: String = text
-                    .chars()
-                    .filter(|&character| character != '\n' && character != '\r')
-                    .collect();
-                if !line.is_empty() {
-                    edits.around(|| controller.insert_str(&line));
-                }
-            });
-        });
-        calls.resume();
-        ActionOutcome::Performed
-    }
-}
-
 impl ViewState<EditableText> for EditableTextState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         // First: every edit path built below reports through it.
@@ -1723,18 +1671,21 @@ impl ViewState<EditableText> for EditableTextState {
         //     handler: a clipboard chord the handler leaves unconsumed
         //     reaches the `Shortcuts` above, which resolves it here.
         self.clipboard = ctx.capability::<ClipboardCapability>().ok();
+        self.primary = Rc::new(PrimarySelectionOwner::acquire(ctx));
         self.record_action_chain(ctx);
 
         // 3. Forward controller change events into the rebuild notifier so the
-        //    inner AnimatedBuilder rebuilds on every keystroke.
-        let rebuild_notifier_for_text = self.rebuild_notifier.clone();
-        let controller_listener_id =
-            self.controller
-                .borrow()
-                .add_listener(std::rc::Rc::new(move || {
-                    rebuild_notifier_for_text.notify_listeners();
-                }));
-        self.controller_listener_id = Some(controller_listener_id);
+        //    inner AnimatedBuilder rebuilds on every keystroke, and claim the
+        //    selection they leave.
+        let listener = self.controller_listener();
+        self.controller_listener_id = Some(self.controller.borrow().add_listener(listener));
+        // A selection the controller already held is claimed now: no change
+        // will report it.
+        claim_primary(
+            &self.primary,
+            &Rc::downgrade(&self.controller),
+            &self.obscure,
+        );
 
         // 4. Forward FocusManager focus-change events into the rebuild notifier
         //    so the caret appears / disappears immediately when this field
@@ -1907,6 +1858,10 @@ impl ViewState<EditableText> for EditableTextState {
         let mut calls = OwnerCalls::new();
         let was_obscured = self.obscure.replace(new_view.obscure_text);
         self.obscuring_character.set(new_view.obscuring_character);
+        // An obscured field holds no primary selection; the claim is
+        // reconciled below, once the controller is the replacement's too, so
+        // no backend sees the new flag with the old controller's text.
+        let mut reclaim = was_obscured != new_view.obscure_text;
         let was_purpose = self.input_purpose.replace(new_view.input_purpose);
         if (was_obscured != new_view.obscure_text || was_purpose != new_view.input_purpose)
             && let Some(store) = &self.text_store
@@ -1941,20 +1896,22 @@ impl ViewState<EditableText> for EditableTextState {
                 new_view.controller.clone(),
             );
             calls.retire(replaced);
-            let rebuild_notifier_for_text = self.rebuild_notifier.clone();
-            self.controller_listener_id = Some(self.controller.borrow().add_listener(
-                std::rc::Rc::new(move || {
-                    rebuild_notifier_for_text.notify_listeners();
-                }),
-            ));
+            let listener = self.controller_listener();
+            self.controller_listener_id = Some(self.controller.borrow().add_listener(listener));
             // The visible text is the replacement's now, and nothing else
             // will say so: the old controller's notifications are gone and the
-            // new one has not changed since it was handed over.
-            self.rebuild_notifier.notify_listeners();
+            // new one has not changed since it was handed over. Its selection
+            // is the one the primary selection holds now.
+            calls.run(|| self.rebuild_notifier.notify_listeners());
+            reclaim = true;
             // The input method's document is the replacement's too.
             if let Some(store) = &self.text_store {
                 calls.run(|| store.controller_changed());
             }
+        }
+        if reclaim {
+            let controller = Rc::downgrade(&self.controller);
+            calls.run(|| claim_primary(&self.primary, &controller, &self.obscure));
         }
 
         if !Rc::ptr_eq(&self.focus_node, &new_view.focus_node) {
@@ -2046,7 +2003,7 @@ impl ViewState<EditableText> for EditableTextState {
                 }
 
                 if self.focus_node.has_primary_focus() {
-                    self.rebuild_notifier.notify_listeners();
+                    calls.run(|| self.rebuild_notifier.notify_listeners());
                     if let Some(transition) = &self.ime_focus_transition {
                         calls.run(|| transition(true));
                     }
@@ -2170,6 +2127,8 @@ impl ViewState<EditableText> for EditableTextState {
             let controller = self.controller.borrow().clone();
             calls.run(|| controller.end_composition());
         }
+        // A selection that is gone is no longer offered to other clients.
+        calls.run(|| self.primary.release());
         let attachment = self.focus_attachment.borrow_mut().take();
         self.selection_drag.set(None);
         let owns_attachment = attachment

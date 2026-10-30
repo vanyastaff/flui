@@ -38,7 +38,7 @@ use flui_painting::Paint;
 use flui_painting::{paint::Shader, styling::Color};
 
 // ---------------------------------------------------------------------------
-// Platform backend selection (mirrors Renderer::select_backend)
+// Platform backend: the preferred one of gpu_backend::Family::order
 // ---------------------------------------------------------------------------
 
 #[cfg(target_os = "windows")]

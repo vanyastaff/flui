@@ -12,7 +12,8 @@ use std::{sync::Arc, time::Duration};
 
 pub(super) fn bench(c: &mut Criterion) {
     let fallback = std::env::var_os("FLUI_BENCH_FALLBACK").is_some();
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         force_fallback_adapter: fallback,
         apply_limit_buckets: false,

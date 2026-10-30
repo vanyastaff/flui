@@ -522,6 +522,7 @@ pub(crate) mod events {
                 pinch: Rc::clone(&pinch),
                 accepting,
                 composing: Cell::new(false),
+                unplaced: std::cell::RefCell::default(),
             });
 
             // The pointers the canvas holds captured, by DOM pointer id with
@@ -580,6 +581,9 @@ pub(crate) mod events {
         accepting: Accepting,
         /// Whether the window's text input composes now.
         composing: Cell<bool>,
+        /// Keys held down the browser names no code for, by their `keyCode`,
+        /// with the key each was pressed as.
+        unplaced: std::cell::RefCell<crate::input::keys::UnplacedKeys<u32>>,
     }
 
     impl CanvasKeys for KeyRoute {
@@ -588,7 +592,16 @@ pub(crate) mod events {
             if !self.accepting.get() {
                 return;
             }
-            let input = convert_keyboard_event(event.unchecked_ref(), state, self.composing.get());
+            let ke: &web_sys::KeyboardEvent = event.unchecked_ref();
+            // Read before the held keys are borrowed: a DOM getter may
+            // dispatch. A zero key code (a synthetic event's) names no key.
+            let key_code = Some(ke.key_code()).filter(|code| *code != 0);
+            let input = match convert_keyboard_event(ke, state, self.composing.get()) {
+                PlatformInput::Keyboard(key) => {
+                    PlatformInput::Keyboard(self.unplaced.borrow_mut().settle(key_code, key))
+                }
+                other => other,
+            };
             // DOM getters can close this registration before callback admission.
             if !self.accepting.get() {
                 return;

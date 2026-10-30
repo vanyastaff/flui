@@ -371,8 +371,13 @@ jobs:
       # dlopens libxkbcommon-x11, which the hosted runners do not ship. The
       # native X11 host's window conformance (`tests/x11_window.rs`) starts an
       # Xvfb and an openbox of its own, and its host loads libxcb at run time.
-      - name: Ensure Xvfb, openbox, libxcb + xkbcommon are available (flui-native X11 tests)
-        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends xvfb openbox libxcb1 libxkbcommon-x11-0 libxkbcommon0
+      #
+      # Mesa's lavapipe (Vulkan) and llvmpipe (GL, through EGL) are the GPU the
+      # readback suites render on: without an adapter they skip, and the
+      # gpu-test steps below run them on each backend with a missing adapter
+      # as a failure (ADR-0244 §1).
+      - name: Ensure Xvfb, openbox, libxcb + xkbcommon, lavapipe and llvmpipe are available (flui-native X11 tests, GPU readbacks)
+        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends xvfb openbox libxcb1 libxkbcommon-x11-0 libxkbcommon0 mesa-vulkan-drivers libegl-mesa0 libgl1-mesa-dri
 
       # The native Wayland host's tests (`cargo xtask test` runs them apart
       # from the Xvfb suite) need a compositor: a headless Weston on a socket
@@ -406,6 +411,14 @@ jobs:
       # (AGENTS.md). Native runtime suites remain local commands.
       - name: cargo xtask test --fast
         run: cargo xtask test --fast
+
+      # The GPU readback suites once per backend the Linux renderer can pick:
+      # Vulkan first, then the GLES fallback it takes without one.
+      - name: cargo xtask gpu-test --backend vulkan
+        run: cargo xtask gpu-test --backend vulkan
+
+      - name: cargo xtask gpu-test --backend gl
+        run: cargo xtask gpu-test --backend gl
 
       - name: cargo xtask build-all-targets (links the examples and benches)
         run: cargo xtask build-all-targets
