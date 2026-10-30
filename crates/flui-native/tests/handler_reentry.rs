@@ -763,7 +763,7 @@ mod win32 {
 
     fn platform() -> Rc<dyn Reach> {
         let platform: Arc<dyn Platform> =
-            Arc::new(WindowsPlatform::new().expect("native Windows platform"));
+            Arc::new(WindowsPlatform::try_new().expect("native Windows platform"));
         Rc::new(platform)
     }
 
@@ -921,7 +921,7 @@ mod win32 {
     fn replaced_keyboard_layout_callback() {
         within("Win32 keyboard layout callback", || {
             let platform: Arc<dyn Platform> =
-                Arc::new(WindowsPlatform::new().expect("native Windows platform"));
+                Arc::new(WindowsPlatform::try_new().expect("native Windows platform"));
             a_replaced_keyboard_layout_callback_reaches_the_platform(&platform);
         });
     }
@@ -931,7 +931,7 @@ mod win32 {
     /// on, the handler decides the next request, and hears the quit once.
     fn failing_exit_policy_keeps_the_loop() {
         within("Win32 failing exit policy", || {
-            let platform = WindowsPlatform::new().expect("native Windows platform");
+            let platform = WindowsPlatform::try_new().expect("native Windows platform");
             let log = AppLog::new();
             log.bootstrap(|owner| {
                 owner.shared().request_exit_policy_reevaluation();
@@ -967,7 +967,7 @@ mod win32 {
                     panic!("a capture's destructor");
                 }
             }
-            let platform = WindowsPlatform::new().expect("native Windows platform");
+            let platform = WindowsPlatform::try_new().expect("native Windows platform");
             let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 Box::new(platform).run(crate::app::on_ready(|owner| {
                     let capture = PanicsOnDrop;

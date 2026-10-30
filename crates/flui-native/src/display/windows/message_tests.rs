@@ -17,7 +17,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 #[test]
 fn display_change_message_invalidates_the_snapshot_and_wakes_the_owner() {
-    let platform = WindowsPlatform::new().expect("native platform");
+    let platform = WindowsPlatform::try_new().expect("native platform");
     let displays = Arc::clone(&platform.owner().displays);
     let receiver = platform
         .owner()
@@ -92,7 +92,7 @@ fn display_change_message_invalidates_the_snapshot_and_wakes_the_owner() {
 
 #[test]
 fn work_area_change_invalidates_the_snapshot() {
-    let platform = WindowsPlatform::new().expect("native platform");
+    let platform = WindowsPlatform::try_new().expect("native platform");
     let receiver = platform
         .owner()
         .owner_control
@@ -147,7 +147,7 @@ fn the_displays_and_the_preferences_hear_every_change_in_either_order() {
         let signal = OwnerSignal::new(Arc::new(|| Ok(())));
         signal.start().expect("the owner signal starts");
         let displays: Arc<dyn HostDisplays> = Arc::new(WindowsDisplays::new());
-        let preferences = PreferenceSource::new(&signal).expect("native preference source");
+        let preferences = PreferenceSource::try_new(&signal).expect("native preference source");
         let display_subscriber: Rc<dyn Subscriber> =
             Rc::new(DisplayBroadcasts::new(&displays, &signal));
         let preference_subscriber: Rc<dyn Subscriber> = preferences.broadcasts();
@@ -156,7 +156,7 @@ fn the_displays_and_the_preferences_hear_every_change_in_either_order() {
         } else {
             [preference_subscriber, display_subscriber]
         };
-        let receiver = Receiver::new(subscribers).expect("a receiver");
+        let receiver = Receiver::try_new(subscribers).expect("a receiver");
         preferences.sample().expect("the first preference read");
         displays.snapshot().expect("the first sample");
 
@@ -188,7 +188,7 @@ fn dpi_change_invalidates_the_snapshot() {
             WindowsAndMessaging::{GetWindowRect, SendMessageW, WM_DPICHANGED},
         },
     };
-    let platform = WindowsPlatform::new().expect("native platform");
+    let platform = WindowsPlatform::try_new().expect("native platform");
     let window = platform
         .open_window(
             WindowOptions::default().with_visible(false),

@@ -1956,7 +1956,7 @@ fn windows_bootstrap_accepts_preferences_before_the_first_window() {
     use flui_native::Platform;
 
     let _clear = OwnerHostClearGuard::arm();
-    Box::new(flui_native::WindowsPlatform::new().expect("native platform"))
+    Box::new(flui_native::WindowsPlatform::try_new().expect("native platform"))
         .run(crate::app::runner::app_handler(|owner| {
             let expected = owner
                 .preferences()?

@@ -9,7 +9,7 @@ use windows::Win32::UI::WindowsAndMessaging::WM_QUIT;
 
 #[test]
 fn native_setting_message_replaces_the_cached_observation() {
-    let platform = WindowsPlatform::new().expect("native platform");
+    let platform = WindowsPlatform::try_new().expect("native platform");
     let gate = platform.owner().owner_control.gate();
     let shares = gate.shares("notification fixture").expect("owner");
     let (source, receiver) = (kept(shares.preferences), shares.broadcast_receiver);
@@ -81,7 +81,7 @@ fn native_setting_message_replaces_the_cached_observation() {
 
 #[test]
 fn failed_native_posts_still_deliver_owner_turns_and_quit() {
-    let platform = WindowsPlatform::new().expect("native platform");
+    let platform = WindowsPlatform::try_new().expect("native platform");
     platform
         .preferences()
         .expect("clean source before registration");
@@ -165,7 +165,7 @@ fn preference_failure_retries_without_a_user_window() {
 }
 
 fn recovery(panics: bool, repeat_failure: bool) {
-    let platform = WindowsPlatform::new().expect("native platform");
+    let platform = WindowsPlatform::try_new().expect("native platform");
     let gate = platform.owner().owner_control.gate();
     let source = kept(gate.shares("retry fixture").expect("owner").preferences);
     source.sample().expect("initial observation");

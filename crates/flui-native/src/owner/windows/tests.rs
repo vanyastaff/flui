@@ -284,7 +284,7 @@ impl Subscriber for Listener {
 /// case, 0 when none gives one.
 #[test]
 fn broadcast_subscribers_hear_a_message_in_order() {
-    let receiver = super::broadcast::Receiver::new([
+    let receiver = super::broadcast::Receiver::try_new([
         Rc::new(Listener {
             name: "first",
             answers: &[(BOTH_ANSWER, 7)],
@@ -385,7 +385,7 @@ impl tracing::Subscriber for Logged {
 /// subscribers in one generic containment again, or answer 0 after a panic.
 #[test]
 fn a_failing_subscriber_is_logged_and_a_session_end_still_granted() {
-    let receiver = super::broadcast::Receiver::new([Rc::new(Listener {
+    let receiver = super::broadcast::Receiver::try_new([Rc::new(Listener {
         name: "failing",
         answers: &[],
         after_panic: None,
@@ -430,7 +430,7 @@ impl OwnerMessages for Ending {
 /// panics too.
 #[test]
 fn every_owner_hook_hears_the_window_go_after_one_panics() {
-    let control = OwnerControl::new::<TestHost>(
+    let control = OwnerControl::try_new::<TestHost>(
         WindowIdentity::mint_from(WindowIdentity::source()),
         Weak::<NoWindows>::new(),
         vec![
@@ -461,9 +461,9 @@ fn every_owner_hook_hears_the_window_go_after_one_panics() {
 /// this test alone in, as it runs every test.
 #[test]
 fn a_second_host_is_refused_the_window_class() {
-    let _first = WindowsLoop::new::<QuietHost>(Arc::new(NoWindows))
+    let _first = WindowsLoop::try_new::<QuietHost>(Arc::new(NoWindows))
         .expect("the first host registers the class");
-    match WindowsLoop::new::<TestHost>(Arc::new(NoWindows)) {
+    match WindowsLoop::try_new::<TestHost>(Arc::new(NoWindows)) {
         Err(PlatformError::Init { message }) => assert!(
             message.contains("another host"),
             "the refusal names the class's other host: {message}"

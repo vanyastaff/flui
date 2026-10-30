@@ -531,7 +531,7 @@ mod native_windows {
     // The monitors are keyed by their display targets, not the reusable GDI
     // names, and a sample of an unchanged topology is the same snapshot.
     fn repeated_samples_of_the_real_monitors_keep_their_ids() {
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let first = platform.display_snapshot().expect("first sample");
         let second = platform.display_snapshot().expect("second sample");
         let ids = |snapshot: &flui_platform::DisplaySnapshot| {
@@ -611,7 +611,7 @@ mod native_windows {
     // The snapshot's period is the target's rational rate converted exactly,
     // not a rounded whole-hertz figure.
     fn refresh_is_the_rational_active_mode() {
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let snapshot = platform.display_snapshot().expect("snapshot");
         let rates = system_path_rates();
         assert!(!rates.is_empty(), "the system reports an active path");
@@ -637,7 +637,7 @@ mod native_windows {
     }
 
     fn window_display_is_a_display_of_the_snapshot() {
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open(&platform, true);
         // The window reads the sample the snapshot took; it samples nothing.
         let snapshot = platform.display_snapshot().expect("snapshot");
@@ -656,7 +656,7 @@ mod native_windows {
     #[expect(unsafe_code, reason = "sending WM_DPICHANGED to an owned window")]
     fn a_dpi_change_publishes_the_new_scale_once() {
         use windows::Win32::UI::{HiDpi::GetDpiForWindow, WindowsAndMessaging::WM_DPICHANGED};
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open(&platform, true);
         let hwnd = hwnd_of(&window);
         let rescaled = Arc::new(AtomicUsize::new(0));
@@ -710,7 +710,7 @@ mod native_windows {
 
     #[expect(unsafe_code, reason = "moving an owned window")]
     fn moves_within_one_monitor_keep_the_display() {
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open(&platform, true);
         let hwnd = hwnd_of(&window);
         let moved = Arc::new(AtomicUsize::new(0));
@@ -843,7 +843,7 @@ mod native_windows {
             DM_POINTERHITTEST, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_TIMER,
         };
 
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open_shown(&platform);
         let hwnd = hwnd_of(&window);
         let Some(PlatformInput::Capabilities(capabilities)) =
@@ -957,7 +957,7 @@ mod native_windows {
     fn deadline_none_allows_same_instant_readmission() {
         let calls = Arc::new(AtomicUsize::new(0));
         let result = Arc::clone(&calls);
-        Box::new(WindowsPlatform::new().expect("native Windows platform"))
+        Box::new(WindowsPlatform::try_new().expect("native Windows platform"))
             .run(crate::app::with_log(move |log, owner| {
                 let window = Opened::ready(
                     &owner,
@@ -1071,7 +1071,7 @@ mod native_windows {
     fn unserviced_deadline_queries(window: Option<bool>) -> usize {
         let queries = Arc::new(AtomicUsize::new(0));
         let result = Arc::clone(&queries);
-        Box::new(WindowsPlatform::new().expect("native Windows platform"))
+        Box::new(WindowsPlatform::try_new().expect("native Windows platform"))
             .run(crate::app::with_log(move |log, owner| {
                 if let Some(visible) = window {
                     // No frame reaction: the recording handler declines.
@@ -1109,7 +1109,7 @@ mod native_windows {
     fn same_instant_deadline_frames(obligations: usize) -> usize {
         let frames = Arc::new(AtomicUsize::new(0));
         let result = Arc::clone(&frames);
-        Box::new(WindowsPlatform::new().expect("native Windows platform"))
+        Box::new(WindowsPlatform::try_new().expect("native Windows platform"))
             .run(crate::app::with_log(move |log, owner| {
                 let window = Opened::ready(
                     &owner,
@@ -1159,7 +1159,7 @@ mod native_windows {
         let drops = Arc::new(AtomicUsize::new(0));
         let captures = (Bomb(Arc::clone(&drops)), Bomb(Arc::clone(&drops)));
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            Box::new(WindowsPlatform::new().expect("native Windows platform"))
+            Box::new(WindowsPlatform::try_new().expect("native Windows platform"))
                 .run(crate::app::with_log(move |log, _| {
                     log.answer_deadline_with(move || {
                         std::hint::black_box(&captures);
@@ -1180,7 +1180,8 @@ mod native_windows {
             "the failed handler's captures are retained, not dropped into the unwind"
         );
         drop(failure);
-        let platform = WindowsPlatform::new().expect("independent native owner after failed query");
+        let platform =
+            WindowsPlatform::try_new().expect("independent native owner after failed query");
         let window = open(&platform, true);
         let weak = Rc::downgrade(&window);
         window.close_now();
@@ -1224,7 +1225,7 @@ mod native_windows {
         // hanging.
         let serviced = Arc::new(Mutex::new(None::<bool>));
         let result = Arc::clone(&serviced);
-        Box::new(WindowsPlatform::new().expect("native Windows platform"))
+        Box::new(WindowsPlatform::try_new().expect("native Windows platform"))
             .run(crate::app::with_log(move |log, owner| {
                 let window = Opened::ready(
                     &owner,
@@ -1291,7 +1292,7 @@ mod native_windows {
         let first_closed = Arc::new(AtomicUsize::new(0));
         let returned_counts = Arc::clone(&counts);
         let returned_closed = Arc::clone(&first_closed);
-        Box::new(WindowsPlatform::new().expect("native Windows platform"))
+        Box::new(WindowsPlatform::try_new().expect("native Windows platform"))
             .run(crate::app::with_log(move |log, owner| {
                 let proxy = owner.proxy();
                 let mut first = None;
@@ -1503,7 +1504,7 @@ mod native_windows {
         reason = "actual owned Win32 system-key dispatch and message pumping"
     )]
     fn system_keyboard_close(mode: &'static str) {
-        let platform = Arc::new(WindowsPlatform::new().expect("native Windows platform"));
+        let platform = Arc::new(WindowsPlatform::try_new().expect("native Windows platform"));
         let window = open_shown(&platform);
         let original_weak = Rc::downgrade(&window);
         let replacement = Rc::new(RefCell::new(None::<Opened>));
@@ -1668,7 +1669,7 @@ mod native_windows {
     // reports its own key.
     #[expect(unsafe_code, reason = "owned Win32 keyboard dispatch across threads")]
     fn cross_thread_sent_keydown_takes_no_queued_character() {
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open(&platform, true);
         let hwnd = hwnd_of(&window);
         let typed = Arc::new(Mutex::new(Vec::<String>::new()));
@@ -1846,7 +1847,7 @@ mod native_windows {
     /// queued, whatever the machine's layout.
     #[expect(unsafe_code, reason = "owned Win32 keyboard dispatch")]
     fn keys_delivered(queued: &[(u32, usize, isize)]) -> Vec<String> {
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open(&platform, true);
         let hwnd = hwnd_of(&window);
         let keys = Arc::new(Mutex::new(Vec::<String>::new()));
@@ -1936,7 +1937,7 @@ mod native_windows {
 
     #[expect(unsafe_code, reason = "owned Win32 keyboard dispatch")]
     fn dead_key_reports_dead(case: DeadKeyCase) {
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open_shown(&platform);
         let hwnd = hwnd_of(&window);
         let keys = Arc::new(Mutex::new(Vec::<(
@@ -2221,7 +2222,7 @@ mod native_windows {
         reason = "actual owned Win32 system-key dispatch and message pumping"
     )]
     fn menu_key_keeps_next_character(key: &'static str) {
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open_shown(&platform);
         let hwnd = hwnd_of(&window);
         let closes = Arc::new(AtomicUsize::new(0));
@@ -2359,7 +2360,7 @@ mod native_windows {
         reason = "actual owned Win32 key translation and message pumping"
     )]
     fn alt_space_system_char(consume: bool, pump: bool) {
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open_shown(&platform);
         let hwnd = hwnd_of(&window);
         let keydowns = Arc::new(AtomicUsize::new(0));
@@ -2476,7 +2477,7 @@ mod native_windows {
         reason = "actual owned Win32 close dispatch on its creating thread"
     )]
     fn native_close_retires_final_registry_owner() {
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open(&platform, true);
         let weak = Rc::downgrade(&window);
         let hwnd = hwnd_of(&window);
@@ -2511,7 +2512,7 @@ mod native_windows {
         reason = "actual owned Win32 movement and full client-origin queries"
     )]
     fn move_callback_observes_full_native_coordinates() {
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open(&platform, true);
         let hwnd = hwnd_of(&window);
         let weak = Rc::downgrade(&window);
@@ -2572,7 +2573,7 @@ mod native_windows {
         reason = "owner-thread keyboard state and native character dispatch"
     )]
     fn shift_character_reaches_native_key_dispatch() {
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open(&platform, true);
         let hwnd = hwnd_of(&window);
         let observed = Arc::new(Mutex::new(Vec::new()));
@@ -2613,7 +2614,7 @@ mod native_windows {
     }
 
     fn closed_window_retires_tracking() {
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         for _ in 0..2 {
             let window = open(&platform, true);
             let weak = Rc::downgrade(&window);
@@ -2673,7 +2674,7 @@ mod native_windows {
     fn closed_window_traces_its_native_destruction() {
         use tracing_subscriber::layer::SubscriberExt as _;
 
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open(&platform, true);
         let sibling = open(&platform, true);
         let destroyed = Arc::new(Mutex::new(Vec::new()));
@@ -2711,7 +2712,7 @@ mod native_windows {
     fn reentrant_close_releases_the_surface_before_tracing_destruction() {
         use tracing_subscriber::layer::SubscriberExt as _;
 
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open(&platform, false);
         let hwnd = hwnd_of(&window);
         let destroyed = Arc::new(Mutex::new(Vec::new()));
@@ -2789,7 +2790,7 @@ mod native_windows {
     }
 
     fn close_callback_releases_external_owner() {
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open(&platform, true);
         let weak = Rc::downgrade(&window);
         let owner = Rc::new(RefCell::new(Some(Rc::clone(&window))));
@@ -2839,7 +2840,7 @@ mod native_windows {
         use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute};
         use windows::Win32::UI::WindowsAndMessaging::WM_SETTINGCHANGE;
 
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open(&platform, true);
         let hwnd = hwnd_of(&window);
         let reported: WindowAppearance = window.state().appearance;
@@ -2900,7 +2901,7 @@ mod native_windows {
         reason = "actual owned hidden Win32 resize and client-dimension queries"
     )]
     fn resize_callback_preserves_large_native_dimensions() {
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open(&platform, false);
         let hwnd = hwnd_of(&window);
         let weak = Rc::downgrade(&window);
@@ -2980,7 +2981,7 @@ mod native_windows {
     }
 
     fn resize_callback_observes_current_client_bounds() {
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open(&platform, true);
         let weak = Rc::downgrade(&window);
         let observations = Arc::new(Mutex::new(Vec::new()));
@@ -3032,7 +3033,7 @@ mod native_windows {
         reason = "actual owned Win32 visibility query on its creating thread"
     )]
     fn hidden_popup_is_natively_hidden() {
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open(&platform, false);
         // SAFETY: the live wrapper owns this HWND, queried on its creating thread.
         assert!(!unsafe { IsWindowVisible(hwnd_of(&window)) }.as_bool());
@@ -3134,7 +3135,7 @@ mod native_windows {
     /// sign-extended client coordinates of that outside point.
     fn press_captures_the_mouse_until_the_last_release() {
         use flui_platform::pointer::PointerEvent;
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open(&platform, true);
         let hwnd = hwnd_of(&window);
         let events = record_pointer(&window);
@@ -3176,7 +3177,7 @@ mod native_windows {
     /// without a second cancel.
     #[expect(unsafe_code, reason = "moves the thread's mouse capture")]
     fn capture_taken_mid_press_cancels_the_sequence() {
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open(&platform, true);
         let thief = open(&platform, true);
         let hwnd = hwnd_of(&window);
@@ -3210,7 +3211,7 @@ mod native_windows {
         reason = "native focus and show commands for owned windows"
     )]
     fn focus_loss_and_minimising_end_the_held_press() {
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open(&platform, true);
         let hwnd = hwnd_of(&window);
         let events = record_pointer(&window);
@@ -3279,7 +3280,7 @@ mod native_windows {
                 unsafe { DestroySyntheticPointerDevice(self.0) };
             }
         }
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let Some((window, _close)) = open_pointer_target(&platform) else {
             return;
         };
@@ -3482,7 +3483,7 @@ mod native_windows {
     fn extended_mouse_buttons_share_contact_and_capture() {
         use flui_platform::pointer::{ButtonChange, PointerButton, PointerEvent};
         use windows::Win32::UI::WindowsAndMessaging::{WM_XBUTTONDOWN, WM_XBUTTONUP};
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open(&platform, true);
         let hwnd = hwnd_of(&window);
         let events = record_pointer(&window);
@@ -3540,7 +3541,7 @@ mod native_windows {
     fn extended_mouse_capture_loss_cancels_and_recovers() {
         use flui_platform::pointer::{CancelReason, PointerEvent};
         use windows::Win32::UI::WindowsAndMessaging::{WM_XBUTTONDOWN, WM_XBUTTONUP};
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open(&platform, true);
         let thief = open(&platform, true);
         let hwnd = hwnd_of(&window);
@@ -3585,7 +3586,7 @@ mod native_windows {
             WM_POINTERCAPTURECHANGED, WM_POINTERDOWN, WM_POINTERENTER, WM_POINTERLEAVE,
             WM_POINTERUP, WM_POINTERUPDATE,
         };
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open(&platform, true);
         let hwnd = hwnd_of(&window);
         let events = record_pointer(&window);
@@ -3643,7 +3644,7 @@ mod native_windows {
                 0x8007_0005 | 0x8007_0032 | 0x8007_0078 | 0x8000_4001
             )
         }
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let Some((window, _close)) = open_pointer_target(&platform) else {
             return;
         };
@@ -3972,7 +3973,7 @@ mod native_windows {
                 unsafe { DestroySyntheticPointerDevice(self.0) };
             }
         }
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let Some((window, _close)) = open_pointer_target(&platform) else {
             return;
         };
@@ -4125,7 +4126,7 @@ mod native_windows {
                 TOUCH_MASK_CONTACTAREA, TOUCH_MASK_PRESSURE, WindowFromPoint,
             },
         };
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let (delivered, recordings) = record(Backend::Win32, || {
             let (window, _close) = open_pointer_target(&platform)?;
             let hwnd = hwnd_of(&window);
@@ -4315,7 +4316,7 @@ mod native_windows {
         // SAFETY: an initialized point; nothing is retained.
         unsafe { GetCursorPos(&raw mut original) }.expect("capture cursor for restoration");
         let _restore = Cursor(original);
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let (delivered, recordings) = record(Backend::Win32, || {
             let (window, _close) = open_pointer_target(&platform)?;
             let hwnd = hwnd_of(&window);
@@ -4503,7 +4504,7 @@ mod native_windows {
                 let _ = unsafe { SetCursorPos(self.0.x, self.0.y) };
             }
         }
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let Some((window, _close)) = open_pointer_target(&platform) else {
             return;
         };
@@ -4635,7 +4636,7 @@ mod native_windows {
         // SAFETY: an initialized point; nothing is retained.
         unsafe { GetCursorPos(&raw mut original) }.expect("capture cursor for restoration");
         let _restore = Cursor(original);
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let Some((window, _close)) = open_pointer_target(&platform) else {
             return;
         };
@@ -4884,7 +4885,7 @@ mod native_windows {
     fn fractional_native_wheel_packets_preserve_observed_precision_and_source() {
         use flui_platform::pointer::{PointerEvent, ScrollPrecision, ScrollUnit};
         use windows::Win32::UI::WindowsAndMessaging::{WM_MOUSEHWHEEL, WM_MOUSEWHEEL};
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open(&platform, false);
         let hwnd = hwnd_of(&window);
         let events = record_pointer(&window);
@@ -5075,7 +5076,7 @@ mod native_windows {
         // SAFETY: an initialized point; nothing is retained.
         unsafe { GetCursorPos(&raw mut original) }.expect("capture cursor for restoration");
         let _restore = Cursor(original);
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let Some((window, _close)) = open_pointer_target(&platform) else {
             return;
         };
@@ -5154,7 +5155,7 @@ mod native_windows {
     )]
     fn queued_mouse_samples_keep_native_message_time() {
         use flui_platform::pointer::PointerEvent;
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         // A hidden native window excludes unrelated physical cursor traffic
         // while retaining the actual queue and window-procedure producer.
         let window = open(&platform, false);
@@ -5225,7 +5226,7 @@ mod native_windows {
     )]
     fn queued_key_events_keep_native_message_time() {
         use flui_platform::PlatformInput;
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open(&platform, false);
         let hwnd = hwnd_of(&window);
         pump_translated(hwnd);
@@ -5288,7 +5289,7 @@ mod native_windows {
     /// A pointer event carries the modifiers of its message — the
     /// queue-synchronized state — not the keyboard at processing time.
     fn pointer_modifiers_are_the_message_state() {
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open(&platform, true);
         let hwnd = hwnd_of(&window);
         let events = record_pointer(&window);
@@ -5358,7 +5359,7 @@ mod native_windows {
     }
 
     fn closing_the_last_window_ends_the_loop() {
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         run_loop(platform, |log, owner| {
             log.answer_exit(true);
             post_close(&open_owned(&owner));
@@ -5366,7 +5367,7 @@ mod native_windows {
     }
 
     fn exit_policy_veto_holds_until_a_reevaluation_allows_exit() {
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let answers = Arc::new(Mutex::new(Vec::new()));
         let releaser = Arc::new(Mutex::new(None));
         run_loop(platform, {
@@ -5418,7 +5419,7 @@ mod native_windows {
     }
 
     fn panicking_exit_policy_vetoes_and_is_asked_again() {
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let calls = Arc::new(AtomicUsize::new(0));
         let releaser = Arc::new(Mutex::new(None));
         run_loop(platform, {
@@ -5473,7 +5474,7 @@ mod native_windows {
     }
 
     fn window_opened_by_the_exit_policy_keeps_the_loop() {
-        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let consultations = Arc::new(AtomicUsize::new(0));
         run_loop(platform, {
             let consultations = Arc::clone(&consultations);

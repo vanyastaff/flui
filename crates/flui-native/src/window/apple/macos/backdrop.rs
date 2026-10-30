@@ -179,7 +179,7 @@ impl GlassTint {
     /// A tint from sRGB channels and alpha; `None` unless each is finite and in
     /// `0.0..=1.0`.
     #[must_use]
-    pub fn new(red: f64, green: f64, blue: f64, alpha: f64) -> Option<Self> {
+    pub fn try_new(red: f64, green: f64, blue: f64, alpha: f64) -> Option<Self> {
         [red, green, blue, alpha]
             .iter()
             .all(|channel| (0.0..=1.0).contains(channel))

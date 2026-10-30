@@ -43,6 +43,8 @@
   `PiecewiseLinear`, `SpringCurve`, `SpringDescription`, `SpringSimulation`, `SpringRest`,
   `FrictionSimulation`, `BoundedFrictionSimulation`, `BouncingScrollSimulation`,
   `SimulationBounds` and `Tolerance`.
+- **`flui-native`**: the native platform constructors are `try_new`: `WindowsPlatform`,
+  `MacOSPlatform`, `IOSPlatform`, `WaylandPlatform`, `X11Platform` and `WebPlatform`.
 
 ### Fixed
 

@@ -99,7 +99,7 @@ impl Receiver {
     }
 
     /// A receiver whose messages `subscribers` hear, in this order.
-    pub(crate) fn new(
+    pub(crate) fn try_new(
         subscribers: impl IntoIterator<Item = Rc<dyn Subscriber>>,
     ) -> windows::core::Result<Self> {
         let context = Box::new(Context {

@@ -283,7 +283,7 @@ fn headless_displays_contract() {
 fn windows_displays_report_their_colour() {
     use flui_platform::{CapabilityAbsence, DynamicRange};
 
-    let platform = flui_native::WindowsPlatform::new().expect("native Windows platform");
+    let platform = flui_native::WindowsPlatform::try_new().expect("native Windows platform");
     let snapshot = platform.display_snapshot().expect("snapshot");
     assert!(!snapshot.displays().is_empty(), "a desktop has a display");
     for display in snapshot.displays() {

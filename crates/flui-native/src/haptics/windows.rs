@@ -592,7 +592,7 @@ mod tests {
 
     #[test]
     fn a_window_without_a_haptic_pen_in_range_reports_unavailable() {
-        let platform = WindowsPlatform::new().expect("platform");
+        let platform = WindowsPlatform::try_new().expect("platform");
         let window = platform
             .open_window(
                 WindowOptions::default()
@@ -637,7 +637,7 @@ mod tests {
     /// the context by handle alone in `pen_pointer`.
     #[test]
     fn an_actuator_reads_only_its_own_windows_pen() {
-        let platform = WindowsPlatform::new().expect("platform");
+        let platform = WindowsPlatform::try_new().expect("platform");
         let open = |title: &str| {
             platform
                 .open_window(
