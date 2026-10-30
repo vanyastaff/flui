@@ -15,7 +15,7 @@ mod app;
 
 use app::{AcceptanceApp, Fault, Faults};
 
-fn main() {
+fn main() -> Result<(), flui::LaunchError> {
     let fault = std::env::args()
         .nth(1)
         .unwrap_or_default()
@@ -24,5 +24,8 @@ fn main() {
             eprintln!("acceptance_app_faults: {unknown}");
             std::process::exit(2);
         });
-    flui::run_app(AcceptanceApp::new(Faults::from(fault)));
+    flui::run_app(
+        AcceptanceApp::new(Faults::from(fault)),
+        flui::AppLaunch::new(),
+    )
 }

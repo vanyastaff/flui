@@ -83,7 +83,7 @@ use flui_view::View;
 // ============================================================================
 
 /// Opens an additional top-level window while the platform loop
-/// `run_app`/`run_app_with_config` started is already running — the
+/// `run_app` started is already running — the
 /// embedder-facing seam issue #555's [`WindowPolicy`] governs which
 /// ui_runtime/presentation topology the new window becomes. Must be called from
 /// the owner thread while a loop is live (mirrors `bootstrap_desktop`'s own

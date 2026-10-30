@@ -22,8 +22,9 @@
 //!     }
 //! }
 //!
-//! fn main() {
-//!     flui::run_app(Hello);
+//! fn main() -> Result<(), flui::LaunchError> {
+//!     flui::run_app(Hello, flui::AppLaunch::new())?;
+//!     Ok(())
 //! }
 //! ```
 //!
@@ -35,14 +36,15 @@
 //!
 //! # Application entry points
 //!
-//! [`run_app`] uses the default [`AppConfig`]; [`run_app_with_config`] accepts
-//! window configuration and application services. Both return `()` rather than
-//! a startup error. On desktop they drive the native event loop until shutdown
-//! and panic if startup or the event loop fails. On iOS they enter UIKit; on
-//! the web they start the browser runner. On Android these two functions panic:
-//! call `flui::run_app_android` or `flui::run_app_android_with_config` from
-//! `android_main`, passing the system-provided `AndroidApp` available through
-//! `flui::android_activity`.
+//! [`run_app`] takes the root and an [`AppLaunch`]: the [`AppConfig`] (window
+//! configuration and application services) and the [`AppCapabilities`] the
+//! application registers (overrides of the built-in providers and plugins,
+//! ADR-0152). It returns a [`LaunchError`] when the registrations conflict or
+//! the platform cannot start. On desktop it drives the native event loop until
+//! shutdown; on iOS it enters UIKit; on the web it starts the browser runner.
+//! On Android it panics: call `flui::run_app_android` from `android_main`,
+//! passing the system-provided `AndroidApp` available through
+//! `flui::android_activity` and the same [`AppLaunch`].
 //!
 #![cfg_attr(
     all(
@@ -129,8 +131,8 @@ impl StatelessView for MaterialHello {
     }
 }
 
-fn main() {
-    flui::run_app(MaterialHello);
+fn main() -> Result<(), flui::LaunchError> {
+    flui::run_app(MaterialHello, flui::AppLaunch::new())
 }
 ```"#
 )]
@@ -355,18 +357,23 @@ pub use flui_app::app::open_window;
 ))]
 pub use flui_app::app::{AppControlError, AppHandle, AppRunError, Application, StartupWindow};
 /// The application entry point — builds the tree, opens a window, and drives
-/// the frame loop. Re-exported from [`app`] (`flui-app`).
+/// the frame loop with an [`AppLaunch`]'s configuration and capabilities.
+/// Re-exported from [`app`] (`flui-app`).
 ///
-/// The root must implement [`view::StatelessView`]. On desktop this returns
-/// after shutdown and panics on startup or event-loop failure; use
-/// `flui::Application::run` for a fallible desktop entry point. On Android it
-/// panics: use `flui::run_app_android` with the system's `AndroidApp` instead.
+/// The root must implement [`view::StatelessView`]. It returns a
+/// [`LaunchError`] when the capability registrations conflict or the platform
+/// cannot start; on desktop it returns after shutdown and panics on an
+/// event-loop failure. On Android it panics: use `flui::run_app_android` with
+/// the system's `AndroidApp` instead.
 pub use flui_app::run_app;
-/// [`run_app`] with an explicit [`AppConfig`] (window title, size, services,
-/// failure policy). Re-exported from [`app`] (`flui-app`).
-///
-/// Has the same root, platform, and startup-panic contract as [`run_app`].
-pub use flui_app::run_app_with_config;
+/// The Android entry point, called from the `cdylib`'s `android_main`
+/// (`flui create` writes one). Re-exported from `flui-app`.
+#[cfg(target_os = "android")]
+pub use flui_app::run_app_android;
+/// What [`run_app`] and `run_app_android` start a run with, the capability
+/// registrations it carries, and why starting fails. Re-exported from [`app`]
+/// (`flui-app`).
+pub use flui_app::{AppCapabilities, AppLaunch, LaunchError};
 /// Registers a font's faces with the app, for measurement, paint and carets.
 /// Re-exported from [`app`] (`flui-app`).
 ///
@@ -379,10 +386,6 @@ pub use flui_app::run_app_with_config;
 /// return [`FontRegistrationError`] without adding a face. See
 /// [`app::register_font`] for the individual error variants.
 pub use flui_app::{FontRegistrationError, register_font};
-/// The Android entry points, called from the `cdylib`'s `android_main`
-/// (`flui create` writes one). Re-exported from `flui-app`.
-#[cfg(target_os = "android")]
-pub use flui_app::{run_app_android, run_app_android_with_config};
 
 /// Everything an application author needs in scope to write widget code:
 /// the widget catalog prelude, [`run_app`], and — with the `material` feature
@@ -438,7 +441,7 @@ pub mod prelude {
         not(target_arch = "wasm32")
     ))]
     pub use flui_app::app::{AppWindowError, open_secondary_window, open_window};
-    pub use flui_app::{register_font, run_app, run_app_with_config};
+    pub use flui_app::{AppCapabilities, AppLaunch, LaunchError, register_font, run_app};
     #[cfg(feature = "material")]
     pub use flui_material::{
         AlertDialog, AppBar, BackButton, Card, Checkbox, Chip, ColorScheme, DefaultTabController,

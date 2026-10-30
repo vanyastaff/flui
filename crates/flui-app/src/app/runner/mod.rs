@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use flui_view::{StatelessView, View};
 
-use super::AppConfig;
+use super::{AppLaunch, LaunchError};
 
 #[cfg(target_os = "android")]
 mod android;
@@ -80,7 +80,7 @@ mod surface_lifecycle;
 mod web;
 
 #[cfg(target_os = "android")]
-pub use android::{run_app_android, run_app_android_with_config};
+pub use android::run_app_android;
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -95,7 +95,7 @@ pub(crate) use host::{
 };
 pub(in crate::app) use installed_host::InstalledHost;
 #[cfg(target_os = "ios")]
-pub use ios::{run_app_ios, run_app_ios_with_config};
+use ios::run_ios;
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -319,28 +319,18 @@ pub fn request_presentation_close(
     }
 }
 
-/// Run a FLUI application with default configuration.
+/// Run a FLUI application: `root` in a main window, with `launch`'s
+/// configuration and capability providers.
 ///
-/// This is the internal implementation called by `run_app()`.
+/// This is the entry point on the desktop, iOS and the Web; Android enters
+/// through `run_app_android`, which takes the `AndroidApp` the system hands
+/// `android_main`.
 ///
-/// # Panics
+/// # Errors
 ///
-/// With the application's own panic, when nothing is left to go on after
-/// it (ADR-0258 §2): a destructor or `on_quit` that panics at the exit, or
-/// the close of the last window. The exit first writes what the
-/// application persisted and stops its services and pools; the panic then
-/// resumes, so the process exits with 101 and the panic's text, printed
-/// once.
-pub fn run_app_impl<V>(root: V)
-where
-    V: View + StatelessView + Clone + 'static,
-{
-    run_app_with_config_impl(root, AppConfig::default());
-}
-
-/// Run a FLUI application with custom configuration.
-///
-/// This is the internal implementation called by `run_app_with_config()`.
+/// [`LaunchError::CapabilityConflict`] when `launch`'s registrations
+/// conflict, found before the platform starts; [`LaunchError::Platform`] when
+/// the platform cannot start.
 ///
 /// # Panics
 ///
@@ -349,62 +339,78 @@ where
 /// the close of the last window. The exit first writes what the
 /// application persisted and stops its services and pools; the panic then
 /// resumes, so the process exits with 101 and the panic's text, printed
-/// once.
-pub fn run_app_with_config_impl<V>(root: V, config: AppConfig)
+/// once. On Android, which this entry point cannot start.
+pub fn run_app_impl<V>(root: V, launch: AppLaunch) -> Result<(), LaunchError>
 where
     V: View + StatelessView + Clone + 'static,
 {
-    // Managed startup: install FLUI's default backend only if the slot is
-    // empty. An application that configured its own subscriber before calling
-    // `run_app` keeps it, and a second `run_app` in one process is a no-op
-    // rather than a panic.
-    let _installation = super::logging::init_managed_logging(&config);
-
-    // No frame-pacing field is logged here: `AppConfig` carries none — the
-    // advisory-only `vsync`/`target_fps` fields it used to have were removed
-    // rather than kept misleading. The desktop runner's steady-state pacing
-    // comes entirely from the GPU-side present path
-    // (`flui_engine::Renderer::render_scene`) today — the blocking Fifo
-    // present on the Vulkan/Wayland path, and the platform's display-pass
-    // cadence on the native AppKit backend (ADR-0058's per-backend facts).
-    // The unwired `RasterOptions` DTO was deleted with no reader rather than
-    // kept as a shape; a frame-pacing surface returns with the threaded lane
-    // that can act on one — that wiring is #559's job, not a claim this
-    // comment gets to make in the meantime.
-    tracing::info!(
-        title = %config.title,
-        size = ?config.size,
-        "Starting FLUI application"
-    );
-
-    // Run platform-specific event loop
     #[cfg(all(
         not(target_os = "android"),
         not(target_os = "ios"),
         not(target_arch = "wasm32")
     ))]
     {
-        run_desktop(root, config);
+        // The desktop runs an `Application`, which checks the registrations
+        // and installs logging itself.
+        run_desktop(root, launch)
     }
 
     #[cfg(target_os = "android")]
     {
-        let _ = (root, config);
+        let _ = (root, launch);
         panic!(
             "On Android, use flui_app::run_app_android() from android_main() \
              instead of run_app(). AndroidApp must be provided by the system."
         );
     }
 
-    #[cfg(target_os = "ios")]
+    #[cfg(any(target_os = "ios", target_arch = "wasm32"))]
     {
-        run_app_ios_with_config(root, config);
+        let AppLaunch {
+            config,
+            capabilities,
+        } = launch;
+        // Before anything starts, so a conflict starts nothing (ADR-0152 §1).
+        install_capabilities(capabilities)?;
+        // Managed startup: install FLUI's default backend only if the slot
+        // is empty. An application that configured its own subscriber first
+        // keeps it, and a second run in one process is a no-op.
+        let _installation = super::logging::init_managed_logging(&config);
+        tracing::info!(
+            title = %config.title,
+            size = ?config.size,
+            "Starting FLUI application"
+        );
+        #[cfg(target_os = "ios")]
+        {
+            run_ios(root, config)
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            run_web(root, config)
+        }
     }
+}
 
-    #[cfg(target_arch = "wasm32")]
-    {
-        run_web(root, config);
-    }
+/// Check `capabilities` against the built-ins and install the registry the
+/// run's UI runtimes acquire capabilities from.
+///
+/// # Errors
+///
+/// [`LaunchError::CapabilityConflict`] for the first conflict; nothing is
+/// installed then.
+#[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
+pub(in crate::app) fn install_capabilities(
+    capabilities: crate::app::AppCapabilities,
+) -> Result<(), LaunchError> {
+    // A plugin's `register` is user code: it runs with no borrow held.
+    let clipboard =
+        host::APP_RUNTIME.with(|slot| std::rc::Rc::clone(slot.borrow().clipboard_slot()));
+    let registry = capabilities
+        .into_registry(&clipboard)
+        .map_err(LaunchError::CapabilityConflict)?;
+    host::APP_RUNTIME.with(|slot| slot.borrow_mut().capabilities = Some(registry));
+    Ok(())
 }
 
 #[cfg(all(

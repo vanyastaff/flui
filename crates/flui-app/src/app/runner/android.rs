@@ -14,50 +14,53 @@ use super::surface_lifecycle::{
     SurfaceLifecycleOutcome, SurfaceRecreationRetry, report_surface_settlement,
     retry_surface_recreation, settle_surface_availability,
 };
-use crate::app::AppConfig;
+use crate::app::{AppConfig, AppLaunch, LaunchError};
 
 // ============================================================================
 // Android Implementation
 // ============================================================================
 
-/// Run a FLUI application on Android with default configuration.
+/// Run a FLUI application on Android: `root` in the Activity's window, with
+/// `launch`'s configuration and capability providers.
 ///
-/// This is the primary entry point for Android apps. Call this from your
-/// `android_main()` function:
-///
-/// ```rust,ignore
-/// #[no_mangle]
-/// fn android_main(app: AndroidApp) {
-///     flui_app::run_app_android(app, MyRootView);
-/// }
-/// ```
-#[cfg(target_os = "android")]
-pub fn run_app_android<V>(app: android_activity::AndroidApp, root: V)
-where
-    V: View + StatelessView + Clone + 'static,
-{
-    run_app_android_with_config(app, root, AppConfig::default());
-}
-
-/// Run a FLUI application on Android with custom configuration.
-///
-/// Like [`run_app_android`] but allows specifying app configuration.
+/// This is the entry point on Android. Call it from your `android_main()`
+/// function:
 ///
 /// ```rust,ignore
 /// #[no_mangle]
 /// fn android_main(app: AndroidApp) {
-///     let config = AppConfig::new()
-///         .with_title("My App")
-///         .with_size(800, 600);
-///     flui_app::run_app_android_with_config(app, MyRootView, config);
+///     let launch = AppLaunch::new()
+///         .config(AppConfig::new().with_title("My App"))
+///         .capabilities(AppCapabilities::new().plugin(MyPlugin));
+///     // `run_app_android` logs why it could not start.
+///     let _started = flui_app::run_app_android(app, MyRootView, launch);
 /// }
 /// ```
+///
+/// # Errors
+///
+/// [`LaunchError::CapabilityConflict`] when `launch`'s registrations
+/// conflict, found before the platform starts and logged.
 #[cfg(target_os = "android")]
-pub fn run_app_android_with_config<V>(app: android_activity::AndroidApp, root: V, config: AppConfig)
+pub fn run_app_android<V>(
+    app: android_activity::AndroidApp,
+    root: V,
+    launch: AppLaunch,
+) -> Result<(), LaunchError>
 where
     V: View + StatelessView + Clone + 'static,
 {
+    let AppLaunch {
+        config,
+        capabilities,
+    } = launch;
+    // Logging first: `android_main` has no stderr, so the log is where a
+    // conflict can be read.
     let _installation = crate::app::logging::init_managed_logging(&config);
+    // Before the platform starts, so a conflict starts nothing (ADR-0152 §1).
+    super::install_capabilities(capabilities).inspect_err(|error| {
+        tracing::error!(%error, "FLUI could not start");
+    })?;
 
     tracing::info!(
         title = %config.title,
@@ -65,6 +68,7 @@ where
     );
 
     run_android(root, config, app);
+    Ok(())
 }
 
 #[cfg(target_os = "android")]

@@ -118,8 +118,7 @@ where
     /// [`AppRunError::CapabilityConflict`] before any window opens.
     #[must_use = "the builder returns the updated application; assign or chain it"]
     pub fn capability<C: Capability>(mut self, provider: impl CapabilityProvider<C>) -> Self {
-        self.capabilities
-            .override_with(|registrar| registrar.provide::<C>(provider));
+        self.capabilities = std::mem::take(&mut self.capabilities).capability::<C>(provider);
         self
     }
     /// Register the providers of `plugin`. A plugin provides what neither the
@@ -128,7 +127,7 @@ where
     /// [`AppRunError::CapabilityConflict`] before any window opens.
     #[must_use = "the builder returns the updated application; assign or chain it"]
     pub fn plugin(mut self, plugin: impl Plugin) -> Self {
-        self.capabilities.plugin(Box::new(plugin));
+        self.capabilities = std::mem::take(&mut self.capabilities).plugin(plugin);
         self
     }
     /// Run the native loop and release its services before returning.
