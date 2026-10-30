@@ -1145,7 +1145,7 @@ pub mod manipulation {
                         .on(self.surface)
                         .with_primary(true)
                         .with_modifiers(frame.modifiers)
-                        .at(x, y, frame.scale);
+                        .at_device(x, y, frame.scale);
                         delivered.inputs.extend(
                             decode_derived(contacts, &native)
                                 .unwrap_or_else(DecodeError::into_inputs),

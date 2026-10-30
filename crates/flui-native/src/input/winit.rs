@@ -502,7 +502,7 @@ impl WinitInput {
             // A gesture is centred on the device's cursor; once it moves on,
             // the gesture keeps its own last position.
             if let Some((_, raw)) = self.contacts.position(surface, Some(cursor), MOUSE) {
-                native = native.at(raw.x, raw.y, scale);
+                native = native.at_device(raw.x, raw.y, scale);
             }
             native
         } else {
@@ -515,7 +515,7 @@ impl WinitInput {
                         self.label(*device_id, KindClass::Cursor),
                         ReadingAction::Move,
                     )
-                    .at(position.x, position.y, scale);
+                    .at_device(position.x, position.y, scale);
                     self.held = Some(HeldMove {
                         window,
                         reading: native,
@@ -585,7 +585,7 @@ impl WinitInput {
                         owned::PointerKind::Touch,
                         action,
                     )
-                    .at(touch.location.x, touch.location.y, scale)
+                    .at_device(touch.location.x, touch.location.y, scale)
                     .with_sensors(touch_sensors(touch.force));
                     if touch.phase == TouchPhase::Moved {
                         self.held = Some(HeldMove {

@@ -581,7 +581,7 @@ impl SharedAssembly {
         };
         let mut reading =
             NativeReading::new(NativeContact(label), step.kind, action, self.time(step.at))
-                .at(x, y, 1.0);
+                .at_device(x, y, 1.0);
         if let Some(device) = step.device
             && self.profile.names_devices
             && !self.faulty(Fault::NoDevice)
@@ -699,7 +699,7 @@ impl SharedAssembly {
         if self.faulty(Fault::FrozenFocal) && phase != GesturePhase::Began {
             reading
         } else {
-            reading.at(step.x, step.y, 1.0)
+            reading.at_device(step.x, step.y, 1.0)
         }
     }
 

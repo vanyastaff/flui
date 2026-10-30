@@ -248,7 +248,7 @@ fn a_ctrl_wheel_pinch_assembles_into_one_pan_zoom_sequence() {
             ReadingTime::epoch(time),
         )
         .with_primary(true)
-        .at(40.0, 30.0, 1.0);
+        .at_logical(40.0, 30.0);
         for input in decode(registry, &native).expect("decodes") {
             match input {
                 PlatformInput::Pointer(PointerEvent::PanZoom(event)) => {
