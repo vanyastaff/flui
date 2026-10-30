@@ -391,8 +391,8 @@ request.
 > **Environments:** all · **Who it hurts:** Everyone who relies on a platform claim; maintainers who cannot replay a failure · **Parity:** [Quality bar](platform-parity.md#quality-bar)
 
 - Honest absence: the nine spellings of "not here" are one now, `Unsupported` with its reason in every contract error (ADR-0151 §4); the Android clipboard is still an in-process mock (ADR-0152). Other layers show what silent spellings cost: winit setters return `()` while their documentation lists platforms as unsupported, `tauri-plugin-geolocation` resolves to a zeroed position on the desktop, and `tauri-plugin-notification` reports a permission it did not check.
-- Replay: pointer, key and wheel traces replay on the headless host; IME, lifecycle, preference and display recordings do not exist.
-- The `native-capture` journal records pointers only, so a failure in any other event family cannot be replayed.
+- Replay: pointer, key and wheel traces, system notices, session ends, reopens and input method events replay on the headless host; preference, display and window state recordings do not exist yet.
+- The `native-capture` journal records pointers, system notices, session ends, reopens and input method events, not preferences, displays or window state. An input method that edits the focused text store directly (TSF on Windows, the Android and web mirrors) delivers no event, so its edits are not journaled: the `ime` row family reserves a store-edit payload for them.
 - Not every unsupported cell in the parity tables names its reason, and nothing checks the cells against the code's `Unsupported` reasons.
 
 ### 34. Power-aware pacing and throttling

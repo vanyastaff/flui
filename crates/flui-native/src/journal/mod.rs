@@ -1,11 +1,14 @@
 //! The journal of native input (ADR-0215 §4): what a host's pointer
-//! registries were fed, before FLUI translated it.
+//! registries were fed, and what its loop and window deliveries were handed
+//! (system notices, session ends, reopens, input method events), before the
+//! application heard it.
 //!
 //! - `capture` (debug builds with `native-capture`): the hook every
-//!   [`ContactRegistry`](crate::input::assembly::ContactRegistry) created on a
-//!   thread reports its calls to while a capture is installed there;
+//!   [`ContactRegistry`](crate::input::assembly::ContactRegistry), loop
+//!   delivery and window delivery created on a thread reports its calls to
+//!   while a capture is installed there;
 //! - `recorder` (the same builds): the sink that folds those calls into one
-//!   `codec::NativeRecording` per registry;
+//!   `codec::NativeRecording` per registry or delivery;
 //! - `codec` (with `native-capture` or `testing`): the recording read,
 //!   written and replayed, in the schema `flui-protocol` declares, so a reader
 //!   such as the driver reads it without this crate.

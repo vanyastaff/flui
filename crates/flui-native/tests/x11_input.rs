@@ -471,6 +471,7 @@ fn xtest_pointer_buttons_and_wheel_reach_the_window() {
         };
         let replayed: Vec<String> = recording
             .replay()
+            .expect("a registry's recording replays")
             .iter()
             .filter_map(PlatformInput::as_pointer)
             .filter(contact)
