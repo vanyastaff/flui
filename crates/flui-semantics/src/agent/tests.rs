@@ -30,7 +30,7 @@ fn noop() -> crate::SemanticsActionHandler {
 
 fn placement() -> Placement {
     Placement::new(
-        DevicePixelRatio::new(2.0).expect("2 is a ratio"),
+        DevicePixelRatio::try_new(2.0).expect("2 is a ratio"),
         WindowId::from_u64(1).expect("non-zero"),
     )
 }

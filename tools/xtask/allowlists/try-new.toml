@@ -57,18 +57,6 @@ crate = "flui-animation"
 type = "ValueRange"
 
 [[allow]]
-crate = "flui-foundation"
-type = "DevicePixelRatio"
-
-[[allow]]
-crate = "flui-foundation"
-type = "TextSize"
-
-[[allow]]
-crate = "flui-foundation"
-type = "WindowMetrics"
-
-[[allow]]
 crate = "flui-native"
 type = "ArboardClipboard"
 
@@ -165,40 +153,8 @@ crate = "flui-native"
 type = "X11Loop"
 
 [[allow]]
-crate = "flui-platform"
-type = "Distance"
-
-[[allow]]
-crate = "flui-platform"
-type = "FlingSpeeds"
-
-[[allow]]
-crate = "flui-platform"
-type = "Locale"
-
-[[allow]]
-crate = "flui-platform"
-type = "NativeMouseGeometry"
-
-[[allow]]
-crate = "flui-platform"
-type = "NativeTouchGeometry"
-
-[[allow]]
-crate = "flui-platform"
-type = "PointerFrame"
-
-[[allow]]
-crate = "flui-platform"
-type = "Utf16Range"
-
-[[allow]]
 crate = "flui-runtime"
 type = "UiRuntime"
-
-[[allow]]
-crate = "flui-scheduler"
-type = "OwnerFrame"
 
 [[allow]]
 crate = "flui-widgets"

@@ -222,8 +222,8 @@ fn authored_request(
     style: Option<&crate::typography::TextStyle>,
 ) -> Result<(TextSizeRequest, TextSizingIntent), TextLayoutError> {
     let authored = style.and_then(|s| s.font_size).unwrap_or(DEFAULT_FONT_SIZE);
-    let size =
-        TextSize::new(authored).map_err(|_| TextLayoutError::InvalidFontSize { size: authored })?;
+    let size = TextSize::try_new(authored)
+        .map_err(|_| TextLayoutError::InvalidFontSize { size: authored })?;
     let intent = style
         .and_then(|s| s.sizing)
         .unwrap_or(TextSizingIntent::Profile(TextScaleProfile::Body));

@@ -347,7 +347,7 @@ impl WinitInput {
         let input = if events.len() == 1 {
             PlatformInput::Pointer(events.remove(0))
         } else {
-            match flui_platform::PointerFrame::new(events) {
+            match flui_platform::PointerFrame::try_new(events) {
                 Ok(frame) => PlatformInput::PointerFrame(frame),
                 Err(empty) => unreachable!("BUG: a taken touch frame is not empty: {empty}"),
             }

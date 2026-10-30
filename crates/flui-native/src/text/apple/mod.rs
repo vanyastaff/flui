@@ -29,7 +29,7 @@ pub(crate) mod macos;
 /// worse than none: the client hides it).
 #[cfg(any(target_os = "ios", test))]
 pub(crate) fn ime_cursor(text: &str, from: Utf16Offset, to: Utf16Offset) -> Option<(usize, usize)> {
-    let range = Utf16Range::new(from, to)?;
+    let range = Utf16Range::try_new(from, to)?;
     let bytes = utf16::byte_range(text, range).ok()?;
     Some((bytes.start, bytes.end))
 }

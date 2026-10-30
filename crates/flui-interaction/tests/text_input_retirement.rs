@@ -834,7 +834,7 @@ fn failed_nested_gate_reservation_preserves_the_valid_outer_attachment() {
                 LockGrant::read(move |session| {
                     *read.borrow_mut() = session
                         .text(
-                            flui_platform::text_store::Utf16Range::new(
+                            flui_platform::text_store::Utf16Range::try_new(
                                 flui_platform::text_store::Utf16Offset::ZERO,
                                 session.document_len(),
                             )
@@ -885,7 +885,7 @@ fn commit_reentry_preserves_the_newer_attachment() {
             LockGrant::read(move |session| {
                 *read.borrow_mut() = session
                     .text(
-                        flui_platform::text_store::Utf16Range::new(
+                        flui_platform::text_store::Utf16Range::try_new(
                             flui_platform::text_store::Utf16Offset::ZERO,
                             session.document_len(),
                         )

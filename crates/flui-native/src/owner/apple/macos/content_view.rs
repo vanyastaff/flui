@@ -637,7 +637,7 @@ fn utf16_range(range: NSRange) -> Option<Utf16Range> {
         return None;
     }
     let end = range.location.checked_add(range.length)?;
-    Utf16Range::new(Utf16Offset::new(range.location), Utf16Offset::new(end))
+    Utf16Range::try_new(Utf16Offset::new(range.location), Utf16Offset::new(end))
 }
 
 /// `range` as AppKit's, `{NSNotFound, 0}` for none.

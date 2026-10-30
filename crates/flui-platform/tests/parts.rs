@@ -74,7 +74,7 @@ fn a_window_state_round_trips_through_its_parts() {
     let capabilities = WindowCapabilities::ALL
         .unavailable(&material, CapabilityAbsence::NotYetOnThisHost)
         .without_presentation_feedback(CapabilityAbsence::NotOnThisDevice);
-    let metrics = WindowMetrics::new(DeviceSize::new(1600, 1200), 2.0).expect("valid");
+    let metrics = WindowMetrics::try_new(DeviceSize::new(1600, 1200), 2.0).expect("valid");
     let state = WindowState::new(
         WindowGeometry::new(Some(Point::new(10.0, 20.0)), Size::new(820.0, 640.0)),
         Size::new(800.0, 600.0),

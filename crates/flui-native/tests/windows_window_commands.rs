@@ -1259,7 +1259,7 @@ fn win32_readback(hwnd: HWND) -> Readback {
     Readback {
         metrics: have_client
             .then(|| {
-                WindowMetrics::new(
+                WindowMetrics::try_new(
                     Size::new(client.right - client.left, client.bottom - client.top),
                     f64::from(dpi) / 96.0,
                 )

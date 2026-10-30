@@ -1513,7 +1513,7 @@ pub(crate) fn sample_state(
         // window's empty client area is not drawable and keeps the last.
         metrics: have_client
             .then(|| {
-                flui_foundation::geometry::WindowMetrics::new(
+                flui_foundation::geometry::WindowMetrics::try_new(
                     Size::new(client.right - client.left, client.bottom - client.top),
                     scale,
                 )

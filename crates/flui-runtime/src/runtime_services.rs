@@ -212,7 +212,7 @@ impl RuntimeServices {
             .clock(clock.clone())
             .build();
         Self {
-            owner_frame: OwnerFrame::new(&scheduler)
+            owner_frame: OwnerFrame::try_new(&scheduler)
                 .expect("BUG: a fresh scheduler has no owner frame"),
             scheduler,
             wake,

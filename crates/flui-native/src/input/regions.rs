@@ -49,7 +49,7 @@ impl ProjectedInputRegions {
         scale: f64,
         display: Option<DisplayId>,
     ) -> Option<&[DeviceInputRegion]> {
-        let Some(ratio) = DevicePixelRatio::new(scale) else {
+        let Some(ratio) = DevicePixelRatio::try_new(scale) else {
             tracing::warn!(
                 scale,
                 "input regions not projected: the window scale is not a positive finite number"

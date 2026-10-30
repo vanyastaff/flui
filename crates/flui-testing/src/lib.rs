@@ -355,7 +355,7 @@ impl HeadlessBinding {
         let (vsync_driver_alive, request_frame) = Self::registry_driver(&scheduler);
         vsync.set_frame_requester(Some(request_frame));
         let owner_frame =
-            OwnerFrame::new(&scheduler).expect("BUG: a fresh scheduler has no owner frame");
+            OwnerFrame::try_new(&scheduler).expect("BUG: a fresh scheduler has no owner frame");
         let interaction_lane = InteractionLane::try_new()?;
         Ok(Self {
             lifecycle: flui_view::__runtime::LifecycleSource::new(),

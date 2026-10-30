@@ -72,8 +72,8 @@ impl WindowMetrics {
     /// [`InvalidMetrics::LogicalOverflow`] when it is so small that the logical size is not
     /// finite, and
     /// [`InvalidMetrics::EmptyExtent`] when a side is below one pixel.
-    pub fn new(physical: DeviceSize, scale: f64) -> Result<Self, InvalidMetrics> {
-        let scale = DevicePixelRatio::new(scale).ok_or(InvalidMetrics::InvalidScale(scale))?;
+    pub fn try_new(physical: DeviceSize, scale: f64) -> Result<Self, InvalidMetrics> {
+        let scale = DevicePixelRatio::try_new(scale).ok_or(InvalidMetrics::InvalidScale(scale))?;
         if physical.width < 1 || physical.height < 1 {
             return Err(InvalidMetrics::EmptyExtent {
                 width: physical.width,
@@ -103,7 +103,7 @@ impl WindowMetrics {
     /// [`InvalidMetrics::LogicalOverflow`] when the ratio is too small to keep the size finite, and
     /// [`InvalidMetrics::EmptyExtent`] when a side rounds to less than a pixel.
     pub fn from_logical(logical: Size<f64>, scale: f64) -> Result<Self, InvalidMetrics> {
-        let ratio = DevicePixelRatio::new(scale).ok_or(InvalidMetrics::InvalidScale(scale))?;
+        let ratio = DevicePixelRatio::try_new(scale).ok_or(InvalidMetrics::InvalidScale(scale))?;
         if !(logical.width.is_finite() && logical.height.is_finite()) {
             return Err(InvalidMetrics::NonFiniteSize {
                 width: logical.width,
@@ -120,7 +120,7 @@ impl WindowMetrics {
                 scale,
             });
         }
-        Self::new(device_size(logical, ratio), scale)
+        Self::try_new(device_size(logical, ratio), scale)
     }
 
     /// The drawable area in device pixels, at least one pixel in each extent.

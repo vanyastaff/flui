@@ -13,7 +13,7 @@ thread_local! {
 }
 
 fn install_owner(scheduler: &UpdateScheduler) -> std::rc::Rc<OwnerFrame> {
-    let owner = std::rc::Rc::new(OwnerFrame::new(scheduler).expect("one test owner"));
+    let owner = std::rc::Rc::new(OwnerFrame::try_new(scheduler).expect("one test owner"));
     WAKE_OWNER.with(|slot| *slot.borrow_mut() = std::rc::Rc::downgrade(&owner));
     owner
 }
