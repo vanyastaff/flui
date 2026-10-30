@@ -90,12 +90,12 @@ enum MinSdk {
 }
 
 /// Every minimum-SDK declaration in a Gradle build script, in order: each
-/// `minSdk` or `minSdkVersion` identifier, wherever the layout puts it
-/// (`defaultConfig { minSdk = 23 }` on one line included), with the value
-/// after `=`, inside `(…)` or after a space, up to the end of the line, a
-/// `;` or a `}`. Comments are dropped first. A later declaration overrides
-/// an earlier one, so each must state the floor; a mention that is no
-/// declaration the build can read is an unverified one.
+/// `minSdk` or `minSdkVersion` identifier, qualified (`this.minSdk`,
+/// `android.defaultConfig.minSdk`) or not, wherever the layout puts it
+/// (`defaultConfig { minSdk = 23 }` on one line included), that is assigned
+/// rather than read ([`declared_value`]). Comments are dropped first. A later
+/// declaration overrides an earlier one, so each must state the floor; a
+/// value the build cannot read is an unverified one.
 fn min_sdk_assignments(script: &str) -> Vec<MinSdk> {
     let code = without_comments(script);
     let mut found = Vec::new();
@@ -108,22 +108,15 @@ fn min_sdk_assignments(script: &str) -> Vec<MinSdk> {
             .chars()
             .next()
             .is_some_and(|c| c.is_alphanumeric() || c == '_');
-        let qualified_or_quoted =
-            before.is_some_and(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '"' | '\''));
+        let inside_name_or_string =
+            before.is_some_and(|c| c.is_alphanumeric() || matches!(c, '_' | '"' | '\''));
         rest = after_name;
-        if continues_identifier || qualified_or_quoted {
+        if continues_identifier || inside_name_or_string {
             continue;
         }
-        let value = after_name.trim_start_matches([' ', '\t']);
-        let value = if let Some(value) = value.strip_prefix('=') {
-            value
-        } else if let Some(value) = value.strip_prefix('(') {
-            value.split_once(')').map_or(value, |(inside, _)| inside)
-        } else {
-            value
+        let Some(value) = declared_value(after_name) else {
+            continue;
         };
-        let end = value.find(['\n', ';', '}']).unwrap_or(value.len());
-        let value = value[..end].trim();
         found.push(if let Ok(literal) = value.parse() {
             MinSdk::Literal(literal)
         } else if value.replace(' ', "")
@@ -135,6 +128,63 @@ fn min_sdk_assignments(script: &str) -> Vec<MinSdk> {
         });
     }
     found
+}
+
+/// The value a `minSdk` identifier (qualified or not) declares, given the
+/// text after it, or `None` when the identifier is only read (`minSdk.get()`,
+/// `minSdk == 23`, an argument). A declaration is `= v`, `(v)`, `.set(v)` or
+/// Groovy's `minSdk v`; a compound assignment declares an unverified value.
+fn declared_value(after_name: &str) -> Option<&str> {
+    let trimmed = after_name.trim_start_matches([' ', '\t']);
+    let spaced = trimmed.len() < after_name.len();
+    if trimmed.starts_with("==") {
+        None
+    } else if let Some(value) = trimmed.strip_prefix('=') {
+        Some(up_to_end(value))
+    } else if ["+=", "-=", "*=", "/=", "%="]
+        .iter()
+        .any(|operator| trimmed.starts_with(operator))
+    {
+        Some(up_to_end(trimmed))
+    } else if let Some(value) = trimmed.strip_prefix('(') {
+        Some(call_argument(value))
+    } else if let Some(value) = after_name.strip_prefix(".set(") {
+        Some(call_argument(value))
+    } else if spaced
+        && trimmed
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphanumeric() || matches!(c, '_' | '"' | '\''))
+    {
+        Some(up_to_end(trimmed))
+    } else {
+        None
+    }
+}
+
+/// `value` up to the end of its line, a `;` or a `}`.
+fn up_to_end(value: &str) -> &str {
+    let end = value.find(['\n', ';', '}']).unwrap_or(value.len());
+    value[..end].trim()
+}
+
+/// `value` (what follows a call's `(`) up to the `)` that closes the call,
+/// nested calls included.
+fn call_argument(value: &str) -> &str {
+    let mut depth = 0_usize;
+    let close = value.char_indices().find_map(|(at, c)| match c {
+        '(' => {
+            depth += 1;
+            None
+        }
+        ')' if depth == 0 => Some(at),
+        ')' => {
+            depth -= 1;
+            None
+        }
+        _ => None,
+    });
+    value[..close.unwrap_or(value.len())].trim()
 }
 
 /// `script` with its `//` and `/* … */` comments removed.
@@ -229,9 +279,34 @@ mod tests {
                 "        /* minSdk = 1 */ minSdk = 26 // minSdk = 2\n",
                 vec![MinSdk::Literal(26)],
             ),
+            ("        minSdk.set(23)\n", vec![MinSdk::Literal(23)]),
             (
-                "        minSdk.set(23)\n",
-                vec![MinSdk::Unverified(".set(23)".to_owned())],
+                "    defaultConfig { this.minSdk = 23 }\n",
+                vec![MinSdk::Literal(23)],
+            ),
+            (
+                "android.defaultConfig.minSdk = 23\n",
+                vec![MinSdk::Literal(23)],
+            ),
+            (
+                "android.defaultConfig.minSdkVersion 21\n",
+                vec![MinSdk::Literal(21)],
+            ),
+            (
+                "android.defaultConfig.minSdk.set(libs.versions.min.get().toInt())\n",
+                vec![MinSdk::Unverified(
+                    "libs.versions.min.get().toInt()".to_owned(),
+                )],
+            ),
+            (
+                "        minSdk += 3\n",
+                vec![MinSdk::Unverified("+= 3".to_owned())],
+            ),
+            (
+                "val floor = android.defaultConfig.minSdk ?: 21\n\
+                 check(minSdk == 26)\n\
+                 println(android.defaultConfig.minSdk)\n",
+                vec![],
             ),
             (
                 include_str!("../../templates/platforms/android/build.gradle.kts"),
