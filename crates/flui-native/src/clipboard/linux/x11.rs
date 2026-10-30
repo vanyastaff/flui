@@ -67,7 +67,7 @@ impl X11Clipboard {
             .name("flui-x11-clipboard".into())
             .spawn({
                 let bell = Arc::clone(&bell);
-                move || selection::run(selections, &received, &bell)
+                move || selection::run(selections, received, &bell)
             })
             .map_err(|error| init(format!("cannot start the clipboard's thread: {error}")))?;
         Ok(Self {

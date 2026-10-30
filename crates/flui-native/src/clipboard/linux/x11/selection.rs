@@ -804,17 +804,26 @@ impl Selections {
 /// The thread's body: commands and events until `Stop`, or until the
 /// connection fails. A panic is contained here: the thread ends, and the
 /// reads waiting are abandoned, each drop contained, before the state
-/// drops.
-pub(super) fn run(mut selections: Selections, commands: &Receiver<Command>, bell: &OwnedFd) {
+/// drops; so are the commands still queued, whose reads were never taken.
+pub(super) fn run(mut selections: Selections, commands: Receiver<Command>, bell: &OwnedFd) {
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        steps(&mut selections, commands, bell)
+        steps(&mut selections, &commands, bell)
     }));
     match outcome {
         Ok(Ok(())) => {}
         Ok(Err(error)) => tracing::error!("the X11 clipboard's connection failed: {error}"),
         Err(payload) => contained(payload),
     }
-    let abandoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| selections.abandon()));
+    let abandoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut failure = FirstPanic::new();
+        failure.contain(|| selections.abandon());
+        while let Ok(command) = commands.try_recv() {
+            failure.contain(|| drop(command));
+        }
+        // A command sent after the drain drops with the queue.
+        failure.contain(|| drop(commands));
+        failure.resume();
+    }));
     if let Err(payload) = abandoned {
         contained(payload);
     }
