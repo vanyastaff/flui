@@ -1,6 +1,6 @@
 # ADR-0271: The host font feed asks the platform which faces fall back, and FLUI's tables follow
 
-- **Status:** Accepted (2026-10-30). Not implemented: the platform answers (§3), and the locale-change trigger (§4).
+- **Status:** Accepted (2026-10-30). Not implemented: the answers of Windows, Apple and Android from API 29 (§3), and the locale-change trigger (§4).
 - **Date:** 2026-10-30
 - **Supersedes:** [ADR-0092](ADR-0092-per-realm-text-over-parley.md) §7 only for its clause that
   FLUI's tables are the whole fallback order: the platform's answer now comes first, and the
@@ -120,12 +120,14 @@ Each face appears once, in the first position where it occurs. Only faces the co
 are written. A `FaceRef::File` resolves by file and face index, with both paths canonicalised, so a
 path through a symlink still matches. A `FaceRef::Family` resolves through the collection's family
 names. A face with colour glyph tables (`COLR`, `CBDT`, `sbix`) never enters a script
-list or the common list, only the emoji generic. Without that rule, a platform that ranks an emoji
-face high for Latin digits reintroduces the word-gap defect that `font_resolve` prevents.
+list or the common list, only the emoji generic: one the host named in a text list moves to the
+end of the host's emoji list (Android 6 leaves its emoji family untagged). Without that rule, a
+platform that ranks an emoji face high for Latin digits reintroduces the word-gap defect that
+`font_resolve` prevents.
 
 ### §3 `flui-native` computes it, off the owner thread
 
-`flui_native::text::system_fallback(locale: &LanguageTag) -> SystemFallback` exists on every
+`flui_native::fonts::system_fallback(locale: &str) -> SystemFallback` exists on every
 target. It queries each of fontique's scripts with that script's sample text, plus `😀` for the
 emoji faces:
 
@@ -134,11 +136,11 @@ emoji faces:
 | Windows | `IDWriteFontFallback::MapCharacters` over the sample, with the locale; one face per script | none | `MapCharacters("😀")` |
 | macOS, iOS | `CTFontCreateForStringWithLanguage`, as a URL | `CTFontCopyDefaultCascadeListForLanguages` for the locale | `CTFontCreateForString("😀")` |
 | Linux, BSD | `FcFontSort` with the script's charset and the locale's langset; files whose charset covers the sample, in fontconfig's order | none | `FcFontSort` with `color=true` and the emoji charset |
-| Android, API 23+ | `fonts.xml` and `fonts_customization.xml` fallback families whose `lang` names the script, as files, in file order | untagged fallback families | the `und-Zsye` family |
-| Android, `Since<Api29>` | `AFontMatcher_match` over the sample, ahead of the `fonts.xml` order | as API 23 | as API 23 |
+| Android, API 23 to 28 | `fonts.xml` fallback families whose `lang` names the script or implies it (`ja`, `ko`, `zh`), as files, in file order; among the Han families the locale's own first | untagged fallback families | the `und-Zsye` family |
+| Android, `Since<Api29>` | `AFontMatcher_match` over the sample, with the locale | none | `AFontMatcher_match("😀")` |
 | wasm32, other | `SystemFallback::none(locale)` | | |
 
-fontconfig is opened with `libloading` (`libfontconfig.so.1`). A missing library or symbol gives
+fontconfig is opened with `dlopen` (`libfontconfig.so.1`). A missing library or symbol gives
 `SystemFallback::none(locale)` and one debug log, never a panic. fontconfig never becomes a
 link-time dependency.
 
@@ -207,7 +209,7 @@ fallback order is FLUI's tables alone, as today. A test that needs a host answer
 
 - `the_host_answer_precedes_the_tables` (flui-painting, `fallback_chain`) covers the merge order,
   deduplication, path resolution through `..`, a face the collection lacks, and the colour-face
-  exclusion.
+  exclusion; `a_colour_face_in_a_text_list_moves_to_the_emoji_generic` covers the move.
 - `a_host_fallback_face_draws_a_script_the_tables_miss` (flui-painting, a row of
   `host_feed_contract`) feeds a hand-built `SystemFallback` that names the Arabic probe face, which
   no table names. With the answer the Arabic text shapes in that face; without it, every letter
@@ -216,9 +218,9 @@ fallback order is FLUI's tables alone, as today. A test that needs a host answer
   `FallbackOrder`. Each change raises the generation once, the text measures in the new order, and
   an equal answer changes nothing.
 - `fonts_xml_orders_fallback_by_language` (flui-native, `pub(crate)`, runs on Linux) parses
-  recorded `fonts.xml` and `fonts_customization.xml` from API 23, 29 and 34.
-- `fontconfig_answers_latin_and_emoji` (flui-native, Linux CI) gives a non-empty Latin list and a
-  colour emoji face on the CI image. Where fontconfig is absent, it gets the default value.
+  the `fonts.xml` of API 23 and API 28, recorded from AOSP.
+- `fontconfig_answers_latin` (flui-native, Linux CI) gives a non-empty Latin list of existing files
+  on the CI image. Where fontconfig is absent, it gets no answer.
 - A device run on Windows, macOS, iOS and Android renders Arabic, Devanagari, Han in ja-JP and
   zh-CN, and emoji with no missing-glyph box (`docs/platform-parity.md`, gap 35).
 

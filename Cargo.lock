@@ -2239,6 +2239,7 @@ dependencies = [
  "objc2-ui-kit 0.3.2",
  "parking_lot",
  "raw-window-handle",
+ "roxmltree",
  "rustix 1.1.5",
  "serde",
  "serde_json",
