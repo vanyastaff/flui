@@ -232,18 +232,7 @@ impl GradientPipelines {
             self.isolation_bind_group_layout = Some(mapping);
             self.isolation_layout = Some(layout);
         }
-        let targets = [
-            Some(wgpu::ColorTargetState {
-                format: self.surface_format,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            }),
-            Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::R8Unorm,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            }),
-        ];
+        let targets = crate::pipeline_cache::isolation_targets(self.surface_format);
         let pipeline = crate::pipeline_set::create_unit_quad_pipeline_with_targets(
             device,
             self.isolation_layout

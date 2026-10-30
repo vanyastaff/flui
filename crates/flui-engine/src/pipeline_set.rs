@@ -292,18 +292,7 @@ impl PipelineSet {
                 bind_group_layouts: &bind_group_layouts[..if filtered { 4 } else { 3 }],
                 immediate_size: 0,
             });
-            let targets = [
-                Some(wgpu::ColorTargetState {
-                    format: self.ssaa_tile_surface_format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                }),
-                Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::R8Unorm,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                }),
-            ];
+            let targets = crate::pipeline_cache::isolation_targets(self.ssaa_tile_surface_format);
             let pipeline = create_unit_quad_pipeline_with_targets(
                 device,
                 &layout,

@@ -8,3 +8,7 @@
 
 - Gradient stops are read from a texture instead of a fragment-stage storage buffer, which GLES 3.0 and WebGL2 lack.
 - `flui-engine` compiles wgpu's `gles` backend on Linux and Android and `webgl` on the web.
+
+### Fixed
+
+- On GL drivers that offer dual-source blending (Mesa's llvmpipe among them), a gradient or image drawn with `Plus` or another destination-reading blend after a coverage-correct draw no longer draws nothing: the isolation pass's targets now set their blend function instead of leaving the dual-source one Mesa refuses with two draw buffers.
