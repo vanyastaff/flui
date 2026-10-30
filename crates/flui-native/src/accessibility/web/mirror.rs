@@ -17,6 +17,9 @@ pub(crate) enum Op {
     /// Create a detached element for `id`. A later [`Op::Children`] or
     /// [`Op::Root`] places it.
     Create { id: NodeId, spec: ElementSpec },
+    /// Put a new element for `id`, of `spec`, in the place of its old one,
+    /// with the old one's children.
+    Replace { id: NodeId, spec: ElementSpec },
     /// Bring `id`'s element from `old` to `new`.
     Update {
         id: NodeId,
@@ -85,6 +88,11 @@ impl Mirror {
         self.nodes.get(&id).map(|entry| &entry.node)
     }
 
+    /// The spec `id`'s element was last brought to, if it is mirrored.
+    pub(crate) fn spec(&self, id: NodeId) -> Option<&ElementSpec> {
+        self.nodes.get(&id).and_then(|entry| entry.spec.as_ref())
+    }
+
     /// The node the tree's focus is on, if it is in the tree.
     pub(crate) fn focus(&self) -> Option<NodeId> {
         self.focus
@@ -117,7 +125,8 @@ impl Mirror {
                     children_changed.push(id);
                     structure_changed = true;
                 }
-                if entry.node.bounds() != node.bounds() {
+                // Its children are placed in its box, scrolled as it is.
+                if ParentFrame::of(&entry.node) != ParentFrame::of(&node) {
                     placement_changed.insert(id);
                 }
                 entry.node = node;
@@ -179,7 +188,8 @@ impl Mirror {
         }
 
         // Specs: every node sent, and the children of a node whose bounds
-        // moved or whose children changed, since they are placed in its box.
+        // moved, whose scroll changed or whose children changed, since they
+        // are placed in its box.
         let mut dirty: Vec<NodeId> = sent
             .iter()
             .copied()
@@ -284,6 +294,9 @@ impl Mirror {
             .expect("BUG: refreshed node is mirrored");
         match entry.spec.replace(spec.clone()) {
             None => ops.push(Op::Create { id, spec }),
+            // A node that is mirrored as another element now (a link given a
+            // URL, a slider made read-only) gets a new one in its place.
+            Some(old) if old.tag != spec.tag => ops.push(Op::Replace { id, spec }),
             Some(old) if old != spec => ops.push(Op::Update { id, old, new: spec }),
             Some(_) => {}
         }
@@ -345,6 +358,7 @@ mod tests {
             .map(|op| match op {
                 Op::Create { id, .. } => format!("create {}", id.0),
                 Op::Update { id, .. } => format!("update {}", id.0),
+                Op::Replace { id, .. } => format!("replace {}", id.0),
                 Op::Children { id, children } => format!(
                     "children {} {:?}",
                     id.0,
@@ -443,6 +457,87 @@ mod tests {
             button.map(|placement| (placement.left, placement.top)),
             Some((5.0, 5.0))
         );
+    }
+
+    /// A scroller scrolling re-places its children, as far into its content
+    /// as it is scrolled, so each stays where it is seen.
+    #[test]
+    fn a_scroller_scrolling_replaces_its_children() {
+        let scroller = |position: f64| {
+            let mut node = Node::new(Role::ScrollView);
+            node.set_bounds(Rect::new(0.0, 0.0, 400.0, 300.0));
+            node.add_action(Action::SetScrollOffset);
+            node.set_scroll_y(position);
+            node.set_scroll_y_min(0.0);
+            node.set_scroll_y_max(500.0);
+            node.set_children(vec![BUTTON]);
+            node
+        };
+        let list = NodeId(4);
+        let mut mirror = Mirror::new(ElementIds::new("t"));
+        mirror
+            .apply(full(
+                vec![
+                    (ROOT, root(&[list])),
+                    (list, scroller(0.0)),
+                    (BUTTON, button()),
+                ],
+                ROOT,
+            ))
+            .expect("first tree");
+        let ops = mirror
+            .apply(partial(vec![(list, scroller(120.0))], ROOT))
+            .expect("scrolled");
+        let placed = |ops: &[Op], id| {
+            ops.iter().find_map(|op| match op {
+                Op::Update {
+                    id: updated, new, ..
+                } if *updated == id => Some(new.clone()),
+                _ => None,
+            })
+        };
+        assert_eq!(
+            placed(&ops, list)
+                .and_then(|spec| spec.scroll)
+                .map(|scroll| (scroll.top, scroll.height)),
+            Some((120.0, 800.0)),
+            "the scroller is scrolled inside content as tall as its extent"
+        );
+        assert_eq!(
+            placed(&ops, BUTTON).map(|spec| spec.placement.top),
+            Some(130.0),
+            "the button is re-placed into the scrolled content"
+        );
+    }
+
+    /// A node mirrored as another element now gets a new element in the
+    /// place of its old one.
+    #[test]
+    fn a_link_given_a_url_is_replaced_by_an_anchor() {
+        let link = |url: Option<&str>| {
+            let mut node = Node::new(Role::Link);
+            node.set_label("Docs");
+            node.add_action(Action::Click);
+            if let Some(url) = url {
+                node.set_url(url);
+            }
+            node
+        };
+        let mut mirror = Mirror::new(ElementIds::new("t"));
+        mirror
+            .apply(full(
+                vec![(ROOT, root(&[BUTTON])), (BUTTON, link(None))],
+                ROOT,
+            ))
+            .expect("first tree");
+        let ops = mirror
+            .apply(partial(
+                vec![(BUTTON, link(Some("https://example.com/docs")))],
+                ROOT,
+            ))
+            .expect("given a URL");
+        assert_eq!(kinds(&ops), ["replace 2"]);
+        assert_eq!(mirror.spec(BUTTON).map(|spec| spec.tag.name()), Some("a"));
     }
 
     /// A node moving under its old descendant leaves its parent's element
