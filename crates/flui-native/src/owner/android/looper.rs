@@ -499,6 +499,14 @@ impl AndroidLoop {
 
                     let handled = match event {
                         InputEvent::MotionEvent(motion) => {
+                            // TalkBack's explore by touch goes to the window's
+                            // accessibility bridge, not to the app as input.
+                            let explored = self.input.touch_exploration(motion).is_some_and(
+                                |(action, x, y)| self.java_view.explore_by_touch(action, x, y),
+                            );
+                            if explored {
+                                return InputStatus::Handled;
+                            }
                             let events = self.input.motion(&self.app, motion, scale_factor);
                             let mut any_handled = false;
                             self.offer_handwriting(window.as_ref(), &events);
