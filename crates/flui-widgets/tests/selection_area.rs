@@ -808,3 +808,32 @@ pub(crate) fn a_silenced_text_is_left_out_of_the_selection() {
         "the silenced text is not selected"
     );
 }
+
+/// A span's accessibility override still decides what is read: overridden
+/// or silenced text keeps its label and lends no runs to the document.
+///
+/// Red-check: publish runs from the authored text regardless (the document
+/// reads "Dr." and "secret").
+pub(crate) fn span_overrides_keep_their_reading_in_a_selection_area() {
+    use flui_painting::typography::TextSpan;
+    use flui_widgets::RichText;
+
+    let laid = mounted(SelectionArea::new(Column::new((
+        RichText::new(TextSpan::new("Dr.").with_semantics_label("Doctor")),
+        RichText::new(TextSpan::with_children(vec![
+            TextSpan::new("Hi "),
+            TextSpan::new("secret").with_semantics_label(""),
+        ])),
+        Text::new("Omega"),
+    ))));
+    let tree = consumer(&laid);
+    let state = tree.state();
+    let read = find_all(state, Role::Document)[0].document_range().text();
+    assert_eq!(read, "Omega", "only text read as written lends runs");
+    assert!(
+        find_all(state, Role::Label)
+            .iter()
+            .any(|node| node.label().as_deref() == Some("Doctor")),
+        "the override is still the label"
+    );
+}

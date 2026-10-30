@@ -670,6 +670,9 @@ impl RenderBox for RenderParagraph {
         if text.is_empty() {
             return;
         }
+        let plain = span.to_plain_text();
+        // A span's accessibility override reads differently from its glyphs.
+        let overridden = text != plain;
         if self.routes_links() {
             config.set_semantics_boundary(true);
             config.set_explicit_child_nodes(true);
@@ -677,16 +680,19 @@ impl RenderBox for RenderParagraph {
             config.set_label(text);
         }
         // Selectable text is a nested merger with its runs: a node of its own
-        // inside any merge, read and selected by character (ADR-0214). With
-        // routed links it stays the boundary of its link regions instead, so
-        // each link keeps its own node and handler; it names its anchor but
-        // publishes no runs until links carry runs of their own.
+        // inside any merge, read and selected by character (ADR-0214). Its
+        // runs are its authored text, so text a span's accessibility
+        // override replaces or silences keeps its label and publishes no
+        // runs until runs can carry overrides. With routed links it stays
+        // the boundary of its link regions, so each link keeps its own node
+        // and handler, and publishes no runs until links carry runs of their
+        // own. Either way it names its anchor.
         if let Some(anchor) = &self.selectable {
             config.add_anchor(anchor.clone());
-            if !self.routes_links() {
-                config.set_semantics_boundary(true);
+            config.set_semantics_boundary(true);
+            if !self.routes_links() && !overridden {
                 config.set_merging_semantics_of_descendants(true);
-                if let Some(content) = self.semantics_text_content(&span.to_plain_text()) {
+                if let Some(content) = self.semantics_text_content(&plain) {
                     config.set_text_content(content);
                 }
             }
