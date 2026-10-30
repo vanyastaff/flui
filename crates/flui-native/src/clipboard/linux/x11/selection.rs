@@ -245,8 +245,11 @@ pub(super) struct Selections {
     /// The writes' clock appends the server has not stamped yet: only the
     /// last one's time is the pending write's.
     clocks: usize,
-    /// The reads waiting: for the one under way, or for a pending write.
+    /// The reads waiting for the read under way, or for one to start.
     readers: Vec<Resolver<Option<String>>>,
+    /// The reads sent after a pending write: they answer what the write
+    /// leaves, so they join no read that began before it.
+    after_write: Vec<Resolver<Option<String>>>,
     reading: Option<Reading>,
     /// Which of [`Atoms::destinations`] the reads are converted into now.
     destination: usize,
@@ -294,6 +297,7 @@ impl Selections {
             pending: None,
             clocks: 0,
             readers: Vec::new(),
+            after_write: Vec::new(),
             reading: None,
             destination: 0,
             transfers: Vec::new(),
@@ -317,10 +321,12 @@ impl Selections {
                 )?;
             }
             Command::Read(answer) => {
-                self.readers.push(answer);
                 // A read after a write answers what the write left: it waits
                 // for the write to own the selection or fail to.
-                if self.pending.is_none() {
+                if self.pending.is_some() {
+                    self.after_write.push(answer);
+                } else {
+                    self.readers.push(answer);
                     self.serve()?;
                 }
             }
@@ -421,7 +427,11 @@ impl Selections {
     /// abandoned too, and the first failure goes on.
     fn abandon(&mut self) {
         let mut failure = FirstPanic::new();
-        for reader in std::mem::take(&mut self.readers) {
+        let waiting = std::mem::take(&mut self.readers);
+        for reader in waiting
+            .into_iter()
+            .chain(std::mem::take(&mut self.after_write))
+        {
             failure.contain(|| drop(reader));
         }
         failure.resume();
@@ -484,6 +494,7 @@ impl Selections {
             tracing::debug!("the X11 clipboard was taken before the write could own it");
         }
         // The reads that waited for the write.
+        self.readers.append(&mut self.after_write);
         self.serve()
     }
 
