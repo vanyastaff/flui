@@ -761,8 +761,8 @@ fn accessibility_input_reaches_the_semantics_owner() {
     assert_eq!(dispatch(boom), Ok(InputOutcome::Queued));
     assert_eq!(dispatch(send), Ok(InputOutcome::Queued));
     let woken = wakes.load(Ordering::Relaxed);
-    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(owner_turn));
-    assert!(failed.is_err(), "the handler's panic resumes");
+    // The handler's panic is contained by the owner (ADR-0258 §1).
+    owner_turn();
     assert_eq!(clicks.get(), 0, "the request behind it waits");
     assert!(
         wakes.load(Ordering::Relaxed) > woken,

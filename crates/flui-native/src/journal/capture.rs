@@ -28,7 +28,9 @@ use std::time::Duration;
 
 use flui_platform::EventTime;
 use flui_platform::pointer::PointerKind;
-use flui_platform::{ImeEvent, SessionEndPhase, SystemNotice, SystemPreferences};
+use flui_platform::{
+    DisplaySnapshot, ImeEvent, SessionEndPhase, SystemNotice, SystemPreferences, WindowState,
+};
 use flui_protocol::native_recording::Stream;
 use parking_lot::{Mutex, ReentrantMutex};
 
@@ -146,6 +148,11 @@ pub enum Captured<'a> {
     /// The application read the system preferences, and this is what the
     /// platform answered.
     Preferences(Result<&'a SystemPreferences, &'a PlatformError>),
+    /// The application read the displays, and this is what the platform
+    /// answered.
+    Displays(Result<&'a DisplaySnapshot, &'a PlatformError>),
+    /// A window published a snapshot that differs from the one before it.
+    WindowState(&'a WindowState),
 }
 
 /// Which registry of a capture a call came from: registries are numbered in

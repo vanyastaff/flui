@@ -2,6 +2,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+use super::terminal::contained;
 use crate::app::runtime::{AppRuntime, ExitPolicy};
 
 /// A fresh clone of the loop-scoped platform wake capability — see
@@ -635,6 +636,8 @@ pub(crate) fn install_owner_platform(
             ))]
             {
                 state.quit_notification = crate::app::runtime::QuitNotification::Active;
+                // A loop that wants other renderers says so after this install.
+                state.window_renderers = super::window_renderer::WindowRenderers::default();
                 state.pending_window_reservations =
                     Arc::new(std::sync::atomic::AtomicUsize::new(0));
             }
@@ -725,7 +728,10 @@ pub(crate) fn route_quit(route: impl Fn() + 'static) {
 
 /// Send the user's reopen (AppKit's Dock click) to `route`.
 #[cfg_attr(
-    any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
+    any(
+        target_arch = "wasm32",
+        all(not(test), any(target_os = "android", target_os = "ios"))
+    ),
     expect(dead_code, reason = "only the desktop main window reopens")
 )]
 pub(super) fn route_reopen(route: impl Fn() + 'static) {
@@ -750,6 +756,23 @@ pub(super) fn route_wake_deadline(route: impl Fn() -> Option<web_time::Instant> 
         |routes| &mut routes.wake_deadline,
         Rc::new(route) as Rc<dyn Fn() -> Option<web_time::Instant>>,
     );
+}
+
+/// The instant the running loop is asked to wake at, as a desktop loop asks
+/// before it waits: the answer of the route [`route_wake_deadline`] set.
+#[cfg(all(
+    feature = "testing",
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(crate) fn loop_wake_deadline() -> Option<web_time::Instant> {
+    let routes = APP_RUNTIME.with(|slot| {
+        let runs = &slot.borrow().run_routes;
+        runs.last().and_then(std::rc::Weak::upgrade)
+    })?;
+    let route = routes.borrow().wake_deadline.clone()?;
+    route()
 }
 
 /// The application handler `flui-app` runs a platform with: `ready` runs the
@@ -789,32 +812,42 @@ impl RunnerHandler {
     }
 }
 
+// Every method's whole body runs under one catch, as `WindowRoutes`' do
+// (ADR-0258 §4).
 impl flui_native::AppHandler for RunnerHandler {
     fn ready(&self, owner: flui_native::OwnerPlatform) -> Result<(), flui_native::BootstrapError> {
-        let bootstrap = self
-            .bootstrap
-            .borrow_mut()
-            .take()
-            .expect("BUG: a platform runs its bootstrap once");
-        // From here the `route_*` functions reach this run's routes.
-        APP_RUNTIME.with(|slot| {
-            slot.borrow_mut()
-                .run_routes
-                .push(Rc::downgrade(&self.routes));
-        });
-        bootstrap(owner)
+        // A bootstrap that panicked quits the loop it started; the exit
+        // resumes the panic.
+        contained(Ok(()), "application bootstrap", || {
+            let bootstrap = self
+                .bootstrap
+                .borrow_mut()
+                .take()
+                .expect("BUG: a platform runs its bootstrap once");
+            // From here the `route_*` functions reach this run's routes.
+            APP_RUNTIME.with(|slot| {
+                slot.borrow_mut()
+                    .run_routes
+                    .push(Rc::downgrade(&self.routes));
+            });
+            bootstrap(owner)
+        })
     }
 
     fn quit_requested(&self, _: &flui_native::OwnerPlatform) {
-        if let Some(quit) = self.route(|routes| routes.quit.clone()) {
-            quit();
-        }
+        contained((), "application quit", || {
+            if let Some(quit) = self.route(|routes| routes.quit.clone()) {
+                quit();
+            }
+        });
     }
 
     fn reopen(&self, _: &flui_native::OwnerPlatform) {
-        if let Some(reopen) = self.route(|routes| routes.reopen.clone()) {
-            reopen();
-        }
+        contained((), "application reopen", || {
+            if let Some(reopen) = self.route(|routes| routes.reopen.clone()) {
+                reopen();
+            }
+        });
     }
 
     fn session_end(
@@ -822,26 +855,37 @@ impl flui_native::AppHandler for RunnerHandler {
         _: &flui_native::OwnerPlatform,
         phase: flui_platform::SessionEndPhase,
     ) -> flui_platform::SessionEndAnswer {
-        answer_session_end(phase)
+        contained(
+            flui_platform::SessionEndAnswer::Proceed,
+            "session end",
+            || answer_session_end(phase),
+        )
     }
 
     fn host_notice(&self, _: &flui_native::OwnerPlatform, notice: flui_platform::SystemNotice) {
         // System notices (ADR-0237): every UI runtime's subscribers receive
         // them from the owner thread.
-        super::owner_dispatch::deliver_host_notice(&notice.into());
+        contained((), "host notice", || {
+            super::owner_dispatch::deliver_host_notice(&notice.into());
+        });
     }
 
     fn exit_policy(&self, _: &flui_native::OwnerPlatform) -> flui_native::ExitAnswer {
-        match self.route(|routes| routes.exit_policy.clone()) {
-            Some(exit) if exit() => flui_native::ExitAnswer::End,
-            Some(_) => flui_native::ExitAnswer::KeepRunning,
-            None => flui_native::ExitAnswer::HostDecides,
-        }
+        // A failure here quits the loop anyway.
+        contained(flui_native::ExitAnswer::End, "exit policy", || {
+            match self.route(|routes| routes.exit_policy.clone()) {
+                Some(exit) if exit() => flui_native::ExitAnswer::End,
+                Some(_) => flui_native::ExitAnswer::KeepRunning,
+                None => flui_native::ExitAnswer::HostDecides,
+            }
+        })
     }
 
     fn wake_deadline(&self, _: &flui_native::OwnerPlatform) -> Option<web_time::Instant> {
-        self.route(|routes| routes.wake_deadline.clone())
-            .and_then(|deadline| deadline())
+        contained(None, "wake deadline", || {
+            self.route(|routes| routes.wake_deadline.clone())
+                .and_then(|deadline| deadline())
+        })
     }
 }
 

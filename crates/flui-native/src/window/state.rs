@@ -166,6 +166,11 @@ pub(crate) struct WindowStateCell {
     /// leaves the cell stale. At one per nanosecond it would take centuries to
     /// wrap.
     invalidations: AtomicU64,
+    /// The snapshots the cell publishes, its first included, journalled while
+    /// a native capture is installed (ADR-0215 §4): every host publishes
+    /// through a cell, so this is the one place a window's state is recorded.
+    #[cfg(all(debug_assertions, feature = "native-capture"))]
+    journal: crate::journal::capture::Journal,
 }
 
 /// The capabilities owners handed out so far, one per window cell.
@@ -204,6 +209,14 @@ impl WindowStateCell {
     /// never opens on this one.
     pub(crate) fn new(mut initial: WindowState) -> Self {
         initial.capabilities = initial.capabilities.owned_by(next_capabilities_owner());
+        #[cfg(all(debug_assertions, feature = "native-capture"))]
+        let journal = {
+            let journal = crate::journal::capture::Journal::open_stream(
+                flui_protocol::native_recording::Stream::WindowState,
+            );
+            journal.record(crate::journal::capture::Captured::WindowState(&initial));
+            journal
+        };
         Self {
             last: Mutex::new(Slot {
                 state: initial,
@@ -211,6 +224,8 @@ impl WindowStateCell {
                 frozen: false,
             }),
             invalidations: AtomicU64::new(1),
+            #[cfg(all(debug_assertions, feature = "native-capture"))]
+            journal,
         }
     }
 
@@ -278,6 +293,14 @@ impl WindowStateCell {
                 let changed = next.revision != slot.state.revision;
                 if changed {
                     slot.state = next.clone();
+                }
+                // The capture's sink runs with the slot released, as the
+                // handler's `state_changed` does.
+                drop(slot);
+                #[cfg(all(debug_assertions, feature = "native-capture"))]
+                if changed {
+                    self.journal
+                        .record(crate::journal::capture::Captured::WindowState(&next));
                 }
                 Published {
                     state: next,

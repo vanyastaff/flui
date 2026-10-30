@@ -1,6 +1,8 @@
 # ADR-0136: UI surfaces are owner-local; one thread-boundary ledger
 
-- **Status:** Accepted (§2; the other sections are not decisions until adopted)
+- **Status:** Accepted (§2). The thread-boundary ledger and opt-in parallel layout were
+  rejected by the owner on 2026-10-28 (see Alternatives rejected); the other sections are not
+  decisions.
 - **Date:** 2026-10-06
 - **Amended:** 2026-10-11 — later accepted owner APIs are distinguished from this record's historical signatures and unadopted proposals.
 - **Superseded-by:** [ADR-0182](ADR-0182-complete-owner-execution.md) for scheduler execution authority and frame-entry API.
@@ -20,8 +22,8 @@
 Only section 2 was accepted in this record. Its UI-runtime ownership of async tasks
 and weak owner-local handles remains; the scheduler execution API and transitional
 queue/notification descriptions are superseded by ADR-0182, ADR-0175 and ADR-0178
-in the scopes above. The thread-boundary ledger/gate and opt-in parallel-layout
-ideas remain unadopted proposals. Later accepted records do not retroactively
+in the scopes above. The thread-boundary ledger and opt-in parallel layout were
+rejected (see Alternatives rejected). Later accepted records do not retroactively
 approve every reserved section here.
 
 ## Context
@@ -113,6 +115,16 @@ weak-handle and thread-boundary rules in this section still apply.
   arbitrary thread's lifetime — is exactly what the owner-thread model exists to prevent.
 - **`send_wrapper`-style runtime checks.** They turn a compile error into a panic on the
   wrong thread.
+- **A thread-boundary ledger** (rejected by the owner, 2026-10-28): every `Send` type and
+  bound listed with a flip-or-keep reason. The reasons would be prose a gate cannot check.
+  What remains is the gate without the ledger: `cargo xtask send-positions` counts the
+  author-written `Send` positions of the public API against a list that only shrinks, and
+  `cargo xtask send-impls` with the `deny.toml` bans keeps `unsafe impl Send`/`Sync` and
+  send-wrapper crates out ([ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) §6).
+- **Opt-in parallel layout through an `IndependentLayout` marker** (rejected by the owner,
+  2026-10-28). It would put a `Send` position back into the render-object surface for a
+  speed-up nothing measures; [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md)
+  §2 keeps layout inside one UI runtime serial.
 
 ## Validation
 

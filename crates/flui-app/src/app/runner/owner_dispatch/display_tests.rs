@@ -95,7 +95,8 @@ struct Win {
     dispatcher: PresentationDispatcher,
     /// Redraws the window was asked for.
     redraws: Arc<AtomicUsize>,
-    /// While set, the redraw request fails the way a platform wake can.
+    /// While set, the window's frame route panics: the window answers the
+    /// frame `FrameOutcome::Failed`.
     fail_redraw: Arc<AtomicBool>,
 }
 
@@ -140,10 +141,7 @@ fn install_window(
     let failing = Arc::clone(&fail_redraw);
     crate::app::runner::window_routes::WindowRoutes::of(&*window).route_frame_requested(
         move |_| {
-            assert!(
-                !failing.load(Ordering::SeqCst),
-                "injected redraw wake failure"
-            );
+            assert!(!failing.load(Ordering::SeqCst), "injected frame failure");
             counter.fetch_add(1, Ordering::SeqCst);
         },
     );
@@ -318,7 +316,10 @@ fn panicking_window_observer_keeps_the_snapshot_and_the_tail() {
     );
 }
 
-fn apply_panic_keeps_the_debt_and_the_next_equal_change_is_delivered() {
+/// A display change whose frame fails is still applied: the window answers
+/// the failed frame `Failed`, nothing unwinds into the apply, and the next
+/// change is delivered as usual.
+fn a_failed_frame_keeps_the_applied_display() {
     let rig = boot();
     let win = open_window(&rig, None);
     win.fail_redraw.store(true, Ordering::SeqCst);
@@ -327,22 +328,16 @@ fn apply_panic_keeps_the_debt_and_the_next_equal_change_is_delivered() {
     rig.turns.drive();
     assert_eq!(
         win.period_ms(),
-        Some(16),
-        "a failed apply must leave the old value and the debt"
+        Some(8),
+        "a failed frame undid the display it was asked for"
     );
 
-    // The platform recovers; the next change leaves the window's own display
-    // exactly as it was last derived, yet the owed value is delivered.
     win.fail_redraw.store(false, Ordering::SeqCst);
-    rig.controls
-        .simulate_display_change(rig.ids[LEFT], DisplayChange::Name("renamed".into()))
-        .expect("an unrelated field");
+    let before = win.redraws();
+    rig.period(LEFT, 16);
     rig.turns.drive();
-    assert_eq!(
-        win.period_ms(),
-        Some(8),
-        "an equal derived value after a failed apply was not delivered"
-    );
+    assert_eq!(win.period_ms(), Some(16), "the next change was lost");
+    assert!(win.redraws() > before, "the next change asked for no frame");
 }
 
 fn foreign_thread_invalidation_wakes_the_owner() {
@@ -571,8 +566,8 @@ fn display_delivery_contract() {
                 panicking_window_observer_keeps_the_snapshot_and_the_tail as fn(),
             ),
             (
-                "apply_panic_keeps_the_debt_and_the_next_equal_change_is_delivered",
-                apply_panic_keeps_the_debt_and_the_next_equal_change_is_delivered as fn(),
+                "a_failed_frame_keeps_the_applied_display",
+                a_failed_frame_keeps_the_applied_display as fn(),
             ),
             (
                 "foreign_thread_invalidation_wakes_the_owner",

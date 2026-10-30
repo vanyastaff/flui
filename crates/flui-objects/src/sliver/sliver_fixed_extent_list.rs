@@ -64,6 +64,7 @@ use flui_rendering::{
     traits::RenderSliver,
 };
 
+use super::pinned::{PinnedChildren, PinnedPlace};
 use super::sliver_grid::{MAX_UNBOUNDED_WINDOW_CHILDREN, UNBOUNDED_SENTINEL_WINDOW};
 
 /// How far a layout offset may miss an exact multiple of the item extent and
@@ -82,6 +83,8 @@ pub struct RenderSliverFixedExtentList {
     item_extent: f64,
     item_count: usize,
     collection: Option<flui_rendering::semantics::SemanticsCollection>,
+    /// The collection's accessible name, published on its list or grid node.
+    collection_label: Option<std::sync::Arc<str>>,
     /// Logical index → dense slot of every attached child, rebuilt each pass
     /// from the children's parent data.
     logical_to_slot: BTreeMap<usize, usize>,
@@ -90,9 +93,34 @@ pub struct RenderSliverFixedExtentList {
     /// The count the unbounded-window truncation last warned about, so the
     /// warning fires once per count rather than once per frame.
     warned_truncation_for: Option<usize>,
+    /// The pinned residents outside the window (`set_pinned_indices`).
+    pinned: PinnedChildren,
 }
 
 impl RenderSliverFixedExtentList {
+    /// The logical indices of pinned residents outside the window. Each is
+    /// laid out after the window at `index × item_extent`, adds nothing to the
+    /// geometry, and is skipped by paint and hit testing; semantics keeps it.
+    pub fn set_pinned_indices(
+        &mut self,
+        pinned: &std::collections::BTreeSet<usize>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        self.pinned.set(pinned)
+    }
+
+    /// Names the collection for assistive technology: the label of the list
+    /// or grid node this sliver publishes.
+    pub fn set_collection_label(
+        &mut self,
+        label: Option<&std::sync::Arc<str>>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.collection_label.as_ref() == label {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.collection_label = label.cloned();
+        flui_rendering::RenderUpdateImpact::SEMANTICS
+    }
+
     /// Overrides the accessible set size rather than deriving it from logical
     /// slots. `None` declares an unknown total.
     pub fn set_semantic_set_size(
@@ -124,9 +152,11 @@ impl RenderSliverFixedExtentList {
             item_extent,
             item_count,
             collection: None,
+            collection_label: None,
             logical_to_slot: BTreeMap::new(),
             attached_child_count: 0,
             warned_truncation_for: None,
+            pinned: PinnedChildren::default(),
         }
     }
 
@@ -383,6 +413,9 @@ impl RenderSliver for RenderSliverFixedExtentList {
         config.set_lazy_collection(self.collection.unwrap_or_else(|| {
             SemanticsCollection::new(SemanticsCollectionKind::List, Some(self.item_count))
         }));
+        if let Some(label) = &self.collection_label {
+            config.set_label(label.as_ref());
+        }
     }
 
     fn perform_layout(
@@ -393,6 +426,7 @@ impl RenderSliver for RenderSliverFixedExtentList {
 
         if self.item_count == 0 {
             self.attached_child_count = 0;
+            self.pinned.clear_slots();
             ctx.emit_retain_band(0, 0);
             return Ok(SliverGeometry::ZERO);
         }
@@ -410,6 +444,7 @@ impl RenderSliver for RenderSliverFixedExtentList {
             self.attached_child_count = ctx.child_count();
             let first = finite_leading_cache_edge(&constraints)
                 .map_or(0, |start| self.min_child_index_for_scroll_offset(start));
+            self.pinned.clear_slots();
             ctx.emit_retain_band(first, first);
             return Ok(SliverGeometry {
                 scroll_extent,
@@ -460,6 +495,7 @@ impl RenderSliver for RenderSliverFixedExtentList {
         }
         if self.item_count == 0 || first > last {
             self.attached_child_count = ctx.child_count();
+            self.pinned.clear_slots();
             ctx.emit_retain_band(first, first);
             let scroll_extent = self.compute_max_scroll_offset(effective_count);
             return Ok(SliverGeometry {
@@ -515,16 +551,39 @@ impl RenderSliver for RenderSliverFixedExtentList {
             }
         }
 
+        let item_count = self.item_count;
+        let item_extent = self.item_extent;
+        self.pinned.lay_out(first..last + 1, ctx, |index| {
+            (index < item_count).then(|| {
+                let layout_offset = item_extent * index as f64;
+                PinnedPlace {
+                    constraints: child_constraints,
+                    layout_offset,
+                    paint_offset: child_paint_offset(
+                        &constraints,
+                        &geometry,
+                        layout_offset,
+                        item_extent,
+                    ),
+                }
+            })
+        })?;
+
         Ok(geometry)
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
-        ctx.paint_children();
+        // A pinned child is placed, so only this skip keeps it off screen.
+        for slot in 0..ctx.child_count() {
+            if !self.pinned.is_pinned_slot(slot) {
+                ctx.paint_child(slot);
+            }
+        }
     }
 
     fn hit_test(&self, ctx: &mut SliverHitTestContext<'_, Variable, Self::ParentData>) -> bool {
         for slot in (0..self.attached_child_count).rev() {
-            if ctx.hit_test_child_at_layout_offset(slot) {
+            if !self.pinned.is_pinned_slot(slot) && ctx.hit_test_child_at_layout_offset(slot) {
                 return true;
             }
         }

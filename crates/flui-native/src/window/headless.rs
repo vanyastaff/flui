@@ -298,6 +298,48 @@ impl<H: Host<Loop = HeadlessLoop, Window = MockWindow>> HostPlatform<H> {
         self.window_shared().tracked.lock().policy = limits;
         self
     }
+
+    /// The windows this platform holds open, through a handle that outlives
+    /// [`Platform::run`](crate::Platform::run): a test reaches a window the
+    /// application opened, to close it as the user would, without a way into
+    /// the application's handler.
+    #[must_use]
+    pub fn open_windows(&self) -> HeadlessOpenWindows {
+        HeadlessOpenWindows {
+            windows: Arc::downgrade(self.window_shared()),
+        }
+    }
+}
+
+/// The windows a headless platform holds open
+/// ([`HeadlessPlatform::open_windows`](crate::HeadlessPlatform::open_windows)).
+/// Empty once the platform is gone.
+#[derive(Clone, Debug)]
+pub struct HeadlessOpenWindows {
+    windows: Weak<HeadlessWindows>,
+}
+
+impl HeadlessOpenWindows {
+    /// Every open window, in the order it opened: the last is topmost.
+    #[must_use]
+    pub fn all(&self) -> Vec<MockWindow> {
+        self.windows
+            .upgrade()
+            .map(|windows| windows.tracked.lock().windows.clone())
+            .unwrap_or_default()
+    }
+
+    /// The open window `id`, `None` once it closed.
+    #[must_use]
+    pub fn get(&self, id: WindowId) -> Option<MockWindow> {
+        let windows = self.windows.upgrade()?;
+        let tracked = windows.tracked.lock();
+        tracked
+            .windows
+            .iter()
+            .find(|window| window.id == id)
+            .cloned()
+    }
 }
 
 impl host::Window<HeadlessLoop> for MockWindow {
@@ -579,6 +621,9 @@ struct MockWindowState {
     display: Option<DisplayId>,
     /// What the simulated window system lets this window do now.
     capabilities: WindowCapabilities,
+    /// A snapshot the simulated window system reported in place of what the
+    /// model says ([`MockWindow::simulate_state`]), until the model changes.
+    reported: Option<WindowState>,
 }
 
 impl MockWindowState {
@@ -652,8 +697,12 @@ impl MockWindowState {
 /// host observe it: no position without `observes_position`, no minimized
 /// mode without `observes_minimized`, and no frame while fullscreen. A
 /// closed window is detached; a size or scale that is not a drawable area
-/// reports no metrics. The hover is what the last hover report said.
+/// reports no metrics. The hover is what the last hover report said. A
+/// snapshot the window system reported is read as it was reported.
 fn sample_window_state(model: &MockWindowState, hovered: bool) -> WindowState {
+    if let Some(reported) = &model.reported {
+        return reported.clone();
+    }
     let capabilities = &model.capabilities;
     let observed = |geometry: WindowGeometry| {
         WindowGeometry::new(
@@ -773,6 +822,7 @@ impl MockWindow {
             cursor: CursorIcon::default(),
             display,
             capabilities,
+            reported: None,
         };
         model.size = model.clamp_size(options.size, &limits);
         if capabilities.permits(&WindowCommand::SetMode(options.mode)) {
@@ -831,6 +881,8 @@ impl MockWindow {
     /// the handler's `state_changed` after the cell's lock is released when the revision
     /// grew.
     fn publish_state(&self) -> WindowState {
+        // The model changed, so a snapshot reported in its place is over.
+        self.state.lock().reported = None;
         let published = read_window_state(&self.source.cell, &self.source.model, &self.delivery);
         if published.changed {
             self.delivery.dispatch_state_changed();
@@ -961,6 +1013,25 @@ impl MockWindow {
     /// Delivers to the window handler's `input`.
     pub fn inject_event(&self, event: PlatformInput) -> DispatchEventResult {
         self.delivery.dispatch_input(event)
+    }
+
+    /// Simulate the window system reporting `state` for this window, as a
+    /// replay of a `window_state` recording does. It is published as any read
+    /// of the window system is, through [`WindowState::successor`]: the
+    /// revision is the one this window's history earns, not `state`'s, a
+    /// snapshot with the same facts publishes nothing, and the capabilities
+    /// keep this window's owner. Fires the handler's `state_changed` when the
+    /// snapshot differs, and returns what was published.
+    ///
+    /// Reads answer with `state` until a simulation or a command changes the
+    /// window's own model, which publishes what the model says again.
+    pub fn simulate_state(&self, state: WindowState) -> WindowState {
+        self.state.lock().reported = Some(state);
+        let published = read_window_state(&self.source.cell, &self.source.model, &self.delivery);
+        if published.changed {
+            self.delivery.dispatch_state_changed();
+        }
+        published.state
     }
 
     /// Simulate a resize for testing. Fires the handler's `state_changed` when the

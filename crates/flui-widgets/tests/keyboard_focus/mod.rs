@@ -3,6 +3,7 @@
 //! family's rows; `contracts.rs` runs them as `keyboard_focus_contracts`.
 
 pub(crate) mod activation;
+pub(crate) mod list;
 pub(crate) mod modality;
 pub(crate) mod requests;
 pub(crate) mod routes;

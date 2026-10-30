@@ -253,6 +253,9 @@ ui-events = { workspace = true }
 keyboard-types = { workspace = true }
 android-activity = { workspace = true }
 jni.workspace = true
+
+# Every Unix: `_exit`, the exit watchdog's end of the process (ADR-0258 §7).
+[target.'cfg(unix)'.dependencies]
 libc.workspace = true
 
 # Native-only async dependencies (not available on wasm32)
@@ -822,6 +825,7 @@ crate-level = [
     "os",
     "testing",
     "journal",
+    "process",
 ]
 # The one edge between platform files of one feature: the winit host on Linux
 # reads the compositor's outputs through the Linux source, which leaves with

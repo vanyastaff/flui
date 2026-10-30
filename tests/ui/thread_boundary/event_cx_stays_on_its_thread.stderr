@@ -1,0 +1,28 @@
+error[E0277]: `Rc<RefCell<reactive::Inner>>` cannot be sent between threads safely
+ --> tests/ui/thread_boundary/event_cx_stays_on_its_thread.rs:7:20
+  |
+7 |     require_send::<EventCx<'static>>();
+  |                    ^^^^^^^^^^^^^^^^ `Rc<RefCell<reactive::Inner>>` cannot be sent between threads safely
+  |
+  = help: within `EventCx<'static>`, the trait `Send` is not implemented for `Rc<RefCell<reactive::Inner>>`
+note: required because it appears within the type `Reactive`
+ --> crates/flui-view/src/reactive/mod.rs
+  |
+  | pub struct Reactive {
+  |            ^^^^^^^^
+note: required because it appears within the type `Writer`
+ --> crates/flui-view/src/reactive/writer.rs
+  |
+  | pub struct Writer {
+  |            ^^^^^^
+  = note: required because it appears within the type `&'static mut Writer`
+note: required because it appears within the type `EventCx<'static>`
+ --> crates/flui-view/src/reactive/writer.rs
+  |
+  | pub struct EventCx<'a> {
+  |            ^^^^^^^
+note: required by a bound in `require_send`
+ --> tests/ui/thread_boundary/event_cx_stays_on_its_thread.rs:4:20
+  |
+4 | fn require_send<T: Send>() {}
+  |                    ^^^^ required by this bound in `require_send`

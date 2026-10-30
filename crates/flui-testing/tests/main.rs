@@ -134,6 +134,18 @@ fn owner_local_write_paths() {
                 "owner_local_write_paths::nested_write_panics_inside_an_event_cx",
                 owner_local_write_paths::nested_write_panics_inside_an_event_cx,
             ),
+            (
+                "owner_local_write_paths::listener_writes_through_a_captured_writer_source",
+                owner_local_write_paths::listener_writes_through_a_captured_writer_source,
+            ),
+            (
+                "owner_local_write_paths::status_listener_writes_through_a_captured_writer_source",
+                owner_local_write_paths::status_listener_writes_through_a_captured_writer_source,
+            ),
+            (
+                "owner_local_write_paths::post_frame_callback_writes_through_a_captured_writer_source",
+                owner_local_write_paths::post_frame_callback_writes_through_a_captured_writer_source,
+            ),
         ],
     );
 }

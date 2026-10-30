@@ -449,6 +449,22 @@ fn keyboard_focus_contracts() {
                 crate::keyboard_focus::activation::keyboard_activation_matches_click as fn(),
             ),
             (
+                "keyboard_focus::list::list_keyboard_navigation",
+                crate::keyboard_focus::list::list_keyboard_navigation,
+            ),
+            (
+                "keyboard_focus::list::focused_row_is_pinned_while_scrolled_away",
+                crate::keyboard_focus::list::focused_row_is_pinned_while_scrolled_away,
+            ),
+            (
+                "keyboard_focus::list::an_empty_list_is_a_tab_stop_with_its_empty_label",
+                crate::keyboard_focus::list::an_empty_list_is_a_tab_stop_with_its_empty_label,
+            ),
+            (
+                "keyboard_focus::list::the_list_node_carries_the_list_name",
+                crate::keyboard_focus::list::the_list_node_carries_the_list_name,
+            ),
+            (
                 "keyboard_focus::activation::navigation_keys_reach_back_and_dismiss_once",
                 crate::keyboard_focus::activation::navigation_keys_reach_back_and_dismiss_once,
             ),
@@ -530,6 +546,7 @@ fn semantics_translation_and_routing() {
             ("collection_semantics::a_lazy_list_item_reads_its_position_and_its_containers_size", crate::collection_semantics::a_lazy_list_item_reads_its_position_and_its_containers_size as fn()),
             ("collection_semantics::a_virtualized_list_publishes_its_full_size_and_true_positions", crate::collection_semantics::a_virtualized_list_publishes_its_full_size_and_true_positions),
             ("collection_semantics::an_unknown_length_publishes_no_size", crate::collection_semantics::an_unknown_length_publishes_no_size),
+            ("collection_semantics::a_lazy_sliver_names_its_collection", crate::collection_semantics::a_lazy_sliver_names_its_collection),
             ("collection_semantics::separators_are_not_members_of_the_set", crate::collection_semantics::separators_are_not_members_of_the_set),
             ("collection_semantics::an_unknown_set_inside_a_known_one_withholds_the_outer_size", crate::collection_semantics::an_unknown_set_inside_a_known_one_withholds_the_outer_size),
             ("collection_semantics::a_known_set_inside_a_known_one_reads_its_own_size", crate::collection_semantics::a_known_set_inside_a_known_one_reads_its_own_size),
@@ -731,7 +748,8 @@ fn lazy_slivers() {
     run_cases(
         "lazy_slivers",
         &[
-            ("lazy_list::lazy_list_view_builder_exhausted_pass_budget_defers_the_rest_to_the_next_frame", crate::lazy_list::lazy_list_view_builder_exhausted_pass_budget_defers_the_rest_to_the_next_frame as fn()),
+            ("lazy_list::a_pinned_row_stays_announced_until_its_pin_is_released", crate::lazy_list::a_pinned_row_stays_announced_until_its_pin_is_released as fn()),
+            ("lazy_list::lazy_list_view_builder_exhausted_pass_budget_defers_the_rest_to_the_next_frame", crate::lazy_list::lazy_list_view_builder_exhausted_pass_budget_defers_the_rest_to_the_next_frame),
             ("lazy_list::lazy_list_view_builder_keyed_row_moving_with_the_viewport_keeps_state", crate::lazy_list::lazy_list_view_builder_keyed_row_moving_with_the_viewport_keeps_state),
             ("lazy_list::lazy_list_view_builder_pathological_extents_defer_instead_of_panicking", crate::lazy_list::lazy_list_view_builder_pathological_extents_defer_instead_of_panicking),
             ("lazy_list::lazy_list_view_builder_stateful_items_init_and_dispose_with_the_band", crate::lazy_list::lazy_list_view_builder_stateful_items_init_and_dispose_with_the_band),

@@ -357,6 +357,12 @@ impl Harness {
         self.host.ui_runtime().set_window_visible(visible);
     }
 
+    /// Report the window focused or not; see
+    /// [`HeadlessHost::set_window_focused`](crate::HeadlessHost::set_window_focused).
+    pub fn set_window_focused(&self, focused: bool) {
+        self.host.ui_runtime().set_window_focused(focused);
+    }
+
     /// Replace the root view and settle.
     ///
     /// The harness root rebuilds with `new_root` under the same `Align`, so a

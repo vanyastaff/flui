@@ -390,7 +390,7 @@ mod tests {
         let accepted = fixture
             .storage
             .publish(&NOTES, b"late".to_vec(), WriteMode::Replace);
-        fixture.services.shutdown(std::time::Duration::ZERO);
+        fixture.services.shutdown(std::time::Instant::now());
         fixture.io.run_until_idle();
         assert_eq!(
             pollster::block_on(accepted),
@@ -409,7 +409,7 @@ mod tests {
         let accepted = fixture
             .storage
             .publish(&NOTES, b"accepted".to_vec(), WriteMode::Replace);
-        fixture.services.shutdown(std::time::Duration::ZERO);
+        fixture.services.shutdown(std::time::Instant::now());
         let late = fixture
             .storage
             .publish(&NOTES, b"late".to_vec(), WriteMode::Replace);

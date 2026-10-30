@@ -144,13 +144,15 @@ the dispatch layer moves there too.
   finish. `panicking_stop_notifies_siblings_and_restores_runtime_delivery`
   covers individual and competing listener failures and subsequent delivery.
 
-- **Recovery does not start new windows.** Owner completion still retires native
-  resources and settles terminal notifications after a failure, but leaves
-  new main/secondary installation work for a healthy owner opportunity.
-  An already-published secondary installation still settles its receipt and
-  releases its loop-liveness reservation during recovery.
-  `owner_failure_defers_new_window_work_until_recovery` asserts the original
-  failure, no premature installer call, and delivery of the retained request.
+- **Recovery does not start new windows.** An operation's own panic is
+  contained where it ran (ADR-0258 §1) and leaves the turn healthy, so the
+  window work it accepted runs in the same turn
+  (`a_contained_callback_failure_runs_accepted_window_work`). After a failure
+  that leaves the turn (a host hook's, or a terminal one), owner completion
+  still retires native resources and settles terminal notifications, but
+  leaves new main/secondary installation work for a healthy owner
+  opportunity. An already-published secondary installation still settles its
+  receipt and releases its loop-liveness reservation during recovery.
 
 - **Native roots preserve accepted event order.** A fresh input or window event
   joins the existing owner FIFO, including when a continuation has been posted

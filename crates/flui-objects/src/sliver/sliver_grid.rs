@@ -63,6 +63,7 @@ use flui_rendering::{
     traits::RenderSliver,
 };
 
+use super::pinned::{PinnedChildren, PinnedPlace};
 use super::placement::{Placed, Placement, PlacementTrack};
 
 // ============================================================================
@@ -175,6 +176,8 @@ pub struct RenderSliverGrid {
     /// Total known item count.
     item_count: usize,
     collection: Option<flui_rendering::semantics::SemanticsCollection>,
+    /// The collection's accessible name, published on its list or grid node.
+    collection_label: Option<std::sync::Arc<str>>,
     /// Logical-index → dense-slot map rebuilt each pass from parent-data.
     /// Kept as a field to reuse the `BTreeMap` allocation across passes.
     logical_to_slot: BTreeMap<usize, usize>,
@@ -196,9 +199,34 @@ pub struct RenderSliverGrid {
     placement: PlacementTrack,
     /// The tiles the last pass positioned. Kept to reuse the allocation.
     placed: Vec<Placed>,
+    /// The pinned residents outside the window (`set_pinned_indices`).
+    pinned: PinnedChildren,
 }
 
 impl RenderSliverGrid {
+    /// The logical indices of pinned residents outside the window. Each is
+    /// laid out after the window in its own cell, adds nothing to the
+    /// geometry, and is skipped by paint and hit testing; semantics keeps it.
+    pub fn set_pinned_indices(
+        &mut self,
+        pinned: &std::collections::BTreeSet<usize>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        self.pinned.set(pinned)
+    }
+
+    /// Names the collection for assistive technology: the label of the list
+    /// or grid node this sliver publishes.
+    pub fn set_collection_label(
+        &mut self,
+        label: Option<&std::sync::Arc<str>>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.collection_label.as_ref() == label {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.collection_label = label.cloned();
+        flui_rendering::RenderUpdateImpact::SEMANTICS
+    }
+
     /// Overrides the accessible member count independently of tile residency.
     /// `None` declares an unknown total.
     pub fn set_semantic_set_size(
@@ -232,11 +260,13 @@ impl RenderSliverGrid {
             grid_delegate,
             item_count,
             collection: None,
+            collection_label: None,
             logical_to_slot: BTreeMap::new(),
             attached_child_count: 0,
             warned_truncation_for: None,
             placement: PlacementTrack::default(),
             placed: Vec::new(),
+            pinned: PinnedChildren::default(),
         }
     }
 
@@ -302,6 +332,7 @@ impl Clone for RenderSliverGrid {
     fn clone(&self) -> Self {
         Self {
             collection: self.collection,
+            collection_label: self.collection_label.clone(),
             grid_delegate: self.grid_delegate.clone(),
             item_count: self.item_count,
             logical_to_slot: BTreeMap::new(), // transient — reset each pass
@@ -311,6 +342,7 @@ impl Clone for RenderSliverGrid {
             warned_truncation_for: self.warned_truncation_for,
             placement: self.placement.clone(),
             placed: Vec::new(),
+            pinned: self.pinned.clone(),
         }
     }
 }
@@ -342,6 +374,9 @@ impl RenderSliver for RenderSliverGrid {
         config.set_lazy_collection(self.collection.unwrap_or_else(|| {
             SemanticsCollection::new(SemanticsCollectionKind::Grid, Some(self.item_count))
         }));
+        if let Some(label) = &self.collection_label {
+            config.set_label(label.as_ref());
+        }
     }
 
     fn perform_layout(
@@ -353,6 +388,7 @@ impl RenderSliver for RenderSliverGrid {
         // ── 1. Empty grid ─────────────────────────────────────────────────────
         if self.item_count == 0 {
             self.attached_child_count = 0;
+            self.pinned.clear_slots();
             ctx.emit_retain_band(0, 0);
             return Ok(SliverGeometry::ZERO);
         }
@@ -375,6 +411,7 @@ impl RenderSliver for RenderSliverGrid {
                  emitting an empty retain band so index math cannot saturate to usize::MAX"
                 );
                 self.attached_child_count = ctx.child_count();
+                self.pinned.clear_slots();
                 ctx.emit_retain_band(0, 0);
                 return Ok(poison_window_geometry(&tile_layout, self.item_count));
             }
@@ -389,6 +426,7 @@ impl RenderSliver for RenderSliverGrid {
                  +∞; emitting an empty retain band so index math cannot saturate to usize::MAX"
                 );
                 self.attached_child_count = ctx.child_count();
+                self.pinned.clear_slots();
                 ctx.emit_retain_band(0, 0);
                 return Ok(poison_window_geometry(&tile_layout, self.item_count));
             }
@@ -466,6 +504,7 @@ impl RenderSliver for RenderSliverGrid {
             let scroll_extent = tile_layout.compute_max_scroll_offset(effective_item_count);
             self.attached_child_count = ctx.child_count();
             // Empty retain band tells the element tree to evict all off-window children.
+            self.pinned.clear_slots();
             ctx.emit_retain_band(first_in_window, first_in_window);
             return Ok(SliverGeometry {
                 scroll_extent,
@@ -617,6 +656,26 @@ impl RenderSliver for RenderSliverGrid {
                 });
         }
 
+        // Pinned tiles go to their own cell, row and column, after the window.
+        self.pinned
+            .lay_out(first_in_window..last_in_window + 1, ctx, |index| {
+                (index < effective_item_count).then(|| {
+                    let layout_offset = tile_layout.get_scroll_offset_of_child(index);
+                    let cross = tile_layout.get_cross_axis_offset_of_child(index);
+                    PinnedPlace {
+                        constraints: tile_constraints,
+                        layout_offset,
+                        paint_offset: grid_child_paint_offset(
+                            &constraints,
+                            &geometry,
+                            layout_offset,
+                            tile_layout.child_main_axis_extent,
+                            cross,
+                        ),
+                    }
+                })
+            })?;
+
         Ok(geometry)
     }
 
@@ -629,13 +688,18 @@ impl RenderSliver for RenderSliverGrid {
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
-        ctx.paint_children();
+        // A pinned tile is placed, so only this skip keeps it off screen.
+        for slot in 0..ctx.child_count() {
+            if !self.pinned.is_pinned_slot(slot) {
+                ctx.paint_child(slot);
+            }
+        }
     }
 
     fn hit_test(&self, ctx: &mut SliverHitTestContext<'_, Variable, Self::ParentData>) -> bool {
         // Reverse walk: the last-attached slot is at the highest Z-order.
         for slot in (0..self.attached_child_count).rev() {
-            if ctx.hit_test_child_at_layout_offset(slot) {
+            if !self.pinned.is_pinned_slot(slot) && ctx.hit_test_child_at_layout_offset(slot) {
                 return true;
             }
         }
