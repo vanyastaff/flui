@@ -4682,6 +4682,18 @@ graph LR
   строк, которым нужен X11/Wayland-сервер; doctest'ы `flui-platform`, `flui-interaction`,
   `flui-testing`, `flui-sdk`; clippy `-p flui-native --target x86_64-pc-windows-msvc
   --all-targets`; `xtask checks`.
+- [ ] **LY52** — в части: шов. `StorageCapability` и `StorageHandle` (newtype над `Arc<dyn Storage>`)
+  в `flui_view::persist` рядом с `Persisted`; встроенный провайдер во `flui-app`
+  (`capability.rs`, `StorageSlot`) поверх `HostStorage`: без `with_storage_dir` — `NotRegistered`,
+  без корня данных — `NotOnThisPlatform`; `placement_recorder` пишет в тот же стор.
+  `LifecycleContext::storage`, поле `PresentationCapabilities::storage` и
+  `RuntimeHostServices::with_storage` удалены; `lay_out_with_storage` регистрирует `MemoryStorage`
+  встроенным провайдером headless-реестра. Остаток (решение координатора 2026-10-30): место по
+  умолчанию без настройки — кросс-платформенный `AppId` (reverse-DNS) вместо `AppleBundleId` в
+  `AppIdentity`, `AppDataDir` вместо `StorageName` у `data_dirs`, `flui build` передаёт
+  `[app].organization` + `name`; на Android без `AppId` — имя пакета; без идентификатора —
+  `NotRegistered` и предупреждение при первом `Persisted::open`; `with_storage_dir` только
+  переопределяет место.
 
 ## Отступление от порядка, решённое владельцем
 

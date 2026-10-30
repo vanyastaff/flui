@@ -444,7 +444,7 @@ pub(crate) struct AppRuntime {
     /// resolved once from the run's configuration when the host starts
     /// ([`Self::install_host_storage`]) and released with the owner platform
     /// at loop exit.
-    pub(super) host_storage: Option<Arc<dyn flui_platform::Storage>>,
+    pub(super) host_storage: crate::app::capability::StorageSlot,
     /// The flush registry over [`Self::host_storage`], kept outside every UI
     /// runtime: what their documents publish, written on the loop's IO pool
     /// and flushed when the application or the session ends.
@@ -553,7 +553,7 @@ impl AppRuntime {
             platform_primary_selection: Rc::default(),
             capabilities: None,
             platform_data_transfer: Arc::new(Mutex::new(None)),
-            host_storage: None,
+            host_storage: crate::app::capability::StorageSlot::default(),
             flush_host: None,
             terminal: None,
             window_commands: Rc::default(),
@@ -1271,11 +1271,17 @@ impl AppRuntime {
     /// replaces a storage an earlier run on this thread left, whose IO pool
     /// is gone. Its IO runs on this loop's execution services, resolved here
     /// if no runner resolved them yet, so install the host's executors first.
-    pub(super) fn install_host_storage(&mut self, dirs: Option<flui_native::storage::DataDirs>) {
-        let Some(dirs) = dirs else {
-            self.host_storage = None;
-            self.flush_host = None;
-            return;
+    pub(super) fn install_host_storage(
+        &mut self,
+        dirs: Result<flui_native::storage::DataDirs, flui_platform::Unsupported>,
+    ) {
+        let dirs = match dirs {
+            Ok(dirs) => dirs,
+            Err(refusal) => {
+                self.host_storage.install(Err(refusal));
+                self.flush_host = None;
+                return;
+            }
         };
         let io = Arc::downgrade(self.ensure_execution());
         let storage = super::storage_host::host_storage(dirs, std::sync::Weak::clone(&io));
@@ -1298,7 +1304,7 @@ impl AppRuntime {
                 Ok(())
             }),
         ));
-        self.host_storage = Some(storage);
+        self.host_storage.install(Ok(storage));
     }
 
     /// The publishing side of the host's flush registry, for the UI runtimes
@@ -1310,8 +1316,9 @@ impl AppRuntime {
     }
 
     /// The host's byte storage, if the run configured one.
+    #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
     pub(super) fn host_storage(&self) -> Option<Arc<dyn flui_platform::Storage>> {
-        self.host_storage.clone()
+        self.host_storage.storage()
     }
 
     /// The providers the next UI runtime this host builds acquires platform
@@ -1325,6 +1332,7 @@ impl AppRuntime {
     /// The slots the built-in providers read the owner platform from.
     pub(super) fn capability_slots(&self) -> crate::app::capability::CapabilitySlots {
         crate::app::capability::CapabilitySlots {
+            storage: self.host_storage.clone(),
             clipboard: Rc::clone(&self.platform_clipboard),
             primary_selection: Rc::clone(&self.platform_primary_selection),
         }

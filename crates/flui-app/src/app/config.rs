@@ -597,8 +597,8 @@ impl AppConfig {
         self
     }
 
-    /// Keep the application's data under `name`, which every widget reaches
-    /// through `LifecycleContext::storage`.
+    /// Keep the application's data under `name`, which every widget acquires as
+    /// the `StorageCapability` (`cx.capability::<StorageCapability>()`).
     ///
     /// The directory is `name` under the platform's data roots: the current
     /// user's data directories on desktop and iOS, the app's private `files`

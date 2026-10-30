@@ -62,6 +62,7 @@ use flui_semantics::platform::{
 use flui_view::__runtime::{FlushHost, FlushWrite, OwnerNotify};
 use flui_view::CloseReason;
 use flui_view::dev_agent::DevAgentHook;
+use flui_view::persist::{StorageCapability, StorageHandle};
 use parking_lot::Mutex;
 
 use crate::a11y::A11yTree;
@@ -728,8 +729,8 @@ impl HeadlessHost {
         Self::assemble(window, None, Some(registry), Some(scripted))
     }
 
-    /// [`Self::new`], its widgets reaching `storage` through
-    /// `LifecycleContext::storage`.
+    /// [`Self::new`], its widgets acquiring `storage` as
+    /// the [`StorageCapability`].
     pub(crate) fn with_storage(
         window: HeadlessWindow,
         storage: Option<Arc<dyn flui_platform::Storage>>,
@@ -785,15 +786,21 @@ impl HeadlessHost {
             ClockSource::Manual(clock.clone()),
         );
         let registry = capabilities.unwrap_or_else(|| {
+            let mut built_ins = scripted.registrar();
+            if let Some(storage) = &storage {
+                let storage = Arc::clone(storage);
+                built_ins.provide::<StorageCapability>(
+                    move |_: &flui_platform::capability::ProviderContext<'_>| {
+                        Ok(StorageHandle::new(Arc::clone(&storage)))
+                    },
+                );
+            }
             flui_runtime::capability::CapabilityRegistry::builder()
-                .built_ins(scripted.registrar())
+                .built_ins(built_ins)
                 .build()
                 .expect("BUG: one built-in per capability cannot conflict")
         });
         host = host.with_capabilities(registry);
-        if let Some(storage) = storage {
-            host = host.with_storage(storage);
-        }
         if let Some(flush) = &flush {
             host = host.with_flush_registry(flush.registry());
         }

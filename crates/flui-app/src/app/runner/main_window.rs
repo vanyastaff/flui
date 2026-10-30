@@ -1528,14 +1528,17 @@ mod tests {
 
     /// A storage directory in the main configuration reaches the UI runtimes the
     /// host builds: the run resolves the host's storage once, at start, and
-    /// a UI runtime built afterwards holds it in its build owner, which every
-    /// `LifecycleContext::storage` under it reads. Driven through
+    /// a UI runtime built afterwards provides it to its widgets as the
+    /// `StorageCapability`. Driven through
     /// `run_with_platform` itself, so the host's storage comes from the
     /// runner; the UI runtime is an `Isolated` window opened from `on_ready`,
     /// which reaches `host::build_ui_runtime` as every runner site does,
     /// without a GPU.
     #[test]
     fn a_configured_storage_dir_reaches_lifecycle_context() {
+        use flui_platform::capability::Capability as _;
+        use flui_view::persist::StorageCapability;
+
         let reached = Rc::new(Cell::new(None));
         let seen = Rc::clone(&reached);
         let app = Application::new(|_| -> flui_widgets::Text {
@@ -1559,11 +1562,20 @@ mod tests {
                 dispatcher,
                 super::super::owner_dispatch::RuntimeTask::TestCallback(Box::new(
                     move |ui_runtime| {
-                        observed.set(Some(
-                            ui_runtime
-                                .widgets()
-                                .with_build_owner(|owner| owner.capabilities().storage.is_some()),
-                        ));
+                        observed.set(Some(ui_runtime.widgets().with_build_owner(|owner| {
+                            owner
+                                .capabilities()
+                                .capabilities
+                                .as_ref()
+                                .is_some_and(|source| {
+                                    source
+                                        .acquire(
+                                            std::any::TypeId::of::<StorageCapability>(),
+                                            StorageCapability::NAME,
+                                        )
+                                        .is_ok()
+                                })
+                        })));
                     },
                 )),
             )

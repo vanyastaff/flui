@@ -51,6 +51,7 @@ pub(super) fn runtime_font_collection() -> flui_painting::FontCollection {
 /// The host's byte storage, resolved once from the run's configuration when
 /// the host started (`AppRuntime::install_host_storage`). Same borrow rule
 /// as [`runtime_wake_callback`].
+#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
 pub(super) fn runtime_storage() -> Option<Arc<dyn flui_platform::Storage>> {
     APP_RUNTIME.with(|slot| slot.borrow().host_storage())
 }
@@ -66,20 +67,27 @@ pub(super) fn install_configured_executors(config: &crate::app::AppConfig) {
 
 /// Give the host the storage `config` asks for, under the installed owner
 /// platform's data roots. Call once the owner platform and the host's
-/// executors are installed; without a configured directory, or where the
-/// platform has no data root, widgets get no storage.
+/// executors are installed. Without a configured directory widgets are
+/// refused storage as not registered; where the platform has no data root,
+/// as not on this platform.
 pub(super) fn install_host_storage(config: &crate::app::AppConfig) {
-    let dirs = config.storage_dir.and_then(|name| {
-        let dirs = with_owner_platform(|owner| owner.shared().data_dirs(&name)).flatten();
-        if dirs.is_none() {
-            tracing::warn!(
-                storage_dir = name.as_str(),
-                "this platform has no data directory; widgets get no storage"
-            );
-        }
-        dirs
-    });
-    // Always installed, `None` included: a run without storage must not
+    let refused =
+        |reason| flui_platform::Unsupported::of::<flui_view::persist::StorageCapability>(reason);
+    let dirs = config
+        .storage_dir
+        .ok_or_else(|| refused(flui_platform::UnsupportedReason::NotRegistered))
+        .and_then(|name| {
+            with_owner_platform(|owner| owner.shared().data_dirs(&name))
+                .flatten()
+                .ok_or_else(|| {
+                    tracing::warn!(
+                        storage_dir = name.as_str(),
+                        "this platform has no data directory; widgets get no storage"
+                    );
+                    refused(flui_platform::UnsupportedReason::NotOnThisPlatform)
+                })
+        });
+    // Always installed, a refusal included: a run without storage must not
     // inherit the previous run's on this thread.
     APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_storage(dirs));
     // The run's receivers replace the last run's, for the same reason.
@@ -318,9 +326,6 @@ pub(super) fn build_ui_runtime(
         flui_scheduler::ClockSource::Platform,
     )
     .with_capabilities(runtime_capabilities());
-    if let Some(storage) = runtime_storage() {
-        host = host.with_storage(storage);
-    }
     if let Some(registry) = APP_RUNTIME.with(|slot| slot.borrow().flush_registry()) {
         host = host.with_flush_registry(registry);
     }

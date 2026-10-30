@@ -123,7 +123,6 @@ impl UiRuntime {
             wake,
             needs_redraw,
             capabilities,
-            storage,
             clock,
             text,
             data_transfer,
@@ -182,7 +181,6 @@ impl UiRuntime {
                 command_sender: sender_prototype.clone(),
                 capabilities: capabilities.clone(),
                 completions: owner_jobs.completions().clone(),
-                storage: storage.clone(),
                 close: close.clone(),
                 clock: &clock,
                 text: text.clone(),
@@ -230,7 +228,6 @@ impl UiRuntime {
             wake,
             capabilities,
             owner_jobs,
-            storage,
             close,
             text,
             #[cfg(any(test, feature = "testing"))]

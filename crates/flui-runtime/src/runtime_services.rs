@@ -9,7 +9,6 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use flui_foundation::{PresentationId, UiRuntimeId};
 use flui_painting::{FontCollection, TextContext};
-use flui_platform::Storage;
 use flui_platform::data_transfer::{DataTransferSource, NullDataTransferSource};
 use flui_platform::drag::ProcessNonce;
 use flui_rendering::TextContextHandle;
@@ -27,7 +26,6 @@ pub struct RuntimeHostServices<'a> {
     pub(crate) wake: Arc<dyn Fn() + Send + Sync>,
     pub(crate) needs_redraw: Arc<AtomicBool>,
     pub(crate) capabilities: crate::capability::CapabilityRegistry,
-    pub(crate) storage: Option<Arc<dyn Storage>>,
     pub(crate) fonts: &'a FontCollection,
     pub(crate) clock: ClockSource,
     pub(crate) preferences: Option<crate::owner::SystemPreferencesSnapshot>,
@@ -40,7 +38,6 @@ pub struct RuntimeHostServices<'a> {
 impl fmt::Debug for RuntimeHostServices<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RuntimeHostServices")
-            .field("storage", &self.storage.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -72,7 +69,6 @@ impl<'a> RuntimeHostServices<'a> {
             wake,
             needs_redraw,
             capabilities: crate::capability::CapabilityRegistry::empty(),
-            storage: None,
             fonts,
             clock,
             preferences: None,
@@ -108,14 +104,6 @@ impl<'a> RuntimeHostServices<'a> {
     #[must_use]
     pub fn with_process_nonce(mut self, nonce: ProcessNonce) -> Self {
         self.process_nonce = nonce;
-        self
-    }
-
-    /// The byte storage every presentation of the UI runtime hands its widgets
-    /// through `LifecycleContext::storage`. Without it they get none.
-    #[must_use]
-    pub fn with_storage(mut self, storage: Arc<dyn Storage>) -> Self {
-        self.storage = Some(storage);
         self
     }
 
@@ -170,9 +158,6 @@ pub(crate) struct RuntimeServices {
     /// The providers every presentation of this UI runtime acquires platform
     /// capabilities from (ADR-0152).
     pub(crate) capabilities: crate::capability::CapabilityRegistry,
-    /// The byte storage every presentation of this UI runtime hands its widgets
-    /// (`LifecycleContext::storage`); `None` when the host gave it none.
-    pub(crate) storage: Option<Arc<dyn Storage>>,
     /// Where the UI runtime reads time: its frame-time origin, and every
     /// presentation's gesture arena and frame clock.
     pub(crate) clock: ClockSource,
@@ -202,7 +187,6 @@ impl RuntimeServices {
             wake,
             needs_redraw,
             capabilities,
-            storage,
             fonts,
             clock,
             preferences,
@@ -223,7 +207,6 @@ impl RuntimeServices {
             wake,
             needs_redraw,
             capabilities,
-            storage,
             clock,
             preferences,
             text: TextContextHandle::new(TextContext::new(fonts)),
