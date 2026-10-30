@@ -103,9 +103,9 @@
 //! Everything [`EditableText`] itself defers applies here too (multi-line,
 //! input formatters, overflow scrolling) — see its own module docs.
 //! Additionally, narrowed at this layer:
-//! - **Selection colors** — no collapsed-caret-only substrate has a
-//!   selection to color yet (see `TextEditingController`'s own deferral
-//!   list).
+//! - **Per-field selection colors** — every field highlights with the
+//!   `Theme`'s `selection`, which reaches it as the inherited
+//!   `DefaultSelectionStyle`; `TextField` exposes no override of its own.
 //! - **`cursorColor`/style overrides** — see the caret-color/text-style
 //!   sections above.
 //! - **Label/hint/helper/error as `Widget`** — `InputDecoration` is

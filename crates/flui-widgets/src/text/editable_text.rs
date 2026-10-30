@@ -47,6 +47,7 @@ use crate::semantics::Semantics;
 use crate::support::{command_modifiers, ref_callback};
 use crate::text::controller::TextEditingController;
 use crate::text::primary_selection::PrimarySelectionOwner;
+use crate::text::selection_style::{DefaultSelectionStyle, SelectionStyle};
 use crate::text::text_store::{EditableTextStore, FieldParts, with_editable_global};
 
 mod clipboard;
@@ -395,7 +396,9 @@ pub struct EditableText {
     pub(super) caret_height: Option<f64>,
     /// Color of the caret bar when the field is focused.
     pub(super) caret_color: Color,
-    pub(super) selection_color: Color,
+    /// How the selection is highlighted; `None` takes the nearest
+    /// [`DefaultSelectionStyle`](crate::DefaultSelectionStyle)'s.
+    pub(super) selection_style: Option<SelectionStyle>,
     /// Whether this field accepts focus and input. `true` by default.
     ///
     /// **Named hoist**: `enabled` conceptually belongs to the decorated field,
@@ -468,7 +471,7 @@ impl EditableText {
             caret_color: Color::BLACK,
             // Transparent by default, so the primitive paints no highlight
             // until a caller (a decorated `TextField`, a theme) chooses one.
-            selection_color: Color::TRANSPARENT,
+            selection_style: None,
             enabled: true,
             autofocus: false,
             text_style: None,
@@ -545,15 +548,13 @@ impl EditableText {
         self
     }
 
-    /// Fill for the selection highlight.
-    ///
-    /// Defaults to [`Color::TRANSPARENT`]: the primitive tracks a selection
-    /// whether or not it paints one, and a field with no chosen colour should
-    /// not invent a highlight. `TextField` and the Material/Cupertino themes
-    /// are where a real colour comes from.
+    /// Highlight the selection with `style`, in place of the nearest
+    /// [`DefaultSelectionStyle`]'s or [`SelectionStyle::default`]: its
+    /// active colour while the field holds the focus, its inactive one after
+    /// a blur, which keeps the selection.
     #[must_use]
-    pub fn selection_color(mut self, color: Color) -> Self {
-        self.selection_color = color;
+    pub fn selection_style(mut self, style: SelectionStyle) -> Self {
+        self.selection_style = Some(style);
         self
     }
 
@@ -705,7 +706,7 @@ impl std::fmt::Debug for EditableText {
             .field("focus_node", &self.focus_node)
             .field("caret_height", &self.caret_height)
             .field("caret_color", &self.caret_color)
-            .field("selection_color", &self.selection_color)
+            .field("selection_style", &self.selection_style)
             .field("enabled", &self.enabled)
             .field("autofocus", &self.autofocus)
             .field("text_style", &self.text_style)
@@ -2065,7 +2066,10 @@ impl ViewState<EditableText> for EditableTextState {
             font_weight_adjustment: crate::MediaQuery::font_weight_adjustment_of(ctx).unwrap_or(0),
             caret_height: view.caret_height,
             caret_color: view.caret_color,
-            selection_color: view.selection_color,
+            selection_style: view
+                .selection_style
+                .or_else(|| DefaultSelectionStyle::maybe_of(ctx))
+                .unwrap_or_default(),
             text_style: view.text_style.clone(),
             obscure_text: view.obscure_text,
             obscuring_character: view.obscuring_character,
@@ -2770,7 +2774,7 @@ struct FieldAppearance {
     font_weight_adjustment: i32,
     caret_height: Option<f64>,
     caret_color: Color,
-    selection_color: Color,
+    selection_style: SelectionStyle,
     text_style: Option<TextStyle>,
     /// Paint each source character as [`Self::obscuring_character`].
     obscure_text: bool,
@@ -2888,7 +2892,12 @@ fn build_field_view(
             selection,
             caret_height: appearance.caret_height,
             caret_color: appearance.caret_color,
-            selection_color: appearance.selection_color,
+            // A blur keeps the selection and dims it, as in a `SelectionArea`.
+            selection_color: if focused {
+                appearance.selection_style.active
+            } else {
+                appearance.selection_style.inactive
+            },
             text_style: appearance.text_style.clone(),
         },
     );

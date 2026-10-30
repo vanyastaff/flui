@@ -355,6 +355,10 @@ fn text_input_contracts() {
             text_field::tapping_the_decorated_area_focuses_the_field_and_reaches_the_decorator,
         ),
         (
+            "text_field::a field highlights its selection in the theme colours",
+            text_field::a_field_highlights_its_selection_in_the_theme_colours,
+        ),
+        (
             "text_field::the input purpose reaches the text store",
             text_field::the_input_purpose_reaches_the_text_store,
         ),

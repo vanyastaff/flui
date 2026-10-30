@@ -4,7 +4,7 @@ use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::painting::TextStyle;
 use flui_sdk::painting::{BorderRadius, BorderSide, BoxDecoration, Color};
 use flui_sdk::platform::{Brightness, TargetPlatform};
-use flui_sdk::widgets::{FocusRingStyle, WidgetStateProperty};
+use flui_sdk::widgets::{FocusRingStyle, SelectionStyle, WidgetStateProperty};
 
 use crate::button_style::ButtonStyle;
 use crate::color_scheme::ColorScheme;
@@ -29,6 +29,15 @@ fn focus_ring(scheme: &ColorScheme) -> FocusRingStyle {
         inner: scheme.surface,
         ..FocusRingStyle::BUILT_IN
     }
+}
+
+/// The selection highlight in `scheme`'s colours: `primary` at 40 % while
+/// the selecting widget holds the focus, `on_surface` at 16 % after a blur.
+fn selection(scheme: &ColorScheme) -> SelectionStyle {
+    SelectionStyle::new(
+        scheme.primary.with_opacity(0.40),
+        scheme.on_surface.with_opacity(0.16),
+    )
 }
 
 /// Compute the M3 default [`TextTheme`]: `englishLike2021` geometry overlaid
@@ -765,6 +774,12 @@ pub struct ThemeData {
     /// contrasts with any background the control sits on.
     pub focus_ring: FocusRingStyle,
 
+    /// How selected text is highlighted: [`Theme`](crate::Theme) provides it
+    /// as the inherited `DefaultSelectionStyle`, which selection areas and
+    /// text fields read. The baselines highlight with `primary` while
+    /// focused and dim to `on_surface` after a blur.
+    pub selection: SelectionStyle,
+
     /// Overrides [`ElevatedButton`](crate::ElevatedButton)'s default style.
     /// `None` (the default): no override, `ElevatedButton` uses its own
     /// M3 token table verbatim.
@@ -866,6 +881,7 @@ impl ThemeData {
             color_scheme,
             text_theme,
             focus_ring: focus_ring(&color_scheme),
+            selection: selection(&color_scheme),
             elevated_button_theme: None,
             filled_button_theme: None,
             outlined_button_theme: None,
@@ -902,6 +918,7 @@ impl ThemeData {
             color_scheme,
             text_theme,
             focus_ring: focus_ring(&color_scheme),
+            selection: selection(&color_scheme),
             elevated_button_theme: None,
             filled_button_theme: None,
             outlined_button_theme: None,
@@ -968,6 +985,7 @@ impl ThemeData {
                 .text_theme
                 .unwrap_or_else(|| self.text_theme.clone()),
             focus_ring: overrides.focus_ring.unwrap_or(self.focus_ring),
+            selection: overrides.selection.unwrap_or(self.selection),
             // Each component-theme slot is itself already `Option<_>` on
             // `ThemeData`, so — unlike `color_scheme`/`text_theme` above —
             // the override field mirrors that `Option<_>` shape directly
@@ -1052,6 +1070,8 @@ pub struct ThemeDataOverrides {
     pub text_theme: Option<TextTheme>,
     /// Overrides [`ThemeData::focus_ring`].
     pub focus_ring: Option<FocusRingStyle>,
+    /// Overrides [`ThemeData::selection`].
+    pub selection: Option<SelectionStyle>,
     /// Replaces [`ThemeData::elevated_button_theme`] wholesale when `Some`;
     /// `None` leaves it unchanged (see [`ThemeData::copy_with`]'s doc
     /// comment on why this mirrors `Option<ElevatedButtonThemeData>`

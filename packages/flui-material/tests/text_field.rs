@@ -498,3 +498,41 @@ pub fn an_autofocus_field_takes_the_focus_on_mount() {
         }
     }
 }
+
+/// A field under a `Theme` highlights its selection in the theme's colours:
+/// `primary` at 40 % while focused, `on_surface` at 16 % after a blur.
+///
+/// Mutation red-check: drop the `DefaultSelectionStyle` that `Theme::new`
+/// wraps its child in; the field falls back to `SelectionStyle::default()`'s
+/// blue and both assertions fail.
+pub fn a_field_highlights_its_selection_in_the_theme_colours() {
+    let theme = ThemeData::light();
+    let colors = theme.color_scheme;
+    let controller = TextEditingController::with_text("hello world");
+    let focus_node = FocusNode::with_debug_label("themed selection");
+    let mut laid = lay_out(
+        Theme::new(
+            theme,
+            TextField::new(controller.clone()).focus_node(Rc::clone(&focus_node)),
+        ),
+        tight(300.0, 100.0),
+    );
+    let _ = focus_node.request_focus();
+    controller.set_selection(0, 5);
+    laid.tick();
+    let editable = laid
+        .try_find_by_render_type("RenderEditable")
+        .expect("TextField composes an EditableText");
+    assert_eq!(
+        laid.render_property(editable, "selection_color"),
+        Some(format!("{:?}", colors.primary.with_opacity(0.40))),
+        "a focused field highlights with the theme's primary"
+    );
+    focus_node.unfocus();
+    laid.tick();
+    assert_eq!(
+        laid.render_property(editable, "selection_color"),
+        Some(format!("{:?}", colors.on_surface.with_opacity(0.16))),
+        "a blurred field dims to the theme's on_surface"
+    );
+}

@@ -167,6 +167,7 @@ fn text_editing() {
             ("editable_text::disabling_the_field_retires_its_selection_contact", crate::editable_text::disabling_the_field_retires_its_selection_contact),
             ("editable_text::replacing_the_controller_retires_the_old_selection_contact", crate::editable_text::replacing_the_controller_retires_the_old_selection_contact),
             ("editable_text::selection_drag_survives_a_same_controller_rebuild", crate::editable_text::selection_drag_survives_a_same_controller_rebuild),
+            ("editable_text::a_field_highlights_its_selection_with_the_inherited_style", crate::editable_text::a_field_highlights_its_selection_with_the_inherited_style),
             ("editable_text::foreign_release_preserves_the_selection_contact", crate::editable_text::foreign_release_preserves_the_selection_contact),
             ("editable_text::foreign_cancel_preserves_the_selection_contact", crate::editable_text::foreign_cancel_preserves_the_selection_contact),
             ("editable_text::insertion_keeps_the_caret_after_the_joined_combining_cluster", crate::editable_text::insertion_keeps_the_caret_after_the_joined_combining_cluster),
