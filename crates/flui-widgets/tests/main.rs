@@ -152,6 +152,8 @@ mod router;
 mod scroll;
 #[path = "selection_area.rs"]
 mod selection_area;
+#[path = "selection_area_input.rs"]
+mod selection_area_input;
 #[path = "semantics.rs"]
 mod semantics;
 #[path = "shortcuts.rs"]

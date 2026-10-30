@@ -7,7 +7,7 @@ use core::time::Duration;
 
 use flui_foundation::geometry::{Point, Size};
 use flui_platform::EventTime;
-use flui_platform::keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, NamedKey};
+use flui_platform::keyboard::{Code, Key, KeyEvent, KeyRelease, KeyRepeat, KeyState, NamedKey};
 use flui_platform::pointer::{
     ContactSize, HoverDistance, InputValueError, PanZoomTransform, PenOrientation, PointerButton,
     PointerButtons, PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition,
@@ -295,6 +295,24 @@ fn a_key_event_is_a_repeat_only_while_down() {
     let down = KeyEvent::new(KeyState::Down, Key::character("a"), Code::KeyA, T0)
         .with_repeat(KeyRepeat::AutoRepeat);
     assert_eq!(down.repeat(), KeyRepeat::AutoRepeat);
+}
+
+fn a_key_event_is_unreleased_only_while_down() {
+    let down = KeyEvent::new(KeyState::Down, Key::character("é"), Code::Unidentified, T0);
+    assert_eq!(
+        down.release(),
+        KeyRelease::Follows,
+        "a key-down has a release by default"
+    );
+    let stray = down.with_release(KeyRelease::Never);
+    assert_eq!(stray.release(), KeyRelease::Never);
+    let up = KeyEvent::new(KeyState::Up, Key::character("é"), Code::Unidentified, T0)
+        .with_release(KeyRelease::Never);
+    assert_eq!(
+        up.release(),
+        KeyRelease::Follows,
+        "a release is the key's own"
+    );
 }
 
 fn character_keys_preserve_nonempty_native_text_and_refuse_empty_text() {
@@ -625,6 +643,10 @@ fn input_vocabulary_contract() {
             (
                 "a_key_event_is_a_repeat_only_while_down",
                 a_key_event_is_a_repeat_only_while_down,
+            ),
+            (
+                "a_key_event_is_unreleased_only_while_down",
+                a_key_event_is_unreleased_only_while_down,
             ),
             (
                 "character_keys_preserve_nonempty_native_text_and_refuse_empty_text",

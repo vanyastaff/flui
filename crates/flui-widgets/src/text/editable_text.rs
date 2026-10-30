@@ -2454,7 +2454,7 @@ fn word_jump_modifier(platform: TargetPlatform) -> Modifiers {
 /// flags, Fn and Symbol were excluded by the command projection; an incidental
 /// Caps Lock does not disqualify word movement.
 #[inline]
-fn is_word_jump_modifier(modifiers: Modifiers, platform: TargetPlatform) -> bool {
+pub(crate) fn is_word_jump_modifier(modifiers: Modifiers, platform: TargetPlatform) -> bool {
     let required = word_jump_modifier(platform);
     [Modifiers::CONTROL, Modifiers::ALT, Modifiers::META]
         .into_iter()

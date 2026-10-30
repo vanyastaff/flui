@@ -46,6 +46,7 @@ impl Host for Android {
     type Accessibility = AndroidAccessibility;
     // The loop holds the clipboard and the transport `AndroidHost` makes.
     type Clipboard = AndroidLoop;
+    type PrimarySelection = crate::host::Absent<crate::host::position::PrimarySelection>;
     type Drag = AndroidLoop;
     type Haptics = AndroidHaptics;
     type Preferences = AndroidLoop;

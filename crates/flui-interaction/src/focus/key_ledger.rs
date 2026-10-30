@@ -13,7 +13,9 @@
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
-use flui_platform::keyboard::{Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, NamedKey};
+use flui_platform::keyboard::{
+    Code, ImeComposition, Key, KeyEvent, KeyRelease, KeyRepeat, KeyState, NamedKey,
+};
 
 use super::FocusNode;
 use crate::ids::FocusNodeId;
@@ -83,8 +85,14 @@ pub(super) enum Admission {
     /// focus moved: the release reaches no key handler, and the press's path
     /// is told the key was cancelled.
     Cancelled(HeldPress),
-    /// An input method's key, an orphan, or a repeat of a key whose key-down
-    /// went to another unit: global handlers saw it, the walk does not.
+    /// The release of a key without a code that matches no key-down held for
+    /// it: global handlers saw it, the walk does not, and the focus manager
+    /// logs it once the ledger is let go, since a log subscriber may call back
+    /// into the manager.
+    Orphan,
+    /// An input method's key, the release of a key with a code no key-down
+    /// was held for, or a repeat of a key whose key-down went to another unit:
+    /// global handlers saw it, the walk does not.
     Withheld,
 }
 
@@ -128,6 +136,15 @@ impl KeyLedger {
                 }
                 let ime = event.composition == ImeComposition::Active
                     || event.key == Key::Named(NamedKey::Process);
+                // A key-down no release follows is held by nobody: recorded,
+                // it would stay held until the next blur cancelled it.
+                if event.release() == KeyRelease::Never {
+                    return Ok(if ime {
+                        Admission::Withheld
+                    } else {
+                        Admission::Press
+                    });
+                }
                 let origin = if ime {
                     KeyOrigin::Ime
                 } else {
@@ -157,7 +174,11 @@ impl KeyLedger {
                     Admission::Continuation
                 }
                 Some(KeyOrigin::Focus { press, .. }) => Admission::Cancelled(press),
-                _ => Admission::Withheld,
+                // `KeyEvent`'s contract: a code-less key's release carries the
+                // key its key-down did, so one that matches nothing is an orphan
+                // the focus manager reports.
+                None if matches!(id, KeyId::Logical(_)) => Admission::Orphan,
+                Some(KeyOrigin::Ime) | None => Admission::Withheld,
             },
         };
         Ok(admission)

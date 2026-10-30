@@ -704,6 +704,12 @@ path = "tests/wayland_clipboard.rs"
 harness = false
 required-features = ["wayland"]
 
+[[test]]
+name = "wayland_primary_selection"
+path = "tests/wayland_primary_selection.rs"
+harness = false
+required-features = ["wayland"]
+
 # The native Wayland host's own window frame under a compositor that draws
 # none (Weston's desktop shell), read back from the X server it runs on and
 # driven through XTest: its own harness, for the same reason.

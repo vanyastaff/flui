@@ -38,6 +38,7 @@ impl Host for Headless {
     type Text = FakeTextInput;
     type Accessibility = FakeAccessibility;
     type Clipboard = MemoryClipboard;
+    type PrimarySelection = crate::host::Absent<crate::host::position::PrimarySelection>;
     type Drag = DragDouble;
     type Haptics = HeadlessHaptics;
     type Preferences = HeadlessPreferences;

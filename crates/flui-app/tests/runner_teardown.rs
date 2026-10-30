@@ -1818,3 +1818,197 @@ pub(crate) fn a_panicking_post_frame_callback_reports_once_and_the_next_frame_bu
     );
     run.join().expect("the run returns Ok");
 }
+
+/// Starts `application`, lets `drive` put a fault on its path, then closes the
+/// last window as the user does and joins the run.
+fn close_after<V, F>(
+    application: Application<V, F>,
+    drive: impl FnOnce(&flui_app::testing::HeadlessRunHandle, &flui_native::MockWindow),
+) -> flui_app::testing::ExitReport
+where
+    V: flui_view::View + Clone + 'static,
+    F: FnMut(&AppHandle) -> V + 'static,
+{
+    let run = HeadlessRun::start(application);
+    run.run_owner_turn();
+    let window = run
+        .open_windows()
+        .into_iter()
+        .next()
+        .expect("the main window");
+    drive(&run, &window);
+    assert!(run.is_running(), "the fault ended the application early");
+    assert!(window.simulate_close(), "the application lets it close");
+    run.run_owner_turn();
+    run.join().expect("the run returns")
+}
+
+/// A view whose `build` counts each call and panics.
+#[derive(Clone)]
+struct BuildFails {
+    builds: Rc<std::cell::Cell<u32>>,
+}
+
+impl flui_view::StatelessView for BuildFails {
+    fn build(&self, _ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
+        self.builds.set(self.builds.get() + 1);
+        assert!(self.builds.get() == 0, "the build failed");
+        flui_widgets::SizedBox::square(10.0)
+    }
+}
+
+impl flui_view::View for BuildFails {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+fn exit_code_of_an_ordinary_close() {
+    let report = close_after(
+        Application::new(|_| flui_widgets::SizedBox::square(10.0))
+            .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed)),
+        |_, _| {},
+    );
+    assert_eq!(report.code(), 0);
+}
+
+fn fail_the_tap() {
+    panic!("the tap handler failed");
+}
+
+fn exit_code_after_a_tap_handler_panic() {
+    let panics = CallbackPanics::default();
+    let application = Application::new(|_| {
+        flui_widgets::GestureDetector::new()
+            .behavior(flui_widgets::HitTestBehavior::Opaque)
+            .on_tap(|_| fail_the_tap())
+            .child(flui_widgets::SizedBox::square(100.0))
+    })
+    .with_config(reporting_callback_panics(&panics));
+    let report = close_after(application, |run, window| {
+        tap(
+            run,
+            window,
+            flui_foundation::geometry::Offset::new(10.0, 10.0),
+        );
+    });
+    assert_eq!(
+        *panics.lock().expect("BUG: no reporter panicked"),
+        ["the tap handler failed"]
+    );
+    assert_eq!(report.code(), 0, "the contained panic left the exit alone");
+}
+
+fn exit_code_after_a_post_frame_panic() {
+    let panics = CallbackPanics::default();
+    let view = PostFramePanics {
+        handle: Rc::default(),
+    };
+    let report = close_after(
+        Application::new(move |_| view.clone()).with_config(reporting_callback_panics(&panics)),
+        |_, _| {},
+    );
+    assert_eq!(
+        *panics.lock().expect("BUG: no reporter panicked"),
+        ["the post-frame callback failed"]
+    );
+    assert_eq!(report.code(), 0, "the contained panic left the exit alone");
+}
+
+fn exit_code_after_a_build_panic() {
+    let builds = Rc::new(std::cell::Cell::new(0));
+    let view = BuildFails {
+        builds: Rc::clone(&builds),
+    };
+    let report = close_after(
+        Application::new(move |_| view.clone())
+            .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed)),
+        |_, _| {},
+    );
+    assert!(builds.get() > 0, "the failing build ran");
+    assert_eq!(
+        report.code(),
+        0,
+        "the substituted build left the exit alone"
+    );
+}
+
+fn exit_code_after_a_close_handler_panic() {
+    let panicked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let handler = flui_app::app::CloseRequestHandler::new(move |_| {
+        assert!(
+            panicked.swap(true, std::sync::atomic::Ordering::SeqCst),
+            "the close-request handler failed"
+        );
+        flui_app::app::CloseResponse::Close
+    });
+    let application = Application::new(|_| flui_widgets::SizedBox::square(10.0)).with_config(
+        AppConfig::new()
+            .with_exit_policy(ExitPolicy::OnLastWindowClosed)
+            .with_close_request_handler(handler),
+    );
+    let report = close_after(application, |run, window| {
+        assert!(
+            !window.simulate_close(),
+            "the failed handler kept the window"
+        );
+        run.run_owner_turn();
+    });
+    assert_eq!(report.code(), 0, "the contained panic left the exit alone");
+}
+
+fn exit_code_after_a_dispose_panic_on_the_last_close() {
+    let report = close_after(
+        Application::new(|_| FailingNote {
+            dispose_panic: Some("the dispose failed"),
+            capture_panic: None,
+            disposed: Rc::default(),
+        })
+        .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed)),
+        |_, _| {},
+    );
+    assert_eq!(report.code(), flui_app::testing::EXIT_CODE_PANIC);
+}
+
+fn exit_code_after_a_destructor_panic_at_loop_exit() {
+    let capture = PanicsOnDrop("the capture failed to drop");
+    let report = close_after(
+        Application::new(move |_| {
+            let _held = &capture;
+            flui_widgets::SizedBox::square(10.0)
+        })
+        .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed)),
+        |_, _| {},
+    );
+    assert_eq!(report.code(), flui_app::testing::EXIT_CODE_PANIC);
+}
+
+/// The exit code of each path of the user-panic table (ADR-0258 §3). A panic
+/// in a handler, a post-frame callback, a `build` or a close-request handler
+/// is contained, so the application later exits 0; one in a `dispose` or a
+/// destructor on the way out exits 101 after the flush. No row expects an abort. A destructor that blocks
+/// past the watchdog (124) runs in a child process: `runner_exit_codes`.
+#[test]
+fn user_panic_exit_code_matrix() {
+    crate::run_table(
+        "user_panic_exit_code_matrix",
+        &[
+            ("ordinary close", exit_code_of_an_ordinary_close),
+            ("tap handler", exit_code_after_a_tap_handler_panic),
+            ("post-frame callback", exit_code_after_a_post_frame_panic),
+            ("build", exit_code_after_a_build_panic),
+            (
+                "close-request handler",
+                exit_code_after_a_close_handler_panic,
+            ),
+            (
+                "dispose on the last close",
+                exit_code_after_a_dispose_panic_on_the_last_close,
+            ),
+            (
+                "destructor at loop exit",
+                exit_code_after_a_destructor_panic_at_loop_exit,
+            ),
+        ],
+    );
+}

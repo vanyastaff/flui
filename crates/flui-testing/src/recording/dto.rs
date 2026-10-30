@@ -24,7 +24,8 @@ use flui_platform::data_transfer::{
 };
 use flui_platform::input_capabilities::{InputCapabilities, PointerKindSet};
 use flui_platform::keyboard::{
-    Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Location, Modifiers, NamedKey,
+    Code, ImeComposition, Key, KeyEvent, KeyRelease, KeyRepeat, KeyState, Location, Modifiers,
+    NamedKey,
 };
 use flui_platform::pointer::{
     ButtonChange, CancelReason, ContactSize, DeviceId, HoverDistance, PanZoomEvent, PanZoomPhase,
@@ -1319,6 +1320,8 @@ struct KeyEventDto {
     repeat: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     composing: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    unreleased: bool,
     t: u64,
 }
 
@@ -1346,6 +1349,7 @@ impl TryFrom<&KeyEvent> for KeyEventDto {
             modifiers: modifiers_dto(event.modifiers),
             repeat: event.repeat() == KeyRepeat::AutoRepeat,
             composing: event.composition == ImeComposition::Active,
+            unreleased: event.release() == KeyRelease::Never,
             t: event.time.as_nanos(),
         })
     }
@@ -1388,6 +1392,11 @@ impl TryFrom<KeyEventDto> for KeyEvent {
             ImeComposition::Active
         } else {
             ImeComposition::Inactive
+        })
+        .with_release(if event.unreleased {
+            KeyRelease::Never
+        } else {
+            KeyRelease::Follows
         }))
     }
 }

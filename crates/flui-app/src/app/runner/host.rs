@@ -889,6 +889,7 @@ pub(crate) fn install_owner_platform(
     // The platform clipboard is installed with the owner, so every ui_runtime
     // a runner builds afterwards acquires it (`runtime_capabilities`).
     let clipboard = owner.clipboard();
+    let primary_selection = owner.primary_selection();
     let data_transfer = owner.shared().data_transfer();
     let (previous, previous_owner_turn_wake, previous_host, previous_clipboard) =
         APP_RUNTIME.with(|slot| {
@@ -901,6 +902,7 @@ pub(crate) fn install_owner_platform(
             let previous_clipboard = (
                 state.set_platform_clipboard(clipboard),
                 state.set_platform_data_transfer(data_transfer),
+                state.set_platform_primary_selection(primary_selection),
             );
             let previous_host =
                 std::mem::replace(&mut state.installed_host, super::InstalledHost::new());
