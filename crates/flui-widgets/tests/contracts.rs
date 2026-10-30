@@ -593,6 +593,8 @@ fn selection_area_input() {
             ("selection_area_input::a_drag_ends_where_it_is_released", crate::selection_area_input::a_drag_ends_where_it_is_released),
             ("selection_area_input::a_click_targets_the_keys_which_cross_at_the_shown_end", crate::selection_area_input::a_click_targets_the_keys_which_cross_at_the_shown_end),
             ("selection_area_input::a_panicking_blur_listener_keeps_the_clicked_selection", crate::selection_area_input::a_panicking_blur_listener_keeps_the_clicked_selection),
+            ("selection_area_input::line_keys_keep_their_column_and_their_line", crate::selection_area_input::line_keys_keep_their_column_and_their_line),
+            ("selection_area_input::the_nearest_text_is_nearest_on_screen", crate::selection_area_input::the_nearest_text_is_nearest_on_screen),
         ],
     );
 }

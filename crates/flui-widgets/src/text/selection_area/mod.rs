@@ -41,7 +41,7 @@ use flui_view::{
     impl_inherited_view,
 };
 
-use self::input::{AreaAction, PointerState, SelectionGestures};
+use self::input::{AreaAction, CaretMemory, PointerState, SelectionGestures};
 use super::rich_text::ResolvedParagraph;
 use super::selection_style::{DefaultSelectionStyle, SelectionStyle};
 use crate::Semantics;
@@ -197,6 +197,7 @@ impl StatefulView for SelectionArea {
                 clamp_pending: Cell::new(false),
                 mounted: Cell::new(true),
                 backward: Cell::new(false),
+                caret: Cell::new(CaretMemory::default()),
             }),
         }
     }
@@ -334,6 +335,8 @@ struct SelectionModel {
     /// Whether the last committed selection runs backward, its anchor
     /// after its focus, so ends that both leave keep that direction.
     backward: Cell<bool>,
+    /// What the keys remember about the moving end.
+    caret: Cell<CaretMemory>,
 }
 
 impl SelectionModel {
@@ -363,6 +366,7 @@ impl SelectionModel {
         if *self.selection.borrow() == selection {
             return;
         }
+        self.caret.set(CaretMemory::default());
         let coverage = selection
             .as_ref()
             .and_then(|selection| self.covered(selection));

@@ -10,7 +10,7 @@ use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
 use std::rc::{Rc, Weak};
 
-use flui_foundation::geometry::{Matrix4, Offset};
+use flui_foundation::geometry::{Matrix4, Offset, Rect};
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::{
     GestureRecognizer, KeyEventResult, PointerKindSet, TapAndDragGestureRecognizer,
@@ -61,6 +61,17 @@ struct Drag {
     unit: Unit,
     start: DocumentPosition,
     end: DocumentPosition,
+}
+
+/// What the keys remember about the moving end between presses, forgotten
+/// whenever anything else changes the selection.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct CaretMemory {
+    /// The end sits at the end of its line, not the start of the next.
+    upstream: bool,
+    /// The horizontal place, in render-root coordinates, that consecutive
+    /// line steps keep to across shorter lines.
+    column: Option<f64>,
 }
 
 /// What the pointer is doing in the area.
@@ -126,16 +137,23 @@ impl SelectionModel {
                 self.with_paragraph(&text.entry, |paragraph, to_root| {
                     let (x, y) = to_root.try_inverse()?.transform_point(global.dx, global.dy);
                     let size = paragraph.painter().size();
-                    let gap = |at: f64, extent: f64| {
-                        if at < 0.0 {
-                            -at
-                        } else if at > extent {
-                            at - extent
+                    // Texts are ranked by distance in root coordinates, so
+                    // a scaled ancestor does not shrink its texts' gaps.
+                    let bounds =
+                        to_root.transform_rect(&Rect::from_ltwh(0.0, 0.0, size.width, size.height));
+                    let gap = |at: f64, low: f64, high: f64| {
+                        if at < low {
+                            low - at
+                        } else if at > high {
+                            at - high
                         } else {
                             0.0
                         }
                     };
-                    let distance = (gap(y, size.height), gap(x, size.width));
+                    let distance = (
+                        gap(global.dy, bounds.top(), bounds.bottom()),
+                        gap(global.dx, bounds.left(), bounds.right()),
+                    );
                     let byte = paragraph
                         .painter()
                         .get_position_for_offset(Offset::new(x, y))
@@ -341,6 +359,8 @@ impl SelectionModel {
             return KeyEventResult::Ignored;
         };
         let by_word = is_word_jump_modifier(modifiers, TargetPlatform::current());
+        let memory = self.caret.get();
+        let mut next_memory = CaretMemory::default();
         let ordered = self.ordered();
         let Some(index) = ordered
             .iter()
@@ -380,13 +400,21 @@ impl SelectionModel {
                 text_boundaries::previous_grapheme_boundary(text, byte),
             )),
             Key::Named(NamedKey::Home) => self
-                .line_edge(&ordered[index].entry, byte, false)
+                .line_edge(&ordered[index].entry, byte, false, memory.upstream)
                 .map(|edge| at(index, edge)),
-            Key::Named(NamedKey::End) => self
-                .line_edge(&ordered[index].entry, byte, true)
-                .map(|edge| at(index, edge)),
-            Key::Named(NamedKey::ArrowDown) => self.line_step(&ordered, index, byte, true),
-            Key::Named(NamedKey::ArrowUp) => self.line_step(&ordered, index, byte, false),
+            Key::Named(NamedKey::End) => {
+                next_memory.upstream = true;
+                self.line_edge(&ordered[index].entry, byte, true, memory.upstream)
+                    .map(|edge| at(index, edge))
+            }
+            Key::Named(NamedKey::ArrowDown | NamedKey::ArrowUp) => {
+                let down = matches!(event.key, Key::Named(NamedKey::ArrowDown));
+                self.line_step(&ordered, index, byte, down, memory)
+                    .map(|(focus, column)| {
+                        next_memory.column = Some(column);
+                        focus
+                    })
+            }
             _ => return KeyEventResult::Ignored,
         };
         if let Some(focus) = focus {
@@ -394,15 +422,24 @@ impl SelectionModel {
                 cx,
                 Some(&DocumentSelection::new(selection.anchor().clone(), focus)),
             );
+            // The commit forgot the memory; keep what this key set.
+            self.caret.set(next_memory);
         }
         KeyEventResult::Handled
     }
 
-    /// The start or end of the line `byte` is on.
-    fn line_edge(&self, entry: &SelectableEntry, byte: usize, end: bool) -> Option<usize> {
+    /// The start or end of the line `byte` is on; `upstream` places a byte
+    /// at a soft wrap on the line it ends.
+    fn line_edge(
+        &self,
+        entry: &SelectableEntry,
+        byte: usize,
+        end: bool,
+        upstream: bool,
+    ) -> Option<usize> {
         self.with_paragraph(entry, |paragraph, _| {
             let lines = paragraph.painter().get_line_metrics();
-            let line = line_of(&lines, byte)?;
+            let line = line_of(&lines, byte, upstream)?;
             Some(if end {
                 line.end_index
             } else {
@@ -411,24 +448,33 @@ impl SelectionModel {
         })
     }
 
-    /// The position a line below (or above) `byte`, at the same horizontal
-    /// place, crossing into the next (or previous) text from its last (or
-    /// first) line.
+    /// The position a line below (or above) `byte`, at the horizontal place
+    /// the previous line steps kept to (else the caret's), crossing into the
+    /// next (or previous) text from its last (or first) line; with that
+    /// place in render-root coordinates.
     fn line_step(
         &self,
         ordered: &[Ordered],
         index: usize,
         byte: usize,
         down: bool,
-    ) -> Option<DocumentPosition> {
+        memory: CaretMemory,
+    ) -> Option<(DocumentPosition, f64)> {
         let entry = &ordered[index].entry;
-        // The caret's horizontal place in root coordinates, and the next
-        // line within this text, if any.
-        let (global_x, within) = self.with_paragraph(entry, |paragraph, to_root| {
+        // The horizontal place in root coordinates, and the next line
+        // within this text, if any.
+        let (column, within) = self.with_paragraph(entry, |paragraph, to_root| {
             let painter = paragraph.painter();
-            let caret = painter.get_offset_for_caret(TextPosition::downstream(byte));
+            let caret = painter.get_offset_for_caret(if memory.upstream {
+                TextPosition::upstream(byte)
+            } else {
+                TextPosition::downstream(byte)
+            });
+            let (caret_x, caret_y) = to_root.transform_point(caret.dx, caret.dy);
+            let column = memory.column.unwrap_or(caret_x);
+            let (local_x, _) = to_root.try_inverse()?.transform_point(column, caret_y);
             let lines = painter.get_line_metrics();
-            let line = line_of(&lines, byte)?;
+            let line = line_of(&lines, byte, memory.upstream)?;
             let next = if down {
                 lines.get(line.line_number + 1)
             } else {
@@ -438,14 +484,13 @@ impl SelectionModel {
             };
             let within = next.map(|next| {
                 painter
-                    .get_position_for_offset(Offset::new(caret.dx, next.baseline))
+                    .get_position_for_offset(Offset::new(local_x, next.baseline))
                     .offset
             });
-            let (x, _) = to_root.transform_point(caret.dx, caret.dy);
-            Some((x, within))
+            Some((column, within))
         })?;
         if let Some(within) = within {
-            return Some(DocumentPosition::new(entry.anchor.clone(), within));
+            return Some((DocumentPosition::new(entry.anchor.clone(), within), column));
         }
         let neighbour = if down {
             ordered.get(index + 1)?
@@ -457,20 +502,31 @@ impl SelectionModel {
             let lines = painter.get_line_metrics();
             let line = if down { lines.first()? } else { lines.last()? };
             let (_, baseline) = to_root.transform_point(0.0, line.baseline);
-            let (x, y) = to_root.try_inverse()?.transform_point(global_x, baseline);
+            let (x, y) = to_root.try_inverse()?.transform_point(column, baseline);
             let byte = painter.get_position_for_offset(Offset::new(x, y)).offset;
-            Some(DocumentPosition::new(neighbour.entry.anchor.clone(), byte))
+            Some((
+                DocumentPosition::new(neighbour.entry.anchor.clone(), byte),
+                column,
+            ))
         })
     }
 }
 
-/// The line holding `byte`: the last line starting at or before it.
-fn line_of(lines: &[LineMetrics], byte: usize) -> Option<&LineMetrics> {
-    lines
-        .iter()
-        .take_while(|line| line.start_index <= byte)
-        .last()
-        .or_else(|| lines.first())
+/// The line holding `byte`: the last line starting at or before it, or with
+/// `upstream`, a line ending at it (the end of a soft-wrapped line).
+fn line_of(lines: &[LineMetrics], byte: usize, upstream: bool) -> Option<&LineMetrics> {
+    let ending = || {
+        lines
+            .iter()
+            .find(|line| line.start_index < byte && line.end_index == byte)
+    };
+    upstream.then(ending).flatten().or_else(|| {
+        lines
+            .iter()
+            .take_while(|line| line.start_index <= byte)
+            .last()
+            .or_else(|| lines.first())
+    })
 }
 
 /// Answers the area's intents: select all, copy and dismiss.

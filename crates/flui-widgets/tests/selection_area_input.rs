@@ -598,3 +598,77 @@ pub(crate) fn a_panicking_blur_listener_keeps_the_clicked_selection() {
     );
     assert_eq!(scene.selected().as_deref(), Some(FIRST));
 }
+
+/// Consecutive Shift+Down presses keep to the column they started in across
+/// a shorter line, and Shift+End at a soft wrap stays on the line it ended:
+/// Shift+End again does not move, and Shift+Home returns to that line's
+/// start.
+///
+/// Red-check: take each line step's column from the current caret (the
+/// second step lands near the start of the third line); resolve a line end
+/// downstream (the second Shift+End selects the next line).
+pub(crate) fn line_keys_keep_their_column_and_their_line() {
+    let mut scene = Scene::over(Column::new((Text::new("abcdefghij\nx\nabcdefghij"),)).boxed());
+    // Near the top left, on the first line.
+    let corner =
+        |scene: &Scene| scene.laid.absolute_offset(scene.paragraphs()[0]) + Offset::new(3.0, 3.0);
+    scene.clicks(corner(&scene), 2);
+    assert_eq!(scene.selected().as_deref(), Some("abcdefghij"));
+    for _ in 0..2 {
+        assert!(scene.key(
+            Key::Named(NamedKey::ArrowDown),
+            Code::ArrowDown,
+            Modifiers::SHIFT
+        ));
+    }
+    assert_eq!(
+        scene.selected().as_deref(),
+        Some("abcdefghij\nx\nabcdefghij")
+    );
+
+    let mut scene = Scene::over(
+        Column::new((SizedBox::width(60.0).child(Text::new("aaaa bbbb cccc dddd")),)).boxed(),
+    );
+    scene.clicks(corner(&scene), 2);
+    assert_eq!(scene.selected().as_deref(), Some("aaaa"));
+    assert!(scene.key(Key::Named(NamedKey::End), Code::End, Modifiers::SHIFT));
+    let line = scene.selected().expect("the first line");
+    assert!(line.starts_with("aaaa") && !line.contains('b'), "{line:?}");
+    assert!(scene.key(Key::Named(NamedKey::End), Code::End, Modifiers::SHIFT));
+    assert_eq!(scene.selected(), Some(line), "a second Shift+End stays");
+    assert!(scene.key(Key::Named(NamedKey::Home), Code::Home, Modifiers::SHIFT));
+    assert_eq!(
+        scene.heard.borrow().last(),
+        Some(&None),
+        "back to the line's start"
+    );
+}
+
+/// The pointer finds the nearest text by distance on screen: a text scaled
+/// down by an ancestor is near where it paints, not where its own
+/// coordinates would put it.
+///
+/// Red-check: compare distances in each text's own coordinates (the double
+/// click selects the unscaled text, which is farther on screen).
+pub(crate) fn the_nearest_text_is_nearest_on_screen() {
+    use flui_painting::Alignment;
+    use flui_widgets::Transform;
+
+    let mut scene = Scene::over(
+        Column::new((
+            Transform::scale(0.1, 0.1)
+                .alignment(Alignment::TOP_LEFT)
+                .child(Text::new("Tiny")),
+            Text::new("Plain"),
+        ))
+        .boxed(),
+    );
+    let (tiny, plain) = (scene.index_of("Tiny"), scene.index_of("Plain"));
+    let tiny_bottom = scene.laid.absolute_offset(scene.paragraphs()[tiny]).dy
+        + scene.laid.size(scene.paragraphs()[tiny]).height * 0.1;
+    let plain_top = scene.laid.absolute_offset(scene.paragraphs()[plain]).dy;
+    let gap = plain_top - tiny_bottom;
+    assert!(gap > 0.0, "the gap lies between the painted texts");
+    scene.clicks(Offset::new(1.0, tiny_bottom + gap * 0.25), 2);
+    assert_eq!(scene.selected().as_deref(), Some("Tiny"));
+}
