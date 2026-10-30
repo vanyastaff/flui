@@ -105,7 +105,8 @@ use crate::{
 use flui_interaction::focus::{FocusNode, FocusNodeRegistration, KeyEventResult};
 use flui_interaction::pointer::EventPropagation;
 use flui_interaction::{
-    HoldGestureRecognizer, PointerEvent, PointerKindSet, WheelPreferencesProvider,
+    HoldEnd, HoldGestureRecognizer, PointerDispatch, PointerEvent, PointerKindSet,
+    WheelPreferencesProvider,
 };
 use flui_platform::keyboard::{Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, NamedKey};
 use flui_platform::{
@@ -1007,6 +1008,7 @@ impl ViewState<Scrollable> for ScrollableState {
                 &applied,
                 GestureArenaScope::wheel_preferences_of(ctx),
             ))
+            .on_pointer_signal(self.inertia_cancel(&applied))
             .child(if anchored {
                 // An anchored drag is no drop autoscroll target.
                 gestures.boxed()
@@ -1279,6 +1281,34 @@ impl ScrollableState {
                 })
                 .on_cancel(move |_cx| owner_lost.drag_lost()))
             .child(content)
+    }
+
+    /// Fingers that come to rest on a trackpad catch the motion this
+    /// scrollable drives, as a press does (ADR-0208 rule 4): the fling stops
+    /// and the position settles through its physics from rest. A notched
+    /// wheel's easing goes on, as it does under a click.
+    fn inertia_cancel(
+        &self,
+        applied: &Applied,
+    ) -> impl Fn(&mut EventCx<'_>, PointerDispatch<'_>) + use<> {
+        let moving = self.fling_controller.controller().clone();
+        let owner = Rc::clone(&applied.owner);
+        let pipeline = self.pipeline.clone();
+        move |_cx, dispatch| {
+            let PointerEvent::ScrollInertiaCancel(signal) = dispatch.local else {
+                return;
+            };
+            if !(moving.is_animating() && owner.catchable()) {
+                return;
+            }
+            owner.hold(None, signal.pointer.kind);
+            if !owner.hold_ended(
+                HoldEnd::Lifted,
+                presentation_device_pixel_ratio(pipeline.as_ref()),
+            ) {
+                owner.controller().position().set_is_scrolling(false);
+            }
+        }
     }
 
     /// The wheel / trackpad claim.
