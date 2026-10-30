@@ -221,6 +221,13 @@ host.
   typed report at its presentation address before returning the runtime lease.
   Reporting does not increment frame-failure streaks or replace the original
   panic; diagnostics retain their own containment boundary (ADR-0185).
+  A runtime operation's own panic stops there (ADR-0258 §1): its payload is
+  retained, the turn stays healthy and the FIFO tail behind it runs
+  (`a_failed_frame_is_contained_and_the_fifo_tail_runs`). Only a terminal one
+  leaves the turn: the close of the last presentation of the last running UI
+  runtime, or an operation the host shut down in (§2). A host hook's own
+  failure (`after_turn`, the frame-rate hook, text preparation) leaves the turn
+  as before.
 - **Owner operations form a closed vocabulary.** Input, lifecycle, normalized
   metrics, close, install, uninstall, pump and background-pump are typed
   operations or explicit methods. The host accepts no arbitrary

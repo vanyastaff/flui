@@ -368,13 +368,11 @@ fn a_panicking_work_item_keeps_the_delivered_demand_for_the_next_release() {
     let rig = Rig::new();
     rig.touch(true);
     assert_eq!(rig.demands(), [FrameRateDemand::Active]);
-    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = rig.window.test_callback(
-            Box::new(|_| panic!("scripted work item failure")),
-            &rig.effects,
-        );
-    }));
-    assert!(failed.is_err(), "the work item's failure propagates");
+    // The work item's failure is contained by the owner (ADR-0258 §1).
+    let _ = rig.window.test_callback(
+        Box::new(|_| panic!("scripted work item failure")),
+        &rig.effects,
+    );
     rig.touch(false);
     rig.advance(FRAME_RATE_HOLD);
     rig.frame();

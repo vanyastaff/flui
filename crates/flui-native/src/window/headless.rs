@@ -298,6 +298,48 @@ impl<H: Host<Loop = HeadlessLoop, Window = MockWindow>> HostPlatform<H> {
         self.window_shared().tracked.lock().policy = limits;
         self
     }
+
+    /// The windows this platform holds open, through a handle that outlives
+    /// [`Platform::run`](crate::Platform::run): a test reaches a window the
+    /// application opened, to close it as the user would, without a way into
+    /// the application's handler.
+    #[must_use]
+    pub fn open_windows(&self) -> HeadlessOpenWindows {
+        HeadlessOpenWindows {
+            windows: Arc::downgrade(self.window_shared()),
+        }
+    }
+}
+
+/// The windows a headless platform holds open
+/// ([`HeadlessPlatform::open_windows`](crate::HeadlessPlatform::open_windows)).
+/// Empty once the platform is gone.
+#[derive(Clone, Debug)]
+pub struct HeadlessOpenWindows {
+    windows: Weak<HeadlessWindows>,
+}
+
+impl HeadlessOpenWindows {
+    /// Every open window, in the order it opened: the last is topmost.
+    #[must_use]
+    pub fn all(&self) -> Vec<MockWindow> {
+        self.windows
+            .upgrade()
+            .map(|windows| windows.tracked.lock().windows.clone())
+            .unwrap_or_default()
+    }
+
+    /// The open window `id`, `None` once it closed.
+    #[must_use]
+    pub fn get(&self, id: WindowId) -> Option<MockWindow> {
+        let windows = self.windows.upgrade()?;
+        let tracked = windows.tracked.lock();
+        tracked
+            .windows
+            .iter()
+            .find(|window| window.id == id)
+            .cloned()
+    }
 }
 
 impl host::Window<HeadlessLoop> for MockWindow {

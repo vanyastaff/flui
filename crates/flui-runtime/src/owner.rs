@@ -472,6 +472,25 @@ impl OwnerHost {
 }
 
 impl OwnerState {
+    /// Whether `work` closes the last presentation of the last UI runtime
+    /// still running: a failure in it is terminal (ADR-0258 §2), since
+    /// nothing is left to go on after it.
+    fn closes_last_runtime(&self, work: &RuntimeWork) -> bool {
+        let RuntimeWork::Close(address) = work else {
+            return false;
+        };
+        let running = self
+            .runtimes
+            .iter()
+            .filter(|entry| !matches!(entry.residence, Residence::RetiringCheckedOut))
+            .count();
+        running == 1
+            && self.runtimes.iter().any(|entry| {
+                entry.id == address.ui_runtime_id
+                    && entry.presentations.as_slice() == [address.presentation_id]
+            })
+    }
+
     fn authorizer(&self, address: PresentationAddress) -> Result<usize, PublicationError> {
         let index = self.presentation_index(address)?;
         if self.runtimes[index]

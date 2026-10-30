@@ -723,7 +723,13 @@ fn resize_uses_the_installed_driver_lease_through_failure_and_teardown() {
                 .as_ref()
                 .and_then(|failure| failure.downcast_ref::<&str>())
                 .copied(),
-            if fail { Some("resize failure") } else { None }
+            // A resize's panic is its operation's, contained (ADR-0258 §1),
+            // unless the host shut down in it, which ended the loop.
+            if fail && close {
+                Some("resize failure")
+            } else {
+                None
+            }
         );
         assert_eq!(calls.get(), 1, "resize reached the installed driver");
         if close {
@@ -801,11 +807,8 @@ fn a_resize_that_finds_the_driver_leased_reaches_it_at_the_next_checkout() {
             RuntimeTask::Frame(frame.binding, flui_native::frame_request_now()),
         )
     };
-    let failure = catch_unwind(AssertUnwindSafe(frame_now)).expect_err("the resize panics");
-    assert_eq!(
-        failure.downcast_ref::<&str>(),
-        Some(&"deferred resize failure")
-    );
+    // The resize's panic is the frame operation's, contained (ADR-0258 §1).
+    frame_now().expect("the resize's panic is contained");
     assert_eq!(
         *sizes.borrow(),
         [size(320.0)],
@@ -1146,31 +1149,15 @@ fn unpublished_window_retires_native_resources_independently() {
                     .as_ref()
                     .and_then(|failure| failure.downcast_ref::<&str>())
                     .copied(),
-                if incoming_failure {
+                // A deferred callback's panic is its operation's, contained
+                // (ADR-0258 §1): its accepted FIFO tail, the cancelled
+                // proposal's retirement, runs in the same turn.
+                if incoming_failure && !deferred {
                     Some("preparation failure")
                 } else {
                     driver_failure.or(handler_failure)
                 }
             );
-            if deferred && incoming_failure {
-                // The failed callback preserves its accepted FIFO tail. The
-                // next owner opportunity retires the cancelled proposal.
-                let continuation = catch_unwind(AssertUnwindSafe(|| {
-                    dispatch_platform_ui_runtime(
-                        outer,
-                        RuntimeTask::TestCallback(Box::new(|_| {})),
-                    )
-                    .expect("resume accepted cancellation");
-                }))
-                .err();
-                assert_eq!(
-                    continuation
-                        .as_ref()
-                        .and_then(|failure| failure.downcast_ref::<&str>())
-                        .copied(),
-                    driver_failure.or(handler_failure)
-                );
-            }
             assert_eq!(
                 retired.load(Ordering::SeqCst),
                 2,

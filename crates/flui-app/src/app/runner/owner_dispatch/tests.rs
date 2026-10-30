@@ -766,13 +766,13 @@ fn late_event_never_crosses_ui_runtime_incarnations() {
 
 fn panic_restores_dispatch_host_for_next_event() {
     let dispatcher = install_test_ui_runtime();
-    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = dispatch_platform_ui_runtime(
-            dispatcher,
-            RuntimeTask::TestCallback(Box::new(|_| panic!("test panic"))),
-        );
-    }));
-    assert!(panic.is_err());
+    // The callback's panic is its operation's, contained by the owner
+    // (ADR-0258 §1): the dispatch returns.
+    dispatch_platform_ui_runtime(
+        dispatcher,
+        RuntimeTask::TestCallback(Box::new(|_| panic!("test panic"))),
+    )
+    .expect("a contained panic leaves the dispatch accepted");
 
     let ran = Rc::new(RefCell::new(false));
     let ran_in_event = Rc::clone(&ran);

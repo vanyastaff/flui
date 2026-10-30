@@ -8,7 +8,7 @@ use super::{
         APP_RUNTIME, OwnerHostClearGuard, install_exit_policy_hook, install_owner_platform,
         install_platform_quit_hook, runtime_wake_callback, with_owner_platform,
     },
-    owner_dispatch::teardown_platform_ui_runtime,
+    owner_dispatch::{ExitWatchdog, TeardownStep, teardown_platform_ui_runtime_logged},
 };
 use crate::app::{
     AppConfig, AppRunError, Application, StartupWindow,
@@ -63,17 +63,28 @@ pub(in crate::app) struct MainController {
     /// hook.
     agent: Option<DevAgentAttachment>,
 }
+// Each field is dropped on its own, so one that panics does not keep the
+// rest; the first panic resumes once all are gone (ADR-0258 §5), and the
+// exit holds it as its terminal failure. Inside an unwind it is retained.
 impl Drop for MainController {
     fn drop(&mut self) {
         self.cancel_pending();
+        let mut first = flui_foundation::panic::FirstPanic::new();
         let watcher = self.watcher.take();
-        contain(|| drop(watcher));
+        first.contain(|| drop(watcher));
         let agent = self.agent.take();
-        contain(|| drop(agent));
+        first.contain(|| drop(agent));
         let installer = self.installer.take();
-        contain(|| drop(installer));
+        first.contain(|| drop(installer));
         let observer = self.error.take();
-        contain(|| drop(observer));
+        first.contain(|| drop(observer));
+        if std::thread::panicking() {
+            if let Some(payload) = first.into_payload() {
+                flui_foundation::panic::retain_opaque_payload(payload);
+            }
+        } else {
+            first.resume();
+        }
     }
 }
 enum CompletionState {
@@ -598,6 +609,11 @@ pub(super) fn main_window_closed(address: flui_foundation::PresentationAddress) 
         ingress.wake_owner();
     }
 }
+
+/// Shut the main window down: its intents are refused and its controller,
+/// with the application's factory and what it captured, dropped. A panic
+/// there is the loop's terminal failure (ADR-0258 §2), which the exit
+/// resumes once it has written what the application persisted.
 pub(super) fn shutdown_main_window() {
     let (controller, ingress) = APP_RUNTIME.with(|slot| {
         let mut runtime = slot.borrow_mut();
@@ -607,8 +623,8 @@ pub(super) fn shutdown_main_window() {
         ingress.close();
     }
     if let Some(mut controller) = controller {
-        contain(|| controller.cancel());
-        contain(|| drop(controller));
+        super::terminal::contain_terminal("main window cancellation", || controller.cancel());
+        super::terminal::contain_terminal("main window retirement", || drop(controller));
     }
 }
 
@@ -617,16 +633,33 @@ pub(super) fn shutdown_main_window() {
 /// the [`OwnerHostClearGuard`], so the windows go before the owner platform
 /// that created them. On unwind each step is contained, so a second panic
 /// cannot abort the first one's unwind; that first panic stays the one raised.
-struct LoopTeardown;
+/// Each step that ends is written to its log.
+///
+/// It starts the exit watchdog first and leaves it in `watchdog`, whose
+/// holder ends the watch once the exit's outcome is known (ADR-0258 §7).
+#[derive(Default)]
+struct LoopTeardown {
+    log: Rc<RefCell<Vec<TeardownStep>>>,
+    watchdog: Rc<RefCell<Option<Rc<ExitWatchdog>>>>,
+}
 
 impl Drop for LoopTeardown {
     fn drop(&mut self) {
+        let watchdog = Rc::new(ExitWatchdog::start());
+        self.watchdog.replace(Some(Rc::clone(&watchdog)));
+        let log = Rc::clone(&self.log);
+        let mut record = move |step| {
+            watchdog.reached(step);
+            log.borrow_mut().push(step);
+        };
         if std::thread::panicking() {
             contain(shutdown_main_window);
-            contain(teardown_platform_ui_runtime);
+            record(TeardownStep::MainWindow);
+            contain(|| teardown_platform_ui_runtime_logged(&mut record));
         } else {
             shutdown_main_window();
-            teardown_platform_ui_runtime();
+            record(TeardownStep::MainWindow);
+            teardown_platform_ui_runtime_logged(&mut record);
         }
     }
 }
@@ -665,133 +698,212 @@ where
     V: View + Clone + 'static,
     F: FnMut(&AppHandle) -> V + 'static,
 {
+    start_loop(application, platform, Rc::default())?.finish()
+}
+
+/// A loop whose [`Platform::run`](flui_native::Platform::run) returned, with
+/// its teardown still owed: a desktop loop's `run` returns when the loop
+/// ends, the headless platform's once it has bootstrapped, so a test drives
+/// the application between [`start_loop`] and [`StartedLoop::finish`].
+/// Dropped unfinished, it tears the loop down all the same.
+pub(crate) struct StartedLoop {
+    // Fields drop in this order: the main window and the ui_runtimes (and the
+    // native windows they own) are retired while the owner platform still
+    // lives.
+    teardown: LoopTeardown,
+    owner_guard: OwnerHostClearGuard,
+    // Last: the watch the teardown started ends once the owner platform is
+    // gone too.
+    watchdog: Rc<RefCell<Option<Rc<ExitWatchdog>>>>,
+    fatal: Rc<RefCell<Option<AppRunError>>>,
+    result: Result<(), flui_native::PlatformError>,
+}
+
+impl StartedLoop {
+    /// Tear the loop down, then report its outcome (ADR-0258 §3): a terminal
+    /// failure resumes, else the first fatal failure the loop recorded is
+    /// returned, else what `run` returned.
+    ///
+    /// # Panics
+    ///
+    /// With the terminal failure's payload, once the teardown has written
+    /// what the application persisted.
+    pub(crate) fn finish(self) -> Result<(), AppRunError> {
+        let Self {
+            teardown,
+            owner_guard,
+            watchdog,
+            fatal,
+            result,
+        } = self;
+        drop(teardown);
+        drop(owner_guard);
+        drop(watchdog);
+        if let Some(payload) = super::terminal::take_terminal() {
+            std::panic::resume_unwind(payload);
+        }
+        let failure = fatal.borrow_mut().take();
+        if let Some(error) = failure {
+            return Err(error);
+        }
+        result.map_err(|error| AppRunError::Platform {
+            source: Arc::new(error),
+        })
+    }
+}
+
+/// Run `application` on the platform `platform` makes, up to the point
+/// [`Platform::run`](flui_native::Platform::run) returns, writing each
+/// teardown step that ends to `teardown_log`, on unwind too.
+pub(crate) fn start_loop<V, F>(
+    application: Application<V, F>,
+    platform: impl FnOnce() -> Result<Box<dyn flui_native::Platform>, AppRunError>,
+    teardown_log: Rc<RefCell<Vec<TeardownStep>>>,
+) -> Result<StartedLoop, AppRunError>
+where
+    V: View + Clone + 'static,
+    F: FnMut(&AppHandle) -> V + 'static,
+{
     let _logging = super::super::logging::init_managed_logging(&application.config);
     let platform = platform()?;
     let fatal = Rc::new(RefCell::new(None));
     let recorded = Rc::clone(&fatal);
-    let _owner_guard = OwnerHostClearGuard::arm();
+    // Declared before the owner guard, so the watch outlives it on unwind.
+    let watchdog = Rc::default();
+    let owner_guard = OwnerHostClearGuard::arm();
     // Declared after the owner guard, so it drops first: the main window and
     // the ui_runtimes (and the native windows they own) are retired while the
     // owner platform still lives, on unwind too.
-    let teardown = LoopTeardown;
-    let result = platform.run(crate::app::runner::app_handler(move |owner| {
-        let Application {
-            mut factory,
-            config,
-            startup,
-            ready,
-            window_error,
-            ..
-        } = application;
-        let proxy = owner.proxy();
-        let ingress = Ingress::new(proxy, startup == StartupWindow::Open);
-        let handle = ingress.handle();
-        install_owner_platform(owner)?;
-        APP_RUNTIME.with(|slot| {
-            let mut runtime = slot.borrow_mut();
-            runtime.main_ingress = Some(Arc::clone(&ingress));
-            runtime.main_host_lifecycle = flui_scheduler::AppLifecycleState::Resumed;
-            if let Some(executors) = config.executors.clone() {
-                runtime.install_host_executors(executors);
-            }
-            runtime.reopen_lifecycles();
-            runtime.ensure_execution();
-        });
-        super::host::install_host_storage(&config);
-        install_exit_policy_hook(config.exit_policy);
-        install_platform_quit_hook();
-        let reopen = Arc::downgrade(&ingress);
-        super::host::route_reopen(move || {
-            if let Some(ingress) = reopen.upgrade() {
-                ingress.request_native_show();
-            }
-        });
-        let reload = WorkerReload::from_config(&config);
-        let watcher = reload.spawn_watcher(runtime_wake_callback());
-        let agent = config.dev_agent.as_ref().and_then(DevAgent::attach);
-        let installer_config = config.clone();
-        let identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
-        let factory_identity = Arc::clone(&identity);
-        let installer = Box::new(move |handle: &AppHandle, window, host| {
-            let root = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| factory(handle)))
-                .map_err(|payload| {
-                let message = flui_runtime::frame_failure::panic_text(
-                    installer_config.frame_failure_detail,
-                    payload.as_ref(),
-                );
-                std::mem::forget(payload);
-                AppWindowError::FactoryPanicked { message }
-            })?;
-            if !handle.ingress.accepting()
-                || !APP_RUNTIME
-                    .with(|slot| Arc::ptr_eq(&slot.borrow().loop_identity, &factory_identity))
-            {
-                return Err(AppWindowError::Cancelled);
-            }
-            install_desktop_window(root, &installer_config, reload.clone(), window, host)
-        });
-        APP_RUNTIME.with(|slot| {
-            slot.borrow_mut().main_controller = Some(MainController {
-                ingress: Arc::clone(&ingress),
-                identity,
-                installer: Some(installer),
-                config: config.clone(),
-                open: None,
-                installing: None,
-                pending: None,
-                routes: None,
-                pending_wake: None,
-                closing: false,
-                initial: startup == StartupWindow::Open,
-                error: window_error,
-                fatal: recorded,
-                watcher,
-                agent,
-            });
-        });
-        for service in &config.services {
-            if let Err(error) = super::host::start_service(service) {
-                let fatal = APP_RUNTIME.with(|slot| {
-                    slot.borrow()
-                        .main_controller
-                        .as_ref()
-                        .map(|controller| Rc::clone(&controller.fatal))
-                });
-                if let Some(fatal) = fatal {
-                    fatal.replace(Some(AppRunError::Service {
-                        source: Arc::new(error),
-                    }));
-                }
-                let _ = handle.request_quit();
-                return Ok(());
-            }
-        }
-        if let Some(ready) = ready
-            && let Err(payload) =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ready(&handle)))
-        {
-            std::mem::forget(payload);
+    let teardown = LoopTeardown {
+        log: teardown_log,
+        watchdog: Rc::clone(&watchdog),
+    };
+    // A panic out of the platform's own loop is terminal (ADR-0258 §3): held
+    // for the exit's end, and the teardown runs as after any other end.
+    let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        platform.run(crate::app::runner::app_handler(move |owner| {
+            let Application {
+                mut factory,
+                config,
+                startup,
+                ready,
+                window_error,
+                ..
+            } = application;
+            let proxy = owner.proxy();
+            let ingress = Ingress::new(proxy, startup == StartupWindow::Open);
+            let handle = ingress.handle();
+            install_owner_platform(owner)?;
             APP_RUNTIME.with(|slot| {
-                if let Some(controller) = slot.borrow().main_controller.as_ref() {
-                    controller
-                        .fatal
-                        .borrow_mut()
-                        .replace(AppRunError::OnReadyPanicked);
+                let mut runtime = slot.borrow_mut();
+                runtime.main_ingress = Some(Arc::clone(&ingress));
+                runtime.main_host_lifecycle = flui_scheduler::AppLifecycleState::Resumed;
+                if let Some(executors) = config.executors.clone() {
+                    runtime.install_host_executors(executors);
+                }
+                runtime.reopen_lifecycles();
+                runtime.ensure_execution();
+            });
+            super::host::install_host_storage(&config);
+            install_exit_policy_hook(config.exit_policy);
+            install_platform_quit_hook();
+            let reopen = Arc::downgrade(&ingress);
+            super::host::route_reopen(move || {
+                if let Some(ingress) = reopen.upgrade() {
+                    ingress.request_native_show();
                 }
             });
-            let _ = handle.request_quit();
-        }
-        drive_main_window();
-        with_owner_platform(|owner| owner.shared().request_exit_policy_reevaluation());
-        Ok(())
+            let reload = WorkerReload::from_config(&config);
+            let watcher = reload.spawn_watcher(runtime_wake_callback());
+            let agent = config.dev_agent.as_ref().and_then(DevAgent::attach);
+            let installer_config = config.clone();
+            let identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
+            let factory_identity = Arc::clone(&identity);
+            let installer = Box::new(move |handle: &AppHandle, window, host| {
+                let root =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| factory(handle)))
+                        .map_err(|payload| {
+                            let message = flui_runtime::frame_failure::panic_text(
+                                installer_config.frame_failure_detail,
+                                payload.as_ref(),
+                            );
+                            std::mem::forget(payload);
+                            AppWindowError::FactoryPanicked { message }
+                        })?;
+                if !handle.ingress.accepting()
+                    || !APP_RUNTIME
+                        .with(|slot| Arc::ptr_eq(&slot.borrow().loop_identity, &factory_identity))
+                {
+                    return Err(AppWindowError::Cancelled);
+                }
+                install_desktop_window(root, &installer_config, reload.clone(), window, host)
+            });
+            APP_RUNTIME.with(|slot| {
+                slot.borrow_mut().main_controller = Some(MainController {
+                    ingress: Arc::clone(&ingress),
+                    identity,
+                    installer: Some(installer),
+                    config: config.clone(),
+                    open: None,
+                    installing: None,
+                    pending: None,
+                    routes: None,
+                    pending_wake: None,
+                    closing: false,
+                    initial: startup == StartupWindow::Open,
+                    error: window_error,
+                    fatal: recorded,
+                    watcher,
+                    agent,
+                });
+            });
+            for service in &config.services {
+                if let Err(error) = super::host::start_service(service) {
+                    let fatal = APP_RUNTIME.with(|slot| {
+                        slot.borrow()
+                            .main_controller
+                            .as_ref()
+                            .map(|controller| Rc::clone(&controller.fatal))
+                    });
+                    if let Some(fatal) = fatal {
+                        fatal.replace(Some(AppRunError::Service {
+                            source: Arc::new(error),
+                        }));
+                    }
+                    let _ = handle.request_quit();
+                    return Ok(());
+                }
+            }
+            if let Some(ready) = ready
+                && let Err(payload) =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ready(&handle)))
+            {
+                std::mem::forget(payload);
+                APP_RUNTIME.with(|slot| {
+                    if let Some(controller) = slot.borrow().main_controller.as_ref() {
+                        controller
+                            .fatal
+                            .borrow_mut()
+                            .replace(AppRunError::OnReadyPanicked);
+                    }
+                });
+                let _ = handle.request_quit();
+            }
+            drive_main_window();
+            with_owner_platform(|owner| owner.shared().request_exit_policy_reevaluation());
+            Ok(())
+        }))
     }));
-    drop(teardown);
-    let failure = fatal.borrow_mut().take();
-    if let Some(error) = failure {
-        return Err(error);
-    }
-    result.map_err(|error| AppRunError::Platform {
-        source: Arc::new(error),
+    let result = run.unwrap_or_else(|payload| {
+        super::terminal::hold_terminal(payload, "platform loop");
+        Ok(())
+    });
+    Ok(StartedLoop {
+        teardown,
+        owner_guard,
+        watchdog,
+        fatal,
+        result,
     })
 }
 
@@ -841,7 +953,7 @@ mod tests {
     }
     fn main_window_pending_coalesces_and_recovers_after_installer_panic() {
         let _owner = OwnerHostClearGuard::arm();
-        let _cleanup = LoopTeardown;
+        let _cleanup = LoopTeardown::default();
         let platform = HeadlessPlatform::new();
         let deferred = platform.enable_deferred_window_open();
         let turns = platform.owner_turns();
@@ -903,7 +1015,7 @@ mod tests {
 
         for close_before_publication in [false, true] {
             let _owner = OwnerHostClearGuard::arm();
-            let _cleanup = LoopTeardown;
+            let _cleanup = LoopTeardown::default();
             Box::new(HeadlessPlatform::new())
                 .run(crate::app::runner::app_handler(move |owner| {
                     let handle = install_test_controller(
@@ -983,12 +1095,12 @@ mod tests {
         }
     }
 
-    fn owner_failure_defers_new_window_work_until_recovery() {
+    fn a_contained_callback_failure_runs_accepted_window_work() {
         use super::super::owner_dispatch::{
             RuntimeTask, dispatch_platform_ui_runtime, install_platform_ui_runtime,
         };
         let _owner = OwnerHostClearGuard::arm();
-        let _cleanup = LoopTeardown;
+        let _cleanup = LoopTeardown::default();
         Box::new(HeadlessPlatform::new())
             .run(crate::app::runner::app_handler(move |owner| {
                 let calls = Rc::new(Cell::new(0));
@@ -1007,37 +1119,22 @@ mod tests {
                 );
                 let reply = Rc::new(RefCell::new(None));
                 let requested = Rc::clone(&reply);
-                let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    dispatch_platform_ui_runtime(
-                        outer,
-                        RuntimeTask::TestCallback(Box::new(move |_| {
-                            *requested.borrow_mut() = Some(
-                                handle
-                                    .request_show_main_window()
-                                    .expect("admit request before failure"),
-                            );
-                            panic!("owner callback failed");
-                        })),
-                    )
-                    .expect("admitted callback");
-                }))
-                .expect_err("preserve callback failure");
-                assert_eq!(
-                    failure.downcast_ref::<&str>(),
-                    Some(&"owner callback failed")
-                );
-                assert_eq!(calls.get(), 0, "recovery must not invoke a fresh installer");
-                assert!(
-                    reply
-                        .borrow_mut()
-                        .as_mut()
-                        .expect("accepted request")
-                        .try_result()
-                        .is_none()
-                );
-                dispatch_platform_ui_runtime(outer, RuntimeTask::TestCallback(Box::new(|_| {})))
-                    .expect("next healthy owner opportunity");
-                assert_eq!(calls.get(), 1, "accepted request survives the failed turn");
+                // The callback's panic is its operation's, contained (ADR-0258
+                // §1): the turn stays healthy and runs the window work it
+                // accepted.
+                dispatch_platform_ui_runtime(
+                    outer,
+                    RuntimeTask::TestCallback(Box::new(move |_| {
+                        *requested.borrow_mut() = Some(
+                            handle
+                                .request_show_main_window()
+                                .expect("admit request before failure"),
+                        );
+                        panic!("owner callback failed");
+                    })),
+                )
+                .expect("a contained callback failure leaves the dispatch accepted");
+                assert_eq!(calls.get(), 1, "the accepted request ran in the same turn");
                 assert!(matches!(
                     reply
                         .borrow_mut()
@@ -1122,7 +1219,7 @@ mod tests {
         crate::table_test::run_table(
             "main_window_installer_matrix",
             &[
-                ("owner_failure_defers_new_window_work_until_recovery", owner_failure_defers_new_window_work_until_recovery as fn()),
+                ("a_contained_callback_failure_runs_accepted_window_work", a_contained_callback_failure_runs_accepted_window_work as fn()),
                 (
                     "main_window_waits_for_deferred_runtime_publication",
                     main_window_waits_for_deferred_runtime_publication as fn(),

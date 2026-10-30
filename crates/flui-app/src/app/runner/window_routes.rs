@@ -37,6 +37,7 @@ use flui_platform::{
 };
 
 use super::host::APP_RUNTIME;
+use super::terminal::contained;
 
 type Route<A, R> = Box<dyn FnMut(A) -> R>;
 
@@ -236,59 +237,92 @@ impl WindowRoutes {
     }
 }
 
+// Every method's whole body runs under one catch (ADR-0258 §4): a panic,
+// whether the application's or the routing's own, is the loop's terminal
+// failure and the method answers the platform as if nothing ran, so no
+// application panic reaches the OS entry that called it. A frame is the
+// exception: its failure is answered `FrameOutcome::Failed`.
 impl WindowHandler for WindowRoutes {
     fn input(&self, event: PlatformInput) -> DispatchEventResult {
-        // A set route that is not out for a call (the replay of what was held
-        // takes it out) hears the input now.
-        if self.held.borrow().inputs.is_empty() && self.input.is_set() {
-            return self
-                .input
-                .call(event)
-                .expect("BUG: a set input route is there for its call");
-        }
-        // No route yet, or input still waiting for it: kept behind that, and
-        // handed over now when the route is there to take it.
-        self.held.borrow_mut().inputs.push_back(event);
-        self.deliver_held_inputs();
-        DispatchEventResult::DEFERRED
+        // A key whose handler panicked counts as handled: the platform does
+        // not act on it in the application's stead.
+        let handled = DispatchEventResult::resolved(false, true);
+        contained(handled, "window input", || {
+            // A set route that is not out for a call (the replay of what was
+            // held takes it out) hears the input now.
+            if self.held.borrow().inputs.is_empty() && self.input.is_set() {
+                return self
+                    .input
+                    .call(event)
+                    .expect("BUG: a set input route is there for its call");
+            }
+            // No route yet, or input still waiting for it: kept behind that,
+            // and handed over now when the route is there to take it.
+            self.held.borrow_mut().inputs.push_back(event);
+            self.deliver_held_inputs();
+            DispatchEventResult::DEFERRED
+        })
     }
 
     fn state_changed(&self) {
-        if self.state_changed.call(()).is_none() {
-            self.held.borrow_mut().state_changed = true;
-        }
+        contained((), "window state", || {
+            if self.state_changed.call(()).is_none() {
+                self.held.borrow_mut().state_changed = true;
+            }
+        });
     }
 
     fn frame_requested(&self, request: FrameRequest) -> FrameOutcome {
-        if self.frame_requested.call(request).is_some() {
-            return FrameOutcome::Produced;
-        }
-        // Answered with one frame once the route is set; nothing ran now.
-        self.held.borrow_mut().frame = Some(request);
-        FrameOutcome::Declined
+        // A frame is the one method whose failure is not terminal: the
+        // platform counts it as a frame that ran, and the next one is asked
+        // for as any frame is (ADR-0258 §4).
+        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if self.frame_requested.call(request).is_some() {
+                return FrameOutcome::Produced;
+            }
+            // Answered with one frame once the route is set; nothing ran now.
+            self.held.borrow_mut().frame = Some(request);
+            FrameOutcome::Declined
+        }));
+        ran.unwrap_or_else(|payload| {
+            super::terminal::contain_diagnostic(|| {
+                tracing::error!(
+                    panic = flui_foundation::panic::payload_text(payload.as_ref()),
+                    "a window's frame failed; the platform asks for it again"
+                );
+            });
+            flui_foundation::panic::retain_opaque_payload(payload);
+            FrameOutcome::Failed
+        })
     }
 
     fn close_requested(&self) -> CloseDecision {
-        self.close_requested.call(()).unwrap_or_else(|| {
-            // No presentation to ask yet: the window stays, and the request
-            // is asked once the route is set.
-            self.close_pending.set(true);
-            CloseDecision::KeepOpen
+        contained(CloseDecision::KeepOpen, "window close request", || {
+            self.close_requested.call(()).unwrap_or_else(|| {
+                // No presentation to ask yet: the window stays, and the
+                // request is asked once the route is set.
+                self.close_pending.set(true);
+                CloseDecision::KeepOpen
+            })
         })
     }
 
     fn closed(&self) {
-        let route = self.closed.borrow_mut().take();
-        match route {
-            Some(route) => route(),
-            None => self.closed_heard.set(true),
-        }
+        contained((), "window closed", || {
+            let route = self.closed.borrow_mut().take();
+            match route {
+                Some(route) => route(),
+                None => self.closed_heard.set(true),
+            }
+        });
     }
 
     fn surface_changed(&self, change: SurfaceChange) {
-        if self.surface_changed.call(change).is_none() {
-            self.held.borrow_mut().surface = Some(change);
-        }
+        contained((), "window surface", || {
+            if self.surface_changed.call(change).is_none() {
+                self.held.borrow_mut().surface = Some(change);
+            }
+        });
     }
 }
 

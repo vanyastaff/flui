@@ -1996,7 +1996,7 @@ the instant alone names an answer; observing no deadline permits later
 admission of the same absolute instant. The count of the frames the handlers
 produced at delivery is the delivery generation: the same instant re-arms
 after every frame
-produced since its delivery (`FrameOutcome::Produced`, or a `frame_requested`
+produced since its delivery (`FrameOutcome::Produced` or `Failed`, or a `frame_requested`
 that panicked), and never when none was. A frame request no handler runs a
 frame for (no window, a window that has let go of its handler, or a handler
 that answers `FrameOutcome::Declined`, visible or hidden) is not counted, so
