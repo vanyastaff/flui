@@ -1,4 +1,4 @@
-// Two-circle radial gradients with validated storage-buffer stops.
+// Two-circle radial gradients; the stops and their interpolation are in `stops.wgsl`.
 
 // Vertex input (unit quad)
 struct VertexInput {
@@ -24,13 +24,6 @@ struct InstanceInput {
 }
 
 // Gradient stop (same as linear)
-struct GradientStop {
-    color: vec4<f32>,
-    position: f32,
-    _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
-}
 
 // Vertex output
 struct VertexOutput {
@@ -63,52 +56,9 @@ struct Viewport {
 @group(0) @binding(0)
 var<uniform> viewport: Viewport;
 
-@group(1) @binding(0)
-var<storage, read> gradient_stops: array<GradientStop>;
-
 // =============================================================================
 // SDF Functions
 // =============================================================================
-
-// =============================================================================
-// Gradient Interpolation (same as linear)
-// =============================================================================
-
-fn interpolateGradient(t: f32, stop_count: u32, stop_offset: u32) -> vec4<f32> {
-    let t_clamped = clamp(t, 0.0, 1.0);
-
-    if (stop_count == 0u) {
-        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
-    }
-    if (stop_count == 1u) {
-        return gradient_stops[stop_offset].color;
-    }
-
-    var prev_stop = gradient_stops[stop_offset];
-    var next_stop = gradient_stops[stop_offset + 1u];
-
-    if (t_clamped <= prev_stop.position) {
-        return prev_stop.color;
-    }
-
-    for (var i = 1u; i < stop_count; i++) {
-        next_stop = gradient_stops[stop_offset + i];
-
-        if (t_clamped <= next_stop.position) {
-            let range = next_stop.position - prev_stop.position;
-            if (range > 0.0) {
-                let local_t = (t_clamped - prev_stop.position) / range;
-                return mix(prev_stop.color, next_stop.color, local_t);
-            } else {
-                return next_stop.color;
-            }
-        }
-
-        prev_stop = next_stop;
-    }
-
-    return next_stop.color;
-}
 
 // =============================================================================
 // Vertex Shader

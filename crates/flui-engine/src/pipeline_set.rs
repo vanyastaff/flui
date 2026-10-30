@@ -53,7 +53,7 @@
 //! The gradient bind-group update is encapsulated in
 //! [`PipelineSet::prepare_gradient_bind_group`](crate::pipeline_set::PipelineSet::prepare_gradient_bind_group),
 //! which takes `device` and `queue`
-//! as shared references and manages both the buffer write and bind-group
+//! as shared references and manages both the texture upload and bind-group
 //! recreation internally. This prevents a borrow conflict that would arise if the
 //! caller needed `&mut self.gradient_bind_group` while also holding
 //! `&self.gradient_bind_group_layout`. The pattern mirrors
@@ -74,6 +74,22 @@ use crate::{
     pipeline_cache::{PipelineCache, blend_state_for},
     ssaa::SsaaDownsamplePipeline,
 };
+
+/// Texels in a row of the gradient stop texture: `GRADIENT_STOP_ROW_TEXELS` in
+/// `shaders/gradients/stops.wgsl`. Its 16 KiB rows are a multiple of the 256
+/// bytes a texture copy's row needs.
+pub(crate) const GRADIENT_STOP_TEXTURE_WIDTH: u32 = 1024;
+
+/// Bytes in a row of the gradient stop texture: `rgba32float` texels.
+pub(crate) const GRADIENT_STOP_ROW_BYTES: usize = GRADIENT_STOP_TEXTURE_WIDTH as usize * 16;
+
+/// The rows `stops_bytes` takes in the gradient stop texture, or `None` when
+/// they exceed `max_rows`, the device's `max_texture_dimension_2d`.
+pub(crate) fn gradient_stop_rows(stops_bytes: usize, max_rows: u32) -> Option<u32> {
+    u32::try_from(stops_bytes.div_ceil(GRADIENT_STOP_ROW_BYTES).max(1))
+        .ok()
+        .filter(|rows| *rows <= max_rows)
+}
 
 /// Device-scoped collection of all `wgpu::RenderPipeline`s used by [`crate::painter::WgpuPainter`].
 ///
@@ -152,7 +168,7 @@ pub(crate) struct PipelineSet {
     /// a page grows.
     pub(crate) glyph_atlas_bind_group_layout: wgpu::BindGroupLayout,
 
-    /// Bind group layout for gradient pipelines (gradient-stops buffer at binding 0).
+    /// Bind group layout for gradient pipelines (gradient-stops texture at binding 0).
     ///
     /// Private: callers reach it via [`Self::prepare_gradient_bind_group`] to
     /// avoid the borrow-split described in the module doc.
@@ -515,24 +531,49 @@ impl PipelineSet {
 
     // ── Gradient bind-group refresh ────────────────────────────────────────────
 
-    /// Every encoded segment owns a distinct immutable stop table binding.
+    /// Every encoded segment owns a distinct immutable stop table binding: a
+    /// texture of [`GRADIENT_STOP_TEXTURE_WIDTH`] texels a row, two per stop
+    /// (`gradients/stops.wgsl`), padded with zeros to whole rows.
+    ///
+    /// `stops_bytes` is a whole number of stops; [`gradient_stop_rows`] says
+    /// whether it fits the device before a caller gets here.
     pub(crate) fn prepare_gradient_bind_group(
         &self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         stops_bytes: &[u8],
     ) -> wgpu::BindGroup {
         use wgpu::util::DeviceExt;
-        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Immutable Gradient Stops"),
-            contents: stops_bytes,
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let rows = stops_bytes.len().div_ceil(GRADIENT_STOP_ROW_BYTES).max(1);
+        let mut texels = stops_bytes.to_vec();
+        texels.resize(rows * GRADIENT_STOP_ROW_BYTES, 0);
+        let texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("Immutable Gradient Stops"),
+                size: wgpu::Extent3d {
+                    width: GRADIENT_STOP_TEXTURE_WIDTH,
+                    height: u32::try_from(rows)
+                        .expect("BUG: gradient_stop_rows bounded the rows by the device"),
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba32Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &texels,
+        );
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Gradient Stops Bind Group"),
             layout: &self.gradient_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: buffer.as_entire_binding(),
+                resource: wgpu::BindingResource::TextureView(&view),
             }],
         })
     }

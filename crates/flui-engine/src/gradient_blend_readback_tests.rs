@@ -502,6 +502,48 @@ fn ninth_gradient_stop_is_not_silently_clamped() {
     );
 }
 
+/// A gradient whose stops sit past the first row of the stop texture reads
+/// them from that row.
+///
+/// The stops of a whole segment share one texture, 512 stops to a row. Two
+/// draws of `MAX_GRADIENT_STOPS` each fill the first row, so the third
+/// draw's stops start the second: a lookup that ignored the row would read
+/// the first draw's red there instead of blue.
+fn gradient_stops_past_the_first_texture_row_read_back() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let full = crate::batches::MAX_GRADIENT_STOPS;
+    let column = |index: u32| Rect::from_xywh(f64::from(index * 20), 0.0, 20.0, f64::from(SIDE));
+    let mut builder = SceneBuilder::new();
+    let mut canvas = Canvas::new();
+    for (index, color, count) in [
+        (0, Color::rgb(255, 0, 0), full),
+        (1, Color::rgb(0, 255, 0), full),
+        (2, Color::rgb(0, 0, 255), 2),
+    ] {
+        let shader = Shader::LinearGradient {
+            from: Offset::new(0.0, 0.0),
+            to: Offset::new(f64::from(SIDE), 0.0),
+            colors: vec![color; count],
+            stops: None,
+            tile_mode: TileMode::Clamp,
+        };
+        canvas.draw_rect(column(index), &shader_paint(shader, BlendMode::SrcOver));
+    }
+    builder.add_picture(canvas.finish());
+    let pixels = renderer
+        .render_layer_tree(&builder.build(), (SIDE, SIDE))
+        .expect("gradients spanning two stop rows must render");
+    for (point, expected, label) in [
+        ((10, 32), [1.0, 0.0, 0.0, 1.0], "first row, first draw"),
+        ((30, 32), [0.0, 1.0, 0.0, 1.0], "first row, second draw"),
+        ((50, 32), [0.0, 0.0, 1.0, 1.0], "second row, third draw"),
+    ] {
+        assert_pixel(pixel_at(&pixels, point), expected, label);
+    }
+}
+
 // ── Acceptance 4: a shader on an arbitrary path paints the path ──────────────
 
 const RAMP_START: Color = Color::rgb(255, 0, 0);
@@ -1070,6 +1112,10 @@ fn gradients_read_back_as_specified() {
             excessive_gradient_work_refuses_then_next_frame_renders,
         ),
         ("ninth_stop", ninth_gradient_stop_is_not_silently_clamped),
+        (
+            "stops_past_first_row",
+            gradient_stops_past_the_first_texture_row_read_back,
+        ),
         (
             "porter_duff_modes",
             a_linear_gradient_renders_every_porter_duff_mode,
