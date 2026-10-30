@@ -158,7 +158,9 @@ pub(crate) fn list_keyboard_navigation() {
         let _ = app.enter_owner_scope(|| manager.dispatch_key_event(&repeat));
         app.pump();
         let built = app.count_elements_by_view_type::<RawButton>() - 2;
-        baseline_scroll.jump_to(scroll.pixels());
+        baseline_scroll
+            .jump_to(scroll.pixels())
+            .expect("no build is running");
         baseline.pump();
         baseline.pump();
         let bound = baseline.count_elements_by_view_type::<RawButton>() - 2 + 1;
@@ -225,7 +227,7 @@ pub(crate) fn focused_row_is_pinned_while_scrolled_away() {
     assert!(key(&mut app, NamedKey::ArrowDown));
     assert_eq!(focused(&app).as_deref(), Some("row1"));
 
-    scroll.jump_to(200_000.0);
+    scroll.jump_to(200_000.0).expect("no build is running");
     settle(&mut app);
     assert_eq!(
         scroll.pixels(),
