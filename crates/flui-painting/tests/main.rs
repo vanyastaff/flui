@@ -111,6 +111,10 @@ fn caret_contract() {
                 cc::mixed_bidi_boxes_carry_their_run_direction,
             ),
             (
+                "line_layouts_split_lines_by_direction_in_logical_order",
+                cc::line_layouts_split_lines_by_direction_in_logical_order,
+            ),
+            (
                 "a_trailing_newline_puts_the_caret_on_the_empty_line",
                 cc::a_trailing_newline_puts_the_caret_on_the_empty_line,
             ),
