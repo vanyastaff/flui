@@ -390,6 +390,11 @@ impl Page {
         };
         self.editor.set_semantics(Some(&host.element));
         let replaced = std::mem::replace(&mut *self.stage.borrow_mut(), Stage::Host(host));
+        // Removing the focused placeholder would leave the page's focus on
+        // the body, where no key reaches the window.
+        if placeholder_focused {
+            self.focus_canvas();
+        }
         if let Stage::Placeholder(placeholder) = replaced {
             placeholder.element.remove();
         }
@@ -440,7 +445,10 @@ impl Page {
         }
     }
 
-    /// Move the page's focus to the tree's focus.
+    /// Move the page's focus to the tree's focus. A focus whose element
+    /// takes no DOM focus (a root without `Action::Focus`) leaves the page's
+    /// focus on the canvas, and the claim stands until a later update names
+    /// a node that takes it.
     fn follow_focus(&self) {
         let element = {
             let tree = self.tree.borrow();
@@ -451,13 +459,28 @@ impl Page {
                 .focus()
                 .and_then(|focus| tree.elements.get(&focus).cloned())
         };
-        self.claim_focus.set(false);
         if let Some(element) = element {
-            let options = web_sys::FocusOptions::new();
-            options.set_prevent_scroll(true);
-            if let Err(error) = element.focus_with_options(&options) {
+            if let Err(error) = element.focus_with_options(&unscrolled()) {
                 warn_failure("the focused node's element could not be focused", &error);
             }
+            if self.holds_focus(&element) {
+                self.claim_focus.set(false);
+                return;
+            }
+        }
+        self.focus_canvas();
+    }
+
+    /// Keep the page's focus in the window: on the canvas, when nothing in
+    /// the host holds it.
+    fn focus_canvas(&self) {
+        if let Some(host) = self.host_element()
+            && self.holds_focus(&host)
+        {
+            return;
+        }
+        if let Err(error) = self.canvas.focus_with_options(&unscrolled()) {
+            warn_failure("the canvas could not be focused", &error);
         }
     }
 
@@ -717,6 +740,13 @@ fn arrange(parent: &HtmlElement, children: &[&HtmlElement]) -> Result<(), JsValu
         extra.remove();
     }
     Ok(())
+}
+
+/// Focus that leaves the page where it is scrolled.
+fn unscrolled() -> web_sys::FocusOptions {
+    let options = web_sys::FocusOptions::new();
+    options.set_prevent_scroll(true);
+    options
 }
 
 fn pixels(value: f64) -> String {

@@ -20,6 +20,14 @@ export function placeholderLabel() {
     return document.querySelector('flui-a11y-placeholder')?.getAttribute('aria-label') ?? null;
 }
 export function activatePlaceholder() { document.querySelector('flui-a11y-placeholder').click(); }
+export function focusPlaceholder() { document.querySelector('flui-a11y-placeholder').focus(); }
+// What holds the page's focus: a node's identifier, the canvas, or the tag.
+export function focused() {
+    const active = document.activeElement;
+    if (!active) return 'nothing';
+    if (active.id === 'flui-canvas') return 'canvas';
+    return active.getAttribute('data-flui-id') ?? active.tagName.toLowerCase();
+}
 // The host's elements as the browser's accessibility tree reads them.
 export function semanticsTree() {
     const read = element => {
@@ -78,6 +86,9 @@ extern "C" {
     fn placeholder_label() -> Option<String>;
     #[wasm_bindgen(js_name = activatePlaceholder)]
     fn activate_placeholder();
+    #[wasm_bindgen(js_name = focusPlaceholder)]
+    fn focus_placeholder();
+    fn focused() -> String;
     #[wasm_bindgen(js_name = semanticsTree)]
     fn semantics_tree() -> String;
     #[wasm_bindgen(js_name = hostOpacity)]
@@ -236,6 +247,31 @@ fn a_click_on_an_element_reaches_the_action_listener() {
         .collect();
     assert_eq!(asked, [(Action::Click, BUTTON)], "the label has no action");
     drop(actions);
+    window.close_now();
+}
+
+/// A keyboard user who activates the placeholder keeps the page's focus in
+/// the window: on the canvas while the published focus is a node that takes
+/// no DOM focus, on that node's element once one does.
+#[wasm_bindgen_test]
+fn activating_the_focused_placeholder_keeps_focus_in_the_window() {
+    let (_platform, window, accessibility) = open();
+    accessibility.publish(counter(0));
+    focus_placeholder();
+    assert_eq!(focused(), "flui-a11y-placeholder");
+
+    activate_placeholder();
+    assert_eq!(focused(), "canvas", "the root takes no DOM focus");
+
+    accessibility.publish(TreeUpdate {
+        focus: BUTTON,
+        ..counter(1)
+    });
+    assert_eq!(
+        focused(),
+        "increment",
+        "the claim waited for a focusable node"
+    );
     window.close_now();
 }
 
