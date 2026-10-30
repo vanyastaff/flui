@@ -33,6 +33,11 @@
 //! names no feature's platform file. A table that leaves one of them
 //! [`Absent`] gets windows that hand out [`Absent`].
 
+mod clipboard;
+
+pub use clipboard::{MemoryClipboard, NativeClipboard};
+pub(crate) use clipboard::{SharedClipboard, SyncClipboard};
+
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -42,9 +47,9 @@ use flui_foundation::geometry::Size;
 use flui_platform::data_transfer::{DataTransferSource, NullDataTransferSource};
 use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
 use flui_platform::{
-    ClipboardItem, DeviceId, DisplaySnapshot, HapticFeedback, PlatformHaptics,
-    PlatformSystemChrome, StorageName, SystemPreferences, SystemUiOverlayStyle, Unsupported,
-    UnsupportedReason, WindowCapabilities, WindowHandler, WindowId, WindowOptions,
+    DeviceId, DisplaySnapshot, HapticFeedback, PlatformHaptics, PlatformSystemChrome, StorageName,
+    SystemPreferences, SystemUiOverlayStyle, Unsupported, UnsupportedReason, WindowCapabilities,
+    WindowHandler, WindowId, WindowOptions,
 };
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
@@ -348,21 +353,7 @@ pub trait Input<O> {
 /// The clipboard position.
 pub trait Clipboard<O> {
     /// [`Platform::clipboard`].
-    fn clipboard(owner: &O) -> Arc<dyn flui_platform::Clipboard>;
-
-    /// [`Platform::write_to_clipboard`]: the item's text, through
-    /// [`clipboard`](Self::clipboard), unless the host keeps richer items.
-    fn write(owner: &O, item: ClipboardItem) {
-        if let Some(text) = item.text_content() {
-            Self::clipboard(owner).write_text(text.to_string());
-        }
-    }
-
-    /// [`Platform::read_from_clipboard`]: the clipboard's text, unless the host
-    /// keeps richer items.
-    fn read(owner: &O) -> Option<ClipboardItem> {
-        Self::clipboard(owner).read_text().map(ClipboardItem::text)
-    }
+    fn clipboard(owner: &O) -> Rc<dyn NativeClipboard>;
 }
 
 /// The drag-and-drop position.
@@ -547,19 +538,21 @@ impl<W: ?Sized> Text<W> for Absent<position::Text> {
     }
 }
 
-impl flui_platform::Clipboard for Absent<position::Clipboard> {
-    fn read_text(&self) -> Option<String> {
+/// A host without a clipboard holds nothing: a read answers `None`, a write
+/// is dropped.
+impl SyncClipboard for Absent<position::Clipboard> {
+    fn read_now(&self) -> Option<String> {
         None
     }
 
-    fn write_text(&self, text: String) {
+    fn write_now(&self, text: String) {
         drop(text);
     }
 }
 
 impl<O> Clipboard<O> for Absent<position::Clipboard> {
-    fn clipboard(_: &O) -> Arc<dyn flui_platform::Clipboard> {
-        Arc::new(Self::NEW)
+    fn clipboard(_: &O) -> Rc<dyn NativeClipboard> {
+        Rc::new(Self::NEW)
     }
 }
 

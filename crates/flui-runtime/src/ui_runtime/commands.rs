@@ -637,7 +637,7 @@ impl UiRuntime {
         .err();
         let mut first_panic = Some(payload);
         preserve_first_input_panic(&mut first_panic, answered, "semantics agent reply");
-        if !self.rx.is_empty() {
+        if self.has_queued_work() {
             let wake_panic = catch_unwind(AssertUnwindSafe(|| {
                 self.sender_prototype.wake_owner();
             }))
@@ -645,6 +645,12 @@ impl UiRuntime {
             preserve_first_input_panic(&mut first_panic, wake_panic, "semantics agent action wake");
         }
         resume_unwind(first_panic.expect("BUG: the semantics agent job panic must be preserved"));
+    }
+
+    /// Whether a command or an owner job waits for a later turn: what a
+    /// panicking drain must leave a wake for.
+    fn has_queued_work(&self) -> bool {
+        !self.rx.is_empty() || self.owner_jobs.has_queued()
     }
 
     fn rearm_after_command_panic(&self, payload: Box<dyn std::any::Any + Send>) -> ! {
@@ -993,7 +999,7 @@ impl UiRuntime {
                         // tail has a future owner turn before its opaque drop
                         // glue runs; two field panics cannot be contained by
                         // an outer catch in Rust.
-                        if !self.rx.is_empty()
+                        if self.has_queued_work()
                             && let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
                                 self.sender_prototype.wake_owner();
                             }))
@@ -1057,6 +1063,15 @@ impl UiRuntime {
                 }
             }
         }
+        // Then what providers posted back: settled completions run their
+        // waiting closures here, at the owner turn, never on the thread that
+        // answered. A panicking closure keeps the queued tail live, as a
+        // command's does, before resuming.
+        report.invoked += self.owner_jobs.drain(|job, scope| {
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| job.run(scope))) {
+                self.rearm_after_command_panic(payload);
+            }
+        });
         // A prior rearm wake may have panicked after leaving queue/redraw
         // demand durable. This completed owner boundary has made progress;
         // retry the delivery now so any work enqueued during this turn still

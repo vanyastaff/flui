@@ -629,7 +629,6 @@ fn run_platform_ownership_child(kind: &str) {
         crate::runtime_services::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            crate::presentation::test_clipboard(),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         ),

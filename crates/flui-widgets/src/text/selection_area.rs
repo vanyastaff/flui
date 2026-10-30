@@ -15,10 +15,12 @@
 
 use std::cell::RefCell;
 use std::cmp::Ordering;
+use std::ops::Range;
 use std::rc::Rc;
 
 use flui_foundation::panic::FirstPanic;
 use flui_objects::{RenderParagraph, SubtreeAnchor};
+use flui_painting::styling::Color;
 use flui_painting::text_boundaries;
 use flui_painting::typography::TextLink;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
@@ -33,6 +35,7 @@ use flui_view::{
 };
 
 use super::rich_text::ResolvedParagraph;
+use super::selection_style::{DefaultSelectionStyle, SelectionStyle};
 use crate::Semantics;
 use crate::anchored_box::AnchoredBox;
 use crate::support::RefCallback;
@@ -78,6 +81,7 @@ pub struct SelectionArea {
     child: BoxedView,
     on_selection_changed: Option<SelectionCallback>,
     role: SemanticsRole,
+    style: Option<SelectionStyle>,
 }
 
 impl std::fmt::Debug for SelectionArea {
@@ -86,6 +90,7 @@ impl std::fmt::Debug for SelectionArea {
             .field("child", &self.child)
             .field("on_selection_changed", &self.on_selection_changed.is_some())
             .field("role", &self.role)
+            .field("style", &self.style)
             .finish()
     }
 }
@@ -97,6 +102,7 @@ impl SelectionArea {
             child: child.into_view().boxed(),
             on_selection_changed: None,
             role: SemanticsRole::Document,
+            style: None,
         }
     }
 
@@ -112,6 +118,14 @@ impl SelectionArea {
         self.on_selection_changed = Some(Rc::new(move |cx, selected| {
             handler(cx, selected).report();
         }));
+        self
+    }
+
+    /// Highlight the selection with `style`, in place of the nearest
+    /// [`DefaultSelectionStyle`]'s or [`SelectionStyle::default`].
+    #[must_use]
+    pub fn style(mut self, style: SelectionStyle) -> Self {
+        self.style = Some(style);
         self
     }
 
@@ -185,7 +199,11 @@ impl ViewState<SelectionArea> for SelectionAreaState {
             .clone_from(&new_view.on_selection_changed);
     }
 
-    fn build(&self, view: &SelectionArea, _ctx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, view: &SelectionArea, ctx: &dyn BuildContext) -> impl IntoView {
+        let style = view
+            .style
+            .or_else(|| DefaultSelectionStyle::maybe_of(ctx))
+            .unwrap_or_default();
         let model = Rc::clone(&self.model);
         Semantics::new()
             .role(view.role)
@@ -193,7 +211,12 @@ impl ViewState<SelectionArea> for SelectionAreaState {
             .document_selection(self.model.selection.borrow().clone())
             .on_set_document_selection(move |cx, selection| model.select(cx, &selection))
             .child(SelectionScope {
-                registry: Some(Rc::clone(&self.model.registry)),
+                data: ScopeData {
+                    registry: Some(Rc::clone(&self.model.registry)),
+                    // The area takes no focus until pointer and keyboard
+                    // selection: it highlights as focused.
+                    color: style.active,
+                },
                 child: view.child.clone(),
             })
     }
@@ -226,7 +249,8 @@ impl SelectionModel {
         if self.selection.borrow().as_ref() == Some(&selection) {
             return;
         }
-        let selected = self.selected_text(&selection);
+        let covered = self.covered(&selection);
+        let selected = covered.as_ref().map(|covered| self.joined(covered));
         *self.selection.borrow_mut() = Some(selection);
         let rebuild = self.rebuild.borrow().clone();
         let listener = self.on_selection_changed.borrow().clone();
@@ -236,6 +260,7 @@ impl SelectionModel {
                 rebuild.schedule(RebuildReason::StateChange);
             }
         });
+        self.highlight(covered.as_deref().unwrap_or_default(), &mut failure);
         failure.contain(|| {
             if let Some(listener) = listener {
                 listener(cx, selected.as_ref());
@@ -244,10 +269,12 @@ impl SelectionModel {
         failure.resume();
     }
 
-    /// The text `selection` covers, in reading order; `None` when it covers
+    /// The parts of the texts `selection` covers, in reading order, each as
+    /// its entry's index and a byte range of its text; `None` when it covers
     /// none. Each text contributes only what its layout shows: the lines a
-    /// line limit cuts are not in its runs, so they are not reported either.
-    fn selected_text(&self, selection: &DocumentSelection) -> Option<SelectedText> {
+    /// line limit cuts are not in its runs, so they are neither reported nor
+    /// highlighted.
+    fn covered(&self, selection: &DocumentSelection) -> Option<Vec<Covered>> {
         let entries = self.registry.entries.borrow();
         let order = self.reading_order(&entries);
         let place = |at: &DocumentPosition| {
@@ -263,18 +290,82 @@ impl SelectionModel {
         if from == to {
             return None;
         }
-        let mut text = String::new();
-        for (rank, &(index, shown)) in order.iter().enumerate().take(to.0 + 1).skip(from.0) {
-            let content = entries[index].text.borrow();
-            let shown = shown.unwrap_or(content.len()).min(content.len());
-            let start = if rank == from.0 { from.1 } else { 0 }.min(shown);
-            let end = if rank == to.0 { to.1 } else { shown }.min(shown);
-            if rank > from.0 {
-                text.push('\n');
-            }
-            text.push_str(content.get(start..end).unwrap_or_default());
+        Some(
+            order
+                .iter()
+                .enumerate()
+                .take(to.0 + 1)
+                .skip(from.0)
+                .map(|(rank, &(index, shown))| {
+                    let length = entries[index].text.borrow().len();
+                    let shown = shown.unwrap_or(length).min(length);
+                    let start = if rank == from.0 { from.1 } else { 0 }.min(shown);
+                    let end = if rank == to.0 { to.1 } else { shown }.min(shown);
+                    Covered {
+                        index,
+                        range: start..end.max(start),
+                        to_end: rank != to.0,
+                    }
+                })
+                .collect(),
+        )
+    }
+
+    /// The covered parts' text, joined by `'\n'`.
+    fn joined(&self, covered: &[Covered]) -> SelectedText {
+        let entries = self.registry.entries.borrow();
+        let text = covered
+            .iter()
+            .map(|Covered { index, range, .. }| {
+                entries[*index]
+                    .text
+                    .borrow()
+                    .get(range.clone())
+                    .unwrap_or_default()
+                    .to_owned()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        SelectedText { text }
+    }
+
+    /// Gives each registered text its part of `covered` to highlight, and
+    /// rebuilds only the texts whose part changed. A part that runs to its
+    /// text's end is kept open-ended, so a text edited while selected
+    /// highlights what it holds now; the paragraph bounds it when it builds,
+    /// and its layout paints only the lines it shows. A rebuild that panics
+    /// stops neither the others nor the caller's listener: its failure is
+    /// held in `failure`.
+    fn highlight(&self, covered: &[Covered], failure: &mut FirstPanic) {
+        let changed: Vec<Rc<SelectableEntry>> = {
+            let entries = self.registry.entries.borrow();
+            entries
+                .iter()
+                .enumerate()
+                .filter_map(|(index, entry)| {
+                    let part = covered
+                        .iter()
+                        .find(|part| part.index == index && !part.range.is_empty())
+                        .map(|part| {
+                            let end = if part.to_end {
+                                usize::MAX
+                            } else {
+                                part.range.end
+                            };
+                            part.range.start..end
+                        });
+                    (entry.highlight.replace(part.clone()) != part).then(|| Rc::clone(entry))
+                })
+                .collect()
+        };
+        for entry in changed {
+            let rebuild = entry.rebuild.borrow().clone();
+            failure.contain(|| {
+                if let Some(rebuild) = rebuild {
+                    rebuild.schedule(RebuildReason::StateChange);
+                }
+            });
         }
-        Some(SelectedText { text })
     }
 
     /// The presented texts in the order the published document reads them,
@@ -444,45 +535,77 @@ impl SelectionRegistry {
         ))
     }
 }
-
-/// One registered text: the anchor its node declares, its plain text, and
-/// the box that measures it.
+/// One registered text: the anchor its node declares, its plain text, the
+/// box that measures it, the part of it the selection highlights and what
+/// rebuilds it when that part changes.
 struct SelectableEntry {
     anchor: SemanticsAnchor,
     text: RefCell<String>,
     subtree: SubtreeAnchor,
+    highlight: RefCell<Option<Range<usize>>>,
+    rebuild: RefCell<Option<RebuildHandle>>,
 }
 
-/// Hands the area's registry to the texts beneath it; a disabled container
-/// hands none.
+/// One text's part of a selection: its entry's index, the bytes its layout
+/// shows of that part, and whether the part runs on to the text's end
+/// rather than stopping at the selection's later end.
+struct Covered {
+    index: usize,
+    range: Range<usize>,
+    to_end: bool,
+}
+
+/// The selected bytes of one text and the colour that highlights them.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Highlight {
+    pub(super) range: Range<usize>,
+    pub(super) color: Color,
+}
+
+/// Hands the area's registry and highlight colour to the texts beneath it; a
+/// disabled container hands no registry.
 #[derive(Clone)]
 pub(super) struct SelectionScope {
-    registry: Option<Rc<SelectionRegistry>>,
+    data: ScopeData,
     child: BoxedView,
+}
+
+/// What a [`SelectionScope`] hands down.
+#[derive(Clone)]
+pub(super) struct ScopeData {
+    registry: Option<Rc<SelectionRegistry>>,
+    color: Color,
 }
 
 impl std::fmt::Debug for SelectionScope {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SelectionScope")
-            .field("enabled", &self.registry.is_some())
+            .field("enabled", &self.data.registry.is_some())
+            .field("color", &self.data.color)
             .finish_non_exhaustive()
     }
 }
 
 impl SelectionScope {
-    /// The registry of the area the text at `ctx` belongs to, registering a
-    /// dependency on it.
-    pub(super) fn registry_of(ctx: &dyn BuildContext) -> Option<Rc<SelectionRegistry>> {
-        ctx.depend_on::<Self, _>(|scope| scope.registry.clone())
-            .flatten()
+    /// The registry of the area the text at `ctx` belongs to and the colour
+    /// it highlights with, registering a dependency on both.
+    pub(super) fn registry_of(ctx: &dyn BuildContext) -> Option<(Rc<SelectionRegistry>, Color)> {
+        ctx.depend_on::<Self, _>(|scope| {
+            scope
+                .data
+                .registry
+                .clone()
+                .map(|registry| (registry, scope.data.color))
+        })
+        .flatten()
     }
 }
 
 impl InheritedView for SelectionScope {
-    type Data = Option<Rc<SelectionRegistry>>;
+    type Data = ScopeData;
 
     fn data(&self) -> &Self::Data {
-        &self.registry
+        &self.data
     }
 
     fn child(&self) -> &dyn View {
@@ -490,11 +613,12 @@ impl InheritedView for SelectionScope {
     }
 
     fn update_should_notify(&self, old: &Self) -> bool {
-        match (&self.registry, &old.registry) {
+        let registry_changed = match (&self.data.registry, &old.data.registry) {
             (Some(new), Some(old)) => !Rc::ptr_eq(new, old),
             (None, None) => false,
             _ => true,
-        }
+        };
+        registry_changed || self.data.color != old.data.color
     }
 }
 
@@ -525,7 +649,10 @@ impl View for SelectionContainer {
 impl StatelessView for SelectionContainer {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         SelectionScope {
-            registry: None,
+            data: ScopeData {
+                registry: None,
+                color: Color::TRANSPARENT,
+            },
             child: self.child.clone(),
         }
     }
@@ -537,6 +664,8 @@ pub(super) struct SelectableParagraph {
     paragraph: ResolvedParagraph,
     on_link: Option<RefCallback<TextLink>>,
     registry: Rc<SelectionRegistry>,
+    /// The colour the area highlights with.
+    color: Color,
 }
 
 impl SelectableParagraph {
@@ -544,11 +673,13 @@ impl SelectableParagraph {
         paragraph: ResolvedParagraph,
         on_link: Option<RefCallback<TextLink>>,
         registry: Rc<SelectionRegistry>,
+        color: Color,
     ) -> Self {
         Self {
             paragraph,
             on_link,
             registry,
+            color,
         }
     }
 
@@ -580,6 +711,8 @@ impl StatefulView for SelectableParagraph {
                 anchor: SemanticsAnchor::new(),
                 text: RefCell::new(self.plain_text()),
                 subtree: SubtreeAnchor::new(),
+                highlight: RefCell::new(None),
+                rebuild: RefCell::new(None),
             }),
             registry: Rc::clone(&self.registry),
         }
@@ -601,7 +734,8 @@ impl std::fmt::Debug for SelectableParagraphState {
 }
 
 impl ViewState<SelectableParagraph> for SelectableParagraphState {
-    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        *self.entry.rebuild.borrow_mut() = Some(ctx.rebuild_handle());
         self.registry.register(&self.entry);
     }
 
@@ -617,6 +751,14 @@ impl ViewState<SelectableParagraph> for SelectableParagraphState {
     fn build(&self, view: &SelectableParagraph, _ctx: &dyn BuildContext) -> impl IntoView {
         let paragraph = ResolvedParagraph {
             selectable: Some(self.entry.anchor.clone()),
+            highlight: self.entry.highlight.borrow().clone().and_then(|range| {
+                let length = self.entry.text.borrow().len();
+                let range = range.start.min(length)..range.end.min(length);
+                (!range.is_empty()).then_some(Highlight {
+                    range,
+                    color: view.color,
+                })
+            }),
             ..view.paragraph.clone()
         };
         AnchoredBox::new(
@@ -626,6 +768,7 @@ impl ViewState<SelectableParagraph> for SelectableParagraphState {
     }
 
     fn dispose(&mut self) {
+        self.entry.rebuild.borrow_mut().take();
         self.registry.unregister(&self.entry);
     }
 }

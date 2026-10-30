@@ -105,7 +105,7 @@
 //!
 //! - **Mock Windows**: `open_window()` returns mock windows (no OS windows
 //!   created)
-//! - **In-Memory Clipboard**: Full clipboard API with in-memory storage
+//! - **In-Memory Clipboard**: a clipboard that reads back what the application wrote
 //! - **Mock Displays**: Single virtual display at 1920x1080
 //! - **Background Executor**: Async task execution with tokio runtime
 //! - **Fast Tests**: <100ms overhead, suitable for rapid test iteration
@@ -246,6 +246,7 @@ pub use window::installation::{
 // this crate's public API (the window-open family lives with its
 // capability types in `owner`).
 pub use error::{BootstrapError, PlatformError, PlatformResult};
+pub use host::NativeClipboard;
 // Re-export executor types
 #[cfg(not(target_arch = "wasm32"))]
 pub use executor::BackgroundExecutor;

@@ -5,8 +5,8 @@
 //! conformance kit (`flui_testing::text_store_kit`) certifies itself
 //! against, and the store a platform backend's tests drive without mounting
 //! a widget tree. It stands to [`TextStore`] as
-//! `flui_platform::InMemoryClipboard` stands to
-//! `flui_platform::Clipboard`. It lives beside the lock arbiter and ledger it
+//! `flui_testing::ScriptedClipboard` stands to
+//! `flui_interaction::ClipboardBackend`. It lives beside the lock arbiter and ledger it
 //! drives, which are this crate's (ADR-0264).
 //!
 //! Its geometry is a fixed grid: every Unicode scalar is one cell

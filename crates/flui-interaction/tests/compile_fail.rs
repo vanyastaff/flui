@@ -13,6 +13,8 @@ fn trybuild_ui() {
     cases.compile_fail("tests/compile_fail/tap_drag_details_are_non_exhaustive.rs");
     cases.compile_fail("tests/compile_fail/haptics_host_is_configured_before_its_handles.rs");
     cases.compile_fail("tests/compile_fail/a_recognizer_names_what_it_must_implement.rs");
+    // `a_clipboard_handle_stays_on_its_thread` (ADR-0152 §3).
+    cases.compile_fail("tests/compile_fail/a_clipboard_handle_stays_on_its_thread.rs");
     cases.pass("tests/compile_pass/dyn_compatible_extension_points.rs");
     cases.pass("tests/compile_pass/open_arena_member.rs");
     cases.pass("tests/compile_pass/allocated_interaction_identities.rs");

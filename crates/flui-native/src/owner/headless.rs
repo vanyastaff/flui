@@ -14,9 +14,9 @@ use std::{
     thread::{self, ThreadId},
 };
 
+use crate::host::MemoryClipboard;
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_foundation::{ClaimSlot, DataTransferId, claim_slot};
-use flui_platform::InMemoryClipboard;
 use flui_platform::data_transfer::{DropFeedback, RepresentationDescriptor, TransferActions};
 use flui_platform::drag::{OsDragEndHook, OsDragProvider, OsDragStart, PlatformDragSource};
 use parking_lot::Mutex;
@@ -205,7 +205,7 @@ pub(crate) struct HeadlessState {
     /// Called when a test changes the keyboard layout.
     pub(crate) keyboard_layout_changed: Option<Box<dyn FnMut() + Send>>,
     background_executor: Arc<TestExecutor>,
-    pub(crate) clipboard: Arc<InMemoryClipboard>,
+    pub(crate) clipboard: Arc<dyn crate::host::SharedClipboard>,
     is_running: bool,
     /// The windows the platform tracks: the window feature's.
     pub(crate) windows: Arc<dyn TrackedWindows>,
@@ -323,7 +323,7 @@ impl HeadlessLoop {
             app,
             keyboard_layout_changed: None,
             background_executor: Arc::new(TestExecutor::new("background")),
-            clipboard: Arc::new(InMemoryClipboard::new()),
+            clipboard: Arc::new(MemoryClipboard::new()),
             is_running: false,
             windows,
             keyboard_layout: "en-US".to_string(),

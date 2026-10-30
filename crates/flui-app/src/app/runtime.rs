@@ -23,7 +23,7 @@ use flui_native::OwnerPlatform;
 use flui_painting::{FontCollection, HostFontFeed};
 #[cfg(target_os = "android")]
 use flui_platform::WindowExecutionState;
-use flui_platform::{Clipboard, PlatformWindow, RedrawRequester};
+use flui_platform::{PlatformWindow, RedrawRequester};
 use parking_lot::Mutex;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -412,7 +412,12 @@ pub(crate) struct AppRuntime {
     /// X11 connection) would stay pinned behind this `Arc` past the event
     /// loop's exit. See [`Drop`]'s impl below for the last-resort third clear
     /// path.
-    platform_clipboard: Arc<Mutex<Option<Arc<dyn Clipboard>>>>,
+    platform_clipboard: crate::app::capability::ClipboardSlot,
+    /// The providers every UI runtime this host builds acquires platform
+    /// capabilities from (ADR-0152): the application's, checked for conflicts
+    /// before the loop starts, or the built-ins alone when a runner starts
+    /// without an [`Application`](crate::app::Application).
+    pub(super) capabilities: Option<flui_runtime::capability::CapabilityRegistry>,
     /// The platform instance's data-transfer source and the nonce that names
     /// this platform instance's drags (ADR-0211 §3), installed and cleared
     /// with the clipboard. Every UI runtime this host builds takes both.
@@ -526,7 +531,8 @@ impl AppRuntime {
             needs_redraw: Arc::new(AtomicBool::new(false)),
             redraw_window: Rc::default(),
             redraw_requester: Arc::new(Mutex::new(None)),
-            platform_clipboard: Arc::new(Mutex::new(None)),
+            platform_clipboard: Rc::default(),
+            capabilities: None,
             platform_data_transfer: Arc::new(Mutex::new(None)),
             host_storage: None,
             flush_host: None,
@@ -1180,9 +1186,9 @@ impl AppRuntime {
     /// composition-root borrow as well as this slot's lock.
     pub(super) fn set_platform_clipboard(
         &self,
-        clipboard: Arc<dyn Clipboard>,
-    ) -> Option<Arc<dyn Clipboard>> {
-        self.platform_clipboard.lock().replace(clipboard)
+        clipboard: Rc<dyn flui_native::NativeClipboard>,
+    ) -> Option<Rc<dyn flui_native::NativeClipboard>> {
+        self.platform_clipboard.borrow_mut().replace(clipboard)
     }
 
     /// The explicit, deterministic teardown clear — the first of the two
@@ -1199,7 +1205,7 @@ impl AppRuntime {
         )
     )]
     pub(super) fn clear_platform_clipboard(&self) {
-        let _prev = self.platform_clipboard.lock().take();
+        let _prev = self.platform_clipboard.borrow_mut().take();
         let _prev = self.platform_data_transfer.lock().take();
     }
 
@@ -1273,18 +1279,23 @@ impl AppRuntime {
         self.host_storage.clone()
     }
 
-    /// Access the installed platform clipboard, if any. Every runner reads it
-    /// through `runner::host::runtime_clipboard` to hand each UI runtime it builds
-    /// the platform clipboard.
-    pub(super) fn clipboard(&self) -> Option<Arc<dyn Clipboard>> {
-        let clipboard = self.platform_clipboard.lock().clone();
-        if clipboard.is_none() {
-            tracing::debug!(
-                "AppRuntime::clipboard: no platform clipboard installed (not yet \
-                 bootstrapped, or torn down)"
-            );
-        }
-        clipboard
+    /// The providers the next UI runtime this host builds acquires platform
+    /// capabilities from: the run's registry, or the built-ins alone.
+    pub(super) fn capability_registry(&self) -> flui_runtime::capability::CapabilityRegistry {
+        self.capabilities
+            .clone()
+            .unwrap_or_else(|| crate::app::capability::built_in_registry(&self.platform_clipboard))
+    }
+
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    /// The slot the built-in clipboard provider reads the owner platform's
+    /// clipboard from.
+    pub(super) fn clipboard_slot(&self) -> &crate::app::capability::ClipboardSlot {
+        &self.platform_clipboard
     }
 }
 
@@ -1393,7 +1404,7 @@ impl Drop for AppRuntime {
     /// particular order relative to window/surface teardown, so this may
     /// run before, after, or never relative to those.
     fn drop(&mut self) {
-        let _prev = self.platform_clipboard.lock().take();
+        let _prev = self.platform_clipboard.borrow_mut().take();
         let _prev = self.platform_data_transfer.lock().take();
     }
 }

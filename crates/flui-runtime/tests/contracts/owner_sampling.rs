@@ -225,7 +225,6 @@ fn manual_runtime(clock: ManualClock) -> (UiRuntime, ManualWindow) {
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock),
         ),

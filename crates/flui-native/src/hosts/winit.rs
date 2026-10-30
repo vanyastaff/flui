@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use flui_platform::Clipboard;
+use crate::host::SharedClipboard;
 
 #[cfg(target_os = "linux")]
 use crate::accessibility::linux::UnixAccessibility;
@@ -111,7 +111,7 @@ impl WinitHost for Winit {
 
     /// The system clipboard through `arboard`, or an inert one where it
     /// cannot open (a headless session).
-    fn clipboard() -> Arc<dyn Clipboard> {
+    fn clipboard() -> Arc<dyn SharedClipboard> {
         ArboardClipboard::or_inert()
     }
 

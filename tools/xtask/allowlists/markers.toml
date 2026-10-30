@@ -157,7 +157,7 @@ count = 4
 [[allow]]
 path = "crates/flui-native/src/platform.rs"
 class = "spec-task"
-count = 4
+count = 3
 
 [[allow]]
 path = "crates/flui-rendering/src/lib.rs"

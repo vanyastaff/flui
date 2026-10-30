@@ -34,17 +34,10 @@ pub(super) fn start_service(
     }
 }
 
-/// The platform clipboard for [`crate::app::ui_runtime::UiRuntime::try_new`]'s
-/// `clipboard` parameter. Same borrow rule as [`runtime_wake_callback`].
-///
-/// # Panics
-///
-/// If no platform clipboard is installed: [`install_owner_platform`] installs
-/// it, and every runner calls that before it builds any ui_runtime.
-pub(super) fn runtime_clipboard() -> Arc<dyn flui_platform::Clipboard> {
-    APP_RUNTIME
-        .with(|slot| slot.borrow().clipboard())
-        .expect("BUG: the runner installs the platform clipboard before it builds a ui_runtime")
+/// The providers a UI runtime this host builds acquires platform capabilities
+/// from (ADR-0152). Same borrow rule as [`runtime_wake_callback`].
+pub(super) fn runtime_capabilities() -> flui_runtime::capability::CapabilityRegistry {
+    APP_RUNTIME.with(|slot| slot.borrow().capability_registry())
 }
 
 /// The app's font collection for [`crate::app::ui_runtime::UiRuntime::try_new`]'s
@@ -290,7 +283,7 @@ const CLOSE_VETOES: &[flui_view::CloseReason] = &[
 const CLOSE_VETOES: &[flui_view::CloseReason] = &[];
 
 /// Builds a runner's UI runtime with its own window wake and redraw debt,
-/// the platform clipboard and the app's font
+/// the platform capabilities and the app's font
 /// collection and the host's byte storage. Every runner site and secondary
 /// window builds its UI runtime through this one call, so a UI runtime cannot be
 /// handed a stand-in for any of them.
@@ -320,10 +313,10 @@ pub(super) fn build_ui_runtime(
     let mut host = crate::app::ui_runtime::RuntimeHostServices::new(
         wake,
         redraw,
-        runtime_clipboard(),
         &fonts,
         flui_scheduler::ClockSource::Platform,
-    );
+    )
+    .with_capabilities(runtime_capabilities());
     if let Some(storage) = runtime_storage() {
         host = host.with_storage(storage);
     }
@@ -609,9 +602,9 @@ pub(crate) fn install_owner_platform(
         not(target_arch = "wasm32")
     ))]
     super::main_window::shutdown_main_window();
-    // The platform clipboard (ADR-0038 §9) is installed with the owner, so
-    // every ui_runtime a runner builds afterwards finds it (`runtime_clipboard`).
-    let clipboard = owner.shared().clipboard();
+    // The platform clipboard is installed with the owner, so every ui_runtime
+    // a runner builds afterwards acquires it (`runtime_capabilities`).
+    let clipboard = owner.clipboard();
     let data_transfer = owner.shared().data_transfer();
     let (previous, previous_owner_turn_wake, previous_host, previous_clipboard) =
         APP_RUNTIME.with(|slot| {

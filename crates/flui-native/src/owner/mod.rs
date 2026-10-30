@@ -136,7 +136,7 @@ use crate::host_window::{HostWindow, OwnerThreadToken};
 use crate::platform::{PathPromptOptions, Platform, PlatformExecutor};
 use crate::task::Task;
 use flui_platform::data_transfer::DataTransferSource;
-use flui_platform::{Clipboard, ClipboardItem, WindowHandler, WindowId, WindowOptions};
+use flui_platform::{WindowHandler, WindowId, WindowOptions};
 use signal::{OwnerSignal, SignalTransport};
 
 // ============================================================================
@@ -192,6 +192,13 @@ impl OwnerPlatform {
     /// Returns unsupported on backends without this transport, or owner-gone after quit.
     pub fn on_wake(&self, callback: Box<dyn FnMut() + Send>) -> Result<(), WakeRegistrationError> {
         self.hooks.on_wake(callback)
+    }
+
+    /// The host's plain-text clipboard, owner-local: the application's
+    /// clipboard provider builds its handles over it (ADR-0152).
+    #[must_use]
+    pub fn clipboard(&self) -> std::rc::Rc<dyn crate::NativeClipboard> {
+        self.platform.clipboard()
     }
 
     /// Tell the platform the application released the session end it asked to
@@ -270,7 +277,7 @@ impl OwnerPlatform {
     }
 
     /// Escapes to the residual thread-safe surface: `background_executor`,
-    /// `clipboard`, callback registration, and the rest of §2's "stays on
+    /// callback registration, and the rest of §2's "stays on
     /// `Platform`" list, wrapped in a `Clone + Send + Sync` handle a
     /// `std::thread::scope` worker can freely hold — see
     /// [`SharedPlatform`]'s own doc for why this can no longer be
@@ -382,12 +389,6 @@ impl SharedPlatform {
         self.platform.data_dirs(app)
     }
 
-    /// The platform's clipboard interface.
-    #[must_use]
-    pub fn clipboard(&self) -> Arc<dyn Clipboard> {
-        self.platform.clipboard()
-    }
-
     /// The data-transfer transport (ADR-0038).
     #[must_use]
     pub fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
@@ -466,17 +467,6 @@ impl SharedPlatform {
         suggested_name: Option<&str>,
     ) -> Task<Result<Option<PathBuf>, PlatformError>> {
         self.platform.prompt_for_new_path(directory, suggested_name)
-    }
-
-    /// Writes a rich clipboard item (text + metadata).
-    pub fn write_to_clipboard(&self, item: ClipboardItem) {
-        self.platform.write_to_clipboard(item);
-    }
-
-    /// Reads a rich clipboard item.
-    #[must_use]
-    pub fn read_from_clipboard(&self) -> Option<ClipboardItem> {
-        self.platform.read_from_clipboard()
     }
 }
 

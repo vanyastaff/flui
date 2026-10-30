@@ -159,7 +159,6 @@ fn runtime_on(window: PresentationWindow) -> UiRuntime {
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         ),

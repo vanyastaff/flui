@@ -7,14 +7,13 @@
 //!
 //! - `windows`: `OpenClipboard` with an owner window of its own;
 //! - `apple`: `NSPasteboard` on macOS, `UIPasteboard` on iOS;
-//! - `android`: an in-process stand-in until the system clipboard is reached
-//!   through JNI;
-//! - `web`: `navigator.clipboard`, read back from what the page wrote;
+//! - `android`: no file yet; the host holds a `MemoryClipboard` until the
+//!   system clipboard is reached through JNI;
+//! - `web`: `navigator.clipboard`, whose read answers when its promise
+//!   settles;
 //! - `winit`: `arboard`;
-//! - `headless`: the contract's in-memory clipboard.
+//! - `headless`: a `MemoryClipboard`, one per loop.
 
-#[cfg(target_os = "android")]
-pub(crate) mod android;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) mod apple;
 mod headless;

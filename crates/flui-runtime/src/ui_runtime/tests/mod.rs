@@ -41,7 +41,6 @@ pub(super) fn new_runtime(wake: Arc<dyn Fn() + Send + Sync>) -> Result<UiRuntime
         crate::runtime_services::RuntimeHostServices::new(
             wake,
             Arc::new(AtomicBool::new(false)),
-            crate::presentation::test_clipboard(),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         ),
@@ -59,7 +58,6 @@ fn new_runtime_with_capacity(
         crate::runtime_services::RuntimeHostServices::new(
             wake,
             Arc::new(AtomicBool::new(false)),
-            crate::presentation::test_clipboard(),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         ),
@@ -411,6 +409,7 @@ fn wake_debt_and_signal_write_matrix() {
             ("signal_write_routing::a_panicking_signal_write_keeps_its_envelope", signal_write_routing::a_panicking_signal_write_keeps_its_envelope as fn()),
             ("signal_write_routing::a_signal_of_one_window_is_not_writable_while_another_window_builds", signal_write_routing::a_signal_of_one_window_is_not_writable_while_another_window_builds as fn()),
             ("signal_write_routing::stale_signal_command_disposal_panic_rearms_its_fifo_tail", signal_write_routing::stale_signal_command_disposal_panic_rearms_its_fifo_tail as fn()),
+            ("signal_write_routing::stale_signal_command_disposal_panic_rearms_a_queued_owner_job", signal_write_routing::stale_signal_command_disposal_panic_rearms_a_queued_owner_job as fn()),
             ("signal_write_routing::a_failed_signal_write_rearm_retries_at_the_next_owner_boundary", signal_write_routing::a_failed_signal_write_rearm_retries_at_the_next_owner_boundary as fn()),
             ("signal_write_routing::an_older_overlapping_wake_cannot_clear_newer_failed_delivery_debt", signal_write_routing::an_older_overlapping_wake_cannot_clear_newer_failed_delivery_debt as fn()),
             ("redraw_wake_routing::a_cross_thread_frame_request_reaches_the_ui_runtimes_platform_wake", redraw_wake_routing::a_cross_thread_frame_request_reaches_the_ui_runtimes_platform_wake as fn()),
