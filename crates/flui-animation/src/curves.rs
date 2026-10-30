@@ -1,4 +1,4 @@
-//! Common easing presets, usable directly or wrapped in [`crate::ArcCurve`].
+//! Common easing presets, usable directly or wrapped in [`crate::SharedCurve`].
 //!
 //! [`EASE`], [`EASE_IN`], [`EASE_OUT`] and [`EASE_IN_OUT`] use the CSS control
 //! points. Other Bézier presets approximate their named motion styles; a

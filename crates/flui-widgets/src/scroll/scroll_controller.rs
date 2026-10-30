@@ -63,7 +63,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use flui_animation::{Animation, AnimationController, AnimationRunFuture, ArcCurve, MotionSpec};
+use flui_animation::{Animation, AnimationController, AnimationRunFuture, MotionSpec, SharedCurve};
 use flui_foundation::Listenable;
 use flui_foundation::panic::PanicRecovery;
 use flui_rendering::view::{ScrollPosition, ViewportOffset};
@@ -103,7 +103,7 @@ pub(super) enum PendingScrollCommand {
     AnimateTo {
         target_pixels: f64,
         duration: Duration,
-        curve: ArcCurve,
+        curve: SharedCurve,
     },
     /// A jump asked while a pass of the attached scrollable's chain ran:
     /// clamped to the extents when it lands.
@@ -390,7 +390,7 @@ impl ScrollController {
     /// position.
     ///
     /// See this module's docs for why this returns no completion future.
-    pub fn animate_to(&self, target_pixels: f64, duration: Duration, curve: ArcCurve) {
+    pub fn animate_to(&self, target_pixels: f64, duration: Duration, curve: SharedCurve) {
         if duration.is_zero() {
             self.jump_to(target_pixels);
             return;

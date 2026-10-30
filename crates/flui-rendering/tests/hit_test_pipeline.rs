@@ -634,8 +634,10 @@ impl flui_rendering::traits::RenderBox for BombMetadataLeaf {
 
     fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {}
 
-    fn metadata(&self) -> Option<std::sync::Arc<dyn std::any::Any + Send + Sync>> {
-        Some(std::sync::Arc::new(PanicsWhenDropped))
+    fn metadata(&self) -> Option<flui_rendering::hit_testing::HitMetadata> {
+        Some(flui_rendering::hit_testing::HitMetadata::new(
+            PanicsWhenDropped,
+        ))
     }
 }
 

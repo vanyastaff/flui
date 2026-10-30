@@ -25,7 +25,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
-use flui_animation::curve::{ArcCurve, Curve};
+use flui_animation::curve::{Curve, SharedCurve};
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, CurvedAnimation, DrivenController, Vsync,
     VsyncUpdate, curves,
@@ -102,8 +102,8 @@ pub struct AnimatedSwitcher {
     child: Option<BoxedView>,
     duration: Duration,
     reverse_duration: Option<Duration>,
-    switch_in_curve: ArcCurve,
-    switch_out_curve: ArcCurve,
+    switch_in_curve: SharedCurve,
+    switch_out_curve: SharedCurve,
     transition: EntryTransition,
     layout_builder: AnimatedSwitcherLayoutBuilder,
 }
@@ -143,7 +143,7 @@ impl EntryTransition {
 
 thread_local! {
     // Canonical, thread-shared handles for the default builders — mirrors
-    // the by-value equality built-in `ArcCurve`s have (same rationale,
+    // the by-value equality built-in `SharedCurve`s have (same rationale,
     // `thread_local!` here rather than a
     // `static OnceLock` because `Rc<dyn Fn>` is neither `Send` nor `Sync`).
     // Without this, every `AnimatedSwitcher::new()` would mint a FRESH `Rc`
@@ -169,8 +169,8 @@ impl AnimatedSwitcher {
             child: None,
             duration,
             reverse_duration: None,
-            switch_in_curve: ArcCurve::new(curves::LINEAR),
-            switch_out_curve: ArcCurve::new(curves::LINEAR),
+            switch_in_curve: SharedCurve::new(curves::LINEAR),
+            switch_out_curve: SharedCurve::new(curves::LINEAR),
             transition: EntryTransition::Builder(DEFAULT_TRANSITION_BUILDER.with(Clone::clone)),
             layout_builder: DEFAULT_LAYOUT_BUILDER.with(Clone::clone),
         }
@@ -216,15 +216,15 @@ impl AnimatedSwitcher {
 
     /// Overrides the curve applied while a child transitions in.
     #[must_use]
-    pub fn switch_in_curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
-        self.switch_in_curve = ArcCurve::new(curve);
+    pub fn switch_in_curve(mut self, curve: impl Curve + 'static) -> Self {
+        self.switch_in_curve = SharedCurve::new(curve);
         self
     }
 
     /// Overrides the curve applied while a child transitions out.
     #[must_use]
-    pub fn switch_out_curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
-        self.switch_out_curve = ArcCurve::new(curve);
+    pub fn switch_out_curve(mut self, curve: impl Curve + 'static) -> Self {
+        self.switch_out_curve = SharedCurve::new(curve);
         self
     }
 
@@ -378,8 +378,8 @@ impl ChildEntry {
         child_number: u64,
         duration: Duration,
         reverse_duration: Option<Duration>,
-        switch_in_curve: ArcCurve,
-        switch_out_curve: ArcCurve,
+        switch_in_curve: SharedCurve,
+        switch_out_curve: SharedCurve,
         transition: &EntryTransition,
         animate: bool,
         vsync: Option<&Vsync>,
@@ -778,8 +778,8 @@ mod retirement_tests {
                 index as u64,
                 Duration::from_secs(1),
                 None,
-                ArcCurve::new(curves::LINEAR),
-                ArcCurve::new(curves::LINEAR),
+                SharedCurve::new(curves::LINEAR),
+                SharedCurve::new(curves::LINEAR),
                 &EntryTransition::Builder(builder),
                 true,
                 Some(&vsync),

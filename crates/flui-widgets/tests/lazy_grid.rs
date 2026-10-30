@@ -7,15 +7,13 @@
 //! `RenderSliverGrid::perform_layout`, the second lays out the now-built
 //! tiles.
 
-use std::sync::Arc;
-
 use crate::common::{lay_out, tight};
-use flui_rendering::delegates::{SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount};
+use flui_rendering::delegates::SliverGridDelegateWithFixedCrossAxisCount;
 use flui_view::ViewExt;
 use flui_widgets::prelude::*;
 
-fn two_column_delegate() -> Arc<dyn SliverGridDelegate> {
-    Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(2))
+fn two_column_delegate() -> SliverGridDelegateWithFixedCrossAxisCount {
+    SliverGridDelegateWithFixedCrossAxisCount::new(2)
 }
 
 // ============================================================================

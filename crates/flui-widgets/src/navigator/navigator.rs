@@ -1678,7 +1678,7 @@ impl NavigatorHandle {
             return false;
         }
         // Both `insert` and `remove` hand back the displaced `PopPacing`, which
-        // may own an `Arc<dyn Curve + Send + Sync>` — a caller-supplied value whose
+        // may own an `Rc<dyn Curve>` — a caller-supplied value whose
         // `Drop` is user code. The guard is the first temporary in the statement,
         // so it would otherwise still be alive when that value drops. Same rule as
         // the registry's displaced closures and the history's undelivered results.

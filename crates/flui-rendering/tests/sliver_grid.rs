@@ -24,8 +24,6 @@
 //! max_paint_extent=400, cache_extent=200, hit_test_extent=200,
 //! has_visual_overflow=true.
 
-use std::sync::Arc;
-
 use flui_foundation::Leaf;
 use flui_foundation::geometry::{Rect, Size};
 use flui_objects::RenderSliverGrid;
@@ -116,7 +114,7 @@ impl RenderBox for SliverHost {
 /// Returns `(owner, root_id, grid_sliver_id, child_ids)`.
 fn build_grid_tree(
     constraints: SliverConstraints,
-    delegate: Arc<dyn flui_rendering::delegates::SliverGridDelegate>,
+    delegate: SliverGridDelegateWithFixedCrossAxisCount,
     child_count: usize,
 ) -> (
     PipelineOwner<flui_rendering::pipeline::phase::Layout>,
@@ -183,8 +181,8 @@ fn primary_constraints() -> SliverConstraints {
         .build()
 }
 
-fn two_column_delegate() -> Arc<dyn flui_rendering::delegates::SliverGridDelegate> {
-    Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(2))
+fn two_column_delegate() -> SliverGridDelegateWithFixedCrossAxisCount {
+    SliverGridDelegateWithFixedCrossAxisCount::new(2)
 }
 
 fn primary_geometry() {

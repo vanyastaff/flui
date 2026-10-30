@@ -14,8 +14,6 @@
 //! - **Keys**: `Key`, `ValueKey`, `UniqueKey` for widget identity
 //!   (ObjectKey/GlobalKey in flui-view)
 //! - **Change Notification**: Observable patterns for reactive UI updates
-//! - **Callbacks**: `VoidCallback`, `ValueChanged`, and other callback type
-//!   aliases
 //! - **Listener IDs**: Stable identifiers for change-notification listeners
 //! - **Diagnostics**: Debugging and introspection utilities
 //! - **Error Handling**: Standardized error types and utilities
@@ -165,7 +163,6 @@ pub mod affinity;
 // Compile-time child-count markers the render protocol attaches to nodes.
 pub mod arity;
 pub mod async_snapshot;
-pub mod callbacks;
 // Generic at-most-once request/reply primitive (ADR-0039 §3): the winit
 // owner lane's claim-slot reply protocol composes this; its state-machine
 // tests live here so CI actually runs them (same rationale as `affinity`).
@@ -234,11 +231,6 @@ pub use affinity::OwnerAffinity;
 // shadow `std::ops::Range`.
 pub use arity::{Arity, AtLeast, Exact, Leaf, Never, Optional, Range, Single, Variable};
 pub use async_snapshot::{AsyncSnapshot, ConnectionState};
-// Callbacks
-pub use callbacks::{
-    FallibleCallback, Predicate, ValueChanged, ValueGetter, ValueSetter, ValueTransformer,
-    VoidCallback,
-};
 // Claim-slot request/reply primitive (ADR-0039 §3)
 pub use claim_slot::{ClaimHandle, ClaimOutcome, ClaimSlot, claim_slot};
 // Monotonic time source (OS / virtual clock) — foundational primitive injected
@@ -326,8 +318,6 @@ pub mod prelude {
         EPSILON,
         // IDs
         ElementId,
-        // Callbacks
-        FallibleCallback,
         IS_DESKTOP,
         IS_MOBILE,
         IS_WEB,
@@ -343,7 +333,6 @@ pub mod prelude {
         ListenerId,
         // Observer IDs
         ObserverId,
-        Predicate,
         PresentationAddress,
         PresentationId,
         RELEASE_MODE,
@@ -352,16 +341,11 @@ pub mod prelude {
         TreeId,
         UiRuntimeId,
         UniqueKey,
-        ValueChanged,
-        ValueGetter,
         ValueKey,
         ValueListenable,
         ValueNotifier,
-        ValueSetter,
-        ValueTransformer,
         ViewId,
         ViewKey,
-        VoidCallback,
         WithKey,
     };
 }

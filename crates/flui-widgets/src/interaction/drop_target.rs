@@ -17,7 +17,6 @@
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::Arc;
 
 use flui_foundation::geometry::{Offset, Point};
 use flui_interaction::LocalPayloadTarget;
@@ -455,7 +454,7 @@ impl ReceiverAnchor {
         match ctx.register_local_payload(payload) {
             Ok(target) => {
                 self.ticket.ticket.set(Some(target));
-                render_object.set_shared_metadata(Some(Arc::new(target)));
+                render_object.set_metadata(Some(target));
             }
             Err(error) => tracing::debug!(
                 ?error,

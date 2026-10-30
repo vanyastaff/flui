@@ -536,7 +536,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
 
     /// Opaque payload this box attaches to any hit that lands on it — see
     /// [`RenderObject::metadata`].
-    fn metadata(&self) -> Option<std::sync::Arc<dyn std::any::Any + Send + Sync>> {
+    fn metadata(&self) -> Option<crate::hit_testing::HitMetadata> {
         None
     }
 
@@ -902,7 +902,7 @@ where
         <T as RenderBox>::blocks_hit_slop(self)
     }
 
-    fn metadata(&self) -> Option<std::sync::Arc<dyn std::any::Any + Send + Sync>> {
+    fn metadata(&self) -> Option<crate::hit_testing::HitMetadata> {
         <T as RenderBox>::metadata(self)
     }
 

@@ -18,8 +18,9 @@
 //! orphan and emits nothing. Both log a diagnostic. Decoding a reading
 //! allocates nothing once the registry holds its contacts.
 //!
-//! In debug builds with the `native-capture` feature, `capture` journals
-//! every registry call on a thread as a native recording (ADR-0215 §4).
+//! In debug builds with the `native-capture` feature, `journal::capture`
+//! records every registry call on a thread as a native recording (ADR-0215
+//! §4).
 
 #![forbid(unsafe_code)]
 
@@ -34,7 +35,7 @@ macro_rules! journal {
 mod batch;
 mod buttons;
 #[cfg(all(debug_assertions, feature = "native-capture"))]
-pub mod capture;
+use crate::journal::capture;
 mod clock;
 mod pan_zoom;
 mod registry;

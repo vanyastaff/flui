@@ -16,8 +16,9 @@ use crate::attributes::SemanticsAttributes;
 use crate::identity::AccessibilityNodeId;
 use crate::properties::{HeadingLevel, TextDirection};
 use crate::role::{Assertiveness, SemanticsRole};
-use crate::states::{States, Toggled};
+use crate::states::{AutoComplete, Current, HasPopup, Invalid, States, Toggled};
 use crate::{CellPosition, NumericRange, SemanticsAction, SetSize, SortDirection, TableShape};
+use flui_foundation::geometry::Axis;
 
 /// The window root every row's node hangs under.
 const ROOT: NodeId = NodeId(u64::MAX);
@@ -140,7 +141,7 @@ fn nz(number: usize) -> NonZeroUsize {
 }
 
 fn range() -> NumericRange {
-    NumericRange::new(4.0, 0.0, 10.0, 2.0).expect("finite fixture")
+    NumericRange::try_new(4.0, 0.0, 10.0, 2.0).expect("finite fixture")
 }
 
 /// Every published attribute reaches the consumer as its AccessKit property.
@@ -163,6 +164,10 @@ fn every_published_attribute_reads_through_the_consumer() {
         hint: _,
         tooltip: _,
         placeholder: _,
+        keyboard_shortcut: _,
+        language: _,
+        url: _,
+        role_description: _,
         identifier: _,
         text_direction: _,
         custom_actions: _,
@@ -203,6 +208,10 @@ fn every_published_attribute_reads_through_the_consumer() {
         modal: _,
         required: _,
         invalid: _,
+        current: _,
+        has_popup: _,
+        auto_complete: _,
+        orientation: _,
         // Not per-node properties: AccessKit expresses focusability as the
         // `Focus` action a focusable node registers, and focus as the update's
         // `focus`, which the owner resolves from `focused`
@@ -529,8 +538,120 @@ fn every_published_attribute_reads_through_the_consumer() {
         Row::new(
             "invalid",
             R::TextInput,
-            |a| a.states.invalid = Some(true),
+            |a| a.states.invalid = Some(Invalid::True),
             |n| n.data().invalid() == Some(accesskit::Invalid::True),
+        ),
+        Row::new(
+            "invalid spelling",
+            R::TextInput,
+            |a| a.states.invalid = Some(Invalid::Spelling),
+            |n| n.data().invalid() == Some(accesskit::Invalid::Spelling),
+        ),
+        Row::new(
+            "invalid grammar",
+            R::TextInput,
+            |a| a.states.invalid = Some(Invalid::Grammar),
+            |n| n.data().invalid() == Some(accesskit::Invalid::Grammar),
+        ),
+        Row::new(
+            "validated and passed",
+            R::TextInput,
+            |a| a.states.invalid = Some(Invalid::False),
+            |n| n.data().invalid().is_none(),
+        ),
+        Row::new(
+            "current page",
+            R::Link,
+            |a| a.states.current = Some(Current::Page),
+            |n| n.data().aria_current() == Some(accesskit::AriaCurrent::Page),
+        ),
+        Row::new(
+            "current step",
+            R::ListItem,
+            |a| a.states.current = Some(Current::Step),
+            |n| n.data().aria_current() == Some(accesskit::AriaCurrent::Step),
+        ),
+        Row::new(
+            "has popup",
+            R::Button,
+            |a| a.states.has_popup = Some(HasPopup::ListBox),
+            |n| n.data().has_popup() == Some(accesskit::HasPopup::Listbox),
+        ),
+        Row::new(
+            "auto complete",
+            R::ComboBox,
+            |a| a.states.auto_complete = Some(AutoComplete::Both),
+            |n| n.data().auto_complete() == Some(accesskit::AutoComplete::Both),
+        ),
+        Row::new(
+            "orientation",
+            R::Slider,
+            |a| a.states.orientation = Some(Axis::Vertical),
+            |n| n.data().orientation() == Some(accesskit::Orientation::Vertical),
+        ),
+        Row::new(
+            "horizontal orientation",
+            R::TabList,
+            |a| a.states.orientation = Some(Axis::Horizontal),
+            |n| n.data().orientation() == Some(accesskit::Orientation::Horizontal),
+        ),
+        Row::new(
+            "keyboard shortcut",
+            R::Button,
+            |a| a.keyboard_shortcut = Some("Control+S".into()),
+            |n| n.data().keyboard_shortcut() == Some("Control+S"),
+        ),
+        Row::new(
+            "language",
+            R::None,
+            |a| {
+                a.label = Some("Bonjour".into());
+                a.language = Some("fr-FR".into());
+            },
+            |n| n.data().language() == Some("fr-FR"),
+        ),
+        Row::new(
+            "url",
+            R::Link,
+            |a| {
+                a.label = Some("Docs".into());
+                a.url = Some("https://example.org/docs".into());
+            },
+            |n| n.data().url() == Some("https://example.org/docs"),
+        ),
+        Row::new(
+            "role description",
+            R::Group,
+            |a| a.role_description = Some("slide".into()),
+            |n| n.data().role_description() == Some("slide"),
+        ),
+        Row::new(
+            "large step",
+            R::Slider,
+            |a| {
+                a.numeric_range = Some(range().with_jump(5.0).expect("positive jump"));
+            },
+            |n| n.data().numeric_value_jump() == Some(5.0),
+        ),
+        Row::new(
+            "generic",
+            R::Generic,
+            |a| a.label = Some("Wrapper".into()),
+            |n| {
+                n.role() == Role::GenericContainer
+                    && n.label().is_none()
+                    && n.description().as_deref() == Some("Wrapper")
+            },
+        ),
+        Row::new(
+            "presentation",
+            R::Presentation,
+            |a| a.label = Some("Decoration".into()),
+            |n| {
+                n.role() == Role::GenericContainer
+                    && !n.label_comes_from_value()
+                    && n.value().is_none()
+            },
         ),
         Row {
             actions: SemanticsAction::Focus.value(),
@@ -602,6 +723,24 @@ fn an_inapplicable_attribute_is_not_published() {
             R::Button,
             |a| a.states.modal = Some(true),
             |n| !n.is_modal(),
+        ),
+        Row::new(
+            "orientation on a button",
+            R::Button,
+            |a| a.states.orientation = Some(Axis::Horizontal),
+            |n| n.data().orientation().is_none(),
+        ),
+        Row::new(
+            "a popup on a heading",
+            R::Heading,
+            |a| a.states.has_popup = Some(HasPopup::Menu),
+            |n| n.data().has_popup().is_none(),
+        ),
+        Row::new(
+            "auto complete on a button",
+            R::Button,
+            |a| a.states.auto_complete = Some(AutoComplete::List),
+            |n| n.data().auto_complete().is_none(),
         ),
         Row::new(
             "a table shape on a set container with no role",
@@ -851,7 +990,10 @@ fn every_role_is_kept_and_named_through_the_consumer() {
     ];
     let mut failed = Vec::new();
     for &role in SemanticsRole::ALL {
-        if role == SemanticsRole::None {
+        // Structure only: published as a container the consumer lifts its
+        // children out of (the `generic` and `presentation` rows of
+        // `every_published_attribute_reads_through_the_consumer`).
+        if matches!(role, R::None | R::Generic | R::Presentation) {
             continue;
         }
         let Some(&(_, want)) = expected.iter().find(|(known, _)| *known == role) else {

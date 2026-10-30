@@ -1869,6 +1869,7 @@ dependencies = [
  "serde_json",
  "slab",
  "smallvec",
+ "static_assertions",
  "thiserror 2.0.21",
  "tracing",
  "tracing-subscriber",
@@ -2199,6 +2200,7 @@ dependencies = [
  "flui-native",
  "flui-painting",
  "flui-platform",
+ "flui-protocol",
  "flui-semantics",
  "flui-testing",
  "futures-util",
@@ -2527,6 +2529,7 @@ dependencies = [
 name = "flui-widgets"
 version = "0.2.0-dev"
 dependencies = [
+ "accesskit",
  "accesskit_consumer",
  "bitflags 2.13.2",
  "criterion",
@@ -2550,6 +2553,7 @@ dependencies = [
  "percent-encoding",
  "proptest",
  "smallvec",
+ "static_assertions",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
@@ -7858,9 +7862,11 @@ dependencies = [
  "cargo_metadata",
  "clap",
  "keyboard-types",
+ "kurbo",
  "proc-macro2",
  "pulldown-cmark",
  "regex",
+ "roxmltree",
  "serde",
  "serde_json",
  "sha2",

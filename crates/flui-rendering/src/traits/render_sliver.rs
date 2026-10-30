@@ -307,7 +307,7 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     /// hit walk reads it exactly as the box walk does; without this forward it
     /// would read the `RenderObject` default and no sliver could ever attach a
     /// payload, which is a quieter failure than not offering the hook at all.
-    fn metadata(&self) -> Option<std::sync::Arc<dyn std::any::Any + Send + Sync>> {
+    fn metadata(&self) -> Option<crate::hit_testing::HitMetadata> {
         None
     }
 
@@ -592,7 +592,7 @@ where
     // Effect-layer and lifecycle forwards — same pattern as the BoxProtocol
     // blanket: call into the RenderSliver method so overrides are visible
     // through `&dyn RenderObject<SliverProtocol>`.
-    fn metadata(&self) -> Option<std::sync::Arc<dyn std::any::Any + Send + Sync>> {
+    fn metadata(&self) -> Option<crate::hit_testing::HitMetadata> {
         <T as RenderSliver>::metadata(self)
     }
 

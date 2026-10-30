@@ -50,6 +50,14 @@ pub(crate) struct SemanticsAttributes {
     pub(crate) tooltip: Option<SmolStr>,
     /// What an empty text field shows in place of a value.
     pub(crate) placeholder: Option<SmolStr>,
+    /// The keys that activate or focus the node (`aria-keyshortcuts`).
+    pub(crate) keyboard_shortcut: Option<SmolStr>,
+    /// The BCP 47 language of the node's text.
+    pub(crate) language: Option<SmolStr>,
+    /// The address a link leads to or an image came from.
+    pub(crate) url: Option<SmolStr>,
+    /// What a screen reader says for the role (`aria-roledescription`).
+    pub(crate) role_description: Option<SmolStr>,
     /// The widget author's stable identifier for tests and automation
     /// (ADR-0240): published as AccessKit `author_id`, never announced, never
     /// merged into another node.

@@ -31,9 +31,9 @@ pub struct Flow<C = Vec<BoxedView>> {
 impl<C> Flow<C> {
     /// A flow of the given children, driven by `delegate`, with the
     /// default `Clip::HardEdge` clip behavior.
-    pub fn new(delegate: Rc<dyn FlowDelegate>, children: C) -> Self {
+    pub fn new(delegate: impl FlowDelegate + 'static, children: C) -> Self {
         Self {
-            delegate,
+            delegate: Rc::new(delegate),
             clip_behavior: Clip::HardEdge,
             children,
         }

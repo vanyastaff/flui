@@ -183,7 +183,10 @@ pub use controls::{
 pub use flex::{Column, Expanded, Flex, Flexible, Row, Spacer};
 pub use flui_painting::ImagePlacement;
 pub use flui_painting::paint::ImageRepeat;
-pub use icon::{Icon, IconData, IconTheme, IconThemeData};
+pub use icon::{
+    AnimatedIcon, AnimatedIconData, AnimatedIconState, Icon, IconCommand, IconCommandBuf, IconData,
+    IconDataError, IconPath, IconPathBuf, IconTheme, IconThemeData,
+};
 #[cfg(feature = "asset-images")]
 pub use image::AssetImage;
 #[cfg(feature = "asset-images")]
@@ -370,9 +373,10 @@ pub use flui_interaction::{
     PanZoomEvent, TapDetails,
 };
 pub use flui_rendering::semantics::{
-    ActionCall, Assertiveness, CellPosition, HeadingLevel, NumericRange, NumericRangeError, Reveal,
-    ScrollUnit as SemanticsScrollUnit, SemanticsAnchor, SemanticsConfiguration, SemanticsRole,
-    SetSize, SortDirection, TableShape, TextDirection as SemanticsTextDirection, Toggled,
+    ActionCall, Assertiveness, AutoComplete, CellPosition, Current, HasPopup, HeadingLevel,
+    Invalid, NumericRange, NumericRangeError, Reveal, ScrollUnit as SemanticsScrollUnit,
+    SemanticsAnchor, SemanticsConfiguration, SemanticsRole, SetSize, SortDirection, TableShape,
+    TextDirection as SemanticsTextDirection, Toggled,
 };
 
 // ============================================================================

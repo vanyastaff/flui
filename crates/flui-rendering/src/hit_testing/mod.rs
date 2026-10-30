@@ -47,7 +47,7 @@ mod result;
 // consumers' `use crate::hit_testing::HitTestResult` imports compile
 // unchanged.
 pub use entry::HitTestEntry;
-pub use flui_interaction::pointer::{CursorRequest, HitTestBehavior};
+pub use flui_interaction::pointer::{CursorRequest, HitMetadata, HitTestBehavior};
 // Pointer-event dispatch surface: a `RenderObject` advertises a data-only
 // `PointerTarget` (see `RenderObject::pointer_target`) that the pipeline
 // attaches to its hit entry; dispatch resolves the target through the

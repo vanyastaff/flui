@@ -2,6 +2,7 @@
 //! (ADR-0238 §9, R16): a delta against the tree the action started on, the
 //! whole tree, or nothing, taken from the frame the action's effect landed in.
 
+use std::rc::Rc;
 use std::sync::atomic::AtomicU32;
 
 use flui_protocol::{
@@ -112,7 +113,7 @@ fn an_action_that_dirtied_nothing_still_reads_back_after_a_frame() {
     node.config_mut().set_role(SemanticsRole::Button);
     node.config_mut().set_label("Press");
     node.config_mut()
-        .add_action(SemanticsAction::Click, Arc::new(|_| {}));
+        .add_action(SemanticsAction::Click, Rc::new(|_| {}));
     let mut owner = SemanticsOwner::new(Arc::new(|_| {}));
     let root = owner.insert(node);
     owner.set_root(Some(root));
@@ -162,7 +163,7 @@ fn a_window_that_closes_first_leaves_an_outcome_that_ran_without_a_reading() {
     node.config_mut().set_role(SemanticsRole::Button);
     node.config_mut().set_label("Press");
     node.config_mut()
-        .add_action(SemanticsAction::Click, Arc::new(|_| {}));
+        .add_action(SemanticsAction::Click, Rc::new(|_| {}));
     let mut owner = SemanticsOwner::new(Arc::new(|_| {}));
     let root = owner.insert(node);
     owner.set_root(Some(root));

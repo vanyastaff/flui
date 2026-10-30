@@ -18,6 +18,9 @@ proc-macro2 = { workspace = true, features = ["span-locations"] }
 # `cargo xtask markers`: Markdown read as events, not lines.
 pulldown-cmark = { workspace = true }
 regex = { workspace = true }
+# `cargo xtask icon-import`: SVG path data (`kurbo`) and SVG/AVD XML (`roxmltree`).
+kurbo = { workspace = true }
+roxmltree = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

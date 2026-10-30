@@ -290,6 +290,17 @@ pub struct UiRuntime {
     /// An owner lease defers operation diagnostics until its registry residence
     /// is restored. Direct runtime transactions deliver at their own boundary.
     pub(crate) owner_checkout_active: Cell<bool>,
+    /// The commit anchor is owed (ADR-0142 item 5): a frame drive closed its
+    /// presentations' commits and has not yet run every queued grant with
+    /// them open again — the drive unwound, or a presentation's anchor
+    /// failed. The next owner turn pays it ([`Self::pay_owed_anchor`]) and
+    /// only a completed anchor clears it; a wake that failed does not.
+    anchor_owed: Cell<bool>,
+    /// The presentation whose press is committing its composition before the
+    /// press is dispatched (ADR-0142 item 4). Pointer input owner code sends
+    /// that presentation from inside the commit (an `on_changed` that
+    /// dispatches a press) is not a second contact, and is dropped.
+    press_commit: Cell<Option<flui_foundation::PresentationId>>,
     /// Runtime-scoped policy for retaining unstructured frame-failure text.
     /// Set once by the runner from `AppConfig`; a shared-UI runtime secondary
     /// presentation inherits this existing UI runtime policy.

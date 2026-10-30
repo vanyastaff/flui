@@ -16,6 +16,7 @@
 //! they can run — and fail — against the pre-diff implementation.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -404,10 +405,10 @@ impl NumericControl {
         let numeric = Arc::clone(&received);
         control
             .config_mut()
-            .set_numeric_range(NumericRange::new(0.0, 0.0, 10.0, 1.0).expect("finite fixture"));
+            .set_numeric_range(NumericRange::try_new(0.0, 0.0, 10.0, 1.0).expect("finite fixture"));
         control.config_mut().add_action(
             SemanticsAction::SetNumericValue,
-            Arc::new(move |call| {
+            Rc::new(move |call| {
                 let ActionCall::SetNumericValue(value) = call else {
                     panic!("the numeric handler received {call:?}");
                 };
@@ -451,7 +452,7 @@ impl NumericControl {
             .expect("control remains live")
             .config_mut()
             .set_numeric_range(
-                flui_semantics::NumericRange::new(0.0, 0.0, 5.0, 1.0)
+                flui_semantics::NumericRange::try_new(0.0, 0.0, 5.0, 1.0)
                     .expect("finite narrower range"),
             );
         self.owner.mark_dirty(self.id);
@@ -600,7 +601,7 @@ impl RevealFixture {
             };
             ancestor.config_mut().add_action(
                 SemanticsAction::ScrollIntoView,
-                Arc::new(move |call| {
+                Rc::new(move |call| {
                     let _capture = &capture;
                     assert!(matches!(call, ActionCall::ScrollIntoView(Some(_))));
                     sink.lock().push(name);
@@ -749,7 +750,7 @@ fn configuration_capture_retirement_preserves_first_failure_and_healthy_destruct
                 panic_on_drop,
                 failure,
             };
-            Arc::new(move |_| {
+            Rc::new(move |_| {
                 let _capture = &capture;
             })
         };
@@ -975,6 +976,86 @@ fn relations_resolve_through_anchors_across_publication() {
     assert_eq!(dropped.labelled_by(), &[] as &[accesskit::NodeId]);
 }
 
+/// Each relation reaches its AccessKit property through the same anchor
+/// resolution as `labelled_by`. A single-target property takes the first
+/// target in identity order, whichever node declared the anchor first, and a
+/// relation to an anchor no node declares is dropped.
+#[test]
+fn every_relation_resolves_to_its_accesskit_property() {
+    use flui_semantics::{SemanticsAnchor, SemanticsRelation};
+
+    let render = |index: u32| {
+        RenderId::new_gen(
+            index,
+            core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
+        )
+    };
+    let published = |index: u32| {
+        accesskit::NodeId(flui_semantics::AccessibilityNodeId::from(render(index)).as_u64())
+    };
+    let help = SemanticsAnchor::new();
+    let details = SemanticsAnchor::new();
+    let next = SemanticsAnchor::new();
+    let error = SemanticsAnchor::new();
+    let option = SemanticsAnchor::new();
+    let unknown = SemanticsAnchor::new();
+
+    let (mut owner, received) = recording_owner();
+    let root = owner.insert(node(0, "root"));
+    // The error anchor is declared by two nodes, the later one first.
+    let targets = [
+        (5, "Must contain @", error.clone()),
+        (1, "Your work address", help),
+        (2, "Address book", details),
+        (3, "Password", next),
+        (4, "Required", error),
+        (6, "name@example.com", option),
+    ];
+    let mut field = SemanticsNode::new().with_source_render_id(render(9));
+    for (kind, anchor) in [
+        (SemanticsRelation::DescribedBy, &targets[1].2),
+        (SemanticsRelation::Details, &targets[2].2),
+        (SemanticsRelation::FlowTo, &targets[3].2),
+        (SemanticsRelation::ErrorMessage, &targets[0].2),
+        (SemanticsRelation::ActiveDescendant, &targets[5].2),
+        (SemanticsRelation::Controls, &unknown),
+    ] {
+        field.config_mut().add_relation(kind, anchor.clone());
+    }
+    for (index, label, anchor) in targets {
+        let mut target = node(index, label);
+        target.config_mut().add_anchor(anchor);
+        let target = owner.insert(target);
+        owner.add_child(root, target);
+    }
+    let field = owner.insert(field);
+    owner.add_child(root, field);
+    owner.set_root(Some(root));
+    owner.flush();
+
+    let update = &received.lock()[0];
+    let published_field = update
+        .nodes
+        .iter()
+        .find(|(id, _)| *id == published(9))
+        .map(|(_, node)| node.clone())
+        .expect("the full update carries the field");
+    assert_eq!(published_field.described_by(), &[published(1)]);
+    assert_eq!(published_field.details(), &[published(2)]);
+    assert_eq!(published_field.flow_to(), &[published(3)]);
+    assert_eq!(
+        published_field.error_message(),
+        Some(published(4)),
+        "the first target in identity order, not in declaration order"
+    );
+    assert_eq!(published_field.active_descendant(), Some(published(6)));
+    assert_eq!(
+        published_field.controls(),
+        &[] as &[accesskit::NodeId],
+        "a relation to an anchor no node declares is dropped"
+    );
+}
+
 /// A node whose only annotation is its selection still reaches the platform:
 /// an annotation consisting of one declared state is not an empty one.
 #[test]
@@ -1170,7 +1251,7 @@ fn an_action_under_an_unaddressable_node_is_not_found() {
     let counter = Arc::clone(&calls);
     button.config_mut().add_action(
         SemanticsAction::Click,
-        Arc::new(move |_| *counter.lock() += 1),
+        Rc::new(move |_| *counter.lock() += 1),
     );
     let button = owner.insert(button);
     owner.add_child(root, button);
@@ -1343,14 +1424,14 @@ fn an_unattached_alias_does_not_replace_published_custom_actions() {
     let ran = Arc::clone(&calls);
     let archive = item
         .config_mut()
-        .add_custom_action("Archive", Arc::new(move |_| ran.lock().push("item")));
+        .add_custom_action("Archive", Rc::new(move |_| ran.lock().push("item")));
     let item = owner.insert(item);
     owner.add_child(root, item);
     owner.set_root(Some(root));
     let mut orphan = node(1, "orphan");
     orphan
         .config_mut()
-        .add_custom_action("Delete", Arc::new(|_| panic!("the orphan is never run")));
+        .add_custom_action("Delete", Rc::new(|_| panic!("the orphan is never run")));
     let _orphan = owner.insert(orphan);
     owner.flush();
 
@@ -1591,7 +1672,7 @@ fn a_disclosure_admits_the_transition_both_states_allow() {
         let clicks = Arc::clone(&clicks);
         node.config_mut().add_action(
             SemanticsAction::Click,
-            Arc::new(move |_| {
+            Rc::new(move |_| {
                 clicks.fetch_add(1, Ordering::SeqCst);
             }),
         );
@@ -1635,7 +1716,7 @@ fn a_role_change_admits_only_the_actions_both_nodes_offer() {
         node.config_mut().set_role(role);
         node.config_mut().set_expanded(false);
         node.config_mut()
-            .add_action(SemanticsAction::Click, Arc::new(|_| {}));
+            .add_action(SemanticsAction::Click, Rc::new(|_| {}));
         node
     };
     let button = with_click(SemanticsRole::Button, "More");
@@ -1646,7 +1727,7 @@ fn a_role_change_admits_only_the_actions_both_nodes_offer() {
     let mut paragraph = with_click(SemanticsRole::Paragraph, "More");
     paragraph
         .config_mut()
-        .add_action(SemanticsAction::ShowContextMenu, Arc::new(|_| {}));
+        .add_action(SemanticsAction::ShowContextMenu, Rc::new(|_| {}));
     adapter.owner.tree_mut().replace_node(id, paragraph);
     adapter.reject();
     assert_eq!(
@@ -1679,11 +1760,11 @@ fn a_numeric_write_is_admitted_inside_both_ranges() {
     let slider = |min, max| {
         let mut node = node(1, "Volume");
         node.config_mut()
-            .set_numeric_range(NumericRange::new(min, min, max, 1.0).expect("finite range"));
+            .set_numeric_range(NumericRange::try_new(min, min, max, 1.0).expect("finite range"));
         let sink = Arc::clone(&received);
         node.config_mut().add_action(
             SemanticsAction::SetNumericValue,
-            Arc::new(move |call| {
+            Rc::new(move |call| {
                 let ActionCall::SetNumericValue(value) = call else {
                     panic!("the numeric handler received {call:?}");
                 };
@@ -1742,7 +1823,7 @@ fn a_text_write_is_read_as_a_number_only_where_a_range_was_delivered() {
     field.config_mut().set_value("draft");
     field
         .config_mut()
-        .add_action(SemanticsAction::SetValue, Arc::new(|_| {}));
+        .add_action(SemanticsAction::SetValue, Rc::new(|_| {}));
     let target = field.accessibility_id().expect("render-backed identity");
     let mut adapter = RejectingAdapter::new();
     let id = adapter.root(field);
@@ -1751,11 +1832,11 @@ fn a_text_write_is_read_as_a_number_only_where_a_range_was_delivered() {
     range.config_mut().set_role(SemanticsRole::Slider);
     range
         .config_mut()
-        .set_numeric_range(NumericRange::new(0.0, 0.0, 10.0, 1.0).expect("finite range"));
+        .set_numeric_range(NumericRange::try_new(0.0, 0.0, 10.0, 1.0).expect("finite range"));
     let sink = Arc::clone(&received);
     range.config_mut().add_action(
         SemanticsAction::SetNumericValue,
-        Arc::new(move |call| {
+        Rc::new(move |call| {
             let ActionCall::SetNumericValue(value) = call else {
                 panic!("the numeric handler received {call:?}");
             };
@@ -1789,7 +1870,7 @@ fn a_node_the_adapter_was_not_given_is_not_found() {
     let mut button = node(1, "Send");
     button
         .config_mut()
-        .add_action(SemanticsAction::Click, Arc::new(|_| {}));
+        .add_action(SemanticsAction::Click, Rc::new(|_| {}));
     let target = button.accessibility_id().expect("render-backed identity");
     let button = adapter.owner.insert(button);
     adapter.owner.add_child(root, button);
@@ -1823,7 +1904,7 @@ fn a_reveal_is_admitted_only_while_both_nodes_are_visible() {
             node.config_mut().set_hidden(hidden);
             if own_handler {
                 node.config_mut()
-                    .add_action(SemanticsAction::ScrollIntoView, Arc::new(|_| {}));
+                    .add_action(SemanticsAction::ScrollIntoView, Rc::new(|_| {}));
             }
             node
         };
@@ -1831,7 +1912,7 @@ fn a_reveal_is_admitted_only_while_both_nodes_are_visible() {
         scroller.set_reveal_rect(Rect::new(0.0, 0.0, 200.0, 200.0));
         scroller
             .config_mut()
-            .add_action(SemanticsAction::ScrollIntoView, Arc::new(|_| {}));
+            .add_action(SemanticsAction::ScrollIntoView, Rc::new(|_| {}));
         let mut adapter = RejectingAdapter::new();
         let scroller = adapter.owner.insert(scroller);
         let delivered = target_node(delivered_hidden);
@@ -1876,7 +1957,7 @@ fn a_removal_the_adapter_rejected_leaves_the_child_it_holds() {
         let mut button = node(1, "Send");
         button
             .config_mut()
-            .add_action(SemanticsAction::Click, Arc::new(|_| {}));
+            .add_action(SemanticsAction::Click, Rc::new(|_| {}));
         button
     };
     let mut adapter = RejectingAdapter::new();
@@ -1916,8 +1997,9 @@ fn a_text_write_follows_the_delivered_value_handler() {
         let range = |numeric: bool| {
             let mut node = node(1, if numeric { "Level" } else { "Volume" });
             node.config_mut().set_role(SemanticsRole::Slider);
-            node.config_mut()
-                .set_numeric_range(NumericRange::new(0.0, 0.0, 10.0, 1.0).expect("finite range"));
+            node.config_mut().set_numeric_range(
+                NumericRange::try_new(0.0, 0.0, 10.0, 1.0).expect("finite range"),
+            );
             node.config_mut().set_value("zero");
             let sink = Arc::clone(&received);
             node.config_mut().add_action(
@@ -1926,7 +2008,7 @@ fn a_text_write_follows_the_delivered_value_handler() {
                 } else {
                     SemanticsAction::SetValue
                 },
-                Arc::new(move |call| sink.lock().push(call)),
+                Rc::new(move |call| sink.lock().push(call)),
             );
             node
         };
@@ -1973,11 +2055,11 @@ fn a_rejected_callback_replacement_keeps_the_delivered_tree() {
         let mut button = node(1, "Send");
         button
             .config_mut()
-            .add_action(SemanticsAction::Click, Arc::new(|_| {}));
+            .add_action(SemanticsAction::Click, Rc::new(|_| {}));
         if menu {
             button
                 .config_mut()
-                .add_action(SemanticsAction::ShowContextMenu, Arc::new(|_| {}));
+                .add_action(SemanticsAction::ShowContextMenu, Rc::new(|_| {}));
         }
         button
     };
@@ -2085,11 +2167,11 @@ fn a_disabled_node_takes_no_user_action_from_the_platform() {
     button.config_mut().set_enabled(Some(false));
     button.config_mut().add_action(
         SemanticsAction::Click,
-        Arc::new(move |_| *click_counter.lock() += 1),
+        Rc::new(move |_| *click_counter.lock() += 1),
     );
     button.config_mut().add_action(
         SemanticsAction::Focus,
-        Arc::new(move |_| *focus_counter.lock() += 1),
+        Rc::new(move |_| *focus_counter.lock() += 1),
     );
     let button = owner.insert(button);
     owner.add_child(root, button);
@@ -2133,7 +2215,7 @@ fn a_child_listed_without_a_parent_link_still_resolves() {
     let target = button.accessibility_id().expect("render-backed identity");
     button
         .config_mut()
-        .add_action(SemanticsAction::Click, Arc::new(|_| {}));
+        .add_action(SemanticsAction::Click, Rc::new(|_| {}));
     let button = owner.insert(button);
     owner
         .get_mut(root)

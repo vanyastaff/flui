@@ -32,15 +32,15 @@ impl CustomPaint {
 
     /// Sets the painter that draws behind the child.
     #[must_use]
-    pub fn painter(mut self, painter: Rc<dyn CustomPainter>) -> Self {
-        self.painter = Some(painter);
+    pub fn painter(mut self, painter: impl CustomPainter + 'static) -> Self {
+        self.painter = Some(Rc::new(painter));
         self
     }
 
     /// Sets the painter that draws in front of the child.
     #[must_use]
-    pub fn foreground_painter(mut self, painter: Rc<dyn CustomPainter>) -> Self {
-        self.foreground_painter = Some(painter);
+    pub fn foreground_painter(mut self, painter: impl CustomPainter + 'static) -> Self {
+        self.foreground_painter = Some(Rc::new(painter));
         self
     }
 

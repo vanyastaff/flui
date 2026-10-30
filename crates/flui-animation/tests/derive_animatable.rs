@@ -63,7 +63,7 @@ fn nested_fields_keep_their_interpolation_contracts() {
 }
 
 fn nested_values_retarget_on_one_registered_motion() {
-    use flui_animation::{AnimatedValue, ArcCurve, MotionClock, MotionSpec, Vsync};
+    use flui_animation::{AnimatedValue, MotionClock, MotionSpec, SharedCurve, Vsync};
     use std::time::Duration;
 
     let vsync = Vsync::new();
@@ -78,7 +78,7 @@ fn nested_values_retarget_on_one_registered_motion() {
         ),
         MotionSpec::Curve {
             duration: Duration::from_secs(1),
-            curve: ArcCurve::new(Linear),
+            curve: SharedCurve::new(Linear),
         },
         Some(&vsync),
     )

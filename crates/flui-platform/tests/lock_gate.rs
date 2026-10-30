@@ -236,6 +236,49 @@ fn settling_runs_owner_code_outside_the_lock() {
     assert!(failures.is_empty(), "failed settle cases: {failures:?}");
 }
 
+/// While the gate's UI runtime is checked out, only the owner's own calls
+/// pass it: outside one a sync request is refused and an async one waits;
+/// inside one, nested or left by an unwind, the store is served, and the
+/// frame transaction's shut gate still wins (ADR-0142 item 6).
+fn a_checked_out_gate_admits_only_owner_calls() {
+    let store = InMemoryTextStore::new("text");
+    let gate = CommitGate::new();
+    store.set_commit_gate(gate.clone());
+    let log: Log = Rc::new(RefCell::new(Vec::new()));
+    gate.set_checked_out(true);
+    assert_eq!(
+        store.request_lock(recording(&log, "platform sync"), LockTiming::Sync),
+        Err(TextStoreError::SyncLockUnavailable)
+    );
+    assert_eq!(
+        store.request_lock(recording(&log, "platform async"), LockTiming::Async),
+        Ok(LockOutcome::Deferred)
+    );
+    assert!(!gate.is_shut(), "a checkout is no frame transaction");
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        gate.owner_entry(|| gate.owner_entry(|| panic!("owner code panics")))
+    }));
+    assert!(unwound.is_err());
+    assert!(!gate.is_open(), "the unwound owner calls left the gate");
+    gate.owner_entry(|| {
+        assert_eq!(
+            store.request_lock(recording(&log, "owner"), LockTiming::Sync),
+            Ok(LockOutcome::Granted)
+        );
+        gate.set_open(false);
+        assert!(
+            !gate.is_open(),
+            "a shut gate stays shut inside an owner call"
+        );
+        gate.set_open(true);
+    });
+    assert_eq!(*log.borrow(), ["platform async", "owner"]);
+    gate.set_checked_out(false);
+    assert_eq!(
+        store.request_lock(recording(&log, "back in the slot"), LockTiming::Sync),
+        Ok(LockOutcome::Granted)
+    );
+}
 #[test]
 fn queued_text_store_grants_respect_gate_changes() {
     let cases: &[(&str, fn())] = &[
@@ -254,6 +297,10 @@ fn queued_text_store_grants_respect_gate_changes() {
         (
             "work_queued_inside_a_grant_waits_if_that_grant_closes_the_gate",
             work_queued_inside_a_grant_waits_if_that_grant_closes_the_gate,
+        ),
+        (
+            "a_checked_out_gate_admits_only_owner_calls",
+            a_checked_out_gate_admits_only_owner_calls,
         ),
     ];
     let mut failures = Vec::new();

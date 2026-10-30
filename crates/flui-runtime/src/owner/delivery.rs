@@ -383,6 +383,7 @@ impl RuntimeLease {
             runtime
         };
         runtime.owner_checkout_active.set(true);
+        runtime.set_text_commits_checked_out(true);
         Ok(Self {
             core: Rc::clone(core),
             id: runtime.id(),
@@ -397,6 +398,10 @@ impl RuntimeLease {
             .runtime
             .as_deref()
             .expect("BUG: returning lease owns its runtime");
+        // Grants a platform entry queued while the runtime was out of its
+        // slot run before it goes back (ADR-0142 item 6).
+        let anchored = catch_unwind(AssertUnwindSafe(|| runtime.finish_checkout())).err();
+        preserve_first_lifecycle_panic(first, anchored, "owner turn commit anchor");
         let state = if first.is_some() {
             RecoveryState::PreservingFailure
         } else {
@@ -420,6 +425,7 @@ impl Drop for RuntimeLease {
             return;
         };
         runtime.owner_checkout_active.set(false);
+        runtime.set_text_commits_checked_out(false);
         let retired = {
             let mut state = self.core.state.borrow_mut();
             if state.active_runtime == Some(self.id) {

@@ -413,7 +413,7 @@ fn start_press_fade(
     rebuild: Option<&RebuildHandle>,
 ) -> Option<AnimationRunFuture> {
     pressed_opacity?;
-    let curve: Rc<dyn flui_sdk::animation::Curve + Send + Sync> =
+    let curve: Rc<dyn flui_sdk::animation::Curve> =
         std::rc::Rc::new(curves::EASE_IN_OUT_CUBIC_EMPHASIZED);
     let outcome = controller.animate_to_curved(1.0, Some(K_FADE_OUT_DURATION), curve);
     if let Err(error) = &outcome {
@@ -440,7 +440,7 @@ fn chain_release_fade(controller: &AnimationController, press_fade: AnimationRun
     let release_controller = controller.clone();
     press_fade.when_complete_or_cancel(move |outcome| {
         if outcome.is_ok() {
-            let curve: Rc<dyn flui_sdk::animation::Curve + Send + Sync> =
+            let curve: Rc<dyn flui_sdk::animation::Curve> =
                 std::rc::Rc::new(curves::EASE_OUT_CUBIC);
             if let Err(error) =
                 release_controller.animate_to_curved(0.0, Some(K_FADE_IN_DURATION), curve)

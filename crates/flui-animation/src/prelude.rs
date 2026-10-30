@@ -6,7 +6,7 @@
 
 pub use crate::{
     Animatable, AnimatedValue, AnimatedValueView, Animation, AnimationController, AnimationError,
-    AnimationRunFuture, AnimationStatus, ArcCurve, Curve, CurvedAnimation, DrivenController,
-    Keyframes, MotionSpec, RunCanceled, Tween, TwoWayConverter, curves,
+    AnimationRunFuture, AnimationStatus, Curve, CurvedAnimation, DrivenController, Keyframes,
+    MotionSpec, RunCanceled, SharedCurve, Tween, TwoWayConverter, curves,
 };
 pub use flui_foundation::Listenable;
