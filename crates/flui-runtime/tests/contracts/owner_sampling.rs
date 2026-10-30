@@ -219,7 +219,7 @@ fn manual_runtime(clock: ManualClock) -> (UiRuntime, ManualWindow) {
         _native: Rc::clone(window.window()),
         handler,
     };
-    let runtime = UiRuntime::new(
+    let runtime = UiRuntime::try_new(
         window,
         1.0,
         RuntimeHostServices::new(

@@ -29,7 +29,7 @@ pub(super) fn runtime() -> UiRuntime {
 }
 
 pub(super) fn runtime_with_wake(wake: Arc<dyn Fn() + Send + Sync>) -> UiRuntime {
-    UiRuntime::new(
+    UiRuntime::try_new(
         window(),
         1.0,
         RuntimeHostServices::new(

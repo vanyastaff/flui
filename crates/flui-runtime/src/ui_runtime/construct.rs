@@ -48,7 +48,7 @@ impl UiRuntime {
     ///
     /// [`UiRuntimeError::InteractionLane`] if the owner-local interaction lane
     /// could not be created.
-    pub fn new(
+    pub fn try_new(
         window: impl Into<PresentationWindow>,
         device_pixel_ratio: f64,
         host: RuntimeHostServices<'_>,
@@ -56,7 +56,7 @@ impl UiRuntime {
         Self::with_capacity(DEFAULT_COMMAND_CAPACITY, window, device_pixel_ratio, host)
     }
 
-    /// [`Self::new`] with an explicit inbox capacity.
+    /// [`Self::try_new`] with an explicit inbox capacity.
     ///
     /// # Errors
     ///
