@@ -121,7 +121,7 @@
 //!   `ListTile`s (see [`crate::divider`]'s module docs).
 //! - **The `SafeArea`/`IconTheme.merge` wrapper layers ARE
 //!   ported**: `SafeArea::new().top(false).bottom(false).minimum(...)`, and
-//!   `IconTheme::new(IconThemeData { color: .., ..IconTheme::of(ctx) }, ..)`
+//!   `IconTheme::new(IconTheme::of(ctx).color(..), ..)`
 //!   — a genuine merge over the ambient `IconTheme::of(ctx)` snapshot (only
 //!   `color` is overridden; `size`/`opacity`/etc. pass through from whatever
 //!   `IconTheme` already wraps this tile), matching `IconTheme.merge`'s own
@@ -139,7 +139,7 @@ use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Expanded, IconTheme,
-    IconThemeData, MainAxisSize, Padding, Row, SafeArea, Semantics, SemanticsRole, SizedBox,
+    MainAxisSize, Padding, Row, SafeArea, Semantics, SemanticsRole, SizedBox,
 };
 
 use crate::ink_well::InkWell;
@@ -771,8 +771,8 @@ impl StatelessView for ListTile {
         // An `IconTheme.merge` over the ambient theme,
         // not a replacement: only `color` is overridden, every other field
         // (`size`, `opacity`, …) passes the enclosing `IconTheme::of`
-        // through unchanged. `IconThemeData { color: ..,
-        // ..IconThemeData::default() }` would instead blank every other
+        // through unchanged. `IconThemeData::default().color(..)`
+        // would instead blank every other
         // field back to `None`, discarding an ambient `size` override an
         // app-level `IconTheme` set above this tile.
         let ambient_icon_theme = IconTheme::of(ctx);
@@ -781,10 +781,7 @@ impl StatelessView for ListTile {
             .bottom(false)
             .minimum(resolved.content_padding)
             .child(IconTheme::new(
-                IconThemeData {
-                    color: Some(resolved.icon_color),
-                    ..ambient_icon_theme
-                },
+                ambient_icon_theme.color(resolved.icon_color),
                 build_content_row(self, &resolved),
             ));
 

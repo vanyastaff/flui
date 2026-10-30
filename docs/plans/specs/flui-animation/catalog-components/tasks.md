@@ -1,7 +1,7 @@
 # flui-animation / catalog-components — задачи
 
-- **Статус:** в работе. Влиты T1, T2, T3, T7, T8, T9, T10, T13; T11 сделан (`PageIndicator`,
-  `CupertinoPageControl`); дальше T4, T6 после T33 полноты ввода, затем T12.
+- **Статус:** в работе. Влиты T1, T2, T3, T7, T8, T9, T10, T11, T13; T4 сделан (`SymbolEffect`,
+  `PathEffect`); дальше переключаемый `IconButton`, T6 после T33 полноты ввода, затем T12.
 - **Дата:** 2026-10-17
 - **Design:** [design.md](design.md), [requirements.md](requirements.md).
 - **Тикеты:** родитель vanyastaff/flui#1691; T1 #1692 · T2 #1693 · T3 #1694 · T4 #1695 ·
@@ -69,6 +69,23 @@ T1..T13 ─► T12 поверхность SDK, ARCHITECTURE, motion_lab, таб�
   `draw_on`/`draw_off` через `Path::trim` для векторных; потребитель — `NavigationBar`
   (bounce выбранной иконки) и `IconButton` с переключением.
 - **Требования:** I4, I5, строка M1. **После:** T3.
+- **Сделано.** `SymbolEffect` (`bounce`, `wiggle`, `rotate`, `pulse`, `breathe`, `appear`,
+  `disappear`, `replace`; `repeat`, `speed(Speed)`, `animate_on_appear`) на `Icon` и
+  `AnimatedIcon`, `PathEffect` (`draw_on`/`draw_off`) только на `AnimatedIcon`. Отступления,
+  одобренные координатором: `Speed::try_new` вместо `Speed::new`; триггер `on_change(u64)`;
+  длительности — ассоциированные константы (`SymbolEffect::BOUNCE_DURATION` …); эффект
+  наследуется через `IconThemeData::symbol_effect`, а `IconThemeData` стал `#[non_exhaustive]`
+  с методом на каждое поле. Потребитель — `NavigationBar`: новая выбранная иконка
+  подпрыгивает, покинутая — нет. Переключаемый `IconButton` (`is_selected`/`selected_icon`,
+  `replace`) — отдельная задача: у `IconButton` ещё нет варианта-переключателя.
+  Тесты: `symbol_effect::*` в `widgets_it` (`each_effect_peaks_where_its_timing_says`,
+  `a_one_shot_effect_plays_per_change_and_repeat`,
+  `a_repeating_effect_finishes_its_cycle_when_turned_off`,
+  `a_replace_cross_fades_and_only_the_new_label_is_heard`, `transitions_play_when_first_applied`,
+  `reduced_motion_keeps_the_icon_still_or_at_its_end`,
+  `a_speed_is_positive_and_finite_and_scales_the_timing`,
+  `a_path_effect_draws_the_paths_on_and_off`); доктест `compile_fail` у `PathEffect` (у `Icon`
+  нет `path_effect`); `navigation_bar::a_newly_selected_icon_bounces` в `material_it`.
 
 ### T6 — движение перестановки (#1697)
 
@@ -122,7 +139,7 @@ T1..T13 ─► T12 поверхность SDK, ARCHITECTURE, motion_lab, таб�
   экспорт из `flui-material`.
 - **Требования:** P1, P2, P5, P6 (шов и Material-стиль), строка M1.
 
-### T11 — индикатор страниц (#1702) — сделано
+### T11 — индикатор страниц (#1702) — влито (#2048)
 
 - **Что:** `PageIndicator::controlled` и `PageIndicator::observed` (дробная позиция, тап и
   действия только у управляемого, окно, семантика); `CupertinoPageControl` — его

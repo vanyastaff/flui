@@ -350,11 +350,7 @@ impl StatelessView for CupertinoTabBar {
                 }
 
                 let content = IconTheme::new(
-                    IconThemeData {
-                        color: Some(color),
-                        size: Some(self.icon_size),
-                        ..IconThemeData::default()
-                    },
+                    IconThemeData::default().color(color).size(self.icon_size),
                     DefaultTextStyle::new(
                         tab_label_style.clone().with_color(color),
                         Padding::new(flui_sdk::geometry::EdgeInsets::only_bottom(4.0)).child(

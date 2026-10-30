@@ -7,15 +7,27 @@ use flui_painting::typography::TextShadow;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, InheritedView, impl_inherited_view};
 
-/// The size, color, opacity, font-variation axes, shadows, and text-scaling
-/// policy an [`Icon`](crate::Icon) resolves from its nearest [`IconTheme`]
+use super::SymbolEffect;
+
+/// The size, color, opacity, font-variation axes, shadows, text-scaling
+/// policy and symbol effect an [`Icon`](crate::Icon) resolves from its nearest [`IconTheme`]
 /// ancestor.
 ///
 /// Every field is optional: `None` means "not specified at this level, defer
 /// to whatever is further up" (per-field inheritance).
 /// [`IconTheme::of`] resolves the ambient theme down to
 /// [`IconThemeData::fallback`] so callers always get a fully-populated value.
+///
+/// Built from [`default`](Self::default) with one method per field, so a new field never
+/// breaks a caller:
+///
+/// ```rust
+/// # use flui_widgets::IconThemeData;
+/// let theme = IconThemeData::default().size(20.0).apply_text_scaling(true);
+/// assert_eq!(theme.size, Some(20.0));
+/// ```
 #[derive(Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
 pub struct IconThemeData {
     /// Icon side length in logical pixels (icons are square: this sizes both
     /// width and height).
@@ -57,6 +69,11 @@ pub struct IconThemeData {
     /// Applies to the square's side and the glyph size together, including an
     /// explicit [`Icon::size`](crate::Icon::size) override. Defaults to false.
     pub apply_text_scaling: Option<bool>,
+
+    /// The motion every [`Icon`](crate::Icon) and [`AnimatedIcon`](crate::AnimatedIcon)
+    /// below plays when it has no [`SymbolEffect`] of its own. No fallback: without one
+    /// icons are still.
+    pub symbol_effect: Option<SymbolEffect>,
 }
 
 impl IconThemeData {
@@ -75,7 +92,78 @@ impl IconThemeData {
             optical_size: Some(48.0),
             shadows: None,
             apply_text_scaling: Some(false),
+            symbol_effect: None,
         }
+    }
+
+    /// Sets the `size` field.
+    #[must_use]
+    pub fn size(mut self, size: f64) -> Self {
+        self.size = Some(size);
+        self
+    }
+
+    /// Sets the `color` field.
+    #[must_use]
+    pub fn color(mut self, color: Color) -> Self {
+        self.color = Some(color);
+        self
+    }
+
+    /// Sets the `opacity` field.
+    #[must_use]
+    pub fn opacity(mut self, opacity: f64) -> Self {
+        self.opacity = Some(opacity);
+        self
+    }
+
+    /// Sets the `fill` field.
+    #[must_use]
+    pub fn fill(mut self, fill: f64) -> Self {
+        self.fill = Some(fill);
+        self
+    }
+
+    /// Sets the `weight` field.
+    #[must_use]
+    pub fn weight(mut self, weight: f64) -> Self {
+        self.weight = Some(weight);
+        self
+    }
+
+    /// Sets the `grade` field.
+    #[must_use]
+    pub fn grade(mut self, grade: f64) -> Self {
+        self.grade = Some(grade);
+        self
+    }
+
+    /// Sets the `optical_size` field.
+    #[must_use]
+    pub fn optical_size(mut self, optical_size: f64) -> Self {
+        self.optical_size = Some(optical_size);
+        self
+    }
+
+    /// Sets the `shadows` field.
+    #[must_use]
+    pub fn shadows(mut self, shadows: Vec<TextShadow>) -> Self {
+        self.shadows = Some(shadows);
+        self
+    }
+
+    /// Sets the `apply_text_scaling` field.
+    #[must_use]
+    pub fn apply_text_scaling(mut self, apply: bool) -> Self {
+        self.apply_text_scaling = Some(apply);
+        self
+    }
+
+    /// Sets the `symbol_effect` field.
+    #[must_use]
+    pub fn symbol_effect(mut self, effect: SymbolEffect) -> Self {
+        self.symbol_effect = Some(effect);
+        self
     }
 
     /// Fill every `None` field in `self` from `fallback`.
@@ -91,6 +179,10 @@ impl IconThemeData {
             optical_size: self.optical_size.or(fallback.optical_size),
             shadows: self.shadows.clone().or_else(|| fallback.shadows.clone()),
             apply_text_scaling: self.apply_text_scaling.or(fallback.apply_text_scaling),
+            symbol_effect: self
+                .symbol_effect
+                .clone()
+                .or_else(|| fallback.symbol_effect.clone()),
         }
     }
 }

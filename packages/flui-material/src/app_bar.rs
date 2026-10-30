@@ -515,10 +515,7 @@ impl StatelessView for AppBar {
         let toolbar = Row::new(toolbar_children).cross_axis_alignment(CrossAxisAlignment::Center);
 
         let themed_toolbar = IconTheme::new(
-            IconThemeData {
-                color: Some(foreground_color),
-                ..IconThemeData::default()
-            },
+            IconThemeData::default().color(foreground_color),
             DefaultTextStyle::new(
                 toolbar_text_style,
                 SizedBox::height(self.toolbar_height).child(toolbar),
