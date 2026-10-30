@@ -123,7 +123,7 @@ mod cases {
         let recorder = flui_native::journal::recorder::Recorder::start(
             flui_native::journal::codec::Backend::Wayland,
         );
-        let platform = WaylandPlatform::new().expect("the harness's Weston answers");
+        let platform = WaylandPlatform::try_new().expect("the harness's Weston answers");
         let handler = RecordingWindowHandler::new();
         let window = platform
             .open_window(

@@ -92,7 +92,7 @@ impl RenderIcon {
         if self.glyph.is_none() && self.side == 0.0 {
             return Ok(None);
         }
-        let size = TextSize::new(self.side)
+        let size = TextSize::try_new(self.side)
             .map_err(|_| flui_painting::TextLayoutError::InvalidFontSize { size: self.side })?;
         let profile = if let Some(TextSizingIntent::Profile(profile)) = self.style.sizing {
             profile

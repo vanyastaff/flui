@@ -121,7 +121,7 @@ impl ScrollMetrics {
     /// The scroll range, or `None` when the extents are unordered or not
     /// finite.
     pub(crate) fn bounds(&self) -> Option<SimulationBounds> {
-        SimulationBounds::new(self.min_scroll_extent, self.max_scroll_extent).ok()
+        SimulationBounds::try_new(self.min_scroll_extent, self.max_scroll_extent).ok()
     }
 
     /// The extents as `(min, max)` when `min <= max`, an infinite end
@@ -344,9 +344,14 @@ impl ScrollPhysics for ClampingScrollPhysics {
         if let Some(edge) = metrics.edge_past() {
             let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0)
                 .expect("BUG: the clamping return spring is in the admitted domain");
-            let simulation =
-                SpringSimulation::new(spring, metrics.pixels, edge, velocity_px_per_sec, tolerance)
-                    .ok()?;
+            let simulation = SpringSimulation::try_new(
+                spring,
+                metrics.pixels,
+                edge,
+                velocity_px_per_sec,
+                tolerance,
+            )
+            .ok()?;
             return Some(Box::new(simulation));
         }
         // Skip fling below the configured threshold.
@@ -354,7 +359,7 @@ impl ScrollPhysics for ClampingScrollPhysics {
             return None;
         }
         // A NaN position or an invalid drag: no fling.
-        let simulation = BoundedFrictionSimulation::new(
+        let simulation = BoundedFrictionSimulation::try_new(
             self.fling_drag_coefficient,
             metrics.pixels,
             velocity_px_per_sec,
@@ -373,7 +378,7 @@ impl ScrollPhysics for ClampingScrollPhysics {
             return None;
         }
         metrics.bounds()?;
-        let simulation = FrictionSimulation::new(
+        let simulation = FrictionSimulation::try_new(
             self.fling_drag_coefficient,
             metrics.pixels,
             velocity_px_per_sec,
@@ -504,7 +509,7 @@ impl ScrollPhysics for BouncingScrollPhysics {
         let tolerance = metrics.ballistic_tolerance()?;
         // If the position is past an edge, spring back regardless of velocity.
         if let Some(edge) = metrics.edge_past() {
-            let spring = SpringSimulation::new(
+            let spring = SpringSimulation::try_new(
                 self.spring,
                 metrics.pixels,
                 edge,
@@ -519,7 +524,7 @@ impl ScrollPhysics for BouncingScrollPhysics {
         if velocity_px_per_sec.abs() < self.min_fling_velocity_px_per_sec {
             return None;
         }
-        let simulation = BouncingScrollSimulation::new(
+        let simulation = BouncingScrollSimulation::try_new(
             self.spring,
             self.fling_drag_coefficient,
             metrics.pixels,

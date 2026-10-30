@@ -59,7 +59,7 @@ impl Drop for FinishedFuture {
 fn finished_and_cancelled_futures_preserve_caught_failure_custody() {
     for cancelled in [false, true] {
         let scheduler = UpdateScheduler::new();
-        let owner = Rc::new(OwnerFrame::new(&scheduler).expect("fresh owner"));
+        let owner = Rc::new(OwnerFrame::try_new(&scheduler).expect("fresh owner"));
         let drops = Rc::new(Cell::new(0));
         let cancel = Rc::new(RefCell::new(None));
         let token = owner.async_driver().spawn_local(Box::pin(FinishedFuture {
@@ -107,7 +107,7 @@ fn cancelling_transient_work_preserves_caught_failure_custody() {
         }
     }
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
     let drops = Rc::new(Cell::new(0));
     let capture = Capture(Rc::clone(&drops));
     let cancelled = scheduler.schedule_frame_callback(Box::new(move |_| {
@@ -157,7 +157,7 @@ fn callbacks_and_task_polls_refuse_nested_owner_turns() {
         calls.set(calls.get() + 1);
     }
     let scheduler = UpdateScheduler::new();
-    let owner = Rc::new(OwnerFrame::new(&scheduler).expect("fresh owner"));
+    let owner = Rc::new(OwnerFrame::try_new(&scheduler).expect("fresh owner"));
     let calls = Rc::new(Cell::new(0));
     let weak = Rc::downgrade(&owner);
     let observed = Rc::clone(&calls);
@@ -214,7 +214,7 @@ impl Future for RemovedFuture {
 
 fn lifecycle_removal_preserves_caught_failure() {
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
     let drops = Rc::new(Cell::new(0));
     let capture = RemovedCapture(Rc::clone(&drops));
     let id = scheduler.add_lifecycle_state_listener(Rc::new(move |_| {
@@ -247,7 +247,7 @@ fn hook_replacement_preserves_caught_failure() {
         }
     }
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
     let drops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let capture = Capture(std::sync::Arc::clone(&drops));
     scheduler.set_on_frame_scheduled(Some(std::sync::Arc::new(move || {
@@ -274,7 +274,7 @@ fn hook_replacement_preserves_caught_failure() {
 
 fn explicit_task_cancellation_preserves_caught_failure() {
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
     let drops = Rc::new(Cell::new(0));
     let token = owner.async_driver().spawn_local(Box::pin(RemovedFuture {
         capture: RemovedCapture(Rc::clone(&drops)),
@@ -299,7 +299,7 @@ fn explicit_task_cancellation_preserves_caught_failure() {
 
 fn eager_completion_preserves_caught_failure() {
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
     let drops = Rc::new(Cell::new(0));
     let now = Instant::now();
     owner
@@ -463,7 +463,7 @@ fn assert_healthy_post_frame_rejection_retires(handle: &flui_scheduler::PostFram
 
 fn active_retired_post_frame_rejection_custody() {
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
     let handle = owner.post_frame_handle();
     let drops = Rc::new(Cell::new(0));
     assert_eq!(
@@ -492,7 +492,7 @@ fn active_retired_post_frame_rejection_custody() {
 /// it neither comes back to the caller nor runs nor drops.
 fn active_retired_post_frame_rejection_is_not_returned() {
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
     let handle = owner.post_frame_handle();
     let drops = Rc::new(Cell::new(0));
     let ran = Rc::new(Cell::new(false));
@@ -519,7 +519,7 @@ fn active_retired_post_frame_rejection_is_not_returned() {
 /// the caller decides; the next healthy rejection still retires normally.
 fn healthy_closed_post_frame_rejection_returns_the_callback() {
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
     let handle = owner.post_frame_handle();
     assert!(owner.retire().is_none());
     let drops = Rc::new(Cell::new(0));
@@ -558,7 +558,7 @@ impl Drop for RejectingPostFrameCapture {
 
 fn closed_scheduler_post_frame_rejection_custody() {
     let scheduler = UpdateScheduler::new();
-    let owner = Rc::new(OwnerFrame::new(&scheduler).expect("fresh owner"));
+    let owner = Rc::new(OwnerFrame::try_new(&scheduler).expect("fresh owner"));
     let handle = owner.post_frame_handle();
     let drops = Rc::new(Cell::new(0));
     let capture = RejectingPostFrameCapture {
@@ -583,7 +583,7 @@ fn closed_scheduler_post_frame_rejection_custody() {
 
 fn standalone_retired_post_frame_rejection_custody() {
     let scheduler = UpdateScheduler::new();
-    let owner = Rc::new(OwnerFrame::new(&scheduler).expect("fresh owner"));
+    let owner = Rc::new(OwnerFrame::try_new(&scheduler).expect("fresh owner"));
     let handle = owner.post_frame_handle();
     let drops = Rc::new(Cell::new(0));
     let capture = RejectingPostFrameCapture {
@@ -639,7 +639,7 @@ fn closed_execution_publishes_task_custody(frame: bool) {
     }
     {
         let scheduler = UpdateScheduler::new();
-        let owner = Rc::new(OwnerFrame::new(&scheduler).expect("fresh owner"));
+        let owner = Rc::new(OwnerFrame::try_new(&scheduler).expect("fresh owner"));
         let driver = owner.async_driver();
         drop(scheduler);
         let drops = Rc::new(Cell::new(0));
@@ -724,7 +724,7 @@ fn closed_scheduler_retirement(spawn_refused: bool) {
         }
     }
     let scheduler = UpdateScheduler::new();
-    let owner = Rc::new(OwnerFrame::new(&scheduler).expect("fresh owner"));
+    let owner = Rc::new(OwnerFrame::try_new(&scheduler).expect("fresh owner"));
     let other = Rc::new(RefCell::new(None));
     let rejected_drops = Rc::new(Cell::new(0));
     let driver = owner.async_driver();
@@ -776,7 +776,7 @@ fn owner_drop_preserves_first_failure_through_terminal_release() {
         }
     }
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
     let weak = scheduler.downgrade();
     let terminal_drops = Rc::new(Cell::new(0));
     let capture = RemovedCapture(Rc::clone(&terminal_drops));
@@ -814,7 +814,7 @@ fn owner_drop_preserves_first_failure_through_terminal_release() {
 
 fn healthy_teardown_after_completed_caught_failure() {
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
     let drops = Rc::new(Cell::new(0));
     assert_eq!(
         owner.pump_background(|| {
@@ -836,7 +836,7 @@ fn healthy_teardown_after_completed_caught_failure() {
 
 fn completed_retirement_ends_caller_failure_custody() {
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
     assert_eq!(
         owner.pump_background(|| {
             catch_nested_refusal_failure(&owner);
@@ -896,7 +896,7 @@ fn recursive_retirement_shares_caught_failure() {
         }
     }
     let scheduler = UpdateScheduler::new();
-    let owner = Rc::new(OwnerFrame::new(&scheduler).expect("fresh owner"));
+    let owner = Rc::new(OwnerFrame::try_new(&scheduler).expect("fresh owner"));
     let driver = owner.async_driver();
     let first = driver.spawn_local(Box::pin(RecursiveRetirement(Rc::downgrade(&owner))));
     let drops = Rc::new(Cell::new(0));
@@ -942,7 +942,7 @@ fn standalone_background_refusal_ends_custody() {
 
 fn standalone_refusal_ends_custody(frame: bool) {
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
     assert!(owner.retire().is_none());
     let failure = catch_unwind(AssertUnwindSafe(|| {
         let capture = RejectedCapture;
@@ -984,7 +984,7 @@ fn standalone_failed_retirement_ends_custody() {
         }
     }
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
     let token = owner.async_driver().spawn_local(Box::pin(PanickingFuture));
     let failure = owner
         .retire()
@@ -1016,7 +1016,7 @@ fn standalone_retirement_publishes_producer_custody() {
         }
     }
     let scheduler = UpdateScheduler::new();
-    let owner = Rc::new(OwnerFrame::new(&scheduler).expect("fresh owner"));
+    let owner = Rc::new(OwnerFrame::try_new(&scheduler).expect("fresh owner"));
     let drops = Rc::new(Cell::new(0));
     let capture = RemovedCapture(Rc::clone(&drops));
     let callback = scheduler.schedule_frame_callback(Box::new(move |_| {
@@ -1072,7 +1072,7 @@ fn retired_task_admission_preserves_caught_failure(mode: u8) {
     }
     {
         let scheduler = UpdateScheduler::new();
-        let owner = Rc::new(OwnerFrame::new(&scheduler).expect("fresh owner"));
+        let owner = Rc::new(OwnerFrame::try_new(&scheduler).expect("fresh owner"));
         let driver = owner.async_driver();
         let drops = Rc::new(Cell::new(0));
         assert_eq!(
@@ -1112,7 +1112,7 @@ fn retired_task_admission_preserves_caught_failure(mode: u8) {
         assert_eq!(driver.pending_task_count(), 0);
         assert_eq!(owner.pump_background(|| {}), Err(ExecutionError::Retired));
         drop(owner);
-        let replacement = OwnerFrame::new(&scheduler).expect("replacement owner");
+        let replacement = OwnerFrame::try_new(&scheduler).expect("replacement owner");
         assert_eq!(replacement.pump_background(|| {}), Ok(0));
     }
 }

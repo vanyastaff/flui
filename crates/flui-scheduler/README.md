@@ -72,7 +72,7 @@ use flui_scheduler::{OwnerFrame, Priority, UpdateScheduler};
 let scheduler = UpdateScheduler::new();
 // The owner thread's frame state (owner-local post-frame callbacks and
 // async tasks); complete execution belongs to this owner.
-let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+let owner = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
 
 // Schedule a one-time frame callback (animation tick)
 scheduler.schedule_frame_callback(Box::new(|vsync_time| {
@@ -274,7 +274,7 @@ impl PipelineOwner {
 use flui_scheduler::{OwnerFrame, Priority, UpdateScheduler};
 
 let scheduler = UpdateScheduler::new();
-let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+let owner = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
 
 // In your event loop
 match event {

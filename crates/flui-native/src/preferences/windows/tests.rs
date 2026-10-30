@@ -208,7 +208,7 @@ fn a_receiver_the_os_keeps_stays_registered_and_inert() {
         pending: AtomicBool::new(false),
         signal: Arc::downgrade(&signal),
     });
-    let receiver = Receiver::new([
+    let receiver = Receiver::try_new([
         Rc::new(PreferenceBroadcasts(Arc::clone(&invalidation))) as Rc<dyn Subscriber>
     ])
     .expect("receiver");
@@ -267,7 +267,7 @@ fn a_receiver_the_os_keeps_stays_registered_and_inert() {
 /// while a successor still wakes.
 fn a_delegate_that_outlives_its_source_is_inert() {
     let (signal, wakes) = counting_signal();
-    let source = PreferenceSource::new(&signal).expect("native source");
+    let source = PreferenceSource::try_new(&signal).expect("native source");
     // What each WinRT delegate captures.
     let kept = Arc::clone(&source.invalidation);
     drop(source);
@@ -281,8 +281,8 @@ fn a_delegate_that_outlives_its_source_is_inert() {
         "the old delegate wakes nobody"
     );
 
-    let successor = PreferenceSource::new(&signal).expect("successor");
-    let receiver = Receiver::new([successor.broadcasts()]).expect("receiver");
+    let successor = PreferenceSource::try_new(&signal).expect("successor");
+    let receiver = Receiver::try_new([successor.broadcasts()]).expect("receiver");
     let woken = wakes.load(Ordering::SeqCst);
     receiver.send_with_for_test(WM_SETTINGCHANGE, 0, 0);
     assert!(successor.pending());

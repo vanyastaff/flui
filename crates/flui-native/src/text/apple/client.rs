@@ -86,7 +86,7 @@ impl std::fmt::Debug for TextClient {
 
 /// `range` clamped into a document of `len` code units.
 fn clamped(range: Utf16Range, len: Utf16Offset) -> Utf16Range {
-    Utf16Range::new(range.start().min(len), range.end().min(len))
+    Utf16Range::try_new(range.start().min(len), range.end().min(len))
         .expect("BUG: clamping both ends keeps them ordered")
 }
 
@@ -345,7 +345,7 @@ impl TextClient {
                 }
             };
             let composition =
-                Utf16Range::new(change.start, change.new_end).map(|range| Composition {
+                Utf16Range::try_new(change.start, change.new_end).map(|range| Composition {
                     range,
                     hides_caret: false,
                 });

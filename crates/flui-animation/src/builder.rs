@@ -27,7 +27,7 @@ impl ValueRange {
     /// [`RangeDefect::Inverted`] when `lower >= upper`, or
     /// [`RangeDefect::SpanOverflow`] when the ordered endpoints' difference
     /// overflows `f64`. These checks run in that order.
-    pub fn new(lower: f64, upper: f64) -> Result<Self, RangeDefect> {
+    pub fn try_new(lower: f64, upper: f64) -> Result<Self, RangeDefect> {
         if !lower.is_finite() || !upper.is_finite() {
             return Err(RangeDefect::NonFinite);
         }
@@ -66,7 +66,7 @@ impl Default for ValueRange {
 /// use std::time::Duration;
 ///
 /// let controller = AnimationController::builder(Duration::from_millis(300))
-///     .bounds(ValueRange::new(10.0, 20.0).expect("finite range"))
+///     .bounds(ValueRange::try_new(10.0, 20.0).expect("finite range"))
 ///     .initial_value(15.0)
 ///     .build();
 /// assert_eq!(controller.value(), 15.0);

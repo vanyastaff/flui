@@ -469,7 +469,7 @@ fn sample_state(
         .with_display(displays.activity_display());
     ReportedFacts {
         // No native window (terminated, or not yet made) is no drawable area.
-        metrics: flui_foundation::geometry::WindowMetrics::new(Size::new(width, height), scale)
+        metrics: flui_foundation::geometry::WindowMetrics::try_new(Size::new(width, height), scale)
             .ok(),
         appearance: kept.appearance,
         safe_area: kept.safe_area,

@@ -543,7 +543,7 @@ impl Running {
             installed.replace(Some(capability));
             Ok(())
         });
-        Box::new(WebPlatform::new().expect("platform"))
+        Box::new(WebPlatform::try_new().expect("platform"))
             .run(Rc::clone(&log) as Rc<dyn flui_native::AppHandler>)
             .expect("run");
         Self { owner, log, wakes }

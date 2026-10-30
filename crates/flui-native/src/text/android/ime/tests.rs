@@ -28,7 +28,7 @@ fn offset(units: usize) -> Utf16Offset {
 }
 
 fn range(start: usize, end: usize) -> Utf16Range {
-    Utf16Range::new(offset(start), offset(end)).expect("ordered")
+    Utf16Range::try_new(offset(start), offset(end)).expect("ordered")
 }
 
 /// What the view reports: its text, a caret or selection, and a composing

@@ -148,6 +148,8 @@ mod routable_derive;
 mod router;
 #[path = "scroll.rs"]
 mod scroll;
+#[path = "selection_area.rs"]
+mod selection_area;
 #[path = "semantics.rs"]
 mod semantics;
 #[path = "shortcuts.rs"]

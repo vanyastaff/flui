@@ -1636,7 +1636,7 @@ impl FocalFling {
         self.stop(ScrollEndReason::Preempted);
         let speed = velocity.dx.hypot(velocity.dy);
         let geometry = core.geometry();
-        let simulation = FrictionSimulation::new(0.1, 0.0, speed, Tolerance::DEFAULT);
+        let simulation = FrictionSimulation::try_new(0.1, 0.0, speed, Tolerance::DEFAULT);
         let (Some(post_frame), Some((viewport, boundary)), Ok(simulation), true) = (
             post_frame,
             geometry,

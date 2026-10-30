@@ -145,12 +145,12 @@ pub(crate) fn presentation_rates_pause_and_step_are_independent() {
     binding.pump_all(Duration::ZERO);
     binding
         .with_presentation_motion_clock(a, |clock| {
-            clock.set_rate(PlaybackRate::new(2.0).expect("valid rate"));
+            clock.set_rate(PlaybackRate::try_new(2.0).expect("valid rate"));
         })
         .expect("A exists");
     binding
         .with_presentation_motion_clock(b, |clock| {
-            clock.set_rate(PlaybackRate::new(0.5).expect("valid rate"));
+            clock.set_rate(PlaybackRate::try_new(0.5).expect("valid rate"));
         })
         .expect("B exists");
     binding.pump_all(Duration::from_millis(250));
@@ -206,7 +206,7 @@ pub(crate) fn the_motion_clock_rate_and_step_drive_the_binding_vsync() {
 
     binding
         .motion_clock_mut()
-        .set_rate(PlaybackRate::new(2.0).expect("2 is a valid rate"));
+        .set_rate(PlaybackRate::try_new(2.0).expect("2 is a valid rate"));
     binding.pump_frame(Duration::from_millis(250));
     assert!(
         (controller.value() - 0.5).abs() < 1e-9,

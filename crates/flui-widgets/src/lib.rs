@@ -315,7 +315,8 @@ pub use swipe::{
 };
 pub use text::{
     AnimatedDefaultTextStyle, DefaultTextStyle, EditableText, EditableTextState, RawTextField,
-    RawTextFieldState, RichText, SubmitCallback, Text, TextEditingController,
+    RawTextFieldState, RichText, SelectedText, SelectionArea, SelectionContainer, SubmitCallback,
+    Text, TextEditingController,
 };
 pub use transitions::{
     AlignTransition, AlignTransitionState, AnimatedBuilder, AnimatedBuilderState,

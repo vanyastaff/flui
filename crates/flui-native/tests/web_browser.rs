@@ -352,7 +352,7 @@ impl CanvasWindow {
         // A failed test aborts without closing its window: each test opens
         // the backend on a canvas of its own, which it creates.
         fresh_canvas();
-        let platform = WebPlatform::new().expect("a browser platform");
+        let platform = WebPlatform::try_new().expect("a browser platform");
         let handler = RecordingWindowHandler::new();
         let seen = Rc::new(RefCell::new(Vec::new()));
         let answer = Rc::new(Cell::new(DispatchEventResult::resolved(false, true)));
@@ -492,7 +492,7 @@ fn the_browser_leaves_every_touch_on_the_canvas_to_the_application() {
         ("the page's own", page_canvas),
     ] {
         place();
-        let platform = WebPlatform::new().expect("a browser platform");
+        let platform = WebPlatform::try_new().expect("a browser platform");
         let window = platform
             .open_window(WindowOptions::default(), RecordingWindowHandler::new())
             .expect("the page's canvas opens");
@@ -1156,7 +1156,7 @@ impl HostedCanvas {
         fresh_canvas();
         let slot = Rc::new(RefCell::new(None));
         let out = Rc::clone(&slot);
-        Box::new(WebPlatform::new().expect("a browser platform"))
+        Box::new(WebPlatform::try_new().expect("a browser platform"))
             .run(crate::app::on_ready(move |owner| {
                 let handler = RecordingWindowHandler::new();
                 let keys = Rc::new(RefCell::new(Vec::new()));
@@ -1252,7 +1252,7 @@ fn an_edit_context_serves_the_focused_field() {
     assert_eq!(store.text(), "hello worldに");
 
     store.app_replace(
-        Utf16Range::new(Utf16Offset::ZERO, Utf16Offset::new(5)).expect("a range"),
+        Utf16Range::try_new(Utf16Offset::ZERO, Utf16Offset::new(5)).expect("a range"),
         "HELLO",
     );
     assert_eq!(edit_context_text().as_deref(), Some("HELLO worldに"));
@@ -1348,7 +1348,7 @@ fn a_textarea_serves_the_field_without_edit_context() {
     assert_eq!(store.selection().range().start().get(), 4);
 
     store.app_replace(
-        Utf16Range::new(Utf16Offset::ZERO, Utf16Offset::new(2)).expect("a range"),
+        Utf16Range::try_new(Utf16Offset::ZERO, Utf16Offset::new(2)).expect("a range"),
         "AB",
     );
     let state = editor().expect("the textarea");

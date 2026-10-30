@@ -93,7 +93,7 @@ impl Locale {
     ///
     /// # Errors
     /// Rejects malformed components; use string parsing for full language tags.
-    pub fn new(
+    pub fn try_new(
         language: impl AsRef<str>,
         country: Option<impl AsRef<str>>,
     ) -> Result<Self, InvalidLocale> {

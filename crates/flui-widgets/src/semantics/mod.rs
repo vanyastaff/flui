@@ -1035,6 +1035,52 @@ impl Semantics {
         self
     }
 
+    /// Make this node a merge boundary (ADR-0214 §3): it keeps a node of its
+    /// own inside a merging ancestor, and merges none of its descendants into
+    /// it, so the controls and texts beneath it stay addressable.
+    #[must_use]
+    pub fn merge_boundary(mut self, merge_boundary: bool) -> Self {
+        self.configuration.set_merge_boundary(merge_boundary);
+        self
+    }
+
+    /// Publish `selection` as this document's selection across the texts
+    /// beneath it, in their runs (ADR-0214 §3). A selection whose end names
+    /// no text beneath the node that publishes runs is not published.
+    #[must_use]
+    pub fn document_selection(
+        mut self,
+        selection: Option<flui_rendering::semantics::DocumentSelection>,
+    ) -> Self {
+        self.configuration.set_document_selection(selection);
+        self
+    }
+
+    /// Invoke `handler` with the selection a platform asked this document to
+    /// take: a `SetTextSelection` sent to the node, or to a text beneath it,
+    /// with each end as the text's anchor and a byte of it (ADR-0214 §4).
+    /// The owner refused one whose ends are not current runs of texts beneath
+    /// this node before it reaches here. Replaces
+    /// [`on_set_text_selection`](Self::on_set_text_selection): a node takes
+    /// selections as a field or as a document, not both.
+    #[must_use]
+    pub fn on_set_document_selection<F, R>(mut self, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, flui_rendering::semantics::DocumentSelection) -> R + 'static,
+        R: EventOutcome,
+    {
+        let handler = value_callback(handler);
+        self.event_actions.insert(
+            SemanticsAction::SetTextSelection,
+            Rc::new(move |cx, call| {
+                if let ActionCall::SetDocumentSelection(selection) = call {
+                    handler(cx, selection);
+                }
+            }),
+        );
+        self
+    }
+
     /// Invoke `handler` with `true` when the assistive technology's cursor
     /// (VoiceOver, TalkBack) enters this node's subtree and `false` when it
     /// leaves: a carousel stops moving while a screen reader reads it. This is

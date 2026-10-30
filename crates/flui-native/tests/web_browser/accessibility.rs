@@ -185,7 +185,7 @@ fn open_on_page(
     Rc<dyn HostWindow>,
     Arc<dyn PlatformAccessibility>,
 ) {
-    let platform = WebPlatform::new().expect("a browser platform");
+    let platform = WebPlatform::try_new().expect("a browser platform");
     let window = platform
         .open_window(WindowOptions::default(), handler)
         .expect("the page's canvas opens");

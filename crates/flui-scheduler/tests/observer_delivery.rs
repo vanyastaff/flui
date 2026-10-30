@@ -86,7 +86,7 @@ fn lifecycle_removal_before_delivery_skips_retired_listener() {
 
 fn timings_without_subscribers_retain_nothing() {
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
     for _ in 0..10_000 {
         let now = Instant::now();
         owner
@@ -98,7 +98,7 @@ fn timings_without_subscribers_retain_nothing() {
 
 fn timings_automatically_flush_and_allow_reentry() {
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
     let received = Rc::new(RefCell::new(0));
     let seen = Rc::clone(&received);
     let weak = scheduler.downgrade();
@@ -122,7 +122,7 @@ fn timings_automatically_flush_and_allow_reentry() {
 
 fn timings_failure_delivers_healthy_tail_and_recovers() {
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
     let failed: flui_scheduler::TimingsCallback = Rc::new(|_| panic!("timings listener"));
     scheduler.add_timings_callback(Rc::clone(&failed));
     let competing: flui_scheduler::TimingsCallback = Rc::new(|_| panic!("second timings listener"));
@@ -157,7 +157,7 @@ fn observer_failures_protect_nested_retirement() {
     for timings in [false, true] {
         for mode in ["standalone", "active", "nested"] {
             let scheduler = UpdateScheduler::new();
-            let owner = Rc::new(OwnerFrame::new(&scheduler).expect("fresh owner"));
+            let owner = Rc::new(OwnerFrame::try_new(&scheduler).expect("fresh owner"));
             let drops = Rc::new(std::cell::Cell::new(0));
             let pending = Rc::new(std::cell::Cell::new(None));
             let pending_task = Rc::new(RefCell::new(None::<flui_scheduler::TaskToken>));
@@ -255,7 +255,7 @@ fn observer_failure_custody_follows_a_replacement_owner() {
     for timings in [false, true] {
         let scheduler = UpdateScheduler::new();
         let owner = Rc::new(RefCell::new(Some(
-            OwnerFrame::new(&scheduler).expect("fresh owner"),
+            OwnerFrame::try_new(&scheduler).expect("fresh owner"),
         )));
         let drops = Rc::new(std::cell::Cell::new(0));
         let replace = {
@@ -266,7 +266,7 @@ fn observer_failure_custody_follows_a_replacement_owner() {
                 let outgoing = owner.borrow_mut().take().expect("outgoing owner");
                 drop(outgoing);
                 let scheduler = weak.upgrade().expect("live scheduler");
-                let replacement = OwnerFrame::new(&scheduler).expect("owner slot released");
+                let replacement = OwnerFrame::try_new(&scheduler).expect("owner slot released");
                 let capture = Capture(Rc::clone(&drops));
                 let task = replacement.async_driver().spawn_local(Box::pin(async move {
                     std::future::pending::<()>().await;

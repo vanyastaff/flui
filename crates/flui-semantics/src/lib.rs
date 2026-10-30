@@ -48,6 +48,7 @@ mod assistive_focus;
 mod attributes;
 mod collection;
 pub mod configuration;
+mod document_selection;
 pub mod identity;
 pub mod node;
 mod numeric_range;
@@ -149,6 +150,7 @@ pub use properties::{
 // ============================================================================
 // RE-EXPORTS - Role Types
 // ============================================================================
+pub use document_selection::{DocumentPosition, DocumentSelection};
 pub use relation::{SemanticsAnchor, SemanticsRelation};
 pub use role::{
     AccessibilityFocusBlockType, DebugSemanticsDumpOrder, LiveSetting, SemanticsRole, Urgency,

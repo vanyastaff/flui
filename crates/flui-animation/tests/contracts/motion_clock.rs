@@ -17,7 +17,7 @@ const fn ms(millis: u64) -> Duration {
 }
 
 fn rate(value: f64) -> PlaybackRate {
-    PlaybackRate::new(value).expect("test rates are finite and non-negative")
+    PlaybackRate::try_new(value).expect("test rates are finite and non-negative")
 }
 
 fn now_after(clock: &mut MotionClock, raw: Duration) -> Duration {
@@ -305,7 +305,7 @@ fn settle_simulation(source: impl flui_animation::Simulation + 'static, expected
 fn reduced_friction_reaches_its_analytic_rest() {
     use flui_animation::simulation::{FrictionSimulation, Tolerance};
     settle_simulation(
-        FrictionSimulation::new(0.135, 5.0, 300.0, Tolerance::DEFAULT).expect("friction"),
+        FrictionSimulation::try_new(0.135, 5.0, 300.0, Tolerance::DEFAULT).expect("friction"),
         5.0 - 300.0 / 0.135_f64.ln(),
     );
 }
@@ -313,8 +313,8 @@ fn reduced_friction_reaches_its_analytic_rest() {
 fn reduced_spring_reaches_its_exact_endpoint() {
     use flui_animation::simulation::{SpringDescription, SpringSimulation, Tolerance};
     settle_simulation(
-        SpringSimulation::new(
-            SpringDescription::new(1.0, 100.0, 20.0).expect("spring description"),
+        SpringSimulation::try_new(
+            SpringDescription::try_new(1.0, 100.0, 20.0).expect("spring description"),
             7.0,
             13.0,
             -4.0,
@@ -1392,8 +1392,8 @@ fn rate_change_mid_run_keeps_value_continuous(kind: &str) {
         "curve" => controller.animate_to_curved(1.0, None, curves::DECELERATE),
         "repeat" => controller.repeat(RepeatMode::Restart),
         "spring" => controller.animate_with(
-            SpringSimulation::new(
-                SpringDescription::new(1.0, 1.0, 2.0).expect("critical spring"),
+            SpringSimulation::try_new(
+                SpringDescription::try_new(1.0, 1.0, 2.0).expect("critical spring"),
                 0.0,
                 1.0,
                 0.0,

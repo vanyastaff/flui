@@ -207,7 +207,7 @@ impl Drop for Peer {
 /// the window forward with the focus.
 #[test]
 fn an_activation_takes_the_foreground_only_when_it_is_handed_over() {
-    let platform = WindowsPlatform::new().expect("native Windows platform");
+    let platform = WindowsPlatform::try_new().expect("native Windows platform");
     let opened = crate::Opened::on(
         &platform,
         WindowOptions::default()

@@ -337,7 +337,8 @@ request.
 
 - `InputLatency` is set by nobody.
 - Android cannot honour it on `NativeActivity`.
-- iOS coalesced and predicted touches and the Linux and macOS paths are not audited.
+- iOS attaches the touches UIKit coalesced into a move and the ones it predicts (type-checked, no run on a device). Pencil force, altitude and azimuth that UIKit later revises (`touchesEstimatedPropertiesUpdated:`) are not reported: the pointer vocabulary has no revision of a delivered sample, so a stroke keeps the first estimate. The planned shape is a `#[non_exhaustive]` `PointerEvent::SampleRevised { pointer, sample_index, sensors }`, which lands with the first stroke or ink consumer; a scenario that covers Pencil estimates fails on this gap until then. Holding a reading back until its estimate settles was rejected: it adds the latency this entry is about.
+- The Linux and macOS paths are not audited.
 - Timestamp conversion is a hazard of its own: Win32 `GetMessageTime` is 32-bit milliseconds that wrap every 49.7 days, Wayland event times have an undefined base, and Android's event time is uptime milliseconds. Windows pointer ticks are rebased across the wrap (`NativeTime::TickMillis`); the native Wayland host reads a stamp through the same rule only when it lies within a second of `CLOCK_MONOTONIC` and stamps the event on arrival otherwise (Weston's X11 backend stamps on the X server's clock); the X11, Android and Web conversions are not audited.
 
 ### 28. Distribution is unaudited
@@ -517,5 +518,6 @@ request.
 | 2026-10-30 | minor | Entry 2: the semantics identifier reaches Android's `viewIdResourceName` through a change to the vendored `accesskit_android`, type-checked |
 | 2026-10-30 | minor | Entries 2 and 36: every Web canvas mirrors its tree as a parallel ARIA DOM in a host over the canvas, activated by a placeholder only a screen reader finds, its clicks reaching the action listener (headless Chrome, constructed events); the browser reports no screen reader's cursor |
 | 2026-10-30 | minor | Entry 15: the iPad pointer scrolls, pinches, rotates, hovers and reads its secondary button, type-checked, never run on an iPad |
+| 2026-10-30 | minor | Entry 27: iOS attaches coalesced and predicted touches to a move; revised Pencil estimates are not reported, the planned `SampleRevised` event is named |
 
 </details>

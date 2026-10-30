@@ -50,7 +50,7 @@ pub struct Utf16Range {
 impl Utf16Range {
     /// The span from `start` to `end`, or `None` when `start > end`.
     #[must_use]
-    pub const fn new(start: Utf16Offset, end: Utf16Offset) -> Option<Self> {
+    pub const fn try_new(start: Utf16Offset, end: Utf16Offset) -> Option<Self> {
         if start.0 > end.0 {
             None
         } else {
@@ -220,7 +220,7 @@ mod tests {
             byte_offset(CORPUS, at(2)),
             Err(OffsetError::SplitsSurrogatePair(2))
         );
-        let range = Utf16Range::new(at(0), at(2)).expect("ordered");
+        let range = Utf16Range::try_new(at(0), at(2)).expect("ordered");
         assert_eq!(
             byte_range(CORPUS, range),
             Err(OffsetError::SplitsSurrogatePair(2))

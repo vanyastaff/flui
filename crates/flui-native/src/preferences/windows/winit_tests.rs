@@ -454,7 +454,7 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
                 .lock()
                 .clone()
                 .expect("live owner signal");
-            let source = crate::preferences::windows::PreferenceSource::new(&signal)
+            let source = crate::preferences::windows::PreferenceSource::try_new(&signal)
                 .expect("native source construction");
             assert!(
                 source

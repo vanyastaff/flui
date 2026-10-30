@@ -99,6 +99,9 @@ pub(crate) struct SemanticsAttributes {
     /// A text field's text as runs and its selection, shared because a
     /// configuration is cloned on every assembly.
     pub(crate) text: Option<Arc<crate::TextContent>>,
+    /// A document's selection across the texts beneath it (ADR-0214),
+    /// resolved to their runs when published.
+    pub(crate) document_selection: Option<crate::DocumentSelection>,
     /// The outline level of a header node.
     pub(crate) heading_level: Option<HeadingLevel>,
     /// Anchors naming this node as a relation target (ADR-0205).

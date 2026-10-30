@@ -2093,7 +2093,7 @@ already acquired window. Catching that failure cannot reissue an old identity.
 
 The Windows row `window_identity_exhaustion_permanently_refuses_retries` joins
 `the_owner_thread_machinery_honours_its_contracts`. It drives
-`WindowIdentity::admit`, the admission `WindowsWindow::new` runs around
+`WindowIdentity::admit`, the admission `WindowsWindow::try_new` runs around
 `CreateWindowExW`, from a local counter with an acquisition that records
 native creation, checks repeated refusal and verifies that refused admission
 never acquires. This tests the admission boundary, not recycled HWND behavior.

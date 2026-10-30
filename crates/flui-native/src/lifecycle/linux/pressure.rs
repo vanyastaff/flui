@@ -448,7 +448,7 @@ pub(crate) mod triggers {
     }
 
     impl Trigger {
-        pub(crate) fn new(
+        pub(crate) fn try_new(
             stall: Stall,
             threshold: Duration,
             window: Duration,
@@ -513,8 +513,9 @@ pub(crate) mod triggers {
         // The same share of the window, so the fallback is no more eager.
         let unprivileged_threshold = threshold * 2;
         [
-            Trigger::new(stall, threshold, window).expect("BUG: the built-in trigger is in range"),
-            Trigger::new(stall, unprivileged_threshold, unprivileged_window)
+            Trigger::try_new(stall, threshold, window)
+                .expect("BUG: the built-in trigger is in range"),
+            Trigger::try_new(stall, unprivileged_threshold, unprivileged_window)
                 .expect("BUG: the built-in fallback trigger is in range"),
         ]
     }
@@ -583,17 +584,17 @@ pub(crate) mod triggers {
             ];
             for (case, threshold, window, accepted) in table {
                 assert_eq!(
-                    Trigger::new(Stall::Partial, threshold, window).is_ok(),
+                    Trigger::try_new(Stall::Partial, threshold, window).is_ok(),
                     accepted,
                     "{case}"
                 );
             }
             assert_eq!(
-                Trigger::new(Stall::Full, ms(100), ms(20_000)),
+                Trigger::try_new(Stall::Full, ms(100), ms(20_000)),
                 Err(TriggerError::WindowOutOfRange(ms(20_000)))
             );
             assert_eq!(
-                Trigger::new(Stall::Full, ms(0), ms(1000)),
+                Trigger::try_new(Stall::Full, ms(0), ms(1000)),
                 Err(TriggerError::ThresholdOutOfRange {
                     threshold: ms(0),
                     window: ms(1000)
@@ -611,7 +612,7 @@ pub(crate) mod triggers {
                 (ms(3000), false),
                 (ms(2500), false),
             ] {
-                let trigger = Trigger::new(Stall::Partial, ms(100), window).expect("in range");
+                let trigger = Trigger::try_new(Stall::Partial, ms(100), window).expect("in range");
                 assert_eq!(trigger.is_unprivileged(), expected, "{window:?}");
             }
         }

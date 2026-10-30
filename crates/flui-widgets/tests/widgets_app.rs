@@ -60,7 +60,7 @@ pub(crate) fn locale_override_removal_uses_the_nearest_current_preferences() {
     use flui_widgets::localization::Localizations;
     use flui_widgets::{MediaQuery, MediaQueryData};
 
-    let arabic = Locale::new("ar", None::<&str>).expect("valid Arabic locale");
+    let arabic = Locale::try_new("ar", None::<&str>).expect("valid Arabic locale");
     let (probe, captured) = capture(Localizations::locale_of);
     let tree = |preferred: Option<Vec<Locale>>, explicit: Option<Locale>| {
         let app =

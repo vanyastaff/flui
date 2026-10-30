@@ -153,7 +153,7 @@ impl std::fmt::Debug for Doorbell {
 }
 
 impl Doorbell {
-    fn new() -> Result<Self, PlatformError> {
+    fn try_new() -> Result<Self, PlatformError> {
         eventfd(0, EventfdFlags::CLOEXEC | EventfdFlags::NONBLOCK)
             .map(|fd| Self(Arc::new(fd)))
             .map_err(|error| PlatformError::Init {
@@ -383,11 +383,11 @@ impl X11Loop {
     ///
     /// # Errors
     /// [`PlatformError::Init`] when the doorbell cannot be made.
-    pub(crate) fn new<H: X11Host>(
+    pub(crate) fn try_new<H: X11Host>(
         connection: Arc<X11Connection>,
         windows: Arc<dyn LoopWindows>,
     ) -> Result<Self, PlatformError> {
-        let doorbell = Doorbell::new()?;
+        let doorbell = Doorbell::try_new()?;
         let rung = doorbell.clone();
         let signal = OwnerSignal::new(Arc::new(move || rung.ring()));
         let app = Arc::new(AppDelivery::new());

@@ -359,7 +359,7 @@ mod cases {
             title: &str,
             handler: Rc<dyn flui_platform::WindowHandler>,
         ) -> Self {
-            let platform = X11Platform::new().expect("the X11 platform");
+            let platform = X11Platform::try_new().expect("the X11 platform");
             let window = platform
                 .open_window(
                     WindowOptions::default()
@@ -415,7 +415,7 @@ mod cases {
                 .ok()
                 .and_then(|cookie| cookie.reply().ok());
             let metrics = geometry.filter(|_| viewable).and_then(|geometry| {
-                WindowMetrics::new(
+                WindowMetrics::try_new(
                     Size::new(i32::from(geometry.width), i32::from(geometry.height)),
                     1.0,
                 )
@@ -595,7 +595,7 @@ mod cases {
     /// mode, so the window manager maps it maximized and it never shows in
     /// normal mode first.
     fn a_window_opened_in_a_mode_is_mapped_in_it() {
-        let platform = X11Platform::new().expect("the X11 platform");
+        let platform = X11Platform::try_new().expect("the X11 platform");
         let server = RustConnection::connect(None)
             .expect("the X server answers")
             .0;
@@ -640,7 +640,7 @@ mod cases {
     /// so, closed when it grants it, after which the window is gone from the
     /// server and its surface target hands out nothing.
     fn the_window_managers_close_asks_the_handler() {
-        let platform = X11Platform::new().expect("the X11 platform");
+        let platform = X11Platform::try_new().expect("the X11 platform");
         let server = RustConnection::connect(None)
             .expect("the X server answers")
             .0;
@@ -698,7 +698,7 @@ mod cases {
     /// handle for the window that is gone, and a frame asked for it reaches
     /// nothing.
     fn a_window_destroyed_by_another_client_closes_and_lets_go() {
-        let platform = X11Platform::new().expect("the X11 platform");
+        let platform = X11Platform::try_new().expect("the X11 platform");
         let server = RustConnection::connect(None)
             .expect("the X server answers")
             .0;
@@ -738,7 +738,7 @@ mod cases {
     /// A frame asked for on another thread wakes a loop that waits with no
     /// deadline: the loop's doorbell, not a poll.
     fn a_frame_asked_for_on_another_thread_wakes_the_loop() {
-        let platform = Box::new(X11Platform::new().expect("the X11 platform"));
+        let platform = Box::new(X11Platform::try_new().expect("the X11 platform"));
         let framed = Arc::new(AtomicBool::new(false));
         let seen = Arc::clone(&framed);
         let app = with_log(move |log, owner| {
@@ -794,7 +794,7 @@ mod cases {
     /// The loop ends when its last window closes and the application lets
     /// it, and the application hears the quit last.
     fn the_loop_ends_with_its_last_window() {
-        let platform = Box::new(X11Platform::new().expect("the X11 platform"));
+        let platform = Box::new(X11Platform::try_new().expect("the X11 platform"));
         let log = AppLog::new();
         log.answer_exit(true);
         log.bootstrap(|owner| {
@@ -823,7 +823,7 @@ mod cases {
     /// A wake deadline whose frame no handler ran is delivered once, not on
     /// every turn: the loop waits for the next event instead of spinning.
     fn a_wake_deadline_no_frame_serviced_is_delivered_once() {
-        let platform = Box::new(X11Platform::new().expect("the X11 platform"));
+        let platform = Box::new(X11Platform::try_new().expect("the X11 platform"));
         let log = AppLog::new();
         // One instant, answered again on every turn.
         log.answer_deadline(Some(web_time::Instant::now() + Duration::from_millis(50)));

@@ -82,10 +82,10 @@ impl AnimationTime {
 /// ```
 /// use flui_animation::{InvalidPlaybackRate, PlaybackRate};
 ///
-/// let slow = PlaybackRate::new(0.1).expect("0.1 is a valid rate");
+/// let slow = PlaybackRate::try_new(0.1).expect("0.1 is a valid rate");
 /// assert_eq!(slow.get(), 0.1);
 /// assert!(PlaybackRate::PAUSED.is_paused());
-/// assert_eq!(PlaybackRate::new(-1.0), Err(InvalidPlaybackRate::Negative(-1.0)));
+/// assert_eq!(PlaybackRate::try_new(-1.0), Err(InvalidPlaybackRate::Negative(-1.0)));
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub struct PlaybackRate(f64);
@@ -104,7 +104,7 @@ impl PlaybackRate {
     ///
     /// [`InvalidPlaybackRate::NonFinite`] for NaN or ±∞,
     /// [`InvalidPlaybackRate::Negative`] for a rate below zero.
-    pub fn new(rate: f64) -> Result<Self, InvalidPlaybackRate> {
+    pub fn try_new(rate: f64) -> Result<Self, InvalidPlaybackRate> {
         if !rate.is_finite() {
             return Err(InvalidPlaybackRate::NonFinite(rate));
         }
@@ -138,7 +138,7 @@ impl TryFrom<f64> for PlaybackRate {
     type Error = InvalidPlaybackRate;
 
     fn try_from(rate: f64) -> Result<Self, Self::Error> {
-        Self::new(rate)
+        Self::try_new(rate)
     }
 }
 
@@ -211,7 +211,7 @@ impl FrameTick {
 /// assert_eq!(clock.frame(ms(100)).now().as_duration(), ms(100));
 ///
 /// // Half speed from the last frame on: no jump at the change.
-/// clock.set_rate(PlaybackRate::new(0.5).expect("0.5 is a valid rate"));
+/// clock.set_rate(PlaybackRate::try_new(0.5).expect("0.5 is a valid rate"));
 /// assert_eq!(clock.frame(ms(300)).now().as_duration(), ms(200));
 ///
 /// // A timestamp from the past holds the timeline.

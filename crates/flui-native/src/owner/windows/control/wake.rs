@@ -14,7 +14,7 @@ pub(crate) struct OwnerWake {
 }
 
 impl OwnerWake {
-    pub(crate) fn new() -> windows::core::Result<Self> {
+    pub(crate) fn try_new() -> windows::core::Result<Self> {
         // SAFETY: unnamed, non-inheritable auto-reset event; no caller pointers.
         let event = unsafe { CreateEventW(None, false, false, None)? };
         Ok(Self {

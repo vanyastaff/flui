@@ -27,7 +27,7 @@ use flui_foundation::Diagnosticable;
 use flui_foundation::Leaf;
 use flui_foundation::geometry::{Offset, Size};
 use flui_interaction::CursorIcon;
-use flui_painting::typography::{InlineSpan, TextAlign, TextDirection};
+use flui_painting::typography::{InlineSpan, TextAffinity, TextAlign, TextDirection, TextPosition};
 use flui_painting::{Invalidation, TextBaseline as PainterBaseline, TextPainter};
 
 use flui_rendering::{
@@ -39,7 +39,7 @@ use flui_rendering::{
     },
     hit_testing::CursorRequest,
     parent_data::BoxParentData,
-    semantics::{SemanticsConfiguration, SemanticsRegions},
+    semantics::{SemanticsAnchor, SemanticsConfiguration, SemanticsRegions, TextContent},
     traits::{RenderBox, TextBaseline},
 };
 
@@ -66,6 +66,9 @@ pub struct RenderParagraph {
     shown_links_listener: Option<ShownLinksListener>,
     /// What the listener was last told.
     shown_links: Vec<bool>,
+    /// The anchor a selection area registered this text under, while it is
+    /// selectable: it then publishes its runs (ADR-0214).
+    selectable: Option<SemanticsAnchor>,
 }
 
 impl RenderParagraph {
@@ -82,6 +85,7 @@ impl RenderParagraph {
             link_focus: None,
             shown_links_listener: None,
             shown_links: Vec::new(),
+            selectable: None,
         }
     }
 
@@ -116,6 +120,62 @@ impl RenderParagraph {
     /// The routes the text's links are reached through.
     pub fn link_routes(&self) -> &[TextLinkRoute] {
         &self.link_routes
+    }
+
+    /// Makes the text selectable under `anchor`, the identity a selection
+    /// area registered it with, or plain static text again with `None`.
+    ///
+    /// Selectable text publishes its laid-out text as runs, declares
+    /// `anchor` on its node and merges its own descendants, so it keeps a
+    /// node of its own and its runs even inside an outer merge (ADR-0214
+    /// §1-§2). Text outside a selection area publishes no runs.
+    pub fn set_selectable(
+        &mut self,
+        anchor: Option<SemanticsAnchor>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.selectable == anchor {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.selectable = anchor;
+        flui_rendering::RenderUpdateImpact::SEMANTICS
+    }
+
+    /// The anchor the text is selectable under, if it is.
+    pub fn selectable(&self) -> Option<&SemanticsAnchor> {
+        self.selectable.as_ref()
+    }
+
+    /// The laid-out text as runs, or `None` before layout. A run the
+    /// semantics model refuses is a bug in this description: it is logged
+    /// and the text publishes its label alone.
+    fn semantics_text_content(&self, text: &str) -> Option<TextContent> {
+        if !self.painter.has_layout() {
+            return None;
+        }
+        let runs = crate::text::runs::text_runs(
+            text,
+            self.painter.line_layouts(),
+            self.painter.text_direction().unwrap_or(TextDirection::Ltr),
+            0.0,
+            |start, line| {
+                let caret = self
+                    .painter
+                    .get_offset_for_caret(TextPosition::new(start, TextAffinity::Downstream));
+                flui_foundation::geometry::Rect::from_ltrb(
+                    caret.dx,
+                    line.top,
+                    caret.dx,
+                    line.bottom,
+                )
+            },
+        );
+        match runs.and_then(TextContent::try_new) {
+            Ok(content) => Some(content),
+            Err(error) => {
+                tracing::error!(%error, "BUG: a paragraph's layout described a run the semantics model refuses");
+                None
+            }
+        }
     }
 
     /// Names the link that holds the primary keyboard focus and the ring it
@@ -610,11 +670,32 @@ impl RenderBox for RenderParagraph {
         if text.is_empty() {
             return;
         }
+        let plain = span.to_plain_text();
+        // A span's accessibility override reads differently from its glyphs.
+        let overridden = text != plain;
         if self.routes_links() {
             config.set_semantics_boundary(true);
             config.set_explicit_child_nodes(true);
         } else {
             config.set_label(text);
+        }
+        // Selectable text is a nested merger with its runs: a node of its own
+        // inside any merge, read and selected by character (ADR-0214). Its
+        // runs are its authored text, so text a span's accessibility
+        // override replaces or silences keeps its label and publishes no
+        // runs until runs can carry overrides. With routed links it stays
+        // the boundary of its link regions, so each link keeps its own node
+        // and handler, and publishes no runs until links carry runs of their
+        // own. Either way it names its anchor.
+        if let Some(anchor) = &self.selectable {
+            config.add_anchor(anchor.clone());
+            config.set_semantics_boundary(true);
+            if !self.routes_links() && !overridden {
+                config.set_merging_semantics_of_descendants(true);
+                if let Some(content) = self.semantics_text_content(&plain) {
+                    config.set_text_content(content);
+                }
+            }
         }
         if let Some(direction) = self.painter.text_direction() {
             config.set_text_direction(semantics_text_direction(direction));

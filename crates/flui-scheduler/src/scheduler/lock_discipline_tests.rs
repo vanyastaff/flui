@@ -56,7 +56,7 @@ use super::*;
 /// deadlocking, a third failure mode again. DashMap 6.2.1 has no
 /// all-shards "is anything locked" API to assert here, and a lane is never
 /// a field of `SchedulerInner` for this destructure to see in the first
-/// place -- each `OwnerFrame::new` call hands the caller its
+/// place -- each `OwnerFrame::try_new` call hands the caller its
 /// own, held separately from the scheduler's own storage.
 fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
     // Destructured without `..` on purpose: a `Mutex` added directly to
@@ -219,7 +219,8 @@ fn transient_callback_runs_with_no_scheduler_lock_held() {
         let _prev = std::mem::replace(&mut *observed_for_callback.lock(), probe.current_frame());
     }));
 
-    let owner = crate::OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+    let owner =
+        crate::OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
     let now = Instant::now();
     let frame_id = owner
         .drive_frame(
@@ -291,7 +292,7 @@ fn completion_waker_runs_with_no_scheduler_lock_held() {
     let mut cx = Context::from_waker(&waker);
     assert!(Pin::new(&mut future).poll(&mut cx).is_pending());
 
-    crate::OwnerFrame::new(&scheduler)
+    crate::OwnerFrame::try_new(&scheduler)
         .expect("the scheduler has no live owner frame")
         .drive_frame(
             crate::Instant::now(),

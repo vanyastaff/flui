@@ -681,7 +681,9 @@ impl PublishedState {
 /// whole-tree scan, and dead entries are dropped by a liveness check before
 /// resolution. A target's identity can change without its sources being
 /// dirty, so an incremental flush re-translates every relation source and lets
-/// the mirror diff drop the unchanged ones.
+/// the mirror diff drop the unchanged ones. A document selection (ADR-0214)
+/// resolves through the runs of the texts beneath its node, which change
+/// without dirtying it, so its node is a source too.
 #[derive(Default)]
 struct RelationIndex {
     anchored: FxHashMap<SemanticsId, SmallVec<[SemanticsAnchor; 1]>>,
@@ -706,7 +708,7 @@ impl RelationIndex {
             self.anchored
                 .insert(sid, config.anchors().iter().cloned().collect());
         }
-        if config.relations().is_empty() {
+        if config.relations().is_empty() && config.document_selection().is_none() {
             self.sources.remove(&sid);
         } else {
             self.sources.insert(sid);
@@ -1052,10 +1054,25 @@ impl SemanticsOwner {
         request: &accesskit::ActionRequest,
     ) -> Result<SemanticsActionRequest, crate::ActionDecodeError> {
         let mut routed = request.clone();
-        if let Some(field) = AccessibilityNodeId::from_u64(request.target_node.0)
-            .and_then(|run| self.field_of_run(run))
-        {
+        let target = AccessibilityNodeId::from_u64(request.target_node.0);
+        let text_owner = target.and_then(|run| self.field_of_run(run));
+        if let Some(field) = text_owner {
             routed.target_node = accesskit::NodeId(field.as_u64());
+        }
+        // A selection sent to static text, or to one of its runs, is the
+        // document's to make (ADR-0214 §4). A text that blocks user actions
+        // keeps the request, which it then refuses (ADR-0216 §1).
+        if request.action == accesskit::Action::SetTextSelection
+            && let Some(at) = text_owner.or(target)
+            && !self.blocks_user_actions_at(at)
+            && let Some(document) = self.document_of(at)
+        {
+            routed.target_node = accesskit::NodeId(document.as_u64());
+            return crate::accesskit_translation::decode_request(&routed, |target, selection| {
+                Some(ActionCall::SetDocumentSelection(
+                    self.document_selection(target, selection)?,
+                ))
+            });
         }
         crate::accesskit_translation::decode_request(&routed, |target, selection| {
             let root = self.tree.root()?;
@@ -1073,7 +1090,117 @@ impl SemanticsOwner {
                     position(&selection.focus)?,
                 ))
                 .ok()
+                .map(ActionCall::SetTextSelection)
         })
+    }
+
+    /// The texts of the document that holds the text `anchor` names, as their
+    /// anchors in the order the last publication reads them, sort keys and
+    /// all: what an adapter's range over the document covers. `None` when no
+    /// published text declares `anchor`, or no document holds it.
+    #[must_use]
+    pub fn document_texts(
+        &self,
+        anchor: &crate::SemanticsAnchor,
+    ) -> Option<Vec<crate::SemanticsAnchor>> {
+        let text = self.tree.rooted_nodes()?.into_iter().find_map(|sid| {
+            let node = self.tree.get(sid)?;
+            (node.config().anchors().contains(anchor)
+                && crate::accesskit_translation::published_text(node.config().attributes())
+                    .is_some())
+            .then(|| node.accessibility_id())
+            .flatten()
+        })?;
+        let document = self.document_of(text)?;
+        let (_, document) = self.locate(self.tree.root()?, document).ok()?;
+        Some(
+            self.tree
+                .texts_beneath(document)
+                .into_iter()
+                .filter_map(|node| node.config().anchors().first().cloned())
+                .collect(),
+        )
+    }
+
+    /// Whether the node published as `at` blocks user actions (ADR-0216 §1).
+    fn blocks_user_actions_at(&self, at: AccessibilityNodeId) -> bool {
+        self.tree
+            .root()
+            .and_then(|root| self.locate(root, at).ok())
+            .is_some_and(|(_, node)| node.config().blocks_user_actions())
+    }
+
+    /// The document that makes selections for the node published as `at`:
+    /// the node itself or its nearest ancestor that is a merge boundary and
+    /// takes `SetTextSelection` (ADR-0214 §4). `None` for a text field, which
+    /// makes its own, and for a node no such document holds.
+    fn document_of(&self, at: AccessibilityNodeId) -> Option<AccessibilityNodeId> {
+        let root = self.tree.root()?;
+        let (mut sid, node) = self.locate(root, at).ok()?;
+        if node.config().attributes().effective_role().is_text_input() {
+            return None;
+        }
+        // Bounded by the tree's size, so a malformed parent chain cannot loop.
+        for _ in 0..=self.tree.len() {
+            let node = self.tree.get(sid)?;
+            let config = node.config();
+            if config.makes_document_selections() {
+                return node.accessibility_id();
+            }
+            sid = node.parent()?;
+        }
+        None
+    }
+
+    /// A selection between two run positions as the document published as
+    /// `document` reads it: each end in the text whose run it names, as that
+    /// text's anchor and a byte of it. `None` unless both runs are current
+    /// runs of texts this document holds: texts beneath it that no nearer
+    /// document holds, so a run of another document, nested in this one or
+    /// not, or one an edit retired, is refused before the document sees it. A
+    /// character index past its run's end is read as the run's end.
+    fn document_selection(
+        &self,
+        document: AccessibilityNodeId,
+        selection: &accesskit::TextSelection,
+    ) -> Option<crate::DocumentSelection> {
+        let root = self.tree.root()?;
+        let document_id = document;
+        let (_, document) = self.locate(root, document).ok()?;
+        let position = |at: &accesskit::TextPosition| {
+            let run = AccessibilityNodeId::from_u64(at.node.0)?;
+            let text = self.field_of_run(run)?;
+            // The text belongs to this document, not to one nested in it.
+            if self.document_of(text) != Some(document_id) {
+                return None;
+            }
+            let (_, text) = self.locate(root, text).ok()?;
+            // A text that blocks user actions is no end of an assistive
+            // selection (ADR-0216 §1).
+            if text.config().blocks_user_actions() {
+                return None;
+            }
+            let anchor = text.config().anchors().first()?;
+            // The run's text must be the one the document finds by its anchor.
+            let (_, beneath) = self.tree.text_beneath(document, anchor)?;
+            if beneath.accessibility_id() != text.accessibility_id() {
+                return None;
+            }
+            let (content, runs) =
+                crate::accesskit_translation::published_text(text.config().attributes())?;
+            let index = runs.iter().position(|published| *published == run)?;
+            let character = at
+                .character_index
+                .min(content.runs().get(index)?.character_count());
+            let byte = content
+                .byte_offset(crate::TextRunPosition::new(index, character))
+                .ok()?;
+            Some(crate::DocumentPosition::new(anchor.clone(), byte))
+        };
+        Some(crate::DocumentSelection::new(
+            position(&selection.anchor)?,
+            position(&selection.focus)?,
+        ))
     }
 
     /// The field that publishes `run` as one of its text runs.

@@ -20,7 +20,7 @@ casing, not registry membership or CLDR likely subtags. Existing `in`/`iw`/`ji`
 and deprecated-region equivalences remain; explicit scripts are not suppressed.
 The existing language-based direction policy remains separate from identity.
 
-`Locale::new` and `with_script` return `Result<Locale, InvalidLocale>` and reject
+`Locale::try_new` and `with_script` return `Result<Locale, InvalidLocale>` and reject
 components supplied in the wrong role. `FromStr` accepts full tags; legacy
 underscore separators remain accepted input. `Display`, `to_language_tag` and
 serde emit a normalized hyphenated tag. Serde accepts that tag string rather

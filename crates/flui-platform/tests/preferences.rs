@@ -4,8 +4,8 @@ use flui_platform::{InvalidPreference, MotionPreference, SystemPreferences};
 fn native_mouse_geometry_preserves_full_area_and_half_extents() {
     use flui_platform::{GestureGeometry, NativeMouseGeometry};
 
-    let ratio = DevicePixelRatio::new(2.0).expect("valid scale");
-    let observed = NativeMouseGeometry::new(Size::new(12, 8), Size::new(6, 2), ratio)
+    let ratio = DevicePixelRatio::try_new(2.0).expect("valid scale");
+    let observed = NativeMouseGeometry::try_new(Size::new(12, 8), Size::new(6, 2), ratio)
         .expect("native geometry");
     let projected = GestureGeometry::from_native_mouse(&observed).expect("projection");
     assert_eq!(
@@ -15,7 +15,7 @@ fn native_mouse_geometry_preserves_full_area_and_half_extents() {
     assert_eq!(projected.mouse_drag_tolerance(), Some(Size::new(3.0, 1.0)));
     assert_eq!(projected.pixel_ratio(), ratio);
 
-    let zero = NativeMouseGeometry::new(Size::new(0, 8), Size::new(6, 0), ratio)
+    let zero = NativeMouseGeometry::try_new(Size::new(0, 8), Size::new(6, 0), ratio)
         .expect("zero axes are observations");
     let projected = GestureGeometry::from_native_mouse(&zero).expect("zero projection");
     assert_eq!(
@@ -23,10 +23,10 @@ fn native_mouse_geometry_preserves_full_area_and_half_extents() {
         Some(Size::new(0.0, 4.0))
     );
     assert_eq!(projected.mouse_drag_tolerance(), Some(Size::new(3.0, 0.0)));
-    assert!(NativeMouseGeometry::new(Size::new(-1, 8), Size::new(6, 2), ratio).is_err());
+    assert!(NativeMouseGeometry::try_new(Size::new(-1, 8), Size::new(6, 2), ratio).is_err());
 
-    let tiny = DevicePixelRatio::new(f64::from_bits(1)).expect("positive finite ratio");
-    let extreme = NativeMouseGeometry::new(Size::new(1, 1), Size::new(1, 1), tiny)
+    let tiny = DevicePixelRatio::try_new(f64::from_bits(1)).expect("positive finite ratio");
+    let extreme = NativeMouseGeometry::try_new(Size::new(1, 1), Size::new(1, 1), tiny)
         .expect("finite native observation");
     assert_eq!(
         GestureGeometry::from_native_mouse(&extreme),
@@ -59,12 +59,12 @@ fn native_gesture_timings_remain_independent() {
 fn native_touch_geometry_projects_each_context_and_refuses_overflow() {
     use flui_platform::{GestureGeometry, NativeTouchGeometry};
     for density in [1.0, 2.0, 3.0] {
-        let native = NativeTouchGeometry::new(
+        let native = NativeTouchGeometry::try_new(
             12,
             30,
             60,
             9000,
-            DevicePixelRatio::new(density).expect("density"),
+            DevicePixelRatio::try_new(density).expect("density"),
         )
         .expect("native touch geometry");
         let projected = GestureGeometry::from_native_touch(&native).expect("projection");
@@ -86,23 +86,29 @@ fn native_touch_geometry_projects_each_context_and_refuses_overflow() {
         );
         assert!(projected.mouse_double_click_area().is_none());
     }
-    let tiny = DevicePixelRatio::new(f64::from_bits(1)).expect("finite positive ratio");
-    let native = NativeTouchGeometry::new(1, 1, 1, 2, tiny).expect("native observation");
+    let tiny = DevicePixelRatio::try_new(f64::from_bits(1)).expect("finite positive ratio");
+    let native = NativeTouchGeometry::try_new(1, 1, 1, 2, tiny).expect("native observation");
     assert_eq!(
         GestureGeometry::from_native_touch(&native),
         Err(InvalidPreference::Distance)
     );
-    assert!(NativeTouchGeometry::new(-1, 0, 1, 2, DevicePixelRatio::ONE).is_err());
-    assert!(NativeTouchGeometry::new(0, 0, 2, 1, DevicePixelRatio::ONE).is_err());
+    assert!(NativeTouchGeometry::try_new(-1, 0, 1, 2, DevicePixelRatio::ONE).is_err());
+    assert!(NativeTouchGeometry::try_new(0, 0, 2, 1, DevicePixelRatio::ONE).is_err());
 }
 
 fn gesture_geometry_refuses_invalid_distances_and_speeds() {
     use flui_platform::{Distance, FlingSpeeds, GestureGeometry};
 
     for value in [f64::NAN, f64::INFINITY, -1.0] {
-        assert_eq!(Distance::new(value), Err(InvalidPreference::Distance));
-        assert_eq!(FlingSpeeds::new(value, 10.0), Err(InvalidPreference::Speed));
-        assert_eq!(FlingSpeeds::new(1.0, value), Err(InvalidPreference::Speed));
+        assert_eq!(Distance::try_new(value), Err(InvalidPreference::Distance));
+        assert_eq!(
+            FlingSpeeds::try_new(value, 10.0),
+            Err(InvalidPreference::Speed)
+        );
+        assert_eq!(
+            FlingSpeeds::try_new(1.0, value),
+            Err(InvalidPreference::Speed)
+        );
         assert!(
             GestureGeometry::new(DevicePixelRatio::ONE)
                 .with_mouse_double_click_area(Size::new(value, 1.0))
@@ -114,13 +120,16 @@ fn gesture_geometry_refuses_invalid_distances_and_speeds() {
                 .is_err()
         );
     }
-    assert!(Distance::new(0.0).is_ok());
-    assert_eq!(FlingSpeeds::new(0.0, 1.0), Err(InvalidPreference::Speed));
+    assert!(Distance::try_new(0.0).is_ok());
     assert_eq!(
-        FlingSpeeds::new(10.0, 1.0),
+        FlingSpeeds::try_new(0.0, 1.0),
+        Err(InvalidPreference::Speed)
+    );
+    assert_eq!(
+        FlingSpeeds::try_new(10.0, 1.0),
         Err(InvalidPreference::FlingRange)
     );
-    let speeds = FlingSpeeds::new(50.0, 8000.0).expect("valid speeds");
+    let speeds = FlingSpeeds::try_new(50.0, 8000.0).expect("valid speeds");
     assert_eq!((speeds.min(), speeds.max()), (50.0, 8000.0));
 }
 
@@ -145,7 +154,7 @@ fn preferred_language_identity_preserves_variants_and_extensions() {
         );
         assert_ne!(
             locale,
-            Locale::new(language, region).expect("valid base locale"),
+            Locale::try_new(language, region).expect("valid base locale"),
             "variant/extension identity must survive resource matching"
         );
     }
@@ -174,9 +183,9 @@ fn malformed_preferred_language_tags_are_refused() {
 fn deprecated_subtags_canonicalize_everywhere_a_locale_is_built() {
     use flui_platform::Locale;
     for (old, current) in [("in", "id"), ("iw", "he"), ("ji", "yi")] {
-        let authored = Locale::new(old, None::<&str>).expect("legacy language");
+        let authored = Locale::try_new(old, None::<&str>).expect("legacy language");
         let parsed: Locale = old.parse().expect("legacy language tag");
-        let preferred = Locale::new(current, None::<&str>).expect("preferred language");
+        let preferred = Locale::try_new(current, None::<&str>).expect("preferred language");
         let mut identities = std::collections::HashSet::new();
         identities.insert(authored);
         assert!(identities.contains(&preferred));
@@ -197,8 +206,8 @@ fn deprecated_subtags_canonicalize_everywhere_a_locale_is_built() {
         ("ZR", "CD"),
     ] {
         assert_eq!(
-            Locale::new("en", Some(old)),
-            Locale::new("en", Some(current))
+            Locale::try_new("en", Some(old)),
+            Locale::try_new("en", Some(current))
         );
     }
     for (language, country, script) in [

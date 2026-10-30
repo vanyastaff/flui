@@ -409,7 +409,7 @@ impl std::fmt::Debug for WebLoop {
 }
 
 impl WebLoop {
-    pub(crate) fn new<H: WebHost>() -> Result<Self, PlatformError> {
+    pub(crate) fn try_new<H: WebHost>() -> Result<Self, PlatformError> {
         console_error_panic_hook::set_once();
 
         let state = WebState {

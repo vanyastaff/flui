@@ -104,7 +104,7 @@ mod cases {
 
     impl Opened {
         fn new(title: &str) -> Self {
-            let platform = WaylandPlatform::new().expect("the harness's Weston answers");
+            let platform = WaylandPlatform::try_new().expect("the harness's Weston answers");
             let handler = RecordingWindowHandler::new();
             let window = platform
                 .open_window(
