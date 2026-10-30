@@ -108,7 +108,10 @@ impl PendingCompletions {
         }
         if let Some(index) = state.free.pop() {
             let slot = &mut state.slots[index as usize];
-            slot.generation = slot.generation.wrapping_add(1);
+            slot.generation = slot
+                .generation
+                .checked_add(1)
+                .expect("BUG: a slot whose generation is exhausted is never freed");
             slot.settle = Some(settle);
             return Some(SlotId {
                 index,
@@ -116,7 +119,7 @@ impl PendingCompletions {
             });
         }
         let index = u32::try_from(state.slots.len())
-            .expect("BUG: fewer than u32::MAX completions are pending at once");
+            .expect("BUG: fewer than u32::MAX slots, each good for u32::MAX completions");
         state.slots.push(PendingSlot {
             generation: 0,
             settle: Some(settle),
@@ -134,7 +137,12 @@ impl PendingCompletions {
             return None;
         }
         let settle = slot.settle.take()?;
-        state.free.push(id.index);
+        let exhausted = slot.generation == u32::MAX;
+        // A slot whose generation is exhausted is retired, not reused: a
+        // wrapped generation would let a stale id reach a later completion.
+        if !exhausted {
+            state.free.push(id.index);
+        }
         Some(settle)
     }
 }
@@ -341,11 +349,16 @@ impl<T: 'static> Future for CompletionFuture<T> {
         if let Some(outcome) = inner.take() {
             return Poll::Ready(outcome);
         }
-        // The replaced waker drops after the borrow ends: its `Drop` may re-enter
-        // the owner and settle this completion.
-        let replaced = inner.local.waker.replace(Some(cx.waker().clone()));
+        // The new waker is cloned before any borrow, and the replaced one drops
+        // after it ends: either may re-enter the owner and settle this
+        // completion, finding no waker yet, so the outcome is read again.
+        let waker = cx.waker().clone();
+        let replaced = inner.local.waker.replace(Some(waker));
         drop(replaced);
-        Poll::Pending
+        match inner.take() {
+            Some(outcome) => Poll::Ready(outcome),
+            None => Poll::Pending,
+        }
     }
 }
 
@@ -426,5 +439,35 @@ impl<T> fmt::Debug for Resolver<T> {
         f.debug_struct("Resolver")
             .field("answered", &self.done)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_slot_whose_generation_is_exhausted_is_retired_not_reused() {
+        let pending = PendingCompletions::new();
+        let source = CompletionSource::new(OwnerPoster::new(|_| Ok(())), pending.clone());
+        let (first, _first_answer) = source.pending::<u32>();
+        drop(first);
+        pending.inner.borrow_mut().slots[0].generation = u32::MAX - 1;
+
+        let (last_of_slot, _last_answer) = source.pending::<u32>();
+        assert_eq!(pending.inner.borrow().slots[0].generation, u32::MAX);
+        drop(last_of_slot);
+        assert!(
+            pending.inner.borrow().free.is_empty(),
+            "an exhausted slot is not handed out again"
+        );
+
+        let (next, _next_answer) = source.pending::<u32>();
+        let state = pending.inner.borrow();
+        assert_eq!(state.slots.len(), 2, "the next completion takes a new slot");
+        assert!(state.slots[0].settle.is_none());
+        assert!(state.slots[1].settle.is_some());
+        drop(state);
+        drop(next);
     }
 }

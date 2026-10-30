@@ -398,21 +398,12 @@ fn a_replaced_waker_may_reenter_the_owner_when_it_drops() {
     let next = Waker::from(Arc::clone(&woken));
     assert_eq!(
         future.as_mut().poll(&mut Context::from_waker(&next)),
-        Poll::Pending,
-        "the answer settles in the replaced waker's drop, after this poll's check"
+        Poll::Ready(Ok(5)),
+        "the answer settles in the replaced waker's drop, and this poll reads it"
     );
     assert!(
         ON_WAKER_DROP.with(|hook| hook.borrow().is_none()),
         "the replaced waker dropped"
-    );
-    assert_eq!(
-        woken.0.load(std::sync::atomic::Ordering::SeqCst),
-        1,
-        "the settle woke the newly registered waker"
-    );
-    assert_eq!(
-        future.as_mut().poll(&mut Context::from_waker(&next)),
-        Poll::Ready(Ok(5))
     );
 }
 
@@ -456,4 +447,50 @@ fn a_panicking_posted_callback_keeps_a_panicking_capture() {
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| owner.turn()))
         .expect_err("the callback's panic reaches the owner");
     assert_eq!(failure.downcast_ref::<&str>(), Some(&"posted callback"));
+}
+
+thread_local! {
+    /// What a [`cloning_waker`] runs the first time it is cloned.
+    static ON_WAKER_CLONE: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+}
+
+/// A waker whose clone runs [`ON_WAKER_CLONE`], as an executor's clone may
+/// re-enter the owner. Safe `Wake` cannot customise clone.
+#[expect(
+    unsafe_code,
+    reason = "exercise an executor's clone through the public Future API"
+)]
+fn cloning_waker() -> Waker {
+    use std::task::{RawWaker, RawWakerVTable};
+
+    unsafe fn clone(data: *const ()) -> RawWaker {
+        if let Some(hook) = ON_WAKER_CLONE.with(|hook| hook.borrow_mut().take()) {
+            hook();
+        }
+        RawWaker::new(data, &VTABLE)
+    }
+    unsafe fn noop(_: *const ()) {}
+    // The data pointer is a dangling constant that nothing dereferences, so
+    // clones and drops have nothing to count.
+    const VTABLE: RawWakerVTable = RawWakerVTable::new(clone, noop, noop, noop);
+    // SAFETY: no vtable function dereferences `data`, and each is safe to call
+    // from any thread any number of times.
+    unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
+}
+
+#[test]
+fn an_answer_settled_while_the_waker_is_cloned_is_read_by_that_poll() {
+    let owner = Rc::new(Owner::new());
+    let (completion, resolver) = owner.source.pending::<u32>();
+    let mut future = pin!(completion.into_future());
+    resolver.resolve(8).expect("owner live");
+    let turning = Rc::clone(&owner);
+    ON_WAKER_CLONE.with(|hook| *hook.borrow_mut() = Some(Box::new(move || turning.turn())));
+
+    let waker = cloning_waker();
+    assert_eq!(
+        future.as_mut().poll(&mut Context::from_waker(&waker)),
+        Poll::Ready(Ok(8)),
+        "the clone settled the answer; this poll must not return Pending with no wake to come"
+    );
 }

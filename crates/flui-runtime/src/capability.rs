@@ -101,12 +101,6 @@ impl CapabilityRegistry {
         CapabilityRegistryBuilder::default()
     }
 
-    /// Whether a provider answers `capability`.
-    #[must_use]
-    pub fn provides(&self, capability: TypeId) -> bool {
-        self.providers.contains_key(&capability)
-    }
-
     /// Ask the provider of `capability` for a handle, as the erased
     /// `capability_erased` entry point does.
     ///
