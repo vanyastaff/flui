@@ -629,6 +629,7 @@ pub use flui_view::__runtime::SESSION_END_BUDGET;
 struct ScriptedBuiltIns {
     clipboard: crate::ScriptedClipboard,
     primary_selection: crate::ScriptedPrimarySelection,
+    background: HeadlessBackground,
 }
 
 impl ScriptedBuiltIns {
@@ -636,7 +637,60 @@ impl ScriptedBuiltIns {
         let mut registrar = flui_platform::capability::CapabilityRegistrar::new();
         self.clipboard.register(&mut registrar);
         self.primary_selection.register(&mut registrar);
+        self.background.register(&mut registrar);
         registrar
+    }
+}
+
+/// The host's background lanes: deterministic, on the test's thread, run
+/// by [`HeadlessHost::pump`] before each frame unless held.
+#[derive(Clone)]
+struct HeadlessBackground {
+    executors: flui_runtime::execution::DeterministicExecutors,
+    /// The lanes as a widget reaches them, with the admission windows and
+    /// shutdown of a hosted run.
+    services: Arc<flui_runtime::execution::ExecutionServices>,
+    held: Rc<std::cell::Cell<bool>>,
+}
+
+impl Default for HeadlessBackground {
+    fn default() -> Self {
+        let executors = flui_runtime::execution::DeterministicExecutors::new();
+        let services = Arc::new(flui_runtime::execution::ExecutionServices::with_host(
+            executors.host_executors(),
+        ));
+        Self {
+            executors,
+            services,
+            held: Rc::default(),
+        }
+    }
+}
+
+impl HeadlessBackground {
+    fn register(&self, registrar: &mut flui_platform::capability::CapabilityRegistrar) {
+        let services = Arc::clone(&self.services);
+        registrar.provide::<flui_view::background::BackgroundCapability>(
+            move |cx: &flui_platform::capability::ProviderContext<'_>| {
+                Ok(flui_view::background::Background::new(
+                    Arc::clone(&services) as Arc<dyn flui_platform::executor::Executor>,
+                    cx.completions().clone(),
+                ))
+            },
+        );
+    }
+
+    /// Queued background jobs and futures not yet finished.
+    fn pending(&self) -> usize {
+        let (jobs, futures) = self.executors.pending();
+        jobs + futures
+    }
+
+    /// Run queued work until none is runnable, unless held.
+    fn drain_unless_held(&self) {
+        if !self.held.get() {
+            let _ran = self.executors.run_until_idle();
+        }
     }
 }
 
@@ -926,6 +980,9 @@ impl HeadlessHost {
         }
         self.clock.advance(dt);
         self.settle_lifecycle();
+        // Background work runs before the frame, so an answer it posts
+        // settles in this pump.
+        self.scripted.background.drain_unless_held();
         // The frame is delivered as `HostInput::Frame` would be: every
         // window's vsync is the clock's reading, on the event timeline, so a
         // recording sees the frame where its deadlines fire.
@@ -1722,12 +1779,48 @@ impl HeadlessHost {
         if !retrying
             && (runtime.needs_redraw()
                 || runtime.scheduler().is_frame_scheduled()
-                || runtime.has_pending_work())
+                || runtime.has_pending_work()
+                || self.background_runs_next_pump())
         {
             return Some(Duration::ZERO);
         }
         let wake = runtime.next_wake()?;
         Some(wake.saturating_duration_since(now))
+    }
+
+    /// Stop [`pump`](Self::pump) running background work, so a test sees a
+    /// widget while its work is still pending; the work waits until
+    /// [`release_background`](Self::release_background) or
+    /// [`run_background`](Self::run_background).
+    pub fn hold_background(&mut self) {
+        self.scripted.background.held.set(true);
+    }
+
+    /// Let [`pump`](Self::pump) run background work again, from its next
+    /// call.
+    pub fn release_background(&mut self) {
+        self.scripted.background.held.set(false);
+    }
+
+    /// Run queued background work now, held or not, until none is runnable.
+    /// Its answers settle at the next pump. Returns the jobs run plus the
+    /// polls made.
+    pub fn run_background(&mut self) -> usize {
+        self.scripted.background.executors.run_until_idle()
+    }
+
+    /// Background jobs and futures queued and not yet finished. Counted by
+    /// [`pump_until_settled`](Self::pump_until_settled): held work keeps a
+    /// host unsettled.
+    #[must_use]
+    pub fn pending_background(&self) -> usize {
+        self.scripted.background.pending()
+    }
+
+    /// Whether the next pump runs background work: a parked future waits
+    /// for its wake, not for a frame.
+    fn background_runs_next_pump(&self) -> bool {
+        !self.scripted.background.held.get() && self.scripted.background.executors.runnable() > 0
     }
 
     /// Wait as a host's loop does, [`time_to_next_frame`](Self::time_to_next_frame),
@@ -1761,6 +1854,7 @@ impl HeadlessHost {
             if !runtime.needs_redraw()
                 && !runtime.scheduler().is_frame_scheduled()
                 && !runtime.has_pending_work()
+                && self.pending_background() == 0
                 && runtime.next_wake().is_none()
             {
                 return Ok(frames);

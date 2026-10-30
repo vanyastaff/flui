@@ -444,6 +444,9 @@ pub(crate) struct AppRuntime {
     /// resolved once from the run's configuration when the host starts
     /// ([`Self::install_host_storage`]) and released with the owner platform
     /// at loop exit.
+    /// The run's execution services as the background capability reaches
+    /// them, filled by [`Self::ensure_execution`].
+    execution_slot: crate::app::capability::ExecutionSlot,
     pub(super) host_storage: crate::app::capability::StorageSlot,
     /// The flush registry over [`Self::host_storage`], kept outside every UI
     /// runtime: what their documents publish, written on the loop's IO pool
@@ -553,6 +556,7 @@ impl AppRuntime {
             platform_primary_selection: Rc::default(),
             capabilities: None,
             platform_data_transfer: Arc::new(Mutex::new(None)),
+            execution_slot: Rc::default(),
             host_storage: crate::app::capability::StorageSlot::default(),
             flush_host: None,
             terminal: None,
@@ -730,12 +734,14 @@ impl AppRuntime {
     /// spawn, never here.
     pub(super) fn ensure_execution(&mut self) -> &Arc<ExecutionServices> {
         let host = self.pending_host_executors.take();
-        self.execution.get_or_init(|| {
+        let services = self.execution.get_or_init(|| {
             Arc::new(match host {
                 Some(host) => ExecutionServices::with_host(host),
                 None => ExecutionServices::with_defaults(),
             })
-        })
+        });
+        *self.execution_slot.borrow_mut() = Some(Arc::downgrade(services));
+        services
     }
 
     /// Start an application service (issue #558): resolve the loop's
@@ -1333,6 +1339,7 @@ impl AppRuntime {
     pub(super) fn capability_slots(&self) -> crate::app::capability::CapabilitySlots {
         crate::app::capability::CapabilitySlots {
             storage: self.host_storage.clone(),
+            execution: Rc::clone(&self.execution_slot),
             clipboard: Rc::clone(&self.platform_clipboard),
             primary_selection: Rc::clone(&self.platform_primary_selection),
         }

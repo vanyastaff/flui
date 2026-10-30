@@ -914,6 +914,31 @@ impl LaidOut {
         self.host.pump(Duration::ZERO);
     }
 
+    /// Stop frames running background work; see
+    /// [`HeadlessHost::hold_background`](crate::HeadlessHost::hold_background).
+    pub fn hold_background(&mut self) {
+        self.host.ui_runtime_mut().hold_background();
+    }
+
+    /// Let frames run background work again; see
+    /// [`HeadlessHost::release_background`](crate::HeadlessHost::release_background).
+    pub fn release_background(&mut self) {
+        self.host.ui_runtime_mut().release_background();
+    }
+
+    /// Run queued background work now; see
+    /// [`HeadlessHost::run_background`](crate::HeadlessHost::run_background).
+    pub fn run_background(&mut self) -> usize {
+        self.host.ui_runtime_mut().run_background()
+    }
+
+    /// Background work queued and not yet finished; see
+    /// [`HeadlessHost::pending_background`](crate::HeadlessHost::pending_background).
+    #[must_use]
+    pub fn pending_background(&self) -> usize {
+        self.host.ui_runtime().pending_background()
+    }
+
     /// Hot-reload entry point: mark every mounted element dirty, without
     /// unmounting or disposing state.
     ///

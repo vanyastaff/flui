@@ -27,6 +27,8 @@
 mod a11y_query;
 #[path = "async_driver.rs"]
 mod async_driver;
+#[path = "background_work.rs"]
+mod background_work;
 #[path = "capability_seam.rs"]
 mod capability_seam;
 #[path = "close_guard.rs"]
@@ -297,6 +299,52 @@ fn capability_seam() {
                 "capability_seam::a_claim_whose_predecessor_panics_as_it_drops_is_withdrawn",
                 capability_seam::a_claim_whose_predecessor_panics_as_it_drops_is_withdrawn
                     as fn(),
+            ),
+        ],
+    );
+}
+
+#[test]
+fn background_work() {
+    run_table(
+        "background_work",
+        &[
+            (
+                "background_work::a_compute_job_answers_at_the_pump_that_runs_it",
+                background_work::a_compute_job_answers_at_the_pump_that_runs_it as fn(),
+            ),
+            (
+                "background_work::on_complete_keeps_the_work_and_runs_once_with_its_answer",
+                background_work::on_complete_keeps_the_work_and_runs_once_with_its_answer as fn(),
+            ),
+            (
+                "background_work::held_work_keeps_its_widget_loading_until_released",
+                background_work::held_work_keeps_its_widget_loading_until_released as fn(),
+            ),
+            (
+                "background_work::run_background_runs_held_work_and_its_answer_settles_at_the_pump",
+                background_work::run_background_runs_held_work_and_its_answer_settles_at_the_pump
+                    as fn(),
+            ),
+            (
+                "background_work::a_dropped_task_skips_its_job",
+                background_work::a_dropped_task_skips_its_job as fn(),
+            ),
+            (
+                "background_work::a_dropped_task_drops_its_parked_future_at_the_next_pump",
+                background_work::a_dropped_task_drops_its_parked_future_at_the_next_pump as fn(),
+            ),
+            (
+                "background_work::a_cancelled_task_answers_cancelled",
+                background_work::a_cancelled_task_answers_cancelled as fn(),
+            ),
+            (
+                "background_work::a_panicking_job_answers_panicked_on_the_owner_thread",
+                background_work::a_panicking_job_answers_panicked_on_the_owner_thread as fn(),
+            ),
+            (
+                "background_work::a_refused_spawn_answers_refused_at_the_next_pump",
+                background_work::a_refused_spawn_answers_refused_at_the_next_pump as fn(),
             ),
         ],
     );
