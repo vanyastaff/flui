@@ -7,5 +7,5 @@ mod layout;
 mod render;
 
 pub use geometry::{CarouselGeometry, CarouselItemPlacement};
-pub use layout::{CarouselLayout, CarouselLayoutError, MAX_ITEM_EXTENT};
+pub use layout::{CarouselLayout, CarouselLayoutError, CarouselLayoutKind, MAX_ITEM_EXTENT};
 pub use render::{CarouselConfig, CarouselItemFrames, RenderSliverCarousel};
