@@ -82,7 +82,13 @@ pub struct ContextMenuArea {
     /// The checked commands as a menu; the mounted area presents it.
     alternatives: GestureAlternatives,
     child: Option<BoxedView>,
+    /// Told of each request before the menu shows, as a selection area selects what the
+    /// press landed on.
+    on_open: Option<MenuOpenHook>,
 }
+
+/// What a [`ContextMenuArea`] tells its mounting widget before a menu shows.
+pub(crate) type MenuOpenHook = Rc<dyn Fn(&mut EventCx<'_>, &MenuRequest)>;
 
 impl ContextMenuArea {
     /// An area whose menu shows `first`, then `more`.
@@ -102,6 +108,7 @@ impl ContextMenuArea {
         Ok(Self {
             alternatives: GestureAlternatives::new(Alternative::ContextMenu(menu))?,
             child: None,
+            on_open: None,
         })
     }
 
@@ -117,6 +124,12 @@ impl ContextMenuArea {
     #[must_use]
     pub fn child(mut self, content: impl IntoView) -> Self {
         self.child = Some(content.into_view().boxed());
+        self
+    }
+
+    /// Call `hook` with each request before its menu shows.
+    pub(crate) fn on_open(mut self, hook: MenuOpenHook) -> Self {
+        self.on_open = Some(hook);
         self
     }
 
@@ -202,10 +215,16 @@ impl ViewState<ContextMenuArea> for ContextMenuAreaState {
         // A long press that hands its contact to a drag closes the menu it
         // opened.
         let session = Rc::clone(&self.session);
+        let on_open = view.on_open.clone();
         view.alternatives
             .clone()
             .present_menu_with(
-                Rc::new(move |_cx, request| presenter.present(request)),
+                Rc::new(move |cx, request| {
+                    if let Some(hook) = &on_open {
+                        hook(cx, &request);
+                    }
+                    presenter.present(request);
+                }),
                 move |_cx| session.close_current(),
             )
             .child(content)

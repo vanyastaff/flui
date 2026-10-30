@@ -103,7 +103,7 @@ T19 были нужны модальность ввода, Back/Dismiss и пр�
 | T31 | `Dismissible` на `AnchoredDrag`, `SwipeActions`, системные края | W4 | T27, T09, T19, T32 | merged |
 | T32 | `ContextMenuArea` на `Sequenced` | W7 | T14, T19 | merged |
 | T33 | `ReorderableList`, `ReorderableGrid` как DnD-сессия, keep-alive, A8; объявление новой позиции после перемещения — метод `WidgetsLocalizations` с параметрами (элемент, позиция, число), добавляется здесь вместе с его единственным производителем | W5, A8, A5 (объявление позиции) | T29, T30; focus-keyboard T4, T11 | todo |
-| T34 | `SelectionArea` (указатель, клавиатура, AT, ручки на `Sequenced`, `TapAndDrag`) | W8, S17, ADR-0214 | T17, T19, T14; поправка ADR-0204 (T01); спека text-ime | todo |
+| T34 | `SelectionArea` (указатель, клавиатура, AT, ручки на `Sequenced`, `TapAndDrag`) | W8, S17, ADR-0214 | T17, T19, T14; поправка ADR-0204 (T01); спека text-ime | T34a сделан: указатель, касание, клавиатура, меню, ручки, `SelectionController`; проверка — `selection_area` (10 тестов) и `harness_paragraph_paints_the_selection_behind_the_glyphs`. T34b (прогоны текста, `text_selection`, `SetTextSelection` по ADR-0214) — поверх W8a/W8b семантики, `docs/gaps.md` 36 до него |
 | T35 | Несколько окон и рантаймов: DnD между окнами, захват при drag над другим окном | Q2, D2 | T28 | merged |
 
 ## Ярус 9 — Windows

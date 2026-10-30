@@ -10,6 +10,7 @@ use flui_view::{
 };
 
 use super::linked_paragraph::{LinkRouting, LinkedParagraph};
+use super::selectable::{SelectableParagraph, SelectionScope};
 use crate::MediaQuery;
 use crate::support::{RefCallback, ref_callback};
 
@@ -144,7 +145,12 @@ impl StatelessView for RichText {
             font_weight_adjustment: MediaQuery::font_weight_adjustment_of(ctx).unwrap_or(0),
             links: None,
             link_focus: None,
+            selection: None,
+            selection_color: flui_painting::styling::Color::TRANSPARENT,
         };
+        if let Some(registry) = SelectionScope::registry_of(ctx) {
+            return SelectableParagraph::new(registry, paragraph, self.on_link.clone()).boxed();
+        }
         match &self.on_link {
             // Links need recognizers built against the arena scope, which
             // only a mounted state can acquire.
@@ -165,6 +171,10 @@ pub(super) struct ResolvedParagraph {
     pub(super) links: Option<LinkRouting>,
     /// The link holding the primary keyboard focus.
     pub(super) link_focus: Option<TextLinkFocus>,
+    /// The part of an enclosing `SelectionArea`'s selection on this text.
+    pub(super) selection: Option<std::ops::Range<usize>>,
+    /// The fill of that selection.
+    pub(super) selection_color: flui_painting::styling::Color,
 }
 
 impl RenderView for ResolvedParagraph {
@@ -178,7 +188,9 @@ impl RenderView for ResolvedParagraph {
                 .with_max_lines(self.authored.max_lines)
                 .with_text_sizing(self.text_sizing.clone())
                 .with_font_weight_adjustment(self.font_weight_adjustment)
-                .with_link_routes(LinkRouting::sync(self.links.as_ref(), ctx, &[]));
+                .with_link_routes(LinkRouting::sync(self.links.as_ref(), ctx, &[]))
+                .with_selection(self.selection.clone())
+                .with_selection_color(self.selection_color);
         let _ = paragraph.set_link_focus(self.link_focus);
         paragraph.set_shown_links_listener(self.shown_links_listener());
         paragraph
@@ -200,6 +212,8 @@ impl RenderView for ResolvedParagraph {
             | render_object.set_font_weight_adjustment(self.font_weight_adjustment)
             | render_object.set_link_routes(routes)
             | render_object.set_link_focus(self.link_focus)
+            | render_object.set_selection(self.selection.clone())
+            | render_object.set_selection_color(self.selection_color)
     }
 
     fn did_unmount_render_object(

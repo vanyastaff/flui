@@ -16,19 +16,25 @@
 //! and a paragraph with routed links publishes one accessible node per link
 //! and per stretch of text between them (`links` module).
 //!
-//! Out of scope for this object (separable): inline `WidgetSpan` children, text selection, and the
-//! clip/fade `TextOverflow` policies (only `ellipsis` is wired here).
+//! A selection made by a `SelectionArea` above it paints as a highlight behind the glyphs
+//! ([`RenderParagraph::set_selection`]); the policy that makes it lives in the widget.
+//!
+//! Out of scope for this object (separable): inline `WidgetSpan` children and the clip/fade
+//! `TextOverflow` policies (only `ellipsis` is wired here).
 
 mod links;
 
 pub use links::{ShownLinksListener, TextLinkFocus, TextLinkKey, TextLinkRoute};
 
+use std::ops::Range;
+
 use flui_foundation::Diagnosticable;
 use flui_foundation::Leaf;
 use flui_foundation::geometry::{Offset, Size};
 use flui_interaction::CursorIcon;
+use flui_painting::styling::Color;
 use flui_painting::typography::{InlineSpan, TextAlign, TextDirection};
-use flui_painting::{Invalidation, TextBaseline as PainterBaseline, TextPainter};
+use flui_painting::{Invalidation, Paint, TextBaseline as PainterBaseline, TextPainter};
 
 use flui_rendering::{
     RenderResult,
@@ -66,6 +72,10 @@ pub struct RenderParagraph {
     shown_links_listener: Option<ShownLinksListener>,
     /// What the listener was last told.
     shown_links: Vec<bool>,
+    /// The selected byte range of the plain text, painted behind the glyphs.
+    selection: Option<Range<usize>>,
+    /// Fill for the selection highlight; transparent paints nothing.
+    selection_color: Color,
 }
 
 impl RenderParagraph {
@@ -82,6 +92,8 @@ impl RenderParagraph {
             link_focus: None,
             shown_links_listener: None,
             shown_links: Vec::new(),
+            selection: None,
+            selection_color: Color::TRANSPARENT,
         }
     }
 
@@ -297,6 +309,10 @@ impl RenderParagraph {
                 != Some(text.to_semantics_text());
         self.runs = runs;
         let impact = text_invalidation_impact(self.painter.set_text(Some(text)), true);
+        // A selection that outlived its text stays inside the new one.
+        if let Some(range) = self.selection.take() {
+            self.selection = Some(self.clamp_text_range(range));
+        }
         if semantics_changed {
             impact | flui_rendering::RenderUpdateImpact::SEMANTICS
         } else {
@@ -334,6 +350,91 @@ impl RenderParagraph {
     /// Read access to the underlying painter (cursor / selection geometry).
     pub fn painter(&self) -> &TextPainter {
         &self.painter
+    }
+
+    /// Selects the byte range `range` of the plain text (builder form).
+    #[must_use]
+    pub fn with_selection(mut self, range: Option<Range<usize>>) -> Self {
+        self.selection = range.map(|range| self.clamp_text_range(range));
+        self
+    }
+
+    /// Sets the selection highlight fill (builder form). Transparent, the
+    /// default, paints nothing.
+    #[must_use]
+    pub fn with_selection_color(mut self, color: Color) -> Self {
+        self.selection_color = color;
+        self
+    }
+
+    /// Replaces the selected byte range of the plain text. Always paint-only:
+    /// a selection changes what gets a highlight, never the glyphs or the
+    /// box's size. Ends past the text or inside a character move back to
+    /// the character boundary before them.
+    pub fn set_selection(
+        &mut self,
+        range: Option<Range<usize>>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let clamped = range.map(|range| self.clamp_text_range(range));
+        if clamped == self.selection {
+            flui_rendering::RenderUpdateImpact::NONE
+        } else {
+            self.selection = clamped;
+            flui_rendering::RenderUpdateImpact::PAINT
+        }
+    }
+
+    /// Replaces the selection highlight fill.
+    pub fn set_selection_color(&mut self, color: Color) -> flui_rendering::RenderUpdateImpact {
+        if self.selection_color == color {
+            flui_rendering::RenderUpdateImpact::NONE
+        } else {
+            self.selection_color = color;
+            flui_rendering::RenderUpdateImpact::PAINT
+        }
+    }
+
+    /// The selected byte range of the plain text.
+    pub fn selection(&self) -> Option<&Range<usize>> {
+        self.selection.as_ref()
+    }
+
+    /// `range` inside the current text, both ends on character boundaries
+    /// and in order.
+    fn clamp_text_range(&self, range: Range<usize>) -> Range<usize> {
+        let text = self
+            .painter
+            .text()
+            .map(InlineSpan::to_plain_text)
+            .unwrap_or_default();
+        let boundary = |offset: usize| {
+            let mut offset = offset.min(text.len());
+            while !text.is_char_boundary(offset) {
+                offset -= 1;
+            }
+            offset
+        };
+        let start = boundary(range.start);
+        start..boundary(range.end).max(start)
+    }
+
+    /// Paints the selection's boxes, each once.
+    fn paint_selection(&self, ctx: &mut PaintCx<'_, Leaf>) {
+        let Some(range) = self.selection.as_ref() else {
+            return;
+        };
+        if range.is_empty() || self.selection_color.is_transparent() {
+            return;
+        }
+        let paint = Paint::fill(self.selection_color);
+        let mut drawn = Vec::new();
+        for text_box in self.painter.get_boxes_for_selection(range.start, range.end) {
+            if text_box.rect.is_empty() || drawn.contains(&text_box.rect) {
+                continue;
+            }
+            drawn.push(text_box.rect);
+            ctx.canvas().draw_rect(text_box.rect, &paint);
+        }
     }
 
     /// The width to lay out at for the given constraints. The box width
@@ -403,6 +504,9 @@ impl Diagnosticable for RenderParagraph {
             // to be usable at all, so this is a pure diagnostics read, not
             // a new capability.
             properties.add("style", format!("{:?}", span.style()));
+        }
+        if let Some(range) = &self.selection {
+            properties.add("selection", format!("{range:?}"));
         }
     }
 }
@@ -529,6 +633,7 @@ impl RenderBox for RenderParagraph {
         if !self.painter.has_layout() {
             return;
         }
+        self.paint_selection(ctx);
         self.painter.paint(ctx.canvas(), Offset::ZERO);
         // The ring follows each line of the focused link, just outside its
         // glyphs, so it covers none of them.

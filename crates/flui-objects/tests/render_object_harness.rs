@@ -1698,6 +1698,47 @@ fn harness_paragraph_paints_text_frame() {
     assert!(run.painted());
 }
 
+fn harness_paragraph_paints_the_selection_behind_the_glyphs() {
+    let run = RenderTester::mount(box_node(
+        RenderParagraph::new(TextSpan::new("select me"), TextDirection::Ltr)
+            .with_selection(Some(0..6))
+            .with_selection_color(Color::BLUE),
+    ))
+    .with_constraints(loose(160.0))
+    .run_frame();
+
+    let commands = run.display_commands();
+    let highlight = commands
+        .iter()
+        .position(|command| command.line.contains("DrawRect"))
+        .unwrap_or_else(|| panic!("a selection must paint a rect; commands: {commands:#?}"));
+    let glyphs = commands
+        .iter()
+        .position(|command| command.line.contains("Paragraph"))
+        .unwrap_or_else(|| panic!("the text must paint; commands: {commands:#?}"));
+    assert!(
+        highlight < glyphs,
+        "the highlight precedes the glyphs; commands: {commands:#?}"
+    );
+
+    // A selection change repaints and never relays out; ends past the text
+    // or inside a character move back to a boundary.
+    let mut paragraph = RenderParagraph::new(TextSpan::new("añb"), TextDirection::Ltr);
+    assert_eq!(
+        paragraph.set_selection(Some(0..2)),
+        flui_rendering::RenderUpdateImpact::PAINT
+    );
+    assert_eq!(paragraph.selection(), Some(&(0..1)));
+    assert_eq!(
+        paragraph.set_selection(Some(0..1)),
+        flui_rendering::RenderUpdateImpact::NONE
+    );
+    let _ = paragraph.set_selection(Some(1..99));
+    assert_eq!(paragraph.selection(), Some(&(1..4)));
+    let _ = paragraph.set_text(TextSpan::new("a"));
+    assert_eq!(paragraph.selection(), Some(&(1..1)));
+}
+
 fn harness_icon_resolves_square_and_optional_glyph_together() {
     use flui_foundation::{TextScaleProfile, TextSize, TextSizeRequest, TextSizingIntent};
     use flui_painting::TextSizing;
@@ -12638,6 +12679,10 @@ fn family_content_paint() {
             (
                 "decorated_box_paints_background_before_child",
                 harness_decorated_box_paints_background_before_child,
+            ),
+            (
+                "paragraph_paints_the_selection_behind_the_glyphs",
+                harness_paragraph_paints_the_selection_behind_the_glyphs,
             ),
             (
                 "container_matches_the_widget_stack_it_collapses",

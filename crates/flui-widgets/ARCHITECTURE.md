@@ -674,6 +674,12 @@ of `navigator`.
 `SwipeActions` drag their content with `AnchoredDrag` (`scroll`), and a swipe
 row composes `ContextMenuArea` for its theme-free menu.
 
+`selection` shares the `swipe` layer: `SelectionArea` composes `ContextMenuArea` for its
+Copy and Select all menu and reads the text widgets' registrations. The registration itself
+(`SelectionScope`, each paragraph's participant) lives in `text`, so `RichText` joins an area
+without naming the module above it. `composited_transform` sits in the bottom layer: its
+`LinkLeader` and `LinkFollower` wrap the leader and follower layers for any widget above.
+
 `form` sits in the top widget layer beside `icon` and `app`: a text form
 field composes `RawTextField` (`text`), a `Focus` wrapper (`interaction`) and
 the error line's `Column` and `Semantics`, and nothing below names a form.
@@ -3864,3 +3870,28 @@ before the focused one would move the focused node to another element. **Tests:*
 `a_link_the_layout_cut_takes_no_focus`,
 `links_keep_their_focus_and_presses_when_links_before_them_change`,
 `unmounting_a_linked_paragraph_releases_its_links`.
+
+## One selection across paragraphs
+
+A `SelectionArea` owns its selection; the paragraphs beneath it only paint their part. `RichText`
+under a `SelectionScope` with a registry mounts as a participant: it registers while mounted, and
+its render node is published through a `SubtreeAnchor` so the area can reach the laid-out
+`RenderParagraph` to read its text, map a pointer or a key to a byte offset and find a caret.
+Nothing is pushed per frame: the area writes a participant's range (and, while the touch handles
+show, a leader at each end) and the participant rebuilds only when that changed.
+
+Reading order is the order of the participants' render nodes in the tree, read on demand from
+their paths from the root, not registration order and not geometry: a paragraph mounted late
+between two others takes its place between them, and right-to-left or multi-column layouts do not
+reorder the text a reader copies.
+
+An end on a paragraph that unmounts moves to the nearest surviving paragraph inside the
+selection; with none left the selection clears. The paragraph leaves while the tree is torn down,
+so the selection is committed at once and `on_selection_changed` hears of it after the frame,
+once. A `SelectionController` change is never reported there.
+
+The handles follow their ends through `LayerLink`: the participant holding an end publishes a
+zero-width leader as tall as the end's line, and each handle in the overlay is a follower of it,
+so a scroll moves them in the same frame as the text. The context menu is `ContextMenuArea`'s
+popup; its long press is the `Sequenced` hold, and the drag that extends the selection by word
+after it is the hold's successor. `selection_area` in the integration tests covers these paths.

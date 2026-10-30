@@ -51,6 +51,7 @@ pub use focus::{
 };
 pub use focus_ring::{DefaultFocusRingStyle, FocusRing, FocusRingStyle};
 pub use focus_traversal_group::{FocusTraversalGroup, FocusTraversalGroupState};
+pub(crate) use gesture_alternatives::MenuHoldScope;
 pub use gesture_alternatives::{
     Alternative, AlternativeKind, CommandAppearance, CommandHandle, CompanionSpec,
     ControlPlacement, ControlSpec, GestureAlternatives, GestureAlternativesError,

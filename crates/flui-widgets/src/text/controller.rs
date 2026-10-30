@@ -1089,7 +1089,7 @@ fn clear_caret_hidden(guard: &mut ControllerInner) -> bool {
 /// not collected, and started at the line that holds `offset`: this runs
 /// on every Ctrl/Alt+Right and must not segment, or allocate a segment
 /// list for, the whole buffer on every keystroke.
-fn next_word_boundary(text: &str, offset: usize) -> usize {
+pub(crate) fn next_word_boundary(text: &str, offset: usize) -> usize {
     let total = text.len();
     if text.is_empty() || offset >= total {
         return total;
@@ -1119,7 +1119,7 @@ fn next_word_boundary(text: &str, offset: usize) -> usize {
 /// from its start up to the bound, and a pass that finds no word moves to
 /// the line before: the cost is the lines walked back over, not the
 /// buffer, and nothing is collected.
-fn prev_word_boundary(text: &str, offset: usize) -> usize {
+pub(crate) fn prev_word_boundary(text: &str, offset: usize) -> usize {
     if text.is_empty() || offset == 0 {
         return 0;
     }

@@ -261,6 +261,7 @@ layers = [
         "media_query",
         "widget_state",
         "anchored_box",
+        "composited_transform",
     ],
     [
         "layout",
@@ -303,6 +304,7 @@ layers = [
     ],
     [
         "swipe",
+        "selection",
     ],
     [
         "icon",

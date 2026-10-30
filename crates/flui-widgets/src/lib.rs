@@ -86,6 +86,7 @@ pub mod __private;
 #[doc(hidden)]
 pub mod __test_access;
 mod anchored_box;
+mod composited_transform;
 
 pub mod animated;
 pub mod app;
@@ -125,6 +126,7 @@ pub mod physical_model;
 // The typed `Router` (ADR-0093); its items are re-exported from the crate root.
 pub mod router;
 pub mod scroll;
+pub mod selection;
 pub mod semantics;
 pub mod stack;
 mod swipe;
@@ -230,6 +232,11 @@ pub use motion::{
     AnimatedSwitcherState, AnimatedSwitcherTransitionBuilder, Effect, Effects, ParticleController,
     ParticleEmitter, ParticleEmitterState, Shimmer, ShimmerBand, ShimmerState, Skeleton,
     SkeletonState, Transition, Trigger,
+};
+pub use selection::{
+    AreaSelection, DotHandles, HandleSide, SelectableId, SelectedContent, SelectionArea,
+    SelectionAreaState, SelectionContainer, SelectionController, SelectionError, SelectionHandles,
+    SelectionPoint,
 };
 // `OverflowBoxFit` configures `OverflowBox`'s size policy; exposed at crate root
 // so consumers don't need to reach into `flui_objects`.

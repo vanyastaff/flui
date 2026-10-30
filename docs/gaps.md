@@ -422,6 +422,7 @@ request.
 - The parity rows "Properties (value, hint, description, state)" and "Announcements and live regions" are ❔ on the desktop adapters and ❌ where there is no adapter at all.
 - Each needs a check with the real assistive technology on each OS that reads role, name, value, hint, state, actions, focus order and announcements; a harness that registers AT-SPI listeners and matches only strings carrying a nonce keeps any other source from producing a hit.
 - No assistive-technology focus reaches a widget: the adapters do not report which node a screen reader's cursor rests on, so a widget cannot react to it. A `Carousel`'s autoplay pauses on keyboard focus, pointer and the app leaving the front, but not when VoiceOver, TalkBack, Narrator or Orca moves onto one of its items; the pause control it draws is what meets WCAG 2.2.2 until then.
+- Text under a `SelectionArea` is selectable with a pointer, touch and the keyboard, but not by a screen reader yet: its paragraphs publish no text runs, the area no `text_selection`, and `SetTextSelection` is not accepted (ADR-0214). Copy and Select all reach assistive technology only as the area's context-menu actions.
 
 ### 37. Add-to-app: no FLUI view inside an existing native app
 
