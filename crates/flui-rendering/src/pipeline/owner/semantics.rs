@@ -1055,22 +1055,24 @@ fn assembly_decisions(
     config: &SemanticsConfiguration,
     context: SemanticsAssemblyContext,
 ) -> NodeAssemblyDecisions {
-    let contributes =
-        context.is_root || config.is_semantics_boundary() || config.has_been_annotated();
+    let boundary = config.is_semantics_boundary() || config.is_merge_boundary();
+    let contributes = context.is_root || boundary || config.has_been_annotated();
     // A node that merges its own descendants is a unit a screen reader stops
     // on, even inside an outer merge: the outer one takes it as a child rather
-    // than absorbing it (ADR-0206, decision 4).
-    let nested_merger = context.merge_into_ancestor && config.is_merging_semantics_of_descendants();
+    // than absorbing it (ADR-0206, decision 4). A merge boundary stops the
+    // outer merge the same way but merges nothing itself (ADR-0214 §3).
+    let nested_merger = context.merge_into_ancestor
+        && (config.is_merging_semantics_of_descendants() || config.is_merge_boundary());
     let forms_node = nested_merger
         || (!context.merge_into_ancestor
             && (context.is_root
-                || config.is_semantics_boundary()
+                || boundary
                 || (contributes && context.parent_requires_explicit_node)));
     let children_require_explicit_node = context.is_root
         || config.explicit_child_nodes()
         || (!contributes && context.parent_requires_explicit_node);
-    let children_merge_into_ancestor =
-        context.merge_into_ancestor || config.is_merging_semantics_of_descendants();
+    let children_merge_into_ancestor = (context.merge_into_ancestor && !config.is_merge_boundary())
+        || config.is_merging_semantics_of_descendants();
 
     NodeAssemblyDecisions {
         contributes,
@@ -1380,8 +1382,12 @@ fn merge_child_fragments(
     for (index, fragment) in fragments.into_iter().enumerate() {
         match fragment {
             SemanticsFragment::Formed(node) => children.push(node),
+            // Runs are the synthetic children of the node declaring them,
+            // positioned in its text: absorbed, they would hang off a node
+            // whose merged label is other text (ADR-0214 §2).
             SemanticsFragment::Pending(pending)
-                if conflicts.as_ref().is_some_and(|conflicts| conflicts[index]) =>
+                if conflicts.as_ref().is_some_and(|conflicts| conflicts[index])
+                    || pending.config.text_content().is_some() =>
             {
                 children.push(pending.form());
             }

@@ -484,6 +484,32 @@ impl TextContent {
         })
     }
 
+    /// The position of the published character boundary at or before byte
+    /// `byte`: a byte inside a character snaps to that character's start, and
+    /// one past the text's end to the end. `None` only for content with no
+    /// runs.
+    #[must_use]
+    pub fn position_at_or_before(&self, byte: usize) -> Option<TextRunPosition> {
+        let (index, run) = self
+            .runs
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, run)| run.byte_range().start <= byte)
+            .or_else(|| self.runs.first().map(|run| (0, run)))?;
+        let mut at = run.parts.start;
+        let mut character = 0;
+        for &length in &run.parts.character_lengths {
+            let next = at.saturating_add(usize::from(length));
+            if next > byte {
+                break;
+            }
+            at = next;
+            character += 1;
+        }
+        Some(TextRunPosition::new(index, character))
+    }
+
     /// `selection` in bytes of the field's value.
     ///
     /// # Errors

@@ -95,6 +95,9 @@ pub enum ActionCall {
     SetScrollOffset(Offset<f64>),
     /// Select this range of the node's text.
     SetTextSelection(TextSelection),
+    /// Select this range of the document's texts: a `SetTextSelection`
+    /// sent to a document node or to a text beneath it (ADR-0214 §4).
+    SetDocumentSelection(crate::DocumentSelection),
     /// Replace the selected text with this text.
     ReplaceSelectedText(String),
     /// Set the node's value to this text.
@@ -153,7 +156,9 @@ impl ActionCall {
             Self::ScrollRight(_) => SemanticsAction::ScrollRight,
             Self::ScrollIntoView(_) => SemanticsAction::ScrollIntoView,
             Self::SetScrollOffset(_) => SemanticsAction::SetScrollOffset,
-            Self::SetTextSelection(_) => SemanticsAction::SetTextSelection,
+            Self::SetTextSelection(_) | Self::SetDocumentSelection(_) => {
+                SemanticsAction::SetTextSelection
+            }
             Self::ReplaceSelectedText(_) => SemanticsAction::ReplaceSelectedText,
             Self::SetValue(_) => SemanticsAction::SetValue,
             Self::SetNumericValue(_) => SemanticsAction::SetNumericValue,

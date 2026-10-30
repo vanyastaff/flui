@@ -582,7 +582,66 @@ impl SemanticsTree {
                 }
                 children
             },
+            text_selection: self.published_document_selection(node),
         })
+    }
+
+    /// `node`'s document selection (ADR-0214 §3) as positions in the runs of
+    /// the texts its ends name, or `None` when it declares none or either end
+    /// names no text beneath it that publishes runs. Each end's byte snaps
+    /// down to a character boundary of its text, and a byte past the text's
+    /// end to the end, so a selection made against older text never names a
+    /// position the runs do not have.
+    fn published_document_selection(
+        &self,
+        node: &SemanticsNode,
+    ) -> Option<accesskit::TextSelection> {
+        let selection = node.config().document_selection()?;
+        let position = |at: &crate::DocumentPosition| {
+            let (_, text) = self.text_beneath(node, at.text())?;
+            let (content, runs) =
+                crate::accesskit_translation::published_text(text.config().attributes())?;
+            let position = content.position_at_or_before(at.byte())?;
+            Some(accesskit::TextPosition {
+                node: accesskit::NodeId(runs.get(position.run)?.as_u64()),
+                character_index: position.character,
+            })
+        };
+        Some(accesskit::TextSelection {
+            anchor: position(selection.anchor())?,
+            focus: position(selection.focus())?,
+        })
+    }
+
+    /// The published node strictly beneath `root` that declares `anchor` and
+    /// publishes text runs, walking only addressable nodes as publication
+    /// does.
+    pub(crate) fn text_beneath(
+        &self,
+        root: &SemanticsNode,
+        anchor: &crate::SemanticsAnchor,
+    ) -> Option<(SemanticsId, &SemanticsNode)> {
+        let mut visited = FxHashSet::default();
+        let mut pending: Vec<SemanticsId> = root.children().iter().rev().copied().collect();
+        while let Some(id) = pending.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            let Some(node) = self
+                .get(id)
+                .filter(|node| node.accessibility_id().is_some())
+            else {
+                continue;
+            };
+            if node.config().anchors().contains(anchor)
+                && crate::accesskit_translation::published_text(node.config().attributes())
+                    .is_some()
+            {
+                return Some((id, node));
+            }
+            pending.extend(node.children().iter().rev().copied());
+        }
+        None
     }
 
     // ========== Dirty Tracking ==========

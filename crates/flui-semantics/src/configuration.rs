@@ -93,6 +93,12 @@ pub struct SemanticsConfiguration {
     /// If true, children semantics won't be merged into this node.
     is_semantics_boundary: bool,
 
+    /// Whether this node stops an outer merge without merging its own
+    /// descendants (ADR-0214 §3): it keeps a node of its own under a merging
+    /// ancestor, and its descendants form their nodes as they would outside
+    /// any merge.
+    is_merge_boundary: bool,
+
     /// Whether pointer-related user actions from this configuration and its
     /// subtree are blocked from assistive-technology dispatch.
     ///
@@ -157,6 +163,7 @@ impl PartialEq for SemanticsConfiguration {
         self.has_reveal_ancestor == other.has_reveal_ancestor
             && self.has_been_annotated == other.has_been_annotated
             && self.is_semantics_boundary == other.is_semantics_boundary
+            && self.is_merge_boundary == other.is_merge_boundary
             && self.blocks_user_actions == other.blocks_user_actions
             && self.blocks_previous_siblings == other.blocks_previous_siblings
             && self.collection == other.collection
@@ -294,6 +301,21 @@ impl SemanticsConfiguration {
     /// its parent, creating a distinct semantics node.
     pub fn set_semantics_boundary(&mut self, value: bool) {
         self.is_semantics_boundary = value;
+    }
+
+    /// Returns whether this node is a merge boundary (ADR-0214 §3).
+    #[inline]
+    pub fn is_merge_boundary(&self) -> bool {
+        self.is_merge_boundary
+    }
+
+    /// Makes this node a merge boundary (ADR-0214 §3): it forms a node of its
+    /// own even under a merging ancestor, as a nested merger does, but merges
+    /// none of its descendants, so a control inside it keeps its own node. A
+    /// `SelectionArea` is one, so its paragraphs and controls stay addressable
+    /// inside a merged list tile.
+    pub fn set_merge_boundary(&mut self, value: bool) {
+        self.is_merge_boundary = value;
     }
 
     /// Returns whether pointer-related user actions are blocked.
@@ -1450,6 +1472,21 @@ impl SemanticsConfiguration {
         self.attributes.text.as_deref()
     }
 
+    /// Declares the document's selection across the texts beneath this node
+    /// (ADR-0214 §3): published as the node's text selection in the runs of
+    /// the texts whose anchors it names, once both are published beneath it.
+    /// `None` clears it.
+    pub fn set_document_selection(&mut self, selection: Option<crate::DocumentSelection>) {
+        self.attributes.document_selection = selection;
+        self.mark_annotated();
+    }
+
+    /// The document's selection, if declared.
+    #[inline]
+    pub fn document_selection(&self) -> Option<&crate::DocumentSelection> {
+        self.attributes.document_selection.as_ref()
+    }
+
     // ========================================================================
     // Relations
     // ========================================================================
@@ -1580,6 +1617,7 @@ impl SemanticsConfiguration {
             max_value_length,
             current_value_length,
             text,
+            document_selection,
             heading_level: _,
             anchors: _,
             relations: _,
@@ -1624,7 +1662,12 @@ impl SemanticsConfiguration {
                 theirs.max_value_length.is_some() || theirs.current_value_length.is_some(),
             )
             // Runs describe one field's layout.
-            || both(text.is_some(), theirs.text.is_some()))
+            || both(text.is_some(), theirs.text.is_some())
+            // A selection is one document's.
+            || both(
+                document_selection.is_some(),
+                theirs.document_selection.is_some(),
+            ))
     }
 
     /// A role, or the route scope a page declares, which a second one
@@ -1724,6 +1767,7 @@ impl SemanticsConfiguration {
             max_value_length,
             current_value_length,
             text,
+            document_selection,
             heading_level,
             anchors,
             relations,
@@ -1824,6 +1868,7 @@ impl SemanticsConfiguration {
             mine.current_value_length = *current_value_length;
         }
         keep(&mut mine.text, text.as_ref());
+        keep(&mut mine.document_selection, document_selection.as_ref());
         keep(&mut mine.heading_level, heading_level.as_ref());
         // A level belongs to a heading, as in `set_role`: a merge whose role is
         // not one publishes no level and keeps none to revive.
@@ -1896,6 +1941,7 @@ impl std::fmt::Debug for SemanticsConfiguration {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SemanticsConfiguration")
             .field("is_semantics_boundary", &self.is_semantics_boundary)
+            .field("is_merge_boundary", &self.is_merge_boundary)
             .field(
                 "is_merging_semantics_of_descendants",
                 &self.is_merging_semantics_of_descendants(),
