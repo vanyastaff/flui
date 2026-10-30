@@ -489,7 +489,7 @@ fn hostile_source_after_sample_failure(initial: bool) {
         0,
         "opaque aggregate retained after source failure"
     );
-    controller.set_value(0.0);
+    controller.set_value(0.0).expect("no build is running");
     let mut next = controller.forward().expect("subsequent run");
     controller.tick_at(std::time::Duration::from_secs_f64(1.0));
     assert_eq!(controller.value(), 1.0);
@@ -570,7 +570,7 @@ fn a_trivial_curved_run_completes_before_its_curve_retires() {
         })
     };
     controller.add_listener(listener);
-    controller.set_value(0.5);
+    controller.set_value(0.5).expect("no build is running");
     let run = trivial.borrow_mut().take().expect("the listener ran");
     assert!(
         run.is_complete() && !run.is_canceled(),
@@ -695,7 +695,7 @@ fn status_failure_retains_retired_source_and_callback() {
         matches!(poll(&mut original), Poll::Ready(Err(_))),
         "cancellation delivered despite notification failure"
     );
-    controller.set_value(0.0);
+    controller.set_value(0.0).expect("no build is running");
     let mut next = controller
         .forward()
         .expect("next run after notification failure");
@@ -743,7 +743,7 @@ fn ordinary_retirement_failure_preserves_new_run() {
         1.0,
         "replacement remains usable after old source retirement failure"
     );
-    controller.set_value(0.0);
+    controller.set_value(0.0).expect("no build is running");
     let mut next = controller.forward().expect("later run");
     controller.tick_at(std::time::Duration::from_secs_f64(1.0));
     assert_eq!(poll(&mut next), Poll::Ready(Ok(())));

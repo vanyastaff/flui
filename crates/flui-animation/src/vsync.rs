@@ -22,6 +22,7 @@
 //! controller run twice (forward to completion, then reverse) is ticked from the
 //! second run's own start instead of snapping to its target on the first frame.
 
+use flui_foundation::BuildPhase;
 use flui_foundation::panic::{FailureClass, RecoveryScope};
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
@@ -68,6 +69,14 @@ impl VsyncRegistration {
             return false;
         };
         probe.needs_sample(owner.borrow().last_tick)
+    }
+
+    /// Whether the registry this admission belongs to is building (see
+    /// [`Vsync::is_building`]).
+    pub(crate) fn is_building(&self) -> bool {
+        self.owner
+            .upgrade()
+            .is_some_and(|inner| Vsync { inner }.is_building())
     }
 
     pub(crate) fn owner_is_alive(&self) -> bool {
@@ -262,6 +271,9 @@ struct VsyncInner {
     /// walk owns child handles, so a detached child is never retained by a cache.
     child_snapshot: Vec<(u64, Terminal<Vsync>)>,
     parent: Option<VsyncRegistration>,
+    /// The build phase of the presentation this registry ticks for, set on
+    /// the root; nested registries read their root's.
+    build_phase: Option<BuildPhase>,
     request_frame: Option<Rc<dyn Fn()>>,
     next_id: u64,
     closed: bool,
@@ -569,6 +581,34 @@ impl Vsync {
     #[must_use]
     pub fn is_same(&self, other: &Vsync) -> bool {
         Rc::ptr_eq(&self.inner, &other.inner)
+    }
+
+    /// Bind this registry to the build phase of its presentation (ADR-0086
+    /// §7). A controller registered here, or in a registry nested under it,
+    /// refuses a mutation made while the phase builds with
+    /// [`AnimationError::MutatedDuringBuild`](crate::AnimationError::MutatedDuringBuild).
+    /// The host binding that sets the frame requester sets this too.
+    pub fn set_build_phase(&self, phase: Option<BuildPhase>) {
+        self.inner.borrow_mut().build_phase = phase;
+    }
+
+    /// Whether the presentation this registry ticks for is building: the
+    /// phase of the nearest registry up the chain that has one. `false` when
+    /// none is bound, or while the chain is borrowed by a tick (a build does
+    /// not run inside a tick).
+    #[must_use]
+    pub fn is_building(&self) -> bool {
+        let mut registry = Some(Rc::clone(&self.inner));
+        while let Some(current) = registry {
+            let Ok(inner) = current.try_borrow() else {
+                return false;
+            };
+            if let Some(phase) = &inner.build_phase {
+                return phase.is_building();
+            }
+            registry = inner.parent.as_ref().and_then(|seat| seat.owner.upgrade());
+        }
+        false
     }
 
     /// Upward traversal needs no descendant snapshot or frame-path cycle stack:

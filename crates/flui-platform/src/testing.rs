@@ -1,10 +1,20 @@
-//! What test doubles of the window contract share (ADR-0243).
+//! What test doubles of the platform contracts share (ADR-0243).
 //!
 //! [`window_takes_no_frame_verbs!`](crate::window_takes_no_frame_verbs) writes
 //! the per-frame verbs of a [`PlatformWindow`](crate::PlatformWindow) double
 //! whose window system takes neither a refresh-rate request nor input
 //! regions, so each double does not repeat them; [`NoNativeSurface`] is the
 //! surface target of a double with no native surface.
+//!
+//! Behind the `testing` feature, the doubles of the contracts this crate
+//! owns (ADR-0243 D4): `FakeHaptics`, the recording
+//! [`PlatformHaptics`](crate::PlatformHaptics) a scenario asserts against.
+
+#[cfg(feature = "testing")]
+mod haptics;
+
+#[cfg(feature = "testing")]
+pub use haptics::{FakeHaptics, HapticCall, HapticPlay};
 
 use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,

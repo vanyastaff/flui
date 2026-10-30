@@ -217,7 +217,7 @@ fn exercise_floating_snap(pinned: bool, migrate_and_unmount: bool) {
     laid.adopt_vsync(vsync.clone()).expect("clock admission");
 
     // Scroll deep: the floating header scrolls away entirely.
-    controller.jump_to(200.0);
+    controller.jump_to(200.0).expect("no build is running");
     laid.pump();
     assert_eq!(
         builds.borrow().last().map(|(shrink, _)| *shrink),

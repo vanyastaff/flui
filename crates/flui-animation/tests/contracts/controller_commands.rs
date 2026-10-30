@@ -35,7 +35,7 @@ fn forward_from_mid_scales_run_duration() {
 fn small_distances_keep_their_authored_duration() {
     for (from, target) in [(0.0, 0.5e-6), (0.5e-6, 0.0)] {
         let (_owner, c) = controller(1000);
-        c.set_value(from);
+        c.set_value(from).expect("no build is running");
         let run = c.animate_to(target, Some(Duration::from_secs(1))).unwrap();
         assert_eq!(
             c.value(),
@@ -81,7 +81,8 @@ fn small_remaining_distance_runs_until_its_scaled_deadline() {
 fn small_from_jumps_notify_their_exact_value() {
     for reverse in [false, true] {
         let (_owner, c) = controller(1000);
-        c.set_value(if reverse { 1.0 } else { 0.0 });
+        c.set_value(if reverse { 1.0 } else { 0.0 })
+            .expect("no build is running");
         let values = Rc::new(RefCell::new(Vec::new()));
         let observed = Rc::clone(&values);
         let source = c.clone();
@@ -123,9 +124,9 @@ fn nearby_interior_positions_keep_their_directional_phase() {
     for reverse in [false, true] {
         for position in [0.5e-6, 1.0 - 0.5e-6] {
             let (_owner, c) = controller(1000);
-            c.set_value(0.5);
+            c.set_value(0.5).expect("no build is running");
             let _run = if reverse { c.reverse() } else { c.forward() }.unwrap();
-            c.set_value(position);
+            c.set_value(position).expect("no build is running");
             assert_eq!(c.value(), position);
             assert_eq!(
                 c.status(),
@@ -153,8 +154,8 @@ fn nearby_interior_positions_keep_their_directional_phase() {
 
 fn set_value_nan_is_canonicalized() {
     let (_owner, c) = controller(100);
-    c.set_value(0.5);
-    c.set_value(f64::NAN);
+    c.set_value(0.5).expect("no build is running");
+    c.set_value(f64::NAN).expect("no build is running");
     assert_eq!(c.value(), 0.0, "NaN selects the lower bound");
     assert_eq!(c.status(), AnimationStatus::ReverseSettled);
 }
@@ -314,7 +315,7 @@ fn repeat_rejects_an_empty_range() {
 fn zero_iterations_settle_at_the_call_without_landing() {
     for mode in [RepeatMode::Restart, RepeatMode::Alternate] {
         let (_owner, c) = controller(100);
-        c.set_value(0.1);
+        c.set_value(0.1).expect("no build is running");
         let generation = c.run_generation();
         let range = ValueRange::new(0.2, 0.8).expect("ordered range");
         let run = c
@@ -500,7 +501,7 @@ fn completion_callback_can_read_and_write_its_controller() {
     let delivered = Arc::clone(&observed);
     future.when_complete_or_cancel(move |outcome| {
         assert_eq!(source.value(), 1.0);
-        source.set_value(0.5);
+        source.set_value(0.5).expect("no build is running");
         *delivered.lock() = Some(outcome);
     });
     c.tick_at(Duration::from_millis(100));
@@ -557,7 +558,7 @@ fn velocity_is_zero_once_set_value_ends_the_run() {
         c.tick_at(Duration::ZERO);
         c.tick_at(Duration::from_millis(500));
         assert!(c.velocity() > 0.0, "bounded={bounded}: the run moves");
-        c.set_value(0.2);
+        c.set_value(0.2).expect("no build is running");
         assert_eq!(c.status(), AnimationStatus::Forward, "bounded={bounded}");
         assert_eq!(c.velocity(), 0.0, "bounded={bounded}: no run, no motion");
         let _next = match target {
@@ -574,9 +575,51 @@ fn velocity_is_zero_once_set_value_ends_the_run() {
     }
 }
 
+/// Every mutator of a controller whose registry's presentation is building
+/// refuses with `MutatedDuringBuild` and leaves value, status and listeners
+/// alone; once the build ends the same commands land (ADR-0086 §7). A
+/// registry nested under the bound one reads the root's phase.
+fn controller_mutation_during_build_is_refused() {
+    let root = Vsync::new();
+    let nested = Vsync::new();
+    let _seat = root.attach_child(&nested).expect("a fresh registry nests");
+    let phase = flui_foundation::BuildPhase::new();
+    root.set_build_phase(Some(phase.clone()));
+    let owner = AnimationController::builder(Duration::from_millis(100)).build_on(Some(&nested));
+    let c = owner.controller().clone();
+    let notified = Rc::new(AtomicUsize::new(0));
+    let heard = Rc::clone(&notified);
+    let _listener = c.add_listener(Rc::new(move || {
+        heard.fetch_add(1, Ordering::Relaxed);
+    }));
+    c.set_value(0.5).expect("no build is running");
+    let before = notified.load(Ordering::Relaxed);
+
+    let build = phase.enter();
+    assert!(nested.is_building());
+    let refused = Err(AnimationError::MutatedDuringBuild);
+    assert_eq!(c.set_value(0.9), refused);
+    assert_eq!(c.forward().map(drop), refused);
+    assert_eq!(c.animate_to(0.0, None).map(drop), refused);
+    assert_eq!(c.stop(), refused);
+    assert_eq!(c.reset(), refused);
+    assert_eq!(c.finish(), refused);
+    assert_eq!(c.value(), 0.5, "a refused mutation keeps the value");
+    assert_eq!(notified.load(Ordering::Relaxed), before, "nor notifies");
+    drop(build);
+
+    assert!(!nested.is_building());
+    c.set_value(0.9).expect("the build ended");
+    assert_eq!(c.value(), 0.9);
+}
+
 #[test]
 fn controller_contract() {
     crate::run_table(&[
+        (
+            "controller mutation during build is refused",
+            controller_mutation_during_build_is_refused,
+        ),
         (
             "velocity is zero once set_value ends the run",
             velocity_is_zero_once_set_value_ends_the_run,

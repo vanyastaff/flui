@@ -354,7 +354,7 @@ impl MountedScroll {
     }
 
     pub(super) fn prepare_active(&mut self) {
-        self.controller.jump_to(0.0);
+        self.controller.jump_to(0.0).expect("no build is running");
         self.laid.tick();
         self.animate();
         self.laid.tick();
@@ -367,12 +367,15 @@ impl MountedScroll {
 
     pub(super) fn animate(&mut self) {
         self.controller
-            .animate_to(1000.0, RUN, SharedCurve::new(curves::LINEAR));
+            .animate_to(1000.0, RUN, SharedCurve::new(curves::LINEAR))
+            .expect("no build is running");
         self.laid.tick();
     }
 
     pub(super) fn interrupt(&mut self) {
-        self.controller.jump_to(self.pixels());
+        self.controller
+            .jump_to(self.pixels())
+            .expect("no build is running");
         self.laid.tick();
     }
 

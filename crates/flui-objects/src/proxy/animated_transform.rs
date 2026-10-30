@@ -648,7 +648,7 @@ mod tests {
         wake: impl Fn() + Send + Sync + 'static,
     ) -> (PipelineOwner, LocalRenderInvalidationHandle) {
         let controller = AnimationController::builder(Duration::from_millis(100)).build();
-        controller.set_value(1.0);
+        controller.set_value(1.0).expect("no build is running");
         let proxy =
             ProxyAnimation::new(std::rc::Rc::new(controller) as std::rc::Rc<dyn Animation<f64>>);
         let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
@@ -769,7 +769,7 @@ mod tests {
         let controller = AnimationController::builder(Duration::from_millis(1))
             .unbounded()
             .build();
-        controller.set_value(turns);
+        controller.set_value(turns).expect("no build is running");
         RenderAnimatedTransform::new(TransformMotion::Rotation {
             turns: ProxyAnimation::new(
                 std::rc::Rc::new(controller) as std::rc::Rc<dyn Animation<f64>>

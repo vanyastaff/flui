@@ -847,8 +847,10 @@ enum Published {
 }
 
 mod actionability;
+mod delta;
 mod locate;
 
+pub use delta::TreeSnapshot;
 pub use locate::WireLocateError;
 
 #[cfg(test)]

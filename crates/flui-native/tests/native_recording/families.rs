@@ -1,20 +1,24 @@
 //! Recordings of the streams beside a pointer registry's (ADR-0215 §4): a
-//! loop's application delivery (system notices, session ends, reopens) and a
-//! window's delivery (its input method's events), replayed on the headless
-//! host.
+//! loop's application delivery (system notices, session ends, reopens), a
+//! window's delivery (its input method's events) and a platform's reads of the
+//! system (its preferences), replayed on the headless host.
 
 use flui_native::journal::codec::{
-    CodecError, NativeRecording, ReplayError, ReplayTarget, Row, Unsupported,
+    CodecError, FailureKind, NativeRecording, PreferenceRead, ReadFailure, ReplayError,
+    ReplayTarget, Row, Unsupported,
 };
 use flui_native::testing::app::{AppCall, AppLog, run_keeping_owner};
-use flui_native::{HeadlessHostEvents, HeadlessPlatform, MockWindow};
+use flui_native::{
+    HeadlessHostEvents, HeadlessPlatform, HeadlessPreferences, MockWindow, OwnerPlatform,
+};
 use flui_platform::{
-    ImeEvent, MemoryPressureLevel, PlatformInput, SessionEndPhase, SystemNotice, WindowOptions,
+    ImeEvent, MemoryPressureLevel, PlatformInput, SessionEndPhase, SystemNotice, SystemPreferences,
+    WindowOptions,
 };
 use flui_testing::window_handler::RecordingWindowHandler;
 
 /// The checked-in recordings of the streams beside a registry's.
-pub(super) const FAMILY_RECORDINGS: [(&str, &str); 2] = [
+pub(super) const FAMILY_RECORDINGS: [(&str, &str); 3] = [
     (
         "headless_app_notices",
         include_str!("headless_app_notices.jsonl"),
@@ -22,6 +26,10 @@ pub(super) const FAMILY_RECORDINGS: [(&str, &str); 2] = [
     (
         "headless_window_ime",
         include_str!("headless_window_ime.jsonl"),
+    ),
+    (
+        "headless_platform_preferences",
+        include_str!("headless_platform_preferences.jsonl"),
     ),
 ];
 
@@ -53,6 +61,52 @@ impl ReplayTarget for WindowTarget {
         self.0.inject_event(PlatformInput::Ime(event.clone()));
         Ok(())
     }
+}
+
+/// Replays a platform stream into a headless platform's preference source,
+/// reading the preferences back through `owner` after each row, as the
+/// application reads them.
+pub(super) struct PlatformTarget<'a> {
+    pub(super) source: HeadlessPreferences,
+    pub(super) owner: &'a OwnerPlatform,
+    pub(super) reads: Vec<Result<SystemPreferences, ReadFailure>>,
+}
+
+impl ReplayTarget for PlatformTarget<'_> {
+    fn preferences(&mut self, read: &PreferenceRead) -> Result<(), Unsupported> {
+        match read {
+            PreferenceRead::Observed(values) => self.source.set(values.clone()),
+            PreferenceRead::Failed(ReadFailure {
+                kind: FailureKind::Preferences,
+                message,
+            }) => self
+                .source
+                .fail_next_read(message.clone().unwrap_or_default()),
+            // The headless source fails a read only as a preference source does.
+            _ => return Err(Unsupported),
+        }
+        self.reads.push(read_back(self.owner));
+        Ok(())
+    }
+}
+
+/// What the application reads of the system preferences through `owner`, a
+/// failure as the kind of error it was.
+pub(super) fn read_back(owner: &OwnerPlatform) -> Result<SystemPreferences, ReadFailure> {
+    owner.preferences().map_err(|error| ReadFailure::of(&error))
+}
+
+/// What each `preferences` row of `recording` says the read returned.
+fn recorded_reads(recording: &NativeRecording) -> Vec<Result<SystemPreferences, ReadFailure>> {
+    recording
+        .rows
+        .iter()
+        .filter_map(|row| match row {
+            Row::Preferences(PreferenceRead::Observed(values)) => Some(Ok(values.clone())),
+            Row::Preferences(PreferenceRead::Failed(failure)) => Some(Err(failure.clone())),
+            _ => None,
+        })
+        .collect()
 }
 
 /// A headless window, opened on `owner` with a recording handler.
@@ -139,6 +193,43 @@ fn window_recordings_replay_on_the_headless_host() {
     );
 }
 
+/// A platform stream replays on the headless host: after each row the
+/// application reads what the recorded read returned, a failure included,
+/// with every preference field the full observation carries.
+fn platform_recordings_replay_on_the_headless_host() {
+    let recording = family("headless_platform_preferences");
+    let platform = HeadlessPlatform::new();
+    let source = platform.preference_source();
+    let log = AppLog::new();
+    let owner = run_keeping_owner(Box::new(platform), &log);
+    let mut target = PlatformTarget {
+        source,
+        owner: &owner,
+        reads: Vec::new(),
+    };
+    recording
+        .replay_into(&mut target)
+        .expect("a platform stream replays on the headless host");
+    let expected = recorded_reads(&recording);
+    assert_eq!(expected.len(), 3, "every row is a read");
+    assert_eq!(target.reads, expected);
+    let full = target.reads[0].as_ref().expect("the first read observed");
+    assert_eq!(full.text_scale(), Some(1.25));
+    assert_eq!(
+        full.locales().map(<[flui_platform::Locale]>::len),
+        Some(2),
+        "the locales survive the read"
+    );
+    assert_eq!(full.wheel().horizontal_characters(), Some(2));
+    assert_eq!(
+        target.reads[1],
+        Err(ReadFailure {
+            kind: FailureKind::Preferences,
+            message: Some("the settings portal did not answer".to_owned()),
+        })
+    );
+}
+
 /// A row the replay does not reproduce stops it with an error naming the
 /// row and its line, never a skipped row: an application stream replayed as
 /// a registry's, a registry's into a host's events, and a redacted input
@@ -181,6 +272,29 @@ fn a_row_the_replay_does_not_reproduce_is_a_typed_error() {
         2,
         "the rows before the redacted one were replayed, none after it"
     );
+
+    let mut deferred = family("headless_platform_preferences");
+    deferred.rows[1] = Row::Preferences(PreferenceRead::Failed(ReadFailure {
+        kind: FailureKind::Deferred,
+        message: None,
+    }));
+    let platform = HeadlessPlatform::new();
+    let source = platform.preference_source();
+    let owner = run_keeping_owner(Box::new(platform), &AppLog::new());
+    let mut target = PlatformTarget {
+        source,
+        owner: &owner,
+        reads: Vec::new(),
+    };
+    assert_eq!(
+        deferred.replay_into(&mut target),
+        Err(ReplayError::Unsupported {
+            line: 3,
+            row: "preferences"
+        }),
+        "the headless source cannot defer a read"
+    );
+    assert_eq!(target.reads.len(), 1, "the read before it was replayed");
 }
 
 /// A registry's recording carries its clock and no other stream does: a
@@ -195,6 +309,10 @@ fn a_header_out_of_its_stream_is_refused() {
             "application stream with a clock",
             r#"{"flui_native_recording":1,"backend":"web","stream":"app","epoch_ns":0,"uptime_ns":0,"devices":[]}"#,
         ),
+        (
+            "platform stream with a clock",
+            r#"{"flui_native_recording":1,"backend":"web","stream":"platform","epoch_ns":0,"uptime_ns":0,"devices":[]}"#,
+        ),
     ] {
         assert!(
             matches!(
@@ -207,7 +325,7 @@ fn a_header_out_of_its_stream_is_refused() {
 }
 
 /// The cases of the streams beside a registry's.
-pub(super) const CASES: [(&str, fn()); 4] = [
+pub(super) const CASES: [(&str, fn()); 5] = [
     (
         "app_recordings_replay_on_the_headless_host",
         app_recordings_replay_on_the_headless_host,
@@ -215,6 +333,10 @@ pub(super) const CASES: [(&str, fn()); 4] = [
     (
         "window_recordings_replay_on_the_headless_host",
         window_recordings_replay_on_the_headless_host,
+    ),
+    (
+        "platform_recordings_replay_on_the_headless_host",
+        platform_recordings_replay_on_the_headless_host,
     ),
     (
         "a_row_the_replay_does_not_reproduce_is_a_typed_error",
@@ -226,20 +348,32 @@ pub(super) const CASES: [(&str, fn()); 4] = [
     ),
 ];
 
-/// A headless session's application and window streams, captured: the
-/// notices, a session end and a reopen the host reported, and one
-/// composition the window delivered. Returns the application's calls, the
-/// window's input method events and the recordings.
+/// What a captured headless session delivered, and its recordings.
 #[cfg(all(debug_assertions, feature = "native-capture"))]
-fn captured_session(
-    privacy: flui_native::journal::recorder::Privacy,
-) -> (Vec<AppCall>, Vec<ImeEvent>, Vec<NativeRecording>) {
+struct Captured {
+    /// The application's calls.
+    calls: Vec<AppCall>,
+    /// The window's input method events.
+    ime: Vec<ImeEvent>,
+    /// What the application read of the system preferences.
+    reads: Vec<Result<SystemPreferences, ReadFailure>>,
+    /// The session's recordings.
+    recordings: Vec<NativeRecording>,
+}
+
+/// A headless session's application, window and platform streams, captured:
+/// the notices, a session end and a reopen the host reported, one
+/// composition the window delivered, and the application's reads of the
+/// system preferences, one of them failed.
+#[cfg(all(debug_assertions, feature = "native-capture"))]
+fn captured_session(privacy: flui_native::journal::recorder::Privacy) -> Captured {
     use flui_native::journal::codec::Backend;
     use flui_native::journal::recorder::Recorder;
 
     let recorder = Recorder::with_privacy(Backend::Headless, privacy);
     let platform = HeadlessPlatform::new();
     let events = platform.host_events();
+    let source = platform.preference_source();
     let log = AppLog::new();
     let owner = run_keeping_owner(Box::new(platform), &log);
     let (window, handler) = headless_window(&owner);
@@ -258,8 +392,23 @@ fn captured_session(
     ] {
         window.inject_event(PlatformInput::Ime(event));
     }
-    let recordings = recorder.finish();
-    (log.calls(), ime_events(&handler), recordings)
+    let mut reads = vec![read_back(&owner)];
+    source.set(
+        SystemPreferences::default()
+            .with_high_contrast(true)
+            .with_text_scale(2.0)
+            .expect("in range"),
+    );
+    reads.push(read_back(&owner));
+    source.fail_next_read("the settings service is gone");
+    reads.push(read_back(&owner));
+    reads.push(read_back(&owner));
+    Captured {
+        calls: log.calls(),
+        ime: ime_events(&handler),
+        reads,
+        recordings: recorder.finish(),
+    }
 }
 
 /// The one recording of `stream` among `recordings`.
@@ -276,19 +425,20 @@ fn only(
     recording.clone()
 }
 
-/// A captured application stream and window stream write and read back
-/// unchanged, and replay on a fresh headless host to exactly what the
-/// session delivered; a capture that redacts text marks the rows that lost
+/// Captured application, window and platform streams write and read back
+/// unchanged, and replay on a fresh headless host to exactly what the session
+/// delivered and read; a capture that redacts text marks the rows that lost
 /// it, which their replay refuses.
 #[cfg(all(debug_assertions, feature = "native-capture"))]
 fn captured_streams_replay_to_what_the_session_delivered() {
     use flui_native::journal::codec::Stream;
     use flui_native::journal::recorder::Privacy;
 
-    let (calls, ime, recordings) = captured_session(Privacy::KeepText);
-    let app = only(&recordings, Stream::App);
-    let window = only(&recordings, Stream::Window);
-    for recording in [&app, &window] {
+    let session = captured_session(Privacy::KeepText);
+    let app = only(&session.recordings, Stream::App);
+    let window = only(&session.recordings, Stream::Window);
+    let reads = only(&session.recordings, Stream::Platform);
+    for recording in [&app, &window, &reads] {
         let mut written = Vec::new();
         recording
             .write(&mut written)
@@ -298,22 +448,37 @@ fn captured_streams_replay_to_what_the_session_delivered() {
             recording
         );
     }
+    assert_eq!(
+        recorded_reads(&reads),
+        session.reads,
+        "the platform stream journals every read the application made, and only those"
+    );
 
     let platform = HeadlessPlatform::new();
     let events = platform.host_events();
+    let source = platform.preference_source();
     let log = AppLog::new();
     let owner = run_keeping_owner(Box::new(platform), &log);
     app.replay_into(&mut HostEventsTarget(events))
         .expect("the application stream replays");
-    assert_eq!(log.calls(), calls);
+    assert_eq!(log.calls(), session.calls);
     let (mock, handler) = headless_window(&owner);
     window
         .replay_into(&mut WindowTarget(mock))
         .expect("the window stream replays");
-    assert_eq!(ime_events(&handler), ime);
+    assert_eq!(ime_events(&handler), session.ime);
+    let mut target = PlatformTarget {
+        source,
+        owner: &owner,
+        reads: Vec::new(),
+    };
+    reads
+        .replay_into(&mut target)
+        .expect("the platform stream replays");
+    assert_eq!(target.reads, session.reads);
 
-    let (_, _, redacted) = captured_session(Privacy::Redact);
-    let window = only(&redacted, Stream::Window);
+    let redacted = captured_session(Privacy::Redact);
+    let window = only(&redacted.recordings, Stream::Window);
     let lost: Vec<usize> = window
         .rows
         .iter()
