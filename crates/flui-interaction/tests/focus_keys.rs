@@ -15,7 +15,7 @@ use flui_interaction::focus::{
 use flui_interaction::ids::FocusNodeId;
 use flui_platform::{
     EventTime,
-    keyboard::{Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, NamedKey},
+    keyboard::{Code, ImeComposition, Key, KeyEvent, KeyRelease, KeyRepeat, KeyState, NamedKey},
 };
 
 fn run_rows(rows: &[(&str, fn())]) {
@@ -706,6 +706,10 @@ fn keyboard_focus_contracts() {
             forgotten_keys_stop_repeating,
         ),
         (
+            "a key-down no release follows is held by nobody",
+            a_key_down_no_release_follows_is_held_by_nobody,
+        ),
+        (
             "a panicking handler keeps its key's record",
             panicking_handler_keeps_its_keys_record,
         ),
@@ -1077,6 +1081,25 @@ fn forgotten_keys_stop_repeating() {
     let _ = manager.dispatch_key_event(&enter(KeyState::Up, KeyRepeat::First));
     assert_eq!(node_keys.get(), 1);
     assert_eq!(cancelled.borrow().len(), 1, "once");
+}
+
+/// A character a host posts without a key (Windows' Alt+numpad entry) reaches
+/// the focus as a press, and nothing holds it: no release follows, so losing
+/// activation later cancels nothing on its path.
+fn a_key_down_no_release_follows_is_held_by_nobody() {
+    let (manager, nodes, _attachments) = manager_with_nodes(1);
+    let _ = nodes[0].request_focus();
+    let node_keys = count_keys(&nodes[0]);
+    let (cancelled, _registration) = record_cancels(&nodes[0]);
+    let stray = key(KeyState::Down, Key::character("é"), Code::Unidentified)
+        .with_release(KeyRelease::Never);
+    assert!(manager.dispatch_key_event(&stray).is_handled());
+    assert_eq!(node_keys.get(), 1, "the character reaches the focus");
+    manager.forget_pressed_keys();
+    assert!(
+        cancelled.borrow().is_empty(),
+        "a key nobody holds is not cancelled"
+    );
 }
 
 fn panicking_handler_keeps_its_keys_record() {

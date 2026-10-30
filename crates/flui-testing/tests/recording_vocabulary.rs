@@ -18,7 +18,8 @@ use flui_platform::data_transfer::{
 };
 use flui_platform::input_capabilities::{InputCapabilities, PointerKindSet};
 use flui_platform::keyboard::{
-    Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Location, Modifiers, NamedKey,
+    Code, ImeComposition, Key, KeyEvent, KeyRelease, KeyRepeat, KeyState, Location, Modifiers,
+    NamedKey,
 };
 use flui_platform::pointer::{
     ButtonChange, CancelReason, ContactSize, DeviceId, HoverDistance, PanZoomEvent, PanZoomPhase,
@@ -593,6 +594,16 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
             Location::Standard,
             KeyRepeat::AutoRepeat,
         )),
+        ("KeyRelease", "Follows") => one(plain_key(KeyState::Down)),
+        ("KeyRelease", "Never") => one(platform(PlatformInput::Keyboard(
+            KeyEvent::new(
+                KeyState::Down,
+                Key::character("é"),
+                Code::Unidentified,
+                at(18),
+            )
+            .with_release(KeyRelease::Never),
+        ))),
         ("ImeComposition", "Inactive") => one(composing_key(ImeComposition::Inactive)),
         ("ImeComposition", "Active") => one(composing_key(ImeComposition::Active)),
         ("ImeEvent", "Enabled") => one(ime(ImeEvent::Enabled)),

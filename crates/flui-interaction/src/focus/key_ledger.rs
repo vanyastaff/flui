@@ -13,7 +13,9 @@
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
-use flui_platform::keyboard::{Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, NamedKey};
+use flui_platform::keyboard::{
+    Code, ImeComposition, Key, KeyEvent, KeyRelease, KeyRepeat, KeyState, NamedKey,
+};
 
 use super::FocusNode;
 use crate::ids::FocusNodeId;
@@ -128,6 +130,15 @@ impl KeyLedger {
                 }
                 let ime = event.composition == ImeComposition::Active
                     || event.key == Key::Named(NamedKey::Process);
+                // A key-down no release follows is held by nobody: recorded,
+                // it would stay held until the next blur cancelled it.
+                if event.release() == KeyRelease::Never {
+                    return Ok(if ime {
+                        Admission::Withheld
+                    } else {
+                        Admission::Press
+                    });
+                }
                 let origin = if ime {
                     KeyOrigin::Ime
                 } else {
@@ -157,7 +168,21 @@ impl KeyLedger {
                     Admission::Continuation
                 }
                 Some(KeyOrigin::Focus { press, .. }) => Admission::Cancelled(press),
-                _ => Admission::Withheld,
+                Some(KeyOrigin::Ime) => Admission::Withheld,
+                None => {
+                    if let KeyId::Logical(key) = &id {
+                        // `KeyEvent`'s contract: a code-less key's release
+                        // carries the key its key-down did. One that matches
+                        // nothing was pressed before this window had focus,
+                        // or its host broke the contract and left the
+                        // key-down held until the next blur.
+                        tracing::warn!(
+                            ?key,
+                            "a key without a code was released with no key-down held for it"
+                        );
+                    }
+                    Admission::Withheld
+                }
             },
         };
         Ok(admission)
