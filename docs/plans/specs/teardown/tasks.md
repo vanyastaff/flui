@@ -92,10 +92,11 @@ graph LR
   записи `SessionEnd`; отказ окна держит блок на запросе до закрытия окна), S3 (уведомление и
   `Detached` с коммитом композиции, если осталось ≥ 1 с; извлечённому — уведомление в FIFO), S4
   (размещение окон и `flush_within` от начала
-  `Ending` в `SESSION_END_BUDGET`, у `Delay { max }` — не дольше `max`), S6 (quit всегда).
+  `Ending` в `SESSION_END_BUDGET`, у `Delay { max }` — не дольше `max`), S6 (quit). У `NotifyOnly` (остановка Android, pagehide в web) приложение остаётся живым: уведомление и flush идут, `Detached` и quit — нет.
   Вето сеанса зависит от `SessionEndSupport` платформы (`Hold` — Windows, macOS, headless;
   `Delay` — Linux/logind; `NotifyOnly` — Android, iOS, web), а не от cfg. Строки:
   `a_session_end_query_asks_each_window_guard`,
+  `a_notify_only_session_end_leaves_the_application_running`,
   `a_cancelled_logoff_withdraws_only_the_session_entry`,
   `a_session_end_with_a_checked_out_runtime_calls_no_user_code`,
   `a_session_end_asks_the_handler_before_the_guard`,

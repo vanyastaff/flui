@@ -207,6 +207,10 @@ fn runner_teardown() {
                 "session_end_commits_composition_before_the_flush",
                 session_end_commits_composition_before_the_flush,
             ),
+            (
+                "a_notify_only_session_end_leaves_the_application_running",
+                a_notify_only_session_end_leaves_the_application_running,
+            ),
         ],
     );
 }
@@ -815,4 +819,48 @@ pub(crate) fn session_end_commits_composition_before_the_flush() {
         "Detached came from the session end's delivery, before its quit"
     );
     run.join().expect("the session end returns Ok");
+}
+
+/// On a platform that only tells (an Android stop, a web pagehide), the
+/// session's end writes what the documents published but leaves the
+/// application up: the user may come back to the same windows, so they hear
+/// no Detached and the loop does not quit (ADR-0260 §3).
+///
+/// Red-check: deliver the close and ask the loop to quit whatever the
+/// platform's support — the observer hears Detached and the loop ends.
+pub(crate) fn a_notify_only_session_end_leaves_the_application_running() {
+    let seen: SeenAtDetached = Rc::new(RefCell::new(None));
+    let field = ComposingField {
+        store: flui_interaction::testing::InMemoryTextStore::new("ab"),
+        seen: Rc::clone(&seen),
+        loop_at_detached: None,
+    };
+    let application = Application::new(move |_| field.clone())
+        .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
+    let platform = flui_native::HeadlessPlatform::new()
+        .with_session_end_support(flui_platform::SessionEndSupport::NotifyOnly)
+        .with_text_store_host(|| {
+            flui_testing::RecordingTextStoreHost::new()
+                as Rc<dyn flui_platform::text_store::TextStoreHost>
+        });
+    let run = HeadlessRun::start_on(application, platform);
+    run.run_owner_turn();
+
+    assert_eq!(
+        run.end_session(SessionEndPhase::Ending),
+        SessionEndAnswer::Proceed
+    );
+    run.run_owner_turn();
+    assert!(
+        run.is_running(),
+        "the application stays up for the user's return"
+    );
+    assert_eq!(*seen.borrow(), None, "no window heard Detached");
+
+    let windows = run.open_windows();
+    assert_eq!(windows.len(), 1, "the window is still open");
+    assert!(windows[0].simulate_close(), "the application lets it close");
+    run.run_owner_turn();
+    run.join()
+        .expect("closing the window afterwards returns Ok");
 }

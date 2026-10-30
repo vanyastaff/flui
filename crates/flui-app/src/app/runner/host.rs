@@ -410,6 +410,14 @@ fn answer_session_end(phase: flui_platform::SessionEndPhase) -> flui_platform::S
         }
         SessionEndPhase::Ending => {
             let deadline = std::time::Instant::now() + session_end_budget();
+            // A platform that only tells (Android's stop, the web's pagehide,
+            // iOS) reports that the process may be killed, not that the
+            // application is over: it may come back to the same UI. Only a
+            // platform that holds or delays the session ends the
+            // application here.
+            let ends_application =
+                session_end_platform(flui_native::OwnerPlatform::session_end_support)
+                    .is_some_and(|support| support != flui_platform::SessionEndSupport::NotifyOnly);
             drop(take_session_end());
             // What the host keeps itself is written first, within the same
             // deadline as the documents.
@@ -427,12 +435,16 @@ fn answer_session_end(phase: flui_platform::SessionEndPhase) -> flui_platform::S
                 >= SESSION_END_USER_CODE_THRESHOLD
             {
                 deliver_contained(&HostNotice::SessionEnded);
-                deliver_session_end_close();
+                if ends_application {
+                    deliver_session_end_close();
+                }
             }
             flush_for_session_end(deadline);
             // The loop is asked to quit whatever ends the session, an end
             // that closes only this application included.
-            let _ = session_end_platform(flui_native::OwnerPlatform::quit);
+            if ends_application {
+                let _ = session_end_platform(flui_native::OwnerPlatform::quit);
+            }
             SessionEndAnswer::Proceed
         }
         // A phase this host does not know asks for nothing.
