@@ -493,6 +493,9 @@ pub struct ScrollableState {
     /// controller in the same call.
     scroll_controller: ScrollController,
     hooks: Option<Rc<ScrollableHooks>>,
+    /// The UI runtime's build phase, taken in `init_state`: the hooks hand it
+    /// to the controller so `jump_to`/`animate_to` refuse during `build`.
+    build_phase: flui_foundation::BuildPhase,
     /// The ballistic simulation driver. Bounds span `(NEG_INFINITY, INFINITY)`
     /// so pixel-space simulation positions are not clamped to `[0, 1]`.
     ///
@@ -612,6 +615,7 @@ impl StatefulView for Scrollable {
             reveal: Rc::new(ScrollReveal::new(focus)),
             scroll_controller: self.controller.clone().unwrap_or_default(),
             hooks: None,
+            build_phase: flui_foundation::BuildPhase::new(),
             fling_controller,
             fling_clock: None,
             wheel_motion: Rc::new(RefCell::new(None)),
@@ -770,6 +774,7 @@ impl ScrollableState {
                 let owner = jump_owner.borrow().clone();
                 owner.is_some_and(|owner| owner.jump(target))
             }),
+            build_phase: self.build_phase.clone(),
             in_pass: Box::new(move || {
                 pass_owner
                     .borrow()
@@ -887,6 +892,7 @@ impl ViewState<Scrollable> for ScrollableState {
         self.post_frame = ctx.post_frame_handle();
         self.pipeline = ctx.pipeline_owner().map(|cell| cell.downgrade());
         self.install_flush_handle(ctx);
+        self.build_phase = ctx.build_phase();
         self.install_hooks();
         self.install_fling_listener();
         self.install_fling_status_listener();
@@ -1424,7 +1430,7 @@ impl ScrollableState {
                 if notched {
                     // Start at the displayed position, never at the previous
                     // destination or a stale programmatic animation value.
-                    fling_wheel.set_value(pixels);
+                    let _ = fling_wheel.set_value(pixels);
                     if !is_current() {
                         return EventPropagation::Stop;
                     }

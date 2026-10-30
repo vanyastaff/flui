@@ -67,7 +67,7 @@ fn is_animating_while_a_run_is_installed() {
 fn is_animating_after_set_value_stops_the_run() {
     let controller = controller();
     let _run = controller.forward().expect("run starts");
-    controller.set_value(0.5);
+    controller.set_value(0.5).expect("no build is running");
     assert_is_animating_everywhere(&controller, false);
 }
 
@@ -349,7 +349,7 @@ fn overshooting_curve_stays_within_bounds() {
 
 fn max_duration_start_from(from: f64, start: fn(&AnimationController)) {
     let controller = AnimationController::builder(Duration::MAX).build();
-    controller.set_value(from);
+    controller.set_value(from).expect("no build is running");
     let started = catch_unwind(AssertUnwindSafe(|| start(&controller)));
     assert!(
         started.is_ok(),
@@ -400,7 +400,7 @@ fn disposed_controller_ignores_set_value() {
     let mut owner =
         AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
     let controller = owner.controller().clone();
-    controller.set_value(0.3);
+    controller.set_value(0.3).expect("no build is running");
     let notified = Arc::new(Mutex::new(0_usize));
     let sink = Arc::clone(&notified);
     controller.add_listener(std::rc::Rc::new(move || {
@@ -408,7 +408,10 @@ fn disposed_controller_ignores_set_value() {
     }));
     owner.dispose();
 
-    controller.set_value(0.8);
+    assert_eq!(
+        controller.set_value(0.8),
+        Err(flui_animation::AnimationError::Disposed)
+    );
 
     assert_eq!(
         controller.value(),

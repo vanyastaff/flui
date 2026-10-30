@@ -198,7 +198,7 @@ fn tick_without_rebuilding<V, E, F>(
 {
     let mut tree = Headless::mount(view);
     for value in VALUES {
-        controller.set_value(value);
+        controller.set_value(value).expect("no build is running");
         let report = tree.binding.pump_frame_report(FRAME);
         assert_no_rebuild(&report, &format!("{what}: a tick to {value}"));
         for index in 0..nodes {
@@ -306,7 +306,7 @@ fn ticks_without_rebuilding<V: View + Clone + 'static>(
 ) {
     let mut tree = Headless::mount(view);
     for value in VALUES {
-        controller.set_value(value);
+        controller.set_value(value).expect("no build is running");
         let report = tree.binding.pump_frame_report(FRAME);
         assert_no_rebuild(&report, &format!("{what}: a tick to {value}"));
         check(&tree, value);
@@ -546,7 +546,7 @@ fn taps_at(
         })
         .child(child_box());
     let c = controller();
-    c.set_value(value);
+    c.set_value(value).expect("no build is running");
     let laid = lay_out(wrap(&c, detector), loose(200.0));
     let tap = |(x, y): (f64, f64)| {
         let before = taps.load(Ordering::SeqCst);
@@ -618,7 +618,7 @@ pub(crate) fn a_moving_slide_preserves_selected_pointer_coordinates() {
             if !selected.replace(true) {
                 // Change the public animation after choosing the path, before
                 // the owner lane receives it. Its mapping must remain admitted.
-                controller.set_value(0.5);
+                controller.set_value(0.5).expect("no build is running");
             }
             path
         });
@@ -684,9 +684,9 @@ pub(crate) fn hit_test_follows_the_painted_transform() {
 /// same render object, and the new value shows on that frame.
 pub(crate) fn swapping_the_animation_keeps_the_render_object() {
     let first = controller();
-    first.set_value(0.5);
+    first.set_value(0.5).expect("no build is running");
     let second = controller();
-    second.set_value(1.0);
+    second.set_value(1.0).expect("no build is running");
     let mut laid = lay_out(
         ScaleTransition::new(scalar(&first), child_box()),
         loose(200.0),
@@ -700,7 +700,7 @@ pub(crate) fn swapping_the_animation_keeps_the_render_object() {
     );
     assert_maps(&laid, 0, scale_by(1.0), "after the swap");
 
-    first.set_value(0.25);
+    first.set_value(0.25).expect("no build is running");
     laid.tick();
     assert_maps(
         &laid,
@@ -708,7 +708,7 @@ pub(crate) fn swapping_the_animation_keeps_the_render_object() {
         scale_by(1.0),
         "the old animation no longer drives the node",
     );
-    second.set_value(0.75);
+    second.set_value(0.75).expect("no build is running");
     laid.tick();
     assert_maps(
         &laid,
@@ -729,7 +729,7 @@ pub(crate) fn unmounted_transition_leaves_its_sibling_ticking() {
         )),
         loose(200.0),
     );
-    c.set_value(0.5);
+    c.set_value(0.5).expect("no build is running");
     laid.tick();
     laid.pump_widget(Column::new((
         ScaleTransition::new(scalar(&c), child_box()).boxed(),
@@ -739,7 +739,7 @@ pub(crate) fn unmounted_transition_leaves_its_sibling_ticking() {
             .len(),
         1
     );
-    c.set_value(0.25);
+    c.set_value(0.25).expect("no build is running");
     laid.tick();
     assert_maps(&laid, 0, scale_by(0.25), "the surviving transition");
 }
@@ -748,7 +748,7 @@ pub(crate) fn unmounted_transition_leaves_its_sibling_ticking() {
 /// dropped its own handle, and releases it on unmount.
 pub(crate) fn the_animation_is_released_after_unmount() {
     let c = controller();
-    c.set_value(0.5);
+    c.set_value(0.5).expect("no build is running");
     let animation = fraction(&c, TranslationFraction::new(1.0, 0.0));
     let weak: std::rc::Weak<dyn Animation<TranslationFraction>> =
         std::rc::Rc::downgrade(&animation);

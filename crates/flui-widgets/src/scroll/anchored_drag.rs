@@ -489,13 +489,13 @@ impl<K: Copy + Eq + 'static> AnchoredDragController<K> {
             .is_some_and(|owner| owner.contact().is_some());
         if !dragging && inner.scroll.pixels() != target {
             if owner.is_some() {
-                inner.scroll.animate_to(
+                let _ = inner.scroll.animate_to(
                     target,
                     RESETTLE,
                     SharedCurve::new(flui_animation::curves::EASE_OUT),
                 );
             } else {
-                inner.scroll.jump_to(target);
+                let _ = inner.scroll.jump_to(target);
             }
         }
         inner.notifier.notify_listeners();
@@ -515,7 +515,7 @@ impl<K: Copy + Eq + 'static> AnchoredDragController<K> {
     ) -> Result<(), AnchorsError> {
         let target = self.inner.anchors.borrow().offset(key);
         let target = target.ok_or(AnchorsError::Missing)?;
-        self.inner.scroll.animate_to(target, duration, curve);
+        let _ = self.inner.scroll.animate_to(target, duration, curve);
         Ok(())
     }
 
@@ -528,7 +528,7 @@ impl<K: Copy + Eq + 'static> AnchoredDragController<K> {
         let target = self.inner.anchors.borrow().offset(key);
         let target = target.ok_or(AnchorsError::Missing)?;
         let from = self.inner.scroll.pixels();
-        self.inner.scroll.jump_to(target);
+        let _ = self.inner.scroll.jump_to(target);
         // Without a mounted drag the jump moves the position directly, and
         // no owner reports the arrival.
         if self.inner.arrive(from, self.inner.scroll.pixels()) {

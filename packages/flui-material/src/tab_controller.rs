@@ -43,7 +43,9 @@ use flui_sdk::animation::{
     curves,
 };
 use flui_sdk::foundation::panic::PanicRecovery;
-use flui_sdk::foundation::{ChangeNotifier, Listenable, ListenerId, ListenerObserver};
+use flui_sdk::foundation::{
+    ChangeNotifier, Listenable, ListenerId, ListenerObserver, MutatedDuringBuild,
+};
 use flui_sdk::pipeline::ScrollDirection;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, InheritedView, impl_inherited_view};
@@ -233,6 +235,15 @@ impl Shared {
     fn notify_index_changed(&self) {
         self.index_listeners.notify();
         self.step_changes.notify_listeners();
+    }
+
+    /// Whether a widget that bound this controller to its clock is building
+    /// (ADR-0086 §7).
+    fn building(&self) -> bool {
+        self.clocks
+            .borrow()
+            .iter()
+            .any(|(_, clock)| clock.as_ref().is_some_and(Vsync::is_building))
     }
 
     fn index(&self) -> usize {
@@ -696,29 +707,39 @@ impl TabController {
     /// listeners — unless `index == self.index()` or `self.length() < 2`, a
     /// no-op without a notification.
     ///
+    /// # Errors
+    ///
+    /// [`MutatedDuringBuild`] while a widget using this controller is
+    /// building: the index is unchanged and no listener is notified.
+    ///
     /// # Panics
     ///
     /// Panics if `index >= length` when `length > 0` (in every build
     /// profile). This panic fires on the caller's thread (gesture / app
     /// code), outside the build-error `ErrorView` boundary.
-    pub fn set_index(&self, index: usize) {
-        self.change_index(index, Change::Jump);
+    pub fn set_index(&self, index: usize) -> Result<(), MutatedDuringBuild> {
+        self.change_index(index, Change::Jump)
     }
 
     /// Selects `index` and animates the position there over the controller's
     /// motion. `index` commits at once; listeners are notified once.
     ///
+    /// # Errors
+    ///
+    /// As [`set_index`](Self::set_index).
+    ///
     /// # Panics
     ///
     /// As [`set_index`](Self::set_index).
-    pub fn animate_to(&self, index: usize) {
-        self.change_index(index, Change::Animate);
+    pub fn animate_to(&self, index: usize) -> Result<(), MutatedDuringBuild> {
+        self.change_index(index, Change::Animate)
     }
 
-    fn change_index(&self, index: usize, change: Change) {
+    fn change_index(&self, index: usize, change: Change) -> Result<(), MutatedDuringBuild> {
         assert_set_index_in_range(self.shared.length, index);
+        MutatedDuringBuild::check(self.shared.building(), "TabController")?;
         if self.shared.length < 2 || !self.shared.commit(index) {
-            return;
+            return Ok(());
         }
         // The index is committed, so its listeners hear of it even when a
         // position observer panics while the source moves; that first
@@ -727,6 +748,7 @@ impl TabController {
         recovery.run(|| self.shared.follow(index, change));
         recovery.run(|| self.shared.notify_index_changed());
         recovery.finish();
+        Ok(())
     }
 
     /// Registers a listener, called whenever the selected index actually

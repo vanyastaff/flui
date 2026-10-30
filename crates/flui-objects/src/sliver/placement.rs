@@ -185,8 +185,9 @@ impl Placement {
                     .map_err(|error| tracing::warn!(%error, "placement spring refused"))
                     .ok()
                     .map(|simulation| {
-                        self.clock.set_value(0.0);
-                        self.clock.animate_with(simulation)
+                        self.clock
+                            .set_value(0.0)
+                            .and_then(|()| self.clock.animate_with(simulation))
                     })
             }
             MotionSpec::Curve { duration, .. } => {

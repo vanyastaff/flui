@@ -174,7 +174,7 @@ pub(crate) fn the_frame_follows_the_progress() {
     );
 
     let controller = AnimationController::builder(Duration::from_millis(100)).build();
-    controller.set_value(1.0);
+    controller.set_value(1.0).expect("no build is running");
     let vsync = Vsync::new();
     let mut laid = lay_out_animated(
         VsyncScope::new(vsync.clone(), AnimatedIcon::new(BAR, controller).size(48.0)),

@@ -39,6 +39,7 @@ impl AnimationController {
     fn admit_finish(&self) -> Result<(), AnimationError> {
         let mut inner = self.inner.borrow_mut();
         Self::check_disposed(&inner)?;
+        Self::check_build(&inner)?;
         if inner.run.is_none() {
             return Ok(());
         }
