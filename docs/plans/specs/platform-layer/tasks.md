@@ -3655,6 +3655,31 @@ graph LR
   тестов разделена: `support/x11_session.rs` (Xvfb, сессия, экран) и стартеры
   `weston_x11.rs`, `sway_x11.rs`. Дальше: общий помощник выделения для `EditableText` и
   `SelectionArea` и вставка средней кнопкой.
+- [ ] **LY84** (не закрыта: из PR — clipboard, primary selection, IME через XIM, XDND — этот
+  первый) — ветка `platform/x11-clipboard` от `main` @ `57b22734c`. **Clipboard.** Позиция
+  clipboard таблицы `X11` — `X11Loop`; цикл держит clipboard через хук `X11Host::clipboard`
+  (`clipboard::linux::x11::X11Clipboard`), цикл и его окна событий выделения не видят.
+  `X11Clipboard` держит своё соединение (`RustConnection`, как источник дисплеев для RandR) с
+  неотображённым окном `INPUT_ONLY` и свою нить `flui-x11-clipboard`; команды (`Write`, `Read`,
+  `Stop`) идут каналом и звонком (eventfd), нить ждёт в `poll` соединение, звонок и ближайший
+  срок. **Владение** (ICCCM §2): запись берёт время сервера пустым дописыванием в своё
+  свойство (`PropertyNotify`), ставит окно владельцем `CLIPBOARD` на это время и проверяет
+  `GetSelectionOwner`; `SelectionClear` снимает владение. **Ответ:** `TARGETS`, `TIMESTAMP`,
+  `TEXT` (как UTF-8) и формы `TextForm::OFFERED`; запрос старше владения, `MULTIPLE` и прочее —
+  отказ (property `None`); устаревший клиент без property получает ответ в свойство с именем
+  цели; текст больше одного запроса (порог — предел запроса сервера, не больше 256 КиБ) идёт
+  `INCR`, следующий кусок — на удаление свойства запросчиком, последним — пустой, не больше
+  четырёх таких передач сразу, 5 с между кусками. **Чтение:** пока владеет приложение — его
+  текст сразу; иначе `ConvertSelection` в своё свойство по очереди `UTF8_STRING`,
+  `text/plain;charset=utf-8`, `STRING`, свойство читается с удалением (для `INCR` это просьба о
+  следующем куске), предел 5 с и 64 МиБ; чтения, пришедшие во время чужого, получают его ответ.
+  **Тесты** (под `xvfb-run`, без `DISPLAY` пропускаются; случаи держат одно соединение, чтобы
+  Xvfb не сбрасывался между ними): `the_clipboard_crosses_between_connections` (два clipboard на
+  своих соединениях: первый пишет и читает своё, второй читает текст первого через сервер и
+  пишет свой, первый читает текст второго — без `SelectionClear` первый отвечает своим),
+  `a_large_selection_crosses_in_chunks` (300 000 символов, без `INCR` чтения падает),
+  `a_selection_nobody_owns_reads_as_nothing`. Не сделано: передача clipboard менеджеру
+  (`CLIPBOARD_MANAGER`, `SAVE_TARGETS`) при выходе — записано в `docs/gaps.md` (запись 6).
 - [x] **LY83** — ветка `platform/x11-input` от `main` @ `c8401e35b`, слито `main` @ `ee5480c57`
   (#1933). **Позиция ввода** таблицы `X11` — цикл (`type Input = X11Loop`): таблица делает
   `input::linux::x11::X11Input` (`X11Host::input`), цикл держит его через хук
