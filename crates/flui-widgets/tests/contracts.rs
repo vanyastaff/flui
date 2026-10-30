@@ -577,6 +577,30 @@ fn selection_area_text_runs() {
     );
 }
 
+/// A `SelectionArea` selects with a mouse and the keyboard, copies, clears and dims its
+/// highlight on a blur, reading its texts where they are laid out.
+#[test]
+fn selection_area_input() {
+    run_cases(
+        "selection_area_input",
+        &[
+            ("selection_area_input::a_drag_selects_across_texts_and_a_click_clears", crate::selection_area_input::a_drag_selects_across_texts_and_a_click_clears as fn()),
+            ("selection_area_input::multi_clicks_select_a_word_or_a_text_and_shift_click_extends", crate::selection_area_input::multi_clicks_select_a_word_or_a_text_and_shift_click_extends),
+            ("selection_area_input::keys_extend_select_everything_copy_and_clear", crate::selection_area_input::keys_extend_select_everything_copy_and_clear),
+            ("selection_area_input::a_drag_without_semantics_reads_where_the_texts_are_laid_out", crate::selection_area_input::a_drag_without_semantics_reads_where_the_texts_are_laid_out),
+            ("selection_area_input::a_blur_dims_the_highlight_and_keeps_the_selection", crate::selection_area_input::a_blur_dims_the_highlight_and_keeps_the_selection),
+            ("selection_area_input::a_removed_text_hands_its_end_to_the_text_beside_it", crate::selection_area_input::a_removed_text_hands_its_end_to_the_text_beside_it),
+            ("selection_area_input::a_drag_ends_where_it_is_released", crate::selection_area_input::a_drag_ends_where_it_is_released),
+            ("selection_area_input::a_click_targets_the_keys_which_cross_at_the_shown_end", crate::selection_area_input::a_click_targets_the_keys_which_cross_at_the_shown_end),
+            ("selection_area_input::a_panicking_blur_listener_keeps_the_clicked_selection", crate::selection_area_input::a_panicking_blur_listener_keeps_the_clicked_selection),
+            ("selection_area_input::line_keys_keep_their_column_and_their_line", crate::selection_area_input::line_keys_keep_their_column_and_their_line),
+            ("selection_area_input::the_nearest_text_is_nearest_on_screen", crate::selection_area_input::the_nearest_text_is_nearest_on_screen),
+            ("selection_area_input::esc_clears_then_reaches_the_enclosing_dismiss", crate::selection_area_input::esc_clears_then_reaches_the_enclosing_dismiss),
+            ("selection_area_input::a_panicking_listener_keeps_what_the_keys_remember", crate::selection_area_input::a_panicking_listener_keeps_what_the_keys_remember),
+        ],
+    );
+}
+
 /// Widget semantics reach the platform and platform actions reach widgets, with the
 /// documented drop set and the exhaustive routing list pinned.
 #[test]

@@ -13,12 +13,17 @@
 //!
 //! [anchor]: SemanticsAnchor
 
-use std::cell::RefCell;
-use std::cmp::Ordering;
-use std::ops::Range;
-use std::rc::Rc;
+mod input;
 
+use std::cell::{Cell, RefCell};
+use std::ops::Range;
+use std::rc::{Rc, Weak};
+
+use flui_foundation::RenderId;
+use flui_foundation::geometry::Rect;
 use flui_foundation::panic::FirstPanic;
+use flui_interaction::focus::FocusNode;
+use flui_interaction::{ClipboardCapability, ClipboardHandle, KeyEventResult};
 use flui_objects::{RenderParagraph, SubtreeAnchor};
 use flui_painting::styling::Color;
 use flui_painting::text_boundaries;
@@ -31,14 +36,19 @@ use flui_rendering::semantics::{
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{
-    BoxedView, EventCx, EventOutcome, InheritedView, LifecycleContext, RebuildHandle,
-    RebuildReason, StatefulView, View, ViewExt, ViewState, impl_inherited_view,
+    BoxedView, EventCx, EventOutcome, InheritedView, LifecycleContext, PostFrameHandle,
+    RebuildHandle, RebuildReason, StatefulView, View, ViewExt, ViewState, WriterSource,
+    impl_inherited_view,
 };
 
+use self::input::{AreaAction, CaretMemory, PointerState, SelectionGestures};
 use super::rich_text::ResolvedParagraph;
 use super::selection_style::{DefaultSelectionStyle, SelectionStyle};
 use crate::Semantics;
 use crate::anchored_box::AnchoredBox;
+use crate::interaction::{
+    Actions, CopySelectionTextIntent, DismissIntent, Focus, SelectAllTextIntent,
+};
 use crate::support::RefCallback;
 
 /// What a [`SelectionArea`] holds selected, in reading order.
@@ -65,6 +75,17 @@ type SelectionCallback = Rc<dyn Fn(&mut EventCx<'_>, Option<&SelectedText>)>;
 /// selection (ADR-0214): the area is a `Document` node that publishes the
 /// selection, and the texts publish their runs. Text outside an area
 /// publishes none of this and costs nothing more.
+///
+/// A mouse, pen or trackpad selects too: a drag selects by character, a
+/// double click by word and a triple click a whole text, and Shift extends
+/// from the selection's anchor. The keys move the moving end (Shift with the
+/// arrows, Home and End, by word with the platform's word modifier), the
+/// platform's select-all and copy chords select every text and copy the
+/// selection, and Esc clears it. Selecting takes the focus; a blur keeps the
+/// selection and paints it with [`SelectionStyle::inactive`]. A text that
+/// leaves while holding an end hands the end to the selected text beside
+/// it, and the selection clears once no selected text is left; the listener
+/// hears of each change.
 ///
 /// # Examples
 ///
@@ -166,6 +187,17 @@ impl StatefulView for SelectionArea {
                 on_selection_changed: RefCell::new(self.on_selection_changed.clone()),
                 rebuild: RefCell::new(None),
                 pipeline: RefCell::new(None),
+                direction: Cell::new(SemanticsTextDirection::Ltr),
+                writer: RefCell::new(None),
+                clipboard: RefCell::new(None),
+                focus: FocusNode::with_debug_label("SelectionArea"),
+                focused: Cell::new(false),
+                pointer: PointerState::default(),
+                post_frame: RefCell::new(None),
+                clamp_pending: Cell::new(false),
+                mounted: Cell::new(true),
+                backward: Cell::new(false),
+                caret: Cell::new(CaretMemory::default()),
             }),
         }
     }
@@ -191,6 +223,15 @@ impl ViewState<SelectionArea> for SelectionAreaState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         *self.model.rebuild.borrow_mut() = Some(ctx.rebuild_handle());
         *self.model.pipeline.borrow_mut() = ctx.pipeline_owner();
+        *self.model.writer.borrow_mut() = Some(ctx.writer_source());
+        *self.model.clipboard.borrow_mut() = ctx.capability::<ClipboardCapability>().ok();
+        *self.model.post_frame.borrow_mut() = ctx.post_frame_handle();
+        let model = Rc::downgrade(&self.model);
+        *self.model.registry.on_departure.borrow_mut() = Some(Box::new(move |anchor| {
+            if let Some(model) = model.upgrade() {
+                model.departed(anchor);
+            }
+        }));
     }
 
     fn did_update_view(&mut self, _old_view: &SelectionArea, new_view: &SelectionArea) {
@@ -210,27 +251,61 @@ impl ViewState<SelectionArea> for SelectionAreaState {
             TextDirection::Ltr => SemanticsTextDirection::Ltr,
             TextDirection::Rtl => SemanticsTextDirection::Rtl,
         };
+        self.model.direction.set(direction);
+        let content = SelectionGestures {
+            model: Rc::clone(&self.model),
+            child: SelectionScope {
+                data: ScopeData {
+                    registry: Some(Rc::clone(&self.model.registry)),
+                    color: if self.model.focused.get() {
+                        style.active
+                    } else {
+                        style.inactive
+                    },
+                },
+                child: view.child.clone(),
+            }
+            .boxed(),
+        };
+        let (keys, focus_changed) = (Rc::downgrade(&self.model), Rc::downgrade(&self.model));
+        // The area is focused by selecting in it, never by traversal; the
+        // document node is what assistive technology reads.
+        let focused = Focus::new(content)
+            .focus_node(Rc::clone(&self.model.focus))
+            .skip_traversal(true)
+            .include_semantics(false)
+            .on_key_event(move |cx, event| {
+                keys.upgrade()
+                    .map_or(KeyEventResult::Ignored, |model| model.key(cx, event))
+            })
+            .on_focus_change(move |_cx, focused| {
+                if let Some(model) = focus_changed.upgrade() {
+                    model.focus_changed(focused);
+                }
+            });
+        let mut actions = Actions::new(focused)
+            .action::<SelectAllTextIntent>(AreaAction(Rc::downgrade(&self.model)))
+            .action::<CopySelectionTextIntent>(AreaAction(Rc::downgrade(&self.model)));
+        // Esc clears a selection; with nothing selected the area declares no
+        // dismiss, so Esc reaches the enclosing one (a modal route's pop).
+        // Every commit rebuilds the area, so this follows the selection.
+        if self.model.selection.borrow().is_some() {
+            actions = actions.action::<DismissIntent>(AreaAction(Rc::downgrade(&self.model)));
+        }
         let model = Rc::clone(&self.model);
         Semantics::new()
             .role(view.role)
             .merge_boundary(true)
             .text_direction(direction)
             .document_selection(self.model.selection.borrow().clone())
-            .on_set_document_selection(move |cx, selection| model.select(cx, &selection))
-            .child(SelectionScope {
-                data: ScopeData {
-                    registry: Some(Rc::clone(&self.model.registry)),
-                    // The area takes no focus until pointer and keyboard
-                    // selection: it highlights as focused.
-                    color: style.active,
-                },
-                child: view.child.clone(),
-            })
+            .on_set_document_selection(move |cx, selection| model.select(cx, Some(&selection)))
+            .child(actions)
     }
 
     fn dispose(&mut self) {
         // A handler a frame already captured finds no area to rebuild.
         self.model.rebuild.borrow_mut().take();
+        self.model.mounted.set(false);
     }
 }
 
@@ -240,25 +315,84 @@ struct SelectionModel {
     on_selection_changed: RefCell<Option<SelectionCallback>>,
     rebuild: RefCell<Option<RebuildHandle>>,
     pipeline: RefCell<Option<PipelineCell>>,
+    /// The direction the area read as of its last build, which orders the
+    /// texts along a line.
+    direction: Cell<SemanticsTextDirection>,
+    /// Where the listener hears of a change the pointer made, acquired in
+    /// `init_state`.
+    writer: RefCell<Option<WriterSource>>,
+    /// Where Copy writes, acquired in `init_state`; `None` disables Copy.
+    clipboard: RefCell<Option<ClipboardHandle>>,
+    /// The node the area holds the focus with once the user selects in it.
+    focus: Rc<FocusNode>,
+    /// Whether the area holds the focus: a blur dims the highlight and
+    /// keeps the selection.
+    focused: Cell<bool>,
+    pointer: PointerState,
+    /// Where a text that leaves while holding an end has the selection
+    /// moved after the frame, acquired in `init_state`.
+    post_frame: RefCell<Option<PostFrameHandle>>,
+    /// Whether a move after the frame is already scheduled.
+    clamp_pending: Cell<bool>,
+    /// Cleared when the area is disposed, so a move scheduled before then
+    /// finds no area to tell.
+    mounted: Cell<bool>,
+    /// Whether the last committed selection runs backward, its anchor
+    /// after its focus, so ends that both leave keep that direction.
+    backward: Cell<bool>,
+    /// What the keys remember about the moving end.
+    caret: Cell<CaretMemory>,
 }
 
 impl SelectionModel {
     /// Takes `selection` as the area's, once each end is snapped into a
     /// registered text: an end naming a text this area does not hold
-    /// refuses the whole request. Tells the listener after the selection is
-    /// committed and no borrow is held, since it may rebuild the area or
-    /// select again. A wake that panics still lets the listener hear of the
-    /// committed selection; the first failure is resumed afterwards.
-    fn select(&self, cx: &mut EventCx<'_>, selection: &DocumentSelection) {
-        let Some(selection) = self.registry.snap(selection) else {
-            return;
+    /// refuses the whole request; `None` selects nothing. Every selection
+    /// comes from the user (assistive technology, the pointer or a key), so
+    /// a committed one takes the focus. Tells the listener after the
+    /// selection is committed and no borrow is held, since it may rebuild
+    /// the area or select again. A wake or focus listener that panics still
+    /// lets the listener hear of the committed selection; the first failure
+    /// is resumed afterwards.
+    fn select(&self, cx: &mut EventCx<'_>, selection: Option<&DocumentSelection>) {
+        self.commit(cx, selection, true, CaretMemory::default());
+    }
+
+    /// [`select`](Self::select), taking the focus only when `from_user`
+    /// and something is selected, and keeping `caret` as what the keys
+    /// remember about the new moving end. The memory is stored with the
+    /// selection, before any callback runs, so a panicking callback cannot
+    /// part the two.
+    fn commit(
+        &self,
+        cx: &mut EventCx<'_>,
+        selection: Option<&DocumentSelection>,
+        from_user: bool,
+        caret: CaretMemory,
+    ) {
+        let selection = match selection {
+            Some(selection) => match self.registry.snap(selection) {
+                Some(snapped) => Some(snapped),
+                None => return,
+            },
+            None => None,
         };
-        if self.selection.borrow().as_ref() == Some(&selection) {
+        // The memory belongs to the latest input even when the ends stay
+        // put: Shift+End at a short line's end forgets the column.
+        self.caret.set(caret);
+        if *self.selection.borrow() == selection {
             return;
         }
-        let covered = self.covered(&selection);
+        let coverage = selection
+            .as_ref()
+            .and_then(|selection| self.covered(selection));
+        if let Some((_, backward)) = &coverage {
+            self.backward.set(*backward);
+        }
+        let covered = coverage.map(|(parts, _)| parts);
         let selected = covered.as_ref().map(|covered| self.joined(covered));
-        *self.selection.borrow_mut() = Some(selection);
+        let take_focus = from_user && selection.is_some();
+        *self.selection.borrow_mut() = selection;
         let rebuild = self.rebuild.borrow().clone();
         let listener = self.on_selection_changed.borrow().clone();
         let mut failure = FirstPanic::new();
@@ -267,6 +401,11 @@ impl SelectionModel {
                 rebuild.schedule(RebuildReason::StateChange);
             }
         });
+        if take_focus && !self.focus.has_primary_focus() {
+            failure.contain(|| {
+                let _outcome = self.focus.request_focus();
+            });
+        }
         self.highlight(covered.as_deref().unwrap_or_default(), &mut failure);
         failure.contain(|| {
             if let Some(listener) = listener {
@@ -276,12 +415,122 @@ impl SelectionModel {
         failure.resume();
     }
 
+    /// The area gained or lost the focus: it rebuilds with the active or the
+    /// dimmed highlight, and keeps its selection.
+    fn focus_changed(&self, focused: bool) {
+        if self.focused.replace(focused) == focused {
+            return;
+        }
+        let rebuild = self.rebuild.borrow().clone();
+        if let Some(rebuild) = rebuild {
+            rebuild.schedule(RebuildReason::StateChange);
+        }
+    }
+
+    /// The text under `anchor` left the area. When it held an end of the
+    /// selection, the selection moves after the frame, once the texts that
+    /// stay are laid out: see [`keep_what_remains`](Self::keep_what_remains).
+    /// Without a post-frame lane the selection keeps naming the departed
+    /// text, which selects nothing until the user selects again.
+    fn departed(self: &Rc<Self>, anchor: &SemanticsAnchor) {
+        let holds_an_end = self.selection.borrow().as_ref().is_some_and(|selection| {
+            selection.anchor().text() == anchor || selection.focus().text() == anchor
+        });
+        if !holds_an_end || self.clamp_pending.replace(true) {
+            return;
+        }
+        let Some(post_frame) = self.post_frame.borrow().clone() else {
+            self.clamp_pending.set(false);
+            tracing::warn!("SelectionArea: no post-frame lane to move a departed selection end");
+            return;
+        };
+        let model = Rc::downgrade(self);
+        let scheduled = post_frame.schedule(move |_| {
+            if let Some(model) = Weak::upgrade(&model) {
+                model.keep_what_remains();
+            }
+        });
+        if let Err(error) = scheduled {
+            self.clamp_pending.set(false);
+            tracing::warn!(?error, "SelectionArea: the post-frame lane is closed");
+        }
+    }
+
+    /// Moves each end held by a text that left onto the edge of what the
+    /// selection still highlights in the texts that stay: an end on the
+    /// earlier side moves to the start of the first of them, an end on the
+    /// later side to the end of the last; when both ends left, the selection
+    /// keeps the direction it was committed in. Nothing left highlighted clears
+    /// the selection. The listener hears of the result; the focus stays
+    /// where it is.
+    fn keep_what_remains(&self) {
+        self.clamp_pending.set(false);
+        if !self.mounted.get() {
+            return;
+        }
+        let Some(selection) = self.selection.borrow().clone() else {
+            return;
+        };
+        let ordered = self.ordered();
+        let held =
+            |at: &DocumentPosition| ordered.iter().any(|text| text.entry.anchor == *at.text());
+        let (anchor_held, focus_held) = (held(selection.anchor()), held(selection.focus()));
+        if anchor_held && focus_held {
+            return;
+        }
+        let highlighted: Vec<DocumentPosition> = ordered
+            .iter()
+            .filter_map(|text| {
+                let range = text.entry.highlight.borrow().clone()?;
+                let range = range.start.min(text.text.len())..range.end.min(text.text.len());
+                Some([
+                    DocumentPosition::new(text.entry.anchor.clone(), range.start),
+                    DocumentPosition::new(text.entry.anchor.clone(), range.end),
+                ])
+            })
+            .flatten()
+            .collect();
+        let next = highlighted
+            .first()
+            .zip(highlighted.last())
+            .map(|(first, last)| {
+                let kept = if anchor_held {
+                    selection.anchor()
+                } else if focus_held {
+                    selection.focus()
+                } else {
+                    let (anchor, focus) = if self.backward.get() {
+                        (last, first)
+                    } else {
+                        (first, last)
+                    };
+                    return DocumentSelection::new(anchor.clone(), focus.clone());
+                };
+                // The kept end bounds the highlight on one side; the departed
+                // end takes the other.
+                let kept_earlier = kept.text() == first.text()
+                    && (kept.text() != last.text() || kept.byte() <= first.byte());
+                let moved = if kept_earlier { last } else { first };
+                if anchor_held {
+                    DocumentSelection::new(kept.clone(), moved.clone())
+                } else {
+                    DocumentSelection::new(moved.clone(), kept.clone())
+                }
+            });
+        self.rebase_drag(held, next.as_ref());
+        let writer = self.writer.borrow().clone();
+        if let Some(writer) = writer {
+            writer.write(|cx| self.commit(cx, next.as_ref(), false, CaretMemory::default()));
+        }
+    }
+
     /// The parts of the texts `selection` covers, in reading order, each as
     /// its entry's index and a byte range of its text; `None` when it covers
-    /// none. Each text contributes only what its layout shows: the lines a
+    /// none, with whether the anchor reads after the focus. Each text
+    /// contributes only what its layout shows: the lines a
     /// line limit cuts are not in its runs, so they are neither reported nor
     /// highlighted.
-    fn covered(&self, selection: &DocumentSelection) -> Option<Vec<Covered>> {
+    fn covered(&self, selection: &DocumentSelection) -> Option<(Vec<Covered>, bool)> {
         let entries = self.registry.entries.borrow();
         let order = self.reading_order(&entries);
         let place = |at: &DocumentPosition| {
@@ -290,14 +539,14 @@ impl SelectionModel {
                 .position(|entry| entry.anchor == *at.text())?;
             Some((order.iter().position(|&(i, _)| i == index)?, at.byte()))
         };
-        let (from, to) = {
+        let (from, to, backward) = {
             let (a, b) = (place(selection.anchor())?, place(selection.focus())?);
-            if a <= b { (a, b) } else { (b, a) }
+            if a <= b { (a, b, false) } else { (b, a, true) }
         };
         if from == to {
             return None;
         }
-        Some(
+        Some((
             order
                 .iter()
                 .enumerate()
@@ -315,7 +564,8 @@ impl SelectionModel {
                     }
                 })
                 .collect(),
-        )
+            backward,
+        ))
     }
 
     /// The covered parts' text, joined by `'\n'`.
@@ -375,26 +625,26 @@ impl SelectionModel {
         }
     }
 
-    /// The presented texts in the order the published document reads them,
-    /// each as its index and the byte where its laid-out text ends (`None`
-    /// when no layout says), so the text reported for a selection is the
-    /// text an adapter selected. While semantics is on, that is the last
-    /// publication's order: sort keys first, then where each text is laid
-    /// out ([`reading_order`](flui_rendering::semantics::reading_order)), and
-    /// a text it does not publish (offstage, excluded, silenced) is left out.
-    /// Without it, the order is place in the render tree, and texts beneath
-    /// an ancestor that leaves its subtree out of semantics are left out;
-    /// texts not yet in the render tree keep registration order after the
-    /// placed ones.
-    ///
-    /// Pointer selection, which selects without semantics, brings the same
-    /// laid-out order to the fallback.
+    /// The presented texts in the order a reader takes them, each as its
+    /// index and the byte where its laid-out text ends (`None` when no layout
+    /// says), so the text reported for a selection is the text an adapter
+    /// selected and the text the pointer selects. While semantics is on, that
+    /// is the last publication's order: the assembly orders a document's
+    /// texts by [`reading_order`](flui_rendering::semantics::reading_order) after any sort keys, and a
+    /// text it does not publish (offstage, excluded, silenced) is left out.
+    /// Without it, the same function orders the texts' laid-out boxes, and
+    /// texts beneath an ancestor that leaves its subtree out of semantics are
+    /// left out; texts not laid out yet read last, in registration order.
     fn reading_order(&self, entries: &[Rc<SelectableEntry>]) -> Vec<(usize, Option<usize>)> {
         let pipeline = self.pipeline.borrow().clone();
+        let direction = self.direction.get();
         pipeline
             .and_then(|pipeline| {
                 pipeline.try_with_layout(|owner| {
-                    let shown = |index: usize| shown_end(owner, &entries[index].subtree);
+                    let shown = |index: usize| {
+                        paragraph_beneath(owner, &entries[index].subtree)
+                            .and_then(|(_, paragraph)| shown_end(paragraph))
+                    };
                     if let Some(published) = owner.semantics_owner().and_then(|semantics| {
                         entries
                             .iter()
@@ -408,21 +658,18 @@ impl SelectionModel {
                             .map(|index| (index, shown(index)))
                             .collect();
                     }
-                    let places: Vec<Placement> = entries
+                    let presented: Vec<usize> = (0..entries.len())
+                        .filter(|&index| !hidden(owner, &entries[index].subtree))
+                        .collect();
+                    let boxes: Vec<Rect> = presented
                         .iter()
-                        .map(|entry| Placement::of(owner, &entry.subtree))
+                        .map(|&index| {
+                            laid_out_box(owner, &entries[index].subtree).unwrap_or(UNPLACED)
+                        })
                         .collect();
-                    let mut order: Vec<usize> = (0..entries.len())
-                        .filter(|&index| places[index] != Placement::Hidden)
-                        .collect();
-                    order.sort_by(|&a, &b| match (&places[a], &places[b]) {
-                        (Placement::At(a), Placement::At(b)) => a.cmp(b),
-                        (Placement::At(_), _) => Ordering::Less,
-                        (_, Placement::At(_)) => Ordering::Greater,
-                        _ => Ordering::Equal,
-                    });
-                    order
+                    flui_rendering::semantics::reading_order(&boxes, direction)
                         .into_iter()
+                        .map(|at| presented[at])
                         .map(|index| (index, shown(index)))
                         .collect()
                 })
@@ -431,80 +678,93 @@ impl SelectionModel {
     }
 }
 
-/// Where the laid-out text of the paragraph beneath `subtree` ends: its last
-/// shown line's end, which a line limit puts before the authored text's end.
-fn shown_end(owner: &PipelineOwner, subtree: &SubtreeAnchor) -> Option<usize> {
+/// The box of a text not laid out yet: no edge is finite, so it reads after
+/// the laid-out ones.
+const UNPLACED: Rect = Rect::from_ltrb(f64::NAN, f64::NAN, f64::NAN, f64::NAN);
+
+/// The paragraph beneath `subtree` and its render node: the first render
+/// object beneath the anchor that is one; link routing may wrap it, but only
+/// in a few single-child boxes.
+fn paragraph_beneath<'a>(
+    owner: &'a PipelineOwner,
+    subtree: &SubtreeAnchor,
+) -> Option<(RenderId, &'a RenderParagraph)> {
     let tree = owner.render_tree();
     let mut at = subtree.get()?;
-    // The paragraph is the first render object beneath the anchor that is
-    // one; link routing may wrap it, but only in a few single-child boxes.
     for _ in 0..8 {
         at = *tree.children(at).first()?;
-        let Some(paragraph) = tree
+        if let Some(paragraph) = tree
             .get(at)?
             .as_box()?
             .render_object()
             .downcast_ref::<RenderParagraph>()
-        else {
-            continue;
-        };
-        let painter = paragraph.painter();
-        if !painter.has_layout() {
-            return None;
+        {
+            return Some((at, paragraph));
         }
-        return painter
-            .line_layouts()
-            .iter()
-            .map(|line| line.runs.last().map_or(line.start, |run| run.range().end))
-            .max();
     }
     None
 }
 
-/// Where a registered text stands in the presented document.
-#[derive(Clone, Debug, PartialEq)]
-enum Placement {
-    /// The child indices from the render root to the text's box.
-    At(Vec<usize>),
-    /// Mounted, but beneath an ancestor that excludes it from semantics.
-    Hidden,
-    /// Not in the render tree.
-    Unplaced,
+/// Where `paragraph`'s laid-out text ends: its last shown line's end, which
+/// a line limit puts before the authored text's end.
+fn shown_end(paragraph: &RenderParagraph) -> Option<usize> {
+    let painter = paragraph.painter();
+    if !painter.has_layout() {
+        return None;
+    }
+    painter
+        .line_layouts()
+        .iter()
+        .map(|line| line.runs.last().map_or(line.start, |run| run.range().end))
+        .max()
 }
 
-impl Placement {
-    fn of(owner: &PipelineOwner, subtree: &SubtreeAnchor) -> Self {
-        let Some(id) = subtree.get() else {
-            return Self::Unplaced;
+/// The box the paragraph beneath `subtree` lays its text out in, in the
+/// render root's space; `None` before its layout.
+fn laid_out_box(owner: &PipelineOwner, subtree: &SubtreeAnchor) -> Option<Rect> {
+    let (node, paragraph) = paragraph_beneath(owner, subtree)?;
+    let painter = paragraph.painter();
+    if !painter.has_layout() {
+        return None;
+    }
+    let to_root = owner.transform_to(node, owner.root_id()?)?;
+    let size = painter.size();
+    let rect = to_root.transform_rect(&Rect::from_ltwh(0.0, 0.0, size.width, size.height));
+    rect.is_finite().then_some(rect)
+}
+
+/// Whether the text beneath `subtree` is mounted beneath an ancestor that
+/// leaves its subtree out of semantics. A text not in the render tree yet is
+/// not hidden: it reads after the laid-out ones.
+fn hidden(owner: &PipelineOwner, subtree: &SubtreeAnchor) -> bool {
+    let tree = owner.render_tree();
+    let Some(mut at) = subtree.get() else {
+        return false;
+    };
+    loop {
+        let Some(node) = tree.get(at) else {
+            return false;
         };
-        let tree = owner.render_tree();
-        let mut path = Vec::new();
-        let mut at = id;
-        loop {
-            let Some(node) = tree.get(at) else {
-                return Self::Unplaced;
-            };
-            if node.excludes_semantics_subtree() {
-                return Self::Hidden;
-            }
-            let Some(parent) = tree.parent(at) else {
-                break;
-            };
-            let Some(index) = tree.children(parent).iter().position(|&child| child == at) else {
-                return Self::Unplaced;
-            };
-            path.push(index);
-            at = parent;
+        if node.excludes_semantics_subtree() {
+            return true;
         }
-        path.reverse();
-        Self::At(path)
+        let Some(parent) = tree.parent(at) else {
+            return false;
+        };
+        at = parent;
     }
 }
+
+/// Told the anchor of a text that left an area.
+type DepartureHook = Box<dyn Fn(&SemanticsAnchor)>;
 
 /// The texts registered with one area, in registration order.
 #[derive(Default)]
 pub(super) struct SelectionRegistry {
     entries: RefCell<Vec<Rc<SelectableEntry>>>,
+    /// Told the anchor of each text that leaves, once the entries are no
+    /// longer borrowed.
+    on_departure: RefCell<Option<DepartureHook>>,
 }
 
 impl SelectionRegistry {
@@ -515,10 +775,22 @@ impl SelectionRegistry {
         }
     }
 
+    /// Lets `entry` go, with its highlight: a text that moves to another
+    /// area must not paint this one's selection there.
     fn unregister(&self, entry: &Rc<SelectableEntry>) {
-        self.entries
-            .borrow_mut()
-            .retain(|held| !Rc::ptr_eq(held, entry));
+        let left = {
+            let mut entries = self.entries.borrow_mut();
+            let before = entries.len();
+            entries.retain(|held| !Rc::ptr_eq(held, entry));
+            entries.len() != before
+        };
+        if !left {
+            return;
+        }
+        entry.highlight.borrow_mut().take();
+        if let Some(on_departure) = self.on_departure.borrow().as_ref() {
+            on_departure(&entry.anchor);
+        }
     }
 
     /// `selection` with each end in a registered text, its byte clamped to
