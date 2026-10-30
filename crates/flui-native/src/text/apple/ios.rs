@@ -90,6 +90,14 @@ impl flui_platform::PlatformTextInput for Keyboard {
         }
     }
 
+    /// The responder's document empties, and with it the keyboard's marked
+    /// text, uncommitted.
+    fn discard_composition(&self) {
+        if let Some(responder) = self.responder() {
+            responder.reset();
+        }
+    }
+
     fn set_ime_cursor_area(&self, area: flui_foundation::geometry::Bounds<f64>) {
         if let Some(responder) = self.responder() {
             responder.set_caret(objc2_foundation::NSRect::new(

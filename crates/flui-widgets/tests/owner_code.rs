@@ -514,6 +514,7 @@ struct Platform;
 impl PlatformTextInput for Platform {
     fn set_ime_allowed(&self, _: bool) {}
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn discard_composition(&self) {}
 }
 
 fn owner() -> Rc<TextInputOwner> {
@@ -2936,6 +2937,7 @@ impl PlatformTextInput for FailsToEnable {
         );
     }
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn discard_composition(&self) {}
 }
 
 fn attach_whose_platform_enable_panics() {
@@ -2982,6 +2984,7 @@ impl PlatformTextInput for FailsToEnableOnce {
             .push(allowed);
     }
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn discard_composition(&self) {}
 }
 
 impl FailsToEnableOnce {
@@ -3140,6 +3143,7 @@ impl PlatformTextInput for FailsToDisable {
         }
     }
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn discard_composition(&self) {}
 }
 
 /// The close's first failure stays the one raised, ahead of what its unwind's
@@ -3241,6 +3245,7 @@ impl PlatformTextInput for ClosesOnCursor {
         }
         panic!("platform failure placing the cursor");
     }
+    fn discard_composition(&self) {}
 }
 
 impl Drop for ClosesOnCursor {
@@ -3777,6 +3782,7 @@ struct PanicsWhenDestroyed;
 impl PlatformTextInput for PanicsWhenDestroyed {
     fn set_ime_allowed(&self, _: bool) {}
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn discard_composition(&self) {}
 }
 
 impl Drop for PanicsWhenDestroyed {

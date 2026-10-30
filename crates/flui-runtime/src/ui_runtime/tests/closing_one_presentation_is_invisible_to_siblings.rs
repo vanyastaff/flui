@@ -144,6 +144,10 @@ impl PlatformTextInput for CloseTextInput {
     fn set_ime_cursor_area(&self, area: flui_foundation::geometry::Bounds<f64>) {
         self.recorder.set_ime_cursor_area(area);
     }
+
+    fn discard_composition(&self) {
+        self.recorder.discard_composition();
+    }
 }
 
 struct CursorCapture {
