@@ -4,11 +4,10 @@
 > [`platform-support.toml`](../platform-support.toml); edit that file, not this page.
 
 The lowest version of each environment FLUI runs on, and what sets it
-([ADR-0244](adr/ADR-0244-os-version-floors-and-gates.md)). These are the declared targets:
-only the Android `minSdk` is packaged from them so far, and no backend refuses to start
-below a floor yet ([gaps entry 22](gaps.md)), so an older system may fail later instead of
-being refused. The ADR puts an API newer than a floor behind a typed gate rather than raising
-the floor.
+([ADR-0244](adr/ADR-0244-os-version-floors-and-gates.md)). The backends refuse to start below
+them, and `flui build` packages them; an application may raise one in `flui.toml`
+(`[platforms.<environment>] min`), never lower it. The ADR puts an API newer than a floor
+behind a typed gate rather than raising the floor.
 
 | Environment | Floor | Set by |
 |---|---|---|

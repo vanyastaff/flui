@@ -202,6 +202,10 @@ pub(crate) enum CliError {
     #[error("TOML serialization error")]
     TomlSerialize(#[from] toml::ser::Error),
 
+    /// A `[platforms]` table of `flui.toml` was refused.
+    #[error(transparent)]
+    AppFloor(#[from] crate::build::app_floor::AppFloorError),
+
     /// Build system error.
     #[error("build failed")]
     Build(#[from] crate::build::error::BuildError),
