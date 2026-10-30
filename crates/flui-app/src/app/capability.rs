@@ -211,34 +211,35 @@ impl CapabilityProvider<PrimarySelectionCapability> for PlatformPrimarySelection
 }
 
 impl PrimarySelectionBackend for NativePrimary {
-    fn claim(&self, text: Rc<dyn SelectionText>) -> PrimaryClaimId {
+    /// The host's offer holds a second reference to `text`; the claims keep
+    /// theirs until the handle takes it back, so the host letting its offer
+    /// go never runs the captures' `Drop`.
+    fn claim(
+        &self,
+        text: Rc<dyn SelectionText>,
+    ) -> (PrimaryClaimId, Option<Rc<dyn SelectionText>>) {
         let offered = Rc::clone(&text);
         let (id, replaced) = self.claims.borrow_mut().claim(text);
-        // What the claim replaced is the application's: dropped with no
-        // borrow held.
-        drop(replaced);
         if self.claims.borrow().is_current(id) {
             self.native.offer(Rc::new(move || offered.text()));
         }
-        id
+        (id, replaced)
     }
 
-    fn release(&self, claim: PrimaryClaimId) {
+    fn release(&self, claim: PrimaryClaimId) -> Option<Rc<dyn SelectionText>> {
         let released = self.claims.borrow_mut().release(claim);
         if released.is_some() {
+            // A no-op once another client selected: the host owns nothing.
             self.native.withdraw();
         }
-        drop(released);
+        released
     }
 
+    /// A claim another client's selection ended stays in the claims until
+    /// its handle releases it, which hands its captures back to be dropped
+    /// there.
     fn is_current(&self, claim: PrimaryClaimId) -> bool {
-        if !self.native.owns() {
-            // Another client selected: no claim of this application holds.
-            let lost = self.claims.borrow_mut().lose();
-            drop(lost);
-            return false;
-        }
-        self.claims.borrow().is_current(claim)
+        self.native.owns() && self.claims.borrow().is_current(claim)
     }
 
     fn read_text(&self, answer: Resolver<Option<String>>) {
@@ -267,9 +268,13 @@ mod tests {
             self.offered.replace(Some(text));
         }
 
+        /// Counts only a withdrawal of a selection the host still holds, as
+        /// the trait says a withdrawal after another client selected does
+        /// nothing.
         fn withdraw(&self) {
-            self.withdrawn.set(self.withdrawn.get() + 1);
-            self.offered.replace(None);
+            if self.offered.replace(None).is_some() {
+                self.withdrawn.set(self.withdrawn.get() + 1);
+            }
         }
 
         fn owns(&self) -> bool {
@@ -301,7 +306,7 @@ mod tests {
         let native = Rc::new(Recorded::default());
         let primary = NativePrimary::new(Rc::clone(&native) as Rc<dyn NativePrimarySelection>);
         let asked = Rc::new(Cell::new(0));
-        let first = primary.claim(Rc::new({
+        let (first, _) = primary.claim(Rc::new({
             let asked = Rc::clone(&asked);
             move || {
                 asked.set(asked.get() + 1);
@@ -312,17 +317,30 @@ mod tests {
         assert_eq!(native.text().as_deref(), Some("first"));
         assert_eq!(asked.get(), 1);
 
-        let second = primary.claim(Rc::new(|| Some("second".to_owned())));
+        let (second, replaced) = primary.claim(Rc::new(|| Some("second".to_owned())));
+        assert_eq!(
+            replaced.and_then(|text| text.text()).as_deref(),
+            Some("first"),
+            "the replaced claim's text comes back to the handle"
+        );
         assert!(!primary.is_current(first));
-        primary.release(first);
+        assert!(primary.release(first).is_none());
         assert_eq!(native.withdrawn.get(), 0, "a stale claim withdraws nothing");
         assert!(primary.is_current(second));
 
         native.lose();
         assert!(!primary.is_current(second), "another client selected");
-        let third = primary.claim(Rc::new(|| Some("third".to_owned())));
+        assert_eq!(
+            primary
+                .release(second)
+                .and_then(|text| text.text())
+                .as_deref(),
+            Some("second"),
+            "a lost claim's text comes back at its release, not when it is lost"
+        );
+        let (third, _) = primary.claim(Rc::new(|| Some("third".to_owned())));
         assert!(primary.is_current(third));
-        primary.release(third);
+        assert!(primary.release(third).is_some());
         assert_eq!(
             native.withdrawn.get(),
             1,
