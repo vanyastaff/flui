@@ -78,6 +78,16 @@ graph LR
   имя, корни от платформы (#1709). Остаток — production-вызов `FlushHost::new` с писателем на
   IO-пуле: сегодня его зовут только тесты (`flui-view/src/flush_registry.rs`), у реестра нет
   писателя. Остаток — задача P6 ниже.
+- **P4** — путь загрузки (`persist/persisted.rs`): `open` берёт `StorageCapability`, `load` —
+  чтение с `MAX_BYTES`, заголовок (`Corrupt` для нет/чужого/битого), `NewerVersion` →
+  `ReadOnly`, `decode` под `catch_unwind` (`Panicked`, payload — `retain_opaque_payload`),
+  поколение (применяется последняя), отмена при `Drop` future; без хранилища —
+  `Storage(Unsupported(NotRegistered))` и `Unavailable`. Строки (`tests/persist.rs`):
+  `a_load_reports_each_stored_state` (R18, R29, R30, R31), `only_the_latest_of_several_loads_is_applied`
+  (R25, R28), `unmount_during_load_releases_requests` (R27), `unavailable_storage_runs_in_memory_with_status`
+  (R33). `UnsavedChanges` проверяется в `start_load`, строка — с P5 (нужен `Saving`). Остаток:
+  `a_loaded_document_round_trips_through_memory_storage` снимает `ignore` с P5 (нужен `set`);
+  doctest с `FutureBuilder` — во `flui-widgets`, когда P11 подключит загрузчик.
 
 ## Устаревшие задачи
 
