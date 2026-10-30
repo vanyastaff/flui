@@ -188,6 +188,38 @@ fn followers_take_the_leaders_scale(renderer: &HeadlessRenderer) {
     expect_pixel(&bytes, (29, 29), [255, 0, 0, 255]);
     expect_pixel(&bytes, (10, 10), [255; 4]);
 }
+/// A follower under a scale of 7 undoes it: its 8x8 content lands on the
+/// unscaled leader at (14, 14) at its own size. The resolved transform must
+/// keep the affine shape the painter admits, which a general inverse of a
+/// scale of 7 does not.
+fn followers_under_a_scaled_parent_paint(renderer: &HeadlessRenderer) {
+    let link = LayerLink::new();
+    let mut tree = LayerTree::new(Layer::from(OffsetLayer::zero()));
+    tree.push_child(
+        tree.root(),
+        Layer::from(LeaderLayer::with_offset(
+            link,
+            Size::new(8.0, 8.0),
+            Offset::new(14.0, 14.0),
+        )),
+    );
+    let scaled = tree.push_child(
+        tree.root(),
+        Layer::from(TransformLayer::new(Matrix4::scaling(7.0, 7.0, 1.0))),
+    );
+    let follower = tree.push_child(
+        scaled,
+        Layer::from(FollowerLayer::new(link).with_size(Size::new(8.0, 8.0))),
+    );
+    tree.push_child(
+        follower,
+        picture(Rect::from_xywh(0.0, 0.0, 8.0, 8.0), Color::RED),
+    );
+    let bytes = capture(renderer, &tree);
+    expect_pixel(&bytes, (18, 18), [255, 0, 0, 255]);
+    expect_pixel(&bytes, (10, 10), [255; 4]);
+    expect_pixel(&bytes, (26, 26), [255; 4]);
+}
 fn nested_backdrop_reads_child_and_keeps_tail(renderer: &HeadlessRenderer) {
     let mut tree = LayerTree::new(picture(Rect::from_xywh(0.0, 0.0, 64.0, 64.0), Color::GREEN));
     let group = tree.push_child(
@@ -1654,6 +1686,10 @@ fn layer_effects_capture_as_specified() {
         (
             "followers take the leader's scale",
             followers_take_the_leaders_scale,
+        ),
+        (
+            "followers under a scaled parent paint",
+            followers_under_a_scaled_parent_paint,
         ),
         (
             "nested backdrop target and tail",

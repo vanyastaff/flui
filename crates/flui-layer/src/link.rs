@@ -160,28 +160,27 @@ fn resolve_at_depth(
 
     // The leader's chain, walked up from the leader itself so its own offset
     // (the position it gives a hypothetical child) is on the forward side.
-    // The anchor point rides along for the clip test: it starts in the
-    // leader's own coordinates and is mapped into each ancestor's in turn.
+    // For the clip test, the anchor point (in the leader's own coordinates)
+    // is projected through the chain accumulated so far at each clip, never
+    // through points already flattened at a lower level: depth a 3D rotation
+    // gives the point must survive until a later one takes it back.
     let hide_when_clipped = follower.leader_clip() == LeaderClip::Hide;
     let anchor = follower.leader_anchor().along_size(leader.size());
-    let mut anchor = Point::new(anchor.dx, anchor.dy);
     let mut leader_chain = Matrix4::IDENTITY;
     for id in tree.ancestors(leader_id) {
         if id == common_ancestor {
             break;
         }
         let layer = tree.get_layer(id).ok_or(Unresolved::Hidden)?;
-        if hide_when_clipped && id != leader_id && !clip_admits(layer, anchor) {
-            return Err(Unresolved::Hidden);
-        }
-        let local = chain_transform(tree, id, layer, depth)?;
-        leader_chain = local * leader_chain;
-        if hide_when_clipped {
-            let (x, y) = local
-                .project_plane_point(anchor.x, anchor.y)
+        if hide_when_clipped && id != leader_id {
+            let (x, y) = leader_chain
+                .project_plane_point(anchor.dx, anchor.dy)
                 .ok_or(Unresolved::Hidden)?;
-            anchor = Point::new(x, y);
+            if !clip_admits(layer, Point::new(x, y)) {
+                return Err(Unresolved::Hidden);
+            }
         }
+        leader_chain = chain_transform(tree, id, layer, depth)? * leader_chain;
     }
 
     let mut follower_chain = Matrix4::IDENTITY;
@@ -195,14 +194,49 @@ fn resolve_at_depth(
         }
     }
 
-    let follower_from_ancestor = follower_chain.try_inverse().ok_or(Unresolved::Hidden)?;
+    let follower_from_ancestor = invert(&follower_chain).ok_or(Unresolved::Hidden)?;
     let linked = follower.linked_offset(leader.size());
     let transform =
         follower_from_ancestor * leader_chain * Matrix4::translation(linked.dx, linked.dy, 0.0);
     // A singular leader chain (a zero scale) collapses the follower: nothing
     // of it can be seen or hit, and hit-testing needs the inverse.
-    transform.try_inverse().ok_or(Unresolved::Hidden)?;
+    invert(&transform).ok_or(Unresolved::Hidden)?;
     Ok(transform)
+}
+
+/// The inverse of `matrix`, kept in the 2D affine shape when `matrix` has
+/// it.
+///
+/// The general 4x4 inverse divides by the determinant everywhere, so the
+/// inverse of a scale of 7 holds `49 * (1/49)` where the affine shape needs
+/// an exact `1` and `0`, and a consumer that admits only affine transforms
+/// (the GPU painter) would refuse an ordinary scaled chain. Products of
+/// affine matrices keep the shape exactly, so only the inverse needs this.
+fn invert(matrix: &Matrix4) -> Option<Matrix4> {
+    let coefficients = &matrix.m;
+    let affine = [2, 3, 6, 7, 8, 9, 11, 14]
+        .iter()
+        .all(|&index| coefficients[index] == 0.0)
+        && coefficients[10] == 1.0
+        && coefficients[15] == 1.0;
+    if !affine {
+        return matrix.try_inverse();
+    }
+    // Column-major: x' = xx·x + yx·y + tx, y' = xy·x + yy·y + ty.
+    let [xx, xy, yx, yy, tx, ty] = [0, 1, 4, 5, 12, 13].map(|index| coefficients[index]);
+    let determinant = xx * yy - xy * yx;
+    if determinant == 0.0 || !determinant.is_finite() {
+        return None;
+    }
+    let [inv_xx, inv_xy, inv_yx, inv_yy] = [yy, -xy, -yx, xx].map(|value| value / determinant);
+    let mut inverse = Matrix4::IDENTITY;
+    inverse.m[0] = inv_xx;
+    inverse.m[1] = inv_xy;
+    inverse.m[4] = inv_yx;
+    inverse.m[5] = inv_yy;
+    inverse.m[12] = -(inv_xx * tx + inv_yx * ty);
+    inverse.m[13] = -(inv_xy * tx + inv_yy * ty);
+    finite(inverse).ok()
 }
 
 /// The transform `layer` (at `id`) applies to its children, as a chain sees

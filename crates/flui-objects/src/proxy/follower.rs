@@ -181,18 +181,6 @@ impl RenderFollowerLayer {
         self.follower_anchor
     }
 
-    /// Replaces `leader_clip` and returns the exact pipeline impact.
-    pub fn set_leader_clip(
-        &mut self,
-        leader_clip: LeaderClip,
-    ) -> flui_rendering::RenderUpdateImpact {
-        if self.leader_clip == leader_clip {
-            return flui_rendering::RenderUpdateImpact::NONE;
-        }
-        self.leader_clip = leader_clip;
-        flui_rendering::RenderUpdateImpact::PAINT
-    }
-
     /// Replaces the layer link and returns the exact pipeline impact.
     pub fn set_link(&mut self, link: LayerLink) -> flui_rendering::RenderUpdateImpact {
         if self.link == link {

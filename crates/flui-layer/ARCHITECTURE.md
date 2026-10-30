@@ -91,7 +91,9 @@ hit-test side table all read. Anchors outside `[-1, 1]` are legal off-rectangle 
 `LeaderClip::Hide` the leader's anchor point is mapped up the leader's chain and tested against
 each clip layer on it; clips at or above the common ancestor already clip the follower. A
 singular or non-finite chain, a hidden nested follower and nesting past `MAX_FOLLOWER_NESTING`
-resolve to `None`, so no consumer sees a degenerate transform.
+resolve to `None`, so no consumer sees a degenerate transform. An affine chain is inverted in 2D,
+so the result keeps the exact affine shape the GPU painter admits
+(`a_scaled_follower_parent_keeps_the_affine_shape`).
 
 Tests: `tests/follower.rs`, run as `follower_resolution` in `tests/main.rs`
 (`a_scaled_leader_scales_the_follower`, `a_leader_inside_another_follower_resolves_through_it`,

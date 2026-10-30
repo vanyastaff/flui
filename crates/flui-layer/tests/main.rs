@@ -110,6 +110,14 @@ fn follower_resolution() {
                 f::a_clip_under_a_transform_tests_the_mapped_anchor,
             ),
             (
+                "a_scaled_follower_parent_keeps_the_affine_shape",
+                f::a_scaled_follower_parent_keeps_the_affine_shape,
+            ),
+            (
+                "the_clip_test_keeps_the_anchors_depth_through_the_chain",
+                f::the_clip_test_keeps_the_anchors_depth_through_the_chain,
+            ),
+            (
                 "an_unlinked_follower_takes_the_unlinked_contract",
                 f::an_unlinked_follower_takes_the_unlinked_contract,
             ),

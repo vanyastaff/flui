@@ -1,4 +1,4 @@
-use std::f64::consts::FRAC_PI_2;
+use std::f64::consts::{FRAC_PI_2, FRAC_PI_3};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::LayerId;
@@ -344,4 +344,56 @@ pub(crate) fn leader_inside_the_follower_subtree_falls_back_to_unlinked() {
     tree.push_child(id, leader(link, 50.0, 50.0));
 
     assert_eq!(place(&tree, id, 0.0, 0.0), (3.0, 4.0));
+}
+
+/// Under a non-power-of-two scale above the follower, the resolved transform
+/// keeps the exact 2D affine shape a consumer that admits only affine
+/// transforms (the GPU painter) requires; the general 4x4 inverse would put
+/// `49 * (1/49)` where an exact `1` belongs.
+pub(crate) fn a_scaled_follower_parent_keeps_the_affine_shape() {
+    let link = LayerLink::new();
+    let mut tree = LayerTree::new(offset(0.0, 0.0));
+    let root = tree.root();
+    tree.push_child(root, leader(link, 14.0, 14.0));
+    let scaled = tree.push_child(root, transform(Matrix4::scaling(7.0, 7.0, 1.0)));
+    let id = tree.push_child(scaled, Layer::from(follower(link)));
+
+    let m = resolve_follower_transform(&tree, id)
+        .expect("the follower resolves to a transform")
+        .m;
+    assert_eq!(
+        [
+            m[2], m[3], m[6], m[7], m[8], m[9], m[10], m[11], m[14], m[15]
+        ],
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+        "{m:?}"
+    );
+    assert_eq!(place(&tree, id, 0.0, 0.0), (2.0, 2.0));
+}
+
+/// The clip test projects the anchor through the whole chain below each
+/// clip: two opposite rotations about X cancel, so an anchor at y = 10 is
+/// inside a clip spanning 8 to 12. Flattening the point after each rotation
+/// would move it to 2.5 and hide the follower.
+pub(crate) fn the_clip_test_keeps_the_anchors_depth_through_the_chain() {
+    let link = LayerLink::new();
+    let mut tree = LayerTree::new(offset(0.0, 0.0));
+    let root = tree.root();
+    let clipped = tree.push_child(root, clip(Rect::from_xywh(-50.0, 8.0, 100.0, 4.0)));
+    let tilted = tree.push_child(clipped, transform(Matrix4::rotation_x(FRAC_PI_3)));
+    let untilted = tree.push_child(tilted, transform(Matrix4::rotation_x(-FRAC_PI_3)));
+    tree.push_child(
+        untilted,
+        Layer::from(LeaderLayer::with_offset(
+            link,
+            Size::ZERO,
+            Offset::new(0.0, 10.0),
+        )),
+    );
+    let id = tree.push_child(
+        root,
+        Layer::from(follower(link).with_leader_clip(LeaderClip::Hide)),
+    );
+
+    assert!(resolve_follower_transform(&tree, id).is_some());
 }
