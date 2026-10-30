@@ -244,6 +244,14 @@ fn runner_teardown() {
                 a_notice_subscriber_panic_never_leaves_the_handler,
             ),
             (
+                "dispose_panic_on_last_window_close_resumes_after_flush",
+                dispose_panic_on_last_window_close_resumes_after_flush,
+            ),
+            (
+                "capture_drop_panic_keeps_the_first_failure_and_still_flushes",
+                capture_drop_panic_keeps_the_first_failure_and_still_flushes,
+            ),
+            (
                 "a_session_end_handler_panic_with_a_panicking_payload_refuses",
                 a_session_end_handler_panic_with_a_panicking_payload_refuses,
             ),
@@ -1486,4 +1494,148 @@ pub(crate) fn a_notice_subscriber_panic_never_leaves_the_handler() {
         let report = run.join().expect("the run returns");
         assert_eq!(report.exit, RunExit::Returned, "{case:?}");
     }
+}
+
+/// A note screen's state, which fails as the test asks when its window goes.
+#[derive(Clone)]
+struct FailingNote {
+    /// The text `dispose` panics with.
+    dispose_panic: Option<&'static str>,
+    /// The text a capture of the state's lifecycle callback panics with when
+    /// it is dropped.
+    capture_panic: Option<&'static str>,
+    /// How many of these states ran `dispose`.
+    disposed: Rc<std::cell::Cell<u32>>,
+}
+
+struct FailingNoteState {
+    note: FailingNote,
+    subscription: Option<flui_view::LifecycleSubscription>,
+}
+
+impl flui_view::StatefulView for FailingNote {
+    type State = FailingNoteState;
+
+    fn create_state(&self) -> Self::State {
+        FailingNoteState {
+            note: self.clone(),
+            subscription: None,
+        }
+    }
+}
+
+impl flui_view::ViewState<FailingNote> for FailingNoteState {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        if let Some(text) = self.note.capture_panic {
+            let capture = PanicsOnDrop(text);
+            let (_, subscription) = ctx
+                .lifecycle_handle()
+                .expect("a bound lifecycle")
+                .subscribe(move |_| {
+                    let _held = &capture;
+                })
+                .expect("the lifecycle is open");
+            self.subscription = Some(subscription);
+        }
+    }
+
+    fn build(
+        &self,
+        _view: &FailingNote,
+        _ctx: &dyn flui_view::BuildContext,
+    ) -> impl flui_view::IntoView {
+        flui_widgets::SizedBox::square(10.0)
+    }
+
+    fn dispose(&mut self) {
+        self.note.disposed.set(self.note.disposed.get() + 1);
+        if let Some(text) = self.note.dispose_panic {
+            panic!("{text}");
+        }
+    }
+}
+
+impl flui_view::View for FailingNote {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+/// Runs `first` and `second` as the main window's content, closes that last window the
+/// way the user does and joins the run.
+fn close_the_last_window_of(
+    first: FailingNote,
+    second: FailingNote,
+) -> flui_app::testing::ExitReport {
+    let application = Application::new(move |_| {
+        flui_widgets::Column::new(flui_widgets::column![first.clone(), second.clone()])
+    })
+    .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
+    let run = HeadlessRun::start(application);
+    run.run_owner_turn();
+    let windows = run.open_windows();
+    assert_eq!(windows.len(), 1, "the main window is open");
+    assert!(windows[0].simulate_close(), "the application lets it close");
+    run.run_owner_turn();
+    run.join().expect("a terminal panic is no run error")
+}
+
+/// R12: a `dispose` that panics as the last window closes on the real path
+/// (the window's close, its presentation's close) disposes the other states
+/// all the same, runs the whole exit and only then resumes the panic: 101
+/// with the panic's text, no abort.
+pub(crate) fn dispose_panic_on_last_window_close_resumes_after_flush() {
+    let disposed = Rc::new(std::cell::Cell::new(0));
+    let note = |dispose_panic| FailingNote {
+        dispose_panic,
+        capture_panic: None,
+        disposed: Rc::clone(&disposed),
+    };
+    let report = close_the_last_window_of(note(Some("the note's dispose failed")), note(None));
+    assert_eq!(
+        report.exit,
+        RunExit::Panicked {
+            message: "the note's dispose failed".to_owned()
+        }
+    );
+    assert_eq!(report.code(), flui_app::testing::EXIT_CODE_PANIC);
+    assert_eq!(disposed.get(), 2, "the other state was disposed too");
+    assert_eq!(
+        report.teardown, TEARDOWN_ORDER,
+        "every exit step ran before the panic resumed"
+    );
+}
+
+/// R13: a callback capture whose `Drop` panics as the last window closes (the
+/// window's lifecycle releases its observers before the tree is disposed)
+/// is the exit's failure; what the tree still owns is retained, so no more
+/// application code runs and a later `dispose` that would panic never does;
+/// the services, the pools and the loop's return still follow.
+pub(crate) fn capture_drop_panic_keeps_the_first_failure_and_still_flushes() {
+    let disposed = Rc::new(std::cell::Cell::new(0));
+    let report = close_the_last_window_of(
+        FailingNote {
+            dispose_panic: None,
+            capture_panic: Some("the callback's capture failed to drop"),
+            disposed: Rc::clone(&disposed),
+        },
+        FailingNote {
+            dispose_panic: Some("a later dispose failed"),
+            capture_panic: None,
+            disposed: Rc::clone(&disposed),
+        },
+    );
+    assert_eq!(
+        report.exit,
+        RunExit::Panicked {
+            message: "the callback's capture failed to drop".to_owned()
+        },
+        "the first failure is the exit's"
+    );
+    assert_eq!(report.code(), flui_app::testing::EXIT_CODE_PANIC);
+    assert_eq!(disposed.get(), 0, "the tree was retained, not disposed");
+    assert_eq!(
+        report.teardown, TEARDOWN_ORDER,
+        "the services, the pools and the loop's return followed the failure"
+    );
 }

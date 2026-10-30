@@ -220,12 +220,20 @@ graph LR
   `a_failed_frame_counts_and_does_not_unwind`. Зубы проверены. Временное: строки набора
   открывают вторичное окно `Isolated` (offscreen главного окна — дизайн к T10); сброс доказан
   маркером `TeardownStep::Flush`, а не байтами на диске (`Persisted` — заглушка до persistence).
-  Остаток T9: R6, R9, R11 `user_panic_exit_code_matrix`, R12, R13, строки с паникой в
+  Остаток T9: R6, R9, R11 `user_panic_exit_code_matrix`, строки с паникой в
   маршрутизации `flui-app`.
   - [x] Паника приложения в `AppHandler::session_end` и `AppHandler::host_notice`: таблица
     `a_notice_subscriber_panic_never_leaves_the_handler` (`runner_teardown`; запрос, завершение,
     системное уведомление) через подписчика уведомлений окна; шов маршрута не понадобился.
     Характеризация: панику ловит пооперационная граница `flui-runtime`, затем catch обработчика.
+  - [x] R12 `dispose_panic_on_last_window_close_resumes_after_flush` и R13
+    `capture_drop_panic_keeps_the_first_failure_and_still_flushes` (`runner_teardown`, на
+    headless-runner в процессе, как R7). Находка: паника `dispose` при закрытии окна
+    сдерживалась деревом (`RecoveredPanic`) и терялась — кадра после закрытия нет, выход был 0.
+    Теперь закрытие презентации (`flui-runtime`) после `detach_root_widget` делает первую
+    сдержанную панику своей ошибкой: остальные `dispose` выполнены, у последнего окна — 101 после
+    сброса. Зубы: без этого R12 падает (`Returned`). R13 — характеризация: захват наблюдателя
+    жизненного цикла падает раньше дерева, дерево удерживается, `dispose` не вызывается.
 - [x] T10 — характеризация раннера. Главное окно открывается и на headless: окно рисует
   `WindowRenderer` (crate-private: `RasterBackend` + `DeviceRecovery` + `DisplayColorFollow` +
   задержка кадра), которого строит `WindowRenderers` цикла; production — wgpu `Renderer` без
