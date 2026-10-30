@@ -729,6 +729,8 @@ edge-exceptions = [
 [package.metadata.cargo-shear]
 ignored-paths = [
     "tests/ui/thread_boundary/*.rs",
+    "tests/ui/thread_boundary/material/*.rs",
+    "tests/ui/thread_boundary/cupertino/*.rs",
     "tests/ui/unstable_input/*.rs",
     "tests/ui/native/*.rs",
 ]

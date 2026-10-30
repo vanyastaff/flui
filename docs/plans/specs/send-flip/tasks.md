@@ -197,3 +197,8 @@ T3 и T10 не делят файлов и идут параллельно. T9 ж
   (с `count`, только сокращается); `--self-test` на встроенном JSON, шаг в CI-джобе `doc`;
   ADR-0089 §6 дополнен. Убранная из списка позиция `MonotonicClock: Send` роняет gate (проверено).
 - [ ] T7 — закрытие
+  T7a: trybuild R1 в `tests/ui/thread_boundary/` — `scroll_controller_`, `signal_`,
+  `writer_source_`, `writer_`, `event_cx_`, `state_cell_`, `text_editing_controller_` и под
+  своими features `material/tab_controller_`, `cupertino/cupertino_tab_controller_`
+  `stays_on_its_thread`; каждая диагностика называет публичный тип; `thread_boundary_ui` с
+  `material,cupertino,native` проходит локально.

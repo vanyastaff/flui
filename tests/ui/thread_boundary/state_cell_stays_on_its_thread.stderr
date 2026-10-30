@@ -1,0 +1,39 @@
+error[E0277]: `Rc<std::cell::Cell<u32>>` cannot be sent between threads safely
+ --> tests/ui/thread_boundary/state_cell_stays_on_its_thread.rs:6:30
+  |
+6 |     require_thread_spawnable(cell);
+  |     ------------------------ ^^^^ `Rc<std::cell::Cell<u32>>` cannot be sent between threads safely
+  |     |
+  |     required by a bound introduced by this call
+  |
+  = help: within `StateCell<u32>`, the trait `Send` is not implemented for `Rc<std::cell::Cell<u32>>`
+note: required because it appears within the type `StateCell<u32>`
+ --> crates/flui-view/src/state_cell.rs
+  |
+  | pub struct StateCell<T: Copy> {
+  |            ^^^^^^^^^
+note: required by a bound in `require_thread_spawnable`
+ --> tests/ui/thread_boundary/state_cell_stays_on_its_thread.rs:3:32
+  |
+3 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+  |                                ^^^^ required by this bound in `require_thread_spawnable`
+
+error[E0277]: `Rc<RefCell<Option<state_cell::LocalStateBinding>>>` cannot be sent between threads safely
+ --> tests/ui/thread_boundary/state_cell_stays_on_its_thread.rs:6:30
+  |
+6 |     require_thread_spawnable(cell);
+  |     ------------------------ ^^^^ `Rc<RefCell<Option<state_cell::LocalStateBinding>>>` cannot be sent between threads safely
+  |     |
+  |     required by a bound introduced by this call
+  |
+  = help: within `StateCell<u32>`, the trait `Send` is not implemented for `Rc<RefCell<Option<state_cell::LocalStateBinding>>>`
+note: required because it appears within the type `StateCell<u32>`
+ --> crates/flui-view/src/state_cell.rs
+  |
+  | pub struct StateCell<T: Copy> {
+  |            ^^^^^^^^^
+note: required by a bound in `require_thread_spawnable`
+ --> tests/ui/thread_boundary/state_cell_stays_on_its_thread.rs:3:32
+  |
+3 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+  |                                ^^^^ required by this bound in `require_thread_spawnable`
