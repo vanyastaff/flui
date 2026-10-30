@@ -590,6 +590,10 @@ pub(crate) fn install_owner_platform(
                                 &mut first,
                                 super::main_window::drive_main_window,
                             );
+                            super::installed_host::contain(
+                                &mut first,
+                                super::main_window::drive_program_quit,
+                            );
                         }
                     }
                     flui_foundation::panic::FirstPanic::fold(&mut commands, first);

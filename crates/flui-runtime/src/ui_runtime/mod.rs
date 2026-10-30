@@ -31,6 +31,7 @@ mod presentation_factory;
 pub use presentation_factory::PresentationFactory;
 mod presentation_lifecycle;
 use presentation_lifecycle::HostLifecycle;
+pub use presentation_lifecycle::SettledCloses;
 
 use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;

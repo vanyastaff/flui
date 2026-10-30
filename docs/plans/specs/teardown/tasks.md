@@ -225,8 +225,19 @@ graph LR
     `AppHandle::retry_render_device`; строки `runner_close`
     `a_lost_device_waits_out_its_rebuild_backoff` и
     `a_given_up_device_renders_again_when_the_application_asks`.
-- [ ] T10 — характеризация раннера (учёт `Drop` — ADR-0261 §2; R4 — `EXIT_BUDGET`)
-- [ ] T11 — вето с причиной
+- [x] T10 — характеризация раннера (учёт `Drop` — ADR-0261 §2; R4 — `EXIT_BUDGET`)
+- [x] T11 — вето с причиной. `CloseRequest::reason` несёт причину; `KeepOpen` обработчика
+  записывает `PendingClose` (`CloseGuardSource::record`), паника обработчика не записывает
+  ничего. `AppHandle::request_quit` спрашивает каждую presentation с `Program` на ходу владельца
+  (`drive_program_quit`); при вето quit ждёт презентации с записью: выполнение записи или уход
+  окна — согласие, `stay_open` (`SettledClose::declined`) или отказ без записи — отмена. Закрытие
+  окна старше записи quit (`make_due`). Фатальные выходы — `Ingress::quit_now` без вопроса.
+  ADR-0259 §4 уточнён. Доказательство: `close_request_matrix`
+  (`a_close_request_carries_its_reason`, `a_kept_open_close_is_recorded_for_its_reason`),
+  `lifecycle_tests::a_window_close_outranks_a_recorded_quit`, `runner_close` (R23
+  `a_vetoed_close_disposes_nothing`, `a_refused_quit_waits_for_the_record_then_exits`,
+  `a_quit_the_window_stays_open_for_is_cancelled`). Зубы: без записи в ожидание quit падают
+  строки quit, без `record` в `consult` — R23 и строки quit.
 - [ ] T12 — обход #1165
 - [ ] T13 — IME-шаг закрытия
 - [ ] T14 — остаток: завершение сеанса

@@ -486,7 +486,7 @@ impl MainController {
                 .borrow_mut()
                 .replace(AppRunError::InitialWindow(error));
             contain(|| drop(old));
-            let _ = self.ingress.handle().request_quit();
+            let _ = self.ingress.quit_now();
         } else if let Some(mut observer) = self.error.take() {
             let observed =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| observer(&error)));
@@ -563,6 +563,54 @@ pub(super) fn drive_main_window() {
         controller.fail(AppWindowError::InstallerPanicked { message });
     }
 }
+/// Ask every presentation whether the quit the application asked for
+/// ([`AppHandle::request_quit`](crate::app::AppHandle::request_quit)) may go
+/// ahead, as a close for [`CloseReason::Program`](crate::app::CloseReason::Program): its guard first, then its
+/// handler. A presentation the deferred quit waits on and that is gone
+/// consents. Runs on the owner's turn, outside every runtime lease.
+pub(super) fn drive_program_quit() {
+    use crate::app::application_control::QuitAnswer;
+    use crate::app::{CloseReason, CloseResponse};
+
+    let Some((ingress, router)) = APP_RUNTIME.with(|slot| {
+        let runtime = slot.borrow();
+        runtime
+            .main_ingress
+            .clone()
+            .map(|ingress| (ingress, runtime.close_requests()))
+    }) else {
+        return;
+    };
+    let registered = router.addresses();
+    for address in ingress.quit_waiting() {
+        if !registered.contains(&address) {
+            ingress.quit_consented(address);
+        }
+    }
+    if !ingress.begin_quit_consult() {
+        return;
+    }
+    // The router contains every handler's panic, so the consultation always
+    // ends with an answer; asking every presentation, not only up to the
+    // first refusal, records the close on each one that refuses.
+    let mut waiting = Vec::new();
+    let mut cancelled = false;
+    for address in registered {
+        if router.consult(address, CloseReason::Program) == CloseResponse::KeepOpen {
+            if router.is_recorded(address, CloseReason::Program) {
+                waiting.push(address);
+            } else {
+                cancelled = true;
+            }
+        }
+    }
+    ingress.finish_quit_consult(if cancelled {
+        QuitAnswer::Cancelled
+    } else {
+        QuitAnswer::Waiting(waiting)
+    });
+}
+
 pub(super) fn main_window_closing(address: flui_foundation::PresentationAddress) {
     let ingress = APP_RUNTIME.with(|slot| {
         let mut runtime = slot.borrow_mut();
@@ -874,7 +922,7 @@ where
                             source: Arc::new(error),
                         }));
                     }
-                    let _ = handle.request_quit();
+                    let _ = handle.ingress.quit_now();
                     return Ok(());
                 }
             }
@@ -891,7 +939,7 @@ where
                             .replace(AppRunError::OnReadyPanicked);
                     }
                 });
-                let _ = handle.request_quit();
+                let _ = handle.ingress.quit_now();
             }
             drive_main_window();
             with_owner_platform(|owner| owner.shared().request_exit_policy_reevaluation());
