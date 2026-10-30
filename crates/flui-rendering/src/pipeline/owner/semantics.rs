@@ -1382,12 +1382,13 @@ fn merge_child_fragments(
     for (index, fragment) in fragments.into_iter().enumerate() {
         match fragment {
             SemanticsFragment::Formed(node) => children.push(node),
-            // Runs are the synthetic children of the node declaring them,
-            // positioned in its text: absorbed, they would hang off a node
-            // whose merged label is other text (ADR-0214 §2).
+            // Runs are the synthetic children of the one node declaring them,
+            // so a merge never drops a second text's runs for the first's:
+            // that text keeps its node and its runs (ADR-0214 §2).
             SemanticsFragment::Pending(pending)
                 if conflicts.as_ref().is_some_and(|conflicts| conflicts[index])
-                    || pending.config.text_content().is_some() =>
+                    || (pending.config.text_content().is_some()
+                        && config.text_content().is_some()) =>
             {
                 children.push(pending.form());
             }

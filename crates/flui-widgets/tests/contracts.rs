@@ -545,6 +545,25 @@ fn keyboard_focus_contracts() {
     );
 }
 
+/// Static text inside a `SelectionArea` publishes runs and is selected by assistive
+/// technology as one document; text outside one publishes none (ADR-0214).
+#[test]
+fn selection_area_text_runs() {
+    run_cases(
+        "selection_area_text_runs",
+        &[
+            ("selection_area::selection_area_text_publishes_runs", crate::selection_area::selection_area_text_publishes_runs as fn()),
+            ("selection_area::selection_area_accepts_assistive_selection", crate::selection_area::selection_area_accepts_assistive_selection),
+            ("selection_area::selection_area_refuses_stale_or_foreign_positions", crate::selection_area::selection_area_refuses_stale_or_foreign_positions),
+            ("selection_area::selectable_text_under_a_merging_ancestor_keeps_its_runs", crate::selection_area::selectable_text_under_a_merging_ancestor_keeps_its_runs),
+            ("selection_area::static_text_outside_selection_area_publishes_no_runs", crate::selection_area::static_text_outside_selection_area_publishes_no_runs),
+            ("selection_area::nested_merger_paragraph_keeps_its_run_nodes", crate::selection_area::nested_merger_paragraph_keeps_its_run_nodes),
+            ("selection_area::a_control_inside_a_selection_area_under_an_outer_merger_keeps_its_node", crate::selection_area::a_control_inside_a_selection_area_under_an_outer_merger_keeps_its_node),
+            ("selection_area::a_document_selection_snaps_into_its_texts_or_is_withheld", crate::selection_area::a_document_selection_snaps_into_its_texts_or_is_withheld),
+        ],
+    );
+}
+
 /// Widget semantics reach the platform and platform actions reach widgets, with the
 /// documented drop set and the exhaustive routing list pinned.
 #[test]

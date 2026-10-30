@@ -1,6 +1,6 @@
 # ADR-0214: Static text inside a `SelectionArea` publishes text runs
 
-- **Status:** Accepted (2026-10-13); implementation pending (docs/plans/specs/flui-interaction/completeness/tasks.md). Until it merges, `main` follows ADR-0204 §2 (runs for text inputs only).
+- **Status:** Accepted (2026-10-13); implemented (2026-10-30): the semantics model, `RenderParagraph::set_selectable` and the assistive path of `SelectionArea`, with the rows below in `crates/flui-widgets/tests/selection_area.rs`. Pointer, keyboard and handles follow in docs/plans/specs/flui-interaction/completeness/tasks.md (T34). The native `TextPattern`, VoiceOver and Orca rows are still to run on a host.
 - **Date:** 2026-10-13
 - **Amends:** [ADR-0204](ADR-0204-synthetic-semantics-nodes.md) §2, whose "only for text
   inputs; static text keeps its value until its cost is measured" now has one exception.

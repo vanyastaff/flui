@@ -179,7 +179,10 @@ impl ViewState<SelectionArea> for SelectionAreaState {
     }
 
     fn did_update_view(&mut self, _old_view: &SelectionArea, new_view: &SelectionArea) {
-        *self.model.on_selection_changed.borrow_mut() = new_view.on_selection_changed.clone();
+        self.model
+            .on_selection_changed
+            .borrow_mut()
+            .clone_from(&new_view.on_selection_changed);
     }
 
     fn build(&self, view: &SelectionArea, ctx: &dyn BuildContext) -> impl IntoView {
