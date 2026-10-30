@@ -255,7 +255,7 @@ pub struct WindowDelivery {
     /// newest last, whose platform follow-up must not be delivered again.
     unanswered_keys: Mutex<VecDeque<flui_platform::keyboard::KeyEvent>>,
     dispatch: Mutex<DispatchState>,
-    /// Incremented each time `frame_requested` produces a frame (or panics),
+    /// Incremented each time `frame_requested` produces a frame (or fails, or panics),
     /// nested requests delivered later included; a declined request, or one
     /// with no handler to run, leaves it unchanged. Shareable so a backend can count frames across every window
     /// it opens ([`Self::counting_frames`]).
@@ -619,11 +619,16 @@ impl WindowDelivery {
             }
             Delivery::Frame(request) => {
                 let called = call(&self.handler(), |handler| handler.frame_requested(request));
-                // A frame that unwinds counts as one that ran: it had its
-                // chance at what was due. A declined one serviced nothing.
+                // A frame that unwinds or fails counts as one that ran: it
+                // had its chance at what was due, and a wake deadline answered
+                // before it is asked for again. A declined one serviced
+                // nothing. A failure the handler contained does not unwind:
+                // at an OS entry that would be the entry's answer or an abort
+                // (ADR-0258 §4).
                 if matches!(
                     called,
-                    Called::Returned(FrameOutcome::Produced) | Called::Panicked(_)
+                    Called::Returned(FrameOutcome::Produced | FrameOutcome::Failed)
+                        | Called::Panicked(_)
                 ) {
                     self.frames_run.fetch_add(1, Ordering::Relaxed);
                 }

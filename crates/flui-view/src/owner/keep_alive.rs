@@ -35,12 +35,24 @@
 //! placed-generation stamp, so an unlaid child is skipped by paint, both
 //! hit-test walks, and semantics alike. That makes the stamp load-bearing here
 //! rather than defence-in-depth, which is recorded in the ADR.
+//!
+//! # A pinned child is laid out
+//!
+//! A pin ([`KeepAliveHandle::pin`]) is a hold whose child the sliver also
+//! lays out outside the band: measured, placed at its estimated offset, seen
+//! by semantics and by focus geometry, and skipped by paint and hit testing
+//! explicitly, since a placed child would otherwise be painted. It adds nothing
+//! to the sliver's geometry or measured extents. The host's manager resolves
+//! the pins to logical indices after each band eviction and hands them to the
+//! render object; a pin taken or released marks every watching sliver for
+//! layout, so the render object hears of it on the next frame.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
 use flui_foundation::ElementId;
+use flui_rendering::pipeline::LocalRenderInvalidationHandle;
 
 use crate::tree::ElementTree;
 use smallvec::SmallVec;
@@ -61,13 +73,69 @@ struct Inner {
     /// Resolving the target when eviction asks makes relocation free the same
     /// way keying by element rather than index does.
     holders: HashMap<ElementId, usize>,
+    /// Live holder -> how many of its leases are pins ([`KeepAliveHandle::pin`]).
+    /// Every pin is also counted in `holders`: a pin is a hold that the
+    /// sliver additionally lays out.
+    pins: HashMap<ElementId, usize>,
+    /// The lazy slivers that lay out pinned children, by host element: each
+    /// is asked to lay out again when a pin is taken or released, so a
+    /// released row leaves the semantics tree without waiting for a scroll.
+    /// An entry whose render node has detached is dropped the first time it
+    /// refuses the mark.
+    pin_watchers: HashMap<ElementId, LocalRenderInvalidationHandle>,
 }
 
 impl std::fmt::Debug for Inner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Inner")
             .field("holders", &self.holders)
+            .field("pins", &self.pins)
             .finish_non_exhaustive()
+    }
+}
+
+/// The sparse children `holders` sit under, each once.
+fn resolve_children<'a>(
+    tree: &ElementTree,
+    holders: impl Iterator<Item = &'a ElementId>,
+) -> HolderIds {
+    let mut children = HolderIds::new();
+    for holder in holders {
+        if let Some(child) = crate::tree::enclosing_sparse_child(tree, *holder)
+            && !children.contains(&child)
+        {
+            children.push(child);
+        }
+    }
+    children
+}
+
+/// Ask every watching sliver to lay out again: a pin was taken or released.
+///
+/// The handles are copied out before any is marked, so no borrow of the table
+/// is held while the render side records the mark and asks for a frame. A
+/// handle whose node has detached refuses, and its entry is dropped.
+#[expect(
+    clippy::needless_collect,
+    reason = "the collect ends the table borrow before any handle runs"
+)]
+fn notify_pin_watchers(inner: &RefCell<Inner>) {
+    let watchers: Vec<(ElementId, LocalRenderInvalidationHandle)> = inner
+        .borrow()
+        .pin_watchers
+        .iter()
+        .map(|(host, handle)| (*host, handle.clone()))
+        .collect();
+    let gone: Vec<ElementId> = watchers
+        .into_iter()
+        .filter(|(_, handle)| handle.mark_needs_layout().is_err())
+        .map(|(host, _)| host)
+        .collect();
+    if !gone.is_empty() {
+        let mut inner = inner.borrow_mut();
+        for host in gone {
+            inner.pin_watchers.remove(&host);
+        }
     }
 }
 
@@ -100,15 +168,22 @@ impl KeepAliveHolds {
     /// stale entry cannot pin a row.
     pub(crate) fn held_children(&self, tree: &ElementTree) -> HolderIds {
         let inner = self.inner.borrow();
-        let mut held = HolderIds::new();
-        for holder in inner.holders.keys() {
-            if let Some(child) = crate::tree::enclosing_sparse_child(tree, *holder)
-                && !held.contains(&child)
-            {
-                held.push(child);
-            }
-        }
-        held
+        resolve_children(tree, inner.holders.keys())
+    }
+
+    /// The sparse children currently pinned ([`KeepAliveHandle::pin`]),
+    /// resolved through `tree` the same way as [`Self::held_children`]. Every
+    /// pinned child is also held.
+    pub(crate) fn pinned_children(&self, tree: &ElementTree) -> HolderIds {
+        let inner = self.inner.borrow();
+        resolve_children(tree, inner.pins.keys())
+    }
+
+    /// Ask the lazy sliver hosted by `host` to lay out again whenever a pin
+    /// is taken or released, through its render node's `handle`. Replaces an
+    /// earlier registration for the same host.
+    pub(crate) fn watch_pins(&self, host: ElementId, handle: LocalRenderInvalidationHandle) {
+        self.inner.borrow_mut().pin_watchers.insert(host, handle);
     }
 
     /// Drops every lease `holder` had.
@@ -118,7 +193,16 @@ impl KeepAliveHolds {
     /// in the same step, and a stranded holder would keep resolving to
     /// whatever sparse child it last sat under.
     pub(crate) fn forget_holder(&self, holder: ElementId) {
-        self.inner.borrow_mut().holders.remove(&holder);
+        let had_pins = {
+            let mut inner = self.inner.borrow_mut();
+            inner.holders.remove(&holder);
+            // A lazy sliver's host unmounting stops watching for pins.
+            inner.pin_watchers.remove(&holder);
+            inner.pins.remove(&holder).is_some()
+        };
+        if had_pins {
+            notify_pin_watchers(&self.inner);
+        }
     }
 
     /// How many holders are live. Diagnostics and tests.
@@ -174,6 +258,34 @@ impl KeepAliveHandle {
         KeepAliveLease {
             inner: self.inner.clone(),
             holder: self.holder,
+            pinned: false,
+        }
+    }
+
+    /// Take a pin: a hold under which the lazy sliver also lays the child out
+    /// while it is outside the cache band. Drop the returned lease to release
+    /// it.
+    ///
+    /// A pinned child is measured and placed at its estimated offset, so the
+    /// semantics tree keeps it and focus can measure it, while paint and hit
+    /// testing skip it and it adds nothing to the sliver's geometry, its
+    /// anchor or its measured extents. What a focused row needs to stay
+    /// focused and announced while a pointer scrolls it away. Every lazy
+    /// multi-box sliver honours it; the sliver lays out again as soon as a
+    /// pin is taken or released.
+    pub fn pin(&self) -> KeepAliveLease {
+        if let Some(inner) = self.inner.upgrade() {
+            {
+                let mut table = inner.borrow_mut();
+                *table.holders.entry(self.holder).or_insert(0) += 1;
+                *table.pins.entry(self.holder).or_insert(0) += 1;
+            }
+            notify_pin_watchers(&inner);
+        }
+        KeepAliveLease {
+            inner: self.inner.clone(),
+            holder: self.holder,
+            pinned: true,
         }
     }
 
@@ -229,6 +341,8 @@ pub struct KeepAliveLease {
     /// The element that took the lease. The child it keeps alive is resolved
     /// from this when eviction asks, never cached — see [`Inner`].
     holder: ElementId,
+    /// Whether this lease is a pin ([`KeepAliveHandle::pin`]).
+    pinned: bool,
 }
 
 impl KeepAliveLease {
@@ -239,20 +353,33 @@ impl KeepAliveLease {
     }
 }
 
+/// Take one lease of `holder` out of `counts`.
+fn release_one(counts: &mut HashMap<ElementId, usize>, holder: ElementId) -> bool {
+    let Some(count) = counts.get_mut(&holder) else {
+        return false;
+    };
+    *count -= 1;
+    if *count == 0 {
+        counts.remove(&holder);
+    }
+    true
+}
+
 impl Drop for KeepAliveLease {
     fn drop(&mut self) {
         let Some(inner) = self.inner.upgrade() else {
             return;
         };
-        let mut inner = inner.borrow_mut();
         // Decrement by one — this lease's own. Clearing the holder outright
         // would release a replacement taken before this one dropped, which is
         // the reacquisition case `acquire` documents.
-        if let Some(count) = inner.holders.get_mut(&self.holder) {
-            *count -= 1;
-            if *count == 0 {
-                inner.holders.remove(&self.holder);
-            }
+        let released_pin = {
+            let mut table = inner.borrow_mut();
+            release_one(&mut table.holders, self.holder);
+            self.pinned && release_one(&mut table.pins, self.holder)
+        };
+        if released_pin {
+            notify_pin_watchers(&inner);
         }
     }
 }

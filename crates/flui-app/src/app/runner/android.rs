@@ -7,8 +7,8 @@ use super::frame_pacing::{
 };
 use super::host::{APP_RUNTIME, OwnerHostClearGuard, install_owner_platform, with_owner_platform};
 use super::owner_dispatch::{
-    RuntimeEvent, RuntimeTask, dispatch_platform_ui_runtime, install_input_wiring,
-    prepare_platform_ui_runtime, teardown_platform_ui_runtime,
+    ExitWatchdog, RuntimeEvent, RuntimeTask, dispatch_platform_ui_runtime, install_input_wiring,
+    prepare_platform_ui_runtime, teardown_platform_ui_runtime_logged,
 };
 use super::surface_lifecycle::{
     SurfaceLifecycleOutcome, SurfaceRecreationRetry, report_surface_settlement,
@@ -502,8 +502,16 @@ where
         bootstrap_android(root, config, hot_reload)?;
         Ok(())
     }));
-    teardown_platform_ui_runtime();
+    // The exit is bounded end to end, as on the desktop (ADR-0258 §7).
+    let watchdog = ExitWatchdog::start();
+    teardown_platform_ui_runtime_logged(&mut |step| watchdog.reached(step));
     drop(agent);
+    drop(watchdog);
+    // The exit's outcome: a terminal failure resumes once everything above
+    // ran (ADR-0258 §3).
+    if let Some(payload) = super::terminal::take_terminal() {
+        std::panic::resume_unwind(payload);
+    }
 
     // `on_ready`'s `Err` propagates straight out of `Platform::run`; surface
     // it the same way `run_desktop` does now that the event loop has

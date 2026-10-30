@@ -4548,7 +4548,7 @@ graph LR
   `platform_it` (`native_recording`, `contract`, `backend_conformance`) с `native-capture` и без,
   lib-тесты с `native-capture`, гейты `workspace`, `reach`, `globals`, `testing`, `module-dag`.
 
-- [ ] **LY97** (не закрыта: четыре PR, первые два — потоки и предпочтения; дальше дисплеи и состояние
+- [ ] **LY97** (не закрыта: четыре PR, первые три — потоки, предпочтения и дисплеи; дальше состояние
   окна, затем строка store-edit для IME без событий) — ветка `claude/project-thread-jqc75j` после
   LY98. **Потоки журнала:** заголовок называет `Stream` — `registry` (по умолчанию, единственный с
   часами; `epoch_ns` и `uptime_ns` теперь необязательны и пишутся только у него), `app`
@@ -4576,10 +4576,21 @@ graph LR
   `try_into_preferences` с типизированной `InvalidPreference`), не `non_exhaustive`, так что новое
   поле не компилируется ни в одном зеркале, пока его не отразят. Headless воспроизводит
   наблюдение и сбой вида `preferences` через `HeadlessPreferences`; другие виды сбоя он не воспроизводит и отказывает
-  типизированной ошибкой. Тесты: золотой `headless_platform_preferences.jsonl`, строки
+  типизированной ошибкой. Тесты: золотой `headless_platform_preferences.jsonl` (теперь `headless_platform_reads.jsonl`), строки
   `platform_recordings_replay_on_the_headless_host` и платформенная часть
   `captured_streams_replay_to_what_the_session_delivered` и
   `a_row_the_replay_does_not_reproduce_is_a_typed_error`.
+  **Третья часть — дисплеи.** Тот же поток `platform`: `HostPlatform::display_snapshot` пишет
+  каждое чтение (`Captured::Displays`), строка `displays` несёт
+  `DisplayRead::{Observed { revision, displays }, Failed(ReadFailure)}`. Дисплей в схеме — метка
+  (`DisplayId::get` платформы, смысл только внутри записи) и поля через публичные
+  `flui_platform::{DisplayParts, ColorParts}` (`DisplayInfo::into_parts`, `DisplayParts::into_info`),
+  не `non_exhaustive`. Replay выпускает свой id на каждую метку (`DisplayKey::Injected`), один на
+  весь replay; ревизия снимка пишется как сведение и не воспроизводится. Headless получает
+  `HeadlessDisplayControls::{replace, fail_next_read}`. Тесты: золотой
+  `headless_platform_preferences.jsonl` переименован в `headless_platform_reads.jsonl` и несёт три
+  чтения дисплеев; `platform_recordings_replay_on_the_headless_host` и платформенная часть
+  `captured_streams_replay_to_what_the_session_delivered` сверяют чтения дисплеев по меткам.
 
 - [x] **LY48** (часть haptics) — #1983, ветка `claude/project-thread-00ptwi`, от `main` @ `377efd1`.
   `FakeHaptics`, `HapticCall`, `HapticPlay` → `flui_platform::testing` под новой фичей

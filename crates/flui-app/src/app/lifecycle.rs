@@ -171,7 +171,7 @@ impl<F: Future + Unpin> Future for CatchUnwind<F> {
 
 // Diagnostics are user code too. A reporting failure cannot erase completion
 // evidence or strand a worker's accepted tail.
-fn contain_lifecycle_diagnostic(report: impl FnOnce()) {
+pub(crate) fn contain_lifecycle_diagnostic(report: impl FnOnce()) {
     if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(report)) {
         flui_foundation::panic::retain_opaque_payload(payload);
     }
@@ -1476,12 +1476,11 @@ impl ServiceRegistry {
     /// the pools' own cancellation hard-drops any future still running, so
     /// this cooperative pass must come first or no service ever gets its
     /// flush window.
-    pub(crate) fn shutdown(&mut self, deadline: Duration) -> ServiceShutdownReport {
+    pub(crate) fn shutdown(&mut self, join_by: Instant) -> ServiceShutdownReport {
         self.accepting = false;
         for slot in &self.services {
             slot.signal.cancel();
         }
-        let join_by = Instant::now() + deadline;
         let mut entries = Vec::with_capacity(self.services.len());
         for mut slot in self.services.drain(..) {
             let outcome = if let Some(outcome) = slot.poll_finished() {
@@ -1505,7 +1504,7 @@ impl ServiceRegistry {
                 ServiceShutdownOutcome::DeadlineExceeded => {
                     tracing::warn!(
                         service = slot.name,
-                        ?deadline,
+                        ?join_by,
                         "service ignored cancellation past the shutdown deadline; it will be \
                          force-abandoned when the execution pools close"
                     );
@@ -2058,13 +2057,13 @@ mod tests {
             )
             .expect("service must start");
 
-        let report = registry.shutdown(Duration::from_secs(10));
+        let report = registry.shutdown(Instant::now() + Duration::from_secs(10));
         assert!(report.all_completed(), "report: {report:?}");
         assert!(
             flushed.load(Ordering::Acquire),
             "the service must have used its flush window before shutdown returned"
         );
-        services.shutdown(Duration::from_secs(5));
+        services.shutdown(std::time::Instant::now() + Duration::from_secs(5));
     }
 
     #[test]
