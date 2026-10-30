@@ -11,7 +11,7 @@ use crate::app::AppConfig;
 // ============================================================================
 
 #[cfg(target_arch = "wasm32")]
-pub(super) fn run_web<V>(root: V, config: AppConfig)
+pub(super) fn run_web<V>(root: V, config: AppConfig) -> Result<(), crate::app::LaunchError>
 where
     V: View + StatelessView + Clone + 'static,
 {
@@ -24,16 +24,14 @@ where
     tracing::info!("Starting web platform via flui-native");
 
     // Platform init is an environment failure (unsupported browser, missing
-    // wasm feature, driver problem), not a `BUG:` invariant — see the
-    // matching comment in `run_desktop` above for why this is a `match` +
-    // `panic!` with a full error log instead of a bare `.expect()`.
-    let platform = match flui_native::current_platform() {
-        Ok(platform) => platform,
-        Err(error) => {
-            tracing::error!(%error, "Failed to initialize platform");
-            panic!("web bootstrap failed: platform initialization error: {error:?}");
+    // wasm feature, driver problem), not a `BUG:` invariant: the caller gets
+    // it as a `LaunchError`.
+    let platform = flui_native::current_platform().map_err(|error| {
+        tracing::error!(%error, "Failed to initialize platform");
+        crate::app::LaunchError::Platform {
+            source: Arc::new(error),
         }
-    };
+    })?;
 
     /// The actual web bootstrap: canvas window, renderer, UI runtime, and
     /// callback wiring. Runs once, synchronously, inside `on_ready` —
@@ -193,6 +191,7 @@ where
     if let Err(err) = result {
         panic!("web bootstrap failed: {err:?}");
     }
+    Ok(())
 }
 
 pub(super) struct WebFrameDriver {

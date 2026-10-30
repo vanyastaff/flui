@@ -199,7 +199,7 @@ The hook is split so the edge from `flui-app` could go before Subsecond exists.
   which is `Send`, and `flui-hot-reload`'s worker driver is already `Send`. The host still calls
   it only on the owner thread, so an implementation needs no `Sync`.
 - **It is installed on `AppConfig`, not `Application`** (`AppConfig::with_dev_reload`), so both
-  `Application::with_config` and `run_app_with_config` reach it. Every window opened with a
+  `Application::with_config` and `run_app`'s `AppLaunch::config` reach it. Every window opened with a
   clone of the configuration shares the one hook.
 - **Attach once per loop.** The desktop and iOS hosts attach the hook when the loop starts,
   before the first window, and detach it when the loop ends; a second attach while one is live

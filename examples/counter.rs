@@ -62,6 +62,6 @@ impl ViewState<CounterView> for CounterState {
     }
 }
 
-fn main() {
-    run_app(CounterApp);
+fn main() -> Result<(), LaunchError> {
+    run_app(CounterApp, AppLaunch::new())
 }

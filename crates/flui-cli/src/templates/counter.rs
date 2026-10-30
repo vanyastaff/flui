@@ -72,7 +72,8 @@ use flui::widgets::{SafeArea, column};
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 fn android_main(app: flui::android_activity::AndroidApp) {
-    flui::run_app_android(app, CounterApp);
+    // `run_app_android` logs why it could not start.
+    let _started = flui::run_app_android(app, CounterApp, flui::AppLaunch::new());
 }
 
 #[derive(Clone, StatelessView)]

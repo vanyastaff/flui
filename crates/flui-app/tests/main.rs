@@ -61,10 +61,17 @@ fn run_table(table: &str, cases: &[(&str, fn())]) {
 fn capability_registration() {
     run_table(
         "capability_registration",
-        &[(
-            "capability_registration::conflicting_registrations_fail_run_before_the_platform_starts",
-            capability_registration::conflicting_registrations_fail_run_before_the_platform_starts
-                as fn(),
-        )],
+        &[
+            (
+                "capability_registration::conflicting_registrations_fail_run_before_the_platform_starts",
+                capability_registration::conflicting_registrations_fail_run_before_the_platform_starts
+                    as fn(),
+            ),
+            (
+                "capability_registration::a_conflicting_launch_fails_run_app_before_the_platform_starts",
+                capability_registration::a_conflicting_launch_fails_run_app_before_the_platform_starts
+                    as fn(),
+            ),
+        ],
     );
 }
