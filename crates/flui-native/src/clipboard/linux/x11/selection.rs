@@ -62,6 +62,11 @@ const MAX_TEXT: usize = 64 * 1024 * 1024;
 /// property holds one until its timeout, and more are refused.
 const MAX_WRITERS: usize = 4;
 
+/// The most bytes the `INCR` writes hold at once, each shared buffer counted
+/// once: room for one text past a chunk in both its UTF-8 and ISO 8859-1
+/// forms, which a transfer keeps after the ownership it began under ends.
+const TRANSFER_BUDGET: usize = 2 * MAX_TEXT;
+
 /// The largest chunk written in one request, below the server's request
 /// limit whatever it is.
 const MAX_CHUNK: usize = 256 * 1024;
@@ -209,15 +214,6 @@ impl Owned {
         }
         let text = &self.text;
         Arc::clone(self.latin1.get_or_insert_with(|| form.encode(text).into()))
-    }
-
-    /// Whether `bytes` is one of the text's forms this ownership holds.
-    fn holds(&self, bytes: &Arc<[u8]>) -> bool {
-        bytes.as_ptr() == self.text.as_ptr()
-            || self
-                .latin1
-                .as_ref()
-                .is_some_and(|latin1| Arc::ptr_eq(latin1, bytes))
     }
 }
 
@@ -798,31 +794,21 @@ impl Selections {
     }
 
     /// Whether a transfer of `bytes` may start. A transfer goes on after the
-    /// ownership whose text it writes ends (ICCCM §2.2), so the text the
-    /// clipboard no longer owns but its transfers still hold is bounded:
-    /// [`MAX_TEXT`] bytes in all, each shared buffer counted once. The
-    /// current ownership's text is held anyway and never counts.
+    /// ownership whose text it writes ends (ICCCM §2.2), so what the
+    /// transfers hold is bounded when each starts: [`TRANSFER_BUDGET`] bytes
+    /// in all, each shared buffer counted once.
     fn within_budget(&self, bytes: &Arc<[u8]>) -> bool {
-        let held =
-            |buffer: &Arc<[u8]>| self.owned.as_ref().is_some_and(|owned| owned.holds(buffer));
-        if held(bytes) {
-            return true;
-        }
-        let mut retained: Vec<&Arc<[u8]>> = Vec::new();
+        let mut held: Vec<&Arc<[u8]>> = Vec::new();
         for transfer in &self.transfers {
-            if !held(&transfer.bytes)
-                && !retained
-                    .iter()
-                    .any(|kept| Arc::ptr_eq(kept, &transfer.bytes))
-            {
-                retained.push(&transfer.bytes);
+            if !held.iter().any(|kept| Arc::ptr_eq(kept, &transfer.bytes)) {
+                held.push(&transfer.bytes);
             }
         }
-        if retained.iter().any(|kept| Arc::ptr_eq(kept, bytes)) {
+        if held.iter().any(|kept| Arc::ptr_eq(kept, bytes)) {
             return true;
         }
-        let total: usize = retained.iter().map(|kept| kept.len()).sum();
-        total.saturating_add(bytes.len()) <= MAX_TEXT
+        let total: usize = held.iter().map(|kept| kept.len()).sum();
+        total.saturating_add(bytes.len()) <= TRANSFER_BUDGET
     }
 
     /// Stop hearing `requestor`'s properties once no transfer writes to it.
