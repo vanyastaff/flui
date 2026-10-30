@@ -204,6 +204,33 @@ fn semantics_listener_retirement_preserves_independent_envelopes() {
     owner_scope::semantics_listener_retirement_preserves_independent_envelopes();
 }
 
+/// Each case runs in a child process: without retention, a capture dropped
+/// while unwinding panics again and aborts the process.
+#[test]
+fn primary_claims_keep_their_captures_while_unwinding() {
+    if let Ok(case) = std::env::var(capability_seam::PRIMARY_UNWIND_CHILD) {
+        capability_seam::a_claim_unwound_keeps_its_captures(&case);
+        return;
+    }
+    for case in ["claim", "claims"] {
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "primary_claims_keep_their_captures_while_unwinding",
+                "--test-threads=1",
+            ])
+            .env(capability_seam::PRIMARY_UNWIND_CHILD, case)
+            .env("RUST_BACKTRACE", "0")
+            .output()
+            .expect("child test process");
+        assert!(
+            output.status.success(),
+            "case {case} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
 #[test]
 fn capability_seam() {
     run_table(
@@ -264,6 +291,11 @@ fn capability_seam() {
             (
                 "capability_seam::a_runtime_without_a_primary_selection_answers_not_registered",
                 capability_seam::a_runtime_without_a_primary_selection_answers_not_registered
+                    as fn(),
+            ),
+            (
+                "capability_seam::a_claim_whose_predecessor_panics_as_it_drops_is_withdrawn",
+                capability_seam::a_claim_whose_predecessor_panics_as_it_drops_is_withdrawn
                     as fn(),
             ),
         ],
