@@ -211,7 +211,7 @@ impl SwipeActions {
                     menu,
                 ))?)
             }
-            SwipeAlternative::ContextMenu => Host::Area(ContextMenuArea::new(
+            SwipeAlternative::ContextMenu => Host::Area(ContextMenuArea::try_new(
                 first.command.clone(),
                 more.iter().map(|action| action.command.clone()),
             )?),

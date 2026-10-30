@@ -1870,8 +1870,12 @@ impl MacOSWindow {
             let content: NSRect = msg_send![self.ns_window, contentRectForFrameRect: frame];
             let _: () = msg_send![self.ns_window, setStyleMask: wanted];
             let restyled: NSRect = msg_send![self.ns_window, frameRectForContentRect: content];
-            let _: () = msg_send![self.ns_window, setFrame: restyled, display: YES];
+            // `display: NO`: `YES` would draw a whole frame on this command's
+            // stack, before the resize reaches the host. The frame is asked
+            // for instead, so it comes on the next pass like any other.
+            let _: () = msg_send![self.ns_window, setFrame: restyled, display: NO];
         }
+        self.redraw().request_redraw();
         Ok(())
     }
 

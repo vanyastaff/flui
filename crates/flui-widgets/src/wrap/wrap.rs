@@ -5,10 +5,12 @@ use std::fmt;
 use flui_foundation::geometry::Axis;
 use flui_objects::{RenderWrap, WrapAlignment, WrapCrossAlignment};
 use flui_painting::paint::Clip;
+use flui_painting::typography::TextDirection;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::BoxedView;
 use flui_view::seq::ViewSeq;
 
+use crate::Directionality;
 use crate::support::generic_render_view_element;
 
 /// Lays children out along [`direction`](Wrap::direction), wrapping to a new
@@ -21,10 +23,13 @@ use crate::support::generic_render_view_element;
 /// direction. For the default horizontal direction the main axis is horizontal
 /// (left-to-right in LTR) and the cross axis is vertical (top-to-bottom).
 ///
-/// # RTL caveat
+/// # Reading direction
 ///
-/// `WrapAlignment::Start` / `End` and `WrapCrossAlignment::Start` / `End` are
-/// always LTR / TTB in FLUI — `TextDirection` is not yet plumbed into layout.
+/// The ambient [`Directionality`] decides where a horizontal run starts and
+/// which side a vertical wrap places its first run on: in a right-to-left
+/// subtree both start at the right, and `Start` / `End` alignments name the
+/// reading edge. Horizontal runs stack top to bottom, and a vertical run
+/// fills from the top.
 ///
 /// # Example
 ///
@@ -150,7 +155,38 @@ impl<C: ViewSeq> fmt::Debug for Wrap<C> {
     }
 }
 
-impl<C> flui_view::RenderView for Wrap<C>
+impl<C> flui_view::View for Wrap<C>
+where
+    C: ViewSeq + Clone + 'static,
+{
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+impl<C> flui_view::StatelessView for Wrap<C>
+where
+    C: ViewSeq + Clone + 'static,
+{
+    fn build(&self, ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
+        WrapRenderView {
+            wrap: self.clone(),
+            text_direction: Directionality::maybe_of(ctx).unwrap_or_default(),
+        }
+    }
+}
+
+/// The `RenderWrap`-backed render-object widget behind [`Wrap`], with the
+/// ambient direction already read at the `BuildContext` seam: a horizontal
+/// run starts at the reading edge, and a vertical wrap places its runs from
+/// it.
+#[derive(Clone)]
+struct WrapRenderView<C> {
+    wrap: Wrap<C>,
+    text_direction: TextDirection,
+}
+
+impl<C> flui_view::RenderView for WrapRenderView<C>
 where
     C: ViewSeq + Clone + 'static,
 {
@@ -158,7 +194,9 @@ where
     type RenderObject = RenderWrap;
 
     fn create_render_object(&self, _ctx: &flui_view::RenderObjectContext<'_>) -> RenderWrap {
-        self.build_render_object()
+        self.wrap
+            .build_render_object()
+            .with_text_direction(self.text_direction)
     }
 
     fn update_render_object(
@@ -166,23 +204,25 @@ where
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut RenderWrap,
     ) -> flui_rendering::RenderUpdateImpact {
+        let wrap = &self.wrap;
         render_object.update_configuration(
-            self.direction,
-            self.alignment,
-            self.spacing,
-            self.run_alignment,
-            self.run_spacing,
-            self.cross_axis_alignment,
-        ) | render_object.set_clip_behavior(self.clip_behavior)
+            wrap.direction,
+            wrap.alignment,
+            wrap.spacing,
+            wrap.run_alignment,
+            wrap.run_spacing,
+            wrap.cross_axis_alignment,
+        ) | render_object.set_text_direction(self.text_direction)
+            | render_object.set_clip_behavior(wrap.clip_behavior)
     }
 
     fn has_children(&self) -> bool {
-        !self.children.is_empty()
+        !self.wrap.children.is_empty()
     }
 
     fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn flui_view::View)) {
-        self.children.for_each(|_index, child| visitor(child));
+        self.wrap.children.for_each(|_index, child| visitor(child));
     }
 }
 
-generic_render_view_element!(Wrap);
+generic_render_view_element!(WrapRenderView);

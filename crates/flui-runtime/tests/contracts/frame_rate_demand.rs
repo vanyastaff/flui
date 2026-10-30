@@ -117,7 +117,7 @@ impl Rig {
         let window = crate::owner_publication::window();
         // A native host owns the window; the runtime holds it weakly.
         let native_window = Rc::clone(window.window());
-        let runtime = UiRuntime::new(
+        let runtime = UiRuntime::try_new(
             window,
             1.0,
             RuntimeHostServices::new(
