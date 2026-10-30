@@ -137,12 +137,15 @@ impl<D: Document> Persisted<D> {
         } else {
             SaveStatus::Unavailable
         };
-        let registry = cx
-            .flush_registry_in_crate(CrateToken::new())
-            .map(|registry| {
-                let publisher = registry.publisher(D::NAME);
-                (registry, publisher)
-            });
+        // Writes go to the storage the document acquired, whichever
+        // provider that is.
+        let registry = storage.as_ref().ok().and_then(|handle| {
+            cx.flush_registry_in_crate(CrateToken::new())
+                .map(|registry| {
+                    let publisher = registry.publisher(D::NAME, Arc::clone(handle.store()));
+                    (registry, publisher)
+                })
+        });
         Self {
             document: Rc::new(OpenDocument {
                 storage,
@@ -236,6 +239,9 @@ impl<D: Document> Persisted<D> {
         let bytes: Arc<[u8]> = Arc::from(framed::<D>(revision, &body));
         let replaced = {
             let mut state = document.state.borrow_mut();
+            // A load still in flight read the file before this edit: its
+            // result is not applied over it.
+            state.generation = state.generation.wrapping_add(1);
             let loaded = state
                 .loaded
                 .as_mut()
@@ -251,18 +257,20 @@ impl<D: Document> Persisted<D> {
             state.status = SaveStatus::Saving;
             replaced
         };
-        // The replaced value's drop is application code: no borrow is held.
-        drop(replaced);
         publisher.publish(bytes, mode, revision);
         document.refresh();
+        // The replaced value's drop is application code: it runs with no
+        // borrow held and after this edit is published, so an edit it makes
+        // is published after this one and wins.
+        drop(replaced);
         Ok(revision)
     }
 
     /// The latest revision the storage confirmed, if any.
     #[must_use]
     pub fn committed(&self) -> Option<Revision> {
-        let (registry, _) = self.document.registry.as_ref()?;
-        registry.committed(D::NAME).map(|(revision, _)| revision)
+        let (_, publisher) = self.document.registry.as_ref()?;
+        publisher.committed().map(|(revision, _)| revision)
     }
 
     /// Where the document stands against its storage.
@@ -342,6 +350,11 @@ impl<D: Document> OpenDocument<D> {
     ) -> Result<Rc<D>, PersistError> {
         let mut state = self.state.borrow_mut();
         let latest = state.generation == generation;
+        if latest {
+            // Bytes written before this load belong to the value it replaces:
+            // the status follows the load, not their write.
+            state.published = None;
+        }
         let (result, replaced) = match outcome {
             Ok(loaded) => {
                 let value = Rc::clone(&loaded.value);
@@ -439,8 +452,8 @@ impl<D: Document> OpenDocument<D> {
     fn refresh(self: &Rc<Self>) {
         let (released, stale_watch, spawn) = {
             let mut state = self.state.borrow_mut();
-            if let (Some(_), Some((registry, _))) = (&state.published, &self.registry) {
-                let flush = registry.state(D::NAME);
+            if let (Some(_), Some((_, publisher))) = (&state.published, &self.registry) {
+                let flush = publisher.state();
                 match &flush {
                     FlushState::Clean => {
                         if matches!(state.failure, Some(PersistError::Storage(_))) {

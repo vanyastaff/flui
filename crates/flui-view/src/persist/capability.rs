@@ -41,6 +41,11 @@ impl StorageHandle {
         Self { store }
     }
 
+    /// The store this handle reaches.
+    pub(crate) fn store(&self) -> &Arc<dyn Storage> {
+        &self.store
+    }
+
     /// Read the value stored under `name`, refusing one longer than `limit`
     /// bytes; see [`Storage::read`].
     pub fn read(&self, name: &StorageName, limit: u64) -> StorageFuture<Stored> {
