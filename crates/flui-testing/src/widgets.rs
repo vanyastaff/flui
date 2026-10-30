@@ -65,7 +65,7 @@ use flui_view::element::InheritedElementAccess;
 use flui_widgets::{Align, ConstrainedBox, UnconstrainedBox};
 
 use self::host::WidgetHost;
-use crate::host::HeadlessWindow;
+use crate::host::{HeadlessWindow, KitStorage};
 
 /// A laid-out widget tree, mounted in a [`HeadlessHost`](crate::HeadlessHost)
 /// so geometry can be queried after layout, and re-driven with
@@ -350,13 +350,40 @@ pub fn lay_out_with_storage(
     constraints: BoxConstraints,
     storage: impl flui_platform::Storage,
 ) -> LaidOut {
-    mount_laid_out(root, constraints, Some(Arc::new(storage)))
+    mount_laid_out(
+        root,
+        constraints,
+        Some(KitStorage {
+            host: Arc::new(storage),
+            provided: None,
+        }),
+    )
+}
+
+/// Like [`lay_out_with_storage`], with the application providing `provided`
+/// as the `StorageCapability` in place of the host's `host` storage: the
+/// tree's widgets acquire `provided`, and the host's own storage is still
+/// there to tell whether anything reached it.
+pub fn lay_out_with_provided_storage(
+    root: impl View,
+    constraints: BoxConstraints,
+    host: impl flui_platform::Storage,
+    provided: impl flui_platform::Storage,
+) -> LaidOut {
+    mount_laid_out(
+        root,
+        constraints,
+        Some(KitStorage {
+            host: Arc::new(host),
+            provided: Some(Arc::new(provided)),
+        }),
+    )
 }
 
 fn mount_laid_out(
     root: impl View,
     constraints: BoxConstraints,
-    storage: Option<Arc<dyn flui_platform::Storage>>,
+    storage: Option<KitStorage>,
 ) -> LaidOut {
     let logical_root_type = root.view_type_id();
     let surface = surface_for(&constraints);

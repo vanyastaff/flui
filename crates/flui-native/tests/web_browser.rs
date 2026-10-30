@@ -1370,14 +1370,15 @@ fn a_textarea_serves_the_field_without_edit_context() {
 }
 
 /// A frame request carries the browser's own frame time, not the moment the callback ran: a frame
-/// the page's thread was held for before the backend's callback sees a vsync that old.
+/// the page's thread was held for before the backend's callback sees a vsync that old. Each frame asks
+/// for the next, as a running animation does: the backend produces a frame only when one is asked for.
 #[wasm_bindgen_test]
 async fn an_animation_frame_request_is_stamped_with_the_browsers_frame_time() {
     const HELD_MS: f64 = 25.0;
     let canvas = HostedCanvas::open();
     // `(requests seen, how long before the callback ran the second one's vsync was)`.
     let seen = Arc::new(std::sync::Mutex::new((0_usize, Duration::ZERO)));
-    let record = Arc::clone(&seen);
+    let (record, window) = (Arc::clone(&seen), Rc::clone(&canvas.window));
     canvas.handler.react_to_frame(move |request| {
         let now = flui_platform::EventTime::from_nanos(flui_native::event_timestamp_ns());
         let mut seen = record.lock().expect("the frame record");
@@ -1386,15 +1387,18 @@ async fn an_animation_frame_request_is_stamped_with_the_browsers_frame_time() {
             seen.1 = now.saturating_duration_since(request.vsync);
         }
         if seen.0 == 1 {
-            // Registered inside the callback, so it runs ahead of the backend's own callback for
-            // the following frame and holds the thread between the frame's start and that callback.
+            // Registered inside the callback, before the request for the next frame, so it runs
+            // ahead of the backend's own callback for that frame and holds the thread between the
+            // frame's start and that callback.
             hold_next_frame(HELD_MS);
+            window.request_redraw();
         }
         assert!(
             request.target_present.is_none(),
             "the browser names no present time"
         );
     });
+    canvas.window.request_redraw();
     wait(300).await;
     let (requests, age) = *seen.lock().expect("the frame record");
     assert!(requests >= 2, "{requests} frame requests in 300 ms");

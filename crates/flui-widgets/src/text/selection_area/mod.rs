@@ -13,6 +13,7 @@
 //!
 //! [anchor]: SemanticsAnchor
 
+mod handles;
 mod input;
 
 use std::cell::{Cell, RefCell};
@@ -28,6 +29,7 @@ use flui_objects::{RenderParagraph, SubtreeAnchor};
 use flui_painting::styling::Color;
 use flui_painting::text_boundaries;
 use flui_painting::typography::{TextDirection, TextLink};
+use flui_rendering::layer::LayerLink;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::semantics::{
     DocumentPosition, DocumentSelection, SemanticsAnchor, SemanticsRole,
@@ -41,16 +43,20 @@ use flui_view::{
     impl_inherited_view,
 };
 
+pub use self::handles::{
+    DefaultSelectionHandles, DotHandles, HandleInfo, HandleSide, SelectionHandles,
+};
+use self::handles::{HandleState, Look};
 use self::input::{AreaAction, CaretMemory, PointerState, SelectionGestures};
 use super::primary_selection::PrimarySelectionOwner;
 use super::rich_text::ResolvedParagraph;
 use super::selection_style::{DefaultSelectionStyle, SelectionStyle};
-use crate::Semantics;
 use crate::anchored_box::AnchoredBox;
 use crate::interaction::{
     Actions, CopySelectionTextIntent, DismissIntent, Focus, SelectAllTextIntent,
 };
 use crate::support::RefCallback;
+use crate::{Overlay, Semantics};
 
 /// What a [`SelectionArea`] holds selected, in reading order.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,6 +94,15 @@ type SelectionCallback = Rc<dyn Fn(&mut EventCx<'_>, Option<&SelectedText>)>;
 /// it, and the selection clears once no selected text is left; the listener
 /// hears of each change.
 ///
+/// A touch long press selects the word under it and shows a handle under
+/// each end, in the nearest [`Overlay`]; dragging a handle
+/// moves its end, and the handles follow the ends as the text scrolls. A
+/// tap, Esc or a selection by mouse hides them. They look like
+/// [`handles`](Self::handles) sets, else the nearest
+/// [`DefaultSelectionHandles`], else [`DotHandles`] in the opaque active
+/// highlight colour. Without an overlay there are no handles, and a debug
+/// build says so.
+///
 /// # Examples
 ///
 /// ```rust
@@ -105,6 +120,7 @@ pub struct SelectionArea {
     on_selection_changed: Option<SelectionCallback>,
     role: SemanticsRole,
     style: Option<SelectionStyle>,
+    handles: Option<Rc<dyn SelectionHandles>>,
 }
 
 impl std::fmt::Debug for SelectionArea {
@@ -114,6 +130,7 @@ impl std::fmt::Debug for SelectionArea {
             .field("on_selection_changed", &self.on_selection_changed.is_some())
             .field("role", &self.role)
             .field("style", &self.style)
+            .field("handles", &self.handles.is_some())
             .finish()
     }
 }
@@ -126,7 +143,17 @@ impl SelectionArea {
             on_selection_changed: None,
             role: SemanticsRole::Document,
             style: None,
+            handles: None,
         }
+    }
+
+    /// Build the touch handles with `handles`, in place of the nearest
+    /// [`DefaultSelectionHandles`]' or [`DotHandles`] in the opaque active
+    /// highlight colour.
+    #[must_use]
+    pub fn handles(mut self, handles: impl SelectionHandles) -> Self {
+        self.handles = Some(Rc::new(handles));
+        self
     }
 
     /// Call `handler` with the selected text after each change of the
@@ -201,6 +228,7 @@ impl StatefulView for SelectionArea {
                 mounted: Cell::new(true),
                 backward: Cell::new(false),
                 caret: Cell::new(CaretMemory::default()),
+                handles: HandleState::default(),
             }),
         }
     }
@@ -230,12 +258,40 @@ impl ViewState<SelectionArea> for SelectionAreaState {
         *self.model.writer.borrow_mut() = Some(ctx.writer_source());
         *self.model.clipboard.borrow_mut() = ctx.capability::<ClipboardCapability>().ok();
         *self.model.post_frame.borrow_mut() = ctx.post_frame_handle();
+        *self.model.handles.overlay.borrow_mut() = Overlay::maybe_of(ctx);
         let model = Rc::downgrade(&self.model);
         *self.model.registry.on_departure.borrow_mut() = Some(Box::new(move |anchor| {
             if let Some(model) = model.upgrade() {
                 model.departed(anchor);
             }
         }));
+        let model = Rc::downgrade(&self.model);
+        // A text laid out anew under shown handles changes the line they
+        // are sized to.
+        *self.model.registry.on_rebuild.borrow_mut() = Some(Box::new(move || {
+            if let Some(model) = model.upgrade() {
+                model.check_handles_after_frame();
+            }
+        }));
+    }
+
+    /// Follows the overlay the handles go in.
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        let overlay = Overlay::maybe_of(ctx);
+        let moved = match (
+            self.model.handles.overlay.borrow().as_ref(),
+            overlay.as_ref(),
+        ) {
+            (Some(old), Some(new)) => !old.is_same(new),
+            (None, None) => false,
+            _ => true,
+        };
+        if moved {
+            let mut failure = FirstPanic::new();
+            self.model.hide_handles(&mut failure);
+            *self.model.handles.overlay.borrow_mut() = overlay;
+            failure.resume();
+        }
     }
 
     fn did_update_view(&mut self, _old_view: &SelectionArea, new_view: &SelectionArea) {
@@ -250,12 +306,26 @@ impl ViewState<SelectionArea> for SelectionAreaState {
             .style
             .or_else(|| DefaultSelectionStyle::maybe_of(ctx))
             .unwrap_or_default();
+        let look = view
+            .handles
+            .clone()
+            .or_else(|| DefaultSelectionHandles::maybe_of(ctx))
+            .map_or_else(
+                || Look::Dots(DotHandles::new(style.active.with_alpha(255))),
+                Look::Given,
+            );
+        self.model.handles.set_look(look);
         // The document reads its lines in the ambient direction.
         let direction = match crate::Directionality::maybe_of(ctx).unwrap_or_default() {
             TextDirection::Ltr => SemanticsTextDirection::Ltr,
             TextDirection::Rtl => SemanticsTextDirection::Rtl,
         };
-        self.model.direction.set(direction);
+        // Shown handles are built for the direction they read in.
+        if self.model.direction.replace(direction) != direction {
+            let mut failure = FirstPanic::new();
+            self.model.handles.refresh(&mut failure);
+            failure.resume();
+        }
         let content = SelectionGestures {
             model: Rc::clone(&self.model),
             child: SelectionScope {
@@ -310,9 +380,13 @@ impl ViewState<SelectionArea> for SelectionAreaState {
         // A handler a frame already captured finds no area to rebuild.
         self.model.rebuild.borrow_mut().take();
         self.model.mounted.set(false);
-        // A selection that is gone is no longer offered to other clients.
+        // A selection that is gone is no longer offered to other clients,
+        // and its handles leave the overlay even when the backend fails.
+        let mut failure = FirstPanic::new();
         let primary = self.model.primary.borrow().clone();
-        primary.release();
+        failure.contain(|| primary.release());
+        self.model.handles.hide(&mut failure);
+        failure.resume();
     }
 }
 
@@ -352,6 +426,8 @@ struct SelectionModel {
     backward: Cell<bool>,
     /// What the keys remember about the moving end.
     caret: Cell<CaretMemory>,
+    /// The touch handles.
+    handles: HandleState,
 }
 
 impl SelectionModel {
@@ -402,11 +478,20 @@ impl SelectionModel {
         let covered = coverage.map(|(parts, _)| parts);
         let selected = covered.as_ref().map(|covered| self.joined(covered));
         let take_focus = from_user && selection.is_some();
+        let selected_any = selection.is_some();
         *self.selection.borrow_mut() = selection;
         let rebuild = self.rebuild.borrow().clone();
         let listener = self.on_selection_changed.borrow().clone();
         let primary = self.primary.borrow().clone();
         let mut failure = FirstPanic::new();
+        // Nothing selected has nothing to hold; otherwise the handles follow
+        // the new ends, whose lines may differ in height. Hidden before the
+        // highlight, which then publishes no ends.
+        if selected_any {
+            self.handles.refresh(&mut failure);
+        } else {
+            self.handles.hide(&mut failure);
+        }
         failure.contain(|| {
             if let Some(rebuild) = rebuild {
                 rebuild.schedule(RebuildReason::StateChange);
@@ -434,16 +519,58 @@ impl SelectionModel {
         failure.resume();
     }
 
+    /// Shows the handles under the selection's ends, when an overlay can
+    /// hold them. A wake that fails is held in `failure`, after the ends
+    /// are published.
+    fn show_handles(self: &Rc<Self>, failure: &mut FirstPanic) {
+        if !self.handles.shown.get() && self.handles.show(self, failure) {
+            self.republish_ends(failure);
+        }
+    }
+
+    /// Hides the handles, if they are shown. A wake that fails is held in
+    /// `failure`, after the ends are withdrawn.
+    fn hide_handles(&self, failure: &mut FirstPanic) {
+        if self.handles.hide(failure) {
+            self.republish_ends(failure);
+        }
+    }
+
+    /// Hands the texts the links of the ends they hold, or none, after the
+    /// handles were shown or hidden; the selection itself is unchanged.
+    fn republish_ends(&self, failure: &mut FirstPanic) {
+        let selection = self.selection.borrow().clone();
+        let covered = selection
+            .and_then(|selection| self.covered(&selection))
+            .map(|(parts, _)| parts);
+        self.highlight(covered.as_deref().unwrap_or_default(), failure);
+    }
+
+    /// The direction the area reads in.
+    fn text_direction(&self) -> TextDirection {
+        match self.direction.get() {
+            SemanticsTextDirection::Rtl => TextDirection::Rtl,
+            SemanticsTextDirection::Ltr => TextDirection::Ltr,
+        }
+    }
+
     /// The area gained or lost the focus: it rebuilds with the active or the
-    /// dimmed highlight, and keeps its selection.
+    /// dimmed highlight, and keeps its selection. Losing it hides the
+    /// handles, which would otherwise stay above whatever took the focus,
+    /// such as a route pushed over the area.
     fn focus_changed(&self, focused: bool) {
         if self.focused.replace(focused) == focused {
             return;
         }
+        let mut failure = FirstPanic::new();
+        if !focused {
+            self.hide_handles(&mut failure);
+        }
         let rebuild = self.rebuild.borrow().clone();
         if let Some(rebuild) = rebuild {
-            rebuild.schedule(RebuildReason::StateChange);
+            failure.contain(|| rebuild.schedule(RebuildReason::StateChange));
         }
+        failure.resume();
     }
 
     /// The text under `anchor` left the area. When it held an end of the
@@ -621,26 +748,38 @@ impl SelectionModel {
     /// highlights what it holds now; the paragraph bounds it when it builds,
     /// and its layout paints only the lines it shows. A rebuild that panics
     /// stops neither the others nor the caller's listener: its failure is
-    /// held in `failure`.
+    /// held in `failure`. While the handles are shown, the first text with
+    /// a part publishes the start for its handle and the last the end.
     fn highlight(&self, covered: &[Covered], failure: &mut FirstPanic) {
+        let parts: Vec<&Covered> = covered
+            .iter()
+            .filter(|part| !part.range.is_empty())
+            .collect();
+        let shown = self.handles.shown.get();
+        let holds = |index: usize, part: Option<&&Covered>, side: HandleSide| {
+            (shown && part.is_some_and(|part| part.index == index)).then(|| self.handles.link(side))
+        };
         let changed: Vec<Rc<SelectableEntry>> = {
             let entries = self.registry.entries.borrow();
             entries
                 .iter()
                 .enumerate()
                 .filter_map(|(index, entry)| {
-                    let part = covered
-                        .iter()
-                        .find(|part| part.index == index && !part.range.is_empty())
-                        .map(|part| {
-                            let end = if part.to_end {
-                                usize::MAX
-                            } else {
-                                part.range.end
-                            };
-                            part.range.start..end
-                        });
-                    (entry.highlight.replace(part.clone()) != part).then(|| Rc::clone(entry))
+                    let part = parts.iter().find(|part| part.index == index).map(|part| {
+                        let end = if part.to_end {
+                            usize::MAX
+                        } else {
+                            part.range.end
+                        };
+                        part.range.start..end
+                    });
+                    let ends = (
+                        holds(index, parts.first(), HandleSide::Start),
+                        holds(index, parts.last(), HandleSide::End),
+                    );
+                    let moved = entry.handles.replace(ends) != ends;
+                    (entry.highlight.replace(part.clone()) != part || moved)
+                        .then(|| Rc::clone(entry))
                 })
                 .collect()
         };
@@ -787,6 +926,9 @@ fn hidden(owner: &PipelineOwner, subtree: &SubtreeAnchor) -> bool {
 /// Told the anchor of a text that left an area.
 type DepartureHook = Box<dyn Fn(&SemanticsAnchor)>;
 
+/// Told that a text rebuilt, so it may lay out anew.
+type RebuildHook = Box<dyn Fn()>;
+
 /// The texts registered with one area, in registration order.
 #[derive(Default)]
 pub(super) struct SelectionRegistry {
@@ -794,6 +936,8 @@ pub(super) struct SelectionRegistry {
     /// Told the anchor of each text that leaves, once the entries are no
     /// longer borrowed.
     on_departure: RefCell<Option<DepartureHook>>,
+    /// Told when a text rebuilds.
+    on_rebuild: RefCell<Option<RebuildHook>>,
 }
 
 impl SelectionRegistry {
@@ -831,12 +975,7 @@ impl SelectionRegistry {
         let snap = |at: &DocumentPosition| {
             let entry = entries.iter().find(|entry| entry.anchor == *at.text())?;
             let text = entry.text.borrow();
-            let byte = at.byte().min(text.len());
-            let byte = if text_boundaries::is_grapheme_boundary(&text, byte) {
-                byte
-            } else {
-                text_boundaries::previous_grapheme_boundary(&text, byte)
-            };
+            let byte = text_boundaries::grapheme_floor(&text, at.byte());
             Some(DocumentPosition::new(at.text().clone(), byte))
         };
         Some(DocumentSelection::new(
@@ -853,8 +992,14 @@ struct SelectableEntry {
     text: RefCell<String>,
     subtree: SubtreeAnchor,
     highlight: RefCell<Option<Range<usize>>>,
+    /// The links it publishes the selection's start and end under, for the
+    /// handles, while it holds them.
+    handles: Cell<HandleEnds>,
     rebuild: RefCell<Option<RebuildHandle>>,
 }
+
+/// The links a text publishes the selection's start and end under.
+type HandleEnds = (Option<LayerLink>, Option<LayerLink>);
 
 /// One text's part of a selection: its entry's index, the bytes its layout
 /// shows of that part, and whether the part runs on to the text's end
@@ -865,11 +1010,13 @@ struct Covered {
     to_end: bool,
 }
 
-/// The selected bytes of one text and the colour that highlights them.
+/// The selected bytes of one text, the colour that highlights them and the
+/// links it publishes the selection's ends under.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Highlight {
     pub(super) range: Range<usize>,
     pub(super) color: Color,
+    pub(super) handles: HandleEnds,
 }
 
 /// Hands the area's registry and highlight colour to the texts beneath it; a
@@ -1022,6 +1169,7 @@ impl StatefulView for SelectableParagraph {
                 text: RefCell::new(self.plain_text()),
                 subtree: SubtreeAnchor::new(),
                 highlight: RefCell::new(None),
+                handles: Cell::new((None, None)),
                 rebuild: RefCell::new(None),
             }),
             registry: Rc::clone(&self.registry),
@@ -1059,6 +1207,9 @@ impl ViewState<SelectableParagraph> for SelectableParagraphState {
     }
 
     fn build(&self, view: &SelectableParagraph, _ctx: &dyn BuildContext) -> impl IntoView {
+        if let Some(on_rebuild) = self.registry.on_rebuild.borrow().as_ref() {
+            on_rebuild();
+        }
         let paragraph = ResolvedParagraph {
             selectable: Some(self.entry.anchor.clone()),
             highlight: self.entry.highlight.borrow().clone().and_then(|range| {
@@ -1067,6 +1218,7 @@ impl ViewState<SelectableParagraph> for SelectableParagraphState {
                 (!range.is_empty()).then_some(Highlight {
                     range,
                     color: view.color,
+                    handles: self.entry.handles.get(),
                 })
             }),
             ..view.paragraph.clone()

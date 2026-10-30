@@ -13,9 +13,11 @@
 //! - **immutable data**: a non-`mut` `static` of a primitive, a shared
 //!   reference to immutable data, an array, slice or tuple of it, or a bare
 //!   `fn` pointer;
-//! - **monotonic ID counters**: a non-`mut`, non-`pub` atomic integer `static`
-//!   initialized with a literal, whose every mention where it is visible is
-//!   its declaration, `NAME.fetch_add(<literal ≥ 1>, …)` or a `use` path.
+//! - **monotonic ID counters**: a non-`mut`, non-`pub` `AtomicU64` or
+//!   `AtomicI64` `static` initialized with a literal, whose every mention where
+//!   it is visible is its declaration, `NAME.fetch_add(<literal ≥ 1>, …)` or a
+//!   `use` path. A narrower counter can wrap, so it needs a reviewed `counter`
+//!   entry.
 //!
 //! Every other global has an entry in its crate's
 //! `[package.metadata.flui] globals`, keyed by its item path in the target:
@@ -205,7 +207,7 @@ fn exemption(defs: &[Def]) -> Option<Exempt> {
         if def.ty.immutable_data {
             return Some(Exempt::Immutable);
         }
-        let counter = def.ty.atomic_int
+        let counter = def.ty.wide_atomic_int
             && def.counter_init
             && def.vis != Vis::Public
             && def.uses.as_ref().is_some_and(|uses| uses.disallowed == 0);

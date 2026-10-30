@@ -39,6 +39,10 @@ pub(super) const ATOMIC_INTS: [&str; 10] = [
     "AtomicIsize",
 ];
 
+/// The atomic integer types wide enough that `fetch_add` by a literal cannot
+/// wrap in a process's lifetime, so a counter of one needs no review.
+pub(super) const WIDE_ATOMIC_INTS: [&str; 2] = ["AtomicU64", "AtomicI64"];
+
 /// The primitive types that are immutable data on their own.
 const PRIMITIVES: [&str; 17] = [
     "bool", "char", "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128",
@@ -83,6 +87,8 @@ pub(super) struct TypeInfo {
     pub(super) immutable_data: bool,
     /// One of [`ATOMIC_INTS`] under any path prefix.
     pub(super) atomic_int: bool,
+    /// One of [`WIDE_ATOMIC_INTS`] under any path prefix.
+    pub(super) wide_atomic_int: bool,
 }
 
 impl TypeInfo {
@@ -95,6 +101,9 @@ impl TypeInfo {
             atomic_int: outer
                 .as_deref()
                 .is_some_and(|name| ATOMIC_INTS.contains(&name)),
+            wide_atomic_int: outer
+                .as_deref()
+                .is_some_and(|name| WIDE_ATOMIC_INTS.contains(&name)),
             outer,
             immutable_data: immutable_data(ty),
         }

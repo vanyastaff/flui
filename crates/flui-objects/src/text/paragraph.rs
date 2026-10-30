@@ -25,11 +25,13 @@ pub use links::{ShownLinksListener, TextLinkFocus, TextLinkKey, TextLinkRoute};
 
 use flui_foundation::Diagnosticable;
 use flui_foundation::Leaf;
-use flui_foundation::geometry::{Offset, Rect, Size};
+use flui_foundation::geometry::{Matrix4, Offset, Rect, Size};
 use flui_interaction::CursorIcon;
 use flui_painting::styling::Color;
 use flui_painting::text_boundaries;
-use flui_painting::typography::{InlineSpan, TextAffinity, TextAlign, TextDirection, TextPosition};
+use flui_painting::typography::{
+    InlineSpan, LineMetrics, TextAffinity, TextAlign, TextDirection, TextPosition,
+};
 use flui_painting::{Invalidation, Paint, TextBaseline as PainterBaseline, TextPainter};
 
 use flui_rendering::{
@@ -40,6 +42,7 @@ use flui_rendering::{
         PaintCx,
     },
     hit_testing::CursorRequest,
+    layer::LayerLink,
     parent_data::BoxParentData,
     semantics::{SemanticsAnchor, SemanticsConfiguration, SemanticsRegions, TextContent},
     traits::{RenderBox, TextBaseline},
@@ -75,6 +78,10 @@ pub struct RenderParagraph {
     selection: Option<std::ops::Range<usize>>,
     /// The highlight behind the selected glyphs.
     selection_color: Color,
+    /// Where the selection's start is published for a handle, if anywhere.
+    start_handle: Option<LayerLink>,
+    /// Where the selection's end is published for a handle, if anywhere.
+    end_handle: Option<LayerLink>,
 }
 
 impl RenderParagraph {
@@ -94,6 +101,8 @@ impl RenderParagraph {
             selectable: None,
             selection: None,
             selection_color: Color::TRANSPARENT,
+            start_handle: None,
+            end_handle: None,
         }
     }
 
@@ -196,6 +205,69 @@ impl RenderParagraph {
         self.selection_color
     }
 
+    /// Publishes where the selection's ends sit, for handles that follow
+    /// them: a zero-width leader one line tall at the caret before the
+    /// first selected byte under `start`, and after the last under `end`.
+    /// The links come from whatever owns the handles; `None` publishes
+    /// nothing for that end, and a paragraph without a selection publishes
+    /// neither.
+    pub fn set_selection_handles(
+        &mut self,
+        start: Option<LayerLink>,
+        end: Option<LayerLink>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.start_handle == start && self.end_handle == end {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        let was_compositing = self.publishes_handles();
+        self.start_handle = start;
+        self.end_handle = end;
+        if was_compositing == self.publishes_handles() {
+            flui_rendering::RenderUpdateImpact::PAINT
+        } else {
+            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
+        }
+    }
+
+    fn publishes_handles(&self) -> bool {
+        self.start_handle.is_some() || self.end_handle.is_some()
+    }
+
+    /// Pushes a leader at each selection end that has a link. The start
+    /// sits on the line after it (downstream) and the end on the line it
+    /// ends (upstream), so an end at a soft wrap stays with its glyphs.
+    fn paint_handle_leaders(&self, ctx: &mut PaintCx<'_, Leaf>) {
+        let Some(range) = self.selection.as_ref() else {
+            return;
+        };
+        // The ends sit where the highlight ends: on the grapheme boundaries
+        // of the current text.
+        let text = self
+            .painter
+            .text()
+            .map(InlineSpan::to_plain_text)
+            .unwrap_or_default();
+        let floor = |byte: usize| text_boundaries::grapheme_floor(&text, byte);
+        let ends = [
+            (
+                self.start_handle,
+                TextPosition::downstream(floor(range.start)),
+            ),
+            (self.end_handle, TextPosition::upstream(floor(range.end))),
+        ];
+        let lines = self.painter.get_line_metrics();
+        for (link, position) in ends {
+            let Some(link) = link else {
+                continue;
+            };
+            let caret = self.painter.get_offset_for_caret(position);
+            let height = line_of(&lines, position).map_or(0.0, |line| line.height);
+            ctx.with_transform(Matrix4::translation(caret.dx, caret.dy, 0.0), |ctx| {
+                ctx.with_leader(link, Size::new(0.0, height), |_| {});
+            });
+        }
+    }
+
     /// Paints the selection's boxes behind the glyphs, each once: with a
     /// translucent colour an overlap would read darker.
     fn paint_selection(&self, ctx: &mut PaintCx<'_, Leaf>) {
@@ -209,15 +281,10 @@ impl RenderParagraph {
             return;
         };
         let text = span.to_plain_text();
-        let snap = |byte: usize| {
-            let byte = byte.min(text.len());
-            if text_boundaries::is_grapheme_boundary(&text, byte) {
-                byte
-            } else {
-                text_boundaries::previous_grapheme_boundary(&text, byte)
-            }
-        };
-        let (start, end) = (snap(range.start), snap(range.end));
+        let (start, end) = (
+            text_boundaries::grapheme_floor(&text, range.start),
+            text_boundaries::grapheme_floor(&text, range.end),
+        );
         if start >= end {
             return;
         }
@@ -517,6 +584,27 @@ fn text_invalidation_impact(
     }
 }
 
+/// The line `position` caret sits on: with upstream affinity, the line a
+/// soft wrap at it ends.
+fn line_of(lines: &[LineMetrics], position: TextPosition) -> Option<&LineMetrics> {
+    let byte = position.offset;
+    let ending = || {
+        lines
+            .iter()
+            .find(|line| line.start_index < byte && line.end_index == byte)
+    };
+    (position.affinity == TextAffinity::Upstream)
+        .then(ending)
+        .flatten()
+        .or_else(|| {
+            lines
+                .iter()
+                .take_while(|line| line.start_index <= byte)
+                .last()
+                .or_else(|| lines.first())
+        })
+}
+
 impl Diagnosticable for RenderParagraph {
     fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
         properties.add_enum("text_align", self.painter.text_align());
@@ -529,6 +617,16 @@ impl Diagnosticable for RenderParagraph {
         properties.add_flag("soft_wrap", self.soft_wrap, "soft wrap");
         properties.add("selection", format!("{:?}", self.selection));
         properties.add("selection_color", format!("{:?}", self.selection_color));
+        properties.add(
+            "selection_handles",
+            format!(
+                "{:?}",
+                (
+                    self.start_handle.map(|link| link.id()),
+                    self.end_handle.map(|link| link.id()),
+                )
+            ),
+        );
         properties.add(
             "max_lines",
             self.painter
@@ -559,6 +657,11 @@ impl Diagnosticable for RenderParagraph {
 impl RenderBox for RenderParagraph {
     type Arity = Leaf;
     type ParentData = BoxParentData;
+
+    /// A paragraph that publishes its selection's ends pushes leader layers.
+    fn always_needs_compositing(&self) -> bool {
+        self.publishes_handles()
+    }
 
     fn perform_layout(
         &mut self,
@@ -680,6 +783,7 @@ impl RenderBox for RenderParagraph {
         }
         self.paint_selection(ctx);
         self.painter.paint(ctx.canvas(), Offset::ZERO);
+        self.paint_handle_leaders(ctx);
         // The ring follows each line of the focused link, just outside its
         // glyphs, so it covers none of them.
         if let Some(TextLinkFocus {

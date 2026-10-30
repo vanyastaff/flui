@@ -66,7 +66,6 @@
 //!     .with_tight_height(50.0);
 //! ```
 //!
-mod axis_direction;
 mod box_constraints;
 mod direction;
 mod sliver_constraints;
@@ -75,9 +74,9 @@ mod sliver_layout;
 
 use std::fmt;
 
-pub use axis_direction::AxisDirection;
 pub use box_constraints::BoxConstraints;
 pub use direction::{GrowthDirection, apply_growth_direction_to_scroll_direction, right_way_up};
+pub use flui_foundation::geometry::AxisDirection;
 pub use sliver_constraints::SliverConstraints;
 pub use sliver_geometry::SliverGeometry;
 /// Paint-offset math shared by sliver render objects and the pipeline.
