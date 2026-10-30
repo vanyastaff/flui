@@ -1273,10 +1273,7 @@ mod event_loop {
                 .bind::<XdgWmBase, _, _>(&handle, 1..=WM_BASE_VERSION, ())
                 .map_err(|error| {
                     tracing::error!(%error, "Wayland: xdg_wm_base");
-                    PlatformError::MissingRequirement {
-                        environment: flui_platform::Environment::Linux,
-                        requirement: "the Wayland `xdg_wm_base` global",
-                    }
+                    crate::version::requirement::missing(crate::version::requirement::XDG_WM_BASE)
                 })?;
             let viewporter = globals
                 .bind::<WpViewporter, _, _>(&handle, 1..=VIEWPORTER_VERSION, ())

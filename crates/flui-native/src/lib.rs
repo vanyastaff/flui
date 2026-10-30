@@ -512,13 +512,12 @@ pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {
     }
 }
 
-/// The winit host, as [`current_platform`] starts it on Linux.
+/// The winit host, as [`current_platform`] starts it on Linux, after the
+/// display server it will open is checked against Linux's floor: winit's own
+/// connection never reports a missing `xdg_wm_base` or RandR 1.5 as one.
 #[cfg(all(target_os = "linux", feature = "winit-backend"))]
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "the signature a build without the winit host answers with an error"
-)]
 fn start_winit() -> Result<Box<dyn Platform>, PlatformError> {
+    display::linux::floor::probe(&display::linux::protocol::Environment::current())?;
     Ok(Box::new(WinitPlatform::new()))
 }
 

@@ -116,15 +116,12 @@ impl X11Connection {
         }
         // RandR 1.5 is part of Linux's floor: the monitor list is read with it
         // (ADR-0244 §3).
-        let randr = x11rb::protocol::randr::query_version(&xcb, 1, 5)
-            .ok()
-            .and_then(|cookie| cookie.reply().ok());
-        if randr.is_none_or(|version| (version.major_version, version.minor_version) < (1, 5)) {
-            return Err(PlatformError::MissingRequirement {
-                environment: flui_platform::Environment::Linux,
-                requirement: "the X11 RandR 1.5 extension",
-            });
-        }
+        crate::version::requirement::randr_version(
+            x11rb::protocol::randr::query_version(&xcb, 1, 5)
+                .ok()
+                .and_then(|cookie| cookie.reply().ok())
+                .map(|version| (version.major_version, version.minor_version)),
+        )?;
         Ok(Arc::new(Self { xcb, screen }))
     }
 
