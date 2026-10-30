@@ -89,32 +89,84 @@ enum MinSdk {
     Unverified(String),
 }
 
-/// Every `minSdk = …` assignment in a Gradle build script, in order, a
-/// trailing `//` comment dropped: a later one overrides an earlier one, so
-/// each must state the floor.
+/// Every minimum-SDK declaration in a Gradle build script, in order: each
+/// `minSdk` or `minSdkVersion` identifier, wherever the layout puts it
+/// (`defaultConfig { minSdk = 23 }` on one line included), with the value
+/// after `=`, inside `(…)` or after a space, up to the end of the line, a
+/// `;` or a `}`. Comments are dropped first. A later declaration overrides
+/// an earlier one, so each must state the floor; a mention that is no
+/// declaration the build can read is an unverified one.
 fn min_sdk_assignments(script: &str) -> Vec<MinSdk> {
-    script
-        .lines()
-        .filter_map(|line| {
-            let (key, value) = line.split_once('=')?;
-            if key.trim() != "minSdk" {
-                return None;
+    let code = without_comments(script);
+    let mut found = Vec::new();
+    let mut rest = code.as_str();
+    while let Some(at) = rest.find("minSdk") {
+        let before = rest[..at].chars().next_back();
+        let after_name = &rest[at + "minSdk".len()..];
+        let after_name = after_name.strip_prefix("Version").unwrap_or(after_name);
+        let continues_identifier = after_name
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_');
+        let qualified_or_quoted =
+            before.is_some_and(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '"' | '\''));
+        rest = after_name;
+        if continues_identifier || qualified_or_quoted {
+            continue;
+        }
+        let value = after_name.trim_start_matches([' ', '\t']);
+        let value = if let Some(value) = value.strip_prefix('=') {
+            value
+        } else if let Some(value) = value.strip_prefix('(') {
+            value.split_once(')').map_or(value, |(inside, _)| inside)
+        } else {
+            value
+        };
+        let end = value.find(['\n', ';', '}']).unwrap_or(value.len());
+        let value = value[..end].trim();
+        found.push(if let Ok(literal) = value.parse() {
+            MinSdk::Literal(literal)
+        } else if value.replace(' ', "")
+            == format!("providers.gradleProperty(\"{PROPERTY}\").get().toInt()")
+        {
+            MinSdk::Property
+        } else {
+            MinSdk::Unverified(value.to_owned())
+        });
+    }
+    found
+}
+
+/// `script` with its `//` and `/* … */` comments removed.
+fn without_comments(script: &str) -> String {
+    let mut code = String::with_capacity(script.len());
+    let mut rest = script;
+    loop {
+        // The comment that opens first, and whether it is a block comment.
+        let next = [
+            rest.find("//").map(|at| (at, false)),
+            rest.find("/*").map(|at| (at, true)),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
+        match next {
+            None => {
+                code.push_str(rest);
+                return code;
             }
-            let value = value
-                .split_once("//")
-                .map_or(value, |(code, _)| code)
-                .trim();
-            Some(if let Ok(literal) = value.parse() {
-                MinSdk::Literal(literal)
-            } else if value.replace(' ', "")
-                == format!("providers.gradleProperty(\"{PROPERTY}\").get().toInt()")
-            {
-                MinSdk::Property
-            } else {
-                MinSdk::Unverified(value.to_owned())
-            })
-        })
-        .collect()
+            Some((at, false)) => {
+                code.push_str(&rest[..at]);
+                rest = rest[at..].find('\n').map_or("", |end| &rest[at + end..]);
+            }
+            Some((at, true)) => {
+                code.push_str(&rest[..at]);
+                rest = rest[at + 2..]
+                    .find("*/")
+                    .map_or("", |end| &rest[at + 2 + end + 2..]);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -164,6 +216,26 @@ mod tests {
                 "        minSdk = providers.gradleProperty(\"flui.minSdk\").get().toInt()\n\
                  \x20       minSdk = 23\n",
                 vec![MinSdk::Property, MinSdk::Literal(23)],
+            ),
+            (
+                "    defaultConfig { minSdk = 23 }\n",
+                vec![MinSdk::Literal(23)],
+            ),
+            (
+                "        minSdkVersion 21\n        minSdkVersion(22); targetSdk = 35\n",
+                vec![MinSdk::Literal(21), MinSdk::Literal(22)],
+            ),
+            (
+                "        /* minSdk = 1 */ minSdk = 26 // minSdk = 2\n",
+                vec![MinSdk::Literal(26)],
+            ),
+            (
+                "        minSdk.set(23)\n",
+                vec![MinSdk::Unverified(".set(23)".to_owned())],
+            ),
+            (
+                include_str!("../../templates/platforms/android/build.gradle.kts"),
+                vec![MinSdk::Property],
             ),
             ("        targetSdk = 35\n", vec![]),
         ] {
