@@ -96,10 +96,13 @@ impl Owned {
         }
     }
 
-    fn release(self) {
+    /// Destroys the source, which unsets the selection it is, and hands
+    /// back the closure for its owner to drop.
+    fn release(self) -> SelectionText {
         if let Some((_, source)) = self.source {
             source.destroy();
         }
+        self.text
     }
 }
 
@@ -220,13 +223,14 @@ pub(super) struct Released {
 }
 
 impl Released {
+    /// The current closure drops first and the retired ones after it, in
+    /// one protected sequence: once one destructor panics, the rest are
+    /// retained and the first failure goes on (ADR-0127).
     pub(super) fn release(self) {
         self.devices.into_iter().for_each(PrimaryDevice::release);
-        if let Some(owned) = self.owned {
-            owned.release();
-        }
         drop(self.sends);
-        drop_retired(self.retired);
+        let current = self.owned.map(Owned::release);
+        drop_retired(current.into_iter().chain(self.retired).collect());
     }
 }
 
@@ -285,7 +289,7 @@ impl super::SeatClipboard {
         });
         // The closure replaced is dropped with nothing held.
         if let Some(previous) = previous.flatten() {
-            previous.release();
+            drop(previous.release());
         }
     }
 
@@ -293,7 +297,7 @@ impl super::SeatClipboard {
         let previous = self.shared.primary.with(|primary| primary.owned.take());
         // Destroying the source unsets the selection it is.
         if let Some(previous) = previous.flatten() {
-            previous.release();
+            drop(previous.release());
         }
     }
 
@@ -638,38 +642,70 @@ mod tests {
         });
     }
 
+    /// Counts its drops, and fails each.
+    struct Counted(Rc<std::cell::Cell<u32>>);
+
+    impl Drop for Counted {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+            panic!("a capture's destructor failed");
+        }
+    }
+
+    /// A closure holding a [`Counted`] capture over `drops`.
+    fn counted(drops: &Rc<std::cell::Cell<u32>>) -> SelectionText {
+        let capture = Counted(Rc::clone(drops));
+        Rc::new(move || {
+            let _held = &capture;
+            None
+        })
+    }
+
+    /// Runs `release`, which must fail once with the capture's failure,
+    /// having dropped one closure of those `drops` counts.
+    fn fails_once(drops: &Rc<std::cell::Cell<u32>>, release: impl FnOnce()) {
+        let failure = catch_unwind(AssertUnwindSafe(release)).expect_err("it failed");
+        assert_eq!(
+            failure_text(&*failure),
+            Some("a capture's destructor failed")
+        );
+        assert_eq!(
+            drops.get(),
+            1,
+            "the closures after the failure are retained"
+        );
+    }
+
     /// Retired closures after one whose capture fails to drop are retained,
     /// and the first failure goes on.
     #[test]
     fn retired_closures_after_a_failed_drop_are_retained() {
-        /// Counts its drops, and fails each.
-        struct Counted(Rc<std::cell::Cell<u32>>);
-
-        impl Drop for Counted {
-            fn drop(&mut self) {
-                self.0.set(self.0.get() + 1);
-                panic!("a capture's destructor failed");
-            }
-        }
-
         in_child("retired_closures_after_a_failed_drop_are_retained", || {
             let drops = Rc::new(std::cell::Cell::new(0));
-            let retired: Vec<SelectionText> = (0..2)
-                .map(|_| {
-                    let capture = Counted(Rc::clone(&drops));
-                    Rc::new(move || {
-                        let _held = &capture;
-                        None
-                    }) as SelectionText
-                })
-                .collect();
-            let failure =
-                catch_unwind(AssertUnwindSafe(|| drop_retired(retired))).expect_err("it failed");
-            assert_eq!(
-                failure_text(&*failure),
-                Some("a capture's destructor failed")
-            );
-            assert_eq!(drops.get(), 1, "the closure after the failure is retained");
+            let retired = vec![counted(&drops), counted(&drops)];
+            fails_once(&drops, || drop_retired(retired));
         });
+    }
+
+    /// At the loop's end the current selection drops in the same protected
+    /// sequence as the retired ones: a failure there retains them.
+    #[test]
+    fn the_loops_end_retains_the_retired_after_the_current_fails() {
+        in_child(
+            "the_loops_end_retains_the_retired_after_the_current_fails",
+            || {
+                let drops = Rc::new(std::cell::Cell::new(0));
+                let released = Released {
+                    devices: Vec::new(),
+                    owned: Some(Owned {
+                        text: counted(&drops),
+                        source: None,
+                    }),
+                    sends: Vec::new(),
+                    retired: vec![counted(&drops)],
+                };
+                fails_once(&drops, || released.release());
+            },
+        );
     }
 }
