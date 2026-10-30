@@ -188,3 +188,91 @@ fn a_read_after_a_write_answers_the_write() {
         assert_eq!(answers.read(&clipboard), Some(text));
     }
 }
+
+/// Set in the child process a teardown case runs in.
+const CHILD: &str = "FLUI_X11_CLIPBOARD_TEARDOWN_CHILD";
+
+/// Run `case` in a child of this test binary: a second panic during an
+/// unwind aborts the process, which only a child can report.
+fn in_child(test: &str, case: impl FnOnce()) {
+    if std::env::var_os(CHILD).is_some() {
+        case();
+        return;
+    }
+    let path = module_path!()
+        .split_once("::")
+        .map_or(module_path!(), |(_, path)| path);
+    let output = std::process::Command::new(std::env::current_exe().expect("the test binary"))
+        .args(["--exact", &format!("{path}::{test}"), "--test-threads=1"])
+        .env(CHILD, "1")
+        .output()
+        .expect("the child runs");
+    assert!(
+        output.status.success(),
+        "the child failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Reads still waiting when the clipboard drops are each abandoned, though
+/// the abandonment of the first fails: the thread contains each.
+#[test]
+fn reads_waiting_at_the_end_are_each_abandoned() {
+    let Some(_server) = server() else {
+        return;
+    };
+    in_child("reads_waiting_at_the_end_are_each_abandoned", || {
+        // An owner that never answers, so the reads wait.
+        let (owner, screen) = RustConnection::connect(None).expect("the X server answers");
+        let root = owner.setup().roots[screen].root;
+        let window = owner.generate_id().expect("an id");
+        owner
+            .create_window(
+                x11rb::COPY_DEPTH_FROM_PARENT,
+                window,
+                root,
+                0,
+                0,
+                1,
+                1,
+                0,
+                x11rb::protocol::xproto::WindowClass::INPUT_ONLY,
+                x11rb::COPY_FROM_PARENT,
+                &x11rb::protocol::xproto::CreateWindowAux::new(),
+            )
+            .expect("the request is sent");
+        let clipboard_atom = owner
+            .intern_atom(false, b"CLIPBOARD")
+            .expect("the request is sent")
+            .reply()
+            .expect("the server answers")
+            .atom;
+        owner
+            .set_selection_owner(window, clipboard_atom, x11rb::CURRENT_TIME)
+            .expect("the request is sent");
+        owner
+            .get_selection_owner(clipboard_atom)
+            .expect("the request is sent")
+            .reply()
+            .expect("the server answers");
+
+        let posts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = Arc::clone(&posts);
+        let poster = OwnerPoster::new(move |_| {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            panic!("the owner's queue failed")
+        });
+        let source = CompletionSource::new(poster, PendingCompletions::new());
+        let reader = X11Clipboard::start().expect("the X server answers");
+        let (_first, answer) = source.pending::<Option<String>>();
+        reader.read_text(answer);
+        let (_second, answer) = source.pending::<Option<String>>();
+        reader.read_text(answer);
+        drop(reader);
+        assert_eq!(
+            posts.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "each waiting read is abandoned"
+        );
+    });
+}

@@ -368,15 +368,33 @@ impl Selections {
         Ok(())
     }
 
-    /// End the read under way, answering every reader with `text`. A
-    /// delivery that panics (the owner's wake hook) leaves the others
-    /// answered, and the first failure goes on.
-    fn answer(&mut self, text: Option<String>) {
+    /// End the read under way, answering every reader with `text`, the last
+    /// with `text` itself rather than a copy. A delivery that panics (the
+    /// owner's wake hook) leaves the others answered, and the first failure
+    /// goes on.
+    fn answer(&mut self, mut text: Option<String>) {
         self.reading = None;
         let mut failure = FirstPanic::new();
-        for reader in self.readers.drain(..) {
+        let mut readers = std::mem::take(&mut self.readers).into_iter().peekable();
+        while let Some(reader) = readers.next() {
+            let answer = if readers.peek().is_some() {
+                text.clone()
+            } else {
+                text.take()
+            };
             // A retired owner has nobody left to answer.
-            failure.contain(|| reader.resolve(text.clone()));
+            failure.contain(|| reader.resolve(answer));
+        }
+        failure.resume();
+    }
+
+    /// The thread ends: every read still waiting is abandoned, each drop
+    /// contained, so one whose abandonment panics leaves the others
+    /// abandoned too, and the first failure goes on.
+    fn abandon(&mut self) {
+        let mut failure = FirstPanic::new();
+        for reader in std::mem::take(&mut self.readers) {
+            failure.contain(|| drop(reader));
         }
         failure.resume();
     }
@@ -404,7 +422,7 @@ impl Selections {
             }
             Event::SelectionNotify(event) => self.converted(&event)?,
             Event::SelectionRequest(event) => self.request(&event)?,
-            Event::SelectionClear(event) => self.cleared(&event),
+            Event::SelectionClear(event) => self.cleared(&event)?,
             // A requestor that went away fails the writes to it; its
             // transfer ends at its deadline.
             _ => {}
@@ -435,10 +453,24 @@ impl Selections {
         self.serve()
     }
 
-    fn cleared(&mut self, event: &SelectionClearEvent) {
-        if event.owner == self.window && event.selection == self.atoms.clipboard {
+    /// Another client took the selection, unless the window owns it again:
+    /// a clear queued behind the write that took it back is stale.
+    fn cleared(&mut self, event: &SelectionClearEvent) -> Result<(), ReplyOrIdError> {
+        if event.owner != self.window
+            || event.selection != self.atoms.clipboard
+            || self.owned.is_none()
+        {
+            return Ok(());
+        }
+        let owner = self
+            .connection
+            .get_selection_owner(self.atoms.clipboard)?
+            .reply()?
+            .owner;
+        if owner != self.window {
             self.owned = None;
         }
+        Ok(())
     }
 
     /// The owner answered a conversion: read its property, or ask for the
@@ -484,7 +516,11 @@ impl Selections {
             }
             return Ok(());
         }
-        let text = (reply.bytes_after == 0).then(|| form.decode(reply.value));
+        let text = if reply.bytes_after == 0 {
+            decode(form, reply.value)
+        } else {
+            None
+        };
         self.answer(text);
         Ok(())
     }
@@ -508,7 +544,7 @@ impl Selections {
         if reply.value.is_empty() {
             let form = reading.form;
             let bytes = std::mem::take(bytes);
-            self.answer(Some(form.decode(bytes)));
+            self.answer(decode(form, bytes));
         } else if bytes.len() + reply.value.len() > MAX_TEXT || reply.bytes_after != 0 {
             self.answer(None);
         } else {
@@ -731,7 +767,8 @@ impl Selections {
 
 /// The thread's body: commands and events until `Stop`, or until the
 /// connection fails. A panic is contained here: the thread ends, and the
-/// reads waiting are dropped unanswered with the state.
+/// reads waiting are abandoned, each drop contained, before the state
+/// drops.
 pub(super) fn run(mut selections: Selections, commands: &Receiver<Command>, bell: &OwnedFd) {
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         steps(&mut selections, commands, bell)
@@ -739,16 +776,29 @@ pub(super) fn run(mut selections: Selections, commands: &Receiver<Command>, bell
     match outcome {
         Ok(Ok(())) => {}
         Ok(Err(error)) => tracing::error!("the X11 clipboard's connection failed: {error}"),
-        Err(payload) => {
-            tracing::error!(
-                "the X11 clipboard's thread panicked: {}",
-                crate::owner::panic_boundary::panic_payload_message(payload.as_ref())
-            );
-            // The payload may own anything; it is kept rather than dropped
-            // where its destructor could fail too (ADR-0127).
-            std::mem::forget(payload);
-        }
+        Err(payload) => contained(payload),
     }
+    let abandoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| selections.abandon()));
+    if let Err(payload) = abandoned {
+        contained(payload);
+    }
+}
+
+/// Report a panic the thread contained. The payload may own anything; it is
+/// kept rather than dropped where its destructor could fail too (ADR-0127).
+fn contained(payload: Box<dyn std::any::Any + Send>) {
+    tracing::error!(
+        "the X11 clipboard's thread panicked: {}",
+        crate::owner::panic_boundary::panic_payload_message(payload.as_ref())
+    );
+    std::mem::forget(payload);
+}
+
+/// `bytes` received in `form` as text, or `None` past [`MAX_TEXT`] bytes of
+/// it: ISO 8859-1 and ill-formed UTF-8 grow as they decode.
+fn decode(form: TextForm, bytes: Vec<u8>) -> Option<String> {
+    let text = form.decode(bytes);
+    (text.len() <= MAX_TEXT).then_some(text)
 }
 
 fn steps(
