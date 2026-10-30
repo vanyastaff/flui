@@ -256,6 +256,29 @@ pub(crate) fn selection_area_refuses_stale_or_foreign_positions() {
         ))),
         "a current end with a stale one is refused"
     );
+
+    // An area nested in another holds its own texts: the outer document
+    // refuses ends in the inner one's runs.
+    let nested = mounted(SelectionArea::new(Column::new((
+        Text::new("Outer"),
+        SelectionArea::new(Text::new("Inner")),
+    ))));
+    let (outer, inner) = {
+        let tree = consumer(&nested);
+        let state = tree.state();
+        (
+            find_all(state, Role::Document)[0].locate().0,
+            runs_of(&paragraph(state, "Inner")),
+        )
+    };
+    assert!(
+        refused(nested.invoke_semantics_action(selection_request(
+            outer,
+            at(inner[0], 0),
+            at(inner[0], 2)
+        ))),
+        "an end in a nested area's runs is refused by the outer one"
+    );
 }
 
 /// Under a merging ancestor the texts keep their runs and still take a

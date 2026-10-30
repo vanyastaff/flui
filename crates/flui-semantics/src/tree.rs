@@ -615,7 +615,8 @@ impl SemanticsTree {
 
     /// The published node strictly beneath `root` that declares `anchor` and
     /// publishes text runs, walking only addressable nodes as publication
-    /// does.
+    /// does and never into a document nested beneath `root`, whose texts are
+    /// its own (ADR-0214 §4).
     pub(crate) fn text_beneath(
         &self,
         root: &SemanticsNode,
@@ -638,6 +639,9 @@ impl SemanticsTree {
                     .is_some()
             {
                 return Some((id, node));
+            }
+            if node.config().makes_document_selections() {
+                continue;
             }
             pending.extend(node.children().iter().rev().copied());
         }

@@ -1105,10 +1105,7 @@ impl SemanticsOwner {
         for _ in 0..=self.tree.len() {
             let node = self.tree.get(sid)?;
             let config = node.config();
-            if config.is_merge_boundary()
-                && config.effective_actions_as_bits() & SemanticsAction::SetTextSelection.value()
-                    != 0
-            {
+            if config.makes_document_selections() {
                 return node.accessibility_id();
             }
             sid = node.parent()?;
@@ -1119,8 +1116,9 @@ impl SemanticsOwner {
     /// A selection between two run positions as the document published as
     /// `document` reads it: each end in the text whose run it names, as that
     /// text's anchor and a byte of it. `None` unless both runs are current
-    /// runs of texts beneath the document, so a run of another document, or
-    /// one an edit retired, is refused before the document sees it. A
+    /// runs of texts this document holds: texts beneath it that no nearer
+    /// document holds, so a run of another document, nested in this one or
+    /// not, or one an edit retired, is refused before the document sees it. A
     /// character index past its run's end is read as the run's end.
     fn document_selection(
         &self,
@@ -1128,10 +1126,15 @@ impl SemanticsOwner {
         selection: &accesskit::TextSelection,
     ) -> Option<crate::DocumentSelection> {
         let root = self.tree.root()?;
+        let document_id = document;
         let (_, document) = self.locate(root, document).ok()?;
         let position = |at: &accesskit::TextPosition| {
             let run = AccessibilityNodeId::from_u64(at.node.0)?;
             let text = self.field_of_run(run)?;
+            // The text belongs to this document, not to one nested in it.
+            if self.document_of(text) != Some(document_id) {
+                return None;
+            }
             let (_, text) = self.locate(root, text).ok()?;
             let anchor = text.config().anchors().first()?;
             // The run's text must be the one the document finds by its anchor.

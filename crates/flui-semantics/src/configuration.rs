@@ -318,6 +318,15 @@ impl SemanticsConfiguration {
         self.is_merge_boundary = value;
     }
 
+    /// Whether this node makes selections for the texts it holds: a merge
+    /// boundary that takes `SetTextSelection` (ADR-0214 §4). A request on
+    /// one of those texts is routed here, and a document beneath this one
+    /// holds its own texts.
+    pub(crate) fn makes_document_selections(&self) -> bool {
+        self.is_merge_boundary
+            && self.effective_actions_as_bits() & SemanticsAction::SetTextSelection.value() != 0
+    }
+
     /// Returns whether pointer-related user actions are blocked.
     #[inline]
     pub fn blocks_user_actions(&self) -> bool {
