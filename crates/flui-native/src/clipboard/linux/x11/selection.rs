@@ -66,9 +66,10 @@ const MAX_WRITERS: usize = 4;
 /// the text, so more are answered nothing at once.
 pub(super) const MAX_READERS: usize = 4;
 
-/// The most bytes the `INCR` writes hold at once, each shared buffer counted
-/// once: room for one text past a chunk in both its UTF-8 and ISO 8859-1
-/// forms, which a transfer keeps after the ownership it began under ends.
+/// The most bytes of text the `INCR` writes hold at once, each shared text
+/// counted once: room for the text owned now and one an ended ownership
+/// left, which a transfer keeps writing (ICCCM §2.2). Each encodes its form
+/// a chunk at a time, so the texts are all it holds.
 const TRANSFER_BUDGET: usize = 2 * MAX_TEXT;
 
 /// The largest chunk written in one request, below the server's request
@@ -193,13 +194,12 @@ impl Atoms {
     }
 }
 
-/// The text the application owns the selection with, and since when. Its
-/// UTF-8 forms are the text's own bytes, shared by every transfer; its ISO
-/// 8859-1 form is encoded once, the first time a requestor asks for it.
+/// The text the application owns the selection with, and since when. Every
+/// transfer shares the text and encodes its own form a chunk at a time, so
+/// no form of it is ever held whole besides the text.
 struct Owned {
     text: Arc<str>,
     time: xproto::Timestamp,
-    latin1: Option<Arc<[u8]>>,
 }
 
 impl Owned {
@@ -207,17 +207,7 @@ impl Owned {
         Self {
             text: text.into(),
             time,
-            latin1: None,
         }
-    }
-
-    /// The text in `form`: at most one copy of it besides the text.
-    fn encoded(&mut self, form: TextForm) -> Arc<[u8]> {
-        if form.is_utf8() {
-            return Arc::<[u8]>::from(Arc::clone(&self.text));
-        }
-        let text = &self.text;
-        Arc::clone(self.latin1.get_or_insert_with(|| form.encode(text).into()))
     }
 }
 
@@ -226,7 +216,9 @@ struct Transfer {
     requestor: xproto::Window,
     property: xproto::Atom,
     kind: xproto::Atom,
-    bytes: Arc<[u8]>,
+    form: TextForm,
+    text: Arc<str>,
+    /// The byte of `text` the next chunk starts at.
     written: usize,
     /// Whether the zero-length chunk that ends it is written.
     ended: bool,
@@ -719,10 +711,10 @@ impl Selections {
             return Ok(false);
         };
         let kind = self.atoms.form(form);
-        let Some(bytes) = self.owned.as_mut().map(|owned| owned.encoded(form)) else {
-            return Ok(false);
-        };
-        if bytes.len() <= self.chunk {
+        let text = Arc::clone(&owned.text);
+        let len = form.encoded_len(&text);
+        if len <= self.chunk {
+            let (bytes, _) = form.encode_chunk(&text, 0, len);
             self.connection.change_property8(
                 PropMode::REPLACE,
                 request.requestor,
@@ -739,11 +731,11 @@ impl Selections {
             tracing::debug!("an X11 clipboard transfer past {MAX_WRITERS} at once was refused");
             return Ok(false);
         }
-        if !self.within_budget(&bytes) {
+        if !self.within_budget(&text) {
             tracing::debug!("an X11 clipboard transfer past the retained-text budget was refused");
             return Ok(false);
         }
-        let Ok(size) = u32::try_from(bytes.len()) else {
+        let Ok(size) = u32::try_from(len) else {
             return Ok(false);
         };
         // The requestor's deletions of the property ask for each chunk.
@@ -762,7 +754,8 @@ impl Selections {
             requestor: request.requestor,
             property,
             kind,
-            bytes,
+            form,
+            text,
             written: 0,
             ended: false,
             deadline: Instant::now() + TRANSFER_TIMEOUT,
@@ -790,37 +783,39 @@ impl Selections {
             self.forget(transfer.requestor)?;
             return Ok(());
         }
-        let end = (transfer.written + self.chunk).min(transfer.bytes.len());
-        let chunk = &transfer.bytes[transfer.written..end];
+        let (chunk, next) =
+            transfer
+                .form
+                .encode_chunk(&transfer.text, transfer.written, self.chunk);
         transfer.ended = chunk.is_empty();
-        transfer.written = end;
+        transfer.written = next;
         transfer.deadline = Instant::now() + TRANSFER_TIMEOUT;
         self.connection.change_property8(
             PropMode::REPLACE,
             requestor,
             property,
             transfer.kind,
-            chunk,
+            &chunk,
         )?;
         Ok(())
     }
 
-    /// Whether a transfer of `bytes` may start. A transfer goes on after the
+    /// Whether a transfer of `text` may start. A transfer goes on after the
     /// ownership whose text it writes ends (ICCCM §2.2), so what the
     /// transfers hold is bounded when each starts: [`TRANSFER_BUDGET`] bytes
-    /// in all, each shared buffer counted once.
-    fn within_budget(&self, bytes: &Arc<[u8]>) -> bool {
-        let mut held: Vec<&Arc<[u8]>> = Vec::new();
+    /// in all, each shared text counted once.
+    fn within_budget(&self, text: &Arc<str>) -> bool {
+        let mut held: Vec<&Arc<str>> = Vec::new();
         for transfer in &self.transfers {
-            if !held.iter().any(|kept| Arc::ptr_eq(kept, &transfer.bytes)) {
-                held.push(&transfer.bytes);
+            if !held.iter().any(|kept| Arc::ptr_eq(kept, &transfer.text)) {
+                held.push(&transfer.text);
             }
         }
-        if held.iter().any(|kept| Arc::ptr_eq(kept, bytes)) {
+        if held.iter().any(|kept| Arc::ptr_eq(kept, text)) {
             return true;
         }
         let total: usize = held.iter().map(|kept| kept.len()).sum();
-        total.saturating_add(bytes.len()) <= TRANSFER_BUDGET
+        total.saturating_add(text.len()) <= TRANSFER_BUDGET
     }
 
     /// Stop hearing `requestor`'s properties once no transfer writes to it.

@@ -8,6 +8,9 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(x11_host)]
+use std::borrow::Cow;
+
 /// A form of text a selection is offered in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TextForm {
@@ -101,15 +104,9 @@ impl TextForm {
         }
     }
 
-    /// Whether the form's bytes are UTF-8, the same bytes for each such
-    /// form.
-    #[cfg(x11_host)]
-    pub(crate) const fn is_utf8(self) -> bool {
-        !matches!(self, Self::Latin1)
-    }
-
     /// `text` in this form: UTF-8 as it is, ISO 8859-1 with each character
     /// past it written `?`.
+    #[cfg(any(wayland_host, test))]
     pub(crate) fn encode(self, text: &str) -> Vec<u8> {
         match self {
             Self::PlainUtf8 | Self::Utf8String | Self::Plain => text.as_bytes().to_vec(),
@@ -117,6 +114,47 @@ impl TextForm {
                 .chars()
                 .map(|character| u8::try_from(u32::from(character)).unwrap_or(b'?'))
                 .collect(),
+        }
+    }
+
+    /// How many bytes `text` takes in this form, counted without encoding
+    /// it: an owner says how much is coming before it writes any.
+    #[cfg(x11_host)]
+    pub(crate) fn encoded_len(self, text: &str) -> usize {
+        match self {
+            Self::PlainUtf8 | Self::Utf8String | Self::Plain => text.len(),
+            Self::Latin1 => text.chars().count(),
+        }
+    }
+
+    /// At most `limit` bytes of `text` in this form, starting at its byte
+    /// `from`, and the byte of `text` the next chunk starts at. A UTF-8
+    /// chunk borrows the text; an ISO 8859-1 one is the only copy made, so
+    /// the text is never held twice whole.
+    #[cfg(x11_host)]
+    pub(crate) fn encode_chunk(
+        self,
+        text: &str,
+        from: usize,
+        limit: usize,
+    ) -> (Cow<'_, [u8]>, usize) {
+        match self {
+            Self::PlainUtf8 | Self::Utf8String | Self::Plain => {
+                let end = from.saturating_add(limit).min(text.len());
+                (Cow::Borrowed(&text.as_bytes()[from..end]), end)
+            }
+            Self::Latin1 => {
+                let mut next = from;
+                let chunk: Vec<u8> = text[from..]
+                    .chars()
+                    .take(limit)
+                    .map(|character| {
+                        next += character.len_utf8();
+                        u8::try_from(u32::from(character)).unwrap_or(b'?')
+                    })
+                    .collect();
+                (Cow::Owned(chunk), next)
+            }
         }
     }
 }
@@ -206,6 +244,36 @@ mod tests {
                     form.decode(bytes.to_vec()).len(),
                     "{form:?} {bytes:?}"
                 );
+            }
+        }
+    }
+
+    /// The chunks of a text, whatever their size, are its encoding cut in
+    /// order, and the length counted up front is the length they make.
+    #[cfg(x11_host)]
+    #[test]
+    fn chunks_make_the_whole_encoding() {
+        for text in ["", "text", "\u{e9}t\u{e9} \u{2014} \u{1f600}x"] {
+            for form in TextForm::OFFERED {
+                assert_eq!(
+                    form.encoded_len(text),
+                    form.encode(text).len(),
+                    "{form:?} {text:?}"
+                );
+                for limit in [1, 2, 3, 64] {
+                    let mut joined = Vec::new();
+                    let mut from = 0;
+                    loop {
+                        let (chunk, next) = form.encode_chunk(text, from, limit);
+                        assert!(chunk.len() <= limit, "{form:?} {text:?} {limit}");
+                        if chunk.is_empty() {
+                            break;
+                        }
+                        joined.extend_from_slice(&chunk);
+                        from = next;
+                    }
+                    assert_eq!(joined, form.encode(text), "{form:?} {text:?} {limit}");
+                }
             }
         }
     }
