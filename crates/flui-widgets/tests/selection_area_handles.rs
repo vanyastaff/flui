@@ -782,3 +782,25 @@ pub(crate) fn losing_the_focus_hides_the_handles() {
     assert_eq!(scene.handles(), 0);
     assert_eq!(scene.selected().as_deref(), Some("beta"));
 }
+
+/// A frame request that fails as a long press shows the handles leaves
+/// them shown and owned by the area: Esc takes them away.
+///
+/// Red-check: hold the entry only after the overlay is told, outside the
+/// containment (the failure leaves an entry no hide can remove).
+pub(crate) fn a_failing_wake_as_the_handles_appear_still_shows_them() {
+    use std::sync::atomic::Ordering;
+
+    let (mut scene, armed) = with_failing_wake();
+    armed.store(true, Ordering::SeqCst);
+    let _contained = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        scene.long_press(scene.along(width_of("alpha be")));
+    }));
+    armed.store(false, Ordering::SeqCst);
+    scene.settle();
+    assert_eq!(scene.selected().as_deref(), Some("beta"));
+    assert_eq!(scene.handles(), 2);
+
+    scene.escape();
+    assert_eq!((scene.selected(), scene.handles()), (None, 0));
+}
