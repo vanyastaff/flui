@@ -32,7 +32,7 @@ use flui_platform::pointer::{
     PointerButtonEvent, PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent,
     PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition, PointerRevision,
     PointerRole, PointerSample, PointerSignal, Pressure, ScrollDelta, ScrollEvent, ScrollPhase,
-    ScrollPrecision, ScrollUnit, TangentialPressure, Twist,
+    ScrollPrecision, ScrollUnit, SmartZoomEvent, TangentialPressure, Twist,
 };
 use flui_platform::{
     Brightness, DragDropEvent, EventTime, FramePresented, GestureParts, ImeEvent, Locale,
@@ -882,6 +882,16 @@ enum PanZoomPhaseDto {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+struct SmartZoomDto {
+    pointer: PointerInfoDto,
+    t: u64,
+    x: f64,
+    y: f64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    modifiers: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 struct PanZoomDto {
     pointer: PointerInfoDto,
     t: u64,
@@ -949,6 +959,8 @@ enum PointerEventDto {
     ScrollInertiaCancel(SignalDto),
     #[serde(rename = "pan_zoom")]
     PanZoom(PanZoomDto),
+    #[serde(rename = "smart_zoom")]
+    SmartZoom(SmartZoomDto),
     #[serde(rename = "revise")]
     Revise {
         pointer: PointerInfoDto,
@@ -1084,6 +1096,16 @@ impl TryFrom<&PointerEvent> for PointerEventDto {
                     modifiers: modifiers_dto(gesture.modifiers),
                 })
             }
+            PointerEvent::SmartZoom(zoom) => {
+                let point = zoom.position.get();
+                Self::SmartZoom(SmartZoomDto {
+                    pointer: zoom.pointer().try_into()?,
+                    t: zoom.time.as_nanos(),
+                    x: point.x,
+                    y: point.y,
+                    modifiers: modifiers_dto(zoom.modifiers),
+                })
+            }
             PointerEvent::Revise(revision) => Self::Revise {
                 pointer: (&revision.pointer).try_into()?,
                 sample: (&revision.sample).into(),
@@ -1198,6 +1220,14 @@ impl TryFrom<PointerEventDto> for PointerEvent {
                     },
                 )
                 .with_modifiers(modifiers(&gesture.modifiers)?),
+            ),
+            PointerEventDto::SmartZoom(zoom) => Self::SmartZoom(
+                SmartZoomEvent::new(
+                    zoom.pointer.try_into()?,
+                    EventTime::from_nanos(zoom.t),
+                    position(zoom.x, zoom.y)?,
+                )
+                .with_modifiers(modifiers(&zoom.modifiers)?),
             ),
             PointerEventDto::Revise { pointer, sample } => Self::Revise(PointerRevision::new(
                 pointer.try_into()?,

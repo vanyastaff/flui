@@ -16,7 +16,7 @@ use flui_foundation::geometry::{Offset, Size};
 use flui_rendering::{
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
-    hit_testing::{HitTestBehavior, PanZoomTarget, PointerTarget, ScrollTarget},
+    hit_testing::{HitTestBehavior, PanZoomTarget, PointerTarget, ScrollTarget, SmartZoomTarget},
     parent_data::BoxParentData,
     traits::{RenderBox, TextBaseline},
 };
@@ -45,6 +45,7 @@ pub struct RenderListener {
     target: Option<PointerTarget>,
     scroll_target: Option<ScrollTarget>,
     pan_zoom_target: Option<PanZoomTarget>,
+    smart_zoom_target: Option<SmartZoomTarget>,
     behavior: HitTestBehavior,
     has_child: bool,
 }
@@ -57,6 +58,7 @@ impl RenderListener {
             target,
             scroll_target: None,
             pan_zoom_target: None,
+            smart_zoom_target: None,
             behavior,
             has_child: false,
         }
@@ -101,6 +103,19 @@ impl RenderListener {
         self.pan_zoom_target = target;
     }
 
+    /// The arbitrated smart zoom target advertised on this listener's hit
+    /// entries — `None` for a listener that does not compete for the
+    /// platform's smart zoom (see `RenderObject::smart_zoom_target`).
+    #[must_use]
+    pub const fn claimed_smart_zoom_target(&self) -> Option<SmartZoomTarget> {
+        self.smart_zoom_target
+    }
+
+    /// Replaces the arbitrated smart zoom target identity.
+    pub fn set_smart_zoom_target(&mut self, target: Option<SmartZoomTarget>) {
+        self.smart_zoom_target = target;
+    }
+
     /// Replaces the hit-test behavior.
     pub fn set_behavior(&mut self, behavior: HitTestBehavior) {
         self.behavior = behavior;
@@ -113,6 +128,7 @@ impl std::fmt::Debug for RenderListener {
             .field("has_target", &self.target.is_some())
             .field("has_scroll_target", &self.scroll_target.is_some())
             .field("has_pan_zoom_target", &self.pan_zoom_target.is_some())
+            .field("has_smart_zoom_target", &self.smart_zoom_target.is_some())
             .field("behavior", &self.behavior)
             .field("has_child", &self.has_child)
             .finish_non_exhaustive()
@@ -131,6 +147,11 @@ impl flui_foundation::Diagnosticable for RenderListener {
             "has_pan_zoom_target",
             self.pan_zoom_target.is_some(),
             "has_pan_zoom_target",
+        );
+        builder.add_flag(
+            "has_smart_zoom_target",
+            self.smart_zoom_target.is_some(),
+            "has_smart_zoom_target",
         );
         builder.add_enum("behavior", self.behavior);
         builder.add_flag("has_child", self.has_child, "has_child");
@@ -215,5 +236,9 @@ impl RenderBox for RenderListener {
 
     fn pan_zoom_target(&self) -> Option<PanZoomTarget> {
         self.pan_zoom_target
+    }
+
+    fn smart_zoom_target(&self) -> Option<SmartZoomTarget> {
+        self.smart_zoom_target
     }
 }

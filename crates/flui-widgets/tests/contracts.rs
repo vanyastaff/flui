@@ -277,6 +277,7 @@ fn pointer_and_gesture_recognition() {
             ("gesture_detector::drag_and_transform_slots_split_one_contact_from_two", crate::gesture_detector::drag_and_transform_slots_split_one_contact_from_two),
             ("gesture_detector::binding_admits_distinct_drag_sequences_when_pointer_ids_are_reused", crate::gesture_detector::binding_admits_distinct_drag_sequences_when_pointer_ids_are_reused),
             ("gesture_detector::drag_motion_retains_root_units_under_scale_and_rotation", crate::gesture_detector::drag_motion_retains_root_units_under_scale_and_rotation),
+            ("gesture_detector::a_smart_zoom_reaches_only_the_innermost_detector_under_it", crate::gesture_detector::a_smart_zoom_reaches_only_the_innermost_detector_under_it),
             ("gesture_detector::a_detector_in_a_composed_scope_preserves_double_tap_timing", crate::gesture_detector::a_detector_in_a_composed_scope_preserves_double_tap_timing),
             ("pointer_vocabulary::viewer_native_pan_moves_the_scene_under_the_focal_point", crate::pointer_vocabulary::viewer_native_pan_moves_the_scene_under_the_focal_point as fn()),
             ("pointer_vocabulary::viewer_keeps_a_pinch_whose_focal_point_leaves_it", crate::pointer_vocabulary::viewer_keeps_a_pinch_whose_focal_point_leaves_it as fn()),

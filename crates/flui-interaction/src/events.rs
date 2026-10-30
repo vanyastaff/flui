@@ -21,7 +21,7 @@ pub use pointer::{
     ButtonChange, CancelReason, DeviceId, InputValueError, PanZoomEvent, PanZoomPhase,
     PanZoomTransform, PointerButton, PointerButtons, PointerCancel, PointerEvent, PointerId,
     PointerInfo, PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease,
-    PointerRole, PointerSample, PointerSignal, ScrollDelta, ScrollEvent,
+    PointerRole, PointerSample, PointerSignal, ScrollDelta, ScrollEvent, SmartZoomEvent,
 };
 
 /// The interaction clock: `clock`'s current reading on the event timeline
@@ -76,6 +76,7 @@ pub(crate) fn pointer_info(event: &PointerEvent) -> Option<&PointerInfo> {
         | PointerEvent::ScrollInertiaCancel(data) => Some(&data.pointer),
         PointerEvent::Scroll(data) => Some(&data.pointer),
         PointerEvent::PanZoom(data) => Some(data.pointer()),
+        PointerEvent::SmartZoom(data) => Some(data.pointer()),
         PointerEvent::Revise(data) => Some(&data.pointer),
         PointerEvent::PenSqueeze(data) => Some(&data.pointer),
         // Device lifecycle names a device, not a contact; a variant added
@@ -115,6 +116,7 @@ pub(crate) fn event_time(event: &PointerEvent) -> Option<flui_platform::EventTim
         PointerEvent::Move(data) => data.current().time,
         PointerEvent::Scroll(data) => data.time,
         PointerEvent::PanZoom(data) => data.time,
+        PointerEvent::SmartZoom(data) => data.time,
         PointerEvent::Cancel(data) => data.time,
         PointerEvent::Enter(data)
         | PointerEvent::Leave(data)
@@ -169,6 +171,7 @@ impl PointerEventExt for PointerEvent {
                 | PointerEvent::ScrollInertiaCancel(data) => data.position,
                 PointerEvent::Scroll(data) => Some(data.position),
                 PointerEvent::PanZoom(data) => Some(data.position),
+                PointerEvent::SmartZoom(data) => Some(data.position),
                 _ => None,
             }
         }?;

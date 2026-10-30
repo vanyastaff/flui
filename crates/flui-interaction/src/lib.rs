@@ -194,7 +194,7 @@ pub use flui_platform::pointer::{
     ButtonChange, CancelReason, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,
     PointerButton, PointerButtons, PointerInfo, PointerKind, PointerMove, PointerPosition,
     PointerPress, PointerRelease, PointerRole, PointerSample, ScrollDelta, ScrollEvent,
-    ScrollPhase, ScrollPrecision, ScrollUnit,
+    ScrollPhase, ScrollPrecision, ScrollUnit, SmartZoomEvent,
 };
 pub use gesture::{GestureContest, GestureObservation, GestureObserver, ObserverHandle};
 pub use gesture::{GestureEvent, SPAN_ARENA, SPAN_RECOGNIZER, pointer_event_kind};
@@ -222,9 +222,9 @@ pub use gesture::{
     LongPressSimpleCallback, LongPressStartCallback, MultiDragAxis, MultiDragEndDetails,
     MultiDragGestureRecognizer, MultiDragHandle, MultiDragStartCallback, MultiDragUpdateDetails,
     MultiTapCount, MultiTapCountError, MultiTapGestureRecognizer, PhysicalEdge, PrimaryContact,
-    RecognizerSet, ScaleGestureRecognizer, SwipeDetails, SwipeGestureRecognizer,
-    SwipeGestureRecognizerBuilder, SwipeStart, TapAndDragGestureRecognizer, TapCallback,
-    TapDownCallback, TapDragDownCallback, TapDragDownDetails, TapDragEndCallback,
+    RecognizerSet, ScaleGestureRecognizer, SmartZoomDetails, SmartZoomSource, SwipeDetails,
+    SwipeGestureRecognizer, SwipeGestureRecognizerBuilder, SwipeStart, TapAndDragGestureRecognizer,
+    TapCallback, TapDownCallback, TapDragDownCallback, TapDragDownDetails, TapDragEndCallback,
     TapDragEndDetails, TapDragStartCallback, TapDragStartDetails, TapDragUpCallback,
     TapDragUpDetails, TapDragUpdateCallback, TapDragUpdateDetails, TapGestureRecognizer,
     TapUpCallback, cancel_all,
@@ -268,8 +268,8 @@ pub use pointer::{
     InteractionDispatchHandle, InteractionLane, LocalPayloadTarget, PathClipTarget, PointerCapture,
     PointerCaptureError, PointerDispatch, PointerRouteHandler, PointerRouter, PointerTarget,
     RenderId, ResolvedRouteToken, RouteResolution, RouteResolutionMiss, ScrollTarget,
-    ShaderMaskTarget, TransformGuard, resolve_local_payload, resolve_path_clip_target,
-    resolve_shader_mask_target,
+    ShaderMaskTarget, SmartZoomTarget, TransformGuard, resolve_local_payload,
+    resolve_path_clip_target, resolve_shader_mask_target,
 };
 pub use text_input::{
     ClientToken, DetachOutcome, TextInputBackend, TextInputClient, TextInputError, TextInputHandle,
@@ -341,6 +341,7 @@ mod static_assertions {
     impl AssertSendSync for PointerId {}
     impl AssertSendSync for FocusNodeId {}
     impl AssertSendSync for ScrollTarget {}
+    impl AssertSendSync for SmartZoomTarget {}
     impl AssertSendSync for PathClipTarget {}
     impl AssertSendSync for ShaderMaskTarget {}
     impl AssertSendSync for LocalPayloadTarget {}

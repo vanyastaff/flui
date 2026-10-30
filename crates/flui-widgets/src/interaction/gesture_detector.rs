@@ -12,6 +12,7 @@ use flui_foundation::geometry::{Offset, Point};
 use flui_interaction::gesture::{
     GestureComposition, MultiTapDetails, PanZoomDisposition, ScaleEndDetails,
     ScaleGestureRecognizer, ScaleStartDetails, ScaleStartMode, ScaleUpdateDetails,
+    SmartZoomDetails,
 };
 use flui_interaction::pointer::{EventPropagation, PanZoomDispatch};
 use flui_interaction::{
@@ -586,6 +587,7 @@ pub struct GestureDetector {
     force_press: Option<ForcePressSlot>,
     drag: Option<DragSlot>,
     transform: Option<TransformSlot>,
+    smart_zoom: Option<ValueCallback<SmartZoomDetails>>,
     /// How the underlying listener participates in hit-testing.
     behavior: HitTestBehavior,
     recognizer_owner: Option<Rc<()>>,
@@ -601,6 +603,7 @@ impl Default for GestureDetector {
             force_press: None,
             drag: None,
             transform: None,
+            smart_zoom: None,
             behavior: HitTestBehavior::DeferToChild,
             recognizer_owner: None,
             admission: None,
@@ -627,6 +630,7 @@ impl std::fmt::Debug for GestureDetector {
             .field("force_press", &self.force_press)
             .field("drag", &self.drag)
             .field("transform", &self.transform)
+            .field("on_smart_zoom", &self.smart_zoom.is_some())
             .field("behavior", &self.behavior)
             .finish_non_exhaustive()
     }
@@ -786,6 +790,23 @@ impl GestureDetector {
         self
     }
 
+    /// Called for a smart zoom over the child: zoom to fit what lies under
+    /// [`SmartZoomDetails::local_position`], or back out.
+    ///
+    /// The platform's own gesture (a two-finger double-tap on a macOS
+    /// trackpad) arrives here, its [`source`](SmartZoomDetails::source)
+    /// saying so. The innermost detector with this callback takes the zoom,
+    /// so an image inside a zoomable page answers before the page.
+    #[must_use]
+    pub fn on_smart_zoom<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, SmartZoomDetails) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.smart_zoom = Some(value_callback(callback));
+        self
+    }
+
     /// Recognize a force press with `slot`'s thresholds and callbacks.
     #[must_use]
     pub fn force_press(mut self, slot: ForcePressSlot) -> Self {
@@ -841,6 +862,7 @@ struct LiveCallbacks {
     force_press: RefCell<ForcePressCallbacks>,
     drag: RefCell<DragCallbacks>,
     transform: RefCell<TransformCallbacks>,
+    smart_zoom: RefCell<Option<ValueCallback<SmartZoomDetails>>>,
 }
 
 impl LiveCallbacks {
@@ -869,6 +891,7 @@ impl LiveCallbacks {
                     .map(|slot| slot.callbacks.clone())
                     .unwrap_or_default(),
             ),
+            self.smart_zoom.replace(view.smart_zoom.clone()),
         );
         drop(outgoing);
     }
@@ -1718,6 +1741,23 @@ impl GestureDetectorState {
                         claim_native_scale(&recognizer, &gate, &route, dispatch)
                     }
                 });
+        }
+        if view.smart_zoom.is_some() {
+            let live = Rc::clone(&self.live);
+            let mounted = Rc::clone(&self.mounted);
+            raw = raw.smart_zoom_claim(move |dispatch, writer| {
+                if !mounted.get() {
+                    return EventPropagation::Continue;
+                }
+                // The slot borrow ends before the callback runs.
+                let callback = live.smart_zoom.borrow().clone();
+                let Some(callback) = callback else {
+                    return EventPropagation::Continue;
+                };
+                let details = SmartZoomDetails::from_platform(dispatch);
+                writer.write(|cx| callback(cx, details));
+                EventPropagation::Stop
+            });
         }
         raw
     }
