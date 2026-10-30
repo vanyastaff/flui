@@ -499,13 +499,15 @@ fn end_session_now() {
     // Detached observer may still publish what the flush then writes. A UI
     // runtime that is checked out queues the notice and runs none of its code
     // before the process ends.
-    if deadline.saturating_duration_since(std::time::Instant::now())
-        >= SESSION_END_USER_CODE_THRESHOLD
-    {
-        deliver_contained(&HostNotice::SessionEnded);
-        if ends_application {
-            deliver_session_end_close(deadline);
-        }
+    // Each runtime's code starts only while the margin is left, whatever
+    // the runtimes before it spent.
+    let margin_left = || {
+        deadline.saturating_duration_since(std::time::Instant::now())
+            >= SESSION_END_USER_CODE_THRESHOLD
+    };
+    deliver_contained_while(&HostNotice::SessionEnded, margin_left);
+    if ends_application {
+        deliver_session_end_close(deadline);
     }
     flush_for_session_end(deadline);
     if ends_application {
@@ -672,8 +674,18 @@ fn flush_for_session_end(deadline: std::time::Instant) {
 fn deliver_contained(
     notice: &flui_platform::HostNotice,
 ) -> Option<super::owner_dispatch::NoticeDelivery> {
+    deliver_contained_while(notice, || true)
+}
+
+/// [`deliver_contained`], starting each runtime's subscribers only while
+/// `may_start` allows.
+fn deliver_contained_while(
+    notice: &flui_platform::HostNotice,
+    may_start: impl Fn() -> bool,
+) -> Option<super::owner_dispatch::NoticeDelivery> {
     let mut failure = flui_foundation::panic::FirstPanic::new();
-    let delivery = failure.contain(|| super::owner_dispatch::deliver_host_notice(notice));
+    let delivery =
+        failure.contain(|| super::owner_dispatch::deliver_host_notice_while(notice, may_start));
     if let Some(payload) = failure.into_payload() {
         tracing::error!(
             panic = flui_foundation::panic::payload_text(&*payload),

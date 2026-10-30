@@ -572,6 +572,9 @@ fn close_presentation(
 /// would tear down an ENTIRE `WindowPolicy::Shared` group out from under a still-open
 /// sibling window.
 pub(super) fn close_this_window(dispatcher: PresentationDispatcher) {
+    // A window that closes no longer holds the session end it refused, however
+    // the close came: its guard, the user, or `request_presentation_close`.
+    super::host::release_session_end_refusal(dispatcher.address);
     if let Err(error) = close_presentation(dispatcher, dispatcher.address.presentation_id) {
         tracing::warn!(?dispatcher, ?error, "close_this_window: dispatch refused");
     }
@@ -646,6 +649,17 @@ pub(super) fn apply_queued_window_commands(owner_thread: std::thread::ThreadId) 
 /// Deliver a system notice to every UI runtime this host runs, each on its own
 /// owner turn.
 pub(super) fn deliver_host_notice(notice: &flui_platform::HostNotice) -> NoticeDelivery {
+    deliver_host_notice_while(notice, || true)
+}
+
+/// [`deliver_host_notice`], starting each runtime's subscribers only while
+/// `may_start` allows: the session's end stops once its margin for application
+/// code is spent, whatever the runtimes before spent. A runtime not started is
+/// counted refused.
+pub(super) fn deliver_host_notice_while(
+    notice: &flui_platform::HostNotice,
+    may_start: impl Fn() -> bool,
+) -> NoticeDelivery {
     // The host's shared memory is reclaimed once, ahead of every runtime's own
     // caches and of every subscriber: the notice reaches subscribers on later
     // owner turns.
@@ -673,6 +687,14 @@ pub(super) fn deliver_host_notice(notice: &flui_platform::HostNotice) -> NoticeD
     });
     let mut outcome = NoticeDelivery::default();
     for dispatcher in dispatchers {
+        if !may_start() {
+            outcome.refused += 1;
+            tracing::warn!(
+                ?dispatcher,
+                "the notice's budget is spent; this runtime hears it no more"
+            );
+            continue;
+        }
         match dispatcher.host_notice(notice.clone()) {
             Ok(flui_runtime::owner::Delivery::Driven) => outcome.ran += 1,
             Ok(_) => outcome.queued += 1,

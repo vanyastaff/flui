@@ -224,8 +224,12 @@ fn runner_teardown() {
                 a_repeated_session_end_query_does_not_release_the_session,
             ),
             (
-                "a_slow_detached_observer_stops_the_session_end_delivery",
-                a_slow_detached_observer_stops_the_session_end_delivery,
+                "a_slow_observer_stops_the_session_end_delivery",
+                a_slow_observer_stops_the_session_end_delivery,
+            ),
+            (
+                "a_refused_session_end_is_released_by_an_explicit_close",
+                a_refused_session_end_is_released_by_an_explicit_close,
             ),
             (
                 "a_session_end_handler_panic_with_a_panicking_payload_refuses",
@@ -1002,18 +1006,29 @@ pub(crate) fn a_repeated_session_end_query_does_not_release_the_session() {
     run.join().expect("the run returns Ok");
 }
 
-/// A window root whose Detached observer records whether the loop still ran
-/// and then blocks for `delay`, as a slow save does.
+/// What a [`SlowDetached`] blocks on.
+#[derive(Clone, Copy, PartialEq)]
+enum SlowOn {
+    /// Its window's Detached observer.
+    Detached,
+    /// Its subscriber to `HostNotice::SessionEnded`.
+    SessionEnded,
+}
+
+/// A window root whose observer of `slow_on` records whether the loop still
+/// ran and then blocks for `delay`, as a slow save does.
 #[derive(Clone)]
 struct SlowDetached {
     turns: flui_native::HeadlessOwnerTurns,
     running: Rc<std::cell::Cell<Option<bool>>>,
     delay: Duration,
+    slow_on: SlowOn,
 }
 
 struct SlowDetachedState {
     root: SlowDetached,
     subscription: Option<flui_view::LifecycleSubscription>,
+    notices: Option<flui_view::HostNoticeSubscription>,
 }
 
 impl flui_view::StatefulView for SlowDetached {
@@ -1023,6 +1038,7 @@ impl flui_view::StatefulView for SlowDetached {
         SlowDetachedState {
             root: self.clone(),
             subscription: None,
+            notices: None,
         }
     }
 }
@@ -1034,13 +1050,31 @@ impl flui_view::ViewState<SlowDetached> for SlowDetachedState {
             .lifecycle_handle()
             .expect("a bound lifecycle")
             .subscribe(move |state| {
-                if state == flui_view::AppLifecycleState::Detached && root.running.get().is_none() {
+                if root.slow_on == SlowOn::Detached
+                    && state == flui_view::AppLifecycleState::Detached
+                    && root.running.get().is_none()
+                {
                     root.running.set(Some(root.turns.is_running()));
                     std::thread::sleep(root.delay);
                 }
             })
             .expect("the lifecycle is open");
         self.subscription = Some(subscription);
+        let root = self.root.clone();
+        self.notices = Some(
+            ctx.lifecycle_handle()
+                .expect("a bound lifecycle")
+                .subscribe_notices(move |notice| {
+                    if root.slow_on == SlowOn::SessionEnded
+                        && matches!(notice, flui_platform::HostNotice::SessionEnded)
+                        && root.running.get().is_none()
+                    {
+                        root.running.set(Some(root.turns.is_running()));
+                        std::thread::sleep(root.delay);
+                    }
+                })
+                .expect("the lifecycle is open"),
+        );
     }
 
     fn build(
@@ -1058,43 +1092,90 @@ impl flui_view::View for SlowDetached {
     }
 }
 
-/// A slow Detached observer in one UI runtime keeps the next runtime's
-/// observers from starting once less than the margin is left: the flush
-/// keeps the rest of the budget (ADR-0260 §3).
+/// A slow observer in one UI runtime keeps the next runtime's code from
+/// starting once less than the margin is left, for the session-ended notice
+/// and for the Detached delivery alike: the flush keeps the rest of the
+/// budget (ADR-0260 §3).
 ///
-/// Red-check: check the margin only once before the close delivery — both
+/// Red-check: check the margin only once before each delivery — both
 /// windows' observers run while the loop still runs.
-pub(crate) fn a_slow_detached_observer_stops_the_session_end_delivery() {
-    let platform = flui_native::HeadlessPlatform::new();
-    let windows: [Rc<std::cell::Cell<Option<bool>>>; 2] = Default::default();
-    let root = |running: &Rc<std::cell::Cell<Option<bool>>>| SlowDetached {
-        turns: platform.owner_turns(),
-        running: Rc::clone(running),
-        delay: SPENT_MARGIN,
-    };
-    let (first, second) = (root(&windows[0]), root(&windows[1]));
-    let application = Application::new(move |_| first.clone())
-        .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed))
-        .on_ready(move |_| {
-            drop(
-                flui_app::open_window(AppConfig::new(), WindowPolicy::Isolated, second)
-                    .expect("an isolated window opens on the headless platform"),
-            );
-        });
-    let run = HeadlessRun::start_on(application, platform);
-    run.run_owner_turn();
-    assert_eq!(run.open_windows().len(), 2, "both windows are open");
+pub(crate) fn a_slow_observer_stops_the_session_end_delivery() {
+    for slow_on in [SlowOn::SessionEnded, SlowOn::Detached] {
+        let platform = flui_native::HeadlessPlatform::new();
+        let windows: [Rc<std::cell::Cell<Option<bool>>>; 2] = Default::default();
+        let root = |running: &Rc<std::cell::Cell<Option<bool>>>| SlowDetached {
+            turns: platform.owner_turns(),
+            running: Rc::clone(running),
+            delay: SPENT_MARGIN,
+            slow_on,
+        };
+        let (first, second) = (root(&windows[0]), root(&windows[1]));
+        let application = Application::new(move |_| first.clone())
+            .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed))
+            .on_ready(move |_| {
+                drop(
+                    flui_app::open_window(AppConfig::new(), WindowPolicy::Isolated, second)
+                        .expect("an isolated window opens on the headless platform"),
+                );
+            });
+        let run = HeadlessRun::start_on(application, platform);
+        run.run_owner_turn();
+        assert_eq!(run.open_windows().len(), 2, "both windows are open");
 
-    run.end_session(SessionEndPhase::Ending);
-    let delivered = windows
-        .iter()
-        .filter(|running| running.get() == Some(true))
-        .count();
-    assert_eq!(
-        delivered, 1,
-        "only the first window heard Detached from the session end's delivery"
+        run.end_session(SessionEndPhase::Ending);
+        let started = windows
+            .iter()
+            .filter(|running| running.get() == Some(true))
+            .count();
+        assert_eq!(
+            started,
+            1,
+            "only the first window's {} observer ran within the margin",
+            if slow_on == SlowOn::Detached {
+                "Detached"
+            } else {
+                "SessionEnded"
+            }
+        );
+        run.join().expect("the session end returns Ok");
+    }
+}
+
+/// A window whose handler refused the session end and that the application
+/// then closes itself, with `request_presentation_close` once its save is
+/// done, no longer holds the session (ADR-0260 §1).
+///
+/// Red-check: release a refusal only from the guard's settlement — the
+/// platform stays held after the window closed.
+pub(crate) fn a_refused_session_end_is_released_by_an_explicit_close() {
+    let refused = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let seen = std::sync::Arc::clone(&refused);
+    let handler = flui_app::app::CloseRequestHandler::new(move |request| {
+        *seen.lock().expect("unpoisoned") = Some(request.address());
+        flui_app::app::CloseResponse::KeepOpen
+    });
+    let (run, events, _shared) = guarded_run_with(
+        HoldOn::Nothing,
+        AppConfig::new().with_close_request_handler(handler),
     );
-    run.join().expect("the session end returns Ok");
+    assert_eq!(
+        run.end_session(SessionEndPhase::Query),
+        SessionEndAnswer::Block
+    );
+    assert_eq!(events.session_end_releases(), 0, "the handler refused");
+
+    let address = refused
+        .lock()
+        .expect("unpoisoned")
+        .expect("the handler was asked");
+    flui_app::request_presentation_close(address).expect("the window closes");
+    assert_eq!(
+        events.session_end_releases(),
+        1,
+        "the closed window released the session end"
+    );
+    run.run_owner_turn();
+    run.join().expect("the run returns Ok");
 }
 
 /// A close handler that panics on a session end refuses it, even when the
