@@ -584,12 +584,19 @@ impl FluiView {
     fn dispatch_touches(&self, touches: &NSSet<UITouch>, phase: TouchPhase) {
         let mut any = false;
         for touch in touches {
-            let Some(current_window) = self.window() else {
-                break;
-            };
-            if !touch.window().as_ref().is_some_and(|origin| {
-                std::ptr::eq::<UIWindow>(&raw const **origin, &raw const *current_window)
-            }) {
+            let current_window = self.window();
+            let in_window = current_window.as_ref().is_some_and(|current| {
+                touch.window().as_ref().is_some_and(|origin| {
+                    std::ptr::eq::<UIWindow>(&raw const **origin, &raw const **current)
+                })
+            });
+            // A cancel retires its contact wherever the view is: one dropped
+            // while the view leaves its window would keep the contact, and a
+            // Pencil's hover suppression with it, alive.
+            if !in_window && phase != TouchPhase::Cancel {
+                if current_window.is_none() {
+                    break;
+                }
                 continue;
             }
             let events = self.ivars().input.borrow_mut().touch(&touch, phase);
