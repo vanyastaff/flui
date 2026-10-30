@@ -404,10 +404,9 @@ pub(in crate::app) fn install_capabilities(
     capabilities: crate::app::AppCapabilities,
 ) -> Result<(), LaunchError> {
     // A plugin's `register` is user code: it runs with no borrow held.
-    let clipboard =
-        host::APP_RUNTIME.with(|slot| std::rc::Rc::clone(slot.borrow().clipboard_slot()));
+    let slots = host::APP_RUNTIME.with(|slot| slot.borrow().capability_slots());
     let registry = capabilities
-        .into_registry(&clipboard)
+        .into_registry(&slots)
         .map_err(LaunchError::CapabilityConflict)?;
     // A displaced registry's providers are user code too: they drop after the
     // borrow is released.

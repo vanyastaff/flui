@@ -44,6 +44,7 @@ impl Host for Windows {
     type Text = Tsf;
     type Accessibility = WindowsAccessibility;
     type Clipboard = WindowsClipboard;
+    type PrimarySelection = Absent<position::PrimarySelection>;
     type Drag = WindowsLoop;
     type Haptics = WindowsHaptics;
     type Preferences = WindowsLoop;

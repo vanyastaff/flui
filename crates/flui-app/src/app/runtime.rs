@@ -428,6 +428,9 @@ pub(crate) struct AppRuntime {
     /// loop's exit. See [`Drop`]'s impl below for the last-resort third clear
     /// path.
     platform_clipboard: crate::app::capability::ClipboardSlot,
+    /// The platform's primary selection, installed and cleared with the
+    /// clipboard; empty where the platform has none.
+    platform_primary_selection: crate::app::capability::PrimarySelectionSlot,
     /// The providers every UI runtime this host builds acquires platform
     /// capabilities from (ADR-0152): the application's, checked for conflicts
     /// before the loop starts, or the built-ins alone when a runner starts
@@ -547,6 +550,7 @@ impl AppRuntime {
             redraw_window: Rc::default(),
             redraw_requester: Arc::new(Mutex::new(None)),
             platform_clipboard: Rc::default(),
+            platform_primary_selection: Rc::default(),
             capabilities: None,
             platform_data_transfer: Arc::new(Mutex::new(None)),
             host_storage: None,
@@ -1208,6 +1212,19 @@ impl AppRuntime {
         self.platform_clipboard.borrow_mut().replace(clipboard)
     }
 
+    /// Install the platform's primary selection, or none where it has none.
+    /// Returns the displaced one for retirement outside the caller's borrow.
+    pub(super) fn set_platform_primary_selection(
+        &self,
+        primary: Option<Rc<dyn flui_native::NativePrimarySelection>>,
+    ) -> Option<crate::app::capability::NativePrimary> {
+        let installed = primary.map(crate::app::capability::NativePrimary::new);
+        std::mem::replace(
+            &mut *self.platform_primary_selection.borrow_mut(),
+            installed,
+        )
+    }
+
     /// The explicit, deterministic teardown clear — the first of the two
     /// non-last-resort clear paths (the second is the bootstrap `set` itself
     /// replacing a prior installation; see [`Drop`]'s impl for the third,
@@ -1223,6 +1240,7 @@ impl AppRuntime {
     )]
     pub(super) fn clear_platform_clipboard(&self) {
         let _prev = self.platform_clipboard.borrow_mut().take();
+        let _prev = self.platform_primary_selection.borrow_mut().take();
         let _prev = self.platform_data_transfer.lock().take();
     }
 
@@ -1301,13 +1319,15 @@ impl AppRuntime {
     pub(super) fn capability_registry(&self) -> flui_runtime::capability::CapabilityRegistry {
         self.capabilities
             .clone()
-            .unwrap_or_else(|| crate::app::capability::built_in_registry(&self.platform_clipboard))
+            .unwrap_or_else(|| crate::app::capability::built_in_registry(&self.capability_slots()))
     }
 
-    /// The slot the built-in clipboard provider reads the owner platform's
-    /// clipboard from.
-    pub(super) fn clipboard_slot(&self) -> &crate::app::capability::ClipboardSlot {
-        &self.platform_clipboard
+    /// The slots the built-in providers read the owner platform from.
+    pub(super) fn capability_slots(&self) -> crate::app::capability::CapabilitySlots {
+        crate::app::capability::CapabilitySlots {
+            clipboard: Rc::clone(&self.platform_clipboard),
+            primary_selection: Rc::clone(&self.platform_primary_selection),
+        }
     }
 }
 
@@ -1417,6 +1437,7 @@ impl Drop for AppRuntime {
     /// run before, after, or never relative to those.
     fn drop(&mut self) {
         let _prev = self.platform_clipboard.borrow_mut().take();
+        let _prev = self.platform_primary_selection.borrow_mut().take();
         let _prev = self.platform_data_transfer.lock().take();
     }
 }

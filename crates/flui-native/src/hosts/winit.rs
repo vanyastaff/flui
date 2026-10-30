@@ -64,6 +64,7 @@ impl Host for Winit {
     #[cfg(not(target_os = "linux"))]
     type Accessibility = Absent<position::Accessibility>;
     type Clipboard = WinitLoop;
+    type PrimarySelection = Absent<position::PrimarySelection>;
     type Drag = WinitLoop;
     // Desktop winit targets have no haptic hardware to drive.
     type Haptics = Absent<position::Haptics>;

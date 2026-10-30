@@ -590,11 +590,26 @@ mod event_loop {
 
     /// What the loop asks of the clipboard: the clipboard feature's
     /// (`clipboard::linux::wayland`), which the table registers, and what
-    /// [`Platform::clipboard`] hands out.
+    /// [`Platform::clipboard`] hands out, with the primary selection
+    /// [`Platform::primary_selection`] hands out where the compositor has
+    /// one.
     ///
     /// Reached on the owner thread. The dispatch of its objects records what
-    /// they report and runs no handler; a read answers through its resolver.
-    pub(crate) trait WaylandClipboard: host::NativeClipboard + Send + Sync {
+    /// they report and runs no handler; a read answers through its resolver,
+    /// and a request for the application's primary selection waits for
+    /// [`deliver`](Self::deliver).
+    pub(crate) trait WaylandClipboard:
+        host::NativeClipboard + host::NativePrimarySelection + Send + Sync
+    {
+        /// Whether the compositor has a primary selection the clipboard
+        /// bound.
+        fn has_primary_selection(&self) -> bool;
+
+        /// Answer the requests for the application's primary selection the
+        /// dispatch recorded, asking its text with no lock of the loop or of
+        /// the clipboard held.
+        fn deliver(&self);
+
         /// The compositor announced global `name`: bind it if the clipboard
         /// speaks its interface.
         fn global(
@@ -1632,6 +1647,9 @@ mod event_loop {
             // Neither holds a lock of the loop: a handler may open, close or
             // quit.
             self.input.deliver();
+            // The application's selection is asked for its text here, at the
+            // turn, not inside the dispatch that recorded the request.
+            self.clipboard.deliver();
             for window in self.windows.values() {
                 window.settle();
             }
@@ -1965,6 +1983,18 @@ mod event_loop {
     impl host::Clipboard<WaylandLoop> for WaylandLoop {
         fn clipboard(owner: &WaylandLoop) -> Rc<dyn host::NativeClipboard> {
             Rc::new(Arc::clone(&owner.clipboard))
+        }
+    }
+
+    /// The primary selection position is the loop's too, where the
+    /// compositor has `zwp_primary_selection_device_manager_v1`.
+    impl host::PrimarySelection<WaylandLoop> for WaylandLoop {
+        fn primary_selection(owner: &WaylandLoop) -> Option<Rc<dyn host::NativePrimarySelection>> {
+            owner.clipboard.has_primary_selection().then(
+                || -> Rc<dyn host::NativePrimarySelection> {
+                    Rc::new(Arc::clone(&owner.clipboard))
+                },
+            )
         }
     }
 

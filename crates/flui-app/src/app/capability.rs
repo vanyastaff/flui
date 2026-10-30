@@ -4,8 +4,11 @@
 
 use std::{cell::RefCell, rc::Rc};
 
-use flui_interaction::{ClipboardBackend, ClipboardCapability, ClipboardHandle};
-use flui_native::NativeClipboard;
+use flui_interaction::{
+    ClipboardBackend, ClipboardCapability, ClipboardHandle, PrimaryClaimId, PrimaryClaims,
+    PrimarySelectionBackend, PrimarySelectionCapability, PrimarySelectionHandle, SelectionText,
+};
+use flui_native::{NativeClipboard, NativePrimarySelection};
 use flui_platform::{
     Unsupported, UnsupportedReason,
     capability::{
@@ -64,7 +67,7 @@ impl AppCapabilities {
     }
 
     /// The registry of a run: these overrides, then the built-ins over
-    /// `clipboard`, then the plugins. A plugin's `register` is user code, so
+    /// `slots`, then the plugins. A plugin's `register` is user code, so
     /// the caller holds no borrow of the application runtime.
     ///
     /// # Errors
@@ -72,11 +75,11 @@ impl AppCapabilities {
     /// The first [`CapabilityConflict`] among them.
     pub(crate) fn into_registry(
         self,
-        clipboard: &ClipboardSlot,
+        slots: &CapabilitySlots,
     ) -> Result<CapabilityRegistry, CapabilityConflict> {
         let mut builder = CapabilityRegistry::builder()
             .overrides(self.overrides)
-            .built_ins(built_ins(clipboard));
+            .built_ins(built_ins(slots));
         for plugin in &self.plugins {
             builder = builder.plugin(plugin.as_ref());
         }
@@ -94,18 +97,23 @@ impl std::fmt::Debug for AppCapabilities {
 }
 
 /// The registry a run with no override and no plugin has.
-pub(crate) fn built_in_registry(clipboard: &ClipboardSlot) -> CapabilityRegistry {
+pub(crate) fn built_in_registry(slots: &CapabilitySlots) -> CapabilityRegistry {
     CapabilityRegistry::builder()
-        .built_ins(built_ins(clipboard))
+        .built_ins(built_ins(slots))
         .build()
         .expect("BUG: the built-in providers name each capability once")
 }
 
 /// The providers this crate ships.
-fn built_ins(clipboard: &ClipboardSlot) -> CapabilityRegistrar {
+fn built_ins(slots: &CapabilitySlots) -> CapabilityRegistrar {
     let mut registrar = CapabilityRegistrar::new();
     registrar.provide::<ClipboardCapability>(PlatformClipboard {
-        slot: Rc::clone(clipboard),
+        slot: Rc::clone(&slots.clipboard),
+    });
+    // The primary selection is X11's and Wayland's alone.
+    #[cfg(target_os = "linux")]
+    registrar.provide::<PrimarySelectionCapability>(PlatformPrimarySelection {
+        slot: Rc::clone(&slots.primary_selection),
     });
     registrar
 }
@@ -138,5 +146,188 @@ impl ClipboardBackend for NativeBackend {
 
     fn write_text(&self, text: String) {
         self.0.write_text(text);
+    }
+}
+
+/// The slot the owner platform's primary selection is installed in for a
+/// loop's life, with the claims made over it; empty between loops and
+/// where the platform has none.
+pub(crate) type PrimarySelectionSlot = Rc<RefCell<Option<NativePrimary>>>;
+
+/// The owner platform's primary selection and the claims every handle over
+/// it shares, so a claim from one widget makes another's stale.
+#[derive(Clone)]
+pub(crate) struct NativePrimary {
+    native: Rc<dyn NativePrimarySelection>,
+    claims: Rc<RefCell<PrimaryClaims>>,
+}
+
+impl NativePrimary {
+    pub(crate) fn new(native: Rc<dyn NativePrimarySelection>) -> Self {
+        Self {
+            native,
+            claims: Rc::default(),
+        }
+    }
+}
+
+/// The slots the built-in providers read the owner platform from.
+#[derive(Clone, Default)]
+pub(crate) struct CapabilitySlots {
+    pub(crate) clipboard: ClipboardSlot,
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(
+            dead_code,
+            reason = "only the Linux hosts register a primary selection"
+        )
+    )]
+    pub(crate) primary_selection: PrimarySelectionSlot,
+}
+
+/// The built-in primary selection: the owner platform's, on the platforms
+/// that have one. Elsewhere nothing registers it, and an acquisition is
+/// refused as not registered.
+#[cfg_attr(
+    not(target_os = "linux"),
+    expect(dead_code, reason = "only the Linux hosts have a primary selection")
+)]
+struct PlatformPrimarySelection {
+    slot: PrimarySelectionSlot,
+}
+
+impl CapabilityProvider<PrimarySelectionCapability> for PlatformPrimarySelection {
+    fn provide(&self, cx: &ProviderContext<'_>) -> Result<PrimarySelectionHandle, Unsupported> {
+        let native = self.slot.borrow().clone().ok_or_else(|| {
+            // Between loops, or a host of this platform without one (winit,
+            // a compositor without the protocol).
+            Unsupported::of::<PrimarySelectionCapability>(UnsupportedReason::Unavailable)
+        })?;
+        Ok(PrimarySelectionHandle::new(
+            native,
+            cx.completions().clone(),
+        ))
+    }
+}
+
+impl PrimarySelectionBackend for NativePrimary {
+    fn claim(&self, text: Rc<dyn SelectionText>) -> PrimaryClaimId {
+        let offered = Rc::clone(&text);
+        let (id, replaced) = self.claims.borrow_mut().claim(text);
+        // What the claim replaced is the application's: dropped with no
+        // borrow held.
+        drop(replaced);
+        if self.claims.borrow().is_current(id) {
+            self.native.offer(Rc::new(move || offered.text()));
+        }
+        id
+    }
+
+    fn release(&self, claim: PrimaryClaimId) {
+        let released = self.claims.borrow_mut().release(claim);
+        if released.is_some() {
+            self.native.withdraw();
+        }
+        drop(released);
+    }
+
+    fn is_current(&self, claim: PrimaryClaimId) -> bool {
+        if !self.native.owns() {
+            // Another client selected: no claim of this application holds.
+            let lost = self.claims.borrow_mut().lose();
+            drop(lost);
+            return false;
+        }
+        self.claims.borrow().is_current(claim)
+    }
+
+    fn read_text(&self, answer: Resolver<Option<String>>) {
+        self.native.read_text(answer);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use super::*;
+
+    /// What the adapter offered the host.
+    type Offered = Rc<dyn Fn() -> Option<String>>;
+
+    /// A host's primary selection that records what the adapter asks of it.
+    #[derive(Default)]
+    struct Recorded {
+        offered: RefCell<Option<Offered>>,
+        withdrawn: Cell<u32>,
+    }
+
+    impl NativePrimarySelection for Recorded {
+        fn offer(&self, text: Rc<dyn Fn() -> Option<String>>) {
+            self.offered.replace(Some(text));
+        }
+
+        fn withdraw(&self) {
+            self.withdrawn.set(self.withdrawn.get() + 1);
+            self.offered.replace(None);
+        }
+
+        fn owns(&self) -> bool {
+            self.offered.borrow().is_some()
+        }
+
+        fn read_text(&self, answer: Resolver<Option<String>>) {
+            drop(answer);
+        }
+    }
+
+    impl Recorded {
+        /// Another client selects.
+        fn lose(&self) {
+            self.offered.replace(None);
+        }
+
+        fn text(&self) -> Option<String> {
+            let offered = self.offered.borrow().clone();
+            offered.and_then(|text| text())
+        }
+    }
+
+    /// Two widgets' claims over one host selection: the newer makes the
+    /// older stale, a stale claim's release withdraws nothing, another
+    /// client selecting ends both, and the text is asked only when read.
+    #[test]
+    fn claims_over_one_host_selection_share_their_currency() {
+        let native = Rc::new(Recorded::default());
+        let primary = NativePrimary::new(Rc::clone(&native) as Rc<dyn NativePrimarySelection>);
+        let asked = Rc::new(Cell::new(0));
+        let first = primary.claim(Rc::new({
+            let asked = Rc::clone(&asked);
+            move || {
+                asked.set(asked.get() + 1);
+                Some("first".to_owned())
+            }
+        }));
+        assert_eq!(asked.get(), 0, "a claim copies nothing");
+        assert_eq!(native.text().as_deref(), Some("first"));
+        assert_eq!(asked.get(), 1);
+
+        let second = primary.claim(Rc::new(|| Some("second".to_owned())));
+        assert!(!primary.is_current(first));
+        primary.release(first);
+        assert_eq!(native.withdrawn.get(), 0, "a stale claim withdraws nothing");
+        assert!(primary.is_current(second));
+
+        native.lose();
+        assert!(!primary.is_current(second), "another client selected");
+        let third = primary.claim(Rc::new(|| Some("third".to_owned())));
+        assert!(primary.is_current(third));
+        primary.release(third);
+        assert_eq!(
+            native.withdrawn.get(),
+            1,
+            "the current claim's release withdraws"
+        );
+        assert!(!native.owns());
     }
 }

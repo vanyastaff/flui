@@ -91,3 +91,49 @@ impl SyncClipboard for MemoryClipboard {
         *self.text.lock() = Some(text);
     }
 }
+
+/// The host's primary selection, owner-local: what
+/// [`Platform::primary_selection`](crate::Platform::primary_selection) hands
+/// out where the platform has one (X11 and Wayland), and the application's
+/// primary selection provider builds its handles over (ADR-0152).
+///
+/// The application offers its selection lazily: the host asks `text` for
+/// the selected text only when another client reads it, on the owner thread
+/// at a turn of the loop, never inside the platform's own dispatch, so
+/// `text` may read the widget state it shares and call back into this
+/// selection.
+pub trait NativePrimarySelection {
+    /// Make the application's selection the primary selection, answered by
+    /// `text` whenever it is read, in place of what it offered before.
+    fn offer(&self, text: std::rc::Rc<dyn Fn() -> Option<String>>);
+
+    /// Stop offering the application's selection, if it still holds the
+    /// primary selection.
+    fn withdraw(&self);
+
+    /// Whether the application's selection is the primary selection: it
+    /// offered one, withdrew none since, and no other client selected.
+    fn owns(&self) -> bool;
+
+    /// Read the primary selection's text and answer `answer` with it, or
+    /// with `None` when it holds none.
+    fn read_text(&self, answer: Resolver<Option<String>>);
+}
+
+impl<C: NativePrimarySelection + ?Sized> NativePrimarySelection for std::sync::Arc<C> {
+    fn offer(&self, text: std::rc::Rc<dyn Fn() -> Option<String>>) {
+        (**self).offer(text);
+    }
+
+    fn withdraw(&self) {
+        (**self).withdraw();
+    }
+
+    fn owns(&self) -> bool {
+        (**self).owns()
+    }
+
+    fn read_text(&self, answer: Resolver<Option<String>>) {
+        (**self).read_text(answer);
+    }
+}

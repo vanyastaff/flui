@@ -80,6 +80,7 @@ mod wayland {
         type Text = Absent<position::Text>;
         type Accessibility = UnixAccessibility;
         type Clipboard = WaylandLoop;
+        type PrimarySelection = WaylandLoop;
         type Drag = Absent<position::Drag>;
         // A desktop compositor has no haptic hardware to drive.
         type Haptics = Absent<position::Haptics>;
@@ -181,6 +182,7 @@ mod x11 {
         type Text = Absent<position::Text>;
         type Accessibility = UnixAccessibility;
         type Clipboard = Absent<position::Clipboard>;
+        type PrimarySelection = Absent<position::PrimarySelection>;
         type Drag = Absent<position::Drag>;
         // A desktop has no haptic hardware to drive.
         type Haptics = Absent<position::Haptics>;

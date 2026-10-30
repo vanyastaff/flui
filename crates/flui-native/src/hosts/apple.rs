@@ -103,6 +103,8 @@ impl Host for Apple {
     #[cfg(target_os = "ios")]
     type Clipboard = IOSClipboard;
 
+    type PrimarySelection = Absent<position::PrimarySelection>;
+
     type Drag = Absent<position::Drag>;
 
     #[cfg(target_os = "macos")]

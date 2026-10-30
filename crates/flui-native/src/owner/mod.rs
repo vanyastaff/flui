@@ -205,6 +205,14 @@ impl OwnerPlatform {
         self.platform.clipboard()
     }
 
+    /// The host's primary selection, owner-local, where the platform has
+    /// one: the application's primary selection provider builds its handles
+    /// over it (ADR-0152).
+    #[must_use]
+    pub fn primary_selection(&self) -> Option<std::rc::Rc<dyn crate::NativePrimarySelection>> {
+        self.platform.primary_selection()
+    }
+
     /// Tell the platform the application released the session end it asked to
     /// wait for. See [`Platform::release_session_end`].
     pub fn release_session_end(&self) {

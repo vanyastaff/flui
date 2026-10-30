@@ -819,9 +819,9 @@ where
     // nothing (ADR-0152 §1).
     let capabilities = std::mem::take(&mut application.capabilities);
     // A plugin's `register` is user code: it runs with no borrow held.
-    let clipboard = APP_RUNTIME.with(|slot| Rc::clone(slot.borrow().clipboard_slot()));
+    let slots = APP_RUNTIME.with(|slot| slot.borrow().capability_slots());
     let registry = capabilities
-        .into_registry(&clipboard)
+        .into_registry(&slots)
         .map_err(AppRunError::CapabilityConflict)?;
     let _logging = super::super::logging::init_managed_logging(&application.config);
     let platform = platform()?;
