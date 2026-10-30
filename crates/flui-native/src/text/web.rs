@@ -80,7 +80,7 @@ mod input {
     use super::ime::input_mode;
     use crate::owner::panic_boundary::contain_owner_callback;
     use crate::owner::slot::OwnerSlot;
-    use crate::owner::web::listener::CanvasListener;
+    use crate::owner::web::listener::{CanvasListener, viewport_listeners};
     use crate::owner::web::{Accepting, CanvasEditor, CanvasKeys, CanvasRef};
     use crate::text::host_queue::{HostQueue, MirrorHostOp};
     use crate::text::ime::{diff, document_text, scalar_spans};
@@ -817,44 +817,16 @@ mod input {
             (rect.left(), rect.top())
         }
 
-        /// Listeners that tell the surface where the field moved to when the page
-        /// or one of the canvas's ancestors scrolls, or the viewport resizes or
-        /// pans under a pinch zoom, which move the canvas without the store's
-        /// layout changing. `scroll` does not bubble, so it is caught on the
-        /// window in the capture phase.
+        /// Listeners that tell the surface where the field moved to when the
+        /// canvas moves in the viewport without the store's layout changing.
         fn viewport_listeners(&self) -> Result<Vec<CanvasListener>, JsValue> {
-            let window =
-                web_sys::window().ok_or_else(|| JsValue::from_str("there is no window"))?;
-            let mut targets: Vec<(web_sys::EventTarget, bool)> =
-                vec![(window.clone().into(), true)];
-            // Not every browser has a visual viewport.
-            if let Ok(viewport) =
-                js_sys::Reflect::get(&window, &JsValue::from_str("visualViewport"))
-                && let Ok(viewport) = viewport.dyn_into::<web_sys::EventTarget>()
-            {
-                targets.push((viewport, false));
-            }
-            let mut listeners = Vec::new();
-            for (target, capture) in &targets {
-                for kind in ["scroll", "resize"] {
-                    let this = self.this.clone();
-                    listeners.push(
-                        CanvasListener::install_in_phase(
-                            target,
-                            kind,
-                            &self.accepting,
-                            *capture,
-                            move |_| {
-                                if let Some(this) = this.upgrade() {
-                                    this.push_bounds();
-                                }
-                            },
-                        )
-                        .map_err(|error| JsValue::from_str(&error.to_string()))?,
-                    );
+            let this = self.this.clone();
+            viewport_listeners(&self.accepting, move || {
+                if let Some(this) = this.upgrade() {
+                    this.push_bounds();
                 }
-            }
-            Ok(listeners)
+            })
+            .map_err(|error| JsValue::from_str(&error.to_string()))
         }
 
         /// Tell the surface where the field and its selection are, so the input

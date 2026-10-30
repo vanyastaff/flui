@@ -211,6 +211,10 @@ pub(crate) trait CanvasEditor {
     /// `editor` is now part of the canvas's focus area; `None` when none is.
     fn set(&self, editor: Option<&web_sys::HtmlElement>);
 
+    /// `host`, the semantics host, and every element in it are now part of
+    /// the canvas's focus area; `None` when there is none.
+    fn set_semantics(&self, host: Option<&web_sys::HtmlElement>);
+
     /// Whether the canvas, or the editor beside it, has the page's focus.
     fn has_focus(&self) -> bool;
 

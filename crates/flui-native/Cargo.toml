@@ -297,6 +297,7 @@ web-sys = { version = "0.3", features = [
     "WheelEvent",
     "MouseEvent",
     "FocusEvent",
+    "FocusOptions",
     "UiEvent",
     # Text input: the hidden editor where the browser has no EditContext
     "HtmlTextAreaElement",
@@ -317,6 +318,8 @@ web-sys = { version = "0.3", features = [
     "MediaQueryList",
     "MediaQueryListEvent",
     # Observers
+    "MutationObserver",
+    "MutationObserverInit",
     "ResizeObserver",
     "ResizeObserverEntry",
     "ResizeObserverSize",

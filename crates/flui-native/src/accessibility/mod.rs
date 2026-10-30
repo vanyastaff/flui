@@ -12,12 +12,14 @@
 //!   hand out (the Wayland, X11 and winit hosts');
 //! - `android`: TalkBack (`accesskit_android`), through `FluiView`'s node
 //!   provider;
+//! - `web`: a parallel ARIA DOM over the canvas, which the browser's own
+//!   accessibility tree reads (ADR-0255 decision 18), with no AccessKit
+//!   adapter under it;
 //! - `headless`: `FakeAccessibility`, which counts what was published while active.
 //!
 //! The adapters have no feature: every window of a host that has one hands it
 //! out, and each compiles wherever a host of its operating system does
 //! (ADR-0151 §15): on Linux, with any of the Wayland, X11 and winit hosts.
-//! The Web has none yet: its table names `Absent<Accessibility>`.
 
 #[cfg(target_os = "android")]
 pub(crate) mod android;
@@ -28,12 +30,15 @@ pub(crate) mod apple;
     target_os = "macos",
     target_os = "ios",
     target_os = "android",
+    target_arch = "wasm32",
     linux_host
 ))]
 mod bridge;
 pub(crate) mod headless;
 #[cfg(linux_host)]
 pub(crate) mod linux;
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) mod web;
 #[cfg(windows)]
 pub(crate) mod windows;
 
