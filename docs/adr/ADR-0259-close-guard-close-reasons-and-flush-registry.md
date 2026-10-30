@@ -139,9 +139,17 @@ neither the due close, which the owner already holds, nor the wakers after it.
 
 ### §4. `Program` is a close the application's code asks for
 
-`AppHandle::request_quit` asks every presentation's guard with `CloseReason::Program`. While any
-refuses, the quit is deferred, and it proceeds when the last hold over it is released.
-`request_presentation_close` stays the application's unconditional close: it asks no guard.
+`AppHandle::request_quit` asks every presentation's guard with `CloseReason::Program`, and then its
+handler, on the owner's next turn; nothing is fenced before that. While any refuses, the quit is
+deferred and waits on the presentations whose refusal recorded a close: it proceeds, without asking
+again, once each record is carried out (its holds released, or `discard_and_close`) or its
+presentation is gone. A record resolved with `stay_open` cancels the quit; so does a refusal that
+records nothing (a handler that panicked, a presentation without a guard), because nothing would
+ever resolve it. A presentation's own recorded close outranks its recorded quit: carrying out the
+window's close is also its consent. A second `request_quit` while the quit is deferred asks again.
+The application's own failures (its first window, a service that does not start, `on_ready`
+panicking) quit without asking. `request_presentation_close` stays the application's
+unconditional close: it asks no guard.
 
 ### §5. The flush registry
 
@@ -246,8 +254,10 @@ it, `CloseGuardSource` takes its `OwnerNotify` and calls it outside its state, a
   `a_recorded_close_runs_when_the_last_hold_goes_unless_kept_open`,
   `discarding_a_recorded_close_makes_it_due`, `a_cancelled_logoff_withdraws_only_the_session_entry`,
   `an_undelivered_signal_keeps_the_due_close`, `a_close_change_wakes_on_the_owner_turn`.
-- §1, §4: `a_close_request_carries_its_reason`, `a_vetoed_close_disposes_nothing`, and the existing
-  `a_panicking_handler_vetoes_and_stays_registered`.
+- §1, §4: `a_close_request_carries_its_reason`, `a_kept_open_close_is_recorded_for_its_reason`,
+  `a_window_close_outranks_a_recorded_quit`, `a_vetoed_close_disposes_nothing`,
+  `a_refused_quit_waits_for_the_record_then_exits`, `a_quit_the_window_stays_open_for_is_cancelled`,
+  and the existing `a_panicking_handler_vetoes_and_stays_registered`.
 - §5: `a_publishers_own_line_rebases_and_another_conflicts`,
   `a_finished_write_wakes_changed_on_the_owner_turn`,
   `a_registry_entry_published_at_detached_is_written_at_teardown`, and the persistence feature's

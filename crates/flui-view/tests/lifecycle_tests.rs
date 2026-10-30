@@ -533,3 +533,38 @@ pub(crate) fn an_older_resolution_leaves_a_newer_record() {
         "the newer record stays"
     );
 }
+
+/// A close the application's handler kept open is recorded without a hold;
+/// carried out alongside a recorded quit, the window's own close is the one
+/// due, and a quit resolved by staying open is reported as declined.
+pub(crate) fn a_window_close_outranks_a_recorded_quit() {
+    let (source, _signals) = desktop_close_guard(true);
+    let guard = source.guard();
+    source.record(CloseReason::Program);
+    source.record(CloseReason::User);
+    source.record(CloseReason::Program);
+    assert!(source.is_recorded(CloseReason::Program));
+
+    let quit = guard.pending().expect("the quit is recorded first");
+    assert_eq!(quit.reason(), CloseReason::Program);
+    assert_eq!(quit.discard_and_close(), Ok(()));
+    let settled = source.settle();
+    assert_eq!(
+        settled.close,
+        Some(CloseReason::User),
+        "the window's own close is carried out, consenting to the quit"
+    );
+    assert_eq!(settled.declined, []);
+    assert!(
+        guard.pending().is_none(),
+        "one close carries every record out"
+    );
+
+    source.record(CloseReason::Program);
+    let kept = guard.pending().map(PendingClose::stay_open);
+    assert_eq!(kept, Some(Ok(())));
+    let settled = source.settle();
+    assert_eq!(settled.close, None, "staying open carries nothing out");
+    assert_eq!(settled.declined, [CloseReason::Program]);
+    assert_eq!(source.settle().declined, [], "reported once");
+}

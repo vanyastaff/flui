@@ -1772,7 +1772,7 @@ impl HeadlessHost {
     /// windows' guards now let through, run the registry's queued writes and
     /// wake what they resolved.
     fn settle_lifecycle(&mut self) {
-        for (id, _reason) in self.ui_runtime.settle_close_guards() {
+        for (id, _reason) in self.ui_runtime.settle_close_guards().due {
             self.close_presentation(id);
         }
         self.run_flush_writes();

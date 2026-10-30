@@ -67,12 +67,16 @@ pub(crate) fn closing_the_last_window_returns_ok() {
     assert_eq!(report.teardown, TEARDOWN_ORDER);
 }
 
-/// A quit the program asks for ends the loop as a closed last window does.
+/// A quit the program asks for, which no window refuses, ends the loop as a
+/// closed last window does.
 pub(crate) fn a_program_quit_returns_ok() {
     let handle = Rc::new(RefCell::new(None));
     let run = HeadlessRun::start(one_window_app(Rc::clone(&handle)));
     let handle = handle.take().expect("on_ready ran during start");
     handle.request_quit().expect("the loop accepts a quit");
+    // The application's turn asks the windows, which refuse nothing; the
+    // platform quits on the turn after.
+    run.run_owner_turn();
     run.run_owner_turn();
     assert!(!run.is_running(), "the quit reached the platform");
 
