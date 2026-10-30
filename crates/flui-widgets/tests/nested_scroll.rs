@@ -478,7 +478,7 @@ pub(crate) fn steps_carry_the_focal_point_and_the_device_pixel_ratio() {
     assert_eq!(released.focal_point, lifted);
     assert_eq!(released.device_pixel_ratio, 2.0);
 
-    controller.jump_to(0.0);
+    controller.jump_to(0.0).expect("no build is running");
     laid.tick();
     probe.take();
     laid.replay(
@@ -499,7 +499,7 @@ pub(crate) fn steps_carry_the_focal_point_and_the_device_pixel_ratio() {
     );
 
     probe.take();
-    controller.jump_to(300.0);
+    controller.jump_to(300.0).expect("no build is running");
     laid.tick();
     let jump = by_cause(ScrollCause::Programmatic);
     assert_eq!(jump.len(), 1, "the jump is one step");
@@ -620,7 +620,7 @@ pub(crate) fn each_participant_is_offered_the_step_in_its_own_plane() {
     let (mut laid, outer, inner) = mount(Transform::scale(0.0, 1.0), &controller);
     outer.take();
     inner.take();
-    controller.jump_to(100.0);
+    controller.jump_to(100.0).expect("no build is running");
     laid.tick();
     assert_eq!(controller.pixels(), 100.0, "the jump moves the list");
     assert!(
@@ -690,7 +690,7 @@ pub(crate) fn list_in_pager_shares_deltas_by_axis() {
             "{device:?}: a horizontal drag offers horizontal motion only: {steps:?}"
         );
 
-        pager.jump_to(0.0);
+        pager.jump_to(0.0).expect("no build is running");
         laid.tick();
         laid.replay(&slow(device, at(250.0, 200.0), at(100.0, 113.4)));
         settle(&mut laid);
@@ -739,7 +739,7 @@ pub(crate) fn edge_at_start_latches_ancestor_on_every_preset() {
                 ),
                 vsync,
             );
-            outer.jump_to(600.0);
+            outer.jump_to(600.0).expect("no build is running");
             laid.tick();
             let mut points = line(at(150.0, 40.0), at(150.0, 160.0), 8);
             points.extend(
@@ -799,8 +799,8 @@ pub(crate) fn mid_drag_transfer_relatches_only_at_edge_within_the_sequence() {
                 ),
                 vsync,
             );
-            outer.jump_to(600.0);
-            inner.jump_to(700.0);
+            outer.jump_to(600.0).expect("no build is running");
+            inner.jump_to(700.0).expect("no build is running");
             laid.tick();
             let up = line(at(150.0, 190.0), at(150.0, 10.0), 12);
             let up_steps = up.len();
@@ -903,7 +903,7 @@ pub(crate) fn channel_latch_ends_exactly_when_binding_mints_a_new_sequence() {
     probe.take();
 
     for device in DEVICES {
-        controller.jump_to(0.0);
+        controller.jump_to(0.0).expect("no build is running");
         laid.tick();
         probe.take();
         laid.replay(&slow(device, at(150.0, 250.0), at(150.0, 150.0)));
@@ -1156,9 +1156,9 @@ pub(crate) fn fling_handoff_inherits_sequence_across_three_levels() {
         )
         .boxed();
         let mut laid = lay_out_animated(tree, tight(200.0, 200.0), vsync);
-        outer.jump_to(600.0);
-        middle.jump_to(795.0);
-        inner.jump_to(650.0);
+        outer.jump_to(600.0).expect("no build is running");
+        middle.jump_to(795.0).expect("no build is running");
+        inner.jump_to(650.0).expect("no build is running");
         laid.tick();
         top.take();
         between.take();
@@ -1252,8 +1252,8 @@ pub(crate) fn momentum_never_offers_post_fling() {
             list_in_list(&outer, &inner, &top, &middle, None, &vsync),
             vsync,
         );
-        outer.jump_to(600.0);
-        inner.jump_to(650.0);
+        outer.jump_to(600.0).expect("no build is running");
+        inner.jump_to(650.0).expect("no build is running");
         laid.tick();
         laid.replay(&fling(device, at(150.0, 150.0), at(150.0, 60.0)));
         settle(&mut laid);
@@ -1262,8 +1262,8 @@ pub(crate) fn momentum_never_offers_post_fling() {
             "{device:?}: a fling to the inner end offers its residual"
         );
 
-        outer.jump_to(600.0);
-        inner.jump_to(650.0);
+        outer.jump_to(600.0).expect("no build is running");
+        inner.jump_to(650.0).expect("no build is running");
         laid.tick();
         top.take();
         middle.take();
@@ -1343,8 +1343,8 @@ pub(crate) fn new_touch_preempts_handed_off_fling() {
             list_in_list(&outer, &inner, &top, &middle, None, &vsync),
             vsync,
         );
-        outer.jump_to(600.0);
-        inner.jump_to(650.0);
+        outer.jump_to(600.0).expect("no build is running");
+        inner.jump_to(650.0).expect("no build is running");
         laid.tick();
         top.take();
         laid.replay(&fling(device, at(150.0, 150.0), at(150.0, 60.0)));
@@ -1402,8 +1402,8 @@ pub(crate) fn new_wheel_or_assistive_scroll_preempts_handed_off_fling() {
             list_in_list(&outer, &inner, &top, &middle, None, &vsync),
             vsync,
         );
-        outer.jump_to(600.0);
-        inner.jump_to(650.0);
+        outer.jump_to(600.0).expect("no build is running");
+        inner.jump_to(650.0).expect("no build is running");
         laid.enable_semantics();
         laid.tick();
         top.take();
@@ -1544,7 +1544,9 @@ pub(crate) fn a_run_short_of_the_edge_of_a_long_list_hands_nothing_on() {
         .boxed();
         let mut laid = mounted(tree, vsync);
         let end = controller.max_scroll_extent();
-        controller.jump_to(end - 500.0);
+        controller
+            .jump_to(end - 500.0)
+            .expect("no build is running");
         laid.tick();
         laid.replay(&fling(Device::Touch, at(150.0, 250.0), at(150.0, 150.0)));
         settle(&mut laid);
@@ -1575,11 +1577,13 @@ pub(crate) fn user_input_preempts_programmatic_scroll() {
         )
         .boxed();
         let mut laid = mounted(tree, vsync);
-        controller.animate_to(
-            700.0,
-            Duration::from_secs(1),
-            flui_animation::SharedCurve::new(flui_animation::curves::LINEAR),
-        );
+        controller
+            .animate_to(
+                700.0,
+                Duration::from_secs(1),
+                flui_animation::SharedCurve::new(flui_animation::curves::LINEAR),
+            )
+            .expect("no build is running");
         for _ in 0..12 {
             laid.pump_for(SAMPLE);
         }
@@ -1644,18 +1648,20 @@ pub(crate) fn a_participant_declining_programmatic_scrolls_hears_none_of_them() 
         .boxed();
         let mut laid = mounted(tree, vsync);
 
-        controller.jump_to(200.0);
+        controller.jump_to(200.0).expect("no build is running");
         laid.tick();
         assert_eq!(
             controller.pixels(),
             200.0,
             "{device:?}: the jump moves the list"
         );
-        controller.animate_to(
-            400.0,
-            Duration::from_millis(200),
-            flui_animation::SharedCurve::new(flui_animation::curves::LINEAR),
-        );
+        controller
+            .animate_to(
+                400.0,
+                Duration::from_millis(200),
+                flui_animation::SharedCurve::new(flui_animation::curves::LINEAR),
+            )
+            .expect("no build is running");
         settle(&mut laid);
         assert_eq!(
             controller.pixels(),
@@ -1730,7 +1736,7 @@ pub(crate) fn a_new_chain_above_keeps_the_leaf_run() {
         };
         let first = Probe::new();
         let mut laid = mounted(tree(&first), vsync.clone());
-        controller.jump_to(450.0);
+        controller.jump_to(450.0).expect("no build is running");
         laid.tick();
         first.take();
         laid.replay(&fling(device, at(150.0, 250.0), at(150.0, 150.0)));
@@ -1792,7 +1798,7 @@ pub(crate) fn a_fresh_ancestor_physics_mid_drag_keeps_taking_the_remainder() {
         list_at_the_top_of_a_bouncing_list(&outer, &inner, &vsync),
         vsync.clone(),
     );
-    inner.jump_to(800.0);
+    inner.jump_to(800.0).expect("no build is running");
     laid.tick();
     laid.dispatch_pointer_down(150.0, 190.0);
     for y in [170.0, 150.0, 130.0] {
@@ -1828,7 +1834,7 @@ pub(crate) fn participant_result_is_clamped() {
             )
             .boxed();
             let mut laid = mounted(tree, vsync);
-            controller.jump_to(300.0);
+            controller.jump_to(300.0).expect("no build is running");
             laid.tick();
             probe.set_pre(move |step| answer(step.available));
             laid.replay(&slow(device, at(150.0, 250.0), at(150.0, 100.0)));
@@ -1934,7 +1940,7 @@ pub(crate) fn a_step_that_is_not_finite_is_dropped_at_the_channel() {
     )
     .boxed();
     let mut laid = mounted(tree, vsync);
-    controller.jump_to(300.0);
+    controller.jump_to(300.0).expect("no build is running");
     laid.tick();
     probe.set_pre(|step| {
         if step.cause == ScrollCause::Programmatic {
@@ -1958,7 +1964,7 @@ pub(crate) fn a_step_that_is_not_finite_is_dropped_at_the_channel() {
         probe.seen()
     );
     *probe.pre.borrow_mut() = None;
-    controller.jump_to(120.0);
+    controller.jump_to(120.0).expect("no build is running");
     assert_eq!(controller.pixels(), 120.0, "the next jump goes through");
 
     // Every operand finite, the distance not: `f64::MAX - -f64::MAX`.
@@ -2192,7 +2198,7 @@ pub(crate) fn participant_panic_consumes_all_and_next_sequence_recovers() {
             assert_eq!(near_steps, 1, "{device:?}: a closed link is skipped");
 
             *near.on_end.borrow_mut() = None;
-            controller.jump_to(0.0);
+            controller.jump_to(0.0).expect("no build is running");
             laid.tick();
             near.take();
             assert!(
@@ -2343,7 +2349,7 @@ pub(crate) fn a_contact_that_ends_without_release_names_why() {
         );
 
         inner.take();
-        pager.jump_to(0.0);
+        pager.jump_to(0.0).expect("no build is running");
         laid.tick();
         laid.replay(&slow(device, at(150.0, 250.0), at(150.0, 150.0)));
         settle(&mut laid);
@@ -2392,7 +2398,7 @@ pub(crate) fn a_release_taken_over_by_reentrant_code_still_ends_its_sequence() {
         let arm = Rc::clone(&armed);
         let listener = position.add_activity_listener(Rc::new(move || {
             if jumping.position().is_scrolling() && arm.replace(false) {
-                jumping.jump_to(900.0);
+                jumping.jump_to(900.0).expect("no build is running");
             }
         }));
         probe.take();
@@ -2544,7 +2550,7 @@ pub(crate) fn anchor_correction_bypasses_the_channel() {
         )
         .boxed();
         let mut laid = mounted(tree, vsync);
-        controller.jump_to(10_000.0);
+        controller.jump_to(10_000.0).expect("no build is running");
         for _ in 0..4 {
             laid.tick();
         }
@@ -2562,7 +2568,7 @@ pub(crate) fn anchor_correction_bypasses_the_channel() {
             vec![],
             "{device:?}: control: a direct write bypasses the channel"
         );
-        controller.jump_to(resting);
+        controller.jump_to(resting).expect("no build is running");
         let jump: Vec<_> = probe.steps();
         assert_eq!(
             jump.iter().map(|step| step.available.y).sum::<f64>(),
@@ -2825,8 +2831,8 @@ pub(crate) fn contained_scrollable_keeps_its_remainder() {
         )
         .boxed();
         let mut laid = mounted(tree, vsync);
-        outer.jump_to(600.0);
-        inner.jump_to(650.0);
+        outer.jump_to(600.0).expect("no build is running");
+        inner.jump_to(650.0).expect("no build is running");
         laid.tick();
         top.take();
         laid.replay(&fling(device, at(150.0, 190.0), at(150.0, 40.0)));
@@ -2888,7 +2894,7 @@ pub(crate) fn a_remainder_moves_an_overscrolled_ancestor_only_toward_its_range()
             list_at_the_top_of_a_bouncing_list(&outer, &inner, &vsync),
             vsync,
         );
-        inner.jump_to(800.0);
+        inner.jump_to(800.0).expect("no build is running");
         laid.tick();
         outer.set_pixels(-100.0);
         laid.tick();
@@ -3200,8 +3206,8 @@ pub(crate) fn fling_residual_survives_a_participant_taking_part_of_it() {
                 Vec2::ZERO
             }
         });
-        outer.jump_to(600.0);
-        inner.jump_to(650.0);
+        outer.jump_to(600.0).expect("no build is running");
+        inner.jump_to(650.0).expect("no build is running");
         laid.tick();
         top.take();
         middle.take();
@@ -3257,14 +3263,16 @@ pub(crate) fn shared_connection_hears_a_sequence_once() {
             list_in_list(&outer, &inner, &top, &middle, None, &vsync),
             vsync,
         );
-        outer.jump_to(600.0);
+        outer.jump_to(600.0).expect("no build is running");
         laid.tick();
         for controller in [&outer, &inner] {
-            controller.animate_to(
-                700.0,
-                Duration::from_secs(2),
-                flui_animation::SharedCurve::new(flui_animation::curves::LINEAR),
-            );
+            controller
+                .animate_to(
+                    700.0,
+                    Duration::from_secs(2),
+                    flui_animation::SharedCurve::new(flui_animation::curves::LINEAR),
+                )
+                .expect("no build is running");
         }
         laid.pump_for(Duration::from_millis(100));
         laid.pump_for(Duration::from_millis(100));
@@ -3394,7 +3402,7 @@ pub(crate) fn keyboard_scrolls_through_the_channel_as_its_own_sequence() {
     assert_eq!(started.len(), 2, "the next press is a sequence of its own");
     assert_ne!(started[0], started[1]);
 
-    controller.jump_to(0.0);
+    controller.jump_to(0.0).expect("no build is running");
     laid.tick();
     for (code, key, expected) in [
         (Code::PageDown, Key::Named(NamedKey::PageDown), 240.0),
@@ -3408,7 +3416,7 @@ pub(crate) fn keyboard_scrolls_through_the_channel_as_its_own_sequence() {
         settle(&mut laid);
         assert_eq!(controller.pixels(), expected, "{code:?}");
     }
-    controller.jump_to(240.0);
+    controller.jump_to(240.0).expect("no build is running");
     laid.tick();
     assert!(keys.send(
         Code::Space,
@@ -3438,7 +3446,7 @@ pub(crate) fn keyboard_scrolls_through_the_channel_as_its_own_sequence() {
         !keys.down(Code::ArrowUp, Key::Named(NamedKey::ArrowUp)),
         "at the start, up moves nothing"
     );
-    controller.jump_to(700.0);
+    controller.jump_to(700.0).expect("no build is running");
     laid.tick();
     probe.take();
     assert!(
@@ -3536,8 +3544,8 @@ pub(crate) fn keyboard_bubbles_to_the_enclosing_scrollable_and_follows_the_axis(
     )
     .boxed();
     let mut laid = mounted(tree, vsync);
-    outer.jump_to(600.0);
-    inner.jump_to(800.0);
+    outer.jump_to(600.0).expect("no build is running");
+    inner.jump_to(800.0).expect("no build is running");
     laid.tick();
     top.take();
     let keys = Keys::of(&laid);
@@ -3571,7 +3579,7 @@ pub(crate) fn keyboard_bubbles_to_the_enclosing_scrollable_and_follows_the_axis(
         )
         .boxed();
         let mut laid = mounted(tree, vsync);
-        controller.jump_to(300.0);
+        controller.jump_to(300.0).expect("no build is running");
         laid.tick();
         let keys = Keys::of(&laid);
         let (right_key, left_key) = (
@@ -3796,7 +3804,7 @@ pub(crate) fn drag_autoscroll_dispatches_side_effect_deltas() {
     );
 
     // At the top extent nothing moves, and frames stop.
-    controller.jump_to(0.0);
+    controller.jump_to(0.0).expect("no build is running");
     let before = side_effects(&probe).len();
     drag.tick(&laid, 700);
     drag.tick(&laid, 800);

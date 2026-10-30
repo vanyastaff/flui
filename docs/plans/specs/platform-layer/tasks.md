@@ -4548,7 +4548,7 @@ graph LR
   `platform_it` (`native_recording`, `contract`, `backend_conformance`) с `native-capture` и без,
   lib-тесты с `native-capture`, гейты `workspace`, `reach`, `globals`, `testing`, `module-dag`.
 
-- [ ] **LY97** (не закрыта: четыре PR, этот — первый; дальше предпочтения, дисплеи, состояние
+- [ ] **LY97** (не закрыта: четыре PR, первые два — потоки и предпочтения; дальше дисплеи и состояние
   окна, затем строка store-edit для IME без событий) — ветка `claude/project-thread-jqc75j` после
   LY98. **Потоки журнала:** заголовок называет `Stream` — `registry` (по умолчанию, единственный с
   часами; `epoch_ns` и `uptime_ns` теперь необязательны и пишутся только у него), `app`
@@ -4566,6 +4566,20 @@ graph LR
   `window_recordings_replay_on_the_headless_host`, `a_row_the_replay_does_not_reproduce_is_a_typed_error`,
   `a_header_out_of_its_stream_is_refused` и (с `native-capture`)
   `captured_streams_replay_to_what_the_session_delivered` таблицы `native_recording_contracts`.
+  **Вторая часть — предпочтения.** Поток `platform`: `HostPlatform::preferences` пишет в журнал каждое
+  чтение (`Captured::Preferences`) после ответа источника хоста; строка `preferences` несёт
+  `PreferenceRead::{Observed, Failed(ReadFailure)}`, где сбой — вид ошибки `PlatformError` (`FailureKind`) и её сообщение. Схема предпочтений одна на две записи:
+  `flui-protocol::native_recording::Preferences`, а `PreferencesDto` в `flui-testing` — это
+  `revision` плюс эта схема через `flatten` (JSON побайтно прежний:
+  `preference_rows_keep_their_json_spelling`). Оба зеркала идут через публичные
+  `flui_platform::{PreferenceParts, GestureParts, WheelParts}` (`into_parts`,
+  `try_into_preferences` с типизированной `InvalidPreference`), не `non_exhaustive`, так что новое
+  поле не компилируется ни в одном зеркале, пока его не отразят. Headless воспроизводит
+  наблюдение и сбой вида `preferences` через `HeadlessPreferences`; другие виды сбоя он не воспроизводит и отказывает
+  типизированной ошибкой. Тесты: золотой `headless_platform_preferences.jsonl`, строки
+  `platform_recordings_replay_on_the_headless_host` и платформенная часть
+  `captured_streams_replay_to_what_the_session_delivered` и
+  `a_row_the_replay_does_not_reproduce_is_a_typed_error`.
 
 ## Отступление от порядка, решённое владельцем
 

@@ -745,7 +745,7 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
     /// Jump to the end, no animation.
     fn did_add(&mut self) {
         if let Some(controller) = self.inner.controller() {
-            controller.set_value(1.0);
+            let _ = controller.set_value(1.0);
         }
     }
 

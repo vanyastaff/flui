@@ -315,7 +315,7 @@ fn terminal_delivery(stage: TerminalDelivery) {
     );
     drop(receipt);
     drop((status_failure, tail_subscription));
-    controller.set_value(0.5);
+    controller.set_value(0.5).expect("no build is running");
     assert_eq!(controller.value(), 0.5);
 }
 

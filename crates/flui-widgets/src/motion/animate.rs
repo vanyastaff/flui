@@ -329,7 +329,7 @@ impl StatefulView for Animate {
         if let Trigger::Target(position) = self.trigger
             && position.is_finite()
         {
-            driver.controller().set_value(position.clamp(0.0, 1.0));
+            let _ = driver.controller().set_value(position.clamp(0.0, 1.0));
         }
         let (progress, controller_phase) = match &self.trigger {
             Trigger::Controller(controller) => {
@@ -463,7 +463,7 @@ impl AnimateState {
         let outgoing = self.controller_phase.take();
         let from = controller.value();
         if from.is_finite() {
-            self.controller().set_value(from.clamp(0.0, 1.0));
+            let _ = self.controller().set_value(from.clamp(0.0, 1.0));
         }
         let to = match view.trigger {
             Trigger::Target(position) => position,

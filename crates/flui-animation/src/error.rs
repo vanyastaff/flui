@@ -129,6 +129,12 @@ pub enum AnimationError {
     #[error("AnimationController has been disposed")]
     Disposed,
 
+    /// A mutator was called while the presentation the controller ticks for
+    /// was building (ADR-0086 §7). The run, value and listeners are unchanged;
+    /// mutate from an event callback or a lifecycle hook instead.
+    #[error("AnimationController was mutated during build")]
+    MutatedDuringBuild,
+
     /// The active run has no declared finite endpoint to finish at.
     /// Infinite repeats and arbitrary custom simulations refuse explicit
     /// completion without changing the run, its sample or its future.
@@ -266,6 +272,7 @@ impl AnimationError {
     pub const fn kind(&self) -> &'static str {
         match self {
             Self::Disposed => "disposed",
+            Self::MutatedDuringBuild => "mutated_during_build",
             Self::NoFiniteEndpoint => "no_finite_endpoint",
             Self::IdentityExhausted => "identity_exhausted",
             Self::ReentrantMotion => "reentrant_motion",

@@ -55,12 +55,15 @@ pub(crate) fn fade_source_replacement_retries_after_status_failure() {
         }
     }
     let first = AnimationController::builder(Duration::from_millis(100)).build();
-    first.set_value(0.25);
+    first.set_value(0.25).expect("no build is running");
     let second = Rc::new(RefusedOnce {
         controller: AnimationController::builder(Duration::from_millis(100)).build(),
         armed: Cell::new(true),
     });
-    second.controller.set_value(0.75);
+    second
+        .controller
+        .set_value(0.75)
+        .expect("no build is running");
     let view = |animation: Rc<dyn Animation<f64>>| {
         FadeTransition::new(animation, SizedBox::new(40.0, 40.0))
     };
@@ -81,7 +84,10 @@ pub(crate) fn fade_source_replacement_retries_after_status_failure() {
         0.75,
         "the next update retries the source that failed before commitment"
     );
-    second.controller.set_value(0.5);
+    second
+        .controller
+        .set_value(0.5)
+        .expect("no build is running");
     laid.tick();
     assert_eq!(
         laid.opacity(nodes[0]),

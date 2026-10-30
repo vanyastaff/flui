@@ -887,6 +887,10 @@ impl PresentationState {
             }
         });
         let vsync = Vsync::new();
+        // Controllers ticked here refuse mutation while this runtime builds.
+        vsync.set_build_phase(Some(
+            widgets.with_build_owner(flui_view::BuildOwner::build_phase),
+        ));
         let request_animation_frame = Arc::clone(&request_frame);
         let animation_owner = Rc::downgrade(&alive);
         vsync.set_frame_requester(Some(Rc::new(move || {
