@@ -1184,7 +1184,7 @@ neither has held for 250 ms (`FRAME_RATE_HOLD`). The demand is read live at the 
 of every runtime work item, next to the text-sizing frontiers: the clock's
 animation bit cannot be read there, because `poll` clears it after each produced
 frame. The host opts in through `OwnerEffects::tracks_frame_rate_demand` (off by
-default; only Android answers `true`): without it no demand is observed, no hold
+default; Android and iOS answer `true`): without it no demand is observed, no hold
 is armed and no deadline joins the host's wake sources. The owner keeps, per
 presentation, the demand it last delivered, and each work item offers
 `OwnerEffects::frame_rate_demand_changed` whatever differs from it, after the

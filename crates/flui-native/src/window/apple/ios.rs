@@ -607,8 +607,9 @@ impl FluiView {
     /// loop `UIApplicationMain` drives — so it fires on the main thread and
     /// therefore on the owner lane.
     ///
-    /// `screen` is the one the window's scene is on: the link is asked to run
-    /// at that screen's best rate, so a ProMotion panel is not held at 60 Hz.
+    /// `screen` is the one the window's scene is on: the link is asked for the
+    /// rate the window's hint names, the screen's best rate while the
+    /// presentation is active and the system's choice otherwise.
     fn start_display_link(&self, screen: &UIScreen) {
         if self.ivars().display_link.borrow().is_some() {
             return;
