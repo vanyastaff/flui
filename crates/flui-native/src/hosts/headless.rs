@@ -8,7 +8,7 @@ use crate::accessibility::headless::FakeAccessibility;
 use crate::display::headless::{DisplaySpec, laid_out};
 use crate::drag::headless::{DragDouble, HeadlessDragSource};
 use crate::drag::offers::OfferTable;
-use crate::haptics::headless::FakeHaptics;
+use crate::haptics::headless::HeadlessHaptics;
 use crate::host::Host;
 use crate::input::headless::{AttachedDevices, HeadlessInputDevices};
 use crate::lifecycle::headless::HeadlessHostEvents;
@@ -39,7 +39,7 @@ impl Host for Headless {
     type Accessibility = FakeAccessibility;
     type Clipboard = InMemoryClipboard;
     type Drag = DragDouble;
-    type Haptics = FakeHaptics;
+    type Haptics = HeadlessHaptics;
     type Preferences = HeadlessPreferences;
     type Lifecycle = HeadlessHostEvents;
     type Chrome = FakeSystemChrome;

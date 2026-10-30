@@ -78,14 +78,19 @@ impl WidgetHost {
         host
     }
 
-    /// Replace the tree under test and run a frame.
+    /// Replace the tree under test and run the next frame: at once, or once a
+    /// dropped frame's retry is due.
     pub(super) fn swap(&mut self, tree: BoxedView) {
         *self.slot.borrow_mut() = tree;
         let root = self
             .shallowest(TypeId::of::<HarnessRoot>())
             .expect("BUG: the harness root stays mounted");
         self.schedule_rebuild(root);
-        self.pump(Duration::ZERO);
+        let wait = self
+            .ui_runtime
+            .time_to_next_frame()
+            .unwrap_or(Duration::ZERO);
+        self.pump(wait);
     }
 
     /// Mark `(element, depth)` dirty, as a `setState` does.

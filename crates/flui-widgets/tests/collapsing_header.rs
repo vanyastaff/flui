@@ -210,7 +210,7 @@ pub(crate) fn collapsing_header_collapses_before_or_after_the_content() {
         );
         assert_eq!(screen.extent(), EXPANDED, "{device:?}: the header waits");
         let end = ROWS as f64 * ROW - (300.0 - EXPANDED);
-        screen.list.jump_to(end);
+        screen.list.jump_to(end).expect("no build is running");
         screen.laid.tick();
         screen.drag_up(device, 100.0);
         assert!(
@@ -252,7 +252,7 @@ pub(crate) fn collapsing_header_expands_first_or_last() {
                         "{device:?}: while the header stays collapsed, at {}",
                         screen.extent()
                     );
-                    screen.list.jump_to(0.0);
+                    screen.list.jump_to(0.0).expect("no build is running");
                     screen.laid.tick();
                     screen.drag_down(device, 100.0);
                     assert!(
@@ -467,7 +467,7 @@ pub(crate) fn collapsing_header_snaps_to_an_extent() {
 pub(crate) fn collapsing_header_reveals_focused_row_from_tab_and_assistive_request() {
     let mut screen = Screen::new(extents(), |header| header);
     let manager = screen.laid.focus_manager();
-    screen.list.jump_to(300.0);
+    screen.list.jump_to(300.0).expect("no build is running");
     screen.laid.tick();
     let _ = screen.rows[3].request_focus();
     assert!(screen.row_top(2) < EXPANDED, "row 2 starts above the body");
@@ -507,7 +507,7 @@ pub(crate) fn collapsing_header_reveals_focused_row_from_tab_and_assistive_reque
     screen.laid.tick();
     // Content the header clips entirely is not published; content it clips
     // in part is, and a reveal request for it expands the header.
-    screen.list.jump_to(0.0);
+    screen.list.jump_to(0.0).expect("no build is running");
     screen.laid.tick();
     screen.drag_up(crate::nested_scroll::Device::Touch, 40.0);
     assert!(
@@ -542,7 +542,7 @@ pub(crate) fn collapsing_header_reveals_focused_row_from_tab_and_assistive_reque
         screen.row_top(0)
     );
 
-    screen.list.jump_to(300.0);
+    screen.list.jump_to(300.0).expect("no build is running");
     screen.laid.tick();
     let hidden = screen.list.pixels();
     let row = screen.node("Row 0");

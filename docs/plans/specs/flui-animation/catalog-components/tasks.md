@@ -1,7 +1,7 @@
 # flui-animation / catalog-components — задачи
 
-- **Статус:** в работе. Влиты T1, T2, T9, T10, T13; T3 сделан (`AnimatedIcon`, 14 пар
-  `AnimatedIcons` в `flui-material`, `xtask icon-import`); дальше T7.
+- **Статус:** в работе. Влиты T1, T2, T3, T7, T9, T10, T13; T8 сделан (`CarouselView`,
+  `CarouselViewThemeData`, `KeylineSnap::for_layout`); дальше T12.
 - **Дата:** 2026-10-17
 - **Design:** [design.md](design.md), [requirements.md](requirements.md).
 - **Тикеты:** родитель vanyastaff/flui#1691; T1 #1692 · T2 #1693 · T3 #1694 · T4 #1695 ·
@@ -49,7 +49,7 @@ T1..T13 ─► T12 поверхность SDK, ARCHITECTURE, motion_lab, таб�
   переносится. Потребитель — T9.
 - **Требования:** G3. **После:** T1.
 
-### T3 — `AnimatedIcon` (#1694) — сделано
+### T3 — `AnimatedIcon` (#1694) — влито
 
 - **Что:** `AnimatedIconData`, `AnimatedIcon` в `flui-widgets::icon` (RTL, `IconTheme`,
   семантика); `cargo xtask icon-import` (AVD XML, пары SVG); четырнадцать Material-пар в
@@ -78,7 +78,7 @@ T1..T13 ─► T12 поверхность SDK, ARCHITECTURE, motion_lab, таб�
   тестами.
 - **Требования:** R1–R4, строка M1. **После:** T33 полноты ввода.
 
-### T7 — карусель (#1698)
+### T7 — карусель (#1698) — влито
 
 - **Что:** модель ключевых линий, `RenderSliverCarousel` (ленивый, маска; строка
   `RENDER_OBJECT_TYPES` и `harness_*`), фаллибельный `CarouselLayout` с
@@ -86,13 +86,23 @@ T1..T13 ─► T12 поверхность SDK, ARCHITECTURE, motion_lab, таб�
   `CarouselController` и автопрокрутка через `NestedScrollDispatcher` с причиной
   `Programmatic`, гарантии остановки.
 - **Требования:** C1–C6, строка M1. **После:** T21, T23 полноты ввода.
+- **Проверка:** модуль `carousel` в `flui-widgets` (16 тестов: маски между линиями, тап только по видимой
+  части, `SingleAdvance` на ±1 от начала жеста, контроллер и `on_index_changed`, автопрокрутка с
+  паузой и переходом с последнего на первый, reduced motion, семантика и кнопка паузы, RTL,
+  свойства `CarouselGeometry` для всех раскладок); `harness_sliver_carousel_geometry_and_frames`.
+  Пауза по фокусу вспомогательной технологии невозможна: сигнала нет (`docs/gaps.md`, пункт 36).
 
-### T8 — `CarouselView` (#1699)
+### T8 — `CarouselView` (#1699) — сделано
 
 - **Что:** Material-карточки элементов, токены M3, рябь и тап; потребитель общего
   `Carousel`. Сам `CarouselView` — API приложения (Z2): экспорт из `flui-material` и его
   prelude (не через `flui-sdk`) и сцена в `motion_lab`.
 - **Требования:** C7. **После:** T7.
+- **Проверка:** `carousel_view_contracts` в `flui-material` (`every layout implies its snap`,
+  `the implied snap settles a release and none scrolls freely`, `cards cover the shown part of each
+  item`, `the widget beats the theme which beats the tokens`, `a tap reports its card and cards are
+  buttons only with on_tap`). Prelude у `flui-material` нет, экспорт из корня крейта; сцена в
+  `motion_lab` переходит в T12.
 
 ### T9 — `LoadingIndicator` (#1701) — влито
 

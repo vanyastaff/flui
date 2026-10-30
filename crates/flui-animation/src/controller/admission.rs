@@ -55,10 +55,26 @@ impl AnimationController {
         }
     }
 
+    /// A controller ticked by a presentation that is building refuses every
+    /// mutation (ADR-0086 §7): `build` describes the tree, and a listener the
+    /// mutation notifies could not write from there.
+    pub(super) fn check_build(inner: &AnimationControllerInner) -> Result<(), AnimationError> {
+        if inner
+            .frame_routes
+            .iter()
+            .any(crate::VsyncRegistration::is_building)
+        {
+            Err(AnimationError::MutatedDuringBuild)
+        } else {
+            Ok(())
+        }
+    }
+
     pub(super) fn check_run_admission(
         inner: &AnimationControllerInner,
     ) -> Result<(), AnimationError> {
         Self::check_disposed(inner)?;
+        Self::check_build(inner)?;
         if inner.run_generation == u64::MAX || inner.sample_epoch == u64::MAX {
             Err(AnimationError::IdentityExhausted)
         } else {

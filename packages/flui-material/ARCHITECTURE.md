@@ -438,6 +438,21 @@ which also apply at once.
 body `Text` paints in `MaterialApp`'s red 48 px fallback without the
 publication; a `ListTile` title keeps `body_large`/`on_surface`).
 
+### A carousel's card covers the item's mask, its content keeps the item's extent
+
+`CarouselView` lays `flui_widgets::Carousel` out with no item spacing and puts each item's content
+on an M3 card: a `Material` clipped to its shape and inset by the padding inside the item's
+mask, so the 8 dp gap and the rounded corners sit on the part of the item that shows. The card
+is placed again on every scroll from `CarouselItemScope::mask` through its listenable; the mask
+is centred on the item, so it also gives the item's extent, and the content stays laid out at
+that extent behind the card, offset by the mask's start, without reflowing. A card is a button
+(an `InkWell` under a button semantics node) only with `on_tap`. The snap is
+`KeylineSnap::for_layout` unless the view sets one: one item per swipe for every layout whose
+items rest whole, none for an uncontained one, as Compose's carousels default.
+`carousel_view::cards_cover_the_shown_part_of_each_item`,
+`carousel_view::every_layout_implies_its_snap` and
+`carousel_view::the_implied_snap_settles_a_release_and_none_scrolls_freely` pin it.
+
 ### Animated icons are generated constants with their frames beside them
 
 `AnimatedIcons` holds the fourteen Material pairs as `AnimatedIconData` constants in

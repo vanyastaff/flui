@@ -1249,7 +1249,7 @@ fn terminal_modal_aliases_remain_usable_until_last_release() {
             let controller = transition
                 .controller()
                 .expect("mount installs the controller before owner retirement");
-            controller.set_value(0.25);
+            controller.set_value(0.25).expect("no build is running");
             assert_eq!(controller.value(), 0.25);
         } else {
             assert_eq!(
@@ -1277,7 +1277,7 @@ fn terminal_modal_aliases_remain_usable_until_last_release() {
         transition.drain_pending_statuses();
         if mounted {
             let controller = transition.controller().expect("the installed transition alias retains its controller after last navigator release");
-            controller.set_value(0.5);
+            controller.set_value(0.5).expect("no build is running");
             assert_eq!(controller.value(), 0.5);
         } else {
             assert!(
@@ -1295,7 +1295,7 @@ fn terminal_modal_aliases_remain_usable_until_last_release() {
             let controller = transition.controller().expect(
                 "the transition alias still owns its installed animation state after modal release",
             );
-            controller.set_value(0.75);
+            controller.set_value(0.75).expect("no build is running");
             assert_eq!(controller.value(), 0.75);
         } else {
             assert!(transition.controller().is_none());
@@ -1839,3 +1839,60 @@ pub(crate) fn popup_routes_are_admitted_and_leave_the_location_alone() {
 // ============================================================================
 // A parent rebuild
 // ============================================================================
+
+/// A deep link pushes its top with an entrance and adds the page under it
+/// without one, once that entrance settles; the added page then covers Home.
+/// The add lands in the very frame the entrance settles in: the navigator
+/// settles the push in that frame's animation tick, not in a later `build`,
+/// where ADR-0086 §7 refuses controller mutation.
+pub(crate) fn a_deep_link_adds_its_lower_page_in_the_frame_its_top_settles() {
+    const TICK: Duration = Duration::from_millis(16);
+    let frame = Rc::new(Cell::new(0_usize));
+    let entering = Rc::new(Cell::new(None::<usize>));
+    let home = Probe::default();
+    let transitions = {
+        let (frame, entering) = (Rc::clone(&frame), Rc::clone(&entering));
+        move |_cx: &dyn BuildContext,
+              animation: &RouteAnimation,
+              _secondary: &RouteAnimation,
+              child: BoxedView| {
+            if animation.value() > 0.0 && animation.value() < 1.0 {
+                entering.set(Some(frame.get()));
+            }
+            child
+        }
+    };
+    let vsync = Vsync::new();
+    let mut laid = lay_out_animated(
+        VsyncScope::new(
+            vsync.clone(),
+            Router::new(AppRoute::Home, pages(&home)).transitions(transitions),
+        ),
+        tight(400.0, 400.0),
+        vsync,
+    );
+    laid.enable_semantics();
+    laid.pump_for(TICK);
+
+    home.handle().go("/note/1/edit").expect("a known location");
+    let mut covered = None;
+    for _ in 0..40 {
+        frame.set(frame.get() + 1);
+        laid.pump_for(TICK);
+        let home_shown = laid
+            .a11y_tree()
+            .expect("semantics enabled")
+            .find_by_label("Home page")
+            .is_ok();
+        if !home_shown && covered.is_none() {
+            covered = Some(frame.get());
+        }
+    }
+
+    let last_entering = entering.get().expect("the top ran an entrance");
+    assert_eq!(
+        covered,
+        Some(last_entering + 1),
+        "the lower page is added, covering Home, in the frame the top's entrance settles"
+    );
+}

@@ -422,7 +422,7 @@ pub(crate) fn pull_to_refresh_ignores_wheel_and_momentum_and_resets_on_loss() {
     settle(&mut laid);
 
     for device in DEVICES {
-        inbox.list.jump_to(300.0);
+        inbox.list.jump_to(300.0).expect("no build is running");
         laid.tick();
         let most = replay_watching(
             &mut laid,
@@ -444,7 +444,7 @@ pub(crate) fn pull_to_refresh_ignores_wheel_and_momentum_and_resets_on_loss() {
     for device in DEVICES {
         let inbox = Inbox::new();
         let mut laid = inbox.mount_handing_off_at_the_edge();
-        inbox.list.jump_to(60.0);
+        inbox.list.jump_to(60.0).expect("no build is running");
         laid.tick();
         let most = replay_watching(&mut laid, &inbox, &pull(device, 110.0));
         settle(&mut laid);
@@ -454,7 +454,7 @@ pub(crate) fn pull_to_refresh_ignores_wheel_and_momentum_and_resets_on_loss() {
         );
         assert_eq!(inbox.started(), 0, "{device:?}: short of the threshold");
 
-        inbox.list.jump_to(300.0);
+        inbox.list.jump_to(300.0).expect("no build is running");
         laid.tick();
         let most = replay_watching(
             &mut laid,
@@ -499,7 +499,7 @@ pub(crate) fn pull_to_refresh_ignores_wheel_and_momentum_and_resets_on_loss() {
     for device in DEVICES {
         let inbox = Inbox::new();
         let mut laid = inbox.mount_on_a_pager();
-        inbox.list.jump_to(400.0);
+        inbox.list.jump_to(400.0).expect("no build is running");
         laid.tick();
         laid.replay(&fling(device, at(100.0, 40.0), at(100.0, 200.0)));
         laid.pump_for(FRAME);
@@ -521,8 +521,8 @@ pub(crate) fn pull_to_refresh_ignores_wheel_and_momentum_and_resets_on_loss() {
         assert_eq!(most, 0.0, "{device:?}: the lost press pulled nothing");
         assert_eq!(inbox.started(), 0, "{device:?}: and refreshed nothing");
 
-        inbox.pager.jump_to(0.0);
-        inbox.list.jump_to(0.0);
+        inbox.pager.jump_to(0.0).expect("no build is running");
+        inbox.list.jump_to(0.0).expect("no build is running");
         laid.tick();
         replay_watching(&mut laid, &inbox, &pull(device, 180.0));
         laid.pump_for(FRAME);
@@ -647,7 +647,7 @@ pub(crate) fn horizontal_pull_refreshes_from_the_reading_start_under_rtl() {
 
         // At the end, on the left: a finger moving right overscrolls there.
         let end = inbox.list.max_scroll_extent();
-        inbox.list.jump_to(end);
+        inbox.list.jump_to(end).expect("no build is running");
         laid.tick();
         let most = replay_watching(
             &mut laid,
@@ -664,7 +664,7 @@ pub(crate) fn horizontal_pull_refreshes_from_the_reading_start_under_rtl() {
         assert_eq!(inbox.started(), 0);
 
         // At the start, on the right: a finger moving left pulls.
-        inbox.list.jump_to(0.0);
+        inbox.list.jump_to(0.0).expect("no build is running");
         laid.tick();
         let spinner_left = Cell::new(f64::NAN);
         let most = Cell::new(0.0_f64);

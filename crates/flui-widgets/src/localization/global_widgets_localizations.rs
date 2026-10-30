@@ -124,6 +124,14 @@ impl WidgetsLocalizations for GlobalWidgetsLocalizations {
     fn scroll_position_label(&self) -> &'static str {
         DefaultWidgetsLocalizations.scroll_position_label()
     }
+
+    fn autoplay_pause_label(&self) -> &'static str {
+        DefaultWidgetsLocalizations.autoplay_pause_label()
+    }
+
+    fn autoplay_resume_label(&self) -> &'static str {
+        DefaultWidgetsLocalizations.autoplay_resume_label()
+    }
 }
 
 /// A [`LocalizationsDelegate`] that resolves a [`GlobalWidgetsLocalizations`]

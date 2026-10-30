@@ -294,6 +294,11 @@ pub use scroll::{
     SliverPersistentHeaderDelegate, SliverToBoxAdapter, SnapPolicy, StretchTriggerSignal, Viewport,
     ViewportFraction, WheelScrollDistances,
 };
+pub use scroll::{
+    Carousel, CarouselAutoplay, CarouselAutoplayError, CarouselController, CarouselItemScope,
+    CarouselLayout, CarouselLayoutError, CarouselLayoutKind, CarouselState, KeylineSnap,
+    MAX_ITEM_EXTENT, MIN_AUTOPLAY_PERIOD,
+};
 pub use scroll::{FloatingHeaderSnapConfiguration, ScrollPositionScope};
 pub use scroll::{
     InteractionEndDetails, InteractionStartDetails, InteractionUpdateDetails, InteractiveViewer,

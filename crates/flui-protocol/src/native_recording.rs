@@ -1,12 +1,13 @@
 //! The native recording schema (ADR-0215 §4): the journal of one backend's pointer registry,
-//! before FLUI translated it.
+//! loop delivery, window delivery or system reads, before the application heard it.
 //!
-//! A recording is JSON Lines: one [`Header`] object, then one [`Row`] object per registry
-//! call — a reading, a coalesced batch, a device hot-plug, a capture loss. Rows hold the plain
-//! fields a backend copies out of its native event, so a Win32 or Apple recording replays
-//! through the shared decoder on any host. The header names the format's major version under
-//! [`VERSION_KEY`]; a reader skips unknown fields, and an unknown variant is a refusal, never a
-//! skipped row.
+//! A recording is JSON Lines: one [`Header`] object, which names the [`Stream`] it journals,
+//! then one [`Row`] object per call — a reading, a coalesced batch, a device hot-plug, a
+//! capture loss; a system notice, a session end, a reopen; an input method's event; a read of
+//! the system preferences. Rows hold the plain fields a backend copies out of its native event,
+//! so a Win32 or Apple recording replays through the shared decoder on any host. The header
+//! names the format's major version under [`VERSION_KEY`]; a reader skips unknown fields, and
+//! an unknown variant is a refusal, never a skipped row.
 //!
 //! `flui-native` writes and replays these records; this module only declares them, so a
 //! reader such as the driver reads a recording without the core. The format is versioned by
@@ -273,7 +274,27 @@ pub struct Device {
     pub kinds: Vec<PointerKind>,
 }
 
-/// The first line: the backend, its clock anchors and the registry's setup.
+vocabulary! {
+    /// What a recording journals: one pointer registry, one loop's application delivery, one
+    /// window's delivery, or one platform's reads of the system.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum Stream {
+        /// A pointer registry: readings, batches, devices, cancels, wheels and scrolls.
+        #[default]
+        Registry => "registry",
+        /// A loop's application delivery: system notices, session ends and reopens.
+        App => "app",
+        /// A window's delivery: its input method's events.
+        Window => "window",
+        /// A platform's reads of the system: its preferences.
+        Platform => "platform",
+    }
+}
+
+/// The first line: the backend, what the recording journals, its clock anchors and the
+/// registry's setup.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Header {
@@ -281,10 +302,16 @@ pub struct Header {
     pub flui_native_recording: u32,
     /// The backend.
     pub backend: Backend,
-    /// The epoch instant on the event timeline, in nanoseconds.
-    pub epoch_ns: u64,
-    /// System uptime at the epoch, in nanoseconds.
-    pub uptime_ns: u64,
+    /// What the recording journals.
+    #[serde(default, skip_serializing_if = "crate::skip::is_default")]
+    pub stream: Stream,
+    /// The epoch instant on the event timeline, in nanoseconds; a registry's clock, so only a
+    /// registry's recording has it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epoch_ns: Option<u64>,
+    /// System uptime at the epoch, in nanoseconds; with `epoch_ns`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uptime_ns: Option<u64>,
     /// The performance counter at the epoch, when the host has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub counter: Option<Counter>,
@@ -542,6 +569,255 @@ pub struct Scroll {
     pub modifiers: Vec<Modifier>,
 }
 
+vocabulary! {
+    /// How much memory the system wants back.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum MemoryPressureLevel {
+        /// Free what is easy to restore.
+        Moderate => "moderate",
+        /// Free everything the current frame does not need.
+        Critical => "critical",
+    }
+}
+
+vocabulary! {
+    /// A phase of the user's session ending.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum SessionEndPhase {
+        /// The session is about to end; the application is asked whether to wait.
+        Query => "query",
+        /// The session end was cancelled.
+        Cancelled => "cancelled",
+        /// The session is ending now.
+        Ending => "ending",
+    }
+}
+
+/// A one-off system event the host reported to the application.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum Notice {
+    /// The machine is about to sleep.
+    Sleep,
+    /// The machine woke from sleep.
+    Wake,
+    /// The user's session was locked.
+    SessionLocked,
+    /// The user's session was unlocked.
+    SessionUnlocked,
+    /// The system wants memory back.
+    MemoryPressure(MemoryPressureLevel),
+}
+
+/// An input method's event, as the window delivered it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum ImeEvent {
+    /// Composition became available for the focused input.
+    Enabled,
+    /// The composition text changed.
+    Preedit {
+        /// The composition text.
+        text: String,
+        /// The cursor or selection, as byte offsets into `text`; none hides the caret.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cursor: Option<[usize; 2]>,
+    },
+    /// Composition finished with this text.
+    Commit(String),
+    /// Composition ended.
+    Disabled,
+}
+
+/// What a window's input method did. Input methods that edit the focused text store
+/// directly, with no event, will be recorded as a store edit beside `Event`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum Ime {
+    /// An event the window delivered.
+    Event(ImeEvent),
+}
+
+/// The system's motion preference.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum Motion {
+    /// No restriction.
+    NoPreference,
+    /// The user asked for reduced motion.
+    Reduce,
+    /// Animation durations are multiplied by this finite, positive factor.
+    Scaled(f64),
+}
+
+/// The system's text-weight request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum TextWeight {
+    /// The authored weight, unadjusted.
+    NoPreference,
+    /// Heavier, more legible text.
+    Bold,
+    /// A signed, nonzero adjustment to every resolved weight.
+    Adjustment(i32),
+}
+
+/// What one discrete vertical wheel notch scrolls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum WheelStep {
+    /// This many lines; zero disables the axis.
+    Lines(u32),
+    /// One page.
+    Page,
+}
+
+/// The native mouse geometry, in device pixels at `pixel_ratio`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct MouseGeometry {
+    /// The double-click rectangle, width and height.
+    pub double_click_area: [i32; 2],
+    /// The drag threshold, horizontal and vertical.
+    pub drag_tolerance: [i32; 2],
+    /// The device pixel ratio the values were sampled at.
+    pub pixel_ratio: f64,
+}
+
+/// The native touch geometry, in device pixels at `pixel_ratio`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct TouchGeometry {
+    /// The distance a touch travels before it is a drag.
+    pub touch_slop: i32,
+    /// The distance between two taps of a double tap.
+    pub double_tap_slop: i32,
+    /// The slowest fling, per second.
+    pub min_fling: i32,
+    /// The fastest fling, per second.
+    pub max_fling: i32,
+    /// The device pixel ratio the values were sampled at.
+    pub pixel_ratio: f64,
+}
+
+/// The system's gesture timing and geometry; an absent field was not observed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct Gestures {
+    /// The mouse double-click interval, in nanoseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub double_click_interval_ns: Option<u64>,
+    /// The touch double-tap interval, in nanoseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub double_tap_interval_ns: Option<u64>,
+    /// The shortest long press, in nanoseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub long_press_timeout_ns: Option<u64>,
+    /// The native mouse geometry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_mouse_geometry: Option<MouseGeometry>,
+    /// The native touch geometry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_touch_geometry: Option<TouchGeometry>,
+}
+
+/// The host's system preferences (ADR-0172); an absent field was not observed.
+///
+/// The same object is a native `platform` recording's `preferences` row and, beside its
+/// `revision`, a host input recording's preferences row, so the two never spell a preference
+/// differently.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct Preferences {
+    /// The text-size multiplier, in `1/64..=64`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_scale: Option<f64>,
+    /// The motion preference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motion: Option<Motion>,
+    /// Whether high contrast is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub high_contrast: Option<bool>,
+    /// Whether system haptics are on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub haptics: Option<bool>,
+    /// The text-weight request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_weight: Option<TextWeight>,
+    /// The preferred UI locales as BCP 47 tags, in priority order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locales: Option<Vec<String>>,
+    /// Gesture timing and geometry; always written, empty when nothing was observed.
+    #[serde(default)]
+    pub gestures: Gestures,
+    /// What one vertical wheel notch scrolls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wheel_vertical: Option<WheelStep>,
+    /// The characters one horizontal wheel notch scrolls; zero disables the axis.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wheel_horizontal_characters: Option<u32>,
+}
+
+vocabulary! {
+    /// Which error a failed read of the system returned, as the platform's error names it.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum FailureKind {
+        /// An observation was already running or waiting for its retry, so none was available.
+        Deferred => "deferred",
+        /// The preference source could not complete an observation.
+        Preferences => "preferences",
+        /// The display source could not complete a sample.
+        Displays => "displays",
+        /// The host has no source for what was read.
+        Unsupported => "unsupported",
+        /// The event loop failed.
+        EventLoop => "event_loop",
+        /// Another error, which only its message describes.
+        Other => "other",
+    }
+}
+
+/// Why a read of the system failed: the error's kind, and its message when it has one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct Failure {
+    /// Which error.
+    pub kind: FailureKind,
+    /// What failed, in the host's words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// What one read of the system preferences returned.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum PreferenceRead {
+    /// The preferences the system reported.
+    Observed(Preferences),
+    /// The read failed; a failure is not an observation.
+    Failed(Failure),
+}
+
 /// One registry call, after the header.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "row", rename_all = "snake_case")]
@@ -632,6 +908,31 @@ pub enum Row {
         time_ns: u64,
         /// Why.
         reason: CancelReason,
+    },
+    /// The host reported a system notice (an `app` recording).
+    Notice {
+        /// The notice.
+        notice: Notice,
+    },
+    /// The host asked about a phase of the session ending (an `app` recording).
+    SessionEnd {
+        /// The phase.
+        phase: SessionEndPhase,
+    },
+    /// The user reopened the application (an `app` recording).
+    Reopen,
+    /// The window's input method acted (a `window` recording).
+    Ime {
+        /// What it did.
+        ime: Ime,
+        /// Its text was replaced before writing (ADR-0215 §5): replay refuses the row.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        redacted: bool,
+    },
+    /// The application read the system preferences (a `platform` recording).
+    Preferences {
+        /// What the read returned.
+        read: PreferenceRead,
     },
 }
 

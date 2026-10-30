@@ -8,7 +8,7 @@
 //! the [`Material`]/[`InkWell`] surface primitives, the M3 button family
 //! ([`ButtonStyle`], [`ElevatedButton`], [`FilledButton`], [`OutlinedButton`],
 //! [`TextButton`], [`IconButton`], [`FloatingActionButton`], [`BackButton`]),
-//! [`Scaffold`]/[`AppBar`], [`Card`], [`Dialog`]/[`AlertDialog`]/
+//! [`Scaffold`]/[`AppBar`], [`Card`], [`CarouselView`], [`Dialog`]/[`AlertDialog`]/
 //! [`show_dialog`], the input decoration substrate ([`InputDecoration`],
 //! [`InputDecorator`], [`TextField`]), the data-display family
 //! ([`ListTile`], [`Divider`]/[`VerticalDivider`], [`DataTable`]), bottom
@@ -32,7 +32,8 @@
 //!
 //! - `ColorScheme::fromSeed` — dynamic-color generation from a seed. See [`color_scheme`] module docs.
 //! - Every shipped widget's own component theme slot (`ElevatedButtonThemeData`
-//!   and friends, [`AppBarThemeData`], [`CardThemeData`], [`DialogThemeData`],
+//!   and friends, [`AppBarThemeData`], [`CardThemeData`], [`CarouselViewThemeData`],
+//!   [`DialogThemeData`],
 //!   [`FabThemeData`], [`InputDecorationThemeData`]) is narrowed to the
 //!   fields its owning widget actually consumes — see `theme_data`'s module
 //!   docs and each type's own doc comment for the ported/deferred field
@@ -62,6 +63,7 @@ pub mod back_button;
 pub mod button_style;
 mod button_style_button;
 pub mod card;
+pub mod carousel_view;
 pub mod checkbox;
 pub mod chip;
 pub mod color_scheme;
@@ -111,6 +113,7 @@ pub use app_bar::AppBar;
 pub use back_button::BackButton;
 pub use button_style::ButtonStyle;
 pub use card::Card;
+pub use carousel_view::CarouselView;
 pub use checkbox::{Checkbox, CheckboxState};
 pub use chip::{Chip, FilterChip};
 pub use color_scheme::{ColorScheme, ColorSchemeOverrides};
@@ -161,8 +164,8 @@ pub use text_form_field::{TextFormField, TextFormFieldState};
 pub use text_theme::TextTheme;
 pub use theme::{AnimatedTheme, Theme};
 pub use theme_data::{
-    AppBarThemeData, CardThemeData, CheckboxThemeData, ChipThemeData, DataTableThemeData,
-    DialogThemeData, DividerThemeData, ElevatedButtonThemeData, FabThemeData,
+    AppBarThemeData, CardThemeData, CarouselViewThemeData, CheckboxThemeData, ChipThemeData,
+    DataTableThemeData, DialogThemeData, DividerThemeData, ElevatedButtonThemeData, FabThemeData,
     FilledButtonThemeData, IconButtonThemeData, InputDecorationThemeData, ListTileThemeData,
     MaterialStyle, NavigationBarThemeData, OutlinedButtonThemeData, RadioThemeData,
     SwitchThemeData, TabBarThemeData, TextButtonThemeData, ThemeData, ThemeDataOverrides,

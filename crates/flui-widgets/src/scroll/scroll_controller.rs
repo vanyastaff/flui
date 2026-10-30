@@ -64,8 +64,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, AnimationRunFuture, MotionSpec, SharedCurve};
-use flui_foundation::Listenable;
 use flui_foundation::panic::PanicRecovery;
+use flui_foundation::{Listenable, MutatedDuringBuild};
 use flui_rendering::view::{ScrollPosition, ViewportOffset};
 
 /// What the mounted `Scrollable` a controller serves lends it, installed and
@@ -82,6 +82,9 @@ pub(crate) struct ScrollableHooks {
     /// scrollable now: a programmatic request then waits in the command slot
     /// until the pass returns (ADR-0209 §3).
     pub(crate) in_pass: Box<dyn Fn() -> bool>,
+    /// The build phase of the UI runtime the scrollable builds in: while it
+    /// builds, `jump_to` and `animate_to` refuse (ADR-0086 §7).
+    pub(crate) build_phase: flui_foundation::BuildPhase,
 }
 
 // ---------------------------------------------------------------------------
@@ -220,6 +223,15 @@ impl ScrollController {
         self.hooks.borrow().clone()
     }
 
+    /// Refuse a mutation while the attached scrollable's UI runtime builds.
+    fn check_build(&self) -> Result<(), MutatedDuringBuild> {
+        MutatedDuringBuild::check(
+            self.hooks()
+                .is_some_and(|hooks| hooks.build_phase.is_building()),
+            "ScrollController",
+        )
+    }
+
     /// Create a new controller pre-seeded at `initial_scroll_offset` pixels,
     /// before any layout has committed extents.
     ///
@@ -307,7 +319,18 @@ impl ScrollController {
     /// settle, an animation) `Preempted`, synchronously and even when the
     /// offset does not change, never a contact or key still held, and moves
     /// the offset as one `Programmatic` step of a sequence of its own.
-    pub fn jump_to(&self, pixels: f64) {
+    ///
+    /// # Errors
+    ///
+    /// [`MutatedDuringBuild`] while the attached scrollable's UI runtime is
+    /// building; nothing is replaced and the offset is unchanged.
+    pub fn jump_to(&self, pixels: f64) -> Result<(), MutatedDuringBuild> {
+        self.check_build()?;
+        self.jump(pixels);
+        Ok(())
+    }
+
+    fn jump(&self, pixels: f64) {
         if !pixels.is_finite() {
             tracing::warn!(
                 pixels,
@@ -390,10 +413,21 @@ impl ScrollController {
     /// position.
     ///
     /// See this module's docs for why this returns no completion future.
-    pub fn animate_to(&self, target_pixels: f64, duration: Duration, curve: SharedCurve) {
+    ///
+    /// # Errors
+    ///
+    /// [`MutatedDuringBuild`] while the attached scrollable's UI runtime is
+    /// building; no command is queued.
+    pub fn animate_to(
+        &self,
+        target_pixels: f64,
+        duration: Duration,
+        curve: SharedCurve,
+    ) -> Result<(), MutatedDuringBuild> {
+        self.check_build()?;
         if duration.is_zero() {
-            self.jump_to(target_pixels);
-            return;
+            self.jump(target_pixels);
+            return Ok(());
         }
         let target = target_pixels.clamp(self.min_scroll_extent(), self.max_scroll_extent());
         if target == self.pixels() && !self.position.is_scrolling() {
@@ -402,8 +436,8 @@ impl ScrollController {
             // would just reach `AnimationController::retarget`'s identical
             // "already at target" fast path one frame later. A moving position
             // instead retains its velocity and brakes through retarget.
-            self.jump_to(target);
-            return;
+            self.jump(target);
+            return Ok(());
         }
         let mut recovery = PanicRecovery::new();
         let (_, retired) = self.replace_pending_command(PendingScrollCommand::AnimateTo {
@@ -414,6 +448,7 @@ impl ScrollController {
         recovery.scope().retire(retired);
         self.position.notify_with_recovery(&mut recovery.scope());
         recovery.finish();
+        Ok(())
     }
 
     /// Update the scroll extents and viewport dimension, then notify
@@ -598,7 +633,7 @@ impl ScrollController {
                 // and frame origin when interrupting its existing motion.
                 let pixels = self.pixels();
                 if fling.value() != pixels {
-                    fling.set_value(pixels);
+                    let _ = fling.set_value(pixels);
                 }
                 // `animate_to` runs inside a driven scroll activity, so
                 // the scrolling notifier holds true for the run — while the
@@ -756,7 +791,9 @@ mod tests {
             let reentrant_controller = controller.clone();
             fling
                 .subscribe_status(std::rc::Rc::new(move |_status| {
-                    reentrant_controller.jump_to(0.0);
+                    reentrant_controller
+                        .jump_to(0.0)
+                        .expect("no build is running");
                 }))
                 .detach();
 
@@ -767,9 +804,10 @@ mod tests {
                 }),
                 jump: Box::new(|_| false),
                 in_pass: Box::new(|| false),
+                build_phase: flui_foundation::BuildPhase::new(),
             }));
 
-            controller.jump_to(100.0);
+            controller.jump_to(100.0).expect("no build is running");
             let _ = tx.send(());
         });
 

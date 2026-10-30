@@ -231,8 +231,16 @@ pub(crate) fn an_escaped_segment_panic_is_contained_to_its_own_presentation_and_
         "B's segment must run despite A's earlier failure in the same loop"
     );
     assert!(
-        ui_runtime.needs_redraw(),
+        ui_runtime
+            .presentations
+            .primary()
+            .failure_retry_at()
+            .is_some(),
         "a contained frame failure must arm a retry, not settle as rendered"
+    );
+    assert!(
+        ui_runtime.next_wake().is_some(),
+        "the retry deadline is what wakes the host"
     );
     {
         let seen = seen.lock().expect("mutex");
@@ -284,6 +292,7 @@ pub(crate) fn an_escaped_segment_panic_is_contained_to_its_own_presentation_and_
             }
         });
     });
+    assert!(ui_runtime.wait_out_failure_retry_for_test());
     ui_runtime.request_redraw();
     let presented = with_quiet_panics(|| {
         catch_unwind(AssertUnwindSafe(|| ui_runtime.render_frame(&mut backend)))
@@ -323,6 +332,8 @@ pub(crate) fn consecutive_failures_count_up_and_reset_on_a_clean_segment() {
     );
 
     let pump = |ui_runtime: &UiRuntime, backend: &mut ScriptedSink| {
+        // Each pump is the one the host makes when the retry deadline comes.
+        ui_runtime.wait_out_failure_retry_for_test();
         ui_runtime.request_redraw();
         ui_runtime.mark_rendered();
         with_quiet_panics(|| catch_unwind(AssertUnwindSafe(|| ui_runtime.render_frame(backend))))
@@ -500,6 +511,10 @@ pub(crate) fn run_opaque_frame_child(kind: &str) {
         calls.load(std::sync::atomic::Ordering::SeqCst),
         1,
         "one authoritative report"
+    );
+    assert!(
+        ui_runtime.wait_out_failure_retry_for_test(),
+        "the failure armed its retry"
     );
     assert!(
         ui_runtime.render_frame(&mut backend),

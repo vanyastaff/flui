@@ -439,6 +439,15 @@ pub trait LifecycleContext: BuildContext {
     /// with [`SignalError::WrittenDuringBuild`](crate::SignalError::WrittenDuringBuild).
     fn writer_source(&self) -> crate::WriterSource;
 
+    /// The UI runtime's build phase (ADR-0086 §7): building while any
+    /// element of the runtime builds.
+    ///
+    /// A widget that subscribes to a controller binds the controller to this
+    /// phase, so a mutator called from `build` is refused with
+    /// [`MutatedDuringBuild`](flui_foundation::MutatedDuringBuild) instead of
+    /// changing state its listeners can no longer write from.
+    fn build_phase(&self) -> flui_foundation::BuildPhase;
+
     /// The binding's frame-driven async task driver, if a binding
     /// installed one.
     ///

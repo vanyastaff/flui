@@ -120,7 +120,7 @@ impl BackGestureController {
     /// `AnimationController::set_value` stops any active run first, so no
     /// separate `stop()` call is needed here.
     pub fn drag_update(&self, delta: f64) {
-        self.controller.set_value(self.controller.value() - delta);
+        let _ = self.controller.set_value(self.controller.value() - delta);
     }
 
     /// `dragEnd(velocity)`.

@@ -150,15 +150,13 @@ fn exercise_with_secondary(
         }));
     }
     // Independent owners can mint equal local ElementIds. Map keys here only
-    // identify fanout slots, so use distinct slots from the Messenger owner.
-    let root_id = handle
-        .shared
-        .rebuild
-        .borrow()
-        .as_ref()
-        .expect("attached")
-        .element_id()
-        .expect("mounted");
+    // identify fanout slots, so take two distinct slots from one owner.
+    let root_id = fanout[1]
+        .binding
+        .tree_mut()
+        .iter()
+        .next()
+        .expect("a mounted slot");
     handle
         .shared
         .scaffolds
@@ -192,8 +190,16 @@ fn exercise_with_secondary(
         .show_snack_bar(snack_bar("next"))
         .on_closed(move |_cx, reason| seen.set(Some(reason)));
     // Empty the independent inboxes after setup. Start the production advance
-    // from its dismissed-entry boundary, without an earlier dismissal wake.
-    handle.shared.entry_controller.set_value(0.0);
+    // from its dismissed-entry boundary, without an earlier dismissal wake: the
+    // status listener stays quiet while the setup settles the controller.
+    {
+        let _quiet = handle.shared.enter_reconcile();
+        handle
+            .shared
+            .entry_controller
+            .set_value(0.0)
+            .expect("no build is running");
+    }
     forward.binding.pump_frame(Duration::from_millis(16));
     for probe in &mut fanout {
         probe.binding.pump_frame(Duration::from_millis(16));
@@ -349,7 +355,11 @@ fn a_second_display_timer_retires_the_first() {
     handle
         .show_snack_bar(snack_bar("replacement").duration(Duration::from_millis(800)))
         .on_closed(move |_cx, reason| seen.borrow_mut().push(reason));
-    handle.shared.entry_controller.set_value(1.0);
+    handle
+        .shared
+        .entry_controller
+        .set_value(1.0)
+        .expect("no build is running");
     harness.tick();
     let registry = handle
         .shared
