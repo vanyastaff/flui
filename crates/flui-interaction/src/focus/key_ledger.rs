@@ -85,8 +85,14 @@ pub(super) enum Admission {
     /// focus moved: the release reaches no key handler, and the press's path
     /// is told the key was cancelled.
     Cancelled(HeldPress),
-    /// An input method's key, an orphan, or a repeat of a key whose key-down
-    /// went to another unit: global handlers saw it, the walk does not.
+    /// The release of a key without a code that matches no key-down held for
+    /// it: global handlers saw it, the walk does not, and the focus manager
+    /// logs it once the ledger is let go, since a log subscriber may call back
+    /// into the manager.
+    Orphan,
+    /// An input method's key, the release of a key with a code no key-down
+    /// was held for, or a repeat of a key whose key-down went to another unit:
+    /// global handlers saw it, the walk does not.
     Withheld,
 }
 
@@ -168,21 +174,11 @@ impl KeyLedger {
                     Admission::Continuation
                 }
                 Some(KeyOrigin::Focus { press, .. }) => Admission::Cancelled(press),
-                Some(KeyOrigin::Ime) => Admission::Withheld,
-                None => {
-                    if let KeyId::Logical(key) = &id {
-                        // `KeyEvent`'s contract: a code-less key's release
-                        // carries the key its key-down did. One that matches
-                        // nothing was pressed before this window had focus,
-                        // or its host broke the contract and left the
-                        // key-down held until the next blur.
-                        tracing::warn!(
-                            ?key,
-                            "a key without a code was released with no key-down held for it"
-                        );
-                    }
-                    Admission::Withheld
-                }
+                // `KeyEvent`'s contract: a code-less key's release carries the
+                // key its key-down did, so one that matches nothing is an orphan
+                // the focus manager reports.
+                None if matches!(id, KeyId::Logical(_)) => Admission::Orphan,
+                Some(KeyOrigin::Ime) | None => Admission::Withheld,
             },
         };
         Ok(admission)

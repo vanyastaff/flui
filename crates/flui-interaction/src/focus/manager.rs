@@ -1120,6 +1120,17 @@ impl FocusManager {
                 tracing::trace!("key event withheld: its key-down went elsewhere");
                 KeyEventResult::Ignored
             }
+            Admission::Orphan => {
+                // Pressed before this window had focus, or its host broke
+                // `KeyEvent`'s contract and left the key-down held until the
+                // next blur. Logged with the ledger let go: a subscriber may
+                // call back into the manager.
+                tracing::warn!(
+                    key = ?event.key,
+                    "a key without a code was released with no key-down held for it"
+                );
+                KeyEventResult::Ignored
+            }
             Admission::Cancelled(press) => {
                 // Focus moved to another unit while the key was held: the
                 // release is no key event here, and the press's path is told
