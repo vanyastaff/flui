@@ -429,15 +429,16 @@ impl Timeline {
     /// Reuses this module's own [`Self::export_chrome_trace`] serializer;
     /// no second trace format exists anywhere in this crate.
     ///
-    /// The event name embeds [`FrameSnapshot::presentation`], not just
+    /// The event name embeds [`FrameSnapshot::address`], not just
     /// `frame_id`: a `frame_id` is scoped to the presentation whose clock
-    /// minted it (each starts counting from 1), so two presentations'
-    /// snapshots recorded into the SAME `Timeline` — a UI runtime hosting more
-    /// than one presentation, e.g. via `open_secondary_window` — would
-    /// otherwise both name themselves "Frame 1", "Frame 2", … and collide
-    /// in one exported trace file. The `presentation` field is ALSO carried
-    /// in `args` (not just the name) so a consumer can filter/group by it
-    /// without parsing the display string back apart.
+    /// minted it (each starts counting from 1), and a `PresentationId` is
+    /// scoped to the UI runtime that minted it (ADR-0266 §3). Two
+    /// presentations' snapshots recorded into the SAME `Timeline` — a UI
+    /// runtime hosting more than one presentation, or two UI runtimes whose
+    /// first presentations share an id — would otherwise collide in one
+    /// exported trace file. The `ui_runtime` and `presentation` fields are
+    /// ALSO carried in `args` (not just the name) so a consumer can
+    /// filter/group by them without parsing the display string back apart.
     pub fn record_frame_snapshots(&self, snapshots: &[FrameSnapshot]) {
         for snapshot in snapshots {
             let inputs: Vec<serde_json::Value> = snapshot
@@ -450,13 +451,19 @@ impl Timeline {
                 })
                 .collect();
             let args = json!({
-                "presentation": snapshot.presentation.to_string(),
+                "ui_runtime": snapshot.address.ui_runtime_id.to_string(),
+                "presentation": snapshot.address.presentation_id.to_string(),
                 "frame_id": snapshot.frame_id.to_string(),
                 "present_outcome": format!("{:?}", snapshot.present_outcome),
                 "inputs": inputs,
             });
             self.record_completed_event(
-                format!("Frame {} [{}]", snapshot.frame_id, snapshot.presentation),
+                format!(
+                    "Frame {} [{} {}]",
+                    snapshot.frame_id,
+                    snapshot.address.ui_runtime_id,
+                    snapshot.address.presentation_id
+                ),
                 EventCategory::Frame,
                 snapshot.segment_start,
                 snapshot.segment_span(),

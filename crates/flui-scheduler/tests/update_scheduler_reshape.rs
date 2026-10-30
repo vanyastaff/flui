@@ -20,7 +20,8 @@ use flui_foundation::{ManualClock, MonotonicClock as _};
 use flui_scheduler::{
     ClockSource, DemandKind, FrameBudget, FrameClock, FrameId, FramePhase, FramePhaseDurations,
     FrameTimes, IdleDeadline, Instant, MAX_BUILD_REENTRY_PASSES, Milliseconds, PresentOutcome,
-    PresentationId, Priority, SchedulerBuilder, UpdateScheduler, frame_pace,
+    PresentationAddress, PresentationId, Priority, SchedulerBuilder, UiRuntimeId, UpdateScheduler,
+    frame_pace,
 };
 
 /// Tiny-deadline exploit: a `deadline` that has already passed defers
@@ -443,7 +444,7 @@ fn a_late_frame_names_its_slowest_phase() {
     assert!(clock.poll(start).should_run_segment());
     let ms = Duration::from_millis;
     let snapshot = clock.record_frame(
-        PresentationId::new(1),
+        address(),
         FrameTimes {
             clock_timestamp: start,
             segment_start: start,
@@ -462,6 +463,14 @@ fn a_late_frame_names_its_slowest_phase() {
     assert_eq!(snapshot.over_budget_phase(ms(40)), None);
 }
 
+/// The one presentation these frames belong to.
+fn address() -> PresentationAddress {
+    PresentationAddress {
+        ui_runtime_id: UiRuntimeId::new(1),
+        presentation_id: PresentationId::new(1),
+    }
+}
+
 /// Idle time between bursts of frames is neither a slow frame nor a low
 /// frame rate.
 fn frame_pace_ignores_idle_gaps() {
@@ -475,7 +484,7 @@ fn frame_pace_ignores_idle_gaps() {
             let begun = start + ms(at);
             assert!(clock.poll(begun).should_run_segment());
             clock.record_frame(
-                PresentationId::new(1),
+                address(),
                 FrameTimes {
                     clock_timestamp: begun,
                     segment_start: begun,
