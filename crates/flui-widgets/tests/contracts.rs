@@ -730,7 +730,8 @@ fn lazy_slivers() {
     run_cases(
         "lazy_slivers",
         &[
-            ("lazy_list::lazy_list_view_builder_exhausted_pass_budget_defers_the_rest_to_the_next_frame", crate::lazy_list::lazy_list_view_builder_exhausted_pass_budget_defers_the_rest_to_the_next_frame as fn()),
+            ("lazy_list::a_pinned_row_stays_announced_until_its_pin_is_released", crate::lazy_list::a_pinned_row_stays_announced_until_its_pin_is_released as fn()),
+            ("lazy_list::lazy_list_view_builder_exhausted_pass_budget_defers_the_rest_to_the_next_frame", crate::lazy_list::lazy_list_view_builder_exhausted_pass_budget_defers_the_rest_to_the_next_frame),
             ("lazy_list::lazy_list_view_builder_keyed_row_moving_with_the_viewport_keeps_state", crate::lazy_list::lazy_list_view_builder_keyed_row_moving_with_the_viewport_keeps_state),
             ("lazy_list::lazy_list_view_builder_pathological_extents_defer_instead_of_panicking", crate::lazy_list::lazy_list_view_builder_pathological_extents_defer_instead_of_panicking),
             ("lazy_list::lazy_list_view_builder_stateful_items_init_and_dispose_with_the_band", crate::lazy_list::lazy_list_view_builder_stateful_items_init_and_dispose_with_the_band),
