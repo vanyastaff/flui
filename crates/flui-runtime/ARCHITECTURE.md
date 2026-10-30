@@ -884,7 +884,8 @@ the new tree against the snapshot (`TreeSnapshot::delta_to`): appeared, gone and
 (name, value, description, state, actions; bounds only when asked), a role change counting as
 appeared, capped at 256 entries with `truncated`. A presentation that closes first answers each
 owed reading `readback_failed` with the effect `ran`, since the action was delivered. Pinned by
-`src/ui_runtime/tests/agent_act_read.rs` and `flui-semantics`'s `tests/delta.rs`.
+`src/ui_runtime/tests/agent_act_read.rs` and `crates/flui-semantics/tests/delta.rs`.
+
 **Enablement.** Every clone of an agent shares one `SemanticsHandle`, so semantics are
 collected while any clone lives, whatever assistive technology does; the tree an agent reads is
 the one published to assistive technology. Vending requests a frame, and until the first
