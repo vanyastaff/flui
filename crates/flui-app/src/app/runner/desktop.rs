@@ -162,11 +162,10 @@ where
     // (`AppHandle::retry_render_device`, ADR-0267) asks this window for a
     // frame, which acts on it.
     let device_retry = APP_RUNTIME.with(|slot| {
-        slot.borrow().main_ingress.as_ref().map(|ingress| {
-            ingress
-                .device_retry()
-                .watch(&ui_runtime.wake_handle())
-        })
+        slot.borrow()
+            .main_ingress
+            .as_ref()
+            .map(|ingress| ingress.device_retry().watch(&ui_runtime.wake_handle()))
     });
     // The development agent's window is vended while the ui_runtime is still
     // ours: if the installation below fails, the ui_runtime drops it, and the

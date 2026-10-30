@@ -203,6 +203,7 @@ request.
 - Session end is delivered on Windows (checked with sent messages), macOS, iOS, Android, the Web and Linux (there as a notification).
 - The Web reports page freeze, context loss and page hide only against a fake page, not yet from Chrome.
 - Sleep, wake and lock reach Windows, macOS and Linux (Linux checked only against a stand-in for logind), and memory pressure Windows, macOS, iOS, Android and Linux.
+- A GPU device whose rebuild keeps failing is given up after about twelve seconds (ADR-0267). On the desktop the application gets it back with `AppHandle::retry_render_device`; Android and iOS have no such entry, so a given-up window there stays blank until the process restarts. No device loss has run on real hardware: the rows use the stand-in renderer.
 
 ### 13. No deep links, URL schemes, file associations or single instance
 

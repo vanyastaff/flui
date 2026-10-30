@@ -69,12 +69,12 @@ impl Lost {
             },
             now: web_time::Instant::now(),
         };
-        assert!(!lost.pump(), "the lost device shows nothing");
+        assert!(!lost.run_frame(), "the lost device shows nothing");
         assert_eq!(lost.device.submits, 1, "the first frame reached the device");
         lost
     }
 
-    fn pump(&mut self) -> bool {
+    fn run_frame(&mut self) -> bool {
         self.now += std::time::Duration::from_millis(16);
         self.runtime
             .pump(
@@ -138,7 +138,7 @@ fn a_failed_rebuild_is_reported_with_the_dropped_frame() {
     lost.runtime
         .note_primary_device_recovery(Some(DeviceRecovery::Failed { attempts: 3 }));
     lost.wait_out_the_backoff();
-    assert!(!lost.pump());
+    assert!(!lost.run_frame());
     assert_eq!(
         lost.reports().last(),
         Some(&(
@@ -176,7 +176,7 @@ fn a_given_up_rebuild_holds_frames_until_the_application_asks_again() {
     // A frame some other source asks for still reaches the dead device, and
     // neither reports again nor arms a retry.
     lost.runtime.wake_frame();
-    assert!(!lost.pump());
+    assert!(!lost.run_frame());
     assert_eq!(lost.reports().len(), reported, "giving up is reported once");
     assert_eq!(lost.runtime.failure_retry_deadline(), None);
     let wakes = lost.wakes.load(Ordering::SeqCst);
@@ -199,6 +199,6 @@ fn a_given_up_rebuild_holds_frames_until_the_application_asks_again() {
     lost.runtime.note_primary_device_recovery(None);
     lost.device.lost = false;
     let submits = lost.device.submits;
-    assert!(lost.pump(), "the rebuilt device shows the whole tree");
+    assert!(lost.run_frame(), "the rebuilt device shows the whole tree");
     assert_eq!(lost.device.submits, submits + 1);
 }

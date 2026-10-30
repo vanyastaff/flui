@@ -112,10 +112,14 @@ impl DeviceRecoveryBackoff {
 
     /// Record a failed rebuild at `now`: arm the next one, or give the rebuild
     /// up once [`DEVICE_RECOVERY_ATTEMPTS_AT_CAP`] failures ran at the ceiling.
-    fn record_failure(&self, error: &flui_engine::EngineError, now: web_time::Instant) -> FailedRebuild {
+    fn record_failure(
+        &self,
+        error: &flui_engine::EngineError,
+        now: web_time::Instant,
+    ) -> FailedRebuild {
         let deadline = self.backoff.record_failure(error, now);
-        let at_cap = deadline.saturating_duration_since(now)
-            >= super::retry_backoff::RetryBackoff::CAP;
+        let at_cap =
+            deadline.saturating_duration_since(now) >= super::retry_backoff::RetryBackoff::CAP;
         let (attempts, abandoned) = {
             let mut streak = self.streak.lock();
             streak.attempts = streak.attempts.saturating_add(1);
@@ -1033,8 +1037,8 @@ mod device_recovery_tests {
         let mut ui_runtime = mount_root();
         let given_up = Arc::new(std::sync::atomic::AtomicU32::new(0));
         let seen = Arc::clone(&given_up);
-        ui_runtime.set_frame_failure_handler(Some(flui_runtime::frame_failure::FrameFailureHandler::new(
-            move |report| {
+        ui_runtime.set_frame_failure_handler(Some(
+            flui_runtime::frame_failure::FrameFailureHandler::new(move |report| {
                 if let FrameFailureKind::DeviceLost {
                     recovery: Recovery::Abandoned { .. },
                     ..
@@ -1042,8 +1046,8 @@ mod device_recovery_tests {
                 {
                     seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 }
-            },
-        )));
+            }),
+        ));
         let lane = lane_over(ScriptedDeviceBackend {
             lost: true,
             recover_clears_lost: false,
@@ -1063,7 +1067,10 @@ mod device_recovery_tests {
         // Each frame runs past the previous rebuild's deadline, so each one
         // is a fresh failed rebuild until the driver gives up.
         let mut failed = 0;
-        while !matches!(ui_runtime.primary_device_recovery(), Some(Recovery::Abandoned { .. })) {
+        while !matches!(
+            ui_runtime.primary_device_recovery(),
+            Some(Recovery::Abandoned { .. })
+        ) {
             failed += 1;
             assert!(failed <= 64, "a rebuild failing at the ceiling is given up");
             let outcome = frame(&mut ui_runtime, now);
@@ -1081,7 +1088,11 @@ mod device_recovery_tests {
             Some(Recovery::Abandoned { attempts })
         );
         assert_eq!(given_up.load(std::sync::atomic::Ordering::SeqCst), 1);
-        assert_eq!(backoff.next_attempt_at(), None, "no wake waits for a rebuild");
+        assert_eq!(
+            backoff.next_attempt_at(),
+            None,
+            "no wake waits for a rebuild"
+        );
         assert!(
             !ui_runtime.needs_redraw() && !ui_runtime.has_pending_work(),
             "a given-up device asks for no frame"

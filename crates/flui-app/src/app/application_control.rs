@@ -204,7 +204,6 @@ impl Future for WindowRequest {
     }
 }
 
-
 /// The application's requests to rebuild a given-up GPU device (ADR-0267),
 /// shared by [`AppHandle`] and the windows that render.
 #[derive(Default)]
