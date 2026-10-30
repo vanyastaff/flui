@@ -16,17 +16,22 @@
 //!   transfers run at once, each given [`TRANSFER_TIMEOUT`] between
 //!   chunks.
 //! - **Reading.** While the application owns the selection a read answers
-//!   its text at once. Otherwise the thread asks the owner to convert the
-//!   selection into its window's property, in each of [`READ_ORDER`] until
-//!   one is answered, and reads the property (deleting it, which for `INCR`
-//!   asks for the next chunk). Reads that arrive meanwhile join the one
-//!   under way. A read gets [`TRANSFER_TIMEOUT`] in all and at most
-//!   [`MAX_TEXT`] bytes.
+//!   its text at once; a read sent after a write waits for the write to own
+//!   it. Otherwise the thread takes a server timestamp, as a write does, and
+//!   asks the owner to convert the selection at that time into one of its
+//!   window's properties, in each of [`READ_ORDER`] until one is answered.
+//!   It reads the property, deleting it, which for `INCR` asks for the next
+//!   chunk. An answer counts only if it names the read's time, form and
+//!   property, and a read that times out retires its property, so an owner
+//!   that answers late never answers a later read. Reads that arrive
+//!   meanwhile join the one under way. A read gets [`TRANSFER_TIMEOUT`] in
+//!   all and at most [`MAX_TEXT`] bytes.
 
 use std::os::fd::{AsFd, OwnedFd};
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
+use flui_foundation::panic::FirstPanic;
 use flui_platform::capability::Resolver;
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::io::Errno;
@@ -60,6 +65,9 @@ const MAX_WRITERS: usize = 4;
 /// limit whatever it is.
 const MAX_CHUNK: usize = 256 * 1024;
 
+/// How many properties a read is converted into in turn.
+const DESTINATIONS: usize = 4;
+
 /// The forms a read asks for, in order: UTF-8 under X11's name first, which
 /// every toolkit answers, then the MIME name, then ISO 8859-1.
 const READ_ORDER: [TextForm; 3] = [TextForm::Utf8String, TextForm::PlainUtf8, TextForm::Latin1];
@@ -81,24 +89,33 @@ struct Atoms {
     timestamp: xproto::Atom,
     incr: xproto::Atom,
     text: xproto::Atom,
-    /// The window's property a read is converted into.
-    destination: xproto::Atom,
+    /// The window's properties a read is converted into, one at a time: a
+    /// read that timed out retires its property, so an owner that answers
+    /// it late writes where no read looks.
+    destinations: [xproto::Atom; DESTINATIONS],
     /// The window's property a write appends to for a timestamp.
     clock: xproto::Atom,
+    /// The window's property a read appends to for a timestamp, which tells
+    /// its answers from a late answer to an earlier read.
+    read_clock: xproto::Atom,
     /// Each of [`TextForm::OFFERED`], by its position there.
     forms: [xproto::Atom; 4],
 }
 
 impl Atoms {
     fn intern(connection: &RustConnection) -> Result<Self, ReplyOrIdError> {
-        let names: [&[u8]; 7] = [
+        let names: [&[u8]; 11] = [
             b"CLIPBOARD",
             b"TARGETS",
             b"TIMESTAMP",
             b"INCR",
             b"TEXT",
-            b"FLUI_CLIPBOARD",
             b"FLUI_CLIPBOARD_CLOCK",
+            b"FLUI_CLIPBOARD_READ_CLOCK",
+            b"FLUI_CLIPBOARD_0",
+            b"FLUI_CLIPBOARD_1",
+            b"FLUI_CLIPBOARD_2",
+            b"FLUI_CLIPBOARD_3",
         ];
         let cookies = names
             .map(|name| connection.intern_atom(false, name))
@@ -122,8 +139,12 @@ impl Atoms {
             timestamp,
             incr,
             text,
-            destination,
             clock,
+            read_clock,
+            first,
+            second,
+            third,
+            fourth,
         ] = atoms[..]
         else {
             unreachable!("BUG: one atom is interned for each name");
@@ -137,8 +158,9 @@ impl Atoms {
             timestamp,
             incr,
             text,
-            destination,
+            destinations: [first, second, third, fourth],
             clock,
+            read_clock,
             forms: [plain_utf8, utf8_string, plain, latin1],
         })
     }
@@ -182,6 +204,8 @@ struct Transfer {
 /// The read under way: the form asked for and what came so far.
 struct Reading {
     form: TextForm,
+    /// The server's time the read asks at; `None` until it arrives.
+    time: Option<xproto::Timestamp>,
     /// The bytes of an `INCR` read, once the owner announced one.
     incremental: Option<Vec<u8>>,
     deadline: Instant,
@@ -195,9 +219,11 @@ pub(super) struct Selections {
     owned: Option<Owned>,
     /// A write waiting for its timestamp; a newer write replaces it.
     pending: Option<String>,
-    /// The reads waiting for the one under way.
+    /// The reads waiting: for the one under way, or for a pending write.
     readers: Vec<Resolver<Option<String>>>,
     reading: Option<Reading>,
+    /// Which of [`Atoms::destinations`] the reads are converted into now.
+    destination: usize,
     transfers: Vec<Transfer>,
     chunk: usize,
 }
@@ -242,6 +268,7 @@ impl Selections {
             pending: None,
             readers: Vec::new(),
             reading: None,
+            destination: 0,
             transfers: Vec::new(),
             chunk,
         })
@@ -262,14 +289,11 @@ impl Selections {
                 )?;
             }
             Command::Read(answer) => {
-                if let Some(owned) = &self.owned {
-                    // A retired owner has nobody left to answer.
-                    let _ = answer.resolve(Some(owned.text.clone()));
-                } else {
-                    self.readers.push(answer);
-                    if self.reading.is_none() {
-                        self.convert(READ_ORDER[0], Instant::now() + TRANSFER_TIMEOUT)?;
-                    }
+                self.readers.push(answer);
+                // A read after a write answers what the write left: it waits
+                // for the write to own the selection or fail to.
+                if self.pending.is_none() {
+                    self.serve()?;
                 }
             }
             Command::Stop => return Ok(false),
@@ -277,29 +301,84 @@ impl Selections {
         Ok(true)
     }
 
-    /// Ask the owner for the selection as `form`.
-    fn convert(&mut self, form: TextForm, deadline: Instant) -> Result<(), ReplyOrIdError> {
+    /// Answer the waiting reads: with the application's text while it owns
+    /// the selection, otherwise through the read under way or a new one.
+    fn serve(&mut self) -> Result<(), ReplyOrIdError> {
+        if self.readers.is_empty() {
+            return Ok(());
+        }
+        if let Some(owned) = &self.owned {
+            let text = owned.text.clone();
+            if self.reading.is_some() {
+                self.retire_destination();
+            }
+            self.answer(Some(text));
+            return Ok(());
+        }
+        if self.reading.is_none() {
+            self.reading = Some(Reading {
+                form: READ_ORDER[0],
+                time: None,
+                incremental: None,
+                deadline: Instant::now() + TRANSFER_TIMEOUT,
+            });
+            // The server stamps the property's change with its time.
+            self.connection.change_property8(
+                PropMode::APPEND,
+                self.window,
+                self.atoms.read_clock,
+                AtomEnum::INTEGER,
+                &[],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// The property reads are converted into now.
+    fn destination(&self) -> xproto::Atom {
+        self.atoms.destinations[self.destination]
+    }
+
+    /// Leave the read under way unanswered by the owner: the next read is
+    /// converted into another property, so an answer to this one written
+    /// late lands where no read looks.
+    fn retire_destination(&mut self) {
+        self.reading = None;
+        self.destination = (self.destination + 1) % DESTINATIONS;
+    }
+
+    /// Ask the owner for the selection as the read's form, at the read's
+    /// time.
+    fn convert(&mut self) -> Result<(), ReplyOrIdError> {
+        let Some(Reading {
+            form,
+            time: Some(time),
+            ..
+        }) = self.reading
+        else {
+            return Ok(());
+        };
         self.connection.convert_selection(
             self.window,
             self.atoms.clipboard,
             self.atoms.form(form),
-            self.atoms.destination,
-            CURRENT_TIME,
+            self.destination(),
+            time,
         )?;
-        self.reading = Some(Reading {
-            form,
-            incremental: None,
-            deadline,
-        });
         Ok(())
     }
 
-    /// End the read under way, answering every reader with `text`.
+    /// End the read under way, answering every reader with `text`. A
+    /// delivery that panics (the owner's wake hook) leaves the others
+    /// answered, and the first failure goes on.
     fn answer(&mut self, text: Option<String>) {
         self.reading = None;
+        let mut failure = FirstPanic::new();
         for reader in self.readers.drain(..) {
-            let _ = reader.resolve(text.clone());
+            // A retired owner has nobody left to answer.
+            failure.contain(|| reader.resolve(text.clone()));
         }
+        failure.resume();
     }
 
     fn event(&mut self, event: Event) -> Result<(), ReplyOrIdError> {
@@ -307,8 +386,15 @@ impl Selections {
             Event::PropertyNotify(event) => {
                 if event.window == self.window && event.atom == self.atoms.clock {
                     self.own(event.time)?;
+                } else if event.window == self.window && event.atom == self.atoms.read_clock {
+                    if let Some(reading) = &mut self.reading
+                        && reading.time.is_none()
+                    {
+                        reading.time = Some(event.time);
+                        self.convert()?;
+                    }
                 } else if event.window == self.window
-                    && event.atom == self.atoms.destination
+                    && event.atom == self.destination()
                     && event.state == Property::NEW_VALUE
                 {
                     self.read_chunk()?;
@@ -345,7 +431,8 @@ impl Selections {
             self.owned = None;
             tracing::debug!("the X11 clipboard was taken before the write could own it");
         }
-        Ok(())
+        // The reads that waited for the write.
+        self.serve()
     }
 
     fn cleared(&mut self, event: &SelectionClearEvent) {
@@ -360,9 +447,20 @@ impl Selections {
         if event.requestor != self.window || event.selection != self.atoms.clipboard {
             return Ok(());
         }
-        let Some(reading) = &self.reading else {
+        let Some(reading) = &mut self.reading else {
             return Ok(());
         };
+        // An answer to this read names its form, its time (an owner that
+        // ignores the time sends the server's current one) and its property.
+        let ours = reading
+            .time
+            .is_some_and(|time| event.time == time || event.time == CURRENT_TIME)
+            && event.target == self.atoms.form(reading.form)
+            && (event.property == NONE
+                || event.property == self.atoms.destinations[self.destination]);
+        if !ours {
+            return Ok(());
+        }
         if event.property == NONE {
             let next = READ_ORDER
                 .iter()
@@ -370,13 +468,14 @@ impl Selections {
                 .nth(1);
             match next {
                 Some(&form) => {
-                    let deadline = reading.deadline;
-                    self.convert(form, deadline)?;
+                    reading.form = form;
+                    self.convert()?;
                 }
                 None => self.answer(None),
             }
             return Ok(());
         }
+        let form = reading.form;
         let reply = self.take_property()?;
         if reply.type_ == self.atoms.incr {
             // Deleting the property asked for the first chunk.
@@ -385,7 +484,6 @@ impl Selections {
             }
             return Ok(());
         }
-        let form = reading.form;
         let text = (reply.bytes_after == 0).then(|| form.decode(reply.value));
         self.answer(text);
         Ok(())
@@ -428,7 +526,7 @@ impl Selections {
             .get_property(
                 true,
                 self.window,
-                self.atoms.destination,
+                self.destination(),
                 AtomEnum::ANY,
                 0,
                 longs,
@@ -471,7 +569,7 @@ impl Selections {
         };
         let current = request.selection == self.atoms.clipboard
             && request.owner == self.window
-            && (request.time == CURRENT_TIME || request.time >= owned.time);
+            && (request.time == CURRENT_TIME || not_before(request.time, owned.time));
         if !current {
             return Ok(false);
         }
@@ -584,11 +682,13 @@ impl Selections {
 
     /// Stop hearing `requestor`'s properties once no transfer writes to it.
     fn forget(&self, requestor: xproto::Window) -> Result<(), ReplyOrIdError> {
-        if self
-            .transfers
-            .iter()
-            .all(|transfer| transfer.requestor != requestor)
-        {
+        // The window's own changes are heard for as long as it lives.
+        let unheard = requestor != self.window
+            && self
+                .transfers
+                .iter()
+                .all(|transfer| transfer.requestor != requestor);
+        if unheard {
             self.connection.change_window_attributes(
                 requestor,
                 &ChangeWindowAttributesAux::new().event_mask(EventMask::NO_EVENT),
@@ -605,6 +705,7 @@ impl Selections {
             .is_some_and(|reading| reading.deadline <= now)
         {
             tracing::debug!("an X11 clipboard read timed out");
+            self.retire_destination();
             self.answer(None);
         }
         let (expired, kept): (Vec<Transfer>, Vec<Transfer>) = std::mem::take(&mut self.transfers)
@@ -697,5 +798,27 @@ fn wait(selections: &Selections, bell: &OwnedFd) -> Result<(), ReplyOrIdError> {
     match poll(&mut fds, timeout.as_ref()) {
         Ok(_) | Err(Errno::INTR) => Ok(()),
         Err(error) => Err(x11rb::errors::ConnectionError::IoError(error.into()).into()),
+    }
+}
+
+/// Whether server time `time` is no earlier than `since`, across the
+/// 32-bit millisecond clock's wrap every 49.7 days: the later of two
+/// times is the one less than half the clock ahead.
+fn not_before(time: xproto::Timestamp, since: xproto::Timestamp) -> bool {
+    time.wrapping_sub(since) < 1 << 31
+}
+
+#[cfg(test)]
+mod tests {
+    use super::not_before;
+
+    /// A time just past the clock's wrap is later than one just before it.
+    #[test]
+    fn server_times_order_across_the_wrap() {
+        assert!(not_before(0x10, 0xffff_fff0));
+        assert!(!not_before(0xffff_fff0, 0x10));
+        assert!(not_before(5, 5));
+        assert!(not_before(6, 5));
+        assert!(!not_before(5, 6));
     }
 }

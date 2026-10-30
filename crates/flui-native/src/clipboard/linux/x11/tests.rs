@@ -170,3 +170,21 @@ fn a_selection_nobody_owns_reads_as_nothing() {
         "a refused conversion answers at once"
     );
 }
+
+/// A read sent right after a write answers the written text, not the one
+/// the clipboard owned before, though both reach its thread together.
+#[test]
+fn a_read_after_a_write_answers_the_write() {
+    let Some(_server) = server() else {
+        return;
+    };
+    let answers = Answers::new();
+    let clipboard = X11Clipboard::start().expect("the X server answers");
+    clipboard.write_text("before".to_owned());
+    assert_eq!(answers.read(&clipboard).as_deref(), Some("before"));
+    for round in 0..20 {
+        let text = format!("after {round}");
+        clipboard.write_text(text.clone());
+        assert_eq!(answers.read(&clipboard), Some(text));
+    }
+}
