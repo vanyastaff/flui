@@ -109,9 +109,10 @@ graph LR
   `a_session_end_asks_the_handler_before_the_guard`,
   `a_refused_session_end_is_released_when_its_window_closes`,
   `session_end_commits_composition_before_the_flush`,
-  `a_session_end_with_nothing_to_save_proceeds` (quit). Остаток: S5 (разбор realms внутри `Ending`
-  при ≥ 1 с и без извлечённых — сейчас разбор идёт выходом цикла после quit, если процесс жив);
-  строки с байтами реестра (`session_end_flushes_the_registry_within_the_framework_budget`,
+  `a_session_end_with_nothing_to_save_proceeds` (quit). S5 и S6: при ≥ 1 с и без извлечённых
+  `Ending` сам разбирает UI-runtime (деструкторы приложения), затем отменяет сервисы и гасит пулы
+  без ожидания; иначе оставляет всё системе — `session_end_tears_down_only_with_time_left`.
+  Остаток: строки с байтами реестра (`session_end_flushes_the_registry_within_the_framework_budget`,
   `session_end_with_a_checked_out_runtime_writes_registry_bytes_and_calls_no_user_code` и строки
   persistence) ждут публикации `Persisted` в реестр (persistence): снаружи `flui-view` опубликовать
   байты пока нечем.

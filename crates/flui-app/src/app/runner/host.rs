@@ -496,11 +496,10 @@ fn end_session_now() {
     #[cfg(all(not(target_os = "android"), not(target_os = "ios")))]
     super::placement::flush_all_by(deadline);
     // Application code runs while the budget can absorb it: a subscriber or a
-    // Detached observer may still publish what the flush then writes. A UI
-    // runtime that is checked out queues the notice and runs none of its code
-    // before the process ends.
-    // Each runtime's code starts only while the margin is left, whatever
-    // the runtimes before it spent.
+    // Detached observer may still publish what the flush then writes. Each
+    // runtime's code starts only while the margin is left, whatever the
+    // runtimes before it spent. A UI runtime that is checked out queues the
+    // notice and runs none of its code before the process ends.
     let margin_left = || {
         deadline.saturating_duration_since(std::time::Instant::now())
             >= SESSION_END_USER_CODE_THRESHOLD
@@ -511,6 +510,11 @@ fn end_session_now() {
     }
     flush_for_session_end(deadline);
     if ends_application {
+        // The UI runtimes are torn down here only while their destructors
+        // can start within the budget and none is on the stack; otherwise
+        // they are left as they are and the system ends the process.
+        let tear_down = margin_left() && !super::owner_dispatch::any_runtime_checked_out();
+        super::owner_dispatch::end_session_teardown(tear_down);
         let _ = session_end_platform(flui_native::OwnerPlatform::quit);
     }
 }
