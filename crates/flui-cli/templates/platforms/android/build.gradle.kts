@@ -9,7 +9,7 @@ android {
 
     defaultConfig {
         applicationId = "{{package_name}}"
-        minSdk = 23
+        minSdk = providers.gradleProperty("flui.minSdk").get().toInt()
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"

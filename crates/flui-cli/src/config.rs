@@ -18,12 +18,17 @@
 //! worker_package = "my_app-logic"
 //! worker_lib = "my_app_logic"
 //! logic_watch = "logic/src"
+//!
+//! # Optional: raise FLUI's floor for one environment (ADR-0244 §10).
+//! [platforms.ios]
+//! min = "15.0"
 //! ```
 //!
 //! Unknown keys are ignored on load, so a file from an older version still
 //! parses. There is deliberately no global (per-user) configuration file:
 //! the CLI keeps no state about the user and has no telemetry to configure.
 
+use crate::build::app_floor::{AppFloors, PlatformsConfig};
 use crate::error::{CliError, CliResult, ResultExt};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -40,6 +45,10 @@ pub(crate) struct FluiConfig {
     /// `--hot-reload`.
     #[serde(default)]
     pub(crate) hot_reload: Option<HotReloadConfig>,
+    /// The application's floor per environment (ADR-0244 §10), when it
+    /// raises FLUI's: `[platforms.<environment>] min`.
+    #[serde(default, skip_serializing_if = "PlatformsConfig::is_empty")]
+    pub(crate) platforms: PlatformsConfig,
 }
 
 impl FluiConfig {
@@ -62,12 +71,36 @@ impl FluiConfig {
         toml::from_str(&content).with_context(|| format!("failed to parse {}", path.display()))
     }
 
+    /// The floors a build of this project uses: FLUI's, raised where
+    /// `[platforms]` asks.
+    ///
+    /// # Errors
+    /// [`CliError::AppFloor`] when a `min` is below FLUI's floor, is given
+    /// for the web or Linux, or is not the value its environment takes.
+    pub(crate) fn floors(&self) -> CliResult<AppFloors> {
+        Ok(self.platforms.floors()?)
+    }
+
     /// Write `flui.toml` into `dir`.
     pub(crate) fn save(&self, dir: &Path) -> CliResult<()> {
         let content = toml::to_string_pretty(self).context("failed to serialize configuration")?;
         std::fs::write(dir.join("flui.toml"), content).context("failed to write flui.toml")?;
         Ok(())
     }
+}
+
+/// The floors a build in `root` uses: those of its `flui.toml`, or FLUI's
+/// alone when it has none (an in-repo example, a plain cargo package).
+///
+/// # Errors
+/// When `flui.toml` cannot be read or parsed, or a `[platforms]` table is
+/// refused ([`FluiConfig::floors`]).
+pub(crate) fn project_floors(root: &Path) -> CliResult<AppFloors> {
+    let manifest = root.join("flui.toml");
+    if !manifest.is_file() {
+        return Ok(AppFloors::default());
+    }
+    FluiConfig::load_from(&manifest)?.floors()
 }
 
 /// Host/worker hot reload layout.
@@ -134,6 +167,7 @@ mod tests {
                 target_platforms: vec!["macos".into()],
             },
             hot_reload: None,
+            platforms: PlatformsConfig::default(),
         }
     }
 

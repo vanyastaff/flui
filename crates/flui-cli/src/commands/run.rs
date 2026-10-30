@@ -426,6 +426,8 @@ fn run_once(
 ) -> CliResult<()> {
     let mut cmd = Command::new("cargo");
     cmd.arg("run");
+    let root = std::env::current_dir().context("failed to resolve application directory")?;
+    cmd.envs(crate::config::project_floors(&root)?.host_cargo_env());
     if release {
         cmd.arg("--release");
     } else if let Some(prof) = profile {
@@ -1455,7 +1457,9 @@ impl AndroidSession {
         builder
             .validate_environment(abi)
             .map_err(environment_error)?;
+        let floors = crate::config::project_floors(&self.root)?;
         let ctx = BuilderContextBuilder::new(self.root.clone())
+            .with_floors(floors)
             .with_platform(Platform::Android {
                 targets: vec![abi.to_owned()],
             })
@@ -1617,6 +1621,14 @@ fn run_cargo_build(profile: Option<&str>, verbose: bool, agent: Option<&Session>
         cmd.arg("--verbose");
     }
 
+    // The same floors as the run that follows, or the build script reruns:
+    // a refused `flui.toml` is reported by that run.
+    if let Ok(floors) = std::env::current_dir()
+        .map_err(CliError::from)
+        .and_then(|root| crate::config::project_floors(&root))
+    {
+        cmd.envs(floors.host_cargo_env());
+    }
     // The same features as the run that follows, or cargo builds twice.
     with_agent(&mut cmd, agent);
 
@@ -1633,6 +1645,8 @@ fn run_cargo_build(profile: Option<&str>, verbose: bool, agent: Option<&Session>
 fn spawn_app(profile: Option<&str>, verbose: bool, agent: Option<&Session>) -> CliResult<AppChild> {
     let mut cmd = Command::new("cargo");
     cmd.arg("run");
+    let root = std::env::current_dir().context("failed to resolve application directory")?;
+    cmd.envs(crate::config::project_floors(&root)?.host_cargo_env());
 
     if let Some(prof) = profile {
         cmd.args(["--profile", prof]);

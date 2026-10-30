@@ -358,10 +358,26 @@ worker_package = "my_app-logic"
 worker_lib = "my_app_logic"
 logic_watch = "logic/src"
 types_watch = "types/src"
+
+# Optional: the lowest release the app runs on, above FLUI's floor.
+[platforms.ios]
+min = "15.0"
+
+[platforms.android]
+min = 26
 ```
 
 `[app].name` and `[app].organization` become the macOS bundle name and
-identifier. Unknown keys are ignored. There is no global configuration file
+identifier.
+
+`[platforms.<environment>] min` raises FLUI's floor ([version map](../../docs/version-map.md))
+for `windows` (a build number), `macos` and `ios` (a release in quotes) and
+`android` (an API level); a value below FLUI's, or any `min` for `web` or
+`linux`, fails the build. `flui build` writes the higher of the two into the
+APK, the `Info.plist` and the deployment target rustc links with, and the app
+refuses to start below it. A plain `cargo build` uses FLUI's floor alone.
+
+Unknown keys are ignored. There is no global configuration file
 and no telemetry setting, because the CLI stores nothing about you and sends
 nothing anywhere.
 

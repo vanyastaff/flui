@@ -6,6 +6,19 @@
 //! Every feature and the owner thread read it; it names none of them.
 
 pub(crate) mod floor;
+
+/// The application's own floor, when `flui build` raised FLUI's (ADR-0244 §10): written by the
+/// build script from `FLUI_APP_MIN_<ENVIRONMENT>`.
+#[cfg(any(
+    windows,
+    target_os = "android",
+    target_os = "ios",
+    target_os = "macos",
+    test
+))]
+pub(crate) mod app_floor {
+    include!(concat!(env!("OUT_DIR"), "/app_floor.rs"));
+}
 #[cfg(any(
     windows,
     target_os = "android",

@@ -35,7 +35,7 @@ request.
 | 19 | [No native views inside the UI (web view, map, video)](#19-no-native-views-inside-the-ui-web-view-map-video) | all | Apps that embed a map, browser or player |
 | 20 | [Window looks](#20-window-looks) | desktop; mobile for capture | Apps with a native look; apps showing sensitive data |
 | 21 | [Unaudited rows](#21-unaudited-rows) | desktop, Web | Unknown |
-| 22 | [Version floors not packaged, and the GPU fallback not run on devices](#22-version-floors-not-packaged-and-the-gpu-fallback-not-run-on-devices) | all | Users on older systems or GPUs without Vulkan or WebGPU |
+| 22 | [Version floors and the GPU fallback not run on devices](#22-version-floors-and-the-gpu-fallback-not-run-on-devices) | all | Users on older systems or GPUs without Vulkan or WebGPU |
 | 23 | [No presentation feedback](#23-no-presentation-feedback) | iOS, Android, winit | Every animated app; every latency claim |
 | 24 | [No HDR, wide gamut or colour management](#24-no-hdr-wide-gamut-or-colour-management) | all | Photo, video and design apps; every app on an HDR display |
 | 25 | [Sandbox-aware file access is absent](#25-sandbox-aware-file-access-is-absent) | all desktop and mobile | Every app distributed through a store or Flatpak |
@@ -283,13 +283,13 @@ request.
 
 - App identity and packaging, live resize.
 
-### 22. Version floors not packaged, and the GPU fallback not run on devices
+### 22. Version floors and the GPU fallback not run on devices
 
 > **Environments:** all · **Who it hurts:** Users on older systems or GPUs without Vulkan or WebGPU, who get a failure in the middle of start instead of a clear refusal · **Parity:** [App lifecycle](platform-parity.md#app-lifecycle)
 
-- The floors are declared in `platform-support.toml` ([version map](version-map.md)) and the backends refuse a release below them at start, but only the Android `minSdk` is packaged from it.
+- The floors are declared in `platform-support.toml` ([version map](version-map.md)), the backends refuse a release below them at start, and `flui build` packages them, raised by an application's `[platforms.<environment>] min`: the APK's `minSdk` and the NDK level, the iOS and macOS deployment targets with `MinimumOSVersion` and `LSMinimumSystemVersion`. No bundle has run on its floor.
 - Android packages API 23; below API 24, or on a device without a working Vulkan driver, the renderer falls back to GLES 3.0, which no device has run yet.
-- iOS and macOS bundles inherit whatever deployment target the build had.
+- The CLI writes no Windows application manifest (`supportedOS`), and an iOS app built through a hand-made Xcode project takes its deployment target from that project; only the start-up refusal holds the floor there.
 - Windows links a 1607 API unconditionally; the Linux release glibc is the runner's.
 - The GPU fallback (Vulkan to GLES 3.0, WebGPU to WebGL2, Direct3D 12 to WARP) is compiled and the engine's pixel suites pass on llvmpipe GL; only Linux has run it, and no browser has run WebGL2 or Windows WARP.
 
@@ -524,5 +524,6 @@ request.
 | 2026-10-30 | minor | Entry 34: the iOS display link and the Web frame loop stand still while no frame is asked for |
 | 2026-10-30 | minor | Entry 34: iOS holds the high refresh rate only while a presentation is active; its display link still ticks on a still screen |
 | 2026-10-30 | minor | Entry 22 narrows: the backends refuse a release below the floor, and the GPU falls back to GLES 3.0, WebGL2 or WARP (run on llvmpipe GL only); packaging the floor everywhere remains |
+| 2026-10-30 | minor | Entry 22 narrows: `flui build` packages the floors and an application may raise them in `flui.toml`; the Windows manifest and runs on each floor remain |
 
 </details>

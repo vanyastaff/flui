@@ -25,11 +25,13 @@ const PLATFORM_OUTPUT: &str = "crates/flui-native/src/version/floor.rs";
 const CLI_OUTPUT: &str = "crates/flui-cli/src/build/platform_floor.rs";
 /// The version map.
 const MAP_OUTPUT: &str = "docs/version-map.md";
-/// The Gradle template `flui platform add android` scaffolds.
-const GRADLE_TEMPLATE: &str = "crates/flui-cli/templates/platforms/android/build.gradle.kts";
+/// The Gradle properties `flui platform add android` scaffolds; the scaffolded
+/// `build.gradle.kts` reads its `flui.minSdk`, and `flui build` restates it.
+const GRADLE_TEMPLATE: &str = "crates/flui-cli/templates/platforms/android/gradle.properties";
 
-static GRADLE_MIN_SDK: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(\s*minSdk\s*=\s*)([0-9]+)(\s*)$").expect("BUG: static regex"));
+static GRADLE_MIN_SDK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(\s*flui\.minSdk\s*=\s*)([0-9]+)(\s*)$").expect("BUG: static regex")
+});
 
 /// Arguments for `cargo xtask platform-floor`.
 #[derive(Debug, clap::Args)]
@@ -240,13 +242,29 @@ fn dotted(version: &str) -> (u32, u32, u32) {
 }
 
 fn cli_source(floors: &Floors) -> String {
+    let (ios_major, ios_minor, ios_patch) = dotted(&floors.ios.version);
+    let (arm_major, arm_minor, arm_patch) = dotted(&floors.macos.aarch64);
+    let (intel_major, intel_minor, intel_patch) = dotted(&floors.macos.x86_64);
     format!(
         "{GENERATED_HEADER}\n\
-         //! The floors applications are packaged with (ADR-0244).\n\
+         //! The floors applications are packaged with (ADR-0244); an application's own\n\
+         //! `[platforms.<environment>] min` may only raise them.\n\
+         \n\
+         /// The lowest Windows build FLUI supports, as `RtlGetVersion` reports it.\n\
+         pub(crate) const WINDOWS_BUILD: u32 = {};\n\
+         \n\
+         /// The lowest macOS release FLUI supports on arm64, as (major, minor, patch).\n\
+         pub(crate) const MACOS_AARCH64: (u32, u32, u32) = ({arm_major}, {arm_minor}, {arm_patch});\n\
+         \n\
+         /// The lowest macOS release FLUI supports on x86_64, as (major, minor, patch).\n\
+         pub(crate) const MACOS_X86_64: (u32, u32, u32) = ({intel_major}, {intel_minor}, {intel_patch});\n\
+         \n\
+         /// The lowest iOS release FLUI supports, as (major, minor, patch).\n\
+         pub(crate) const IOS: (u32, u32, u32) = ({ios_major}, {ios_minor}, {ios_patch});\n\
          \n\
          /// The Android `minSdk`: the lowest API level FLUI supports.\n\
          pub(crate) const ANDROID_MIN_SDK: u32 = {};\n",
-        floors.android.api
+        floors.windows.build, floors.android.api
     )
 }
 
@@ -258,11 +276,10 @@ fn version_map(floors: &Floors) -> String {
          > [`platform-support.toml`](../platform-support.toml); edit that file, not this page.\n\
          \n\
          The lowest version of each environment FLUI runs on, and what sets it\n\
-         ([ADR-0244](adr/ADR-0244-os-version-floors-and-gates.md)). These are the declared targets:\n\
-         only the Android `minSdk` is packaged from them so far, and no backend refuses to start\n\
-         below a floor yet ([gaps entry 22](gaps.md)), so an older system may fail later instead of\n\
-         being refused. The ADR puts an API newer than a floor behind a typed gate rather than raising\n\
-         the floor.\n\
+         ([ADR-0244](adr/ADR-0244-os-version-floors-and-gates.md)). The backends refuse to start below\n\
+         them, and `flui build` packages them; an application may raise one in `flui.toml`\n\
+         (`[platforms.<environment>] min`), never lower it. The ADR puts an API newer than a floor\n\
+         behind a typed gate rather than raising the floor.\n\
          \n\
          | Environment | Floor | Set by |\n\
          |---|---|---|\n",
@@ -307,7 +324,7 @@ fn version_map(floors: &Floors) -> String {
     page
 }
 
-/// `text` with every `minSdk = N` line stating `api`, its indentation and line endings kept.
+/// `text` with every `flui.minSdk = N` line stating `api`, its indentation and line endings kept.
 fn restate_min_sdk(text: &str, api: u32) -> String {
     text.split_inclusive('\n')
         .map(|line| {
@@ -352,12 +369,12 @@ fn check(
             .filter_map(|caps| caps[2].parse().ok())
             .collect();
         match stated.as_slice() {
-            [] => findings.push(format!("{path} states no `minSdk = N`")),
+            [] => findings.push(format!("{path} states no `flui.minSdk = N`")),
             values => {
                 for value in values {
                     if *value != floors.android.api {
                         findings.push(format!(
-                            "{path} states minSdk = {value}, but {SOURCE} has android.api = {}",
+                            "{path} states flui.minSdk = {value}, but {SOURCE} has android.api = {}",
                             floors.android.api
                         ));
                     }
@@ -382,7 +399,7 @@ mod tests {
         let floors = floors();
         let committed = generate(&floors);
         let gradle = format!(
-            "android {{\n    defaultConfig {{\n        minSdk = {}\n    }}\n}}\n",
+            "android.useAndroidX=true\nflui.minSdk={}\n",
             floors.android.api
         );
         (committed, vec![(GRADLE_TEMPLATE, gradle)])
@@ -455,27 +472,27 @@ mod tests {
 
     fn a_template_floor_that_differs_is_reported() {
         let (committed, _) = agreeing();
-        let drifted = [(GRADLE_TEMPLATE, "        minSdk = 21\n".to_owned())];
+        let drifted = [(GRADLE_TEMPLATE, "flui.minSdk=21\n".to_owned())];
         assert_eq!(
             check(&floors(), &committed, &drifted),
             [format!(
-                "{GRADLE_TEMPLATE} states minSdk = 21, but {SOURCE} has android.api = 23"
+                "{GRADLE_TEMPLATE} states flui.minSdk = 21, but {SOURCE} has android.api = 23"
             )]
         );
-        let silent = [(GRADLE_TEMPLATE, "android {}\n".to_owned())];
+        let silent = [(GRADLE_TEMPLATE, "android.useAndroidX=true\n".to_owned())];
         assert_eq!(
             check(&floors(), &committed, &silent),
-            [format!("{GRADLE_TEMPLATE} states no `minSdk = N`")]
+            [format!("{GRADLE_TEMPLATE} states no `flui.minSdk = N`")]
         );
     }
 
     fn write_restates_a_template_floor_that_differs() {
         let (committed, _) = agreeing();
-        let drifted = "android {\r\n        minSdk = 21\r\n        targetSdk = 35\r\n}";
+        let drifted = "android.useAndroidX=true\r\nflui.minSdk=21\r\norg.gradle.caching=true";
         let restated = restate_min_sdk(drifted, floors().android.api);
         assert_eq!(
             restated,
-            "android {\r\n        minSdk = 23\r\n        targetSdk = 35\r\n}"
+            "android.useAndroidX=true\r\nflui.minSdk=23\r\norg.gradle.caching=true"
         );
         assert_eq!(
             check(&floors(), &committed, &[(GRADLE_TEMPLATE, restated)]),
