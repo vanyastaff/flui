@@ -191,5 +191,9 @@ T3 и T10 не делят файлов и идут параллельно. T9 ж
   `tools/xtask/allowlists/send-impls.toml` (33 impl в `flui-native`, `flui-hot-reload`,
   `flui-desktop-mcp`; список только сокращается, `--seed` печатает нужный), `--self-test` и
   оба шага в `checks`; `deny.toml [bans]`: `send_wrapper`, `fragile`, `send-cell`, `unsend`,
-  `force-send-sync`. T2b: gate позиций по rustdoc JSON.
+  `force-send-sync`. T2b: `cargo xtask send-positions` — rustdoc JSON (загрузчик `api-closure`,
+  `--document-private-items`, все features) для `flui`, `flui-sdk` и 23 крейтов, до которых
+  доходят их публичные реэкспорты; 253 позиции в `tools/xtask/allowlists/send-positions.toml`
+  (с `count`, только сокращается); `--self-test` на встроенном JSON, шаг в CI-джобе `doc`;
+  ADR-0089 §6 дополнен. Убранная из списка позиция `MonotonicClock: Send` роняет gate (проверено).
 - [ ] T7 — закрытие

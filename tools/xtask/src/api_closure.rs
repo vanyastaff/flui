@@ -162,18 +162,18 @@ struct Admission {
     krate: String,
 }
 
-/// One rustdoc build of a checked package.
+/// One rustdoc build of a package.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Build {
+pub(crate) struct Build {
     /// `None`: the host.
-    target: Option<String>,
-    all_features: bool,
-    features: Vec<String>,
+    pub(crate) target: Option<String>,
+    pub(crate) all_features: bool,
+    pub(crate) features: Vec<String>,
 }
 
 impl Build {
     /// The host's build with default features.
-    const HOST: Self = Self {
+    pub(crate) const HOST: Self = Self {
         target: None,
         all_features: false,
         features: Vec::new(),
@@ -181,6 +181,25 @@ impl Build {
 
     fn label(&self) -> &str {
         self.target.as_deref().unwrap_or("host")
+    }
+}
+
+/// Which items beyond the public ones rustdoc's JSON lists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Items {
+    /// `#[doc(hidden)]` items too.
+    Hidden,
+    /// Private items too (`send-positions` follows a public trait's private
+    /// supertraits).
+    Private,
+}
+
+impl Items {
+    fn flag(self) -> &'static str {
+        match self {
+            Self::Hidden => "--document-hidden-items",
+            Self::Private => "--document-private-items",
+        }
     }
 }
 
@@ -242,9 +261,9 @@ struct TraitRow {
 struct BuildRow {
     target: String,
     #[serde(default)]
-    features: Vec<String>,
+    pub(crate) features: Vec<String>,
     #[serde(default)]
-    all_features: bool,
+    pub(crate) all_features: bool,
 }
 
 /// One violation.
@@ -343,7 +362,14 @@ pub(crate) fn api_closure(args: &ApiClosureArgs) -> anyhow::Result<ExitCode> {
             .find(|rule| rule.package == SELF_TEST_PACKAGE)
             .cloned()
             .with_context(|| format!("`{SELF_TEST_PACKAGE}` is not a checked Stable package"))?;
-        let doc = rustdoc_json(&root, &args.toolchain, &stable, &Build::HOST)?;
+        let doc = rustdoc_json(
+            &root,
+            &args.toolchain,
+            &stable.package,
+            &stable.lib,
+            &Build::HOST,
+            Items::Hidden,
+        )?;
         return Ok(self_test(&doc, &stable, &workspace));
     }
     if !args.packages.is_empty() {
@@ -360,7 +386,14 @@ pub(crate) fn api_closure(args: &ApiClosureArgs) -> anyhow::Result<ExitCode> {
     for rule in &rules {
         let mut scans = Vec::new();
         for build in &rule.builds {
-            let doc = rustdoc_json(&root, &args.toolchain, rule, build)?;
+            let doc = rustdoc_json(
+                &root,
+                &args.toolchain,
+                &rule.package,
+                &rule.lib,
+                build,
+                Items::Hidden,
+            )?;
             scans.push(scan(&doc, rule, build, &workspace, &root)?);
         }
         all.extend(findings(rule, scans));
@@ -508,13 +541,19 @@ fn rules(root: &Path, metadata: &cargo_metadata::Metadata) -> anyhow::Result<Vec
 
 /// Runs rustdoc's JSON output for the package's library as `build` builds it,
 /// and reads it.
-fn rustdoc_json(root: &Path, toolchain: &str, rule: &Rule, build: &Build) -> anyhow::Result<Json> {
+pub(crate) fn rustdoc_json(
+    root: &Path,
+    toolchain: &str,
+    package: &str,
+    lib: &str,
+    build: &Build,
+    items: Items,
+) -> anyhow::Result<Json> {
     let target_dir = std::env::var_os("CARGO_TARGET_DIR")
         .map_or_else(|| root.join("target"), PathBuf::from)
         .join("api-closure");
     println!(
-        "$ rustup run {toolchain} cargo rustdoc -p {} ({}, JSON)",
-        rule.package,
+        "$ rustup run {toolchain} cargo rustdoc -p {package} ({}, JSON)",
         build.label()
     );
     let mut command = Command::new("rustup");
@@ -529,7 +568,7 @@ fn rustdoc_json(root: &Path, toolchain: &str, rule: &Rule, build: &Build) -> any
             "cargo",
             "rustdoc",
             "-p",
-            &rule.package,
+            package,
             "--lib",
             "--locked",
         ])
@@ -550,7 +589,7 @@ fn rustdoc_json(root: &Path, toolchain: &str, rule: &Rule, build: &Build) -> any
             "unstable-options",
             "--output-format",
             "json",
-            "--document-hidden-items",
+            items.flag(),
         ])
         .status()
         .with_context(|| format!("spawning `rustup run {toolchain} cargo rustdoc`"))?;
@@ -558,7 +597,7 @@ fn rustdoc_json(root: &Path, toolchain: &str, rule: &Rule, build: &Build) -> any
         bail!(
             "rustdoc failed for {} ({}); its errors are above (a missing toolchain or target \
              is one of them)",
-            rule.package,
+            package,
             build.label()
         );
     }
@@ -566,7 +605,7 @@ fn rustdoc_json(root: &Path, toolchain: &str, rule: &Rule, build: &Build) -> any
         Some(target) => target_dir.join(target).join("doc"),
         None => target_dir.join("doc"),
     };
-    let path = doc_dir.join(format!("{}.json", rule.lib));
+    let path = doc_dir.join(format!("{lib}.json"));
     let text =
         std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
@@ -767,7 +806,7 @@ fn scan(
 }
 
 /// A blanket implementation and a synthetic one belong to whoever wrote them.
-fn skipped(item: &Json) -> bool {
+pub(crate) fn skipped(item: &Json) -> bool {
     item["inner"].get("impl").is_some_and(|implementation| {
         !implementation["blanket_impl"].is_null()
             || implementation["is_synthetic"].as_bool() == Some(true)
@@ -775,7 +814,7 @@ fn skipped(item: &Json) -> bool {
 }
 
 /// An `"id"` as the key `paths` and `index` use.
-fn id_text(id: &Json) -> String {
+pub(crate) fn id_text(id: &Json) -> String {
     match id {
         Json::String(text) => text.clone(),
         other => other.to_string(),
@@ -805,7 +844,7 @@ fn referenced(value: &Json, out: &mut Vec<String>) {
 }
 
 /// Where an item is written, as `path:line` from the repository root.
-fn location(item: &Json, root: &Path) -> String {
+pub(crate) fn location(item: &Json, root: &Path) -> String {
     let span = &item["span"];
     let file = span["filename"]
         .as_str()

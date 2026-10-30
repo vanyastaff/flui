@@ -5,6 +5,9 @@
   vocabulary and its flags; FLUI's roles and actions now cover ARIA 1.2 where AccessKit has a
   counterpart, and role-bearing flags are roles. The rule that stable signatures carry no
   upstream type stands.
+- **Amended:** 2026-10-30 — §6's loader also feeds `cargo xtask send-positions`, the list of
+  `Send` and `Sync` positions in the facade's API (ADR-0136); synthetic auto-trait impls are not
+  positions.
 - **Amended:** 2026-10-21 — §6's gate is `cargo xtask api-closure`; its first run moved the
   contract's two `bitflags` sets into the contract's own type (ADR-0151 §5).
 - **Amended:** 2026-10-11 — verification distinguishes implemented vocabulary checks from the still-proposed API-closure migration.
@@ -161,6 +164,16 @@ on any other upstream path. Before it joins `cargo xtask checks`, it is proven a
 scratch crate with `pub fn f() -> accesskit::Role` must be rejected (its `--self-test`, as
 [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) §5 asks of every gate).
 
+The same loader feeds `cargo xtask send-positions`
+([ADR-0136](ADR-0136-owner-local-ui-surfaces.md)): from the public re-exports of `flui` and
+`flui-sdk`, built with every feature and with private items, it lists every place the reached
+API names `Send` or `Sync` that an author wrote (a supertrait, private sealed ones included, a
+bound, `dyn … + Send`, `-> impl Trait + Send`, an explicit `impl Send`) against
+`tools/xtask/allowlists/send-positions.toml`, which only shrinks. A synthetic auto-trait
+implementation is not a position: it follows from a type's fields, no author decided it, and a
+new data type would add one against a list that only shrinks; trybuild pins the owner types that
+must stay `!Send`, a consumer test the handles meant to cross a thread.
+
 ## Alternatives considered
 
 - **Mirror AccessKit 1:1 in our own enums.** Rejected: the mirror inherits every rename and
@@ -213,5 +226,10 @@ translation has exhaustive inbound matches and its outbound role-family test.
   both, an admission and an entry in use beside ones no longer needed into the contract's real
   rustdoc output, and the rule reports exactly the violations. The same gate checks the core
   host's allow list on every target it builds a host for (ADR-0151 §8).
+- `cargo xtask send-positions` and its `--self-test` (§6), in CI's `doc` job: the self-test runs
+  the rule over a rustdoc JSON document with one planted position of each kind, a private sealed
+  supertrait, a stale and an over-counted entry, and the items the walk must not reach or count
+  (a private item, a public item in a private module, a private field, a synthetic impl, a
+  blanket impl's copy), and the rule reports exactly the planted findings.
 - The implemented outbound `ALL` role test and exhaustive inbound matches in `flui-semantics` (§3).
 - The generated-key round-trip test and the keyboard-types diff check (§4).
