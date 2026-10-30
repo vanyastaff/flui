@@ -18,11 +18,13 @@ use flui_platform::pointer::{
     PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove,
     PointerPosition, PointerPress, PointerRelease, PointerSample,
 };
+use flui_rendering::semantics::{DocumentPosition, DocumentSelection};
 use flui_testing::replay::{MouseScript, PointerScript};
 use flui_view::{BoxedView, BuildContext, ViewExt};
 use flui_widgets::{
     Column, DefaultSelectionHandles, DefaultTextStyle, Directionality, Focus, HandleInfo,
-    HandleSide, SelectionArea, SelectionHandles, SizedBox, Text, WidgetsApp,
+    HandleSide, SelectionArea, SelectionChangeCause, SelectionController, SelectionHandles,
+    SelectionInput, SizedBox, Text, WidgetsApp,
 };
 
 use crate::common::{LaidOut, lay_out, tight};
@@ -69,10 +71,13 @@ impl Scene {
     fn area(heard: &Heard, handles: Option<Marked>) -> SelectionArea {
         let recorded = Rc::clone(heard);
         let area = SelectionArea::new(Column::new((Text::new(WORDS),))).on_selection_changed(
-            move |_cx, selected| {
-                recorded
-                    .borrow_mut()
-                    .push(selected.map(|selected| selected.text.clone()));
+            move |_cx, change| {
+                recorded.borrow_mut().push(
+                    change
+                        .selected
+                        .as_ref()
+                        .map(|selected| selected.text.clone()),
+                );
             },
         );
         match handles {
@@ -327,6 +332,45 @@ pub(crate) fn a_tap_esc_or_the_mouse_hides_the_handles() {
     assert_eq!(scene.handles(), 0, "a mouse selection");
 }
 
+/// A long press is reported as touch; a controller's selection is under no
+/// finger, so it hides the handles.
+pub(crate) fn a_controller_selection_hides_the_handles() {
+    let controller = SelectionController::new();
+    let heard: Heard = Rc::default();
+    let causes = Rc::new(RefCell::new(Vec::new()));
+    let (recorded, noted) = (Rc::clone(&heard), Rc::clone(&causes));
+    let area = SelectionArea::new(Column::new((Text::new(WORDS),)))
+        .controller(controller.clone())
+        .on_selection_changed(move |_cx, change| {
+            recorded.borrow_mut().push(
+                change
+                    .selected
+                    .as_ref()
+                    .map(|selected| selected.text.clone()),
+            );
+            noted.borrow_mut().push(change.cause);
+        });
+    let mut scene = Scene::laid_out(WidgetsApp::new(area), heard);
+    scene.long_press(scene.along(width_of("alpha be")));
+    assert_eq!(scene.handles(), 2);
+    assert_eq!(
+        causes.borrow().last(),
+        Some(&SelectionChangeCause::User(SelectionInput::Touch))
+    );
+    let text = controller.texts()[0].clone();
+    controller
+        .select(DocumentSelection::new(
+            DocumentPosition::new(text.clone(), 0),
+            DocumentPosition::new(text, 5),
+        ))
+        .expect("a range of the text");
+    scene.settle();
+    assert_eq!(
+        (scene.selected().as_deref(), scene.handles()),
+        (Some("alpha"), 0)
+    );
+}
+
 /// The handles are the area's own, else the nearest default's, else dots;
 /// without an overlay there are none, and the long press still selects.
 ///
@@ -373,10 +417,13 @@ pub(crate) fn a_panicking_listener_still_shows_the_handles() {
     let heard: Heard = Rc::default();
     let recorded = Rc::clone(&heard);
     let area = SelectionArea::new(Column::new((Text::new(WORDS),)))
-        .on_selection_changed(move |_cx, selected| {
-            recorded
-                .borrow_mut()
-                .push(selected.map(|selected| selected.text.clone()));
+        .on_selection_changed(move |_cx, change| {
+            recorded.borrow_mut().push(
+                change
+                    .selected
+                    .as_ref()
+                    .map(|selected| selected.text.clone()),
+            );
             assert!(recorded.borrow().is_empty(), "the listener fails");
         })
         .handles(Marked::default());
@@ -425,10 +472,13 @@ pub(crate) fn an_end_at_a_text_edge_drags_from_where_its_handle_is() {
     let heard: Heard = Rc::default();
     let recorded = Rc::clone(&heard);
     let area = SelectionArea::new(Column::new((Text::new(WORDS), Text::new(NEXT))))
-        .on_selection_changed(move |_cx, selected| {
-            recorded
-                .borrow_mut()
-                .push(selected.map(|selected| selected.text.clone()));
+        .on_selection_changed(move |_cx, change| {
+            recorded.borrow_mut().push(
+                change
+                    .selected
+                    .as_ref()
+                    .map(|selected| selected.text.clone()),
+            );
         })
         .handles(Marked::default());
     let mut scene = Scene::laid_out(WidgetsApp::new(area), heard);
@@ -668,10 +718,13 @@ pub(crate) fn an_end_inside_a_new_cluster_sits_where_the_highlight_ends() {
     let area = |text: &'static str, heard: &Heard| {
         let recorded = Rc::clone(heard);
         SelectionArea::new(Column::new((Text::new(text),)))
-            .on_selection_changed(move |_cx, selected| {
-                recorded
-                    .borrow_mut()
-                    .push(selected.map(|selected| selected.text.clone()));
+            .on_selection_changed(move |_cx, change| {
+                recorded.borrow_mut().push(
+                    change
+                        .selected
+                        .as_ref()
+                        .map(|selected| selected.text.clone()),
+                );
             })
             .handles(Marked::default())
     };
@@ -814,10 +867,13 @@ pub(crate) fn a_listener_taking_the_focus_away_leaves_no_handles() {
     let elsewhere = FocusNode::with_debug_label("elsewhere");
     let (recorded, moved) = (Rc::clone(&heard), Rc::clone(&elsewhere));
     let area = SelectionArea::new(Column::new((Text::new(WORDS),)))
-        .on_selection_changed(move |_cx, selected| {
-            recorded
-                .borrow_mut()
-                .push(selected.map(|selected| selected.text.clone()));
+        .on_selection_changed(move |_cx, change| {
+            recorded.borrow_mut().push(
+                change
+                    .selected
+                    .as_ref()
+                    .map(|selected| selected.text.clone()),
+            );
             let _ = moved.request_focus();
         })
         .handles(Marked::default());
