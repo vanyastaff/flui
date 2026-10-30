@@ -232,6 +232,10 @@ fn runner_teardown() {
                 a_refused_session_end_is_released_by_an_explicit_close,
             ),
             (
+                "a_window_closed_during_the_query_does_not_hold_the_session",
+                a_window_closed_during_the_query_does_not_hold_the_session,
+            ),
+            (
                 "a_session_end_handler_panic_with_a_panicking_payload_refuses",
                 a_session_end_handler_panic_with_a_panicking_payload_refuses,
             ),
@@ -1198,5 +1202,63 @@ pub(crate) fn a_session_end_handler_panic_with_a_panicking_payload_refuses() {
         "the panicking handler refused the session end"
     );
     run.end_session(SessionEndPhase::Cancelled);
+    run.join().expect("the run returns Ok");
+}
+
+/// A window that refused the session end and that a later window's handler
+/// closes while the query still asks holds nothing: its refusal is recorded
+/// before the next window is asked, so the close releases it and the query
+/// proceeds (ADR-0260 §1).
+///
+/// Red-check: record the refusals only after every window was asked — the
+/// closed window's refusal is installed afterwards and the query blocks.
+pub(crate) fn a_window_closed_during_the_query_does_not_hold_the_session() {
+    let refused = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let seen = std::sync::Arc::clone(&refused);
+    let handler = flui_app::app::CloseRequestHandler::new(move |request| {
+        let mut first = seen.lock().expect("unpoisoned");
+        match *first {
+            // The first window asked waits for its save.
+            None => {
+                *first = Some(request.address());
+                flui_app::app::CloseResponse::KeepOpen
+            }
+            // The next one finishes that save and closes the first window.
+            Some(address) => {
+                drop(first);
+                flui_app::request_presentation_close(address).expect("the first window closes");
+                flui_app::app::CloseResponse::Close
+            }
+        }
+    });
+    let config = || {
+        AppConfig::new()
+            .with_close_request_handler(handler.clone())
+            .with_exit_policy(ExitPolicy::OnLastWindowClosed)
+    };
+    let second = config();
+    let application = Application::new(|_| flui_widgets::SizedBox::square(10.0))
+        .with_config(config())
+        .on_ready(move |_| {
+            drop(
+                flui_app::open_window(
+                    second,
+                    WindowPolicy::Isolated,
+                    flui_widgets::SizedBox::square(10.0),
+                )
+                .expect("an isolated window opens on the headless platform"),
+            );
+        });
+    let run = HeadlessRun::start(application);
+    run.run_owner_turn();
+    assert_eq!(run.open_windows().len(), 2, "both windows are open");
+
+    assert_eq!(
+        run.end_session(SessionEndPhase::Query),
+        SessionEndAnswer::Proceed,
+        "the only refusing window closed"
+    );
+    run.end_session(SessionEndPhase::Cancelled);
+    run.run_owner_turn();
     run.join().expect("the run returns Ok");
 }

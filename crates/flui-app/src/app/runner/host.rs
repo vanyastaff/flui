@@ -378,18 +378,18 @@ fn answer_session_end(phase: flui_platform::SessionEndPhase) -> flui_platform::S
                 // carried its close out, and every subscriber let go.
                 let _ = session_end_platform(flui_native::OwnerPlatform::release_session_end);
             });
-            let refusals = refuse_session_end(&request);
             let displaced = APP_RUNTIME.with(|slot| {
                 slot.try_borrow_mut().ok().map(|mut state| {
                     let request = state.session_end.replace(request.clone());
                     if let Some(displaced) = state.session_end_current.replace(current) {
                         displaced.set(false);
                     }
-                    let refusals = std::mem::replace(&mut state.session_end_refusals, refusals);
+                    let refusals = std::mem::take(&mut state.session_end_refusals);
                     (request, refusals)
                 })
             });
             drop(displaced);
+            refuse_session_end(&request);
             // A subscriber that panics still gets the platform its answer, and
             // the book still closes: the panic is contained here, a native
             // callback boundary, and reported. A panicking subscriber holds
@@ -586,29 +586,43 @@ fn askable_presentations() -> Option<(
 /// recorded as a `PendingClose(SessionEnd)`. Where the platform does not
 /// hold a session end for a block, nothing can be refused and nobody is
 /// asked.
-fn refuse_session_end(
-    request: &flui_platform::SessionEndRequest,
-) -> crate::app::runtime::SessionEndRefusals {
+///
+/// Each refusal is published before the next window is asked: a later
+/// handler that finishes the work and closes a window that already refused
+/// releases it through that close.
+fn refuse_session_end(request: &flui_platform::SessionEndRequest) {
     if session_end_platform(flui_native::OwnerPlatform::session_end_support)
         != Some(flui_platform::SessionEndSupport::Hold)
     {
-        return Vec::new();
+        return;
     }
     let Some((router, addresses)) = askable_presentations() else {
-        return Vec::new();
+        return;
     };
-    let mut refusals = Vec::new();
     for address in addresses {
         if router.consult_session_end(address) != crate::app::close_request::CloseResponse::KeepOpen
         {
             continue;
         }
-        match request.block("a window waits for the user's decision") {
-            Ok(block) => refusals.push((address, block)),
-            Err(error) => tracing::warn!(?address, %error, "a window's refusal holds no block"),
+        let block = match request.block("a window waits for the user's decision") {
+            Ok(block) => block,
+            Err(error) => {
+                tracing::warn!(?address, %error, "a window's refusal holds no block");
+                continue;
+            }
+        };
+        let unpublished = APP_RUNTIME.with(|slot| match slot.try_borrow_mut() {
+            Ok(mut state) => {
+                state.session_end_refusals.push((address, block));
+                None
+            }
+            Err(_) => Some(block),
+        });
+        if let Some(block) = unpublished {
+            tracing::warn!(?address, "a window's refusal could not be recorded");
+            drop(block);
         }
     }
-    refusals
 }
 
 /// Withdraw the session-end closes a cancelled session end recorded, leaving

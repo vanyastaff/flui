@@ -102,6 +102,7 @@ graph LR
   `a_repeated_session_end_query_does_not_release_the_session`,
   `a_slow_observer_stops_the_session_end_delivery`,
   `a_refused_session_end_is_released_by_an_explicit_close`,
+  `a_window_closed_during_the_query_does_not_hold_the_session`,
   `a_session_end_handler_panic_with_a_panicking_payload_refuses`,
   `a_cancelled_logoff_withdraws_only_the_session_entry`,
   `a_session_end_with_a_checked_out_runtime_calls_no_user_code`,
