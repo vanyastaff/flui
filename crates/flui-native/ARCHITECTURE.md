@@ -198,7 +198,8 @@ trait depends on `flui-platform` instead.
   that hears the system's broadcasts (`broadcast`); `owner::apple` is
   `NSApplication`'s loop with the owner lane and the wake pump (`macos`) and
   `UIApplicationMain` with its delegates and scenes (`ios`); `owner::android`
-  the looper over `android-activity`, the JNI `FluiView` and the NDK lookup;
+  the looper over `android-activity`, whose frames the choreographer paces
+  (`frame_clock`, ADR-0269), the JNI `FluiView` and the NDK lookup;
   `owner::web` the `requestAnimationFrame` loop; `owner::linux::x11` the X11
   host's loop over its libxcb connection and an eventfd doorbell;
   `owner::winit` winit's `ApplicationHandler`; `owner::headless` the test

@@ -358,6 +358,13 @@ worker_package = "my_app-logic"
 worker_lib = "my_app_logic"
 logic_watch = "logic/src"
 types_watch = "types/src"
+
+# Optional: the lowest release the app runs on, above FLUI's floor.
+[platforms.ios]
+min = "15.0"
+
+[platforms.android]
+min = 26
 ```
 
 `[app].id` is the application's one identifier; `flui create` makes it from
@@ -368,8 +375,16 @@ it is the Android package as written, the Apple bundle identifier with `_` as
 `[env] FLUI_APP_ID`, so every cargo invocation builds the application with it,
 and `flui build` and `flui run` rewrite that one key when `flui.toml` changes,
 leaving the rest of the file alone. A `flui.toml` that still names
-`organization` is refused with the `id` line to write instead. Unknown keys are
-ignored. There is no global configuration file
+`organization` is refused with the `id` line to write instead.
+
+`[platforms.<environment>] min` raises FLUI's floor ([version map](../../docs/version-map.md))
+for `windows` (a build number), `macos` and `ios` (a release in quotes) and
+`android` (an API level); a value below FLUI's, or any `min` for `web` or
+`linux`, fails the build. `flui build` writes the higher of the two into the
+APK, the `Info.plist` and the deployment target rustc links with, and the app
+refuses to start below it. A plain `cargo build` uses FLUI's floor alone.
+
+Unknown keys are ignored. There is no global configuration file
 and no telemetry setting, because the CLI stores nothing about you and sends
 nothing anywhere.
 

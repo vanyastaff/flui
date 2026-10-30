@@ -23,6 +23,9 @@ pub(crate) struct BuilderContext {
     /// application — the bundle a double-clickable, foreground-activatable app
     /// needs, and which a bare Mach-O cannot substitute for.
     pub(crate) bundle: Option<AppBundle>,
+    /// The floors the build packages and links with (ADR-0244 §10): FLUI's,
+    /// raised where `flui.toml` asks.
+    pub(crate) floors: crate::build::app_floor::AppFloors,
 }
 
 /// Identity an application bundle is staged under.

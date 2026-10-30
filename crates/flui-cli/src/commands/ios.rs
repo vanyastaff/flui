@@ -200,7 +200,9 @@ pub(super) fn run(udid: &str, release: bool, profile: Option<&str>) -> CliResult
     let simulator = resolve_simulator(udid)?;
     let root = std::env::current_dir()?;
     let bundle = configured_bundle(&root)?;
+    let floors = crate::config::project_floors(&root)?;
     let mut context = BuilderContextBuilder::new(root)
+        .with_floors(floors)
         .with_platform(Platform::Ios {
             targets: vec![simulator.triple.clone()],
         })

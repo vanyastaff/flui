@@ -295,7 +295,7 @@ fn run(target: BuildTarget, options: BuildOptions, output: Option<PathBuf>) -> C
 /// Resolve application-bundle metadata for a macOS build, from `flui.toml`.
 ///
 /// A `.app` needs a display name and a bundle identifier; `flui.toml`'s
-/// `[app].name`/`[app].organization` are exactly those. When the file is absent
+/// `[app].name`/`[app].id` are exactly those. When the file is absent
 /// (e.g. building an in-repo example), the directory name stands in — a bundle
 /// still gets staged, with a derived identifier, rather than the build silently
 /// degrading to a bare binary.
@@ -348,10 +348,13 @@ fn build_android(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
         Profile::Debug
     };
 
+    // Before SDK discovery: a refused `flui.toml` needs no SDK to report.
+    let floors = crate::config::project_floors(&workspace_root)?;
     let android_builder =
         AndroidBuilder::new(&workspace_root).context("failed to initialize Android builder")?;
 
     let mut builder = BuilderContextBuilder::new(workspace_root)
+        .with_floors(floors)
         .with_platform(Platform::Android {
             targets: vec!["arm64-v8a".to_string()],
         })
@@ -425,7 +428,9 @@ fn build_ios(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<
     let ios_builder = IosBuilder::new();
 
     let bundle = super::ios::configured_bundle(&workspace_root)?;
+    let floors = crate::config::project_floors(&workspace_root)?;
     let mut builder = BuilderContextBuilder::new(workspace_root)
+        .with_floors(floors)
         .with_platform(Platform::Ios { targets })
         .with_target(options.cargo_target())
         .with_profile(profile);
@@ -488,7 +493,9 @@ fn build_web(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<
 
     let web_builder = WebBuilder::new(&workspace_root);
 
+    let floors = crate::config::project_floors(&workspace_root)?;
     let mut builder = BuilderContextBuilder::new(workspace_root)
+        .with_floors(floors)
         .with_platform(Platform::Web {
             target: "web".to_string(),
         })
@@ -541,7 +548,9 @@ fn build_desktop(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
 
     let desktop_builder = DesktopBuilder::new();
 
+    let floors = crate::config::project_floors(&workspace_root)?;
     let mut builder = BuilderContextBuilder::new(workspace_root.clone())
+        .with_floors(floors)
         .with_platform(Platform::Desktop { target: None })
         .with_target(options.cargo_target())
         .with_profile(profile);
@@ -618,7 +627,9 @@ fn build_specific_platform(
 
     let desktop_builder = DesktopBuilder::new();
 
+    let floors = crate::config::project_floors(&workspace_root)?;
     let mut builder = BuilderContextBuilder::new(workspace_root.clone())
+        .with_floors(floors)
         .with_platform(Platform::Desktop {
             target: Some(target_triple.to_string()),
         })
@@ -706,7 +717,9 @@ fn build_macos_universal(
         Profile::Debug
     };
 
+    let floors = crate::config::project_floors(&workspace_root)?;
     let mut builder = BuilderContextBuilder::new(workspace_root.clone())
+        .with_floors(floors)
         .with_platform(Platform::Desktop {
             target: Some(SLICES[0].to_string()),
         })
@@ -733,7 +746,9 @@ fn build_macos_universal(
         );
 
         let builder_inst = DesktopBuilder::new();
+        let floors = crate::config::project_floors(&workspace_root)?;
         let slice_ctx = BuilderContextBuilder::new(workspace_root.clone())
+            .with_floors(floors)
             .with_platform(Platform::Desktop {
                 target: Some(triple.to_string()),
             })

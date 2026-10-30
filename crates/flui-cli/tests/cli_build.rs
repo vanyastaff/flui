@@ -338,3 +338,54 @@ fn build_brings_the_cargo_env_in_line_with_the_app_identifier() {
         "a file already in line is not rewritten"
     );
 }
+
+/// A `[platforms]` table FLUI cannot honour fails the build before anything
+/// is compiled or an SDK is looked for, naming the table and, below the floor,
+/// both values (ADR-0244 §10).
+#[test]
+fn a_platform_min_flui_cannot_honour_is_refused_before_building() {
+    let cases = [
+        (
+            "android",
+            "[platforms.android]\nmin = 21\n",
+            "[platforms.android] min = 21 is below FLUI's floor for android, 23",
+        ),
+        (
+            "desktop",
+            "[platforms.ios]\nmin = \"12.0\"\n",
+            "[platforms.ios] min = \"12.0\" is below FLUI's floor for ios, 13.0",
+        ),
+        (
+            "desktop",
+            "[platforms.web]\nmin = 1\n",
+            "[platforms.web] takes no `min`",
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (platform, table, expected) in cases {
+        let project = TempDir::new().expect("project dir");
+        std::fs::write(
+            project.path().join("flui.toml"),
+            format!(
+                "[app]\nname = \"floor_app\"\nversion = \"0.1.0\"\nid = \
+                 \"com.example.floor_app\"\n\n{table}"
+            ),
+        )
+        .expect("write flui.toml");
+        std::fs::write(
+            project.path().join("Cargo.toml"),
+            "[package]\nname = \"floor_app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .expect("write Cargo.toml");
+        let output = flui()
+            .current_dir(project.path())
+            .args(["build", platform])
+            .output()
+            .expect("run flui build");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if output.status.success() || !stderr.contains(expected) {
+            failures.push(format!("{platform} with {table:?}: {stderr}"));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}

@@ -35,7 +35,7 @@ request.
 | 19 | [No native views inside the UI (web view, map, video)](#19-no-native-views-inside-the-ui-web-view-map-video) | all | Apps that embed a map, browser or player |
 | 20 | [Window looks](#20-window-looks) | desktop; mobile for capture | Apps with a native look; apps showing sensitive data |
 | 21 | [Unaudited rows](#21-unaudited-rows) | desktop, Web | Unknown |
-| 22 | [Version floors not packaged, and the GPU fallback not run on devices](#22-version-floors-not-packaged-and-the-gpu-fallback-not-run-on-devices) | all | Users on older systems or GPUs without Vulkan or WebGPU |
+| 22 | [Version floors and the GPU fallback not run on devices](#22-version-floors-and-the-gpu-fallback-not-run-on-devices) | all | Users on older systems or GPUs without Vulkan or WebGPU |
 | 23 | [No presentation feedback](#23-no-presentation-feedback) | iOS, Android, winit | Every animated app; every latency claim |
 | 24 | [No HDR, wide gamut or colour management](#24-no-hdr-wide-gamut-or-colour-management) | all | Photo, video and design apps; every app on an HDR display |
 | 25 | [Sandbox-aware file access is absent](#25-sandbox-aware-file-access-is-absent) | all desktop and mobile | Every app distributed through a store or Flatpak |
@@ -283,13 +283,13 @@ request.
 
 - App identity and packaging, live resize.
 
-### 22. Version floors not packaged, and the GPU fallback not run on devices
+### 22. Version floors and the GPU fallback not run on devices
 
 > **Environments:** all · **Who it hurts:** Users on older systems or GPUs without Vulkan or WebGPU, who get a failure in the middle of start instead of a clear refusal · **Parity:** [App lifecycle](platform-parity.md#app-lifecycle)
 
-- The floors are declared in `platform-support.toml` ([version map](version-map.md)) and the backends refuse a release below them at start, but only the Android `minSdk` is packaged from it.
+- The floors are declared in `platform-support.toml` ([version map](version-map.md)), the backends refuse a release below them at start, and `flui build` packages them, raised by an application's `[platforms.<environment>] min`: the APK's `minSdk` and the NDK level, the iOS and macOS deployment targets with `MinimumOSVersion` and `LSMinimumSystemVersion`. No bundle has run on its floor.
 - Android packages API 23; below API 24, or on a device without a working Vulkan driver, the renderer falls back to GLES 3.0, which no device has run yet.
-- iOS and macOS bundles inherit whatever deployment target the build had.
+- The CLI writes no Windows application manifest (`supportedOS`), and an iOS app built through a hand-made Xcode project takes its deployment target from that project; only the start-up refusal holds the floor there.
 - Windows links a 1607 API unconditionally; the Linux release glibc is the runner's.
 - The GPU fallback (Vulkan to GLES 3.0, WebGPU to WebGL2, Direct3D 12 to WARP) is compiled and the engine's pixel suites pass on llvmpipe GL; only Linux has run it, and no browser has run WebGL2 or Windows WARP.
 
@@ -300,7 +300,7 @@ request.
 - Windows (DXGI frame statistics, run) and the native Wayland host (`wp_presentation_time`, run under Weston 13) report when each frame reached the screen, on the event timeline; the frame clock keeps the report and bounds idle work by the next refresh. Headless injects one.
 - macOS reports (run): the AppKit view is backed by its own `CAMetalLayer`, which wgpu draws into and whose `nextDrawable` adds `addPresentedHandler:` to each drawable; the display pass moved from `drawRect:` to `updateLayer`. On an M1, macOS 27.0, 100 Hz (2026-10-28): 29 reports for 30 presses of `counter`, the shown times a multiple of 9.999 ms apart, the handler 0.34–0.49 ms after the showing; the conformance row saw a report 13 ms before the next request. During a live resize Metal reports most drawables never shown (80 of 102); whether the window shows fewer frames there than with wgpu's own layer is not measured, and no one has looked at a resize by eye.
 - iOS reports nothing (`NotYetOnThisHost`): a UIKit view whose layer class is a `CAMetalLayer` (FLUI's or the plain class) showed nothing on the iOS Simulator (iOS 27.1), while the same app with wgpu's sublayer draws; the simulator's drawables have no `addPresentedHandler:` either. A device run decides whether the layer class works there.
-- Android reports nothing (`NotYetOnThisHost`): the time a frame was shown belongs to the Vulkan swap chain wgpu presents through, and wgpu reads none. Two paths: wgpu reading `VK_GOOGLE_display_timing` (`vkGetPastPresentationTimingGOOGLE`) and handing it to the presenter as DXGI's statistics are handed over, which reports presentation; or `AChoreographer_postVsyncCallback` (API 33), whose frame timelines name when a frame is due on screen (`expectedPresentationTimeNanos`) and so fill only `FrameRequest::target_present`, never a report, and need the loop to dispatch frames from the callback.
+- Android reports nothing (`NotYetOnThisHost`): the time a frame was shown belongs to the Vulkan swap chain wgpu presents through, and wgpu reads none. The path left is wgpu reading `VK_GOOGLE_display_timing` (`vkGetPastPresentationTimingGOOGLE`) and handing it to the presenter as DXGI's statistics are handed over. The loop now runs its frames on the choreographer's callback (ADR-0269), and on API 33 its preferred frame timeline's `expectedPresentationTimeNanos` fills `FrameRequest::target_present`; that names when a frame is due on screen, never a report that it was shown. Type-checked only, not yet run on a device.
 - winit, the Wayland and X11 columns' host until the native ones replace it, reports nothing. The Web (a `requestAnimationFrame` timestamp is a frame's start) and X11 (the Present extension reports a completion to the GPU driver's connection) have no presentation time a toolkit can read, and their windows say so.
 - Animations still tick on the vsync instant, never the presentation time (ADR-0257 decision 2); nothing yet attributes a presentation to the produced frame it showed, so the frame telemetry's input-to-present histogram still ends at the submit.
 
@@ -524,5 +524,6 @@ request.
 | 2026-10-30 | minor | Entry 34: the iOS display link and the Web frame loop stand still while no frame is asked for |
 | 2026-10-30 | minor | Entry 34: iOS holds the high refresh rate only while a presentation is active; its display link still ticks on a still screen |
 | 2026-10-30 | minor | Entry 22 narrows: the backends refuse a release below the floor, and the GPU falls back to GLES 3.0, WebGL2 or WARP (run on llvmpipe GL only); packaging the floor everywhere remains |
+| 2026-10-30 | minor | Entry 22 narrows: `flui build` packages the floors and an application may raise them in `flui.toml`; the Windows manifest and runs on each floor remain |
 
 </details>

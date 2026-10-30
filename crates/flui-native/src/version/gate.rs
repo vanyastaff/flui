@@ -28,20 +28,33 @@ pub(crate) trait OsVersion: Copy + std::fmt::Display {
     const FLOOR_RELEASE: Self;
     /// The floor's position in [`ordinal`](Self::ordinal)'s order.
     const FLOOR: u64;
+    /// The application's own floor, when `flui build` raised FLUI's from `flui.toml`
+    /// (ADR-0244 §10); a refusal compares against the higher of the two.
+    const APP_FLOOR: Option<Self>;
 
     /// The version's position in an order every version of this type agrees with; `None` when
     /// the version could not be read.
     fn ordinal(self) -> Option<u64>;
 }
 
-/// [`PlatformError::UnsupportedOs`] when `version` is below its floor (ADR-0244 §3). A version
-/// that could not be read is not below it: the platform starts, and no gate opens.
+/// [`PlatformError::UnsupportedOs`] when `version` is below its floor (ADR-0244 §3): FLUI's, or
+/// the application's when it is higher (§10). A version that could not be read is not below
+/// it: the platform starts, and no gate opens.
 pub(crate) fn refuse_below_floor<V: OsVersion>(version: V) -> Result<(), PlatformError> {
+    refuse_below(version, V::APP_FLOOR)
+}
+
+/// [`refuse_below_floor`] with the application's floor `app` given.
+fn refuse_below<V: OsVersion>(version: V, app: Option<V>) -> Result<(), PlatformError> {
+    let (floor, shown) = match app.and_then(|app| Some((app.ordinal()?, app))) {
+        Some((ordinal, app)) if ordinal > V::FLOOR => (ordinal, app),
+        _ => (V::FLOOR, V::FLOOR_RELEASE),
+    };
     match version.ordinal() {
-        Some(ordinal) if ordinal < V::FLOOR => Err(PlatformError::UnsupportedOs {
+        Some(ordinal) if ordinal < floor => Err(PlatformError::UnsupportedOs {
             environment: V::ENVIRONMENT,
             found: OsRelease::from_display(version),
-            floor: OsRelease::from_display(V::FLOOR_RELEASE),
+            floor: OsRelease::from_display(shown),
         }),
         Some(_) | None => Ok(()),
     }
@@ -110,6 +123,10 @@ pub(crate) mod windows {
         const ENVIRONMENT: Environment = Environment::Windows;
         const FLOOR_RELEASE: Self = Self(WINDOWS_BUILD);
         const FLOOR: u64 = WINDOWS_BUILD as u64;
+        const APP_FLOOR: Option<Self> = match crate::version::app_floor::WINDOWS {
+            Some(build) => Some(Self(build)),
+            None => None,
+        };
 
         fn ordinal(self) -> Option<u64> {
             (self != Self::UNKNOWN).then_some(u64::from(self.0))
@@ -264,6 +281,10 @@ pub(crate) mod apple {
         const ENVIRONMENT: Environment = Environment::iOS;
         const FLOOR_RELEASE: Self = AppleVersion::new(IOS_FLOOR.0, IOS_FLOOR.1, IOS_FLOOR.2);
         const FLOOR: u64 = Self::FLOOR_RELEASE.rank();
+        const APP_FLOOR: Option<Self> = match crate::version::app_floor::IOS {
+            Some((major, minor, patch)) => Some(AppleVersion::new(major, minor, patch)),
+            None => None,
+        };
 
         fn ordinal(self) -> Option<u64> {
             (self != Self::UNKNOWN).then(|| self.rank())
@@ -310,6 +331,10 @@ pub(crate) mod apple {
         const ENVIRONMENT: Environment = Environment::MacOS;
         const FLOOR_RELEASE: Self = MacOSVersion::new(MACOS_FLOOR.0, MACOS_FLOOR.1, MACOS_FLOOR.2);
         const FLOOR: u64 = Self::FLOOR_RELEASE.rank();
+        const APP_FLOOR: Option<Self> = match crate::version::app_floor::MACOS {
+            Some((major, minor, patch)) => Some(MacOSVersion::new(major, minor, patch)),
+            None => None,
+        };
 
         fn ordinal(self) -> Option<u64> {
             (self.0 != AppleVersion::UNKNOWN).then(|| self.rank())
@@ -413,6 +438,10 @@ pub(crate) mod android {
         const ENVIRONMENT: Environment = Environment::Android;
         const FLOOR_RELEASE: Self = Self(ANDROID_API);
         const FLOOR: u64 = ANDROID_API as u64;
+        const APP_FLOOR: Option<Self> = match crate::version::app_floor::ANDROID {
+            Some(level) => Some(Self(level)),
+            None => None,
+        };
 
         fn ordinal(self) -> Option<u64> {
             (self != Self::UNKNOWN).then_some(u64::from(self.0))
@@ -851,6 +880,36 @@ mod tests {
             "API 22",
             "API 23",
         ));
+        // The application's floor (§10): the higher of the two refuses and is the one shown;
+        // an application floor below FLUI's changes nothing.
+        let api = AndroidApi::from_level;
+        for (found, app, refused_at) in [
+            (24, Some(26), Some("API 26")),
+            (26, Some(26), None),
+            (22, Some(21), Some("API 23")),
+            (23, Some(21), None),
+            (24, None, None),
+        ] {
+            let outcome = super::refuse_below(api(found), app.map(api));
+            let matches = match (&outcome, refused_at) {
+                (Ok(()), None) => true,
+                (
+                    Err(PlatformError::UnsupportedOs {
+                        found: reported,
+                        floor,
+                        ..
+                    }),
+                    Some(at),
+                ) => {
+                    *reported == OsRelease::from_display(api(found))
+                        && *floor == OsRelease::from_display(at)
+                }
+                _ => false,
+            };
+            if !matches {
+                failures.push(format!("API {found} with app floor {app:?}: {outcome:?}"));
+            }
+        }
         assert!(failures.is_empty(), "{failures:#?}");
     }
 }

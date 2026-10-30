@@ -91,7 +91,7 @@ impl WebBuilder {
         }
         args.extend(target.cargo_args());
         crate::ui::debug(format!("building {} for {WASM_TARGET}", target.metadata()));
-        let wasm = cargo::build_artifact(dir, &args, &target).await?;
+        let wasm = cargo::build_artifact(dir, &args, &target, &[]).await?;
         Ok(BuildArtifacts {
             rust_libs: vec![wasm],
             executable: None,

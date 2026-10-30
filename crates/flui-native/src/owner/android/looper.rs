@@ -20,7 +20,7 @@
 //!     -> Resume/Pause/Stop/LowMemory -> memory pressure from the trim level (JNI)
 //!     -> MainEvent::Stop/SaveState   -> session end notice (once per start-to-stop cycle)
 //!     -> MainEvent::Destroy          -> break loop
-//!     -> each tick                   -> dispatch_request_frame()
+//!     -> the choreographer's frame  -> dispatch_frame() (ADR-0269)
 //!   -> loop exit                     -> window released, callbacks cleared, quit hook
 //! ```
 //!
@@ -79,7 +79,9 @@ use crate::{
     owner::android::activity_callbacks::ActivityEvent,
     owner::android::activity_callbacks::ActivityTarget,
     owner::android::activity_callbacks::Reaction,
-    owner::android::ndk::SymbolSource,
+    owner::android::frame_clock::{FrameClock, FrameStamp},
+    owner::android::ndk::{FrameCallbacks, SymbolSource},
+    owner::android::poll::DueDeadline,
     owner::android::poll::LoopTurn,
     owner::android::poll::poll_timeout,
     owner::app_delivery::AppDelivery,
@@ -251,6 +253,9 @@ pub struct AndroidLoop {
     /// The displays, as the table made them; shared with the window.
     pub(crate) displays: Arc<dyn HostDisplays>,
     pub(crate) api: AndroidApi,
+    /// The NDK the level was read from, where the choreographer's frame
+    /// callback is looked up.
+    library: Arc<dyn SymbolSource>,
     /// The identities of the windows it opens.
     pub(crate) window_ids: ActivityWindowIds,
 }
@@ -317,8 +322,9 @@ impl AndroidLoop {
             input: H::input(),
             owner_signal,
             preferences,
-            displays: H::displays(api, library, owner),
+            displays: H::displays(api, Arc::clone(&library), owner),
             api,
+            library,
             window_ids: ActivityWindowIds::default(),
         }
     }
@@ -603,9 +609,21 @@ impl host::Loop for AndroidLoop {
         // When preferences, scroll factors and insets are read next; `None`
         // waits for a change to be reported.
         let mut next_preference_sample = Some(web_time::Instant::now());
+        let mut due_deadline = DueDeadline::default();
         // The choreographer is the loop thread's own: register here, take down
         // at the loop's exit.
         let refresh_rate = self.displays.observe();
+        // The choreographer paces the frames where the system can post a
+        // callback for its next one; elsewhere a frame runs on the turn that
+        // has one (ADR-0269).
+        let frame_clock = FrameCallbacks::resolve(&self.library, self.api)
+            .and_then(|callbacks| FrameClock::start(callbacks, self.app.create_waker()));
+        if frame_clock.is_none() {
+            tracing::debug!(
+                api = %self.api,
+                "Android: no choreographer frame callback; frames are not paced by vsync"
+            );
+        }
 
         let mut handler = Some(handler);
         // No owner lane on this backend: every `OwnerPlatform::open_window`
@@ -672,9 +690,12 @@ impl host::Loop for AndroidLoop {
             // The handler re-enters `flui-app`, so it is asked through the
             // call point with no lock held (ADR-0038 §5).
             let wake_deadline = self.app_delivery.wake_deadline().or_resume(None);
-            let deadline_due = is_deadline_due(wake_deadline, web_time::Instant::now());
-            if deadline_due {
+            let now = web_time::Instant::now();
+            let deadline_due = is_deadline_due(wake_deadline, now);
+            if due_deadline.offer(wake_deadline, now) {
                 // Owner services remain deliverable while execution gates frames.
+                // Once per deadline: the wake also wakes the looper, and a
+                // deadline only a frame clears stays behind until one runs.
                 let _ = self.owner_signal.wake();
                 if self.owner_signal.drive() {
                     self.running.store(false, Ordering::Relaxed);
@@ -697,9 +718,19 @@ impl host::Loop for AndroidLoop {
             let mut should_call_ready = false;
             let ((), redraw_after_poll) =
                 RedrawPoll::new(deadline_due, redraw_requested).poll(resumed, |should_render| {
+                    // Where the choreographer paces the frames, the frame waits
+                    // for its next one, whose callback wakes the poll.
+                    let awaiting_vsync = match frame_clock.as_ref() {
+                        Some(clock) if should_render => {
+                            clock.arm();
+                            true
+                        }
+                        _ => false,
+                    };
                     let timeout = poll_timeout(
                         LoopTurn {
-                            should_render,
+                            should_render: should_render && !awaiting_vsync,
+                            awaiting_vsync,
                             resumed,
                             wake_deadline,
                             next_preference_sample: self.next_sample(next_preference_sample),
@@ -961,12 +992,20 @@ impl host::Loop for AndroidLoop {
             // Resume rather than stranding an acknowledged continuation. The
             // window is cloned out of its lock: the frame runs embedder code
             // that may call back into the platform.
+            // Where the choreographer paces the frames, only the turn whose
+            // poll ran its callback delivers one, stamped with its vsync; a
+            // tick this turn cannot deliver is dropped (ADR-0269).
             let window = self.window.lock().clone();
+            let stamp = match frame_clock.as_ref() {
+                Some(clock) => clock.take(),
+                None => Some(FrameStamp::Now),
+            };
             if let Some(ref w) = window
+                && let Some(stamp) = stamp
                 && redraw_after_poll
                     .take_if_deliverable(resumed, || w.take_deliverable_redraw_request())
             {
-                w.delivery().dispatch_request_frame();
+                w.delivery().dispatch_frame(stamp.request());
             }
         }
 
