@@ -172,4 +172,45 @@ mod tests {
             "a display that reports nothing returns to the default"
         );
     }
+
+    /// A display change whose redraw wake fails leaves the previous value, so
+    /// the host's next delivery of the same value applies it again.
+    #[test]
+    fn a_failed_wake_keeps_the_display_owed() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let fail = Arc::new(AtomicBool::new(false));
+        let failing = Arc::clone(&fail);
+        let runtime = crate::ui_runtime::tests::new_runtime(Arc::new(move || {
+            assert!(!failing.load(Ordering::SeqCst), "injected wake failure");
+        }))
+        .expect("runtime");
+        let id = runtime.presentation_id();
+        let display = WindowDisplay::new(
+            DisplayRegistry::new()
+                .mint(&DisplayKey::Injected(1))
+                .expect("id"),
+            Some(RefreshPeriod::try_from(Duration::from_millis(8)).expect("period")),
+        );
+
+        fail.store(true, Ordering::SeqCst);
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.apply_window_display(id, Some(display));
+        }));
+        assert!(unwound.is_err(), "the injected wake failure unwinds");
+        assert_eq!(
+            runtime.refresh_interval(id),
+            DEFAULT_REFRESH_PERIOD,
+            "a failed apply stored its value"
+        );
+
+        fail.store(false, Ordering::SeqCst);
+        runtime.apply_window_display(id, Some(display));
+        assert_eq!(
+            runtime.refresh_interval(id),
+            Duration::from_millis(8),
+            "the equal value after a failed apply was not applied"
+        );
+    }
 }

@@ -150,6 +150,11 @@ and put `serde` on the Stable contract crate.
    instead of applying different text, so a redacted recording never claims to reproduce
    decisions that depended on that text. Rows: replaying a redacted assistive `SetValue` fails
    with `NonReplayable`; the same recording made with `--keep-text` replays to its decisions.
+   Identifiers are pseudonymized instead: a display's persistent key becomes a counter numbered
+   in order of first sight within the recording (never derived from the key, so it cannot be
+   reversed), its name is replaced, and the row is marked redacted but still replays, because
+   FLUI compares those keys only for equality. Any other row that carries the same key goes
+   through the same per-recording map.
 6. **Scripts.** `PointerScript` is built from per-device consuming builders — `TouchScript`,
    `MouseScript`, `PenScript`, `TrackpadScript`, `VirtualScript` — each converting into a
    `PointerScript` through `build() -> Result<_, ScriptError>` (and `TryFrom`), which checks

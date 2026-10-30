@@ -19,7 +19,7 @@ use std::num::{NonZeroU8, NonZeroU64};
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_foundation::geometry::{DevicePixelRatio, Size};
+use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use flui_platform::EventTime;
 use flui_platform::keyboard::Modifiers;
 use flui_platform::pointer::{
@@ -27,9 +27,11 @@ use flui_platform::pointer::{
     ScrollPrecision, ScrollUnit,
 };
 use flui_platform::{
-    GestureParts, ImeEvent, InvalidPreference, Locale, MemoryPressureLevel, MotionPreference,
-    NativeMouseGeometry, NativeTouchGeometry, PlatformInput, PreferenceParts, SessionEndPhase,
-    SystemNotice, SystemPreferences, TextWeightPreference, WheelParts, WheelStep,
+    CapabilityAbsence, ColorGamut, ColorParts, DisplayInfo, DisplayParts, DynamicRange,
+    GestureParts, Headroom, ImeEvent, InvalidPreference, Locale, MemoryPressureLevel,
+    MotionPreference, NativeMouseGeometry, NativeTouchGeometry, PlatformInput, PreferenceParts,
+    RefreshPeriod, SessionEndPhase, SystemNotice, SystemPreferences, TextWeightPreference,
+    WheelParts, WheelStep,
 };
 use flui_protocol::native_recording as wire;
 use serde::Serialize;
@@ -277,6 +279,15 @@ pub enum Row {
         /// refuses the row.
         redacted: bool,
     },
+    /// The application read the displays (a `platform` stream).
+    Displays {
+        /// What the read returned.
+        read: DisplayRead,
+        /// Each display's name and persistent key were replaced before
+        /// writing (ADR-0215 §5): a key by a pseudonym numbered within the
+        /// recording, so equal keys stay equal and the row still replays.
+        redacted: bool,
+    },
     /// The application read the system preferences (a `platform` stream).
     Preferences(PreferenceRead),
 }
@@ -289,6 +300,45 @@ pub enum PreferenceRead {
     Observed(SystemPreferences),
     /// The read failed; a failure is not an observation.
     Failed(ReadFailure),
+}
+
+/// What one read of the displays returned.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum DisplayRead {
+    /// The displays the system reported, at the platform's snapshot revision.
+    Observed {
+        /// The snapshot's revision, as the platform counted it.
+        revision: u64,
+        /// The displays, in the snapshot's order.
+        displays: Vec<RecordedDisplay>,
+    },
+    /// The read failed.
+    Failed(ReadFailure),
+}
+
+/// One display of a read: its fields, and the label its id is written as.
+///
+/// The label is the number the recording platform's registry issued; it names
+/// the display within the recording only, so a replay issues an id of its own
+/// for each label ([`DisplayParts::into_info`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordedDisplay {
+    /// The display within this recording.
+    pub label: u64,
+    /// Its fields.
+    pub parts: DisplayParts,
+}
+
+impl RecordedDisplay {
+    /// The display `info`, labelled with its id's number.
+    pub fn of(info: DisplayInfo) -> Self {
+        let (id, parts) = info.into_parts();
+        Self {
+            label: id.get(),
+            parts,
+        }
+    }
 }
 
 /// Why a read of the system failed: which [`PlatformError`] it returned, and
@@ -341,6 +391,7 @@ impl Row {
             Self::Reopen => "reopen",
             Self::Ime { .. } => "ime",
             Self::Preferences(_) => "preferences",
+            Self::Displays { .. } => "displays",
         }
     }
 }
@@ -408,6 +459,13 @@ pub trait ReplayTarget {
     /// What a read of the system preferences returned: the target answers
     /// the application's next read with it.
     fn preferences(&mut self, read: &PreferenceRead) -> Result<(), Unsupported> {
+        let _ = read;
+        Err(Unsupported)
+    }
+
+    /// What a read of the displays returned: the target answers the
+    /// application's next read with it.
+    fn displays(&mut self, read: &DisplayRead) -> Result<(), Unsupported> {
         let _ = read;
         Err(Unsupported)
     }
@@ -624,6 +682,7 @@ impl NativeRecording {
                 }
                 Row::Ime { event, .. } => target.ime(event).map_err(unsupported)?,
                 Row::Preferences(read) => target.preferences(read).map_err(unsupported)?,
+                Row::Displays { read, .. } => target.displays(read).map_err(unsupported)?,
             }
             for input in out {
                 target.input(input).map_err(unsupported)?;
@@ -659,7 +718,8 @@ fn row_devices(row: &Row) -> Vec<(NativeDevice, PointerKind)> {
         | Row::SessionEnd(_)
         | Row::Reopen
         | Row::Ime { .. }
-        | Row::Preferences(_) => Vec::new(),
+        | Row::Preferences(_)
+        | Row::Displays { .. } => Vec::new(),
     };
     readings
         .into_iter()
@@ -1357,6 +1417,10 @@ fn row_to_wire(row: &Row) -> DtoResult<wire::Row> {
         Row::Preferences(read) => wire::Row::Preferences {
             read: read_to_wire(read)?,
         },
+        Row::Displays { read, redacted } => wire::Row::Displays {
+            read: display_read_to_wire(read)?,
+            redacted: *redacted,
+        },
     })
 }
 
@@ -1508,18 +1572,20 @@ fn row_from_wire(row: wire::Row) -> DtoResult<Row> {
             redacted,
         },
         wire::Row::Preferences { read } => Row::Preferences(read_from_wire(read)?),
+        wire::Row::Displays { read, redacted } => Row::Displays {
+            read: display_read_from_wire(read)?,
+            redacted,
+        },
         _ => return Err(unread("Row")),
     })
 }
+
 fn read_to_wire(read: &PreferenceRead) -> DtoResult<wire::PreferenceRead> {
     Ok(match read {
         PreferenceRead::Observed(values) => {
             wire::PreferenceRead::Observed(preferences_to_wire(values.clone())?)
         }
-        PreferenceRead::Failed(failure) => wire::PreferenceRead::Failed(wire::Failure {
-            kind: failure.kind,
-            message: failure.message.clone(),
-        }),
+        PreferenceRead::Failed(failure) => wire::PreferenceRead::Failed(failure_to_wire(failure)),
     })
 }
 
@@ -1722,4 +1788,187 @@ fn preferences_from_wire(wire: wire::Preferences) -> DtoResult<SystemPreferences
     }
     .try_into_preferences()
     .map_err(rejected)
+}
+
+fn failure_to_wire(failure: &ReadFailure) -> wire::Failure {
+    wire::Failure {
+        kind: failure.kind,
+        message: failure.message.clone(),
+    }
+}
+
+fn display_read_to_wire(read: &DisplayRead) -> DtoResult<wire::DisplayRead> {
+    Ok(match read {
+        DisplayRead::Observed { revision, displays } => wire::DisplayRead::Observed {
+            revision: *revision,
+            displays: displays
+                .iter()
+                .map(display_to_wire)
+                .collect::<DtoResult<_>>()?,
+        },
+        DisplayRead::Failed(failure) => wire::DisplayRead::Failed(failure_to_wire(failure)),
+    })
+}
+
+fn display_read_from_wire(read: wire::DisplayRead) -> DtoResult<DisplayRead> {
+    Ok(match read {
+        wire::DisplayRead::Observed { revision, displays } => DisplayRead::Observed {
+            revision,
+            displays: displays
+                .into_iter()
+                .map(display_from_wire)
+                .collect::<DtoResult<_>>()?,
+        },
+        wire::DisplayRead::Failed(wire::Failure { kind, message }) => {
+            DisplayRead::Failed(ReadFailure { kind, message })
+        }
+        _ => return Err(unread("DisplayRead")),
+    })
+}
+
+const fn bounds_to_wire(bounds: Bounds<i32>) -> [i32; 4] {
+    [
+        bounds.origin.x,
+        bounds.origin.y,
+        bounds.size.width,
+        bounds.size.height,
+    ]
+}
+
+const fn bounds_from_wire([x, y, width, height]: [i32; 4]) -> Bounds<i32> {
+    Bounds::new(Point::new(x, y), Size::new(width, height))
+}
+
+fn absence_to_wire(absence: CapabilityAbsence) -> DtoResult<wire::Absence> {
+    Ok(match absence {
+        CapabilityAbsence::NotOnThisPlatform => wire::Absence::NotOnThisPlatform,
+        CapabilityAbsence::NotOnThisDevice => wire::Absence::NotOnThisDevice,
+        CapabilityAbsence::NotYetOnThisHost => wire::Absence::NotYetOnThisHost,
+        _ => return Err(DtoError::Unmirrored("CapabilityAbsence")),
+    })
+}
+
+fn absence_from_wire(absence: wire::Absence) -> DtoResult<CapabilityAbsence> {
+    Ok(match absence {
+        wire::Absence::NotOnThisPlatform => CapabilityAbsence::NotOnThisPlatform,
+        wire::Absence::NotOnThisDevice => CapabilityAbsence::NotOnThisDevice,
+        wire::Absence::NotYetOnThisHost => CapabilityAbsence::NotYetOnThisHost,
+        other => return Err(unread(other.name())),
+    })
+}
+
+/// `display` in the schema, through [`DisplayParts`] and [`ColorParts`]: a
+/// field added there fails to compile here until it is mirrored.
+fn display_to_wire(display: &RecordedDisplay) -> DtoResult<wire::Display> {
+    let DisplayParts {
+        name,
+        bounds,
+        usable_bounds,
+        scale_factor,
+        refresh_period,
+        is_primary,
+        persistent_key,
+        color,
+    } = display.parts.clone();
+    let color = match color {
+        Ok(ColorParts {
+            gamut,
+            dynamic_range,
+            headroom,
+        }) => wire::DisplayColor::Known(wire::Color {
+            gamut: match gamut {
+                ColorGamut::Srgb => wire::Gamut::Srgb,
+                ColorGamut::DisplayP3 => wire::Gamut::DisplayP3,
+                ColorGamut::Rec2020 => wire::Gamut::Rec2020,
+                _ => return Err(DtoError::Unmirrored("ColorGamut")),
+            },
+            dynamic_range: match dynamic_range {
+                DynamicRange::Standard => wire::DynamicRange::Standard,
+                DynamicRange::High => wire::DynamicRange::High,
+                _ => return Err(DtoError::Unmirrored("DynamicRange")),
+            },
+            headroom: match headroom {
+                Ok(headroom) => wire::Headroom::Multiple(headroom.get()),
+                Err(absence) => wire::Headroom::Absent(absence_to_wire(absence)?),
+            },
+        }),
+        Err(absence) => wire::DisplayColor::Absent(absence_to_wire(absence)?),
+    };
+    Ok(wire::Display {
+        label: display.label,
+        name,
+        bounds: bounds_to_wire(bounds),
+        usable_bounds: bounds_to_wire(usable_bounds),
+        scale_factor,
+        refresh_period_ns: refresh_period
+            .map(|period| duration_nanos(period.get()))
+            .transpose()?,
+        primary: is_primary,
+        persistent_key,
+        color,
+    })
+}
+
+/// The display `wire` describes, validated as its types validate it.
+fn display_from_wire(wire: wire::Display) -> DtoResult<RecordedDisplay> {
+    let wire::Display {
+        label,
+        name,
+        bounds,
+        usable_bounds,
+        scale_factor,
+        refresh_period_ns,
+        primary,
+        persistent_key,
+        color,
+    } = wire;
+    let color = match color {
+        wire::DisplayColor::Known(wire::Color {
+            gamut,
+            dynamic_range,
+            headroom,
+        }) => Ok(ColorParts {
+            gamut: match gamut {
+                wire::Gamut::Srgb => ColorGamut::Srgb,
+                wire::Gamut::DisplayP3 => ColorGamut::DisplayP3,
+                wire::Gamut::Rec2020 => ColorGamut::Rec2020,
+                other => return Err(unread(other.name())),
+            },
+            dynamic_range: match dynamic_range {
+                wire::DynamicRange::Standard => DynamicRange::Standard,
+                wire::DynamicRange::High => DynamicRange::High,
+                other => return Err(unread(other.name())),
+            },
+            headroom: match headroom {
+                wire::Headroom::Multiple(multiple) => Ok(Headroom::try_new(multiple)
+                    .map_err(|error| invalid(format!("headroom {multiple}: {error}")))?),
+                wire::Headroom::Absent(absence) => Err(absence_from_wire(absence)?),
+                _ => return Err(unread("Headroom")),
+            },
+        }),
+        wire::DisplayColor::Absent(absence) => Err(absence_from_wire(absence)?),
+        _ => return Err(unread("DisplayColor")),
+    };
+    let refresh_period = refresh_period_ns
+        .map(|nanos| {
+            RefreshPeriod::try_from(Duration::from_nanos(nanos))
+                .map_err(|error| invalid(format!("refresh period {nanos} ns: {error}")))
+        })
+        .transpose()?;
+    if !(scale_factor.is_finite() && scale_factor > 0.0) {
+        return Err(invalid(format!("scale factor {scale_factor}")));
+    }
+    Ok(RecordedDisplay {
+        label,
+        parts: DisplayParts {
+            name,
+            bounds: bounds_from_wire(bounds),
+            usable_bounds: bounds_from_wire(usable_bounds),
+            scale_factor,
+            refresh_period,
+            is_primary: primary,
+            persistent_key,
+            color,
+        },
+    })
 }

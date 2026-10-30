@@ -64,6 +64,11 @@ performance-overlay = []
 # is absent and the runner keeps no list of host windows.
 native = []
 
+# The `testing` module (ADR-0243): an application run on the headless platform,
+# driven from the test thread. Off by default and not part of the release API;
+# this crate's tests turn it on through the dev-dependency on itself.
+testing = []
+
 [dependencies]
 flui-platform = { workspace = true }
 # Core FLUI crates
@@ -142,6 +147,8 @@ flui-engine = { path = "../flui-engine", version = "=0.2.0-dev", features = ["vu
 # normally, which cargo permits for dev-dependencies precisely so a lower crate
 # can use the test support built on it.
 flui-testing = { workspace = true }
+# The `testing` kit, for this crate's integration tests.
+flui-app = { path = ".", features = ["testing"] }
 static_assertions.workspace = true
 # A throwaway data root for the host storage tests.
 tempfile.workspace = true

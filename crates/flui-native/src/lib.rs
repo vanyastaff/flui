@@ -219,6 +219,8 @@ pub mod os;
 mod owner;
 mod platform;
 mod preferences;
+#[cfg(any(windows, unix))]
+mod process;
 pub mod storage;
 #[cfg(test)]
 mod table_test;
@@ -286,7 +288,7 @@ pub use owner::headless::{
 pub use preferences::headless::HeadlessPreferences;
 pub use text::headless::FakeTextInput;
 pub use window::headless::{
-    HeadlessWindowPolicy, HeadlessWindowSystem, MockWindow, UnknownDisplay,
+    HeadlessOpenWindows, HeadlessWindowPolicy, HeadlessWindowSystem, MockWindow, UnknownDisplay,
 };
 // What a UIKit scene tells the composition root.
 #[cfg(target_os = "ios")]
@@ -302,6 +304,8 @@ pub use task::{Task, TaskLabel};
 // Each has this one path (ADR-0151 §9).
 pub use host_window::HostWindow;
 pub use platform::{AppHandler, ExitAnswer, PathPromptOptions, Platform, PlatformExecutor};
+#[cfg(any(windows, unix))]
+pub use process::end_process;
 // The owner-thread capability (ADR-0039 §1): minted only by a backend,
 // handed to `on_ready`, never re-exported with a public minting seam.
 pub use owner::{

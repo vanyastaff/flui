@@ -1,18 +1,22 @@
 //! Recordings of the streams beside a pointer registry's (ADR-0215 §4): a
 //! loop's application delivery (system notices, session ends, reopens), a
 //! window's delivery (its input method's events) and a platform's reads of the
-//! system (its preferences), replayed on the headless host.
+//! system (its preferences and displays), replayed on the headless host.
+
+use std::collections::HashMap;
 
 use flui_native::journal::codec::{
-    CodecError, FailureKind, NativeRecording, PreferenceRead, ReadFailure, ReplayError,
-    ReplayTarget, Row, Unsupported,
+    CodecError, DisplayRead, FailureKind, NativeRecording, PreferenceRead, ReadFailure,
+    ReplayError, ReplayTarget, Row, Unsupported,
 };
 use flui_native::testing::app::{AppCall, AppLog, run_keeping_owner};
 use flui_native::{
-    HeadlessHostEvents, HeadlessPlatform, HeadlessPreferences, MockWindow, OwnerPlatform,
+    HeadlessDisplayControls, HeadlessHostEvents, HeadlessPlatform, HeadlessPreferences, MockWindow,
+    OwnerPlatform,
 };
 use flui_platform::{
-    ImeEvent, MemoryPressureLevel, PlatformInput, SessionEndPhase, SystemNotice, SystemPreferences,
+    CapabilityAbsence, DisplayId, DisplayKey, DisplayParts, DisplayRegistry, Headroom, ImeEvent,
+    MemoryPressureLevel, PlatformInput, SessionEndPhase, SystemNotice, SystemPreferences,
     WindowOptions,
 };
 use flui_testing::window_handler::RecordingWindowHandler;
@@ -28,8 +32,8 @@ pub(super) const FAMILY_RECORDINGS: [(&str, &str); 3] = [
         include_str!("headless_window_ime.jsonl"),
     ),
     (
-        "headless_platform_preferences",
-        include_str!("headless_platform_preferences.jsonl"),
+        "headless_platform_reads",
+        include_str!("headless_platform_reads.jsonl"),
     ),
 ];
 
@@ -63,47 +67,158 @@ impl ReplayTarget for WindowTarget {
     }
 }
 
-/// Replays a platform stream into a headless platform's preference source,
-/// reading the preferences back through `owner` after each row, as the
-/// application reads them.
+/// One read of the system the application made, as a test compares it: a
+/// display by its label within the recording and its fields, a failure by
+/// the kind of error it was.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum Read {
+    /// A read of the system preferences.
+    Preferences(Result<SystemPreferences, ReadFailure>),
+    /// A read of the displays.
+    Displays(Result<Vec<(u64, DisplayParts)>, ReadFailure>),
+}
+
+/// The headless platform's system sources, taken before `run` consumes it.
+pub(super) struct Sources {
+    preferences: HeadlessPreferences,
+    displays: HeadlessDisplayControls,
+}
+
+impl Sources {
+    pub(super) fn of(platform: &HeadlessPlatform) -> Self {
+        Self {
+            preferences: platform.preference_source(),
+            displays: platform.display_controls(),
+        }
+    }
+}
+
+/// Replays a platform stream into a headless platform's sources, reading
+/// the system back through `owner` after each row, as the application reads
+/// it. A recorded display's label is issued an id of this replay's own.
 pub(super) struct PlatformTarget<'a> {
-    pub(super) source: HeadlessPreferences,
-    pub(super) owner: &'a OwnerPlatform,
-    pub(super) reads: Vec<Result<SystemPreferences, ReadFailure>>,
+    sources: Sources,
+    owner: &'a OwnerPlatform,
+    registry: DisplayRegistry,
+    labels: HashMap<DisplayId, u64>,
+    pub(super) reads: Vec<Read>,
+}
+
+impl<'a> PlatformTarget<'a> {
+    pub(super) fn new(sources: Sources, owner: &'a OwnerPlatform) -> Self {
+        Self {
+            sources,
+            owner,
+            registry: DisplayRegistry::new(),
+            labels: HashMap::new(),
+            reads: Vec::new(),
+        }
+    }
 }
 
 impl ReplayTarget for PlatformTarget<'_> {
     fn preferences(&mut self, read: &PreferenceRead) -> Result<(), Unsupported> {
         match read {
-            PreferenceRead::Observed(values) => self.source.set(values.clone()),
+            PreferenceRead::Observed(values) => self.sources.preferences.set(values.clone()),
             PreferenceRead::Failed(ReadFailure {
                 kind: FailureKind::Preferences,
                 message,
             }) => self
-                .source
+                .sources
+                .preferences
                 .fail_next_read(message.clone().unwrap_or_default()),
             // The headless source fails a read only as a preference source does.
             _ => return Err(Unsupported),
         }
-        self.reads.push(read_back(self.owner));
+        self.reads
+            .push(Read::Preferences(read_preferences(self.owner)));
+        Ok(())
+    }
+
+    fn displays(&mut self, read: &DisplayRead) -> Result<(), Unsupported> {
+        match read {
+            DisplayRead::Observed { displays, .. } => {
+                let mut infos = Vec::with_capacity(displays.len());
+                for display in displays {
+                    let id = self
+                        .registry
+                        .mint(&DisplayKey::Injected(display.label))
+                        .expect("a replay's registry has ids for its displays");
+                    self.labels.insert(id, display.label);
+                    infos.push(display.parts.clone().into_info(id));
+                }
+                self.sources
+                    .displays
+                    .replace(infos)
+                    .expect("the headless snapshot advances");
+            }
+            DisplayRead::Failed(ReadFailure {
+                kind: FailureKind::Displays,
+                message,
+            }) => self
+                .sources
+                .displays
+                .fail_next_read(message.clone().unwrap_or_default()),
+            // The headless source fails a read only as a display source does.
+            _ => return Err(Unsupported),
+        }
+        let labels = &self.labels;
+        self.reads
+            .push(Read::Displays(read_displays(self.owner, |id| {
+                *labels.get(&id).expect("a replayed display has a label")
+            })));
         Ok(())
     }
 }
 
-/// What the application reads of the system preferences through `owner`, a
-/// failure as the kind of error it was.
-pub(super) fn read_back(owner: &OwnerPlatform) -> Result<SystemPreferences, ReadFailure> {
+/// What the application reads of the system preferences through `owner`.
+pub(super) fn read_preferences(owner: &OwnerPlatform) -> Result<SystemPreferences, ReadFailure> {
     owner.preferences().map_err(|error| ReadFailure::of(&error))
 }
 
-/// What each `preferences` row of `recording` says the read returned.
-fn recorded_reads(recording: &NativeRecording) -> Vec<Result<SystemPreferences, ReadFailure>> {
+/// What the application reads of the displays through `owner`, each display
+/// under the label `label` gives its id.
+pub(super) fn read_displays(
+    owner: &OwnerPlatform,
+    label: impl Fn(DisplayId) -> u64,
+) -> Result<Vec<(u64, DisplayParts)>, ReadFailure> {
+    let snapshot = owner
+        .display_snapshot()
+        .map_err(|error| ReadFailure::of(&error))?;
+    Ok(snapshot
+        .displays()
+        .iter()
+        .cloned()
+        .map(|display| {
+            let (id, parts) = display.into_parts();
+            (label(id), parts)
+        })
+        .collect())
+}
+
+/// What each read row of `recording` says the read returned.
+fn recorded_reads(recording: &NativeRecording) -> Vec<Read> {
     recording
         .rows
         .iter()
         .filter_map(|row| match row {
-            Row::Preferences(PreferenceRead::Observed(values)) => Some(Ok(values.clone())),
-            Row::Preferences(PreferenceRead::Failed(failure)) => Some(Err(failure.clone())),
+            Row::Preferences(PreferenceRead::Observed(values)) => {
+                Some(Read::Preferences(Ok(values.clone())))
+            }
+            Row::Preferences(PreferenceRead::Failed(failure)) => {
+                Some(Read::Preferences(Err(failure.clone())))
+            }
+            Row::Displays {
+                read: DisplayRead::Observed { displays, .. },
+                ..
+            } => Some(Read::Displays(Ok(displays
+                .iter()
+                .map(|display| (display.label, display.parts.clone()))
+                .collect()))),
+            Row::Displays {
+                read: DisplayRead::Failed(failure),
+                ..
+            } => Some(Read::Displays(Err(failure.clone()))),
             _ => None,
         })
         .collect()
@@ -195,25 +310,24 @@ fn window_recordings_replay_on_the_headless_host() {
 
 /// A platform stream replays on the headless host: after each row the
 /// application reads what the recorded read returned, a failure included,
-/// with every preference field the full observation carries.
+/// with every preference field the full observation carries and each display
+/// under one id of the replay's own for its label.
 fn platform_recordings_replay_on_the_headless_host() {
-    let recording = family("headless_platform_preferences");
+    let recording = family("headless_platform_reads");
     let platform = HeadlessPlatform::new();
-    let source = platform.preference_source();
+    let sources = Sources::of(&platform);
     let log = AppLog::new();
     let owner = run_keeping_owner(Box::new(platform), &log);
-    let mut target = PlatformTarget {
-        source,
-        owner: &owner,
-        reads: Vec::new(),
-    };
+    let mut target = PlatformTarget::new(sources, &owner);
     recording
         .replay_into(&mut target)
         .expect("a platform stream replays on the headless host");
     let expected = recorded_reads(&recording);
-    assert_eq!(expected.len(), 3, "every row is a read");
+    assert_eq!(expected.len(), 6, "every row is a read");
     assert_eq!(target.reads, expected);
-    let full = target.reads[0].as_ref().expect("the first read observed");
+    let Read::Preferences(Ok(full)) = &target.reads[0] else {
+        panic!("the first read observed the preferences");
+    };
     assert_eq!(full.text_scale(), Some(1.25));
     assert_eq!(
         full.locales().map(<[flui_platform::Locale]>::len),
@@ -223,10 +337,34 @@ fn platform_recordings_replay_on_the_headless_host() {
     assert_eq!(full.wheel().horizontal_characters(), Some(2));
     assert_eq!(
         target.reads[1],
-        Err(ReadFailure {
+        Read::Preferences(Err(ReadFailure {
             kind: FailureKind::Preferences,
             message: Some("the settings portal did not answer".to_owned()),
-        })
+        }))
+    );
+    let Read::Displays(Ok(displays)) = &target.reads[3] else {
+        panic!("the first display read observed the displays");
+    };
+    let built_in = &displays[0].1;
+    assert!(built_in.is_primary);
+    assert_eq!(
+        built_in.color.map(|color| color.headroom),
+        Ok(Ok(Headroom::try_new(2.5).expect("finite, at least 1"))),
+        "the headroom survives the read"
+    );
+    assert_eq!(
+        displays[1].1.color,
+        Err(CapabilityAbsence::NotYetOnThisHost)
+    );
+    assert!(
+        matches!(&target.reads[4], Read::Displays(Err(failure)) if failure.kind == FailureKind::Displays),
+        "the failed display read fails as a display source does"
+    );
+
+    assert_eq!(
+        target.labels.len(),
+        2,
+        "one id for each label, kept across reads"
     );
 }
 
@@ -273,19 +411,15 @@ fn a_row_the_replay_does_not_reproduce_is_a_typed_error() {
         "the rows before the redacted one were replayed, none after it"
     );
 
-    let mut deferred = family("headless_platform_preferences");
+    let mut deferred = family("headless_platform_reads");
     deferred.rows[1] = Row::Preferences(PreferenceRead::Failed(ReadFailure {
         kind: FailureKind::Deferred,
         message: None,
     }));
     let platform = HeadlessPlatform::new();
-    let source = platform.preference_source();
+    let sources = Sources::of(&platform);
     let owner = run_keeping_owner(Box::new(platform), &AppLog::new());
-    let mut target = PlatformTarget {
-        source,
-        owner: &owner,
-        reads: Vec::new(),
-    };
+    let mut target = PlatformTarget::new(sources, &owner);
     assert_eq!(
         deferred.replay_into(&mut target),
         Err(ReplayError::Unsupported {
@@ -355,8 +489,8 @@ struct Captured {
     calls: Vec<AppCall>,
     /// The window's input method events.
     ime: Vec<ImeEvent>,
-    /// What the application read of the system preferences.
-    reads: Vec<Result<SystemPreferences, ReadFailure>>,
+    /// What the application read of the system.
+    reads: Vec<Read>,
     /// The session's recordings.
     recordings: Vec<NativeRecording>,
 }
@@ -364,16 +498,23 @@ struct Captured {
 /// A headless session's application, window and platform streams, captured:
 /// the notices, a session end and a reopen the host reported, one
 /// composition the window delivered, and the application's reads of the
-/// system preferences, one of them failed.
+/// system preferences and the displays, one of each failed.
 #[cfg(all(debug_assertions, feature = "native-capture"))]
 fn captured_session(privacy: flui_native::journal::recorder::Privacy) -> Captured {
+    use flui_native::DisplayChange;
     use flui_native::journal::codec::Backend;
     use flui_native::journal::recorder::Recorder;
 
     let recorder = Recorder::with_privacy(Backend::Headless, privacy);
-    let platform = HeadlessPlatform::new();
+    // Displays the OS identifies, by keys that name the hardware.
+    let platform = HeadlessPlatform::new().with_displays(vec![
+        flui_native::DisplaySpec::new("Built-in Retina", 1440, 900)
+            .with_persistent_key("EDID-0610-A050-SERIAL-C02XL0"),
+        flui_native::DisplaySpec::new("Studio Display", 2560, 1440)
+            .with_persistent_key("7A1C2E44-5B6D-4F0E-9C3A-2D8E1F4B6A90"),
+    ]);
     let events = platform.host_events();
-    let source = platform.preference_source();
+    let sources = Sources::of(&platform);
     let log = AppLog::new();
     let owner = run_keeping_owner(Box::new(platform), &log);
     let (window, handler) = headless_window(&owner);
@@ -392,17 +533,36 @@ fn captured_session(privacy: flui_native::journal::recorder::Privacy) -> Capture
     ] {
         window.inject_event(PlatformInput::Ime(event));
     }
-    let mut reads = vec![read_back(&owner)];
-    source.set(
+    let preferences = || Read::Preferences(read_preferences(&owner));
+    let displays = || Read::Displays(read_displays(&owner, DisplayId::get));
+    let mut reads = vec![preferences(), displays()];
+    sources.preferences.set(
         SystemPreferences::default()
             .with_high_contrast(true)
             .with_text_scale(2.0)
             .expect("in range"),
     );
-    reads.push(read_back(&owner));
-    source.fail_next_read("the settings service is gone");
-    reads.push(read_back(&owner));
-    reads.push(read_back(&owner));
+    reads.push(preferences());
+    sources
+        .preferences
+        .fail_next_read("the settings service is gone");
+    reads.push(preferences());
+    reads.push(preferences());
+    let primary = sources
+        .displays
+        .snapshot()
+        .and_then(|snapshot| snapshot.primary().map(|display| display.id))
+        .expect("the headless platform has a primary display");
+    sources
+        .displays
+        .simulate_display_change(primary, DisplayChange::ScaleFactor(2.0))
+        .expect("the primary display changes");
+    reads.push(displays());
+    sources
+        .displays
+        .fail_next_read("the display configuration changed while it was read");
+    reads.push(displays());
+    reads.push(displays());
     Captured {
         calls: log.calls(),
         ime: ime_events(&handler),
@@ -456,7 +616,7 @@ fn captured_streams_replay_to_what_the_session_delivered() {
 
     let platform = HeadlessPlatform::new();
     let events = platform.host_events();
-    let source = platform.preference_source();
+    let sources = Sources::of(&platform);
     let log = AppLog::new();
     let owner = run_keeping_owner(Box::new(platform), &log);
     app.replay_into(&mut HostEventsTarget(events))
@@ -467,11 +627,7 @@ fn captured_streams_replay_to_what_the_session_delivered() {
         .replay_into(&mut WindowTarget(mock))
         .expect("the window stream replays");
     assert_eq!(ime_events(&handler), session.ime);
-    let mut target = PlatformTarget {
-        source,
-        owner: &owner,
-        reads: Vec::new(),
-    };
+    let mut target = PlatformTarget::new(sources, &owner);
     reads
         .replay_into(&mut target)
         .expect("the platform stream replays");
@@ -494,6 +650,65 @@ fn captured_streams_replay_to_what_the_session_delivered() {
             line: 3,
             row: "ime"
         })
+    );
+
+    // A redacting capture writes no display's name or persistent key: each
+    // key becomes a pseudonym counted within the recording, the same for the
+    // same display on every read, and the row still replays.
+    let reads = only(&redacted.recordings, Stream::Platform);
+    let mut written = Vec::new();
+    reads
+        .write(&mut written)
+        .expect("a captured recording writes");
+    let written = String::from_utf8(written).expect("JSON Lines are UTF-8");
+    for secret in [
+        "Built-in Retina",
+        "Studio Display",
+        "EDID-0610-A050-SERIAL-C02XL0",
+        "7A1C2E44-5B6D-4F0E-9C3A-2D8E1F4B6A90",
+    ] {
+        assert!(!written.contains(secret), "{secret} reached the recording");
+    }
+    let observed: Vec<Vec<(String, Option<String>)>> = reads
+        .rows
+        .iter()
+        .filter_map(|row| match row {
+            Row::Displays {
+                read: DisplayRead::Observed { displays, .. },
+                redacted,
+            } => {
+                assert!(redacted, "a redacted read is marked");
+                Some(
+                    displays
+                        .iter()
+                        .map(|display| {
+                            (
+                                display.parts.name.clone(),
+                                display.parts.persistent_key.clone(),
+                            )
+                        })
+                        .collect(),
+                )
+            }
+            _ => None,
+        })
+        .collect();
+    let pseudonymous = vec![
+        ("\u{fffd}".to_owned(), Some("display-1".to_owned())),
+        ("\u{fffd}".to_owned(), Some("display-2".to_owned())),
+    ];
+    assert_eq!(observed, vec![pseudonymous; 3]);
+    let platform = HeadlessPlatform::new();
+    let sources = Sources::of(&platform);
+    let owner = run_keeping_owner(Box::new(platform), &AppLog::new());
+    let mut target = PlatformTarget::new(sources, &owner);
+    reads
+        .replay_into(&mut target)
+        .expect("a redacted display read replays");
+    assert_eq!(
+        target.reads.len(),
+        redacted.reads.len(),
+        "every read replayed"
     );
 }
 

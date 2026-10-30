@@ -58,6 +58,7 @@ mod secondary_window;
     all(test, not(target_os = "android"), not(target_arch = "wasm32"))
 ))]
 mod session_controller;
+mod terminal;
 // Unconditional, like `device_recovery` above: the seam's trait and outcome
 // are portable and its tests are host-run, so a `cfg(target_os = "android")`
 // here would hide the whole file from every gate this host can run.
@@ -308,6 +309,15 @@ pub fn request_presentation_close(
 /// Run a FLUI application with default configuration.
 ///
 /// This is the internal implementation called by `run_app()`.
+///
+/// # Panics
+///
+/// With the application's own panic, when nothing is left to go on after
+/// it (ADR-0258 §2): a destructor or `on_quit` that panics at the exit, or
+/// the close of the last window. The exit first writes what the
+/// application persisted and stops its services and pools; the panic then
+/// resumes, so the process exits with 101 and the panic's text, printed
+/// once.
 pub fn run_app_impl<V>(root: V)
 where
     V: View + StatelessView + Clone + 'static,
@@ -318,6 +328,15 @@ where
 /// Run a FLUI application with custom configuration.
 ///
 /// This is the internal implementation called by `run_app_with_config()`.
+///
+/// # Panics
+///
+/// With the application's own panic, when nothing is left to go on after
+/// it (ADR-0258 §2): a destructor or `on_quit` that panics at the exit, or
+/// the close of the last window. The exit first writes what the
+/// application persisted and stops its services and pools; the panic then
+/// resumes, so the process exits with 101 and the panic's text, printed
+/// once.
 pub fn run_app_with_config_impl<V>(root: V, config: AppConfig)
 where
     V: View + StatelessView + Clone + 'static,
@@ -374,6 +393,34 @@ where
         run_web(root, config);
     }
 }
+
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(in crate::app) mod main_window;
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(in crate::app) use main_window::run_application;
+#[cfg(all(
+    feature = "testing",
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(crate) use main_window::{StartedLoop, start_loop};
+pub use owner_dispatch::EXIT_CODE_HUNG;
+#[cfg(all(
+    feature = "testing",
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub use owner_dispatch::TeardownStep;
 
 #[cfg(test)]
 mod tests {
@@ -505,10 +552,19 @@ mod tests {
             }));
         }));
 
-        assert!(unwind.is_err(), "on_ready's panic must propagate");
+        assert!(
+            unwind.is_ok(),
+            "on_ready's panic left the platform handler instead of being held"
+        );
+        let held =
+            super::terminal::take_terminal().expect("on_ready's panic is the terminal failure");
+        assert_eq!(
+            flui_foundation::panic::payload_text(held.as_ref()),
+            Some("exercise on_ready panic cleanup")
+        );
         assert!(
             with_owner_platform(|_| ()).is_none(),
-            "a panic inside on_ready must still unwind through the clear guard \
+            "a panic inside on_ready must still leave the run through the clear guard \
              (armed before Platform::run, not inside on_ready) rather than \
              leaking the host onto this thread"
         );
@@ -589,16 +645,3 @@ mod tests {
         );
     }
 }
-
-#[cfg(all(
-    not(target_os = "android"),
-    not(target_os = "ios"),
-    not(target_arch = "wasm32")
-))]
-pub(in crate::app) mod main_window;
-#[cfg(all(
-    not(target_os = "android"),
-    not(target_os = "ios"),
-    not(target_arch = "wasm32")
-))]
-pub(in crate::app) use main_window::run_application;

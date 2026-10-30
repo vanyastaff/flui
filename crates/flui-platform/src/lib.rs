@@ -149,9 +149,9 @@ pub use clipboard::{Clipboard, ClipboardItem, InMemoryClipboard};
 pub use cursor_icon::CursorIcon;
 pub use data_transfer::{DataTransferOffer, DataTransferSource, NullDataTransferSource};
 pub use display::{
-    ColorGamut, DisplayColor, DisplayId, DisplayIdsExhausted, DisplayInfo, DisplayKey,
-    DisplayRegistry, DisplayRevision, DisplayRevisionExhausted, DisplaySnapshot, DynamicRange,
-    FrameRateHint, Headroom, InvalidHeadroom, InvalidRefreshPeriod, RefreshPeriod,
+    ColorGamut, ColorParts, DisplayColor, DisplayId, DisplayIdsExhausted, DisplayInfo, DisplayKey,
+    DisplayParts, DisplayRegistry, DisplayRevision, DisplayRevisionExhausted, DisplaySnapshot,
+    DynamicRange, FrameRateHint, Headroom, InvalidHeadroom, InvalidRefreshPeriod, RefreshPeriod,
     SurfaceColorSpace, WindowDisplay,
 };
 pub use event_time::EventTime;

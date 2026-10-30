@@ -802,6 +802,10 @@ impl OwnerCore {
                     }
                 }
                 OwnerWork::Runtime(work) => {
+                    // ADR-0258 §1: a panic in the operation is reported and
+                    // contained, and the FIFO tail runs, unless it closes the
+                    // last UI runtime (§2), which ends the turn as terminal.
+                    let terminal = self.state.borrow().closes_last_runtime(&work);
                     self.state.borrow_mut().claim = DeliveryClaim::Executing;
                     let Ok(mut lease) = RuntimeLease::checkout(self, &work) else {
                         continue;
@@ -831,6 +835,9 @@ impl OwnerCore {
                     if let Some(payload) = failure.as_ref() {
                         runtime.report_contained_panic(address, payload.as_ref());
                     }
+                    // A host that shut down during the operation ended the loop:
+                    // its failure is terminal too.
+                    let contained = failure.is_some() && !terminal && !self.state.borrow().closed;
                     let healthy = failure.is_none() && first_failure.is_none();
                     let frontiers = if healthy {
                         runtime.take_text_sizing_frontiers()
@@ -878,6 +885,11 @@ impl OwnerCore {
                             "native text preparation",
                         );
                     }
+                    // The operation's own panic, reported above, is the first
+                    // failure: contained, its payload is retained (ADR-0127).
+                    if contained && let Some(payload) = failure.take() {
+                        flui_foundation::panic::retain_opaque_payload(payload);
+                    }
                     failure
                 }
             };
@@ -897,6 +909,7 @@ impl OwnerCore {
             }
         }
         self.state.borrow_mut().claim = DeliveryClaim::Idle;
+        // What is left is terminal or a host hook's: it leaves the turn.
         finish_retirement(first_failure);
     }
 

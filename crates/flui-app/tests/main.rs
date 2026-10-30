@@ -14,6 +14,13 @@ mod execution_public_paths;
 #[path = "runner_frame_ordering.rs"]
 mod runner_frame_ordering;
 
+// The runner's test kit drives a headless desktop loop, which Android, iOS
+// and the web have no counterpart for.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
 #[path = "runner_teardown.rs"]
 mod runner_teardown;
 

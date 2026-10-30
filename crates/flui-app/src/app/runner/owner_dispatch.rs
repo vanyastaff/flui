@@ -921,32 +921,188 @@ pub(super) fn drain_quit_notification() {
     }
 }
 
-/// Per-pool grace deadline for joining running background work at full
-/// loop-exit teardown. Bounds a hung compute job's ability to wedge process
-/// exit; running work that finishes sooner ends shutdown sooner (the
-/// deadline is a cap, not a sleep).
+/// How long the framework's part of the exit may take: the flush, the
+/// services and the pools, from the moment the flush starts (ADR-0258 §7).
+/// Application code that runs before it (destructors, `on_quit`) is not
+/// counted.
 #[cfg(not(target_arch = "wasm32"))]
-const EXECUTION_SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+pub(crate) const EXIT_BUDGET: std::time::Duration = std::time::Duration::from_secs(6);
 
-/// Deadline for the staged SERVICE shutdown (issue #558) that runs just
-/// before the pools close: every service is cancelled first, then joined
-/// against this one shared deadline — the bounded flush window in which a
-/// service writes its final state. A service that ignores cancellation is
-/// reported (`DeadlineExceeded`) and force-abandoned by the pool shutdown
-/// that follows; it cannot wedge process exit past this deadline plus the
-/// per-pool grace above.
+/// The part of [`EXIT_BUDGET`] the flush registry and the services share:
+/// every service is cancelled first, then joined until what is left of it,
+/// the window in which a service writes its final state. A service that
+/// ignores cancellation is reported (`DeadlineExceeded`) and abandoned by
+/// the pool shutdown that follows.
 #[cfg(not(target_arch = "wasm32"))]
-const SERVICE_SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+pub(crate) const SERVICE_SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The one deadline the exit order's framework steps share, taken when the
+/// flush starts: the flush and the services end by [`Self::services`], the
+/// pools by [`Self::end`], with every second the services did not use.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug)]
+struct ExitDeadline {
+    services: std::time::Instant,
+    end: std::time::Instant,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ExitDeadline {
+    fn start(now: std::time::Instant) -> Self {
+        Self {
+            services: now + SERVICE_SHUTDOWN_DEADLINE,
+            end: now + EXIT_BUDGET,
+        }
+    }
+
+    /// When the flush and the services end.
+    fn services(self) -> std::time::Instant {
+        self.services
+    }
+
+    /// When the pools end.
+    fn end(self) -> std::time::Instant {
+        self.end
+    }
+}
+
+/// How long the whole exit may take, from the main window's shutdown to the
+/// exit code, application code included; past it the exit watchdog ends the
+/// process with [`EXIT_CODE_HUNG`] (ADR-0258 §7).
+#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+pub(crate) const EXIT_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// The exit code of an application whose exit did not end 15 seconds after
+/// it began, which the exit watchdog then ended (ADR-0258 §7): the code GNU
+/// `timeout` returns for a command that ran out of time, so a supervisor reads
+/// a hung exit apart from a panic (101) and a crash.
+pub const EXIT_CODE_HUNG: i32 = 124;
+
+/// Bounds the whole exit: started when the exit order begins, it ends the
+/// process with [`EXIT_CODE_HUNG`] if the exit order has not ended
+/// [`EXIT_WATCHDOG`] later. Dropping it ends the watch.
+///
+/// Before it ends the process it logs the last exit step that ended and
+/// writes the flush registry itself, from its own thread, for a second: the
+/// registry is shared across threads and runs no application code
+/// (ADR-0259 §5).
+#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+pub(super) struct ExitWatchdog {
+    // Dropped with the watchdog: its thread sees the channel close and ends.
+    _stop: std::sync::mpsc::Sender<std::convert::Infallible>,
+    reached: std::sync::Arc<std::sync::Mutex<Option<TeardownStep>>>,
+}
+
+#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+impl ExitWatchdog {
+    /// Start watching the exit this thread is beginning.
+    pub(super) fn start() -> Self {
+        let flush = APP_RUNTIME.with(|slot| {
+            slot.try_borrow()
+                .ok()
+                .and_then(|state| state.flush_host.clone())
+        });
+        let reached = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let (stop, stopped) = std::sync::mpsc::channel::<std::convert::Infallible>();
+        let watched = std::sync::Arc::clone(&reached);
+        let spawned = std::thread::Builder::new()
+            .name("flui-exit-watchdog".into())
+            .spawn(move || {
+                if stopped.recv_timeout(EXIT_WATCHDOG)
+                    != Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                {
+                    return;
+                }
+                let reached = *watched
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                crate::app::lifecycle::contain_lifecycle_diagnostic(|| {
+                    tracing::error!(
+                        after = ?reached,
+                        "the exit did not end within its watchdog; ending the process"
+                    );
+                });
+                if let Some(flush) = flush {
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        flush.flush_within(
+                            std::time::Instant::now() + std::time::Duration::from_secs(1),
+                        )
+                    }));
+                }
+                flui_native::end_process(EXIT_CODE_HUNG)
+            });
+        if let Err(error) = spawned {
+            tracing::warn!(%error, "the exit watchdog did not start; the exit is unbounded");
+        }
+        Self {
+            _stop: stop,
+            reached,
+        }
+    }
+
+    /// Note that `step` of the exit order ended.
+    pub(super) fn reached(&self, step: TeardownStep) {
+        *self
+            .reached
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(step);
+    }
+}
+
+/// One step of the loop's exit teardown, in the order it runs.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TeardownStep {
+    /// The main window's intents were refused and its window retired.
+    #[cfg_attr(
+        any(target_os = "android", target_os = "ios"),
+        allow(dead_code, reason = "only the desktop runner has a main window")
+    )]
+    MainWindow,
+    /// Every hosted UI runtime was shut down and dropped.
+    UiRuntimes,
+    /// The flush registry was written, before the exit deadline's services
+    /// part ran out.
+    Flush,
+    /// The application services were cancelled and joined.
+    Services,
+    /// The background execution pools were closed.
+    Execution,
+    /// The platform clipboard and the redraw window were released.
+    NativeResources,
+}
+
+/// [`teardown_platform_ui_runtime_logged`] for a loop that keeps no log,
+/// ending with the exit's outcome: the terminal failure resumes. On iOS,
+/// whose `UIApplicationMain` never returns, it is logged instead.
+#[cfg(all(not(target_arch = "wasm32"), any(test, target_os = "ios")))]
+pub(super) fn teardown_platform_ui_runtime() {
+    teardown_platform_ui_runtime_logged(&mut |_| {});
+    if let Some(payload) = super::terminal::take_terminal() {
+        #[cfg(not(target_os = "ios"))]
+        std::panic::resume_unwind(payload);
+        #[cfg(target_os = "ios")]
+        {
+            tracing::error!(
+                panic = flui_foundation::panic::payload_text(payload.as_ref()),
+                "the application ends with a terminal failure"
+            );
+            flui_foundation::panic::retain_opaque_payload(payload);
+        }
+    }
+}
 
 /// Full loop-exit teardown: drop every hosted UI runtime, close-request
-/// registration, service and execution pool, and the platform clipboard.
+/// registration, service and execution pool, and the platform clipboard,
+/// telling `log` each step as it ends.
 ///
 /// Reached from each backend's loop exit — `run_desktop`/`run_android` after
 /// `Platform::run` returns, and iOS from `applicationWillTerminate:`, which is
 /// the only pre-exit signal a `UIApplicationMain` loop that never returns can
 /// offer.
 #[cfg(not(target_arch = "wasm32"))]
-pub(super) fn teardown_platform_ui_runtime() {
+pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownStep)) {
     let displaced = APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
         state.owner_thread = None;
@@ -958,6 +1114,29 @@ pub(super) fn teardown_platform_ui_runtime() {
     .err();
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(displaced))).err();
     preserve_first_lifecycle_panic(&mut first_panic, failure, "installed host retirement");
+    log(TeardownStep::UiRuntimes);
+
+    // The framework's part of the exit runs against one deadline taken
+    // here, after the application code above (ADR-0258 §7). The flush
+    // registry is written first, whether or not a failure is held: the
+    // services and the pools after it may abandon the IO pool's writes.
+    let exit = ExitDeadline::start(std::time::Instant::now());
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let flush = APP_RUNTIME.with(|slot| slot.borrow().flush_host.clone());
+        if let Some(flush) = flush {
+            let report = flush.flush_within(exit.services());
+            if !report.is_complete() {
+                tracing::warn!(
+                    failed = report.failed.len(),
+                    unfinished = report.unfinished.len(),
+                    "the flush registry did not write everything by the exit deadline"
+                );
+            }
+        }
+    }))
+    .err();
+    preserve_first_lifecycle_panic(&mut first_panic, failure, "exit flush");
+    log(TeardownStep::Flush);
 
     // Service-lifecycle shutdown (issue #558) BEFORE the pools close: the
     // registry cancels every application service cooperatively and joins
@@ -967,10 +1146,8 @@ pub(super) fn teardown_platform_ui_runtime() {
     // hard-drops any future still running at its next await point, so a
     // service joined AFTER that would lose its flush window every time.
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let report = APP_RUNTIME.with(|slot| {
-            slot.borrow_mut()
-                .shutdown_lifecycles(SERVICE_SHUTDOWN_DEADLINE)
-        });
+        let report =
+            APP_RUNTIME.with(|slot| slot.borrow_mut().shutdown_lifecycles(exit.services()));
         let incomplete: Vec<&'static str> = report
             .entries
             .iter()
@@ -994,10 +1171,11 @@ pub(super) fn teardown_platform_ui_runtime() {
     }))
     .err();
     preserve_first_lifecycle_panic(&mut first_panic, failure, "service shutdown");
+    log(TeardownStep::Services);
 
     // Execution-services shutdown (issue #557): the whole loop is exiting,
     // so stop background admission, cancel outstanding work, join running
-    // work bounded by a per-pool grace deadline, and CLEAR the slot — a
+    // work until the exit deadline's end, and CLEAR the slot — a
     // second platform loop hosted on this same thread later (an embedder
     // running `run_app` twice in one process) must re-resolve fresh
     // services at its own ui_runtime install, not inherit an instance whose
@@ -1008,12 +1186,12 @@ pub(super) fn teardown_platform_ui_runtime() {
     // `ExecutionServices`' own `Drop`.
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         APP_RUNTIME.with(|slot| {
-            slot.borrow_mut()
-                .shutdown_execution(EXECUTION_SHUTDOWN_GRACE);
+            slot.borrow_mut().shutdown_execution(exit.end());
         });
     }))
     .err();
     preserve_first_lifecycle_panic(&mut first_panic, failure, "execution shutdown");
+    log(TeardownStep::Execution);
 
     // ADR-0038 §9's install/teardown symmetry: the event loop has exited (this
     // runs from both `run_desktop` and `run_android`, after their respective
@@ -1038,8 +1216,10 @@ pub(super) fn teardown_platform_ui_runtime() {
     }))
     .err();
     preserve_first_lifecycle_panic(&mut first_panic, failure, "native shutdown");
+    log(TeardownStep::NativeResources);
+    // Terminal (ADR-0258 §2): held for the exit's end, after the flush above.
     if let Some(payload) = first_panic {
-        std::panic::resume_unwind(payload);
+        super::terminal::hold_terminal(payload, "loop exit");
     }
 }
 
