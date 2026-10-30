@@ -308,5 +308,18 @@ graph LR
   `RecordingTextStoreHost`); без шага наблюдатель видит активную композицию.
 - [ ] T14 — остаток: завершение сеанса
 - [ ] T18 — строки на приложении приёмки (`DropLedger` в `flui-testing`, ADR-0261 §2)
+  - [x] R1 `acceptance_app_close_releases_every_owner_after_navigation` и R8
+    `a_panicking_note_build_shows_error_view_and_other_screens_work` (модуль `teardown` приложения
+    приёмки; `facade_consumer` требует их по имени автоматически). Шов учёта `Drop` —
+    `AcceptanceApp::with_planter(Planter)`: приложение держит выданное значение в каждом
+    состоянии, странице маршрута и слушателе контроллера черновика (`Kept`); тип из
+    `flui::testing` в приложение не попадает, пример собирается без `testing`. R1 —
+    характеризация (все `live()` > 0 после прохода Home → Note → Settings и 0 после закрытия);
+    futures не в журнале строки — загрузка к закрытию уже завершена, их покрывает R2 в
+    `runner_close`. R8: паника перенесена из `build` экрана заметки в его редактор
+    (`FailingEditor`), чтобы заголовок с Back оставался: без фокуса после замены всего экрана
+    клавиша Back (Alt+Left) никуда не доходит, и пользователь не может уйти с экрана ошибки.
+  - [ ] R23 со счётчиками `Drop` при вето: у приложения приёмки пока нет вето закрытия (guard
+    появляется со строками persistence P11); строка — вместе с ним.
 - [ ] T17 — README, Win32-строка R5, закрытие
 - [ ] T19 — нативный прогон (после flui-driver FD11; фикстура `acceptance_app_faults`, ADR-0258)

@@ -8,9 +8,11 @@
 //! Everything is held in memory by the root's state, so a restart starts over.
 //!
 //! [`Faults`] is the constructor's seam for injected failures, a set of
-//! [`Fault`]s: a panic in the Note screen's `build`, in the Save handler, or in
-//! the Note screen's `dispose`.
+//! [`Fault`]s: a panic in the Note editor's `build`, in the Save handler, or in
+//! the Note screen's `dispose`. [`Planter`] hands it a value to keep in each
+//! state, page and listener it makes, which a test turns into a drop sentinel.
 
+use std::any::Any;
 use std::fmt;
 use std::future::poll_fn;
 use std::num::ParseIntError;
@@ -18,7 +20,7 @@ use std::rc::Rc;
 use std::str::FromStr;
 use std::task::Poll;
 
-use flui::foundation::{ConnectionState, ValueKey, ViewKey};
+use flui::foundation::{ConnectionState, Listenable, ValueKey, ViewKey};
 use flui::geometry::{EdgeInsets, Size};
 use flui::interaction::FocusNode;
 use flui::material::{ButtonStyle, InputDecoration, TextButton, TextFormField, Theme, ThemeData};
@@ -71,7 +73,8 @@ pub enum Route {
 /// its argument.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fault {
-    /// `build-panic`: the Note screen's `build` panics.
+    /// `build-panic`: the Note screen's editor panics in its `build`; the
+    /// screen's header, with Back, stays.
     Build,
     /// `save-panic`: pressing "Save note" panics before anything is saved.
     Save,
@@ -158,6 +161,28 @@ impl From<Fault> for Faults {
     }
 }
 
+/// A kind of value the application keeps, for a test that plants a drop
+/// sentinel in each one to prove the value was dropped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kept {
+    /// A screen's or the root's state.
+    State,
+    /// A page the router keeps for a route.
+    Page,
+    /// A listener on the draft's controller.
+    Listener,
+}
+
+/// Hands the application a value to keep in each value of a [`Kept`] kind it
+/// makes. The application only holds what it is given and drops it with the
+/// value it is kept in.
+pub type Planter = Rc<dyn Fn(Kept) -> Box<dyn Any>>;
+
+/// What `planter` gives for `kind`, when there is a planter.
+fn plant(planter: Option<&Planter>, kind: Kept) -> Option<Rc<dyn Any>> {
+    planter.map(|planter| Rc::<dyn Any>::from(planter(kind)))
+}
+
 /// The readiness operation, called with the attempt number.
 ///
 /// The attempt number is a key, not a count: Retry moves it to the next value,
@@ -171,6 +196,7 @@ pub struct AcceptanceApp {
     faults: Faults,
     loader: Loader,
     first_attempt: u32,
+    planter: Option<Planter>,
 }
 
 impl AcceptanceApp {
@@ -182,6 +208,7 @@ impl AcceptanceApp {
         Self {
             faults,
             first_attempt: 0,
+            planter: None,
             loader: Rc::new(|_attempt| {
                 let mut polled = false;
                 Box::pin(poll_fn(move |cx| {
@@ -209,6 +236,13 @@ impl AcceptanceApp {
         self.first_attempt = attempt;
         self
     }
+
+    /// Keep what `planter` gives in each value of a [`Kept`] kind.
+    #[must_use]
+    pub fn with_planter(mut self, planter: Planter) -> Self {
+        self.planter = Some(planter);
+        self
+    }
 }
 
 impl StatelessView for AcceptanceApp {
@@ -217,6 +251,7 @@ impl StatelessView for AcceptanceApp {
             faults: self.faults,
             loader: Rc::clone(&self.loader),
             first_attempt: self.first_attempt,
+            planter: self.planter.clone(),
         }
     }
 }
@@ -280,6 +315,7 @@ struct Shared {
     draft: TextEditingController,
     scroll: ScrollController,
     faults: Faults,
+    planter: Option<Planter>,
 }
 
 #[derive(Clone, StatefulView)]
@@ -287,6 +323,7 @@ struct Root {
     faults: Faults,
     loader: Loader,
     first_attempt: u32,
+    planter: Option<Planter>,
 }
 
 struct RootState {
@@ -294,6 +331,8 @@ struct RootState {
     attempt: Signal<u32>,
     faults: Faults,
     first_attempt: u32,
+    planter: Option<Planter>,
+    _kept: Option<Rc<dyn Any>>,
 }
 
 impl StatefulView for Root {
@@ -305,6 +344,8 @@ impl StatefulView for Root {
             attempt: Signal::default(),
             faults: self.faults,
             first_attempt: self.first_attempt,
+            planter: self.planter.clone(),
+            _kept: plant(self.planter.as_ref(), Kept::State),
         }
     }
 }
@@ -312,14 +353,21 @@ impl StatefulView for Root {
 impl ViewState<Root> for RootState {
     fn init_state(&mut self, cx: &dyn LifecycleContext) {
         self.attempt = cx.signal(self.first_attempt);
+        let draft = TextEditingController::new();
+        if let Some(kept) = plant(self.planter.as_ref(), Kept::Listener) {
+            draft.add_listener(Rc::new(move || {
+                let _kept = &kept;
+            }));
+        }
         self.shared = Some(Shared {
             notebook: cx.signal(Notebook::seeded()),
             editing: cx.signal(None),
             compact: cx.signal(false),
             status: cx.signal(String::new()),
-            draft: TextEditingController::new(),
+            draft,
             scroll: ScrollController::new(),
             faults: self.faults,
+            planter: self.planter.clone(),
         });
     }
 
@@ -349,6 +397,7 @@ impl ViewState<Root> for RootState {
                     Screen {
                         route: route.clone(),
                         shared: shared.clone(),
+                        _kept: plant(shared.planter.as_ref(), Kept::Page),
                     }
                     .boxed()
                 }))
@@ -363,6 +412,7 @@ impl ViewState<Root> for RootState {
 struct Screen {
     route: Route,
     shared: Shared,
+    _kept: Option<Rc<dyn Any>>,
 }
 
 struct ScreenState {
@@ -370,6 +420,7 @@ struct ScreenState {
     form: FormHandle,
     focus: Rc<FocusNode>,
     panic_on_dispose: bool,
+    _kept: Option<Rc<dyn Any>>,
 }
 
 impl StatefulView for Screen {
@@ -382,6 +433,7 @@ impl StatefulView for Screen {
             focus: FocusNode::new(),
             panic_on_dispose: self.shared.faults.contains(Fault::Dispose)
                 && matches!(self.route, Route::Note { .. }),
+            _kept: plant(self.shared.planter.as_ref(), Kept::State),
         }
     }
 }
@@ -396,13 +448,11 @@ impl ViewState<Screen> for ScreenState {
         let shared = &view.shared;
         let content = match view.route {
             Route::Home => home(cx, shared, &router),
-            Route::Note { id } => {
-                assert!(
-                    !shared.faults.contains(Fault::Build),
-                    "injected fault: the Note screen's build panics"
-                );
-                editor(cx, id, shared, &router, &self.form, &self.focus)
+            Route::Note { .. } if shared.faults.contains(Fault::Build) => FailingEditor {
+                faults: shared.faults,
             }
+            .boxed(),
+            Route::Note { id } => editor(cx, id, shared, &router, &self.form, &self.focus),
             Route::Settings => settings(cx, shared),
         };
         SafeArea::new().child(Column::new(column![
@@ -420,6 +470,22 @@ impl ViewState<Screen> for ScreenState {
     }
 }
 
+/// The Note screen's editor with [`Fault::Build`] injected: its `build`
+/// panics.
+#[derive(Clone, StatelessView)]
+struct FailingEditor {
+    faults: Faults,
+}
+
+impl StatelessView for FailingEditor {
+    fn build(&self, _cx: &dyn BuildContext) -> impl IntoView {
+        assert!(
+            !self.faults.contains(Fault::Build),
+            "injected fault: the Note screen's editor panics in build"
+        );
+        Text::new("")
+    }
+}
 /// A button that acts only while `route` is the current page: a page stays
 /// actionable while it animates in or out, and a departing page must not act
 /// for the page that replaced it.
