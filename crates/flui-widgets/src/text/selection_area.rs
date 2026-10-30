@@ -22,10 +22,11 @@ use flui_foundation::panic::FirstPanic;
 use flui_objects::{RenderParagraph, SubtreeAnchor};
 use flui_painting::styling::Color;
 use flui_painting::text_boundaries;
-use flui_painting::typography::TextLink;
+use flui_painting::typography::{TextDirection, TextLink};
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::semantics::{
     DocumentPosition, DocumentSelection, SemanticsAnchor, SemanticsRole,
+    TextDirection as SemanticsTextDirection,
 };
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
@@ -204,10 +205,16 @@ impl ViewState<SelectionArea> for SelectionAreaState {
             .style
             .or_else(|| DefaultSelectionStyle::maybe_of(ctx))
             .unwrap_or_default();
+        // The document reads its lines in the ambient direction.
+        let direction = match crate::Directionality::maybe_of(ctx).unwrap_or_default() {
+            TextDirection::Ltr => SemanticsTextDirection::Ltr,
+            TextDirection::Rtl => SemanticsTextDirection::Rtl,
+        };
         let model = Rc::clone(&self.model);
         Semantics::new()
             .role(view.role)
             .merge_boundary(true)
+            .text_direction(direction)
             .document_selection(self.model.selection.borrow().clone())
             .on_set_document_selection(move |cx, selection| model.select(cx, &selection))
             .child(SelectionScope {
@@ -372,14 +379,16 @@ impl SelectionModel {
     /// each as its index and the byte where its laid-out text ends (`None`
     /// when no layout says), so the text reported for a selection is the
     /// text an adapter selected. While semantics is on, that is the last
-    /// publication's order, sort keys included, and a text it does not
-    /// publish (offstage, excluded, silenced) is left out. Without it, the
-    /// order is place in the render tree, and texts beneath an ancestor that
-    /// leaves its subtree out of semantics are left out; texts not yet in
-    /// the render tree keep registration order after the placed ones.
+    /// publication's order: sort keys first, then where each text is laid
+    /// out ([`reading_order`](flui_rendering::semantics::reading_order)), and
+    /// a text it does not publish (offstage, excluded, silenced) is left out.
+    /// Without it, the order is place in the render tree, and texts beneath
+    /// an ancestor that leaves its subtree out of semantics are left out;
+    /// texts not yet in the render tree keep registration order after the
+    /// placed ones.
     ///
-    /// Geometric reading order replaces these when pointer selection lands,
-    /// for the model and the assembly at once.
+    /// Pointer selection, which selects without semantics, brings the same
+    /// laid-out order to the fallback.
     fn reading_order(&self, entries: &[Rc<SelectableEntry>]) -> Vec<(usize, Option<usize>)> {
         let pipeline = self.pipeline.borrow().clone();
         pipeline

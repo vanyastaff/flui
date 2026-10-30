@@ -17,5 +17,7 @@ mod identifier;
 mod incremental_flush;
 #[path = "locate.rs"]
 mod locate;
+#[path = "reading_order.rs"]
+mod reading_order;
 #[path = "text_runs.rs"]
 mod text_runs;

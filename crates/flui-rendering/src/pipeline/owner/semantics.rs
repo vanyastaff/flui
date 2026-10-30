@@ -39,7 +39,7 @@ use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Point, Rect, Size};
 use flui_semantics::{
     AccessibilityNodeId, SemanticsCollectionOrigin, SemanticsConfiguration, SemanticsIndexOrigin,
-    SemanticsNode, SemanticsOwner, SemanticsTree, SetSize, TableShape,
+    SemanticsNode, SemanticsOwner, SemanticsTree, SetSize, TableShape, TextDirection,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -1363,18 +1363,7 @@ fn merge_child_fragments(
                 SemanticsFragment::Pending(node) => node.config.sort_key(),
             }
         }
-        match (key(a), key(b)) {
-            (Some(a), Some(b)) => a.name.cmp(&b.name).then_with(|| {
-                if a.order == b.order {
-                    std::cmp::Ordering::Equal
-                } else {
-                    a.order.total_cmp(&b.order)
-                }
-            }),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
-        }
+        by_sort_key(key(a), key(b))
     });
     let conflicts = (!suppress_conflicts).then(|| mark_configuration_conflicts(config, &fragments));
     let mut children = Vec::with_capacity(fragments.len());
@@ -1399,7 +1388,51 @@ fn merge_child_fragments(
         }
     }
 
+    if config.makes_document_selections() {
+        in_reading_order(&mut children, config.text_direction().unwrap_or_default());
+    }
     children
+}
+
+/// Keyed siblings first, by name and then order; unkeyed ones after, as
+/// they are.
+fn by_sort_key(
+    a: Option<&flui_semantics::SemanticsSortKey>,
+    b: Option<&flui_semantics::SemanticsSortKey>,
+) -> std::cmp::Ordering {
+    match (a, b) {
+        (Some(a), Some(b)) => a.name.cmp(&b.name).then_with(|| {
+            if a.order == b.order {
+                std::cmp::Ordering::Equal
+            } else {
+                a.order.total_cmp(&b.order)
+            }
+        }),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    }
+}
+
+/// Orders a selectable document's children as a reader takes them: the keyed
+/// ones first by their keys, then the rest by where they are laid out
+/// ([`flui_semantics::reading_order`]), so the text a selection reports is
+/// the text the pointer selects. The children of folded-in nodes are ordered
+/// with their new siblings.
+fn in_reading_order(children: &mut Vec<BuiltSemanticsNode>, direction: TextDirection) {
+    children.sort_by(|a, b| by_sort_key(a.config.sort_key(), b.config.sort_key()));
+    let keyed = children
+        .iter()
+        .take_while(|child| child.config.sort_key().is_some())
+        .count();
+    let unkeyed = children.split_off(keyed);
+    let boxes: Vec<Rect<f64>> = unkeyed.iter().map(|child| child.reveal_rect).collect();
+    let mut slots: Vec<Option<BuiltSemanticsNode>> = unkeyed.into_iter().map(Some).collect();
+    children.extend(
+        flui_semantics::reading_order(&boxes, direction)
+            .into_iter()
+            .filter_map(|index| slots[index].take()),
+    );
 }
 
 fn mark_configuration_conflicts(

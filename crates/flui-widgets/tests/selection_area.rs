@@ -626,36 +626,99 @@ pub(crate) fn a_panicking_wake_still_reports_the_committed_selection() {
     );
 }
 
-/// The reported text follows the order the published document reads, so a
-/// column laid out bottom-up reports what an adapter selected.
+/// A document reads its texts where they are laid out: line by line from the
+/// top, along each line in the area's direction, whatever order the tree
+/// holds them in. A selection from the first text read to the last reports
+/// them in that order.
 ///
-/// Red-check: order the texts by their top edge (the report is "\n").
-pub(crate) fn the_reported_text_follows_the_published_document_order() {
+/// Red-check: leave a document's children in tree order (every case but
+/// the RTL row reads its texts in authored order).
+pub(crate) fn a_document_reads_its_texts_where_they_are_laid_out() {
     use flui_objects::VerticalDirection;
-
-    let (area, seen) = recorded_area(
-        Column::new((Text::new("Alpha"), Text::new("Beta")))
-            .vertical_direction(VerticalDirection::Up),
-    );
-    let mut laid = mounted(area);
-    let (first, last, text) = {
-        let tree = consumer(&laid);
-        let state = tree.state();
-        (
-            runs_of(&paragraph(state, "Alpha")),
-            runs_of(&paragraph(state, "Beta")),
-            find_all(state, Role::Document)[0].document_range().text(),
-        )
+    use flui_painting::typography::TextStyle;
+    use flui_view::{BoxedView, ViewExt};
+    use flui_widgets::prelude::Axis;
+    use flui_widgets::{
+        CrossAxisAlignment, Directionality, Positioned, Row, SizedBox, Stack, Wrap,
     };
-    assert_eq!(text, "AlphaBeta", "the document reads in tree order");
-    laid.invoke_semantics_action(selection_request(first[0], at(first[0], 0), at(last[0], 4)))
-        .expect("a selection across both texts is accepted");
-    laid.tick();
-    assert_eq!(
-        *seen.borrow(),
-        vec![Some("Alpha\nBeta".to_owned())],
-        "the report covers what the adapter selected"
-    );
+
+    fn cell(text: &'static str) -> SizedBox {
+        SizedBox::new(60.0, 20.0).child(Text::new(text))
+    }
+    type Case = (&'static str, TextDirection, BoxedView, [&'static str; 3]);
+    let cases: Vec<Case> = vec![
+        (
+            "a column laid out upwards reads from the top",
+            TextDirection::Ltr,
+            Column::new((Text::new("Aa"), Text::new("Bb"), Text::new("Cc")))
+                .vertical_direction(VerticalDirection::Up)
+                .boxed(),
+            ["Cc", "Bb", "Aa"],
+        ),
+        (
+            "a stack reads its texts by where they are placed",
+            TextDirection::Ltr,
+            SizedBox::new(200.0, 120.0)
+                .child(Stack::new((
+                    Positioned::new(Text::new("Aa")).top(80.0).left(0.0),
+                    Positioned::new(Text::new("Bb")).top(0.0).left(100.0),
+                    Positioned::new(Text::new("Cc")).top(0.0).left(0.0),
+                )))
+                .boxed(),
+            ["Cc", "Bb", "Aa"],
+        ),
+        (
+            "a row in a right-to-left area reads from the right",
+            TextDirection::Rtl,
+            Row::new((Text::new("Aa"), Text::new("Bb"), Text::new("Cc"))).boxed(),
+            ["Aa", "Bb", "Cc"],
+        ),
+        (
+            "a wrap that runs down in columns reads across them",
+            TextDirection::Ltr,
+            SizedBox::new(200.0, 50.0)
+                .child(Wrap::new((cell("Aa"), cell("Bb"), cell("Cc"))).direction(Axis::Vertical))
+                .boxed(),
+            ["Aa", "Cc", "Bb"],
+        ),
+        (
+            "a small text beside a tall one shares its line",
+            TextDirection::Ltr,
+            Directionality::new(
+                TextDirection::Rtl,
+                Row::new((
+                    Text::new("Aa").style(TextStyle::new().with_font_size(40.0)),
+                    Text::new("Bb").style(TextStyle::new().with_font_size(10.0)),
+                    Text::new("Cc").style(TextStyle::new().with_font_size(40.0)),
+                ))
+                .cross_axis_alignment(CrossAxisAlignment::End),
+            )
+            .boxed(),
+            ["Cc", "Bb", "Aa"],
+        ),
+    ];
+    for (name, direction, content, expected) in cases {
+        let (area, seen) = recorded_area(content);
+        let mut laid = mounted(Directionality::new(direction, area));
+        let (first, last, text) = {
+            let tree = consumer(&laid);
+            let state = tree.state();
+            (
+                runs_of(&paragraph(state, expected[0])),
+                runs_of(&paragraph(state, expected[2])),
+                find_all(state, Role::Document)[0].document_range().text(),
+            )
+        };
+        assert_eq!(text, expected.concat(), "{name}: the document's reading");
+        laid.invoke_semantics_action(selection_request(first[0], at(first[0], 0), at(last[0], 2)))
+            .expect("a selection across the texts is accepted");
+        laid.tick();
+        assert_eq!(
+            *seen.borrow(),
+            vec![Some(expected.join("\n"))],
+            "{name}: the report reads as the document does"
+        );
+    }
 }
 
 /// A paragraph cut by a line limit contributes only its shown lines to a
