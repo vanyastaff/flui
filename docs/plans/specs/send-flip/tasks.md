@@ -178,7 +178,7 @@ T3 и T10 не делят файлов и идут параллельно. T9 ж
   `controller_mutation_during_build_is_refused` (четыре строки), строка диагностики
   `mutated_during_build`; R7 `tab_controller_listener_writes_from_an_event_callback` — в
   `flui-material/tests/tabs.rs` (`TabController` живёт выше `flui-testing`).
-- [ ] T9 — `TextEditingController` owner-local.
+- [x] T9 — `TextEditingController` owner-local (#1997).
   Состояние в `Rc<RefCell>`; запись сессии — `TextEditingController::write_session` со значением
   `SessionWrite`, собранным до borrow (замыкания под borrow нет), `with_inner` читает чистым кодом
   крейта. `RetainOnFailure` по-прежнему забывает контроллер целиком: последний владелец списка
