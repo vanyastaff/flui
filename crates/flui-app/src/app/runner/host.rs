@@ -365,16 +365,19 @@ fn answer_session_end(phase: flui_platform::SessionEndPhase) -> flui_platform::S
 
     match phase {
         SessionEndPhase::Query => {
-            let refused = refuse_session_end();
             let request = SessionEndRequest::new().on_release(|| {
                 // The platform is told the application is done with the
-                // session end it asked to wait for.
+                // session end it asked to wait for: every window that refused
+                // carried its close out, and every subscriber let go.
                 let _ = session_end_platform(flui_native::OwnerPlatform::release_session_end);
             });
+            let refusals = refuse_session_end(&request);
             let displaced = APP_RUNTIME.with(|slot| {
-                slot.try_borrow_mut()
-                    .ok()
-                    .and_then(|mut state| state.session_end.replace(request.clone()))
+                slot.try_borrow_mut().ok().map(|mut state| {
+                    let request = state.session_end.replace(request.clone());
+                    let refusals = std::mem::replace(&mut state.session_end_refusals, refusals);
+                    (request, refusals)
+                })
             });
             drop(displaced);
             // A subscriber that panics still gets the platform its answer, and
@@ -393,28 +396,39 @@ fn answer_session_end(phase: flui_platform::SessionEndPhase) -> flui_platform::S
                      after the answer and cannot hold the session"
                 );
             }
-            if refused || (delivery.is_some() && held == SessionEndAnswer::Block) {
-                SessionEndAnswer::Block
+            if delivery.is_some() || has_session_end_refusals() {
+                held
             } else {
                 SessionEndAnswer::Proceed
             }
         }
         SessionEndPhase::Cancelled => {
             withdraw_session_end();
-            let released = take_session_end_request();
-            drop(released);
+            drop(take_session_end());
             deliver_contained(&HostNotice::SessionEndCancelled);
             SessionEndAnswer::Proceed
         }
         SessionEndPhase::Ending => {
             let deadline = std::time::Instant::now() + session_end_budget();
-            let released = take_session_end_request();
-            drop(released);
-            // Application code runs first, with the whole budget left: a
-            // subscriber may still publish what the flush then writes. A UI
-            // runtime that is checked out queues the notice instead, and runs
-            // none of its code before the process ends.
-            deliver_contained(&HostNotice::SessionEnded);
+            drop(take_session_end());
+            // What the host keeps itself is written first, within the same
+            // deadline as the documents.
+            #[cfg(all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            super::placement::flush_all_by(deadline);
+            // Application code runs while the budget can absorb it: a
+            // subscriber or a Detached observer may still publish what the
+            // flush then writes. A UI runtime that is checked out queues the
+            // notice and runs none of its code before the process ends.
+            if deadline.saturating_duration_since(std::time::Instant::now())
+                >= SESSION_END_USER_CODE_THRESHOLD
+            {
+                deliver_contained(&HostNotice::SessionEnded);
+                deliver_session_end_close();
+            }
             flush_for_session_end(deadline);
             // The loop is asked to quit whatever ends the session, an end
             // that closes only this application included.
@@ -426,13 +440,64 @@ fn answer_session_end(phase: flui_platform::SessionEndPhase) -> flui_platform::S
     }
 }
 
-/// The session end's request, taken from the loop state.
-fn take_session_end_request() -> Option<flui_platform::SessionEndRequest> {
+/// The least of the session end's budget that must be left for a step that
+/// runs application code to start, so the flush keeps time to write
+/// (ADR-0260, "the 1 s threshold").
+const SESSION_END_USER_CODE_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Whether a window still refuses the session end the host is answering.
+fn has_session_end_refusals() -> bool {
     APP_RUNTIME.with(|slot| {
-        slot.try_borrow_mut()
-            .ok()
-            .and_then(|mut state| state.session_end.take())
+        slot.try_borrow()
+            .is_ok_and(|state| !state.session_end_refusals.is_empty())
     })
+}
+
+/// The session end's request and the windows' refusals, taken from the loop
+/// state; dropping them releases what they held.
+fn take_session_end() -> Option<(
+    Option<flui_platform::SessionEndRequest>,
+    crate::app::runtime::SessionEndRefusals,
+)> {
+    APP_RUNTIME.with(|slot| {
+        slot.try_borrow_mut().ok().map(|mut state| {
+            (
+                state.session_end.take(),
+                std::mem::take(&mut state.session_end_refusals),
+            )
+        })
+    })
+}
+
+/// The window at `address` carried out the session-end close it refused: its
+/// refusal no longer holds the session. Once nothing else holds it, the
+/// platform is released.
+pub(super) fn release_session_end_refusal(address: flui_foundation::PresentationAddress) {
+    let released = APP_RUNTIME.with(|slot| {
+        slot.try_borrow_mut().ok().map(|mut state| {
+            let (released, kept) = std::mem::take(&mut state.session_end_refusals)
+                .into_iter()
+                .partition::<Vec<_>, _>(|(refused, _)| *refused == address);
+            state.session_end_refusals = kept;
+            released
+        })
+    });
+    // Outside the borrow: the last release tells the platform.
+    drop(released);
+}
+
+/// Deliver the session's end to every UI runtime in its slot, containing and
+/// reporting a panic: the caller answers a native callback.
+fn deliver_session_end_close() {
+    let mut failure = flui_foundation::panic::FirstPanic::new();
+    failure.contain(super::owner_dispatch::deliver_session_end_close);
+    if let Some(payload) = failure.into_payload() {
+        tracing::error!(
+            panic = flui_foundation::panic::payload_text(&*payload),
+            "a Detached observer panicked at the session's end"
+        );
+        flui_foundation::panic::retain_opaque_payload(payload);
+    }
 }
 
 /// The owner platform, for a session end. The operating system may report one
@@ -473,26 +538,36 @@ fn askable_presentations() -> Option<(
     })
 }
 
-/// Ask every askable presentation whether the session may end: `true` when
-/// one refuses, through its handler or its guard. Every one is asked, so each
-/// refusal is recorded as a `PendingClose(SessionEnd)`. Where the platform
-/// does not hold a session end for a block, nothing can be refused and
-/// nobody is asked.
-fn refuse_session_end() -> bool {
+/// Ask every askable presentation whether the session may end (ADR-0260 §1),
+/// its handler first, then its guard, and take a block on `request` for each
+/// one that refuses: the session stays held until that window carries its
+/// close out, whatever the notice's subscribers do. Each refusal is also
+/// recorded as a `PendingClose(SessionEnd)`. Where the platform does not
+/// hold a session end for a block, nothing can be refused and nobody is
+/// asked.
+fn refuse_session_end(
+    request: &flui_platform::SessionEndRequest,
+) -> crate::app::runtime::SessionEndRefusals {
     if session_end_platform(flui_native::OwnerPlatform::session_end_support)
         != Some(flui_platform::SessionEndSupport::Hold)
     {
-        return false;
+        return Vec::new();
     }
     let Some((router, addresses)) = askable_presentations() else {
-        return false;
+        return Vec::new();
     };
-    let mut refused = false;
+    let mut refusals = Vec::new();
     for address in addresses {
-        let answer = router.consult(address, flui_view::CloseReason::SessionEnd);
-        refused |= answer == crate::app::close_request::CloseResponse::KeepOpen;
+        if router.consult_session_end(address) != crate::app::close_request::CloseResponse::KeepOpen
+        {
+            continue;
+        }
+        match request.block("a window waits for the user's decision") {
+            Ok(block) => refusals.push((address, block)),
+            Err(error) => tracing::warn!(?address, %error, "a window's refusal holds no block"),
+        }
     }
-    refused
+    refusals
 }
 
 /// Withdraw the session-end closes a cancelled session end recorded, leaving

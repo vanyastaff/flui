@@ -2,7 +2,6 @@ use std::rc::Rc;
 
 use flui_runtime::HostInput;
 use flui_runtime::owner::RuntimeOperation;
-#[cfg(all(test, not(target_os = "android")))]
 use flui_scheduler::AppLifecycleState;
 
 use super::host::APP_RUNTIME;
@@ -47,7 +46,6 @@ impl RuntimeDispatcher {
         ))
     }
 
-    #[cfg(all(test, not(target_os = "android")))]
     pub(super) fn lifecycle(self, state: AppLifecycleState) -> Result<(), DispatchError> {
         dispatch_owner_turn(OwnerTurn::Runtime(self, RuntimeOperation::Lifecycle(state)))
     }
@@ -646,16 +644,6 @@ pub(super) fn apply_queued_window_commands(owner_thread: std::thread::ThreadId) 
 /// Deliver a system notice to every UI runtime this host runs, each on its own
 /// owner turn.
 pub(super) fn deliver_host_notice(notice: &flui_platform::HostNotice) -> NoticeDelivery {
-    // The process may be gone before a subscriber has finished: write what the
-    // host itself keeps first.
-    #[cfg(all(
-        not(target_os = "android"),
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
-    ))]
-    if matches!(notice, flui_platform::HostNotice::SessionEnded) {
-        super::placement::flush_all();
-    }
     // The host's shared memory is reclaimed once, ahead of every runtime's own
     // caches and of every subscriber: the notice reaches subscribers on later
     // owner turns.
@@ -694,6 +682,42 @@ pub(super) fn deliver_host_notice(notice: &flui_platform::HostNotice) -> NoticeD
     }
     failure.resume();
     outcome
+}
+
+/// Tell every UI runtime in its slot that the session is ending, as the close
+/// delivery does (ADR-0259 §6, ADR-0260 §3): each presentation commits its
+/// composition and its observers hear `Detached`, so what they publish reaches
+/// the flush after it. A runtime that is checked out runs none of its code; its
+/// composition is lost, a documented limit. The first panic is contained and
+/// reported by the caller.
+pub(super) fn deliver_session_end_close() {
+    let dispatchers = APP_RUNTIME.with(|slot| {
+        let Ok(runtime) = slot.try_borrow() else {
+            return Vec::new();
+        };
+        let Some(owner_thread) = runtime.owner_thread else {
+            return Vec::new();
+        };
+        let logical = runtime.installed_host.logical();
+        logical
+            .runtime_ids()
+            .map(|ids| {
+                ids.into_iter()
+                    .filter(|id| {
+                        logical
+                            .runtime_status(*id)
+                            .is_ok_and(|status| !status.checked_out)
+                    })
+                    .map(|id| RuntimeDispatcher { owner_thread, id })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    });
+    for dispatcher in dispatchers {
+        if let Err(error) = dispatcher.lifecycle(AppLifecycleState::Detached) {
+            tracing::debug!(?dispatcher, ?error, "session-end close not delivered");
+        }
+    }
 }
 
 /// How a system notice reached the UI runtimes: on the spot, queued behind a

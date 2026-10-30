@@ -181,6 +181,11 @@ impl FrameDriver {
                     .and_then(|state| state.main_ingress.clone())
             });
             for (presentation_id, reason) in settled.due {
+                // A window that carries out the session-end close it refused
+                // no longer holds the session.
+                if reason == flui_view::CloseReason::SessionEnd {
+                    super::host::release_session_end_refusal(address(presentation_id));
+                }
                 if reason != flui_view::CloseReason::Program {
                     queues.close_due(address(presentation_id));
                 }

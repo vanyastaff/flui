@@ -195,6 +195,18 @@ fn runner_teardown() {
                 "a_session_end_with_a_checked_out_runtime_calls_no_user_code",
                 a_session_end_with_a_checked_out_runtime_calls_no_user_code,
             ),
+            (
+                "a_session_end_asks_the_handler_before_the_guard",
+                a_session_end_asks_the_handler_before_the_guard,
+            ),
+            (
+                "a_refused_session_end_is_released_when_its_window_closes",
+                a_refused_session_end_is_released_when_its_window_closes,
+            ),
+            (
+                "session_end_commits_composition_before_the_flush",
+                session_end_commits_composition_before_the_flush,
+            ),
         ],
     );
 }
@@ -336,6 +348,12 @@ type SeenAtDetached = Rc<RefCell<Option<(bool, String)>>>;
 struct ComposingField {
     store: Rc<flui_interaction::testing::InMemoryTextStore>,
     seen: SeenAtDetached,
+    /// The loop of the run, when the test asks whether it still ran at
+    /// Detached; what it answered then.
+    loop_at_detached: Option<(
+        flui_native::HeadlessOwnerTurns,
+        Rc<std::cell::Cell<Option<bool>>>,
+    )>,
 }
 
 struct ComposingFieldState {
@@ -366,12 +384,16 @@ impl flui_view::ViewState<ComposingField> for ComposingFieldState {
                 .expect("the field attaches"),
         );
         let (store, seen) = (Rc::clone(&self.field.store), Rc::clone(&self.field.seen));
+        let at_detached = self.field.loop_at_detached.clone();
         let (_, subscription) = ctx
             .lifecycle_handle()
             .expect("a bound lifecycle")
             .subscribe(move |state| {
                 if state == flui_view::AppLifecycleState::Detached {
                     seen.replace(Some((store.composition().is_some(), store.text())));
+                    if let Some((turns, running)) = &at_detached {
+                        running.set(Some(turns.is_running()));
+                    }
                 }
             })
             .expect("the lifecycle is open");
@@ -409,6 +431,7 @@ pub(crate) fn closing_during_composition_commits_before_detached() {
     let field = ComposingField {
         store: Rc::clone(&store),
         seen: Rc::clone(&seen),
+        loop_at_detached: None,
     };
     let application = Application::new(move |_| field.clone())
         .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
@@ -530,13 +553,25 @@ fn guarded_run(
     flui_native::HeadlessHostEvents,
     Rc<RefCell<Guarded>>,
 ) {
+    guarded_run_with(hold_on, AppConfig::new())
+}
+
+/// [`guarded_run`] with `config`'s close-request handler.
+fn guarded_run_with(
+    hold_on: HoldOn,
+    config: AppConfig,
+) -> (
+    flui_app::testing::HeadlessRunHandle,
+    flui_native::HeadlessHostEvents,
+    Rc<RefCell<Guarded>>,
+) {
     let shared = Rc::new(RefCell::new(Guarded::default()));
     let view = GuardedView {
         hold_on,
         shared: Rc::clone(&shared),
     };
     let application = Application::new(move |_| view.clone())
-        .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
+        .with_config(config.with_exit_policy(ExitPolicy::OnLastWindowClosed));
     let platform = flui_native::HeadlessPlatform::new();
     let events = platform.host_events();
     let run = HeadlessRun::start_on(application, platform);
@@ -656,4 +691,128 @@ pub(crate) fn a_session_end_with_a_checked_out_runtime_calls_no_user_code() {
     let hold = shared.borrow_mut().hold.take();
     drop(hold);
     run.join().expect("the run returns Ok");
+}
+
+/// A session-end query asks the window's close handler before its guard
+/// (ADR-0260 §1), so a handler can start the save or put up the decision even
+/// while a decision hold refuses.
+///
+/// Red-check: consult the guard first — a decision hold refuses before the
+/// handler is asked, and the handler hears nothing.
+pub(crate) fn a_session_end_asks_the_handler_before_the_guard() {
+    let asked = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = std::sync::Arc::clone(&asked);
+    let handler = flui_app::app::CloseRequestHandler::new(move |request| {
+        assert_eq!(request.reason(), flui_view::CloseReason::SessionEnd);
+        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        flui_app::app::CloseResponse::Close
+    });
+    let (run, _events, shared) = guarded_run_with(
+        HoldOn::Decision,
+        AppConfig::new().with_close_request_handler(handler),
+    );
+    assert_eq!(
+        run.end_session(SessionEndPhase::Query),
+        SessionEndAnswer::Block,
+        "the decision hold still refuses"
+    );
+    assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 1);
+    run.end_session(SessionEndPhase::Cancelled);
+    let hold = shared.borrow_mut().hold.take();
+    drop(hold);
+    run.join().expect("the run returns Ok");
+}
+
+/// A window that refused a session end holds it until the window carries the
+/// close out: then, with nothing else holding it, the platform is released
+/// (ADR-0260 §1, §6).
+///
+/// Red-check: answer the refusal without a block on the session end's
+/// request — the platform is never released.
+pub(crate) fn a_refused_session_end_is_released_when_its_window_closes() {
+    let (run, events, shared) = guarded_run(HoldOn::Decision);
+    assert_eq!(
+        run.end_session(SessionEndPhase::Query),
+        SessionEndAnswer::Block
+    );
+    run.run_owner_turn();
+    assert_eq!(events.session_end_releases(), 0, "the window still refuses");
+
+    let pending = shared
+        .borrow()
+        .guard
+        .as_ref()
+        .expect("mounted")
+        .pending()
+        .expect("the session end's close is pending");
+    assert_eq!(pending.reason(), flui_view::CloseReason::SessionEnd);
+    pending
+        .discard_and_close()
+        .expect("the session end's close is current");
+    run.run_owner_turn();
+    assert_eq!(
+        events.session_end_releases(),
+        1,
+        "the carried-out close released the session end"
+    );
+    run.end_session(SessionEndPhase::Ending);
+    let hold = shared.borrow_mut().hold.take();
+    drop(hold);
+    run.join().expect("the run returns Ok");
+}
+
+/// The session's end commits a field's composition and tells its Detached
+/// observers before the flush writes, so what they publish holds the
+/// preedit as text (ADR-0260 §3).
+///
+/// Red-check: skip the close delivery in the ending phase — the observer
+/// hears Detached only from the teardown its quit starts.
+pub(crate) fn session_end_commits_composition_before_the_flush() {
+    use flui_platform::text_store::{
+        Composition, LockGrant, LockOutcome, LockTiming, TextStore, Utf16Offset, Utf16Range,
+    };
+
+    let store = flui_interaction::testing::InMemoryTextStore::new("ab");
+    let seen: SeenAtDetached = Rc::new(RefCell::new(None));
+    let platform = flui_native::HeadlessPlatform::new().with_text_store_host(|| {
+        flui_testing::RecordingTextStoreHost::new()
+            as Rc<dyn flui_platform::text_store::TextStoreHost>
+    });
+    let running = Rc::new(std::cell::Cell::new(None));
+    let field = ComposingField {
+        store: Rc::clone(&store),
+        seen: Rc::clone(&seen),
+        loop_at_detached: Some((platform.owner_turns(), Rc::clone(&running))),
+    };
+    let application = Application::new(move |_| field.clone())
+        .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
+    let run = HeadlessRun::start_on(application, platform);
+    run.run_owner_turn();
+    let composing = Composition {
+        range: Utf16Range::try_new(Utf16Offset::new(2), Utf16Offset::new(4)).expect("ordered"),
+        hides_caret: false,
+    };
+    assert_eq!(
+        store.request_lock(
+            LockGrant::read_write(move |session| {
+                session.insert_at_selection("東京").expect("in range");
+                session.set_composition(Some(composing)).expect("in range");
+            }),
+            LockTiming::Sync,
+        ),
+        Ok(LockOutcome::Granted)
+    );
+
+    run.end_session(SessionEndPhase::Ending);
+    assert_eq!(
+        *seen.borrow(),
+        Some((false, "ab東京".to_owned())),
+        "Detached saw the composition committed before the phase returned"
+    );
+    assert_eq!(
+        running.get(),
+        Some(true),
+        "Detached came from the session end's delivery, before its quit"
+    );
+    run.join().expect("the session end returns Ok");
 }
