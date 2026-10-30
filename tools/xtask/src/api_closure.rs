@@ -201,6 +201,16 @@ impl Items {
             Self::Private => "--document-private-items",
         }
     }
+
+    /// Private items' docs are no one's published documentation: their doc
+    /// lints stay warnings even under CI's `RUSTDOCFLAGS=-D warnings`, so a
+    /// gate that only reads the JSON does not fail on them.
+    fn lint_cap(self) -> &'static [&'static str] {
+        match self {
+            Self::Hidden => &[],
+            Self::Private => &["--cap-lints", "warn"],
+        }
+    }
 }
 
 /// A checked package and its rule.
@@ -591,6 +601,7 @@ pub(crate) fn rustdoc_json(
             "json",
             items.flag(),
         ])
+        .args(items.lint_cap())
         .status()
         .with_context(|| format!("spawning `rustup run {toolchain} cargo rustdoc`"))?;
     if !status.success() {
