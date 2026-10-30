@@ -1789,6 +1789,12 @@ impl LazyMultiBoxRender for RenderSliverCarousel {
     ) -> flui_rendering::RenderUpdateImpact {
         RenderSliverCarousel::set_pinned_indices(self, pinned)
     }
+    fn set_collection_label(
+        &mut self,
+        label: Option<&std::sync::Arc<str>>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverCarousel::set_collection_label(self, label)
+    }
     type Config = CarouselSliverConfig;
 
     const KIND: &'static str = "SliverCarousel";
