@@ -1222,7 +1222,11 @@ tables being non-empty, pushes the transform's inverse on the result's transform
 the position through it for a follower's subtree, and skips a hidden follower's subtree.
 `RenderFollowerLayer::hit_test` stays a plain structural forward; `hit_test_transform`'s
 signature is unchanged (`harness_follower_layer_hit_tests_under_a_scaled_leader`,
-`harness_follower_layer_hides_with_a_clipped_leader`).
+`harness_follower_layer_hides_with_a_clipped_leader`). The subtree under a follower is recorded
+with its accumulated paint origin `o` baked in and the engine applies the resolved transform `M`
+outside it, while the walk has already subtracted `o`; the side table therefore stores
+`T(-o)·M·T(o)`, the mapping paint applies
+(`harness_follower_layer_hit_tests_where_its_offset_content_paints`).
 
 **Staleness.** Hit-testing uses the last completed composite, so it is one frame stale. The transform is
 computed twice (engine for pixels, rendering for hit-test) because a single computation would

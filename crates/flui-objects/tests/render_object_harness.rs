@@ -7209,6 +7209,45 @@ fn harness_follower_layer_hit_tests_under_a_scaled_leader() {
     );
 }
 
+/// A follower laid out 10 px into its repaint boundary paints that offset
+/// inside its leader's scale, so under a scale of 2 its 10x10 child covers
+/// x = 20-40; hit-testing maps the same way. Applying the follower transform
+/// after subtracting the layout offset would hit-test x = 10-30 instead.
+fn harness_follower_layer_hit_tests_where_its_offset_content_paints() {
+    let link = LayerLink::new();
+    let scaled = box_node(RenderTransform::new(Matrix4::scaling(2.0, 2.0, 1.0)))
+        .with_stack_parent_data(
+            StackParentData::new()
+                .with_top(0.0)
+                .with_left(0.0)
+                .with_width(150.0)
+                .with_height(150.0),
+        )
+        .child(box_node(RenderLeaderLayer::new(link)).label("leader"));
+    let overlay = box_node(RenderRepaintBoundary::new())
+        .with_stack_parent_data(
+            StackParentData::new()
+                .with_top(0.0)
+                .with_left(0.0)
+                .with_width(300.0)
+                .with_height(300.0),
+        )
+        .child(
+            box_node(RenderPadding::new(EdgeInsets::new(0.0, 0.0, 0.0, 10.0))).child(
+                box_node(RenderFollowerLayer::new(link))
+                    .child(box_node(RenderAlign::new(Alignment::TOP_LEFT)).child(
+                        box_node(RenderColoredBox::red(10.0, 10.0)).label("follower_child"),
+                    )),
+            ),
+        );
+
+    let run = RenderTester::mount(box_node(RenderStack::new()).child(scaled).child(overlay))
+        .with_size(Size::new(300.0, 300.0))
+        .run_frame();
+
+    assert_eq!(run.hit_first(35.0, 5.0), Some(run.id("follower_child")));
+    assert_eq!(run.hit_first(15.0, 5.0), None);
+}
 /// Under `LeaderClip::Hide` a follower whose leader is scrolled out of the
 /// clip around it takes no hit, and takes hits again once the leader is
 /// back inside; `Escape` keeps it wherever the leader is.
@@ -13341,6 +13380,10 @@ fn family_layer_links() {
             (
                 "follower_layer_hides_with_a_clipped_leader",
                 harness_follower_layer_hides_with_a_clipped_leader,
+            ),
+            (
+                "follower_layer_hit_tests_where_its_offset_content_paints",
+                harness_follower_layer_hit_tests_where_its_offset_content_paints,
             ),
             (
                 "subtree_anchor_attach_publishes_the_real_render_id",

@@ -323,7 +323,7 @@ impl PipelineOwner<PaintPhase> {
                     // logic. The tree carries the leader index itself.
                     let mut follower_transforms = FxHashMap::default();
                     let mut hidden_follower_ids = FxHashSet::default();
-                    for (render_id, follower_layer_id) in follower_correlations {
+                    for (render_id, follower_layer_id, origin) in follower_correlations {
                         debug_assert!(
                             layer_tree
                                 .get_layer(follower_layer_id)
@@ -333,7 +333,13 @@ impl PipelineOwner<PaintPhase> {
                         match flui_layer::resolve_follower_transform(&layer_tree, follower_layer_id)
                         {
                             Some(transform) => {
-                                follower_transforms.insert(render_id, transform);
+                                // The subtree is recorded with its accumulated origin
+                                // baked in and the engine applies `transform` outside
+                                // it, while the hit-test walk and input regions have
+                                // already subtracted that origin: conjugating by it gives
+                                // them the mapping paint applies.
+                                follower_transforms
+                                    .insert(render_id, conjugate(transform, -origin));
                             }
                             None => {
                                 hidden_follower_ids.insert(render_id);
@@ -784,7 +790,7 @@ impl PipelineOwner<PaintPhase> {
                     let is_follower = matches!(*scope, FragmentScope::Follower(_));
                     let layer_id = composer.push_layer(scope_layer(*scope, origin));
                     if is_follower {
-                        composer.record_follower_correlation(node_id, layer_id);
+                        composer.record_follower_correlation(node_id, layer_id, origin);
                     }
                 }
                 FragmentOp::PushTransform(matrix) => {
@@ -1346,14 +1352,14 @@ struct FragmentComposer {
     tree: LayerTree,
     stack: Vec<LayerId>,
     open: DisplayList,
-    /// `(RenderId, LayerId)` correlation for each `Layer::Follower` pushed
+    /// `(RenderId, LayerId, origin)` correlation for each `Layer::Follower` pushed
     /// this paint pass (flui-rendering ARCHITECTURE.md, follower hit-testing) — the general `RenderId -> LayerId`
     /// primitive independently wanted by the snapshot/harness subtree-scoping
     /// TODOs (`testing/snapshot.rs`, `testing/harness.rs`), shipped narrowed
     /// to followers for now. `run_paint` resolves each entry post-paint via
     /// `flui_layer::resolve_follower_transform` into `PipelineOwner
     /// ::last_follower_transforms` / `::last_hidden_follower_ids`.
-    follower_correlations: Vec<(RenderId, LayerId)>,
+    follower_correlations: Vec<(RenderId, LayerId, Offset)>,
     /// Retention decisions taken during the walk, applied by `run_paint` once
     /// the walk's `&self` borrow ends.
     ///
@@ -1541,9 +1547,14 @@ impl FragmentComposer {
 
     /// Records a `(RenderId, LayerId)` correlation for a pushed
     /// `Layer::Follower` node (flui-rendering ARCHITECTURE.md, follower hit-testing).
-    fn record_follower_correlation(&mut self, render_id: RenderId, follower_layer_id: LayerId) {
+    fn record_follower_correlation(
+        &mut self,
+        render_id: RenderId,
+        follower_layer_id: LayerId,
+        origin: Offset,
+    ) {
         self.follower_correlations
-            .push((render_id, follower_layer_id));
+            .push((render_id, follower_layer_id, origin));
     }
 
     /// Flatten everything painted under `root` into a reusable
@@ -1658,7 +1669,7 @@ impl FragmentComposer {
         mut self,
     ) -> (
         LayerTree,
-        Vec<(RenderId, LayerId)>,
+        Vec<(RenderId, LayerId, Offset)>,
         Vec<(RenderId, Option<RetainedSubtree>)>,
         Vec<(RenderId, ContentToken, Vec<(usize, Layer)>)>,
         Vec<RenderId>,
