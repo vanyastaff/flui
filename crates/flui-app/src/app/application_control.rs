@@ -5,7 +5,10 @@ use parking_lot::Mutex;
 use std::{
     future::Future,
     pin::Pin,
-    sync::Arc,
+    sync::{
+        Arc, Weak,
+        atomic::{AtomicU64, Ordering},
+    },
     task::{Context, Poll},
 };
 
@@ -142,6 +145,28 @@ impl AppHandle {
         state.phase = Phase::Quitting;
         self.ingress.proxy.request_quit().map_err(control_error)
     }
+    /// Ask every window whose GPU device rebuild was given up to try again
+    /// (ADR-0267).
+    ///
+    /// A device that keeps failing to rebuild is given up after ten failures
+    /// at the one-second retry ceiling, about twelve seconds after the loss:
+    /// the window reports
+    /// [`DeviceRecovery::Abandoned`](crate::DeviceRecovery::Abandoned) through
+    /// its [`FrameFailureHandler`](crate::FrameFailureHandler), attempts no
+    /// more frames and stays as it was until this call, typically after the
+    /// user installed a driver or reconnected a GPU. The rebuild then starts
+    /// over at once, with a fresh streak. A window whose device is healthy or
+    /// still being rebuilt ignores the request.
+    ///
+    /// Every rendering window of the application this handle controls follows
+    /// the request.
+    pub fn retry_render_device(&self) -> Result<(), AppControlError> {
+        if self.ingress.state.lock().phase == Phase::Closed {
+            return Err(AppControlError::OwnerGone);
+        }
+        self.ingress.device_retry.request();
+        Ok(())
+    }
 }
 
 /// Receipt for opening or showing a window. Success means mounted/wired and redraw requested,
@@ -179,13 +204,63 @@ impl Future for WindowRequest {
     }
 }
 
+/// The application's requests to rebuild a given-up GPU device (ADR-0267),
+/// shared by [`AppHandle`] and the windows that render.
+#[derive(Default)]
+pub(crate) struct DeviceRetry {
+    /// Requests so far; a window compares it with the count it last acted on.
+    requests: AtomicU64,
+    /// Each rendering window's frame wake, held weakly so a closed window's
+    /// UI runtime is not kept alive.
+    wakes: Mutex<Vec<Weak<dyn Fn() + Send + Sync>>>,
+}
+impl DeviceRetry {
+    /// Follow the requests on behalf of a window that `wake` asks a frame of.
+    pub(crate) fn watch(self: &Arc<Self>, wake: &Arc<dyn Fn() + Send + Sync>) -> DeviceRetryWatch {
+        let mut wakes = self.wakes.lock();
+        wakes.retain(|wake| wake.strong_count() > 0);
+        wakes.push(Arc::downgrade(wake));
+        drop(wakes);
+        DeviceRetryWatch {
+            seen: self.requests.load(Ordering::Acquire),
+            retry: Arc::clone(self),
+        }
+    }
+    /// Count a request and ask every live window for a frame, which acts on
+    /// it. The wakes run without the list's lock held.
+    fn request(&self) {
+        self.requests.fetch_add(1, Ordering::AcqRel);
+        let wakes: Vec<_> = self.wakes.lock().iter().filter_map(Weak::upgrade).collect();
+        for wake in wakes {
+            wake();
+        }
+    }
+}
+
+/// One window's view of [`DeviceRetry`]: whether a request arrived since its
+/// last frame.
+pub(crate) struct DeviceRetryWatch {
+    retry: Arc<DeviceRetry>,
+    seen: u64,
+}
+impl DeviceRetryWatch {
+    /// Whether the application asked for a rebuild since the last call.
+    pub(crate) fn take_request(&mut self) -> bool {
+        let requests = self.retry.requests.load(Ordering::Acquire);
+        let requested = requests != self.seen;
+        self.seen = requests;
+        requested
+    }
+}
 pub(crate) struct Ingress {
     state: Mutex<State>,
     proxy: PlatformProxy,
+    device_retry: Arc<DeviceRetry>,
 }
 impl Ingress {
     pub(crate) fn new(proxy: PlatformProxy, startup_open: bool) -> Arc<Self> {
         Arc::new(Self {
+            device_retry: Arc::default(),
             proxy,
             state: Mutex::new(State {
                 phase: Phase::Accepting,
@@ -200,6 +275,9 @@ impl Ingress {
                 replies: Vec::new(),
             }),
         })
+    }
+    pub(crate) fn device_retry(&self) -> &Arc<DeviceRetry> {
+        &self.device_retry
     }
     pub(crate) fn handle(self: &Arc<Self>) -> AppHandle {
         AppHandle {

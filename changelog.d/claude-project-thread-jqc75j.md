@@ -17,3 +17,21 @@
   `WindowCapabilities::into_parts`, `CapabilityParts::into_capabilities`).
 - **`flui-native`**: `MockWindow::simulate_state` publishes a whole snapshot as the window system's
   report, through the window's successor rules.
+- **`flui-runtime`**: `FrameFailureKind::DeviceLost { recovery }` reports a frame dropped on a lost
+  GPU device, with `DeviceRecovery` (`Pending`, `Failed { attempts }`, `Abandoned { attempts }`)
+  saying where the device rebuild stands; `UiRuntime::note_primary_device_recovery`,
+  `UiRuntime::primary_device_recovery` and `UiRuntime::retry_render_device` carry it (ADR-0267).
+- **`flui-app`**: `AppHandle::retry_render_device` asks every window whose device rebuild was given
+  up to try again. `DeviceRecovery` is re-exported.
+
+### Changed
+
+- **`flui-app`**: a GPU device rebuild that keeps failing at the one-second retry ceiling is given
+  up after ten such failures, about twelve seconds after the loss: the window reports
+  `DeviceRecovery::Abandoned` once and attempts no more frames until the application asks again.
+
+### Fixed
+
+- **`flui-runtime`**: a frame dropped on a lost GPU device no longer asks for the next frame at
+  once: it waits out the dropped-frame backoff, so a device that does not come back no longer
+  costs a frame per vsync, and a headless run no longer spins on it.

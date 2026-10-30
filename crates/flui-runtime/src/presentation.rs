@@ -578,6 +578,11 @@ pub struct PresentationState {
     /// key or button press already tried early in this interval. See
     /// [`FAILURE_RETRY_CAP`](crate::frame_failure::FAILURE_RETRY_CAP).
     failure_retry: Cell<FailureRetry>,
+    /// Where the rebuild of this presentation's lost GPU device stands, as its
+    /// renderer's owner last said; `None` while the device is healthy. A given-up
+    /// rebuild holds this presentation's frames until a new rebuild is asked
+    /// for (ADR-0267).
+    device_recovery: Cell<Option<crate::frame_failure::DeviceRecovery>>,
     /// Last frame segment entered for this presentation. Written before the
     /// segment's probe and work so the value remains unwind-correct.
     segment_phase: FramePhaseMarker<SegmentPhase>,
@@ -1069,6 +1074,7 @@ impl PresentationState {
             presented_revision: Cell::new(TreeRevision::ZERO),
             frame_failure_streak: Cell::new(0),
             failure_retry: Cell::new(FailureRetry::default()),
+            device_recovery: Cell::new(None),
             segment_phase: FramePhaseMarker::new(SegmentPhase::Build),
             #[cfg(test)]
             segment_probe: RefCell::new(None),
@@ -1198,6 +1204,7 @@ impl PresentationState {
             presented_revision: Cell::new(TreeRevision::ZERO),
             frame_failure_streak: Cell::new(0),
             failure_retry: Cell::new(FailureRetry::default()),
+            device_recovery: Cell::new(None),
             segment_phase: FramePhaseMarker::new(SegmentPhase::Build),
             #[cfg(test)]
             segment_probe: RefCell::new(None),
@@ -1819,6 +1826,35 @@ impl PresentationState {
             at: Some(at),
             ..retry
         });
+    }
+
+    /// Stop waiting out a dropped frame's retry, keeping the streak: the
+    /// presentation's frames are held by something else now.
+    pub(crate) fn disarm_failure_retry(&self) {
+        self.failure_retry.set(FailureRetry::default());
+    }
+
+    /// Where the rebuild of this presentation's lost device stands; `None`
+    /// while the device is healthy.
+    pub(crate) fn device_recovery(&self) -> Option<crate::frame_failure::DeviceRecovery> {
+        self.device_recovery.get()
+    }
+
+    /// Record where the rebuild of this presentation's lost device stands
+    /// (`None`: healthy again) and return what it was.
+    pub(crate) fn replace_device_recovery(
+        &self,
+        recovery: Option<crate::frame_failure::DeviceRecovery>,
+    ) -> Option<crate::frame_failure::DeviceRecovery> {
+        self.device_recovery.replace(recovery)
+    }
+
+    /// Whether this presentation's device rebuild was given up, which holds
+    /// its frames until a new rebuild is asked for.
+    pub(crate) fn device_abandoned(&self) -> bool {
+        self.device_recovery
+            .get()
+            .is_some_and(crate::frame_failure::DeviceRecovery::is_abandoned)
     }
 
     /// The instant a dropped frame's wait ends, if one waits.

@@ -136,7 +136,7 @@ pub use app::{
 // only their presentation's frame; narrower lifecycle failures can be
 // contained while the frame continues. These types report both outcomes.
 pub use app::{
-    FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
+    DeviceRecovery, FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
     FrameFailureReport, LifecycleHook, PanicText, RecoveredAt, SamplingFailure,
     SamplingFailureOrigin, SamplingStage, SegmentPhase,
 };
