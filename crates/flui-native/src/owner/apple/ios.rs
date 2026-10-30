@@ -136,6 +136,11 @@ pub(crate) enum TrackpadGesture {
         /// The translation since the scroll began.
         translation: (f64, f64),
     },
+    /// A mouse wheel's notches, and their translation in view points.
+    Wheel {
+        /// The translation since the notches began.
+        translation: (f64, f64),
+    },
     /// A pinch, and its scale.
     Pinch {
         /// The scale since the pinch began.

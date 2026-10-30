@@ -237,6 +237,19 @@ define_class!(
             });
         }
 
+        /// A mouse wheel's notches (iOS 13.4).
+        #[unsafe(method(onMouseWheel:))]
+        fn on_mouse_wheel(&self, recognizer: &UIPanGestureRecognizer) {
+            os_entry("onMouseWheel:", (), AfterPanic::Answer(|()| ()), || {
+                self.pin_for_native_callback();
+                let translation = recognizer.translationInView(Some(self));
+                self.dispatch_trackpad(
+                    recognizer,
+                    TrackpadGesture::Wheel { translation: (translation.x, translation.y) },
+                );
+            });
+        }
+
         /// The trackpad's two-finger scroll (iOS 13.4).
         #[unsafe(method(onTrackpadScroll:))]
         fn on_trackpad_scroll(&self, recognizer: &UIPanGestureRecognizer) {
@@ -484,11 +497,23 @@ impl FluiView {
                 Some(sel!(onTrackpadScroll:)),
             )
         };
-        // A scroll is no touch: the pan takes none, only the scroll events of
-        // iOS 13.4, which it does not know before.
+        // SAFETY: as for the scroll.
+        let wheel = unsafe {
+            UIPanGestureRecognizer::initWithTarget_action(
+                mtm.alloc(),
+                Some(self),
+                Some(sel!(onMouseWheel:)),
+            )
+        };
+        // A scroll is no touch: each pan takes none, only the scroll events of
+        // iOS 13.4, which it does not know before. A trackpad's continuous
+        // scroll and a wheel's discrete notches get one recognizer each, so
+        // the notches never read as fingers.
         if scroll.respondsToSelector(sel!(setAllowedScrollTypesMask:)) {
-            scroll.setAllowedScrollTypesMask(UIScrollTypeMask::All);
+            scroll.setAllowedScrollTypesMask(UIScrollTypeMask::Continuous);
             install(&scroll, &NSArray::<NSNumber>::new());
+            wheel.setAllowedScrollTypesMask(UIScrollTypeMask::Discrete);
+            install(&wheel, &NSArray::<NSNumber>::new());
         }
         // SAFETY: as for the scroll.
         let pinch = unsafe {
