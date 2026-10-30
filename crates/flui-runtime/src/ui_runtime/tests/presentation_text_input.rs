@@ -169,7 +169,6 @@ pub(crate) fn a_window_with_a_text_store_host_takes_input_through_it() {
         crate::runtime_services::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            crate::presentation::test_clipboard(),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         ),

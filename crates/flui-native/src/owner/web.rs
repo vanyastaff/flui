@@ -42,7 +42,7 @@ use crate::{
 };
 use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::drag::PlatformDragSource;
-use flui_platform::{Clipboard, DisplayId, DisplaySnapshot, SystemPreferences};
+use flui_platform::{DisplayId, DisplaySnapshot, SystemPreferences};
 
 use crate::owner::sources::SystemPreferenceSource;
 use crate::owner::watch::Watch;
@@ -73,7 +73,7 @@ pub(crate) trait WebHost: 'static {
 
     /// The clipboard, made once per loop: the loop holds it and answers the
     /// table's clipboard position from it.
-    fn clipboard() -> Arc<dyn Clipboard>;
+    fn clipboard() -> Arc<dyn crate::clipboard::SharedClipboard>;
 
     /// The drag-and-drop transport, made once per loop: the loop holds it and
     /// answers the table's drag position from it, and the window it opens
@@ -285,8 +285,8 @@ pub(crate) trait CanvasDrag {
 /// The clipboard position: the clipboard the host's [`WebHost::clipboard`]
 /// made, which the loop holds.
 impl host::Clipboard<WebLoop> for WebLoop {
-    fn clipboard(owner: &WebLoop) -> Arc<dyn Clipboard> {
-        owner.with_state(|state| Arc::clone(&state.clipboard))
+    fn clipboard(owner: &WebLoop) -> Rc<dyn crate::NativeClipboard> {
+        Rc::new(owner.with_state(|state| Arc::clone(&state.clipboard)))
     }
 }
 
@@ -383,7 +383,7 @@ pub struct WebLoop {
 
 pub(crate) struct WebState {
     background_executor: Arc<WebExecutor>,
-    pub(crate) clipboard: Arc<dyn Clipboard>,
+    pub(crate) clipboard: Arc<dyn crate::clipboard::SharedClipboard>,
     is_running: bool,
     /// Window callbacks for RAF loop frame dispatch.
     /// Set when `open_window` creates the single browser window.

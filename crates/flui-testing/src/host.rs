@@ -40,8 +40,8 @@ use flui_platform::data_transfer::{RepresentationDescriptor, TransferActions};
 use flui_platform::drag::{DragError, OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource};
 use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
 use flui_platform::{
-    CursorError, CursorIcon, DisplayId, InMemoryClipboard, PlatformInput, PlatformTextInput,
-    PlatformWindow, Unsupported, UnsupportedReason, WindowId,
+    CursorError, CursorIcon, DisplayId, PlatformInput, PlatformTextInput, PlatformWindow,
+    Unsupported, UnsupportedReason, WindowId,
 };
 use flui_platform::{SessionEndAnswer, SessionEndPhase, TextStoreHost};
 use flui_rendering::layer::{LayerTree, Scene};
@@ -628,7 +628,7 @@ pub struct HeadlessHost {
     sink: HeadlessSink,
     window: Rc<HeadlessWindow>,
     accessibility: Arc<HeadlessAccessibility>,
-    clipboard: Arc<InMemoryClipboard>,
+    clipboard: crate::ScriptedClipboard,
     /// The windows opened beside the primary one, in opening order.
     secondary: Vec<SecondaryWindow>,
     /// The surfaces embedded in the primary window, in minting order.
@@ -689,7 +689,7 @@ impl HeadlessHost {
         let gesture_preset = window.gesture_preset.clone();
         let window = Rc::new(window);
         let accessibility = Arc::new(HeadlessAccessibility::default());
-        let clipboard = Arc::new(InMemoryClipboard::new());
+        let clipboard = crate::ScriptedClipboard::new();
         let clock = ManualClock::new();
         // A collection of its own: the ui_runtime owns a `TextContext` over it
         // (ADR-0092 §3), exactly as a hosted ui_runtime does. Deliberately
@@ -717,9 +717,16 @@ impl HeadlessHost {
         let mut host = RuntimeHostServices::new(
             Arc::new(move || wake_flag.store(true, Ordering::Relaxed)),
             needs_redraw,
-            Arc::clone(&clipboard) as Arc<dyn flui_platform::Clipboard>,
             &fonts,
             ClockSource::Manual(clock.clone()),
+        );
+        let mut built_ins = flui_platform::capability::CapabilityRegistrar::new();
+        clipboard.register(&mut built_ins);
+        host = host.with_capabilities(
+            flui_runtime::capability::CapabilityRegistry::builder()
+                .built_ins(built_ins)
+                .build()
+                .expect("BUG: one built-in per capability cannot conflict"),
         );
         if let Some(storage) = storage {
             host = host.with_storage(storage);
@@ -1098,8 +1105,8 @@ impl HeadlessHost {
 
     /// The clipboard the UI runtime hands its widgets.
     #[must_use]
-    pub fn clipboard(&self) -> Arc<InMemoryClipboard> {
-        Arc::clone(&self.clipboard)
+    pub fn clipboard(&self) -> crate::ScriptedClipboard {
+        self.clipboard.clone()
     }
 
     /// The recording text store backend of a particular presentation.

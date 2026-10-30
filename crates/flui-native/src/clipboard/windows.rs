@@ -32,9 +32,8 @@ use windows::{
     core::w,
 };
 
-use crate::clipboard::lock;
+use crate::clipboard::{NativeClipboard, SyncClipboard, lock};
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
-use flui_platform::Clipboard;
 
 /// Windows clipboard implementation
 ///
@@ -64,13 +63,13 @@ impl Default for WindowsClipboard {
 }
 
 impl crate::host::Clipboard<crate::owner::windows::WindowsLoop> for WindowsClipboard {
-    fn clipboard(_: &crate::owner::windows::WindowsLoop) -> std::sync::Arc<dyn Clipboard> {
-        std::sync::Arc::new(WindowsClipboard::new())
+    fn clipboard(_: &crate::owner::windows::WindowsLoop) -> std::rc::Rc<dyn NativeClipboard> {
+        std::rc::Rc::new(WindowsClipboard::new())
     }
 }
 
-impl Clipboard for WindowsClipboard {
-    fn read_text(&self) -> Option<String> {
+impl SyncClipboard for WindowsClipboard {
+    fn read_now(&self) -> Option<String> {
         let Some(_session) = ClipboardSession::open() else {
             tracing::warn!("Failed to open clipboard for reading");
             return None;
@@ -162,7 +161,7 @@ impl Clipboard for WindowsClipboard {
         }
     }
 
-    fn write_text(&self, text: String) {
+    fn write_now(&self, text: String) {
         let Some(_session) = ClipboardSession::open() else {
             tracing::error!("Failed to open clipboard for writing");
             return;
@@ -249,18 +248,6 @@ impl Clipboard for WindowsClipboard {
             // letting it fall out of scope frees nothing.
             let _ = global;
             tracing::debug!(len = text.len(), "Wrote text to clipboard");
-        }
-    }
-
-    fn has_text(&self) -> bool {
-        // SAFETY: `IsClipboardFormatAvailable` takes a plain format-id
-        // integer, no pointer arguments, and (per its own documented
-        // contract) is one of the few clipboard queries safe to call
-        // without an open/close pair around it.
-        unsafe {
-            // Check if Unicode text format is available without opening clipboard
-            // IsClipboardFormatAvailable returns Result<()> in windows-rs 0.59
-            IsClipboardFormatAvailable(CF_UNICODETEXT.0 as u32).is_ok()
         }
     }
 }

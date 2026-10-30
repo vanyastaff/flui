@@ -1057,6 +1057,15 @@ impl UiRuntime {
                 }
             }
         }
+        // Then what providers posted back: settled completions run their
+        // waiting closures here, at the owner turn, never on the thread that
+        // answered. A panicking closure keeps the queued tail live, as a
+        // command's does, before resuming.
+        report.invoked += self.owner_jobs.drain(|job, scope| {
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| job.run(scope))) {
+                self.rearm_after_command_panic(payload);
+            }
+        });
         // A prior rearm wake may have panicked after leaving queue/redraw
         // demand durable. This completed owner boundary has made progress;
         // retry the delivery now so any work enqueued during this turn still

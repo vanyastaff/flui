@@ -239,16 +239,20 @@ pub struct UiRuntime {
     input_taps: crate::InputTaps,
     /// The arena observers a recording keeps, and what they reported.
     decision_recorder: recording::DecisionRecorder,
-    /// The platform clipboard this UI runtime's presentations hand their widgets:
-    /// the initial one at construction, every later one through
-    /// [`Self::assemble_presentation`].
-    clipboard: Arc<dyn flui_platform::Clipboard>,
+    /// The providers this UI runtime's presentations acquire platform
+    /// capabilities from: the registry the host gave it, handed to the initial
+    /// presentation at construction and to every later one through
+    /// [`Self::assemble_presentation`] (ADR-0152).
+    capabilities: crate::capability::CapabilityRegistry,
+    /// Where providers' answers come back to the owner thread: drained after
+    /// the command inbox at every Idle drain, retired when the UI runtime drops.
+    owner_jobs: crate::capability::OwnerJobs,
     /// The byte storage this UI runtime's presentations hand their widgets
     /// (`LifecycleContext::storage`), if the host gave it one; installed
-    /// like [`Self::clipboard`].
+    /// like [`Self::capabilities`].
     storage: Option<Arc<dyn flui_platform::Storage>>,
     /// What every presentation closes and persists through, installed like
-    /// [`Self::clipboard`].
+    /// [`Self::capabilities`].
     close: crate::runtime_services::CloseServices,
     /// The UI runtime's owner-thread text service (ADR-0092 §3): a `TextContext`
     /// over the app's font collection, built in

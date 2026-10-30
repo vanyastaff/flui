@@ -23,13 +23,11 @@
 //! `owner::apple::macos::owner_lane` module — this file only decides what
 //! runs on the lane.
 
-use std::sync::Arc;
-
 use objc2::rc::Retained;
 use objc2_app_kit::{NSPasteboard, NSPasteboardType};
 use objc2_foundation::NSString;
 
-use flui_platform::Clipboard;
+use crate::clipboard::{NativeClipboard, SyncClipboard};
 
 use crate::owner::apple::MacOSLoop;
 
@@ -144,13 +142,13 @@ impl Default for MacOSClipboard {
 }
 
 impl crate::host::Clipboard<MacOSLoop> for MacOSClipboard {
-    fn clipboard(_: &MacOSLoop) -> Arc<dyn Clipboard> {
-        Arc::new(MacOSClipboard::new())
+    fn clipboard(_: &MacOSLoop) -> std::rc::Rc<dyn NativeClipboard> {
+        std::rc::Rc::new(MacOSClipboard::new())
     }
 }
 
-impl Clipboard for MacOSClipboard {
-    fn read_text(&self) -> Option<String> {
+impl SyncClipboard for MacOSClipboard {
+    fn read_now(&self) -> Option<String> {
         self.with_pasteboard_on_owner(|pasteboard| {
             let string_type = string_type();
 
@@ -169,7 +167,7 @@ impl Clipboard for MacOSClipboard {
         })
     }
 
-    fn write_text(&self, text: String) {
+    fn write_now(&self, text: String) {
         self.with_pasteboard_on_owner(|pasteboard| {
             // Clear existing contents; the return value is the new change
             // count, which this backend does not consume.
@@ -186,15 +184,6 @@ impl Clipboard for MacOSClipboard {
                 tracing::error!(len = text.len(), "Failed to write text to clipboard");
             }
         });
-    }
-
-    fn has_text(&self) -> bool {
-        self.with_pasteboard_on_owner(|pasteboard| {
-            let string_type = string_type();
-            pasteboard
-                .types()
-                .is_some_and(|types| types.iter().any(|t| *t == *string_type))
-        })
     }
 }
 
@@ -218,7 +207,7 @@ mod tests {
         let sentinel = "stable-sentinel";
 
         let sentinel_guard = MacOSClipboard::for_test(test_owner_queue(), board.clone());
-        sentinel_guard.write_text(sentinel.to_string());
+        sentinel_guard.write_now(sentinel.to_string());
 
         let known_payloads: Vec<String> = std::iter::once(sentinel.to_string())
             .chain((0..8).map(|i| format!("payload-{i}")))
@@ -231,8 +220,8 @@ mod tests {
             let clipboard = MacOSClipboard::for_test(test_owner_queue(), board.clone());
             let known_payloads = known_payloads.clone();
             threads.push(std::thread::spawn(move || {
-                clipboard.write_text(format!("payload-{i}"));
-                let read = clipboard.read_text();
+                clipboard.write_now(format!("payload-{i}"));
+                let read = clipboard.read_now();
                 assert!(
                     read.is_some(),
                     "Read must never be None on the serialized lane"
@@ -250,7 +239,7 @@ mod tests {
         }
 
         let final_guard = MacOSClipboard::for_test(test_owner_queue(), board);
-        final_guard.write_text("final".to_string());
-        assert_eq!(final_guard.read_text().as_deref(), Some("final"));
+        final_guard.write_now("final".to_string());
+        assert_eq!(final_guard.read_now().as_deref(), Some("final"));
     }
 }

@@ -16,9 +16,7 @@ use objc2::rc::Retained;
 use objc2_foundation::NSString;
 use objc2_ui_kit::UIPasteboard;
 
-use std::sync::Arc;
-
-use flui_platform::Clipboard;
+use crate::clipboard::{NativeClipboard, SyncClipboard};
 
 use crate::host;
 use crate::owner::apple::IOSLoop;
@@ -54,14 +52,14 @@ impl Default for IOSClipboard {
 }
 
 impl host::Clipboard<IOSLoop> for IOSClipboard {
-    fn clipboard(_: &IOSLoop) -> Arc<dyn Clipboard> {
+    fn clipboard(_: &IOSLoop) -> std::rc::Rc<dyn NativeClipboard> {
         // Stateless: every handle reads and writes the general pasteboard.
-        Arc::new(IOSClipboard::new())
+        std::rc::Rc::new(IOSClipboard::new())
     }
 }
 
-impl Clipboard for IOSClipboard {
-    fn read_text(&self) -> Option<String> {
+impl SyncClipboard for IOSClipboard {
+    fn read_now(&self) -> Option<String> {
         let pasteboard = Self::pasteboard()?;
         // SAFETY: the pasteboard is main-thread-affine and this runs after
         // the `MainThreadMarker` check above; `string` is a documented getter.
@@ -69,7 +67,7 @@ impl Clipboard for IOSClipboard {
         Some(string.to_string())
     }
 
-    fn write_text(&self, text: String) {
+    fn write_now(&self, text: String) {
         let Some(pasteboard) = Self::pasteboard() else {
             tracing::warn!("clipboard write dropped: UIPasteboard is main-thread-only");
             return;
@@ -78,11 +76,5 @@ impl Clipboard for IOSClipboard {
         // SAFETY: as above — main thread established, `setString:` is the
         // documented setter.
         unsafe { pasteboard.setString(Some(&string)) };
-    }
-
-    fn has_text(&self) -> bool {
-        // SAFETY: as above — main thread established, `hasStrings` is a
-        // documented getter.
-        Self::pasteboard().is_some_and(|p| unsafe { p.hasStrings() })
     }
 }

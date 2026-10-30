@@ -116,6 +116,7 @@
 pub mod a11y;
 pub mod backend_conformance;
 pub mod bootstrap;
+pub mod clipboard;
 pub mod drop_ledger;
 pub mod gesture_alternatives;
 pub mod host;
@@ -137,6 +138,7 @@ pub use a11y::{
 };
 pub use backend_conformance::{BackendUnderTest, assert_backend_conforms};
 pub use bootstrap::{BuildCapabilities, MountOptions, MountOwners, Mounted};
+pub use clipboard::ScriptedClipboard;
 pub use drop_ledger::{DropLedger, DropSentinel};
 pub use flui_runtime::presentation::{PointerResampling, PointerResamplingError};
 pub use gesture_alternatives::{

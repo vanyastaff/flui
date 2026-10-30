@@ -3,8 +3,8 @@
 //! This crate holds what the framework, plugins and tests program against
 //! when they talk to the platform, and nothing that implements it:
 //!
-//! - the capability traits [`PlatformTextInput`], [`PlatformHaptics`],
-//!   [`Clipboard`] and the data-transfer transport
+//! - the capability traits [`PlatformTextInput`], [`PlatformHaptics`] and
+//!   the data-transfer transport
 //!   ([`data_transfer::DataTransferSource`], ADR-0038);
 //! - the display vocabulary: [`DisplaySnapshot`], [`DisplayInfo`], the opaque
 //!   [`DisplayId`] a [`DisplayRegistry`] issues, the validated
@@ -110,7 +110,6 @@
 
 mod brightness;
 pub mod capability;
-mod clipboard;
 pub mod data_transfer;
 mod display;
 pub mod drag;
@@ -144,7 +143,6 @@ mod window_handler;
 mod window_state;
 
 pub use brightness::Brightness;
-pub use clipboard::{Clipboard, ClipboardItem, InMemoryClipboard};
 /// The pointer-cursor shape [`PlatformWindow::set_cursor`] takes: the
 /// `cursor-icon` crate's, which ADR-0089 allows in stable signatures.
 pub use cursor_icon::CursorIcon;

@@ -28,9 +28,9 @@ use flui_platform::data_transfer::{
 };
 use flui_platform::input_capabilities::{InputCapabilities, PointerKindSet};
 use flui_platform::{
-    Clipboard, DataTransferOffer, DataTransferSource, DisplayId, DisplaySnapshot, DragDropEvent,
-    InMemoryClipboard, NullDataTransferSource, PlatformInput, SystemPreferences,
-    WindowCapabilities, WindowId, WindowOptions,
+    DataTransferOffer, DataTransferSource, DisplayId, DisplaySnapshot, DragDropEvent,
+    NullDataTransferSource, PlatformInput, SystemPreferences, WindowCapabilities, WindowId,
+    WindowOptions,
 };
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::WindowId as WinitWindowId;
@@ -292,8 +292,8 @@ impl<D: HostDisplays + Default + 'static> WinitHost for QuietHost<D> {
         Box::new(NoHostNotices)
     }
 
-    fn clipboard() -> Arc<dyn Clipboard> {
-        Arc::new(InMemoryClipboard::new())
+    fn clipboard() -> Arc<dyn crate::clipboard::SharedClipboard> {
+        Arc::new(crate::clipboard::MemoryClipboard::new())
     }
 
     fn drag() -> Arc<dyn FileDrops> {

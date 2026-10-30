@@ -758,7 +758,7 @@ impl StartedLoop {
 /// teardown step that ends to `teardown_log`, on unwind too. Its windows
 /// render with what `renderers` builds.
 pub(crate) fn start_loop<V, F>(
-    application: Application<V, F>,
+    mut application: Application<V, F>,
     platform: impl FnOnce() -> Result<Box<dyn flui_native::Platform>, AppRunError>,
     teardown_log: Rc<RefCell<Vec<TeardownStep>>>,
     renderers: WindowRenderers,
@@ -768,6 +768,13 @@ where
     F: FnMut(&AppHandle) -> V + 'static,
 {
     let _logging = super::super::logging::init_managed_logging(&application.config);
+    // Before the platform starts, so a conflict opens no window (ADR-0152 §1).
+    let capabilities = std::mem::take(&mut application.capabilities);
+    // A plugin's `register` is user code: it runs with no borrow held.
+    let clipboard = APP_RUNTIME.with(|slot| Rc::clone(slot.borrow().clipboard_slot()));
+    let registry = capabilities
+        .into_registry(&clipboard)
+        .map_err(AppRunError::CapabilityConflict)?;
     let platform = platform()?;
     let fatal = Rc::new(RefCell::new(None));
     let recorded = Rc::clone(&fatal);
@@ -800,6 +807,7 @@ where
             APP_RUNTIME.with(|slot| {
                 let mut runtime = slot.borrow_mut();
                 runtime.main_ingress = Some(Arc::clone(&ingress));
+                runtime.capabilities = Some(registry);
                 runtime.main_host_lifecycle = flui_scheduler::AppLifecycleState::Resumed;
                 runtime.window_renderers = renderers;
                 if let Some(executors) = config.executors.clone() {

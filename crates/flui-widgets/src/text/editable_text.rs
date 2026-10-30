@@ -18,7 +18,9 @@ use flui_interaction::focus::{
     FocusAttachment, FocusCause, FocusManager, FocusNode, FocusNodeRegistration, KeyEventHandler,
     KeyEventResult, RectProvider,
 };
-use flui_interaction::{ClientToken, ClipboardHandle, TextInputClient, TextInputHandle};
+use flui_interaction::{
+    ClientToken, ClipboardCapability, ClipboardHandle, TextInputClient, TextInputHandle,
+};
 use flui_objects::RenderEditable;
 use flui_painting::{
     styling::Color,
@@ -344,8 +346,8 @@ pub(super) fn source_offset_for_masked_offset(
 /// empty.
 ///
 /// The clipboard is acquired in `init_state` through
-/// [`LifecycleContext::clipboard_handle`]. ADR-0084: acquired as
-/// `cx.capability::<Clipboard>()` once the capability registry lands.
+/// `cx.capability::<ClipboardCapability>()` (ADR-0152); a refusal leaves
+/// copy, cut and paste disabled.
 ///
 /// # DEFERRED (v1)
 ///
@@ -1643,15 +1645,16 @@ impl Action<PasteTextIntent> for ClipboardTextAction {
         let authority = self.clone();
         let controller = self.controller();
         let edits = self.edits.clone();
-        // May complete before `read_text` returns: nothing is borrowed here.
+        // Settles at a later owner turn, never inside `read_text`; the backend
+        // the provider supplied is user code, so it runs under `calls`.
         calls.run(|| {
-            clipboard.read_text(move |text| {
+            clipboard.read_text().on_complete(move |text| {
                 if !authority.admits_paste()
                     || !authority.controller().is_same_controller(&controller)
                 {
                     return;
                 }
-                let Some(text) = text else {
+                let Ok(Some(text)) = text else {
                     return;
                 };
                 // A single-line field: line breaks are dropped, `\r` included,
@@ -1719,7 +1722,7 @@ impl ViewState<EditableText> for EditableTextState {
         // 2b. The clipboard actions, recorded on the node beside the key
         //     handler: a clipboard chord the handler leaves unconsumed
         //     reaches the `Shortcuts` above, which resolves it here.
-        self.clipboard = ctx.clipboard_handle();
+        self.clipboard = ctx.capability::<ClipboardCapability>().ok();
         self.record_action_chain(ctx);
 
         // 3. Forward controller change events into the rebuild notifier so the

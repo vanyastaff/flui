@@ -1089,7 +1089,6 @@ fn detached_text_service_returns_the_runtime_before_native_reentry(case: TextSer
             flui_runtime::ui_runtime::RuntimeHostServices::new(
                 std::sync::Arc::new(|| {}),
                 std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                std::sync::Arc::new(flui_platform::InMemoryClipboard::new()),
                 &flui_painting::FontCollection::new(),
                 flui_scheduler::ClockSource::Platform,
             ),

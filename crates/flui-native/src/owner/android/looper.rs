@@ -239,7 +239,7 @@ pub struct AndroidLoop {
     notices: Arc<dyn NoticeChannel>,
     pub(crate) window: Arc<Mutex<Option<Arc<dyn ActivityWindow>>>>,
     background_executor: Arc<SimpleExecutor>,
-    pub(crate) clipboard: Arc<dyn flui_platform::Clipboard>,
+    pub(crate) clipboard: Arc<dyn crate::clipboard::SharedClipboard>,
     /// The input of the Activity's queue, as the table made it
     /// ([`AndroidHost::input`]).
     pub(crate) input: Box<dyn ActivityInput>,
@@ -1125,8 +1125,8 @@ impl host::Preferences<AndroidLoop> for AndroidLoop {
 /// The clipboard position: the clipboard the host's
 /// [`AndroidHost::clipboard`] made, which the loop holds.
 impl host::Clipboard<AndroidLoop> for AndroidLoop {
-    fn clipboard(owner: &AndroidLoop) -> Arc<dyn flui_platform::Clipboard> {
-        Arc::clone(&owner.clipboard)
+    fn clipboard(owner: &AndroidLoop) -> std::rc::Rc<dyn crate::NativeClipboard> {
+        std::rc::Rc::new(Arc::clone(&owner.clipboard))
     }
 }
 

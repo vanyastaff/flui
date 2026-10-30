@@ -82,7 +82,6 @@ fn implicit_opacity_settles_under_reduce() {
             RuntimeHostServices::new(
                 Arc::new(|| {}),
                 Arc::new(AtomicBool::new(false)),
-                Arc::new(flui_platform::InMemoryClipboard::new()),
                 &flui_painting::FontCollection::new(),
                 flui_scheduler::ClockSource::Manual(clock.clone()),
             ),
@@ -156,7 +155,6 @@ fn system_motion_change_reaches_media_query_and_the_clock() {
                 recorded_wakes.fetch_add(1, Ordering::SeqCst);
             }),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),
@@ -261,7 +259,6 @@ fn system_motion_change_reaches_media_query_and_the_clock() {
             RuntimeHostServices::new(
                 Arc::new(|| {}),
                 Arc::new(AtomicBool::new(false)),
-                Arc::new(flui_platform::InMemoryClipboard::new()),
                 &flui_painting::FontCollection::new(),
                 flui_scheduler::ClockSource::Manual(clock.clone()),
             )
@@ -621,7 +618,6 @@ fn initial_inherited_scale_matches_the_renderer() {
             RuntimeHostServices::new(
                 Arc::new(|| {}),
                 Arc::new(AtomicBool::new(false)),
-                Arc::new(flui_platform::InMemoryClipboard::new()),
                 &flui_painting::FontCollection::new(),
                 flui_scheduler::ClockSource::Platform,
             ),
@@ -850,7 +846,6 @@ fn resize_and_surface_restore_reach_the_product_frame() {
         flui_runtime::ui_runtime::RuntimeHostServices::new(
             std::sync::Arc::new(|| {}),
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            std::sync::Arc::new(flui_platform::InMemoryClipboard::new()),
             &fonts,
             flui_scheduler::ClockSource::Platform,
         )
@@ -1096,7 +1091,6 @@ fn bold_text_changes_the_painted_glyphs() {
             RuntimeHostServices::new(
                 Arc::new(|| {}),
                 Arc::new(AtomicBool::new(false)),
-                Arc::new(flui_platform::InMemoryClipboard::new()),
                 &fonts,
                 flui_scheduler::ClockSource::Platform,
             ),
@@ -1284,7 +1278,6 @@ fn bold_text_changes_the_painted_glyphs() {
                 RuntimeHostServices::new(
                     Arc::new(|| {}),
                     Arc::new(AtomicBool::new(false)),
-                    Arc::new(flui_platform::InMemoryClipboard::new()),
                     &fonts,
                     flui_scheduler::ClockSource::Platform,
                 )
@@ -1592,7 +1585,6 @@ fn preferred_locales_select_resources_and_direction() {
                 flui_runtime::ui_runtime::RuntimeHostServices::new(
                     std::sync::Arc::new(|| {}),
                     std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                    std::sync::Arc::new(flui_platform::InMemoryClipboard::new()),
                     &flui_painting::FontCollection::new(),
                     flui_scheduler::ClockSource::Platform,
                 )
@@ -1742,7 +1734,6 @@ fn native_fling_profile_controls_real_scroll_inertia() {
         flui_runtime::ui_runtime::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),
@@ -1895,7 +1886,6 @@ fn late_geometry_recovery_is_isolated_per_presentation() {
         let mut services = flui_runtime::ui_runtime::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &fonts,
             flui_scheduler::ClockSource::Manual(clock.clone()),
         );
@@ -2103,7 +2093,6 @@ fn gesture_values_follow_the_presentation_display() {
         flui_runtime::ui_runtime::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),
@@ -2430,7 +2419,6 @@ fn a_failed_move_keeps_its_regions_subscribers_and_row() {
         flui_runtime::ui_runtime::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         ),
@@ -2585,7 +2573,6 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         flui_runtime::ui_runtime::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),
@@ -3441,7 +3428,6 @@ fn gesture_preferences_are_captured_in_input_order_before_a_frame() {
             flui_runtime::ui_runtime::RuntimeHostServices::new(
                 Arc::new(|| {}),
                 Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                Arc::new(flui_platform::InMemoryClipboard::new()),
                 &flui_painting::FontCollection::new(),
                 flui_scheduler::ClockSource::Manual(clock.clone()),
             ),
@@ -3598,7 +3584,6 @@ fn accessibility_floor_holds_under_an_authored_scope() {
         flui_runtime::ui_runtime::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),
@@ -4032,7 +4017,6 @@ fn seeded_runtime(owner: &OwnerHost) -> UiRuntime {
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         )

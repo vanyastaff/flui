@@ -185,6 +185,16 @@ impl Unsupported {
         }
     }
 
+    /// The capability named `name` is not here, for `reason`: the erased form
+    /// of [`Self::of`], for a registry that holds the name and not the type.
+    #[must_use]
+    pub const fn named(name: &'static str, reason: UnsupportedReason) -> Self {
+        Self {
+            reason,
+            capability: Some(name),
+        }
+    }
+
     /// The [`NAME`](crate::capability::Capability::NAME) of the capability
     /// this refusal is about, when it names one.
     #[must_use]

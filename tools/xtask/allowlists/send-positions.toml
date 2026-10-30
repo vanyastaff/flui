@@ -48,8 +48,6 @@ positions = [
     { item = "flui_hot_reload::dispatch::register_request_rebuild", at = "impl-trait", marker = "Send" },
     { item = "flui_hot_reload::dispatch::register_request_rebuild", at = "impl-trait", marker = "Sync" },
     { item = "flui_material::dialog::show_dialog", at = "bound", marker = "Send" },
-    { item = "flui_platform::clipboard::Clipboard", at = "supertrait", marker = "Send" },
-    { item = "flui_platform::clipboard::Clipboard", at = "supertrait", marker = "Sync" },
     { item = "flui_platform::data_transfer::DataTransferSource", at = "supertrait", marker = "Send" },
     { item = "flui_platform::data_transfer::DataTransferSource", at = "supertrait", marker = "Sync" },
     { item = "flui_platform::drag::PlatformDragSource", at = "supertrait", marker = "Send" },

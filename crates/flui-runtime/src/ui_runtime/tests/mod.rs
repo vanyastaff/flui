@@ -41,7 +41,6 @@ pub(super) fn new_runtime(wake: Arc<dyn Fn() + Send + Sync>) -> Result<UiRuntime
         crate::runtime_services::RuntimeHostServices::new(
             wake,
             Arc::new(AtomicBool::new(false)),
-            crate::presentation::test_clipboard(),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         ),
@@ -59,7 +58,6 @@ fn new_runtime_with_capacity(
         crate::runtime_services::RuntimeHostServices::new(
             wake,
             Arc::new(AtomicBool::new(false)),
-            crate::presentation::test_clipboard(),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         ),
