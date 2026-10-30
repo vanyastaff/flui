@@ -43,7 +43,7 @@ impl RenderSliverConstrainedCrossAxis {
     ///
     /// # Errors
     /// Refuses negative or nonfinite limits before changing layout state.
-    pub fn new(max_extent: f64) -> Result<Self, InvalidSliverCrossAxisExtent> {
+    pub fn try_new(max_extent: f64) -> Result<Self, InvalidSliverCrossAxisExtent> {
         Ok(Self {
             max_extent: validate_extent(max_extent)?,
         })

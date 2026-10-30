@@ -275,7 +275,7 @@ impl Shared {
         if !position.has_applied_viewport_dimension() {
             return None;
         }
-        CarouselGeometry::new(
+        CarouselGeometry::try_new(
             &attachment.layout,
             position.viewport_dimension(),
             attachment.spacing,

@@ -31,14 +31,17 @@ use std::sync::{
 use cursor_icon::CursorIcon;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
+use objc2::runtime::ProtocolObject;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_foundation::{
     NSArray, NSDefaultRunLoopMode, NSNumber, NSObjectProtocol, NSPoint, NSRunLoop, NSSet,
 };
 use objc2_quartz_core::CADisplayLink;
 use objc2_ui_kit::{
-    UIHoverGestureRecognizer, UIRectEdge, UIScreen, UITouch, UITouchType, UITraitCollection,
-    UITraitEnvironment, UIUserInterfaceStyle, UIView, UIWindow, UIWindowScene,
+    UIEvent, UIGestureRecognizer, UIGestureRecognizerDelegate, UIGestureRecognizerState,
+    UIHoverGestureRecognizer, UIPanGestureRecognizer, UIPinchGestureRecognizer, UIRectEdge,
+    UIRotationGestureRecognizer, UIScreen, UIScrollTypeMask, UITouch, UITouchType,
+    UITraitCollection, UITraitEnvironment, UIUserInterfaceStyle, UIView, UIWindow, UIWindowScene,
 };
 
 use crate::host;
@@ -49,7 +52,7 @@ use crate::owner::OpenWindowError;
 use crate::owner::accessibility_slot::{ViewAccessibility, ViewPoint};
 use crate::owner::apple::IOSLoop;
 use crate::owner::apple::ios::{
-    HostDisplays, NativeOwner, ScreenIdentity, TouchPhase, ViewRef, ViewTouches,
+    HostDisplays, NativeOwner, ScreenIdentity, TouchPhase, TrackpadGesture, ViewRef, ViewTouches,
 };
 use crate::owner::apple::ios::{
     IOSSceneAttachmentId, IOSSceneSessionId, LifecycleObservation, SceneConsumer,
@@ -131,6 +134,9 @@ pub struct FluiViewIvars {
     /// Apart from `metrics`: the theme is the system's, so it needs neither a
     /// laid-out size nor an attached window to be reported.
     dark: Arc<AtomicBool>,
+    /// The uptime of the event UIKit last handed the Pencil hover
+    /// recognizer, which stamps the hover it reports.
+    gesture_stamp: std::cell::Cell<Option<f64>>,
 }
 
 define_class!(
@@ -222,7 +228,8 @@ define_class!(
             os_entry("onPencilHover:", (), AfterPanic::Answer(|()| ()), || {
                 self.pin_for_native_callback();
                 if self.window().is_none() { return; }
-                let events = self.ivars().input.borrow_mut().hover(recognizer, self);
+                let stamp = self.ivars().gesture_stamp.get();
+                let events = self.ivars().input.borrow_mut().hover(recognizer, self, stamp);
                 for event in events {
                     if self.window().is_none() { break; }
                     self.delivery().dispatch_input(event);
@@ -230,35 +237,91 @@ define_class!(
             });
         }
 
+        /// A mouse wheel's notches (iOS 13.4).
+        #[unsafe(method(onMouseWheel:))]
+        fn on_mouse_wheel(&self, recognizer: &UIPanGestureRecognizer) {
+            os_entry("onMouseWheel:", (), AfterPanic::Answer(|()| ()), || {
+                self.pin_for_native_callback();
+                let translation = recognizer.translationInView(Some(self));
+                self.dispatch_trackpad(
+                    recognizer,
+                    TrackpadGesture::Wheel { translation: (translation.x, translation.y) },
+                );
+            });
+        }
+
+        /// The trackpad's two-finger scroll (iOS 13.4).
+        #[unsafe(method(onTrackpadScroll:))]
+        fn on_trackpad_scroll(&self, recognizer: &UIPanGestureRecognizer) {
+            os_entry("onTrackpadScroll:", (), AfterPanic::Answer(|()| ()), || {
+                self.pin_for_native_callback();
+                let translation = recognizer.translationInView(Some(self));
+                self.dispatch_trackpad(
+                    recognizer,
+                    TrackpadGesture::Scroll { translation: (translation.x, translation.y) },
+                );
+            });
+        }
+
+        /// The trackpad's pinch.
+        #[unsafe(method(onTrackpadPinch:))]
+        fn on_trackpad_pinch(&self, recognizer: &UIPinchGestureRecognizer) {
+            os_entry("onTrackpadPinch:", (), AfterPanic::Answer(|()| ()), || {
+                self.pin_for_native_callback();
+                self.dispatch_trackpad(recognizer, TrackpadGesture::Pinch { scale: recognizer.scale() });
+            });
+        }
+
+        /// The trackpad's rotation.
+        #[unsafe(method(onTrackpadRotation:))]
+        fn on_trackpad_rotation(&self, recognizer: &UIRotationGestureRecognizer) {
+            os_entry("onTrackpadRotation:", (), AfterPanic::Answer(|()| ()), || {
+                self.pin_for_native_callback();
+                self.dispatch_trackpad(
+                    recognizer,
+                    TrackpadGesture::Rotation { radians: recognizer.rotation() },
+                );
+            });
+        }
+
+        /// The cursor of an iPad's trackpad or mouse, over the view.
+        #[unsafe(method(onCursorHover:))]
+        fn on_cursor_hover(&self, recognizer: &UIHoverGestureRecognizer) {
+            os_entry("onCursorHover:", (), AfterPanic::Answer(|()| ()), || {
+                self.pin_for_native_callback();
+                self.dispatch_trackpad(recognizer, TrackpadGesture::Hover);
+            });
+        }
+
         #[unsafe(method(touchesBegan:withEvent:))]
-        fn touches_began(&self, touches: &NSSet<UITouch>, _event: Option<&AnyObject>) {
+        fn touches_began(&self, touches: &NSSet<UITouch>, event: Option<&UIEvent>) {
             os_entry("touchesBegan:withEvent:", (), AfterPanic::Answer(|()| ()), || {
                 self.pin_for_native_callback();
-                self.dispatch_touches(touches, TouchPhase::Down);
+                self.dispatch_touches(touches, TouchPhase::Down, event);
             });
         }
 
         #[unsafe(method(touchesMoved:withEvent:))]
-        fn touches_moved(&self, touches: &NSSet<UITouch>, _event: Option<&AnyObject>) {
+        fn touches_moved(&self, touches: &NSSet<UITouch>, event: Option<&UIEvent>) {
             os_entry("touchesMoved:withEvent:", (), AfterPanic::Answer(|()| ()), || {
                 self.pin_for_native_callback();
-                self.dispatch_touches(touches, TouchPhase::Move);
+                self.dispatch_touches(touches, TouchPhase::Move, event);
             });
         }
 
         #[unsafe(method(touchesEnded:withEvent:))]
-        fn touches_ended(&self, touches: &NSSet<UITouch>, _event: Option<&AnyObject>) {
+        fn touches_ended(&self, touches: &NSSet<UITouch>, event: Option<&UIEvent>) {
             os_entry("touchesEnded:withEvent:", (), AfterPanic::Answer(|()| ()), || {
                 self.pin_for_native_callback();
-                self.dispatch_touches(touches, TouchPhase::Up);
+                self.dispatch_touches(touches, TouchPhase::Up, event);
             });
         }
 
         #[unsafe(method(touchesCancelled:withEvent:))]
-        fn touches_cancelled(&self, touches: &NSSet<UITouch>, _event: Option<&AnyObject>) {
+        fn touches_cancelled(&self, touches: &NSSet<UITouch>, event: Option<&UIEvent>) {
             os_entry("touchesCancelled:withEvent:", (), AfterPanic::Answer(|()| ()), || {
                 self.pin_for_native_callback();
-                self.dispatch_touches(touches, TouchPhase::Cancel);
+                self.dispatch_touches(touches, TouchPhase::Cancel, event);
             });
         }
 
@@ -308,6 +371,37 @@ define_class!(
     }
 
     unsafe impl NSObjectProtocol for FluiView {}
+
+    // SAFETY: the view is main-thread-only and answers the optional methods
+    // it declares; UIKit holds the delegate weakly, and the view outlives the
+    // recognizers it installs.
+    unsafe impl UIGestureRecognizerDelegate for FluiView {
+        /// A recognizer's event: its uptime stamps what the recognizer
+        /// reports, as touches are stamped (a recognizer has no time).
+        #[unsafe(method(gestureRecognizer:shouldReceiveEvent:))]
+        fn should_receive_event(&self, _recognizer: &UIGestureRecognizer, event: &UIEvent) -> bool {
+            os_entry("gestureRecognizer:shouldReceiveEvent:", (), AfterPanic::Answer(|()| true), || {
+                self.ivars().gesture_stamp.set(Some(event.timestamp()));
+                true
+            })
+        }
+
+        /// The view's recognizers only report: a trackpad's pinch, rotation
+        /// and scroll run together, and none holds another back.
+        #[unsafe(method(gestureRecognizer:shouldRecognizeSimultaneouslyWithGestureRecognizer:))]
+        fn recognizes_simultaneously(
+            &self,
+            _recognizer: &UIGestureRecognizer,
+            _other: &UIGestureRecognizer,
+        ) -> bool {
+            os_entry(
+                "gestureRecognizer:shouldRecognizeSimultaneouslyWithGestureRecognizer:",
+                (),
+                AfterPanic::Answer(|()| true),
+                || true,
+            )
+        }
+    }
 );
 
 /// What a view needs to name its display: the platform's source, the screen
@@ -348,6 +442,7 @@ impl FluiView {
             window_id: display.window,
             metrics,
             dark,
+            gesture_stamp: std::cell::Cell::new(None),
         });
         // SAFETY: `initWithFrame:` is `UIView`'s designated initializer; the
         // `super(this)` receiver is the partially-initialized allocation with
@@ -369,12 +464,84 @@ impl FluiView {
             UITouchType::Stylus.0,
         )]));
         hover.setCancelsTouchesInView(false);
+        hover.setDelegate(Some(ProtocolObject::from_ref(&*this)));
         this.addGestureRecognizer(&hover);
+        this.install_indirect_recognizers(mtm);
         // A GPU-rendered surface is opaque, so tell UIKit not to composite
         // anything behind it.
         this.setOpaque(true);
         this.sample_appearance();
         this
+    }
+
+    /// The recognizers of an iPad's trackpad and mouse: its two-finger
+    /// scroll, pinch and rotation, and its cursor's hover. Each takes the
+    /// indirect pointer alone, so a finger's touches stay the view's own, and
+    /// none cancels them.
+    fn install_indirect_recognizers(&self, mtm: MainThreadMarker) {
+        let indirect =
+            || NSArray::from_retained_slice(&[NSNumber::new_isize(UITouchType::IndirectPointer.0)]);
+        let install = |recognizer: &UIGestureRecognizer, touch_types: &NSArray<NSNumber>| {
+            recognizer.setAllowedTouchTypes(touch_types);
+            recognizer.setCancelsTouchesInView(false);
+            recognizer.setDelegate(Some(ProtocolObject::from_ref(self)));
+            self.addGestureRecognizer(recognizer);
+        };
+        // SAFETY: the live view declares the
+        // action selector above. UIKit retains the recognizer once installed;
+        // its target does not retain the view.
+        let scroll = unsafe {
+            UIPanGestureRecognizer::initWithTarget_action(
+                mtm.alloc(),
+                Some(self),
+                Some(sel!(onTrackpadScroll:)),
+            )
+        };
+        // SAFETY: as for the scroll.
+        let wheel = unsafe {
+            UIPanGestureRecognizer::initWithTarget_action(
+                mtm.alloc(),
+                Some(self),
+                Some(sel!(onMouseWheel:)),
+            )
+        };
+        // A scroll is no touch: each pan takes none, only the scroll events of
+        // iOS 13.4, which it does not know before. A trackpad's continuous
+        // scroll and a wheel's discrete notches get one recognizer each, so
+        // the notches never read as fingers.
+        if scroll.respondsToSelector(sel!(setAllowedScrollTypesMask:)) {
+            scroll.setAllowedScrollTypesMask(UIScrollTypeMask::Continuous);
+            install(&scroll, &NSArray::<NSNumber>::new());
+            wheel.setAllowedScrollTypesMask(UIScrollTypeMask::Discrete);
+            install(&wheel, &NSArray::<NSNumber>::new());
+        }
+        // SAFETY: as for the scroll.
+        let pinch = unsafe {
+            UIPinchGestureRecognizer::initWithTarget_action(
+                mtm.alloc(),
+                Some(self),
+                Some(sel!(onTrackpadPinch:)),
+            )
+        };
+        install(&pinch, &indirect());
+        // SAFETY: as for the scroll.
+        let rotation = unsafe {
+            UIRotationGestureRecognizer::initWithTarget_action(
+                mtm.alloc(),
+                Some(self),
+                Some(sel!(onTrackpadRotation:)),
+            )
+        };
+        install(&rotation, &indirect());
+        // SAFETY: as for the scroll.
+        let cursor = unsafe {
+            UIHoverGestureRecognizer::initWithTarget_action(
+                mtm.alloc(),
+                Some(self),
+                Some(sel!(onCursorHover:)),
+            )
+        };
+        install(&cursor, &indirect());
     }
 
     /// Record the view's light/dark style, reporting it when it changed.
@@ -581,22 +748,72 @@ impl FluiView {
     /// Convert a UIKit touch batch and dispatch each event, then request a
     /// frame — the same "input dirties the presentation" step Android's
     /// motion-event path takes.
-    fn dispatch_touches(&self, touches: &NSSet<UITouch>, phase: TouchPhase) {
+    fn dispatch_touches(
+        &self,
+        touches: &NSSet<UITouch>,
+        phase: TouchPhase,
+        event: Option<&UIEvent>,
+    ) {
+        // The buttons an indirect pointer holds (iOS 13.4); a finger has none.
+        let buttons = event
+            .filter(|event| event.respondsToSelector(sel!(buttonMask)))
+            .map_or(0, |event| event.buttonMask().0);
         let mut any = false;
         for touch in touches {
-            let Some(current_window) = self.window() else {
-                break;
-            };
-            if !touch.window().as_ref().is_some_and(|origin| {
-                std::ptr::eq::<UIWindow>(&raw const **origin, &raw const *current_window)
-            }) {
+            let current_window = self.window();
+            let in_window = current_window.as_ref().is_some_and(|current| {
+                touch.window().as_ref().is_some_and(|origin| {
+                    std::ptr::eq::<UIWindow>(&raw const **origin, &raw const **current)
+                })
+            });
+            // A cancel retires its contact wherever the view is: one dropped
+            // while the view leaves its window would keep the contact, and a
+            // Pencil's hover suppression with it, alive.
+            if !in_window && phase != TouchPhase::Cancel {
+                if current_window.is_none() {
+                    break;
+                }
                 continue;
             }
-            let events = self.ivars().input.borrow_mut().touch(&touch, phase);
+            let events = self
+                .ivars()
+                .input
+                .borrow_mut()
+                .touch(&touch, phase, buttons);
             for event in events {
                 let result = self.delivery().dispatch_input(event);
                 any |= result.default_prevented;
             }
+        }
+        if any {
+            self.delivery().dispatch_request_frame();
+        }
+    }
+
+    /// Convert what an indirect gesture's `recognizer` reports and dispatch
+    /// it, as a touch batch is.
+    fn dispatch_trackpad(&self, recognizer: &UIGestureRecognizer, gesture: TrackpadGesture) {
+        if self.window().is_none() {
+            return;
+        }
+        // SAFETY: UIKit invokes the action with a live gesture recognizer;
+        // `state` is its documented enum-valued getter (omitted by the
+        // bindings).
+        let state: UIGestureRecognizerState = unsafe { msg_send![recognizer, state] };
+        let location = recognizer.locationInView(Some(self));
+        let stamp = self.ivars().gesture_stamp.get();
+        let events = self.ivars().input.borrow_mut().trackpad(
+            gesture,
+            state.0,
+            (location.x, location.y),
+            stamp,
+        );
+        let mut any = false;
+        for event in events {
+            if self.window().is_none() {
+                break;
+            }
+            any |= self.delivery().dispatch_input(event).default_prevented;
         }
         if any {
             self.delivery().dispatch_request_frame();

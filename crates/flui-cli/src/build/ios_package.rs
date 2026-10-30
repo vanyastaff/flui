@@ -549,6 +549,10 @@ pub(crate) async fn package_application(
 /// `CADisableMinimumFrameDurationOnPhone` lets an iPhone with a ProMotion
 /// panel run `CADisplayLink` above 60 Hz; without it iOS caps the link there
 /// whatever frame-rate range the app asks for.
+///
+/// `UIApplicationSupportsIndirectInputEvents` makes UIKit report an iPad's
+/// trackpad and mouse as an indirect pointer, with its buttons, instead of
+/// as a finger.
 fn application_info_plist(
     bundle: &crate::build::AppBundle,
     numeric: &str,
@@ -564,6 +568,7 @@ fn application_info_plist(
         "CFBundleSupportedPlatforms":[if platform == "IOS" {"iPhoneOS"} else {"iPhoneSimulator"}],
         "UIDeviceFamily":[1,2], "UILaunchScreen":{},
         "CADisableMinimumFrameDurationOnPhone":true,
+        "UIApplicationSupportsIndirectInputEvents":true,
         "UIApplicationSceneManifest": {
             "UIApplicationSupportsMultipleScenes": false,
             "UISceneConfigurations": {
@@ -696,7 +701,7 @@ mod tests {
         drop(CancelOnDrop(Arc::clone(&state)));
         assert_eq!(state.load(Ordering::Acquire), COMMITTING);
     }
-    fn info_plist_lifts_the_phone_frame_duration_cap() {
+    fn info_plist_lifts_the_phone_frame_duration_cap_and_reads_the_pointer() {
         let mut bundle = crate::build::AppBundle::new("Demo", "dev.flui.demo");
         bundle.version = "1.2.3".into();
         for platform in ["IOS", "IOSSIMULATOR"] {
@@ -707,14 +712,19 @@ mod tests {
                 "{platform}"
             );
             assert_eq!(plist["MinimumOSVersion"], "15.0", "{platform}");
+            assert_eq!(
+                plist["UIApplicationSupportsIndirectInputEvents"],
+                serde_json::Value::Bool(true),
+                "{platform}: a trackpad is a pointer, not a finger"
+            );
         }
     }
     #[test]
     fn publication_contract() {
         crate::test_cases::run_cases(&[
             (
-                "info plist lifts the phone frame duration cap",
-                info_plist_lifts_the_phone_frame_duration_cap,
+                "info plist lifts the phone frame duration cap and reads the pointer",
+                info_plist_lifts_the_phone_frame_duration_cap_and_reads_the_pointer,
             ),
             (
                 "publication rolls back and retains backup when rollback fails",

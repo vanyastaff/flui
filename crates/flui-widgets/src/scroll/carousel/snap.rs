@@ -50,7 +50,7 @@ pub(super) struct CarouselSnap {
 
 impl CarouselSnap {
     fn geometry(&self, metrics: &ScrollMetrics) -> Option<CarouselGeometry> {
-        CarouselGeometry::new(
+        CarouselGeometry::try_new(
             &self.layout,
             metrics.viewport_dimension,
             self.spacing,

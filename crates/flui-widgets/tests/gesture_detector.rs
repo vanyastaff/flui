@@ -2599,7 +2599,7 @@ pub(crate) fn scoped_position_smoothing_reaches_drag_slot_updates() {
     };
     let raw = jitter(None);
     let smoothed = jitter(Some(
-        OneEuroTuning::new(0.5, 0.0, 1.0).expect("valid tuning"),
+        OneEuroTuning::try_new(0.5, 0.0, 1.0).expect("valid tuning"),
     ));
     assert!(
         (raw - 8.0).abs() < 1e-9,

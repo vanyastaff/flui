@@ -21,7 +21,7 @@ impl SliverConstrainedCrossAxis {
         child: impl IntoView,
     ) -> Result<Self, InvalidSliverCrossAxisExtent> {
         Ok(Self {
-            configuration: RenderSliverConstrainedCrossAxis::new(max_extent)?,
+            configuration: RenderSliverConstrainedCrossAxis::try_new(max_extent)?,
             child: child.into_view().boxed(),
         })
     }

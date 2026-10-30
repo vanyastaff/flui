@@ -222,7 +222,7 @@ pointer smoothing. Hardware predictions remain separate source samples.
 long-press, force-press and scale smooth the positions they publish after
 recognition (ends, velocities and native pan-zoom stay raw); slop, arena and velocity decisions
 keep the raw samples, and each accepted gesture starts unsmoothed. No preset
-selects smoothing. `OneEuroTuning::new` validates parameters with a typed
+selects smoothing. `OneEuroTuning::try_new` validates parameters with a typed
 error; filtering rejects invalid samples the same way. Invalid input leaves
 accepted history unchanged; the 2D filter commits both axes together, and a
 duplicate or regressed timestamp holds its accepted result and clock anchor.

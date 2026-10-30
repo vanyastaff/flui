@@ -361,7 +361,7 @@ fn compile(root: &Path, recorded: Option<&Record>) -> anyhow::Result<Built> {
         .nth(1)
         .unwrap_or("unknown")
         .to_owned();
-    let scratch = ScratchDir::new("android-dex")?;
+    let scratch = ScratchDir::try_new("android-dex")?;
     let classes = scratch.path().join("classes");
     let out = scratch.path().join("out");
     std::fs::create_dir_all(&classes)?;

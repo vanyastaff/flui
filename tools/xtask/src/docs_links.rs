@@ -164,7 +164,7 @@ fn climbing_out(
     root: &Path,
     files: &[&str],
 ) -> anyhow::Result<Vec<(String, String)>> {
-    let copy = ScratchDir::new("docs-links")?;
+    let copy = ScratchDir::try_new("docs-links")?;
     for file in files {
         let to = copy.path().join(file);
         let dir = to.parent().expect("BUG: a copied file sits in the copy");

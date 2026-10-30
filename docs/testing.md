@@ -758,11 +758,11 @@ before `HeadlessHost::replay` applies any of it, and the replay returns the
 decisions to compare with the recorded ones:
 
 ```rust,ignore
-let writer = RecordingWriter::new(Vec::new(), &host.recording_header(Privacy::Redact))?;
+let writer = RecordingWriter::try_new(Vec::new(), &host.recording_header(Privacy::Redact))?;
 let recording = record(host.input_taps(), writer)?;
 // ...drive the host...
 let bytes = recording.finish()?;
-let replayable = ReplayableRecording::read(RecordingReader::new(&bytes[..])?)?;
+let replayable = ReplayableRecording::read(RecordingReader::try_new(&bytes[..])?)?;
 assert_eq!(fresh_host.replay(&replayable), replayable.decisions());
 ```
 

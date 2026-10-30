@@ -61,7 +61,7 @@ impl WgpuPainter {
         group: Option<&flui_layer::BackdropGroupKey>,
     ) -> EngineResult<()> {
         let matrix = self.current_transform_matrix().m;
-        let affine = ValidatedAffine::new(glam::DMat4::from_cols_array(&matrix))?;
+        let affine = ValidatedAffine::try_new(glam::DMat4::from_cols_array(&matrix))?;
         let shape = ValidatedClip::rect(bounds)?;
         let Some(output_bounds) = affine.map_bounds(bounds)? else {
             return Ok(());

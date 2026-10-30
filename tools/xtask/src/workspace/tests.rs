@@ -512,7 +512,7 @@ fn a_linked_checkout_preserves_test_reachability() {
     fixture.write("crates/a/tests/main.rs", "mod mounted;\n");
     fixture.write("crates/a/tests/mounted.rs", "");
     fixture.write("crates/a/tests/orphan.rs", "");
-    let scratch = util::ScratchDir::new("workspace-link").expect("scratch directory");
+    let scratch = util::ScratchDir::try_new("workspace-link").expect("scratch directory");
     let linked = scratch.path().join("checkout");
     std::os::unix::fs::symlink(fixture.root(), &linked).expect("link checkout");
     let metadata = util::metadata(&linked).expect("cargo metadata through linked checkout");

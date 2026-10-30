@@ -2514,7 +2514,7 @@ pub(crate) fn profiles(stored: Vec<ProfileDto>) -> Result<GestureProfiles> {
                 position_smoothing: values
                     .position_smoothing
                     .map(|tuning| {
-                        OneEuroTuning::new(tuning.min_cutoff, tuning.beta, tuning.d_cutoff)
+                        OneEuroTuning::try_new(tuning.min_cutoff, tuning.beta, tuning.d_cutoff)
                             .map_err(invalid)
                     })
                     .transpose()?,
@@ -2554,7 +2554,7 @@ mod tests {
             "{refused:?}"
         );
         let mut writer =
-            RecordingWriter::new(Vec::new(), &RecordingHeader::new(RecordingClock::Virtual))
+            RecordingWriter::try_new(Vec::new(), &RecordingHeader::new(RecordingClock::Virtual))
                 .expect("header");
         let error = writer
             .write_row(Err(refused.expect_err("refused")))

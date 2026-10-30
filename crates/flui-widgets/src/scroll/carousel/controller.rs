@@ -69,7 +69,7 @@ impl Attachment {
         if !position.has_applied_viewport_dimension() {
             return None;
         }
-        CarouselGeometry::new(
+        CarouselGeometry::try_new(
             &self.layout,
             position.viewport_dimension(),
             self.spacing,

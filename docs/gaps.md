@@ -227,7 +227,7 @@ request.
 
 > **Environments:** various · **Who it hurts:** Pen, trackpad and iPad users · **Parity:** [Input](platform-parity.md#input)
 
-- **Missing:** no pen on macOS or Linux; iPad pointer and hardware keyboard missing; no cursors on mobile; keyboard layout read on Windows only.
+- **Missing:** no pen on macOS or Linux; no iPad hardware keyboard; the iPad pointer (trackpad scroll, pinch, rotation, hover and the secondary button) is type-checked only, never run on an iPad; no cursors on mobile; keyboard layout read on Windows only.
 - Windows: the precision-touchpad pan and pinch (DirectManipulation) have never run on a touchpad, and no injector reaches it, so its golden recording can only come from a `native-capture` run on one (injected touch, pen, mouse and wheel already record theirs through a manual Windows run).
 - Android: touchpad pinch and two-finger scroll and its pen hover and tilt ran only from `uinput` devices through a manual Android run, with no hardware touchpad or stylus. Its widgets ran with `uinput` touches, `input` stylus and mouse events and hardware key events through a manual Android run, with no physical keyboard, key repeat or dead key.
 - Android: a touch held while the app goes to the background makes the system report it not responding ten seconds later. The loop reads its input queue only while the Activity is resumed, so the cancel the system sends for the window it took away is never answered (seen on a Galaxy S21 by holding a touch and pressing Home).
@@ -516,5 +516,6 @@ request.
 | 2026-10-29 | minor | Entry 36: no assistive-technology focus reaches a widget, so a `Carousel`'s autoplay cannot pause on it |
 | 2026-10-30 | minor | Entry 2: the semantics identifier reaches Android's `viewIdResourceName` through a change to the vendored `accesskit_android`, type-checked |
 | 2026-10-30 | minor | Entries 2 and 36: every Web canvas mirrors its tree as a parallel ARIA DOM in a host over the canvas, activated by a placeholder only a screen reader finds, its clicks reaching the action listener (headless Chrome, constructed events); the browser reports no screen reader's cursor |
+| 2026-10-30 | minor | Entry 15: the iPad pointer scrolls, pinches, rotates, hovers and reads its secondary button, type-checked, never run on an iPad |
 
 </details>

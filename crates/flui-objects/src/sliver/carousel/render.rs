@@ -274,7 +274,7 @@ impl RenderSliverCarousel {
         {
             return Some(geometry.clone());
         }
-        let geometry = CarouselGeometry::new(
+        let geometry = CarouselGeometry::try_new(
             &self.config.layout,
             viewport,
             self.config.spacing,

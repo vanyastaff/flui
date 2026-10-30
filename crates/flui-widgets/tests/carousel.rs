@@ -102,7 +102,7 @@ fn fling(from: f64, to: f64) -> PointerScript {
 }
 
 fn geometry(layout: &CarouselLayout, count: usize) -> CarouselGeometry {
-    CarouselGeometry::new(layout, WIDTH, SPACING, count).expect("a layout with items to show")
+    CarouselGeometry::try_new(layout, WIDTH, SPACING, count).expect("a layout with items to show")
 }
 
 #[test]
