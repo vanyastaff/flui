@@ -1709,6 +1709,14 @@ const ROWS: &[(&str, fn())] = &[
         cursor_area_whose_platform_closes_the_owner_and_panics,
     ),
     (
+        "completion: a push platform's discard parking a failure and panicking",
+        completion_whose_platform_discard_parks_and_panics,
+    ),
+    (
+        "completion: a push platform's discard closing the owner and panicking",
+        completion_whose_platform_discard_closes_the_owner_and_panics,
+    ),
+    (
         "in-memory: a request behind a queued grant that moves the store",
         in_memory_request_behind_a_queued_gate_move,
     ),
@@ -3274,6 +3282,80 @@ fn cursor_area_whose_platform_closes_the_owner_and_panics() {
         "the platform clone is released inside the scope, not during the unwind"
     );
     CLOSING_OWNER.with(|slot| slot.borrow_mut().take());
+    the_owner_keeps_working(&self::owner());
+}
+
+/// A push platform whose discard parks a failure through the client's store,
+/// then panics.
+struct ParksThenFailsToDiscard;
+
+impl PlatformTextInput for ParksThenFailsToDiscard {
+    fn set_ime_allowed(&self, _: bool) {}
+    fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn discard_composition(&self) {
+        let store = CLEANUP_STORE.with(|slot| slot.borrow().clone());
+        if let Some(store) = store {
+            park_through(&store, "parked by the discard");
+        }
+        panic!("platform failure discarding the composition");
+    }
+}
+
+fn completion_whose_platform_discard_parks_and_panics() {
+    let owner = TextInputOwner::new(TextInputBackend::Push(Arc::new(ParksThenFailsToDiscard)));
+    let store = composing_store();
+    let _client = owner
+        .handle()
+        .attach(TextInputClient::new(store.clone()))
+        .expect("attach");
+    CLEANUP_STORE.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&store)));
+    assert_eq!(
+        raised(|| owner.complete_composition()).as_deref(),
+        Some("parked by the discard"),
+        "the failure parked before the platform's panic is raised first"
+    );
+    CLEANUP_STORE.with(|slot| slot.borrow_mut().take());
+    assert_eq!(store.composition(), None, "the store still commits");
+    the_owner_keeps_working(&self::owner());
+}
+
+/// A push platform that closes its owner, then panics, from its discard, and
+/// panics when destroyed.
+struct ClosesOnDiscard;
+
+impl PlatformTextInput for ClosesOnDiscard {
+    fn set_ime_allowed(&self, _: bool) {}
+    fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn discard_composition(&self) {
+        let owner = CLOSING_OWNER.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
+        if let Some(owner) = owner {
+            owner.close();
+        }
+        panic!("platform failure discarding the composition");
+    }
+}
+
+impl Drop for ClosesOnDiscard {
+    fn drop(&mut self) {
+        panic!("platform destroyed");
+    }
+}
+
+fn completion_whose_platform_discard_closes_the_owner_and_panics() {
+    let owner = TextInputOwner::new(TextInputBackend::Push(Arc::new(ClosesOnDiscard)));
+    CLOSING_OWNER.with(|slot| *slot.borrow_mut() = Some(Rc::downgrade(&owner)));
+    let store = composing_store();
+    let _client = owner
+        .handle()
+        .attach(TextInputClient::new(store.clone()))
+        .expect("attach");
+    assert_eq!(
+        raised(|| owner.complete_composition()).as_deref(),
+        Some("platform failure discarding the composition"),
+        "the platform clone is released inside the scope, so its destructor's panic follows"
+    );
+    CLOSING_OWNER.with(|slot| slot.borrow_mut().take());
+    assert_eq!(store.composition(), None, "the store still commits");
     the_owner_keeps_working(&self::owner());
 }
 

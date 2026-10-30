@@ -814,8 +814,12 @@ impl TextInputOwner {
             // The platform forgets its preedit first, so its input method
             // never commits again what the store commits in place. A
             // platform that panics or reenters still has the store commit.
+            // The call reaches application code whose grants park failures,
+            // and may close this owner: the clone is released inside the
+            // scope, not by the commit's unwind.
             if let Some(platform) = self.push_platform() {
-                let _ = calls.run(|| platform.discard_composition());
+                let _ = calls.run_parking(&self.gate, || platform.discard_composition());
+                release_platform(platform, &mut calls);
             }
             // The commit settles a grant, which may park an owner failure.
             // It is queued behind the shut gate inside a frame, and behind
