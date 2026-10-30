@@ -1552,8 +1552,7 @@ impl ScrollableState {
         let wheel_distances = view.wheel_distances;
         let (viewport_semantics, position_semantics) = scroll_semantics(
             self.scroll_controller.clone(),
-            view.scroll_direction,
-            applied.axis_direction.is_reversed(),
+            applied.axis_direction,
             move_to,
             view.semantic_label.clone(),
             applied.position_label,
@@ -1897,17 +1896,17 @@ fn service_pending_command(
 /// line distance vertically, its character distance horizontally), never more than a page.
 fn scroll_semantics(
     controller: ScrollController,
-    axis: Axis,
-    reversed: bool,
+    direction: AxisDirection,
     move_to: Rc<dyn Fn(f64, ScrollCause)>,
     label: Option<String>,
     position_label: &'static str,
     item_step: f64,
 ) -> (Semantics, Semantics) {
+    let (axis, reversed) = (direction.axis(), direction.is_reversed());
     let mut semantics = Semantics::new()
         .container(true)
         .role(crate::SemanticsRole::ScrollView)
-        .scroll_source(controller.position(), axis, reversed);
+        .scroll_source(controller.position(), direction);
     if let Some(label) = label {
         semantics = semantics.label(label);
     }
@@ -1917,8 +1916,9 @@ fn scroll_semantics(
         .explicit_child_nodes(true)
         .role(crate::SemanticsRole::Slider)
         .label(position_label)
-        .scroll_source(controller.position(), axis, reversed);
+        .scroll_source(controller.position(), direction);
     let reveal_controller = controller.clone();
+    let offset_controller = controller.clone();
     let step: Rc<dyn Fn(bool, SemanticsScrollUnit)> = {
         let move_to = Rc::clone(&move_to);
         Rc::new(move |increase, unit| {
@@ -1979,6 +1979,25 @@ fn scroll_semantics(
         );
     });
     let set = move_to;
+    // A platform's offset runs from the top or left edge, the order the
+    // position is published in: a scrollable growing up or to the left
+    // mirrors it back into its own pixels.
+    let to_offset = Rc::clone(&set);
+    let semantics = semantics.on_set_scroll_offset(move |_cx, offset| {
+        let visual = match axis {
+            Axis::Vertical => offset.dy,
+            Axis::Horizontal => offset.dx,
+        };
+        let pixels = if reversed {
+            let position = offset_controller.position();
+            position.min_scroll_extent() + position.max_scroll_extent() - visual
+        } else {
+            visual
+        };
+        if pixels.is_finite() {
+            to_offset(pixels, ScrollCause::UserInput);
+        }
+    });
     let increase = Rc::clone(&step);
     let decrease = Rc::clone(&step);
     let adjustment = adjustment

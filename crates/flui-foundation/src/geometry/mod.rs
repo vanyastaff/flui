@@ -35,6 +35,7 @@
 
 pub mod angle;
 pub mod axis;
+pub mod axis_direction;
 pub mod bounds;
 pub mod circle;
 pub mod corner;
@@ -80,6 +81,7 @@ pub mod prelude {
 
 pub use angle::Angle;
 pub use axis::Axis;
+pub use axis_direction::AxisDirection;
 pub use bounds::{Bounds, bounds};
 pub use circle::Circle;
 pub use corner::Corner;
