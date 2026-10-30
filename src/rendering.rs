@@ -13,7 +13,7 @@ pub use flui_rendering::context::{
 };
 pub use flui_rendering::hit_testing::{
     CursorIcon, HitMetadata, HitTestBehavior, MouseTrackerAnnotation, PanZoomTarget, PointerTarget,
-    ScrollTarget,
+    ScrollTarget, SmartZoomTarget,
 };
 pub use flui_rendering::parent_data::{
     BoxParentData, ContainerBoxParentData, FlexFit, FlexParentData, FlowParentData,

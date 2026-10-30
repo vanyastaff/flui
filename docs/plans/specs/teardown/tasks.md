@@ -216,11 +216,15 @@ graph LR
   `device_loss_on_the_closing_frame_still_exits_ok`. Зубы: без `failure_retry_at` в
   `UiRuntime::next_wake` падает R10; без вопроса выхода в `run_owner_turn` падает R15 (закрытие
   из кадра закрывает окно, но цикл не выходит). Правки `frame_pacing.rs` не понадобилось.
-  - [ ] Находка: на headless потерянное устройство, чьё восстановление не удаётся, крутит
+  - [x] Находка: на headless потерянное устройство, чьё восстановление не удаётся, крутит
     кадры синхронно без конца: `SubmitVerdict::DeviceLost` ставит повтор кадра сразу, а
     headless доставляет запрос кадра в том же drain. На рабочем столе это кадр на каждый vsync
     до восстановления. R20 закрывает окно в том же кадре и не зависит от этого; решение —
-    отдельно.
+    отдельно. Решено ADR-0267: кадр на потерянном устройстве ждёт backoff сброшенного кадра,
+    пересборка, падающая на потолке, после десяти попыток бросается до
+    `AppHandle::retry_render_device`; строки `runner_close`
+    `a_lost_device_waits_out_its_rebuild_backoff` и
+    `a_given_up_device_renders_again_when_the_application_asks`.
 - [x] T10 — характеризация раннера (учёт `Drop` — ADR-0261 §2; R4 — `EXIT_BUDGET`)
 - [x] T11 — вето с причиной. `CloseRequest::reason` несёт причину; `KeepOpen` обработчика
   записывает `PendingClose` (`CloseGuardSource::record`), паника обработчика не записывает

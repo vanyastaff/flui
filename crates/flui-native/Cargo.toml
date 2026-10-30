@@ -513,6 +513,14 @@ version = "0.27.1"
 version = "0.2.2"
 path = "../../third_party/accesskit_ios"
 
+# TalkBack (gap 2 of docs/gaps.md): the low-level adapter, which `FluiView`'s
+# node provider forwards to on the Java main thread. Same 0.25 accesskit
+# cohort. It is built on jni 0.21 beside FLUI's 0.22, and the two meet only
+# through raw pointers (the environment and the view in, the node info out),
+# until accesskit_android moves to jni 0.22.
+[target.'cfg(target_os = "android")'.dependencies.accesskit_android]
+version = "0.9.1"
+
 [features]
 default = ["desktop"]
 

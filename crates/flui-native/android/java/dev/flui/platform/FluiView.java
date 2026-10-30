@@ -15,6 +15,7 @@ import android.graphics.Point;
 import android.graphics.RectF;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
@@ -25,6 +26,8 @@ import android.view.DragEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
+import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityNodeProvider;
 import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.CursorAnchorInfo;
 import android.view.inputmethod.EditorInfo;
@@ -38,13 +41,15 @@ import java.util.HashMap;
 /**
  * The one view FLUI adds over a NativeActivity's content: the input method's
  * editor, the drop target, the drag source, the receiver of pasted and
- * keyboard content, and the stylus handwriting editor.
+ * keyboard content, the stylus handwriting editor, and the host of the
+ * semantics tree as virtual views.
  *
  * It draws nothing and takes no touch: FLUI renders to the window surface and
  * reads input from the native input queue. Every method runs on the Java main
  * thread. The native side reaches it only through posted calls, and every
- * native method it calls only queues data for the FLUI owner thread, so
- * neither thread ever waits for the other.
+ * native method it calls either queues data for the FLUI owner thread or, for
+ * the node provider, answers from the tree the native side applied on this
+ * thread, so neither thread ever waits for the other.
  *
  * {@code handle} names the native bridge. The native side clears it, on this
  * thread, before it frees the bridge; a callback after that sees zero and
@@ -71,6 +76,16 @@ public final class FluiView extends View {
 
     /** The window insets this view received have changed. */
     static native void nativeInsetsChanged(long handle);
+
+    /** The node info of a virtual view, {@code HOST_VIEW_ID} for this view itself, or null. */
+    static native AccessibilityNodeInfo nativeNodeInfo(long handle, View host, int virtualViewId);
+
+    /** The node info of the virtual view that holds the focus of {@code focusType}, or null. */
+    static native AccessibilityNodeInfo nativeFindFocus(long handle, View host, int focusType);
+
+    /** Whether the semantics tree took {@code action} on a virtual view. */
+    static native boolean nativePerformAction(long handle, View host, int virtualViewId,
+            int action, Bundle arguments);
 
     /**
      * The secure, system and global settings behind FLUI's preferences:
@@ -115,6 +130,8 @@ public final class FluiView extends View {
     private boolean observing;
     /** The contrast listener on API 34 and above, while {@link #observing}. */
     private Object contrast;
+    /** The node provider, while the native side has an accessibility bridge for this view. */
+    private AccessibilityNodeProvider nodes;
 
     private FluiView(Activity activity, long handle) {
         super(activity);
@@ -201,6 +218,8 @@ public final class FluiView extends View {
     /** The native bridge is going away: stop calling it and leave the window. */
     public void detach() {
         handle = 0;
+        nodes = null;
+        setAccessibilityDelegate(null);
         stopObserving();
         editing = false;
         for (Object permissions : dropPermissions.values()) {
@@ -635,6 +654,58 @@ public final class FluiView extends View {
                     // Nothing to recover: the bytes were read or the read failed.
                 }
             }
+        }
+    }
+
+    // ------------------------------------------------------- accessibility
+
+    /**
+     * Install the accessibility delegate or take it out: the native side calls
+     * this once the window's accessibility bridge exists, and again when it
+     * goes away. A view without one answers as a plain view.
+     */
+    public void provideNodes(boolean provide) {
+        if (provide) {
+            nodes = new Nodes();
+            setAccessibilityDelegate(new NodesDelegate());
+        } else {
+            nodes = null;
+            setAccessibilityDelegate(null);
+        }
+    }
+
+    /** Hands the framework {@link #nodes}, while the native bridge lives. */
+    private final class NodesDelegate extends View.AccessibilityDelegate {
+        @Override
+        public AccessibilityNodeProvider getAccessibilityNodeProvider(View host) {
+            AccessibilityNodeProvider nodes = FluiView.this.nodes;
+            return nodes != null && handle != 0 ? nodes : super.getAccessibilityNodeProvider(host);
+        }
+    }
+
+    /**
+     * FLUI's semantics tree as virtual views of this one. Every call answers
+     * from the tree the native side applied on this thread, so none waits for
+     * the owner.
+     */
+    private final class Nodes extends AccessibilityNodeProvider {
+        @Override
+        public AccessibilityNodeInfo createAccessibilityNodeInfo(int virtualViewId) {
+            long handle = FluiView.this.handle;
+            return handle == 0 ? null : nativeNodeInfo(handle, FluiView.this, virtualViewId);
+        }
+
+        @Override
+        public AccessibilityNodeInfo findFocus(int focusType) {
+            long handle = FluiView.this.handle;
+            return handle == 0 ? null : nativeFindFocus(handle, FluiView.this, focusType);
+        }
+
+        @Override
+        public boolean performAction(int virtualViewId, int action, Bundle arguments) {
+            long handle = FluiView.this.handle;
+            return handle != 0
+                    && nativePerformAction(handle, FluiView.this, virtualViewId, action, arguments);
         }
     }
 

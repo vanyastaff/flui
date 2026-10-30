@@ -295,6 +295,60 @@ impl<'a> RenderObjectContext<'a> {
         Ok(self.dispatch_handle()?.unregister_pan_zoom(target)?)
     }
 
+    /// Register a smart zoom claim handler in the active owner lane.
+    ///
+    /// The first smart zoom target on the hit path, leaf first, whose handler
+    /// returns `Stop` takes the event, so nested zoomable content answers
+    /// before its container. The returned target is data-only and may be
+    /// stored in a render object.
+    ///
+    /// # Errors
+    ///
+    /// Returns the lane's typed dispatch error when no owner lane is active,
+    /// the element was mounted detached, or the owner is gone.
+    pub fn register_smart_zoom(
+        &self,
+        handler: impl Fn(
+            flui_interaction::pointer::SmartZoomDispatch,
+        ) -> flui_interaction::pointer::EventPropagation
+        + 'static,
+    ) -> Result<flui_interaction::pointer::SmartZoomTarget, RenderObjectContextError> {
+        Ok(self.dispatch_handle()?.register_smart_zoom(handler)?)
+    }
+
+    /// Replace an existing smart zoom target's handler without changing its
+    /// data-plane identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns the lane's typed dispatch error for wrong/detached owner state
+    /// or for a target that no longer belongs to the active owner lane.
+    pub fn replace_smart_zoom(
+        &self,
+        target: flui_interaction::pointer::SmartZoomTarget,
+        handler: impl Fn(
+            flui_interaction::pointer::SmartZoomDispatch,
+        ) -> flui_interaction::pointer::EventPropagation
+        + 'static,
+    ) -> Result<(), RenderObjectContextError> {
+        Ok(self
+            .dispatch_handle()?
+            .replace_smart_zoom(target, handler)?)
+    }
+
+    /// Remove a smart zoom target from future arbitration.
+    ///
+    /// # Errors
+    ///
+    /// Returns the lane's typed dispatch error for wrong/detached owner state
+    /// or for a target already removed from the active owner lane.
+    pub fn unregister_smart_zoom(
+        &self,
+        target: flui_interaction::pointer::SmartZoomTarget,
+    ) -> Result<(), RenderObjectContextError> {
+        Ok(self.dispatch_handle()?.unregister_smart_zoom(target)?)
+    }
+
     /// Register mouse-region callbacks in the active owner lane.
     ///
     /// The returned target is data-only and may be stored in a render object;

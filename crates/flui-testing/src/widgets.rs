@@ -218,7 +218,10 @@ fn dispatch_synthetic_pointer(host: &WidgetHost, mut event: PointerEvent) {
         }
         PointerEvent::Cancel(cancel) => cancel.time = time,
         PointerEvent::Scroll(scroll) => scroll.time = time,
-        _ => unreachable!("synthetic pointer helpers produce measured contacts or scrolls"),
+        PointerEvent::SmartZoom(zoom) => zoom.time = time,
+        _ => unreachable!(
+            "synthetic pointer helpers produce measured contacts, scrolls or smart zooms"
+        ),
     }
     host.dispatch_pointer(&event);
 }

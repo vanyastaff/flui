@@ -62,6 +62,6 @@ pub use flui_interaction::pointer::{
     EventPropagation, LocalPayloadTarget, MouseEnterCallback, MouseExitCallback,
     MouseHoverCallback, MouseRegionCallbacks, MouseRegionTarget, MouseTrackerAnnotation,
     PanZoomTarget, PathClipTarget, PointerDispatch, PointerTarget, ScrollTarget, ShaderMaskTarget,
-    resolve_path_clip_target, resolve_shader_mask_target,
+    SmartZoomTarget, resolve_path_clip_target, resolve_shader_mask_target,
 };
 pub use result::HitTestResult;

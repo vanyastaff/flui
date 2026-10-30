@@ -158,6 +158,15 @@ where
         });
     }
     worker_reload.register_ui_runtime(&ui_runtime);
+    // The application's request to rebuild a given-up GPU device
+    // (`AppHandle::retry_render_device`, ADR-0267) asks this window for a
+    // frame, which acts on it.
+    let device_retry = APP_RUNTIME.with(|slot| {
+        slot.borrow()
+            .main_ingress
+            .as_ref()
+            .map(|ingress| ingress.device_retry().watch(&ui_runtime.wake_handle()))
+    });
     // The development agent's window is vended while the ui_runtime is still
     // ours: if the installation below fails, the ui_runtime drops it, and the
     // hook is handed only a window that finished installing.
@@ -255,6 +264,7 @@ where
                 worker_reload,
                 deadlines,
                 reveal_window: Rc::downgrade(&window),
+                device_retry,
             },
         ))
         .map_err(|error| crate::app::AppWindowError::Mount {
@@ -382,6 +392,7 @@ pub(super) struct DesktopFrameDriver {
     lane: Arc<Mutex<crate::app::raster_lane::RasterLane<super::window_renderer::LaneRenderer>>>,
     worker_reload: WorkerReload,
     reveal_window: std::rc::Weak<dyn PlatformWindow>,
+    device_retry: Option<crate::app::application_control::DeviceRetryWatch>,
 }
 
 /// Presentation-owned pacing sources, retained even while its driver is leased.
@@ -447,6 +458,10 @@ impl DesktopFrameDriver {
         ui_runtime: &mut crate::app::ui_runtime::UiRuntime,
         presentation: flui_foundation::PresentationId,
     ) {
+        let retry_requested = self
+            .device_retry
+            .as_mut()
+            .is_some_and(crate::app::application_control::DeviceRetryWatch::take_request);
         let lane_frame = &self.lane;
         let worker_reload_frame = &self.worker_reload;
         let device_recovery_backoff = &self.deadlines.device_recovery_backoff;
@@ -488,6 +503,12 @@ impl DesktopFrameDriver {
             // nested platform pump then finds an empty slot and skips the
             // drain, instead of panicking the borrow.
             let inbox_redraw = ui_runtime.drain_owner_inbox();
+            // A requested rebuild takes a given-up device out of its held
+            // state, which asks for the frame `pump_with_device_recovery`
+            // rebuilds it in.
+            if retry_requested {
+                ui_runtime.retry_render_device();
+            }
 
             // `device_recovery_backoff.next_attempt_at().is_some()` is a
             // REQUIRED fourth dirty source, not an optional extra: a

@@ -5,13 +5,13 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use flui_app::app::{
-    AppConfig, AppHandle, Application, CloseReason, CloseRequestHandler, CloseResponse, ExitPolicy,
-    request_presentation_close,
+    AppConfig, AppHandle, Application, CloseReason, CloseRequestHandler, CloseResponse,
+    DeviceRecovery, ExitPolicy, FrameFailureHandler, FrameFailureKind, request_presentation_close,
 };
 use flui_app::testing::{HeadlessRun, HeadlessRunHandle, RunExit, StandInRenderer, TeardownStep};
 use flui_foundation::PresentationAddress;
@@ -57,6 +57,8 @@ struct Observed {
     gate: Rc<Gate>,
     /// The presentation's close guard, once the root is mounted.
     guard: Rc<RefCell<Option<CloseGuard>>>,
+    /// The device rebuild each frame dropped on a lost device reported.
+    device_reports: Arc<Mutex<Vec<DeviceRecovery>>>,
 }
 
 impl Observed {
@@ -242,7 +244,18 @@ fn observed_app(
     ready: Rc<RefCell<Option<AppHandle>>>,
     handler: Option<CloseRequestHandler>,
 ) -> Application<ObservedRoot, impl FnMut(&AppHandle) -> ObservedRoot> {
-    let mut config = AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed);
+    let device_reports = Arc::clone(&observed.device_reports);
+    let failures = FrameFailureHandler::new(move |report| {
+        if let FrameFailureKind::DeviceLost { recovery, .. } = report.kind {
+            device_reports
+                .lock()
+                .expect("BUG: the frame-failure handler does not panic")
+                .push(recovery);
+        }
+    });
+    let mut config = AppConfig::new()
+        .with_exit_policy(ExitPolicy::OnLastWindowClosed)
+        .with_frame_failure_handler(failures);
     if let Some(handler) = handler {
         config = config.with_close_request_handler(handler);
     }
@@ -673,6 +686,147 @@ pub(crate) fn a_quit_the_window_stays_open_for_is_cancelled() {
     }
 }
 
+/// Sleep until `deadline` and run the turn a native loop runs when its wake
+/// deadline is due: it asks every window for a frame.
+fn wake_at(started: &Started, deadline: Instant) {
+    std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+    flui_platform::PlatformWindow::request_redraw(&started.window);
+    started.run.run_owner_turn();
+}
+
+/// The device rebuilds the dropped frames of `observed` reported, in order.
+fn device_reports(observed: &Observed) -> Vec<DeviceRecovery> {
+    observed
+        .device_reports
+        .lock()
+        .expect("BUG: the frame-failure handler does not panic")
+        .clone()
+}
+
+/// R21: a lost device whose rebuild keeps failing is rebuilt on its backoff,
+/// not at once: the turn that lost it tries one rebuild, reports the failed
+/// rebuild with the dropped frame, and asks its loop to wake later instead of
+/// running frames until the device comes back.
+pub(crate) fn a_lost_device_waits_out_its_rebuild_backoff() {
+    let observed = Observed::default();
+    let started = start(&observed);
+    started.renderer.lose_device();
+    started.renderer.fail_recoveries(u32::MAX);
+    observed.schedule_rebuild();
+    started.run.run_owner_turn();
+    let lost_at = Instant::now();
+
+    assert_eq!(started.renderer.recovery_attempts(), 1, "one rebuild ran");
+    assert_eq!(
+        device_reports(&observed).last(),
+        Some(&DeviceRecovery::Failed { attempts: 1 }),
+        "the dropped frame carries the failed rebuild"
+    );
+    let deadline = started
+        .run
+        .wake_deadline()
+        .expect("the loop wakes for the next rebuild");
+    assert!(deadline > lost_at, "the next rebuild is due at once");
+    started.run.run_owner_turn();
+    assert_eq!(
+        started.renderer.recovery_attempts(),
+        1,
+        "a turn before the deadline rebuilt the device again"
+    );
+    // The loop's deadlines, the rebuild's among them, lead to the next one.
+    let mut deadline = deadline;
+    for _ in 0..8 {
+        wake_at(&started, deadline);
+        if started.renderer.recovery_attempts() > 1 {
+            break;
+        }
+        deadline = started
+            .run
+            .wake_deadline()
+            .expect("the loop still wakes for the next rebuild");
+    }
+    assert_eq!(
+        started.renderer.recovery_attempts(),
+        2,
+        "the next rebuild ran at its deadline"
+    );
+    join_ok_after_close(started);
+}
+
+/// R22: a rebuild that keeps failing at the backoff's ceiling is given up,
+/// reported once, and tried no more; the application's
+/// `AppHandle::retry_render_device` starts it over, and the window renders
+/// again.
+pub(crate) fn a_given_up_device_renders_again_when_the_application_asks() {
+    let observed = Observed::default();
+    let started = start(&observed);
+    started.renderer.lose_device();
+    started.renderer.fail_recoveries(u32::MAX);
+    observed.schedule_rebuild();
+    started.run.run_owner_turn();
+
+    // The loop as a desktop runs it: each turn sleeps until the deadline the
+    // previous one asked to wake at.
+    let given_up_by = Instant::now() + Duration::from_secs(30);
+    let given_up = |observed: &Observed| {
+        device_reports(observed)
+            .iter()
+            .any(|recovery| recovery.is_abandoned())
+    };
+    while !given_up(&observed) {
+        assert!(
+            Instant::now() < given_up_by,
+            "the rebuild was never given up"
+        );
+        let deadline = started
+            .run
+            .wake_deadline()
+            .expect("a rebuild not given up asks the loop to wake for the next");
+        wake_at(&started, deadline);
+    }
+    let attempts = started.renderer.recovery_attempts();
+    assert_eq!(
+        device_reports(&observed).last(),
+        Some(&DeviceRecovery::Abandoned { attempts }),
+        "giving up is reported with every failed rebuild counted"
+    );
+
+    // Past the ceiling's interval, the given-up device is left alone.
+    wake_at(&started, Instant::now() + Duration::from_millis(1_100));
+    observed.schedule_rebuild();
+    started.run.run_owner_turn();
+    assert_eq!(started.renderer.recovery_attempts(), attempts);
+    assert_eq!(
+        device_reports(&observed)
+            .iter()
+            .filter(|recovery| recovery.is_abandoned())
+            .count(),
+        1,
+        "giving up is reported once"
+    );
+
+    started.renderer.fail_recoveries(0);
+    let presented = started.renderer.frames_presented();
+    started
+        .handle
+        .retry_render_device()
+        .expect("the loop accepts the request");
+    started.run.run_owner_turn();
+    assert_eq!(started.renderer.recovery_attempts(), attempts + 1);
+    assert!(
+        started.renderer.frames_presented() > presented,
+        "the rebuilt device shows the window again"
+    );
+    join_ok_after_close(started);
+}
+
+/// Close the last window and join the run.
+fn join_ok_after_close(started: Started) {
+    close(&started, CloseRoute::User);
+    assert!(!started.run.is_running(), "the close ended the loop");
+    join_ok(started.run);
+}
+
 #[test]
 fn runner_close() {
     crate::run_table(
@@ -721,6 +875,14 @@ fn runner_close() {
             (
                 "a_quit_the_window_stays_open_for_is_cancelled",
                 a_quit_the_window_stays_open_for_is_cancelled,
+            ),
+            (
+                "a_lost_device_waits_out_its_rebuild_backoff",
+                a_lost_device_waits_out_its_rebuild_backoff,
+            ),
+            (
+                "a_given_up_device_renders_again_when_the_application_asks",
+                a_given_up_device_renders_again_when_the_application_asks,
             ),
         ],
     );

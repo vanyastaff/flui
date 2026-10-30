@@ -1012,10 +1012,11 @@ fn view_class() -> &'static AnyClass {
             );
             // A modifier key is a key event of its own (the input reads
             // whether it went down from the flags); `mouseCancelled:` takes a
-            // press back.
+            // press back; `smartMagnifyWithEvent:` is the smart zoom.
             for event in [
                 sel!(flagsChanged:),
                 sel!(mouseCancelled:),
+                sel!(smartMagnifyWithEvent:),
                 sel!(mouseDown:),
                 sel!(mouseUp:),
                 sel!(mouseMoved:),

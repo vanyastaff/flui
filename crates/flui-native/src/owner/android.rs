@@ -25,6 +25,7 @@
 #[cfg(target_os = "android")]
 pub(crate) mod activity;
 pub(crate) mod activity_callbacks;
+pub(crate) mod bridge_slot;
 #[cfg(target_os = "android")]
 pub(crate) mod java_view;
 #[cfg(target_os = "android")]

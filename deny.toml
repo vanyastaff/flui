@@ -114,6 +114,9 @@ exceptions = [{ crate = "webpki-root-certs", allow = ["CDLA-Permissive-2.0"] }]
 # warning per duplicate buried the run's result under thousands of lines of
 # inclusion graphs. The weekly nightly-canary job prints
 # `cargo tree --duplicates` as a metric instead.
+# Known duplicates kept on purpose name their way out here: jni 0.21 beside
+# 0.22 is `accesskit_android`'s (TalkBack in flui-native), until
+# accesskit_android moves to jni 0.22.
 multiple-versions = "allow"
 # Allow wildcard dependencies (common in workspace)
 wildcards = "allow"

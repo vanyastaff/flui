@@ -52,6 +52,7 @@ pub(crate) const VARIANTS: &[(&str, &str)] = &[
     ("PointerEvent", "Scroll"),
     ("PointerEvent", "ScrollInertiaCancel"),
     ("PointerEvent", "PanZoom"),
+    ("PointerEvent", "SmartZoom"),
     ("PointerEvent", "Revise"),
     ("PointerEvent", "PenSqueeze"),
     ("PointerEvent", "DeviceAdded"),

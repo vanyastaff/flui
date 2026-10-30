@@ -26,7 +26,7 @@ use flui_platform::pointer::{
     PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent, PointerId, PointerInfo,
     PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRevision,
     PointerRole, PointerSample, PointerSignal, Pressure, ScrollDelta, ScrollEvent, ScrollPhase,
-    ScrollPrecision, ScrollUnit, TangentialPressure, Twist,
+    ScrollPrecision, ScrollUnit, SmartZoomEvent, TangentialPressure, Twist,
 };
 use flui_platform::{
     Brightness, DragDropEvent, EventTime, FramePresented, GesturePreferences, ImeEvent, Locale,
@@ -470,6 +470,9 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
             PointerEvent::ScrollInertiaCancel(signal(touch())),
         )),
         ("PointerEvent", "PanZoom") => one(pan_zoom(PanZoomPhase::Start)),
+        ("PointerEvent", "SmartZoom") => one(pointer_event(PointerEvent::SmartZoom(
+            SmartZoomEvent::new(touch(), at(16), position(9.0, 10.0)),
+        ))),
         ("PointerEvent", "Revise") => one(pointer_event(PointerEvent::Revise(
             PointerRevision::new(touch(), rich_sample(40)),
         ))),

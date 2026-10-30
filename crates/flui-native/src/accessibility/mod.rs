@@ -10,20 +10,24 @@
 //! - `apple`: NSAccessibility on macOS (`accesskit_macos`);
 //! - `linux`: AT-SPI (`accesskit_unix`), which every Linux host's windows
 //!   hand out (the Wayland, X11 and winit hosts');
+//! - `android`: TalkBack (`accesskit_android`), through `FluiView`'s node
+//!   provider;
 //! - `headless`: `FakeAccessibility`, which counts what was published while active.
 //!
 //! The adapters have no feature: every window of a host that has one hands it
 //! out, and each compiles wherever a host of its operating system does
 //! (ADR-0151 §15): on Linux, with any of the Wayland, X11 and winit hosts.
-//! Android and the Web have none yet: their tables name
-//! `Absent<Accessibility>`.
+//! The Web has none yet: its table names `Absent<Accessibility>`.
 
+#[cfg(target_os = "android")]
+pub(crate) mod android;
 #[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) mod apple;
 #[cfg(any(
     target_os = "windows",
     target_os = "macos",
     target_os = "ios",
+    target_os = "android",
     linux_host
 ))]
 mod bridge;
@@ -60,6 +64,12 @@ mod tests {
             (
                 "NSAccessibility",
                 super::apple::MacosAccessibility::ASSISTIVE_FOCUS,
+                AssistiveFocusSupport::Unreported,
+            ),
+            #[cfg(target_os = "android")]
+            (
+                "TalkBack",
+                super::android::AndroidAccessibility::ASSISTIVE_FOCUS,
                 AssistiveFocusSupport::Unreported,
             ),
             #[cfg(target_os = "ios")]

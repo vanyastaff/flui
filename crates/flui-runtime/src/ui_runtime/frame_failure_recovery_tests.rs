@@ -9,7 +9,9 @@ use flui_view::{IntoView, StatelessView, View, element::ElementKind};
 use flui_widgets::{Column, SizedBox};
 
 use super::*;
-use crate::frame_failure::{FailureDisposition, FrameFailureHandler, FrameFailureKind, PanicText};
+use crate::frame_failure::{
+    DeviceRecovery, FailureDisposition, FrameFailureHandler, FrameFailureKind, PanicText,
+};
 use crate::testing::ScriptedSink;
 use flui_view::{LifecycleHook, RecoveredAt};
 
@@ -36,6 +38,7 @@ enum ObservedKind {
     },
     Pipeline,
     Callback,
+    DeviceLost(DeviceRecovery),
 }
 
 fn install_collecting_handler(ui_runtime: &UiRuntime) -> Arc<Mutex<Vec<ObservedFailure>>> {
@@ -60,6 +63,7 @@ fn install_collecting_handler(ui_runtime: &UiRuntime) -> Arc<Mutex<Vec<ObservedF
             FrameFailureKind::SegmentPanic { phase, .. } => ObservedKind::Segment { phase: *phase },
             FrameFailureKind::Pipeline { .. } => ObservedKind::Pipeline,
             FrameFailureKind::CallbackPanic { .. } => ObservedKind::Callback,
+            FrameFailureKind::DeviceLost { recovery } => ObservedKind::DeviceLost(*recovery),
         };
         handler_observed
             .lock()

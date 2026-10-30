@@ -1036,6 +1036,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                     Some(target) => entry.pan_zoom_target(target),
                     None => entry,
                 };
+                let entry = match render_object.smart_zoom_target() {
+                    Some(target) => entry.smart_zoom_target(target),
+                    None => entry,
+                };
                 let entry = entry
                     .cursor_request(hit.cursor.unwrap_or_else(|| render_object.mouse_cursor()));
                 let entry = match render_object.metadata() {

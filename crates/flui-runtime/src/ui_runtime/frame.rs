@@ -1008,10 +1008,9 @@ impl UiRuntime {
                 }
                 SubmitVerdict::DeviceLost => {
                     producer.record_frame_dropped();
-                    // `Retain`, not `Drain`: this arm now arms a retry
-                    // (`retry_needed = true` below), and the eventual real
-                    // submit that retry produces must still find the epochs
-                    // that arrived before this failure — see
+                    // `Retain`, not `Drain`: the frame is tried again, and the
+                    // eventual real submit must still find the epochs that
+                    // arrived before this failure — see
                     // `record_submit_telemetry`'s own doc.
                     self.record_submit_telemetry(
                         frame_time,
@@ -1020,27 +1019,23 @@ impl UiRuntime {
                         PresentOutcome::Errored,
                         EpochDisposition::Retain,
                     );
-                    // Division of labor with the platform runner's own
-                    // recovery wake (`render_frame_with_device_recovery` in
-                    // `runner.rs`): this arm only ever runs once
-                    // `render_scene` was actually called, i.e. there was
-                    // dirty content to submit — it owns the retry for a
-                    // loss OBSERVED MID-FRAME, for every `RasterBackend`
-                    // consumer (headless included), not just the desktop/
-                    // Android runners. A loss discovered on a quiescent
-                    // loop, before anything is dirty enough to reach
-                    // `render_scene` at all, never reaches this arm
-                    // (`draw_frame_entered` produces `Idle`, nothing to
-                    // submit) — that gap is what the runner's own wake on a
-                    // FAILED pre-frame recovery attempt covers instead. The
-                    // two are non-overlapping, not redundant.
-                    retry_needed = true;
-                    // See `retry_needs_repaint`'s own binding above.
-                    retry_needs_repaint = true;
-                    tracing::warn!(
-                        "GPU device lost; frame dropped — retry armed, recovery is \
-                         attempted by the renderer owner"
-                    );
+                    // The submit consumed the paint demand, so the frame the
+                    // rebuilt device shows needs a full repaint whenever it
+                    // comes.
+                    self.mark_needs_full_repaint_for(producer);
+                    // Paced like any dropped frame (ADR-0267): a frame asked
+                    // for at once would run again before the renderer's owner
+                    // next rebuilds the device, and fail the same way. A
+                    // given-up rebuild was reported when it was given up and
+                    // holds the frames until a rebuild is asked for again.
+                    if !producer.device_abandoned() {
+                        let recovery = producer.device_recovery().unwrap_or_default();
+                        self.report_frame_failure(
+                            producer,
+                            FrameFailureKind::DeviceLost { recovery },
+                        );
+                        Self::arm_failure_retry(producer);
+                    }
                 }
                 SubmitVerdict::Failed => {
                     producer.record_frame_dropped();
@@ -1275,6 +1270,7 @@ impl UiRuntime {
         }
         let late = self.presentations.iter().any(|presentation| {
             presentation.failure_retry_at().is_none()
+                && !presentation.device_abandoned()
                 && (presentation.redraw_requested_since_watch()
                     || (late_visual_update && presentation.has_pending_work_snapshot()))
         });

@@ -531,6 +531,17 @@ impl UiRuntime {
                      siblings keep framing, last presented frame is retained"
                 );
             }
+            FrameFailureKind::DeviceLost { recovery } => {
+                tracing::warn!(
+                    { flui_foundation::diagnostics::PRESENTATION_ID } =
+                        report.address.presentation_id.as_u64(),
+                    ui_runtime_id = report.address.ui_runtime_id.as_u64(),
+                    consecutive_failures,
+                    ?recovery,
+                    "GPU device lost; frame dropped, retried after the backoff while the \
+                     renderer's owner rebuilds the device"
+                );
+            }
             FrameFailureKind::RecoveredPanic {
                 at,
                 view_type_id,

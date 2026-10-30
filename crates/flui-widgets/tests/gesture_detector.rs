@@ -2712,3 +2712,80 @@ pub(crate) fn a_rotated_axial_drag_claims_motion_along_its_own_axis() {
         "the inner drag owns a motion along its own horizontal axis"
     );
 }
+
+/// A smart zoom goes to the innermost detector under the pointer that asks
+/// for it, in that detector's space, and only there; outside the inner one it
+/// reaches the outer one.
+pub(crate) fn a_smart_zoom_reaches_only_the_innermost_detector_under_it() {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::{SmartZoomDetails, SmartZoomSource};
+    use flui_testing::TrackpadScript;
+    use flui_widgets::{HitTestBehavior, Padding, SizedBox};
+    use std::{cell::RefCell, rc::Rc};
+
+    for (name, at, inner_hit, outer_hit) in [
+        (
+            "over the inner detector",
+            Offset::new(40.0, 50.0),
+            true,
+            false,
+        ),
+        (
+            "over the outer one only",
+            Offset::new(10.0, 10.0),
+            false,
+            true,
+        ),
+    ] {
+        let inner = Rc::new(RefCell::new(Vec::<SmartZoomDetails>::new()));
+        let outer = Rc::new(RefCell::new(Vec::<SmartZoomDetails>::new()));
+        let (inner_log, outer_log) = (inner.clone(), outer.clone());
+        let mut laid = lay_out(
+            GestureDetector::new()
+                .behavior(HitTestBehavior::Opaque)
+                .on_smart_zoom(move |_, details| outer_log.borrow_mut().push(details))
+                .child(
+                    Padding::all(25.0).child(
+                        GestureDetector::new()
+                            .behavior(HitTestBehavior::Opaque)
+                            .on_smart_zoom(move |_, details| inner_log.borrow_mut().push(details))
+                            .child(SizedBox::new(50.0, 50.0)),
+                    ),
+                ),
+            tight(100.0, 100.0),
+        );
+        let script = TrackpadScript::new("smart zoom", at)
+            .smart_zoom()
+            .build()
+            .expect("one discrete event");
+        laid.replay(&script);
+
+        let (inner, outer) = (inner.borrow(), outer.borrow());
+        assert_eq!(
+            inner.len(),
+            usize::from(inner_hit),
+            "{name}: inner {inner:?}"
+        );
+        assert_eq!(
+            outer.len(),
+            usize::from(outer_hit),
+            "{name}: outer {outer:?}"
+        );
+        let details = inner
+            .first()
+            .or(outer.first())
+            .expect("one detector zoomed");
+        assert_eq!(details.source, SmartZoomSource::Platform, "{name}");
+        assert_eq!(details.global_position, at, "{name}");
+        let origin = if inner_hit {
+            Offset::new(25.0, 25.0)
+        } else {
+            Offset::ZERO
+        };
+        assert_eq!(
+            details.local_position,
+            at - origin,
+            "{name}: local to its detector"
+        );
+    }
+}
