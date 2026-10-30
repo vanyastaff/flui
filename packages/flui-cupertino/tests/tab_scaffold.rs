@@ -83,9 +83,9 @@ pub fn an_inactive_tabs_state_survives_switching_away_and_back() {
         "tab 0's Probe must have been created once"
     );
 
-    controller.set_index(1);
+    controller.set_index(1).expect("no build is running");
     laid.tick();
-    controller.set_index(0);
+    controller.set_index(0).expect("no build is running");
     laid.tick();
 
     assert_eq!(
@@ -144,14 +144,14 @@ pub fn out_of_range_controller_selection_reports_error_and_recovers() {
     );
     assert_eq!(laid.find_all_by_render_type("RenderErrorBox"), []);
 
-    controller.set_index(2);
+    controller.set_index(2).expect("no build is running");
     laid.tick();
     assert!(
         !laid.find_all_by_render_type("RenderErrorBox").is_empty(),
         "invalid selection must report the build failure, including in release"
     );
 
-    controller.set_index(1);
+    controller.set_index(1).expect("no build is running");
     laid.tick();
     assert_eq!(laid.find_all_by_render_type("RenderErrorBox"), []);
     laid.dispatch_pointer_down(100.0, 790.0);
@@ -184,11 +184,54 @@ pub fn tab_controller_relays_keep_failure_custody() {
         }))
     };
     let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        controller.set_index(1);
+        controller.set_index(1).expect("no build is running");
     }))
     .is_err();
     controller.remove_listener(first);
     controller.remove_listener(relay);
     assert!(unwound, "the first listener's panic propagates");
     assert_eq!(seen.get(), Some(true));
+}
+
+/// `set_index` called from the scaffold's build (here, its tab builder) is
+/// refused with a typed error: the index stays and no listener hears of it.
+/// The same call from outside a build lands (ADR-0086 §7).
+pub fn controller_mutation_during_build_is_refused() {
+    let controller = CupertinoTabController::new(0);
+    let outcome = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let notified = Rc::new(Cell::new(0_u32));
+    let heard = Rc::clone(&notified);
+    let _listener = flui_sdk::foundation::Listenable::add_listener(
+        &controller,
+        Rc::new(move || heard.set(heard.get() + 1)),
+    );
+    let in_build = controller.clone();
+    let recorded = Rc::clone(&outcome);
+    let scaffold = CupertinoTabScaffold::new(two_tab_bar(), controller.clone(), move |_ctx, _| {
+        recorded.borrow_mut().push(in_build.set_index(1));
+        SizedBox::new(10.0, 10.0).into_view().boxed()
+    });
+
+    let mut laid = lay_out(
+        MediaQuery::new(MediaQueryData::default(), scaffold),
+        tight(400.0, 800.0),
+    );
+    laid.tick();
+
+    let refused = flui_sdk::foundation::MutatedDuringBuild {
+        controller: "CupertinoTabController",
+    };
+    assert_eq!(outcome.borrow().first(), Some(&Err(refused)));
+    assert!(
+        outcome
+            .borrow()
+            .iter()
+            .all(|result| *result == Err(refused))
+    );
+    assert_eq!((controller.index(), notified.get()), (0, 0));
+
+    controller
+        .set_index(1)
+        .expect("a change outside build is accepted");
+    assert_eq!((controller.index(), notified.get()), (1, 1));
 }

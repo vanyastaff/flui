@@ -17,8 +17,9 @@ use flui_interaction::{
     ContactlessSource, EventPropagation, GestureBinding, HitTestEntry, HitTestResult, IdExhausted,
     InputSequenceId, InputSurface, InteractionLane, PointerId, RenderId, ScrollLatchEnd,
 };
-use flui_platform::haptics::{FakeHaptics, HapticRequest, HapticTiming};
+use flui_platform::haptics::{HapticRequest, HapticTiming};
 use flui_platform::pointer::{DeviceId, PointerRevision, ScrollPhase};
+use flui_platform::testing::FakeHaptics;
 use flui_platform::{HapticFeedback, PlatformHaptics};
 use static_assertions::assert_impl_all;
 

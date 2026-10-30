@@ -36,11 +36,9 @@
 //! capability is reached from a window. A backend with one device-global
 //! engine returns the same `Arc` from every window.
 
-mod fake;
 mod pattern;
 mod request;
 
-pub use fake::{FakeHaptics, HapticCall, HapticPlay};
 pub use pattern::{
     ControlPoint, HapticEvent, HapticPattern, HapticPatternBuilder, HapticPatternError, Intensity,
     ParameterCurve, Sharpness, UnitRangeError,
@@ -104,7 +102,7 @@ pub trait PlatformHaptics: Send + Sync {
     }
 
     /// Downcast support for tests that need to reach a concrete recording
-    /// fake (such as [`FakeHaptics`]) behind the trait object
+    /// fake (such as `flui_platform::testing::FakeHaptics`) behind the trait object
     /// `PlatformWindow::haptics` returns.
     fn as_any(&self) -> &dyn std::any::Any;
 }

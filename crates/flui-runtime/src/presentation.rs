@@ -335,6 +335,16 @@ struct SegmentProbe {
     callback: SegmentProbeCallback,
 }
 
+/// A presentation's wait before it tries a dropped frame again.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct FailureRetry {
+    /// The instant the wait ends; `None` when nothing waits.
+    at: Option<Instant>,
+    /// Whether a key or button press already tried early since the wait last
+    /// ran out. Cleared when it does, and by a frame that succeeds.
+    early_spent: bool,
+}
+
 /// Direct owner of mutable UI state scoped to one presentation.
 ///
 /// It owns behavior-bearing subsystems as concrete values. It does not expose
@@ -427,6 +437,10 @@ pub struct PresentationState {
     /// The bounds the agent's actionability check last read, to tell whether
     /// an element holds still. Owner thread only.
     pub(crate) agent_stability: RefCell<crate::ui_runtime::AgentStability>,
+    /// Actions the agent ran that owe a reading of the tree once a frame has
+    /// passed. Answered by `UiRuntime::complete_agent_reads` after a frame,
+    /// and as failed when the presentation closes first. Owner thread only.
+    pub(crate) agent_reads: RefCell<Vec<crate::ui_runtime::PendingActRead>>,
     /// The window this presentation is shown in, as the host controls it, once
     /// `UiRuntime::install_window` has attached it. Closed before the
     /// presentation's terminal notification, so a handle held past the close
@@ -551,6 +565,10 @@ pub struct PresentationState {
     /// that attempt's contained reports are delivered. Presentation-local on
     /// purpose: one window's streak must never color a sibling's reports.
     frame_failure_streak: Cell<u32>,
+    /// When this presentation may next try a frame it dropped, and whether a
+    /// key or button press already tried early in this interval. See
+    /// [`FAILURE_RETRY_CAP`](crate::frame_failure::FAILURE_RETRY_CAP).
+    failure_retry: Cell<FailureRetry>,
     /// Last frame segment entered for this presentation. Written before the
     /// segment's probe and work so the value remains unwind-correct.
     segment_phase: FramePhaseMarker<SegmentPhase>,
@@ -865,6 +883,10 @@ impl PresentationState {
             }
         });
         let vsync = Vsync::new();
+        // Controllers ticked here refuse mutation while this runtime builds.
+        vsync.set_build_phase(Some(
+            widgets.with_build_owner(flui_view::BuildOwner::build_phase),
+        ));
         let request_animation_frame = Arc::clone(&request_frame);
         let animation_owner = Rc::downgrade(&alive);
         vsync.set_frame_requester(Some(Rc::new(move || {
@@ -967,6 +989,7 @@ impl PresentationState {
             semantics,
             dev_agent: RefCell::new(None),
             agent_stability: RefCell::default(),
+            agent_reads: RefCell::default(),
             window_control: RefCell::new(None),
             window_placement: Cell::new(None),
             widgets,
@@ -988,6 +1011,7 @@ impl PresentationState {
             tree_revision: Cell::new(TreeRevision::ZERO),
             presented_revision: Cell::new(TreeRevision::ZERO),
             frame_failure_streak: Cell::new(0),
+            failure_retry: Cell::new(FailureRetry::default()),
             segment_phase: FramePhaseMarker::new(SegmentPhase::Build),
             #[cfg(test)]
             segment_probe: RefCell::new(None),
@@ -1090,6 +1114,7 @@ impl PresentationState {
             semantics,
             dev_agent: RefCell::new(None),
             agent_stability: RefCell::default(),
+            agent_reads: RefCell::default(),
             window_control: RefCell::new(None),
             window_placement: Cell::new(None),
             widgets,
@@ -1111,6 +1136,7 @@ impl PresentationState {
             tree_revision: Cell::new(TreeRevision::ZERO),
             presented_revision: Cell::new(TreeRevision::ZERO),
             frame_failure_streak: Cell::new(0),
+            failure_retry: Cell::new(FailureRetry::default()),
             segment_phase: FramePhaseMarker::new(SegmentPhase::Build),
             #[cfg(test)]
             segment_probe: RefCell::new(None),
@@ -1714,6 +1740,58 @@ impl PresentationState {
     /// starts a fresh streak. See [`Self::frame_failure_streak`]'s field doc.
     pub(crate) fn reset_frame_failure_streak(&self) {
         self.frame_failure_streak.set(0);
+        self.failure_retry.set(FailureRetry::default());
+    }
+
+    /// Wait until `at` before trying a dropped frame again. An early try
+    /// already spent in this interval stays spent.
+    pub(crate) fn arm_failure_retry(&self, at: Instant) {
+        let retry = self.failure_retry.get();
+        self.failure_retry.set(FailureRetry {
+            at: Some(at),
+            ..retry
+        });
+    }
+
+    /// The instant a dropped frame's wait ends, if one waits.
+    pub(crate) fn failure_retry_at(&self) -> Option<Instant> {
+        self.failure_retry.get().at
+    }
+
+    /// End the wait now for a key or button press, unless one already did
+    /// since the wait last ran out. Returns whether it ended.
+    pub(crate) fn retry_failure_early(&self) -> bool {
+        let retry = self.failure_retry.get();
+        let ends = retry.at.is_some() && !retry.early_spent;
+        if ends {
+            self.failure_retry.set(FailureRetry {
+                at: None,
+                early_spent: true,
+            });
+        }
+        ends
+    }
+
+    /// Whether a frame may be attempted at `now`: no wait, or its end has
+    /// come, which ends it.
+    pub(crate) fn admit_failure_retry(&self, now: Instant) -> bool {
+        match self.failure_retry.get().at {
+            Some(at) if now < at => false,
+            Some(_) => {
+                self.failure_retry.set(FailureRetry::default());
+                true
+            }
+            None => true,
+        }
+    }
+
+    /// Answers every reading an agent's action still owes as failed: the
+    /// presentation closes before a frame could take it. The actions ran.
+    pub(crate) fn abandon_agent_reads(&self) {
+        let owed = std::mem::take(&mut *self.agent_reads.borrow_mut());
+        for pending in owed {
+            pending.abandon();
+        }
     }
 
     /// The latest terminal frame result's revision.
@@ -2117,6 +2195,7 @@ impl PresentationState {
         if let Some(agent) = &agent {
             agent.withdraw();
         }
+        self.abandon_agent_reads();
         let window_control = self.window_control.take();
         if let Some(window) = &window_control {
             failure.invoke(|| window.close());
@@ -2239,6 +2318,7 @@ impl PresentationState {
         if let Some(agent) = &*self.dev_agent.borrow() {
             agent.withdraw();
         }
+        self.abandon_agent_reads();
         flui_interaction::__runtime::withdraw_focus(&self.focus);
         flui_interaction::__runtime::withdraw_text_input(&self.text_input);
         keys

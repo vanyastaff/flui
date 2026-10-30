@@ -204,11 +204,37 @@ impl FrameFailureDetail {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum FailureDisposition {
-    /// The presentation produced no frame. Transient failures retry;
-    /// rejected text input waits for a layout invalidation.
+    /// The presentation produced no frame. Transient failures retry, backing
+    /// off up to [`FAILURE_RETRY_CAP`]; rejected text input waits for a layout
+    /// invalidation.
     FrameDropped,
     /// A narrower lifecycle boundary recovered and the frame may continue.
     Contained,
+}
+
+/// The longest a presentation waits before it tries a dropped frame again
+/// (ADR-0258 §6).
+///
+/// After the `k`-th consecutive [`FailureDisposition::FrameDropped`] report a
+/// presentation tries again `T · 2^min(k − 1, 10)` later, where `T` is its
+/// display's refresh period, and never later than this: a frame that keeps
+/// failing is tried about once a second, and never given up on. A key press or
+/// a pointer button press in the window tries at once, once per interval;
+/// pointer motion, a signal write, a running animation and the frame's own
+/// invalidations wait for the interval.
+pub const FAILURE_RETRY_CAP: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// The doubling exponent's ceiling. It is applied before the shift, so a streak
+/// of any length computes `T · 1024` at most and the shift never overflows.
+const FAILURE_RETRY_MAX_DOUBLINGS: u32 = 10;
+
+/// How long a presentation on a display of `period` waits after its
+/// `streak`-th consecutive dropped frame; see [`FAILURE_RETRY_CAP`].
+pub(crate) fn failure_retry_delay(period: std::time::Duration, streak: u32) -> std::time::Duration {
+    let doublings = streak.saturating_sub(1).min(FAILURE_RETRY_MAX_DOUBLINGS);
+    period
+        .checked_mul(1 << doublings)
+        .map_or(FAILURE_RETRY_CAP, |delay| delay.min(FAILURE_RETRY_CAP))
 }
 
 /// The last frame segment entered for one presentation.
