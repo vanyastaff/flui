@@ -318,6 +318,16 @@ impl NodeWrapper<'_> {
             )
             .unwrap();
         }
+        if let Some(author_id) = self.0.author_id() {
+            let author_id = env.new_string(author_id).unwrap();
+            env.call_method(
+                node_info,
+                "setViewIdResourceName",
+                "(Ljava/lang/String;)V",
+                &[(&author_id).into()],
+            )
+            .unwrap();
+        }
 
         if let Some(text) = self.text() {
             let text = env.new_string(text).unwrap();

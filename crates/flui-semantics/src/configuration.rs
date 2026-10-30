@@ -861,7 +861,8 @@ impl SemanticsConfiguration {
 
     /// Sets the stable identifier tests and automation select this node by
     /// (ADR-0240), published as AccessKit `author_id`: UI Automation's
-    /// `AutomationId`, macOS `AXIdentifier`, AT-SPI's accessible id.
+    /// `AutomationId`, macOS `AXIdentifier`, AT-SPI's accessible id, iOS's
+    /// `accessibilityIdentifier` and Android's `viewIdResourceName`.
     ///
     /// It is never announced, and it is not semantic payload: setting it
     /// marks nothing annotated and makes no boundary, so adding one never
