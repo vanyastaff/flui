@@ -199,6 +199,10 @@ fn nearest(position: f64) -> usize {
 /// motion changes nothing about them; under reduced motion a tap or a step jumps
 /// to the page instead of animating the pager there.
 ///
+/// It lives in `scroll` beside [`PageView`](super::PageView), not with the
+/// other controls: `controls` sits below `scroll` in the crate's module graph
+/// and cannot name [`PageController`].
+///
 /// # Examples
 ///
 /// ```rust
