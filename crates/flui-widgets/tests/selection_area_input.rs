@@ -1,0 +1,421 @@
+//! `SelectionArea` with a mouse and the keyboard: drags and clicks select,
+//! Shift extends, keys move the moving end, select all, copy and clear, and a
+//! blur dims the highlight. Semantics stays off, so every position comes from
+//! where the texts are laid out.
+
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::time::Duration;
+
+use flui_foundation::RenderId;
+use flui_foundation::geometry::{Offset, Point};
+use flui_interaction::events::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey};
+use flui_interaction::testing::input::KeyEventBuilder;
+use flui_platform::EventTime;
+use flui_platform::pointer::{
+    PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind,
+    PointerPosition, PointerPress, PointerRelease, PointerSample,
+};
+use flui_testing::replay::MouseScript;
+use flui_view::{BoxedView, ViewExt};
+use flui_widgets::{Column, SelectionArea, SizedBox, Text, WidgetsApp};
+
+use crate::common::{LaidOut, lay_out, tight};
+
+const FIRST: &str = "Hello world";
+const SECOND: &str = "Second line";
+
+/// What `on_selection_changed` heard, in order.
+type Heard = Rc<RefCell<Vec<Option<String>>>>;
+
+struct Scene {
+    laid: LaidOut,
+    heard: Heard,
+}
+
+impl Scene {
+    /// An area over `content`, in an app that binds the platform shortcuts.
+    fn over(content: impl Into<BoxedView>) -> Self {
+        let heard: Heard = Rc::default();
+        let mut laid = lay_out(Self::area(content, &heard), tight(400.0, 300.0));
+        laid.pump();
+        Self { laid, heard }
+    }
+
+    /// The app with an area over `content` that records into `heard`.
+    fn area(content: impl Into<BoxedView>, heard: &Heard) -> WidgetsApp {
+        let recorded = Rc::clone(heard);
+        WidgetsApp::new(SelectionArea::new(content.into()).on_selection_changed(
+            move |_cx, selected| {
+                recorded
+                    .borrow_mut()
+                    .push(selected.map(|selected| selected.text.clone()));
+            },
+        ))
+    }
+
+    /// The same area over `content` instead, its state kept.
+    fn replace(&mut self, content: impl Into<BoxedView>) {
+        let app = Self::area(content, &self.heard);
+        self.laid.pump_widget(app);
+        self.settle();
+    }
+
+    /// An area over [`FIRST`] above [`SECOND`].
+    fn two_texts() -> Self {
+        Self::over(Column::new((Text::new(FIRST), Text::new(SECOND))).boxed())
+    }
+
+    /// The laid-out paragraphs, in tree order.
+    fn paragraphs(&self) -> Vec<RenderId> {
+        self.laid.find_all_by_render_type("RenderParagraph")
+    }
+
+    /// A point `fraction` of the way across paragraph `index`, at its
+    /// vertical middle.
+    fn at(&self, index: usize, fraction: f64) -> Offset<f64> {
+        let paragraph = self.paragraphs()[index];
+        let origin = self.laid.absolute_offset(paragraph);
+        let size = self.laid.size(paragraph);
+        Offset::new(
+            origin.dx + size.width * fraction,
+            origin.dy + size.height / 2.0,
+        )
+    }
+
+    /// The selected text the listener last heard of.
+    fn selected(&self) -> Option<String> {
+        self.heard.borrow().last().cloned().flatten()
+    }
+
+    /// The part of paragraph `index` that paints highlighted.
+    fn painted(&self, index: usize) -> Option<String> {
+        self.laid
+            .render_property(self.paragraphs()[index], "selection")
+    }
+
+    fn settle(&mut self) {
+        for _ in 0..4 {
+            self.laid.pump_for(Duration::from_millis(16));
+        }
+    }
+
+    fn drag(&mut self, from: Offset<f64>, to: Offset<f64>) {
+        let mut script = MouseScript::new("drag").press(from);
+        for step in 1..=8 {
+            let t = f64::from(step) / 8.0;
+            script = script
+                .wait(Duration::from_millis(16))
+                .move_to(from + (to - from) * t);
+        }
+        let script = script.release().build().expect("the drag releases");
+        self.laid.replay(&script);
+        self.settle();
+    }
+
+    /// `count` clicks at `at`, close enough together to count as one
+    /// multi-click.
+    fn clicks(&mut self, at: Offset<f64>, count: usize) {
+        let mut script = MouseScript::new("clicks");
+        for _ in 0..count {
+            script = script
+                .press(at)
+                .wait(Duration::from_millis(16))
+                .release()
+                .wait(Duration::from_millis(40));
+        }
+        let script = script.build().expect("every click releases");
+        self.laid.replay(&script);
+        self.settle();
+    }
+
+    /// A primary click at `at` with Shift held.
+    fn shift_click(&mut self, at: Offset<f64>) {
+        let mouse = PointerInfo::new(
+            PointerId::try_from(77_u64).expect("a nonzero id"),
+            PointerKind::Mouse,
+        );
+        let sample = PointerSample::new(
+            EventTime::from_nanos(0),
+            PointerPosition::try_new(Point::new(at.dx, at.dy)).expect("finite"),
+        );
+        let down = PointerEvent::Down(
+            PointerPress::new(mouse, PointerButton::PRIMARY, PointerButtons::NONE, sample)
+                .with_modifiers(Modifiers::SHIFT),
+        );
+        let up = PointerEvent::Up(PointerRelease::new(
+            mouse,
+            PointerButton::PRIMARY,
+            PointerButtons::NONE,
+            sample,
+        ));
+        self.laid.dispatch_pointer_event(&down);
+        self.laid.dispatch_pointer_event(&up);
+        self.settle();
+    }
+
+    fn key(&mut self, key: Key, code: Code, modifiers: Modifiers) -> bool {
+        let event: KeyEvent = KeyEventBuilder::new(code)
+            .with_key(key)
+            .with_state(KeyState::Down)
+            .with_modifiers(modifiers)
+            .build();
+        let handled = self
+            .laid
+            .focus_manager()
+            .dispatch_key_event(&event)
+            .is_handled();
+        self.settle();
+        handled
+    }
+}
+
+/// The platform's command modifier, as the app's shortcuts bind it.
+fn command() -> Modifiers {
+    if cfg!(any(target_os = "macos", target_os = "ios")) {
+        Modifiers::META
+    } else {
+        Modifiers::CONTROL
+    }
+}
+
+/// A drag selects across texts and highlights them; a drag back toward its
+/// start selects less and keeps the start; a single click clears, and the
+/// clear is reported.
+///
+/// Red-check: never start a drag's selection (nothing is selected).
+pub(crate) fn a_drag_selects_across_texts_and_a_click_clears() {
+    let mut scene = Scene::two_texts();
+    let (from, to) = (scene.at(0, 0.0), scene.at(1, 1.0));
+    scene.drag(from + Offset::new(-2.0, 0.0), to + Offset::new(2.0, 0.0));
+    assert_eq!(
+        scene.selected().as_deref(),
+        Some("Hello world\nSecond line")
+    );
+    assert_eq!(
+        scene.painted(0),
+        Some(format!("{:?}", Some(0..FIRST.len())))
+    );
+    assert_eq!(
+        scene.painted(1),
+        Some(format!("{:?}", Some(0..SECOND.len())))
+    );
+
+    let middle = scene.at(0, 0.5);
+    scene.drag(from + Offset::new(-2.0, 0.0), middle);
+    let partial = scene.selected().expect("part of the first text");
+    assert!(
+        !partial.is_empty() && FIRST.starts_with(&partial) && partial.len() < FIRST.len(),
+        "{partial:?}"
+    );
+
+    scene.clicks(scene.at(1, 0.5), 1);
+    assert_eq!(scene.painted(0), Some("None".to_owned()));
+    assert_eq!(
+        scene.heard.borrow().last(),
+        Some(&None),
+        "the clear is reported"
+    );
+}
+
+/// A double click selects a word, a triple click a text, and Shift+click
+/// extends from the anchor.
+///
+/// Red-check: select by character whatever the click count (the double
+/// click selects nothing).
+pub(crate) fn multi_clicks_select_a_word_or_a_text_and_shift_click_extends() {
+    let mut scene = Scene::two_texts();
+    scene.clicks(scene.at(0, 0.2), 2);
+    assert_eq!(scene.selected().as_deref(), Some("Hello"));
+    scene.clicks(scene.at(1, 0.3), 3);
+    assert_eq!(scene.selected().as_deref(), Some(SECOND));
+
+    scene.clicks(scene.at(0, 0.2), 2);
+    scene.shift_click(scene.at(1, 1.0) + Offset::new(4.0, 0.0));
+    assert_eq!(
+        scene.selected().as_deref(),
+        Some("Hello world\nSecond line")
+    );
+}
+
+/// Shift with the arrows and End moves the moving end, crossing into the
+/// next text at an edge; the command chords select all and copy, and Esc
+/// clears.
+///
+/// Red-check: ignore Shift+ArrowRight at a text's end (the selection stays
+/// "Hello world").
+pub(crate) fn keys_extend_select_everything_copy_and_clear() {
+    let mut scene = Scene::two_texts();
+    scene.clicks(scene.at(0, 0.2), 2);
+    assert_eq!(scene.selected().as_deref(), Some("Hello"));
+
+    let cases = [
+        (Key::Named(NamedKey::ArrowRight), Code::ArrowRight, "Hello "),
+        (Key::Named(NamedKey::End), Code::End, "Hello world"),
+        (
+            Key::Named(NamedKey::ArrowRight),
+            Code::ArrowRight,
+            "Hello world\n",
+        ),
+        (
+            Key::Named(NamedKey::ArrowLeft),
+            Code::ArrowLeft,
+            "Hello world",
+        ),
+    ];
+    for (key, code, expected) in cases {
+        assert!(
+            scene.key(key.clone(), code, Modifiers::SHIFT),
+            "{key:?} is handled"
+        );
+        assert_eq!(scene.selected().as_deref(), Some(expected), "after {key:?}");
+    }
+
+    let _ = scene.key(Key::character("a"), Code::KeyA, command());
+    assert_eq!(
+        scene.selected().as_deref(),
+        Some("Hello world\nSecond line")
+    );
+    let _ = scene.key(Key::character("c"), Code::KeyC, command());
+    assert_eq!(
+        scene.laid.clipboard().text().as_deref(),
+        Some("Hello world\nSecond line")
+    );
+    let _ = scene.key(Key::Named(NamedKey::Escape), Code::Escape, Modifiers::NONE);
+    assert_eq!(scene.heard.borrow().last(), Some(&None));
+    assert_eq!(scene.painted(0), Some("None".to_owned()));
+}
+
+/// A drag reads the texts where they are laid out even with semantics off:
+/// in a column laid out upwards, dragging from the top text to the bottom
+/// one selects them top first.
+///
+/// Red-check: order the texts by place in the render tree without semantics
+/// (the drag selects "Beta" alone, ending before its start).
+pub(crate) fn a_drag_without_semantics_reads_where_the_texts_are_laid_out() {
+    use flui_objects::VerticalDirection;
+
+    let mut scene = Scene::over(
+        Column::new((Text::new("Alpha"), Text::new("Beta")))
+            .vertical_direction(VerticalDirection::Up)
+            .boxed(),
+    );
+    assert!(scene.laid.a11y_tree().is_none(), "semantics stays off");
+    // Tree order: Alpha is paragraph 0, laid out below Beta.
+    let (top, bottom) = (scene.at(1, 0.0), scene.at(0, 1.0));
+    scene.drag(top + Offset::new(-2.0, 0.0), bottom + Offset::new(2.0, 0.0));
+    assert_eq!(scene.selected().as_deref(), Some("Beta\nAlpha"));
+}
+
+/// A blur keeps the selection and dims its highlight; selecting again
+/// brings the active colour back.
+///
+/// Red-check: always highlight with the active colour (the blurred area
+/// still paints it).
+pub(crate) fn a_blur_dims_the_highlight_and_keeps_the_selection() {
+    use flui_widgets::SelectionStyle;
+
+    let style = SelectionStyle::default();
+    let mut scene = Scene::two_texts();
+    scene.clicks(scene.at(0, 0.2), 2);
+    let colour = |scene: &Scene| {
+        scene
+            .laid
+            .render_property(scene.paragraphs()[0], "selection_color")
+    };
+    assert_eq!(
+        colour(&scene),
+        Some(format!("{:?}", style.active)),
+        "focused"
+    );
+
+    scene.laid.focus_manager().unfocus();
+    scene.settle();
+    assert_eq!(
+        colour(&scene),
+        Some(format!("{:?}", style.inactive)),
+        "blurred"
+    );
+    assert_eq!(
+        scene.painted(0),
+        Some(format!("{:?}", Some(0..5))),
+        "the selection stays"
+    );
+
+    scene.clicks(scene.at(0, 0.8), 2);
+    assert_eq!(
+        colour(&scene),
+        Some(format!("{:?}", style.active)),
+        "focused again"
+    );
+}
+
+/// A text that leaves while holding an end hands that end to the text it
+/// leaves beside, keeping the selection's direction; once no selected text
+/// is left, the selection clears. Each move is reported.
+///
+/// Red-check: never move a departed end (the listener keeps the old text).
+pub(crate) fn a_removed_text_hands_its_end_to_the_text_beside_it() {
+    const THIRD: &str = "Third one";
+    // One children type before and after, so the texts that stay keep their
+    // elements and only the last one leaves.
+    let texts = |words: &[&str]| {
+        Column::new(
+            words
+                .iter()
+                .map(|&words| Text::new(words).boxed())
+                .collect::<Vec<BoxedView>>(),
+        )
+        .boxed()
+    };
+    let three = || texts(&[FIRST, SECOND, THIRD]);
+    let two = || texts(&[FIRST, SECOND]);
+
+    for backward in [false, true] {
+        let mut scene = Scene::over(three());
+        let (from, to) = (scene.at(0, 0.3), scene.at(2, 0.5));
+        if backward {
+            scene.drag(to, from);
+        } else {
+            scene.drag(from, to);
+        }
+        let selected = scene.selected().expect("a drag across three texts");
+        let tail = selected.split('\n').next().expect("the first text's part");
+        assert!(
+            FIRST.ends_with(tail) && tail.len() < FIRST.len(),
+            "{selected:?}"
+        );
+
+        scene.replace(two());
+        let kept = format!("{tail}\n{SECOND}");
+        assert_eq!(scene.selected(), Some(kept.clone()), "backward: {backward}");
+        assert_eq!(
+            scene.painted(1),
+            Some(format!("{:?}", Some(0..SECOND.len())))
+        );
+
+        // The moving end stays the one the user moved: in the first text
+        // when the drag ran backward, at the second text's end otherwise.
+        assert!(scene.key(
+            Key::Named(NamedKey::ArrowLeft),
+            Code::ArrowLeft,
+            Modifiers::SHIFT
+        ));
+        let moved = scene.selected().expect("still selected");
+        if backward {
+            assert_eq!(
+                moved,
+                format!("{}{kept}", &FIRST[FIRST.len() - tail.len() - 1..][..1])
+            );
+        } else {
+            assert_eq!(moved, kept[..kept.len() - 1]);
+        }
+
+        scene.replace(SizedBox::shrink().boxed());
+        assert_eq!(
+            scene.heard.borrow().last(),
+            Some(&None),
+            "nothing selected is left"
+        );
+    }
+}
