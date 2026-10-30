@@ -3280,7 +3280,7 @@ pub(crate) fn a_rebuild_taken_over_by_its_physics_stops_the_obsolete_run() {
 
 /// Anchors at 0, 500 and 1000 px.
 fn three_anchors() -> flui_widgets::SharedSnapPolicy {
-    Arc::new(flui_widgets::AnchorSnap::try_new([0.0, 500.0, 1000.0]).expect("three anchors"))
+    Rc::new(flui_widgets::AnchorSnap::try_new([0.0, 500.0, 1000.0]).expect("three anchors"))
 }
 
 /// A drag from 800 that comes to rest at 740 and lifts: the snap settles

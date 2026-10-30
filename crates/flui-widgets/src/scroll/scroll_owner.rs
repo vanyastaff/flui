@@ -22,7 +22,6 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
-use std::sync::Arc;
 
 use flui_animation::simulation::{SpringDescription, SpringSimulation};
 use flui_animation::{Animation, AnimationController, AnimationRunFuture, Simulation};
@@ -49,7 +48,7 @@ use flui_interaction::drag::DragIdentity;
 const DEFERRED_ROUNDS: u32 = 8;
 
 /// A shared snap policy, compared by identity like [`SharedScrollPhysics`].
-pub type SharedSnapPolicy = Arc<dyn SnapPolicy>;
+pub type SharedSnapPolicy = Rc<dyn SnapPolicy>;
 
 /// What every owner a [`Scrollable`](super::Scrollable) state creates reads
 /// from its lifecycle: the arena that issues sequence ids and the gesture

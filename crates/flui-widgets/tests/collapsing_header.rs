@@ -4,7 +4,6 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::Vsync;
@@ -431,7 +430,7 @@ pub(crate) fn collapsing_header_inherits_the_fling_across_its_collapse() {
 pub(crate) fn collapsing_header_snaps_to_an_extent() {
     for device in DEVICES {
         let snap =
-            || Arc::new(PageSnap::new(ViewportFraction::FULL)) as flui_widgets::SharedSnapPolicy;
+            || Rc::new(PageSnap::new(ViewportFraction::FULL)) as flui_widgets::SharedSnapPolicy;
         let mut screen = Screen::new(extents(), |header| header.snap_policy(snap()));
         screen.drag_up(device, 50.0);
         assert_eq!(
@@ -609,7 +608,7 @@ pub(crate) fn collapsing_header_with_equal_extents_takes_no_scroll() {
         let mut screen = Screen::new(fixed, |header| {
             header
                 .expands(HeaderOrder::BeforeContent)
-                .snap_policy(Arc::new(PageSnap::new(ViewportFraction::FULL)))
+                .snap_policy(Rc::new(PageSnap::new(ViewportFraction::FULL)))
         });
         screen.drag_up(device, 120.0);
         assert_eq!(
