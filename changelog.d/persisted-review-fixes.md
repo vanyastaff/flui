@@ -11,3 +11,8 @@
 
 - The testing kit's `MemoryStorage` honours `WriteMode::IfUnchanged`: a write based on a version
   the name no longer holds fails with `StorageError::Conflict`, as on disk.
+
+### Added
+
+- `flui_testing::widgets::lay_out_with_provided_storage` mounts a tree whose application provides its own
+  `StorageCapability` beside the host's storage.

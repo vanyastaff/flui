@@ -13,7 +13,9 @@ use flui_platform::StorageName;
 use flui_platform::{StorageError, UnsupportedReason};
 use flui_rendering::protocol::BoxProtocol;
 use flui_testing::storage::MemoryStorage;
-use flui_testing::widgets::{LaidOut, lay_out, lay_out_with_storage, tight};
+use flui_testing::widgets::{
+    LaidOut, lay_out, lay_out_with_provided_storage, lay_out_with_storage, tight,
+};
 use flui_view::persist::{
     CodecStep, DecodeError, Document, PersistError, Persisted, ReadOnlyReason, Revision, SaveStatus,
 };
@@ -819,5 +821,41 @@ fn a_failed_reload_after_a_save_reports_the_load() {
         SaveStatus::NotLoaded(Some(PersistError::Corrupt {
             detail: "no header line".into(),
         }))
+    );
+}
+
+/// A document whose application provides its own storage reads and writes
+/// that storage: the host's own storage receives nothing.
+#[test]
+fn a_provided_storage_receives_the_documents_writes() {
+    let (host, provided) = (MemoryStorage::new(), MemoryStorage::new());
+    provided.put(&Note::NAME, stored(1, "first"));
+    let opened = Rc::new(RefCell::new(None));
+    let mut laid = lay_out_with_provided_storage(
+        NoteOpener {
+            opened: Rc::clone(&opened),
+        },
+        tight(10.0, 10.0),
+        host.clone(),
+        provided.clone(),
+    );
+    let Opened {
+        document: notes, ..
+    } = opened
+        .borrow_mut()
+        .take()
+        .expect("init_state opened the document");
+
+    let loaded = drive(&mut laid, notes.load());
+    assert_eq!(loaded.as_deref(), Ok(&Note("first".into())));
+    assert!(notes.set(Note("second".into())).is_ok());
+    laid.pump();
+
+    assert_eq!(notes.status(), SaveStatus::Clean);
+    assert_eq!(provided.contents(&Note::NAME), Some(stored(2, "second")));
+    assert_eq!(
+        host.contents(&Note::NAME),
+        None,
+        "the host's storage is untouched"
     );
 }
