@@ -424,6 +424,35 @@ fn wire_actions(node: &NodeRef<'_>) -> Vec<ActionName> {
     actions
 }
 
+/// AccessKit's common filter, which also leaves out the owner's announcer
+/// nodes: they carry what assistive technology speaks, not an element of the
+/// interface, so an agent neither reads nor acts on them.
+#[derive(Clone, Copy)]
+struct AgentFilter {
+    announcers: Option<[NodeId; 2]>,
+}
+
+impl AgentFilter {
+    fn of(owner: &SemanticsOwner) -> Self {
+        Self {
+            announcers: owner
+                .announcer_node_ids()
+                .map(|ids| ids.map(|id| NodeId(id.as_u64()))),
+        }
+    }
+
+    fn apply(self, node: &NodeRef<'_>) -> FilterResult {
+        if self
+            .announcers
+            .is_some_and(|announcers| announcers.contains(&node.locate().0))
+        {
+            FilterResult::ExcludeSubtree
+        } else {
+            common_filter(node)
+        }
+    }
+}
+
 /// A read's budget and what it left out.
 struct Walk<'q> {
     query: &'q ReadQuery,
@@ -437,6 +466,7 @@ struct Walk<'q> {
     /// AccessKit falls back to the root when nothing does.
     root_claims_focus: bool,
     diagnostics: Vec<TreeDiagnostic>,
+    filter: AgentFilter,
 }
 
 /// `node`'s bounds in the window's logical pixels. The published root's
@@ -476,7 +506,10 @@ impl Walk<'_> {
     fn node(&mut self, node: &NodeRef<'_>, id: ElementId, depth: usize) -> Node {
         let mut out = wire_node(node, id, self.root_claims_focus);
         out.surface_rect = self.rect(node);
-        let children: Vec<NodeRef<'_>> = node.filtered_children(common_filter).collect();
+        let filter = self.filter;
+        let children: Vec<NodeRef<'_>> = node
+            .filtered_children(|child| filter.apply(child))
+            .collect();
         if children.is_empty() {
             return out;
         }
@@ -677,7 +710,7 @@ impl SemanticsOwner {
                 Some(id) => {
                     let node = state
                         .node_by_tree_local_id(NodeId(id.get()), TreeId::ROOT)
-                        .filter(|node| common_filter(node) == FilterResult::Include)
+                        .filter(|node| AgentFilter::of(self).apply(node) == FilterResult::Include)
                         .ok_or(WireReadError::NotFound { element: id })?;
                     (node, id, node.is_root())
                 }
@@ -690,6 +723,7 @@ impl SemanticsOwner {
                 truncated: false,
                 root_claims_focus,
                 diagnostics: Vec::new(),
+                filter: AgentFilter::of(self),
             };
             if walk.remaining == 0 {
                 return Ok(Tree::new(Vec::new(), true));
@@ -732,7 +766,7 @@ impl SemanticsOwner {
         let checked = self.with_published(|state, root_claims_focus| {
             let node = state
                 .node_by_tree_local_id(NodeId(element.get()), TreeId::ROOT)
-                .filter(|node| common_filter(node) == FilterResult::Include)
+                .filter(|node| AgentFilter::of(self).apply(node) == FilterResult::Include)
                 .ok_or(WireActionError::NotFound { element })?;
             let wire = wire_node(&node, element, root_claims_focus);
             // Focus and reveal move the cursor or the viewport, not the

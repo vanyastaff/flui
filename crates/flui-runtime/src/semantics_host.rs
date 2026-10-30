@@ -1,12 +1,11 @@
-//! Per-presentation semantics enablement and platform accessibility delivery.
+//! Per-presentation semantics enablement.
 //!
 //! Replaces the retired process-wide `SemanticsBinding` singleton
 //! (`flui-semantics`). Enablement (via `SemanticsHandle` ref-counting or a
-//! direct platform toggle) and announcement/event delivery are a per-window
-//! platform seam, not process-global state: each `PresentationState`
-//! (`flui-app`'s `app::presentation`) owns exactly one [`SemanticsHost`], so
-//! two presentations never share an enablement counter or step on each
-//! other's platform callback.
+//! direct platform toggle) is a per-window seam, not process-global state:
+//! each `PresentationState` (`flui-app`'s `app::presentation`) owns exactly
+//! one [`SemanticsHost`], so two presentations never share an enablement
+//! counter.
 //!
 //! System settings come from the installed host's `SystemPreferences` source
 //! (ADR-0172). They are independent of semantics collection and platform delivery;
@@ -14,20 +13,13 @@
 //!
 //! Handle acquisition keeps semantics collected while an agent reads the
 //! tree: `UiRuntime::semantics_agent` holds one handle for all clones of the
-//! agent it vends. Announcements and event delivery have no production
-//! caller yet: they are compiled only for tests and the `testing`
-//! feature until a platform embedder wires them through a presentation.
+//! agent it vends. Announcements are not here: they are published through
+//! the semantics tree's announcer nodes (`flui_semantics::Announcer`).
 
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
-
-use flui_semantics::{Assertiveness, SemanticsEvent};
-use parking_lot::RwLock;
-
-type AnnounceCallback = Arc<dyn Fn(&str, Assertiveness) + Send + Sync>;
-type EventCallback = Arc<dyn Fn(&SemanticsEvent) + Send + Sync>;
 
 /// RAII handle that keeps semantics enabled on its owning [`SemanticsHost`]
 /// while held.
@@ -66,8 +58,7 @@ impl std::fmt::Debug for SemanticsHandle {
     }
 }
 
-/// Per-presentation semantics enablement gate and platform accessibility
-/// delivery (announcements + events).
+/// Per-presentation semantics enablement gate.
 ///
 /// One instance lives on each `PresentationState` (in `flui-app`); there is
 /// no process-wide instance and no `instance()`/`is_initialized()` accessor —
@@ -101,20 +92,6 @@ pub struct SemanticsHost {
     /// `Arc`-wrapped shape as `platform_semantics_enabled`, for the same
     /// self-reference reason.
     full_republish_requested: Arc<AtomicBool>,
-
-    /// Callback for accessibility announcements. `PresentationState::close()`
-    /// clears this unconditionally in production (see
-    /// [`Self::clear_announce_callback`]); `announce()`'s read side still
-    /// has no production caller until a platform embedder wires delivery.
-    announce_callback: RwLock<Option<AnnounceCallback>>,
-
-    /// Callback for semantics events dispatched via `Self::dispatch_event`/
-    /// `Self::tooltip`. Set by the platform embedder when the
-    /// accessibility surface is brought up; cleared when the platform goes
-    /// silent (or the presentation closes — see
-    /// [`Self::clear_event_callback`]). Mirrors [`Self::announce_callback`]'s
-    /// shape.
-    event_callback: RwLock<Option<EventCallback>>,
 }
 
 impl SemanticsHost {
@@ -125,8 +102,6 @@ impl SemanticsHost {
             handle_count: Arc::new(AtomicUsize::new(0)),
             platform_semantics_enabled: Arc::new(AtomicBool::new(false)),
             full_republish_requested: Arc::new(AtomicBool::new(false)),
-            announce_callback: RwLock::new(None),
-            event_callback: RwLock::new(None),
         }
     }
 
@@ -208,127 +183,6 @@ impl SemanticsHost {
     pub fn take_full_republish_request(&self) -> bool {
         self.full_republish_requested.swap(false, Ordering::Relaxed)
     }
-
-    // ========== Announcements ==========
-
-    /// Sets the callback for accessibility announcements.
-    #[cfg(any(test, feature = "testing"))]
-    #[doc(hidden)]
-    pub fn set_announce_callback<F>(&self, callback: F)
-    where
-        F: Fn(&str, Assertiveness) + Send + Sync + 'static,
-    {
-        let _prev = self.announce_callback.write().replace(Arc::new(callback));
-    }
-
-    /// Remove the registered announce callback — the platform-embedder
-    /// teardown half of `Self::set_announce_callback`. Called from
-    /// `PresentationState::close()` alongside the cursor-change-callback
-    /// clear, for the identical reason: a torn-down presentation must not
-    /// keep a live platform accessibility-bridge `Arc` pinned past its own
-    /// teardown. **Decides announce-after-close semantics**: once cleared,
-    /// a stray `announce()`/`dispatch_event()` call that races teardown
-    /// falls through to the existing no-callback trace fallback (never a
-    /// panic, never a call into a torn-down bridge) — the same degrade path
-    /// a host that never registered a callback in the first place already
-    /// exercises.
-    pub fn clear_announce_callback(&self) {
-        let _prev = self.announce_callback.write().take();
-    }
-
-    /// Announces a message to assistive technology.
-    ///
-    /// Uses the clone-and-release lock pattern (see [`Self::dispatch_event`]).
-    /// Falls back to a privacy-conscious trace when no platform callback has
-    /// been registered yet — exactly the state a host embedding FLUI starts
-    /// in, before its platform embedder calls
-    /// [`set_announce_callback`](Self::set_announce_callback).
-    ///
-    /// # Arguments
-    ///
-    /// * `message` - The message to announce.
-    /// * `assertiveness` - How urgently to announce the message.
-    #[cfg(any(test, feature = "testing"))]
-    #[doc(hidden)]
-    pub fn announce(&self, message: &str, assertiveness: Assertiveness) {
-        let cb = self.announce_callback.read().as_ref().map(Arc::clone);
-        if let Some(cb) = cb {
-            cb(message, assertiveness);
-        } else {
-            // `message_len`, never `message`. A live-region announcement is
-            // written to be read aloud to the user and routinely carries
-            // their data ("Message from Alice: ...", a balance, a
-            // validation echo); a tracing field is world-readable in the
-            // device log archive.
-            tracing::debug!(
-                message_len = message.len(),
-                assertiveness = ?assertiveness,
-                "SemanticsHost::announce (no platform announce callback registered)"
-            );
-        }
-    }
-
-    // ========== Semantics Events ==========
-
-    /// Sets the callback for semantics events dispatched via
-    /// [`Self::dispatch_event`]/[`Self::tooltip`].
-    ///
-    /// Set by the platform embedder when the accessibility surface is
-    /// brought up; pass `None` (via re-setting to a no-op closure) when the
-    /// platform goes silent. Mirrors [`Self::set_announce_callback`].
-    #[cfg(any(test, feature = "testing"))]
-    #[doc(hidden)]
-    pub fn set_event_callback<F>(&self, callback: F)
-    where
-        F: Fn(&SemanticsEvent) + Send + Sync + 'static,
-    {
-        let _prev = self.event_callback.write().replace(Arc::new(callback));
-    }
-
-    /// Remove the registered event callback — mirrors
-    /// [`Self::clear_announce_callback`]'s teardown rationale and
-    /// announce-after-close decision, for `dispatch_event`/`tooltip` instead
-    /// of `announce`.
-    pub fn clear_event_callback(&self) {
-        let _prev = self.event_callback.write().take();
-    }
-
-    pub(crate) fn take_close_callbacks(&self) -> (Option<AnnounceCallback>, Option<EventCallback>) {
-        let announce = self.announce_callback.write().take();
-        let event = self.event_callback.write().take();
-        (announce, event)
-    }
-
-    /// Dispatches a semantics event to the registered platform callback,
-    /// falling back to a privacy-conscious trace when none is registered
-    /// yet (mirrors [`Self::announce`]'s fallback).
-    ///
-    /// Uses the **clone-and-release** lock-handling pattern: the
-    /// `Arc<dyn Fn>` is cloned out of the read-lock before the callback
-    /// runs, so user code reaching back into this host (e.g. registering
-    /// another callback) cannot deadlock on the host's own lock.
-    #[cfg(any(test, feature = "testing"))]
-    #[doc(hidden)]
-    pub fn dispatch_event(&self, event: &SemanticsEvent) {
-        let cb = self.event_callback.read().as_ref().map(Arc::clone);
-        if let Some(cb) = cb {
-            cb(event);
-        } else {
-            // The type, not the payload: `SemanticsEventData::String` carries
-            // tooltip and announcement text, which `?event` would print.
-            tracing::debug!(
-                event_type = ?event.event_type(),
-                "SemanticsHost::dispatch_event (no platform event callback registered)"
-            );
-        }
-    }
-
-    /// Announces a tooltip.
-    #[cfg(any(test, feature = "testing"))]
-    #[doc(hidden)]
-    pub fn tooltip(&self, message: &str) {
-        self.dispatch_event(&SemanticsEvent::tooltip(message));
-    }
 }
 
 impl Default for SemanticsHost {
@@ -352,7 +206,3 @@ impl std::fmt::Debug for SemanticsHost {
             .finish_non_exhaustive()
     }
 }
-
-// ============================================================================
-// TESTS
-// ============================================================================

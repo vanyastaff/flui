@@ -172,6 +172,23 @@ pub struct CardThemeData {
     pub margin: Option<EdgeInsets>,
 }
 
+/// Overrides [`CarouselView`](crate::CarouselView)'s M3 token defaults, one field at a time.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CarouselViewThemeData {
+    /// Overrides the cards' fill color (`ColorScheme.surface`).
+    pub background_color: Option<Color>,
+    /// Overrides the cards' elevation (`0.0`).
+    pub elevation: Option<f64>,
+    /// Overrides the cards' shape (a 28 dp rounded rectangle, M3's extra-large corner).
+    pub shape: Option<MaterialShape>,
+    /// Overrides the cards' state layer (`ColorScheme.onSurface` at the M3 pressed, hovered and
+    /// focused alphas).
+    pub overlay_color: Option<WidgetStateProperty<Option<Color>>>,
+    /// Overrides the inset of each card inside its item's mask (`EdgeInsets::all(4.0)`, an
+    /// 8 dp gap between neighbours).
+    pub padding: Option<EdgeInsets>,
+}
+
 /// Overrides [`Dialog`](crate::Dialog)/[`AlertDialog`](crate::AlertDialog)'s
 /// `_DialogDefaultsM3` token defaults, one field at a time.
 ///
@@ -771,6 +788,9 @@ pub struct ThemeData {
     /// Overrides [`Card`](crate::Card)'s M3 token defaults, per field.
     pub card_theme: Option<CardThemeData>,
 
+    /// Overrides [`CarouselView`](crate::CarouselView)'s M3 token defaults, per field.
+    pub carousel_view_theme: Option<CarouselViewThemeData>,
+
     /// Overrides [`Dialog`](crate::Dialog)/[`AlertDialog`](crate::AlertDialog)'s
     /// M3 token defaults, per field.
     pub dialog_theme: Option<DialogThemeData>,
@@ -853,6 +873,7 @@ impl ThemeData {
             icon_button_theme: None,
             app_bar_theme: None,
             card_theme: None,
+            carousel_view_theme: None,
             dialog_theme: None,
             floating_action_button_theme: None,
             input_decoration_theme: None,
@@ -888,6 +909,7 @@ impl ThemeData {
             icon_button_theme: None,
             app_bar_theme: None,
             card_theme: None,
+            carousel_view_theme: None,
             dialog_theme: None,
             floating_action_button_theme: None,
             input_decoration_theme: None,
@@ -971,6 +993,9 @@ impl ThemeData {
                 .app_bar_theme
                 .or_else(|| self.app_bar_theme.clone()),
             card_theme: overrides.card_theme.or_else(|| self.card_theme.clone()),
+            carousel_view_theme: overrides
+                .carousel_view_theme
+                .or_else(|| self.carousel_view_theme.clone()),
             dialog_theme: overrides.dialog_theme.or_else(|| self.dialog_theme.clone()),
             floating_action_button_theme: overrides
                 .floating_action_button_theme
@@ -1044,6 +1069,8 @@ pub struct ThemeDataOverrides {
     pub app_bar_theme: Option<AppBarThemeData>,
     /// Replaces [`ThemeData::card_theme`] wholesale when `Some`.
     pub card_theme: Option<CardThemeData>,
+    /// Replaces [`ThemeData::carousel_view_theme`] wholesale when `Some`.
+    pub carousel_view_theme: Option<CarouselViewThemeData>,
     /// Replaces [`ThemeData::dialog_theme`] wholesale when `Some`.
     pub dialog_theme: Option<DialogThemeData>,
     /// Replaces [`ThemeData::floating_action_button_theme`] wholesale when
