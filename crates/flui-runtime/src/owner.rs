@@ -213,6 +213,26 @@ pub struct PreparedInstall {
     delivery: Option<InstallToken>,
 }
 
+impl PreparedInstall {
+    /// The close guard of the prepared presentation: the host answers the
+    /// platform's close requests for its window with it. `None` once the
+    /// proposal is consumed.
+    #[must_use]
+    pub fn close_guard(&self) -> Option<flui_view::__runtime::CloseGuardSource> {
+        match self.payload.as_ref()? {
+            InstallPayload::Runtime(entry) => match &entry.residence {
+                Residence::Resident(runtime) => {
+                    runtime.close_guard_of(self.address.presentation_id)
+                }
+                Residence::CheckedOut | Residence::RetiringCheckedOut => None,
+            },
+            InstallPayload::Presentation { presentation, .. } => {
+                Some(presentation.close_guard().clone())
+            }
+        }
+    }
+}
+
 impl Drop for PreparedInstall {
     fn drop(&mut self) {
         let mut first_failure = None;
