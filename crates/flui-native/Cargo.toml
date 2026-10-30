@@ -808,6 +808,7 @@ crate-level = [
     "os",
     "testing",
     "journal",
+    "process",
 ]
 # The one edge between platform files of one feature: the winit host on Linux
 # reads the compositor's outputs through the Linux source, which leaves with
