@@ -56,13 +56,11 @@ pub(super) fn take_terminal() -> Option<Box<dyn Any + Send>> {
 /// Run `body`, a step of the loop's exit that drops application values: a
 /// panic in it is the loop's terminal failure (ADR-0258 §2), held for the
 /// exit's end while the rest of the exit runs.
-#[cfg_attr(
-    target_arch = "wasm32",
-    expect(
-        dead_code,
-        reason = "the web loop never returns, so no exit order runs after it"
-    )
-)]
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
 pub(super) fn contain_terminal(during: &'static str, body: impl FnOnce()) {
     if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
         hold_terminal(payload, during);
