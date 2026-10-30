@@ -462,6 +462,17 @@ pub trait LifecycleContext: BuildContext {
     /// its own — a task spawned into the wrong one would never run.
     fn async_driver(&self) -> Option<crate::AsyncDriver>;
 
+    /// The UI runtime's timer: [`Sleep`](crate::Sleep) futures that resolve
+    /// on the runtime's clock (the testing kit's virtual clock in a test),
+    /// for a task spawned on [`async_driver`](Self::async_driver) to await.
+    ///
+    /// `None` exactly when [`async_driver`](Self::async_driver) is: a tree
+    /// bound to no UI runtime has no clock to sleep on. Acquire it in a
+    /// lifecycle hook, like the driver.
+    fn timer(&self) -> Option<crate::TimerHandle> {
+        self.async_driver().map(|driver| driver.timer())
+    }
+
     /// The binding's post-frame capability — schedule work that must observe this
     /// frame's committed layout. The callback receives [`crate::FrameTiming`].
     ///
