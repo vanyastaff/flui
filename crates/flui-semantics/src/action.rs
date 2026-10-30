@@ -214,7 +214,7 @@ pub type SemanticsActionHandler = Rc<dyn Fn(ActionCall)>;
 
 /// Told `true` when the assistive technology's cursor (VoiceOver, TalkBack)
 /// enters the subtree of the node holding it and `false` when it leaves, by
-/// [`SemanticsOwner::set_assistive_focus`](crate::SemanticsOwner::set_assistive_focus).
+/// the UI runtime as the platform reports the cursor (`HostInput::AssistiveFocus`).
 /// Distinct from input focus, which the application moves.
 pub type AssistiveFocusHandler = Rc<dyn Fn(bool)>;
 
