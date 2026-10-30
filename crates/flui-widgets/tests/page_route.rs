@@ -48,7 +48,7 @@ fn navigator_with_seed() -> (NavigatorHandle, Harness, RouteId) {
 /// overlay on the following tick.
 fn complete_entrance(transition: &TransitionHandle, harness: &mut Harness) {
     let controller = transition.controller().expect("install created it");
-    controller.set_value(1.0);
+    controller.set_value(1.0).expect("no build is running");
     assert_eq!(controller.status(), AnimationStatus::ForwardSettled);
     harness.tick();
     harness.tick();
@@ -205,20 +205,26 @@ pub(crate) fn secondary_animation_runs_on_the_previous_page_route_when_pushing_a
     let secondary = lower_transition.secondary_animation();
     let upper_controller = upper_transition.controller().expect("installed");
 
-    upper_controller.set_value(0.4);
+    upper_controller
+        .set_value(0.4)
+        .expect("no build is running");
     assert!(
         (secondary.value() - 0.4).abs() < 1e-6,
         "the lower page's secondaryAnimation tracks the upper page's animation, got {}",
         secondary.value()
     );
 
-    upper_controller.set_value(1.0);
+    upper_controller
+        .set_value(1.0)
+        .expect("no build is running");
     harness.tick();
     assert!((secondary.value() - 1.0).abs() < 1e-6);
 
     assert!(navigator.pop());
     harness.tick();
-    upper_controller.set_value(0.25);
+    upper_controller
+        .set_value(0.25)
+        .expect("no build is running");
     assert!(
         (secondary.value() - 0.25).abs() < 1e-6,
         "popping drives the secondary animation backwards, got {}",

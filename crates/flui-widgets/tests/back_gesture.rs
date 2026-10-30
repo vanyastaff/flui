@@ -48,7 +48,7 @@ fn mounted_with_transition_route() -> (NavigatorHandle, Harness, RouteId, Animat
 pub(crate) fn release_matrix_fling_and_slow_release() {
     for (value, velocity) in [(1.0, -2.0), (0.0, 2.0)] {
         let (navigator, _harness, top, controller) = mounted_with_transition_route();
-        controller.set_value(value);
+        controller.set_value(value).expect("no build is running");
         let gesture = BackGestureController::new(navigator.clone(), top, controller.clone());
         assert!(
             !gesture.drag_end(velocity),
@@ -62,7 +62,7 @@ pub(crate) fn release_matrix_fling_and_slow_release() {
     // forward to 1.0 = new page fully covers again) regardless of value.
     {
         let (navigator, _harness, top, c) = mounted_with_transition_route();
-        c.set_value(0.51);
+        c.set_value(0.51).expect("no build is running");
         let gesture = BackGestureController::new(navigator, top, c.clone());
         let still_settling = gesture.drag_end(-2.0);
         assert!(still_settling, "an animated release keeps the run going");
@@ -78,7 +78,7 @@ pub(crate) fn release_matrix_fling_and_slow_release() {
     // Fast positive velocity: pop (route animates back to 0.0).
     {
         let (navigator, _harness, top, c) = mounted_with_transition_route();
-        c.set_value(0.49);
+        c.set_value(0.49).expect("no build is running");
         let gesture = BackGestureController::new(navigator, top, c.clone());
         let still_settling = gesture.drag_end(2.0);
         assert!(still_settling);
@@ -92,7 +92,7 @@ pub(crate) fn release_matrix_fling_and_slow_release() {
     // No meaningful velocity, value > 0.5: stay.
     {
         let (navigator, _harness, top, c) = mounted_with_transition_route();
-        c.set_value(0.51);
+        c.set_value(0.51).expect("no build is running");
         let gesture = BackGestureController::new(navigator, top, c.clone());
         let still_settling = gesture.drag_end(0.0);
         assert!(still_settling);
@@ -101,7 +101,7 @@ pub(crate) fn release_matrix_fling_and_slow_release() {
     // No meaningful velocity, value <= 0.5: pop.
     {
         let (navigator, _harness, top, c) = mounted_with_transition_route();
-        c.set_value(0.49);
+        c.set_value(0.49).expect("no build is running");
         let gesture = BackGestureController::new(navigator, top, c.clone());
         let still_settling = gesture.drag_end(0.0);
         assert!(still_settling);

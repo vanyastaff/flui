@@ -182,7 +182,7 @@ impl StatelessView for Scrollbar {
                             let proposed = ctrl_drag.pixels() + content_delta;
                             // Taking the thumb takes ownership from any running
                             // fling or programmatic animation before changing pixels.
-                            ctrl_drag.jump_to(proposed);
+                            let _ = ctrl_drag.jump_to(proposed);
                         }
                     }))
                     .child(ColoredBox::new(thumb_color));

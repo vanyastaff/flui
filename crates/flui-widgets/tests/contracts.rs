@@ -631,6 +631,7 @@ fn scroll_physics_and_activity() {
             ("scroll::dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_tick", crate::scroll::dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_tick),
             ("scroll::cancelling_an_in_range_scroll_ends_activity_without_coasting", crate::scroll::cancelling_an_in_range_scroll_ends_activity_without_coasting as fn()),
             ("scroll::replacing_vsync_releases_old_seats_and_drives_fresh_contacts", crate::scroll::replacing_vsync_releases_old_seats_and_drives_fresh_contacts),
+            ("scroll::controller_mutation_during_build_is_refused", crate::scroll::controller_mutation_during_build_is_refused),
             ("scroll::replacing_a_scroll_position_cancels_its_contact_and_recovers", crate::scroll::replacing_a_scroll_position_cancels_its_contact_and_recovers),
             ("scroll::a_repeated_frame_does_not_cancel_viewer_inertia", crate::scroll::a_repeated_frame_does_not_cancel_viewer_inertia),
             ("scroll::cancelling_bouncing_overscroll_settles_without_release_velocity", crate::scroll::cancelling_bouncing_overscroll_settles_without_release_velocity as fn()),

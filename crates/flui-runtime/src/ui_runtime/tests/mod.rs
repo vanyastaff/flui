@@ -293,6 +293,7 @@ pub(crate) fn dropping_ui_runtime_a_cannot_wake_ui_runtime_b() {
 // presentation's committed semantics tree through the owner inbox
 // (ADR-0095 §3).
 // ========================================================================
+mod agent_act_read;
 mod agent_locate;
 mod agent_semantics;
 mod agent_stability;

@@ -988,6 +988,14 @@ impl BuildOwner {
         &self.reactive
     }
 
+    /// The phase this owner's builds are published into: the UI runtime's
+    /// once [`set_build_in_progress`](Self::set_build_in_progress) joined it.
+    /// A host binds the registries it owns (a presentation's `Vsync`) to it.
+    #[must_use]
+    pub fn build_phase(&self) -> flui_foundation::BuildPhase {
+        self.reactive.build_phase()
+    }
+
     /// Schedule an element for rebuild.
     ///
     /// Elements are processed in depth order (shallowest first) so parent

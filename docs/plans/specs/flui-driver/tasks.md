@@ -2,7 +2,7 @@
 
 - **Status:** approved by the owner (2026-10-20). FD27 (#1773), FD1 (#1782), FD4 (#1796), FD31
   (#1804), FD2 (#1809, #1814) and FD3 (#1890) have merged; FD5 is in progress in steps (the
-  locate and actionability jobs are in review; the snapshot delta, waits and events, and the
+  locate and actionability jobs have merged (#1968), the snapshot delta is in review; waits and events, and the
   inspect jobs follow). FD28, FD29 and FD30 can start now. `interaction/completeness` has merged
   (#1733), so the IC tasks are unblocked.
   `flui run --agent` and `flui mcp` exist on the ADR-0095 endpoint (#1769); the tasks that replace
@@ -343,6 +343,20 @@ graph LR
     call, or no pending work. The `batch` job and `resolve` (`not_found` and `ambiguous` with
     candidates) come with FD6, which composes them; no server reaches the two calls until FD7
     replaces the ADR-0095 endpoint.
+- **Evidence, snapshot delta and act-and-read (2026-10-29):**
+  - `flui-semantics`'s `tests/delta`: `a_delta_names_what_appeared_went_and_changed` (table: appeared,
+    gone, name, value and state changes, a role change, no bounds noise unless asked),
+    `a_delta_carries_the_node_as_it_is_now_and_the_revisions_it_spans`,
+    `a_delta_past_its_cap_says_so_and_keeps_the_first_entries`.
+  - `flui-runtime`'s `ui_runtime::tests::agent_act_read`:
+    `a_delta_is_read_after_the_frame_the_actions_effect_landed_in`,
+    `a_full_reading_is_the_tree_the_frame_left`, `no_reading_answers_at_the_drain`,
+    `an_action_that_dirtied_nothing_still_reads_back_after_a_frame`,
+    `a_window_that_closes_first_leaves_an_outcome_that_ran_without_a_reading`.
+  - Dropping the bounds, role and gone arms of the diff, the redraw request, the close abandon and
+    the completion call each fails a test.
+  - As built: `AgentWindow::act_and_read` and the same on `SemanticsAgent`; no server reaches it
+    until FD7 replaces the ADR-0095 endpoint, and FD6 composes it into `act`.
 
 ### FD6. Synthetic input, journal, recording (IC)
 

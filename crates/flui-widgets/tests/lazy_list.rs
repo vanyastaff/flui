@@ -540,7 +540,7 @@ pub(crate) fn a_pinned_row_stays_announced_until_its_pin_is_released() {
     laid.tick();
     assert!(lease.borrow().is_some(), "precondition: row 0 took its pin");
 
-    scroll.jump_to(10_000.0);
+    scroll.jump_to(10_000.0).expect("no build is running");
     for _ in 0..3 {
         laid.tick();
     }

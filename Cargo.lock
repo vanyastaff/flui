@@ -2467,6 +2467,7 @@ dependencies = [
  "flui-objects",
  "flui-painting",
  "flui-platform",
+ "flui-protocol",
  "flui-rendering",
  "flui-runtime",
  "flui-scheduler",
