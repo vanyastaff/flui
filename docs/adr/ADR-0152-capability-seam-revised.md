@@ -445,7 +445,9 @@ The clipboard landing spells the shape of §3 as follows; the properties of §2 
   (one capability twice in one tier, checked in every tier even where a higher one answers) or
   `CapabilityConflict::SharedName`. `Application::capability::<C>(provider)` and
   `Application::plugin(plugin)` register, and `Application::run` answers
-  `AppRunError::CapabilityConflict` before the platform is created. `RuntimeHostServices` takes
+  `AppRunError::CapabilityConflict` before the platform is created. `Application` is the desktop
+  entry point; an app started on Android, iOS or the Web gets the built-in providers alone until
+  its entry point takes overrides and plugins too. `RuntimeHostServices` takes
   the registry through `with_capabilities`; without one every acquisition answers
   `NotRegistered`.
 - **The core host's clipboard.** `flui_native::NativeClipboard` is owner-local and

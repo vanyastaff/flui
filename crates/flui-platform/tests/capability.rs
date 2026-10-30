@@ -197,23 +197,23 @@ fn the_future_adapter_wakes_when_the_value_settles() {
     assert_eq!(future.as_mut().poll(&mut cx), Poll::Ready(Ok(9)));
 }
 
-enum Probe {}
+enum Gauge {}
 
-impl Capability for Probe {
+impl Capability for Gauge {
     type Handle = ();
-    const NAME: &'static str = "probe";
+    const NAME: &'static str = "gauge";
 }
 
 // The provider trait stays dyn-compatible.
-const _: fn(&dyn CapabilityProvider<Probe>) = |_| {};
+const _: fn(&dyn CapabilityProvider<Gauge>) = |_| {};
 
 #[test]
 fn a_refusal_names_its_capability() {
-    let refusal = Unsupported::of::<Probe>(UnsupportedReason::NotOnThisPlatform);
-    assert_eq!(refusal.capability(), Some("probe"));
+    let refusal = Unsupported::of::<Gauge>(UnsupportedReason::NotOnThisPlatform);
+    assert_eq!(refusal.capability(), Some("gauge"));
     assert_eq!(
         refusal.to_string(),
-        "unsupported: probe: not on this platform"
+        "unsupported: gauge: not on this platform"
     );
     assert_eq!(
         Unsupported::new(UnsupportedReason::NotRegistered).capability(),

@@ -1287,6 +1287,11 @@ impl AppRuntime {
             .unwrap_or_else(|| crate::app::capability::built_in_registry(&self.platform_clipboard))
     }
 
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
     /// The slot the built-in clipboard provider reads the owner platform's
     /// clipboard from.
     pub(super) fn clipboard_slot(&self) -> &crate::app::capability::ClipboardSlot {

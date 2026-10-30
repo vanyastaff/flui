@@ -8,56 +8,77 @@ use flui_interaction::{ClipboardBackend, ClipboardCapability, ClipboardHandle};
 use flui_native::NativeClipboard;
 use flui_platform::{
     Unsupported, UnsupportedReason,
-    capability::{CapabilityProvider, CapabilityRegistrar, Plugin, ProviderContext, Resolver},
+    capability::{CapabilityProvider, CapabilityRegistrar, ProviderContext, Resolver},
 };
-use flui_runtime::capability::{CapabilityConflict, CapabilityRegistry};
+use flui_runtime::capability::CapabilityRegistry;
 
 /// The slot the owner platform's clipboard is installed in for a loop's life.
 pub(crate) type ClipboardSlot = Rc<RefCell<Option<Rc<dyn NativeClipboard>>>>;
 
-/// What the application registers before it runs: its overrides and its
-/// plugins, in the order it named them.
-#[derive(Default)]
-pub(crate) struct AppCapabilities {
-    overrides: CapabilityRegistrar,
-    plugins: Vec<Box<dyn Plugin>>,
-}
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(crate) use registration::AppCapabilities;
 
-impl AppCapabilities {
-    pub(crate) fn override_with(&mut self, register: impl FnOnce(&mut CapabilityRegistrar)) {
-        register(&mut self.overrides);
+/// The overrides and plugins of an `Application`, which exists on the
+/// desktop hosts.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+mod registration {
+    use flui_platform::capability::{CapabilityRegistrar, Plugin};
+    use flui_runtime::capability::{CapabilityConflict, CapabilityRegistry};
+
+    use super::{ClipboardSlot, built_ins};
+
+    /// What the application registers before it runs: its overrides and its
+    /// plugins, in the order it named them.
+    #[derive(Default)]
+    pub(crate) struct AppCapabilities {
+        overrides: CapabilityRegistrar,
+        plugins: Vec<Box<dyn Plugin>>,
     }
 
-    pub(crate) fn plugin(&mut self, plugin: Box<dyn Plugin>) {
-        self.plugins.push(plugin);
-    }
-
-    /// The registry of a run: these overrides, then the built-ins over
-    /// `clipboard`, then the plugins.
-    ///
-    /// # Errors
-    ///
-    /// The first [`CapabilityConflict`] among them.
-    pub(crate) fn into_registry(
-        self,
-        clipboard: &ClipboardSlot,
-    ) -> Result<CapabilityRegistry, CapabilityConflict> {
-        let mut builder = CapabilityRegistry::builder()
-            .overrides(self.overrides)
-            .built_ins(built_ins(clipboard));
-        for plugin in &self.plugins {
-            builder = builder.plugin(plugin.as_ref());
+    impl AppCapabilities {
+        pub(crate) fn override_with(&mut self, register: impl FnOnce(&mut CapabilityRegistrar)) {
+            register(&mut self.overrides);
         }
-        builder.build()
-    }
-}
 
-impl std::fmt::Debug for AppCapabilities {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AppCapabilities")
-            .field("overrides", &self.overrides)
-            .field("plugins", &self.plugins.len())
-            .finish()
+        pub(crate) fn plugin(&mut self, plugin: Box<dyn Plugin>) {
+            self.plugins.push(plugin);
+        }
+
+        /// The registry of a run: these overrides, then the built-ins over
+        /// `clipboard`, then the plugins.
+        ///
+        /// # Errors
+        ///
+        /// The first [`CapabilityConflict`] among them.
+        pub(crate) fn into_registry(
+            self,
+            clipboard: &ClipboardSlot,
+        ) -> Result<CapabilityRegistry, CapabilityConflict> {
+            let mut builder = CapabilityRegistry::builder()
+                .overrides(self.overrides)
+                .built_ins(built_ins(clipboard));
+            for plugin in &self.plugins {
+                builder = builder.plugin(plugin.as_ref());
+            }
+            builder.build()
+        }
+    }
+
+    impl std::fmt::Debug for AppCapabilities {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("AppCapabilities")
+                .field("overrides", &self.overrides)
+                .field("plugins", &self.plugins.len())
+                .finish()
+        }
     }
 }
 
