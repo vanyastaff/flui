@@ -738,3 +738,46 @@ pub(crate) fn esc_clears_then_reaches_the_enclosing_dismiss() {
     let _ = scene.key(Key::Named(NamedKey::Escape), Code::Escape, Modifiers::NONE);
     assert_eq!(dismissed.get(), 1, "the second Esc dismisses");
 }
+
+/// A listener that panics while Shift+End commits at a soft wrap does not
+/// cost the end its line: after the panic, Shift+Home still returns to that
+/// line's start.
+///
+/// Red-check: store the keys' memory after the commit returns (the panic
+/// skips it, and Shift+Home stays put).
+pub(crate) fn a_panicking_listener_keeps_what_the_keys_remember() {
+    let measured = Scene::over(Column::new((Text::new("aaaa"),)).boxed());
+    let width = measured.laid.size(measured.paragraphs()[0]).width + 1.0;
+    let armed = Rc::new(std::cell::Cell::new(false));
+    let heard: Heard = Rc::default();
+    let (recorded, failing) = (Rc::clone(&heard), Rc::clone(&armed));
+    let area = SelectionArea::new(
+        Column::new((SizedBox::width(width).child(Text::new("aaaa b aaaa")),)).boxed(),
+    )
+    .on_selection_changed(move |_cx, selected| {
+        recorded
+            .borrow_mut()
+            .push(selected.map(|selected| selected.text.clone()));
+        assert!(!failing.get(), "the listener fails");
+    });
+    let mut laid = lay_out(WidgetsApp::new(area), tight(400.0, 300.0));
+    laid.pump();
+    let mut scene = Scene { laid, heard };
+    let corner = scene.laid.absolute_offset(scene.paragraphs()[0]) + Offset::new(3.0, 3.0);
+    scene.clicks(corner, 2);
+    assert_eq!(scene.selected().as_deref(), Some("aaaa"));
+
+    armed.set(true);
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        scene.key(Key::Named(NamedKey::End), Code::End, Modifiers::SHIFT)
+    }));
+    armed.set(false);
+    assert!(caught.is_err(), "the listener's panic reaches the caller");
+    assert_eq!(scene.selected().as_deref(), Some("aaaa "));
+    assert!(scene.key(Key::Named(NamedKey::Home), Code::Home, Modifiers::SHIFT));
+    assert_eq!(
+        scene.heard.borrow().last(),
+        Some(&None),
+        "back to the line's start"
+    );
+}

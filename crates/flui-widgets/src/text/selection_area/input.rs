@@ -430,12 +430,8 @@ impl SelectionModel {
             _ => return KeyEventResult::Ignored,
         };
         if let Some(focus) = focus {
-            self.select(
-                cx,
-                Some(&DocumentSelection::new(selection.anchor().clone(), focus)),
-            );
-            // The commit forgot the memory; keep what this key set.
-            self.caret.set(next_memory);
+            let selection = DocumentSelection::new(selection.anchor().clone(), focus);
+            self.commit(cx, Some(&selection), true, next_memory);
         }
         KeyEventResult::Handled
     }

@@ -355,12 +355,21 @@ impl SelectionModel {
     /// lets the listener hear of the committed selection; the first failure
     /// is resumed afterwards.
     fn select(&self, cx: &mut EventCx<'_>, selection: Option<&DocumentSelection>) {
-        self.commit(cx, selection, true);
+        self.commit(cx, selection, true, CaretMemory::default());
     }
 
     /// [`select`](Self::select), taking the focus only when `from_user`
-    /// and something is selected.
-    fn commit(&self, cx: &mut EventCx<'_>, selection: Option<&DocumentSelection>, from_user: bool) {
+    /// and something is selected, and keeping `caret` as what the keys
+    /// remember about the new moving end. The memory is stored with the
+    /// selection, before any callback runs, so a panicking callback cannot
+    /// part the two.
+    fn commit(
+        &self,
+        cx: &mut EventCx<'_>,
+        selection: Option<&DocumentSelection>,
+        from_user: bool,
+        caret: CaretMemory,
+    ) {
         let selection = match selection {
             Some(selection) => match self.registry.snap(selection) {
                 Some(snapped) => Some(snapped),
@@ -371,7 +380,7 @@ impl SelectionModel {
         if *self.selection.borrow() == selection {
             return;
         }
-        self.caret.set(CaretMemory::default());
+        self.caret.set(caret);
         let coverage = selection
             .as_ref()
             .and_then(|selection| self.covered(selection));
@@ -508,7 +517,7 @@ impl SelectionModel {
             });
         let writer = self.writer.borrow().clone();
         if let Some(writer) = writer {
-            writer.write(|cx| self.commit(cx, next.as_ref(), false));
+            writer.write(|cx| self.commit(cx, next.as_ref(), false, CaretMemory::default()));
         }
     }
 

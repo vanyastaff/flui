@@ -596,6 +596,7 @@ fn selection_area_input() {
             ("selection_area_input::line_keys_keep_their_column_and_their_line", crate::selection_area_input::line_keys_keep_their_column_and_their_line),
             ("selection_area_input::the_nearest_text_is_nearest_on_screen", crate::selection_area_input::the_nearest_text_is_nearest_on_screen),
             ("selection_area_input::esc_clears_then_reaches_the_enclosing_dismiss", crate::selection_area_input::esc_clears_then_reaches_the_enclosing_dismiss),
+            ("selection_area_input::a_panicking_listener_keeps_what_the_keys_remember", crate::selection_area_input::a_panicking_listener_keeps_what_the_keys_remember),
         ],
     );
 }
