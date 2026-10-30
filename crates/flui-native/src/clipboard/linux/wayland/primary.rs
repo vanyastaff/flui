@@ -3,7 +3,13 @@
 //! last, which a middle click pastes (ADR-0152).
 //!
 //! It mirrors the clipboard beside it, on its own devices: one per seat,
-//! keeping the offer of the seat's primary selection. Two things differ.
+//! keeping the offer of the seat's primary selection. Three things differ.
+//!
+//! - **The application has one selection, not one per seat.** A claim made
+//!   above makes every earlier claim stale, wherever it was made, so
+//!   offering on the seat of the last input releases the source on any
+//!   other seat. The clipboard keeps each seat's copy instead, because a
+//!   copy is written once and no claim replaces it.
 //!
 //! - **The application's selection is lazy.**
 //!   [`offer_primary`](super::SeatClipboard::offer_primary) holds the
