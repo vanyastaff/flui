@@ -172,6 +172,9 @@ fn scripts_of(lang: &str) -> Vec<ScriptCode> {
             b"Jpan" => vec![HAN, code(b"Hira"), code(b"Kana")],
             b"Kore" => vec![code(b"Hang"), HAN],
             b"Zsym" => Vec::new(),
+            // Estrangela, Eastern and Western Syriac are styles of the one
+            // script text is shaped as.
+            b"Syre" | b"Syrn" | b"Syrj" => vec![code(b"Syrc")],
             other => vec![code(other)],
         },
         None => match language.as_str() {
@@ -202,10 +205,17 @@ fn han_preference(locale: &str) -> Option<&'static str> {
         "ja" => Some("ja"),
         "ko" => Some("ko"),
         "zh" => {
-            let traditional = tag
-                .split('-')
-                .skip(1)
-                .any(|subtag| matches!(subtag, "hant" | "tw" | "hk" | "mo"));
+            // The script subtag wins over the region: `zh-Hans-TW` is
+            // Simplified (as `fallback_tables::Han::of` reads it).
+            let rest: Vec<&str> = subtags.collect();
+            let traditional = if rest.contains(&"hant") {
+                true
+            } else if rest.contains(&"hans") {
+                false
+            } else {
+                rest.iter()
+                    .any(|subtag| matches!(*subtag, "tw" | "hk" | "mo"))
+            };
             Some(if traditional { "zh-Hant" } else { "zh-Hans" })
         }
         _ => None,
@@ -284,6 +294,21 @@ mod tests {
             Some(file("NotoSansCJK-Regular.ttc", 3)),
         );
         check(
+            "api28 Hani zh-Hans-TW (script over region)",
+            first(&parse(API_28, dir, "zh-Hans-TW"), b"Hani"),
+            Some(file("NotoSansCJK-Regular.ttc", 2)),
+        );
+        check(
+            "api28 Hani zh-Hant-CN",
+            first(&parse(API_28, dir, "zh-Hant-CN"), b"Hani"),
+            Some(file("NotoSansCJK-Regular.ttc", 3)),
+        );
+        check(
+            "api28 Syrc keeps Estrangela first",
+            first(&api28, b"Syrc"),
+            Some(file("NotoSansSyriacEstrangela-Regular.ttf", 0)),
+        );
+        check(
             "api28 Hang ko",
             first(&parse(API_28, dir, "ko-KR"), b"Hang"),
             Some(file("NotoSansCJK-Regular.ttc", 1)),
@@ -329,5 +354,10 @@ mod tests {
             None,
         );
         assert!(failures.is_empty(), "{failures:#?}");
+        assert_eq!(
+            api28.script(ScriptCode::from_bytes(*b"Syrc")).len(),
+            3,
+            "the Estrangela, Eastern and Western faces share Syriac's list"
+        );
     }
 }

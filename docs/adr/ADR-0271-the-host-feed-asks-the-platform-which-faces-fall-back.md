@@ -120,8 +120,10 @@ Each face appears once, in the first position where it occurs. Only faces the co
 are written. A `FaceRef::File` resolves by file and face index, with both paths canonicalised, so a
 path through a symlink still matches. A `FaceRef::Family` resolves through the collection's family
 names. A face with colour glyph tables (`COLR`, `CBDT`, `sbix`) never enters a script
-list or the common list, only the emoji generic. Without that rule, a platform that ranks an emoji
-face high for Latin digits reintroduces the word-gap defect that `font_resolve` prevents.
+list or the common list, only the emoji generic: one the host named in a text list moves to the
+end of the host's emoji list (Android 6 leaves its emoji family untagged). Without that rule, a
+platform that ranks an emoji face high for Latin digits reintroduces the word-gap defect that
+`font_resolve` prevents.
 
 ### §3 `flui-native` computes it, off the owner thread
 
@@ -207,7 +209,7 @@ fallback order is FLUI's tables alone, as today. A test that needs a host answer
 
 - `the_host_answer_precedes_the_tables` (flui-painting, `fallback_chain`) covers the merge order,
   deduplication, path resolution through `..`, a face the collection lacks, and the colour-face
-  exclusion.
+  exclusion; `a_colour_face_in_a_text_list_moves_to_the_emoji_generic` covers the move.
 - `a_host_fallback_face_draws_a_script_the_tables_miss` (flui-painting, a row of
   `host_feed_contract`) feeds a hand-built `SystemFallback` that names the Arabic probe face, which
   no table names. With the answer the Arabic text shapes in that face; without it, every letter
