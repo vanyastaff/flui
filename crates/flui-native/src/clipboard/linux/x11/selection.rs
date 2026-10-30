@@ -27,6 +27,7 @@
 //!   meanwhile join the one under way. A read gets [`TRANSFER_TIMEOUT`] in
 //!   all and at most [`MAX_TEXT`] bytes.
 
+use std::cell::OnceCell;
 use std::os::fd::{AsFd, OwnedFd};
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
@@ -200,6 +201,9 @@ impl Atoms {
 struct Owned {
     text: Arc<str>,
     time: xproto::Timestamp,
+    /// The text's length in ISO 8859-1, counted once: each request for the
+    /// form would otherwise scan the whole text again.
+    latin1_len: OnceCell<usize>,
 }
 
 impl Owned {
@@ -207,6 +211,17 @@ impl Owned {
         Self {
             text: text.into(),
             time,
+            latin1_len: OnceCell::new(),
+        }
+    }
+
+    /// How many bytes the text takes in `form`.
+    fn len_in(&self, form: TextForm) -> usize {
+        match form {
+            TextForm::Latin1 => *self.latin1_len.get_or_init(|| form.encoded_len(&self.text)),
+            TextForm::PlainUtf8 | TextForm::Utf8String | TextForm::Plain => {
+                form.encoded_len(&self.text)
+            }
         }
     }
 }
@@ -728,7 +743,7 @@ impl Selections {
         };
         let kind = self.atoms.form(form);
         let text = Arc::clone(&owned.text);
-        let len = form.encoded_len(&text);
+        let len = owned.len_in(form);
         if len <= self.chunk {
             let (bytes, _) = form.encode_chunk(&text, 0, len);
             self.connection.change_property8(
