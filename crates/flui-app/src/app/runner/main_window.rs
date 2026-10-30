@@ -1526,16 +1526,58 @@ mod tests {
         );
     }
 
-    /// A storage directory in the main configuration reaches the UI runtimes the
-    /// host builds: the run resolves the host's storage once, at start, and
-    /// a UI runtime built afterwards provides it to its widgets as the
-    /// `StorageCapability`. Driven through
-    /// `run_with_platform` itself, so the host's storage comes from the
-    /// runner; the UI runtime is an `Isolated` window opened from `on_ready`,
-    /// which reaches `host::build_ui_runtime` as every runner site does,
-    /// without a GPU.
+    /// The run's storage directory reaches the UI runtimes the host builds:
+    /// the run resolves the host's storage once, at start, and a UI runtime
+    /// built afterwards provides it to its widgets as the
+    /// `StorageCapability`. The directory is the configured one, else the
+    /// application's identifier; a desktop application with neither has no
+    /// storage. Driven through `run_with_platform` itself, so the host's
+    /// storage comes from the runner; the UI runtime is an `Isolated` window
+    /// opened from `on_ready`, which reaches `host::build_ui_runtime` as every
+    /// runner site does, without a GPU.
     #[test]
-    fn a_configured_storage_dir_reaches_lifecycle_context() {
+    fn the_run_storage_dir_reaches_lifecycle_context() {
+        let dir = || {
+            flui_platform::AppDataDir::try_new("storage-host-test")
+                .expect("a plain name is a valid directory")
+        };
+        let identified = || {
+            crate::AppIdentity::try_new("Storage host test")
+                .expect("a display name")
+                .with_app_id(crate::AppId::try_new("dev.flui.storage_host_test").expect("an id"))
+        };
+        let cases: [(&str, AppConfig, bool); 4] = [
+            (
+                "a configured directory",
+                AppConfig::new().with_storage_dir(dir()),
+                true,
+            ),
+            (
+                "an application identifier alone",
+                AppConfig::new().with_application_identity(identified()),
+                true,
+            ),
+            (
+                "a configured directory beside an identifier",
+                AppConfig::new()
+                    .with_application_identity(identified())
+                    .with_storage_dir(dir()),
+                true,
+            ),
+            ("neither, on a desktop", AppConfig::new(), false),
+        ];
+        for (case, config, expected) in cases {
+            assert_eq!(
+                storage_reaches_a_ui_runtime(config),
+                Some(expected),
+                "{case}"
+            );
+        }
+    }
+
+    /// Whether a UI runtime built after a run started with `config` can
+    /// acquire the `StorageCapability`; `None` when it was never observed.
+    fn storage_reaches_a_ui_runtime(config: AppConfig) -> Option<bool> {
         use flui_platform::capability::Capability as _;
         use flui_view::persist::StorageCapability;
 
@@ -1545,11 +1587,7 @@ mod tests {
             panic!("no main window is opened");
         })
         .with_startup_window(StartupWindow::None)
-        .with_config(
-            AppConfig::new()
-                .with_exit_policy(ExitPolicy::ExplicitQuit)
-                .with_storage_dir(flui_platform::StorageName::from_static("storage-host-test")),
-        )
+        .with_config(config.with_exit_policy(ExitPolicy::ExplicitQuit))
         .on_ready(move |_| {
             let (dispatcher, _window) = super::super::secondary_window::open_secondary_window_impl(
                 AppConfig::default(),
@@ -1582,11 +1620,6 @@ mod tests {
             .expect("observe storage through the installed owner");
         });
         run_with_platform(app, Box::new(HeadlessPlatform::new())).expect("ordinary owner teardown");
-
-        assert_eq!(
-            reached.get(),
-            Some(true),
-            "a ui_runtime built after the host started with a storage directory holds storage"
-        );
+        reached.get()
     }
 }

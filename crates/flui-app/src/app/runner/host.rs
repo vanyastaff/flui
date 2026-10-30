@@ -67,21 +67,20 @@ pub(super) fn install_configured_executors(config: &crate::app::AppConfig) {
 
 /// Give the host the storage `config` asks for, under the installed owner
 /// platform's data roots. Call once the owner platform and the host's
-/// executors are installed. Without a configured directory widgets are
-/// refused storage as not registered; where the platform has no data root,
-/// as not on this platform.
+/// executors are installed. Without a directory to name
+/// ([`storage_dir`]) widgets are refused storage as not registered; where
+/// the platform has no data root, as not on this platform.
 pub(super) fn install_host_storage(config: &crate::app::AppConfig) {
     let refused =
         |reason| flui_platform::Unsupported::of::<flui_view::persist::StorageCapability>(reason);
-    let dirs = config
-        .storage_dir
+    let dirs = storage_dir(config)
         .ok_or_else(|| refused(flui_platform::UnsupportedReason::NotRegistered))
-        .and_then(|name| {
-            with_owner_platform(|owner| owner.shared().data_dirs(&name))
+        .and_then(|dir| {
+            with_owner_platform(|owner| owner.shared().data_dirs(&dir))
                 .flatten()
                 .ok_or_else(|| {
                     tracing::warn!(
-                        storage_dir = name.as_str(),
+                        storage_dir = dir.as_str(),
                         "this platform has no data directory; widgets get no storage"
                     );
                     refused(flui_platform::UnsupportedReason::NotOnThisPlatform)
@@ -94,6 +93,39 @@ pub(super) fn install_host_storage(config: &crate::app::AppConfig) {
     let memory = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().host_memory));
     memory.replace_receivers(config.memory_reclaimers.0.clone());
 }
+
+/// The directory the run's storage lives in under the data roots: the one
+/// [`AppConfig::with_storage_dir`](crate::app::AppConfig::with_storage_dir)
+/// names, else the application's identifier, else, where the roots belong to
+/// this application alone, [`SANDBOXED_STORAGE_DIR`]. `None` on a desktop
+/// application with neither, whose roots every application shares.
+pub(crate) fn storage_dir(config: &crate::app::AppConfig) -> Option<flui_platform::AppDataDir> {
+    if let Some(dir) = &config.storage_dir {
+        return Some(dir.clone());
+    }
+    if let Some(app_id) = config.application_identity.app_id() {
+        let dir = flui_platform::AppDataDir::try_new(app_id.as_str())
+            .expect("BUG: an application identifier is a valid directory name");
+        return Some(dir);
+    }
+    SANDBOXED.then(|| {
+        flui_platform::AppDataDir::try_new(SANDBOXED_STORAGE_DIR)
+            .expect("BUG: the sandboxed storage directory name is valid")
+    })
+}
+
+/// Whether the platform's data roots belong to this application alone: the
+/// Android app's private directories, the iOS app container, the page's
+/// origin on the Web.
+const SANDBOXED: bool = cfg!(any(
+    target_os = "android",
+    target_os = "ios",
+    target_arch = "wasm32"
+));
+
+/// The storage directory of an application without an identifier, where the
+/// data roots are its own.
+pub(crate) const SANDBOXED_STORAGE_DIR: &str = "app";
 
 /// Have the host trim the GPU memory behind a new raster lane on a
 /// memory-pressure notice, for as long as the lane exists.

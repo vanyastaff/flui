@@ -10,7 +10,7 @@ use std::sync::Arc;
 use flui_foundation::geometry::Size;
 use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::{
-    DisplaySnapshot, SessionEndAnswer, SessionEndPhase, StorageName, SystemNotice,
+    AppDataDir, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice,
     SystemPreferences, WindowCapabilities, WindowHandler, WindowId, WindowOptions,
 };
 
@@ -430,7 +430,7 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     /// Every host but Android answers with the current user's data directories
     /// ([`crate::storage::data_dirs`]); Android's process has no such
     /// directories, so it answers with its own.
-    fn data_dirs(&self, app: &flui_platform::StorageName) -> Option<crate::storage::DataDirs>;
+    fn data_dirs(&self, app: &flui_platform::AppDataDir) -> Option<crate::storage::DataDirs>;
 }
 
 /// Platform executor trait for async task execution
@@ -704,7 +704,7 @@ impl<H: Host> Platform for HostPlatform<H> {
         self.owner.app_path()
     }
 
-    fn data_dirs(&self, app: &StorageName) -> Option<DataDirs> {
+    fn data_dirs(&self, app: &AppDataDir) -> Option<DataDirs> {
         H::Storage::data_dirs(&self.owner, app)
     }
 }

@@ -368,7 +368,7 @@ secrets).
 | Open, save and folder dialogs | 🟡 | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Windows has no filters, title or owner window; every other host answers "cancelled" |
 | Message box | ❌ | ❌ | — | — | ❌ | ❌ | ❌ | ❌ | Linux has no native one: the app draws it |
 | Share | ❌ | ❌ | — | — | ❌ | ❌ | ❌ | ❌ |  |
-| App folders and storage | ✅ | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | 🟡 | ✅ | `AppConfig::with_storage_dir` gives widgets storage on every host; it ran on Windows and Android, and no Web app has run the probe. Android `app_path` still reports a fixed path. |
+| App folders and storage | ✅ | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | 🟡 | ✅ | An application identifier or `AppConfig::with_storage_dir` gives widgets storage on every host; it ran on Windows and Android, and no Web app has run the probe. Android `app_path` still reports a fixed path. |
 | Tray and status icon | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ | Linux uses StatusNotifierItem |
 | Local notifications | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Needs app identity |
 | Taskbar and Dock progress, badge | 🟡 | ❌ | ❌ | ❌ | ❌ | — | ❌ | ❌ | Windows `ITaskbarList3` sits in an extension nothing can reach; Linux `LauncherEntry`; Web Badging API |
@@ -381,7 +381,7 @@ secrets).
 <details>
 <summary>Run evidence</summary>
 
-- **App folders and storage** — `AppConfig::with_storage_dir` gives widgets storage: the user's data directories on desktop and iOS, the app's `files` and `no_backup` on Android, IndexedDB on the Web, where a write based on a version compares and replaces in one readwrite transaction, so two tabs never both succeed from one base. Runs: a probe counting its launches through `LifecycleContext::storage` read back 1 then 2 across restarts on Windows 11 (`%APPDATA%`) and on a Galaxy S21 (Android 15, release APK, data cleared first, process force-stopped between launches). The Web store's own tests ran on Chromium 152 against its IndexedDB; no Web app has run the probe. Android `app_path` still reports a fixed path
+- **App folders and storage** — an application identifier or `AppConfig::with_storage_dir` gives widgets storage: the user's data directories on desktop and iOS, the app's `files` and `no_backup` on Android, IndexedDB on the Web, where a write based on a version compares and replaces in one readwrite transaction, so two tabs never both succeed from one base. Runs: a probe counting its launches through `LifecycleContext::storage` read back 1 then 2 across restarts on Windows 11 (`%APPDATA%`) and on a Galaxy S21 (Android 15, release APK, data cleared first, process force-stopped between launches). The Web store's own tests ran on Chromium 152 against its IndexedDB; no Web app has run the probe. Android `app_path` still reports a fixed path
 - **Sandbox-aware file and resource access (the layer never hands an app a path it cannot use)** — No security-scoped bookmarks for the macOS App Sandbox, no `xdg-desktop-portal` file access for Flatpak and Snap, no AppContainer-aware paths for MSIX, no Storage Access Framework URIs on Android, no iOS document-scoped URLs; `data_dirs` and the dialogs assume an unsandboxed process
 
 </details>

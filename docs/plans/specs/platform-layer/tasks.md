@@ -4688,12 +4688,15 @@ graph LR
   без корня данных — `NotOnThisPlatform`; `placement_recorder` пишет в тот же стор.
   `LifecycleContext::storage`, поле `PresentationCapabilities::storage` и
   `RuntimeHostServices::with_storage` удалены; `lay_out_with_storage` регистрирует `MemoryStorage`
-  встроенным провайдером headless-реестра. Остаток (решение координатора 2026-10-30): место по
-  умолчанию без настройки — кросс-платформенный `AppId` (reverse-DNS) вместо `AppleBundleId` в
-  `AppIdentity`, `AppDataDir` вместо `StorageName` у `data_dirs`, `flui build` передаёт
-  `[app].organization` + `name`; на Android без `AppId` — имя пакета; без идентификатора —
-  `NotRegistered` и предупреждение при первом `Persisted::open`; `with_storage_dir` только
-  переопределяет место.
+  встроенным провайдером headless-реестра. Место по умолчанию (решение координатора 2026-10-30):
+  `AppId` (reverse-DNS, грамматика имени пакета Android) вместо `AppleBundleId` в `AppIdentity`;
+  `AppDataDir` вместо `StorageName` у `data_dirs`; каталог — `with_storage_dir`, иначе `AppId`,
+  иначе на Android, iOS и Web (корни принадлежат одному приложению) фиксированное `app` (вместо
+  имени пакета: его даёт только JNI, а каталог и так приватный); на десктопе без идентификатора —
+  `NotRegistered` и одно предупреждение за запуск в debug при первом запросе хранилища
+  (`HostStorageProvider`). Таблица `the_run_storage_dir_reaches_lifecycle_context`, `app_id` во
+  `flui-log`, `app_data_dir` во `flui-platform`. Остаток: `flui build` передаёт
+  `[app].organization` + `name` (`FLUI_APP_ID`, читается `option_env!` в `AppConfig::default`).
 
 ## Отступление от порядка, решённое владельцем
 

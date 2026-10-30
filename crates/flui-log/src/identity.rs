@@ -1,28 +1,30 @@
-//! Application identity used by the native log sinks.
+//! Application identity used by the native log sinks and the storage host.
 //!
-//! Two different things are called "the app name" by the platform log systems,
-//! and conflating them is how the historical backend produced identifiers that
+//! Two different things are called "the app name" by the platforms, and
+//! conflating them is how the historical backend produced identifiers that
 //! looked official and were not:
 //!
 //! * a **display name** — free-form, human-facing, used as the logcat tag when
 //!   an event carries no usable target;
-//! * a **bundle identifier** — a reverse-DNS name that Apple's unified logging
-//!   indexes as the *subsystem*, and that `log stream --predicate` queries by.
+//! * an **application identifier** — a reverse-DNS name such as
+//!   `com.example.notes`, which Apple's unified logging indexes as the
+//!   *subsystem* and the storage host names the application's data directory
+//!   after.
 //!
-//! A display name cannot be turned into a bundle identifier. The historical
-//! code built `com.{display_name}.app`, which produced entries such as
+//! A display name cannot be turned into an identifier. The historical code
+//! built `com.{display_name}.app`, which produced entries such as
 //! `com.My Game.app` (not a legal identifier) and, worse, could collide with a
 //! reverse-DNS name owned by somebody else. FLUI therefore keeps them as
-//! separate fields: the bundle identifier is supplied by the application or it
-//! is absent, and absence resolves to one fixed, obviously-unclaimed subsystem
-//! rather than to a guess.
+//! separate fields: the identifier is supplied by the application or it is
+//! absent, and absence resolves to one fixed, obviously-unclaimed subsystem and
+//! to no default data directory rather than to a guess.
 
 use std::fmt;
 
 use thiserror::Error;
 
 /// Subsystem reported to Apple's unified logging when the application has not
-/// declared its real bundle identifier.
+/// declared its identifier.
 ///
 /// Deliberately a single fixed value rather than a name derived from the
 /// display name: an unconfigured application should be easy to spot in
@@ -39,19 +41,80 @@ pub const APPLE_CATEGORY: &str = "flui";
 /// Display name used when the application supplies none.
 pub const DEFAULT_DISPLAY_NAME: &str = "flui";
 
-/// Reasons an [`AppIdentity`] or [`AppleBundleId`] cannot be built.
+/// The longest [`AppId`], in bytes: the longest file name the desktop file
+/// systems accept, since the identifier names the data directory.
+pub const APP_ID_MAX_LEN: usize = 255;
+
+/// Words Java reserves, which Android refuses as a package-name label.
+const JAVA_RESERVED: &[&str] = &[
+    "abstract",
+    "assert",
+    "boolean",
+    "break",
+    "byte",
+    "case",
+    "catch",
+    "char",
+    "class",
+    "const",
+    "continue",
+    "default",
+    "do",
+    "double",
+    "else",
+    "enum",
+    "extends",
+    "false",
+    "final",
+    "finally",
+    "float",
+    "for",
+    "goto",
+    "if",
+    "implements",
+    "import",
+    "instanceof",
+    "int",
+    "interface",
+    "long",
+    "native",
+    "new",
+    "null",
+    "package",
+    "private",
+    "protected",
+    "public",
+    "return",
+    "short",
+    "static",
+    "strictfp",
+    "super",
+    "switch",
+    "synchronized",
+    "this",
+    "throw",
+    "throws",
+    "transient",
+    "true",
+    "try",
+    "void",
+    "volatile",
+    "while",
+];
+
+/// Reasons an [`AppIdentity`] or [`AppId`] cannot be built.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[non_exhaustive]
 pub enum IdentityError {
-    /// A bundle identifier needs at least two dot-separated labels.
+    /// An application identifier needs at least two dot-separated labels.
     #[error(
-        "bundle identifier `{0}` is not reverse-DNS; it needs at least two dot-separated labels, \
-         for example `com.example.app`"
+        "application identifier `{0}` is not reverse-DNS; it needs at least two dot-separated \
+         labels, for example `com.example.app`"
     )]
     NotReverseDns(String),
 
     /// A label between two dots (or at either end) was empty.
-    #[error("bundle identifier `{identifier}` has an empty label at position {position}")]
+    #[error("application identifier `{identifier}` has an empty label at position {position}")]
     EmptyLabel {
         /// The rejected identifier.
         identifier: String,
@@ -59,10 +122,10 @@ pub enum IdentityError {
         position: usize,
     },
 
-    /// A label contained something other than an ASCII letter, digit, or `-`.
+    /// A label contained something other than an ASCII letter, digit, or `_`.
     #[error(
-        "Apple bundle identifier `{identifier}` contains {character:?}; labels accept ASCII \
-         letters, digits, and `-`"
+        "application identifier `{identifier}` contains {character:?}; labels accept ASCII \
+         letters, digits, and `_`"
     )]
     InvalidCharacter {
         /// The rejected identifier.
@@ -71,9 +134,31 @@ pub enum IdentityError {
         character: char,
     },
 
-    /// A label started or ended with `-`.
-    #[error("Apple bundle identifier `{0}` has a label starting or ending with `-`")]
-    HyphenAtLabelEdge(String),
+    /// A label started with something other than an ASCII letter.
+    #[error(
+        "application identifier `{identifier}` has label {position} starting with something \
+         other than an ASCII letter"
+    )]
+    LabelStartsWithNonLetter {
+        /// The rejected identifier.
+        identifier: String,
+        /// Zero-based index of the label.
+        position: usize,
+    },
+
+    /// A label was a word Java reserves, which Android refuses in a package
+    /// name.
+    #[error("application identifier `{identifier}` uses the reserved word `{label}` as a label")]
+    ReservedLabel {
+        /// The rejected identifier.
+        identifier: String,
+        /// The reserved label.
+        label: String,
+    },
+
+    /// The identifier was longer than [`APP_ID_MAX_LEN`] bytes.
+    #[error("application identifier `{0}` is longer than {APP_ID_MAX_LEN} bytes")]
+    TooLong(String),
 
     /// The display name was empty or only whitespace.
     #[error("application display name is empty")]
@@ -87,28 +172,36 @@ pub enum IdentityError {
     DisplayNameHasNul(String),
 }
 
-/// A validated reverse-DNS bundle identifier.
+/// A validated reverse-DNS application identifier, such as
+/// `com.example.notes`: the name the application is known by on every
+/// platform.
 ///
-/// Parsed, not merely checked: once constructed, the value is known to be legal
-/// as an Apple subsystem, so the Apple backend never has to re-inspect it.
+/// The grammar is the one every target accepts as a name for the
+/// application: two or more `.`-separated labels, each starting with an ASCII
+/// letter and continuing with ASCII letters, digits and `_`, none a word Java
+/// reserves, at most [`APP_ID_MAX_LEN`] bytes in all. That is a legal Android
+/// package name, an Apple unified-logging subsystem and a directory name on
+/// every file system. It is what `flui build` derives from `[app]` in
+/// `flui.toml` (`organization` plus `name`).
+///
+/// Parsed, not merely checked: once constructed, the value is known to be
+/// legal everywhere it is used, so no consumer re-inspects it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AppleBundleId(String);
+pub struct AppId(String);
 
-impl AppleBundleId {
-    /// Parse a reverse-DNS bundle identifier such as `com.example.app`.
-    ///
-    /// Accepts two or more `.`-separated labels of ASCII letters, digits, and
-    /// interior hyphens. Android package identifiers intentionally use a
-    /// different type once a consumer needs them; platform grammars are not
-    /// forced into an artificial intersection.
+impl AppId {
+    /// Parse a reverse-DNS application identifier such as `com.example.app`.
     ///
     /// # Errors
     ///
     /// Returns the [`IdentityError`] variant naming what was wrong: too few
-    /// labels, an empty label, a character outside the accepted set, or a
-    /// hyphen at a label boundary.
+    /// labels, an empty label, a label not starting with a letter, a
+    /// character outside the accepted set, a reserved word, or too many bytes.
     pub fn try_new(identifier: impl Into<String>) -> Result<Self, IdentityError> {
         let identifier = identifier.into();
+        if identifier.len() > APP_ID_MAX_LEN {
+            return Err(IdentityError::TooLong(identifier));
+        }
 
         let labels: Vec<&str> = identifier.split('.').collect();
         if labels.len() < 2 {
@@ -116,23 +209,30 @@ impl AppleBundleId {
         }
 
         for (position, label) in labels.iter().enumerate() {
-            if label.is_empty() {
+            let Some(first) = label.chars().next() else {
                 return Err(IdentityError::EmptyLabel {
                     identifier,
                     position,
                 });
-            }
+            };
             if let Some(character) = label
                 .chars()
-                .find(|character| !character.is_ascii_alphanumeric() && *character != '-')
+                .find(|character| !character.is_ascii_alphanumeric() && *character != '_')
             {
                 return Err(IdentityError::InvalidCharacter {
                     identifier,
                     character,
                 });
             }
-            if label.starts_with('-') || label.ends_with('-') {
-                return Err(IdentityError::HyphenAtLabelEdge(identifier));
+            if !first.is_ascii_alphabetic() {
+                return Err(IdentityError::LabelStartsWithNonLetter {
+                    identifier,
+                    position,
+                });
+            }
+            if JAVA_RESERVED.contains(label) {
+                let label = (*label).to_owned();
+                return Err(IdentityError::ReservedLabel { identifier, label });
             }
         }
 
@@ -147,7 +247,7 @@ impl AppleBundleId {
     }
 }
 
-impl fmt::Display for AppleBundleId {
+impl fmt::Display for AppId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.0)
     }
@@ -157,14 +257,14 @@ impl fmt::Display for AppleBundleId {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppIdentity {
     display_name: String,
-    apple_bundle_id: Option<AppleBundleId>,
+    app_id: Option<AppId>,
 }
 
 impl Default for AppIdentity {
     fn default() -> Self {
         Self {
             display_name: DEFAULT_DISPLAY_NAME.to_owned(),
-            apple_bundle_id: None,
+            app_id: None,
         }
     }
 }
@@ -173,7 +273,7 @@ impl AppIdentity {
     /// Build an identity from a human-facing display name.
     ///
     /// The display name is the logcat fallback tag. It is **not** promoted to a
-    /// bundle identifier — call [`AppIdentity::with_apple_bundle_id`] for that.
+    /// application identifier — call [`AppIdentity::with_app_id`] for that.
     ///
     /// # Errors
     ///
@@ -190,14 +290,14 @@ impl AppIdentity {
         }
         Ok(Self {
             display_name,
-            apple_bundle_id: None,
+            app_id: None,
         })
     }
 
-    /// Attach the application's real reverse-DNS bundle identifier.
+    /// Attach the application's identifier.
     #[must_use]
-    pub fn with_apple_bundle_id(mut self, bundle_id: AppleBundleId) -> Self {
-        self.apple_bundle_id = Some(bundle_id);
+    pub fn with_app_id(mut self, app_id: AppId) -> Self {
+        self.app_id = Some(app_id);
         self
     }
 
@@ -208,23 +308,23 @@ impl AppIdentity {
         &self.display_name
     }
 
-    /// The declared bundle identifier, if the application supplied one.
+    /// The declared application identifier, if the application supplied one.
     #[inline]
     #[must_use]
-    pub fn apple_bundle_id(&self) -> Option<&AppleBundleId> {
-        self.apple_bundle_id.as_ref()
+    pub fn app_id(&self) -> Option<&AppId> {
+        self.app_id.as_ref()
     }
 
     /// Subsystem reported to Apple's unified logging.
     ///
-    /// The declared bundle identifier when there is one, otherwise the fixed
-    /// [`UNIDENTIFIED_APPLE_SUBSYSTEM`]. Never a value synthesised from the
-    /// display name.
+    /// The declared application identifier when there is one, otherwise the
+    /// fixed [`UNIDENTIFIED_APPLE_SUBSYSTEM`]. Never a value synthesised from
+    /// the display name.
     #[inline]
     #[must_use]
     pub fn apple_subsystem(&self) -> &str {
-        self.apple_bundle_id
+        self.app_id
             .as_ref()
-            .map_or(UNIDENTIFIED_APPLE_SUBSYSTEM, AppleBundleId::as_str)
+            .map_or(UNIDENTIFIED_APPLE_SUBSYSTEM, AppId::as_str)
     }
 }

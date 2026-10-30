@@ -2,7 +2,11 @@
 //! which this crate supplies as the composition root, and the registry a run
 //! builds from them, the application's overrides and its plugins.
 
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    sync::Arc,
+};
 
 use flui_interaction::{
     ClipboardBackend, ClipboardCapability, ClipboardHandle, PrimaryClaimId, PrimaryClaims,
@@ -357,32 +361,38 @@ mod tests {
 
 /// The host's byte storage for a loop's life, or why the run has none:
 /// [`NotRegistered`](UnsupportedReason::NotRegistered) until a run installs
-/// its storage and when it configured none,
+/// its storage and when it has no data directory to name,
 /// [`NotOnThisPlatform`](UnsupportedReason::NotOnThisPlatform) when the
 /// platform has no data root.
 #[derive(Clone)]
-pub(crate) struct StorageSlot(Rc<RefCell<Result<Arc<dyn Storage>, Unsupported>>>);
+pub(crate) struct StorageSlot {
+    storage: Rc<RefCell<Result<Arc<dyn Storage>, Unsupported>>>,
+    /// Whether this run has said why a widget got no storage.
+    explained: Rc<Cell<bool>>,
+}
 
 impl Default for StorageSlot {
     fn default() -> Self {
-        Self(Rc::new(RefCell::new(Err(Unsupported::of::<
-            StorageCapability,
-        >(
-            UnsupportedReason::NotRegistered,
-        )))))
+        Self {
+            storage: Rc::new(RefCell::new(Err(Unsupported::of::<StorageCapability>(
+                UnsupportedReason::NotRegistered,
+            )))),
+            explained: Rc::new(Cell::new(false)),
+        }
     }
 }
 
 impl StorageSlot {
     /// Install the run's storage, or the reason it has none.
     pub(crate) fn install(&self, storage: Result<Arc<dyn Storage>, Unsupported>) {
-        let replaced = self.0.replace(storage);
+        let replaced = self.storage.replace(storage);
+        self.explained.set(false);
         drop(replaced);
     }
 
     /// Release the run's storage at loop exit, leaving none installed.
     pub(crate) fn take(&self) -> Option<Arc<dyn Storage>> {
-        self.0
+        self.storage
             .replace(Err(Unsupported::of::<StorageCapability>(
                 UnsupportedReason::NotRegistered,
             )))
@@ -392,7 +402,7 @@ impl StorageSlot {
     /// The installed storage, if the run has one.
     #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
     pub(crate) fn storage(&self) -> Option<Arc<dyn Storage>> {
-        self.0.borrow().as_ref().ok().map(Arc::clone)
+        self.storage.borrow().as_ref().ok().map(Arc::clone)
     }
 }
 
@@ -403,11 +413,23 @@ struct HostStorageProvider {
 
 impl CapabilityProvider<StorageCapability> for HostStorageProvider {
     fn provide(&self, _cx: &ProviderContext<'_>) -> Result<StorageHandle, Unsupported> {
-        self.slot
-            .0
-            .borrow()
-            .as_ref()
-            .map(|storage| StorageHandle::new(Arc::clone(storage)))
-            .map_err(|refusal| *refusal)
+        let refusal = match &*self.slot.storage.borrow() {
+            Ok(storage) => return Ok(StorageHandle::new(Arc::clone(storage))),
+            Err(refusal) => *refusal,
+        };
+        // The first widget refused for want of a directory says how to name
+        // one, once a run; a debug build only, since a release build that
+        // keeps nothing is the author's choice.
+        if cfg!(debug_assertions)
+            && refusal.reason == UnsupportedReason::NotRegistered
+            && !self.slot.explained.replace(true)
+        {
+            tracing::warn!(
+                "a widget asked for storage, but the application has no identifier: set \
+                 `AppIdentity::with_app_id` (`flui build` does from flui.toml) or \
+                 `AppConfig::with_storage_dir`"
+            );
+        }
+        Err(refusal)
     }
 }

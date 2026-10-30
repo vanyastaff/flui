@@ -1,7 +1,7 @@
 //! The storage position of a host whose process has the current user's data
 //! directories.
 
-use flui_platform::StorageName;
+use flui_platform::AppDataDir;
 
 use super::DataDirs;
 
@@ -11,7 +11,7 @@ use super::DataDirs;
 pub struct UserDataDirs;
 
 impl<O> crate::host::Storage<O> for UserDataDirs {
-    fn data_dirs(_: &O, app: &StorageName) -> Option<DataDirs> {
+    fn data_dirs(_: &O, app: &AppDataDir) -> Option<DataDirs> {
         super::data_dirs(app)
     }
 }
