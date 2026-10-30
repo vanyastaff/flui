@@ -4,6 +4,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use flui_foundation::geometry::Axis;
+use flui_rendering::constraints::AxisDirection;
 use flui_rendering::view::ScrollPosition;
 use flui_view::element::StaticChildren;
 use flui_view::prelude::StatelessView;
@@ -11,6 +12,7 @@ use flui_view::seq::ViewSeq;
 use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
 
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;
+use crate::scroll::list_focus::{FocusableList, ListFocusConfig, ListItemFocus};
 use crate::scroll::{
     ShrinkWrappingViewport, SliverChildBuilderDelegate, SliverFixedExtentList, SliverList, Viewport,
 };
@@ -79,6 +81,12 @@ pub struct ListView {
     /// a scrolling container do not need to be repainted as the list scrolls).
     /// Set `false` when an item is cheaper to repaint than to composite.
     add_repaint_boundaries: bool,
+    /// One Tab stop with arrow-key focus over the rows (`ListView::focusable`).
+    focusable: bool,
+    /// The list's accessible name.
+    semantics_label: Option<std::sync::Arc<str>>,
+    /// The accessible name of an empty list.
+    empty_label: Option<std::sync::Arc<str>>,
 }
 
 impl ListView {
@@ -99,6 +107,9 @@ impl ListView {
             children_in_boundaries: std::cell::OnceCell::new(),
             builder_source: None,
             add_repaint_boundaries: true,
+            focusable: false,
+            semantics_label: None,
+            empty_label: None,
         }
     }
 
@@ -130,6 +141,9 @@ impl ListView {
             children_in_boundaries: std::cell::OnceCell::new(),
             builder_source: Some(SliverChildBuilderDelegate::new(item_count, builder)),
             add_repaint_boundaries: true,
+            focusable: false,
+            semantics_label: None,
+            empty_label: None,
         }
     }
 
@@ -203,6 +217,71 @@ impl ListView {
         self.shrink_wrap = shrink_wrap;
         self
     }
+
+    /// Make the list one Tab stop with keyboard focus over its rows (default
+    /// `false`).
+    ///
+    /// Tab enters the list on the row it last focused, or on the first visible
+    /// one, and leaves it for the next control. Inside it, the arrow keys
+    /// along `scroll_direction` move between rows, Page Up and Page Down move
+    /// to the edge of the visible rows and then a page past it, and Home and
+    /// End go to the first and last row. A row's focus goes to its first
+    /// focusable descendant, so the row's button activates and shows its ring
+    /// as on a click. A row not built yet is scrolled to and focused when it
+    /// mounts; that needs a shared [`position`](Self::position), as every
+    /// list inside a `Scrollable` has.
+    ///
+    /// The focused row stays built and announced while the pointer scrolls it
+    /// away (ADR-0263), and an arrow key moves from it.
+    #[must_use]
+    pub fn focusable(mut self, focusable: bool) -> Self {
+        self.focusable = focusable;
+        self
+    }
+
+    /// The list's accessible name, announced when focus enters it.
+    #[must_use]
+    pub fn semantics_label(mut self, label: impl Into<std::sync::Arc<str>>) -> Self {
+        self.semantics_label = Some(label.into());
+        self
+    }
+
+    /// The accessible name of the list while it has no rows. A focusable empty
+    /// list stays a Tab stop and announces this; without it the list
+    /// announces [`semantics_label`](Self::semantics_label).
+    #[must_use]
+    pub fn empty_label(mut self, label: impl Into<std::sync::Arc<str>>) -> Self {
+        self.empty_label = Some(label.into());
+        self
+    }
+
+    /// The name the list's collection node carries: the empty label while the
+    /// list has no rows, when one is set.
+    fn collection_label(&self) -> Option<std::sync::Arc<str>> {
+        let empty = self.item_count() == 0;
+        empty
+            .then(|| self.empty_label.clone())
+            .flatten()
+            .or_else(|| self.semantics_label.clone())
+    }
+
+    /// The number of rows the list has.
+    fn item_count(&self) -> usize {
+        self.builder_source
+            .as_ref()
+            .map_or(self.children.len(), |delegate| delegate.item_count)
+    }
+}
+
+/// One row as the list hands it to its sliver: in a focusable list, inside
+/// its focus marker, which carries the row's key; then inside its repaint
+/// boundary.
+fn wrap_row(index: usize, row: BoxedView, focusable: bool, boundary: bool) -> BoxedView {
+    match (focusable, boundary) {
+        (false, false) => row,
+        (false, true) => super::sliver_list::wrap_in_repaint_boundary(row),
+        (true, boundary) => BoxedView::new(ListItemFocus::new(index, row, boundary)),
+    }
 }
 
 impl fmt::Debug for ListView {
@@ -210,7 +289,10 @@ impl fmt::Debug for ListView {
         let mut s = f.debug_struct("ListView");
         s.field("scroll_direction", &self.scroll_direction)
             .field("offset_source", &self.offset_source)
-            .field("shrink_wrap", &self.shrink_wrap);
+            .field("shrink_wrap", &self.shrink_wrap)
+            .field("focusable", &self.focusable)
+            .field("semantics_label", &self.semantics_label)
+            .field("empty_label", &self.empty_label);
         if self.builder_source.is_some() {
             s.field("item_extent_estimate", &self.item_extent_estimate);
             s.field("builder_source", &self.builder_source);
@@ -243,14 +325,26 @@ impl StatelessView for ListView {
         // widgets-side wrapper. The element's `view_type_id()` now returns
         // `TypeId::of::<SliverList>()`, fixing BLOCKER 1 (element identity).
         let sliver: BoxedView = if let Some(ref delegate) = self.builder_source {
-            let builder = if self.add_repaint_boundaries {
-                super::sliver_list::wrap_builder_in_repaint_boundaries(&delegate.builder)
-            } else {
-                Rc::clone(&delegate.builder)
+            let builder = match (self.focusable, self.add_repaint_boundaries) {
+                (false, false) => Rc::clone(&delegate.builder),
+                (false, true) => {
+                    super::sliver_list::wrap_builder_in_repaint_boundaries(&delegate.builder)
+                }
+                (true, boundary) => {
+                    let inner = Rc::clone(&delegate.builder);
+                    let wrapped: Rc<dyn Fn(usize) -> Option<BoxedView>> = Rc::new(move |index| {
+                        inner(index).map(|row| wrap_row(index, row, true, boundary))
+                    });
+                    wrapped
+                }
             };
             {
                 let sliver =
                     SliverList::new(delegate.item_count, self.item_extent_estimate, builder);
+                let sliver = match self.collection_label() {
+                    Some(label) => sliver.semantics_label(label),
+                    None => sliver,
+                };
                 match &delegate.find_index_by_key {
                     Some(find) => {
                         let find = Rc::clone(find);
@@ -264,7 +358,22 @@ impl StatelessView for ListView {
             // Static children go through the same lazy path as a builder:
             // only the window is built, keyed children are found by the
             // delegate's key map, everything outside the window is evicted.
-            let children = if self.add_repaint_boundaries {
+            let children = if self.focusable {
+                // The marker needs the row's index, which a mapping does not
+                // see, so the rows are wrapped once per list value.
+                Rc::clone(self.children_in_boundaries.get_or_init(|| {
+                    StaticChildren::new(
+                        self.children
+                            .children()
+                            .iter()
+                            .enumerate()
+                            .map(|(index, row)| {
+                                wrap_row(index, row.clone(), true, self.add_repaint_boundaries)
+                            })
+                            .collect(),
+                    )
+                }))
+            } else if self.add_repaint_boundaries {
                 Rc::clone(self.children_in_boundaries.get_or_init(|| {
                     StaticChildren::mapped(
                         self.children.children().to_vec(),
@@ -274,9 +383,14 @@ impl StatelessView for ListView {
             } else {
                 Rc::clone(&self.children)
             };
-            SliverFixedExtentList::over(self.item_extent, children).boxed()
+            let sliver = SliverFixedExtentList::over(self.item_extent, children);
+            match self.collection_label() {
+                Some(label) => sliver.semantics_label(label),
+                None => sliver,
+            }
+            .boxed()
         };
-        if self.shrink_wrap {
+        let viewport = if self.shrink_wrap {
             let viewport = ShrinkWrappingViewport::new((sliver,)).axis_direction(axis_direction);
             match &self.offset_source {
                 OffsetSource::Fixed(pixels) => viewport.offset(*pixels),
@@ -290,6 +404,21 @@ impl StatelessView for ListView {
                 OffsetSource::Position(position) => viewport.position(position.clone()),
             }
             .boxed()
+        };
+        if !self.focusable {
+            return viewport;
         }
+        let config = ListFocusConfig {
+            item_count: self.item_count(),
+            axis: self.scroll_direction,
+            reversed: axis_direction == AxisDirection::RightToLeft,
+            position: match &self.offset_source {
+                OffsetSource::Fixed(_) => None,
+                OffsetSource::Position(position) => Some(position.clone()),
+            },
+            extent_estimate: self.item_extent_estimate,
+            empty_list_label: self.collection_label(),
+        };
+        FocusableList::new(config, viewport).boxed()
     }
 }

@@ -177,6 +177,8 @@ pub struct RenderSliverGrid {
     /// Total known item count.
     item_count: usize,
     collection: Option<flui_rendering::semantics::SemanticsCollection>,
+    /// The collection's accessible name, published on its list or grid node.
+    collection_label: Option<std::sync::Arc<str>>,
     /// Logical-index → dense-slot map rebuilt each pass from parent-data.
     /// Kept as a field to reuse the `BTreeMap` allocation across passes.
     logical_to_slot: BTreeMap<usize, usize>,
@@ -213,6 +215,19 @@ impl RenderSliverGrid {
         self.pinned.set(pinned)
     }
 
+    /// Names the collection for assistive technology: the label of the list
+    /// or grid node this sliver publishes.
+    pub fn set_collection_label(
+        &mut self,
+        label: Option<&std::sync::Arc<str>>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.collection_label.as_ref() == label {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.collection_label = label.cloned();
+        flui_rendering::RenderUpdateImpact::SEMANTICS
+    }
+
     /// Overrides the accessible member count independently of tile residency.
     /// `None` declares an unknown total.
     pub fn set_semantic_set_size(
@@ -235,6 +250,7 @@ impl RenderSliverGrid {
             grid_delegate,
             item_count,
             collection: None,
+            collection_label: None,
             logical_to_slot: BTreeMap::new(),
             attached_child_count: 0,
             warned_truncation_for: None,
@@ -306,6 +322,7 @@ impl Clone for RenderSliverGrid {
     fn clone(&self) -> Self {
         Self {
             collection: self.collection,
+            collection_label: self.collection_label.clone(),
             grid_delegate: self.grid_delegate.clone(),
             item_count: self.item_count,
             logical_to_slot: BTreeMap::new(), // transient — reset each pass
@@ -347,6 +364,9 @@ impl RenderSliver for RenderSliverGrid {
         config.set_lazy_collection(self.collection.unwrap_or_else(|| {
             SemanticsCollection::new(SemanticsCollectionKind::Grid, Some(self.item_count))
         }));
+        if let Some(label) = &self.collection_label {
+            config.set_label(label.as_ref());
+        }
     }
 
     fn perform_layout(

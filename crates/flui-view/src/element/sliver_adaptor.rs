@@ -139,6 +139,13 @@ pub trait LazyMultiBoxRender:
     fn set_semantic_set_size(&mut self, count: Option<usize>)
     -> flui_rendering::RenderUpdateImpact;
 
+    /// Names the collection for assistive technology: the label of the list
+    /// or grid node the render object publishes. `None` publishes no name.
+    fn set_collection_label(
+        &mut self,
+        label: Option<&std::sync::Arc<str>>,
+    ) -> flui_rendering::RenderUpdateImpact;
+
     /// Installs the logical indices of the attached children that are pinned
     /// ([`KeepAliveHandle::pin`](crate::owner::KeepAliveHandle::pin)) and lie
     /// outside the retained band. The render object lays each of them out at
@@ -421,6 +428,8 @@ pub struct SliverMultiBoxAdaptor<R: LazyMultiBoxRender> {
     /// `SliverList::separated` sets it explicitly, since its `2n - 1`
     /// children are `n` members.
     pub(crate) semantics: Option<SemanticSetMapping>,
+    /// The collection's accessible name (`semantics_label`).
+    pub(crate) semantics_label: Option<std::sync::Arc<str>>,
     /// How children slide into new positions after a roster change, or
     /// `None` to place them at once.
     pub(crate) placement: Option<Placement>,
@@ -435,6 +444,7 @@ impl<R: LazyMultiBoxRender> Clone for SliverMultiBoxAdaptor<R> {
             builder: Rc::clone(&self.builder),
             find_index_by_key: self.find_index_by_key.clone(),
             semantics: self.semantics.clone(),
+            semantics_label: self.semantics_label.clone(),
             placement: self.placement.clone(),
         }
     }
@@ -474,6 +484,7 @@ impl<R: LazyMultiBoxRender> SliverMultiBoxAdaptor<R> {
             builder,
             find_index_by_key: None,
             semantics: None,
+            semantics_label: None,
             placement: None,
         }
     }
@@ -490,6 +501,14 @@ impl<R: LazyMultiBoxRender> SliverMultiBoxAdaptor<R> {
     #[must_use]
     pub fn semantics(mut self, semantics: SemanticSetMapping) -> Self {
         self.semantics = Some(semantics);
+        self
+    }
+
+    /// Name the collection for assistive technology: the label of the list or
+    /// grid node, announced when focus enters it.
+    #[must_use]
+    pub fn semantics_label(mut self, label: impl Into<std::sync::Arc<str>>) -> Self {
+        self.semantics_label = Some(label.into());
         self
     }
 
@@ -542,6 +561,7 @@ impl<R: LazyMultiBoxRender> RenderView for SliverMultiBoxAdaptor<R> {
         // A fresh object reports layout for any placement; it lays out anyway.
         let _ = render_object.set_placement(self.placement.as_ref());
         let _ = render_object.set_semantic_set_size(self.effective_semantics().declared_count());
+        let _ = render_object.set_collection_label(self.semantics_label.as_ref());
         render_object
     }
 
@@ -566,6 +586,7 @@ impl<R: LazyMultiBoxRender> RenderView for SliverMultiBoxAdaptor<R> {
         };
         count_impact
             | render_object.set_semantic_set_size(self.effective_semantics().declared_count())
+            | render_object.set_collection_label(self.semantics_label.as_ref())
             | render_object.update(&self.config)
             | render_object.set_placement(self.placement.as_ref())
     }
@@ -1230,6 +1251,13 @@ impl LazyMultiBoxRender for RenderSliverList {
     ) -> flui_rendering::RenderUpdateImpact {
         RenderSliverList::set_semantic_set_size(self, count)
     }
+
+    fn set_collection_label(
+        &mut self,
+        label: Option<&std::sync::Arc<str>>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverList::set_collection_label(self, label)
+    }
     fn set_pinned_indices(
         &mut self,
         pinned: &BTreeSet<usize>,
@@ -1540,6 +1568,13 @@ impl LazyMultiBoxRender for RenderSliverGrid {
     ) -> flui_rendering::RenderUpdateImpact {
         RenderSliverGrid::set_semantic_set_size(self, count)
     }
+
+    fn set_collection_label(
+        &mut self,
+        label: Option<&std::sync::Arc<str>>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverGrid::set_collection_label(self, label)
+    }
     fn set_pinned_indices(
         &mut self,
         pinned: &BTreeSet<usize>,
@@ -1640,6 +1675,13 @@ impl LazyMultiBoxRender for RenderSliverFixedExtentList {
         count: Option<usize>,
     ) -> flui_rendering::RenderUpdateImpact {
         RenderSliverFixedExtentList::set_semantic_set_size(self, count)
+    }
+
+    fn set_collection_label(
+        &mut self,
+        label: Option<&std::sync::Arc<str>>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverFixedExtentList::set_collection_label(self, label)
     }
     fn set_pinned_indices(
         &mut self,

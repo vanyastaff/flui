@@ -317,7 +317,52 @@ pub(crate) fn pop_restores_the_opening_element() {
         Some("second"),
         "the focus returns to the element that opened the route"
     );
+
+    // A row of a focusable list, moved to by the arrow keys, is the opening
+    // element as any other control is.
+    let navigator = NavigatorHandle::new();
+    let shared = Rc::clone(&counts);
+    navigator.seed_initial(PageRoute::<i32>::new(move |_, _, _| {
+        let shared = Rc::clone(&shared);
+        SizedBox::new(300.0, 200.0)
+            .child(
+                flui_widgets::ListView::builder(ROWS.len(), 40.0, move |index| {
+                    ROWS.get(index).map(|label| control(label, &shared))
+                })
+                .focusable(true),
+            )
+            .into_view()
+            .boxed()
+    }));
+    let mut harness = mount(Navigator::new(navigator.clone()));
+    harness.tick();
+    let manager = harness.focus_manager();
+    assert!(tab(&manager));
+    settle(&mut harness);
+    assert_eq!(focused(&harness).as_deref(), Some("row0"));
+    for _ in 0..3 {
+        assert!(press(&manager, &Key::Named(NamedKey::ArrowDown)));
+        settle(&mut harness);
+    }
+    assert_eq!(focused(&harness).as_deref(), Some("row3"));
+
+    drop(navigator.push(dialog("dialog", &counts)));
+    settle(&mut harness);
+    assert_eq!(focused(&harness).as_deref(), Some("dialog"));
+    assert!(navigator.pop());
+    settle(&mut harness);
+    assert_eq!(
+        focused(&harness).as_deref(),
+        Some("row3"),
+        "the focus returns to the list row that opened the route"
+    );
 }
+
+/// The labels of the list rows in `pop_restores_the_opening_element`.
+const ROWS: [&str; 12] = [
+    "row0", "row1", "row2", "row3", "row4", "row5", "row6", "row7", "row8", "row9", "row10",
+    "row11",
+];
 
 /// Records the routes a navigator reports removed.
 #[derive(Default)]
