@@ -835,15 +835,12 @@ impl Selections {
 /// connection fails. A panic is contained here: the thread ends, and the
 /// reads waiting are abandoned, each drop contained, before the state
 /// drops; so are the commands still queued, whose reads were never taken.
+/// What ended the thread is reported after the abandonment, so a report
+/// that fails cannot skip it.
 pub(super) fn run(mut selections: Selections, commands: Receiver<Command>, bell: &OwnedFd) {
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         steps(&mut selections, &commands, bell)
     }));
-    match outcome {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => tracing::error!("the X11 clipboard's connection failed: {error}"),
-        Err(payload) => contained(payload),
-    }
     let abandoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut failure = FirstPanic::new();
         failure.contain(|| selections.abandon());
@@ -854,6 +851,13 @@ pub(super) fn run(mut selections: Selections, commands: Receiver<Command>, bell:
         failure.contain(|| drop(commands));
         failure.resume();
     }));
+    match outcome {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            report(|| tracing::error!("the X11 clipboard's connection failed: {error}"))
+        }
+        Err(payload) => contained(payload),
+    }
     if let Err(payload) = abandoned {
         contained(payload);
     }
@@ -862,11 +866,20 @@ pub(super) fn run(mut selections: Selections, commands: Receiver<Command>, bell:
 /// Report a panic the thread contained. The payload may own anything; it is
 /// kept rather than dropped where its destructor could fail too (ADR-0127).
 fn contained(payload: Box<dyn std::any::Any + Send>) {
-    tracing::error!(
-        "the X11 clipboard's thread panicked: {}",
-        crate::owner::panic_boundary::panic_payload_message(payload.as_ref())
-    );
+    report(|| {
+        tracing::error!(
+            "the X11 clipboard's thread panicked: {}",
+            crate::owner::panic_boundary::panic_payload_message(payload.as_ref())
+        );
+    });
     std::mem::forget(payload);
+}
+
+/// Run a diagnostic: a subscriber that panics is contained, its payload kept.
+fn report(diagnostic: impl FnOnce()) {
+    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(diagnostic)) {
+        std::mem::forget(payload);
+    }
 }
 
 /// `bytes` received in `form` as text, or `None` past [`MAX_TEXT`] bytes of
